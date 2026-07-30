@@ -554,12 +554,12 @@ export function DockerNetworks({
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">
                 Node <span className="text-destructive">*</span>
               </label>
               <Select value={createNodeId} onValueChange={setCreateNodeId}>
-                <SelectTrigger className="mt-1">
+                <SelectTrigger>
                   <SelectValue placeholder="Select a node" />
                 </SelectTrigger>
                 <SelectContent>
@@ -574,21 +574,20 @@ export function DockerNetworks({
                 </SelectContent>
               </Select>
             </div>
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">
                 Name <span className="text-destructive">*</span>
               </label>
               <Input
-                className="mt-1"
                 value={createName}
                 onChange={(e) => setCreateName(e.target.value)}
                 placeholder="my-network"
               />
             </div>
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Driver</label>
               <Select value={createDriver} onValueChange={setCreateDriver}>
-                <SelectTrigger className="mt-1">
+                <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -599,23 +598,21 @@ export function DockerNetworks({
                 </SelectContent>
               </Select>
             </div>
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">
                 Subnet <span className="text-muted-foreground font-normal">(optional)</span>
               </label>
               <Input
-                className="mt-1"
                 value={createSubnet}
                 onChange={(e) => setCreateSubnet(e.target.value)}
                 placeholder="172.20.0.0/16"
               />
             </div>
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">
                 Gateway <span className="text-muted-foreground font-normal">(optional)</span>
               </label>
               <Input
-                className="mt-1"
                 value={createGateway}
                 onChange={(e) => setCreateGateway(e.target.value)}
                 placeholder="172.20.0.1"

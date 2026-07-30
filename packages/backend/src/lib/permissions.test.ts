@@ -53,6 +53,8 @@ describe('Scope-based permissions', () => {
       expect(hasScope(['proxy:edit'], 'proxy:view')).toBe(true);
       expect(hasScope(['proxy:edit'], 'proxy:view')).toBe(true);
       expect(hasScope(['databases:query:admin'], 'databases:query:read')).toBe(true);
+      expect(hasScope(['inference:providers:manage'], 'inference:providers:view')).toBe(true);
+      expect(hasScope(['inference:models:manage'], 'inference:providers:view')).toBe(true);
     });
 
     it('does not let create-only or destructive action scopes satisfy read scopes', () => {

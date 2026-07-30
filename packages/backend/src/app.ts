@@ -51,6 +51,16 @@ import { dockerWebhookTriggerRoutes } from '@/modules/docker/docker-webhook.rout
 import { domainRoutes } from '@/modules/domains/domain.routes.js';
 import { groupRoutes } from '@/modules/groups/group.routes.js';
 import { housekeepingRoutes } from '@/modules/housekeeping/housekeeping.routes.js';
+import { inferenceManagementRoutes } from '@/modules/inference/inference.routes.js';
+import { inferenceAuthMiddleware } from '@/modules/inference/inference-auth.middleware.js';
+import {
+  anthropicInferenceDataPlaneRoutes,
+  codexInferenceDataPlaneRoutes,
+  openAiInferenceDataPlaneRoutes,
+} from '@/modules/inference/inference-data-plane.routes.js';
+import { inferenceDiscoveryRoutes } from '@/modules/inference/inference-discovery.routes.js';
+import { createInferenceResponsesWSHandlers } from '@/modules/inference/inference-responses.ws.js';
+import { inferenceSetupRoutes } from '@/modules/inference/inference-setup.routes.js';
 import { integrationsRoutes } from '@/modules/integrations/integrations.routes.js';
 import { licenseRoutes } from '@/modules/license/license.routes.js';
 import { loggingRoutes } from '@/modules/logging/logging.routes.js';
@@ -86,12 +96,27 @@ const HEALTH_REDIS_TIMEOUT_MS = 1000;
 const DOCKER_FILE_BODY_LIMIT_PATH =
   /^\/api\/docker\/nodes\/[^/]+\/(?:containers\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks)|volumes\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks))$/;
 const NODE_FILE_BODY_LIMIT_PATH = /^\/api\/nodes\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks)$/;
+const INFERENCE_DATA_PLANE_PREFIX = /^\/api\/inference\/(?:anthropic|codex|openai)\/v1(?:\/|$)/;
+
+function isInferenceDataPlanePath(path: string): boolean {
+  return INFERENCE_DATA_PLANE_PREFIX.test(path);
+}
 
 function requestBodyLimit(maxSize: number): MiddlewareHandler<AppEnv> {
   return bodyLimit({
     maxSize,
     onError: (c) => c.json({ code: 'PAYLOAD_TOO_LARGE', message: 'Request body too large' }, 413),
   }) as MiddlewareHandler<AppEnv>;
+}
+
+export function inferenceFeatureGuard(): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    const settings = container.resolve(GeneralSettingsService);
+    if (!(await settings.isFeatureEnabled('inferenceEnabled'))) {
+      return c.json({ code: 'INFERENCE_DISABLED', message: 'Inference proxy is disabled' }, 404);
+    }
+    await next();
+  };
 }
 
 function requestBodyLimitDynamic(resolveMaxSize: () => Promise<number>): MiddlewareHandler<AppEnv> {
@@ -217,7 +242,8 @@ export function createApp() {
   const env = getEnv();
 
   // WebSocket support for AI assistant
-  const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app: app as any });
+  const { injectWebSocket, upgradeWebSocket, wss } = createNodeWebSocket({ app: app as any });
+  wss.options.maxPayload = env.INFERENCE_BODY_MAX_BYTES;
 
   // Global middleware
   app.use('*', requestId());
@@ -261,14 +287,31 @@ export function createApp() {
       },
       credentials: true,
       allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-CSRF-Token'],
-      exposeHeaders: ['X-Request-ID'],
+      allowHeaders: [
+        'Content-Type',
+        'Authorization',
+        'X-API-Key',
+        'X-Request-ID',
+        'X-CSRF-Token',
+        'Anthropic-Version',
+        'Anthropic-Beta',
+        'OpenAI-Beta',
+        'OpenAI-Organization',
+        'OpenAI-Project',
+        'Idempotency-Key',
+      ],
+      exposeHeaders: ['X-Request-ID', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset'],
       maxAge: 86400,
     })
   );
 
   app.use('/api/oauth/token', requestBodyLimit(env.OAUTH_BODY_MAX_BYTES));
   app.use('/api/oauth/revoke', requestBodyLimit(env.OAUTH_BODY_MAX_BYTES));
+  app.use('/api/inference/openai/v1/*', requestBodyLimit(env.INFERENCE_BODY_MAX_BYTES));
+  app.use('/api/inference/codex/v1/*', requestBodyLimit(env.INFERENCE_BODY_MAX_BYTES));
+  app.use('/api/inference/anthropic/v1/*', requestBodyLimit(env.INFERENCE_BODY_MAX_BYTES));
+  app.use('/api/inference', inferenceFeatureGuard());
+  app.use('/api/inference/*', inferenceFeatureGuard());
   app.use('/api/logging/ingest', requestBodyLimit(env.LOGGING_INGEST_MAX_BODY_BYTES));
   app.use('/api/logging/ingest/batch', requestBodyLimit(env.LOGGING_INGEST_MAX_BODY_BYTES));
   app.use(
@@ -312,12 +355,19 @@ export function createApp() {
     '/api/*',
     requestBodyLimitExcept(
       env.REQUEST_BODY_MAX_BYTES,
-      (path) => DOCKER_FILE_BODY_LIMIT_PATH.test(path) || NODE_FILE_BODY_LIMIT_PATH.test(path)
+      (path) =>
+        DOCKER_FILE_BODY_LIMIT_PATH.test(path) || NODE_FILE_BODY_LIMIT_PATH.test(path) || isInferenceDataPlanePath(path)
     )
   );
 
   // Rate limiting for API and public PKI routes
-  app.use('/api/*', rateLimitMiddleware);
+  app.use('/api/*', async (c, next) => {
+    if (isInferenceDataPlanePath(c.req.path)) {
+      await next();
+      return;
+    }
+    await rateLimitMiddleware(c, next);
+  });
   app.use('/pki/*', rateLimitMiddleware);
   app.use('/auth/*', authRateLimitMiddleware);
   app.use('/auth/login', authLoginRateLimitMiddleware);
@@ -329,6 +379,7 @@ export function createApp() {
   app.use('/api/setup/*', setupRateLimitMiddleware);
   app.use('/api/ai/ws', aiWebSocketRateLimitMiddleware);
   app.use('/api/events', streamRateLimitMiddleware);
+  app.use('/api/inference/setup/events', streamRateLimitMiddleware);
   app.use('/api/docker/nodes/:nodeId/containers/:containerId/exec', streamRateLimitMiddleware);
   app.use('/api/nodes/:nodeId/exec', streamRateLimitMiddleware);
   app.use('/api/docker/nodes/:nodeId/containers/:containerId/logs/stream', streamRateLimitMiddleware);
@@ -394,9 +445,32 @@ export function createApp() {
   // Auth routes
   app.route('/auth', authRoutes);
   app.route('/.well-known', oauthMetadataRoutes);
+  app.route('/.well-known', inferenceDiscoveryRoutes);
 
   // Protected API routes
   app.route('/api/oauth', oauthRoutes);
+  for (const path of ['/api/inference/codex/v1/responses', '/api/inference/openai/v1/responses']) {
+    app.use(path, async (c, next) => {
+      if (c.req.method === 'GET') return inferenceAuthMiddleware(c, next);
+      await next();
+    });
+    app.get(
+      path,
+      upgradeWebSocket((c) => {
+        const user = c.get('user');
+        const auth = c.get('inferenceAuth');
+        return createInferenceResponsesWSHandlers(
+          user && auth ? { user, tokenId: auth.tokenId, tokenPrefix: auth.tokenPrefix } : null,
+          env.INFERENCE_BODY_MAX_BYTES
+        );
+      })
+    );
+  }
+  app.route('/api/inference/openai/v1', openAiInferenceDataPlaneRoutes);
+  app.route('/api/inference/codex/v1', codexInferenceDataPlaneRoutes);
+  app.route('/api/inference/anthropic/v1', anthropicInferenceDataPlaneRoutes);
+  app.route('/api/inference/setup', inferenceSetupRoutes);
+  app.route('/api/inference', inferenceManagementRoutes);
   app.route('/api/mcp/.well-known', oauthMetadataRoutes);
   app.route('/api/cas', caRoutes);
   app.route('/api/certificates', certRoutes);
@@ -580,6 +654,11 @@ export function createApp() {
 
   // OpenAPI documentation
   app.openAPIRegistry.registerComponent('securitySchemes', 'bearerAuth', securitySchemes.bearerAuth as any);
+  app.openAPIRegistry.registerComponent(
+    'securitySchemes',
+    'inferenceTokenAuth',
+    securitySchemes.inferenceTokenAuth as any
+  );
   const openApiDocument = {
     openapi: '3.1.0',
     info: {

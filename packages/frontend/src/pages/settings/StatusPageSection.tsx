@@ -362,7 +362,7 @@ export function Field({
   className?: string;
 }) {
   return (
-    <label className={`block space-y-1 ${className}`}>
+    <label className={`block space-y-1.5 ${className}`}>
       <span className="text-xs font-medium text-muted-foreground">{label}</span>
       {children}
     </label>

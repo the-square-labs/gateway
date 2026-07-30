@@ -308,7 +308,7 @@ export function ApiTokensSection({
           </DialogHeader>
 
           <div className="space-y-4">
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Name</label>
               <Input
                 value={newTokenName}

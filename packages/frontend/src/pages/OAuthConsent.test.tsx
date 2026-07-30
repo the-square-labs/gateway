@@ -67,6 +67,38 @@ describe("OAuthConsent", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders the inference setup scope once with useful metadata and a content-sized scope section", async () => {
+    vi.spyOn(api, "getOAuthConsent").mockResolvedValue({
+      ...preview,
+      requestedScopes: ["inference:setup"],
+      grantableScopes: ["inference:setup"],
+      unavailableScopes: [],
+      resource: "https://gateway.example.com/api/inference/setup",
+      resourceInfo: {
+        resource: "https://gateway.example.com/api/inference/setup",
+        name: "Gateway Inference Setup",
+        description: "Configure Gateway inference clients and their dedicated runtime tokens.",
+      },
+    });
+
+    renderWithRouter(<OAuthConsent />, {
+      path: "/oauth/consent",
+      route: "/oauth/consent?request=request-1",
+    });
+
+    expect(await screen.findByText("Set up inference clients")).toBeInTheDocument();
+    expect(screen.getAllByText("inference:setup")).toHaveLength(1);
+    expect(
+      screen.getByText(
+        "Configure supported inference clients and manage their dedicated runtime tokens."
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByText("Requested scopes").closest("section")).not.toHaveClass(
+      "min-h-[12rem]",
+      "flex-1"
+    );
+  });
+
   it("submits only selected grantable scopes", async () => {
     vi.spyOn(api, "getOAuthConsent").mockResolvedValue(preview);
     const approve = vi

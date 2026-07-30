@@ -59,6 +59,11 @@ export const securitySchemes = {
     description:
       'Gateway API token (`gw_...`) or OAuth access token (`gwo_...`) for programmatic access. Browser sessions use the HttpOnly session cookie.',
   },
+  inferenceTokenAuth: {
+    type: 'http' as const,
+    scheme: 'bearer',
+    description: 'Dedicated Gateway inference token (`gwi_...`). Valid only on inference adapter data planes.',
+  },
 };
 
 export const jsonContent = (schema: z.ZodTypeAny, example?: unknown) => ({
@@ -580,6 +585,7 @@ export const tags = [
   { name: 'Status Page', description: 'Status page settings, services, and incidents' },
   { name: 'Logging', description: 'Log ingestion, schemas, tokens, search, and metadata' },
   { name: 'AI', description: 'AI assistant configuration and metadata' },
+  { name: 'Inference', description: 'Standalone multi-provider inference proxy management' },
   { name: 'System', description: 'Version, release, and update operations' },
   { name: 'License', description: 'Gateway license activation and status' },
   { name: 'Housekeeping', description: 'Retention, cleanup, and housekeeping runs' },

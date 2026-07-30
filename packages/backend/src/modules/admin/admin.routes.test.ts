@@ -220,7 +220,7 @@ describe('admin Gateway settings route permissions', () => {
     const updateGeneralConfig = vi.fn().mockResolvedValue({
       fileUploadMaxBytes: 50 * 1024 * 1024,
       fileOpenMaxBytes: 10 * 1024 * 1024,
-      features: { pkiEnabled: true, domainsEnabled: true },
+      features: { pkiEnabled: true, domainsEnabled: true, inferenceEnabled: true },
     });
     container.registerInstance(AuthSettingsService, {
       updateConfig: vi.fn().mockResolvedValue({
@@ -259,15 +259,27 @@ describe('admin Gateway settings route permissions', () => {
     const response = await createApp().request('/api/admin/auth-settings', {
       method: 'PUT',
       headers: sessionHeaders(),
-      body: JSON.stringify({ generalSettings: { fileUploadMaxBytes: 50 * 1024 * 1024 } }),
+      body: JSON.stringify({
+        generalSettings: {
+          fileUploadMaxBytes: 50 * 1024 * 1024,
+          features: { inferenceEnabled: true },
+        },
+      }),
     });
     const body = (await response.json()) as Record<string, any>;
 
     expect(response.status).toBe(200);
-    expect(updateGeneralConfig).toHaveBeenCalledWith({ fileUploadMaxBytes: 50 * 1024 * 1024 });
+    expect(updateGeneralConfig).toHaveBeenCalledWith({
+      fileUploadMaxBytes: 50 * 1024 * 1024,
+      features: { inferenceEnabled: true },
+    });
     expect(body.generalSettings.fileUploadMaxBytes).toBe(50 * 1024 * 1024);
     expect(body.generalSettings.fileOpenMaxBytes).toBe(10 * 1024 * 1024);
-    expect(body.generalSettings.features).toEqual({ pkiEnabled: true, domainsEnabled: true });
+    expect(body.generalSettings.features).toEqual({
+      pkiEnabled: true,
+      domainsEnabled: true,
+      inferenceEnabled: true,
+    });
   });
 
   it('allows editing OAuth extended callback compatibility with settings:gateway:edit', async () => {

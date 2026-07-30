@@ -13,7 +13,6 @@ import {
   Globe2,
   LayoutDashboard,
   Lock,
-  LogOut,
   PanelLeft,
   PanelLeftClose,
   ScrollText,
@@ -22,6 +21,7 @@ import {
   Settings,
   ShieldAlert,
   ShieldCheck,
+  UserRound,
   Users,
   X,
 } from "lucide-react";
@@ -29,13 +29,12 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AIButton } from "@/components/ai/AIButton";
 import { confirmAILiteMode } from "@/components/ai/confirm-lite-mode";
+import { AccountMenuContent } from "@/components/layout/AccountMenuContent";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -52,6 +51,7 @@ import {
   proxyHostRoute,
 } from "@/lib/resource-routes";
 import { deriveAllowedResourceIdsByScope } from "@/lib/scope-utils";
+import { isSidebarNavigationActive } from "@/lib/sidebar-navigation";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
@@ -84,7 +84,6 @@ interface NavItem {
   href: string;
   icon: React.ElementType;
   scope?: string;
-  matchTabs?: boolean;
   requiresStatusPageEnabled?: boolean;
   requiresLoggingEnabled?: boolean;
 }
@@ -97,7 +96,10 @@ interface NavGroup {
 const navigationGroups: NavGroup[] = [
   {
     label: "Main",
-    items: [{ name: "Dashboard", href: "/", icon: LayoutDashboard }],
+    items: [
+      { name: "Dashboard", href: "/", icon: LayoutDashboard },
+      { name: "Profile", href: "/profile", icon: UserRound },
+    ],
   },
   {
     label: "Reverse Proxy",
@@ -122,7 +124,6 @@ const navigationGroups: NavGroup[] = [
         href: "/docker",
         icon: Box,
         scope: "docker:containers:view",
-        matchTabs: true,
       },
       {
         name: "Databases",
@@ -135,7 +136,6 @@ const navigationGroups: NavGroup[] = [
         href: "/logging",
         icon: ScrollText,
         scope: "logs:read",
-        matchTabs: true,
         requiresLoggingEnabled: true,
       },
       { name: "Nodes", href: "/nodes", icon: Server, scope: "nodes:details" },
@@ -144,24 +144,22 @@ const navigationGroups: NavGroup[] = [
   {
     label: "Management",
     items: [
-      { name: "Templates", href: "/templates", icon: Award, matchTabs: true },
+      { name: "Templates", href: "/templates", icon: Award },
       { name: "Access Lists", href: "/access-lists", icon: ShieldAlert, scope: "acl:view" },
       {
         name: "Notifications",
         href: "/notifications",
         icon: Bell,
         scope: "notifications:view",
-        matchTabs: true,
       },
       {
         name: "Status Page",
         href: "/status-page",
         icon: Activity,
         scope: "status-page:view",
-        matchTabs: true,
         requiresStatusPageEnabled: true,
       },
-      { name: "Administration", href: "/administration", icon: Users, matchTabs: true },
+      { name: "Administration", href: "/administration", icon: Users },
       { name: "Settings", href: "/settings", icon: Settings },
     ],
   },
@@ -601,31 +599,6 @@ export function SidebarContent({
 
   const allNavItems = effectiveGroups.flatMap((g) => g.items);
 
-  const AccountDropdownContent = () => (
-    <>
-      <div className="px-2 py-1.5">
-        <p className="text-sm font-medium">{user?.name || "User"}</p>
-        <p className="text-xs text-muted-foreground">{user?.email}</p>
-        <p className="text-xs text-muted-foreground capitalize mt-0.5">{user?.groupName}</p>
-      </div>
-      <DropdownMenuSeparator />
-      <DropdownMenuItem
-        onClick={() => {
-          navigate("/settings");
-          onNavigate?.();
-        }}
-      >
-        <Settings className="mr-2 h-4 w-4" />
-        Settings
-      </DropdownMenuItem>
-      <DropdownMenuSeparator />
-      <DropdownMenuItem onClick={handleLogout}>
-        <LogOut className="mr-2 h-4 w-4" />
-        Log out
-      </DropdownMenuItem>
-    </>
-  );
-
   return (
     <div
       style={{ width: alwaysExpanded ? "100%" : isExpanded ? sidebarWidth : 48 }}
@@ -662,9 +635,7 @@ export function SidebarContent({
                     size="icon"
                     className={cn(
                       "h-8 w-8",
-                      (location.pathname === item.href ||
-                        (item.matchTabs && location.pathname.startsWith(`${item.href}/`))) &&
-                        "bg-sidebar-accent"
+                      isSidebarNavigationActive(location.pathname, item.href) && "bg-sidebar-accent"
                     )}
                     onClick={() => navigate(item.href)}
                   >
@@ -723,8 +694,8 @@ export function SidebarContent({
                   </Avatar>
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" side="right" className="w-56">
-                <AccountDropdownContent />
+              <DropdownMenuContent align="start" side="right" className="w-64">
+                <AccountMenuContent onLogout={handleLogout} onNavigate={onNavigate} />
               </DropdownMenuContent>
             </DropdownMenu>
           </motion.div>
@@ -974,11 +945,7 @@ export function SidebarContent({
                       </p>
                     )}
                     {group.items.map((item) => {
-                      const isActive =
-                        location.pathname === item.href ||
-                        (item.matchTabs &&
-                          location.pathname.startsWith(`${item.href}/`) &&
-                          !location.pathname.slice(item.href.length + 1).includes("/"));
+                      const isActive = isSidebarNavigationActive(location.pathname, item.href);
                       return (
                         <Link
                           key={item.href}
@@ -1054,8 +1021,8 @@ export function SidebarContent({
                     <span className="truncate text-sm font-medium">{user?.name || "User"}</span>
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" side="top" className="w-56">
-                  <AccountDropdownContent />
+                <DropdownMenuContent align="start" side="top" className="w-64">
+                  <AccountMenuContent onLogout={handleLogout} onNavigate={onNavigate} />
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>

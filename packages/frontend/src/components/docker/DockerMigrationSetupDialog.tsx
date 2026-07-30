@@ -56,7 +56,7 @@ export function DockerMigrationSetupDialog({
         </DialogHeader>
 
         <div className="space-y-5">
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <label htmlFor="migration-target" className="text-sm font-medium">
               Target node
             </label>

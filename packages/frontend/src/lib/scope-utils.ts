@@ -48,6 +48,7 @@ const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Record<string, readonly string[]> = {
     "integrations:cloudflare:dns:edit",
     "integrations:cloudflare:dns:delete",
   ],
+  "inference:providers:view": ["inference:providers:manage", "inference:models:manage"],
 };
 
 export function extractBaseScope(scope: string): string {

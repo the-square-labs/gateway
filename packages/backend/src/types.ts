@@ -33,7 +33,12 @@ export interface AppEnv {
     sessionId?: string;
     effectiveScopes?: string[];
     isTokenAuth?: boolean;
-    authType?: 'session' | 'api-token' | 'oauth-token';
+    authType?: 'session' | 'api-token' | 'oauth-token' | 'inference-token';
+    inferenceAuth?: {
+      tokenId: string;
+      tokenPrefix: string;
+    };
+    inferenceAdapter?: 'anthropic' | 'codex' | 'openai';
     mcpAuth?: {
       tokenId: string;
       tokenPrefix: string;
@@ -64,7 +69,11 @@ export type AuthenticatedContext = Context<AppEnv> & {
     sessionId?: string;
     effectiveScopes?: string[];
     isTokenAuth?: boolean;
-    authType?: 'session' | 'api-token' | 'oauth-token';
+    authType?: 'session' | 'api-token' | 'oauth-token' | 'inference-token';
+    inferenceAuth?: {
+      tokenId: string;
+      tokenPrefix: string;
+    };
     requestId: string;
   };
 };

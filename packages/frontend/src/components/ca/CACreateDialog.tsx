@@ -106,7 +106,7 @@ export function CACreateDialog({ open, onOpenChange, parentId }: CACreateDialogP
 
         <div className="space-y-4">
           {needsParentPicker && (
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Parent CA</label>
               <Select
                 value={selectedParentId || "none"}
@@ -129,7 +129,7 @@ export function CACreateDialog({ open, onOpenChange, parentId }: CACreateDialogP
             </div>
           )}
 
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <label className="text-sm font-medium">Common Name (CN)</label>
             <Input
               value={commonName}
@@ -142,7 +142,7 @@ export function CACreateDialog({ open, onOpenChange, parentId }: CACreateDialogP
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Key Algorithm</label>
               <Select
                 value={keyAlgorithm}
@@ -159,7 +159,7 @@ export function CACreateDialog({ open, onOpenChange, parentId }: CACreateDialogP
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Validity (years)</label>
               <Input
                 type="number"
@@ -172,7 +172,7 @@ export function CACreateDialog({ open, onOpenChange, parentId }: CACreateDialogP
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Path Length Constraint</label>
               <Input
                 type="number"
@@ -186,7 +186,7 @@ export function CACreateDialog({ open, onOpenChange, parentId }: CACreateDialogP
                 max={10}
               />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Max Cert Validity (days)</label>
               <Input
                 type="number"

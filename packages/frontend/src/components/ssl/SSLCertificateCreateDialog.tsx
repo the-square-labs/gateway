@@ -280,7 +280,7 @@ export function SSLCertificateCreateDialog({
                 />
               ) : (
                 <div className="space-y-4">
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <label className="text-sm font-medium">Domains</label>
                     <div className="space-y-2">
                       <AnimatePresence initial={false}>
@@ -337,7 +337,7 @@ export function SSLCertificateCreateDialog({
                   </div>
 
                   <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       <label className="text-sm font-medium">Challenge Type</label>
                       <Select
                         value={challengeType}
@@ -352,7 +352,7 @@ export function SSLCertificateCreateDialog({
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       <label className="text-sm font-medium">Provider</label>
                       <Select value={acmeProvider} onValueChange={setAcmeProvider}>
                         <SelectTrigger>
@@ -383,7 +383,7 @@ export function SSLCertificateCreateDialog({
           {/* Upload Tab */}
           <TabsContent value="upload">
             <div className="space-y-4">
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">Name</label>
                 <Input
                   value={uploadName}
@@ -391,7 +391,7 @@ export function SSLCertificateCreateDialog({
                   placeholder="My Certificate"
                 />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">Certificate PEM</label>
                 <Textarea
                   className="h-32"
@@ -400,7 +400,7 @@ export function SSLCertificateCreateDialog({
                   placeholder={"-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"}
                 />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">Private Key PEM</label>
                 <Textarea
                   className="h-32"
@@ -409,7 +409,7 @@ export function SSLCertificateCreateDialog({
                   placeholder={"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"}
                 />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">Chain PEM (optional)</label>
                 <Textarea
                   className="h-24"
@@ -428,7 +428,7 @@ export function SSLCertificateCreateDialog({
                 Link an existing PKI certificate from your internal Certificate Authorities for use
                 as an SSL certificate.
               </p>
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">PKI Certificate</label>
                 <Select value={selectedPkiCertId} onValueChange={setSelectedPkiCertId}>
                   <SelectTrigger>
@@ -449,7 +449,7 @@ export function SSLCertificateCreateDialog({
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">Name Override (optional)</label>
                 <Input
                   value={internalName}

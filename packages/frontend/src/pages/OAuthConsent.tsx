@@ -22,7 +22,18 @@ type ConsentResult = {
   delivered: boolean;
 };
 
+const OAUTH_ONLY_SCOPES: Record<string, Omit<OAuthScopeItem, "value">> = {
+  "inference:setup": {
+    label: "Set up inference clients",
+    desc: "Configure supported inference clients and manage their dedicated runtime tokens.",
+    group: "Inference",
+  },
+};
+
 function scopeItem(scope: string): OAuthScopeItem {
+  const oauthOnlyScope = OAUTH_ONLY_SCOPES[scope];
+  if (oauthOnlyScope) return { value: scope, ...oauthOnlyScope };
+
   const match = [...TOKEN_SCOPES]
     .sort((a, b) => b.value.length - a.value.length)
     .find((item) => scope === item.value || scope.startsWith(`${item.value}:`));
@@ -208,8 +219,8 @@ export function OAuthConsent() {
   }
 
   return (
-    <div className="flex h-[100dvh] min-h-[48rem] items-center justify-center bg-background px-4 py-8">
-      <div className="flex h-full w-full max-w-2xl flex-col border border-border bg-card">
+    <div className="flex min-h-[100dvh] items-center justify-center bg-background px-4 py-4 sm:py-8">
+      <div className="flex max-h-[calc(100dvh-2rem)] w-full max-w-2xl flex-col border border-border bg-card sm:max-h-[calc(100dvh-4rem)]">
         <div className="border-b border-border p-5">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
@@ -234,7 +245,7 @@ export function OAuthConsent() {
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col divide-y divide-border overflow-hidden">
+        <div className="flex min-h-0 flex-col divide-y divide-border overflow-y-auto">
           <section className="p-5">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center border border-border bg-muted text-sm font-semibold">
@@ -284,12 +295,12 @@ export function OAuthConsent() {
             </section>
           )}
 
-          <section className="flex min-h-[12rem] flex-1 flex-col p-5">
+          <section className="p-5">
             <div className="mb-3 flex items-center gap-2">
               <Shield className="h-4 w-4 text-muted-foreground" />
               <h2 className="text-sm font-semibold text-foreground">Requested scopes</h2>
             </div>
-            <div className="flex min-h-0 flex-1 flex-col border border-border">
+            <div className="flex min-h-0 flex-col border border-border">
               <Input
                 value={scopeSearch}
                 onChange={(event) => setScopeSearch(event.target.value)}
@@ -302,7 +313,7 @@ export function OAuthConsent() {
                 selected={selectedScopes}
                 onToggle={(scope) => setScopeSelected(scope, !selectedScopes.includes(scope))}
                 readOnly={isSubmitting}
-                viewportClassName="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+                viewportClassName="max-h-[24rem] overflow-y-auto overscroll-contain"
               />
             </div>
           </section>
@@ -326,7 +337,7 @@ export function OAuthConsent() {
           )}
         </div>
 
-        <div className="flex flex-col-reverse gap-3 border-t border-border p-5 sm:flex-row sm:justify-end">
+        <div className="flex shrink-0 flex-col-reverse gap-3 border-t border-border p-5 sm:flex-row sm:justify-end">
           <Button variant="outline" onClick={deny} disabled={isSubmitting}>
             <X className="h-4 w-4" />
             Deny

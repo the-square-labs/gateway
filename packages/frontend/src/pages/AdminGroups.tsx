@@ -657,32 +657,30 @@ export function AdminGroups({
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Name</label>
               <Input
                 value={formName}
                 onChange={(e) => setFormName(formatGroupNameInput(e.target.value))}
                 placeholder="e.g. cert-operator"
-                className="mt-1"
                 disabled={groupDialogReadOnly}
               />
             </div>
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Description</label>
               <Input
                 value={formDescription}
                 onChange={(e) => setFormDescription(e.target.value)}
                 placeholder="Optional description"
-                className="mt-1"
                 disabled={groupDialogReadOnly}
               />
             </div>
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Inherit From</label>
               {editingGroup && groups.some((g) => g.parentId === editingGroup.id) ? (
                 <>
-                  <Input value="None" disabled className="mt-1" />
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <Input value="None" disabled />
+                  <p className="text-xs text-muted-foreground">
                     This group has child groups — it cannot be nested under another group
                   </p>
                 </>
@@ -693,7 +691,7 @@ export function AdminGroups({
                     onValueChange={(v) => setFormParentId(v === "__none__" ? null : v)}
                     disabled={groupDialogReadOnly}
                   >
-                    <SelectTrigger className="mt-1">
+                    <SelectTrigger>
                       <SelectValue placeholder="None" />
                     </SelectTrigger>
                     <SelectContent>

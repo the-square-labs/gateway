@@ -17,6 +17,18 @@ describe('redactOneTimeSecretToolResult', () => {
       token: '[REDACTED_ONE_TIME_SECRET]',
       tokenRedacted: true,
     });
+    expect(
+      redactOneTimeSecretToolResult('manage_inference_token', {
+        id: 'inference-token-1',
+        tokenPrefix: 'gwi_12345678',
+        token: 'gwi_secret',
+      })
+    ).toEqual({
+      id: 'inference-token-1',
+      tokenPrefix: 'gwi_12345678',
+      token: '[REDACTED_ONE_TIME_SECRET]',
+      tokenRedacted: true,
+    });
   });
 
   it('leaves normal user-owned content and non-secret tool output unchanged', () => {

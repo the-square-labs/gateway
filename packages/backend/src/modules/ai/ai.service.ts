@@ -51,6 +51,7 @@ import { DOMAIN_TOOL_NAMES, executeDomainTool } from './ai.domain-tools.js';
 import { executeFolderTool, FOLDER_TOOL_NAMES } from './ai.folder-tools.js';
 import { executeGitLabTool, GITLAB_TOOL_NAMES } from './ai.gitlab-tools.js';
 import { executeGroupTool, GROUP_TOOL_NAMES } from './ai.group-tools.js';
+import { executeInferenceTool, INFERENCE_TOOL_NAMES } from './ai.inference-tools.js';
 import { manageLoggingTool } from './ai.logging-tools.js';
 import { executeNodeTool, NODE_TOOL_NAMES } from './ai.node-tools.js';
 import { executeNotificationTool, NOTIFICATION_TOOL_NAMES } from './ai.notification-tools.js';
@@ -731,6 +732,9 @@ export class AIService {
 
     if (DATABASE_TOOL_NAMES.has(toolName)) {
       return executeDatabaseTool({ databaseService: this.databaseService }, user, toolName, args);
+    }
+    if (INFERENCE_TOOL_NAMES.has(toolName)) {
+      return executeInferenceTool(user, toolName, args);
     }
     if (DOCKER_TOOL_NAMES.has(toolName)) {
       return executeDockerTool(

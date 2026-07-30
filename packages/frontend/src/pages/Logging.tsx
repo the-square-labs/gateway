@@ -590,15 +590,15 @@ function LoggingSchemaDialog({
           <DialogTitle>Create Logging Schema</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          <label className="block space-y-1">
+          <label className="block space-y-1.5">
             <span className="text-sm font-medium">Name</span>
             <Input value={name} onChange={(event) => setName(event.target.value)} />
           </label>
-          <label className="block space-y-1">
+          <label className="block space-y-1.5">
             <span className="text-sm font-medium">Description</span>
             <Input value={description} onChange={(event) => setDescription(event.target.value)} />
           </label>
-          <label className="block space-y-1">
+          <label className="block space-y-1.5">
             <span className="text-sm font-medium">Mode</span>
             <Select
               value={schemaMode}

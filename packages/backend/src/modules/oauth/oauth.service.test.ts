@@ -317,6 +317,46 @@ describe('OAuthService.createConsentRequest', () => {
     ).rejects.toThrow('Your account is not allowed to use MCP');
   });
 
+  it('grants only inference:setup for the isolated setup resource', async () => {
+    const { service } = createService();
+    const setupUser = {
+      ...USER,
+      scopes: ['inference:use', 'inference:tokens:create', 'inference:tokens:revoke', 'nodes:details'],
+    };
+
+    const pending = await service.createConsentRequest(setupUser, {
+      response_type: 'code',
+      client_id: 'goc_client',
+      redirect_uri: 'http://127.0.0.1:8765/callback',
+      code_challenge: 'challenge',
+      code_challenge_method: 'S256',
+      scope: 'inference:setup nodes:details',
+      resource: 'https://gateway.example.com/api/inference/setup',
+    });
+
+    expect(pending.grantableScopes).toEqual(['inference:setup']);
+    expect(pending.unavailableScopes).toEqual(['nodes:details']);
+  });
+
+  it('rejects setup OAuth when the user cannot create and revoke inference tokens', async () => {
+    const { service } = createService();
+
+    await expect(
+      service.createConsentRequest(
+        { ...USER, scopes: ['inference:use', 'inference:tokens:create'] },
+        {
+          response_type: 'code',
+          client_id: 'goc_client',
+          redirect_uri: 'http://127.0.0.1:8765/callback',
+          code_challenge: 'challenge',
+          code_challenge_method: 'S256',
+          scope: 'inference:setup',
+          resource: 'https://gateway.example.com/api/inference/setup',
+        }
+      )
+    ).rejects.toThrow('Your account is not allowed to set up inference clients');
+  });
+
   it('marks high-risk OAuth scopes for manual approval', async () => {
     const { service } = createService();
 
@@ -713,6 +753,33 @@ describe('OAuthService.exchangeToken authorization code flow', () => {
 });
 
 describe('OAuthService.validateAccessToken', () => {
+  it('accepts setup access tokens only for the inference setup resource', async () => {
+    const setupResource = 'https://gateway.example.com/api/inference/setup';
+    const { service } = createService({
+      groupScopes: ['inference:use', 'inference:tokens:create', 'inference:tokens:revoke'],
+      accessToken: {
+        id: 'access-setup',
+        tokenHash: 'hash',
+        tokenPrefix: 'gwo_setup12',
+        clientId: 'goc_client',
+        userId: USER.id,
+        scopes: ['inference:setup'],
+        resource: setupResource,
+        refreshTokenId: 'refresh-setup',
+        expiresAt: new Date(Date.now() + 60_000),
+        revokedAt: null,
+      },
+    });
+
+    await expect(
+      service.validateAccessToken('gwo_setup', { resource: service.getApiResourceUrl() })
+    ).resolves.toBeNull();
+    await expect(service.validateAccessToken('gwo_setup', { resource: setupResource })).resolves.toMatchObject({
+      tokenId: 'access-setup',
+      scopes: ['inference:setup'],
+    });
+  });
+
   it('accepts long-lived MCP access-only tokens without refresh metadata', async () => {
     const { service } = createService({
       accessToken: {

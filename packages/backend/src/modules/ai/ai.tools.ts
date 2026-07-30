@@ -2,6 +2,7 @@ import { DATABASE_AI_TOOLS } from './ai.tools.databases.js';
 import { DOCKER_AI_TOOLS } from './ai.tools.docker.js';
 import { FOLDER_AI_TOOLS } from './ai.tools.folders.js';
 import { GITLAB_AI_TOOLS } from './ai.tools.gitlab.js';
+import { INFERENCE_AI_TOOLS } from './ai.tools.inference.js';
 import { NODE_FILE_AI_TOOLS } from './ai.tools.node-files.js';
 import { NOTIFICATION_AI_TOOLS, WEB_SEARCH_AI_TOOL } from './ai.tools.notifications.js';
 import { OPERATION_AI_TOOLS } from './ai.tools.operations.js';
@@ -1528,7 +1529,7 @@ export const AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'internal_documentation',
     description:
-      'Get detailed internal documentation about a specific topic in this system. Use this whenever you need deeper knowledge about how something works, what fields mean, or what the correct workflow is. Topics: discovery, pki, ssl, proxy, domains, access-lists, templates, acme, users, audit, nginx, nodes, housekeeping, permissions, docker, databases, postgres, redis, logging, folders, node-files, sandbox, conversations, ai-settings, status-page, api, gitlab, notifications.',
+      'Get detailed internal documentation about a specific topic in this system. Use this whenever you need deeper knowledge about how something works, what fields mean, or what the correct workflow is. Topics: discovery, pki, ssl, proxy, domains, access-lists, templates, acme, users, audit, nginx, nodes, housekeeping, permissions, docker, databases, postgres, redis, logging, folders, node-files, sandbox, conversations, ai-settings, status-page, api, inference, gitlab, notifications.',
     parameters: {
       type: 'object',
       properties: {
@@ -1560,6 +1561,7 @@ export const AI_TOOLS: AIToolDefinition[] = [
             'conversations',
             'status-page',
             'api',
+            'inference',
             'ai-settings',
             'gitlab',
             'notifications',
@@ -1583,6 +1585,9 @@ export const AI_TOOLS: AIToolDefinition[] = [
 
   // ── GitLab Integrations ──
   ...GITLAB_AI_TOOLS,
+
+  // ── Inference ──
+  ...INFERENCE_AI_TOOLS,
 
   // ── Operations ──
   ...OPERATION_AI_TOOLS,

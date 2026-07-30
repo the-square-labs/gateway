@@ -1,0 +1,40 @@
+import type { MiddlewareHandler } from 'hono';
+import { container } from '@/container.js';
+import type { AppEnv } from '@/types.js';
+import { inferenceErrorResponse } from './inference-error.js';
+import { InferenceTokenService } from './inference-token.service.js';
+
+function extractInferenceToken(authorization?: string, apiKey?: string): string | null {
+  const bearer = authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : undefined;
+  const headerKey = apiKey?.trim();
+
+  if (bearer && headerKey && bearer !== headerKey) return null;
+  const token = bearer || headerKey;
+  return token?.startsWith('gwi_') ? token : null;
+}
+
+export const inferenceAuthMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (c.req.method === 'OPTIONS') {
+    await next();
+    return;
+  }
+
+  const rawToken = extractInferenceToken(c.req.header('Authorization'), c.req.header('x-api-key'));
+  if (!rawToken) {
+    return inferenceErrorResponse(c, 401, 'invalid_api_key', 'A valid Gateway inference token is required');
+  }
+
+  const result = await container.resolve(InferenceTokenService).validateToken(rawToken);
+  if (!result) {
+    return inferenceErrorResponse(c, 401, 'invalid_api_key', 'Invalid or revoked Gateway inference token');
+  }
+
+  c.set('user', result.user);
+  c.set('effectiveScopes', result.user.scopes);
+  c.set('isTokenAuth', true);
+  c.set('authType', 'inference-token');
+  c.set('inferenceAuth', { tokenId: result.tokenId, tokenPrefix: result.tokenPrefix });
+  await next();
+};
+
+export const __testOnly = { extractInferenceToken };

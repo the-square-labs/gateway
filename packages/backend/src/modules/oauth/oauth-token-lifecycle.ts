@@ -2,8 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, gt, inArray, isNull, or } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { oauthAccessTokens, oauthClients, oauthRefreshTokens } from '@/db/schema/index.js';
-import { boundScopes } from '@/lib/permissions.js';
-import { canonicalizeScopes, isApiTokenScope, isValidBaseScope } from '@/lib/scopes.js';
+import { canonicalizeScopes, isValidBaseScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
@@ -40,7 +39,8 @@ type OAuthTokenLifecycleDeps = {
   getMcpResourceUrl: () => string;
   getClient: (clientId: string) => Promise<OAuthClientRecord | undefined>;
   isSupportedResource: (resource: string) => boolean;
-  assertMcpResourceAllowed: (user: User, resource: string) => void;
+  assertResourceAllowed: (user: User, resource: string) => void;
+  grantScopes: (user: User, resource: string, requestedScopes: string[]) => string[];
 };
 
 export function hashSecret(raw: string): string {
@@ -96,10 +96,8 @@ export class OAuthTokenLifecycle {
     if (!user || user.isBlocked) throw new AppError(400, 'INVALID_GRANT', 'User is no longer active');
 
     const resource = existing.resource ?? this.deps.getApiResourceUrl();
-    this.deps.assertMcpResourceAllowed(user, resource);
-    const scopes = canonicalizeScopes(boundScopes(existing.scopes, user.scopes)).filter((scope) =>
-      isApiTokenScope(scope)
-    );
+    this.deps.assertResourceAllowed(user, resource);
+    const scopes = this.deps.grantScopes(user, resource, existing.scopes);
     if (scopes.length === 0) throw new AppError(400, 'INVALID_GRANT', 'User can no longer grant these scopes');
 
     const issued = await this.deps.db
@@ -230,7 +228,10 @@ export class OAuthTokenLifecycle {
 
     const user = await resolveLiveUser(this.deps.db, token.userId);
     if (!user || user.isBlocked) return null;
-    const scopes = canonicalizeScopes(boundScopes(token.scopes, user.scopes)).filter((scope) => isApiTokenScope(scope));
+    const resource = token.resource ?? this.deps.getApiResourceUrl();
+    this.deps.assertResourceAllowed(user, resource);
+    const scopes = this.deps.grantScopes(user, resource, token.scopes);
+    if (scopes.length === 0) return null;
 
     this.deps.db
       .update(oauthAccessTokens)
@@ -293,8 +294,6 @@ export class OAuthTokenLifecycle {
       }),
       resolveLiveUser(this.deps.db, userId),
     ]);
-    const ownerScopes = user?.scopes ?? [];
-
     const clientIds = [...new Set([...refreshTokens, ...accessTokens].map((token) => token.clientId))];
     if (clientIds.length === 0) return [];
 
@@ -339,8 +338,8 @@ export class OAuthTokenLifecycle {
 
     for (const token of refreshTokens) {
       const group = ensure(token.clientId, token.resource ?? apiResource, token.createdAt);
-      for (const scope of canonicalizeScopes(boundScopes(token.scopes ?? [], ownerScopes))) {
-        if (isApiTokenScope(scope)) group.scopes.add(scope);
+      for (const scope of user ? this.deps.grantScopes(user, token.resource ?? apiResource, token.scopes ?? []) : []) {
+        group.scopes.add(scope);
       }
       group.activeRefreshTokens += 1;
       if (!group.expiresAt || token.expiresAt > group.expiresAt) group.expiresAt = token.expiresAt;
@@ -348,8 +347,8 @@ export class OAuthTokenLifecycle {
 
     for (const token of accessTokens) {
       const group = ensure(token.clientId, token.resource ?? apiResource, token.createdAt);
-      for (const scope of canonicalizeScopes(boundScopes(token.scopes ?? [], ownerScopes))) {
-        if (isApiTokenScope(scope)) group.scopes.add(scope);
+      for (const scope of user ? this.deps.grantScopes(user, token.resource ?? apiResource, token.scopes ?? []) : []) {
+        group.scopes.add(scope);
       }
       group.activeAccessTokens += 1;
       if (token.expiresAt && (!group.expiresAt || token.expiresAt > group.expiresAt)) group.expiresAt = token.expiresAt;
@@ -461,10 +460,8 @@ export class OAuthTokenLifecycle {
       throw new AppError(404, 'OAUTH_AUTHORIZATION_NOT_FOUND', 'OAuth authorization not found');
     }
 
-    this.deps.assertMcpResourceAllowed(user, resource);
-    const scopes = canonicalizeScopes(boundScopes(canonicalRequestedScopes, user.scopes)).filter((scope) =>
-      isApiTokenScope(scope)
-    );
+    this.deps.assertResourceAllowed(user, resource);
+    const scopes = this.deps.grantScopes(user, resource, canonicalRequestedScopes);
     if (scopes.length === 0) {
       throw new AppError(400, 'INVALID_SCOPE', `No selected scopes are grantable for resource ${resource}`);
     }

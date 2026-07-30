@@ -8,7 +8,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function redactOneTimeSecretToolResult(toolName: string, value: unknown): unknown {
-  if (toolName === 'manage_api_token' && isRecord(value) && typeof value.token === 'string') {
+  if (
+    (toolName === 'manage_api_token' || toolName === 'manage_inference_token') &&
+    isRecord(value) &&
+    typeof value.token === 'string'
+  ) {
     return {
       ...value,
       token: ONE_TIME_SECRET_REDACTION,

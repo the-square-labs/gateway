@@ -23,7 +23,6 @@ import {
   FolderOpen,
   Loader2,
   Lock,
-  LogOut,
   MessageSquare,
   MoreHorizontal,
   PanelLeft,
@@ -32,12 +31,11 @@ import {
   Pin,
   PinOff,
   Plus,
-  Settings,
-  Shield,
   Trash2,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { AccountMenuContent } from "@/components/layout/AccountMenuContent";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -52,7 +50,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -327,10 +324,10 @@ export function AILiteSidebar({
                   </Avatar>
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" side="right" className="w-56">
-                <AccountDropdownContent
-                  canAccessAdministration={canAccessAdministration}
-                  handleLogout={handleLogout}
+              <DropdownMenuContent align="start" side="right" className="w-64">
+                <AccountMenuContent
+                  showAdministration={canAccessAdministration}
+                  onLogout={handleLogout}
                 />
               </DropdownMenuContent>
             </DropdownMenu>
@@ -588,10 +585,10 @@ export function AILiteSidebar({
                       <span className="truncate text-sm font-medium">{user?.name || "User"}</span>
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" side="top" className="w-56">
-                    <AccountDropdownContent
-                      canAccessAdministration={canAccessAdministration}
-                      handleLogout={handleLogout}
+                  <DropdownMenuContent align="start" side="top" className="w-64">
+                    <AccountMenuContent
+                      showAdministration={canAccessAdministration}
+                      onLogout={handleLogout}
                     />
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -1017,41 +1014,4 @@ function getFolderStatusIcon(conversations: AIConversationSummary[], expanded: b
     return Loader2;
   }
   return expanded ? FolderOpen : Folder;
-}
-
-function AccountDropdownContent({
-  canAccessAdministration,
-  handleLogout,
-}: {
-  canAccessAdministration: boolean;
-  handleLogout: () => void;
-}) {
-  const navigate = useNavigate();
-  const { user } = useAuthStore();
-
-  return (
-    <>
-      <div className="px-2 py-1.5">
-        <p className="text-sm font-medium">{user?.name || "User"}</p>
-        <p className="text-xs text-muted-foreground">{user?.email}</p>
-        <p className="mt-0.5 text-xs capitalize text-muted-foreground">{user?.groupName}</p>
-      </div>
-      <DropdownMenuSeparator />
-      <DropdownMenuItem onClick={() => navigate("/settings")}>
-        <Settings className="mr-2 h-4 w-4" />
-        Settings
-      </DropdownMenuItem>
-      {canAccessAdministration && (
-        <DropdownMenuItem onClick={() => navigate("/administration")}>
-          <Shield className="mr-2 h-4 w-4" />
-          Administration
-        </DropdownMenuItem>
-      )}
-      <DropdownMenuSeparator />
-      <DropdownMenuItem onClick={handleLogout}>
-        <LogOut className="mr-2 h-4 w-4" />
-        Log out
-      </DropdownMenuItem>
-    </>
-  );
 }

@@ -1,0 +1,2 @@
+ALTER TABLE "inference_provider_connections" ADD COLUMN "minimum_remaining_percent" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "inference_provider_connections" ADD CONSTRAINT "inference_provider_connections_minimum_remaining_range" CHECK ("inference_provider_connections"."minimum_remaining_percent" >= 0 AND "inference_provider_connections"."minimum_remaining_percent" <= 100);

@@ -28,13 +28,18 @@ interface AuthProvisioningSectionProps {
 const BYTES_PER_MEGABYTE = 1024 * 1024;
 const DEFAULT_FILE_UPLOAD_MAX_BYTES = 100 * BYTES_PER_MEGABYTE;
 const DEFAULT_FILE_OPEN_MAX_BYTES = 10 * BYTES_PER_MEGABYTE;
+const DEFAULT_GENERAL_FEATURES = {
+  pkiEnabled: DEFAULT_GATEWAY_FEATURES.pkiEnabled,
+  domainsEnabled: DEFAULT_GATEWAY_FEATURES.domainsEnabled,
+  inferenceEnabled: DEFAULT_GATEWAY_FEATURES.inferenceEnabled,
+};
 const DEFAULT_GENERAL_SETTINGS = {
   fileUploadMaxBytes: DEFAULT_FILE_UPLOAD_MAX_BYTES,
   fileOpenMaxBytes: DEFAULT_FILE_OPEN_MAX_BYTES,
   gatewayPublicIps: [] as string[],
   gatewayGrpcPublicTarget: null as string | null,
   gatewayGrpcLocalIp: null as string | null,
-  features: DEFAULT_GATEWAY_FEATURES,
+  features: DEFAULT_GENERAL_FEATURES,
 };
 
 function bytesToMegabytes(bytes: number) {
@@ -49,7 +54,7 @@ function withDefaultGeneralSettings(settings: AuthProvisioningSettings | null) {
       ...DEFAULT_GENERAL_SETTINGS,
       ...settings.generalSettings,
       features: {
-        ...DEFAULT_GATEWAY_FEATURES,
+        ...DEFAULT_GENERAL_FEATURES,
         ...settings.generalSettings?.features,
       },
     },
@@ -119,6 +124,11 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
         ?.features?.pkiEnabled ?? DEFAULT_GATEWAY_FEATURES.pkiEnabled
   );
+  const [inferenceEnabled, setInferenceEnabled] = useState(
+    () =>
+      api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
+        ?.features?.inferenceEnabled ?? DEFAULT_GATEWAY_FEATURES.inferenceEnabled
+  );
   const skipNextCidrsBlur = useRef(false);
   const skipNextWebhookCidrsBlur = useRef(false);
 
@@ -137,6 +147,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       setGatewayGrpcPublicTarget(settingsData.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(settingsData.generalSettings.gatewayGrpcLocalIp ?? "");
       setPkiEnabled(settingsData.generalSettings.features?.pkiEnabled ?? true);
+      setInferenceEnabled(settingsData.generalSettings.features?.inferenceEnabled ?? false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to load Gateway settings");
     }
@@ -239,6 +250,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       setGatewayGrpcPublicTarget(updated.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(updated.generalSettings.gatewayGrpcLocalIp ?? "");
       setPkiEnabled(nextSettings.generalSettings.features.pkiEnabled);
+      setInferenceEnabled(nextSettings.generalSettings.features.inferenceEnabled);
       const currentFeatures = useSystemConfigStore.getState().config.features;
       useSystemConfigStore.getState().setConfig(
         withDefaultSystemConfig({
@@ -259,6 +271,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       setGatewayGrpcPublicTarget(previous.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(previous.generalSettings.gatewayGrpcLocalIp ?? "");
       setPkiEnabled(previous.generalSettings.features.pkiEnabled);
+      setInferenceEnabled(previous.generalSettings.features.inferenceEnabled);
       toast.error(err instanceof Error ? err.message : "Failed to update Gateway settings");
     } finally {
       setIsSavingGeneral(false);
@@ -295,7 +308,8 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
     draftGatewayPublicIps.join(",") !== settings?.generalSettings.gatewayPublicIps.join(",") ||
     draftGatewayGrpcPublicTarget !== settings?.generalSettings.gatewayGrpcPublicTarget ||
     draftGatewayGrpcLocalIp !== settings?.generalSettings.gatewayGrpcLocalIp ||
-    pkiEnabled !== settings?.generalSettings.features.pkiEnabled;
+    pkiEnabled !== settings?.generalSettings.features.pkiEnabled ||
+    inferenceEnabled !== settings?.generalSettings.features.inferenceEnabled;
 
   const saveGeneralSettings = () => {
     if (!settings) return;
@@ -323,7 +337,8 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       draftGatewayPublicIps.join(",") === settings.generalSettings.gatewayPublicIps.join(",") &&
       draftGatewayGrpcPublicTarget === settings.generalSettings.gatewayGrpcPublicTarget &&
       draftGatewayGrpcLocalIp === settings.generalSettings.gatewayGrpcLocalIp &&
-      pkiEnabled === settings.generalSettings.features.pkiEnabled
+      pkiEnabled === settings.generalSettings.features.pkiEnabled &&
+      inferenceEnabled === settings.generalSettings.features.inferenceEnabled
     ) {
       return;
     }
@@ -333,7 +348,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       gatewayPublicIps: draftGatewayPublicIps,
       gatewayGrpcPublicTarget: draftGatewayGrpcPublicTarget,
       gatewayGrpcLocalIp: draftGatewayGrpcLocalIp,
-      features: { ...settings.generalSettings.features, pkiEnabled },
+      features: { ...settings.generalSettings.features, pkiEnabled, inferenceEnabled },
     });
   };
 
@@ -592,6 +607,20 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
               checked={pkiEnabled}
               disabled={!canEdit || isSavingGeneral}
               onChange={setPkiEnabled}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-4 px-4 py-3">
+            <div>
+              <p className="text-sm font-medium">Inference</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Enable the inference proxy, user tokens, usage, and provider administration
+              </p>
+            </div>
+            <Switch
+              checked={inferenceEnabled}
+              disabled={!canEdit || isSavingGeneral}
+              ariaLabel="Enable inference"
+              onChange={setInferenceEnabled}
             />
           </div>
         </div>

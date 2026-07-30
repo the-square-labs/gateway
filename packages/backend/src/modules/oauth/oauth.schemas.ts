@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { isApiTokenScope } from '@/lib/scopes.js';
+import { isValidBaseScope } from '@/lib/scopes.js';
 
 const UrlSchema = z.string().max(2048).url();
 const HttpUrlSchema = UrlSchema.refine((value) => {
@@ -15,7 +15,7 @@ const OptionalHttpUrlSchema = HttpUrlSchema.or(z.literal(''));
 const ScopeStringSchema = z
   .string()
   .regex(/^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*(:[a-zA-Z0-9-]+)*$/, 'Invalid scope format')
-  .refine(isApiTokenScope, 'Scope is not grantable to OAuth clients');
+  .refine(isValidBaseScope, 'Scope is not recognized');
 
 export const OAuthClientRegistrationSchema = z.object({
   redirect_uris: z.array(UrlSchema).min(1).max(10),

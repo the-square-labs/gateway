@@ -44,6 +44,7 @@ function registerOAuthService(overrides: Partial<OAuthService> = {}) {
     getIssuerUrl: vi.fn().mockReturnValue('https://gateway.example.com'),
     getApiResourceUrl: vi.fn().mockReturnValue('https://gateway.example.com/api'),
     getMcpResourceUrl: vi.fn().mockReturnValue('https://gateway.example.com/api/mcp'),
+    getInferenceSetupResourceUrl: vi.fn().mockReturnValue('https://gateway.example.com/api/inference/setup'),
     registerClient: vi.fn().mockResolvedValue({
       client_id: 'goc_client',
       client_id_issued_at: 1777413600,
@@ -155,6 +156,22 @@ describe('OAuth metadata routes', () => {
     }
   });
 
+  it('advertises isolated inference setup OAuth metadata', async () => {
+    const app = createApp();
+    const authorization = await app.request('/.well-known/oauth-authorization-server/api/inference/setup');
+    const protectedResource = await app.request('/.well-known/oauth-protected-resource/api/inference/setup');
+
+    expect(await authorization.json()).toMatchObject({
+      authorization_endpoint: 'https://gateway.example.com/api/oauth/authorize/api/inference/setup',
+      grant_types_supported: ['authorization_code', 'refresh_token'],
+      scopes_supported: ['inference:setup'],
+    });
+    expect(await protectedResource.json()).toMatchObject({
+      resource: 'https://gateway.example.com/api/inference/setup',
+      scopes_supported: ['inference:setup'],
+    });
+  });
+
   it('advertises authorization server metadata below the MCP endpoint path', async () => {
     const app = new Hono<AppEnv>();
     app.onError(errorHandler);
@@ -223,6 +240,26 @@ describe('OAuth authorization route', () => {
     expect(createConsentRequest).toHaveBeenCalledWith(
       expect.objectContaining({ id: USER.id }),
       expect.objectContaining({ resource: 'https://gateway.example.com/api/mcp' })
+    );
+  });
+
+  it('uses the isolated setup resource for inference setup alias requests', async () => {
+    registerSession();
+    const createConsentRequest = vi.fn().mockResolvedValue({ id: 'request-1' });
+    registerOAuthService({ createConsentRequest });
+    const setupPath = `${authorizePath}&scope=inference%3Asetup`.replace(
+      '/authorize?',
+      '/authorize/api/inference/setup?'
+    );
+
+    const response = await createApp().request(setupPath, {
+      headers: { Cookie: 'session_id=session-1' },
+    });
+
+    expect(response.status).toBe(302);
+    expect(createConsentRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ id: USER.id }),
+      expect.objectContaining({ resource: 'https://gateway.example.com/api/inference/setup' })
     );
   });
 

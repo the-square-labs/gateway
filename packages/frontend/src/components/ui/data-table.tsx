@@ -1,5 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Fragment, type ReactNode, useEffect, useMemo, useRef } from "react";
+import { cn } from "@/lib/utils";
 
 export interface DataTableColumn<T> {
   key: string;
@@ -38,6 +39,8 @@ interface DataTableProps<T> {
   horizontalScroll?: boolean;
   /** Minimum table width when horizontalScroll is enabled */
   minWidth?: string;
+  /** Remove the outer card chrome when another shared shell owns the border. */
+  embedded?: boolean;
 }
 
 type FlatItem<T> =
@@ -61,6 +64,7 @@ export function DataTable<T>({
   onGroupClick,
   horizontalScroll = false,
   minWidth,
+  embedded = false,
 }: DataTableProps<T>) {
   const internalRef = useRef<HTMLDivElement>(null);
   const containerRef = scrollRef ?? internalRef;
@@ -106,7 +110,12 @@ export function DataTable<T>({
 
   if (data.length === 0) {
     return (
-      <div className="border border-border rounded-lg bg-card flex items-center justify-center py-16">
+      <div
+        className={cn(
+          "flex items-center justify-center bg-card py-16",
+          !embedded && "rounded-lg border border-border"
+        )}
+      >
         {emptyContent ?? <p className="text-sm text-muted-foreground">{emptyMessage}</p>}
       </div>
     );
@@ -116,7 +125,12 @@ export function DataTable<T>({
   const totalSize = virtualizer.getTotalSize();
 
   return (
-    <div className="border border-border rounded-lg bg-card flex flex-col min-h-0 max-h-full overflow-hidden">
+    <div
+      className={cn(
+        "flex min-h-0 max-h-full flex-col overflow-hidden bg-card",
+        !embedded && "rounded-lg border border-border"
+      )}
+    >
       <div
         ref={containerRef}
         className={`${horizontalScroll ? "overflow-auto" : "overflow-y-auto"} min-h-0 -mb-px`}
@@ -175,7 +189,7 @@ export function DataTable<T>({
                     ref={virtualizer.measureElement}
                     data-index={vi.index}
                     className={`absolute inset-x-0 grid items-center border-b border-border transition-colors ${
-                      canClick ? "cursor-pointer hover:bg-muted/50" : ""
+                      canClick ? "cursor-pointer hover:bg-accent" : ""
                     }`}
                     style={{
                       transform: `translateY(${top}px)`,

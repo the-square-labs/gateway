@@ -209,6 +209,25 @@ describe('AIService system prompt', () => {
     expect(prompt).toContain('Use find_resource FIRST');
   });
 
+  it('keeps inference separate and routes scoped users to current setup documentation', async () => {
+    const monitoringService = {
+      getDashboardStats: vi.fn().mockRejectedValue(new Error('stats unavailable')),
+    };
+    const service = createService({ monitoringService });
+
+    const prompt = await service.buildSystemPrompt({
+      ...BASE_USER,
+      scopes: ['inference:providers:manage'],
+    });
+
+    expect(prompt).toContain('Available topics:');
+    expect(prompt).toContain('inference');
+    expect(prompt).toContain('Gateway Inference is separate from the internal AI Assistant and Gateway MCP');
+    expect(prompt).toContain('internal_documentation({ topic: "inference" })');
+    expect(prompt).toContain('Never reuse Assistant/MCP credentials');
+    expect(prompt).toContain('removed /api/inference/v1 endpoint');
+  });
+
   it('warns Docker-scoped users to recover stale container IDs through resource search', async () => {
     const monitoringService = {
       getDashboardStats: vi.fn().mockRejectedValue(new Error('stats unavailable')),

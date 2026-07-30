@@ -55,8 +55,8 @@ function parseScopeString(scope: string | undefined): string[] {
   return [...new Set(scope.trim().split(/\s+/).filter(Boolean))];
 }
 
-function assertGrantableScopes(scopes: string[]): void {
-  const invalid = scopes.filter((scope) => !isApiTokenScope(scope));
+function assertGrantableScopes(scopes: string[], setupResource: boolean): void {
+  const invalid = scopes.filter((scope) => (setupResource ? scope !== 'inference:setup' : !isApiTokenScope(scope)));
   if (invalid.length > 0) {
     throw new AppError(400, 'INVALID_SCOPE', `Scopes are not grantable: ${invalid.join(', ')}`);
   }
@@ -129,7 +129,8 @@ export class OAuthService {
       getMcpResourceUrl: () => this.getMcpResourceUrl(),
       getClient: (clientId) => this.getClient(clientId),
       isSupportedResource: (resource) => this.isSupportedResource(resource),
-      assertMcpResourceAllowed: (user, resource) => this.assertMcpResourceAllowed(user, resource),
+      assertResourceAllowed: (user, resource) => this.assertResourceAllowed(user, resource),
+      grantScopes: (user, resource, requestedScopes) => this.grantScopes(user, resource, requestedScopes),
     });
   }
 
@@ -145,22 +146,48 @@ export class OAuthService {
     return new URL('/api', getEnv().APP_URL).href;
   }
 
+  getInferenceSetupResourceUrl(): string {
+    return new URL('/api/inference/setup', getEnv().APP_URL).href;
+  }
+
   getProtectedResourceMetadataUrl(): string {
     return new URL('/.well-known/oauth-protected-resource/api/mcp', getEnv().APP_URL).href;
   }
 
   isSupportedResource(resource: string): boolean {
-    return resource === this.getApiResourceUrl() || resource === this.getMcpResourceUrl();
+    return (
+      resource === this.getApiResourceUrl() ||
+      resource === this.getMcpResourceUrl() ||
+      resource === this.getInferenceSetupResourceUrl()
+    );
   }
 
   private isMcpResource(resource: string): boolean {
     return resource === this.getMcpResourceUrl();
   }
 
-  private assertMcpResourceAllowed(user: User, resource: string): void {
+  assertResourceAllowed(user: User, resource: string): void {
     if (this.isMcpResource(resource) && !hasScope(user.scopes, 'mcp:use')) {
       throw new AppError(403, 'MCP_NOT_ALLOWED', 'Your account is not allowed to use MCP');
     }
+    if (resource === this.getInferenceSetupResourceUrl() && !this.canUseInferenceSetup(user)) {
+      throw new AppError(403, 'INFERENCE_SETUP_NOT_ALLOWED', 'Your account is not allowed to set up inference clients');
+    }
+  }
+
+  grantScopes(user: User, resource: string, requestedScopes: string[]): string[] {
+    if (resource === this.getInferenceSetupResourceUrl()) {
+      return this.canUseInferenceSetup(user) && requestedScopes.includes('inference:setup') ? ['inference:setup'] : [];
+    }
+    return canonicalizeScopes(boundScopes(requestedScopes, user.scopes)).filter((scope) => isApiTokenScope(scope));
+  }
+
+  private canUseInferenceSetup(user: User): boolean {
+    return (
+      hasScope(user.scopes, 'inference:use') &&
+      hasScope(user.scopes, 'inference:tokens:create') &&
+      hasScope(user.scopes, 'inference:tokens:revoke')
+    );
   }
 
   async registerClient(input: OAuthClientRegistrationInput) {
@@ -232,14 +259,10 @@ export class OAuthService {
     if (!this.isSupportedResource(resource)) {
       throw new AppError(400, 'INVALID_TARGET', 'OAuth authorization is not available for this resource');
     }
-    this.assertMcpResourceAllowed(user, resource);
+    this.assertResourceAllowed(user, resource);
 
-    const grantableScopes = canonicalizeScopes(boundScopes(requestedScopes, user.scopes)).filter((scope) =>
-      isApiTokenScope(scope)
-    );
-    const unavailableScopes = requestedScopes.filter(
-      (scope) => !hasScope(user.scopes, scope) || !isApiTokenScope(scope)
-    );
+    const grantableScopes = this.grantScopes(user, resource, requestedScopes);
+    const unavailableScopes = requestedScopes.filter((scope) => !grantableScopes.includes(scope));
 
     const pending: PendingConsent = {
       id: randomBytes(18).toString('base64url'),
@@ -276,13 +299,9 @@ export class OAuthService {
     const oauthExtendedCallbackCompatibility = await this.authSettingsService.getOAuthExtendedCallbackCompatibility();
     assertRedirectUriAllowed(pending.redirectUri, oauthExtendedCallbackCompatibility);
 
-    this.assertMcpResourceAllowed(user, pending.resource);
-    const grantableScopes = canonicalizeScopes(boundScopes(pending.requestedScopes, user.scopes)).filter((scope) =>
-      isApiTokenScope(scope)
-    );
-    const unavailableScopes = pending.requestedScopes.filter(
-      (scope) => !hasScope(user.scopes, scope) || !isApiTokenScope(scope)
-    );
+    this.assertResourceAllowed(user, pending.resource);
+    const grantableScopes = this.grantScopes(user, pending.resource, pending.requestedScopes);
+    const unavailableScopes = pending.requestedScopes.filter((scope) => !grantableScopes.includes(scope));
 
     return {
       ...pending,
@@ -298,7 +317,7 @@ export class OAuthService {
     const scopes = canonicalizeScopes(
       selectedScopes === undefined ? withoutManualApprovalScopes(pending.grantableScopes) : selectedScopes
     );
-    assertGrantableScopes(scopes);
+    assertGrantableScopes(scopes, pending.resource === this.getInferenceSetupResourceUrl());
     if (!isScopeSubset(scopes, pending.grantableScopes)) {
       throw new AppError(403, 'SCOPE_NOT_ALLOWED', 'Selected scopes exceed the current user permissions');
     }
@@ -381,8 +400,8 @@ export class OAuthService {
     const user = await resolveLiveUser(this.db, code.userId);
     if (!user || user.isBlocked) throw new AppError(400, 'INVALID_GRANT', 'User is no longer active');
     const resource = code.resource ?? this.getApiResourceUrl();
-    this.assertMcpResourceAllowed(user, resource);
-    const scopes = canonicalizeScopes(boundScopes(code.scopes, user.scopes)).filter((scope) => isApiTokenScope(scope));
+    this.assertResourceAllowed(user, resource);
+    const scopes = this.grantScopes(user, resource, code.scopes);
     if (scopes.length === 0) throw new AppError(400, 'INVALID_GRANT', 'User can no longer grant these scopes');
 
     const [usedCode] = await this.db

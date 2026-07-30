@@ -30,6 +30,7 @@ describe('AI internal docs registry', () => {
       'conversations',
       'status-page',
       'api',
+      'inference',
       'ai-settings',
       'gitlab',
       'notifications',
@@ -48,6 +49,7 @@ describe('AI internal docs registry', () => {
       gitlab: 'integrations:gitlab:view',
       notifications: 'notifications:view',
       proxy: 'proxy:view',
+      inference: expect.arrayContaining(['inference:use', 'inference:providers:manage', 'inference:models:manage']),
     });
   });
 
@@ -91,6 +93,22 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).toContain('update_ai_settings');
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).toContain('providerUrl');
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).not.toContain('baseUrl:');
+    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
+      'npx @wiolett/gateway inference setup'
+    );
+    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain('/api/inference/openai/v1');
+    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
+      '/api/inference/anthropic/v1/messages'
+    );
+    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
+      'Profile > Authorizations > Inference API tokens'
+    );
+    expect(getInternalDocumentation('inference', ['inference:providers:manage']).content).toContain(
+      'manage_inference_provider'
+    );
+    expect(getInternalDocumentation('inference', ['inference:models:manage']).content).toContain(
+      'manage_inference_model'
+    );
     expect(getInternalDocumentation('status-page', ['status-page:view']).content).toContain('manage_status_page');
     expect(getInternalDocumentation('status-page', ['status-page:view']).content).toContain(
       'status-page:incidents:create'

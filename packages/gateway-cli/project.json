@@ -1,0 +1,28 @@
+{
+  "name": "gateway-cli",
+  "root": "packages/gateway-cli",
+  "sourceRoot": "packages/gateway-cli/src",
+  "targets": {
+    "build": {
+      "command": "pnpm --filter @wiolett/gateway build",
+      "inputs": ["{projectRoot}/src/**/*", "{projectRoot}/package.json"],
+      "outputs": ["{projectRoot}/dist"],
+      "cache": true
+    },
+    "test": {
+      "command": "pnpm --filter @wiolett/gateway test",
+      "inputs": ["{projectRoot}/src/**/*", "{projectRoot}/vitest.config.*", "{projectRoot}/package.json"],
+      "cache": true
+    },
+    "lint": {
+      "command": "pnpm --filter @wiolett/gateway lint",
+      "inputs": ["{projectRoot}/src/**/*", "{projectRoot}/biome.json", "{projectRoot}/package.json"],
+      "cache": true
+    },
+    "typecheck": {
+      "command": "pnpm --filter @wiolett/gateway typecheck",
+      "inputs": ["{projectRoot}/src/**/*", "{projectRoot}/tsconfig.json"],
+      "cache": true
+    }
+  }
+}

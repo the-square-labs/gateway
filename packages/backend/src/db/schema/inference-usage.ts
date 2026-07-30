@@ -1,0 +1,171 @@
+import { sql } from 'drizzle-orm';
+import {
+  bigint,
+  boolean,
+  check,
+  index,
+  integer,
+  jsonb,
+  numeric,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+  varchar,
+} from 'drizzle-orm/pg-core';
+import { inferenceTokens } from './inference-auth.js';
+import { inferenceModelSources, inferenceModels, inferencePricingSnapshots } from './inference-models.js';
+import { inferenceProviderConnections } from './inference-providers.js';
+import { users } from './users.js';
+
+export type InferenceProtocol = 'responses' | 'chat_completions' | 'messages' | 'images' | 'search' | 'realtime';
+export type InferenceRequestStatus = 'reserved' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type InferenceAttemptStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type InferenceBudgetType = 'subscription' | 'api';
+export type InferenceLedgerEntryType = 'settlement' | 'adjustment';
+export type InferenceQuotaStatus = 'fresh' | 'stale' | 'unavailable';
+
+const usageColumns = {
+  uncachedInputTokens: bigint('uncached_input_tokens', { mode: 'number' }).notNull().default(0),
+  cachedInputTokens: bigint('cached_input_tokens', { mode: 'number' }).notNull().default(0),
+  cacheWriteTokens: bigint('cache_write_tokens', { mode: 'number' }).notNull().default(0),
+  outputTokens: bigint('output_tokens', { mode: 'number' }).notNull().default(0),
+  reasoningTokens: bigint('reasoning_tokens', { mode: 'number' }).notNull().default(0),
+};
+
+export const inferenceRequests = pgTable(
+  'inference_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    tokenId: uuid('token_id').references(() => inferenceTokens.id, { onDelete: 'set null' }),
+    modelId: uuid('model_id').references(() => inferenceModels.id, { onDelete: 'set null' }),
+    sourceId: uuid('source_id').references(() => inferenceModelSources.id, { onDelete: 'set null' }),
+    connectionId: uuid('connection_id').references(() => inferenceProviderConnections.id, { onDelete: 'set null' }),
+    pricingSnapshotId: uuid('pricing_snapshot_id').references(() => inferencePricingSnapshots.id, {
+      onDelete: 'set null',
+    }),
+    idempotencyKeyHash: text('idempotency_key_hash'),
+    affinityKeyHash: text('affinity_key_hash'),
+    protocol: varchar('protocol', { length: 32 }).$type<InferenceProtocol>().notNull(),
+    operation: varchar('operation', { length: 64 }).notNull(),
+    publicModelId: text('public_model_id').notNull(),
+    upstreamModelId: text('upstream_model_id'),
+    reasoningEffort: varchar('reasoning_effort', { length: 32 }),
+    budgetType: varchar('budget_type', { length: 16 }).$type<InferenceBudgetType>(),
+    status: varchar('status', { length: 16 }).$type<InferenceRequestStatus>().notNull().default('reserved'),
+    isCompaction: boolean('is_compaction').notNull().default(false),
+    estimatedUsage: boolean('estimated_usage').notNull().default(false),
+    priceVersion: varchar('price_version', { length: 80 }),
+    serviceTier: varchar('service_tier', { length: 32 }),
+    modelMultiplier: numeric('model_multiplier', { precision: 20, scale: 6 }),
+    burnMultiplier: numeric('burn_multiplier', { precision: 20, scale: 6 }),
+    serviceTierMultiplier: numeric('service_tier_multiplier', { precision: 20, scale: 6 }).notNull().default('1'),
+    creditsCharged: numeric('credits_charged', { precision: 24, scale: 6 }).notNull().default('0'),
+    apiMicrodollarsCharged: bigint('api_microdollars_charged', { mode: 'number' }).notNull().default(0),
+    ...usageColumns,
+    responseStatus: integer('response_status'),
+    errorCode: varchar('error_code', { length: 128 }),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('inference_requests_user_idempotency_unique')
+      .on(table.userId, table.idempotencyKeyHash)
+      .where(sql`${table.idempotencyKeyHash} IS NOT NULL`),
+    index('inference_requests_user_created_idx').on(table.userId, table.createdAt),
+    index('inference_requests_status_idx').on(table.status, table.startedAt),
+    index('inference_requests_model_created_idx').on(table.modelId, table.createdAt),
+    check(
+      'inference_requests_charges_nonnegative',
+      sql`${table.creditsCharged} >= 0 AND ${table.apiMicrodollarsCharged} >= 0 AND ${table.serviceTierMultiplier} > 0`
+    ),
+  ]
+);
+
+export const inferenceRequestAttempts = pgTable(
+  'inference_request_attempts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    requestId: uuid('request_id')
+      .notNull()
+      .references(() => inferenceRequests.id, { onDelete: 'cascade' }),
+    sequence: integer('sequence').notNull(),
+    sourceId: uuid('source_id').references(() => inferenceModelSources.id, { onDelete: 'set null' }),
+    connectionId: uuid('connection_id').references(() => inferenceProviderConnections.id, { onDelete: 'set null' }),
+    status: varchar('status', { length: 16 }).$type<InferenceAttemptStatus>().notNull().default('pending'),
+    upstreamStatus: integer('upstream_status'),
+    errorCode: varchar('error_code', { length: 128 }),
+    emittedOutput: boolean('emitted_output').notNull().default(false),
+    latencyMs: integer('latency_ms'),
+    ...usageColumns,
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('inference_attempts_request_sequence_unique').on(table.requestId, table.sequence),
+    index('inference_attempts_connection_started_idx').on(table.connectionId, table.startedAt),
+  ]
+);
+
+export const inferenceUsageLedger = pgTable(
+  'inference_usage_ledger',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    requestId: uuid('request_id')
+      .notNull()
+      .references(() => inferenceRequests.id, { onDelete: 'restrict' }),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    entryType: varchar('entry_type', { length: 16 }).$type<InferenceLedgerEntryType>().notNull(),
+    budgetType: varchar('budget_type', { length: 16 }).$type<InferenceBudgetType>().notNull(),
+    credits: numeric('credits', { precision: 24, scale: 6 }).notNull().default('0'),
+    apiMicrodollars: bigint('api_microdollars', { mode: 'number' }).notNull().default(0),
+    ...usageColumns,
+    reason: varchar('reason', { length: 128 }),
+    snapshot: jsonb('snapshot').$type<Record<string, unknown>>().notNull().default({}),
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  },
+  (table) => [
+    index('inference_usage_ledger_user_time_idx').on(table.userId, table.occurredAt),
+    index('inference_usage_ledger_request_idx').on(table.requestId),
+    uniqueIndex('inference_usage_ledger_settlement_unique')
+      .on(table.requestId)
+      .where(sql`${table.entryType} = 'settlement'`),
+    check('inference_usage_ledger_values_nonnegative', sql`${table.credits} >= 0 AND ${table.apiMicrodollars} >= 0`),
+  ]
+);
+
+export const inferenceQuotaSnapshots = pgTable(
+  'inference_quota_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    connectionId: uuid('connection_id').references(() => inferenceProviderConnections.id, { onDelete: 'set null' }),
+    dimension: varchar('dimension', { length: 128 }).notNull(),
+    modelBucket: varchar('model_bucket', { length: 255 }),
+    status: varchar('status', { length: 16 }).$type<InferenceQuotaStatus>().notNull(),
+    remainingFraction: numeric('remaining_fraction', { precision: 12, scale: 9 }),
+    remainingValue: numeric('remaining_value', { precision: 30, scale: 9 }),
+    limitValue: numeric('limit_value', { precision: 30, scale: 9 }),
+    resetAt: timestamp('reset_at', { withTimezone: true }),
+    fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull(),
+    validUntil: timestamp('valid_until', { withTimezone: true }).notNull(),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('inference_quota_connection_time_idx').on(table.connectionId, table.fetchedAt),
+    index('inference_quota_validity_idx').on(table.status, table.validUntil),
+    check(
+      'inference_quota_fraction_range',
+      sql`${table.remainingFraction} IS NULL OR (${table.remainingFraction} >= 0 AND ${table.remainingFraction} <= 1)`
+    ),
+  ]
+);
+
+export type InferenceRequest = typeof inferenceRequests.$inferSelect;
+export type InferenceRequestAttempt = typeof inferenceRequestAttempts.$inferSelect;
+export type InferenceUsageLedgerEntry = typeof inferenceUsageLedger.$inferSelect;
+export type InferenceQuotaSnapshot = typeof inferenceQuotaSnapshots.$inferSelect;

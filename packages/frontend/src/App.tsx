@@ -56,6 +56,7 @@ import { NodeConsolePopout } from "@/pages/NodeConsolePopout";
 import { Notifications } from "@/pages/Notifications";
 import { OAuthConsent } from "@/pages/OAuthConsent";
 import { OAuthError } from "@/pages/OAuthError";
+import { Profile } from "@/pages/Profile";
 import { ProxyHostDetail } from "@/pages/ProxyHostDetail";
 import { ProxyHosts } from "@/pages/ProxyHosts";
 import { Settings } from "@/pages/Settings";
@@ -955,6 +956,7 @@ export default function App() {
                 path="/logging/schemas/:schemaSlug/:tab?"
                 element={<LoggingPageGuard detailType="schema" />}
               />
+              <Route path="/profile/:tab?" element={<Profile />} />
               <Route path="/settings/:tab?" element={<Settings />} />
               <Route
                 path="/admin/users"

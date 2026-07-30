@@ -54,6 +54,29 @@ import { DomainsService } from '@/modules/domains/domain.service.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import { GroupService } from '@/modules/groups/group.service.js';
 import { PermissionGroupFolderService } from '@/modules/groups/permission-group-folders.service.js';
+import { InferenceAccountingService } from '@/modules/inference/accounting/inference-accounting.service.js';
+import { InferenceBudgetLockService } from '@/modules/inference/accounting/inference-budget-lock.service.js';
+import { InferenceBudgetPolicyService } from '@/modules/inference/accounting/inference-budget-policy.js';
+import { InferenceBudgetReservationService } from '@/modules/inference/accounting/inference-budget-reservation.service.js';
+import { InferenceReservationReconciler } from '@/modules/inference/accounting/inference-reservation-reconciler.js';
+import { InferenceUsageService } from '@/modules/inference/accounting/inference-usage.service.js';
+import { InferenceContinuationService } from '@/modules/inference/inference-continuation.service.js';
+import { InferenceCredentialVault } from '@/modules/inference/inference-credential-vault.js';
+import { InferenceExtendedService } from '@/modules/inference/inference-extended.service.js';
+import { InferenceGatewayExecutor } from '@/modules/inference/inference-gateway.executor.js';
+import { InferenceProtocolService } from '@/modules/inference/inference-protocol.service.js';
+import { InferenceRuntimeService } from '@/modules/inference/inference-runtime.service.js';
+import { InferenceSetupEventsService } from '@/modules/inference/inference-setup-events.service.js';
+import { InferenceTokenService } from '@/modules/inference/inference-token.service.js';
+import { InferenceModelService } from '@/modules/inference/models/inference-model.service.js';
+import { InferenceModelAccessService } from '@/modules/inference/models/inference-model-access.service.js';
+import { InferenceDestinationPolicy } from '@/modules/inference/providers/inference-destination-policy.js';
+import { InferenceOAuthService } from '@/modules/inference/providers/inference-oauth.service.js';
+import { InferenceProviderRegistry } from '@/modules/inference/providers/inference-provider.registry.js';
+import { InferenceProviderService } from '@/modules/inference/providers/inference-provider.service.js';
+import { InferenceProviderCredentialService } from '@/modules/inference/providers/inference-provider-credential.service.js';
+import { InferenceProviderHttpConnector } from '@/modules/inference/providers/inference-provider-http.connector.js';
+import { InferenceRoutingService } from '@/modules/inference/providers/inference-routing.service.js';
 import { GitLabProvider } from '@/modules/integrations/gitlab-provider.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { LicenseService } from '@/modules/license/license.service.js';
@@ -144,6 +167,8 @@ export async function initializeContainer(): Promise<void> {
   // Realtime event bus (in-process; swappable to Redis pub/sub later)
   const eventBus = new EventBusService();
   container.registerInstance(EventBusService, eventBus);
+  const inferenceSetupEvents = new InferenceSetupEventsService(eventBus);
+  container.registerInstance(InferenceSetupEventsService, inferenceSetupEvents);
 
   const sessionService = new SessionService(cacheService);
   container.registerInstance(SessionService, sessionService);
@@ -157,7 +182,7 @@ export async function initializeContainer(): Promise<void> {
   const mcpSettingsService = new McpSettingsService(db);
   container.registerInstance(McpSettingsService, mcpSettingsService);
 
-  const generalSettingsService = new GeneralSettingsService(db);
+  const generalSettingsService = new GeneralSettingsService(db, inferenceSetupEvents);
   container.registerInstance(GeneralSettingsService, generalSettingsService);
 
   const networkSettingsService = new NetworkSettingsService(db);
@@ -198,6 +223,102 @@ export async function initializeContainer(): Promise<void> {
 
   const tokensService = new TokensService(db, auditService);
   container.registerInstance(TokensService, tokensService);
+
+  const inferenceTokenService = new InferenceTokenService(db, auditService);
+  container.registerInstance(InferenceTokenService, inferenceTokenService);
+  const inferenceCredentialVault = new InferenceCredentialVault(cryptoService);
+  container.registerInstance(InferenceCredentialVault, inferenceCredentialVault);
+  const inferenceProviderRegistry = new InferenceProviderRegistry();
+  container.registerInstance(InferenceProviderRegistry, inferenceProviderRegistry);
+  const inferenceDestinationPolicy = new InferenceDestinationPolicy();
+  container.registerInstance(InferenceDestinationPolicy, inferenceDestinationPolicy);
+  const inferenceProviderConnector = new InferenceProviderHttpConnector(fetch, inferenceDestinationPolicy);
+  container.registerInstance(InferenceProviderHttpConnector, inferenceProviderConnector);
+  const inferenceOAuthService = new InferenceOAuthService(db, inferenceCredentialVault, inferenceProviderRegistry);
+  container.registerInstance(InferenceOAuthService, inferenceOAuthService);
+  const inferenceProviderCredentialService = new InferenceProviderCredentialService(
+    db,
+    redis,
+    inferenceCredentialVault,
+    inferenceOAuthService
+  );
+  container.registerInstance(InferenceProviderCredentialService, inferenceProviderCredentialService);
+  const inferenceProviderService = new InferenceProviderService(
+    db,
+    inferenceProviderRegistry,
+    inferenceProviderCredentialService,
+    inferenceProviderConnector,
+    auditService,
+    inferenceDestinationPolicy
+  );
+  container.registerInstance(InferenceProviderService, inferenceProviderService);
+  inferenceProviderService.start();
+  const inferenceRoutingService = new InferenceRoutingService(db, redis);
+  container.registerInstance(InferenceRoutingService, inferenceRoutingService);
+  const inferenceModelAccessService = new InferenceModelAccessService(db, redis);
+  container.registerInstance(InferenceModelAccessService, inferenceModelAccessService);
+  const inferenceModelService = new InferenceModelService(
+    db,
+    inferenceProviderRegistry,
+    inferenceModelAccessService,
+    auditService,
+    inferenceSetupEvents
+  );
+  container.registerInstance(InferenceModelService, inferenceModelService);
+  const inferenceContinuationService = new InferenceContinuationService(redis, cryptoService);
+  container.registerInstance(InferenceContinuationService, inferenceContinuationService);
+  const inferenceRuntimeService = new InferenceRuntimeService();
+  container.registerInstance(InferenceRuntimeService, inferenceRuntimeService);
+  const inferenceBudgetPolicyService = new InferenceBudgetPolicyService(db);
+  container.registerInstance(InferenceBudgetPolicyService, inferenceBudgetPolicyService);
+  const inferenceBudgetReservationService = new InferenceBudgetReservationService(redis);
+  container.registerInstance(InferenceBudgetReservationService, inferenceBudgetReservationService);
+  const inferenceBudgetLockService = new InferenceBudgetLockService(db);
+  container.registerInstance(InferenceBudgetLockService, inferenceBudgetLockService);
+  const inferenceAccountingService = new InferenceAccountingService(
+    inferenceBudgetPolicyService,
+    inferenceBudgetReservationService,
+    inferenceBudgetLockService
+  );
+  container.registerInstance(InferenceAccountingService, inferenceAccountingService);
+  const inferenceUsageService = new InferenceUsageService(db, inferenceBudgetPolicyService, auditService);
+  container.registerInstance(InferenceUsageService, inferenceUsageService);
+  const inferenceReservationReconciler = new InferenceReservationReconciler(
+    db,
+    inferenceBudgetReservationService,
+    inferenceBudgetLockService
+  );
+  container.registerInstance(InferenceReservationReconciler, inferenceReservationReconciler);
+  inferenceReservationReconciler.start();
+  const inferenceGatewayExecutor = new InferenceGatewayExecutor(
+    db,
+    inferenceModelService,
+    inferenceRoutingService,
+    inferenceAccountingService,
+    inferenceProviderCredentialService,
+    inferenceProviderRegistry,
+    inferenceProviderConnector,
+    inferenceDestinationPolicy
+  );
+  container.registerInstance(InferenceGatewayExecutor, inferenceGatewayExecutor);
+  inferenceRuntimeService.setExecutor(inferenceGatewayExecutor);
+  const inferenceExtendedService = new InferenceExtendedService(
+    db,
+    inferenceModelService,
+    inferenceAccountingService,
+    inferenceProviderCredentialService,
+    inferenceProviderRegistry,
+    inferenceProviderConnector,
+    inferenceDestinationPolicy,
+    inferenceRoutingService
+  );
+  container.registerInstance(InferenceExtendedService, inferenceExtendedService);
+  const inferenceProtocolService = new InferenceProtocolService(
+    inferenceRuntimeService,
+    inferenceContinuationService,
+    inferenceModelService
+  );
+  container.registerInstance(InferenceProtocolService, inferenceProtocolService);
 
   const gitLabProvider = new GitLabProvider();
   const integrationsService = new IntegrationsService(db, auditService, cryptoService, [gitLabProvider]);

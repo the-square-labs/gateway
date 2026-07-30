@@ -52,12 +52,14 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "0.115.0",
     "@biomejs/biome": "^2.4.9",
     "@types/node": "^22.10.5",
     "@types/node-cron": "^3.0.11",
     "@types/node-forge": "^1.3.11",
     "@types/pg": "^8.11.10",
     "drizzle-kit": "^0.31.9",
+    "openai7": "npm:openai@7.0.0",
     "tsc-alias": "^1.8.10",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",

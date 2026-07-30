@@ -13,7 +13,17 @@ func DeployCert(certsDir, certID string, certPem, keyPem, chainPem []byte) error
 		return fmt.Errorf("create cert dir: %w", err)
 	}
 
-	if err := WriteAtomic(filepath.Join(dir, "fullchain.pem"), certPem); err != nil {
+	fullchainPem := certPem
+	if len(chainPem) > 0 {
+		fullchainPem = make([]byte, 0, len(certPem)+1+len(chainPem))
+		fullchainPem = append(fullchainPem, certPem...)
+		if len(certPem) > 0 && certPem[len(certPem)-1] != '\n' {
+			fullchainPem = append(fullchainPem, '\n')
+		}
+		fullchainPem = append(fullchainPem, chainPem...)
+	}
+
+	if err := WriteAtomic(filepath.Join(dir, "fullchain.pem"), fullchainPem); err != nil {
 		return fmt.Errorf("write cert: %w", err)
 	}
 

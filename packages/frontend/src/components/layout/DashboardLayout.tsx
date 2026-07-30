@@ -66,6 +66,25 @@ export function DashboardLayout() {
   const [hasNginxNodes, setHasNginxNodes] = useState(true); // default true to avoid flash
   const bootstrapCancelledRef = useRef(false);
   const loadSystemConfig = useSystemConfigStore((state) => state.load);
+  const systemConfigLoaded = useSystemConfigStore((state) => state.loaded);
+  const [systemConfigReady, setSystemConfigReady] = useState(systemConfigLoaded);
+
+  useEffect(() => {
+    if (systemConfigLoaded) setSystemConfigReady(true);
+  }, [systemConfigLoaded]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const refresh = () => {
+      if (document.visibilityState !== "hidden") void loadSystemConfig().catch(() => {});
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [isAuthenticated, loadSystemConfig]);
 
   useEffect(() => {
     if (isAuthenticated) return;
@@ -166,7 +185,6 @@ export function DashboardLayout() {
                 .then((status) => useAIStore.getState().setEnabled(status.enabled))
                 .catch(() => {})
             : Promise.resolve(),
-          loadSystemConfig().catch(() => {}),
         ]);
 
         return { hasNginxNodes };
@@ -195,6 +213,15 @@ export function DashboardLayout() {
           navigate("/blocked");
           return;
         }
+        if (!useSystemConfigStore.getState().loaded) {
+          try {
+            await loadSystemConfig();
+          } catch {
+            // Continue with feature defaults, but never leave the primary loader stuck.
+          }
+        }
+        if (bootstrapCancelledRef.current) return;
+        setSystemConfigReady(true);
         if (!existingUser) setUser(user);
         runGlobalBootstrap(user);
       } catch (error) {
@@ -425,7 +452,7 @@ export function DashboardLayout() {
     };
   }, [commandPaletteOpen, setCommandPaletteOpen, navigate]);
 
-  if (isLoading) {
+  if (isLoading || !systemConfigReady) {
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="flex flex-col items-center gap-4">

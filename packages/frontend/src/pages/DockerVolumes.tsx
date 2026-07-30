@@ -426,12 +426,12 @@ export function DockerVolumes({
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">
                 Node <span className="text-destructive">*</span>
               </label>
               <Select value={createNodeId} onValueChange={setCreateNodeId}>
-                <SelectTrigger className="mt-1">
+                <SelectTrigger>
                   <SelectValue placeholder="Select a node" />
                 </SelectTrigger>
                 <SelectContent>
@@ -446,21 +446,19 @@ export function DockerVolumes({
                 </SelectContent>
               </Select>
             </div>
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">
                 Name <span className="text-destructive">*</span>
               </label>
               <Input
-                className="mt-1"
                 value={createName}
                 onChange={(e) => setCreateName(e.target.value)}
                 placeholder="my-volume"
               />
             </div>
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Driver</label>
               <Input
-                className="mt-1"
                 value={createDriver}
                 onChange={(e) => setCreateDriver(e.target.value)}
                 placeholder="local"

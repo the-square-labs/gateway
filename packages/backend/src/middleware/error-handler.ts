@@ -2,6 +2,7 @@ import type { ErrorHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { ZodError } from 'zod';
 import { logger } from '@/lib/logger.js';
+import { InferenceProtocolError } from '@/modules/inference/protocol/inference-protocol.error.js';
 import type { AppEnv } from '@/types.js';
 
 export interface ApiError {
@@ -64,6 +65,23 @@ export const errorHandler: ErrorHandler<AppEnv> = (err, c) => {
         message: err.message,
       },
       err.status
+    );
+  }
+
+  if (err instanceof InferenceProtocolError) {
+    logger.warn('Inference application error', {
+      requestId,
+      code: err.code,
+      message: err.message,
+      statusCode: err.status,
+    });
+    return c.json<ApiError>(
+      {
+        code: err.code,
+        message: err.message,
+        details: err.details,
+      },
+      err.status as 400
     );
   }
 

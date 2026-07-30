@@ -136,6 +136,20 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | ai:sandbox:manage | View/manage sandbox jobs beyond the current user |
 | mcp:use | Allow a user account to access the remote MCP server with OAuth |
 
+### Inference Gateway
+| Scope | Description |
+|-------|-------------|
+| inference:use | Send requests through the standalone inference data plane |
+| inference:setup | Authorize the Gateway companion CLI setup resource |
+| inference:tokens:create | Create dedicated gwi_ inference tokens for the current user |
+| inference:tokens:revoke | Revoke the current user's inference tokens |
+| inference:usage:view:self | View the current user's inference usage percentages |
+| inference:providers:view | View provider templates, connections, masked credentials, discovery, and quota |
+| inference:providers:manage | Connect, update, synchronize, route, and disconnect inference providers |
+| inference:models:manage | Atomically create, replace, publish, or delete logical inference models |
+| inference:limits:manage | Configure default and per-user inference budgets |
+| inference:usage:view | View system/user inference activity and raw accounting metadata |
+
 ### Docker: Containers
 | Scope | Description |
 |-------|-------------|

@@ -379,67 +379,62 @@ export function DockerRegistriesSection({ nodesList }: DockerRegistriesSectionPr
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">
                 Name <span className="text-destructive">*</span>
               </label>
               <Input
-                className="mt-1"
                 value={regName}
                 onChange={(e) => setRegName(e.target.value)}
                 placeholder="My Registry"
               />
             </div>
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">
                 URL <span className="text-destructive">*</span>
               </label>
               <Input
-                className="mt-1"
                 value={regUrl}
                 onChange={(e) => setRegUrl(e.target.value)}
                 placeholder="ghcr.io"
               />
             </div>
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">
                 Username <span className="text-muted-foreground font-normal">(optional)</span>
               </label>
               <Input
-                className="mt-1"
                 value={regUsername}
                 onChange={(e) => setRegUsername(e.target.value)}
                 placeholder="username"
               />
             </div>
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">
                 Password <span className="text-muted-foreground font-normal">(optional)</span>
               </label>
               <Input
-                className="mt-1"
                 type="password"
                 value={regPassword}
                 onChange={(e) => setRegPassword(e.target.value)}
                 placeholder={regEditId ? "(unchanged)" : "password or token"}
               />
             </div>
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">
                 Trusted Token Service{" "}
                 <span className="text-muted-foreground font-normal">(optional)</span>
               </label>
               <Input
-                className="mt-1"
                 value={regTrustedAuthRealm}
                 onChange={(e) => setRegTrustedAuthRealm(e.target.value)}
                 placeholder="https://auth.registry.example.com"
               />
-              <p className="mt-1 text-xs text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 HTTPS origin that may receive these credentials for Bearer token exchange.
               </p>
             </div>
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Scope</label>
               <Select
                 value={regScope === "node" && regNodeId ? `node:${regNodeId}` : "global"}
@@ -453,7 +448,7 @@ export function DockerRegistriesSection({ nodesList }: DockerRegistriesSectionPr
                   }
                 }}
               >
-                <SelectTrigger className="mt-1">
+                <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

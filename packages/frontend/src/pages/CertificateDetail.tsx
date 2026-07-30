@@ -323,7 +323,7 @@ export function CertificateDetail() {
                 Select a reason for revocation. This action cannot be undone.
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Reason</label>
               <Select value={revokeReason} onValueChange={setRevokeReason}>
                 <SelectTrigger>
@@ -365,7 +365,7 @@ export function CertificateDetail() {
                 Enter a passphrase to protect the exported certificate archive.
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Passphrase</label>
               <Input
                 type="password"

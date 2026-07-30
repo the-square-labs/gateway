@@ -1,3 +1,4 @@
+import { ProgressBar } from "@/components/ui/progress-bar";
 import { Sparkline } from "@/components/ui/sparkline";
 import { cn } from "@/lib/utils";
 
@@ -12,6 +13,7 @@ export interface StatCardProps {
   sparklineMax?: number;
   /** Override text color for label and value (e.g. for warning state) */
   valueColor?: string;
+  appearance?: "default" | "dashboard";
   className?: string;
   style?: React.CSSProperties;
 }
@@ -26,6 +28,7 @@ export function StatCard({
   progress,
   sparklineMax,
   valueColor,
+  appearance = "default",
   className,
   style,
 }: StatCardProps) {
@@ -34,31 +37,43 @@ export function StatCard({
       className={cn("border border-border bg-card flex flex-col overflow-hidden", className)}
       style={style}
     >
-      <div className="p-4 space-y-2 flex-1">
+      <div className="flex-1 space-y-2 p-4">
         <div className="flex items-center justify-between">
           <p
-            className="text-xs text-muted-foreground"
+            className={cn(
+              appearance === "dashboard" ? "text-sm" : "text-xs",
+              "text-muted-foreground"
+            )}
             style={valueColor ? { color: valueColor } : undefined}
           >
             {label}
           </p>
-          <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+          <Icon
+            className={cn(
+              appearance === "dashboard" ? "h-4 w-4" : "h-3.5 w-3.5",
+              "text-muted-foreground"
+            )}
+          />
         </div>
-        <p className="text-xl font-bold" style={valueColor ? { color: valueColor } : undefined}>
+        <p
+          className={cn(appearance === "dashboard" ? "text-2xl" : "text-xl", "font-bold")}
+          style={valueColor ? { color: valueColor } : undefined}
+        >
           {value}
         </p>
         {progress && (
-          <div className="w-full bg-muted h-1.5">
-            <div
-              className="h-1.5 transition-all"
-              style={{
-                width: `${Math.min(progress.percent, 100)}%`,
-                backgroundColor: progress.color ?? color,
-              }}
-            />
-          </div>
+          <ProgressBar value={progress.percent} indicatorColor={progress.color ?? color} />
         )}
-        {subtitle && <p className="text-[10px] text-muted-foreground">{subtitle}</p>}
+        {subtitle && (
+          <p
+            className={cn(
+              appearance === "dashboard" ? "text-xs" : "text-[10px]",
+              "text-muted-foreground"
+            )}
+          >
+            {subtitle}
+          </p>
+        )}
       </div>
       {history.length >= 1 && (
         <Sparkline

@@ -55,6 +55,7 @@ export interface AuthProvisioningSettings {
     features: {
       pkiEnabled: boolean;
       domainsEnabled: boolean;
+      inferenceEnabled: boolean;
     };
   };
   networkSecurity: {

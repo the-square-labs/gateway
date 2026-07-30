@@ -601,7 +601,7 @@ export function DockerImages({
           </DialogHeader>
           <div className="space-y-4">
             {/* Node */}
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">
                 Node <span className="text-destructive">*</span>
               </label>
@@ -612,7 +612,7 @@ export function DockerImages({
                   setPullRegistryId("");
                 }}
               >
-                <SelectTrigger className="mt-1">
+                <SelectTrigger>
                   <SelectValue placeholder="Select a node" />
                 </SelectTrigger>
                 <SelectContent>
@@ -629,14 +629,14 @@ export function DockerImages({
             </div>
 
             {/* Registry */}
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Registry</label>
               <Select
                 value={pullRegistryId || "__default__"}
                 onValueChange={(v) => setPullRegistryId(v === "__default__" ? "" : v)}
                 disabled={!pullNodeId}
               >
-                <SelectTrigger className="mt-1">
+                <SelectTrigger>
                   <SelectValue placeholder={pullNodeId ? "Docker Hub" : "Select a node first"} />
                 </SelectTrigger>
                 <SelectContent>
@@ -653,12 +653,11 @@ export function DockerImages({
             </div>
 
             {/* Image */}
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">
                 Image <span className="text-destructive">*</span>
               </label>
               <Input
-                className="mt-1"
                 value={pullRef}
                 onChange={(e) => setPullRef(e.target.value)}
                 placeholder="nginx:latest"

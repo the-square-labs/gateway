@@ -253,7 +253,7 @@ export function SettingsTab({
         bodyClassName="p-4 space-y-4"
         wrapHeader
       >
-        <div className="space-y-1">
+        <div className="space-y-1.5">
           <label className="text-xs text-muted-foreground">Template</label>
           <Select
             value={nginxTemplateId || "__none__"}
@@ -474,13 +474,12 @@ export function SettingsTab({
           onChange={setCacheEnabled}
           disabled={!canManage}
         >
-          <div className="px-4 py-3">
+          <div className="space-y-1.5 px-4 py-3">
             <label className="text-xs text-muted-foreground">Max Age (seconds)</label>
             <NumericInput
               value={cacheMaxAge}
               onChange={(v) => setCacheMaxAge(v)}
               min={1}
-              className="mt-1"
               disabled={!canManage || !cacheEnabled}
             />
           </div>
@@ -493,7 +492,7 @@ export function SettingsTab({
           disabled={!canManage}
         >
           <div className="px-4 py-3 grid grid-cols-2 gap-3">
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">Requests/sec</label>
               <NumericInput
                 value={rateLimitRPS}
@@ -502,7 +501,7 @@ export function SettingsTab({
                 disabled={!canManage || !rateLimitEnabled}
               />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">Burst</label>
               <NumericInput
                 value={rateLimitBurst}
@@ -525,7 +524,7 @@ export function SettingsTab({
           disabled={!canManage}
         >
           <div className="px-4 py-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">URL Path</label>
               <Input
                 value={healthCheckUrl}
@@ -534,7 +533,7 @@ export function SettingsTab({
                 disabled={!canManage || !host.healthCheckEnabled}
               />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">Expected Status</label>
               <Input
                 type="number"
@@ -546,7 +545,7 @@ export function SettingsTab({
                 disabled={!canManage || !host.healthCheckEnabled}
               />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">Slow Threshold (Nx avg)</label>
               <Input
                 type="number"
@@ -560,7 +559,7 @@ export function SettingsTab({
                 Mark degraded when response time exceeds Nx the 3-hour average. 0 to disable.
               </p>
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">Expected Body</label>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-[11rem_minmax(0,1fr)]">
                 <Select

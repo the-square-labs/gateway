@@ -1,0 +1,1 @@
+ALTER TABLE "inference_requests" ADD COLUMN "reasoning_effort" varchar(32);

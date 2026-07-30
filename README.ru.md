@@ -56,6 +56,7 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 | Установить Gateway | [Installation guide](docs/installation.md) |
 | Добавить nginx, Docker или monitoring узлы | [Nodes and daemons](docs/nodes.md) |
 | Настроить tokens, OAuth, MCP, logging, updates и AI | [Operations guide](docs/operations.md) |
+| Настроить multi-provider inference proxy | [Inference proxy](docs/inference.md) |
 | Изучить security model | [Security model](docs/security.md) |
 | Понять license tiers и activation | [Licensing](docs/licensing.md) |
 | Запустить проект локально или внести вклад | [Development guide](docs/development.md) |

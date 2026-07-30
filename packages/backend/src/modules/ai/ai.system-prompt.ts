@@ -254,6 +254,24 @@ AI chat projects are saved conversation groupings, not source-control projects. 
       `- Docker container IDs are volatile. If a Docker tool returns "No such container", do NOT conclude the workload is gone. First use find_resource with the last known container name/node/image to check whether it was recreated with a new ID.`
     );
   }
+  if (
+    [
+      'inference:use',
+      'inference:tokens:create',
+      'inference:tokens:revoke',
+      'inference:providers:view',
+      'inference:providers:manage',
+      'inference:models:manage',
+      'inference:limits:manage',
+      'inference:usage:view',
+      'settings:gateway:edit',
+    ].some((scope) => hasScopeBase(user.scopes, scope))
+  ) {
+    push(
+      'Inference boundary policy',
+      `- Gateway Inference is separate from the internal AI Assistant and Gateway MCP. Before configuring providers, models, limits, tokens, or client harnesses, read internal_documentation({ topic: "inference" }) and discover the Inference tools. Never reuse Assistant/MCP credentials or suggest the removed /api/inference/v1 endpoint.`
+    );
+  }
 
   if (hasScopeBase(user.scopes, 'pki:cert:view') || hasScopeBase(user.scopes, 'ssl:cert:view')) {
     push(

@@ -120,7 +120,7 @@ export function GitLabAuthorizationModal() {
             </Button>
           ) : null}
 
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <label htmlFor="gitlab-personal-token" className="text-sm font-medium">
               Personal access token
             </label>

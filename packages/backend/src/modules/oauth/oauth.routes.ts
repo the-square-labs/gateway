@@ -45,6 +45,7 @@ function oauthClientErrorRedirectUrl(redirectUri: string, error: string, descrip
 
 function supportedScopes(resource?: string) {
   const service = oauthService();
+  if (resource === service.getInferenceSetupResourceUrl()) return ['inference:setup'];
   return API_TOKEN_SCOPES.filter((scope) => resource !== service.getApiResourceUrl() || scope !== 'mcp:use');
 }
 
@@ -55,6 +56,13 @@ function resourceInfo(resource: string) {
       resource,
       name: 'Gateway MCP',
       description: 'Remote MCP access for AI and MCP clients.',
+    };
+  }
+  if (resource === service.getInferenceSetupResourceUrl()) {
+    return {
+      resource,
+      name: 'Gateway Inference Setup',
+      description: 'Configure Gateway inference clients and their dedicated runtime tokens.',
     };
   }
   return {
@@ -70,7 +78,9 @@ function authorizationServerMetadata(resource?: string) {
   const authorizationEndpoint =
     resource === service.getMcpResourceUrl()
       ? new URL('/api/oauth/authorize/api/mcp', issuer).href
-      : new URL('/api/oauth/authorize', issuer).href;
+      : resource === service.getInferenceSetupResourceUrl()
+        ? new URL('/api/oauth/authorize/api/inference/setup', issuer).href
+        : new URL('/api/oauth/authorize', issuer).href;
   const grantTypesSupported =
     resource === service.getMcpResourceUrl() ? ['authorization_code'] : ['authorization_code', 'refresh_token'];
   return {
@@ -121,6 +131,17 @@ oauthMetadataRoutes.get('/oauth-protected-resource/api/mcp', (c) => {
   });
 });
 
+oauthMetadataRoutes.get('/oauth-protected-resource/api/inference/setup', (c) => {
+  const service = oauthService();
+  return c.json({
+    resource: service.getInferenceSetupResourceUrl(),
+    authorization_servers: [service.getIssuerUrl()],
+    scopes_supported: ['inference:setup'],
+    bearer_methods_supported: ['header'],
+    resource_name: 'Gateway Inference Setup',
+  });
+});
+
 oauthMetadataRoutes.get('/oauth-authorization-server', (c) => {
   const resource = c.req.path.startsWith('/api/mcp/.well-known') ? oauthService().getMcpResourceUrl() : undefined;
   return c.json(authorizationServerMetadata(resource));
@@ -130,6 +151,10 @@ oauthMetadataRoutes.get('/oauth-authorization-server/api/mcp', (c) => {
   return c.json(authorizationServerMetadata(oauthService().getMcpResourceUrl()));
 });
 
+oauthMetadataRoutes.get('/oauth-authorization-server/api/inference/setup', (c) => {
+  return c.json(authorizationServerMetadata(oauthService().getInferenceSetupResourceUrl()));
+});
+
 oauthMetadataRoutes.get('/openid-configuration', (c) => {
   const resource = c.req.path.startsWith('/api/mcp/.well-known') ? oauthService().getMcpResourceUrl() : undefined;
   return c.json(authorizationServerMetadata(resource));
@@ -137,6 +162,10 @@ oauthMetadataRoutes.get('/openid-configuration', (c) => {
 
 oauthMetadataRoutes.get('/openid-configuration/api/mcp', (c) => {
   return c.json(authorizationServerMetadata(oauthService().getMcpResourceUrl()));
+});
+
+oauthMetadataRoutes.get('/openid-configuration/api/inference/setup', (c) => {
+  return c.json(authorizationServerMetadata(oauthService().getInferenceSetupResourceUrl()));
 });
 
 oauthRoutes.post('/register', async (c) => {
@@ -183,6 +212,10 @@ async function handleAuthorize(c: Context<AppEnv>, defaultResource?: string) {
 
 oauthRoutes.get('/authorize/api/mcp', optionalAuthMiddleware, async (c) => {
   return handleAuthorize(c, oauthService().getMcpResourceUrl());
+});
+
+oauthRoutes.get('/authorize/api/inference/setup', optionalAuthMiddleware, async (c) => {
+  return handleAuthorize(c, oauthService().getInferenceSetupResourceUrl());
 });
 
 oauthRoutes.get('/authorize', optionalAuthMiddleware, async (c) => {

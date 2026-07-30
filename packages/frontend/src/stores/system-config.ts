@@ -8,6 +8,7 @@ export const DEFAULT_GATEWAY_FEATURES: GatewayFeatureConfig = {
   pkiEnabled: true,
   domainsEnabled: true,
   loggingEnabled: false,
+  inferenceEnabled: false,
 };
 
 export const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
@@ -20,6 +21,7 @@ export const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
 };
 
 const cachedSystemConfig = api.getCached<SystemConfig>("system:config");
+let systemConfigLoadPromise: Promise<SystemConfig> | null = null;
 
 export function withDefaultSystemConfig(
   config: Partial<SystemConfig> | null | undefined
@@ -48,21 +50,32 @@ export const useSystemConfigStore = create<SystemConfigState>((set) => ({
   isLoading: false,
   loaded: cachedSystemConfig !== undefined,
   load: async () => {
+    if (systemConfigLoadPromise) return systemConfigLoadPromise;
     set({ isLoading: true });
-    try {
-      const config = withDefaultSystemConfig(await api.getSystemConfig());
-      api.setCache("system:config", config);
-      set({ config, isLoading: false, loaded: true });
-      return config;
-    } catch (error) {
-      set({ isLoading: false });
-      throw error;
-    }
+    systemConfigLoadPromise = api
+      .getSystemConfig()
+      .then((value) => {
+        const config = withDefaultSystemConfig(value);
+        api.setCache("system:config", config);
+        set({ config, isLoading: false, loaded: true });
+        return config;
+      })
+      .catch((error) => {
+        set({ isLoading: false });
+        throw error;
+      })
+      .finally(() => {
+        systemConfigLoadPromise = null;
+      });
+    return systemConfigLoadPromise;
   },
   setConfig: (config) => {
     const next = withDefaultSystemConfig(config);
     api.setCache("system:config", next);
     set({ config: next, loaded: true });
   },
-  reset: () => set({ config: DEFAULT_SYSTEM_CONFIG, isLoading: false, loaded: false }),
+  reset: () => {
+    systemConfigLoadPromise = null;
+    set({ config: DEFAULT_SYSTEM_CONFIG, isLoading: false, loaded: false });
+  },
 }));

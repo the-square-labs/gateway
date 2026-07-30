@@ -21,4 +21,9 @@ describe("canonicalizeScopeSelection", () => {
       scopeMatches(["integrations:cloudflare:manage"], "integrations:cloudflare:dns:view")
     ).toBe(true);
   });
+
+  it("lets provider and model managers read the provider metadata required by their UI", () => {
+    expect(scopeMatches(["inference:providers:manage"], "inference:providers:view")).toBe(true);
+    expect(scopeMatches(["inference:models:manage"], "inference:providers:view")).toBe(true);
+  });
 });

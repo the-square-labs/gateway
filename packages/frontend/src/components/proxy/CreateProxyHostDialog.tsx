@@ -345,7 +345,7 @@ export function CreateProxyHostDialog({
               className="space-y-6"
             >
               {/* Type Selector */}
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">Type</label>
                 <Select
                   value={rawConfigEnabled ? "raw" : type}
@@ -365,7 +365,7 @@ export function CreateProxyHostDialog({
               </div>
 
               {/* Node Selector */}
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">Node</label>
                 <Select
                   value={nodeId || "__none__"}
@@ -417,7 +417,7 @@ export function CreateProxyHostDialog({
               </div>
 
               {/* Domain Names */}
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">Domain Names</label>
                 <div className="space-y-2">
                   <AnimatePresence initial={false}>
@@ -521,7 +521,7 @@ export function CreateProxyHostDialog({
                   </div>
                   <div className="p-4">
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <div className="space-y-1">
+                      <div className="space-y-1.5">
                         <label className="text-xs text-muted-foreground">Redirect URL</label>
                         <Input
                           value={redirectUrl}
@@ -529,7 +529,7 @@ export function CreateProxyHostDialog({
                           placeholder="https://example.com"
                         />
                       </div>
-                      <div className="space-y-1">
+                      <div className="space-y-1.5">
                         <label className="text-xs text-muted-foreground">Status Code</label>
                         <Select
                           value={String(redirectStatusCode)}

@@ -486,10 +486,10 @@ export function AdminNodes() {
           </DialogHeader>
 
           <div className="space-y-4">
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Node Type</label>
               <Select value={enrollType} onValueChange={setEnrollType}>
-                <SelectTrigger className="mt-1">
+                <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -505,14 +505,13 @@ export function AdminNodes() {
                   ))}
                 </SelectContent>
               </Select>
-              <p className="mt-1 text-xs text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 {NODE_TYPES.find((t) => t.value === enrollType)?.description}
               </p>
             </div>
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Node Name</label>
               <Input
-                className="mt-1"
                 value={enrollDisplayName}
                 onChange={(e) => setEnrollDisplayName(e.target.value)}
                 placeholder="US-East Proxy"
@@ -549,9 +548,9 @@ export function AdminNodes() {
                 </p>
               </div>
 
-              <div>
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">Setup Command</label>
-                <p className="text-xs text-muted-foreground mb-2">
+                <p className="text-xs text-muted-foreground">
                   Run on the target host as root.{" "}
                   {enrollResult.type === "docker"
                     ? "Installs the Docker management daemon and enrolls with this Gateway."
@@ -560,7 +559,7 @@ export function AdminNodes() {
                       : "Installs nginx, the daemon, and enrolls with this Gateway."}
                 </p>
                 {enrollmentTargets.length > 1 && (
-                  <p className="mb-2 text-xs text-muted-foreground">
+                  <p className="text-xs text-muted-foreground">
                     Use the public command for remote hosts and the local command for nodes on the
                     private network.
                   </p>
@@ -608,9 +607,9 @@ export function AdminNodes() {
                 </Tabs>
               </div>
 
-              <div>
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">Enrollment Token</label>
-                <p className="text-xs text-muted-foreground mb-2">
+                <p className="text-xs text-muted-foreground">
                   For manual setup. See the documentation for details.
                 </p>
                 <CopyValueField label="Enrollment token" value={enrollResult.token} />

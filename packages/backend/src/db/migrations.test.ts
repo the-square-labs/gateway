@@ -80,4 +80,24 @@ describe('drizzle migration metadata', () => {
     expect(migration).not.toContain('ALTER TABLE "logging_environments"');
     expect(migration).not.toContain('ALTER TABLE "logging_schemas"');
   });
+
+  it('creates encrypted inference credentials and an append-only usage ledger', () => {
+    const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0064_glossy_celestials.sql'), 'utf8');
+
+    expect(migration).toContain('"encrypted_payload" text NOT NULL');
+    expect(migration).toContain('"encrypted_dek" text NOT NULL');
+    expect(migration).not.toContain('"access_token"');
+    expect(migration).not.toContain('"refresh_token"');
+    expect(migration).toContain('gateway_reject_inference_usage_ledger_mutation');
+    expect(migration).toContain('BEFORE UPDATE OR DELETE ON "inference_usage_ledger"');
+  });
+
+  it('keeps one active package-managed token per harness installation', () => {
+    const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0071_new_zodiak.sql'), 'utf8');
+
+    expect(migration).toContain('"managed_by" varchar(64)');
+    expect(migration).toContain('"installation_id" uuid');
+    expect(migration).toContain('"inference_tokens_managed_identity_active_unique"');
+    expect(migration).toContain('"revoked_at" is null');
+  });
 });

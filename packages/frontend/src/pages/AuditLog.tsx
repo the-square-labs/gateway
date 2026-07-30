@@ -936,22 +936,22 @@ export function AuditLog({
           </DialogHeader>
           <div className="space-y-4 px-1">
             <div className="grid gap-3 md:grid-cols-2">
-              <div>
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">From</label>
                 <Input
                   type="datetime-local"
                   value={exportFrom}
                   onChange={(event) => setExportFrom(event.target.value)}
-                  className="audit-date-input mt-1 [&::-webkit-calendar-picker-indicator]:hidden"
+                  className="audit-date-input [&::-webkit-calendar-picker-indicator]:hidden"
                 />
               </div>
-              <div>
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">To</label>
                 <Input
                   type="datetime-local"
                   value={exportTo}
                   onChange={(event) => setExportTo(event.target.value)}
-                  className="audit-date-input mt-1 [&::-webkit-calendar-picker-indicator]:hidden"
+                  className="audit-date-input [&::-webkit-calendar-picker-indicator]:hidden"
                 />
               </div>
             </div>

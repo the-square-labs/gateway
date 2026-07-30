@@ -1,0 +1,342 @@
+import type {
+  InferenceDiscoveredModel,
+  InferenceModel,
+  InferenceProviderCatalogItem,
+  InferenceProviderConnection,
+  InferenceProviderModelPricing,
+} from "@/types/inference";
+
+export const CLIENT_REASONING_EFFORTS = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "ultra",
+] as const;
+
+export interface ModelForm {
+  publicId: string;
+  displayName: string;
+  subscriptionMultiplier: number;
+  contextWindow: string;
+  maxInputTokens: string;
+  maxOutputTokens: string;
+  autoCompactTokenLimit: string;
+}
+
+export interface ModelPricingForm {
+  inputPrice: number;
+  outputPrice: number;
+  imagePrice: number;
+  searchPrice: number;
+  realtimePrice: number;
+}
+
+export interface ProviderModelBinding {
+  connection: InferenceProviderConnection;
+  model: InferenceDiscoveredModel;
+}
+
+export interface ProviderModelOption {
+  key: string;
+  providerId: string;
+  providerLabel: string;
+  remoteModelId: string;
+  displayName: string;
+  sourceType: "subscription" | "api";
+  bindings: ProviderModelBinding[];
+  totalAccounts: number;
+  contextWindow: number | null;
+  maxInputTokens: number | null;
+  maxOutputTokens: number | null;
+  autoCompactTokenLimit: number | null;
+  modalities: string[];
+  capabilities: Record<string, boolean>;
+  capabilityLimitations: Record<string, string[]>;
+  reasoningEfforts: string[];
+  pricing: InferenceProviderModelPricing | null;
+}
+
+export const EMPTY_MODEL_FORM: ModelForm = {
+  publicId: "",
+  displayName: "",
+  subscriptionMultiplier: 1,
+  contextWindow: "",
+  maxInputTokens: "",
+  maxOutputTokens: "",
+  autoCompactTokenLimit: "",
+};
+
+export const EMPTY_MODEL_PRICING: ModelPricingForm = {
+  inputPrice: 0,
+  outputPrice: 0,
+  imagePrice: 0,
+  searchPrice: 0,
+  realtimePrice: 0,
+};
+
+export function providerModelKey(providerId: string, remoteModelId: string) {
+  return `${providerId}:${remoteModelId}`;
+}
+
+export function providerModelLabels(options: ProviderModelOption[]) {
+  const counts = new Map<string, number>();
+  for (const option of options) {
+    const key = normalizedDisplayName(option.displayName);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return new Map(
+    options.map((option) => {
+      const duplicated = (counts.get(normalizedDisplayName(option.displayName)) ?? 0) > 1;
+      return [
+        option.key,
+        duplicated ? `${option.displayName} · ${option.remoteModelId}` : option.displayName,
+      ];
+    })
+  );
+}
+
+export function buildProviderModelOptions(
+  connections: InferenceProviderConnection[],
+  catalog: InferenceProviderCatalogItem[]
+): ProviderModelOption[] {
+  const providers = new Map(catalog.map((provider) => [provider.id, provider]));
+  const active = connections.filter((connection) => connection.enabled);
+  const apiProviderLabels = new Map(
+    [...new Set(active.map((connection) => connection.providerId))].map((providerId) => [
+      providerId,
+      [
+        ...new Set(
+          active
+            .filter((connection) => connection.providerId === providerId)
+            .map((connection) => connection.name.trim())
+            .filter(Boolean)
+        ),
+      ].join(", "),
+    ])
+  );
+  const groups = new Map<string, ProviderModelBinding[]>();
+  for (const connection of active) {
+    for (const model of connection.discoveredModels.filter((candidate) => candidate.available)) {
+      const key = providerModelKey(connection.providerId, model.remoteModelId);
+      groups.set(key, [...(groups.get(key) ?? []), { connection, model }]);
+    }
+  }
+  return [...groups.entries()]
+    .map(([key, bindings]) => {
+      const first = bindings[0]!;
+      const provider = providers.get(first.connection.providerId);
+      const totalAccounts = active.filter(
+        (connection) => connection.providerId === first.connection.providerId
+      ).length;
+      const capabilityKeys = new Set(
+        bindings.flatMap(({ model }) => Object.keys(model.capabilities))
+      );
+      const capabilities: Record<string, boolean> = {};
+      const capabilityLimitations: Record<string, string[]> = {};
+      for (const capability of [...capabilityKeys].sort()) {
+        const missing = bindings.filter(({ model }) => model.capabilities[capability] !== true);
+        capabilities[capability] = missing.length === 0;
+        if (missing.length) {
+          capabilityLimitations[capability] = missing.map(({ connection }) => connection.name);
+        }
+      }
+      const modalities = intersect(bindings.map(({ model }) => model.modalities));
+      const reasoningEfforts = intersect(bindings.map(({ model }) => model.reasoningEfforts));
+      const pricing = commonPricing(bindings.map(({ model }) => model.pricing ?? null));
+      return {
+        key,
+        providerId: first.connection.providerId,
+        providerLabel: provider?.subscription
+          ? provider.label
+          : apiProviderLabels.get(first.connection.providerId) ||
+            provider?.label ||
+            first.connection.providerId,
+        remoteModelId: first.model.remoteModelId,
+        displayName: first.model.displayName || first.model.remoteModelId,
+        sourceType: provider?.subscription ? "subscription" : "api",
+        bindings,
+        totalAccounts,
+        contextWindow: minimum(bindings.map(({ model }) => model.contextWindow)),
+        maxInputTokens: minimum(bindings.map(({ model }) => model.maxInputTokens)),
+        maxOutputTokens: minimum(bindings.map(({ model }) => model.maxOutputTokens)),
+        autoCompactTokenLimit: minimum(bindings.map(({ model }) => model.autoCompactTokenLimit)),
+        modalities: modalities.length ? modalities : ["text"],
+        capabilities,
+        capabilityLimitations,
+        reasoningEfforts,
+        pricing,
+      } satisfies ProviderModelOption;
+    })
+    .sort((left, right) =>
+      `${left.providerLabel}:${left.displayName}`.localeCompare(
+        `${right.providerLabel}:${right.displayName}`
+      )
+    );
+}
+
+export function formFromModel(model: InferenceModel): ModelForm {
+  return {
+    publicId: model.publicId,
+    displayName: model.displayName,
+    subscriptionMultiplier: model.subscriptionMultiplier,
+    contextWindow: String(model.contextWindow),
+    maxInputTokens: String(model.maxInputTokens),
+    maxOutputTokens: model.maxOutputTokens == null ? "" : String(model.maxOutputTokens),
+    autoCompactTokenLimit: String(model.autoCompactTokenLimit),
+  };
+}
+
+export function formWithProviderModel(
+  current: ModelForm,
+  option: ProviderModelOption,
+  replaceIdentity = false
+): ModelForm {
+  const safeAutoCompactTokenLimit =
+    option.autoCompactTokenLimit != null && option.maxInputTokens != null
+      ? Math.min(option.autoCompactTokenLimit, option.maxInputTokens)
+      : option.autoCompactTokenLimit;
+  return {
+    ...current,
+    publicId:
+      !replaceIdentity && current.publicId
+        ? current.publicId
+        : option.remoteModelId.toLowerCase().replaceAll(" ", "-"),
+    displayName: !replaceIdentity && current.displayName ? current.displayName : option.displayName,
+    contextWindow: technicalValue(option.contextWindow, current.contextWindow, replaceIdentity),
+    maxInputTokens: technicalValue(option.maxInputTokens, current.maxInputTokens, replaceIdentity),
+    maxOutputTokens: technicalValue(
+      option.maxOutputTokens,
+      current.maxOutputTokens,
+      replaceIdentity
+    ),
+    autoCompactTokenLimit: technicalValue(
+      safeAutoCompactTokenLimit,
+      current.autoCompactTokenLimit,
+      replaceIdentity
+    ),
+  };
+}
+
+export function modelTechnicalLimits(form: ModelForm) {
+  return {
+    contextWindow: Number(form.contextWindow),
+    maxInputTokens: Number(form.maxInputTokens),
+    maxOutputTokens: optionalTechnicalValue(form.maxOutputTokens),
+    autoCompactTokenLimit: Number(form.autoCompactTokenLimit),
+  };
+}
+
+export function hasCompleteTechnicalLimits(form: ModelForm) {
+  const limits = modelTechnicalLimits(form);
+  return (
+    [limits.contextWindow, limits.maxInputTokens, limits.autoCompactTokenLimit].every(
+      (value) => Number.isSafeInteger(value) && value > 0
+    ) &&
+    (limits.maxOutputTokens === null ||
+      (Number.isSafeInteger(limits.maxOutputTokens) && limits.maxOutputTokens > 0)) &&
+    limits.autoCompactTokenLimit <= limits.maxInputTokens
+  );
+}
+
+export function defaultReasoningMap(
+  wireEfforts: string[],
+  persisted: Record<string, string>
+): Record<string, string> {
+  if (Object.keys(persisted).length) return persisted;
+  return Object.fromEntries(
+    CLIENT_REASONING_EFFORTS.flatMap((effort) =>
+      wireEfforts.includes(effort) ? [[effort, effort]] : []
+    )
+  );
+}
+
+export function exposedReasoningEfforts(map: Record<string, string>): string[] {
+  return Object.entries(map).flatMap(([clientEffort, upstreamEffort]) =>
+    clientEffort.trim() && upstreamEffort.trim() ? [clientEffort.trim()] : []
+  );
+}
+
+export function normalizeReasoningMap(map: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(map).flatMap(([clientEffort, upstreamEffort]) => {
+      const client = clientEffort.trim();
+      const upstream = upstreamEffort.trim();
+      return client && upstream ? [[client, upstream]] : [];
+    })
+  );
+}
+
+export function pricingFromModel(model: InferenceModel | null): ModelPricingForm {
+  const pricing = model?.sources[0]?.pricing;
+  if (!pricing) return EMPTY_MODEL_PRICING;
+  return {
+    inputPrice: (pricing.inputMicrodollarsPerMillion ?? 0) / 1_000_000,
+    outputPrice: (pricing.outputMicrodollarsPerMillion ?? 0) / 1_000_000,
+    imagePrice: (pricing.otherUnitPrices.image_generation ?? 0) / 1_000_000,
+    searchPrice: (pricing.otherUnitPrices.web_search_query ?? 0) / 1_000_000,
+    realtimePrice: (pricing.otherUnitPrices.realtime_session ?? 0) / 1_000_000,
+  };
+}
+
+export function pricingFromProvider(
+  pricing: InferenceProviderModelPricing | null | undefined
+): ModelPricingForm {
+  if (!pricing) return EMPTY_MODEL_PRICING;
+  return {
+    inputPrice: pricing.inputMicrodollarsPerMillion / 1_000_000,
+    outputPrice: pricing.outputMicrodollarsPerMillion / 1_000_000,
+    imagePrice: (pricing.otherUnitPrices?.image_generation ?? 0) / 1_000_000,
+    searchPrice: (pricing.otherUnitPrices?.web_search_query ?? 0) / 1_000_000,
+    realtimePrice: (pricing.otherUnitPrices?.realtime_session ?? 0) / 1_000_000,
+  };
+}
+
+export function pricingPayload(pricing: ModelPricingForm) {
+  return {
+    version: `manual-${new Date().toISOString()}`,
+    inputMicrodollarsPerMillion: Math.round(pricing.inputPrice * 1_000_000),
+    outputMicrodollarsPerMillion: Math.round(pricing.outputPrice * 1_000_000),
+    otherUnitPrices: {
+      image_generation: Math.round(pricing.imagePrice * 1_000_000),
+      image_edit: Math.round(pricing.imagePrice * 1_000_000),
+      web_search_query: Math.round(pricing.searchPrice * 1_000_000),
+      realtime_session: Math.round(pricing.realtimePrice * 1_000_000),
+    },
+    source: "manual" as const,
+  };
+}
+
+function intersect(values: string[][]) {
+  const first = values[0] ?? [];
+  return first.filter((value) => values.every((items) => items.includes(value)));
+}
+
+function minimum(values: Array<number | null>) {
+  const known = values.filter((value): value is number => value != null && value > 0);
+  return known.length ? Math.min(...known) : null;
+}
+
+function commonPricing(
+  values: Array<InferenceProviderModelPricing | null>
+): InferenceProviderModelPricing | null {
+  const first = values[0];
+  if (!first || values.some((value) => !value || JSON.stringify(value) !== JSON.stringify(first)))
+    return null;
+  return first;
+}
+
+function technicalValue(detected: number | null, current: string, replace: boolean) {
+  if (detected != null) return String(detected);
+  return replace ? "" : current;
+}
+
+function optionalTechnicalValue(value: string) {
+  return value.trim() ? Number(value) : null;
+}
+
+function normalizedDisplayName(value: string) {
+  return value.trim().toLowerCase();
+}

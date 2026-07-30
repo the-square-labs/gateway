@@ -290,7 +290,7 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
           )}
           {!status.hasKey && (
             <>
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium" htmlFor="license-key">
                   License key
                 </label>

@@ -1,0 +1,319 @@
+import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { inject, injectable } from 'tsyringe';
+import { TOKENS } from '@/container.js';
+import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
+import {
+  inferenceDiscoveredModels,
+  inferenceModelAccessRules,
+  inferenceModelSources,
+  inferenceModels,
+  inferencePricingSnapshots,
+  inferenceProviderConnections,
+} from '@/db/schema/index.js';
+import { AppError } from '@/middleware/error-handler.js';
+import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { InferenceSetupEventsService } from '../inference-setup-events.service.js';
+import type { InferenceProviderRegistry } from '../providers/inference-provider.registry.js';
+import { knownProviderModel, pricingFromDiscoveredMetadata } from '../providers/inference-provider-model-catalog.js';
+import type { InferenceModelService } from './inference-model.service.js';
+import type {
+  InferenceModelConfigurationInput,
+  InferenceModelInput,
+  InferenceModelSourceInput,
+  InferencePricingInput,
+} from './inference-model.types.js';
+import {
+  manualSourceAllowed,
+  normalizePublicId,
+  validateDefaultEffort,
+  validateModelInput,
+  validatePricing,
+} from './inference-model.validation.js';
+import type { InferenceModelAccessService } from './inference-model-access.service.js';
+import { normalizeReasoningEfforts, validateReasoningMap } from './inference-reasoning.service.js';
+
+interface PreparedSource {
+  connectionId: string;
+  discoveredModelId: string | null;
+  upstreamModelId: string;
+  providerId: string;
+  sourceType: 'subscription' | 'api';
+  enabled: boolean;
+  subscriptionMultiplierOverride: string | null;
+  reasoningEffortMap: Record<string, string>;
+  capabilitiesOverride: Record<string, boolean> | null;
+  metadata: Record<string, unknown>;
+  pricing?: InferencePricingInput;
+  safeContextWindow: number;
+  safeMaxInputTokens: number;
+}
+
+@injectable()
+export class InferenceModelConfigurationService {
+  constructor(
+    @inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient,
+    private readonly registry: InferenceProviderRegistry,
+    private readonly models: InferenceModelService,
+    private readonly access: InferenceModelAccessService,
+    private readonly audit: AuditService,
+    private readonly setupEvents?: InferenceSetupEventsService
+  ) {}
+
+  async save(userId: string, modelId: string | null, input: InferenceModelConfigurationInput) {
+    const model = normalizedModel(input.model);
+    validateAccess(input.access);
+    const uniqueSubjects = new Map(
+      input.access.subjects.map((subject) => [`${subject.subjectType}:${subject.subjectId}`, subject])
+    );
+
+    const savedId = await this.db.transaction(async (tx) => {
+      const existing = modelId
+        ? (await tx.select().from(inferenceModels).where(eq(inferenceModels.id, modelId)).limit(1))[0]
+        : null;
+      if (modelId && !existing) {
+        throw new AppError(404, 'INFERENCE_MODEL_NOT_FOUND', 'Inference model not found');
+      }
+
+      const sources = await this.prepareSources(tx, model, input.sources);
+      validatePublishableConfiguration(model, sources, input.access.mode);
+      const enabled = input.access.mode !== 'disabled';
+      const values = {
+        ...model,
+        publicId: normalizePublicId(model.publicId),
+        displayName: model.displayName.trim(),
+        subscriptionMultiplier: String(model.subscriptionMultiplier),
+        enabled,
+        defaultAccessAllowed: input.access.mode === 'everyone',
+        updatedAt: new Date(),
+      };
+
+      let id = modelId;
+      if (id) {
+        await tx.update(inferenceModels).set(values).where(eq(inferenceModels.id, id));
+        await tx.delete(inferenceModelAccessRules).where(eq(inferenceModelAccessRules.modelId, id));
+        await tx.delete(inferenceModelSources).where(eq(inferenceModelSources.modelId, id));
+      } else {
+        const [created] = await tx
+          .insert(inferenceModels)
+          .values({ ...values, createdBy: userId })
+          .returning({ id: inferenceModels.id });
+        id = created!.id;
+      }
+
+      for (const source of sources) {
+        const [created] = await tx
+          .insert(inferenceModelSources)
+          .values({
+            modelId: id,
+            connectionId: source.connectionId,
+            discoveredModelId: source.discoveredModelId,
+            upstreamModelId: source.upstreamModelId,
+            sourceType: source.sourceType,
+            enabled: source.enabled,
+            priority: 0,
+            subscriptionMultiplierOverride: source.subscriptionMultiplierOverride,
+            reasoningEffortMap: source.reasoningEffortMap,
+            capabilitiesOverride: source.capabilitiesOverride,
+            metadata: source.metadata,
+          })
+          .returning({ id: inferenceModelSources.id });
+        if (source.pricing) await insertPricing(tx, created!.id, userId, source.pricing);
+      }
+
+      if (input.access.mode === 'selected') {
+        await tx.insert(inferenceModelAccessRules).values(
+          [...uniqueSubjects.values()].map((subject) => ({
+            modelId: id!,
+            subjectType: subject.subjectType,
+            groupId: subject.subjectType === 'group' ? subject.subjectId : null,
+            userId: subject.subjectType === 'user' ? subject.subjectId : null,
+            effect: 'allow' as const,
+            createdBy: userId,
+          }))
+        );
+      }
+      return id;
+    });
+
+    await this.access.invalidate();
+    await this.audit.log({
+      userId,
+      action: modelId ? 'inference.model.configuration.replace' : 'inference.model.configuration.create',
+      resourceType: 'inference_model',
+      resourceId: savedId,
+      details: { sourceCount: input.sources.length, accessMode: input.access.mode },
+    });
+    this.setupEvents?.publishCatalogChanged();
+    return this.models.getAdmin(savedId);
+  }
+
+  private async prepareSources(
+    db: DrizzleExecutor,
+    model: InferenceModelInput,
+    inputs: InferenceModelSourceInput[]
+  ): Promise<PreparedSource[]> {
+    const connectionIds = [...new Set(inputs.map((source) => source.connectionId))];
+    if (connectionIds.length !== inputs.length) {
+      throw new AppError(400, 'INFERENCE_MODEL_SOURCE_DUPLICATE', 'Each provider connection may be bound only once');
+    }
+    const connections = await db
+      .select()
+      .from(inferenceProviderConnections)
+      .where(
+        and(inArray(inferenceProviderConnections.id, connectionIds), isNull(inferenceProviderConnections.deletedAt))
+      );
+    const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
+    const discoveredIds = inputs.flatMap((source) => (source.discoveredModelId ? [source.discoveredModelId] : []));
+    const discovered = discoveredIds.length
+      ? await db.select().from(inferenceDiscoveredModels).where(inArray(inferenceDiscoveredModels.id, discoveredIds))
+      : [];
+    const discoveredById = new Map(discovered.map((item) => [item.id, item]));
+
+    return inputs.map((input) => {
+      const connection = connectionById.get(input.connectionId);
+      if (!connection) throw new AppError(404, 'INFERENCE_PROVIDER_NOT_FOUND', 'Provider connection not found');
+      const provider = this.registry.require(connection.providerId);
+      const discoveredModel = input.discoveredModelId ? discoveredById.get(input.discoveredModelId) : undefined;
+      if (input.discoveredModelId && discoveredModel?.connectionId !== connection.id) {
+        throw new AppError(
+          400,
+          'INFERENCE_DISCOVERED_MODEL_INVALID',
+          'Discovered model does not belong to the connection'
+        );
+      }
+      if (!discoveredModel && !manualSourceAllowed(connection.syncStatus, provider.modelsPath, input.manualMetadata)) {
+        throw new AppError(
+          400,
+          'INFERENCE_MANUAL_SOURCE_NOT_ALLOWED',
+          'Manual model IDs require unavailable discovery and complete technical metadata'
+        );
+      }
+      const upstreamModelId = discoveredModel?.remoteModelId ?? input.upstreamModelId?.trim();
+      if (!upstreamModelId) {
+        throw new AppError(400, 'INFERENCE_UPSTREAM_MODEL_REQUIRED', 'Upstream model ID is required');
+      }
+      const enabled = input.enabled !== false;
+      assertEnabledSourceAvailable(enabled, connection.enabled, discoveredModel?.available);
+      if (enabled) validateReasoningMap(model.reasoningEfforts, input.reasoningEffortMap);
+      const sourceType = provider.subscription && connection.authType === 'oauth' ? 'subscription' : 'api';
+      const pricing =
+        sourceType === 'api'
+          ? (pricingFromDiscoveredMetadata(discoveredModel?.metadata) ??
+            (discoveredModel ? knownProviderModel(provider.id, discoveredModel.remoteModelId)?.pricing : undefined) ??
+            input.pricing)
+          : input.pricing;
+      if (sourceType === 'api' && enabled) validatePricing(pricing);
+      const technical = input.manualMetadata;
+      return {
+        connectionId: connection.id,
+        discoveredModelId: discoveredModel?.id ?? null,
+        upstreamModelId,
+        providerId: connection.providerId,
+        sourceType,
+        enabled,
+        subscriptionMultiplierOverride:
+          input.subscriptionMultiplierOverride === undefined || input.subscriptionMultiplierOverride === null
+            ? null
+            : String(input.subscriptionMultiplierOverride),
+        reasoningEffortMap: input.reasoningEffortMap,
+        capabilitiesOverride: input.capabilitiesOverride ?? null,
+        metadata: {
+          origin: discoveredModel ? ('discovery' as const) : ('manual' as const),
+          providerFamily: provider.family,
+          ...(technical ? { technical } : {}),
+          composition: { role: 'primary' as const },
+        },
+        ...(pricing ? { pricing } : {}),
+        safeContextWindow: technical?.contextWindow ?? discoveredModel?.contextWindow ?? model.contextWindow,
+        safeMaxInputTokens: technical?.maxInputTokens ?? discoveredModel?.maxInputTokens ?? model.maxInputTokens,
+      };
+    });
+  }
+}
+
+function normalizedModel(input: InferenceModelInput): InferenceModelInput {
+  validateModelInput(input);
+  const reasoningEfforts = normalizeReasoningEfforts(input.reasoningEfforts);
+  validateDefaultEffort(reasoningEfforts, input.defaultReasoningEffort);
+  return { ...input, reasoningEfforts, defaultReasoningEffort: input.defaultReasoningEffort ?? null };
+}
+
+function validateAccess(input: InferenceModelConfigurationInput['access']): void {
+  if (input.mode === 'selected' && input.subjects.length === 0) {
+    throw new AppError(400, 'INFERENCE_MODEL_ACCESS_EMPTY', 'Selected access requires at least one user or group');
+  }
+}
+
+function validatePublishableConfiguration(
+  model: InferenceModelInput,
+  sources: PreparedSource[],
+  accessMode: InferenceModelConfigurationInput['access']['mode']
+): void {
+  const enabled = sources.filter((source) => source.enabled);
+  if (accessMode !== 'disabled' && enabled.length === 0) {
+    throw new AppError(400, 'INFERENCE_MODEL_SOURCE_REQUIRED', 'Published model needs an enabled source');
+  }
+  const first = sources[0];
+  if (
+    first &&
+    sources.some((source) => source.providerId !== first.providerId || source.upstreamModelId !== first.upstreamModelId)
+  ) {
+    throw new AppError(
+      400,
+      'INFERENCE_MODEL_PROVIDER_REQUIRED',
+      'A logical model must use one provider and one upstream model'
+    );
+  }
+  for (const source of enabled) {
+    if (model.contextWindow > source.safeContextWindow || model.maxInputTokens > source.safeMaxInputTokens) {
+      throw new AppError(400, 'INFERENCE_MODEL_LIMIT_UNSAFE', 'Published limits exceed an enabled source safe limit');
+    }
+  }
+}
+
+type PricingExecutor = Pick<DrizzleExecutor, 'insert'>;
+
+async function insertPricing(
+  db: PricingExecutor,
+  sourceId: string,
+  userId: string,
+  input: InferencePricingInput
+): Promise<void> {
+  validatePricing(input);
+  await db.insert(inferencePricingSnapshots).values({
+    sourceId,
+    version: input.version.trim(),
+    inputMicrodollarsPerMillion: input.inputMicrodollarsPerMillion,
+    cachedInputMicrodollarsPerMillion: input.cachedInputMicrodollarsPerMillion,
+    cacheWriteMicrodollarsPerMillion: input.cacheWriteMicrodollarsPerMillion,
+    outputMicrodollarsPerMillion: input.outputMicrodollarsPerMillion,
+    reasoningMicrodollarsPerMillion: input.reasoningMicrodollarsPerMillion,
+    otherUnitPrices: input.otherUnitPrices ?? {},
+    source: input.source,
+    createdBy: userId,
+  });
+}
+
+function assertEnabledSourceAvailable(
+  enabled: boolean,
+  connectionEnabled: boolean,
+  discoveredAvailable?: boolean
+): void {
+  if (!enabled) return;
+  if (!connectionEnabled) {
+    throw new AppError(
+      409,
+      'INFERENCE_PROVIDER_DISABLED',
+      'Enabled model sources require an enabled provider connection'
+    );
+  }
+  if (discoveredAvailable === false) {
+    throw new AppError(
+      409,
+      'INFERENCE_DISCOVERED_MODEL_UNAVAILABLE',
+      'Enabled model sources require an available discovered model'
+    );
+  }
+}
+
+export const __testOnly = { assertEnabledSourceAvailable };

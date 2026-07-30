@@ -533,7 +533,7 @@ export function CADetail() {
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">CRL Distribution URL</label>
                 <Input
                   value={epCrlUrl}
@@ -542,7 +542,7 @@ export function CADetail() {
                   className="font-mono text-xs"
                 />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">CA Issuers URL</label>
                 <Input
                   value={epCaIssuersUrl}

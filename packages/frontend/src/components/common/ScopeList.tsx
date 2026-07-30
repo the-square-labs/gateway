@@ -330,6 +330,8 @@ function ScopeRow({
     (!disabled || combinedSelectedIds.length > 0);
   const baseLocked = (!!inheritedExactBase || inheritedSelectedIds.length > 0) && !isOwnSelected;
   const rowDisabled = disabled || baseLocked;
+  const showTechnicalValue = scope.value !== scope.label;
+  const showDescription = scope.desc !== scope.label && scope.desc !== scope.value;
 
   return (
     <div className={cn(muted && "opacity-40")}>
@@ -350,14 +352,16 @@ function ScopeRow({
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-baseline gap-2">
             <p className="text-sm">{scope.label}</p>
-            <p className="text-[10px] text-muted-foreground font-mono">{scope.value}</p>
+            {showTechnicalValue && (
+              <p className="text-[10px] text-muted-foreground font-mono">{scope.value}</p>
+            )}
             {baseLocked && inheritedFromName && (
               <p className="text-[10px] text-muted-foreground">
                 inherited from {inheritedFromName}
               </p>
             )}
           </div>
-          <p className="text-xs text-muted-foreground">{scope.desc}</p>
+          {showDescription && <p className="text-xs text-muted-foreground">{scope.desc}</p>}
         </div>
       </label>
       {showRestrictions && (

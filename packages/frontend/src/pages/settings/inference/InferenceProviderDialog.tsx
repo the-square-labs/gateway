@@ -1,0 +1,369 @@
+import { Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { confirm } from "@/components/common/ConfirmDialog";
+import { PanelShell } from "@/components/common/PanelShell";
+import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { formatDate, formatRelativeDate } from "@/lib/utils";
+import { api } from "@/services/api";
+import type {
+  InferenceProviderCatalogItem,
+  InferenceProviderConnection,
+  InferenceQuotaWindow,
+} from "@/types/inference";
+import { connectionIdentity, HealthBadge } from "./inference-provider-ui";
+
+interface Props {
+  open: boolean;
+  connection: InferenceProviderConnection | null;
+  provider: InferenceProviderCatalogItem | null;
+  canManage: boolean;
+  onOpenChange: (open: boolean) => void;
+  onChanged: () => Promise<void>;
+}
+
+const QUOTA_WINDOWS = [
+  { dimension: "5h", label: "5 hours" },
+  { dimension: "7d", label: "Weekly" },
+  { dimension: "30d", label: "Monthly" },
+] as const;
+
+export function InferenceProviderDialog({
+  open,
+  connection,
+  provider,
+  canManage,
+  onOpenChange,
+  onChanged,
+}: Props) {
+  const [enabled, setEnabled] = useState(true);
+  const [name, setName] = useState("");
+  const [routingStrategy, setRoutingStrategy] = useState<"balanced" | "sequential">("balanced");
+  const [minimumRemainingPercent, setMinimumRemainingPercent] = useState(0);
+  const [apiMonthlyLimitUsd, setApiMonthlyLimitUsd] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [retainedConnection, setRetainedConnection] = useState(connection);
+  const [retainedProvider, setRetainedProvider] = useState(provider);
+  const displayedConnection = connection ?? retainedConnection;
+  const displayedProvider = provider ?? retainedProvider;
+
+  useEffect(() => {
+    if (!open || !connection) return;
+    setRetainedConnection(connection);
+    setRetainedProvider(provider);
+    setName(connection.name);
+    setEnabled(connection.enabled);
+    setRoutingStrategy(connection.routingStrategy);
+    setMinimumRemainingPercent(connection.minimumRemainingPercent);
+    setApiMonthlyLimitUsd(formatUsdInput(connection.apiMonthlyLimitMicrodollars));
+  }, [connection, open, provider]);
+
+  if (!displayedConnection) return null;
+
+  const subscription = displayedProvider?.subscription === true;
+  const apiMonthlyLimitMicrodollars = parseUsdLimit(apiMonthlyLimitUsd);
+  const apiMonthlyLimitValid = subscription || apiMonthlyLimitMicrodollars !== undefined;
+  const reportedQuotaWindows = QUOTA_WINDOWS.flatMap(({ dimension, label }) => {
+    const quota = quotaForDimension(displayedConnection.quota, dimension);
+    return quota ? [{ dimension, label, quota }] : [];
+  });
+  const dirty =
+    name.trim() !== displayedConnection.name ||
+    enabled !== displayedConnection.enabled ||
+    routingStrategy !== displayedConnection.routingStrategy ||
+    (subscription && minimumRemainingPercent !== displayedConnection.minimumRemainingPercent) ||
+    (!subscription &&
+      apiMonthlyLimitValid &&
+      apiMonthlyLimitMicrodollars !== displayedConnection.apiMonthlyLimitMicrodollars);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const connectionChanges = {
+        ...(name.trim() !== displayedConnection.name ? { name: name.trim() } : {}),
+        ...(enabled !== displayedConnection.enabled ? { enabled } : {}),
+        ...(subscription && minimumRemainingPercent !== displayedConnection.minimumRemainingPercent
+          ? { minimumRemainingPercent }
+          : {}),
+        ...(!subscription &&
+        apiMonthlyLimitMicrodollars !== displayedConnection.apiMonthlyLimitMicrodollars
+          ? { apiMonthlyLimitMicrodollars }
+          : {}),
+      };
+      if (Object.keys(connectionChanges).length) {
+        await api.updateInferenceProvider(displayedConnection.id, connectionChanges);
+      }
+      if (routingStrategy !== displayedConnection.routingStrategy) {
+        await api.updateInferenceRouting(displayedConnection.providerId, routingStrategy);
+      }
+      await onChanged();
+      onOpenChange(false);
+      toast.success("Provider settings updated");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to update provider");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const sync = async () => {
+    setSyncing(true);
+    try {
+      await api.syncInferenceProvider(displayedConnection.id);
+      await onChanged();
+      toast.success("Provider synchronized");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Provider sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const disconnect = async () => {
+    const accepted = await confirm({
+      title: "Disconnect provider",
+      description: `Disconnect “${displayedConnection.name}” and destroy its stored credential?`,
+      confirmLabel: "Disconnect",
+    });
+    if (!accepted) return;
+    try {
+      await api.disconnectInferenceProvider(displayedConnection.id);
+      onOpenChange(false);
+      await onChanged();
+      toast.success("Provider disconnected");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to disconnect provider");
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>{displayedConnection.name}</DialogTitle>
+          <DialogDescription>
+            {displayedProvider?.label ?? displayedConnection.providerId} ·{" "}
+            {connectionIdentity(displayedConnection)}
+          </DialogDescription>
+        </DialogHeader>
+
+        {subscription && reportedQuotaWindows.length > 0 && (
+          <PanelShell
+            title="Subscription limits"
+            description="Latest synchronized quota windows for this account"
+          >
+            {reportedQuotaWindows.map(({ dimension, label, quota }) => (
+              <SettingsControlRow key={dimension} title={label}>
+                <QuotaWindowValue quota={quota} />
+              </SettingsControlRow>
+            ))}
+          </PanelShell>
+        )}
+
+        <PanelShell
+          title="Connection"
+          description="Health, routing availability, and synchronization"
+        >
+          <SettingsControlRow title="Connection name">
+            <Input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              aria-label="Connection name"
+              disabled={!canManage}
+            />
+          </SettingsControlRow>
+          <SettingsControlRow title="Status">
+            <HealthBadge status={enabled ? displayedConnection.status : "disabled"} />
+          </SettingsControlRow>
+          <SettingsControlRow title="Enabled" description="Allow Gateway to route requests here">
+            <Switch
+              checked={enabled}
+              onChange={setEnabled}
+              ariaLabel={`Enable ${displayedConnection.name}`}
+              disabled={!canManage}
+            />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Routing strategy"
+            description={`Applies to all ${displayedProvider?.label ?? displayedConnection.providerId} connections`}
+          >
+            <Select
+              value={routingStrategy}
+              onValueChange={(value) => setRoutingStrategy(value as "balanced" | "sequential")}
+              disabled={!canManage}
+            >
+              <SelectTrigger aria-label="Routing strategy">
+                <SelectValue>
+                  {routingStrategy === "balanced" ? "Balanced" : "Sequential"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent className="w-[var(--radix-select-trigger-width)] max-w-[calc(100vw-2rem)]">
+                <SelectItem value="balanced" textValue="Balanced" className="items-start py-2">
+                  <span className="flex w-full min-w-0 flex-col gap-0.5 pr-4">
+                    <span>Balanced</span>
+                    <span className="whitespace-normal text-xs font-normal leading-relaxed text-muted-foreground">
+                      Distributes new threads evenly across available connections.
+                    </span>
+                  </span>
+                </SelectItem>
+                <SelectItem value="sequential" textValue="Sequential" className="items-start py-2">
+                  <span className="flex w-full min-w-0 flex-col gap-0.5 pr-4">
+                    <span>Sequential</span>
+                    <span className="whitespace-normal text-xs font-normal leading-relaxed text-muted-foreground">
+                      Uses the highest connection until unavailable, then moves down the list.
+                    </span>
+                  </span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingsControlRow>
+          {subscription && (
+            <SettingsControlRow
+              title="Minimum remaining"
+              description="Stop routing when any quota window falls below this reserve"
+            >
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={minimumRemainingPercent}
+                  onChange={(event) =>
+                    setMinimumRemainingPercent(
+                      Math.min(100, Math.max(0, Math.round(Number(event.target.value))))
+                    )
+                  }
+                  aria-label="Minimum remaining percentage"
+                  className="w-24"
+                  disabled={!canManage}
+                />
+                <span className="text-sm text-muted-foreground">%</span>
+              </div>
+            </SettingsControlRow>
+          )}
+          {!subscription && (
+            <SettingsControlRow
+              title="Monthly API limit"
+              description={`Used this UTC month: ${formatUsd(displayedConnection.apiMonthlySpentMicrodollars)}. Leave empty for unlimited.`}
+            >
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min="0"
+                  max={Number.MAX_SAFE_INTEGER / 1_000_000}
+                  step="0.01"
+                  value={apiMonthlyLimitUsd}
+                  onChange={(event) => setApiMonthlyLimitUsd(event.target.value)}
+                  placeholder="Unlimited"
+                  aria-label="Monthly API limit in USD"
+                  className="w-32"
+                  disabled={!canManage}
+                />
+                <span className="text-sm text-muted-foreground">USD</span>
+              </div>
+            </SettingsControlRow>
+          )}
+          <SettingsControlRow title="Last synchronized">
+            <span className="text-sm">
+              {displayedConnection.lastSyncedAt
+                ? formatRelativeDate(displayedConnection.lastSyncedAt)
+                : "Never"}
+            </span>
+          </SettingsControlRow>
+        </PanelShell>
+
+        {canManage && (
+          <DialogFooter className="sm:justify-between sm:space-x-0">
+            <Button variant="destructive" onClick={() => void disconnect()}>
+              <Trash2 />
+              Disconnect
+            </Button>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row">
+              <Button variant="outline" onClick={() => void sync()} disabled={syncing || saving}>
+                {syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                Sync now
+              </Button>
+              <Button
+                onClick={() => void save()}
+                disabled={!dirty || !name.trim() || !apiMonthlyLimitValid || saving || syncing}
+              >
+                {saving && <Loader2 className="animate-spin" />}
+                Save settings
+              </Button>
+            </div>
+          </DialogFooter>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function parseUsdLimit(value: string): number | null | undefined {
+  if (!value.trim()) return null;
+  const dollars = Number(value);
+  const microdollars = Math.round(dollars * 1_000_000);
+  if (!Number.isFinite(dollars) || dollars < 0 || !Number.isSafeInteger(microdollars))
+    return undefined;
+  return microdollars;
+}
+
+function formatUsdInput(microdollars: number | null): string {
+  if (microdollars === null) return "";
+  return (microdollars / 1_000_000)
+    .toFixed(2)
+    .replace(/\.00$/, "")
+    .replace(/(\.\d)0$/, "$1");
+}
+
+function formatUsd(microdollars: number): string {
+  return `$${(microdollars / 1_000_000).toFixed(2)}`;
+}
+
+function quotaForDimension(quota: InferenceQuotaWindow[], dimension: string) {
+  const matches = quota.filter((window) => window.dimension === dimension);
+  if (!matches.length) return null;
+  return matches.reduce((worst, current) => {
+    if (current.remainingFraction == null) return worst;
+    if (worst.remainingFraction == null || current.remainingFraction < worst.remainingFraction)
+      return current;
+    return worst;
+  });
+}
+
+function QuotaWindowValue({ quota }: { quota: InferenceQuotaWindow }) {
+  return (
+    <div className="text-right">
+      <p className="text-sm">
+        {quota.remainingFraction == null
+          ? "Unknown"
+          : `${Math.round(quota.remainingFraction * 100)}% remaining`}
+        {quota.stale || quota.status === "stale" ? " · stale" : ""}
+      </p>
+      {quota.resetAt && (
+        <p className="text-xs text-muted-foreground">
+          Resets {formatRelativeDate(quota.resetAt)} · {formatDate(quota.resetAt)}
+        </p>
+      )}
+    </div>
+  );
+}

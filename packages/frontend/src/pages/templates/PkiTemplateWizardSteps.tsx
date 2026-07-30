@@ -132,7 +132,7 @@ export function StepGeneral({
         Give your template a name and configure the basic certificate parameters. These settings
         determine the type of certificate and its cryptographic strength.
       </p>
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         <label className="text-sm font-medium">Name</label>
         <Input
           value={name}
@@ -140,7 +140,7 @@ export function StepGeneral({
           placeholder="e.g., Mutual TLS Server+Client"
         />
       </div>
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         <label className="text-sm font-medium">Description</label>
         <Input
           value={description}
@@ -149,7 +149,7 @@ export function StepGeneral({
         />
       </div>
       <div className="grid grid-cols-3 gap-4">
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           <label className="text-sm font-medium">Certificate Type</label>
           <Select value={certType} onValueChange={(v) => setCertType(v as CertificateType)}>
             <SelectTrigger>
@@ -163,7 +163,7 @@ export function StepGeneral({
             </SelectContent>
           </Select>
         </div>
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           <label className="text-sm font-medium">Key Algorithm</label>
           <Select value={keyAlgorithm} onValueChange={(v) => setKeyAlgorithm(v as KeyAlgorithm)}>
             <SelectTrigger>
@@ -177,7 +177,7 @@ export function StepGeneral({
             </SelectContent>
           </Select>
         </div>
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           <label className="text-sm font-medium">Validity (days)</label>
           <NumericInput value={validityDays} onChange={setValidityDays} min={1} max={3650} />
         </div>
@@ -409,7 +409,7 @@ export function StepSubjectDN({
         All fields are optional. Leave empty if not needed.
       </p>
       <div className="space-y-3">
-        <div className="space-y-1">
+        <div className="space-y-1.5">
           <label className="text-xs font-medium">Organization (O)</label>
           <Input
             value={dnO}
@@ -418,7 +418,7 @@ export function StepSubjectDN({
           />
           <p className="text-xs text-muted-foreground">The legal name of your organization.</p>
         </div>
-        <div className="space-y-1">
+        <div className="space-y-1.5">
           <label className="text-xs font-medium">Organizational Unit (OU)</label>
           <Input
             value={dnOu}
@@ -430,11 +430,11 @@ export function StepSubjectDN({
           </p>
         </div>
         <div className="grid grid-cols-3 gap-3">
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <label className="text-xs font-medium">Locality (L)</label>
             <Input value={dnL} onChange={(e) => setDnL(e.target.value)} placeholder="City" />
           </div>
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <label className="text-xs font-medium">State (ST)</label>
             <Input
               value={dnSt}
@@ -442,7 +442,7 @@ export function StepSubjectDN({
               placeholder="State/Province"
             />
           </div>
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <label className="text-xs font-medium">Country (C)</label>
             <Input
               value={dnC}
@@ -478,7 +478,7 @@ export function StepDistribution({
         URLs will be used automatically.
       </p>
 
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         <label className="text-sm font-medium">CRL Distribution Points</label>
         <p className="text-xs text-muted-foreground">
           URLs where the Certificate Revocation List can be downloaded. Clients check this to verify
@@ -516,7 +516,7 @@ export function StepDistribution({
         </Button>
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         <label className="text-sm font-medium">CA Issuers URL</label>
         <p className="text-xs text-muted-foreground">
           Where clients can download the issuing CA certificate to build the trust chain.

@@ -21,6 +21,7 @@ Gateway AI starts conversations with a small base tool surface. Domain-specific 
 - Use internal_documentation before Gateway-specific workflows, tool argument details, permission-sensitive operations, and recently added capabilities. Do not answer those from general intuition.
 - Use discover_tools({ category: "Logging" }) before managing logging environments/schemas/logs.
 - Use discover_tools({ category: "Docker" }) before managing Docker containers/images/volumes/networks.
+- Use discover_tools({ category: "Inference" }) before configuring inference providers, models, limits, or tokens.
 - Use discover_tools({ query: "certificate" }) when you know the task but not the category.
 - After discovery, use internal_documentation for workflow details and argument shapes.
 
@@ -932,6 +933,115 @@ Token permissions are controlled by scopes. Each endpoint requires specific scop
 - Token last-used timestamp is tracked for auditing
 - Tokens inherit the user's resource restrictions (if the user's group restricts a scope to specific resources, the token is similarly restricted)`,
 
+  inference: `# Gateway Inference
+
+Gateway Inference is a standalone external model gateway. It is not the internal AI Assistant provider and it is not Gateway MCP. It has separate provider credentials, model configuration, scopes, accounting, continuation state, and dedicated \`gwi_\` runtime tokens. Never use a normal \`gw_\` API token, a \`gwo_\` OAuth token, an Assistant provider key, or an MCP credential on the inference data plane.
+
+## Availability
+
+Inference is disabled by default. Read Gateway settings first. An administrator with \`settings:gateway:edit\` can enable it through \`update_gateway_settings\`:
+
+\`\`\`json
+{
+  "generalSettings": {
+    "features": { "inferenceEnabled": true }
+  }
+}
+\`\`\`
+
+No restart is required. If inference is disabled, inference tools fail instead of bypassing the feature gate.
+
+## Administrative Tools
+
+- \`manage_inference_provider\`: list templates/connections, connect API keys, start or inspect supported authorization flows, sync, rename, enable/disable, configure quota reserves/API budgets/routing, or disconnect.
+- \`manage_inference_model\`: list models, inspect account suggestions, atomically create/replace a complete model configuration, or delete a model.
+- \`manage_inference_limits\`: list default/per-user policies and configure or remove overrides.
+- \`manage_inference_token\`: list, create, or revoke the current user's \`gwi_\` tokens. It cannot issue a token for another user.
+
+Always inspect current state before mutation. Use \`internal_documentation({ topic: "inference" })\` before multi-step inference work.
+
+## Provider Workflow
+
+1. Call \`manage_inference_provider({ operation: "list_templates" })\` and use the returned provider ID. Never invent template IDs.
+2. For API/local providers, call \`connect_api_key\` with the name, providerId, and only the secret/URL fields supported by that template. Never repeat the API key.
+3. For supported device/OAuth providers, call \`start_authorization\`. Subscription connectors require the exact returned termsVersion and explicit user approval before acceptTerms may be true. Never infer or silently accept connector terms.
+4. Return the authorization URL/user code. For device flows, call \`wait\` and then \`authorization_status\`; Gateway polls automatically. Redirect/paste-callback providers must be completed in **Settings > Inference**. Never ask the user to paste an OAuth callback URL or authorization code into AI chat.
+5. Call \`sync\`, then verify discoveredModels, quota, status, and syncStatus.
+
+Each connection row is one account or API key. There is no Pool resource. Gateway groups compatible connections automatically per provider/model:
+
+- \`balanced\`: distributes new threads across available connections while retaining thread affinity;
+- \`sequential\`: uses the lowest routingOrder connection until unavailable, then moves down the list.
+
+Subscription connections can set minimumRemainingPercent. API connections can set apiMonthlyLimitUsd; null means no per-connection cap. Disconnecting or disabling is blocked when it would leave a published model without a route.
+
+## Model Workflow
+
+1. List synchronized provider connections and select a discovered model.
+2. Call \`manage_inference_model({ operation: "save", configuration })\`. Omit modelId to create; include modelId to replace the entire configuration atomically.
+3. A logical model uses exactly one provider template and one upstream model. Multiple sources are accounts/keys for that same provider/model, never a mix of OpenAI, OpenRouter, Anthropic, Kimi, etc.
+4. Configure publicId, displayName, contextWindow, maxInputTokens, optional maxOutputTokens, autoCompactTokenLimit, modalities, capabilities, reasoning efforts, subscriptionMultiplier, sources, pricing, and access.
+5. Access mode is \`everyone\`, \`selected\` with user/group subjects, or \`disabled\`. Never publish without an enabled, available source.
+6. reasoningEffortMap maps client efforts to provider efforts, for example \`{ "ultra": "max" }\`. Every advertised effort must be representable by every enabled source.
+7. API pricing is versioned. Pricing values are integer microdollars per million tokens: $5.00 per million tokens is 5,000,000 microdollars. Prefer synchronized/known pricing; use manual pricing only when provider metadata is unavailable.
+
+\`save\` is the only model mutation workflow. Do not attempt partial model/source/pricing/access updates.
+
+## Default And Per-user Limits
+
+\`manage_inference_limits\` uses one complete policy object. \`enabled\` controls inference access. Subscription windows use credits5hEnabled/credits5h, credits7dEnabled/credits7d, and credits30dEnabled/credits30d. A disabled window is unlimited; if all three are disabled, subscription-credit usage is unlimited. apiMonthlyMicrodollars is the user's monthly API budget and 0 disables API usage. billingTimezone is an IANA timezone. Per-user policies override the default policy.
+
+## User Tokens And Harness Setup
+
+Users need \`inference:use\`. Creating and revoking tokens additionally require \`inference:tokens:create\` and \`inference:tokens:revoke\`.
+
+Token options:
+
+- UI: **Profile > Authorizations > Inference API tokens**;
+- AI: \`manage_inference_token({ operation: "create", name: "Laptop" })\` for the current user;
+- CLI: \`npx @wiolett/gateway inference tokens create --harness codex --name laptop\` after login.
+
+The \`gwi_\` secret is shown once. Never repeat it after creation, store it in assistant history, or expose it to another user.
+
+### Recommended Codex setup
+
+No global installation or PATH change is required:
+
+\`\`\`bash
+npx @wiolett/gateway login https://gateway.example.com
+npx @wiolett/gateway inference setup
+npx @wiolett/gateway inference doctor codex
+\`\`\`
+
+\`npx @wiolett/gateway\` and \`npx @wiolett/gateway inference\` open the interactive menus. Automation commands are \`inference setup codex\`, \`sync codex\`, \`doctor codex\`, and \`remove codex\`. Setup uses isolated OAuth/PKCE, issues a dedicated runtime token, writes only package-managed Codex configuration sections, and installs a private helper. Catalog changes apply after starting a new Codex process.
+
+### Manual OpenAI-compatible setup
+
+\`\`\`text
+Base URL: https://gateway.example.com/api/inference/openai/v1
+API key:  gwi_...
+Models:   GET <base-url>/models
+\`\`\`
+
+Use this adapter for OpenAI SDKs and OpenAI-compatible harnesses. It supports Responses and Chat Completions. The old \`/api/inference/v1\` path does not exist and must never be suggested.
+
+### Manual Anthropic-compatible setup
+
+\`\`\`text
+Anthropic SDK base URL: https://gateway.example.com/api/inference/anthropic
+Direct REST prefix:     https://gateway.example.com/api/inference/anthropic/v1
+API key:                gwi_...
+\`\`\`
+
+Anthropic SDKs append \`/v1\` themselves, so configure the SDK base URL without \`/v1\`. Direct HTTP clients call \`/api/inference/anthropic/v1/messages\`. Dedicated \`gwi_\` tokens work as Bearer credentials and as \`x-api-key\`.
+
+## Safety And Verification
+
+- Management tools enforce the caller's actual inference scopes; never work around a permission error.
+- Provider credentials are encrypted and list operations return masked metadata only.
+- Activity stores metadata and normalized usage, never prompts or model output.
+- After configuration, verify provider sync, model visibility, a small request, accounting, reasoning mapping, tools, continuation, and Codex auto-compaction where applicable.
+- Never alter internal AI Assistant provider settings while configuring Gateway Inference, and never claim that configuring one configures the other.`,
   'ai-settings': `# AI Assistant Settings
 
 AI assistant settings control the provider, request limits, tool exposure, web search, and sandbox runner. Use these tools instead of guessing from UI labels:
@@ -1154,6 +1264,18 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   housekeeping: 'housekeeping:view',
   permissions: 'feat:ai:use',
   api: 'feat:ai:use',
+  inference: [
+    'inference:use',
+    'inference:tokens:create',
+    'inference:tokens:revoke',
+    'inference:usage:view:self',
+    'inference:providers:view',
+    'inference:providers:manage',
+    'inference:models:manage',
+    'inference:limits:manage',
+    'inference:usage:view',
+    'settings:gateway:edit',
+  ],
   gitlab: 'integrations:gitlab:view',
   notifications: 'notifications:view',
 };

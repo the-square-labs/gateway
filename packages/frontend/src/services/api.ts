@@ -54,6 +54,7 @@ import { withAuthApi } from "./api-auth";
 import { API_BASE, ApiClientBase } from "./api-base";
 import { withDatabaseApi } from "./api-databases";
 import { withDockerApi } from "./api-docker";
+import { withInferenceApi } from "./api-inference";
 import { withIntegrationsApi } from "./api-integrations";
 import { withLoggingApi } from "./api-logging";
 import { withNotificationApi } from "./api-notifications";
@@ -61,11 +62,13 @@ import { withPkiApi } from "./api-pki";
 import { withProxyApi } from "./api-proxy";
 import { withSystemApi } from "./api-system";
 
-class ApiClient extends withIntegrationsApi(
-  withLoggingApi(
-    withNotificationApi(
-      withAuthApi(
-        withSystemApi(withDockerApi(withDatabaseApi(withPkiApi(withProxyApi(ApiClientBase)))))
+class ApiClient extends withInferenceApi(
+  withIntegrationsApi(
+    withLoggingApi(
+      withNotificationApi(
+        withAuthApi(
+          withSystemApi(withDockerApi(withDatabaseApi(withPkiApi(withProxyApi(ApiClientBase)))))
+        )
       )
     )
   )

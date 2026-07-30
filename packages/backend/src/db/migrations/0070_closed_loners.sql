@@ -1,0 +1,3 @@
+ALTER TABLE "inference_models" DROP CONSTRAINT "inference_models_token_limits_valid";--> statement-breakpoint
+ALTER TABLE "inference_models" ALTER COLUMN "max_output_tokens" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "inference_models" ADD CONSTRAINT "inference_models_token_limits_valid" CHECK ("inference_models"."max_input_tokens" > 0 AND ("inference_models"."max_output_tokens" IS NULL OR "inference_models"."max_output_tokens" > 0) AND "inference_models"."auto_compact_token_limit" > 0 AND "inference_models"."auto_compact_token_limit" <= "inference_models"."max_input_tokens");

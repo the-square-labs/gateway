@@ -1,0 +1,2 @@
+ALTER TABLE "inference_provider_connections" ADD COLUMN "api_monthly_limit_microdollars" bigint;--> statement-breakpoint
+ALTER TABLE "inference_provider_connections" ADD CONSTRAINT "inference_provider_connections_api_monthly_limit_nonnegative" CHECK ("inference_provider_connections"."api_monthly_limit_microdollars" IS NULL OR "inference_provider_connections"."api_monthly_limit_microdollars" >= 0);

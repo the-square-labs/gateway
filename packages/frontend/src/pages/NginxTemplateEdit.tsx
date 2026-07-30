@@ -507,7 +507,7 @@ export function NginxTemplateEdit() {
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_10rem] shrink-0">
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <label className="text-xs text-muted-foreground">Name</label>
             <Input
               value={name}
@@ -516,7 +516,7 @@ export function NginxTemplateEdit() {
               placeholder="Template name"
             />
           </div>
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <label className="text-xs text-muted-foreground">Description</label>
             <Input
               value={description}
@@ -525,7 +525,7 @@ export function NginxTemplateEdit() {
               placeholder="Optional description"
             />
           </div>
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <label className="text-xs text-muted-foreground">Host Type</label>
             <Select
               value={type}

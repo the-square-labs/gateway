@@ -3,6 +3,7 @@ import { Filter, Search } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 
 interface SearchFilterBarProps {
   /** Placeholder for the search input */
@@ -19,6 +20,12 @@ interface SearchFilterBarProps {
   onReset: () => void;
   /** Filter dropdowns rendered inside the collapsible panel */
   filters?: ReactNode;
+  /** Render filters beside search instead of behind the Filters button */
+  inlineFilters?: boolean;
+  /** Optional styling for embedding the bar into an existing panel */
+  className?: string;
+  /** Optional styling for the search input */
+  inputClassName?: string;
 }
 
 export function SearchFilterBar({
@@ -29,23 +36,27 @@ export function SearchFilterBar({
   hasActiveFilters: _hasActiveFilters,
   onReset: _onReset,
   filters,
+  inlineFilters = false,
+  className,
+  inputClassName,
 }: SearchFilterBarProps) {
   const [showFilters, setShowFilters] = useState(false);
 
   return (
-    <div className="space-y-0">
-      <div className="flex gap-2">
-        <div className="relative flex-1">
+    <div className={cn("space-y-0", className)}>
+      <div className={cn("flex gap-2", inlineFilters && "flex-wrap")}>
+        <div className={cn("relative flex-1", inlineFilters && "min-w-[14rem]")}>
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder={placeholder}
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
             onKeyDown={onSearchSubmit ? (e) => e.key === "Enter" && onSearchSubmit() : undefined}
-            className="pl-9"
+            className={cn("pl-9", inputClassName)}
           />
         </div>
-        {filters && (
+        {filters && inlineFilters && filters}
+        {filters && !inlineFilters && (
           <Button variant="outline" onClick={() => setShowFilters(!showFilters)}>
             <Filter className="h-4 w-4" />
             Filters
@@ -53,7 +64,7 @@ export function SearchFilterBar({
         )}
       </div>
 
-      {filters && (
+      {filters && !inlineFilters && (
         <AnimatePresence>
           {showFilters && (
             <motion.div

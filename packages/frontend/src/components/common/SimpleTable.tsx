@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { Fragment } from "react";
 import { EmptyState } from "@/components/common/EmptyState";
 import { cn } from "@/lib/utils";
 
@@ -9,6 +10,15 @@ export interface SimpleTableColumn<TRow> {
   className?: string;
   cellClassName?: string;
   render: (row: TRow) => React.ReactNode;
+}
+
+export interface SimpleTableRowRenderProps<TRow> {
+  row: TRow;
+  index: number;
+  interactive: boolean;
+  className: string;
+  onClick?: () => void;
+  children: React.ReactNode;
 }
 
 interface SimpleTableProps<TRow> {
@@ -25,6 +35,7 @@ interface SimpleTableProps<TRow> {
   tableClassName?: string;
   headerRowClassName?: string;
   bodyClassName?: string;
+  rowRenderer?: (props: SimpleTableRowRenderProps<TRow>) => React.ReactNode;
 }
 
 function alignClass(align: SimpleTableColumn<unknown>["align"]) {
@@ -47,6 +58,7 @@ export function SimpleTable<TRow>({
   tableClassName,
   headerRowClassName,
   bodyClassName,
+  rowRenderer,
 }: SimpleTableProps<TRow>) {
   if (loading) {
     return <div className="px-4 py-6 text-sm text-muted-foreground">{loadingMessage}</div>;
@@ -82,29 +94,35 @@ export function SimpleTable<TRow>({
             const resolvedRowClassName =
               typeof rowClassName === "function" ? rowClassName(row, index) : rowClassName;
 
-            return (
-              <tr
-                key={getRowKey(row, index)}
+            const className = cn(
+              "border-b border-border last:border-b-0",
+              interactive && "cursor-pointer transition-colors hover:bg-accent",
+              resolvedRowClassName
+            );
+            const onClick = interactive ? () => onRowClick?.(row, index) : undefined;
+            const children = columns.map((column) => (
+              <td
+                key={column.id}
                 className={cn(
-                  "border-b border-border last:border-b-0",
-                  interactive && "cursor-pointer transition-colors hover:bg-accent",
-                  resolvedRowClassName
+                  "px-4 py-3 align-middle",
+                  alignClass(column.align),
+                  column.cellClassName
                 )}
-                onClick={interactive ? () => onRowClick?.(row, index) : undefined}
               >
-                {columns.map((column) => (
-                  <td
-                    key={column.id}
-                    className={cn(
-                      "px-4 py-3 align-middle",
-                      alignClass(column.align),
-                      column.cellClassName
-                    )}
-                  >
-                    {column.render(row)}
-                  </td>
-                ))}
-              </tr>
+                {column.render(row)}
+              </td>
+            ));
+
+            return (
+              <Fragment key={getRowKey(row, index)}>
+                {rowRenderer ? (
+                  rowRenderer({ row, index, interactive, className, onClick, children })
+                ) : (
+                  <tr className={className} onClick={onClick}>
+                    {children}
+                  </tr>
+                )}
+              </Fragment>
             );
           })}
         </tbody>

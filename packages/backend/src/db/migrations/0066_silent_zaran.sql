@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "inference_usage_ledger_settlement_unique" ON "inference_usage_ledger" USING btree ("request_id") WHERE "inference_usage_ledger"."entry_type" = 'settlement';

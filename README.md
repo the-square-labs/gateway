@@ -56,6 +56,7 @@ For flags, non-interactive installs, custom SSL, OIDC details, updates, and node
 | Install Gateway | [Installation guide](docs/installation.md) |
 | Add nginx, Docker, or monitoring nodes | [Nodes and daemons](docs/nodes.md) |
 | Configure tokens, OAuth, MCP, logging, updates, and AI | [Operations guide](docs/operations.md) |
+| Configure the multi-provider inference proxy | [Inference proxy](docs/inference.md) |
 | Review the security model | [Security model](docs/security.md) |
 | Understand license tiers and activation | [Licensing](docs/licensing.md) |
 | Run the project locally or contribute | [Development guide](docs/development.md) |

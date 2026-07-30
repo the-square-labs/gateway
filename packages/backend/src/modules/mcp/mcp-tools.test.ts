@@ -111,6 +111,10 @@ describe('MCP tool scope filtering', () => {
         'manage_ai_conversation',
         'manage_oauth_authorization',
         'manage_api_token',
+        'manage_inference_provider',
+        'manage_inference_model',
+        'manage_inference_limits',
+        'manage_inference_token',
       ])
     );
   });

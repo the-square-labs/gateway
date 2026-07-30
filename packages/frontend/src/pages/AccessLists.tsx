@@ -333,7 +333,7 @@ export function AccessLists() {
             <div className="space-y-6">
               {/* Basic info */}
               <div className="space-y-4">
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   <label className="text-sm font-medium">Name</label>
                   <Input
                     value={name}
@@ -341,7 +341,7 @@ export function AccessLists() {
                     placeholder="e.g., Office Only"
                   />
                 </div>
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   <label className="text-sm font-medium">Description</label>
                   <Input
                     value={description}

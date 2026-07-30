@@ -39,7 +39,7 @@ export function SettingsControlRow({
 
 export function SettingsInlineControl({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <label className="block w-full min-w-0 space-y-1">
+    <label className="block w-full min-w-0 space-y-1.5">
       <span className="block text-xs text-muted-foreground">{label}</span>
       {children}
     </label>

@@ -467,7 +467,7 @@ export function AdminUsers({
             <DialogTitle>Create User</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label htmlFor="create-user-email" className="text-sm font-medium">
                 Email
               </label>
@@ -479,7 +479,7 @@ export function AdminUsers({
                 onChange={(e) => setCreateEmail(e.target.value)}
               />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label htmlFor="create-user-name" className="text-sm font-medium">
                 Name
               </label>
@@ -490,7 +490,7 @@ export function AdminUsers({
                 onChange={(e) => setCreateName(e.target.value)}
               />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Group</label>
               <Select value={createGroupId} onValueChange={setCreateGroupId}>
                 <SelectTrigger>

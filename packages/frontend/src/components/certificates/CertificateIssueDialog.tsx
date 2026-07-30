@@ -154,7 +154,7 @@ export function CertificateIssueDialog({
         {/* Step 1: CA & Template Selection */}
         {step === 1 && (
           <div className="space-y-4">
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Issuing CA</label>
               <Select value={selectedCAId || undefined} onValueChange={(v) => setSelectedCAId(v)}>
                 <SelectTrigger>
@@ -171,7 +171,7 @@ export function CertificateIssueDialog({
             </div>
 
             {templates.length > 0 && (
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">Template</label>
                 <Select
                   value={selectedTemplateId || "none"}
@@ -193,7 +193,7 @@ export function CertificateIssueDialog({
             )}
 
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">Certificate Type</label>
                 <Select
                   value={type}
@@ -214,7 +214,7 @@ export function CertificateIssueDialog({
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">Key Algorithm</label>
                 <Select
                   value={keyAlgorithm}
@@ -242,7 +242,7 @@ export function CertificateIssueDialog({
         {/* Step 2: Subject Details */}
         {step === 2 && (
           <div className="space-y-4">
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Common Name (CN)</label>
               <Input
                 value={commonName}
@@ -250,7 +250,7 @@ export function CertificateIssueDialog({
                 placeholder="e.g., api.example.com"
               />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Validity (days)</label>
               <NumericInput
                 value={validityDays}
@@ -261,7 +261,7 @@ export function CertificateIssueDialog({
             </div>
 
             {/* SANs */}
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">
                 Subject Alternative Names
                 {sansRequired && <span className="text-destructive ml-1">*</span>}
@@ -297,7 +297,7 @@ export function CertificateIssueDialog({
             </div>
 
             {/* Subject DN (optional) */}
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Subject DN (optional)</label>
               <div className="grid grid-cols-3 gap-2">
                 <Input
@@ -326,7 +326,7 @@ export function CertificateIssueDialog({
           <div className="space-y-3 text-sm">
             <div className="border border-border p-4 space-y-2">
               <h3 className="font-semibold">Review</h3>
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 <p>
                   <span className="text-muted-foreground">CA:</span>{" "}
                   {activeCAs.find((c) => c.id === selectedCAId)?.commonName}

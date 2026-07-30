@@ -2,6 +2,7 @@ import { isIP } from 'node:net';
 import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { settings } from '@/db/schema/index.js';
+import type { InferenceSetupEventsService } from '@/modules/inference/inference-setup-events.service.js';
 
 const SETTINGS_KEY = 'general:settings';
 const BODY_LIMIT_OVERHEAD_RATIO = 1.5;
@@ -26,6 +27,7 @@ export interface GeneralSettings {
 export interface GeneralFeatureSettings {
   pkiEnabled: boolean;
   domainsEnabled: boolean;
+  inferenceEnabled: boolean;
 }
 
 export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
@@ -37,6 +39,7 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   features: {
     pkiEnabled: true,
     domainsEnabled: true,
+    inferenceEnabled: false,
   },
 };
 
@@ -148,7 +151,10 @@ export class GeneralSettingsService {
   private cached: GeneralSettings | null = null;
   private cachedAt = 0;
 
-  constructor(private readonly db: DrizzleClient) {}
+  constructor(
+    private readonly db: DrizzleClient,
+    private readonly inferenceSetupEvents?: InferenceSetupEventsService
+  ) {}
 
   async getConfig(): Promise<GeneralSettings> {
     const now = Date.now();
@@ -180,6 +186,9 @@ export class GeneralSettingsService {
       });
     this.cached = next;
     this.cachedAt = Date.now();
+    if (current.features.inferenceEnabled !== next.features.inferenceEnabled) {
+      this.inferenceSetupEvents?.publishCatalogChanged();
+    }
     return next;
   }
 
@@ -251,6 +260,10 @@ export class GeneralSettingsService {
           typeof features.domainsEnabled === 'boolean'
             ? features.domainsEnabled
             : DEFAULT_GENERAL_SETTINGS.features.domainsEnabled,
+        inferenceEnabled:
+          typeof features.inferenceEnabled === 'boolean'
+            ? features.inferenceEnabled
+            : DEFAULT_GENERAL_SETTINGS.features.inferenceEnabled,
       },
     };
   }

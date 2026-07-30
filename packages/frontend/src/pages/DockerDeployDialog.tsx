@@ -328,7 +328,7 @@ export function DockerDeployDialog({
           </Tabs>
 
           {/* Node */}
-          <div>
+          <div className="space-y-1.5">
             <label className="text-sm font-medium">
               Node <span className="text-destructive">*</span>
             </label>
@@ -343,12 +343,11 @@ export function DockerDeployDialog({
               placeholder="Select a node"
               searchPlaceholder="Search nodes..."
               emptyMessage="No nodes found."
-              className="mt-1"
             />
           </div>
 
           {/* Registry */}
-          <div>
+          <div className="space-y-1.5">
             <label className="text-sm font-medium">Registry</label>
             <Combobox
               value={deployRegistryId || "__default__"}
@@ -358,7 +357,6 @@ export function DockerDeployDialog({
               searchPlaceholder="Search registries..."
               emptyMessage="No registries found."
               disabled={!deployNodeId}
-              className="mt-1"
               renderOption={(option) => {
                 const registry = availableRegistries.find(
                   (candidate) => candidate.id === option.value
@@ -380,7 +378,7 @@ export function DockerDeployDialog({
           </div>
 
           {/* Image */}
-          <div>
+          <div className="space-y-1.5">
             <label className="text-sm font-medium">
               Image <span className="text-destructive">*</span>
             </label>
@@ -392,7 +390,6 @@ export function DockerDeployDialog({
               placeholder={!deployNodeId ? "Select a node first" : "Select or enter an image"}
               searchPlaceholder="Search or enter an image..."
               disabled={!deployNodeId}
-              className="mt-1"
               renderOption={(option) => (
                 <span className="flex min-w-0 items-center gap-2">
                   <span className="min-w-0 truncate">{option.label}</span>
@@ -403,14 +400,12 @@ export function DockerDeployDialog({
               )}
             />
             {deployImage && !deployLocalImages.includes(deployImage) && deployNodeId && (
-              <p className="text-xs text-muted-foreground mt-1">
-                Will be pulled to this node on deploy
-              </p>
+              <p className="text-xs text-muted-foreground">Will be pulled to this node on deploy</p>
             )}
           </div>
 
           {/* Container name */}
-          <div>
+          <div className="space-y-1.5">
             <label className="text-sm font-medium">
               {deployMode === "deployment" ? "Deployment Name" : "Container Name"}{" "}
               {deployMode === "container" && (
@@ -418,7 +413,6 @@ export function DockerDeployDialog({
               )}
             </label>
             <Input
-              className="mt-1"
               value={deployName}
               onChange={(e) => setDeployName(e.target.value)}
               placeholder={deployMode === "deployment" ? "my-app" : "my-container"}
@@ -443,19 +437,17 @@ export function DockerDeployDialog({
                   transition={tabContentTransition}
                 >
                   <div className="grid grid-cols-2 gap-3">
-                    <div>
+                    <div className="space-y-1.5">
                       <label className="text-sm font-medium">Host Port</label>
                       <Input
-                        className="mt-1"
                         inputMode="numeric"
                         value={routeHostPort}
                         onChange={(e) => setRouteHostPort(e.target.value)}
                       />
                     </div>
-                    <div>
+                    <div className="space-y-1.5">
                       <label className="text-sm font-medium">Container Port</label>
                       <Input
-                        className="mt-1"
                         inputMode="numeric"
                         value={routeContainerPort}
                         onChange={(e) => setRouteContainerPort(e.target.value)}
@@ -464,18 +456,13 @@ export function DockerDeployDialog({
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
-                    <div>
+                    <div className="space-y-1.5">
                       <label className="text-sm font-medium">Health Path</label>
-                      <Input
-                        className="mt-1"
-                        value={healthPath}
-                        onChange={(e) => setHealthPath(e.target.value)}
-                      />
+                      <Input value={healthPath} onChange={(e) => setHealthPath(e.target.value)} />
                     </div>
-                    <div>
+                    <div className="space-y-1.5">
                       <label className="text-sm font-medium">Drain Seconds</label>
                       <Input
-                        className="mt-1"
                         inputMode="numeric"
                         value={drainSeconds}
                         onChange={(e) => setDrainSeconds(e.target.value)}
@@ -488,10 +475,10 @@ export function DockerDeployDialog({
           </AnimatePresence>
 
           {/* Restart policy */}
-          <div>
+          <div className="space-y-1.5">
             <label className="text-sm font-medium">Restart Policy</label>
             <Select value={deployRestart} onValueChange={setDeployRestart}>
-              <SelectTrigger className="mt-1">
+              <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

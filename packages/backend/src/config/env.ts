@@ -72,11 +72,17 @@ const envSchema = z.object({
   RATE_LIMIT_PKI_MAX_REQUESTS: rateLimitMaxSchema.default(600),
   RATE_LIMIT_STREAM_MAX_REQUESTS: rateLimitMaxSchema.default(120),
   RATE_LIMIT_AI_WS_MAX_REQUESTS: rateLimitMaxSchema.default(30),
+  RATE_LIMIT_INFERENCE_MAX_REQUESTS: rateLimitMaxSchema.default(600),
 
   // Request body limits
   REQUEST_BODY_MAX_BYTES: z.coerce.number().int().positive().default(2_097_152),
   OAUTH_BODY_MAX_BYTES: z.coerce.number().int().positive().default(32_768),
   DOCKER_FILE_WRITE_MAX_BODY_BYTES: z.coerce.number().int().positive().default(150_000_000),
+  INFERENCE_BODY_MAX_BYTES: z.coerce.number().int().positive().default(33_554_432),
+  INFERENCE_MAX_CONCURRENT_REQUESTS_PER_TOKEN: z.coerce.number().int().positive().default(16),
+  INFERENCE_CONCURRENCY_LEASE_SECONDS: z.coerce.number().int().positive().default(600),
+  INFERENCE_CONTINUATION_MAX_BYTES: z.coerce.number().int().positive().default(2_097_152),
+  INFERENCE_CONTINUATION_TTL_SECONDS: z.coerce.number().int().positive().default(86_400),
 
   // Session
   SESSION_EXPIRY: z.coerce.number().default(2592000), // 30 days

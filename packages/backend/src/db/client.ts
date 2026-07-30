@@ -5,6 +5,8 @@ import * as schema from './schema/index.js';
 const { Pool } = pg;
 
 export type DrizzleClient = ReturnType<typeof drizzle<typeof schema>>;
+export type DrizzleTransaction = Parameters<Parameters<DrizzleClient['transaction']>[0]>[0];
+export type DrizzleExecutor = DrizzleClient | DrizzleTransaction;
 
 export function createDrizzleClient(connectionString: string): DrizzleClient {
   const pool = new Pool({

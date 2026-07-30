@@ -123,6 +123,17 @@ export const ALL_SCOPES = [
   'ai:sandbox:tier:high',
   'ai:sandbox:manage',
   'mcp:use',
+  // ── Inference ────────────────────────────────────────────────────
+  'inference:use',
+  'inference:setup',
+  'inference:tokens:create',
+  'inference:tokens:revoke',
+  'inference:usage:view:self',
+  'inference:providers:view',
+  'inference:providers:manage',
+  'inference:models:manage',
+  'inference:limits:manage',
+  'inference:usage:view',
   // ── Docker: Containers ───────────────────────────────────────────
   'docker:containers:view',
   'docker:containers:create',
@@ -218,6 +229,11 @@ export const USER_ONLY_SCOPES = [
   'ai:sandbox:tier:high',
   'ai:sandbox:manage',
   'mcp:use',
+  'inference:use',
+  'inference:setup',
+  'inference:tokens:create',
+  'inference:tokens:revoke',
+  'inference:usage:view:self',
 ] as const;
 export const PROGRAMMATIC_DENIED_BASE_SCOPES = [
   ...USER_ONLY_SCOPES,
@@ -236,6 +252,11 @@ export const PROGRAMMATIC_DENIED_BASE_SCOPES = [
   'proxy:advanced:bypass',
   'nodes:config:view',
   'nodes:config:edit',
+  'inference:providers:view',
+  'inference:providers:manage',
+  'inference:models:manage',
+  'inference:limits:manage',
+  'inference:usage:view',
 ] as const;
 
 const PROGRAMMATIC_DENIED_SCOPE_SET = new Set<string>(PROGRAMMATIC_DENIED_BASE_SCOPES);
@@ -343,6 +364,15 @@ export const ADMIN_SCOPES: readonly string[] = [
   'ai:sandbox:tier:high',
   'ai:sandbox:manage',
   'mcp:use',
+  'inference:use',
+  'inference:tokens:create',
+  'inference:tokens:revoke',
+  'inference:usage:view:self',
+  'inference:providers:view',
+  'inference:providers:manage',
+  'inference:models:manage',
+  'inference:limits:manage',
+  'inference:usage:view',
   'docker:containers:view',
   'docker:containers:create',
   'docker:containers:edit',

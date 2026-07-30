@@ -783,11 +783,10 @@ export function AdminNodeDetail({
             <DialogTitle>Node Settings</DialogTitle>
           </DialogHeader>
           <div className="space-y-5">
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Display Name</label>
               <Input
                 aria-label="Display Name"
-                className="mt-1"
                 value={appearanceName}
                 onChange={(e) => setAppearanceName(e.target.value)}
                 placeholder={node.hostname}
@@ -795,13 +794,13 @@ export function AdminNodeDetail({
                   if (e.key === "Enter") void handleAppearanceSave();
                 }}
               />
-              <p className="mt-1 text-xs text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Leave empty to use the hostname ({node.hostname})
               </p>
             </div>
-            <div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Color</label>
-              <div className="mt-2 grid grid-cols-8 gap-2">
+              <div className="grid grid-cols-8 gap-2">
                 <button
                   type="button"
                   aria-label="Default color"
@@ -827,7 +826,7 @@ export function AdminNodeDetail({
                   />
                 ))}
               </div>
-              <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span>Preview:</span>
                 <Badge
                   variant="secondary"
@@ -839,14 +838,14 @@ export function AdminNodeDetail({
               </div>
             </div>
             {node.type === "docker" && (
-              <div>
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium">Service Address</label>
                 <Select
                   value={serviceAddressMode}
                   onValueChange={setServiceAddressMode}
                   disabled={!canEditNodeServiceAddress}
                 >
-                  <SelectTrigger className="mt-1">
+                  <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -885,14 +884,13 @@ export function AdminNodeDetail({
                 {serviceAddressMode === "__custom__" && (
                   <Input
                     aria-label="Custom Service Address"
-                    className="mt-2"
                     value={customServiceAddress}
                     onChange={(event) => setCustomServiceAddress(event.target.value)}
                     placeholder="docker-node.internal"
                     disabled={!canEditNodeServiceAddress}
                   />
                 )}
-                <p className="mt-1 text-xs text-muted-foreground">
+                <p className="text-xs text-muted-foreground">
                   Used by proxy hosts to reach published Docker ports.
                 </p>
               </div>

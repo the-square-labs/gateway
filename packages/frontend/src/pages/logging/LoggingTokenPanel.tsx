@@ -142,7 +142,7 @@ export function LoggingTokenPanel({
               </div>
             </div>
           ) : (
-            <label className="block space-y-1">
+            <label className="block space-y-1.5">
               <span className="text-sm font-medium">Name</span>
               <Input value={name} onChange={(event) => setName(event.target.value)} />
             </label>

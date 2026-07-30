@@ -100,6 +100,12 @@ Object.defineProperty(window.HTMLElement.prototype, "scrollIntoView", {
   value: vi.fn(),
 });
 
+Object.defineProperty(window, "scrollTo", {
+  configurable: true,
+  writable: true,
+  value: vi.fn(),
+});
+
 beforeAll(() => {
   server.listen({ onUnhandledRequest: "error" });
 });
