@@ -96,7 +96,7 @@ describe('admin Gateway settings route permissions', () => {
       }),
     } as unknown as AuthSettingsService);
     container.registerInstance(McpSettingsService, {
-      getConfig: vi.fn().mockResolvedValue({ serverEnabled: true }),
+      getConfig: vi.fn().mockResolvedValue({ serverEnabled: true, extendedCompatibility: false }),
     } as unknown as McpSettingsService);
     container.registerInstance(GeneralSettingsService, {
       getConfig: vi.fn().mockResolvedValue({
@@ -131,6 +131,7 @@ describe('admin Gateway settings route permissions', () => {
       oidcRequireVerifiedEmail: true,
       oauthExtendedCallbackCompatibility: false,
       mcpServerEnabled: true,
+      mcpExtendedCompatibility: false,
       generalSettings: {
         fileUploadMaxBytes: 100 * 1024 * 1024,
         fileOpenMaxBytes: 10 * 1024 * 1024,
@@ -175,8 +176,8 @@ describe('admin Gateway settings route permissions', () => {
       updateConfig,
     } as unknown as AuthSettingsService);
     container.registerInstance(McpSettingsService, {
-      updateConfig: vi.fn().mockResolvedValue({ serverEnabled: true }),
-      getConfig: vi.fn().mockResolvedValue({ serverEnabled: true }),
+      updateConfig: vi.fn().mockResolvedValue({ serverEnabled: true, extendedCompatibility: false }),
+      getConfig: vi.fn().mockResolvedValue({ serverEnabled: true, extendedCompatibility: false }),
     } as unknown as McpSettingsService);
     container.registerInstance(GeneralSettingsService, {
       getConfig: vi.fn().mockResolvedValue({
@@ -231,7 +232,7 @@ describe('admin Gateway settings route permissions', () => {
       }),
     } as unknown as AuthSettingsService);
     container.registerInstance(McpSettingsService, {
-      updateConfig: vi.fn().mockResolvedValue({ serverEnabled: true }),
+      updateConfig: vi.fn().mockResolvedValue({ serverEnabled: true, extendedCompatibility: false }),
     } as unknown as McpSettingsService);
     container.registerInstance(GeneralSettingsService, {
       updateConfig: updateGeneralConfig,
@@ -293,8 +294,9 @@ describe('admin Gateway settings route permissions', () => {
     container.registerInstance(AuthSettingsService, {
       updateConfig,
     } as unknown as AuthSettingsService);
+    const updateMcpConfig = vi.fn().mockResolvedValue({ serverEnabled: true, extendedCompatibility: true });
     container.registerInstance(McpSettingsService, {
-      updateConfig: vi.fn().mockResolvedValue({ serverEnabled: true }),
+      updateConfig: updateMcpConfig,
     } as unknown as McpSettingsService);
     container.registerInstance(GeneralSettingsService, {
       getConfig: vi.fn().mockResolvedValue({
@@ -326,13 +328,21 @@ describe('admin Gateway settings route permissions', () => {
     const response = await createApp().request('/api/admin/auth-settings', {
       method: 'PUT',
       headers: sessionHeaders(),
-      body: JSON.stringify({ oauthExtendedCallbackCompatibility: true }),
+      body: JSON.stringify({
+        oauthExtendedCallbackCompatibility: true,
+        mcpExtendedCompatibility: true,
+      }),
     });
     const body = (await response.json()) as Record<string, unknown>;
 
     expect(response.status).toBe(200);
     expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({ oauthExtendedCallbackCompatibility: true }));
+    expect(updateMcpConfig).toHaveBeenCalledWith({
+      serverEnabled: undefined,
+      extendedCompatibility: true,
+    });
     expect(body.oauthExtendedCallbackCompatibility).toBe(true);
+    expect(body.mcpExtendedCompatibility).toBe(true);
     expect(body.oidcRequireVerifiedEmail).toBe(true);
   });
 });

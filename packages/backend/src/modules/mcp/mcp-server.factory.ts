@@ -14,6 +14,7 @@ export interface CreateMcpServerOptions {
   issuedMcpSessionId?: string;
   authType?: 'oauth' | 'api-token';
   clientId?: string;
+  eagerToolListing?: boolean;
 }
 
 export function createMcpServer(options: CreateMcpServerOptions) {
@@ -27,7 +28,7 @@ export function createMcpServer(options: CreateMcpServerOptions) {
 
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
-    enableJsonResponse: true,
+    enableJsonResponse: false,
   });
 
   registerMcpToolHandlers(
@@ -41,6 +42,7 @@ export function createMcpServer(options: CreateMcpServerOptions) {
       issuedMcpSessionId: options.issuedMcpSessionId,
       authType: options.authType,
       clientId: options.clientId,
+      eagerToolListing: options.eagerToolListing,
     },
     options.user
   );

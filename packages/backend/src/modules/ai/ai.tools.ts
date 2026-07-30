@@ -1326,7 +1326,7 @@ export const AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'get_gateway_settings',
     description:
-      'Read Gateway control-plane settings: OIDC provisioning, MCP server enablement, general feature limits, network security, and outbound webhook policy.',
+      'Read Gateway control-plane settings: OIDC provisioning, MCP server enablement and compatibility, general feature limits, network security, and outbound webhook policy.',
     parameters: { type: 'object', properties: {} },
     destructive: false,
     category: 'Maintenance',
@@ -1336,7 +1336,7 @@ export const AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'update_gateway_settings',
     description:
-      'Update Gateway control-plane settings. Pass only fields to change: OIDC provisioning, MCP server enablement, generalSettings, networkSecurity, or outboundWebhookPolicy.',
+      'Update Gateway control-plane settings. Pass only fields to change: OIDC provisioning, MCP server enablement or compatibility, generalSettings, networkSecurity, or outboundWebhookPolicy.',
     parameters: {
       type: 'object',
       properties: {
@@ -1345,6 +1345,10 @@ export const AI_TOOLS: AIToolDefinition[] = [
         oidcRequireVerifiedEmail: { type: 'boolean' },
         oauthExtendedCallbackCompatibility: { type: 'boolean' },
         mcpServerEnabled: { type: 'boolean' },
+        mcpExtendedCompatibility: {
+          type: 'boolean',
+          description: 'Return every OAuth-scoped MCP tool in the initial tools/list response.',
+        },
         generalSettings: { type: 'object' },
         networkSecurity: { type: 'object' },
         outboundWebhookPolicy: { type: 'object' },

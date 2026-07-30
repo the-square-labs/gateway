@@ -587,9 +587,9 @@ export function registerMcpToolHandlers(server: McpAuthContext['server'], auth: 
 
   server.server.setRequestHandler(ListToolsRequestSchema, (request): ListToolsResult => {
     state.lastAccessAt = Date.now();
-    const visibleToolNames = visibleToolNamesForState(state);
+    const visibleToolNames = auth.eagerToolListing ? undefined : visibleToolNamesForState(state);
     const tools = [
-      MCP_DISCOVER_TOOLS_DEFINITION,
+      ...(auth.eagerToolListing ? [] : [MCP_DISCOVER_TOOLS_DEFINITION]),
       ...listAvailableMcpTools(auth.scopes, visibleToolNames).map((tool) => ({
         name: tool.name,
         description: tool.description,
@@ -613,7 +613,7 @@ export function registerMcpToolHandlers(server: McpAuthContext['server'], auth: 
     return { tools: page.items, nextCursor: page.nextCursor };
   });
 
-  server.server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+  server.server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<CallToolResult> => {
     const toolName = request.params.name;
     const args = request.params.arguments ?? {};
     if (toolName === 'discover_tools') {
@@ -633,6 +633,7 @@ export function registerMcpToolHandlers(server: McpAuthContext['server'], auth: 
             lastAccessAt: state.lastAccessAt,
           });
         }
+        await extra.sendNotification({ method: 'notifications/tools/list_changed' });
       }
       return toolResult({
         activeToolsets: [...state.activeToolsets],

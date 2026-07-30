@@ -45,6 +45,7 @@ export interface AppEnv {
       authType?: 'oauth' | 'api-token';
       clientId?: string;
     };
+    mcpExtendedCompatibility?: boolean;
     requestId: string;
     loggingIngest?: {
       tokenId: string;

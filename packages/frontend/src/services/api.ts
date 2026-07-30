@@ -336,6 +336,7 @@ class ApiClient extends withInferenceApi(
     oidcRequireVerifiedEmail?: boolean;
     oauthExtendedCallbackCompatibility?: boolean;
     mcpServerEnabled?: boolean;
+    mcpExtendedCompatibility?: boolean;
     generalSettings?: Partial<AuthProvisioningSettings["generalSettings"]>;
     networkSecurity?: Partial<AuthProvisioningSettings["networkSecurity"]>;
     outboundWebhookPolicy?: Partial<AuthProvisioningSettings["outboundWebhookPolicy"]>;

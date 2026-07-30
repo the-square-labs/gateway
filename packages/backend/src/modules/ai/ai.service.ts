@@ -1280,6 +1280,7 @@ export class AIService {
         return {
           ...settings,
           mcpServerEnabled: mcpSettings.serverEnabled,
+          mcpExtendedCompatibility: mcpSettings.extendedCompatibility,
           generalSettings,
           networkSecurity,
           outboundWebhookPolicy,
@@ -1301,7 +1302,10 @@ export class AIService {
         const outboundWebhookPolicyService = container.resolve(OutboundWebhookPolicyService);
         const [settings, mcpSettings, generalSettings, networkSecurity, outboundWebhookPolicy] = await Promise.all([
           authSettingsService.updateConfig(input),
-          mcpSettingsService.updateConfig({ serverEnabled: input.mcpServerEnabled }),
+          mcpSettingsService.updateConfig({
+            serverEnabled: input.mcpServerEnabled,
+            extendedCompatibility: input.mcpExtendedCompatibility,
+          }),
           input.generalSettings
             ? generalSettingsService.updateConfig(input.generalSettings)
             : generalSettingsService.getConfig(),
@@ -1319,6 +1323,7 @@ export class AIService {
         return {
           ...settings,
           mcpServerEnabled: mcpSettings.serverEnabled,
+          mcpExtendedCompatibility: mcpSettings.extendedCompatibility,
           generalSettings,
           networkSecurity,
           outboundWebhookPolicy,

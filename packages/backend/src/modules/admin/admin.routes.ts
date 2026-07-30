@@ -191,6 +191,7 @@ adminRoutes.openapi({ ...getAuthSettingsRoute, middleware: requireScope('setting
   return c.json({
     ...settings,
     mcpServerEnabled: mcpSettings.serverEnabled,
+    mcpExtendedCompatibility: mcpSettings.extendedCompatibility,
     generalSettings,
     networkSecurity,
     outboundWebhookPolicy,
@@ -231,7 +232,10 @@ adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('sett
     const previousGeneralSettings = shouldRefreshGrpcIdentity ? await generalSettingsService.getConfig() : null;
     const [updated, mcpSettings, generalSettings, networkSecurity, outboundWebhookPolicy] = await Promise.all([
       authSettingsService.updateConfig(input),
-      mcpSettingsService.updateConfig({ serverEnabled: input.mcpServerEnabled }),
+      mcpSettingsService.updateConfig({
+        serverEnabled: input.mcpServerEnabled,
+        extendedCompatibility: input.mcpExtendedCompatibility,
+      }),
       input.generalSettings
         ? generalSettingsService.updateConfig(input.generalSettings)
         : generalSettingsService.getConfig(),
@@ -280,6 +284,7 @@ adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('sett
     return c.json({
       ...updated,
       mcpServerEnabled: mcpSettings.serverEnabled,
+      mcpExtendedCompatibility: mcpSettings.extendedCompatibility,
       generalSettings,
       networkSecurity,
       outboundWebhookPolicy,

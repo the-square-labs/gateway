@@ -12,6 +12,7 @@ const SETTINGS: AuthProvisioningSettings = {
   oidcRequireVerifiedEmail: true,
   oauthExtendedCallbackCompatibility: false,
   mcpServerEnabled: true,
+  mcpExtendedCompatibility: false,
   generalSettings: {
     fileUploadMaxBytes: 100 * 1024 * 1024,
     fileOpenMaxBytes: 10 * 1024 * 1024,
@@ -75,5 +76,27 @@ describe("AuthProvisioningSection inference setting", () => {
       })
     );
     expect(useSystemConfigStore.getState().config.features.inferenceEnabled).toBe(true);
+  });
+
+  it("persists extended MCP compatibility", async () => {
+    api.setCache("settings:auth-provisioning", SETTINGS);
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(SETTINGS);
+    const update = vi.spyOn(api, "updateAuthProvisioningSettings").mockResolvedValue({
+      ...SETTINGS,
+      mcpExtendedCompatibility: true,
+    });
+    const user = userEvent.setup();
+
+    render(<AuthProvisioningSection canEdit />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Enable extended MCP compatibility" })
+    );
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith({
+        mcpExtendedCompatibility: true,
+      })
+    );
   });
 });

@@ -4,18 +4,25 @@ import { settings } from '@/db/schema/settings.js';
 
 const MCP_SETTINGS_DEFAULTS = {
   'mcp:server_enabled': false,
+  'mcp:extended_compatibility': false,
 } as const;
 
 export interface McpSettingsConfig {
   serverEnabled: boolean;
+  extendedCompatibility: boolean;
 }
 
 export class McpSettingsService {
   constructor(private readonly db: DrizzleClient) {}
 
   async getConfig(): Promise<McpSettingsConfig> {
+    const [serverEnabled, extendedCompatibility] = await Promise.all([
+      this.getSetting('mcp:server_enabled', MCP_SETTINGS_DEFAULTS['mcp:server_enabled']),
+      this.getSetting('mcp:extended_compatibility', MCP_SETTINGS_DEFAULTS['mcp:extended_compatibility']),
+    ]);
     return {
-      serverEnabled: await this.getSetting('mcp:server_enabled', MCP_SETTINGS_DEFAULTS['mcp:server_enabled']),
+      serverEnabled,
+      extendedCompatibility,
     };
   }
 
@@ -23,9 +30,15 @@ export class McpSettingsService {
     return (await this.getConfig()).serverEnabled;
   }
 
-  async updateConfig(updates: { serverEnabled?: boolean }): Promise<McpSettingsConfig> {
+  async updateConfig(updates: {
+    serverEnabled?: boolean;
+    extendedCompatibility?: boolean;
+  }): Promise<McpSettingsConfig> {
     if (updates.serverEnabled !== undefined) {
       await this.setSetting('mcp:server_enabled', updates.serverEnabled);
+    }
+    if (updates.extendedCompatibility !== undefined) {
+      await this.setSetting('mcp:extended_compatibility', updates.extendedCompatibility);
     }
 
     return this.getConfig();

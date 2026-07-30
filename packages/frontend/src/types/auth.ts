@@ -46,6 +46,7 @@ export interface AuthProvisioningSettings {
   oidcRequireVerifiedEmail: boolean;
   oauthExtendedCallbackCompatibility: boolean;
   mcpServerEnabled: boolean;
+  mcpExtendedCompatibility: boolean;
   generalSettings: {
     fileUploadMaxBytes: number;
     fileOpenMaxBytes: number;

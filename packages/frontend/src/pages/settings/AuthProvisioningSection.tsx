@@ -50,6 +50,7 @@ function withDefaultGeneralSettings(settings: AuthProvisioningSettings | null) {
   if (!settings) return null;
   return {
     ...settings,
+    mcpExtendedCompatibility: settings.mcpExtendedCompatibility ?? false,
     generalSettings: {
       ...DEFAULT_GENERAL_SETTINGS,
       ...settings.generalSettings,
@@ -72,6 +73,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
   const [isSavingGroup, setIsSavingGroup] = useState(false);
   const [isSavingGeneral, setIsSavingGeneral] = useState(false);
   const [isSavingMcp, setIsSavingMcp] = useState(false);
+  const [isSavingMcpCompatibility, setIsSavingMcpCompatibility] = useState(false);
   const [isSavingOAuthCompatibility, setIsSavingOAuthCompatibility] = useState(false);
   const [isSavingNetwork, setIsSavingNetwork] = useState(false);
   const [isSavingWebhookPolicy, setIsSavingWebhookPolicy] = useState(false);
@@ -366,6 +368,25 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       toast.error(err instanceof Error ? err.message : "Failed to update MCP server setting");
     } finally {
       setIsSavingMcp(false);
+    }
+  };
+
+  const handleToggleMcpCompatibility = async (checked: boolean) => {
+    if (!settings || !canEdit) return;
+    setIsSavingMcpCompatibility(true);
+    const previous = settings;
+    setSettings({ ...settings, mcpExtendedCompatibility: checked });
+    try {
+      const updated = await api.updateAuthProvisioningSettings({
+        mcpExtendedCompatibility: checked,
+      });
+      applySettings(updated);
+      toast.success("MCP compatibility setting updated");
+    } catch (err) {
+      setSettings(previous);
+      toast.error(err instanceof Error ? err.message : "Failed to update MCP compatibility");
+    } finally {
+      setIsSavingMcpCompatibility(false);
     }
   };
 
@@ -703,6 +724,21 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
               checked={settings.mcpServerEnabled}
               disabled={!canEdit || isSavingMcp}
               onChange={handleToggleMcpServer}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-4 px-4 py-3">
+            <div>
+              <p className="text-sm font-medium">Extended MCP compatibility</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Return all OAuth-scoped tools in the initial tool list for clients that cannot
+                refresh after discovery. This increases the initial tool catalog size.
+              </p>
+            </div>
+            <Switch
+              ariaLabel="Enable extended MCP compatibility"
+              checked={settings.mcpExtendedCompatibility}
+              disabled={!canEdit || isSavingMcpCompatibility}
+              onChange={handleToggleMcpCompatibility}
             />
           </div>
           <div className="flex items-center justify-between gap-4 px-4 py-3">

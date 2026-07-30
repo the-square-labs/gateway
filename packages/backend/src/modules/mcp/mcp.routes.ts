@@ -73,11 +73,12 @@ function methodNotAllowed() {
   );
 }
 
-mcpRoutes.use('*', async (_c, next) => {
-  const enabled = await container.resolve(McpSettingsService).isEnabled();
-  if (!enabled) {
+mcpRoutes.use('*', async (c, next) => {
+  const config = await container.resolve(McpSettingsService).getConfig();
+  if (!config.serverEnabled) {
     throw new HTTPException(404, { message: 'MCP server is disabled' });
   }
+  c.set('mcpExtendedCompatibility', config.extendedCompatibility);
   await next();
 });
 
@@ -106,6 +107,7 @@ mcpRoutes.post('/', async (c) => {
     issuedMcpSessionId: responseMcpSessionId,
     authType: auth.authType,
     clientId: auth.clientId,
+    eagerToolListing: c.get('mcpExtendedCompatibility') ?? false,
   });
 
   await server.connect(transport);

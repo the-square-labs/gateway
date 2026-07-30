@@ -35,6 +35,7 @@ export const UpdateAuthProvisioningSettingsSchema = z.object({
   oidcRequireVerifiedEmail: z.boolean().optional(),
   oauthExtendedCallbackCompatibility: z.boolean().optional(),
   mcpServerEnabled: z.boolean().optional(),
+  mcpExtendedCompatibility: z.boolean().optional(),
   generalSettings: z
     .object({
       fileUploadMaxBytes: z.number().int().min(FILE_UPLOAD_MIN_BYTES).max(FILE_UPLOAD_MAX_BYTES).optional(),

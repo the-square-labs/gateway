@@ -161,8 +161,8 @@ describe('AIService maintenance tools', () => {
       }),
     };
     const mcpSettingsService = {
-      getConfig: vi.fn().mockResolvedValue({ serverEnabled: false }),
-      updateConfig: vi.fn().mockResolvedValue({ serverEnabled: true }),
+      getConfig: vi.fn().mockResolvedValue({ serverEnabled: false, extendedCompatibility: false }),
+      updateConfig: vi.fn().mockResolvedValue({ serverEnabled: true, extendedCompatibility: true }),
     };
     const generalSettingsService = {
       getConfig: vi.fn().mockResolvedValue({ features: { pkiEnabled: true, domainsEnabled: true } }),
@@ -210,6 +210,7 @@ describe('AIService maintenance tools', () => {
       result: {
         oidcAutoCreateUsers: true,
         mcpServerEnabled: false,
+        mcpExtendedCompatibility: false,
         availableGroups: [{ id: '00000000-0000-4000-8000-000000000001', name: 'viewer', isBuiltin: true }],
       },
       invalidateStores: [],
@@ -220,6 +221,7 @@ describe('AIService maintenance tools', () => {
         oidcAutoCreateUsers: false,
         oidcDefaultGroupId: '00000000-0000-4000-8000-000000000001',
         mcpServerEnabled: true,
+        mcpExtendedCompatibility: true,
         generalSettings: { features: { pkiEnabled: false } },
         networkSecurity: { clientIpSource: 'direct' },
         outboundWebhookPolicy: { allowPrivateNetworks: false },
@@ -228,6 +230,7 @@ describe('AIService maintenance tools', () => {
       result: {
         oidcAutoCreateUsers: false,
         mcpServerEnabled: true,
+        mcpExtendedCompatibility: true,
         availableGroups: [{ id: '00000000-0000-4000-8000-000000000001', name: 'viewer', isBuiltin: true }],
       },
       invalidateStores: ['settings'],
@@ -239,7 +242,10 @@ describe('AIService maintenance tools', () => {
         oidcDefaultGroupId: '00000000-0000-4000-8000-000000000001',
       })
     );
-    expect(mcpSettingsService.updateConfig).toHaveBeenCalledWith({ serverEnabled: true });
+    expect(mcpSettingsService.updateConfig).toHaveBeenCalledWith({
+      serverEnabled: true,
+      extendedCompatibility: true,
+    });
     expect(generalSettingsService.updateConfig).toHaveBeenCalledWith({ features: { pkiEnabled: false } });
     expect(networkSettingsService.updateConfig).toHaveBeenCalledWith({ clientIpSource: 'direct' });
     expect(outboundWebhookPolicyService.updateConfig).toHaveBeenCalledWith({ allowPrivateNetworks: false });

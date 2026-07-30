@@ -9,4 +9,5 @@ export interface McpAuthContext {
   issuedMcpSessionId?: string;
   authType?: 'oauth' | 'api-token';
   clientId?: string;
+  eagerToolListing?: boolean;
 }

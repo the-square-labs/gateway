@@ -55,9 +55,9 @@ function registerToken(scopes: string[] | null, user: User = USER) {
   registerOAuth(scopes, user);
 }
 
-function registerMcpSettings(enabled = true) {
+function registerMcpSettings(enabled = true, extendedCompatibility = false) {
   container.registerInstance(McpSettingsService, {
-    isEnabled: vi.fn().mockResolvedValue(enabled),
+    getConfig: vi.fn().mockResolvedValue({ serverEnabled: enabled, extendedCompatibility }),
   } as unknown as McpSettingsService);
 }
 
@@ -92,6 +92,22 @@ function mcpHeaders(token = 'gwo_valid', mcpSessionId?: string) {
   };
 }
 
+async function parseMcpMessages(response: Response): Promise<JsonRecord[]> {
+  const contentType = response.headers.get('content-type') ?? '';
+  if (contentType.includes('application/json')) {
+    const body = (await response.json()) as JsonRecord | JsonRecord[];
+    return Array.isArray(body) ? body : [body];
+  }
+
+  const text = await response.text();
+  return text.split(/\n\n+/).flatMap((event) =>
+    event
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => JSON.parse(line.slice('data: '.length)) as JsonRecord)
+  );
+}
+
 async function mcpRequest(
   method: string,
   params: Record<string, unknown> = {},
@@ -103,9 +119,13 @@ async function mcpRequest(
     headers: mcpHeaders(token, mcpSessionId),
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
   });
+  const messages = await parseMcpMessages(response);
+  const body = messages.find((message) => message.id === 1) ?? messages.at(-1);
+  if (!body) throw new Error('MCP response did not contain a JSON-RPC result');
   return {
     response,
-    body: (await response.json()) as JsonRecord,
+    body,
+    messages,
   };
 }
 
@@ -489,6 +509,34 @@ describe('MCP tools', () => {
     const refreshed = await mcpRequest('tools/list');
     names = refreshed.body.result.tools.map((tool: { name: string }) => tool.name);
     expect(names).toContain('list_docker_deployments');
+  });
+
+  it('emits tools/list_changed after activating a toolset', async () => {
+    registerToken(['docker:containers:view', 'docker:containers:manage']);
+
+    const discovered = await mcpRequest('tools/call', {
+      name: 'discover_tools',
+      arguments: { category: 'docker' },
+    });
+
+    expect(discovered.response.headers.get('content-type')).toContain('text/event-stream');
+    expect(discovered.messages).toContainEqual({
+      jsonrpc: '2.0',
+      method: 'notifications/tools/list_changed',
+    });
+    expect(discovered.body.result.isError).not.toBe(true);
+  });
+
+  it('eagerly lists all scoped tools when extended compatibility is enabled', async () => {
+    registerMcpSettings(true, true);
+    registerToken(['docker:containers:view', 'docker:containers:manage']);
+
+    const { body } = await mcpRequest('tools/list');
+    const names = body.result.tools.map((tool: { name: string }) => tool.name);
+
+    expect(names).not.toContain('discover_tools');
+    expect(names).toContain('list_docker_deployments');
+    expect(names).toContain('restart_docker_container');
   });
 
   it('keeps newly discovered notification tools visible on the first tools/list page', async () => {
