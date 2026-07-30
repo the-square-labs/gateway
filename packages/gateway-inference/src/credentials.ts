@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { CliError } from './errors.js';
-import type { OAuthCredential, RuntimeCredential } from './types.js';
+import type { InferenceHarness, OAuthCredential, RuntimeCredential } from './types.js';
 
 const SERVICE = 'net.wiolett.gateway.inference-cli';
 
@@ -18,9 +18,9 @@ export interface CredentialStore {
   get(profile: string): Promise<OAuthCredential | null>;
   set(profile: string, credential: OAuthCredential): Promise<void>;
   delete(profile: string): Promise<void>;
-  getRuntime(profile: string): Promise<RuntimeCredential | null>;
-  setRuntime(profile: string, credential: RuntimeCredential): Promise<void>;
-  deleteRuntime(profile: string): Promise<void>;
+  getRuntime(profile: string, harness?: InferenceHarness): Promise<RuntimeCredential | null>;
+  setRuntime(profile: string, credential: RuntimeCredential, harness?: InferenceHarness): Promise<void>;
+  deleteRuntime(profile: string, harness?: InferenceHarness): Promise<void>;
 }
 
 type KeyringModule = typeof import('@napi-rs/keyring');
@@ -153,8 +153,8 @@ export class SecureCredentialStore implements CredentialStore {
     await this.withFallback('delete', `oauth:${profile}`);
   }
 
-  async getRuntime(profile: string): Promise<RuntimeCredential | null> {
-    const encoded = await this.withFallback('get', `runtime:${profile}`);
+  async getRuntime(profile: string, harness: InferenceHarness = 'codex'): Promise<RuntimeCredential | null> {
+    const encoded = await this.withFallback('get', runtimeAccount(profile, harness));
     if (!encoded) return null;
     try {
       return JSON.parse(encoded) as RuntimeCredential;
@@ -165,12 +165,16 @@ export class SecureCredentialStore implements CredentialStore {
     }
   }
 
-  async setRuntime(profile: string, credential: RuntimeCredential): Promise<void> {
-    await this.withFallback('set', `runtime:${profile}`, JSON.stringify(credential));
+  async setRuntime(
+    profile: string,
+    credential: RuntimeCredential,
+    harness: InferenceHarness = credential.harness
+  ): Promise<void> {
+    await this.withFallback('set', runtimeAccount(profile, harness), JSON.stringify(credential));
   }
 
-  async deleteRuntime(profile: string): Promise<void> {
-    await this.withFallback('delete', `runtime:${profile}`);
+  async deleteRuntime(profile: string, harness: InferenceHarness = 'codex'): Promise<void> {
+    await this.withFallback('delete', runtimeAccount(profile, harness));
   }
 
   private async withFallback(operation: 'get', profile: string): Promise<string | null>;
@@ -218,4 +222,8 @@ export class SecureCredentialStore implements CredentialStore {
     if (!this.options.interactive) return false;
     return this.options.confirmFileFallback?.('') ?? false;
   }
+}
+
+function runtimeAccount(profile: string, harness: InferenceHarness): string {
+  return harness === 'codex' ? `runtime:${profile}` : `runtime:${profile}:${harness}`;
 }

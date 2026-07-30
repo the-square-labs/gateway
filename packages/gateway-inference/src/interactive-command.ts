@@ -1,3 +1,5 @@
+import { inspectClaudeCodeConfiguration, resolveClaudeCodePaths } from './claude-code-config.js';
+import { ClaudeCodeIntegrationService } from './claude-code-integration.js';
 import { readVisibleCatalogModels } from './codex-catalog.js';
 import { inspectCodexConfiguration, resolveCodexPaths } from './codex-config.js';
 import { CodexIntegrationService, type CommandRunner } from './codex-integration.js';
@@ -32,11 +34,20 @@ export interface InteractiveCommandInput {
 
 interface InteractiveState {
   identity?: SetupIdentity;
-  harnessConfigured: boolean;
+  codexConfigured: boolean;
+  claudeCodeConfigured: boolean;
   models: string[];
 }
 
-type InferenceAction = 'authenticate' | 'setup' | 'sync' | 'doctor' | 'remove' | 'logout';
+type InferenceAction =
+  | 'authenticate'
+  | 'setup'
+  | 'sync'
+  | 'doctor'
+  | 'remove'
+  | 'doctor-claude-code'
+  | 'remove-claude-code'
+  | 'logout';
 
 export async function runInteractiveRootCommand(input: InteractiveCommandInput): Promise<number> {
   input.ui.intro('Wiolett Gateway Inference');
@@ -48,14 +59,15 @@ export async function runInteractiveInferenceCommand(
   showIntro = true
 ): Promise<number> {
   if (showIntro) input.ui.intro('Wiolett Gateway Inference');
-  const integration = createIntegration(input);
+  const codexIntegration = createIntegration(input);
+  const claudeCodeIntegration = createClaudeCodeIntegration(input);
   const state = await loadInferenceMenuState(input);
   await showState(input, state);
 
   while (true) {
     const action = (await input.ui.select(
       'What do you want to do?',
-      inferenceActions(state.identity, state.harnessConfigured, state.models.length)
+      inferenceActions(state)
     )) as InferenceAction | null;
     if (!action) {
       input.ui.cancel('No action selected.');
@@ -70,25 +82,33 @@ export async function runInteractiveInferenceCommand(
       continue;
     }
     if (action === 'logout') return logout(input);
-    if (action === 'setup') return setupHarness(input, integration);
+    if (action === 'setup') return setupHarness(input, codexIntegration, claudeCodeIntegration);
     if (action === 'sync') {
-      state.models = await syncModels(input, integration);
+      state.models = await syncModels(input, codexIntegration);
       continue;
     }
     if (action === 'doctor') {
-      await diagnose(input, integration);
+      await diagnose(input, codexIntegration);
       continue;
     }
-    if (await removeHarness(input, integration)) {
-      state.harnessConfigured = false;
+    if (action === 'doctor-claude-code') {
+      await diagnoseClaudeCode(input, claudeCodeIntegration);
+      continue;
+    }
+    if (action === 'remove' && (await removeHarness(input, codexIntegration))) {
+      state.codexConfigured = false;
       state.models = [];
+      continue;
+    }
+    if (action === 'remove-claude-code' && (await removeClaudeCode(input, claudeCodeIntegration))) {
+      state.claudeCodeConfigured = false;
     }
   }
 }
 
 export async function runInteractiveHarnessSetupCommand(input: InteractiveCommandInput): Promise<number> {
   input.ui.intro('Wiolett Gateway Inference · Setup');
-  return setupHarness(input, createIntegration(input));
+  return setupHarness(input, createIntegration(input), createClaudeCodeIntegration(input));
 }
 
 async function loadInferenceMenuState(input: InteractiveCommandInput): Promise<InteractiveState> {
@@ -106,25 +126,28 @@ async function loadInferenceMenuState(input: InteractiveCommandInput): Promise<I
   const paths = resolveCodexPaths(input.paths, input.profileName, input.env, input.home);
   const config = await inspectCodexConfiguration({ paths, profile: input.profileName });
   const models = config.configured ? await readVisibleCatalogModels(paths.catalogFile) : [];
-  return { identity, harnessConfigured: config.configured, models };
+  const claudeCode = await inspectClaudeCodeConfiguration({
+    paths: resolveClaudeCodePaths(input.paths, input.profileName, input.env, input.home),
+  });
+  return {
+    identity,
+    codexConfigured: config.configured,
+    claudeCodeConfigured: claudeCode.configured,
+    models,
+  };
 }
 
 async function showState(input: InteractiveCommandInput, state: InteractiveState): Promise<void> {
   const profile = await input.profiles.get(input.profileName);
   if (profile) input.ui.info(`Gateway: ${profile.origin}`);
   if (state.identity) showAccount(input.ui, state.identity);
-  input.ui.info(
-    state.harnessConfigured ? `Codex: configured · ${state.models.length} models` : 'Codex: not configured'
-  );
+  input.ui.info(state.codexConfigured ? `Codex: configured · ${state.models.length} models` : 'Codex: not configured');
+  input.ui.info(state.claudeCodeConfigured ? 'Claude Code: configured' : 'Claude Code: not configured');
 }
 
-function inferenceActions(
-  identity: SetupIdentity | undefined,
-  harnessConfigured: boolean,
-  modelCount: number
-): InteractiveOption[] {
+function inferenceActions(state: InteractiveState): InteractiveOption[] {
   const options: InteractiveOption[] = [];
-  if (!identity) {
+  if (!state.identity) {
     options.push({
       value: 'authenticate',
       label: 'Login',
@@ -133,21 +156,21 @@ function inferenceActions(
   }
   options.push({
     value: 'setup',
-    label: harnessConfigured ? 'Setup or repair harness' : 'Setup harness',
-    hint: harnessConfigured ? 'Reconfigure the managed Codex integration' : 'Configure a supported inference harness',
+    label: state.codexConfigured || state.claudeCodeConfigured ? 'Setup or repair harness' : 'Setup harness',
+    hint: 'Configure a supported inference harness',
   });
-  if (harnessConfigured) {
-    if (identity) {
+  if (state.codexConfigured) {
+    if (state.identity) {
       options.push({
         value: 'sync',
         label: 'Refresh models',
-        hint: `${modelCount} models currently cached`,
+        hint: `${state.models.length} Codex models currently cached`,
       });
     }
     options.push(
       {
         value: 'doctor',
-        label: 'Check integration',
+        label: 'Check Codex integration',
         hint: 'Diagnose Codex, credentials, configuration, and catalog',
       },
       {
@@ -157,11 +180,25 @@ function inferenceActions(
       }
     );
   }
-  if (identity) {
+  if (state.claudeCodeConfigured) {
+    options.push(
+      {
+        value: 'doctor-claude-code',
+        label: 'Check Claude Code integration',
+        hint: 'Diagnose Claude Code, credentials, configuration, and model discovery',
+      },
+      {
+        value: 'remove-claude-code',
+        label: 'Remove Claude Code integration',
+        hint: 'Restore only package-managed Claude Code settings and credentials',
+      }
+    );
+  }
+  if (state.identity) {
     options.push({
       value: 'logout',
       label: 'Logout',
-      hint: `Remove setup authorization for ${identity.user.email}`,
+      hint: `Remove setup authorization for ${state.identity.user.email}`,
     });
   }
   return options;
@@ -175,24 +212,19 @@ async function authenticate(input: InteractiveCommandInput): Promise<SetupIdenti
     return null;
   }
   input.ui.info('Complete authorization in your browser...');
-  try {
-    await loginCommand(
-      { gateway, command: ['login'] },
-      input.profileName,
-      input.profiles,
-      input.credentials,
-      SILENT_OUTPUT,
-      input.fetch,
-      input.openBrowser
-    );
-    const context = await authenticatedSetupClient(input.profileName, input.profiles, input.credentials, input.fetch);
-    const identity = await context.client.me();
-    input.ui.info('Gateway authorization complete');
-    return identity;
-  } catch (error) {
-    input.ui.info('Gateway authorization failed');
-    throw error;
-  }
+  await loginCommand(
+    { gateway, command: ['login'] },
+    input.profileName,
+    input.profiles,
+    input.credentials,
+    SILENT_OUTPUT,
+    input.fetch,
+    input.openBrowser
+  );
+  const context = await authenticatedSetupClient(input.profileName, input.profiles, input.credentials, input.fetch);
+  const identity = await context.client.me();
+  input.ui.info('Gateway authorization complete');
+  return identity;
 }
 
 function showAccount(ui: InteractiveCliUi, identity: SetupIdentity): void {
@@ -243,6 +275,33 @@ async function diagnose(input: InteractiveCommandInput, integration: CodexIntegr
   }
 }
 
+async function diagnoseClaudeCode(
+  input: InteractiveCommandInput,
+  integration: ClaudeCodeIntegrationService
+): Promise<void> {
+  let discovery: InferenceDiscovery | undefined;
+  try {
+    discovery = (await authenticatedSetupClient(input.profileName, input.profiles, input.credentials, input.fetch))
+      .discovery;
+  } catch (error) {
+    const expected =
+      isAuthorizationRequired(error) ||
+      (error instanceof CliError && ['NETWORK_ERROR', 'NETWORK_TIMEOUT'].includes(error.code));
+    if (!expected) throw error;
+  }
+  const spinner = input.ui.spinner('Checking the Claude Code integration...');
+  try {
+    const report = await integration.doctor({ profileName: input.profileName, discovery });
+    spinner.stop(report.ok ? 'Integration check complete' : 'Integration needs attention');
+    for (const check of report.checks) {
+      input.ui.info(`${check.status.toUpperCase()} · ${check.name}: ${check.message}`);
+    }
+  } catch (error) {
+    spinner.error('Could not check the Claude Code integration');
+    throw error;
+  }
+}
+
 async function removeHarness(input: InteractiveCommandInput, integration: CodexIntegrationService): Promise<boolean> {
   const confirmed = await input.ui.confirm('Remove the package-managed Codex integration from this device?');
   if (!confirmed) {
@@ -283,7 +342,51 @@ async function removeHarness(input: InteractiveCommandInput, integration: CodexI
   }
 }
 
-async function setupHarness(input: InteractiveCommandInput, integration: CodexIntegrationService): Promise<number> {
+async function removeClaudeCode(
+  input: InteractiveCommandInput,
+  integration: ClaudeCodeIntegrationService
+): Promise<boolean> {
+  const confirmed = await input.ui.confirm('Remove the package-managed Claude Code integration from this device?');
+  if (!confirmed) {
+    if (confirmed === null) input.ui.cancel('Removal cancelled.');
+    return false;
+  }
+  let client: InferenceSetupClient | undefined;
+  try {
+    client = (await authenticatedSetupClient(input.profileName, input.profiles, input.credentials, input.fetch)).client;
+  } catch (error) {
+    const expected =
+      isAuthorizationRequired(error) ||
+      (error instanceof CliError && ['NETWORK_ERROR', 'NETWORK_TIMEOUT'].includes(error.code));
+    if (!expected) throw error;
+  }
+  const spinner = input.ui.spinner('Removing the Claude Code integration...');
+  try {
+    const result = await integration.remove({
+      profileName: input.profileName,
+      removeToken: Boolean(client),
+      client,
+    });
+    if (!result.removed) {
+      spinner.error('Claude Code integration was not removed');
+      input.ui.info(`Preserved conflicting settings: ${result.conflicts.join(', ')}`);
+      return false;
+    }
+    spinner.stop(
+      result.tokenRevoked ? 'Claude Code integration and runtime token removed' : 'Claude Code integration removed'
+    );
+    return true;
+  } catch (error) {
+    spinner.error('Could not remove the Claude Code integration');
+    throw error;
+  }
+}
+
+async function setupHarness(
+  input: InteractiveCommandInput,
+  integration: CodexIntegrationService,
+  claudeCodeIntegration: ClaudeCodeIntegrationService
+): Promise<number> {
   const existing = await input.profiles.get(input.profileName);
   return runInteractiveInferenceSetup({
     profileName: input.profileName,
@@ -302,6 +405,22 @@ async function setupHarness(input: InteractiveCommandInput, integration: CodexIn
         input.openBrowser
       ),
     configure: async (harness, context) => {
+      if (harness === 'claude-code') {
+        const result = await claudeCodeIntegration.setup({
+          profileName: input.profileName,
+          profile: context.profile,
+          discovery: context.discovery,
+          client: context.client,
+        });
+        return {
+          progress: `Configured Claude Code ${result.claudeCodeVersion}`,
+          summary: [
+            `${result.modelCount} Gateway models are ready.`,
+            `Default model: ${result.defaultModel}.`,
+            'Restart Claude Code to load Gateway models.',
+          ].join('\n'),
+        };
+      }
       if (harness !== 'codex') {
         throw new CliError('UNSUPPORTED_HARNESS', `Harness ${harness} is not supported by this CLI version.`);
       }
@@ -345,6 +464,16 @@ function createIntegration(input: InteractiveCommandInput): CodexIntegrationServ
     env: input.env,
     home: input.home,
     proxyDaemon: input.proxyDaemon,
+  });
+}
+
+function createClaudeCodeIntegration(input: InteractiveCommandInput): ClaudeCodeIntegrationService {
+  return new ClaudeCodeIntegrationService(input.paths, input.credentials, {
+    fetch: input.fetch,
+    commandRunner: input.commandRunner,
+    runtimeSource: input.runtimeSource,
+    env: input.env,
+    home: input.home,
   });
 }
 

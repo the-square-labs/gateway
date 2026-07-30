@@ -1,7 +1,7 @@
 {
-  "name": "gateway-cli",
-  "root": "packages/gateway-cli",
-  "sourceRoot": "packages/gateway-cli/src",
+  "name": "gateway-inference",
+  "root": "packages/gateway-inference",
+  "sourceRoot": "packages/gateway-inference/src",
   "targets": {
     "build": {
       "command": "pnpm --filter @wiolett/gateway-inference build",

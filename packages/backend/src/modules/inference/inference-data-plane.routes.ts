@@ -3,6 +3,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import type { AppEnv } from '@/types.js';
 import { inferenceAuthMiddleware } from './inference-auth.middleware.js';
+import { claudeCodeModelAlias } from './inference-claude-code-models.js';
 import { codexModelsResponse } from './inference-codex-models.js';
 import { inferenceErrorResponse } from './inference-error.js';
 import { InferenceExtendedService } from './inference-extended.service.js';
@@ -133,7 +134,7 @@ anthropicInferenceDataPlaneRoutes.get('/models', async (c) => {
   if (!user) return inferenceErrorResponse(c, 401, 'invalid_api_key', 'Authentication required');
   const models = (await container.resolve(InferenceModelService).listForUser(user)).data;
   const data = models.map((model) => ({
-    id: model.id,
+    id: claudeCodeModelAlias(model.id),
     type: 'model' as const,
     display_name: model.display_name,
     created_at: new Date(model.created * 1000).toISOString(),

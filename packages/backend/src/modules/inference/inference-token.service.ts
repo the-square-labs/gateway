@@ -44,7 +44,7 @@ function serializeManagedToken(token: typeof inferenceTokens.$inferSelect) {
 }
 
 export interface ManagedInferenceTokenInput {
-  harness: 'codex';
+  harness: 'codex' | 'claude-code';
   deviceName: string;
   installationId: string;
   replaceExisting?: boolean;
@@ -113,7 +113,7 @@ export class InferenceTokenService {
         .insert(inferenceTokens)
         .values({
           userId,
-          name: `${input.harness === 'codex' ? 'Codex' : input.harness} · ${input.deviceName.trim()}`,
+          name: `${input.harness === 'codex' ? 'Codex' : 'Claude Code'} · ${input.deviceName.trim()}`,
           managedBy: 'gateway-cli',
           harness: input.harness,
           deviceName: input.deviceName.trim(),

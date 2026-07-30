@@ -221,15 +221,15 @@ describe('inference data-plane boundary', () => {
     expect(await anthropic.json()).toMatchObject({
       data: [
         {
-          id: 'kimi-k3',
+          id: 'claude-gateway-a2ltaS1rMw',
           type: 'model',
           max_input_tokens: 240_000,
           max_tokens: 16_000,
           capabilities: { image_input: true, thinking: true },
         },
       ],
-      first_id: 'kimi-k3',
-      last_id: 'kimi-k3',
+      first_id: 'claude-gateway-a2ltaS1rMw',
+      last_id: 'claude-gateway-a2ltaS1rMw',
       has_more: false,
     });
   });

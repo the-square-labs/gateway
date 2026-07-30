@@ -2,7 +2,7 @@ import { CliError } from './errors.js';
 import { assertTrustedEndpoint, type Fetch, requestJson } from './http.js';
 import type { InferenceDiscovery, OAuthMetadata } from './types.js';
 
-export const CLI_VERSION = '0.1.5';
+export const CLI_VERSION = '0.2.1';
 
 function compareVersions(left: string, right: string): number {
   const parse = (value: string) => value.split('.').map((part) => Number.parseInt(part, 10) || 0);

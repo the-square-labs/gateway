@@ -11,7 +11,7 @@ import { InferenceSetupEventsService } from './inference-setup-events.service.js
 import { InferenceTokenService } from './inference-token.service.js';
 
 const ManagedTokenInputSchema = z.object({
-  harness: z.literal('codex'),
+  harness: z.enum(['codex', 'claude-code']),
   deviceName: z.string().trim().min(1).max(255),
   installationId: z.string().uuid(),
   replaceExisting: z.boolean().optional(),

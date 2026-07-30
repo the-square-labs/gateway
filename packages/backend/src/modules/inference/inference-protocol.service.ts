@@ -5,6 +5,7 @@ import { getEnv } from '@/config/env.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AppEnv, User } from '@/types.js';
+import { resolveClaudeCodeModelAlias } from './inference-claude-code-models.js';
 import type { InferenceContinuationService } from './inference-continuation.service.js';
 import type { InferenceRuntimeService } from './inference-runtime.service.js';
 import type { InferenceModelService } from './models/inference-model.service.js';
@@ -63,11 +64,14 @@ export class InferenceProtocolService {
   }
 
   async messages(c: Context<AppEnv>): Promise<Response> {
-    return this.execute(c, parseAnthropicMessagesRequest(await this.readJson(c)));
+    const request = parseAnthropicMessagesRequest(await this.readJson(c));
+    normalizeClaudeCodeRequest(c, request);
+    return this.execute(c, request);
   }
 
   async countMessageTokens(c: Context<AppEnv>): Promise<Response> {
     const request = parseAnthropicMessagesRequest(await this.readJson(c));
+    normalizeClaudeCodeRequest(c, request);
     const user = c.get('user');
     if (!user) throw new InferenceProtocolError(401, 'invalid_api_key', 'Authentication required');
     if (this.models) await this.models.resolveForUser(user, request.model);
@@ -286,13 +290,13 @@ export class InferenceProtocolService {
     const collector = new InferenceResponseCollector(
       request,
       execution.responseId,
-      execution.resolvedModel,
+      request.responseModel ?? execution.resolvedModel,
       execution.affinityKey ?? affinityKey
     );
     const protocolEncoder = createProtocolStreamEncoder(
       request.protocol,
       execution.responseId,
-      execution.resolvedModel
+      request.responseModel ?? execution.resolvedModel
     );
     const service = this;
     const stream = new ReadableStream<Uint8Array>({
@@ -333,7 +337,7 @@ export class InferenceProtocolService {
     const collector = new InferenceResponseCollector(
       request,
       execution.responseId,
-      execution.resolvedModel,
+      request.responseModel ?? execution.resolvedModel,
       execution.affinityKey ?? affinityKey
     );
     for await (const event of execution.events) {
@@ -364,6 +368,21 @@ export class InferenceProtocolService {
     } catch {
       throw new InferenceProtocolError(400, 'invalid_request_error', 'Request body must be valid JSON');
     }
+  }
+}
+
+function normalizeClaudeCodeRequest(c: Context<AppEnv>, request: InferenceRequest): void {
+  const requestedModel = request.model;
+  request.model = resolveClaudeCodeModelAlias(requestedModel);
+  if (request.model !== requestedModel) request.responseModel = requestedModel;
+  request.promptCacheKey ??= c.req.header('X-Claude-Code-Session-Id');
+  const version = c.req.header('anthropic-version');
+  const beta = c.req.header('anthropic-beta');
+  if (version || beta) {
+    request.providerHeaders = {
+      ...(version ? { 'anthropic-version': version } : {}),
+      ...(beta ? { 'anthropic-beta': beta } : {}),
+    };
   }
 }
 

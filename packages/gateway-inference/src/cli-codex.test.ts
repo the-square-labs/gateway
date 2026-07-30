@@ -157,6 +157,7 @@ describe('@wiolett/gateway-inference CLI', () => {
     const interactiveUi = {
       intro: vi.fn(),
       info: vi.fn(),
+      error: vi.fn(),
       gatewayOrigin: vi.fn(),
       select: vi.fn(),
       confirm: vi.fn().mockResolvedValue(true),
@@ -218,6 +219,7 @@ describe('@wiolett/gateway-inference CLI', () => {
     const isolatedUi = {
       intro: vi.fn(),
       info: vi.fn(),
+      error: vi.fn(),
       gatewayOrigin: vi.fn(),
       select: vi.fn().mockResolvedValueOnce(null),
       confirm: vi.fn().mockResolvedValue(true),
@@ -255,9 +257,15 @@ describe('@wiolett/gateway-inference CLI', () => {
     expect(await runCli([], { ...dependencies, interactive: false })).toBe(1);
     expect(values.at(-1)).toMatchObject({ error: { code: 'INTERACTIVE_TTY_REQUIRED' } });
 
+    const outputCountBeforeInteractiveErrors = values.length;
+    interactiveUi.error.mockClear();
     expect(await runCli(['status'], dependencies)).toBe(1);
-    expect(values.at(-1)).toMatchObject({ error: { code: 'UNKNOWN_COMMAND' } });
+    expect(interactiveUi.error).toHaveBeenCalledWith('Error [UNKNOWN_COMMAND]: Unknown command: status');
     expect(await runCli(['inference'], dependencies)).toBe(1);
+    expect(interactiveUi.error).toHaveBeenCalledWith('Error [UNKNOWN_COMMAND]: Unknown command: inference');
+    expect(values).toHaveLength(outputCountBeforeInteractiveErrors);
+
+    expect(await runCli(['status'], { ...dependencies, interactive: false })).toBe(1);
     expect(values.at(-1)).toMatchObject({ error: { code: 'UNKNOWN_COMMAND' } });
     expect(await runCli(['--profile', 'work'], dependencies)).toBe(1);
     expect(values.at(-1)).toMatchObject({ error: { code: 'INVALID_ARGUMENT' } });

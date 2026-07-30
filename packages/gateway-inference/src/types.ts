@@ -4,6 +4,8 @@ export interface InferenceAdapters {
   anthropic: { baseUrl: string };
 }
 
+export type InferenceHarness = 'codex' | 'claude-code';
+
 export interface InferenceDiscovery {
   schemaVersion: 1;
   enabled: boolean;
@@ -16,6 +18,7 @@ export interface InferenceDiscovery {
   adapters: InferenceAdapters;
   harnesses: {
     codex: { supported: boolean };
+    'claude-code'?: { supported: boolean };
   };
 }
 
@@ -72,7 +75,7 @@ export interface RuntimeCredential {
   token: string;
   tokenId: string;
   prefix: string;
-  harness: 'codex';
+  harness: InferenceHarness;
   installationId: string;
 }
 

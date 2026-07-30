@@ -26,6 +26,8 @@ export function providerRequestBody(
   upstreamModel: string,
   request: InferenceRequest
 ): JsonObject {
+  const extensions = { ...request.extensions };
+  if (definition.wireProtocol !== 'anthropic-messages') delete extensions.context_management;
   if (definition.wireProtocol !== 'anthropic-messages') assertNoAnthropicCacheControl(request);
   if (definition.wireProtocol !== 'openai-responses' && request.tools.some((tool) => tool.type === 'hosted')) {
     throw new InferenceProtocolError(
@@ -35,7 +37,7 @@ export function providerRequestBody(
     );
   }
   if (definition.wireProtocol === 'google-gemini') {
-    const extra = wireExtensions(request.extensions, ['temperature', 'top_p', 'top_k', 'stop', 'stop_sequences']);
+    const extra = wireExtensions(extensions, ['temperature', 'top_p', 'top_k', 'stop', 'stop_sequences']);
     const system = request.messages
       .filter((message) => message.role === 'system' || message.role === 'developer')
       .flatMap((message) => message.content)
@@ -74,7 +76,7 @@ export function providerRequestBody(
     };
   }
   if (definition.wireProtocol === 'anthropic-messages') {
-    const extra = wireExtensions(request.extensions, [
+    const extra = wireExtensions(extensions, [
       'temperature',
       'top_p',
       'top_k',
@@ -82,6 +84,7 @@ export function providerRequestBody(
       'metadata',
       'service_tier',
       'output_config',
+      'context_management',
     ]);
     const system = request.messages
       .filter((message) => message.role === 'system' || message.role === 'developer')
@@ -116,7 +119,7 @@ export function providerRequestBody(
         })),
       ...(request.tools.length
         ? {
-            tools: request.tools.map((tool) => anthropicTool(tool, oauth)),
+            tools: request.tools.map((tool) => anthropicTool(tool, oauth, request.protocol === 'messages')),
           }
         : {}),
       ...(request.toolChoice !== undefined
@@ -133,7 +136,7 @@ export function providerRequestBody(
     return body;
   }
   if (definition.wireProtocol === 'openai-chat') {
-    const extra = wireExtensions(request.extensions, [
+    const extra = wireExtensions(extensions, [
       'temperature',
       'top_p',
       'stop',
@@ -169,7 +172,7 @@ export function providerRequestBody(
       ...extra,
     };
   }
-  const extra = wireExtensions(request.extensions, [
+  const extra = wireExtensions(extensions, [
     'temperature',
     'top_p',
     'service_tier',
@@ -935,8 +938,10 @@ function openAiChatTool(tool: InferenceTool): JsonObject {
   };
 }
 
-function anthropicTool(tool: InferenceTool, oauth: boolean): JsonObject {
+function anthropicTool(tool: InferenceTool, oauth: boolean, preserveRaw = false): JsonObject {
+  const raw = preserveRaw ? tool.raw : {};
   return {
+    ...raw,
     name: claudeToolName(providerToolName(tool), oauth),
     description: tool.type === 'custom' ? customToolDescription(tool) : tool.description,
     input_schema:

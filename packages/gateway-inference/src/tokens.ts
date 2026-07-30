@@ -1,6 +1,6 @@
 import { hostname } from 'node:os';
 import { type Fetch, requestJson } from './http.js';
-import type { CreatedManagedToken, ManagedToken, SetupIdentity } from './types.js';
+import type { CreatedManagedToken, InferenceHarness, ManagedToken, SetupIdentity } from './types.js';
 
 export class InferenceSetupClient {
   constructor(
@@ -23,6 +23,7 @@ export class InferenceSetupClient {
   }
 
   createToken(input: {
+    harness?: InferenceHarness;
     installationId: string;
     deviceName?: string;
     replaceExisting?: boolean;
@@ -33,7 +34,7 @@ export class InferenceSetupClient {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          harness: 'codex',
+          harness: input.harness ?? 'codex',
           deviceName: input.deviceName?.trim() || hostname(),
           installationId: input.installationId,
           ...(input.replaceExisting ? { replaceExisting: true } : {}),

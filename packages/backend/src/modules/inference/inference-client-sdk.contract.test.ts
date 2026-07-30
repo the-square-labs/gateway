@@ -37,6 +37,7 @@ const MODEL = {
   supported_reasoning_efforts: ['medium', 'high'],
   default_reasoning_effort: 'medium',
 };
+const CLAUDE_MODEL_ALIAS = 'claude-gateway-Z2F0ZXdheS1tb2RlbA';
 
 beforeAll(() => {
   process.env.NODE_ENV = 'test';
@@ -170,7 +171,7 @@ describe('official client adapter contracts', () => {
     const rawModels = await fetch('http://gateway.test/api/inference/anthropic/v1/models', {
       headers: { 'x-api-key': 'gwi_contract-test' },
     });
-    expect(await rawModels.json()).toMatchObject({ data: [{ id: MODEL.id }] });
+    expect(await rawModels.json()).toMatchObject({ data: [{ id: CLAUDE_MODEL_ALIAS }] });
     const client = new Anthropic({
       apiKey: 'gwi_contract-test',
       baseURL: 'http://gateway.test/api/inference/anthropic',
@@ -179,16 +180,16 @@ describe('official client adapter contracts', () => {
 
     const models = await client.models.list();
     const message = await client.messages.create({
-      model: MODEL.id,
+      model: CLAUDE_MODEL_ALIAS,
       max_tokens: 16,
       messages: [{ role: 'user', content: 'hello' }],
     });
     const count = await client.messages.countTokens({
-      model: MODEL.id,
+      model: CLAUDE_MODEL_ALIAS,
       messages: [{ role: 'user', content: 'hello' }],
     });
     const stream = await client.messages.create({
-      model: MODEL.id,
+      model: CLAUDE_MODEL_ALIAS,
       max_tokens: 16,
       messages: [{ role: 'user', content: 'hello' }],
       stream: true,
@@ -196,7 +197,7 @@ describe('official client adapter contracts', () => {
     const events: string[] = [];
     for await (const event of stream) events.push(event.type);
 
-    expect(models.data.map((model) => model.id)).toEqual([MODEL.id]);
+    expect(models.data.map((model) => model.id)).toEqual([CLAUDE_MODEL_ALIAS]);
     expect(message.content).toEqual([{ type: 'text', text: 'ok' }]);
     expect(count.input_tokens).toBe(3);
     expect(events).toContain('content_block_delta');

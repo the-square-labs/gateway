@@ -10,7 +10,7 @@ const AUTHORIZATION_REQUIRED_CODES = new Set([
   'AUTHORIZATION_EXPIRED',
   'AUTHORIZATION_REVOKED',
 ]);
-const CLI_SUPPORTED_HARNESSES = new Set(['codex']);
+const CLI_SUPPORTED_HARNESSES = new Set(['codex', 'claude-code']);
 
 export interface InteractiveSetupSession {
   profile: GatewayProfile;
@@ -44,13 +44,8 @@ export async function runInteractiveInferenceSetup(input: {
       return 0;
     }
     input.ui.info('Complete authorization in your browser...');
-    try {
-      await input.authorize(gateway);
-      input.ui.info('Gateway authorization complete');
-    } catch (authorizationError) {
-      input.ui.info('Gateway authorization failed');
-      throw authorizationError;
-    }
+    await input.authorize(gateway);
+    input.ui.info('Gateway authorization complete');
     session = await input.session();
   }
 
@@ -82,7 +77,7 @@ export function isAuthorizationRequired(error: unknown): boolean {
 
 function supportedHarnesses(discovery: InferenceDiscovery): InteractiveOption[] {
   return Object.entries(discovery.harnesses)
-    .filter(([harness, value]) => value.supported && CLI_SUPPORTED_HARNESSES.has(harness))
+    .filter(([harness, value]) => value?.supported && CLI_SUPPORTED_HARNESSES.has(harness))
     .map(([value]) => ({ value, ...harnessPresentation(value) }));
 }
 
@@ -93,9 +88,15 @@ function harnessPresentation(harness: string): Pick<InteractiveOption, 'label' |
       hint: 'Gateway models, reasoning, tools, and automatic catalog refresh',
     };
   }
+  if (harness === 'claude-code') {
+    return {
+      label: 'Claude Code CLI',
+      hint: 'Native Anthropic gateway, model discovery, tools, and extended thinking',
+    };
+  }
   return { label: harnessLabel(harness), hint: 'Advertised by this Gateway instance' };
 }
 
 function harnessLabel(harness: string): string {
-  return harness === 'codex' ? 'Codex CLI' : harness;
+  return harness === 'codex' ? 'Codex CLI' : harness === 'claude-code' ? 'Claude Code CLI' : harness;
 }

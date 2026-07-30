@@ -79,7 +79,8 @@ export function InferenceEndpointSettingsPanel({ canManage }: { canManage: boole
   };
 
   const gatewayUrl = window.location.origin;
-  const directSetupCommands = `${CLI_COMMAND} login ${gatewayUrl}\n${CLI_COMMAND} setup codex`;
+  const codexSetupCommands = `${CLI_COMMAND} login ${gatewayUrl}\n${CLI_COMMAND} setup codex`;
+  const claudeCodeSetupCommands = `${CLI_COMMAND} login ${gatewayUrl}\n${CLI_COMMAND} setup claude-code`;
 
   return (
     <>
@@ -125,19 +126,51 @@ export function InferenceEndpointSettingsPanel({ canManage }: { canManage: boole
 
           <div className="space-y-4">
             <CopyCodeBlock label="Interactive setup" value={CLI_COMMAND} codeClassName="min-h-0" />
-            <CopyCodeBlock
-              label="Direct Codex setup"
-              value={directSetupCommands}
-              codeClassName="min-h-0"
-            />
 
-            <div className="border border-border p-3">
-              <p className="text-sm font-medium">Codex Desktop requires extra setup</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Sign in to an OpenAI account through Codex’s normal login flow first. Codex Desktop
-                does not show custom model catalogs without that account session. After Gateway
-                setup or login changes, fully quit and reopen Codex so it reloads the catalog.
-              </p>
+            <div className="space-y-2">
+              <div>
+                <p className="text-sm font-medium">Codex</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Configures Codex CLI and Desktop through a managed local proxy and Gateway model
+                  catalog.
+                </p>
+              </div>
+              <CopyCodeBlock
+                label="Direct Codex setup"
+                value={codexSetupCommands}
+                codeClassName="min-h-0"
+              />
+              <div className="border border-border p-3">
+                <p className="text-sm font-medium">Codex Desktop requires extra setup</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Sign in to an OpenAI account through Codex’s normal login flow first. Codex
+                  Desktop does not show custom model catalogs without that account session. After
+                  Gateway setup or login changes, fully quit and reopen Codex so it reloads the
+                  catalog.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div>
+                <p className="text-sm font-medium">Claude Code</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Requires Claude Code 2.1.129 or newer and configures its native Anthropic gateway
+                  connection.
+                </p>
+              </div>
+              <CopyCodeBlock
+                label="Direct Claude Code setup"
+                value={claudeCodeSetupCommands}
+                codeClassName="min-h-0"
+              />
+              <div className="border border-border p-3">
+                <p className="text-sm font-medium">Claude Code CLI only</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Claude Desktop and the Claude Code VS Code extension use separate configuration
+                  surfaces and are not modified automatically.
+                </p>
+              </div>
             </div>
           </div>
 

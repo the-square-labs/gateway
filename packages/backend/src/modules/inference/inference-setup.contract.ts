@@ -23,6 +23,9 @@ export function inferenceAdapterDiscovery(oauth: OAuthService, harnessSpecificEn
       // Anthropic SDK resources include their own leading /v1 segment.
       anthropic: { baseUrl: new URL('/api/inference/anthropic', baseUrl).href },
     },
-    harnesses: { codex: { supported: harnessSpecificEndpointsEnabled } },
+    harnesses: {
+      codex: { supported: harnessSpecificEndpointsEnabled },
+      'claude-code': { supported: harnessSpecificEndpointsEnabled },
+    },
   };
 }

@@ -1,6 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ClaudeCodeIntegrationService } from './claude-code-integration.js';
 import { CodexIntegrationService, type CommandRunner } from './codex-integration.js';
 import { type CredentialStore, SecureCredentialStore } from './credentials.js';
 import { CLI_VERSION } from './discovery.js';
@@ -48,7 +49,7 @@ const HELP = `Usage: npx @wiolett/gateway-inference [command]
 Commands:
   login [GATEWAY]                  Authorize this device through Gateway
   logout                           Remove Gateway setup authorization
-  setup [HARNESS]                  Configure an inference harness
+  setup [codex|claude-code]        Configure an inference harness
 
 Running without a command opens the interactive manager.
 
@@ -126,6 +127,16 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
       });
       return 0;
     }
+    if (parsed.command[0] === '__credential' && parsed.command[1] === 'claude-code' && parsed.command.length === 2) {
+      const runtime = await credentials.getRuntime(CONNECTION_NAME, 'claude-code');
+      if (!runtime) {
+        throw new CliError('RUNTIME_TOKEN_MISSING', 'Claude Code runtime token is missing. Run setup claude-code.', {
+          exitCode: 2,
+        });
+      }
+      process.stdout.write(`${runtime.token}\n`);
+      return 0;
+    }
     if (parsed.command.length === 0) {
       if (!interactive) {
         throw new CliError(
@@ -170,25 +181,62 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
       const harness = parsed.command[1];
       if (!harness) {
         if (!interactive) {
-          throw new CliError('HARNESS_REQUIRED', 'Interactive setup requires a TTY. For automation, use: setup codex');
+          throw new CliError(
+            'HARNESS_REQUIRED',
+            'Interactive setup requires a TTY. For automation, use: setup codex or setup claude-code'
+          );
         }
         return await runInteractiveHarnessSetupCommand(input);
       }
-      if (harness !== 'codex') {
+      if (harness !== 'codex' && harness !== 'claude-code') {
         throw new CliError('UNSUPPORTED_HARNESS', `Harness ${harness} is not supported by this CLI version.`);
       }
-      return await setupCodexCommand(input, paths, profiles, credentials, output, interactive, dependencies);
+      return harness === 'codex'
+        ? await setupCodexCommand(input, paths, profiles, credentials, output, interactive, dependencies)
+        : await setupClaudeCodeCommand(input, paths, profiles, credentials, output, interactive, dependencies);
     }
     throw new CliError('UNKNOWN_COMMAND', `Unknown command: ${parsed.command.join(' ')}`);
   } catch (error) {
     const payload = errorPayload(error);
+    const message = `Error [${payload.error.code}]: ${payload.error.message}`;
     if (privateRuntime) {
-      process.stderr.write(`Error [${payload.error.code}]: ${payload.error.message}\n`);
+      process.stderr.write(`${message}\n`);
       return error instanceof CliError ? error.exitCode : 1;
     }
-    output.write(payload, () => `Error [${payload.error.code}]: ${payload.error.message}`);
+    if (interactive && interactiveUi && !output.json) {
+      interactiveUi.error(message);
+    } else {
+      output.write(payload, () => message);
+    }
     return error instanceof CliError ? error.exitCode : 1;
   }
+}
+
+async function setupClaudeCodeCommand(
+  input: InteractiveCommandInput,
+  paths: CliPaths,
+  profiles: ProfileStore,
+  credentials: CredentialStore,
+  output: Output,
+  interactive: boolean,
+  dependencies: CliDependencies
+): Promise<number> {
+  const context = await setupContext(input, profiles, credentials, output, interactive, dependencies);
+  const result = await createClaudeCodeIntegration(paths, credentials, dependencies).setup({
+    profileName: CONNECTION_NAME,
+    profile: context.profile,
+    discovery: context.discovery,
+    client: context.client,
+  });
+  output.write({ ok: true, ...result }, () =>
+    [
+      `Configured Claude Code ${result.claudeCodeVersion}.`,
+      `Models: ${result.modelCount}; default: ${result.defaultModel}.`,
+      'Restart Claude Code to load Gateway models.',
+      `Config: ${result.configFile}`,
+    ].join('\n')
+  );
+  return 0;
 }
 
 async function setupCodexCommand(
@@ -200,6 +248,33 @@ async function setupCodexCommand(
   interactive: boolean,
   dependencies: CliDependencies
 ): Promise<number> {
+  const context = await setupContext(input, profiles, credentials, output, interactive, dependencies);
+  const result = await createIntegration(paths, credentials, dependencies).setup({
+    profileName: CONNECTION_NAME,
+    profile: context.profile,
+    discovery: context.discovery,
+    client: context.client,
+  });
+  output.write({ ok: true, ...result }, () =>
+    [
+      `Configured Codex ${result.codexVersion}.`,
+      `Models: ${result.catalog.modelCount}; default: ${result.defaultModel}.`,
+      ...(result.warning ? [`Warning: ${result.warning}`] : []),
+      'Fully quit and reopen Codex to load the current model catalog.',
+      `Config: ${result.configFile}`,
+    ].join('\n')
+  );
+  return 0;
+}
+
+async function setupContext(
+  input: InteractiveCommandInput,
+  profiles: ProfileStore,
+  credentials: CredentialStore,
+  output: Output,
+  interactive: boolean,
+  dependencies: CliDependencies
+) {
   let profile = await profiles.get(CONNECTION_NAME);
   let context: Awaited<ReturnType<typeof authenticatedSetupClient>>;
   try {
@@ -225,22 +300,7 @@ async function setupCodexCommand(
   }
   profile ??= await profiles.getRequired(CONNECTION_NAME);
   await context.client.me();
-  const result = await createIntegration(paths, credentials, dependencies).setup({
-    profileName: CONNECTION_NAME,
-    profile,
-    discovery: context.discovery,
-    client: context.client,
-  });
-  output.write({ ok: true, ...result }, () =>
-    [
-      `Configured Codex ${result.codexVersion}.`,
-      `Models: ${result.catalog.modelCount}; default: ${result.defaultModel}.`,
-      ...(result.warning ? [`Warning: ${result.warning}`] : []),
-      'Fully quit and reopen Codex to load the current model catalog.',
-      `Config: ${result.configFile}`,
-    ].join('\n')
-  );
-  return 0;
+  return { ...context, profile };
 }
 
 function createIntegration(paths: CliPaths, credentials: CredentialStore, dependencies: CliDependencies) {
@@ -251,6 +311,16 @@ function createIntegration(paths: CliPaths, credentials: CredentialStore, depend
     env: dependencies.env,
     home: dependencies.home,
     proxyDaemon: dependencies.proxyDaemon,
+  });
+}
+
+function createClaudeCodeIntegration(paths: CliPaths, credentials: CredentialStore, dependencies: CliDependencies) {
+  return new ClaudeCodeIntegrationService(paths, credentials, {
+    fetch: dependencies.fetch,
+    commandRunner: dependencies.commandRunner,
+    runtimeSource: dependencies.runtimeSource,
+    env: dependencies.env,
+    home: dependencies.home,
   });
 }
 

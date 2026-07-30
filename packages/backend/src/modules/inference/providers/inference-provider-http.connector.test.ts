@@ -679,6 +679,51 @@ describe('InferenceProviderHttpConnector', () => {
     });
   });
 
+  it('forwards only supported Claude gateway headers to native Anthropic providers', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response('data: {"type":"message_stop"}\n\n', {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    );
+    const connector = new InferenceProviderHttpConnector(fetcher);
+
+    await connector.execute!(
+      registry.require('anthropic-apikey'),
+      { apiKey: 'secret' },
+      'https://api.anthropic.com',
+      'claude-test',
+      {
+        protocol: 'messages',
+        model: 'claude-test',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'Hello' }] }],
+        tools: [],
+        stream: true,
+        providerHeaders: {
+          'anthropic-version': '2023-06-01',
+          'anthropic-beta': 'context-management-2025-06-27',
+          'x-claude-code-session-id': 'must-not-forward',
+        },
+        isCompaction: false,
+        extensions: {},
+      },
+      new AbortController().signal
+    );
+
+    expect(fetcher).toHaveBeenCalledWith(
+      'https://api.anthropic.com/v1/messages',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'anthropic-version': '2023-06-01',
+          'anthropic-beta': 'context-management-2025-06-27',
+          'x-api-key': 'secret',
+        }),
+      })
+    );
+    const headers = fetcher.mock.calls[0]![1]!.headers as Record<string, string>;
+    expect(headers['x-claude-code-session-id']).toBeUndefined();
+  });
+
   it('flushes a final SSE terminal frame without a trailing blank line', async () => {
     const connector = new InferenceProviderHttpConnector(
       vi.fn().mockResolvedValue(

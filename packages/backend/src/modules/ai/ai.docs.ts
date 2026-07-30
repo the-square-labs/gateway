@@ -1002,15 +1002,35 @@ Token options:
 
 The \`gwi_\` secret is shown once. Never repeat it after creation, store it in assistant history, or expose it to another user.
 
-### Recommended Codex setup
+### Recommended harness setup
 
 No global installation or PATH change is required:
 
 \`\`\`bash
-npx @wiolett/gateway-inference
+npx -y @wiolett/gateway-inference@latest
 \`\`\`
 
-An administrator must first enable **Harness-specific endpoints** in **Settings > Inference**. The interactive manager asks for the Gateway URL and can log in, configure or repair Codex, refresh models, diagnose the integration, remove managed configuration, and log out. The only direct commands are \`login [gateway]\`, \`logout\`, and \`setup [harness]\`; for example, \`npx @wiolett/gateway-inference setup codex\`. Setup uses isolated OAuth/PKCE, issues a dedicated runtime token, writes only package-managed Codex configuration sections, and installs a private helper. Catalog changes apply after starting a new Codex process. Codex Desktop must also be signed in to an OpenAI account normally and fully restarted after setup or login changes.
+An administrator must first enable **Harness-specific endpoints** in **Settings > Inference**. The interactive manager asks for the Gateway URL, completes isolated OAuth/PKCE, and can configure, diagnose, repair, or remove supported harness integrations. The only direct commands are \`login [gateway]\`, \`logout\`, and \`setup [harness]\`. If the user does not name a harness, ask whether they use Codex or Claude Code before giving harness-specific instructions.
+
+#### Codex CLI and Desktop
+
+\`\`\`bash
+npx -y @wiolett/gateway-inference@latest login https://gateway.example.com
+npx -y @wiolett/gateway-inference@latest setup codex
+\`\`\`
+
+Codex setup issues a dedicated runtime token, writes only package-managed Codex configuration sections, installs a private helper and loopback proxy, and maintains the authoritative Gateway model catalog. Catalog changes apply after starting a new Codex process. Codex Desktop must also be signed in to an OpenAI account through Codex's normal login flow; after Gateway setup or login changes, fully quit and reopen Codex.
+
+#### Claude Code CLI
+
+Claude Code 2.1.129 or newer is required:
+
+\`\`\`bash
+npx -y @wiolett/gateway-inference@latest login https://gateway.example.com
+npx -y @wiolett/gateway-inference@latest setup claude-code
+\`\`\`
+
+Claude Code setup issues a separate dedicated runtime token and configures the native Anthropic gateway contract with \`ANTHROPIC_BASE_URL\`, model discovery, and a private \`apiKeyHelper\`. It does not use the Codex loopback proxy. This setup supports the Claude Code CLI only; Claude Desktop and the Claude Code VS Code extension are separate and are not modified automatically.
 
 ### Manual OpenAI-compatible setup
 

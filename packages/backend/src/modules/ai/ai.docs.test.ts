@@ -94,7 +94,14 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).toContain('providerUrl');
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).not.toContain('baseUrl:');
     expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
-      'npx @wiolett/gateway-inference setup codex'
+      'npx -y @wiolett/gateway-inference@latest setup codex'
+    );
+    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
+      'npx -y @wiolett/gateway-inference@latest setup claude-code'
+    );
+    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain('Claude Code 2.1.129 or newer');
+    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
+      'Claude Desktop and the Claude Code VS Code extension'
     );
     expect(getInternalDocumentation('inference', ['inference:use']).content).toContain('/api/inference/v1');
     expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(

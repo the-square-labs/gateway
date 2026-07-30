@@ -134,6 +134,7 @@ export class InferenceProviderHttpConnector implements InferenceProviderConnecto
         headers: {
           ...this.authHeaders(definition, credential),
           ...providerRuntimeHeaders(definition, credential, request.promptCacheKey),
+          ...anthropicClientHeaders(definition, request.providerHeaders),
           'Content-Type': 'application/json',
           ...antigravity?.headers,
         },
@@ -405,6 +406,24 @@ function providerRuntimeHeaders(
   return {
     'x-grok-req-id': randomUUID(),
     ...(affinity ? { 'x-grok-conv-id': affinity, 'x-grok-session-id': affinity } : {}),
+  };
+}
+
+function anthropicClientHeaders(
+  definition: InferenceProviderDefinition,
+  headers?: Record<string, string>
+): Record<string, string> {
+  if (definition.family !== 'anthropic' || !headers) return {};
+  const version = headers['anthropic-version']?.trim();
+  const requestedBeta = headers['anthropic-beta']
+    ?.split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const requiredBeta = definition.id === 'anthropic' ? ['claude-code-20250219', 'oauth-2025-04-20'] : [];
+  const beta = [...new Set([...(requestedBeta ?? []), ...requiredBeta])];
+  return {
+    ...(version ? { 'anthropic-version': version } : {}),
+    ...(beta.length ? { 'anthropic-beta': beta.join(',') } : {}),
   };
 }
 

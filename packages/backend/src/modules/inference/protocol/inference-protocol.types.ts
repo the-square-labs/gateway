@@ -53,6 +53,7 @@ export interface InferenceTool {
 export interface InferenceRequest {
   protocol: InferenceProtocol;
   model: string;
+  responseModel?: string;
   messages: InferenceMessage[];
   tools: InferenceTool[];
   toolChoice?: unknown;
@@ -62,6 +63,7 @@ export interface InferenceRequest {
   reasoningConfig?: Record<string, unknown>;
   previousResponseId?: string;
   promptCacheKey?: string;
+  providerHeaders?: Record<string, string>;
   parallelToolCalls?: boolean;
   isCompaction: boolean;
   extensions: Record<string, unknown>;

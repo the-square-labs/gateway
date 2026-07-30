@@ -87,6 +87,41 @@ describe('interactive inference setup', () => {
     expect(configure).not.toHaveBeenCalled();
     expect(ui.events).toContain('cancel:Setup cancelled.');
   });
+
+  it('offers Claude Code when the Gateway advertises its harness endpoint', async () => {
+    const ui = new FakeUi();
+    ui.harness = 'claude-code';
+    const configure = vi.fn(async () => ({ progress: 'Configured Claude Code', summary: 'Ready' }));
+    const session = {
+      ...SESSION,
+      discovery: {
+        ...SESSION.discovery,
+        harnesses: {
+          codex: { supported: true as const },
+          'claude-code': { supported: true as const },
+        },
+      },
+    };
+
+    await runInteractiveInferenceSetup({
+      profileName: 'default',
+      ui,
+      session: async () => session,
+      authorize: vi.fn(),
+      configure,
+    });
+
+    expect(ui.options).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          value: 'claude-code',
+          label: 'Claude Code CLI',
+          hint: expect.stringContaining('Anthropic'),
+        }),
+      ])
+    );
+    expect(configure).toHaveBeenCalledWith('claude-code', session);
+  });
 });
 
 class FakeUi implements InteractiveCliUi {
@@ -99,6 +134,9 @@ class FakeUi implements InteractiveCliUi {
   }
   info(message: string) {
     this.events.push(`info:${message}`);
+  }
+  error(message: string) {
+    this.events.push(`error:${message}`);
   }
   async gatewayOrigin() {
     return 'https://gateway.example.com';

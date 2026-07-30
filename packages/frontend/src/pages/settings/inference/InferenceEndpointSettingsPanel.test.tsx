@@ -13,7 +13,7 @@ describe("InferenceEndpointSettingsPanel", () => {
     vi.restoreAllMocks();
   });
 
-  it("updates the endpoint gate and explains CLI and Codex Desktop setup", async () => {
+  it("updates the endpoint gate and explains Codex and Claude Code setup", async () => {
     vi.spyOn(api, "getInferenceSettings").mockResolvedValue({
       harnessSpecificEndpointsEnabled: false,
     });
@@ -40,8 +40,11 @@ describe("InferenceEndpointSettingsPanel", () => {
     expect(dialog).toBeInTheDocument();
     expect(screen.getByText("npx -y @wiolett/gateway-inference@latest")).toBeInTheDocument();
     expect(screen.getByText(/setup codex/)).toBeInTheDocument();
+    expect(screen.getByText(/setup claude-code/)).toBeInTheDocument();
     expect(screen.getByText("Codex Desktop requires extra setup")).toBeInTheDocument();
     expect(screen.getByText(/Sign in to an OpenAI account/)).toBeInTheDocument();
+    expect(screen.getByText("Claude Code CLI only")).toBeInTheDocument();
+    expect(screen.getByText(/Claude Code 2.1.129 or newer/)).toBeInTheDocument();
 
     const closeButtons = within(dialog).getAllByRole("button", { name: "Close" });
     await user.click(closeButtons.at(-1)!);

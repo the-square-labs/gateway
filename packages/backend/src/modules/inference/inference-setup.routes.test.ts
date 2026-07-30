@@ -107,7 +107,7 @@ describe('inference setup discovery and control plane', () => {
         codex: { catalogUrl: 'https://gateway.example.com/api/inference/codex/v1/models' },
         anthropic: { baseUrl: 'https://gateway.example.com/api/inference/anthropic' },
       },
-      harnesses: { codex: { supported: false } },
+      harnesses: { codex: { supported: false }, 'claude-code': { supported: false } },
     });
   });
 
@@ -166,6 +166,27 @@ describe('inference setup discovery and control plane', () => {
       installationId,
     });
     expect(tokens.revokeManagedToken).toHaveBeenCalledWith(USER.id, '22222222-2222-4222-8222-222222222222');
+  });
+
+  it('accepts a dedicated Claude Code managed-token slot', async () => {
+    const { tokens } = registerServices();
+    const installationId = '44444444-4444-4444-8444-444444444444';
+    const response = await createApp().request('/api/inference/setup/tokens', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer gwo_setup', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        harness: 'claude-code',
+        deviceName: 'workstation',
+        installationId,
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(tokens.createManagedToken).toHaveBeenCalledWith(USER.id, {
+      harness: 'claude-code',
+      deviceName: 'workstation',
+      installationId,
+    });
   });
 
   it('opens an authenticated event stream with current catalog state', async () => {

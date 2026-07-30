@@ -316,6 +316,40 @@ describe('inference protocol routes', () => {
     expect(await count.json()).toMatchObject({ input_tokens: expect.any(Number) });
   });
 
+  it('resolves Claude Code aliases and carries supported gateway headers into execution', async () => {
+    let executed: InferenceRequest | undefined;
+    const app = registerRuntime({
+      execute: vi.fn(async (request: InferenceRequest) => {
+        executed = request;
+        return { responseId: 'resp_alias', resolvedModel: request.model, events: richEvents() };
+      }),
+    });
+    const response = await app.request('/api/inference/anthropic/v1/messages?beta=true', {
+      ...jsonRequest({
+        model: 'claude-gateway-a2ltaS1rMw',
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'Hello' }],
+      }),
+      headers: {
+        ...jsonRequest({}).headers,
+        'X-Claude-Code-Session-Id': 'session-1',
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'context-management-2025-06-27',
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.clone().json()).toMatchObject({ model: 'claude-gateway-a2ltaS1rMw' });
+    expect(executed).toMatchObject({
+      model: 'kimi-k3',
+      promptCacheKey: 'session-1',
+      providerHeaders: {
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'context-management-2025-06-27',
+      },
+    });
+  });
+
   it('emits exactly one v2 compaction output item and builds v1 replacement history', async () => {
     let compactRequest: InferenceRequest | undefined;
     const executor: InferenceExecutor = {

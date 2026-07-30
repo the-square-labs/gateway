@@ -16,6 +16,7 @@ export interface InteractiveSpinner {
 export interface InteractiveCliUi {
   intro(title: string): void;
   info(message: string): void;
+  error(message: string): void;
   gatewayOrigin(): Promise<string | null>;
   select(message: string, options: InteractiveOption[]): Promise<string | null>;
   confirm(message: string): Promise<boolean | null>;
@@ -31,6 +32,9 @@ export function createInteractiveCliUi(): InteractiveCliUi {
     },
     info(message) {
       prompts.log.info(message);
+    },
+    error(message) {
+      prompts.log.error(message);
     },
     async gatewayOrigin() {
       const value = await prompts.text({

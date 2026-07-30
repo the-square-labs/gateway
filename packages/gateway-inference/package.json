@@ -1,6 +1,6 @@
 {
   "name": "@wiolett/gateway-inference",
-  "version": "0.1.5",
+  "version": "0.2.1",
   "description": "Interactive inference companion for Wiolett Gateway",
   "type": "module",
   "bin": {
@@ -9,7 +9,7 @@
   "repository": {
     "type": "git",
     "url": "https://gitlab.wiolett.net/wiolett/gateway.git",
-    "directory": "packages/gateway-cli"
+    "directory": "packages/gateway-inference"
   },
   "bugs": {
     "url": "https://gitlab.wiolett.net/wiolett/gateway/-/issues"

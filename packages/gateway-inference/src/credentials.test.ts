@@ -86,6 +86,34 @@ describe('secure credentials', () => {
     expect(await fallback.get('work')).toEqual(credential);
   });
 
+  it('keeps the published Codex slot separate from Claude Code runtime credentials', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gateway-cli-credential-'));
+    const backend = new MemoryBackend(true);
+    const store = new SecureCredentialStore(backend, new FileCredentialBackend(join(directory, 'credentials.json')));
+    const codex: RuntimeCredential = {
+      token: 'gwi_codex',
+      tokenId: 'codex-id',
+      prefix: 'gwi_codex',
+      harness: 'codex',
+      installationId: '33333333-3333-4333-8333-333333333333',
+    };
+    const claude: RuntimeCredential = {
+      ...codex,
+      token: 'gwi_claude',
+      tokenId: 'claude-id',
+      prefix: 'gwi_claude',
+      harness: 'claude-code',
+    };
+    await store.setRuntime('work', codex);
+    await store.setRuntime('work', claude, 'claude-code');
+
+    expect(await store.getRuntime('work')).toEqual(codex);
+    expect(await store.getRuntime('work', 'claude-code')).toEqual(claude);
+    await store.deleteRuntime('work', 'claude-code');
+    expect(await store.getRuntime('work')).toEqual(codex);
+    expect(await store.getRuntime('work', 'claude-code')).toBeNull();
+  });
+
   it('rejects fallback files with group or world permissions', async () => {
     if (process.platform === 'win32') return;
     const directory = await mkdtemp(join(tmpdir(), 'gateway-cli-credential-'));

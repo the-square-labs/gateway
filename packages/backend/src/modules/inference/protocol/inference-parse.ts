@@ -489,7 +489,16 @@ export function parseAnthropicMessagesRequest(value: unknown): InferenceRequest 
     extensions: extensions(
       raw,
       ['model', 'messages', 'system', 'tools', 'tool_choice', 'stream', 'max_tokens', 'thinking'],
-      ['temperature', 'top_p', 'top_k', 'stop_sequences', 'metadata', 'service_tier', 'output_config']
+      [
+        'temperature',
+        'top_p',
+        'top_k',
+        'stop_sequences',
+        'metadata',
+        'service_tier',
+        'output_config',
+        'context_management',
+      ]
     ),
   };
 }

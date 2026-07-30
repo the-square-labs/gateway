@@ -42,15 +42,24 @@ API key:              gwi_...
 
 The base `/api/inference/v1` adapter is always available while inference is enabled and exposes the OpenAI-compatible Models, Responses, Chat Completions, images, search, and realtime surfaces. Harness-specific adapters are disabled by default and can be enabled in **Settings > Inference**. When enabled, Codex exposes its ModelInfo catalog, Responses, and Responses Compact under `/api/inference/codex/v1`; Anthropic's REST endpoints live under `/api/inference/anthropic/v1`, while its SDK `baseURL` omits `/v1` because the SDK adds that segment itself.
 
-For Codex, prefer the companion package instead of editing configuration or copying tokens manually:
+For Codex and Claude Code, prefer the companion package instead of editing configuration or copying tokens manually:
 
 ```bash
-npx @wiolett/gateway-inference
+npx -y @wiolett/gateway-inference@latest
 ```
 
-The interactive package asks for the Gateway URL, completes resource-isolated OAuth with PKCE, configures Codex, issues a dedicated runtime token, installs a private stable helper, and maintains an authoritative model catalog. Direct `login [gateway]`, `logout`, and `setup [harness]` commands are also available. It does not require a global install or modify `PATH`. Catalog changes are applied to newly started Codex processes.
+The interactive package asks for the Gateway URL, completes resource-isolated OAuth with PKCE, and offers each harness advertised by Gateway. Direct `login [gateway]`, `logout`, and `setup [harness]` commands are also available:
 
-Enable **Harness-specific endpoints** in **Settings > Inference** before running the companion package. Codex Desktop must also be signed in to an OpenAI account through its normal login flow; after setup or login changes, fully quit and reopen Codex so it reloads the custom model catalog.
+```bash
+npx -y @wiolett/gateway-inference@latest setup codex
+npx -y @wiolett/gateway-inference@latest setup claude-code
+```
+
+Codex setup issues a dedicated runtime token, installs a private stable helper and loopback proxy, and maintains the authoritative Gateway model catalog. Codex Desktop must also be signed in to an OpenAI account through its normal login flow; after setup or login changes, fully quit and reopen Codex so it reloads the custom model catalog.
+
+Claude Code setup requires Claude Code 2.1.129 or newer. It configures Claude Code's native Anthropic gateway contract through `ANTHROPIC_BASE_URL`, model discovery, and a private `apiKeyHelper`; it does not run a loopback proxy. The integration applies only to the Claude Code CLI, not Claude Desktop or the VS Code extension.
+
+Enable **Harness-specific endpoints** in **Settings > Inference** before running either setup. The package does not require a global install or modify `PATH`.
 
 For ChatGPT subscription-backed models whose upstream catalog advertises it, Codex also exposes `/fast`. Gateway forwards the `priority` service tier and charges a fixed 2x subscription-credit multiplier; API dollar accounting is unchanged.
 

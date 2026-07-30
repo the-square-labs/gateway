@@ -62,6 +62,17 @@ For flags, non-interactive installs, custom SSL, OIDC details, updates, and node
 | Run the project locally or contribute | [Development guide](docs/development.md) |
 | Review permission scopes | [SCOPES.md](SCOPES.md) |
 
+## Configure AI Harnesses
+
+The [`@wiolett/gateway-inference`](packages/gateway-inference) companion configures supported AI harnesses without copying a Gateway inference token into their config files. Enable **Inference** and **Harness-specific endpoints** in **Settings > Inference**, then run one of:
+
+```bash
+npx -y @wiolett/gateway-inference@latest setup codex
+npx -y @wiolett/gateway-inference@latest setup claude-code
+```
+
+The CLI asks for the Gateway URL and completes OAuth when no active connection exists. Codex Desktop must also be signed in through Codex's normal OpenAI account flow and fully restarted after setup. Claude Code setup requires Claude Code 2.1.129 or newer and configures the CLI only, not Claude Desktop or the VS Code extension. See the [package README](packages/gateway-inference/README.md) and [inference guide](docs/inference.md) for the complete lifecycle and manual API setup.
+
 ## Product Tour
 
 <table>
@@ -95,6 +106,7 @@ For flags, non-interactive installs, custom SSL, OIDC details, updates, and node
 | Monitoring | Node CPU, memory, disk, network, service status, daemon runtime details, log streaming, and update checks. |
 | Logging | Optional ClickHouse-backed structured log ingestion with schemas, retention, ingest tokens, rate limits, and search. |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages, and optional AI assistant. |
+| Inference | Optional multi-provider model gateway with dedicated tokens, usage controls, OpenAI-compatible APIs, and managed Codex or Claude Code setup through `@wiolett/gateway-inference`. |
 | Administration | OIDC login, group-based permissions, scoped programmatic access, audit logs, setup state, updates, and license controls. |
 
 ## How It Works
