@@ -14,12 +14,11 @@ export interface GatewayProfile {
 }
 
 interface ProfilesState {
-  schemaVersion: 1;
   activeProfile?: string;
   profiles: Record<string, GatewayProfile>;
 }
 
-const EMPTY_STATE: ProfilesState = { schemaVersion: 1, profiles: {} };
+const EMPTY_STATE: ProfilesState = { profiles: {} };
 
 export function validateProfileName(name: string): string {
   if (!PROFILE_NAME_PATTERN.test(name)) {
@@ -68,7 +67,7 @@ export class ProfileStore {
 
   async getRequired(name: string): Promise<GatewayProfile> {
     const profile = await this.get(name);
-    if (!profile) throw new CliError('PROFILE_NOT_FOUND', `Gateway profile "${name}" does not exist.`);
+    if (!profile) throw new CliError('PROFILE_NOT_FOUND', 'Gateway connection is not configured.');
     return profile;
   }
 
@@ -111,13 +110,11 @@ export class ProfileStore {
   private async read(): Promise<ProfilesState> {
     try {
       const parsed = JSON.parse(await readFile(this.file, 'utf8')) as Partial<ProfilesState>;
-      if (parsed.schemaVersion !== 1 || !parsed.profiles || typeof parsed.profiles !== 'object') {
-        throw new Error('Unsupported profile state');
-      }
+      if (!parsed.profiles || typeof parsed.profiles !== 'object') throw new Error('Invalid profile state');
       return parsed as ProfilesState;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return structuredClone(EMPTY_STATE);
-      throw new CliError('PROFILE_STATE_INVALID', 'Gateway profile state is unreadable or unsupported.', {
+      throw new CliError('PROFILE_STATE_INVALID', 'Gateway connection state is unreadable.', {
         cause: error,
       });
     }

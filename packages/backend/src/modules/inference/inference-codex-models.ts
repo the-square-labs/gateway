@@ -82,6 +82,9 @@ export function codexModelsResponse(models: PublicInferenceModel[]) {
         experimental_supported_tools: [],
         input_modalities: model.input_modalities.filter((value) => ['audio', 'image', 'text'].includes(value)),
         supports_search_tool: model.capabilities.search === true,
+        // Responses Lite is an internal Codex-backend transport. Gateway terminates
+        // and re-encodes Responses requests, so advertising it makes Codex send a
+        // compact tool protocol that cannot be preserved end-to-end.
         use_responses_lite: false,
         auto_review_model_override: null,
         tool_mode: null,

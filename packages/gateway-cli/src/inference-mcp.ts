@@ -1,9 +1,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CatalogSyncResult } from './codex-catalog.js';
+import { inspectCodexConfiguration, resolveCodexPaths } from './codex-config.js';
 import { CodexIntegrationService } from './codex-integration.js';
 import type { CredentialStore } from './credentials.js';
+import { CLI_VERSION } from './discovery.js';
 import type { Fetch } from './http.js';
+import type { InferenceProxyDaemonManager } from './inference-proxy-daemon.js';
+import { inferenceProxyDaemonManager } from './inference-proxy-daemon.js';
 import type { CliPaths } from './paths.js';
 import type { ProfileStore } from './profiles.js';
 import { authenticatedSetupClient } from './session.js';
@@ -17,17 +21,37 @@ export async function runInferenceMcp(input: {
   credentials: CredentialStore;
   fetch?: Fetch;
   signal?: AbortSignal;
+  proxyDaemon?: InferenceProxyDaemonManager;
 }): Promise<void> {
-  const server = new McpServer({ name: 'wiolett-gateway-inference', version: '0.1.0' });
-  const integration = new CodexIntegrationService(input.paths, input.credentials, { fetch: input.fetch });
+  const server = new McpServer({ name: 'wiolett-gateway-inference', version: CLI_VERSION });
+  const integration = new CodexIntegrationService(input.paths, input.credentials, {
+    fetch: input.fetch,
+    proxyDaemon: input.proxyDaemon,
+  });
+  const integrationPaths = resolveCodexPaths(input.paths, input.profileName);
+  const configured = await inspectCodexConfiguration({ paths: integrationPaths, profile: input.profileName });
+  if (!configured.configured || !configured.baseUrl) {
+    throw new Error('Gateway inference is not configured. Run setup codex again.');
+  }
+  const proxy = await (input.proxyDaemon ?? inferenceProxyDaemonManager).ensure({
+    paths: input.paths,
+    profileName: input.profileName,
+    remoteBaseUrl: configured.baseUrl,
+    runtimeFile: input.paths.runtimeFile,
+  });
   let lastRefresh: { status: string; at: string; warning?: string } | null = null;
   let refreshPromise: Promise<CatalogSyncResult> | null = null;
 
   const refresh = async () => {
     if (refreshPromise) return refreshPromise;
     refreshPromise = (async (): Promise<CatalogSyncResult> => {
-      const context = await authenticatedSetupClient(input.profileName, input.profiles, input.credentials, input.fetch);
-      const result = await integration.sync({ profileName: input.profileName, discovery: context.discovery });
+      const refreshedContext = await authenticatedSetupClient(
+        input.profileName,
+        input.profiles,
+        input.credentials,
+        input.fetch
+      );
+      const result = await integration.sync({ profileName: input.profileName, discovery: refreshedContext.discovery });
       lastRefresh = {
         status: result.status,
         at: new Date().toISOString(),
@@ -44,11 +68,19 @@ export async function runInferenceMcp(input: {
     'inference_status',
     { description: 'Inspect the local Gateway Codex integration and catalog freshness.' },
     async () => {
-      const context = await authenticatedSetupClient(input.profileName, input.profiles, input.credentials, input.fetch);
-      const report = await integration.doctor({ profileName: input.profileName, discovery: context.discovery });
+      const refreshedContext = await authenticatedSetupClient(
+        input.profileName,
+        input.profiles,
+        input.credentials,
+        input.fetch
+      );
+      const report = await integration.doctor({
+        profileName: input.profileName,
+        discovery: refreshedContext.discovery,
+      });
       return {
-        content: [{ type: 'text', text: JSON.stringify({ ...report, lastRefresh }, null, 2) }],
-        structuredContent: { ...report, lastRefresh },
+        content: [{ type: 'text', text: JSON.stringify({ ...report, proxy: proxy.baseUrl, lastRefresh }, null, 2) }],
+        structuredContent: { ...report, proxy: proxy.baseUrl, lastRefresh },
       };
     }
   );
@@ -69,14 +101,27 @@ export async function runInferenceMcp(input: {
     }
   );
 
-  await refresh().catch((error) =>
+  void refresh().catch((error) =>
     process.stderr.write(`Gateway catalog startup refresh failed: ${messageOf(error)}\n`)
   );
   const controller = new AbortController();
-  input.signal?.addEventListener('abort', () => controller.abort(), { once: true });
   void monitorCatalog({ ...input, refresh, signal: controller.signal });
   const transport = new StdioServerTransport();
-  await server.connect(transport);
+  let closed = false;
+  const close = async () => {
+    if (closed) return;
+    closed = true;
+    controller.abort();
+  };
+  transport.onclose = () => void close();
+  process.stdin.once('end', () => void close());
+  input.signal?.addEventListener('abort', () => void close(), { once: true });
+  try {
+    await server.connect(transport);
+  } catch (error) {
+    await close();
+    throw error;
+  }
 }
 
 async function monitorCatalog(input: {

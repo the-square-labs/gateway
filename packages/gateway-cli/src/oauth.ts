@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { CredentialStore } from './credentials.js';
+import { CLI_VERSION } from './discovery.js';
 import { CliError } from './errors.js';
 import { withFileLock } from './file-lock.js';
 import { assertTrustedEndpoint, type Fetch, requestJson } from './http.js';
@@ -158,8 +159,8 @@ export async function loginWithBrowser(
           grant_types: ['authorization_code', 'refresh_token'],
           response_types: ['code'],
           client_name: 'Wiolett Gateway CLI',
-          software_id: 'net.wiolett.gateway.cli',
-          software_version: '0.1.0',
+          software_id: 'net.wiolett.gateway.inference-cli',
+          software_version: CLI_VERSION,
           scope: 'inference:setup',
         }),
       },
@@ -222,7 +223,7 @@ export async function refreshCredential(options: {
     );
   }
   const stored = await options.credentials.get(options.profile);
-  if (!stored) throw new CliError('NOT_LOGGED_IN', `Profile "${options.profile}" is not logged in.`, { exitCode: 2 });
+  if (!stored) throw new CliError('NOT_LOGGED_IN', 'Gateway connection is not logged in.', { exitCode: 2 });
   const now = options.now?.() ?? new Date();
   if (!stored.expiresAt || new Date(stored.expiresAt).getTime() > now.getTime() + 60_000) return stored;
   if (!stored.refreshToken)

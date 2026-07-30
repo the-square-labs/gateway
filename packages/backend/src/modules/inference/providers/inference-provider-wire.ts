@@ -54,7 +54,7 @@ export function providerRequestBody(
             tools: [
               {
                 functionDeclarations: request.tools.map((tool) => ({
-                  name: tool.name,
+                  name: providerToolName(tool),
                   description: tool.description,
                   parameters: tool.inputSchema ?? { type: 'object', properties: {} },
                 })),
@@ -240,13 +240,17 @@ export interface ProviderStreamState {
   responseId: string;
   model: string;
   usage: Partial<InferenceUsage>;
-  toolCalls: Map<number, { itemId: string; callId: string; name: string; arguments: string; custom: boolean }>;
+  toolCalls: Map<
+    number,
+    { itemId: string; callId: string; name: string; namespace?: string; arguments: string; custom: boolean }
+  >;
   blocks: Map<
     number,
     {
       itemId: string;
       callId?: string;
       name?: string;
+      namespace?: string;
       type: string;
       arguments?: string;
       custom?: boolean;
@@ -255,6 +259,7 @@ export interface ProviderStreamState {
     }
   >;
   customToolNames: Set<string>;
+  toolNames: Map<string, { name: string; namespace?: string }>;
   completedToolCalls: Set<number>;
   messagePhases: Map<string, InferenceMessagePhase>;
   activeMessage?: { itemId: string; text: string };
@@ -270,11 +275,27 @@ export function createProviderStreamState(model: string, tools: InferenceTool[] 
     usage: {},
     toolCalls: new Map(),
     blocks: new Map(),
-    customToolNames: new Set(tools.filter((tool) => tool.type === 'custom').map((tool) => tool.name)),
+    customToolNames: new Set(tools.filter((tool) => tool.type === 'custom').map(providerToolName)),
+    toolNames: new Map(
+      tools
+        .filter((tool) => tool.type !== 'hosted')
+        .map((tool) => [
+          providerToolName(tool),
+          { name: tool.name, ...(tool.namespace ? { namespace: tool.namespace } : {}) },
+        ])
+    ),
     completedToolCalls: new Set(),
     messagePhases: new Map(),
     completed: false,
   };
+}
+
+function providerToolName(tool: { name: string; namespace?: string }): string {
+  return tool.namespace ? `${tool.namespace}__${tool.name}` : tool.name;
+}
+
+function resolveProviderToolName(state: ProviderStreamState, name: string): { name: string; namespace?: string } {
+  return state.toolNames.get(name) ?? { name };
 }
 
 function responsesEvents(payload: JsonObject, state: ProviderStreamState): InferenceStreamEvent[] {
@@ -293,10 +314,12 @@ function responsesEvents(payload: JsonObject, state: ProviderStreamState): Infer
       if (itemId && phase) state.messagePhases.set(itemId, phase);
     }
     if (item && (item.type === 'function_call' || item.type === 'custom_tool_call')) {
+      const toolName = resolveProviderToolName(state, string(item.name) ?? 'tool');
       state.blocks.set(index, {
         itemId: string(item.id) ?? `call_${randomUUID()}`,
         callId: string(item.call_id) ?? string(item.id),
-        name: string(item.name) ?? 'tool',
+        name: toolName.name,
+        ...(toolName.namespace ? { namespace: toolName.namespace } : {}),
         type: string(item.type) ?? 'function_call',
         custom: item.type === 'custom_tool_call',
       });
@@ -333,6 +356,7 @@ function responsesEvents(payload: JsonObject, state: ProviderStreamState): Infer
         itemId: string(payload.item_id) ?? block?.itemId ?? `call_${randomUUID()}`,
         callId: block?.callId ?? string(payload.item_id) ?? `call_${randomUUID()}`,
         name: block?.name ?? 'tool',
+        ...(block?.namespace ? { namespace: block.namespace } : {}),
         delta: string(payload.delta) ?? '',
         ...(type === 'response.custom_tool_call_input.delta' || block?.custom ? { custom: true } : {}),
       },
@@ -375,6 +399,7 @@ function responsesEvents(payload: JsonObject, state: ProviderStreamState): Infer
       ];
     }
     if (item.type === 'function_call' || item.type === 'custom_tool_call') {
+      const toolName = resolveProviderToolName(state, string(item.name) ?? 'tool');
       return [
         {
           type: 'item.done',
@@ -382,7 +407,8 @@ function responsesEvents(payload: JsonObject, state: ProviderStreamState): Infer
             type: 'function_call',
             id: string(item.id) ?? `call_${randomUUID()}`,
             callId: string(item.call_id) ?? string(item.id) ?? `call_${randomUUID()}`,
-            name: string(item.name) ?? 'tool',
+            name: toolName.name,
+            ...(toolName.namespace ? { namespace: toolName.namespace } : {}),
             arguments: string(item.input) ?? string(item.arguments) ?? '',
             ...(item.type === 'custom_tool_call' ? { custom: true } : {}),
           },
@@ -456,12 +482,16 @@ function chatEvents(payload: JsonObject, state: ProviderStreamState): InferenceS
     const fn = object(call?.function);
     const index = number(call?.index) ?? 0;
     const existing = state.toolCalls.get(index);
-    const name = string(fn?.name) ?? existing?.name ?? 'tool';
-    const custom = existing?.custom ?? state.customToolNames.has(name);
+    const upstreamName = string(fn?.name);
+    const toolName = upstreamName ? resolveProviderToolName(state, upstreamName) : undefined;
+    const name = toolName?.name ?? existing?.name ?? 'tool';
+    const namespace = toolName?.namespace ?? existing?.namespace;
+    const custom = existing?.custom ?? (upstreamName ? state.customToolNames.has(upstreamName) : false);
     const previous = existing ?? {
       itemId: `${custom ? 'ctc' : 'fc'}_${randomUUID()}`,
       callId: string(call?.id) ?? `call_${randomUUID()}`,
       name,
+      ...(namespace ? { namespace } : {}),
       arguments: '',
       custom,
     };
@@ -469,7 +499,13 @@ function chatEvents(payload: JsonObject, state: ProviderStreamState): InferenceS
     const updated = {
       ...previous,
       ...(string(call?.id) ? { callId: string(call?.id)! } : {}),
-      ...(string(fn?.name) ? { name: string(fn?.name)!, custom: state.customToolNames.has(string(fn?.name)!) } : {}),
+      ...(upstreamName
+        ? {
+            name,
+            ...(namespace ? { namespace } : {}),
+            custom: state.customToolNames.has(upstreamName),
+          }
+        : {}),
       arguments: previous.arguments + delta,
     };
     state.toolCalls.set(index, updated);
@@ -479,6 +515,7 @@ function chatEvents(payload: JsonObject, state: ProviderStreamState): InferenceS
         itemId: updated.itemId,
         callId: updated.callId,
         name: updated.name,
+        ...(updated.namespace ? { namespace: updated.namespace } : {}),
         delta,
       });
     }
@@ -497,6 +534,7 @@ function chatEvents(payload: JsonObject, state: ProviderStreamState): InferenceS
           id: call.itemId,
           callId: call.callId,
           name: call.name,
+          ...(call.namespace ? { namespace: call.namespace } : {}),
           arguments: call.custom ? customToolInput(call.arguments) : call.arguments,
           ...(call.custom ? { custom: true } : {}),
         },
@@ -558,8 +596,10 @@ function anthropicEvents(
   if (type === 'content_block_start') {
     const block = object(payload.content_block);
     const blockType = string(block?.type) ?? 'text';
-    const name = stripClaudeToolName(string(block?.name), definition.id === 'anthropic');
-    const custom = state.customToolNames.has(name ?? '');
+    const upstreamName = stripClaudeToolName(string(block?.name), definition.id === 'anthropic');
+    const toolName = resolveProviderToolName(state, upstreamName ?? 'tool');
+    const name = toolName.name;
+    const custom = state.customToolNames.has(upstreamName ?? '');
     const itemId =
       blockType === 'text'
         ? `msg_${randomUUID()}`
@@ -570,6 +610,7 @@ function anthropicEvents(
       itemId,
       callId: string(block?.id),
       name,
+      ...(toolName.namespace ? { namespace: toolName.namespace } : {}),
       type: blockType,
       custom,
       text:
@@ -635,6 +676,7 @@ function anthropicEvents(
           itemId: block.itemId,
           callId: block.callId ?? block.itemId,
           name: block.name ?? 'tool',
+          ...(block.namespace ? { namespace: block.namespace } : {}),
           delta: partial,
         },
       ];
@@ -671,6 +713,7 @@ function anthropicEvents(
             id: block.itemId,
             callId: block.callId ?? block.itemId,
             name: block.name ?? 'tool',
+            ...(block.namespace ? { namespace: block.namespace } : {}),
             arguments: block.custom ? customToolInput(block.arguments ?? '') : (block.arguments ?? ''),
             ...(block.custom ? { custom: true } : {}),
           },
@@ -723,13 +766,15 @@ function googleEvents(payload: JsonObject, state: ProviderStreamState): Inferenc
     const fn = object(part.functionCall);
     if (fn) {
       const id = string(fn.id) ?? `call_${randomUUID()}`;
+      const toolName = resolveProviderToolName(state, string(fn.name) ?? 'tool');
       events.push({
         type: 'item.done',
         item: {
           type: 'function_call',
           id,
           callId: id,
-          name: string(fn.name) ?? 'tool',
+          name: toolName.name,
+          ...(toolName.namespace ? { namespace: toolName.namespace } : {}),
           arguments: JSON.stringify(fn.args ?? {}),
         },
       });
@@ -775,7 +820,7 @@ function openAiInputItems(messages: InferenceRequest['messages']): JsonObject[] 
           type: part.custom ? 'custom_tool_call' : 'function_call',
           id: part.id,
           call_id: part.callId,
-          name: part.name,
+          name: providerToolName(part),
           ...(part.custom ? { input: part.arguments } : { arguments: part.arguments }),
         });
       } else if (part.type === 'tool_result') {
@@ -839,11 +884,12 @@ function openAiImagePart(source: JsonObject): JsonObject {
 }
 
 function openAiTool(tool: InferenceRequest['tools'][number]): JsonObject {
-  if (tool.type !== 'function') return tool.raw;
+  if (tool.type === 'hosted') return tool.raw;
+  if (tool.type === 'custom') return { ...tool.raw, name: providerToolName(tool) };
   const rawFunction = object(tool.raw.function);
   return {
     type: 'function',
-    name: tool.name,
+    name: providerToolName(tool),
     ...(tool.description ? { description: tool.description } : {}),
     parameters: tool.inputSchema ?? {},
     ...(typeof rawFunction?.strict === 'boolean'
@@ -859,7 +905,7 @@ function openAiChatTool(tool: InferenceTool): JsonObject {
     return {
       type: 'function',
       function: {
-        name: tool.name,
+        name: providerToolName(tool),
         description: tool.description,
         parameters: tool.inputSchema ?? { type: 'object', properties: {} },
       },
@@ -868,7 +914,7 @@ function openAiChatTool(tool: InferenceTool): JsonObject {
   return {
     type: 'function',
     function: {
-      name: tool.name,
+      name: providerToolName(tool),
       description: customToolDescription(tool),
       parameters: {
         type: 'object',
@@ -887,7 +933,7 @@ function openAiChatTool(tool: InferenceTool): JsonObject {
 
 function anthropicTool(tool: InferenceTool, oauth: boolean): JsonObject {
   return {
-    name: claudeToolName(tool.name, oauth),
+    name: claudeToolName(providerToolName(tool), oauth),
     description: tool.type === 'custom' ? customToolDescription(tool) : tool.description,
     input_schema:
       tool.type === 'custom'
@@ -984,7 +1030,7 @@ function anthropicPart(part: InferenceContentPart, oauth: boolean): JsonObject {
     return {
       type: 'tool_use',
       id: part.callId,
-      name: claudeToolName(part.name, oauth),
+      name: claudeToolName(providerToolName(part), oauth),
       input: part.custom ? { input: part.arguments } : parseJson(part.arguments),
       ...(part.cacheControl !== undefined ? { cache_control: part.cacheControl } : {}),
     };
@@ -1048,7 +1094,7 @@ function googlePart(part: InferenceContentPart): JsonObject {
     );
   }
   if (part.type === 'tool_call')
-    return { functionCall: { id: part.callId, name: part.name, args: parseJson(part.arguments) } };
+    return { functionCall: { id: part.callId, name: providerToolName(part), args: parseJson(part.arguments) } };
   if (part.type === 'tool_result')
     return { functionResponse: { name: part.callId, response: { output: part.output } } };
   if (part.type === 'reasoning') return { text: part.text, thought: true, thoughtSignature: part.signature };
@@ -1086,7 +1132,7 @@ function chatMessages(messages: InferenceRequest['messages']): JsonObject[] {
                             id: part.callId,
                             type: 'function',
                             function: {
-                              name: part.name,
+                              name: providerToolName(part),
                               arguments: part.custom ? JSON.stringify({ input: part.arguments }) : part.arguments,
                             },
                           }

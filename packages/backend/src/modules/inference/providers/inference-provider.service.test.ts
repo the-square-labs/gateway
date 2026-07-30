@@ -1,6 +1,6 @@
 import 'reflect-metadata';
-import { describe, expect, it } from 'vitest';
-import { __testOnly } from './inference-provider.service.js';
+import { describe, expect, it, vi } from 'vitest';
+import { __testOnly, InferenceProviderService } from './inference-provider.service.js';
 
 describe('InferenceProviderService policy helpers', () => {
   it('classifies quota pressure against routing safety floors', () => {
@@ -55,5 +55,49 @@ describe('InferenceProviderService policy helpers', () => {
 
     expect(__testOnly.connectionDisableBlockers(affected, ['model-b'])).toEqual([affected[0]]);
     expect(__testOnly.connectionDisableBlockers(affected, ['model-a', 'model-b'])).toEqual([]);
+  });
+
+  it('reclaims abandoned running synchronizations without duplicating live ones', async () => {
+    const now = new Date('2026-07-30T12:00:00.000Z');
+    const where = vi.fn().mockResolvedValue([
+      { id: 'healthy-due', syncStatus: 'success', updatedAt: new Date('2026-07-30T11:59:00.000Z') },
+      { id: 'live-running', syncStatus: 'running', updatedAt: new Date('2026-07-30T11:51:00.001Z') },
+      { id: 'abandoned-running', syncStatus: 'running', updatedAt: new Date('2026-07-30T11:50:00.000Z') },
+    ]);
+    const from = vi.fn().mockReturnValue({ where });
+    const db = { select: vi.fn().mockReturnValue({ from }) };
+    const service = new InferenceProviderService(
+      db as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never
+    );
+    const syncConnection = vi.spyOn(service, 'syncConnection').mockResolvedValue({} as never);
+
+    await service.syncDue(now);
+
+    expect(syncConnection).toHaveBeenCalledTimes(2);
+    expect(syncConnection).toHaveBeenCalledWith('healthy-due', true);
+    expect(syncConnection).toHaveBeenCalledWith('abandoned-running', true);
+    expect(syncConnection).not.toHaveBeenCalledWith('live-running', true);
+  });
+
+  it('checks for abandoned synchronizations immediately on scheduler startup', () => {
+    const service = new InferenceProviderService(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never
+    );
+    const syncDue = vi.spyOn(service, 'syncDue').mockResolvedValue();
+
+    service.start();
+    service.stop();
+
+    expect(syncDue).toHaveBeenCalledOnce();
   });
 });

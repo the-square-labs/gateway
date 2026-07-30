@@ -14,6 +14,7 @@ interface ItemBuilder {
   text: string;
   callId?: string;
   name?: string;
+  namespace?: string;
   custom?: boolean;
   signature?: string;
   redactedData?: string;
@@ -54,6 +55,7 @@ export class InferenceResponseCollector {
       const builder = this.ensure(event.itemId, 'function_call');
       builder.callId = event.callId;
       builder.name = event.name;
+      builder.namespace = event.namespace;
       builder.custom = event.custom;
       builder.text += event.delta;
       return;
@@ -120,6 +122,7 @@ export class InferenceResponseCollector {
       id: builder.id,
       callId: builder.callId ?? builder.id,
       name: builder.name ?? 'tool',
+      ...(builder.namespace ? { namespace: builder.namespace } : {}),
       arguments: builder.text,
       ...(builder.custom ? { custom: true } : {}),
     };
@@ -172,6 +175,7 @@ export function responseItem(item: InferenceOutputItem): Record<string, unknown>
         id: item.id,
         call_id: item.callId,
         name: item.name,
+        ...(item.namespace ? { namespace: item.namespace } : {}),
         ...(item.custom ? { input: item.arguments } : { arguments: item.arguments }),
         status: 'completed',
       };

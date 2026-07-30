@@ -34,4 +34,25 @@ describe('Codex model catalog service tiers', () => {
     expect(model.additional_speed_tiers).toEqual([]);
     expect(model.service_tiers).toEqual([]);
   });
+
+  it('advertises hosted web search without enabling the internal Responses Lite transport', () => {
+    const [withoutSearch, withSearch] = codexModelsResponse([
+      MODEL,
+      { ...MODEL, id: 'search-model', capabilities: { ...MODEL.capabilities, search: true } },
+    ]).models;
+
+    expect(withoutSearch).toMatchObject({
+      web_search_tool_type: 'text',
+      supports_search_tool: false,
+      use_responses_lite: false,
+      shell_type: 'shell_command',
+      apply_patch_tool_type: 'freeform',
+      supports_parallel_tool_calls: true,
+    });
+    expect(withSearch).toMatchObject({
+      web_search_tool_type: 'text',
+      supports_search_tool: true,
+      use_responses_lite: false,
+    });
+  });
 });

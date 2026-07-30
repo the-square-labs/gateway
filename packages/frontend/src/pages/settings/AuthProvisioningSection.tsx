@@ -423,6 +423,24 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
     }
   };
 
+  const handleToggleInference = async (checked: boolean) => {
+    if (!checked) {
+      setInferenceEnabled(false);
+      return;
+    }
+
+    const accepted = await confirm({
+      title: "Enable alpha inference?",
+      description:
+        "Inference is currently in alpha testing and has not been thoroughly validated. It may behave unexpectedly, fail, or change without notice. Enable it only if you accept the risk of unstable behavior.",
+      confirmLabel: "Enable anyway",
+      cancelLabel: "Keep disabled",
+      bodyDescription: true,
+      variant: "destructive",
+    });
+    if (accepted) setInferenceEnabled(true);
+  };
+
   const updateNetworkSecurity = async (
     patch: Partial<AuthProvisioningSettings["networkSecurity"]>
   ) => {
@@ -641,7 +659,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
               checked={inferenceEnabled}
               disabled={!canEdit || isSavingGeneral}
               ariaLabel="Enable inference"
-              onChange={setInferenceEnabled}
+              onChange={handleToggleInference}
             />
           </div>
         </div>

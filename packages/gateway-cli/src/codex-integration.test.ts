@@ -1,8 +1,10 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodexIntegrationService } from './codex-integration.js';
+import { CODEX_ACCOUNT_LOGIN_WARNING, CodexIntegrationService } from './codex-integration.js';
 import type { CredentialStore } from './credentials.js';
+import { inferenceProxyBaseUrl } from './inference-proxy.js';
+import type { InferenceProxyDaemonManager } from './inference-proxy-daemon.js';
 import type { CliPaths } from './paths.js';
 import type { GatewayProfile } from './profiles.js';
 import type { InferenceSetupClient } from './tokens.js';
@@ -23,6 +25,11 @@ const CATALOG = {
       supported_reasoning_levels: [],
     },
   ],
+};
+
+const NOOP_PROXY_DAEMON: InferenceProxyDaemonManager = {
+  ensure: vi.fn(async ({ paths, profileName }) => ({ baseUrl: inferenceProxyBaseUrl(paths, profileName) })),
+  stop: vi.fn(async () => undefined),
 };
 
 class MemoryCredentials implements CredentialStore {
@@ -89,7 +96,7 @@ async function fixture() {
 }
 
 describe('CodexIntegrationService', () => {
-  it('issues an explicit replacement token, installs runtime, catalog, and secret-free Codex config', async () => {
+  it('issues an explicit replacement token and configures the built-in OpenAI provider for Gateway', async () => {
     const files = await fixture();
     const credentials = new MemoryCredentials();
     const createToken = vi.fn().mockResolvedValue({
@@ -118,17 +125,18 @@ describe('CodexIntegrationService', () => {
         new Response(JSON.stringify(CATALOG), { headers: { 'Content-Type': 'application/json', ETag: '"v1"' } })
       );
     const fetcher = fetchMock as typeof fetch;
-    const commandRunner = vi.fn(async (_command: string, args: string[]) =>
-      args.includes('--version')
-        ? { code: 0, stdout: 'codex-cli 0.145.0\n', stderr: '' }
-        : { code: 0, stdout: JSON.stringify(CATALOG), stderr: '' }
-    );
+    const commandRunner = vi.fn(async (_command: string, args: string[]) => {
+      if (args.includes('--version')) return { code: 0, stdout: 'codex-cli 0.145.0\n', stderr: '' };
+      if (args[0] === 'login') return { code: 1, stdout: 'Not logged in\n', stderr: '' };
+      return { code: 0, stdout: JSON.stringify(CATALOG), stderr: '' };
+    });
     const service = new CodexIntegrationService(files.paths, credentials, {
       fetch: fetcher,
       commandRunner,
       runtimeSource: files.runtimeSource,
       env: { CODEX_HOME: join(files.root, 'codex') },
       home: files.root,
+      proxyDaemon: NOOP_PROXY_DAEMON,
     });
 
     const result = await service.setup({
@@ -144,10 +152,15 @@ describe('CodexIntegrationService', () => {
     });
     expect(credentials.runtime).toMatchObject({ tokenId: 'new-token', token: 'gwi_runtime-secret' });
     expect(result.catalog).toMatchObject({ status: 'updated', modelCount: 1 });
+    expect(result.defaultModel).toBe('gateway-model');
+    expect(result.warning).toBe(CODEX_ACCOUNT_LOGIN_WARNING);
     const config = await readFile(result.configFile, 'utf8');
-    expect(config).toContain('wire_api = "responses"');
-    expect(config).toContain('.auth]');
+    expect(config).toContain('model = "gateway-model"');
+    expect(config).toContain('model_provider = "openai"');
+    expect(config).toContain(`openai_base_url = "${inferenceProxyBaseUrl(files.paths, 'work')}"`);
+    expect(config).not.toContain('cli_auth_credentials_store');
     expect(config).not.toContain('gwi_runtime-secret');
+    await expect(readFile(join(files.root, 'codex', 'auth.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(commandRunner).toHaveBeenCalledWith(
       'codex',
       ['debug', 'models'],
@@ -209,6 +222,7 @@ describe('CodexIntegrationService', () => {
       runtimeSource: files.runtimeSource,
       env: { CODEX_HOME: join(files.root, 'codex') },
       home: files.root,
+      proxyDaemon: NOOP_PROXY_DAEMON,
     });
 
     await service.setup({ profileName: 'work', profile: files.profile, discovery: files.discovery, client });
@@ -262,6 +276,7 @@ describe('CodexIntegrationService', () => {
       runtimeSource: files.runtimeSource,
       env: { CODEX_HOME: codexHome },
       home: files.root,
+      proxyDaemon: NOOP_PROXY_DAEMON,
     });
 
     const setup = await service.setup({
@@ -270,18 +285,126 @@ describe('CodexIntegrationService', () => {
       discovery: files.discovery,
       client,
     });
-    const edited = (await readFile(setup.configFile, 'utf8')).replace('name = "OpenAI"', 'name = "Edited"');
+    const edited = (await readFile(setup.configFile, 'utf8')).replace(
+      `openai_base_url = "${inferenceProxyBaseUrl(files.paths, 'work')}"`,
+      'openai_base_url = "http://127.0.0.1:59999/v1"'
+    );
     await writeFile(setup.configFile, edited);
     await writeFile(files.runtimeSource, 'updated packaged runtime');
+    vi.mocked(NOOP_PROXY_DAEMON.ensure).mockClear();
 
     await expect(service.sync({ profileName: 'work', discovery: files.discovery })).resolves.toMatchObject({
       status: 'unchanged',
       modelCount: 1,
     });
     await expect(readFile(files.paths.runtimeFile, 'utf8')).resolves.toBe('updated packaged runtime');
+    expect(NOOP_PROXY_DAEMON.ensure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paths: files.paths,
+        profileName: 'work',
+        remoteBaseUrl: files.discovery.adapters.codex.baseUrl,
+        runtimeFile: files.paths.runtimeFile,
+      })
+    );
   });
 
-  it('rejects Codex versions without command-backed provider auth', async () => {
+  it('keeps shared runtime assets until the last configured Codex home is removed', async () => {
+    const files = await fixture();
+    const credentials = new MemoryCredentials();
+    let configFileAtRevoke = '';
+    const activeTokens: Array<{ id: string; harness: string; installationId: string }> = [];
+    const createToken = vi.fn(async () => {
+      const token = {
+        id: 'shared-token',
+        prefix: 'gwi_shared',
+        token: 'gwi_shared-secret',
+        harness: 'codex' as const,
+        deviceName: 'test',
+        installationId: files.profile.installationId,
+        name: 'Codex',
+        createdAt: '2026-07-28T00:00:00Z',
+      };
+      activeTokens.splice(0, activeTokens.length, token);
+      return token;
+    });
+    const revokeToken = vi.fn(async (tokenId: string) => {
+      expect(await readFile(configFileAtRevoke, 'utf8')).not.toContain('model_provider = "openai"');
+      const index = activeTokens.findIndex((token) => token.id === tokenId);
+      if (index >= 0) activeTokens.splice(index, 1);
+    });
+    const client = {
+      listTokens: vi.fn(async () => [...activeTokens]),
+      createToken,
+      revokeToken,
+    } as unknown as InferenceSetupClient;
+    const fetcher = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify(CATALOG), {
+          headers: { 'Content-Type': 'application/json', ETag: '"v1"' },
+        })
+    ) as typeof fetch;
+    const commandRunner = vi.fn(async (_command: string, args: string[]) =>
+      args.includes('--version')
+        ? { code: 0, stdout: 'codex-cli 0.145.0', stderr: '' }
+        : { code: 0, stdout: JSON.stringify(CATALOG), stderr: '' }
+    );
+    const homeA = join(files.root, 'codex-a');
+    const homeB = join(files.root, 'codex-b');
+    const serviceA = new CodexIntegrationService(files.paths, credentials, {
+      fetch: fetcher,
+      commandRunner,
+      runtimeSource: files.runtimeSource,
+      env: { CODEX_HOME: homeA },
+      home: files.root,
+      proxyDaemon: NOOP_PROXY_DAEMON,
+    });
+    const serviceB = new CodexIntegrationService(files.paths, credentials, {
+      fetch: fetcher,
+      commandRunner,
+      runtimeSource: files.runtimeSource,
+      env: { CODEX_HOME: homeB },
+      home: files.root,
+      proxyDaemon: NOOP_PROXY_DAEMON,
+    });
+
+    const setupA = await serviceA.setup({
+      profileName: 'work',
+      profile: files.profile,
+      discovery: files.discovery,
+      client,
+    });
+    const setupB = await serviceB.setup({
+      profileName: 'work',
+      profile: files.profile,
+      discovery: files.discovery,
+      client,
+    });
+
+    expect(createToken).toHaveBeenCalledTimes(1);
+    expect(setupA.configFile).toBe(join(homeA, 'config.toml'));
+    expect(setupB.configFile).toBe(join(homeB, 'config.toml'));
+    expect(credentials.runtime?.tokenId).toBe('shared-token');
+
+    configFileAtRevoke = setupA.configFile;
+    await expect(serviceB.remove({ profileName: 'work', removeToken: true, client })).resolves.toMatchObject({
+      removed: true,
+      tokenRevoked: false,
+    });
+    expect(revokeToken).not.toHaveBeenCalled();
+    expect(credentials.runtime?.tokenId).toBe('shared-token');
+    await expect(readFile(setupA.catalogFile, 'utf8')).resolves.toContain('gateway-model');
+    await expect(readFile(setupA.configFile, 'utf8')).resolves.toContain('model_provider = "openai"');
+
+    await expect(serviceA.remove({ profileName: 'work', removeToken: true, client })).resolves.toMatchObject({
+      removed: true,
+      tokenRevoked: true,
+    });
+    expect(revokeToken).toHaveBeenCalledOnce();
+    expect(credentials.runtime).toBeNull();
+    await expect(readFile(setupA.catalogFile, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects Codex versions without the required model catalog support', async () => {
     const files = await fixture();
     const credentials = new MemoryCredentials();
     const service = new CodexIntegrationService(files.paths, credentials, {
@@ -289,6 +412,7 @@ describe('CodexIntegrationService', () => {
       runtimeSource: files.runtimeSource,
       env: { CODEX_HOME: join(files.root, 'codex') },
       home: files.root,
+      proxyDaemon: NOOP_PROXY_DAEMON,
     });
 
     await expect(

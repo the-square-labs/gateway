@@ -308,6 +308,144 @@ describe('provider wire adapters', () => {
     ]);
   });
 
+  it('bridges Codex namespace tools through Chat Completions providers', () => {
+    const namespaceTool = {
+      type: 'function' as const,
+      namespace: 'mcp__gateway',
+      name: 'status',
+      description: 'Read status',
+      inputSchema: { type: 'object', properties: {} },
+      raw: {
+        type: 'function',
+        name: 'status',
+        description: 'Read status',
+        parameters: { type: 'object', properties: {} },
+      },
+    };
+    const body = providerRequestBody(registry.require('moonshot'), 'kimi-test', {
+      ...REQUEST,
+      tools: [namespaceTool],
+    });
+
+    expect(body).toMatchObject({
+      tools: [
+        {
+          type: 'function',
+          function: { name: 'mcp__gateway__status' },
+        },
+      ],
+    });
+
+    const state = createProviderStreamState('kimi-test', [namespaceTool]);
+    expect(
+      parseProviderEvent(
+        registry.require('moonshot'),
+        {
+          id: 'chat-1',
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: 'call-1',
+                    function: { name: 'mcp__gateway__status', arguments: '{}' },
+                  },
+                ],
+              },
+              finish_reason: null,
+            },
+          ],
+        },
+        state
+      )
+    ).toEqual([
+      expect.objectContaining({
+        type: 'tool_call.delta',
+        name: 'status',
+        namespace: 'mcp__gateway',
+        delta: '{}',
+      }),
+    ]);
+    expect(
+      parseProviderEvent(
+        registry.require('moonshot'),
+        { id: 'chat-1', choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+        state
+      )
+    ).toEqual([
+      {
+        type: 'item.done',
+        item: {
+          type: 'function_call',
+          id: expect.stringMatching(/^fc_/),
+          callId: 'call-1',
+          name: 'status',
+          namespace: 'mcp__gateway',
+          arguments: '{}',
+        },
+      },
+    ]);
+  });
+
+  it('preserves namespace identity for native Responses custom tools', () => {
+    const namespaceTool = {
+      type: 'custom' as const,
+      namespace: 'functions',
+      name: 'apply_patch',
+      description: 'Apply a patch',
+      raw: {
+        type: 'custom',
+        name: 'apply_patch',
+        description: 'Apply a patch',
+        format: { type: 'grammar', syntax: 'lark', definition: 'start: /.+/' },
+      },
+    };
+    const body = providerRequestBody(registry.require('openai'), 'gpt-test', {
+      ...REQUEST,
+      tools: [namespaceTool],
+    });
+
+    expect(body).toMatchObject({
+      tools: [
+        {
+          type: 'custom',
+          name: 'functions__apply_patch',
+          format: { type: 'grammar', syntax: 'lark' },
+        },
+      ],
+    });
+    expect(
+      parseProviderEvent(
+        registry.require('openai'),
+        {
+          type: 'response.output_item.done',
+          item: {
+            type: 'custom_tool_call',
+            id: 'ctc-1',
+            call_id: 'call-1',
+            name: 'functions__apply_patch',
+            input: '*** Begin Patch',
+          },
+        },
+        createProviderStreamState('gpt-test', [namespaceTool])
+      )
+    ).toEqual([
+      {
+        type: 'item.done',
+        item: {
+          type: 'function_call',
+          id: 'ctc-1',
+          callId: 'call-1',
+          name: 'apply_patch',
+          namespace: 'functions',
+          arguments: '*** Begin Patch',
+          custom: true,
+        },
+      },
+    ]);
+  });
+
   it('closes Chat reasoning before text and text before a tool call', () => {
     const provider = registry.require('moonshot');
     const state = createProviderStreamState('kimi-test');

@@ -111,46 +111,68 @@ function contentParts(value: unknown, context: 'openai' | 'anthropic'): Inferenc
 function parseTools(value: unknown): InferenceTool[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new InferenceProtocolError(400, 'invalid_request_error', 'tools must be an array');
-  return value.map((rawTool) => {
+  return value.flatMap<InferenceTool>((rawTool): InferenceTool[] => {
     const tool = object(rawTool, 'tool');
+    if (tool.type === 'namespace') {
+      const namespace = requiredString(tool.name, 'tool.name');
+      if (!Array.isArray(tool.tools)) {
+        throw new InferenceProtocolError(400, 'invalid_request_error', 'namespace tools must be an array');
+      }
+      return parseTools(tool.tools).map((nested) => {
+        if (nested.type === 'hosted') {
+          throw new InferenceProtocolError(
+            400,
+            'invalid_request_error',
+            'namespace entries must be client-executed tools'
+          );
+        }
+        return { ...nested, namespace };
+      });
+    }
     if (typeof tool.name === 'string' && tool.type === undefined) {
-      return {
-        type: 'function',
-        name: requiredString(tool.name, 'tool.name'),
-        ...(typeof tool.description === 'string' ? { description: tool.description } : {}),
-        ...(tool.input_schema && typeof tool.input_schema === 'object'
-          ? { inputSchema: tool.input_schema as Record<string, unknown> }
-          : {}),
-        raw: tool,
-      };
+      return [
+        {
+          type: 'function',
+          name: requiredString(tool.name, 'tool.name'),
+          ...(typeof tool.description === 'string' ? { description: tool.description } : {}),
+          ...(tool.input_schema && typeof tool.input_schema === 'object'
+            ? { inputSchema: tool.input_schema as Record<string, unknown> }
+            : {}),
+          raw: tool,
+        },
+      ];
     }
     if (tool.type === 'function' && tool.function && typeof tool.function === 'object') {
       const fn = object(tool.function, 'tool.function');
-      return {
-        type: 'function',
-        name: requiredString(fn.name, 'tool.function.name'),
-        ...(typeof fn.description === 'string' ? { description: fn.description } : {}),
-        ...(fn.parameters && typeof fn.parameters === 'object'
-          ? { inputSchema: fn.parameters as Record<string, unknown> }
-          : {}),
-        raw: tool,
-      };
+      return [
+        {
+          type: 'function',
+          name: requiredString(fn.name, 'tool.function.name'),
+          ...(typeof fn.description === 'string' ? { description: fn.description } : {}),
+          ...(fn.parameters && typeof fn.parameters === 'object'
+            ? { inputSchema: fn.parameters as Record<string, unknown> }
+            : {}),
+          raw: tool,
+        },
+      ];
     }
     if (tool.type === 'function' || tool.type === 'custom') {
-      return {
-        type: tool.type,
-        name: requiredString(tool.name, 'tool.name'),
-        ...(typeof tool.description === 'string' ? { description: tool.description } : {}),
-        ...(tool.parameters && typeof tool.parameters === 'object'
-          ? { inputSchema: tool.parameters as Record<string, unknown> }
-          : tool.input_schema && typeof tool.input_schema === 'object'
-            ? { inputSchema: tool.input_schema as Record<string, unknown> }
-            : {}),
-        raw: tool,
-      };
+      return [
+        {
+          type: tool.type,
+          name: requiredString(tool.name, 'tool.name'),
+          ...(typeof tool.description === 'string' ? { description: tool.description } : {}),
+          ...(tool.parameters && typeof tool.parameters === 'object'
+            ? { inputSchema: tool.parameters as Record<string, unknown> }
+            : tool.input_schema && typeof tool.input_schema === 'object'
+              ? { inputSchema: tool.input_schema as Record<string, unknown> }
+              : {}),
+          raw: tool,
+        },
+      ];
     }
     const hostedName = requiredString(tool.type, 'tool.type');
-    return { type: 'hosted', name: hostedName, raw: tool };
+    return [{ type: 'hosted', name: hostedName, raw: tool }];
   });
 }
 
@@ -208,6 +230,7 @@ function parseResponsesInput(value: unknown): {
             id: typeof item.id === 'string' ? item.id : requiredString(item.call_id, 'function_call.call_id'),
             callId: requiredString(item.call_id ?? item.id, 'function_call.call_id'),
             name: requiredString(item.name, 'function_call.name'),
+            ...(typeof item.namespace === 'string' ? { namespace: item.namespace } : {}),
             arguments:
               type === 'custom_tool_call'
                 ? requiredString(item.input ?? item.arguments, 'custom_tool_call.input')
@@ -271,9 +294,10 @@ function mergeTools(...groups: InferenceTool[][]): InferenceTool[] {
   const merged: InferenceTool[] = [];
   const indexes = new Map<string, number>();
   for (const tool of groups.flat()) {
-    const existing = indexes.get(tool.name);
+    const key = `${tool.namespace ?? ''}\u0000${tool.name}`;
+    const existing = indexes.get(key);
     if (existing === undefined) {
-      indexes.set(tool.name, merged.length);
+      indexes.set(key, merged.length);
       merged.push(tool);
     } else {
       merged[existing] = tool;
@@ -317,6 +341,7 @@ export function parseResponsesRequest(value: unknown): InferenceRequest {
         'previous_response_id',
         'prompt_cache_key',
         'parallel_tool_calls',
+        'stream_options',
       ],
       [
         'temperature',

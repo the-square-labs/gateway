@@ -12,7 +12,7 @@ export async function installPrivateRuntime(
 ): Promise<{ updated: boolean; path: string }> {
   const source = await readFile(sourceFile);
   await mkdir(dirname(destinationFile), { recursive: true, mode: 0o700 });
-  await installNativeKeyringPackage(dirname(destinationFile));
+  await installKeyringPackages(dirname(destinationFile));
   let current: Buffer | undefined;
   try {
     current = await readFile(destinationFile);
@@ -32,27 +32,47 @@ export async function installPrivateRuntime(
   return { updated: true, path: destinationFile };
 }
 
-function resolveNativeKeyringPackage(): { name: string; entry: string; packageJson: string } {
+interface RuntimePackage {
+  name: string;
+  entry: string;
+  packageJson: string;
+}
+
+function resolveKeyringPackages(): RuntimePackage[] {
+  const mainPackageJson = require.resolve('@napi-rs/keyring/package.json');
+  const keyringRequire = createRequire(mainPackageJson);
   const packageName = nativeKeyringPackage();
   try {
-    const keyringRequire = createRequire(require.resolve('@napi-rs/keyring/package.json'));
-    return {
-      name: packageName,
-      entry: keyringRequire.resolve(packageName),
-      packageJson: keyringRequire.resolve(`${packageName}/package.json`),
-    };
+    return [
+      {
+        name: '@napi-rs/keyring',
+        entry: keyringRequire.resolve('@napi-rs/keyring'),
+        packageJson: mainPackageJson,
+      },
+      {
+        name: packageName,
+        entry: keyringRequire.resolve(packageName),
+        packageJson: keyringRequire.resolve(`${packageName}/package.json`),
+      },
+    ];
   } catch (error) {
     throw new Error(`The platform credential-store binding ${packageName} is unavailable.`, { cause: error });
   }
 }
 
-async function installNativeKeyringPackage(runtimeDirectory: string): Promise<void> {
-  const native = resolveNativeKeyringPackage();
-  const [scope, packageName] = native.name.split('/');
+async function installKeyringPackages(runtimeDirectory: string): Promise<void> {
+  for (const packageFiles of resolveKeyringPackages()) {
+    await installRuntimePackage(runtimeDirectory, packageFiles);
+  }
+}
+
+async function installRuntimePackage(runtimeDirectory: string, packageFiles: RuntimePackage): Promise<void> {
+  const [scope, packageName] = packageFiles.name.split('/');
+  if (!scope || !packageName) throw new Error(`Invalid runtime package name: ${packageFiles.name}`);
   const packageDirectory = join(runtimeDirectory, 'node_modules', scope, packageName);
   await mkdir(packageDirectory, { recursive: true, mode: 0o700 });
-  await atomicCopy(native.entry, join(packageDirectory, basename(native.entry)), 0o600);
-  await atomicCopy(native.packageJson, join(packageDirectory, 'package.json'), 0o600);
+  await atomicCopy(packageFiles.entry, join(packageDirectory, basename(packageFiles.entry)), 0o600);
+  await atomicCopy(packageFiles.packageJson, join(packageDirectory, 'package.json'), 0o600);
 }
 
 async function atomicCopy(source: string, destination: string, mode: number): Promise<void> {

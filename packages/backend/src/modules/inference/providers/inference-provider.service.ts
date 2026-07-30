@@ -38,6 +38,7 @@ import type { InferenceProviderHttpConnector } from './inference-provider-http.c
 
 const SYNC_FRESH_MS = 5 * 60_000;
 const LAST_GOOD_MS = 30 * 60_000;
+const SYNC_RUNNING_RECOVERY_MS = 2 * SYNC_FRESH_MS;
 
 @injectable()
 export class InferenceProviderService {
@@ -331,8 +332,9 @@ export class InferenceProviderService {
 
   start(): void {
     if (this.timer) return;
-    this.timer = setInterval(() => void this.syncDue(), 60_000);
+    this.timer = setInterval(() => this.runDueSync(), 60_000);
     this.timer.unref();
+    this.runDueSync();
   }
 
   stop(): void {
@@ -340,19 +342,34 @@ export class InferenceProviderService {
     this.timer = null;
   }
 
-  async syncDue(): Promise<void> {
+  async syncDue(now = new Date()): Promise<void> {
     const due = await this.db
-      .select({ id: inferenceProviderConnections.id })
+      .select({
+        id: inferenceProviderConnections.id,
+        syncStatus: inferenceProviderConnections.syncStatus,
+        updatedAt: inferenceProviderConnections.updatedAt,
+      })
       .from(inferenceProviderConnections)
       .where(
         and(
           eq(inferenceProviderConnections.enabled, true),
           isNull(inferenceProviderConnections.deletedAt),
-          lte(inferenceProviderConnections.nextSyncAt, new Date()),
-          ne(inferenceProviderConnections.syncStatus, 'running')
+          lte(inferenceProviderConnections.nextSyncAt, now)
         )
       );
-    await Promise.allSettled(due.map((connection) => this.syncConnection(connection.id, true)));
+    await Promise.allSettled(
+      due
+        .filter(
+          (connection) =>
+            connection.syncStatus !== 'running' ||
+            connection.updatedAt.getTime() <= now.getTime() - SYNC_RUNNING_RECOVERY_MS
+        )
+        .map((connection) => this.syncConnection(connection.id, true))
+    );
+  }
+
+  private runDueSync(): void {
+    void this.syncDue().catch(() => undefined);
   }
 
   private async persistModels(

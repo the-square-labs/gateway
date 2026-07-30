@@ -45,8 +45,8 @@ export async function loginCommand(
     'AUTHORIZATION_LOCKED'
   );
   output.write(
-    { ok: true, profile: profileName, gateway: profile.origin, user: identity.user, inference: identity.inference },
-    () => `Logged in to ${profile.origin} as ${identity.user.email} (profile: ${profileName}).`
+    { ok: true, gateway: profile.origin, user: identity.user, inference: identity.inference },
+    () => `Logged in to ${profile.origin} as ${identity.user.email}.`
   );
 }
 
@@ -76,9 +76,7 @@ export async function logoutCommand(
     lockFile: profiles.credentialLockFile(profileName),
   });
   await profiles.removeClient(profileName);
-  output.write({ ok: true, profile: profileName, remoteRevoked: result.remoteRevoked }, () =>
-    result.remoteRevoked
-      ? `Logged out profile "${profileName}".`
-      : `Removed local authorization for "${profileName}"; remote revocation could not be confirmed.`
+  output.write({ ok: true, remoteRevoked: result.remoteRevoked }, () =>
+    result.remoteRevoked ? 'Logged out.' : 'Removed local authorization; remote revocation could not be confirmed.'
   );
 }

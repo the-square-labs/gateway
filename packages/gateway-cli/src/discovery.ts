@@ -2,7 +2,7 @@ import { CliError } from './errors.js';
 import { assertTrustedEndpoint, type Fetch, requestJson } from './http.js';
 import type { InferenceDiscovery, OAuthMetadata } from './types.js';
 
-export const CLI_VERSION = '0.1.0';
+export const CLI_VERSION = '0.1.5';
 
 function compareVersions(left: string, right: string): number {
   const parse = (value: string) => value.split('.').map((part) => Number.parseInt(part, 10) || 0);
@@ -39,7 +39,7 @@ export async function discoverInference(
   if (compareVersions(CLI_VERSION, discovery.minimumCliVersion) < 0) {
     throw new CliError(
       'CLI_UPDATE_REQUIRED',
-      `Gateway requires @wiolett/gateway ${discovery.minimumCliVersion} or newer (current ${CLI_VERSION}).`
+      `Gateway requires @wiolett/gateway-inference ${discovery.minimumCliVersion} or newer (current ${CLI_VERSION}).`
     );
   }
   return discovery;

@@ -19,6 +19,7 @@ export type InferenceContentPart =
       id: string;
       callId: string;
       name: string;
+      namespace?: string;
       arguments: string;
       custom?: boolean;
       cacheControl?: unknown;
@@ -43,6 +44,7 @@ export interface InferenceMessage {
 export interface InferenceTool {
   type: 'function' | 'custom' | 'hosted';
   name: string;
+  namespace?: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
   raw: Record<string, unknown>;
@@ -89,14 +91,30 @@ export type InferenceOutputItem =
       raw?: Record<string, unknown>;
     }
   | { type: 'reasoning'; id: string; text: string; signature?: string; redactedData?: string }
-  | { type: 'function_call'; id: string; callId: string; name: string; arguments: string; custom?: boolean }
+  | {
+      type: 'function_call';
+      id: string;
+      callId: string;
+      name: string;
+      namespace?: string;
+      arguments: string;
+      custom?: boolean;
+    }
   | { type: 'hosted'; id: string; raw: Record<string, unknown> }
   | { type: 'compaction'; id: string; encryptedContent: string };
 
 export type InferenceStreamEvent =
   | { type: 'output_text.delta'; itemId: string; delta: string; phase?: InferenceMessagePhase }
   | { type: 'reasoning.delta'; itemId: string; delta: string; signature?: string }
-  | { type: 'tool_call.delta'; itemId: string; callId: string; name: string; delta: string; custom?: boolean }
+  | {
+      type: 'tool_call.delta';
+      itemId: string;
+      callId: string;
+      name: string;
+      namespace?: string;
+      delta: string;
+      custom?: boolean;
+    }
   | { type: 'item.done'; item: InferenceOutputItem }
   | {
       type: 'completed';

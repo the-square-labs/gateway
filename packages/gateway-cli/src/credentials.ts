@@ -1,11 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { createInterface } from 'node:readline/promises';
 import { CliError } from './errors.js';
 import type { OAuthCredential, RuntimeCredential } from './types.js';
 
-const SERVICE = 'net.wiolett.gateway.cli';
+const SERVICE = 'net.wiolett.gateway.inference-cli';
 
 export interface CredentialBackend {
   readonly name: string;
@@ -206,7 +205,7 @@ export class SecureCredentialStore implements CredentialStore {
     if (!fileExists && !(await this.allowFallback())) {
       throw new CliError(
         'SECURE_CREDENTIAL_STORE_UNAVAILABLE',
-        'No platform credential store is available. Re-run with --allow-file-credentials or approve the interactive warning.'
+        'No operating-system credential store is available, and file credential storage was not approved.'
       );
     }
     if (operation === 'get') return this.fileBackend.get(profile);
@@ -218,17 +217,5 @@ export class SecureCredentialStore implements CredentialStore {
     if (this.options.allowFileCredentials) return true;
     if (!this.options.interactive) return false;
     return this.options.confirmFileFallback?.('') ?? false;
-  }
-}
-
-export async function confirmFileCredentialFallback(file: string): Promise<boolean> {
-  const terminal = createInterface({ input: process.stdin, output: process.stderr });
-  try {
-    const answer = await terminal.question(
-      `Warning: no OS credential store is available. Store OAuth credentials in ${file} with mode 0600? [y/N] `
-    );
-    return /^y(?:es)?$/i.test(answer.trim());
-  } finally {
-    terminal.close();
   }
 }

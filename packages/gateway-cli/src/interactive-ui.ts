@@ -18,6 +18,7 @@ export interface InteractiveCliUi {
   info(message: string): void;
   gatewayOrigin(): Promise<string | null>;
   select(message: string, options: InteractiveOption[]): Promise<string | null>;
+  confirm(message: string): Promise<boolean | null>;
   spinner(message: string): InteractiveSpinner;
   cancel(message: string): void;
   outro(message: string): void;
@@ -50,6 +51,10 @@ export function createInteractiveCliUi(): InteractiveCliUi {
     },
     async select(message, options) {
       const value = await prompts.select({ message, options });
+      return prompts.isCancel(value) ? null : value;
+    },
+    async confirm(message) {
+      const value = await prompts.confirm({ message });
       return prompts.isCancel(value) ? null : value;
     },
     spinner(message) {

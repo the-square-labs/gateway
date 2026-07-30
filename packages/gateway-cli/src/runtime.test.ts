@@ -19,6 +19,12 @@ describe('private runtime installation', () => {
     const nativePackage = process.platform === 'darwin' ? `keyring-darwin-${process.arch}` : undefined;
     if (nativePackage) {
       await expect(
+        access(join(directory, 'private', 'node_modules', '@napi-rs', 'keyring', 'package.json'))
+      ).resolves.toBeUndefined();
+      await expect(
+        access(join(directory, 'private', 'node_modules', '@napi-rs', 'keyring', 'index.js'))
+      ).resolves.toBeUndefined();
+      await expect(
         access(join(directory, 'private', 'node_modules', '@napi-rs', nativePackage, 'package.json'))
       ).resolves.toBeUndefined();
     }
@@ -35,5 +41,11 @@ describe('private runtime installation', () => {
     await writeFile(realEntry, '');
 
     expect(isDirectCliInvocation(pathToFileURL(realEntry).href, join(linkedDirectory, 'gateway-cli.js'))).toBe(true);
+  });
+
+  it('reserves the gateway-inference bin without claiming the future gateway bin', () => {
+    const moduleUrl = pathToFileURL('/tmp/wiolett-inference-runtime.js').href;
+    expect(isDirectCliInvocation(moduleUrl, '/usr/local/bin/gateway-inference')).toBe(true);
+    expect(isDirectCliInvocation(moduleUrl, '/usr/local/bin/gateway')).toBe(false);
   });
 });

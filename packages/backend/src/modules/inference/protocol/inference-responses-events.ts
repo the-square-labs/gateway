@@ -141,6 +141,7 @@ export class ResponsesEventEncoder {
             id: event.itemId,
             call_id: event.callId,
             name: event.name,
+            ...(event.namespace ? { namespace: event.namespace } : {}),
             ...(event.custom ? { input: '' } : { arguments: '' }),
             status: 'in_progress',
           },

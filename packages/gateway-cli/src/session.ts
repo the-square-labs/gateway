@@ -14,7 +14,7 @@ export async function authenticatedSetupClient(
 ) {
   const profile = await profiles.getRequired(profileName);
   if (!profile.clientId) {
-    throw new CliError('NOT_LOGGED_IN', `Profile "${profileName}" is not logged in.`, { exitCode: 2 });
+    throw new CliError('NOT_LOGGED_IN', 'Gateway connection is not logged in.', { exitCode: 2 });
   }
   const discovery = await discoverInference(profile.origin, fetcher);
   const metadata = await fetchSetupOAuthMetadata(discovery, fetcher);

@@ -6,7 +6,7 @@ The server-side connector baseline is OpenCodex commit `357acee62458684bc027e9d5
 
 ## Enable inference
 
-Inference is disabled by default. An administrator with Gateway settings access enables it under **Settings > Gateway > General > Inference**. No process restart is required.
+Inference is disabled by default. An administrator with Gateway settings access enables it under **Settings > Gateway > General > Inference**. Enabling requires an explicit acknowledgement that the feature is in alpha testing, is not yet thoroughly validated, and may behave unstably. No process restart is required.
 
 When disabled, management and data-plane routes return `INFERENCE_DISABLED`, and the frontend omits Inference usage, token management, and administration surfaces. Connected provider credentials, model configuration, and accounting history remain stored.
 
@@ -45,12 +45,10 @@ The former `/api/inference/v1` route does not exist and is not redirected. OpenA
 For Codex, prefer the companion package instead of editing configuration or copying tokens manually:
 
 ```bash
-npx @wiolett/gateway login https://gateway.example.com
-npx @wiolett/gateway inference setup codex
-npx @wiolett/gateway inference doctor codex
+npx @wiolett/gateway-inference
 ```
 
-The package uses resource-isolated OAuth with PKCE, issues a dedicated runtime token, installs a private stable helper, and maintains an authoritative model catalog. It does not require a global install or modify `PATH`. Catalog changes are applied to newly started Codex processes.
+The interactive package asks for the Gateway URL, completes resource-isolated OAuth with PKCE, configures Codex, issues a dedicated runtime token, installs a private stable helper, and maintains an authoritative model catalog. Direct `login [gateway]`, `logout`, and `setup [harness]` commands are also available. It does not require a global install or modify `PATH`. Catalog changes are applied to newly started Codex processes.
 
 For ChatGPT subscription-backed models whose upstream catalog advertises it, Codex also exposes `/fast`. Gateway forwards the `priority` service tier and charges a fixed 2x subscription-credit multiplier; API dollar accounting is unchanged.
 

@@ -69,7 +69,7 @@ export async function syncCodexCatalog(input: {
     if (response.status === 401) {
       throw new CliError(
         'RUNTIME_TOKEN_REVOKED',
-        'The Codex runtime token is invalid or revoked. Run inference setup codex to issue a new token.',
+        'The Codex runtime token is invalid or revoked. Run setup codex to issue a new token.',
         { exitCode: 2 }
       );
     }
@@ -132,6 +132,18 @@ export function assertCodexCatalog(value: unknown): asserts value is CodexCatalo
     }
     if (typeof model.slug !== 'string' || !model.slug.trim()) {
       throw new CliError('CATALOG_INVALID', 'Codex catalog model slug is invalid.');
+    }
+    if (
+      'web_search_tool_type' in model &&
+      model.web_search_tool_type !== 'text' &&
+      model.web_search_tool_type !== 'text_and_image'
+    ) {
+      throw new CliError('CATALOG_INVALID', 'Codex catalog model web_search_tool_type is invalid.');
+    }
+    for (const key of ['supports_search_tool', 'use_responses_lite']) {
+      if (key in model && typeof model[key] !== 'boolean') {
+        throw new CliError('CATALOG_INVALID', `Codex catalog model ${key} is invalid.`);
+      }
     }
   }
   if (visibleModelCount(value as CodexCatalog) === 0) {

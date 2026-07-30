@@ -40,31 +40,39 @@ fast_mode = true
     const first = await configureCodex({
       paths: codex,
       profile: 'work',
+      model: 'gateway-model',
       baseUrl: 'https://gateway.example.com/api/inference/codex/v1',
+      proxyBaseUrl: 'http://127.0.0.1:55555/v1',
       runtimeFile: paths.runtimeFile,
     });
     const configured = await readFile(codex.configFile, 'utf8');
     expect(configured).toContain('# user comment');
-    expect(configured).toContain('model = "custom"');
+    expect(configured).toContain('model = "gateway-model"');
+    expect(configured).toContain('authenticates through a local proxy');
     expect(configured).toContain('[features]');
     expect(configured).toContain(`model_provider = "${first.providerId}"`);
-    expect(configured).toContain(`[model_providers."${first.providerId}".auth]`);
+    expect(first.providerId).toBe('openai');
     expect(configured).toContain(`[mcp_servers."${first.mcpId}"]`);
     expect(configured).not.toContain('gwi_');
+    expect(configured).toContain('openai_base_url = "http://127.0.0.1:55555/v1"');
+    expect(configured).not.toContain('cli_auth_credentials_store');
 
     const second = await configureCodex({
       paths: codex,
       profile: 'work',
+      model: 'gateway-model',
       baseUrl: 'https://gateway.example.com/api/inference/codex/v1',
+      proxyBaseUrl: 'http://127.0.0.1:55555/v1',
       runtimeFile: paths.runtimeFile,
     });
     expect(second.changed).toBe(false);
-    expect((await readFile(codex.configFile, 'utf8')).match(/wiolett-gateway:provider:work/g)).toHaveLength(2);
+    expect((await readFile(codex.configFile, 'utf8')).match(/# Gateway Inference keeps Codex/g)).toHaveLength(1);
 
     expect(first.backupFile).not.toBe(second.backupFile);
     const removed = await removeCodexConfiguration({ paths: codex, profile: 'work' });
     expect(removed).toMatchObject({ removed: true, conflicts: [] });
     const restored = await readFile(codex.configFile, 'utf8');
+    expect(restored).toContain('model = "custom"');
     expect(restored).toContain('model_provider = "old-provider"');
     expect(restored).toContain('model_catalog_json = "/old/catalog.json"');
     expect(restored).not.toContain('wiolett-gateway:');
@@ -77,7 +85,9 @@ fast_mode = true
     const work = await configureCodex({
       paths: codex,
       profile: 'work',
+      model: 'work-model',
       baseUrl: 'https://work.example/api/inference/codex/v1',
+      proxyBaseUrl: 'http://127.0.0.1:51001/v1',
       runtimeFile: paths.runtimeFile,
       now: () => new Date('2026-07-28T00:00:00Z'),
     });
@@ -85,7 +95,9 @@ fast_mode = true
     const personalResult = await configureCodex({
       paths: personal,
       profile: 'personal',
+      model: 'personal-model',
       baseUrl: 'https://personal.example/api/inference/codex/v1',
+      proxyBaseUrl: 'http://127.0.0.1:51002/v1',
       runtimeFile: paths.runtimeFile,
       now: () => new Date('2026-07-28T01:00:00Z'),
     });
@@ -93,6 +105,7 @@ fast_mode = true
 
     await removeCodexConfiguration({ paths: personal, profile: 'personal' });
     expect(await readFile(codex.configFile, 'utf8')).toContain(`model_provider = "${work.providerId}"`);
+    expect(await readFile(codex.configFile, 'utf8')).toContain('model = "work-model"');
     expect((await inspectCodexConfiguration({ paths: codex, profile: 'work' })).active).toBe(true);
   });
 
@@ -102,15 +115,105 @@ fast_mode = true
     await configureCodex({
       paths: codex,
       profile: 'work',
+      model: 'gateway-model',
       baseUrl: 'https://gateway.example/api/inference/codex/v1',
+      proxyBaseUrl: 'http://127.0.0.1:55555/v1',
       runtimeFile: paths.runtimeFile,
     });
-    const changed = (await readFile(codex.configFile, 'utf8')).replace('name = "OpenAI"', 'name = "User edited"');
+    const changed = (await readFile(codex.configFile, 'utf8')).replace(
+      'openai_base_url = "http://127.0.0.1:55555/v1"',
+      'openai_base_url = "https://user-edited.example/v1"'
+    );
     await writeFile(codex.configFile, changed);
 
     const result = await removeCodexConfiguration({ paths: codex, profile: 'work' });
     expect(result).toMatchObject({ removed: true, conflicts: [] });
-    expect(await readFile(codex.configFile, 'utf8')).not.toContain('name = "User edited"');
+    expect(await readFile(codex.configFile, 'utf8')).not.toContain('user-edited.example');
+  });
+
+  it('repairs an incomplete marker left by a Codex config rewrite', async () => {
+    const { paths, codex } = await fixture();
+    await mkdir(codex.codexHome, { recursive: true });
+    const input = {
+      paths: codex,
+      profile: 'work',
+      model: 'gateway-model',
+      baseUrl: 'https://gateway.example/api/inference/codex/v1',
+      proxyBaseUrl: 'http://127.0.0.1:55555/v1',
+      runtimeFile: paths.runtimeFile,
+    };
+    await configureCodex(input);
+    await writeFile(codex.configFile, `# >>> wiolett-gateway:active\n${await readFile(codex.configFile, 'utf8')}`);
+
+    await expect(configureCodex(input)).resolves.toMatchObject({ providerId: 'openai' });
+    const repaired = await readFile(codex.configFile, 'utf8');
+    expect(repaired).not.toContain('>>> wiolett-gateway');
+    expect(repaired.match(/# Gateway Inference keeps Codex/g)).toHaveLength(1);
+    expect(await inspectCodexConfiguration({ paths: codex, profile: 'work' })).toMatchObject({
+      configured: true,
+      conflicts: [],
+    });
+  });
+
+  it('isolates managed configuration state between Codex homes', async () => {
+    const { root, paths, codex } = await fixture();
+    await mkdir(codex.codexHome, { recursive: true });
+    await writeFile(codex.configFile, '[features]\nold_home = true\n');
+    await configureCodex({
+      paths: codex,
+      profile: 'work',
+      model: 'gateway-model',
+      baseUrl: 'https://gateway.example/api/inference/codex/v1',
+      proxyBaseUrl: 'http://127.0.0.1:55555/v1',
+      runtimeFile: paths.runtimeFile,
+    });
+
+    const nextHome = resolveCodexPaths(paths, 'work', { CODEX_HOME: join(root, 'codex-next') }, root);
+    await mkdir(nextHome.codexHome, { recursive: true });
+    await writeFile(nextHome.configFile, '[features]\nnew_home = true\n');
+
+    expect(nextHome.stateFile).not.toBe(codex.stateFile);
+    expect(await inspectCodexConfiguration({ paths: nextHome, profile: 'work' })).toMatchObject({
+      configured: false,
+      conflicts: [],
+    });
+    expect(await readFile(nextHome.configFile, 'utf8')).toBe('[features]\nnew_home = true\n');
+    await expect(readFile(nextHome.stateFile, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+    await expect(
+      configureCodex({
+        paths: nextHome,
+        profile: 'work',
+        model: 'gateway-model',
+        baseUrl: 'https://gateway.example/api/inference/codex/v1',
+        proxyBaseUrl: 'http://127.0.0.1:55555/v1',
+        runtimeFile: paths.runtimeFile,
+      })
+    ).resolves.toMatchObject({ configFile: nextHome.configFile });
+    expect(await inspectCodexConfiguration({ paths: codex, profile: 'work' })).toMatchObject({
+      configured: true,
+      configFile: codex.configFile,
+    });
+    expect(await inspectCodexConfiguration({ paths: nextHome, profile: 'work' })).toMatchObject({
+      configured: true,
+      configFile: nextHome.configFile,
+    });
+    expect(await readFile(codex.configFile, 'utf8')).toContain('old_home = true');
+    expect(await readFile(nextHome.configFile, 'utf8')).toContain('model_provider = "openai"');
+
+    await expect(removeCodexConfiguration({ paths: nextHome, profile: 'work' })).resolves.toMatchObject({
+      removed: true,
+      conflicts: [],
+    });
+    expect(await readFile(nextHome.configFile, 'utf8')).toBe('[features]\nnew_home = true\n');
+    expect(await readFile(codex.configFile, 'utf8')).toContain('model_provider = "openai"');
+    expect(await inspectCodexConfiguration({ paths: codex, profile: 'work' })).toMatchObject({ configured: true });
+
+    await expect(removeCodexConfiguration({ paths: codex, profile: 'work' })).resolves.toMatchObject({
+      removed: true,
+      conflicts: [],
+    });
+    expect(await readFile(codex.configFile, 'utf8')).toBe('[features]\nold_home = true\n');
   });
 
   it('ignores formatting, extra fields, and tunable values while checking required integration fields', async () => {
@@ -119,7 +222,9 @@ fast_mode = true
     await configureCodex({
       paths: codex,
       profile: 'work',
+      model: 'gateway-model',
       baseUrl: 'https://gateway.example/api/inference/codex/v1',
+      proxyBaseUrl: 'http://127.0.0.1:55555/v1',
       runtimeFile: paths.runtimeFile,
     });
     const configured = await readFile(codex.configFile, 'utf8');
@@ -136,13 +241,13 @@ fast_mode = true
     await writeFile(
       codex.configFile,
       harmlesslyEdited.replace(
-        'base_url = "https://gateway.example/api/inference/codex/v1"',
-        'base_url = "https://other.example/api/inference/codex/v1"'
+        'openai_base_url = "http://127.0.0.1:55555/v1"',
+        'openai_base_url = "https://other.example/api/inference/codex/v1"'
       )
     );
     expect(await inspectCodexConfiguration({ paths: codex, profile: 'work' })).toMatchObject({
       configured: true,
-      conflicts: ['model provider'],
+      conflicts: ['active Codex selection'],
     });
   });
 
@@ -155,21 +260,26 @@ fast_mode = true
     const first = await configureCodex({
       paths: dotted,
       profile: 'a.b',
+      model: 'dotted-model',
       baseUrl: 'https://dotted.example/api/inference/codex/v1',
+      proxyBaseUrl: 'http://127.0.0.1:51003/v1',
       runtimeFile: paths.runtimeFile,
     });
     const second = await configureCodex({
       paths: dashed,
       profile: 'a-b',
+      model: 'dashed-model',
       baseUrl: 'https://dashed.example/api/inference/codex/v1',
+      proxyBaseUrl: 'http://127.0.0.1:51004/v1',
       runtimeFile: paths.runtimeFile,
     });
 
-    expect(first.providerId).not.toBe(second.providerId);
+    expect(first.providerId).toBe('openai');
+    expect(second.providerId).toBe('openai');
     expect(first.mcpId).not.toBe(second.mcpId);
     const config = await readFile(codex.configFile, 'utf8');
-    expect(config).toContain(first.providerId);
-    expect(config).toContain(second.providerId);
+    expect(config).toContain(first.mcpId);
+    expect(config).toContain(second.mcpId);
   });
 
   it('journals configuration before replacement and recovers an interrupted write', async () => {
@@ -179,7 +289,9 @@ fast_mode = true
     await configureCodex({
       paths: codex,
       profile: 'work',
+      model: 'work-model',
       baseUrl: 'https://work.example/api/inference/codex/v1',
+      proxyBaseUrl: 'http://127.0.0.1:51001/v1',
       runtimeFile: paths.runtimeFile,
     });
     const stableConfig = await readFile(codex.configFile, 'utf8');
@@ -192,7 +304,9 @@ fast_mode = true
       configureCodex({
         paths: personal,
         profile: 'personal',
+        model: 'personal-model',
         baseUrl: 'https://personal.example/api/inference/codex/v1',
+        proxyBaseUrl: 'http://127.0.0.1:51002/v1',
         runtimeFile: paths.runtimeFile,
         afterConfigWrite: async () => {
           interruptedConfig = await readFile(codex.configFile, 'utf8');
@@ -211,5 +325,39 @@ fast_mode = true
     expect(await readFile(codex.configFile, 'utf8')).toBe(stableConfig);
     expect(await readFile(codex.stateFile, 'utf8')).toBe(stableState);
     expect((await inspectCodexConfiguration({ paths: personal, profile: 'personal' })).configured).toBe(false);
+  });
+
+  it('journals removal and restores configuration after an interrupted write', async () => {
+    const { paths, codex } = await fixture();
+    await mkdir(codex.codexHome, { recursive: true });
+    await writeFile(codex.configFile, 'model_provider = "original"\n');
+    await configureCodex({
+      paths: codex,
+      profile: 'work',
+      model: 'work-model',
+      baseUrl: 'https://work.example/api/inference/codex/v1',
+      proxyBaseUrl: 'http://127.0.0.1:51001/v1',
+      runtimeFile: paths.runtimeFile,
+    });
+    const stableConfig = await readFile(codex.configFile, 'utf8');
+    const stableState = await readFile(codex.stateFile, 'utf8');
+
+    await expect(
+      removeCodexConfiguration({
+        paths: codex,
+        profile: 'work',
+        afterConfigWrite: async () => {
+          expect(JSON.parse(await readFile(codex.stateFile, 'utf8')).pending).toBeTruthy();
+          throw new Error('simulated removal interruption');
+        },
+      })
+    ).rejects.toThrow('simulated removal interruption');
+
+    expect(await readFile(codex.configFile, 'utf8')).toBe(stableConfig);
+    expect(await readFile(codex.stateFile, 'utf8')).toBe(stableState);
+    expect(await inspectCodexConfiguration({ paths: codex, profile: 'work' })).toMatchObject({
+      configured: true,
+      conflicts: [],
+    });
   });
 });

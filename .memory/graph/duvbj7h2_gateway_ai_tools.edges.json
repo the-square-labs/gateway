@@ -3,30 +3,10 @@
   "edges": [
     {
       "from_id": "duvbj7h2",
-      "to_id": "sg6sqaui",
-      "relation": "same_workflow",
-      "weight": 0.6,
-      "reason": "Both describe safe refactor patterns in gateway AI tools area and testing-first approach.",
-      "source": "auto",
-      "created_at": 1781993074133,
-      "updated_at": 1781993074133
-    },
-    {
-      "from_id": "duvbj7h2",
       "to_id": "ph8ejel0",
       "relation": "same_workflow",
       "weight": 0.58,
       "reason": "Both cover AI service refactor with web-search capabilities and testing contracts.",
-      "source": "auto",
-      "created_at": 1781993074133,
-      "updated_at": 1781993074133
-    },
-    {
-      "from_id": "duvbj7h2",
-      "to_id": "xg6y81q3",
-      "relation": "same_area",
-      "weight": 0.4,
-      "reason": "Similar MCP/scope considerations in gateway tooling domain.",
       "source": "auto",
       "created_at": 1781993074133,
       "updated_at": 1781993074133

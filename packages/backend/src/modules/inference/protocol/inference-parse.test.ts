@@ -47,6 +47,7 @@ describe('inference protocol parsing', () => {
       prompt_cache_key: 'thread-1',
       service_tier: 'priority',
       client_metadata: { originator: 'codex_cli_rs' },
+      stream_options: { include_obfuscation: false },
     });
 
     expect(request).toMatchObject({
@@ -109,6 +110,42 @@ describe('inference protocol parsing', () => {
       'tool_result',
     ]);
     expect(request.tools[0].name).toBe('run');
+  });
+
+  it('parses Codex Responses Lite namespace tools as client-executed functions', () => {
+    const request = parseResponsesRequest({
+      model: 'logical-model',
+      input: [
+        {
+          type: 'additional_tools',
+          tools: [
+            {
+              type: 'namespace',
+              name: 'mcp__gateway',
+              description: 'Gateway tools',
+              tools: [
+                {
+                  type: 'function',
+                  name: 'status',
+                  description: 'Read status',
+                  parameters: { type: 'object', properties: {} },
+                },
+              ],
+            },
+          ],
+        },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Hello' }] },
+      ],
+    });
+
+    expect(request.tools).toMatchObject([
+      {
+        type: 'function',
+        namespace: 'mcp__gateway',
+        name: 'status',
+        description: 'Read status',
+      },
+    ]);
   });
 
   it('rejects Chat Completions choices and logprobs that cannot be represented losslessly', () => {

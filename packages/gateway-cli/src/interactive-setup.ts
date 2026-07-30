@@ -29,8 +29,7 @@ export async function runInteractiveInferenceSetup(input: {
   configure: (harness: string, session: InteractiveSetupSession) => Promise<{ progress: string; summary: string }>;
 }): Promise<number> {
   if (input.showIntro !== false) {
-    input.ui.intro('Wiolett Gateway inference setup');
-    input.ui.info(`Profile: ${input.profileName}`);
+    input.ui.intro('Wiolett Gateway Inference · Setup');
   }
   let session: InteractiveSetupSession;
 
@@ -44,12 +43,12 @@ export async function runInteractiveInferenceSetup(input: {
       input.ui.cancel('Setup cancelled.');
       return 0;
     }
-    const spinner = input.ui.spinner('Complete authorization in your browser...');
+    input.ui.info('Complete authorization in your browser...');
     try {
       await input.authorize(gateway);
-      spinner.stop('Gateway authorization complete');
+      input.ui.info('Gateway authorization complete');
     } catch (authorizationError) {
-      spinner.error('Gateway authorization failed');
+      input.ui.info('Gateway authorization failed');
       throw authorizationError;
     }
     session = await input.session();

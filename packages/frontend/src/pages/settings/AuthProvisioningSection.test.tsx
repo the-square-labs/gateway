@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ConfirmDialog, useConfirmDialog } from "@/components/common/ConfirmDialog";
 import { api } from "@/services/api";
 import { useSystemConfigStore } from "@/stores/system-config";
 import type { AuthProvisioningSettings } from "@/types";
@@ -39,7 +40,10 @@ const SETTINGS: AuthProvisioningSettings = {
 };
 
 describe("AuthProvisioningSection inference setting", () => {
-  afterEach(() => api.invalidateCache("settings:auth-provisioning"));
+  afterEach(() => {
+    api.invalidateCache("settings:auth-provisioning");
+    useConfirmDialog.getState().close();
+  });
 
   it("persists inference beside the other Gateway feature settings", async () => {
     api.setCache("settings:auth-provisioning", SETTINGS);
@@ -53,11 +57,22 @@ describe("AuthProvisioningSection inference setting", () => {
     }));
     const user = userEvent.setup();
 
-    render(<AuthProvisioningSection canEdit />);
+    render(
+      <>
+        <AuthProvisioningSection canEdit />
+        <ConfirmDialog />
+      </>
+    );
 
     const inferenceRow = (await screen.findByText("Inference")).parentElement?.parentElement;
     if (!inferenceRow) throw new Error("Inference settings row not found");
     await user.click(within(inferenceRow).getByRole("button", { name: "Enable inference" }));
+    expect(
+      screen.getByText(
+        "Inference is currently in alpha testing and has not been thoroughly validated. It may behave unexpectedly, fail, or change without notice. Enable it only if you accept the risk of unstable behavior."
+      )
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Enable anyway" }));
     const save = screen
       .getAllByRole("button", { name: "Save" })
       .find((button) => !(button as HTMLButtonElement).disabled);
@@ -76,6 +91,28 @@ describe("AuthProvisioningSection inference setting", () => {
       })
     );
     expect(useSystemConfigStore.getState().config.features.inferenceEnabled).toBe(true);
+  });
+
+  it("keeps inference disabled when the alpha warning is dismissed", async () => {
+    api.setCache("settings:auth-provisioning", SETTINGS);
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(SETTINGS);
+    const update = vi.spyOn(api, "updateAuthProvisioningSettings");
+    const user = userEvent.setup();
+
+    render(
+      <>
+        <AuthProvisioningSection canEdit />
+        <ConfirmDialog />
+      </>
+    );
+
+    const inferenceToggle = await screen.findByRole("button", { name: "Enable inference" });
+    expect(inferenceToggle).toHaveAttribute("aria-pressed", "false");
+    await user.click(inferenceToggle);
+    await user.click(screen.getByRole("button", { name: "Keep disabled" }));
+
+    expect(inferenceToggle).toHaveAttribute("aria-pressed", "false");
+    expect(update).not.toHaveBeenCalled();
   });
 
   it("persists extended MCP compatibility", async () => {

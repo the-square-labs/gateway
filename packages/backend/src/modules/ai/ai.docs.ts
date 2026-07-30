@@ -998,8 +998,7 @@ Users need \`inference:use\`. Creating and revoking tokens additionally require 
 Token options:
 
 - UI: **Profile > Authorizations > Inference API tokens**;
-- AI: \`manage_inference_token({ operation: "create", name: "Laptop" })\` for the current user;
-- CLI: \`npx @wiolett/gateway inference tokens create --harness codex --name laptop\` after login.
+- AI: \`manage_inference_token({ operation: "create", name: "Laptop" })\` for the current user.
 
 The \`gwi_\` secret is shown once. Never repeat it after creation, store it in assistant history, or expose it to another user.
 
@@ -1008,12 +1007,10 @@ The \`gwi_\` secret is shown once. Never repeat it after creation, store it in a
 No global installation or PATH change is required:
 
 \`\`\`bash
-npx @wiolett/gateway login https://gateway.example.com
-npx @wiolett/gateway inference setup
-npx @wiolett/gateway inference doctor codex
+npx @wiolett/gateway-inference
 \`\`\`
 
-\`npx @wiolett/gateway\` and \`npx @wiolett/gateway inference\` open the interactive menus. Automation commands are \`inference setup codex\`, \`sync codex\`, \`doctor codex\`, and \`remove codex\`. Setup uses isolated OAuth/PKCE, issues a dedicated runtime token, writes only package-managed Codex configuration sections, and installs a private helper. Catalog changes apply after starting a new Codex process.
+The interactive manager asks for the Gateway URL and can log in, configure or repair Codex, refresh models, diagnose the integration, remove managed configuration, and log out. The only direct commands are \`login [gateway]\`, \`logout\`, and \`setup [harness]\`; for example, \`npx @wiolett/gateway-inference setup codex\`. Setup uses isolated OAuth/PKCE, issues a dedicated runtime token, writes only package-managed Codex configuration sections, and installs a private helper. Catalog changes apply after starting a new Codex process.
 
 ### Manual OpenAI-compatible setup
 

@@ -2,8 +2,9 @@ import { readVisibleCatalogModels } from './codex-catalog.js';
 import { inspectCodexConfiguration, resolveCodexPaths } from './codex-config.js';
 import { CodexIntegrationService, type CommandRunner } from './codex-integration.js';
 import type { CredentialStore } from './credentials.js';
-import { CliError } from './errors.js';
+import { CliError, errorPayload } from './errors.js';
 import type { Fetch } from './http.js';
+import type { InferenceProxyDaemonManager } from './inference-proxy-daemon.js';
 import { isAuthorizationRequired, runInteractiveInferenceSetup } from './interactive-setup.js';
 import type { InteractiveCliUi, InteractiveOption } from './interactive-ui.js';
 import { loginCommand, logoutCommand } from './login-command.js';
@@ -11,12 +12,11 @@ import type { Output } from './output.js';
 import type { CliPaths } from './paths.js';
 import type { ProfileStore } from './profiles.js';
 import { authenticatedSetupClient } from './session.js';
-import type { SetupIdentity } from './types.js';
+import type { InferenceSetupClient } from './tokens.js';
+import type { InferenceDiscovery, SetupIdentity } from './types.js';
 
 export interface InteractiveCommandInput {
   profileName: string;
-  profileExplicit?: boolean;
-  gateway?: string;
   paths: CliPaths;
   profiles: ProfileStore;
   credentials: CredentialStore;
@@ -27,23 +27,19 @@ export interface InteractiveCommandInput {
   runtimeSource?: string;
   env?: NodeJS.ProcessEnv;
   home?: string;
+  proxyDaemon?: InferenceProxyDaemonManager;
 }
 
-type InferenceAction = 'authenticate' | 'sync' | 'setup' | 'logout';
+interface InteractiveState {
+  identity?: SetupIdentity;
+  harnessConfigured: boolean;
+  models: string[];
+}
+
+type InferenceAction = 'authenticate' | 'setup' | 'sync' | 'doctor' | 'remove' | 'logout';
 
 export async function runInteractiveRootCommand(input: InteractiveCommandInput): Promise<number> {
-  input.ui.intro('Wiolett Gateway');
-  const module = await input.ui.select('Choose a module', [
-    {
-      value: 'inference',
-      label: 'Inference',
-      hint: 'Authentication, model catalog, and harness integrations',
-    },
-  ]);
-  if (!module) {
-    input.ui.cancel('No module selected.');
-    return 0;
-  }
+  input.ui.intro('Wiolett Gateway Inference');
   return runInteractiveInferenceCommand(input, false);
 }
 
@@ -51,21 +47,10 @@ export async function runInteractiveInferenceCommand(
   input: InteractiveCommandInput,
   showIntro = true
 ): Promise<number> {
-  if (showIntro) input.ui.intro('Wiolett Gateway · Inference');
-  if (await shouldShowProfile(input)) input.ui.info(`Profile: ${input.profileName}`);
-
-  const integration = new CodexIntegrationService(input.paths, input.credentials, {
-    fetch: input.fetch,
-    commandRunner: input.commandRunner,
-    runtimeSource: input.runtimeSource,
-    env: input.env,
-    home: input.home,
-  });
+  if (showIntro) input.ui.intro('Wiolett Gateway Inference');
+  const integration = createIntegration(input);
   const state = await loadInferenceMenuState(input);
-  if (state.identity) showAccount(input.ui, state.identity);
-  if (state.models.length > 0) {
-    input.ui.info(`Models: ${state.models.join(', ')}`);
-  }
+  await showState(input, state);
 
   while (true) {
     const action = (await input.ui.select(
@@ -81,39 +66,32 @@ export async function runInteractiveInferenceCommand(
       const identity = await authenticate(input);
       if (!identity) return 0;
       state.identity = identity;
-      showAccount(input.ui, state.identity);
+      showAccount(input.ui, identity);
       continue;
     }
     if (action === 'logout') return logout(input);
     if (action === 'setup') return setupHarness(input, integration);
-    state.models = await syncModels(input, integration);
+    if (action === 'sync') {
+      state.models = await syncModels(input, integration);
+      continue;
+    }
+    if (action === 'doctor') {
+      await diagnose(input, integration);
+      continue;
+    }
+    if (await removeHarness(input, integration)) {
+      state.harnessConfigured = false;
+      state.models = [];
+    }
   }
 }
 
 export async function runInteractiveHarnessSetupCommand(input: InteractiveCommandInput): Promise<number> {
-  const integration = new CodexIntegrationService(input.paths, input.credentials, {
-    fetch: input.fetch,
-    commandRunner: input.commandRunner,
-    runtimeSource: input.runtimeSource,
-    env: input.env,
-    home: input.home,
-  });
-  input.ui.intro('Wiolett Gateway inference setup');
-  if (await shouldShowProfile(input)) input.ui.info(`Profile: ${input.profileName}`);
-  return setupHarness(input, integration);
+  input.ui.intro('Wiolett Gateway Inference · Setup');
+  return setupHarness(input, createIntegration(input));
 }
 
-async function shouldShowProfile(input: InteractiveCommandInput): Promise<boolean> {
-  if (input.profileExplicit) return true;
-  const profiles = await input.profiles.list();
-  return Object.keys(profiles.profiles).length > 1;
-}
-
-async function loadInferenceMenuState(input: InteractiveCommandInput): Promise<{
-  identity?: SetupIdentity;
-  harnessConfigured: boolean;
-  models: string[];
-}> {
+async function loadInferenceMenuState(input: InteractiveCommandInput): Promise<InteractiveState> {
   let identity: SetupIdentity | undefined;
   const profile = await input.profiles.get(input.profileName);
   if (profile) {
@@ -131,6 +109,15 @@ async function loadInferenceMenuState(input: InteractiveCommandInput): Promise<{
   return { identity, harnessConfigured: config.configured, models };
 }
 
+async function showState(input: InteractiveCommandInput, state: InteractiveState): Promise<void> {
+  const profile = await input.profiles.get(input.profileName);
+  if (profile) input.ui.info(`Gateway: ${profile.origin}`);
+  if (state.identity) showAccount(input.ui, state.identity);
+  input.ui.info(
+    state.harnessConfigured ? `Codex: configured · ${state.models.length} models` : 'Codex: not configured'
+  );
+}
+
 function inferenceActions(
   identity: SetupIdentity | undefined,
   harnessConfigured: boolean,
@@ -140,30 +127,41 @@ function inferenceActions(
   if (!identity) {
     options.push({
       value: 'authenticate',
-      label: 'Authenticate',
-      hint: 'Authorize this CLI through Gateway OAuth',
+      label: 'Login',
+      hint: 'Authorize this device through Gateway OAuth',
     });
   }
   options.push({
-    value: 'sync',
-    label: 'Re-sync models',
-    hint: !identity
-      ? 'Authenticate first'
-      : harnessConfigured
-        ? `${modelCount} models currently cached`
-        : 'Set up a harness first',
-    disabled: !identity || !harnessConfigured,
-  });
-  options.push({
     value: 'setup',
-    label: 'Setup harness',
-    hint: harnessConfigured ? 'Reconfigure or repair an integration' : 'Configure a supported inference harness',
+    label: harnessConfigured ? 'Setup or repair harness' : 'Setup harness',
+    hint: harnessConfigured ? 'Reconfigure the managed Codex integration' : 'Configure a supported inference harness',
   });
+  if (harnessConfigured) {
+    if (identity) {
+      options.push({
+        value: 'sync',
+        label: 'Refresh models',
+        hint: `${modelCount} models currently cached`,
+      });
+    }
+    options.push(
+      {
+        value: 'doctor',
+        label: 'Check integration',
+        hint: 'Diagnose Codex, credentials, configuration, and catalog',
+      },
+      {
+        value: 'remove',
+        label: 'Remove Codex integration',
+        hint: 'Delete only package-managed configuration and credentials',
+      }
+    );
+  }
   if (identity) {
     options.push({
       value: 'logout',
       label: 'Logout',
-      hint: `Remove authorization for ${identity.user.email}`,
+      hint: `Remove setup authorization for ${identity.user.email}`,
     });
   }
   return options;
@@ -171,12 +169,12 @@ function inferenceActions(
 
 async function authenticate(input: InteractiveCommandInput): Promise<SetupIdentity | null> {
   const existing = await input.profiles.get(input.profileName);
-  const gateway = input.gateway ?? existing?.origin ?? (await input.ui.gatewayOrigin());
+  const gateway = existing?.origin ?? (await input.ui.gatewayOrigin());
   if (!gateway) {
-    input.ui.cancel('Authentication cancelled.');
+    input.ui.cancel('Login cancelled.');
     return null;
   }
-  const spinner = input.ui.spinner('Complete authorization in your browser...');
+  input.ui.info('Complete authorization in your browser...');
   try {
     await loginCommand(
       { gateway, command: ['login'] },
@@ -189,10 +187,10 @@ async function authenticate(input: InteractiveCommandInput): Promise<SetupIdenti
     );
     const context = await authenticatedSetupClient(input.profileName, input.profiles, input.credentials, input.fetch);
     const identity = await context.client.me();
-    spinner.stop('Gateway authorization complete');
+    input.ui.info('Gateway authorization complete');
     return identity;
   } catch (error) {
-    spinner.error('Gateway authorization failed');
+    input.ui.info('Gateway authorization failed');
     throw error;
   }
 }
@@ -217,11 +215,78 @@ async function syncModels(input: InteractiveCommandInput, integration: CodexInte
   }
 }
 
+async function diagnose(input: InteractiveCommandInput, integration: CodexIntegrationService): Promise<void> {
+  let discovery: InferenceDiscovery | undefined;
+  let setupCheck: { status: 'ok' | 'error' | 'warning'; message: string } | undefined;
+  try {
+    const context = await authenticatedSetupClient(input.profileName, input.profiles, input.credentials, input.fetch);
+    await context.client.me();
+    discovery = context.discovery;
+    setupCheck = { status: 'ok', message: 'Gateway accepted the setup authorization' };
+  } catch (error) {
+    const offline = error instanceof CliError && ['NETWORK_ERROR', 'NETWORK_TIMEOUT'].includes(error.code);
+    setupCheck = {
+      status: offline ? 'warning' : 'error',
+      message: `${offline ? 'Offline' : 'Setup authorization failed'}: ${errorPayload(error).error.message}`,
+    };
+  }
+  const spinner = input.ui.spinner('Checking the Codex integration...');
+  try {
+    const report = await integration.doctor({ profileName: input.profileName, discovery, setupCheck });
+    spinner.stop(report.ok ? 'Integration check complete' : 'Integration needs attention');
+    for (const check of report.checks) {
+      input.ui.info(`${check.status.toUpperCase()} · ${check.name}: ${check.message}`);
+    }
+  } catch (error) {
+    spinner.error('Could not check the Codex integration');
+    throw error;
+  }
+}
+
+async function removeHarness(input: InteractiveCommandInput, integration: CodexIntegrationService): Promise<boolean> {
+  const confirmed = await input.ui.confirm('Remove the package-managed Codex integration from this device?');
+  if (!confirmed) {
+    if (confirmed === null) input.ui.cancel('Removal cancelled.');
+    return false;
+  }
+  let client: InferenceSetupClient | undefined;
+  try {
+    client = (await authenticatedSetupClient(input.profileName, input.profiles, input.credentials, input.fetch)).client;
+  } catch (error) {
+    const expected =
+      isAuthorizationRequired(error) ||
+      (error instanceof CliError && ['NETWORK_ERROR', 'NETWORK_TIMEOUT'].includes(error.code));
+    if (!expected) throw error;
+  }
+  const spinner = input.ui.spinner('Removing the Codex integration...');
+  try {
+    const result = await integration.remove({
+      profileName: input.profileName,
+      removeToken: Boolean(client),
+      client,
+    });
+    if (!result.removed) {
+      spinner.error('Codex integration was not removed');
+      if (result.conflicts.length > 0) {
+        input.ui.info(`Preserved conflicting configuration: ${result.conflicts.join(', ')}`);
+      }
+      return false;
+    }
+    spinner.stop(result.tokenRevoked ? 'Codex integration and runtime token removed' : 'Codex integration removed');
+    if (result.conflicts.length > 0) {
+      input.ui.info(`Preserved edited configuration blocks: ${result.conflicts.join(', ')}`);
+    }
+    return result.removed;
+  } catch (error) {
+    spinner.error('Could not remove the Codex integration');
+    throw error;
+  }
+}
+
 async function setupHarness(input: InteractiveCommandInput, integration: CodexIntegrationService): Promise<number> {
   const existing = await input.profiles.get(input.profileName);
   return runInteractiveInferenceSetup({
     profileName: input.profileName,
-    gateway: input.gateway,
     existingOrigin: existing?.origin,
     ui: input.ui,
     showIntro: false,
@@ -248,7 +313,12 @@ async function setupHarness(input: InteractiveCommandInput, integration: CodexIn
       });
       return {
         progress: `Configured Codex ${result.codexVersion}`,
-        summary: `${result.catalog.modelCount} Gateway models are ready.\nRestart Codex to load the current model catalog.`,
+        summary: [
+          `${result.catalog.modelCount} Gateway models are ready.`,
+          `Default model: ${result.defaultModel}.`,
+          ...(result.warning ? [`Warning: ${result.warning}`] : []),
+          'Fully quit and reopen Codex to load the current model catalog.',
+        ].join('\n'),
       };
     },
   });
@@ -265,6 +335,17 @@ async function logout(input: InteractiveCommandInput): Promise<number> {
     spinner.error('Could not remove Gateway authorization');
     throw error;
   }
+}
+
+function createIntegration(input: InteractiveCommandInput): CodexIntegrationService {
+  return new CodexIntegrationService(input.paths, input.credentials, {
+    fetch: input.fetch,
+    commandRunner: input.commandRunner,
+    runtimeSource: input.runtimeSource,
+    env: input.env,
+    home: input.home,
+    proxyDaemon: input.proxyDaemon,
+  });
 }
 
 const SILENT_OUTPUT: Output = { json: false, write() {} };

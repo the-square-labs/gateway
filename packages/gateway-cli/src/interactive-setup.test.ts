@@ -58,10 +58,9 @@ describe('interactive inference setup', () => {
     ]);
     expect(configure).toHaveBeenCalledWith('codex', SESSION);
     expect(ui.events).toEqual([
-      'intro:Wiolett Gateway inference setup',
-      'info:Profile: work',
-      'spinner:Complete authorization in your browser...',
-      'stop:Gateway authorization complete',
+      'intro:Wiolett Gateway Inference · Setup',
+      'info:Complete authorization in your browser...',
+      'info:Gateway authorization complete',
       'select',
       'spinner:Configuring Codex CLI...',
       'stop:Configured Codex',
@@ -108,6 +107,9 @@ class FakeUi implements InteractiveCliUi {
     this.options = options;
     this.events.push('select');
     return this.harness;
+  }
+  async confirm() {
+    return true;
   }
   spinner(message: string) {
     this.events.push(`spinner:${message}`);

@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { assertCodexCatalog, readCatalog, readCatalogMetadata, syncCodexCatalog } from './codex-catalog.js';
 import {
   configureCodex,
+  hasOtherManagedCodexHome,
   inspectCodexConfiguration,
   removeCodexConfiguration,
   resolveCodexPaths,
@@ -12,6 +13,8 @@ import {
 import type { CredentialStore } from './credentials.js';
 import { CliError } from './errors.js';
 import type { Fetch } from './http.js';
+import { inferenceProxyBaseUrl } from './inference-proxy.js';
+import { type InferenceProxyDaemonManager, inferenceProxyDaemonManager } from './inference-proxy-daemon.js';
 import type { CliPaths } from './paths.js';
 import type { GatewayProfile } from './profiles.js';
 import { installPrivateRuntime } from './runtime.js';
@@ -19,6 +22,8 @@ import type { InferenceSetupClient } from './tokens.js';
 import type { InferenceDiscovery, RuntimeCredential } from './types.js';
 
 const MINIMUM_CODEX_VERSION = '0.145.0';
+export const CODEX_ACCOUNT_LOGIN_WARNING =
+  'Codex is not signed in to an OpenAI account. Sign in to Codex, then fully quit and reopen Desktop to display Gateway models.';
 
 export interface CommandResult {
   code: number;
@@ -40,6 +45,7 @@ export class CodexIntegrationService {
       env?: NodeJS.ProcessEnv;
       home?: string;
       now?: () => Date;
+      proxyDaemon?: InferenceProxyDaemonManager;
     } = {}
   ) {}
 
@@ -50,8 +56,9 @@ export class CodexIntegrationService {
     client: InferenceSetupClient;
   }) {
     const codex = await this.requireCodex();
-    const runtimeCredential = await this.ensureRuntimeToken(input.profileName, input.profile, input.client);
     const integrationPaths = resolveCodexPaths(this.paths, input.profileName, this.options.env, this.options.home);
+    const codexAccountReady = await this.hasCodexAccountLogin(codex.command, integrationPaths.codexHome);
+    const runtimeCredential = await this.ensureRuntimeToken(input.profileName, input.profile, input.client);
     const runtimeSource = this.options.runtimeSource ?? process.argv[1];
     if (!runtimeSource) throw new CliError('RUNTIME_SOURCE_MISSING', 'Could not locate the packaged Gateway runtime.');
     await installPrivateRuntime(runtimeSource, this.paths.runtimeFile);
@@ -68,15 +75,26 @@ export class CodexIntegrationService {
     });
 
     const previousState = await readOptionalFile(integrationPaths.stateFile);
+    const localCatalog = await readCatalog(integrationPaths.catalogFile);
+    const defaultModel = selectDefaultModel(localCatalog);
     const config = await configureCodex({
       paths: integrationPaths,
       profile: input.profileName,
+      model: defaultModel,
       baseUrl: input.discovery.adapters.codex.baseUrl,
+      proxyBaseUrl: inferenceProxyBaseUrl(this.paths, input.profileName),
       runtimeFile: this.paths.runtimeFile,
       now: this.options.now,
     });
     try {
       await this.smoke(codex.command, codex.version, integrationPaths.catalogFile, integrationPaths.codexHome);
+      await (this.options.proxyDaemon ?? inferenceProxyDaemonManager).ensure({
+        paths: this.paths,
+        profileName: input.profileName,
+        remoteBaseUrl: input.discovery.adapters.codex.baseUrl,
+        runtimeFile: this.paths.runtimeFile,
+        env: this.options.env,
+      });
     } catch (error) {
       await restoreCodexBackup(integrationPaths.configFile, config.backupFile);
       if (previousState === null) await rm(integrationPaths.stateFile, { force: true });
@@ -89,14 +107,17 @@ export class CodexIntegrationService {
       mcpId: config.mcpId,
       configFile: config.configFile,
       catalogFile: integrationPaths.catalogFile,
+      defaultModel,
+      proxyBaseUrl: inferenceProxyBaseUrl(this.paths, input.profileName),
       catalog,
       token: { id: runtimeCredential.tokenId, prefix: runtimeCredential.prefix },
+      ...(codexAccountReady ? {} : { warning: CODEX_ACCOUNT_LOGIN_WARNING }),
     };
   }
 
   async sync(input: { profileName: string; discovery: InferenceDiscovery }) {
     // `sync` is also the upgrade path for the long-lived private runtime used
-    // by Codex. Without refreshing this copy, `npx @wiolett/gateway@latest`
+    // by Codex. Without refreshing this copy, `npx @wiolett/gateway-inference@latest`
     // could successfully update the catalog itself while every subsequent MCP
     // process kept executing an older bundled implementation indefinitely.
     await this.installRuntime();
@@ -105,9 +126,9 @@ export class CodexIntegrationService {
     const integrationPaths = resolveCodexPaths(this.paths, input.profileName, this.options.env, this.options.home);
     const config = await inspectCodexConfiguration({ paths: integrationPaths, profile: input.profileName });
     if (!config.configured) {
-      throw new CliError('CODEX_NOT_CONFIGURED', 'Codex is not configured for this Gateway profile. Run setup first.');
+      throw new CliError('CODEX_NOT_CONFIGURED', 'Codex is not configured. Run setup first.');
     }
-    return syncCodexCatalog({
+    const catalog = await syncCodexCatalog({
       catalogUrl: input.discovery.adapters.codex.catalogUrl,
       token: runtime.token,
       codexVersion: codex.version,
@@ -117,6 +138,14 @@ export class CodexIntegrationService {
       fetch: this.options.fetch,
       now: this.options.now,
     });
+    await (this.options.proxyDaemon ?? inferenceProxyDaemonManager).ensure({
+      paths: this.paths,
+      profileName: input.profileName,
+      remoteBaseUrl: input.discovery.adapters.codex.baseUrl,
+      runtimeFile: this.paths.runtimeFile,
+      env: this.options.env,
+    });
+    return catalog;
   }
 
   async doctor(input: {
@@ -211,21 +240,27 @@ export class CodexIntegrationService {
     if (inspection.conflicts.length > 0) {
       return { removed: false, conflicts: inspection.conflicts, tokenRevoked: false };
     }
+    const sharedWithAnotherHome = await hasOtherManagedCodexHome({
+      paths: integrationPaths,
+      profile: input.profileName,
+    });
     const runtime = await this.credentials.getRuntime(input.profileName);
-    let tokenRevoked = false;
-    if (input.removeToken && runtime && input.client) {
-      await input.client.revokeToken(runtime.tokenId);
-      tokenRevoked = true;
-    }
     const config = await removeCodexConfiguration({ paths: integrationPaths, profile: input.profileName });
-    if (config.conflicts.length > 0) return { ...config, tokenRevoked };
-    await rm(integrationPaths.profileDir, { recursive: true, force: true });
-    await this.credentials.deleteRuntime(input.profileName);
+    if (config.conflicts.length > 0) return { ...config, tokenRevoked: false };
+    let tokenRevoked = false;
+    if (!sharedWithAnotherHome) {
+      await (this.options.proxyDaemon ?? inferenceProxyDaemonManager).stop({
+        paths: this.paths,
+        profileName: input.profileName,
+      });
+      if (input.removeToken && runtime && input.client) {
+        await input.client.revokeToken(runtime.tokenId);
+        tokenRevoked = true;
+      }
+      await rm(integrationPaths.profileDir, { recursive: true, force: true });
+      await this.credentials.deleteRuntime(input.profileName);
+    }
     return { ...config, tokenRevoked };
-  }
-
-  async printRuntimeToken(profileName: string): Promise<string> {
-    return (await this.requireRuntimeCredential(profileName)).token;
   }
 
   private async ensureRuntimeToken(
@@ -256,7 +291,7 @@ export class CodexIntegrationService {
   private async requireRuntimeCredential(profileName: string): Promise<RuntimeCredential> {
     const runtime = await this.credentials.getRuntime(profileName);
     if (!runtime) {
-      throw new CliError('RUNTIME_TOKEN_MISSING', 'Codex runtime token is missing. Run inference setup codex.', {
+      throw new CliError('RUNTIME_TOKEN_MISSING', 'Codex runtime token is missing. Run setup codex.', {
         exitCode: 2,
       });
     }
@@ -314,10 +349,19 @@ export class CodexIntegrationService {
     if (compareVersions(version, MINIMUM_CODEX_VERSION) < 0) {
       throw new CliError(
         'CODEX_UPDATE_REQUIRED',
-        `Codex ${MINIMUM_CODEX_VERSION} or newer is required for command-backed provider authentication (found ${version}).`
+        `Codex ${MINIMUM_CODEX_VERSION} or newer is required for the Gateway model catalog (found ${version}).`
       );
     }
     return { command, version };
+  }
+
+  private async hasCodexAccountLogin(command: string, codexHome: string): Promise<boolean> {
+    const result = await this.run(command, ['login', 'status'], {
+      ...process.env,
+      ...this.options.env,
+      CODEX_HOME: codexHome,
+    });
+    return result.code === 0;
   }
 
   private async smoke(command: string, version: string, catalogFile: string, codexHome: string): Promise<void> {
@@ -353,6 +397,17 @@ export class CodexIntegrationService {
   private run(command: string, args: string[], env?: NodeJS.ProcessEnv): Promise<CommandResult> {
     return (this.options.commandRunner ?? runCommand)(command, args, env);
   }
+}
+
+function selectDefaultModel(catalog: Awaited<ReturnType<typeof readCatalog>>): string {
+  const model = catalog?.models
+    .filter((candidate) => candidate.visibility === 'list' && candidate.supported_in_api === true)
+    .sort(
+      (left, right) =>
+        Number(left.priority ?? Number.MAX_SAFE_INTEGER) - Number(right.priority ?? Number.MAX_SAFE_INTEGER)
+    )[0];
+  if (!model) throw new CliError('CATALOG_EMPTY', 'Gateway catalog has no model that Codex can select by default.');
+  return String(model.slug);
 }
 
 export async function runCommand(command: string, args: string[], env = process.env): Promise<CommandResult> {

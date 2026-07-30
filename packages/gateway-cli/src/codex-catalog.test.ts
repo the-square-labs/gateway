@@ -112,6 +112,18 @@ describe('Codex catalog synchronization', () => {
         fetch: vi.fn().mockResolvedValue(new Response(JSON.stringify({ models: [] }))) as typeof fetch,
       })
     ).rejects.toMatchObject({ code: 'CATALOG_EMPTY' });
+    await expect(
+      syncCodexCatalog({
+        ...base,
+        fetch: vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              models: [{ ...CATALOG.models[0], web_search_tool_type: null, supports_search_tool: false }],
+            })
+          )
+        ) as typeof fetch,
+      })
+    ).rejects.toMatchObject({ code: 'CATALOG_INVALID' });
     expect(JSON.parse(await readFile(files.catalogFile, 'utf8'))).toEqual(CATALOG);
   });
 

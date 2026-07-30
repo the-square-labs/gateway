@@ -4,23 +4,23 @@
   "sourceRoot": "packages/gateway-cli/src",
   "targets": {
     "build": {
-      "command": "pnpm --filter @wiolett/gateway build",
+      "command": "pnpm --filter @wiolett/gateway-inference build",
       "inputs": ["{projectRoot}/src/**/*", "{projectRoot}/package.json"],
       "outputs": ["{projectRoot}/dist"],
       "cache": true
     },
     "test": {
-      "command": "pnpm --filter @wiolett/gateway test",
+      "command": "pnpm --filter @wiolett/gateway-inference test",
       "inputs": ["{projectRoot}/src/**/*", "{projectRoot}/vitest.config.*", "{projectRoot}/package.json"],
       "cache": true
     },
     "lint": {
-      "command": "pnpm --filter @wiolett/gateway lint",
+      "command": "pnpm --filter @wiolett/gateway-inference lint",
       "inputs": ["{projectRoot}/src/**/*", "{projectRoot}/biome.json", "{projectRoot}/package.json"],
       "cache": true
     },
     "typecheck": {
-      "command": "pnpm --filter @wiolett/gateway typecheck",
+      "command": "pnpm --filter @wiolett/gateway-inference typecheck",
       "inputs": ["{projectRoot}/src/**/*", "{projectRoot}/tsconfig.json"],
       "cache": true
     }

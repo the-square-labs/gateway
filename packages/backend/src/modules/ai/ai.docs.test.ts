@@ -94,7 +94,7 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).toContain('providerUrl');
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).not.toContain('baseUrl:');
     expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
-      'npx @wiolett/gateway inference setup'
+      'npx @wiolett/gateway-inference setup codex'
     );
     expect(getInternalDocumentation('inference', ['inference:use']).content).toContain('/api/inference/openai/v1');
     expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(

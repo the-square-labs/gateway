@@ -3,30 +3,10 @@
   "edges": [
     {
       "from_id": "ph8ejel0",
-      "to_id": "sg6sqaui",
-      "relation": "same_area",
-      "weight": 0.68,
-      "reason": "Same gateway AI service refactor area; mentions ai.service.ts and extraction to ai.service-helpers.ts and tests.",
-      "source": "auto",
-      "created_at": 1781991941005,
-      "updated_at": 1781991941005
-    },
-    {
-      "from_id": "ph8ejel0",
       "to_id": "3b6g7z3k",
       "relation": "related_to",
       "weight": 0.33,
       "reason": "Gateway database viewer work relevant to backend/db handling patterns.",
-      "source": "auto",
-      "created_at": 1781991941005,
-      "updated_at": 1781991941005
-    },
-    {
-      "from_id": "ph8ejel0",
-      "to_id": "xg6y81q3",
-      "relation": "related_to",
-      "weight": 0.25,
-      "reason": "Gateway MCP/OAuth tooling scope handling; cross-references tool/scope governance in AI/MCP area.",
       "source": "auto",
       "created_at": 1781991941005,
       "updated_at": 1781991941005
