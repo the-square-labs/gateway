@@ -3,6 +3,7 @@ import { useAuthStore } from "@/stores/auth";
 import { InferenceActivityPanel } from "../inference/InferenceActivityPanel";
 import { InferenceUsersTable } from "../inference/InferenceAdminTables";
 import { InferenceOverview } from "../inference/InferenceUsagePanels";
+import { InferenceEndpointSettingsPanel } from "./inference/InferenceEndpointSettingsPanel";
 import { InferenceModelsPanel } from "./inference/InferenceModelsPanel";
 import { InferenceProvidersPanel } from "./inference/InferenceProvidersPanel";
 
@@ -11,10 +12,12 @@ export function InferenceSettingsSection() {
   const hasScope = useAuthStore((state) => state.hasScope);
   const canViewUsage = hasScope("inference:usage:view");
   const canViewProviders = hasScope("inference:providers:view");
+  const canManageProviders = hasScope("inference:providers:manage");
   const canManageModels = hasScope("inference:models:manage");
   const canManageLimits = hasScope("inference:limits:manage");
   return (
     <div className="space-y-4">
+      {canViewProviders && <InferenceEndpointSettingsPanel canManage={canManageProviders} />}
       {canViewUsage && <InferenceOverview />}
       {canViewProviders && (
         <InferenceProvidersPanel

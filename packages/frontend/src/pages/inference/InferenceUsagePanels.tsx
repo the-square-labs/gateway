@@ -5,7 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { StatCard } from "@/components/ui/stat-card";
-import { cn, formatDate, formatRelativeDate } from "@/lib/utils";
+import {
+  INFERENCE_SELF_USAGE_CACHE_KEY,
+  subscribeToInferenceSelfUsage,
+} from "@/lib/inference-self-usage";
+import { cn, formatDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import type {
   InferenceSelfUsage,
@@ -13,7 +17,6 @@ import type {
   InferenceUsageWindow,
 } from "@/types/inference";
 
-const SELF_USAGE_CACHE_KEY = "req:/api/inference/usage/self";
 const COMPACT_USAGE_OPEN_KEY = "gateway:account-menu:ai-usage-open";
 
 function remainingPercentage(percentage: number) {
@@ -30,7 +33,7 @@ function initialCompactUsageOpen() {
 }
 
 function useInferenceSelfUsage() {
-  const cached = api.getCached<InferenceSelfUsage>(SELF_USAGE_CACHE_KEY);
+  const cached = api.getCached<InferenceSelfUsage>(INFERENCE_SELF_USAGE_CACHE_KEY);
   const [usage, setUsage] = useState<InferenceSelfUsage | null>(cached ?? null);
   const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +49,11 @@ function useInferenceSelfUsage() {
     }
   }, []);
 
-  useEffect(() => void load(), [load]);
+  useEffect(() => {
+    const unsubscribe = subscribeToInferenceSelfUsage(setUsage);
+    void load();
+    return unsubscribe;
+  }, [load]);
 
   return { usage, loading, error, load };
 }
@@ -120,7 +127,8 @@ export function InferenceUsage() {
                 value={`${remaining}%`}
                 icon={icon}
                 progress={{ percent: remaining }}
-                subtitle={`Recovers ${formatRelativeDate(value.recoveryAt)} · ${formatDate(value.recoveryAt)}`}
+                subtitle={`Recovers ${formatDate(value.recoveryAt)}`}
+                subtitleClassName="text-xs"
               />
             );
           })}

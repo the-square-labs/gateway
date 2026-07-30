@@ -24,7 +24,11 @@ const DialogOverlay = React.forwardRef<
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
 const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn("flex flex-col space-y-1.5 text-left", className)} {...props} />
+  <div
+    data-dialog-header=""
+    className={cn("flex flex-col space-y-1.5 text-left", className)}
+    {...props}
+  />
 );
 DialogHeader.displayName = "DialogHeader";
 
@@ -122,6 +126,7 @@ const DialogContent = React.forwardRef<
         >
           {hasHeader ? (
             <div
+              data-dialog-header-slot=""
               className={cn(
                 "flex shrink-0 items-start justify-between gap-4 px-4 pb-4 pt-4 transition-shadow duration-200 ease-out sm:px-6 sm:pt-6",
                 bodyScrolled ? "max-sm:shadow-[inset_0_-1px_0_var(--color-border)]" : ""
@@ -138,6 +143,7 @@ const DialogContent = React.forwardRef<
           ) : null}
           {bodyChildren.length > 0 ? (
             <div
+              data-dialog-body=""
               className={cn(
                 "min-h-0 min-w-0 px-4 max-sm:flex-1 max-sm:overflow-y-auto max-sm:overscroll-contain sm:px-6",
                 bodyChildren.length > 1 && "grid gap-4",

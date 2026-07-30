@@ -131,7 +131,7 @@ function createSdkApp() {
   } as unknown as InferenceProtocolService);
 
   const app = new Hono<AppEnv>();
-  app.route('/api/inference/openai/v1', openAiInferenceDataPlaneRoutes);
+  app.route('/api/inference/v1', openAiInferenceDataPlaneRoutes);
   app.route('/api/inference/anthropic/v1', anthropicInferenceDataPlaneRoutes);
   const fetch = (input: string | URL | Request, init?: RequestInit) => app.fetch(new Request(input, init));
   return { app, fetch: fetch as typeof globalThis.fetch };
@@ -140,13 +140,13 @@ function createSdkApp() {
 describe('official client adapter contracts', () => {
   it('deserializes models, Chat Completions, and streamed Responses with OpenAI 7', async () => {
     const { fetch } = createSdkApp();
-    const rawModels = await fetch('http://gateway.test/api/inference/openai/v1/models', {
+    const rawModels = await fetch('http://gateway.test/api/inference/v1/models', {
       headers: { Authorization: 'Bearer gwi_contract-test' },
     });
     expect(await rawModels.json()).toMatchObject({ data: [{ id: MODEL.id }] });
     const client = new OpenAI({
       apiKey: 'gwi_contract-test',
-      baseURL: 'http://gateway.test/api/inference/openai/v1',
+      baseURL: 'http://gateway.test/api/inference/v1',
       fetch,
     });
 

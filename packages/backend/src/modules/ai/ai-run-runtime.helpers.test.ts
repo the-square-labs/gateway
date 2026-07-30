@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeCheckpoint, toCheckpoint, toClientCheckpoint } from './ai-run-runtime.helpers.js';
+import { normalizeCheckpoint, toChatMessage, toCheckpoint, toClientCheckpoint } from './ai-run-runtime.helpers.js';
 
 describe('AI run runtime checkpoint helpers', () => {
+  it('does not send persisted UI-only errors back to the model', () => {
+    expect(
+      toChatMessage({
+        role: 'assistant',
+        content: '**Error:** Provider is rate limited.',
+        localOnly: true,
+      })
+    ).toBeNull();
+  });
+
   it('keeps server pending messages for resume but omits them from client checkpoints', () => {
     const raw = toCheckpoint({
       type: 'tool_approval_required',

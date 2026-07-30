@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { Hono } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container, TOKENS } from '@/container.js';
+import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { AppEnv, SessionData, User } from '@/types.js';
@@ -75,6 +76,70 @@ function registerSession(user: User = USER) {
 afterEach(() => container.reset());
 
 describe('inference management token routes', () => {
+  it('reads and updates harness-specific endpoint settings with provider administration scopes', async () => {
+    const providerAdmin = {
+      ...USER,
+      scopes: [...USER.scopes, 'inference:providers:view', 'inference:providers:manage'],
+    };
+    registerSession(providerAdmin);
+    const service = {
+      getInferenceSettings: vi.fn().mockResolvedValue({
+        harnessSpecificEndpointsEnabled: false,
+      }),
+      updateInferenceSettings: vi.fn().mockResolvedValue({
+        harnessSpecificEndpointsEnabled: true,
+      }),
+    };
+    container.registerInstance(GeneralSettingsService, service as unknown as GeneralSettingsService);
+    const app = createApp();
+    const sessionHeaders = { Cookie: 'session_id=session-1' };
+    const mutationHeaders = {
+      ...sessionHeaders,
+      'X-CSRF-Token': 'csrf-token',
+      'Content-Type': 'application/json',
+    };
+
+    const read = await app.request('/api/inference/settings', { headers: sessionHeaders });
+    const update = await app.request('/api/inference/settings', {
+      method: 'PATCH',
+      headers: mutationHeaders,
+      body: JSON.stringify({ harnessSpecificEndpointsEnabled: true }),
+    });
+
+    expect(read.status).toBe(200);
+    expect(await read.json()).toEqual({ harnessSpecificEndpointsEnabled: false });
+    expect(update.status).toBe(200);
+    expect(await update.json()).toEqual({ harnessSpecificEndpointsEnabled: true });
+    expect(service.updateInferenceSettings).toHaveBeenCalledWith({
+      harnessSpecificEndpointsEnabled: true,
+    });
+  });
+
+  it('does not let provider viewers change inference endpoint settings', async () => {
+    const providerViewer = {
+      ...USER,
+      scopes: [...USER.scopes, 'inference:providers:view'],
+    };
+    registerSession(providerViewer);
+    container.registerInstance(GeneralSettingsService, {
+      getInferenceSettings: vi.fn().mockResolvedValue({
+        harnessSpecificEndpointsEnabled: false,
+      }),
+    } as unknown as GeneralSettingsService);
+
+    const response = await createApp().request('/api/inference/settings', {
+      method: 'PATCH',
+      headers: {
+        Cookie: 'session_id=session-1',
+        'X-CSRF-Token': 'csrf-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ harnessSpecificEndpointsEnabled: true }),
+    });
+
+    expect(response.status).toBe(403);
+  });
+
   it('lists, creates, and revokes tokens through a live browser session', async () => {
     registerSession();
     const service = {

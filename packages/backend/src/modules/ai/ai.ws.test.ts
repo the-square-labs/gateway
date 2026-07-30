@@ -247,6 +247,8 @@ describe('AI websocket backend runtime commands', () => {
           clientCommandId: 'cmd-1',
           content: ' hello ',
           context: { route: '/nodes' },
+          model: 'gateway-model',
+          reasoningEffort: 'high',
         }),
       }),
       ws as any
@@ -259,6 +261,8 @@ describe('AI websocket backend runtime commands', () => {
       userMessage: { role: 'user', content: 'hello' },
       clientCommandId: 'cmd-1',
       lastContext: { route: '/nodes' },
+      model: 'gateway-model',
+      reasoningEffort: 'high',
     });
     expect(getConversationSnapshot).toHaveBeenCalledWith(USER.id, 'conversation-1');
     expect(startRunExecution).toHaveBeenCalledWith(USER, 'run-1');
@@ -282,6 +286,46 @@ describe('AI websocket backend runtime commands', () => {
     });
     await Promise.resolve();
     expect(getConversationSnapshot).toHaveBeenCalledTimes(2);
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
+  it('builds a new conversation title from user-visible content only', async () => {
+    const { ws, handlers } = await openAuthenticatedWs();
+    container.registerInstance(TOKENS.RedisClient, allowingRedis() as any);
+
+    const run = createRun();
+    const snapshot = createSnapshot(run);
+    const startUserRun = vi.fn().mockResolvedValue({
+      conversationId: 'conversation-1',
+      userMessageId: 'message-1',
+      run,
+      duplicate: false,
+    });
+    container.registerInstance(AIRunService, {
+      startUserRun,
+      getConversationSnapshot: vi.fn().mockResolvedValue(snapshot),
+      startRunExecution: vi.fn(),
+    } as unknown as AIRunService);
+
+    const content =
+      '<system-instruction>The user typed "start container" in the command palette.</system-instruction>\nstart container';
+    await handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          type: 'conversation.send_message',
+          clientCommandId: 'cmd-command-palette',
+          content,
+        }),
+      }),
+      ws as any
+    );
+
+    expect(startUserRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'start container',
+        userMessage: { role: 'user', content },
+      })
+    );
     handlers.onClose(new Event('close'), ws as any);
   });
 

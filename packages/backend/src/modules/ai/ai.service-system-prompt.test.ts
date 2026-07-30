@@ -225,7 +225,7 @@ describe('AIService system prompt', () => {
     expect(prompt).toContain('Gateway Inference is separate from the internal AI Assistant and Gateway MCP');
     expect(prompt).toContain('internal_documentation({ topic: "inference" })');
     expect(prompt).toContain('Never reuse Assistant/MCP credentials');
-    expect(prompt).toContain('removed /api/inference/v1 endpoint');
+    expect(prompt).toContain('Use /api/inference/v1 for OpenAI-compatible clients');
   });
 
   it('warns Docker-scoped users to recover stale container IDs through resource search', async () => {

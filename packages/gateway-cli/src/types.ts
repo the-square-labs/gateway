@@ -7,6 +7,7 @@ export interface InferenceAdapters {
 export interface InferenceDiscovery {
   schemaVersion: 1;
   enabled: boolean;
+  harnessSpecificEndpointsEnabled?: boolean;
   minimumCliVersion: string;
   oauth: {
     resource: string;
@@ -14,7 +15,7 @@ export interface InferenceDiscovery {
   };
   adapters: InferenceAdapters;
   harnesses: {
-    codex: { supported: true };
+    codex: { supported: boolean };
   };
 }
 

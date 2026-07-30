@@ -9,7 +9,7 @@ const disabledDiscovery = {
     authorizationServer: 'https://gateway.example.com',
   },
   adapters: {
-    openai: { baseUrl: 'https://gateway.example.com/api/inference/openai/v1' },
+    openai: { baseUrl: 'https://gateway.example.com/api/inference/v1' },
     codex: {
       baseUrl: 'https://gateway.example.com/api/inference/codex/v1',
       catalogUrl: 'https://gateway.example.com/api/inference/codex/v1/models',
@@ -32,6 +32,24 @@ describe('inference discovery', () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify(disabledDiscovery))) as typeof fetch;
     await expect(discoverInference('https://gateway.example.com', fetcher, false)).resolves.toMatchObject({
       enabled: false,
+    });
+  });
+
+  it('stops setup before authentication when harness endpoints are disabled', async () => {
+    const fetcher = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ...disabledDiscovery,
+            enabled: true,
+            harnessSpecificEndpointsEnabled: false,
+            harnesses: { codex: { supported: false } },
+          })
+        )
+    ) as typeof fetch;
+
+    await expect(discoverInference('https://gateway.example.com', fetcher)).rejects.toMatchObject({
+      code: 'HARNESS_ENDPOINTS_DISABLED',
     });
   });
 

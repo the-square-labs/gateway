@@ -73,7 +73,7 @@ function appWithCredential(result: unknown) {
     listForUser: vi.fn().mockResolvedValue({ object: 'list', data: [] }),
   } as unknown as InferenceModelService);
   const app = new Hono<AppEnv>();
-  app.route('/api/inference/openai/v1', openAiInferenceDataPlaneRoutes);
+  app.route('/api/inference/v1', openAiInferenceDataPlaneRoutes);
   app.route('/api/inference/codex/v1', codexInferenceDataPlaneRoutes);
   app.route('/api/inference/anthropic/v1', anthropicInferenceDataPlaneRoutes);
   return app;
@@ -83,7 +83,7 @@ describe('inference data-plane boundary', () => {
   it('accepts dedicated Bearer and Anthropic x-api-key credentials', async () => {
     const app = appWithCredential({ user: USER, tokenId: 'token-1', tokenPrefix: 'gwi_12345678' });
 
-    const openAi = await app.request('/api/inference/openai/v1/models', {
+    const openAi = await app.request('/api/inference/v1/models', {
       headers: { Authorization: 'Bearer gwi_test' },
     });
     const anthropic = await app.request('/api/inference/anthropic/v1/messages', {
@@ -107,7 +107,7 @@ describe('inference data-plane boundary', () => {
       { Authorization: 'Bearer gwi_one', 'x-api-key': 'gwi_two' },
     ];
     for (const headers of headerCases) {
-      const response = await app.request('/api/inference/openai/v1/models', { headers });
+      const response = await app.request('/api/inference/v1/models', { headers });
       expect(response.status).toBe(401);
       expect(await response.json()).toMatchObject({ error: { code: 'invalid_api_key' } });
     }
@@ -115,7 +115,7 @@ describe('inference data-plane boundary', () => {
 
   it('returns a protocol-shaped 404 for unknown inference paths', async () => {
     const app = appWithCredential({ user: USER, tokenId: 'token-1', tokenPrefix: 'gwi_12345678' });
-    const response = await app.request('/api/inference/openai/v1/unknown', {
+    const response = await app.request('/api/inference/v1/unknown', {
       headers: { Authorization: 'Bearer gwi_test' },
     });
 
@@ -148,7 +148,7 @@ describe('inference data-plane boundary', () => {
       }),
     } as unknown as InferenceModelService);
 
-    const response = await app.request('/api/inference/openai/v1/models', {
+    const response = await app.request('/api/inference/v1/models', {
       headers: { Authorization: 'Bearer gwi_test' },
     });
     const text = await response.text();

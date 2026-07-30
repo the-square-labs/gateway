@@ -10,6 +10,7 @@ import { SessionService } from '@/services/session.service.js';
 import type { User } from '@/types.js';
 import { AISettingsService } from './ai.settings.service.js';
 import type { WSClientMessage, WSServerMessage } from './ai.types.js';
+import { AIProviderRuntimeService } from './ai-provider-runtime.service.js';
 import { AIRunService, aiUserConversationsChangedChannel } from './ai-run.service.js';
 
 const logger = createChildLogger('AI-WebSocket');
@@ -83,7 +84,10 @@ function getRunId(msg: WSClientMessage): string | undefined {
 }
 
 function titleFromContent(content: string): string {
-  const title = content.trim().replace(/\s+/g, ' ');
+  const title = content
+    .replace(/<system-instruction>[\s\S]*?<\/system-instruction>\s*/gi, '')
+    .trim()
+    .replace(/\s+/g, ' ');
   return title ? title.slice(0, 80) : 'New chat';
 }
 
@@ -226,6 +230,9 @@ function getRateLimitCount(results: unknown): number {
 async function checkRateLimit(userId: string): Promise<AIRateLimitResult> {
   const settingsService = container.resolve(AISettingsService);
   const config = await settingsService.getConfig();
+  if (config.providerType === 'gateway_inference') {
+    return { allowed: true, retryAfter: 0 };
+  }
 
   const key = `ai-ratelimit:${userId}`;
   const now = Date.now();
@@ -370,6 +377,14 @@ export function createWSHandlers() {
         try {
           const content = msg.content.trim();
           if (!content) throw new AppError(400, 'AI_MESSAGE_REQUIRED', 'Message content is required');
+          const model = msg.model?.trim();
+          if (model && model.length > 255) {
+            throw new AppError(400, 'AI_MODEL_INVALID', 'AI model identifier is too long');
+          }
+          const reasoningEffort = msg.reasoningEffort?.trim();
+          if (reasoningEffort && reasoningEffort.length > 64) {
+            throw new AppError(400, 'AI_REASONING_EFFORT_INVALID', 'AI reasoning effort is too long');
+          }
 
           const rateCheck = await checkRateLimit(user.id);
           if (!rateCheck.allowed) {
@@ -394,6 +409,8 @@ export function createWSHandlers() {
             },
             clientCommandId: msg.clientCommandId,
             lastContext: msg.context ? { ...msg.context } : null,
+            ...(model ? { model } : {}),
+            ...(reasoningEffort ? { reasoningEffort } : {}),
           });
 
           send(ws, {
@@ -422,6 +439,14 @@ export function createWSHandlers() {
 
       if (msg.type === 'conversation.compact') {
         try {
+          const model = msg.model?.trim();
+          if (model && model.length > 255) {
+            throw new AppError(400, 'AI_MODEL_INVALID', 'AI model identifier is too long');
+          }
+          const reasoningEffort = msg.reasoningEffort?.trim();
+          if (reasoningEffort && reasoningEffort.length > 64) {
+            throw new AppError(400, 'AI_REASONING_EFFORT_INVALID', 'AI reasoning effort is too long');
+          }
           const rateCheck = await checkRateLimit(user.id);
           if (!rateCheck.allowed) {
             const code = rateCheck.unavailable ? 'RATE_LIMIT_UNAVAILABLE' : 'RATE_LIMITED';
@@ -439,6 +464,8 @@ export function createWSHandlers() {
             userId: user.id,
             clientCommandId: msg.clientCommandId,
             lastContext: msg.context ? { ...msg.context } : null,
+            ...(model ? { model } : {}),
+            ...(reasoningEffort ? { reasoningEffort } : {}),
           });
 
           send(ws, {
@@ -670,7 +697,9 @@ export async function authenticateWSConnection(ws: WSContext, sessionId: string)
   }
 
   const settingsService = container.resolve(AISettingsService);
-  const enabled = await settingsService.isEnabled();
+  const enabled = container.isRegistered(AIProviderRuntimeService)
+    ? (await container.resolve(AIProviderRuntimeService).statusForUser(user)).enabled
+    : await settingsService.isEnabled();
   if (!enabled) {
     send(ws, { type: 'auth_error', message: 'AI assistant is not enabled' });
     return false;

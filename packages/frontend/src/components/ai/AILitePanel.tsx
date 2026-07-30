@@ -24,7 +24,6 @@ import { useUIStore } from "@/stores/ui";
 import type {
   AIComposerAttachment,
   AIComposerLocalImageAttachment,
-  AIConfig,
   AIMessageAttachment,
   AIToolCall,
   PageContext,
@@ -144,7 +143,14 @@ export function AILitePanel() {
     deleteConversation,
     renameConversation,
     rollbackToMessage,
+    retryMessage,
     connect,
+    providerStatus,
+    selectedModel,
+    selectedReasoningEffort,
+    setSelectedModel,
+    setSelectedReasoningEffort,
+    refreshProviderStatus,
   } = useAIStore();
   const {
     setAILiteMode,
@@ -179,6 +185,7 @@ export function AILitePanel() {
   const isCurrentChatPinned = activeConversationId
     ? pinnedAIConversationIds.includes(activeConversationId)
     : false;
+  const selectedProviderModel = providerStatus?.models.find((model) => model.id === selectedModel);
 
   const openRenameDialog = () => {
     if (!activeConversationId) return;
@@ -224,21 +231,13 @@ export function AILitePanel() {
   }, [connect]);
 
   useEffect(() => {
-    const cached = api.getCached<AIConfig>("settings:ai-config");
-    if (cached) setCanAttachImages(Boolean(cached.supportsImages));
-    let cancelled = false;
-    void api
-      .getAIConfig()
-      .then((config) => {
-        if (!cancelled) setCanAttachImages(Boolean((config as unknown as AIConfig).supportsImages));
-      })
-      .catch(() => {
-        if (!cancelled) setCanAttachImages(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    void refreshProviderStatus().catch(() => setCanAttachImages(false));
+  }, [refreshProviderStatus]);
+
+  useEffect(() => {
+    const selected = providerStatus?.models.find((model) => model.id === selectedModel);
+    setCanAttachImages(selected?.supportsImages ?? providerStatus?.supportsImages ?? false);
+  }, [providerStatus, selectedModel]);
 
   useEffect(() => {
     const timer = setTimeout(() => textareaRef.current?.focus(), 150);
@@ -416,7 +415,6 @@ export function AILitePanel() {
           confirmLabel: "Return",
           cancelLabel: "Cancel",
           cancelVariant: "ghost",
-          bodyDescription: true,
           variant: "destructive",
         });
         if (!ok) return;
@@ -609,6 +607,8 @@ export function AILitePanel() {
                 onReject={rejectTool}
                 onAnswer={answerQuestion}
                 onEditUserMessage={handleEditUserMessage}
+                onRetryUserMessage={(messageId) => void retryMessage(messageId)}
+                retryDisabled={currentConversationStreaming || isCompactingContext}
                 editUserMessageDisabled={isCompactingContext || isCompactionRetryQuestion}
               />
             </div>
@@ -680,6 +680,15 @@ export function AILitePanel() {
             approvalMode={approvalMode}
             approvalModeLabel={approvalModeLabel}
             setApprovalMode={setApprovalMode}
+            modelOptions={
+              providerStatus?.allowUserModelSelection ? providerStatus.models : undefined
+            }
+            selectedModel={selectedModel}
+            onModelChange={setSelectedModel}
+            reasoningOptions={selectedProviderModel?.reasoningEfforts}
+            selectedReasoningEffort={selectedReasoningEffort}
+            onReasoningEffortChange={setSelectedReasoningEffort}
+            gatewayInferenceMode={providerStatus?.providerType === "gateway_inference"}
             attachments={attachments}
             canAttachImages={canAttachImages}
             uploadingAttachments={uploadingAttachments}

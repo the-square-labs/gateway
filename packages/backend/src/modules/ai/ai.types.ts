@@ -7,13 +7,17 @@ export type WebSearchProvider = 'tavily' | 'brave' | 'serper' | 'searxng' | 'exa
 export type MaxTokensField = 'max_tokens' | 'max_completion_tokens';
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'none';
 export type AIEndpointMode = 'auto' | 'chat_completions' | 'responses';
+export type AIProviderType = 'openai_compatible' | 'gateway_inference';
 
 export interface AIConfig {
   enabled: boolean;
+  providerType: AIProviderType;
   providerUrl: string;
   endpointMode: AIEndpointMode;
   supportsImages: boolean;
   model: string;
+  gatewayInferenceModel: string;
+  gatewayInferenceAllowUserModelSelection: boolean;
   maxCompletionTokens: number;
   maxTokensField: MaxTokensField;
   reasoningEffort: ReasoningEffort;
@@ -93,7 +97,14 @@ export type WSClientMessage =
   | { type: 'conversation.subscribe'; conversationId: string; clientCommandId?: string }
   | { type: 'conversation.unsubscribe'; conversationId: string }
   | { type: 'conversation.sync'; conversationId: string; clientCommandId?: string }
-  | { type: 'conversation.compact'; conversationId: string; clientCommandId: string; context?: PageContext }
+  | {
+      type: 'conversation.compact';
+      conversationId: string;
+      clientCommandId: string;
+      context?: PageContext;
+      model?: string;
+      reasoningEffort?: string;
+    }
   | {
       type: 'conversation.send_message';
       clientCommandId: string;
@@ -101,6 +112,8 @@ export type WSClientMessage =
       content: string;
       attachments?: AIMessageAttachment[];
       context?: PageContext;
+      model?: string;
+      reasoningEffort?: string;
     }
   | { type: 'run.stop'; conversationId: string; runId: string; clientCommandId: string }
   | {

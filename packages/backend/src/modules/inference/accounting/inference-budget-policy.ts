@@ -12,6 +12,10 @@ export const SUBSCRIPTION_WINDOWS = {
   '30d': 30 * 24 * 60 * 60_000,
 } as const;
 
+export const SUBSCRIPTION_CHAT_BUDGET_FRACTION = 0.95;
+export const SUBSCRIPTION_LAST_REQUEST_BUDGET_FRACTION = 0.96;
+const SUBSCRIPTION_RECOVERY_BUDGET_FRACTION = SUBSCRIPTION_CHAT_BUDGET_FRACTION * 0.995;
+
 export interface EffectiveInferenceLimits {
   enabled: boolean;
   credits5hEnabled: boolean;
@@ -65,23 +69,55 @@ export class InferenceBudgetPolicyService {
       credits7d: new Date(now.getTime() - SUBSCRIPTION_WINDOWS['7d']),
       credits30d: new Date(now.getTime() - SUBSCRIPTION_WINDOWS['30d']),
     };
-    const subscriptionSum = async (cutoff: Date) => {
-      const [row] = await database
-        .select({ value: sql<string>`COALESCE(SUM(${inferenceUsageLedger.credits}), 0)` })
-        .from(inferenceUsageLedger)
-        .where(
-          and(
-            eq(inferenceUsageLedger.userId, userId),
-            eq(inferenceUsageLedger.budgetType, 'subscription'),
-            gte(inferenceUsageLedger.occurredAt, cutoff)
+    const rollingWindowUsage = async (cutoff: Date, durationMs: number, limit: number) => {
+      const result = await database.execute(
+        sql<{
+          used: string;
+          recovery_base: Date | string | null;
+        }>`
+          WITH grouped_entries AS (
+            SELECT
+              ${inferenceUsageLedger.occurredAt} AS occurred_at,
+              SUM(${inferenceUsageLedger.credits})::numeric AS credits
+            FROM ${inferenceUsageLedger}
+            WHERE
+              ${inferenceUsageLedger.userId} = ${userId}
+              AND ${inferenceUsageLedger.budgetType} = 'subscription'
+              AND ${inferenceUsageLedger.occurredAt} >= ${cutoff}
+            GROUP BY ${inferenceUsageLedger.occurredAt}
+          ),
+          windowed_entries AS (
+            SELECT
+              occurred_at,
+              SUM(credits) OVER () AS used,
+              COALESCE(
+                SUM(credits) OVER (
+                  ORDER BY occurred_at
+                  ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING
+                ),
+                0
+              ) AS remaining_after_expiry
+            FROM grouped_entries
           )
-        );
-      return Number(row?.value ?? 0);
+          SELECT
+            COALESCE(MAX(used), 0)::text AS used,
+            MIN(occurred_at) FILTER (
+              WHERE remaining_after_expiry <= ${limit * SUBSCRIPTION_RECOVERY_BUDGET_FRACTION}
+            ) AS recovery_base
+          FROM windowed_entries
+        `
+      );
+      const row = result.rows[0] as { used: string; recovery_base: Date | string | null } | undefined;
+      const recoveryBase = row?.recovery_base ? new Date(row.recovery_base) : now;
+      return {
+        used: Number(row?.used ?? 0),
+        recoveryAt: new Date(recoveryBase.getTime() + (row?.recovery_base ? durationMs : 0)),
+      };
     };
     const [credits5h, credits7d, credits30d, apiRow] = await Promise.all([
-      subscriptionSum(cutoffs.credits5h),
-      subscriptionSum(cutoffs.credits7d),
-      subscriptionSum(cutoffs.credits30d),
+      rollingWindowUsage(cutoffs.credits5h, SUBSCRIPTION_WINDOWS['5h'], limits.credits5h),
+      rollingWindowUsage(cutoffs.credits7d, SUBSCRIPTION_WINDOWS['7d'], limits.credits7d),
+      rollingWindowUsage(cutoffs.credits30d, SUBSCRIPTION_WINDOWS['30d'], limits.credits30d),
       database
         .select({ value: sql<number>`COALESCE(SUM(${inferenceUsageLedger.apiMicrodollars}), 0)` })
         .from(inferenceUsageLedger)
@@ -94,14 +130,14 @@ export class InferenceBudgetPolicyService {
         ),
     ]);
     return {
-      credits5h,
-      credits7d,
-      credits30d,
+      credits5h: credits5h.used,
+      credits7d: credits7d.used,
+      credits30d: credits30d.used,
       apiMonthlyMicrodollars: Number(apiRow[0]?.value ?? 0),
       recoveryAt: {
-        credits5h: new Date(now.getTime() + SUBSCRIPTION_WINDOWS['5h']),
-        credits7d: new Date(now.getTime() + SUBSCRIPTION_WINDOWS['7d']),
-        credits30d: new Date(now.getTime() + SUBSCRIPTION_WINDOWS['30d']),
+        credits5h: credits5h.recoveryAt,
+        credits7d: credits7d.recoveryAt,
+        credits30d: credits30d.recoveryAt,
         apiMonthly: month.end,
       },
     };

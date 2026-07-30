@@ -1124,6 +1124,11 @@ export const AI_TOOLS: AIToolDefinition[] = [
       type: 'object',
       properties: {
         enabled: { type: 'boolean', description: 'Enable or disable the AI assistant.' },
+        providerType: {
+          type: 'string',
+          enum: ['openai_compatible', 'gateway_inference'],
+          description: 'Assistant response provider.',
+        },
         providerUrl: { type: 'string', description: 'OpenAI-compatible provider base URL.' },
         endpointMode: {
           type: 'string',
@@ -1132,6 +1137,14 @@ export const AI_TOOLS: AIToolDefinition[] = [
         },
         apiKey: { type: 'string', description: 'Provider API key. Empty string clears the saved key.' },
         model: { type: 'string', description: 'Model name.' },
+        gatewayInferenceModel: {
+          type: 'string',
+          description: 'Default published Gateway Inference model ID.',
+        },
+        gatewayInferenceAllowUserModelSelection: {
+          type: 'boolean',
+          description: 'Allow users to select another accessible Gateway Inference model.',
+        },
         customSystemPrompt: { type: 'string', description: 'Additional system prompt instructions.' },
         rateLimitMax: { type: 'number', description: 'Maximum assistant requests per window.' },
         rateLimitWindowSeconds: { type: 'number', description: 'Rate limit window in seconds.' },

@@ -12,6 +12,8 @@ interface AIMessageListProps {
     content: string,
     attachments: AIMessageAttachment[]
   ) => void;
+  onRetryUserMessage?: (messageId: string) => void;
+  retryDisabled?: boolean;
   editUserMessageDisabled?: boolean;
 }
 
@@ -22,9 +24,12 @@ export function AIMessageList({
   onReject,
   onAnswer,
   onEditUserMessage,
+  onRetryUserMessage,
+  retryDisabled,
   editUserMessageDisabled,
 }: AIMessageListProps) {
   const groups = groupAssistantTurns(messages);
+  const retryTargets = buildRetryTargets(messages);
 
   return (
     <>
@@ -38,6 +43,12 @@ export function AIMessageList({
             onReject={onReject}
             onAnswer={onAnswer}
             onEditUserMessage={onEditUserMessage}
+            onRetry={
+              onRetryUserMessage && retryTargets.has(group[0])
+                ? () => onRetryUserMessage(retryTargets.get(group[0])!)
+                : undefined
+            }
+            retryDisabled={retryDisabled}
             editUserMessageDisabled={editUserMessageDisabled}
           />
         ) : (
@@ -51,6 +62,12 @@ export function AIMessageList({
                 onReject={onReject}
                 onAnswer={onAnswer}
                 onEditUserMessage={onEditUserMessage}
+                onRetry={
+                  onRetryUserMessage && retryTargets.has(message)
+                    ? () => onRetryUserMessage(retryTargets.get(message)!)
+                    : undefined
+                }
+                retryDisabled={retryDisabled}
                 editUserMessageDisabled={editUserMessageDisabled}
               />
             ))}
@@ -59,6 +76,21 @@ export function AIMessageList({
       )}
     </>
   );
+}
+
+function buildRetryTargets(messages: AIMessageType[]): Map<AIMessageType, string> {
+  const targets = new Map<AIMessageType, string>();
+  let lastUserMessageId: string | null = null;
+  for (const message of messages) {
+    if (message.role === "user") {
+      lastUserMessageId = message.id;
+      continue;
+    }
+    if (lastUserMessageId && message.localOnly && /^\s*\*\*Error:\*\*/i.test(message.content)) {
+      targets.set(message, lastUserMessageId);
+    }
+  }
+  return targets;
 }
 
 function groupAssistantTurns(messages: AIMessageType[]): AIMessageType[][] {

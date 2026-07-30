@@ -137,10 +137,57 @@ describe('provider wire adapters', () => {
       ],
     });
 
-    expect(body.input).toEqual([
+    const input = body.input as unknown[];
+    expect(input).toEqual([
       { type: 'function_call', id: 'fc-1', call_id: 'call-1', name: 'lookup', arguments: '{"q":"x"}' },
       { type: 'function_call_output', call_id: 'call-1', output: 'result' },
     ]);
+  });
+
+  it('does not forward a call_id as an OpenAI Responses function item id', () => {
+    const body = providerRequestBody(registry.require('openai'), 'gpt-test', {
+      ...REQUEST,
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_call',
+              id: 'call_ocQ5UJj22a3efmVoqLituMI0',
+              callId: 'call_ocQ5UJj22a3efmVoqLituMI0',
+              name: 'discover_tools',
+              arguments: '{}',
+            },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              callId: 'call_ocQ5UJj22a3efmVoqLituMI0',
+              output: '{"activeToolsets":["core"]}',
+            },
+          ],
+        },
+      ],
+    });
+
+    const input = body.input as unknown[];
+    expect(input).toEqual([
+      {
+        type: 'function_call',
+        call_id: 'call_ocQ5UJj22a3efmVoqLituMI0',
+        name: 'discover_tools',
+        arguments: '{}',
+      },
+      {
+        type: 'function_call_output',
+        call_id: 'call_ocQ5UJj22a3efmVoqLituMI0',
+        output: '{"activeToolsets":["core"]}',
+      },
+    ]);
+    expect(input[0]).not.toHaveProperty('id');
   });
 
   it('preserves Anthropic cache controls and translates inline Responses files to documents', () => {

@@ -83,7 +83,7 @@ async function fixture() {
       authorizationServer: 'https://gateway.example.com',
     },
     adapters: {
-      openai: { baseUrl: 'https://gateway.example.com/api/inference/openai/v1' },
+      openai: { baseUrl: 'https://gateway.example.com/api/inference/v1' },
       codex: {
         baseUrl: 'https://gateway.example.com/api/inference/codex/v1',
         catalogUrl: 'https://gateway.example.com/api/inference/codex/v1/models',

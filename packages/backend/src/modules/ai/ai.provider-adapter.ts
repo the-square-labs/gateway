@@ -13,6 +13,11 @@ export interface NormalizedModelResponse {
   toolCalls: NormalizedToolCall[];
 }
 
+export interface AIModelTool {
+  type: 'function';
+  function: { name: string; description: string; parameters: Record<string, unknown> };
+}
+
 export type ModelProviderEvent =
   | { type: 'text_delta'; content: string }
   | { type: 'model_response'; response: NormalizedModelResponse };
@@ -21,10 +26,7 @@ interface StreamModelOptions {
   client: OpenAI;
   config: AIConfig;
   messages: Record<string, unknown>[];
-  tools: Array<{
-    type: 'function';
-    function: { name: string; description: string; parameters: Record<string, unknown> };
-  }>;
+  tools: AIModelTool[];
   signal: AbortSignal;
 }
 

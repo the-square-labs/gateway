@@ -203,7 +203,9 @@ export class AIRunExecutor {
         abortController.signal,
         run.id,
         run.conversationId,
-        (currentMessages) => this.maybeAutoCompactContext(user, run, currentMessages, pageContext, abortController)
+        (currentMessages) => this.maybeAutoCompactContext(user, run, currentMessages, pageContext, abortController),
+        run.model ?? undefined,
+        run.reasoningEffort ?? undefined
       )) {
         if (abortController.signal.aborted) return;
 
@@ -239,7 +241,9 @@ export class AIRunExecutor {
         assistantContent
       );
       if (assistantMessageId) await this.linkRunToolCallsToAssistantMessage(run.id, assistantMessageId);
-      await this.updateRunStatus(run.id, 'failed', error instanceof Error ? error.message : 'AI run failed');
+      const errorMessage = error instanceof Error ? error.message : 'AI run failed';
+      await this.updateRunStatus(run.id, 'failed', errorMessage);
+      await this.persistRunErrorMessage(user.id, run.conversationId, run.id, errorMessage);
       this.forgetAssistantDraftState(run.id);
       this.publishConversationChanged(user.id, run.conversationId);
     } finally {
@@ -377,7 +381,9 @@ export class AIRunExecutor {
         input.queuedApprovals,
         input.conversationId,
         (currentMessages) => this.maybeAutoCompactContext(user, run, currentMessages, pageContext, abortController),
-        input.rejectionError
+        input.rejectionError,
+        run.model ?? undefined,
+        run.reasoningEffort ?? undefined
       )) {
         if (abortController.signal.aborted) return;
 
@@ -413,7 +419,9 @@ export class AIRunExecutor {
         assistantContent
       );
       if (assistantMessageId) await this.linkRunToolCallsToAssistantMessage(input.runId, assistantMessageId);
-      await this.updateRunStatus(input.runId, 'failed', error instanceof Error ? error.message : 'AI run failed');
+      const errorMessage = error instanceof Error ? error.message : 'AI run failed';
+      await this.updateRunStatus(input.runId, 'failed', errorMessage);
+      await this.persistRunErrorMessage(user.id, input.conversationId, input.runId, errorMessage);
       this.forgetAssistantDraftState(input.runId);
       this.publishConversationChanged(user.id, input.conversationId);
     } finally {
@@ -455,7 +463,9 @@ export class AIRunExecutor {
         abortController.signal,
         input.runId,
         input.conversationId,
-        (currentMessages) => this.maybeAutoCompactContext(user, run, currentMessages, pageContext, abortController)
+        (currentMessages) => this.maybeAutoCompactContext(user, run, currentMessages, pageContext, abortController),
+        run.model ?? undefined,
+        run.reasoningEffort ?? undefined
       )) {
         if (abortController.signal.aborted) return;
 
@@ -491,7 +501,9 @@ export class AIRunExecutor {
         assistantContent
       );
       if (assistantMessageId) await this.linkRunToolCallsToAssistantMessage(input.runId, assistantMessageId);
-      await this.updateRunStatus(input.runId, 'failed', error instanceof Error ? error.message : 'AI run failed');
+      const errorMessage = error instanceof Error ? error.message : 'AI run failed';
+      await this.updateRunStatus(input.runId, 'failed', errorMessage);
+      await this.persistRunErrorMessage(user.id, input.conversationId, input.runId, errorMessage);
       this.forgetAssistantDraftState(input.runId);
       this.publishConversationChanged(user.id, input.conversationId);
     } finally {
@@ -529,11 +541,9 @@ export class AIRunExecutor {
       this.publishConversationChanged(user.id, run.conversationId);
     } catch (error) {
       if (abortController.signal.aborted) return;
-      await this.updateRunStatus(
-        run.id,
-        'failed',
-        error instanceof Error ? error.message : 'Context compaction failed'
-      );
+      const errorMessage = error instanceof Error ? error.message : 'Context compaction failed';
+      await this.updateRunStatus(run.id, 'failed', errorMessage);
+      await this.persistRunErrorMessage(user.id, run.conversationId, run.id, errorMessage);
       this.publishConversationChanged(user.id, run.conversationId);
     } finally {
       this.abortControllers.delete(run.id);
@@ -653,7 +663,11 @@ export class AIRunExecutor {
       if (event.type === 'context_blocked') {
         await this.persistConversationStatus(run.conversationId, 'context_blocked', event.reason);
       }
-      await this.updateRunStatus(run.id, 'failed', event.type === 'error' ? event.message : event.reason);
+      const errorMessage = event.type === 'error' ? event.message : event.reason;
+      await this.updateRunStatus(run.id, 'failed', errorMessage);
+      if (event.type === 'error') {
+        await this.persistRunErrorMessage(user.id, run.conversationId, run.id, errorMessage);
+      }
       this.forgetAssistantDraftState(run.id);
       this.publishConversationChanged(user.id, run.conversationId);
       return { assistantContent, assistantMessageWritten, done: true };
@@ -701,7 +715,14 @@ export class AIRunExecutor {
     abortController: AbortController
   ): Promise<ChatMessage[]> {
     const aiService = container.resolve(AIService);
-    const shouldCompact = await aiService.shouldAutoCompactContext(user, messages, pageContext, run.conversationId);
+    const shouldCompact = await aiService.shouldAutoCompactContext(
+      user,
+      messages,
+      pageContext,
+      run.conversationId,
+      run.model ?? undefined,
+      run.reasoningEffort ?? undefined
+    );
     if (!shouldCompact) return messages;
     try {
       return await this.performContextCompaction(user, run, messages, pageContext, abortController, 'auto', false);
@@ -736,7 +757,16 @@ export class AIRunExecutor {
     try {
       const result = await container
         .resolve(AIService)
-        .compactConversationContext(user, messages, pageContext, abortController.signal, trigger);
+        .compactConversationContext(
+          user,
+          messages,
+          pageContext,
+          abortController.signal,
+          trigger,
+          run.model ?? undefined,
+          run.conversationId,
+          run.reasoningEffort ?? undefined
+        );
       if (result.compacted) {
         const markerMessageId = await this.persistCompactMarker(user.id, run.conversationId, result);
         await this.linkToolCallToAssistantMessage(run.id, toolCallId, markerMessageId);
@@ -859,6 +889,31 @@ export class AIRunExecutor {
     await this.db.update(aiConversations).set({ updatedAt: new Date() }).where(eq(aiConversations.id, conversationId));
     this.conversationSearchService?.rebuildConversationIndexBestEffort(userId, conversationId);
     return message?.id ?? null;
+  }
+
+  private async persistRunErrorMessage(
+    userId: string,
+    conversationId: string,
+    runId: string,
+    error: string
+  ): Promise<void> {
+    const content = `**Error:** ${error.trim() || 'AI run failed'}`;
+    const sequence = await nextMessageSequence(this.db, conversationId);
+    await this.db.insert(aiConversationMessages).values(
+      toConversationMessage(
+        conversationId,
+        {
+          role: 'assistant',
+          content,
+          localOnly: true,
+          runError: true,
+          runId,
+        },
+        sequence
+      )
+    );
+    await this.db.update(aiConversations).set({ updatedAt: new Date() }).where(eq(aiConversations.id, conversationId));
+    this.conversationSearchService?.rebuildConversationIndexBestEffort(userId, conversationId);
   }
 
   private async getOrCreateToolBoundaryMessage(conversationId: string, runId: string): Promise<string> {

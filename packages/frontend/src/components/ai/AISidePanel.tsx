@@ -39,7 +39,6 @@ import { useUIStore } from "@/stores/ui";
 import type {
   AIComposerAttachment,
   AIComposerLocalImageAttachment,
-  AIConfig,
   AIConversationStatus,
   AIMessageAttachment,
   AIRunStatus,
@@ -219,7 +218,14 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     deleteConversation,
     renameConversation,
     rollbackToMessage,
+    retryMessage,
     connect,
+    providerStatus,
+    selectedModel,
+    selectedReasoningEffort,
+    setSelectedModel,
+    setSelectedReasoningEffort,
+    refreshProviderStatus,
   } = useAIStore();
 
   const [input, setInput] = useAIComposerDraft(activeConversationId);
@@ -253,6 +259,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
   const isCurrentChatPinned = activeConversationId
     ? pinnedAIConversationIds.includes(activeConversationId)
     : false;
+  const selectedProviderModel = providerStatus?.models.find((model) => model.id === selectedModel);
 
   const openRenameDialog = () => {
     if (!activeConversationId) return;
@@ -300,21 +307,13 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
 
   useEffect(() => {
     if (!active) return;
-    const cached = api.getCached<AIConfig>("settings:ai-config");
-    if (cached) setCanAttachImages(Boolean(cached.supportsImages));
-    let cancelled = false;
-    void api
-      .getAIConfig()
-      .then((config) => {
-        if (!cancelled) setCanAttachImages(Boolean((config as unknown as AIConfig).supportsImages));
-      })
-      .catch(() => {
-        if (!cancelled) setCanAttachImages(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [active]);
+    void refreshProviderStatus().catch(() => setCanAttachImages(false));
+  }, [active, refreshProviderStatus]);
+
+  useEffect(() => {
+    const selected = providerStatus?.models.find((model) => model.id === selectedModel);
+    setCanAttachImages(selected?.supportsImages ?? providerStatus?.supportsImages ?? false);
+  }, [providerStatus, selectedModel]);
 
   const updateStickToBottom = useCallback(() => {
     const node = scrollViewportRef.current;
@@ -484,7 +483,6 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
           confirmLabel: "Return",
           cancelLabel: "Cancel",
           cancelVariant: "ghost",
-          bodyDescription: true,
           variant: "destructive",
         });
         if (!ok) return;
@@ -758,6 +756,8 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
               onReject={rejectTool}
               onAnswer={answerQuestion}
               onEditUserMessage={handleEditUserMessage}
+              onRetryUserMessage={(messageId) => void retryMessage(messageId)}
+              retryDisabled={currentConversationStreaming || isCompactingContext}
               editUserMessageDisabled={isCompactingContext || isCompactionRetryQuestion}
             />
             <div className="pb-4" />
@@ -822,6 +822,15 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
             approvalMode={approvalMode}
             approvalModeLabel={approvalModeLabel}
             setApprovalMode={setApprovalMode}
+            modelOptions={
+              providerStatus?.allowUserModelSelection ? providerStatus.models : undefined
+            }
+            selectedModel={selectedModel}
+            onModelChange={setSelectedModel}
+            reasoningOptions={selectedProviderModel?.reasoningEfforts}
+            selectedReasoningEffort={selectedReasoningEffort}
+            onReasoningEffortChange={setSelectedReasoningEffort}
+            gatewayInferenceMode={providerStatus?.providerType === "gateway_inference"}
             attachments={attachments}
             canAttachImages={canAttachImages}
             uploadingAttachments={uploadingAttachments}

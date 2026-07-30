@@ -23,8 +23,12 @@ Command.displayName = CommandPrimitive.displayName;
 const CommandDialog = ({
   children,
   shouldFilter,
+  onExitComplete,
   ...props
-}: React.ComponentProps<typeof Dialog> & { shouldFilter?: boolean }) => {
+}: React.ComponentProps<typeof Dialog> & {
+  shouldFilter?: boolean;
+  onExitComplete?: () => void;
+}) => {
   return (
     <Dialog {...props}>
       <DialogContent
@@ -32,6 +36,14 @@ const CommandDialog = ({
         hideCloseButton
         unstyled
         aria-describedby={undefined}
+        onAnimationEnd={(event) => {
+          if (
+            event.target === event.currentTarget &&
+            event.currentTarget.dataset.state === "closed"
+          ) {
+            onExitComplete?.();
+          }
+        }}
       >
         <DialogPrimitive.Title className="sr-only">Command Palette</DialogPrimitive.Title>
         <Command

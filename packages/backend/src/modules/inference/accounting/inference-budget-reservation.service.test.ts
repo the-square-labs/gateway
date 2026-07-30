@@ -15,8 +15,9 @@ describe('inference live reservation policy', () => {
     billingTimezone: 'UTC',
   };
 
-  it('protects five percent of subscription credits for compaction', () => {
+  it('allows one percent bounded grace while retaining the compaction reserve', () => {
     expect(__testOnly.reservationLimit('credits5h', limits, false)).toBe(95);
+    expect(__testOnly.reservationLimit('credits5h', limits, false, true)).toBe(96);
     expect(__testOnly.reservationLimit('credits5h', limits, true)).toBe(100);
     expect(__testOnly.reservationLimit('apiMonthlyMicrodollars', limits, false)).toBe(400);
   });

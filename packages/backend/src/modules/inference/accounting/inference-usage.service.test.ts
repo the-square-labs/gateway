@@ -9,6 +9,12 @@ describe('inference usage presentation', () => {
     expect(__testOnly.percentage(0, 0)).toBe(0);
   });
 
+  it('presents the spendable chat budget as exhausted before the protected compaction reserve', () => {
+    expect(__testOnly.subscriptionPercentage(47.5, 100)).toBe(50);
+    expect(__testOnly.subscriptionPercentage(95, 100)).toBe(100);
+    expect(__testOnly.subscriptionPercentage(96, 100)).toBe(100);
+  });
+
   it.each([
     { limit: 0, configured: false },
     { limit: 10_000_000, configured: true },

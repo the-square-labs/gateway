@@ -37,6 +37,10 @@ describe("InferenceUsage", () => {
     expect(usageCard?.parentElement).not.toHaveClass("gap-4", "p-4");
     expect(screen.getByText("50%")).toBeInTheDocument();
     expect(usageCard?.querySelector(".bg-primary")).toHaveStyle({ width: "75%" });
+    expect(screen.getByText("API usage")).toHaveClass("text-xs");
+    expect(usageValue).toHaveClass("text-xl");
+    expect(screen.getByText("Recovers Aug 1, 2026")).toHaveClass("text-xs");
+    expect(screen.queryByText(/Just now/)).not.toBeInTheDocument();
     const text = document.body.textContent ?? "";
     expect(text).not.toMatch(/\$|credits|tokens|openai|anthropic|kimi/i);
   });

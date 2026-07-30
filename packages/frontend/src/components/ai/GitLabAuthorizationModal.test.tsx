@@ -71,6 +71,9 @@ describe("GitLabAuthorizationModal", () => {
     renderWithRouter(<GitLabAuthorizationModal />);
 
     expect(await screen.findByText("Main GitLab")).toBeInTheDocument();
+    const explanation = screen.getByText(/Gateway needs your personal access token/);
+    expect(explanation.closest("[data-dialog-body]")).toBeInTheDocument();
+    expect(explanation.closest("[data-dialog-header]")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /create personal access token/i })).toHaveAttribute(
       "href",
       missingStatus.patCreationUrl

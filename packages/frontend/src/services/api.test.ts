@@ -1,3 +1,4 @@
+import { INFERENCE_SELF_USAGE_UPDATED_EVENT } from "@/lib/inference-self-usage";
 import { api } from "@/services/api";
 
 function jsonResponse(body: unknown, init?: ResponseInit) {
@@ -105,6 +106,31 @@ describe("api client contract", () => {
     expect(api.getCached("auth:me:preferences")).toEqual({
       aiApprovalMode: "bypass-non-destructive",
     });
+  });
+
+  it("publishes fresh inference usage to every mounted usage surface", async () => {
+    const usage = {
+      enabled: true,
+      api: { configured: false, percentage: 0, recoveryAt: "2030-01-01T00:00:00.000Z" },
+      subscription: {
+        "5h": { configured: false, percentage: 0, recoveryAt: "2030-01-01T00:00:00.000Z" },
+        "7d": { configured: true, percentage: 99, recoveryAt: "2030-01-07T00:00:00.000Z" },
+        "30d": {
+          configured: false,
+          percentage: 0,
+          recoveryAt: "2030-01-30T00:00:00.000Z",
+        },
+      },
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse(usage));
+    const onUsage = vi.fn();
+    window.addEventListener(INFERENCE_SELF_USAGE_UPDATED_EVENT, onUsage);
+
+    await expect(api.getInferenceSelfUsage()).resolves.toEqual(usage);
+
+    expect(onUsage).toHaveBeenCalledOnce();
+    expect((onUsage.mock.calls[0]?.[0] as CustomEvent).detail).toEqual(usage);
+    window.removeEventListener(INFERENCE_SELF_USAGE_UPDATED_EVENT, onUsage);
   });
 
   it("replaces a user's exact additional permissions", async () => {

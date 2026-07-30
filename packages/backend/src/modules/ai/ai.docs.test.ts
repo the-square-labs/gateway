@@ -96,7 +96,7 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
       'npx @wiolett/gateway-inference setup codex'
     );
-    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain('/api/inference/openai/v1');
+    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain('/api/inference/v1');
     expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
       '/api/inference/anthropic/v1/messages'
     );

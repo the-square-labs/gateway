@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import type { AIMessage } from "@/types/ai";
 import { AIMessageList } from "./AIMessageList";
 
@@ -41,5 +41,28 @@ describe("AIMessageList", () => {
       screen.getByRole("button", { name: /find resource/i })
     );
     expect(compactAssistantTurn).toContainElement(screen.getByText("По базам сейчас так:"));
+  });
+
+  it("retries the user turn preceding a persisted run error", () => {
+    const onRetryUserMessage = vi.fn();
+    const messages: AIMessage[] = [
+      {
+        id: "user-1",
+        role: "user",
+        content: "Give me an overview",
+      },
+      {
+        id: "assistant-error",
+        role: "assistant",
+        content: "**Error:** Provider rejected the request.",
+        localOnly: true,
+        runError: true,
+      },
+    ];
+
+    render(<AIMessageList messages={messages} onRetryUserMessage={onRetryUserMessage} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetryUserMessage).toHaveBeenCalledWith("user-1");
   });
 });

@@ -22,15 +22,26 @@ import { Textarea } from "@/components/ui/textarea";
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAIStore } from "@/stores/ai";
-import type { AISandboxArtifact, AISandboxJob, AISandboxStatus } from "@/types/ai";
+import { useSystemConfigStore } from "@/stores/system-config";
+import type {
+  AIInferenceModelOption,
+  AIProviderType,
+  AISandboxArtifact,
+  AISandboxJob,
+  AISandboxStatus,
+} from "@/types/ai";
 import { SaveSettingsButton, SettingsControlRow } from "./AISettingsControls";
 
 interface AIConfigState {
   enabled: boolean;
+  providerType: AIProviderType;
   providerUrl: string;
   endpointMode: string;
   supportsImages: boolean;
   model: string;
+  gatewayInferenceModel: string;
+  gatewayInferenceAllowUserModelSelection: boolean;
+  gatewayInferenceModels: AIInferenceModelOption[];
   maxCompletionTokens: number;
   maxTokensField: string;
   reasoningEffort: string;
@@ -48,6 +59,21 @@ interface AIConfigState {
   webSearchBaseUrl: string;
   sandboxEnabled: boolean;
   sandboxDefaultTier: "low" | "medium" | "high";
+}
+
+function normalizeAIConfigState(config: AIConfigState): AIConfigState {
+  return {
+    ...config,
+    providerType: config.providerType ?? "openai_compatible",
+    gatewayInferenceModel: config.gatewayInferenceModel ?? "",
+    gatewayInferenceAllowUserModelSelection:
+      config.gatewayInferenceAllowUserModelSelection ?? false,
+    gatewayInferenceModels: (config.gatewayInferenceModels ?? []).map((model) => ({
+      ...model,
+      reasoningEfforts: model.reasoningEfforts ?? [],
+      defaultReasoningEffort: model.defaultReasoningEffort ?? null,
+    })),
+  };
 }
 
 const WEB_SEARCH_PROVIDER_LABELS: Record<string, string> = {
@@ -442,17 +468,20 @@ function SandboxArtifactsPanel() {
 }
 
 export function AIConfigSection() {
-  const [aiConfig, setAiConfig] = useState<AIConfigState | null>(
-    () => api.getCached<AIConfigState>("settings:ai-config") ?? null
-  );
+  const inferenceEnabled = useSystemConfigStore((state) => state.config.features.inferenceEnabled);
+  const [aiConfig, setAiConfig] = useState<AIConfigState | null>(() => {
+    const cached = api.getCached<AIConfigState>("settings:ai-config");
+    return cached ? normalizeAIConfigState(cached) : null;
+  });
   const [aiApiKey, setAiApiKey] = useState("");
   const [aiWebSearchKey, setAiWebSearchKey] = useState("");
   const [aiToolsModalOpen, setAiToolsModalOpen] = useState(false);
   const [sandboxStatus, setSandboxStatus] = useState<AISandboxStatus | null>(null);
   const [aiSaving, setAiSaving] = useState(false);
-  const [aiSavedConfig, setAiSavedConfig] = useState<AIConfigState | null>(
-    () => api.getCached<AIConfigState>("settings:ai-config") ?? null
-  );
+  const [aiSavedConfig, setAiSavedConfig] = useState<AIConfigState | null>(() => {
+    const cached = api.getCached<AIConfigState>("settings:ai-config");
+    return cached ? normalizeAIConfigState(cached) : null;
+  });
 
   const assistantHasChanges = (() => {
     if (!aiConfig || !aiSavedConfig) return false;
@@ -472,9 +501,13 @@ export function AIConfigSection() {
     if (aiApiKey) return true;
     return (
       aiConfig.providerUrl !== aiSavedConfig.providerUrl ||
+      aiConfig.providerType !== aiSavedConfig.providerType ||
       aiConfig.endpointMode !== aiSavedConfig.endpointMode ||
       aiConfig.supportsImages !== aiSavedConfig.supportsImages ||
-      aiConfig.model !== aiSavedConfig.model
+      aiConfig.model !== aiSavedConfig.model ||
+      aiConfig.gatewayInferenceModel !== aiSavedConfig.gatewayInferenceModel ||
+      aiConfig.gatewayInferenceAllowUserModelSelection !==
+        aiSavedConfig.gatewayInferenceAllowUserModelSelection
     );
   })();
 
@@ -499,15 +532,22 @@ export function AIConfigSection() {
   })();
 
   const loadAIConfig = useCallback(async () => {
+    const expectedInferenceEnabled = inferenceEnabled;
     try {
-      const config = (await api.getAIConfig()) as any;
+      const config = normalizeAIConfigState((await api.getAIConfig()) as unknown as AIConfigState);
+      if (
+        useSystemConfigStore.getState().config.features.inferenceEnabled !==
+        expectedInferenceEnabled
+      ) {
+        return;
+      }
       api.setCache("settings:ai-config", config);
       setAiConfig(config);
       setAiSavedConfig(config);
     } catch {
       /* AI not configured yet */
     }
-  }, []);
+  }, [inferenceEnabled]);
 
   const loadSandboxStatus = useCallback(async () => {
     try {
@@ -520,7 +560,9 @@ export function AIConfigSection() {
   const updateAIConfig = async (partial: Record<string, unknown>) => {
     setAiSaving(true);
     try {
-      const updated = (await api.updateAIConfig(partial)) as any;
+      const updated = normalizeAIConfigState(
+        (await api.updateAIConfig(partial)) as unknown as AIConfigState
+      );
       setAiConfig((prev) => {
         if (!prev) return null;
         const next = { ...prev, ...updated };
@@ -530,7 +572,7 @@ export function AIConfigSection() {
       });
       api
         .getAIStatus()
-        .then((s) => useAIStore.getState().setEnabled(s.enabled))
+        .then((status) => useAIStore.getState().setProviderStatus(status))
         .catch(() => {});
       toast.success("AI settings updated");
     } catch (err) {
@@ -557,13 +599,24 @@ export function AIConfigSection() {
 
   const saveProviderSettings = async () => {
     if (!aiConfig) return;
-    const updates: Record<string, unknown> = {
-      providerUrl: aiConfig.providerUrl,
-      endpointMode: aiConfig.endpointMode,
-      supportsImages: aiConfig.supportsImages,
-      model: aiConfig.model,
-    };
-    if (aiApiKey) updates.apiKey = aiApiKey;
+    const updates: Record<string, unknown> =
+      aiConfig.providerType === "gateway_inference"
+        ? {
+            providerType: aiConfig.providerType,
+            gatewayInferenceModel: aiConfig.gatewayInferenceModel,
+            gatewayInferenceAllowUserModelSelection:
+              aiConfig.gatewayInferenceAllowUserModelSelection,
+          }
+        : {
+            providerType: aiConfig.providerType,
+            providerUrl: aiConfig.providerUrl,
+            endpointMode: aiConfig.endpointMode,
+            supportsImages: aiConfig.supportsImages,
+            model: aiConfig.model,
+          };
+    if (aiConfig.providerType === "openai_compatible" && aiApiKey) {
+      updates.apiKey = aiApiKey;
+    }
     await updateAIConfig(updates);
     setAiApiKey("");
   };
@@ -768,166 +821,255 @@ export function AIConfigSection() {
       <div className="space-y-4">
         <PanelShell
           title="Provider"
-          description="OpenAI-compatible provider connection used for assistant responses"
+          description={
+            aiConfig.providerType === "gateway_inference"
+              ? "Gateway Inference model used for assistant responses"
+              : "OpenAI-compatible provider connection used for assistant responses"
+          }
           actions={
             <SaveSettingsButton
               onClick={saveProviderSettings}
-              disabled={!providerHasChanges || aiSaving}
+              disabled={
+                !providerHasChanges ||
+                aiSaving ||
+                (aiConfig.providerType === "gateway_inference" && !aiConfig.gatewayInferenceModel)
+              }
             />
           }
           dirty={providerHasChanges}
         >
-          <SettingsControlRow title="Base URL" description="OpenAI-compatible API base URL.">
-            <Input
-              aria-label="Base URL"
-              className="text-sm"
-              placeholder="https://api.openai.com/v1"
-              value={aiConfig.providerUrl}
-              onChange={(e) => setAiConfig({ ...aiConfig, providerUrl: e.target.value })}
-            />
-          </SettingsControlRow>
           <SettingsControlRow
-            title="Endpoint"
-            description="Provider endpoint family used for tool-capable requests."
+            title="Provider type"
+            description="Response provider for the AI assistant."
           >
             <Select
-              value={aiConfig.endpointMode || "auto"}
-              onValueChange={(endpointMode) => setAiConfig({ ...aiConfig, endpointMode })}
-            >
-              <SelectTrigger aria-label="Endpoint" className="text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="auto">Auto</SelectItem>
-                <SelectItem value="responses">Responses API</SelectItem>
-                <SelectItem value="chat_completions">Chat Completions</SelectItem>
-              </SelectContent>
-            </Select>
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Image input"
-            description="Enable when the selected model can process uploaded images."
-          >
-            <Switch
-              checked={!!aiConfig.supportsImages}
-              disabled={aiSaving}
-              onChange={(supportsImages) => setAiConfig({ ...aiConfig, supportsImages })}
-            />
-          </SettingsControlRow>
-          <SettingsControlRow title="Model" description="Model name used for assistant responses.">
-            <Input
-              aria-label="Model"
-              className="text-sm"
-              placeholder="gpt-4o"
-              value={aiConfig.model}
-              onChange={(e) => setAiConfig({ ...aiConfig, model: e.target.value })}
-            />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="API key"
-            description="Secret used to authenticate provider requests."
-          >
-            <Input
-              aria-label="API key"
-              className="text-sm"
-              type="password"
-              placeholder={aiConfig.hasApiKey ? `****${aiConfig.apiKeyLast4}` : "sk-..."}
-              value={aiApiKey}
-              onChange={(e) => setAiApiKey(e.target.value)}
-            />
-          </SettingsControlRow>
-        </PanelShell>
-
-        <PanelShell
-          title="Limits"
-          description="Request budgets, context size, and provider token field mapping"
-          actions={
-            <SaveSettingsButton
-              onClick={saveLimitSettings}
-              disabled={!limitsHasChanges || aiSaving}
-            />
-          }
-          dirty={limitsHasChanges}
-        >
-          <SettingsControlRow
-            title="Requests and window"
-            description="Maximum assistant requests allowed per time window."
-            controlsClassName="grid grid-cols-2 gap-2 sm:max-w-none sm:grid-cols-[8rem_8rem]"
-          >
-            <Input
-              aria-label="Requests"
-              className="text-sm"
-              type="number"
-              value={aiConfig.rateLimitMax}
-              onChange={(e) => setAiConfig({ ...aiConfig, rateLimitMax: Number(e.target.value) })}
-            />
-            <Input
-              aria-label="Window seconds"
-              className="text-sm"
-              type="number"
-              value={aiConfig.rateLimitWindowSeconds}
-              onChange={(e) =>
+              value={aiConfig.providerType || "openai_compatible"}
+              onValueChange={(providerType) =>
                 setAiConfig({
                   ...aiConfig,
-                  rateLimitWindowSeconds: Number(e.target.value),
+                  providerType: providerType as AIProviderType,
+                  gatewayInferenceModel:
+                    providerType === "gateway_inference"
+                      ? aiConfig.gatewayInferenceModel ||
+                        aiConfig.gatewayInferenceModels[0]?.id ||
+                        ""
+                      : aiConfig.gatewayInferenceModel,
                 })
               }
-            />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Tool rounds and context size"
-            description="Maximum sequential tool calls and context budget."
-            controlsClassName="grid grid-cols-2 gap-2 sm:max-w-none sm:grid-cols-[8rem_8rem]"
-          >
-            <Input
-              aria-label="Max tool rounds"
-              className="text-sm"
-              type="number"
-              value={aiConfig.maxToolRounds}
-              onChange={(e) => setAiConfig({ ...aiConfig, maxToolRounds: Number(e.target.value) })}
-            />
-            <Input
-              aria-label="Context size"
-              className="text-sm"
-              type="number"
-              value={aiConfig.maxContextTokens}
-              onChange={(e) =>
-                setAiConfig({ ...aiConfig, maxContextTokens: Number(e.target.value) })
-              }
-            />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Response tokens"
-            description="Maximum generated tokens returned by the provider."
-          >
-            <Input
-              aria-label="Max response tokens"
-              className="text-sm"
-              type="number"
-              value={aiConfig.maxCompletionTokens}
-              onChange={(e) =>
-                setAiConfig({ ...aiConfig, maxCompletionTokens: Number(e.target.value) })
-              }
-            />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Token field"
-            description="Provider request field used for max response tokens."
-          >
-            <Select
-              value={aiConfig.maxTokensField || "max_completion_tokens"}
-              onValueChange={(v) => setAiConfig({ ...aiConfig, maxTokensField: v })}
             >
-              <SelectTrigger aria-label="Token field" className="text-sm">
+              <SelectTrigger aria-label="Provider type" className="text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="max_completion_tokens">max_completion_tokens</SelectItem>
-                <SelectItem value="max_tokens">max_tokens</SelectItem>
+                <SelectItem value="openai_compatible">OAI-compatible</SelectItem>
+                {inferenceEnabled && (
+                  <SelectItem value="gateway_inference">Gateway Inference</SelectItem>
+                )}
               </SelectContent>
             </Select>
           </SettingsControlRow>
+          {aiConfig.providerType === "gateway_inference" ? (
+            <>
+              <SettingsControlRow
+                title="Default model"
+                description="Model used unless an operator selects another allowed model."
+              >
+                <Select
+                  value={aiConfig.gatewayInferenceModel}
+                  onValueChange={(gatewayInferenceModel) =>
+                    setAiConfig({ ...aiConfig, gatewayInferenceModel })
+                  }
+                >
+                  <SelectTrigger aria-label="Default model" className="text-sm">
+                    <SelectValue placeholder="Select a model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {aiConfig.gatewayInferenceModels.map((model) => (
+                      <SelectItem key={model.id} value={model.id}>
+                        {model.displayName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="User model selection"
+                description="Allow users to choose another Gateway Inference model they can access."
+              >
+                <Switch
+                  checked={aiConfig.gatewayInferenceAllowUserModelSelection}
+                  disabled={aiSaving}
+                  onChange={(gatewayInferenceAllowUserModelSelection) =>
+                    setAiConfig({
+                      ...aiConfig,
+                      gatewayInferenceAllowUserModelSelection,
+                    })
+                  }
+                />
+              </SettingsControlRow>
+            </>
+          ) : (
+            <>
+              <SettingsControlRow title="Base URL" description="OpenAI-compatible API base URL.">
+                <Input
+                  aria-label="Base URL"
+                  className="text-sm"
+                  placeholder="https://api.openai.com/v1"
+                  value={aiConfig.providerUrl}
+                  onChange={(e) => setAiConfig({ ...aiConfig, providerUrl: e.target.value })}
+                />
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="Endpoint"
+                description="Provider endpoint family used for tool-capable requests."
+              >
+                <Select
+                  value={aiConfig.endpointMode || "auto"}
+                  onValueChange={(endpointMode) => setAiConfig({ ...aiConfig, endpointMode })}
+                >
+                  <SelectTrigger aria-label="Endpoint" className="text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">Auto</SelectItem>
+                    <SelectItem value="responses">Responses API</SelectItem>
+                    <SelectItem value="chat_completions">Chat Completions</SelectItem>
+                  </SelectContent>
+                </Select>
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="Image input"
+                description="Enable when the selected model can process uploaded images."
+              >
+                <Switch
+                  checked={!!aiConfig.supportsImages}
+                  disabled={aiSaving}
+                  onChange={(supportsImages) => setAiConfig({ ...aiConfig, supportsImages })}
+                />
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="Model"
+                description="Model name used for assistant responses."
+              >
+                <Input
+                  aria-label="Model"
+                  className="text-sm"
+                  placeholder="gpt-4o"
+                  value={aiConfig.model}
+                  onChange={(e) => setAiConfig({ ...aiConfig, model: e.target.value })}
+                />
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="API key"
+                description="Secret used to authenticate provider requests."
+              >
+                <Input
+                  aria-label="API key"
+                  className="text-sm"
+                  type="password"
+                  placeholder={aiConfig.hasApiKey ? `****${aiConfig.apiKeyLast4}` : "sk-..."}
+                  value={aiApiKey}
+                  onChange={(e) => setAiApiKey(e.target.value)}
+                />
+              </SettingsControlRow>
+            </>
+          )}
         </PanelShell>
+
+        {aiConfig.providerType === "openai_compatible" && (
+          <PanelShell
+            title="Limits"
+            description="Request budgets, context size, and provider token field mapping"
+            actions={
+              <SaveSettingsButton
+                onClick={saveLimitSettings}
+                disabled={!limitsHasChanges || aiSaving}
+              />
+            }
+            dirty={limitsHasChanges}
+          >
+            <SettingsControlRow
+              title="Requests and window"
+              description="Maximum assistant requests allowed per time window."
+              controlsClassName="grid grid-cols-2 gap-2 sm:max-w-none sm:grid-cols-[8rem_8rem]"
+            >
+              <Input
+                aria-label="Requests"
+                className="text-sm"
+                type="number"
+                value={aiConfig.rateLimitMax}
+                onChange={(e) => setAiConfig({ ...aiConfig, rateLimitMax: Number(e.target.value) })}
+              />
+              <Input
+                aria-label="Window seconds"
+                className="text-sm"
+                type="number"
+                value={aiConfig.rateLimitWindowSeconds}
+                onChange={(e) =>
+                  setAiConfig({
+                    ...aiConfig,
+                    rateLimitWindowSeconds: Number(e.target.value),
+                  })
+                }
+              />
+            </SettingsControlRow>
+            <SettingsControlRow
+              title="Tool rounds and context size"
+              description="Maximum sequential tool calls and context budget."
+              controlsClassName="grid grid-cols-2 gap-2 sm:max-w-none sm:grid-cols-[8rem_8rem]"
+            >
+              <Input
+                aria-label="Max tool rounds"
+                className="text-sm"
+                type="number"
+                value={aiConfig.maxToolRounds}
+                onChange={(e) =>
+                  setAiConfig({ ...aiConfig, maxToolRounds: Number(e.target.value) })
+                }
+              />
+              <Input
+                aria-label="Context size"
+                className="text-sm"
+                type="number"
+                value={aiConfig.maxContextTokens}
+                onChange={(e) =>
+                  setAiConfig({ ...aiConfig, maxContextTokens: Number(e.target.value) })
+                }
+              />
+            </SettingsControlRow>
+            <SettingsControlRow
+              title="Response tokens"
+              description="Maximum generated tokens returned by the provider."
+            >
+              <Input
+                aria-label="Max response tokens"
+                className="text-sm"
+                type="number"
+                value={aiConfig.maxCompletionTokens}
+                onChange={(e) =>
+                  setAiConfig({ ...aiConfig, maxCompletionTokens: Number(e.target.value) })
+                }
+              />
+            </SettingsControlRow>
+            <SettingsControlRow
+              title="Token field"
+              description="Provider request field used for max response tokens."
+            >
+              <Select
+                value={aiConfig.maxTokensField || "max_completion_tokens"}
+                onValueChange={(v) => setAiConfig({ ...aiConfig, maxTokensField: v })}
+              >
+                <SelectTrigger aria-label="Token field" className="text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="max_completion_tokens">max_completion_tokens</SelectItem>
+                  <SelectItem value="max_tokens">max_tokens</SelectItem>
+                </SelectContent>
+              </Select>
+            </SettingsControlRow>
+          </PanelShell>
+        )}
       </div>
 
       <PanelShell

@@ -60,6 +60,14 @@ function setAuthenticatedUser() {
 async function connectAI() {
   vi.stubGlobal("WebSocket", MockWebSocket);
   setAuthenticatedUser();
+  vi.spyOn(api, "getAIStatus").mockResolvedValue({
+    enabled: true,
+    providerType: "openai_compatible",
+    defaultModel: "test-model",
+    allowUserModelSelection: false,
+    supportsImages: false,
+    models: [],
+  });
 
   const connectPromise = useAIStore.getState().connect();
   const socket = MockWebSocket.instances[0];
@@ -129,6 +137,68 @@ describe("AI backend runtime store", () => {
         }),
       ])
     );
+  });
+
+  it("sends the selected model only for Gateway Inference", async () => {
+    const socket = await connectAI();
+    const models = [
+      {
+        id: "gateway-default",
+        displayName: "Gateway Default",
+        supportsImages: false,
+        maxContextTokens: 100_000,
+        maxOutputTokens: 16_000,
+        reasoningEfforts: ["low", "high"],
+        defaultReasoningEffort: "high",
+      },
+      {
+        id: "gateway-fast",
+        displayName: "Gateway Fast",
+        supportsImages: false,
+        maxContextTokens: 80_000,
+        maxOutputTokens: 8_000,
+        reasoningEfforts: ["low", "high", "max"],
+        defaultReasoningEffort: "high",
+      },
+    ];
+
+    useAIStore.getState().setProviderStatus({
+      enabled: true,
+      providerType: "gateway_inference",
+      defaultModel: "gateway-default",
+      allowUserModelSelection: true,
+      supportsImages: false,
+      models,
+    });
+    useAIStore.getState().setSelectedModel("gateway-fast");
+    useAIStore.getState().setSelectedReasoningEffort("max");
+    useAIStore.getState().sendMessage("use gateway");
+
+    expect(sentPayloads(socket)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "conversation.send_message",
+          content: "use gateway",
+          model: "gateway-fast",
+          reasoningEffort: "max",
+        }),
+      ])
+    );
+
+    useAIStore.getState().setProviderStatus({
+      enabled: true,
+      providerType: "openai_compatible",
+      defaultModel: "oai-model",
+      allowUserModelSelection: false,
+      supportsImages: false,
+      models: [],
+    });
+    useAIStore.setState({ isStreaming: false });
+    useAIStore.getState().sendMessage("use oai");
+
+    const oaiPayload = sentPayloads(socket).find((payload) => payload.content === "use oai");
+    expect(oaiPayload).not.toHaveProperty("model");
+    expect(oaiPayload).not.toHaveProperty("reasoningEffort");
   });
 
   it("reports context usage with server-estimated prompt and tool overhead", async () => {
@@ -470,6 +540,64 @@ describe("AI backend runtime store", () => {
     );
   });
 
+  it("retries a failed turn by rolling it back and sending it again", async () => {
+    const socket = await connectAI();
+    useAIStore.setState({
+      activeConversationId: "conversation-1",
+      lastContext: { route: "/settings" },
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: "old prompt",
+          attachments: [],
+        },
+        {
+          id: "assistant-error",
+          role: "assistant",
+          content: "**Error:** provider failed",
+          localOnly: true,
+          runError: true,
+        },
+      ],
+    });
+    vi.mocked(rollbackConversationToMessage).mockResolvedValueOnce({
+      message: {
+        id: "user-1",
+        role: "user",
+        content: "old prompt",
+        attachments: [],
+      },
+      conversation: {
+        id: "conversation-1",
+        title: "Retry chat",
+        messages: [],
+        lastContext: { route: "/settings" },
+        createdAt: "2026-06-26T09:59:00.000Z",
+        updatedAt: "2026-06-26T10:00:00.000Z",
+        lastUserMessageAt: "2026-06-26T10:00:00.000Z",
+        folderId: null,
+        status: "active",
+        blockReason: null,
+        activeRunStatus: null,
+      },
+    });
+
+    await useAIStore.getState().retryMessage("user-1");
+
+    expect(rollbackConversationToMessage).toHaveBeenCalledWith("conversation-1", "user-1");
+    expect(sentPayloads(socket)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "conversation.send_message",
+          conversationId: "conversation-1",
+          content: "old prompt",
+          context: { route: "/settings" },
+        }),
+      ])
+    );
+  });
+
   it("cancels the active run when rolling back to a user message", async () => {
     useAIStore.setState({
       activeConversationId: "conversation-1",
@@ -545,7 +673,15 @@ describe("AI backend runtime store", () => {
           discoveredToolsets: [],
           checkpoint: null,
         },
-        messages: [{ id: "message-1", role: "assistant", content: "Checking..." }],
+        messages: [
+          { id: "message-1", role: "assistant", content: "Checking..." },
+          {
+            id: "message-2",
+            role: "assistant",
+            content: "**Error:** provider failed",
+            localOnly: true,
+          },
+        ],
         runtime: {
           activeRun: {
             id: "run-1",
@@ -600,6 +736,10 @@ describe("AI backend runtime store", () => {
         status: "awaiting_approval",
       }),
     ]);
+    expect(useAIStore.getState().messages[1]).toMatchObject({
+      content: "**Error:** provider failed",
+      localOnly: true,
+    });
   });
 
   it("updates the sidebar from runtime snapshots without refetching conversations", async () => {

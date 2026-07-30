@@ -818,7 +818,7 @@ function openAiInputItems(messages: InferenceRequest['messages']): JsonObject[] 
       if (part.type === 'tool_call') {
         items.push({
           type: part.custom ? 'custom_tool_call' : 'function_call',
-          id: part.id,
+          ...(isOpenAiFunctionItemId(part.id) ? { id: part.id } : {}),
           call_id: part.callId,
           name: providerToolName(part),
           ...(part.custom ? { input: part.arguments } : { arguments: part.arguments }),
@@ -844,6 +844,10 @@ function openAiInputItems(messages: InferenceRequest['messages']): JsonObject[] 
     }
     return items;
   });
+}
+
+function isOpenAiFunctionItemId(value: string): boolean {
+  return value.startsWith('fc');
 }
 
 function openAiPart(part: InferenceContentPart, role: InferenceRequest['messages'][number]['role']): JsonObject {

@@ -129,7 +129,7 @@ export type InferenceStreamEvent =
 export interface InferenceExecutionContext {
   requestId: string;
   userId: string;
-  tokenId: string;
+  tokenId: string | null;
   affinityKey?: string;
   existingThread?: boolean;
   operation?: 'inference' | 'search';

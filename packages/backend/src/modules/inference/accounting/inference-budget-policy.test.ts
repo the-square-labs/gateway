@@ -1,7 +1,7 @@
 import 'reflect-metadata';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { InferenceLimitPolicy } from '@/db/schema/inference-models.js';
-import { __testOnly } from './inference-budget-policy.js';
+import { __testOnly, InferenceBudgetPolicyService } from './inference-budget-policy.js';
 
 describe('effective inference rolling-window policy', () => {
   it('treats disabled default windows as global gates over a user override', () => {
@@ -42,6 +42,42 @@ describe('effective inference rolling-window policy', () => {
     });
 
     expect(__testOnly.effectiveLimits(user, defaults).credits7dEnabled).toBe(false);
+  });
+
+  it('derives rolling recovery timestamps from ledger expiry bases', async () => {
+    const now = new Date('2026-07-31T00:00:00.000Z');
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({
+        rows: [{ used: '95', recovery_base: new Date('2026-07-30T22:00:00.000Z') }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ used: '475', recovery_base: new Date('2026-07-27T12:00:00.000Z') }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ used: '950', recovery_base: new Date('2026-07-10T06:00:00.000Z') }],
+      });
+    const database = {
+      execute,
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue([{ value: 0 }]),
+        })),
+      })),
+    };
+    const limits = __testOnly.effectiveLimits(policy({}));
+    const service = new InferenceBudgetPolicyService(database as never);
+
+    const usage = await service.usage('cef8fbd8-f149-4cd6-b69f-34bea4a10c52', limits, now, database as never);
+
+    expect(usage).toMatchObject({
+      credits5h: 95,
+      credits7d: 475,
+      credits30d: 950,
+    });
+    expect(usage.recoveryAt.credits5h).toEqual(new Date('2026-07-31T03:00:00.000Z'));
+    expect(usage.recoveryAt.credits7d).toEqual(new Date('2026-08-03T12:00:00.000Z'));
+    expect(usage.recoveryAt.credits30d).toEqual(new Date('2026-08-09T06:00:00.000Z'));
   });
 });
 

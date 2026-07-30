@@ -5,10 +5,19 @@ import { inferencePricingSnapshots, inferenceQuotaSnapshots } from '@/db/schema/
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 import type { InferenceRequest, InferenceUsage } from '../protocol/inference-protocol.types.js';
 import { estimateInputTokens } from '../protocol/inference-usage.js';
-import { apiMicrodollars, subscriptionCredits } from './inference-budget-policy.js';
+import {
+  apiMicrodollars,
+  type EffectiveInferenceLimits,
+  type InferenceBudgetUsage,
+  SUBSCRIPTION_CHAT_BUDGET_FRACTION,
+  SUBSCRIPTION_LAST_REQUEST_BUDGET_FRACTION,
+  subscriptionCredits,
+} from './inference-budget-policy.js';
 import type { BudgetReservationAmounts } from './inference-budget-reservation.service.js';
 
 const DEFAULT_UNKNOWN_MAX_OUTPUT_TOKENS = 8_192;
+const MINIMUM_CAPPED_OUTPUT_TOKENS = 128;
+const CAPPED_REQUEST_SAFETY_FRACTION = 0.95;
 
 export function conservativeEstimate(
   request: InferenceRequest,
@@ -61,6 +70,69 @@ export function reservationAmounts(
     credits30d: 0,
     apiMonthlyMicrodollars: apiMicrodollars(usage, pricing) + fixedApiMicrodollars,
   };
+}
+
+export function capSubscriptionEstimateToBudget(input: {
+  estimate: InferenceUsage;
+  limits: EffectiveInferenceLimits;
+  usage: InferenceBudgetUsage;
+  modelMultiplier: number;
+  burnMultiplier: number;
+  serviceTierMultiplier: number;
+  isCompaction: boolean;
+  allowLastRequestGrace: boolean;
+}): InferenceUsage {
+  if (input.isCompaction || !input.allowLastRequestGrace) return input.estimate;
+
+  const enabledHeadroom = [
+    input.limits.credits5hEnabled
+      ? input.limits.credits5h * SUBSCRIPTION_LAST_REQUEST_BUDGET_FRACTION - input.usage.credits5h
+      : null,
+    input.limits.credits7dEnabled
+      ? input.limits.credits7d * SUBSCRIPTION_LAST_REQUEST_BUDGET_FRACTION - input.usage.credits7d
+      : null,
+    input.limits.credits30dEnabled
+      ? input.limits.credits30d * SUBSCRIPTION_LAST_REQUEST_BUDGET_FRACTION - input.usage.credits30d
+      : null,
+  ].filter((value): value is number => value !== null);
+
+  if (enabledHeadroom.length === 0) return input.estimate;
+  const headroomCredits = Math.max(0, Math.min(...enabledHeadroom));
+  const multiplier = input.modelMultiplier * input.burnMultiplier * input.serviceTierMultiplier;
+  const desiredCredits = subscriptionCredits(input.estimate.totalTokens, multiplier, 1);
+  if (desiredCredits <= headroomCredits || multiplier <= 0) return input.estimate;
+
+  const minimumCredits = subscriptionCredits(input.estimate.inputTokens + MINIMUM_CAPPED_OUTPUT_TOKENS, multiplier, 1);
+  if (minimumCredits > headroomCredits) return input.estimate;
+
+  const targetCredits = Math.max(minimumCredits, headroomCredits * CAPPED_REQUEST_SAFETY_FRACTION);
+  const totalTokenCapacity = Math.floor((targetCredits * 1_000) / multiplier);
+  const outputTokens = Math.min(
+    input.estimate.outputTokens,
+    Math.max(MINIMUM_CAPPED_OUTPUT_TOKENS, totalTokenCapacity - input.estimate.inputTokens)
+  );
+
+  return {
+    ...input.estimate,
+    outputTokens,
+    totalTokens: input.estimate.inputTokens + outputTokens,
+  };
+}
+
+export function hasSpendableSubscriptionBudget(limits: EffectiveInferenceLimits, usage: InferenceBudgetUsage): boolean {
+  const enabledWindows = [
+    limits.credits5hEnabled
+      ? { used: usage.credits5h, limit: limits.credits5h * SUBSCRIPTION_CHAT_BUDGET_FRACTION }
+      : null,
+    limits.credits7dEnabled
+      ? { used: usage.credits7d, limit: limits.credits7d * SUBSCRIPTION_CHAT_BUDGET_FRACTION }
+      : null,
+    limits.credits30dEnabled
+      ? { used: usage.credits30d, limit: limits.credits30d * SUBSCRIPTION_CHAT_BUDGET_FRACTION }
+      : null,
+  ].filter((window): window is { used: number; limit: number } => window !== null);
+
+  return enabledWindows.length === 0 || enabledWindows.every((window) => window.used < window.limit);
 }
 
 export function unitCharge(
@@ -132,4 +204,10 @@ function latestQuotaRows(rows: Array<typeof inferenceQuotaSnapshots.$inferSelect
   });
 }
 
-export const __testOnly = { conservativeEstimate, reservationAmounts, latestQuotaRows };
+export const __testOnly = {
+  capSubscriptionEstimateToBudget,
+  conservativeEstimate,
+  hasSpendableSubscriptionBudget,
+  reservationAmounts,
+  latestQuotaRows,
+};

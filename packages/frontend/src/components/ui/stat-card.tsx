@@ -9,6 +9,7 @@ export interface StatCardProps {
   history?: number[];
   color?: string;
   subtitle?: string;
+  subtitleClassName?: string;
   progress?: { percent: number; color?: string };
   sparklineMax?: number;
   /** Override text color for label and value (e.g. for warning state) */
@@ -25,6 +26,7 @@ export function StatCard({
   history = [],
   color = "var(--color-primary)",
   subtitle,
+  subtitleClassName,
   progress,
   sparklineMax,
   valueColor,
@@ -68,7 +70,8 @@ export function StatCard({
           <p
             className={cn(
               appearance === "dashboard" ? "text-xs" : "text-[10px]",
-              "text-muted-foreground"
+              "text-muted-foreground",
+              subtitleClassName
             )}
           >
             {subtitle}

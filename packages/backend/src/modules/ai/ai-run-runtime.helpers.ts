@@ -25,6 +25,7 @@ export function toPageContext(value: Record<string, unknown> | null): PageContex
 export function toChatMessage(value: unknown): ChatMessage | null {
   if (!value || typeof value !== 'object') return null;
   const message = value as Record<string, unknown>;
+  if (message.localOnly === true) return null;
   const role = message.role;
   if (role !== 'system' && role !== 'user' && role !== 'assistant' && role !== 'tool') return null;
   return {

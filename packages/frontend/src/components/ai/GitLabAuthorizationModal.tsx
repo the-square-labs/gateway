@@ -89,12 +89,12 @@ export function GitLabAuthorizationModal() {
       <DialogContent hideCloseButton>
         <DialogHeader>
           <DialogTitle>Authorize GitLab</DialogTitle>
-          <DialogDescription>
-            Gateway needs your personal access token for this connector. It is sent directly to
-            Gateway, stored encrypted, used only for this GitLab connector, and never added to the
-            AI conversation.
-          </DialogDescription>
         </DialogHeader>
+        <DialogDescription>
+          Gateway needs your personal access token for this connector. It is sent directly to
+          Gateway, stored encrypted, used only for this GitLab connector, and never added to the AI
+          conversation.
+        </DialogDescription>
 
         <div className="space-y-4">
           <div className="rounded-md border border-border bg-muted/40 p-3 text-sm">

@@ -1,5 +1,8 @@
 import { useLocation } from "react-router-dom";
+import { useAIStore } from "@/stores/ai";
+import { useAuthStore } from "@/stores/auth";
 import type { QuickAction } from "@/types/ai";
+import { useInferenceQuotaSnapshot } from "./InferenceQuotaStatus";
 
 const QUICK_ACTIONS: Record<string, QuickAction[]> = {
   "/": [
@@ -62,6 +65,13 @@ interface QuickActionChipsProps {
 
 export function QuickActionChips({ onSelect }: QuickActionChipsProps) {
   const location = useLocation();
+  const gatewayInferenceMode = useAIStore(
+    (state) => state.providerStatus?.providerType === "gateway_inference"
+  );
+  const canViewInferenceUsage = useAuthStore((state) =>
+    state.hasScope("inference:usage:view:self")
+  );
+  const inferenceQuota = useInferenceQuotaSnapshot(gatewayInferenceMode && canViewInferenceUsage);
 
   const actions =
     QUICK_ACTIONS[location.pathname] ||
@@ -73,8 +83,10 @@ export function QuickActionChips({ onSelect }: QuickActionChipsProps) {
       {actions.map((action) => (
         <button
           key={action.label}
+          type="button"
           onClick={() => onSelect(action.prompt)}
-          className="border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
+          disabled={inferenceQuota.exhausted}
+          className="border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
         >
           {action.label}
         </button>

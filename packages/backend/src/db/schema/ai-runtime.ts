@@ -50,6 +50,8 @@ export const aiRuns = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     status: varchar('status', { length: 32 }).$type<AIRunStatus>().notNull().default('queued'),
     activeMessageId: uuid('active_message_id'),
+    model: varchar('model', { length: 255 }),
+    reasoningEffort: varchar('reasoning_effort', { length: 64 }),
     clientCommandId: varchar('client_command_id', { length: 128 }).notNull(),
     assistantDraftContent: text('assistant_draft_content'),
     error: text('error'),

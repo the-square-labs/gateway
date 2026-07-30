@@ -6,7 +6,7 @@ import { inferenceLimitPolicies, inferenceRequests, inferenceUsageLedger, users 
 import type { InferenceRequestStatus } from '@/db/schema/inference-usage.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
-import type { InferenceBudgetPolicyService } from './inference-budget-policy.js';
+import { type InferenceBudgetPolicyService, SUBSCRIPTION_CHAT_BUDGET_FRACTION } from './inference-budget-policy.js';
 
 export interface InferenceLimitPolicyInput {
   enabled: boolean;
@@ -43,17 +43,17 @@ export class InferenceUsageService {
       subscription: {
         '5h': {
           configured: limits.credits5hEnabled,
-          percentage: percentage(usage.credits5h, limits.credits5h),
+          percentage: subscriptionPercentage(usage.credits5h, limits.credits5h),
           recoveryAt: usage.recoveryAt.credits5h.toISOString(),
         },
         '7d': {
           configured: limits.credits7dEnabled,
-          percentage: percentage(usage.credits7d, limits.credits7d),
+          percentage: subscriptionPercentage(usage.credits7d, limits.credits7d),
           recoveryAt: usage.recoveryAt.credits7d.toISOString(),
         },
         '30d': {
           configured: limits.credits30dEnabled,
-          percentage: percentage(usage.credits30d, limits.credits30d),
+          percentage: subscriptionPercentage(usage.credits30d, limits.credits30d),
           recoveryAt: usage.recoveryAt.credits30d.toISOString(),
         },
       },
@@ -294,6 +294,10 @@ function percentage(used: number, limit: number): number {
   return Math.max(0, Math.min(100, (used / limit) * 100));
 }
 
+function subscriptionPercentage(used: number, limit: number): number {
+  return percentage(used, limit * SUBSCRIPTION_CHAT_BUDGET_FRACTION);
+}
+
 function validatePolicy(input: InferenceLimitPolicyInput) {
   const values = [input.credits5h, input.credits7d, input.credits30d, input.apiMonthlyMicrodollars];
   if (values.some((value) => !Number.isFinite(value) || value < 0)) {
@@ -320,4 +324,4 @@ function dbPolicy(input: InferenceLimitPolicyInput) {
   };
 }
 
-export const __testOnly = { percentage, validatePolicy };
+export const __testOnly = { percentage, subscriptionPercentage, validatePolicy };

@@ -22,12 +22,17 @@ export interface GeneralSettings {
   gatewayGrpcPublicTarget: string | null;
   gatewayGrpcLocalIp: string | null;
   features: GeneralFeatureSettings;
+  inference: GeneralInferenceSettings;
 }
 
 export interface GeneralFeatureSettings {
   pkiEnabled: boolean;
   domainsEnabled: boolean;
   inferenceEnabled: boolean;
+}
+
+export interface GeneralInferenceSettings {
+  harnessSpecificEndpointsEnabled: boolean;
 }
 
 export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
@@ -41,10 +46,14 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
     domainsEnabled: true,
     inferenceEnabled: false,
   },
+  inference: {
+    harnessSpecificEndpointsEnabled: false,
+  },
 };
 
-export type GeneralSettingsUpdate = Omit<Partial<GeneralSettings>, 'features'> & {
+export type GeneralSettingsUpdate = Omit<Partial<GeneralSettings>, 'features' | 'inference'> & {
   features?: Partial<GeneralFeatureSettings>;
+  inference?: Partial<GeneralInferenceSettings>;
 };
 
 export function fileUploadBodyLimitBytes(fileUploadMaxBytes: number): number {
@@ -150,11 +159,16 @@ export function isValidGatewayHostPortTarget(value: string): boolean {
 export class GeneralSettingsService {
   private cached: GeneralSettings | null = null;
   private cachedAt = 0;
+  private inferenceDisabledHandler?: () => Promise<void>;
 
   constructor(
     private readonly db: DrizzleClient,
     private readonly inferenceSetupEvents?: InferenceSetupEventsService
   ) {}
+
+  setInferenceDisabledHandler(handler: () => Promise<void>): void {
+    this.inferenceDisabledHandler = handler;
+  }
 
   async getConfig(): Promise<GeneralSettings> {
     const now = Date.now();
@@ -176,6 +190,10 @@ export class GeneralSettingsService {
         ...current.features,
         ...updates.features,
       },
+      inference: {
+        ...current.inference,
+        ...updates.inference,
+      },
     });
     await this.db
       .insert(settings)
@@ -186,8 +204,14 @@ export class GeneralSettingsService {
       });
     this.cached = next;
     this.cachedAt = Date.now();
-    if (current.features.inferenceEnabled !== next.features.inferenceEnabled) {
+    if (
+      current.features.inferenceEnabled !== next.features.inferenceEnabled ||
+      current.inference.harnessSpecificEndpointsEnabled !== next.inference.harnessSpecificEndpointsEnabled
+    ) {
       this.inferenceSetupEvents?.publishCatalogChanged();
+    }
+    if (current.features.inferenceEnabled && !next.features.inferenceEnabled) {
+      await this.inferenceDisabledHandler?.();
     }
     return next;
   }
@@ -218,6 +242,14 @@ export class GeneralSettingsService {
     return config.features[feature];
   }
 
+  async getInferenceSettings(): Promise<GeneralInferenceSettings> {
+    return (await this.getConfig()).inference;
+  }
+
+  async updateInferenceSettings(updates: Partial<GeneralInferenceSettings>): Promise<GeneralInferenceSettings> {
+    return (await this.updateConfig({ inference: updates })).inference;
+  }
+
   private normalize(value: unknown): GeneralSettings {
     const record = typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
     const rawFileUploadMaxBytes = Number(record.fileUploadMaxBytes);
@@ -246,6 +278,10 @@ export class GeneralSettingsService {
       typeof record.features === 'object' && record.features !== null
         ? (record.features as Record<string, unknown>)
         : {};
+    const inference =
+      typeof record.inference === 'object' && record.inference !== null
+        ? (record.inference as Record<string, unknown>)
+        : {};
 
     return {
       fileUploadMaxBytes,
@@ -264,6 +300,12 @@ export class GeneralSettingsService {
           typeof features.inferenceEnabled === 'boolean'
             ? features.inferenceEnabled
             : DEFAULT_GENERAL_SETTINGS.features.inferenceEnabled,
+      },
+      inference: {
+        harnessSpecificEndpointsEnabled:
+          typeof inference.harnessSpecificEndpointsEnabled === 'boolean'
+            ? inference.harnessSpecificEndpointsEnabled
+            : DEFAULT_GENERAL_SETTINGS.inference.harnessSpecificEndpointsEnabled,
       },
     };
   }

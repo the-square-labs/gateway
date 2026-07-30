@@ -23,6 +23,141 @@ describe('inference accounting estimates', () => {
     );
   });
 
+  it('shrinks the final subscription response to fit the bounded last-request grace', () => {
+    const estimate = {
+      inputTokens: 7_808,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 8_192,
+      reasoningTokens: 0,
+      totalTokens: 16_000,
+      estimated: true,
+    };
+    const capped = __testOnly.capSubscriptionEstimateToBudget({
+      estimate,
+      limits: {
+        enabled: true,
+        credits5hEnabled: false,
+        credits5h: 100,
+        credits7dEnabled: true,
+        credits7d: 2_950,
+        credits30dEnabled: false,
+        credits30d: 1_000,
+        apiMonthlyMicrodollars: 0,
+        billingTimezone: 'UTC',
+      },
+      usage: {
+        credits5h: 0,
+        credits7d: 2_741.657456,
+        credits30d: 0,
+        apiMonthlyMicrodollars: 0,
+        recoveryAt: {
+          credits5h: new Date(),
+          credits7d: new Date(),
+          credits30d: new Date(),
+          apiMonthly: new Date(),
+        },
+      },
+      modelMultiplier: 10,
+      burnMultiplier: 1,
+      serviceTierMultiplier: 1,
+      isCompaction: false,
+      allowLastRequestGrace: true,
+    });
+
+    expect(capped.outputTokens).toBe(774);
+    expect(capped.totalTokens).toBe(8_582);
+    expect(subscriptionCredits(capped.totalTokens, 10, 1)).toBeLessThan(90.342544);
+  });
+
+  it('does not cap requests that fit or protected compaction requests', () => {
+    const estimate = {
+      inputTokens: 100,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 100,
+      reasoningTokens: 0,
+      totalTokens: 200,
+      estimated: true,
+    };
+    const input = {
+      estimate,
+      limits: {
+        enabled: true,
+        credits5hEnabled: true,
+        credits5h: 100,
+        credits7dEnabled: false,
+        credits7d: 100,
+        credits30dEnabled: false,
+        credits30d: 100,
+        apiMonthlyMicrodollars: 0,
+        billingTimezone: 'UTC',
+      },
+      usage: {
+        credits5h: 0,
+        credits7d: 0,
+        credits30d: 0,
+        apiMonthlyMicrodollars: 0,
+        recoveryAt: {
+          credits5h: new Date(),
+          credits7d: new Date(),
+          credits30d: new Date(),
+          apiMonthly: new Date(),
+        },
+      },
+      modelMultiplier: 1,
+      burnMultiplier: 1,
+      serviceTierMultiplier: 1,
+      isCompaction: false,
+      allowLastRequestGrace: true,
+    };
+
+    expect(__testOnly.capSubscriptionEstimateToBudget(input)).toBe(estimate);
+    expect(
+      __testOnly.capSubscriptionEstimateToBudget({
+        ...input,
+        usage: { ...input.usage, credits5h: 95 },
+        isCompaction: true,
+      })
+    ).toBe(estimate);
+    expect(
+      __testOnly.capSubscriptionEstimateToBudget({
+        ...input,
+        usage: { ...input.usage, credits5h: 95 },
+        allowLastRequestGrace: false,
+      })
+    ).toBe(estimate);
+  });
+
+  it('allows last-request grace only while the visible chat budget remains positive', () => {
+    const limits = {
+      enabled: true,
+      credits5hEnabled: true,
+      credits5h: 100,
+      credits7dEnabled: false,
+      credits7d: 100,
+      credits30dEnabled: false,
+      credits30d: 100,
+      apiMonthlyMicrodollars: 0,
+      billingTimezone: 'UTC',
+    };
+    const usage = {
+      credits5h: 94.999,
+      credits7d: 0,
+      credits30d: 0,
+      apiMonthlyMicrodollars: 0,
+      recoveryAt: {
+        credits5h: new Date(),
+        credits7d: new Date(),
+        credits30d: new Date(),
+        apiMonthly: new Date(),
+      },
+    };
+
+    expect(__testOnly.hasSpendableSubscriptionBudget(limits, usage)).toBe(true);
+    expect(__testOnly.hasSpendableSubscriptionBudget(limits, { ...usage, credits5h: 95 })).toBe(false);
+  });
+
   it('composes model, dynamic-burn, and Fast multipliers for subscription credits', () => {
     expect(subscriptionCredits(2_000, 3, 4, 2)).toBe(48);
   });

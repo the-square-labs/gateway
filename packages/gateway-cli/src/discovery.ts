@@ -36,6 +36,12 @@ export async function discoverInference(
   }
   if (requireEnabled && !discovery.enabled)
     throw new CliError('INFERENCE_DISABLED', 'Inference is disabled on this Gateway.');
+  if (requireEnabled && discovery.harnessSpecificEndpointsEnabled === false) {
+    throw new CliError(
+      'HARNESS_ENDPOINTS_DISABLED',
+      'Harness-specific inference endpoints are disabled on this Gateway. Ask an administrator to enable them in Settings > Inference.'
+    );
+  }
   if (compareVersions(CLI_VERSION, discovery.minimumCliVersion) < 0) {
     throw new CliError(
       'CLI_UPDATE_REQUIRED',

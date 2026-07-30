@@ -1010,17 +1010,17 @@ No global installation or PATH change is required:
 npx @wiolett/gateway-inference
 \`\`\`
 
-The interactive manager asks for the Gateway URL and can log in, configure or repair Codex, refresh models, diagnose the integration, remove managed configuration, and log out. The only direct commands are \`login [gateway]\`, \`logout\`, and \`setup [harness]\`; for example, \`npx @wiolett/gateway-inference setup codex\`. Setup uses isolated OAuth/PKCE, issues a dedicated runtime token, writes only package-managed Codex configuration sections, and installs a private helper. Catalog changes apply after starting a new Codex process.
+An administrator must first enable **Harness-specific endpoints** in **Settings > Inference**. The interactive manager asks for the Gateway URL and can log in, configure or repair Codex, refresh models, diagnose the integration, remove managed configuration, and log out. The only direct commands are \`login [gateway]\`, \`logout\`, and \`setup [harness]\`; for example, \`npx @wiolett/gateway-inference setup codex\`. Setup uses isolated OAuth/PKCE, issues a dedicated runtime token, writes only package-managed Codex configuration sections, and installs a private helper. Catalog changes apply after starting a new Codex process. Codex Desktop must also be signed in to an OpenAI account normally and fully restarted after setup or login changes.
 
 ### Manual OpenAI-compatible setup
 
 \`\`\`text
-Base URL: https://gateway.example.com/api/inference/openai/v1
+Base URL: https://gateway.example.com/api/inference/v1
 API key:  gwi_...
 Models:   GET <base-url>/models
 \`\`\`
 
-Use this adapter for OpenAI SDKs and OpenAI-compatible harnesses. It supports Responses and Chat Completions. The old \`/api/inference/v1\` path does not exist and must never be suggested.
+Use this base adapter for OpenAI SDKs and OpenAI-compatible clients. It supports Responses and Chat Completions. Harness-specific adapters such as Codex and Anthropic are available only when an administrator enables them in **Settings > Inference**.
 
 ### Manual Anthropic-compatible setup
 
@@ -1038,7 +1038,7 @@ Anthropic SDKs append \`/v1\` themselves, so configure the SDK base URL without 
 - Provider credentials are encrypted and list operations return masked metadata only.
 - Activity stores metadata and normalized usage, never prompts or model output.
 - After configuration, verify provider sync, model visibility, a small request, accounting, reasoning mapping, tools, continuation, and Codex auto-compaction where applicable.
-- Never alter internal AI Assistant provider settings while configuring Gateway Inference, and never claim that configuring one configures the other.`,
+- Gateway Inference runtime and credentials remain isolated from the assistant configuration. The assistant may use a published Gateway Inference model only when an administrator explicitly selects that provider type.`,
   'ai-settings': `# AI Assistant Settings
 
 AI assistant settings control the provider, request limits, tool exposure, web search, and sandbox runner. Use these tools instead of guessing from UI labels:
@@ -1050,10 +1050,14 @@ AI assistant settings control the provider, request limits, tool exposure, web s
 - get_sandbox_runtime_status: read sandbox runner enablement and runtime health.
 
 ## Provider Settings
+- providerType: openai_compatible or gateway_inference. Gateway Inference is available only while the inference feature is enabled.
 - providerUrl: OpenAI-compatible API base URL.
 - endpointMode: auto, chat_completions, or responses.
 - model: provider model name.
 - apiKey: only set this when replacing the stored provider key. The current secret is never returned in full.
+- gatewayInferenceModel: default published Gateway Inference model ID.
+- gatewayInferenceAllowUserModelSelection: whether users may choose another model they are allowed to access.
+- OpenAI-compatible provider values are preserved while Gateway Inference is selected. Disabling inference restores them; if no OpenAI-compatible key was saved, the assistant is disabled.
 
 ## Limits
 - rateLimitMax and rateLimitWindowSeconds: rate limit for assistant requests.

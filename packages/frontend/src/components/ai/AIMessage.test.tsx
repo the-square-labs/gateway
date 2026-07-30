@@ -70,6 +70,26 @@ describe("AIMessage tool call groups", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("renders run errors as left-aligned assistant blocks with retry", () => {
+    const onRetry = vi.fn();
+    render(
+      <AIMessage
+        message={{
+          id: "run-error",
+          role: "assistant",
+          content: "**Error:** Provider quota is exhausted.",
+          localOnly: true,
+          runError: true,
+        }}
+        onRetry={onRetry}
+      />
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Error: Provider quota is exhausted.");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
   it("renders local-only tool calls through the normal tool call UI", () => {
     render(
       <AIMessage

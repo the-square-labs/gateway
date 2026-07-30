@@ -17,6 +17,7 @@ import { AISettingsService } from './ai.settings.service.js';
 import { AI_TOOLS } from './ai.tools.js';
 import { AIConversationService } from './ai-conversation.service.js';
 import { AIConversationFolderService } from './ai-conversation-folder.service.js';
+import { AIProviderRuntimeService } from './ai-provider-runtime.service.js';
 import { AIRunService } from './ai-run.service.js';
 
 export const aiRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
@@ -121,9 +122,19 @@ aiRoutes.use('*', sessionOnly);
 
 // GET /api/ai/status — check if AI features are enabled (any authenticated user)
 aiRoutes.openapi(aiStatusRoute, async (c) => {
+  if (container.isRegistered(AIProviderRuntimeService)) {
+    return c.json(await container.resolve(AIProviderRuntimeService).statusForUser(c.get('user')!));
+  }
   const settingsService = container.resolve(AISettingsService);
-  const enabled = await settingsService.isEnabled();
-  return c.json({ enabled });
+  const config = await settingsService.getConfig();
+  return c.json({
+    enabled: await settingsService.isEnabled(),
+    providerType: config.providerType,
+    defaultModel: config.model,
+    allowUserModelSelection: false,
+    supportsImages: config.supportsImages,
+    models: [],
+  });
 });
 
 aiRoutes.get('/conversations', requireScope('feat:ai:use'), async (c) => {
@@ -235,15 +246,26 @@ aiRoutes.post('/context-estimate', requireScope('feat:ai:use'), async (c) => {
 
   const service = container.resolve(AIService);
   const user = c.get('user')!;
-  const data = await service.getContextEstimate(user, parsed.data.context, parsed.data.conversationId ?? undefined);
+  const data = await service.getContextEstimate(
+    user,
+    parsed.data.context,
+    parsed.data.conversationId ?? undefined,
+    parsed.data.model,
+    parsed.data.reasoningEffort
+  );
   return c.json({ data });
 });
 
 // GET /api/ai/config — full config for admin display (admin only)
 aiRoutes.openapi({ ...getAiConfigRoute, middleware: requireScope('feat:ai:configure') }, async (c) => {
   const settingsService = container.resolve(AISettingsService);
-  const config = await settingsService.getConfigForAdmin();
-  return c.json({ data: config });
+  const [config, gatewayInferenceModels] = await Promise.all([
+    settingsService.getConfigForAdmin(),
+    container.isRegistered(AIProviderRuntimeService)
+      ? container.resolve(AIProviderRuntimeService).adminModels()
+      : Promise.resolve([]),
+  ]);
+  return c.json({ data: { ...config, gatewayInferenceModels } });
 });
 
 // PUT /api/ai/config — update config (admin only)
@@ -258,7 +280,12 @@ aiRoutes.openapi({ ...updateAiConfigRoute, middleware: requireScope('feat:ai:con
     ? (await settingsService.getConfig()).customSystemPrompt
     : undefined;
   await settingsService.updateConfig(body.data);
-  const config = await settingsService.getConfigForAdmin();
+  const [config, gatewayInferenceModels] = await Promise.all([
+    settingsService.getConfigForAdmin(),
+    container.isRegistered(AIProviderRuntimeService)
+      ? container.resolve(AIProviderRuntimeService).adminModels()
+      : Promise.resolve([]),
+  ]);
   if (oldCustomSystemPrompt !== undefined && oldCustomSystemPrompt !== config.customSystemPrompt) {
     const user = c.get('user')!;
     const auditService = container.resolve(AuditService);
@@ -286,7 +313,7 @@ aiRoutes.openapi({ ...updateAiConfigRoute, middleware: requireScope('feat:ai:con
       await auditService.log(promptAuditEntry, { markRequest: false });
     }
   }
-  return c.json({ data: config });
+  return c.json({ data: { ...config, gatewayInferenceModels } });
 });
 
 // GET /api/ai/tools — list all tool definitions grouped by category (admin only)

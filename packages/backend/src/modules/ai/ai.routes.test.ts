@@ -82,6 +82,11 @@ function registerServices(aiSettings?: Partial<AISettingsService>) {
   container.registerInstance(TOKENS.DrizzleClient, createDb());
   container.registerInstance(AISettingsService, {
     isEnabled: vi.fn().mockResolvedValue(true),
+    getConfig: vi.fn().mockResolvedValue({
+      providerType: 'openai_compatible',
+      model: 'test-model',
+      supportsImages: false,
+    }),
     ...aiSettings,
   } as unknown as AISettingsService);
 }
@@ -99,7 +104,14 @@ describe('AI routes session-only authentication', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ enabled: true });
+    expect(await response.json()).toEqual({
+      enabled: true,
+      providerType: 'openai_compatible',
+      defaultModel: 'test-model',
+      allowUserModelSelection: false,
+      supportsImages: false,
+      models: [],
+    });
   });
 
   it('rejects API tokens for AI routes', async () => {

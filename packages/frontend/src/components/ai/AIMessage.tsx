@@ -4,12 +4,14 @@ import {
   Download,
   FileText,
   Image as ImageIcon,
+  RotateCcw,
   SquarePen,
   TerminalSquare,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Button } from "@/components/ui/button";
 import type { AIMessageAttachment, AIMessage as AIMessageType, AIToolCall } from "@/types/ai";
 import { AIToolCallBlock } from "./AIToolCallBlock";
 
@@ -24,6 +26,8 @@ interface AIMessageProps {
     content: string,
     attachments: AIMessageAttachment[]
   ) => void;
+  onRetry?: () => void;
+  retryDisabled?: boolean;
   editUserMessageDisabled?: boolean;
 }
 
@@ -85,6 +89,8 @@ export function AIMessage({
   onReject,
   onAnswer,
   onEditUserMessage,
+  onRetry,
+  retryDisabled = false,
   editUserMessageDisabled = false,
 }: AIMessageProps) {
   const content = typeof message.content === "string" ? message.content : "";
@@ -92,6 +98,7 @@ export function AIMessage({
   const hasCompactContextTool =
     message.toolCalls?.some((tc) => tc.name === "compact_context") ?? false;
   const visibleContent = message.compactMarker && hasCompactContextTool ? "" : content;
+  const errorMessage = extractErrorMessage(visibleContent);
   const compactSummary = message.compactMarker ? content : undefined;
   const artifacts = extractArtifactAttachments(message.toolCalls);
   const showArtifacts = artifacts.length > 0 && !message.isStreaming;
@@ -154,6 +161,33 @@ export function AIMessage({
 
   if (message.localOnly && !message.toolCalls?.length) {
     if (!content.trim()) return null;
+    if (errorMessage) {
+      return (
+        <div className={assistantMaxWidthClass}>
+          <div
+            role="alert"
+            className="flex w-fit max-w-full items-center gap-3 border border-border bg-muted/50 px-3 py-2 text-sm text-muted-foreground"
+          >
+            <span className="min-w-0 break-words">
+              <span className="font-medium text-foreground">Error:</span> {errorMessage}
+            </span>
+            {onRetry && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 shrink-0 px-2.5"
+                onClick={onRetry}
+                disabled={retryDisabled}
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Retry
+              </Button>
+            )}
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="flex justify-center">
         <div className="max-w-[90%] bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
@@ -172,7 +206,7 @@ export function AIMessage({
     message.toolCalls!.every(
       (tc) => tc.status === "completed" || tc.status === "failed" || tc.status === "rejected"
     );
-  const hasError = visibleContent.includes("**Error:**");
+  const hasError = errorMessage !== null;
 
   const hasActiveQuestion =
     hasToolCalls &&
@@ -243,6 +277,11 @@ export function AIMessage({
       </div>
     </div>
   );
+}
+
+function extractErrorMessage(content: string): string | null {
+  const match = content.trim().match(/^\*\*Error:\*\*\s*([\s\S]+)$/i);
+  return match?.[1]?.trim() || null;
 }
 
 function hasQuestionAnswer(toolCall: AIToolCall): boolean {

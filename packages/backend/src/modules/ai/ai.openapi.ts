@@ -7,7 +7,26 @@ export const aiStatusRoute = appRoute({
   path: '/status',
   tags: ['AI'],
   summary: 'Get AI feature status',
-  responses: okJson(z.object({ enabled: z.boolean() })),
+  responses: okJson(
+    z.object({
+      enabled: z.boolean(),
+      providerType: z.enum(['openai_compatible', 'gateway_inference']),
+      defaultModel: z.string(),
+      allowUserModelSelection: z.boolean(),
+      supportsImages: z.boolean(),
+      models: z.array(
+        z.object({
+          id: z.string(),
+          displayName: z.string(),
+          supportsImages: z.boolean(),
+          maxContextTokens: z.number(),
+          maxOutputTokens: z.number().nullable(),
+          reasoningEfforts: z.array(z.string()),
+          defaultReasoningEffort: z.string().nullable(),
+        })
+      ),
+    })
+  ),
 });
 
 export const getAiConfigRoute = appRoute({

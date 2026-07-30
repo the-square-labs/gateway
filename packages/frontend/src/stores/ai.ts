@@ -24,6 +24,7 @@ import type {
   AIConversationStatus,
   AICredentialChallenge,
   AIMessage,
+  AIProviderStatus,
   AIRunToolCall,
   AIToolCall,
   ChatMessage,
@@ -34,6 +35,42 @@ import type {
 const DEFAULT_CONTEXT_TOKEN_LIMIT = 56000;
 const DEFAULT_REASONING_EFFORT: AIConfig["reasoningEffort"] = "none";
 const CONTEXT_ESTIMATE_CACHE_TTL_MS = 30_000;
+const AI_MODEL_STORAGE_KEY = "gateway:ai:selected-model";
+const AI_REASONING_STORAGE_PREFIX = "gateway:ai:reasoning-effort:";
+
+function loadStoredAIModel(): string | null {
+  try {
+    return window.localStorage.getItem(AI_MODEL_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function storeAIModel(model: string | null): void {
+  try {
+    if (model) window.localStorage.setItem(AI_MODEL_STORAGE_KEY, model);
+    else window.localStorage.removeItem(AI_MODEL_STORAGE_KEY);
+  } catch {
+    // Local preferences are best-effort.
+  }
+}
+
+function loadStoredAIReasoningEffort(model: string | null): string | null {
+  if (!model) return null;
+  try {
+    return window.localStorage.getItem(`${AI_REASONING_STORAGE_PREFIX}${model}`);
+  } catch {
+    return null;
+  }
+}
+
+function storeAIReasoningEffort(model: string, effort: string): void {
+  try {
+    window.localStorage.setItem(`${AI_REASONING_STORAGE_PREFIX}${model}`, effort);
+  } catch {
+    // Local preferences are best-effort.
+  }
+}
 
 interface AIContextOverheadEstimate {
   systemTokens: number;
@@ -41,7 +78,7 @@ interface AIContextOverheadEstimate {
   overheadTokens: number;
   limit: number;
   source: "server" | "settings" | "fallback";
-  reasoningEffort: AIConfig["reasoningEffort"];
+  reasoningEffort: string;
   toolCount: number;
   systemBreakdown: Array<{
     label: string;
@@ -64,7 +101,7 @@ let contextEstimateCache: {
 async function resolveContextSettings(): Promise<{
   limit: number;
   source: "settings" | "fallback";
-  reasoningEffort: AIConfig["reasoningEffort"];
+  reasoningEffort: string;
 }> {
   const cached = api.getCached<AIConfig>("settings:ai-config");
   if (cached?.maxContextTokens) {
@@ -278,6 +315,9 @@ interface AIState {
   lastContext: PageContext | null;
   pendingApprovalToolCallId: string | null;
   pendingCredentialChallenge: AICredentialChallenge | null;
+  providerStatus: AIProviderStatus | null;
+  selectedModel: string | null;
+  selectedReasoningEffort: string | null;
 
   // Actions
   connect: () => Promise<boolean>;
@@ -311,7 +351,12 @@ interface AIState {
   deleteConversation: (conversationId: string) => Promise<void>;
   renameConversation: (conversationId: string, title: string) => Promise<void>;
   rollbackToMessage: (messageId: string) => Promise<AIMessage | null>;
+  retryMessage: (messageId: string) => Promise<void>;
   setEnabled: (enabled: boolean) => void;
+  setProviderStatus: (status: AIProviderStatus) => void;
+  refreshProviderStatus: () => Promise<void>;
+  setSelectedModel: (model: string) => void;
+  setSelectedReasoningEffort: (effort: string) => void;
   handleSlashCommand: (input: string) => Promise<boolean>;
   setMessages: (messages: AIMessage[]) => void;
 }
@@ -502,9 +547,16 @@ function trimChatMessagesToBudget(messages: ChatMessage[], maxTokens: number): C
   return kept;
 }
 
-function contextEstimateCacheKey(context?: PageContext, conversationId?: string | null): string {
+function contextEstimateCacheKey(
+  context?: PageContext,
+  conversationId?: string | null,
+  model?: string | null,
+  reasoningEffort?: string | null
+): string {
   return JSON.stringify({
     conversationId: conversationId ?? null,
+    model: model ?? null,
+    reasoningEffort: reasoningEffort ?? null,
     route: context?.route ?? null,
     resourceType: context?.resourceType ?? null,
     resourceId: context?.resourceId ?? null,
@@ -513,16 +565,23 @@ function contextEstimateCacheKey(context?: PageContext, conversationId?: string 
 
 async function resolveContextOverhead(
   context?: PageContext,
-  conversationId?: string | null
+  conversationId?: string | null,
+  model?: string | null,
+  reasoningEffort?: string | null
 ): Promise<AIContextOverheadEstimate> {
-  const key = contextEstimateCacheKey(context, conversationId);
+  const key = contextEstimateCacheKey(context, conversationId, model, reasoningEffort);
   const now = Date.now();
   if (contextEstimateCache?.key === key && contextEstimateCache.expiresAt > now) {
     return contextEstimateCache.estimate;
   }
 
   try {
-    const estimate = await api.getAIContextEstimate({ context, conversationId });
+    const estimate = await api.getAIContextEstimate({
+      context,
+      conversationId,
+      ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    });
     const result: AIContextOverheadEstimate = {
       systemTokens: estimate.systemTokens,
       toolsTokens: estimate.toolsTokens,
@@ -583,7 +642,7 @@ export interface AIContextUsage {
     tokens: number;
   }>;
   source: "server" | "settings" | "fallback";
-  reasoningEffort: AIConfig["reasoningEffort"];
+  reasoningEffort: string;
 }
 
 interface SendMessageOptions {
@@ -593,10 +652,12 @@ interface SendMessageOptions {
 export async function getAIContextUsage(
   messages: AIMessage[],
   context?: PageContext,
-  conversationId?: string | null
+  conversationId?: string | null,
+  model?: string | null,
+  reasoningEffort?: string | null
 ): Promise<AIContextUsage> {
   const chatMessages = buildChatMessages(messages);
-  const overhead = await resolveContextOverhead(context, conversationId);
+  const overhead = await resolveContextOverhead(context, conversationId, model, reasoningEffort);
   const overheadTokens = overhead.overheadTokens;
   const messageBudget = overhead.limit - overhead.toolsTokens - overhead.systemTokens;
   const effectiveChatMessages = trimChatMessagesToBudget(chatMessages, messageBudget);
@@ -640,6 +701,9 @@ export const useAIStore = create<AIState>()((set, get) => ({
   lastContext: null,
   pendingApprovalToolCallId: null,
   pendingCredentialChallenge: null,
+  providerStatus: null,
+  selectedModel: loadStoredAIModel(),
+  selectedReasoningEffort: loadStoredAIReasoningEffort(loadStoredAIModel()),
 
   connect: async () => {
     const auth = useAuthStore.getState();
@@ -651,6 +715,9 @@ export const useAIStore = create<AIState>()((set, get) => ({
       set({ isConnecting: false, connectionError: "Not authenticated" });
       return false;
     }
+    void get()
+      .refreshProviderStatus()
+      .catch(() => {});
     if (wsClient?.isConnected) {
       set({ isConnected: true, isConnecting: false, connectionError: null });
       return true;
@@ -753,6 +820,13 @@ export const useAIStore = create<AIState>()((set, get) => ({
         content,
         attachments,
         context,
+        ...(state.providerStatus?.providerType === "gateway_inference" && state.selectedModel
+          ? { model: state.selectedModel }
+          : {}),
+        ...(state.providerStatus?.providerType === "gateway_inference" &&
+        state.selectedReasoningEffort
+          ? { reasoningEffort: state.selectedReasoningEffort }
+          : {}),
         conversationId: options.startNewConversation
           ? undefined
           : (state.activeConversationId ?? undefined),
@@ -1234,8 +1308,86 @@ export const useAIStore = create<AIState>()((set, get) => ({
     return result.message;
   },
 
+  retryMessage: async (messageId: string) => {
+    const state = get();
+    if (state.isStreaming || state.isCompactingContext) return;
+    const message = await get().rollbackToMessage(messageId);
+    if (!message) return;
+    get().sendMessage(message.content, get().lastContext ?? undefined, message.attachments ?? []);
+  },
+
   setEnabled: (enabled: boolean) => {
     set({ isEnabled: enabled });
+  },
+
+  setProviderStatus: (status: AIProviderStatus) => {
+    set((state) => {
+      const selectable = status.providerType === "gateway_inference" && status.models.length > 0;
+      const currentAllowed =
+        selectable &&
+        status.allowUserModelSelection &&
+        status.models.some((model) => model.id === state.selectedModel);
+      const selectedModel = selectable
+        ? currentAllowed
+          ? state.selectedModel
+          : status.defaultModel || status.models[0]?.id || null
+        : null;
+      const selectedModelOption = status.models.find((model) => model.id === selectedModel);
+      const storedReasoningEffort = loadStoredAIReasoningEffort(selectedModel);
+      const selectedReasoningEffort = selectedModelOption?.reasoningEfforts.includes(
+        state.selectedReasoningEffort ?? ""
+      )
+        ? state.selectedReasoningEffort
+        : selectedModelOption?.reasoningEfforts.includes(storedReasoningEffort ?? "")
+          ? storedReasoningEffort
+          : selectedModelOption?.defaultReasoningEffort ||
+            selectedModelOption?.reasoningEfforts[0] ||
+            null;
+      storeAIModel(selectedModel);
+      return {
+        providerStatus: status,
+        selectedModel,
+        selectedReasoningEffort,
+        isEnabled: status.enabled,
+      };
+    });
+  },
+
+  refreshProviderStatus: async () => {
+    const status = await api.getAIStatus();
+    get().setProviderStatus(status);
+  },
+
+  setSelectedModel: (model: string) => {
+    const status = get().providerStatus;
+    if (
+      status?.providerType !== "gateway_inference" ||
+      !status.allowUserModelSelection ||
+      !status.models.some((option) => option.id === model)
+    ) {
+      return;
+    }
+    storeAIModel(model);
+    const option = status.models.find((candidate) => candidate.id === model);
+    const storedReasoningEffort = loadStoredAIReasoningEffort(model);
+    const selectedReasoningEffort = option?.reasoningEfforts.includes(storedReasoningEffort ?? "")
+      ? storedReasoningEffort
+      : option?.defaultReasoningEffort || option?.reasoningEfforts[0] || null;
+    set({ selectedModel: model, selectedReasoningEffort });
+  },
+
+  setSelectedReasoningEffort: (effort: string) => {
+    const { providerStatus, selectedModel } = get();
+    const option = providerStatus?.models.find((model) => model.id === selectedModel);
+    if (
+      providerStatus?.providerType !== "gateway_inference" ||
+      !selectedModel ||
+      !option?.reasoningEfforts.includes(effort)
+    ) {
+      return;
+    }
+    storeAIReasoningEffort(selectedModel, effort);
+    set({ selectedReasoningEffort: effort });
   },
 
   setMessages: (messages: AIMessage[]) => {
@@ -1268,7 +1420,13 @@ export const useAIStore = create<AIState>()((set, get) => ({
     }
 
     if (cmd === "/compact") {
-      const { activeConversationId, lastContext } = get();
+      const {
+        activeConversationId,
+        lastContext,
+        providerStatus,
+        selectedModel,
+        selectedReasoningEffort,
+      } = get();
       if (!activeConversationId) {
         set((state) => ({
           messages: appendLocalAssistantError(
@@ -1293,6 +1451,12 @@ export const useAIStore = create<AIState>()((set, get) => ({
           conversationId: activeConversationId,
           clientCommandId,
           context: lastContext ?? undefined,
+          ...(providerStatus?.providerType === "gateway_inference" && selectedModel
+            ? { model: selectedModel }
+            : {}),
+          ...(providerStatus?.providerType === "gateway_inference" && selectedReasoningEffort
+            ? { reasoningEffort: selectedReasoningEffort }
+            : {}),
         });
       } catch (error) {
         set((state) => ({
@@ -1308,11 +1472,20 @@ export const useAIStore = create<AIState>()((set, get) => ({
     }
 
     if (cmd === "/context") {
-      const { activeConversationId, lastContext, messages } = get();
+      const {
+        activeConversationId,
+        lastContext,
+        messages,
+        providerStatus,
+        selectedModel,
+        selectedReasoningEffort,
+      } = get();
       const usage = await getAIContextUsage(
         messages,
         lastContext ?? undefined,
-        activeConversationId
+        activeConversationId,
+        providerStatus?.providerType === "gateway_inference" ? selectedModel : undefined,
+        providerStatus?.providerType === "gateway_inference" ? selectedReasoningEffort : undefined
       );
       const sourceNote =
         usage.source === "fallback"
@@ -1376,6 +1549,9 @@ export function resetAIStateForAuthChange() {
     lastContext: null,
     pendingApprovalToolCallId: null,
     pendingCredentialChallenge: null,
+    providerStatus: null,
+    selectedModel: loadStoredAIModel(),
+    selectedReasoningEffort: loadStoredAIReasoningEffort(loadStoredAIModel()),
   });
 }
 
@@ -1856,6 +2032,9 @@ function normalizeConversationMessage(
         : undefined,
     conversationStatus: normalizeConversationBlockStatus(message.conversationStatus),
     blockReason: typeof message.blockReason === "string" ? message.blockReason : undefined,
+    localOnly: message.localOnly === true,
+    runError: message.runError === true,
+    runId: typeof message.runId === "string" ? message.runId : undefined,
     isStreaming: false,
   };
 }

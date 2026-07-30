@@ -67,7 +67,7 @@ describe('AIService AI settings tools', () => {
     const service = createService({ settingsService });
 
     await expect(service.executeTool(CONFIG_USER, 'get_ai_settings', {})).resolves.toEqual({
-      result: adminConfig,
+      result: { ...adminConfig, gatewayInferenceModels: [] },
       invalidateStores: [],
     });
 
@@ -78,7 +78,7 @@ describe('AIService AI settings tools', () => {
         unsupported: 'ignored',
       })
     ).resolves.toEqual({
-      result: adminConfig,
+      result: { ...adminConfig, gatewayInferenceModels: [] },
       invalidateStores: ['settings'],
     });
 

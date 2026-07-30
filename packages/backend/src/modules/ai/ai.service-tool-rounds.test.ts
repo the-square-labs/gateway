@@ -25,10 +25,13 @@ const BASE_USER: User = {
 
 const BASE_CONFIG: AIConfig = {
   enabled: true,
+  providerType: 'openai_compatible',
   supportsImages: false,
   providerUrl: '',
   endpointMode: 'responses',
   model: 'gpt-5.4-mini',
+  gatewayInferenceModel: '',
+  gatewayInferenceAllowUserModelSelection: false,
   maxCompletionTokens: 1024,
   maxTokensField: 'max_completion_tokens',
   reasoningEffort: 'none',

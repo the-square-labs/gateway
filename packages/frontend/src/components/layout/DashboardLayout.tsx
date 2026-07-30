@@ -182,7 +182,7 @@ export function DashboardLayout() {
           user.scopes?.includes(AI_SCOPE)
             ? api
                 .getAIStatus()
-                .then((status) => useAIStore.getState().setEnabled(status.enabled))
+                .then((status) => useAIStore.getState().setProviderStatus(status))
                 .catch(() => {})
             : Promise.resolve(),
         ]);

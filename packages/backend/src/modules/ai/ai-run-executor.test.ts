@@ -463,6 +463,18 @@ describe('AIRunExecutor live assistant draft streaming', () => {
     expect(harness.updateSet).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'failed', error: 'provider failed' })
     );
+    expect(harness.insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'conversation-1',
+        role: 'assistant',
+        content: '**Error:** provider failed',
+        uiMessage: expect.objectContaining({
+          localOnly: true,
+          runError: true,
+          runId: 'run-1',
+        }),
+      })
+    );
   });
 
   it('persists a hidden conversation-ended marker after end_conversation', async () => {

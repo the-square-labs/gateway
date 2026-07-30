@@ -80,6 +80,8 @@ export interface CreateAIRunInput {
   userId: string;
   clientCommandId: string;
   activeMessageId?: string | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
 }
 
 export interface StartUserRunInput {
@@ -89,6 +91,8 @@ export interface StartUserRunInput {
   userMessage: Record<string, unknown>;
   clientCommandId: string;
   lastContext?: Record<string, unknown> | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
 }
 
 export interface StartContextCompactionInput {
@@ -96,6 +100,8 @@ export interface StartContextCompactionInput {
   userId: string;
   clientCommandId: string;
   lastContext?: Record<string, unknown> | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
 }
 
 export interface StartUserRunResult {
@@ -231,6 +237,8 @@ export class AIRunService {
           userId: input.userId,
           clientCommandId: input.clientCommandId,
           activeMessageId: message.id,
+          model: input.model?.trim() || null,
+          reasoningEffort: input.reasoningEffort?.trim() || null,
           status: 'queued',
           updatedAt: now,
         })
@@ -294,6 +302,8 @@ export class AIRunService {
           userId: input.userId,
           clientCommandId: input.clientCommandId,
           activeMessageId: null,
+          model: input.model?.trim() || null,
+          reasoningEffort: input.reasoningEffort?.trim() || null,
           status: 'queued',
           updatedAt: now,
         })
@@ -327,6 +337,8 @@ export class AIRunService {
         userId: input.userId,
         clientCommandId: input.clientCommandId,
         activeMessageId: input.activeMessageId ?? null,
+        model: input.model?.trim() || null,
+        reasoningEffort: input.reasoningEffort?.trim() || null,
       })
       .returning();
 

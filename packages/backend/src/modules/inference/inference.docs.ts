@@ -14,11 +14,30 @@ import {
   InferenceProviderConnectionResponseSchema,
   InferenceProviderIdParamSchema,
   InferenceSelfUsageResponseSchema,
+  InferenceSettingsSchema,
   InferenceTokenResponseSchema,
   StartInferenceOAuthSchema,
   UpdateInferenceProviderConnectionSchema,
   UpdateInferenceProviderRoutingSchema,
+  UpdateInferenceSettingsSchema,
 } from './inference.schemas.js';
+
+export const getInferenceSettingsRoute = appRoute({
+  method: 'get',
+  path: '/settings',
+  tags: ['Inference'],
+  summary: 'Read inference endpoint settings',
+  responses: okJson(InferenceSettingsSchema),
+});
+
+export const updateInferenceSettingsRoute = appRoute({
+  method: 'patch',
+  path: '/settings',
+  tags: ['Inference'],
+  summary: 'Update inference endpoint settings',
+  request: jsonBody(UpdateInferenceSettingsSchema),
+  responses: okJson(InferenceSettingsSchema),
+});
 
 export const listInferenceTokensRoute = appRoute({
   method: 'get',

@@ -26,6 +26,8 @@ export interface AIMessage {
   toolCalls?: AIToolCall[];
   isStreaming?: boolean;
   localOnly?: boolean;
+  runError?: boolean;
+  runId?: string;
   compactMarker?: boolean;
   compactTailMessageCount?: number;
   conversationStatus?: Exclude<AIConversationStatus, "active">;
@@ -41,13 +43,37 @@ export interface AIMessage {
 
 export type WebSearchProvider = "tavily" | "brave" | "serper" | "searxng" | "exa";
 export type AIEndpointMode = "auto" | "chat_completions" | "responses";
+export type AIProviderType = "openai_compatible" | "gateway_inference";
+
+export interface AIInferenceModelOption {
+  id: string;
+  displayName: string;
+  supportsImages: boolean;
+  maxContextTokens: number;
+  maxOutputTokens: number | null;
+  reasoningEfforts: string[];
+  defaultReasoningEffort: string | null;
+}
+
+export interface AIProviderStatus {
+  enabled: boolean;
+  providerType: AIProviderType;
+  defaultModel: string;
+  allowUserModelSelection: boolean;
+  supportsImages: boolean;
+  models: AIInferenceModelOption[];
+}
 
 export interface AIConfig {
   enabled: boolean;
+  providerType: AIProviderType;
   providerUrl: string;
   endpointMode: AIEndpointMode;
   supportsImages: boolean;
   model: string;
+  gatewayInferenceModel: string;
+  gatewayInferenceAllowUserModelSelection: boolean;
+  gatewayInferenceModels: AIInferenceModelOption[];
   maxCompletionTokens: number;
   maxTokensField: "max_tokens" | "max_completion_tokens";
   reasoningEffort: "low" | "medium" | "high" | "none";
@@ -73,7 +99,7 @@ export interface AIContextEstimate {
   toolsTokens: number;
   totalOverhead: number;
   limit: number;
-  reasoningEffort: AIConfig["reasoningEffort"];
+  reasoningEffort: string;
   toolCount: number;
   systemBreakdown: Array<{
     label: string;
@@ -310,6 +336,8 @@ export type WSClientMessage =
       conversationId: string;
       clientCommandId: string;
       context?: PageContext;
+      model?: string;
+      reasoningEffort?: string;
     }
   | {
       type: "conversation.send_message";
@@ -318,6 +346,8 @@ export type WSClientMessage =
       content: string;
       attachments?: AIMessageAttachment[];
       context?: PageContext;
+      model?: string;
+      reasoningEffort?: string;
     }
   | { type: "run.stop"; conversationId: string; runId: string; clientCommandId: string }
   | {

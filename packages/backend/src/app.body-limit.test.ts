@@ -121,10 +121,10 @@ describe('request body limits', () => {
   });
 
   it('uses the larger inference-specific limit instead of the global API limit', async () => {
-    await expectNotPayloadTooLarge('/api/inference/codex/v1/responses', 'POST', 'x'.repeat(3_000_000));
+    await expectNotPayloadTooLarge('/api/inference/v1/responses', 'POST', 'x'.repeat(3_000_000));
   });
 
   it('still rejects inference requests above the inference-specific limit', async () => {
-    await expectPayloadTooLarge('/api/inference/codex/v1/responses', 'POST', 'x'.repeat(34_000_000));
+    await expectPayloadTooLarge('/api/inference/v1/responses', 'POST', 'x'.repeat(34_000_000));
   });
 });

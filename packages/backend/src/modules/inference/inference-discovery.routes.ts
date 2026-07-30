@@ -8,6 +8,9 @@ import { inferenceAdapterDiscovery } from './inference-setup.contract.js';
 export const inferenceDiscoveryRoutes = new OpenAPIHono<AppEnv>();
 
 inferenceDiscoveryRoutes.get('/wiolett-inference', async (c) => {
-  const enabled = await container.resolve(GeneralSettingsService).isFeatureEnabled('inferenceEnabled');
-  return c.json({ ...inferenceAdapterDiscovery(container.resolve(OAuthService)), enabled });
+  const settings = await container.resolve(GeneralSettingsService).getConfig();
+  return c.json({
+    ...inferenceAdapterDiscovery(container.resolve(OAuthService), settings.inference.harnessSpecificEndpointsEnabled),
+    enabled: settings.features.inferenceEnabled,
+  });
 });

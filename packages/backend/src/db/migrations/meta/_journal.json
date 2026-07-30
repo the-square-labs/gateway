@@ -519,6 +519,20 @@
       "when": 1785359378995,
       "tag": "0073_boring_doctor_doom",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1785441536313,
+      "tag": "0074_happy_iron_lad",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1785442877452,
+      "tag": "0075_uneven_ikaris",
+      "breakpoints": true
     }
   ]
 }

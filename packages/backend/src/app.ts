@@ -96,7 +96,7 @@ const HEALTH_REDIS_TIMEOUT_MS = 1000;
 const DOCKER_FILE_BODY_LIMIT_PATH =
   /^\/api\/docker\/nodes\/[^/]+\/(?:containers\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks)|volumes\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks))$/;
 const NODE_FILE_BODY_LIMIT_PATH = /^\/api\/nodes\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks)$/;
-const INFERENCE_DATA_PLANE_PREFIX = /^\/api\/inference\/(?:anthropic|codex|openai)\/v1(?:\/|$)/;
+const INFERENCE_DATA_PLANE_PREFIX = /^\/api\/inference\/(?:(?:anthropic|codex)\/v1|v1)(?:\/|$)/;
 
 function isInferenceDataPlanePath(path: string): boolean {
   return INFERENCE_DATA_PLANE_PREFIX.test(path);
@@ -114,6 +114,22 @@ export function inferenceFeatureGuard(): MiddlewareHandler<AppEnv> {
     const settings = container.resolve(GeneralSettingsService);
     if (!(await settings.isFeatureEnabled('inferenceEnabled'))) {
       return c.json({ code: 'INFERENCE_DISABLED', message: 'Inference proxy is disabled' }, 404);
+    }
+    await next();
+  };
+}
+
+export function inferenceHarnessEndpointsGuard(): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    const settings = await container.resolve(GeneralSettingsService).getInferenceSettings();
+    if (!settings.harnessSpecificEndpointsEnabled) {
+      return c.json(
+        {
+          code: 'INFERENCE_HARNESS_ENDPOINTS_DISABLED',
+          message: 'Harness-specific inference endpoints are disabled',
+        },
+        404
+      );
     }
     await next();
   };
@@ -307,11 +323,14 @@ export function createApp() {
 
   app.use('/api/oauth/token', requestBodyLimit(env.OAUTH_BODY_MAX_BYTES));
   app.use('/api/oauth/revoke', requestBodyLimit(env.OAUTH_BODY_MAX_BYTES));
-  app.use('/api/inference/openai/v1/*', requestBodyLimit(env.INFERENCE_BODY_MAX_BYTES));
+  app.use('/api/inference/v1/*', requestBodyLimit(env.INFERENCE_BODY_MAX_BYTES));
   app.use('/api/inference/codex/v1/*', requestBodyLimit(env.INFERENCE_BODY_MAX_BYTES));
   app.use('/api/inference/anthropic/v1/*', requestBodyLimit(env.INFERENCE_BODY_MAX_BYTES));
   app.use('/api/inference', inferenceFeatureGuard());
   app.use('/api/inference/*', inferenceFeatureGuard());
+  app.use('/api/inference/codex/*', inferenceHarnessEndpointsGuard());
+  app.use('/api/inference/anthropic/*', inferenceHarnessEndpointsGuard());
+  app.use('/api/inference/setup/*', inferenceHarnessEndpointsGuard());
   app.use('/api/logging/ingest', requestBodyLimit(env.LOGGING_INGEST_MAX_BODY_BYTES));
   app.use('/api/logging/ingest/batch', requestBodyLimit(env.LOGGING_INGEST_MAX_BODY_BYTES));
   app.use(
@@ -449,7 +468,7 @@ export function createApp() {
 
   // Protected API routes
   app.route('/api/oauth', oauthRoutes);
-  for (const path of ['/api/inference/codex/v1/responses', '/api/inference/openai/v1/responses']) {
+  for (const path of ['/api/inference/codex/v1/responses', '/api/inference/v1/responses']) {
     app.use(path, async (c, next) => {
       if (c.req.method === 'GET') return inferenceAuthMiddleware(c, next);
       await next();
@@ -466,7 +485,7 @@ export function createApp() {
       })
     );
   }
-  app.route('/api/inference/openai/v1', openAiInferenceDataPlaneRoutes);
+  app.route('/api/inference/v1', openAiInferenceDataPlaneRoutes);
   app.route('/api/inference/codex/v1', codexInferenceDataPlaneRoutes);
   app.route('/api/inference/anthropic/v1', anthropicInferenceDataPlaneRoutes);
   app.route('/api/inference/setup', inferenceSetupRoutes);

@@ -2,10 +2,12 @@ import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { settings } from '@/db/schema/settings.js';
 import { isPrivateUrl } from '@/lib/utils.js';
+import { AppError } from '@/middleware/error-handler.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type {
   AIConfig,
   AIEndpointMode,
+  AIProviderType,
   EncryptedValue,
   MaxTokensField,
   ReasoningEffort,
@@ -14,11 +16,14 @@ import type {
 
 const AI_SETTINGS_DEFAULTS: Record<string, unknown> = {
   'ai:enabled': false,
+  'ai:provider_type': 'openai_compatible',
   'ai:provider_url': '',
   'ai:endpoint_mode': 'auto',
   'ai:supports_images': false,
   'ai:api_key_encrypted': null,
   'ai:model': '',
+  'ai:gateway_inference_model': '',
+  'ai:gateway_inference_allow_user_model_selection': false,
   'ai:max_completion_tokens': 8192,
   'ai:max_tokens_field': 'max_completion_tokens',
   'ai:reasoning_effort': 'none',
@@ -36,10 +41,21 @@ const AI_SETTINGS_DEFAULTS: Record<string, unknown> = {
 };
 
 export class AISettingsService {
+  private inferenceFeatureEnabled: () => Promise<boolean> = async () => false;
+  private gatewayInferenceModelAvailable: (model: string) => Promise<boolean> = async () => false;
+
   constructor(
     private readonly db: DrizzleClient,
     private readonly cryptoService: CryptoService
   ) {}
+
+  setInferenceFeatureResolver(resolver: () => Promise<boolean>): void {
+    this.inferenceFeatureEnabled = resolver;
+  }
+
+  setGatewayInferenceModelValidator(validator: (model: string) => Promise<boolean>): void {
+    this.gatewayInferenceModelAvailable = validator;
+  }
 
   async getConfig(): Promise<AIConfig> {
     const rows = await this.db.select().from(settings).where(eq(settings.key, settings.key)); // get all
@@ -57,10 +73,13 @@ export class AISettingsService {
 
     return {
       enabled: getValue<boolean>('ai:enabled'),
+      providerType: getValue<AIProviderType>('ai:provider_type'),
       providerUrl: getValue<string>('ai:provider_url'),
       endpointMode: getValue<AIEndpointMode>('ai:endpoint_mode'),
       supportsImages: getValue<boolean>('ai:supports_images'),
       model: getValue<string>('ai:model'),
+      gatewayInferenceModel: getValue<string>('ai:gateway_inference_model'),
+      gatewayInferenceAllowUserModelSelection: getValue<boolean>('ai:gateway_inference_allow_user_model_selection'),
       maxCompletionTokens: getValue<number>('ai:max_completion_tokens'),
       maxTokensField: getValue<MaxTokensField>('ai:max_tokens_field'),
       reasoningEffort: getValue<ReasoningEffort>('ai:reasoning_effort'),
@@ -126,12 +145,42 @@ export class AISettingsService {
   }
 
   async updateConfig(updates: Record<string, unknown>): Promise<AIConfig> {
+    if (Object.hasOwn(updates, 'providerType') || Object.hasOwn(updates, 'gatewayInferenceModel')) {
+      const current = await this.getConfig();
+      const providerType = (updates.providerType ?? current.providerType) as AIProviderType;
+      const gatewayInferenceModel = String(updates.gatewayInferenceModel ?? current.gatewayInferenceModel).trim();
+
+      if (providerType === 'gateway_inference') {
+        if (!(await this.inferenceFeatureEnabled())) {
+          throw new AppError(
+            400,
+            'AI_GATEWAY_INFERENCE_DISABLED',
+            'Gateway Inference must be enabled before it can be used by the AI assistant'
+          );
+        }
+        if (!gatewayInferenceModel) {
+          throw new AppError(400, 'AI_GATEWAY_INFERENCE_MODEL_REQUIRED', 'Select a default Gateway Inference model');
+        }
+        if (!(await this.gatewayInferenceModelAvailable(gatewayInferenceModel))) {
+          throw new AppError(
+            400,
+            'AI_GATEWAY_INFERENCE_MODEL_UNAVAILABLE',
+            'The selected Gateway Inference model is not available'
+          );
+        }
+        updates.gatewayInferenceModel = gatewayInferenceModel;
+      }
+    }
+
     const keyMap: Record<string, string> = {
       enabled: 'ai:enabled',
+      providerType: 'ai:provider_type',
       providerUrl: 'ai:provider_url',
       endpointMode: 'ai:endpoint_mode',
       supportsImages: 'ai:supports_images',
       model: 'ai:model',
+      gatewayInferenceModel: 'ai:gateway_inference_model',
+      gatewayInferenceAllowUserModelSelection: 'ai:gateway_inference_allow_user_model_selection',
       customSystemPrompt: 'ai:custom_system_prompt',
       rateLimitMax: 'ai:rate_limit_max',
       rateLimitWindowSeconds: 'ai:rate_limit_window_seconds',
@@ -193,9 +242,22 @@ export class AISettingsService {
   async isEnabled(): Promise<boolean> {
     const val = await this.getSetting<boolean>('ai:enabled');
     if (!val) return false;
-    // Also require API key to be configured
+    const providerType = await this.getSetting<AIProviderType>('ai:provider_type');
+    if (providerType === 'gateway_inference') {
+      const model = await this.getSetting<string>('ai:gateway_inference_model');
+      return Boolean(model && (await this.inferenceFeatureEnabled()));
+    }
     const apiKey = await this.getSetting<EncryptedValue | null>('ai:api_key_encrypted');
     return !!apiKey;
+  }
+
+  async handleInferenceDisabled(): Promise<void> {
+    const providerType = await this.getSetting<AIProviderType>('ai:provider_type');
+    if (providerType !== 'gateway_inference') return;
+
+    await this.setSetting('ai:provider_type', 'openai_compatible');
+    const apiKey = await this.getSetting<EncryptedValue | null>('ai:api_key_encrypted');
+    if (!apiKey) await this.setSetting('ai:enabled', false);
   }
 
   async getDecryptedApiKey(): Promise<string | null> {

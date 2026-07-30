@@ -79,6 +79,7 @@ export class InferenceGatewayExecutor implements InferenceExecutor {
           apiUnitCharge: context.apiUnitCharge,
           retryOf,
         });
+        const admittedRequest = applyAdmissionOutputLimit(mappedRequest, admission);
         const definition = this.registry.require(selected.connection.providerId);
         const requiredOperation = context.operation === 'search' ? 'search' : 'inference';
         if (!(definition.supportedOperations ?? ['inference']).includes(requiredOperation)) {
@@ -100,7 +101,7 @@ export class InferenceGatewayExecutor implements InferenceExecutor {
           credential,
           selected.connection.baseUrl,
           selected.source.upstreamModelId,
-          mappedRequest,
+          admittedRequest,
           context.signal,
           selected.connection.metadata.allowPrivateNetwork === true
         );
@@ -108,7 +109,7 @@ export class InferenceGatewayExecutor implements InferenceExecutor {
           responseId: upstream.responseId || `resp_${randomUUID()}`,
           resolvedModel: resolved.model.publicId,
           affinityKey: context.affinityKey,
-          events: this.accountedEvents(mappedRequest, admission, upstream.events),
+          events: this.accountedEvents(admittedRequest, admission, upstream.events),
         };
       } catch (error) {
         lastError = error;
@@ -346,7 +347,14 @@ function normalizeError(error: unknown): InferenceProtocolError {
   return new InferenceProtocolError(502, 'upstream_error', 'Upstream inference request failed');
 }
 
+function applyAdmissionOutputLimit(request: InferenceRequest, admission: InferenceAdmission): InferenceRequest {
+  return admission.admittedMaxOutputTokens === undefined
+    ? request
+    : { ...request, maxOutputTokens: admission.admittedMaxOutputTokens };
+}
+
 export const __testOnly = {
+  applyAdmissionOutputLimit,
   terminalUsage,
   mapRequestReasoning,
   hasImages,

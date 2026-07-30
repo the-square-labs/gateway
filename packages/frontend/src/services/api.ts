@@ -751,8 +751,8 @@ class ApiClient extends withInferenceApi(
 
   // ── AI Assistant ──
 
-  async getAIStatus(): Promise<{ enabled: boolean }> {
-    return this.request<{ enabled: boolean }>("/ai/status");
+  async getAIStatus(): Promise<import("@/types/ai").AIProviderStatus> {
+    return this.request<import("@/types/ai").AIProviderStatus>("/ai/status");
   }
 
   async getAIConfig(): Promise<Record<string, unknown>> {
@@ -798,12 +798,16 @@ class ApiClient extends withInferenceApi(
   async getAIContextEstimate(input?: {
     context?: PageContext;
     conversationId?: string | null;
+    model?: string;
+    reasoningEffort?: string;
   }): Promise<AIContextEstimate> {
     const res = await this.request<{ data: AIContextEstimate }>("/ai/context-estimate", {
       method: "POST",
       body: JSON.stringify({
         context: input?.context,
         conversationId: input?.conversationId ?? undefined,
+        model: input?.model,
+        reasoningEffort: input?.reasoningEffort,
       }),
     });
     return res.data;

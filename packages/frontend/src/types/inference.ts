@@ -8,6 +8,10 @@ export interface InferenceToken {
   createdAt: string;
 }
 
+export interface InferenceSettings {
+  harnessSpecificEndpointsEnabled: boolean;
+}
+
 export interface InferenceUsageWindow {
   percentage: number;
   recoveryAt: string;

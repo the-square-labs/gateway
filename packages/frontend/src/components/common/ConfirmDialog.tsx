@@ -16,7 +16,6 @@ interface ConfirmState {
   confirmLabel: string;
   cancelLabel: string;
   cancelVariant: "outline" | "ghost";
-  bodyDescription: boolean;
   variant: "default" | "destructive";
   onConfirm: (() => void) | null;
   show: (opts: {
@@ -25,7 +24,6 @@ interface ConfirmState {
     confirmLabel?: string;
     cancelLabel?: string;
     cancelVariant?: "outline" | "ghost";
-    bodyDescription?: boolean;
     variant?: "default" | "destructive";
     onConfirm: () => void;
   }) => void;
@@ -39,7 +37,6 @@ export const useConfirmDialog = create<ConfirmState>()((set) => ({
   confirmLabel: "Confirm",
   cancelLabel: "Cancel",
   cancelVariant: "outline",
-  bodyDescription: false,
   variant: "default",
   onConfirm: null,
   show: ({
@@ -48,7 +45,6 @@ export const useConfirmDialog = create<ConfirmState>()((set) => ({
     confirmLabel = "Confirm",
     cancelLabel = "Cancel",
     cancelVariant = "outline",
-    bodyDescription = false,
     variant = "destructive",
     onConfirm,
   }) =>
@@ -59,7 +55,6 @@ export const useConfirmDialog = create<ConfirmState>()((set) => ({
       confirmLabel,
       cancelLabel,
       cancelVariant,
-      bodyDescription,
       variant,
       onConfirm,
     }),
@@ -72,7 +67,6 @@ export function confirm(opts: {
   confirmLabel?: string;
   cancelLabel?: string;
   cancelVariant?: "outline" | "ghost";
-  bodyDescription?: boolean;
   variant?: "default" | "destructive";
 }): Promise<boolean> {
   return new Promise((resolve) => {
@@ -100,7 +94,6 @@ export function ConfirmDialog() {
     confirmLabel,
     cancelLabel,
     cancelVariant,
-    bodyDescription,
     variant,
     onConfirm,
     close,
@@ -111,17 +104,10 @@ export function ConfirmDialog() {
       <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          {!bodyDescription && (
-            <DialogDescription className="break-words [overflow-wrap:anywhere]">
-              {description}
-            </DialogDescription>
-          )}
         </DialogHeader>
-        {bodyDescription && (
-          <p className="break-words text-sm text-muted-foreground [overflow-wrap:anywhere]">
-            {description}
-          </p>
-        )}
+        <DialogDescription className="break-words [overflow-wrap:anywhere]">
+          {description}
+        </DialogDescription>
         <DialogFooter>
           <Button variant={cancelVariant} onClick={close}>
             {cancelLabel}

@@ -166,7 +166,6 @@ export function Domains() {
           confirmLabel: "Delete DNS",
           cancelLabel: "Keep DNS",
           variant: "destructive",
-          bodyDescription: true,
         });
         await api.deleteDomain(d.id, { deleteDns: ok });
         toast.success("Domain deleted");

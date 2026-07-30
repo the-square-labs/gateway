@@ -37,7 +37,7 @@ inferenceSetupRoutes.use('*', inferenceSetupAuthMiddleware);
 
 inferenceSetupRoutes.get('/me', async (c) => {
   const user = c.get('user')!;
-  const discovery = inferenceAdapterDiscovery(container.resolve(OAuthService));
+  const discovery = inferenceAdapterDiscovery(container.resolve(OAuthService), true);
   const { version } = await codexCatalogForUser(user);
   return c.json({
     user: { id: user.id, name: user.name, email: user.email, role: user.groupName },

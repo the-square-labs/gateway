@@ -103,7 +103,7 @@ function registerRuntime(
     listForUser: vi.fn().mockResolvedValue({ object: 'list', data: [] }),
   } as unknown as InferenceModelService);
   const app = new Hono<AppEnv>();
-  app.route('/api/inference/openai/v1', openAiInferenceDataPlaneRoutes);
+  app.route('/api/inference/v1', openAiInferenceDataPlaneRoutes);
   app.route('/api/inference/codex/v1', codexInferenceDataPlaneRoutes);
   app.route('/api/inference/anthropic/v1', anthropicInferenceDataPlaneRoutes);
   return app;
@@ -285,7 +285,7 @@ describe('inference protocol routes', () => {
       execute: vi.fn().mockResolvedValue({ responseId: 'resp_2', resolvedModel: 'wire-model', events: richEvents() }),
     });
     const response = await app.request(
-      '/api/inference/openai/v1/chat/completions',
+      '/api/inference/v1/chat/completions',
       jsonRequest({ model: 'logical-model', stream: true, messages: [{ role: 'user', content: 'Hello' }] })
     );
     const text = await response.text();

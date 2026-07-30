@@ -12,7 +12,6 @@ export async function confirmAILiteMode() {
     confirmLabel: "Enable",
     cancelLabel: "Back",
     cancelVariant: "ghost",
-    bodyDescription: true,
     variant: "default",
   });
   if (confirmed) useUIStore.getState().setAILiteModeIntroAccepted(true);

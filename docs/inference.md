@@ -6,7 +6,7 @@ The server-side connector baseline is OpenCodex commit `357acee62458684bc027e9d5
 
 ## Enable inference
 
-Inference is disabled by default. An administrator with Gateway settings access enables it under **Settings > Gateway > General > Inference**. Enabling requires an explicit acknowledgement that the feature is in alpha testing, is not yet thoroughly validated, and may behave unstably. No process restart is required.
+Inference is disabled by default. An administrator with Gateway settings access enables it under **Settings > Gateway > General > Inference**. No process restart is required.
 
 When disabled, management and data-plane routes return `INFERENCE_DISABLED`, and the frontend omits Inference usage, token management, and administration surfaces. Connected provider credentials, model configuration, and accounting history remain stored.
 
@@ -34,13 +34,13 @@ Create a token under **Profile > Authorizations > Inference API tokens**. The `g
 Use the client-specific base URL:
 
 ```text
-OpenAI SDK baseURL:   https://gateway.example.com/api/inference/openai/v1
+OpenAI SDK baseURL:   https://gateway.example.com/api/inference/v1
 Codex CLI base URL:   https://gateway.example.com/api/inference/codex/v1
 Anthropic SDK baseURL: https://gateway.example.com/api/inference/anthropic
 API key:              gwi_...
 ```
 
-The former `/api/inference/v1` route does not exist and is not redirected. OpenAI exposes Models, Responses, Chat Completions, images, search, and realtime surfaces. Codex exposes its ModelInfo catalog, Responses, and Responses Compact. Anthropic's REST endpoints live under `/api/inference/anthropic/v1`; its SDK `baseURL` omits `/v1` because the SDK adds that segment itself.
+The base `/api/inference/v1` adapter is always available while inference is enabled and exposes the OpenAI-compatible Models, Responses, Chat Completions, images, search, and realtime surfaces. Harness-specific adapters are disabled by default and can be enabled in **Settings > Inference**. When enabled, Codex exposes its ModelInfo catalog, Responses, and Responses Compact under `/api/inference/codex/v1`; Anthropic's REST endpoints live under `/api/inference/anthropic/v1`, while its SDK `baseURL` omits `/v1` because the SDK adds that segment itself.
 
 For Codex, prefer the companion package instead of editing configuration or copying tokens manually:
 
@@ -49,6 +49,8 @@ npx @wiolett/gateway-inference
 ```
 
 The interactive package asks for the Gateway URL, completes resource-isolated OAuth with PKCE, configures Codex, issues a dedicated runtime token, installs a private stable helper, and maintains an authoritative model catalog. Direct `login [gateway]`, `logout`, and `setup [harness]` commands are also available. It does not require a global install or modify `PATH`. Catalog changes are applied to newly started Codex processes.
+
+Enable **Harness-specific endpoints** in **Settings > Inference** before running the companion package. Codex Desktop must also be signed in to an OpenAI account through its normal login flow; after setup or login changes, fully quit and reopen Codex so it reloads the custom model catalog.
 
 For ChatGPT subscription-backed models whose upstream catalog advertises it, Codex also exposes `/fast`. Gateway forwards the `priority` service tier and charges a fixed 2x subscription-credit multiplier; API dollar accounting is unchanged.
 
@@ -83,7 +85,9 @@ Subscription credits use:
 tokens / 1000 × logical-or-source model multiplier × frozen dynamic burn multiplier × frozen service-tier multiplier
 ```
 
-Dynamic burn protects upstream quota with a 30% reserve, a 10% new-thread floor, a 3% emergency floor, and an 8x cap. The multiplier is frozen at admission. Codex Fast adds a separate fixed 2x service-tier multiplier for eligible ChatGPT subscription sources. Compaction uses a 1x dynamic burn, retains the requested Fast multiplier, and has a protected 5% subscription reservation.
+Dynamic burn protects upstream quota with a 30% reserve, a 10% new-thread floor, a 3% emergency floor, and an 8x cap. The multiplier is frozen at admission. Codex Fast adds a separate fixed 2x service-tier multiplier for eligible ChatGPT subscription sources.
+
+The final 5% of each subscription limit is excluded from the user-visible chat budget and reserved for recovery. When a full conservative output reservation no longer fits, Gateway reduces the admitted `maxOutputTokens` to the remaining budget. A final request may borrow at most 1% of the configured limit, leaving at least 4% protected for compaction. Compaction uses a 1x dynamic burn, retains the requested Fast multiplier, and may consume the protected reserve.
 
 API usage is stored in integer microdollars using the pricing snapshot selected at admission. Redis holds atomic reservations, affinity, cooldowns, refresh locks, and bounded encrypted continuation state; PostgreSQL remains the source of truth and stores immutable settlement ledger rows.
 

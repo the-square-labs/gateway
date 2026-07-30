@@ -22,6 +22,7 @@ import { AISettingsService } from '@/modules/ai/ai.settings.service.js';
 import { AIConversationService } from '@/modules/ai/ai-conversation.service.js';
 import { AIConversationFolderService } from '@/modules/ai/ai-conversation-folder.service.js';
 import { AIConversationSearchService } from '@/modules/ai/ai-conversation-search.service.js';
+import { AIProviderRuntimeService } from '@/modules/ai/ai-provider-runtime.service.js';
 import { AIRunService } from '@/modules/ai/ai-run.service.js';
 import { AlertService } from '@/modules/audit/alert.service.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
@@ -645,7 +646,20 @@ export async function initializeContainer(): Promise<void> {
 
   // AI Settings
   const aiSettingsService = new AISettingsService(db, cryptoService);
+  aiSettingsService.setInferenceFeatureResolver(() => generalSettingsService.isFeatureEnabled('inferenceEnabled'));
+  aiSettingsService.setGatewayInferenceModelValidator(async (model) => {
+    const models = await inferenceModelService.listAdmin();
+    return models.some((candidate) => candidate.enabled && candidate.publicId === model);
+  });
+  generalSettingsService.setInferenceDisabledHandler(() => aiSettingsService.handleInferenceDisabled());
   container.registerInstance(AISettingsService, aiSettingsService);
+  const aiProviderRuntimeService = new AIProviderRuntimeService(
+    aiSettingsService,
+    generalSettingsService,
+    inferenceModelService,
+    inferenceRuntimeService
+  );
+  container.registerInstance(AIProviderRuntimeService, aiProviderRuntimeService);
   const aiSandboxArtifactService = new AISandboxArtifactService(env);
   container.registerInstance(AISandboxArtifactService, aiSandboxArtifactService);
   const aiSandboxJobsService = new AISandboxJobsService(db);
@@ -823,7 +837,8 @@ export async function initializeContainer(): Promise<void> {
     notifDispatcherService,
     aiSandboxService,
     aiSandboxArtifactService,
-    aiConversationSearchService
+    aiConversationSearchService,
+    aiProviderRuntimeService
   );
   container.registerInstance(AIService, aiService);
 

@@ -185,7 +185,6 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
           description: `Existing DNS target differs${details.zoneName ? ` in ${details.zoneName}` : ""}. Current: ${current || "unknown"}. Desired: ${desired || "unknown"}.`,
           confirmLabel: "Overwrite DNS",
           variant: "destructive",
-          bodyDescription: true,
         });
         if (ok) {
           try {

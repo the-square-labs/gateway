@@ -93,6 +93,7 @@ import { executeWebSearch } from './ai.web-search.js';
 import { getAIToolApprovalDecision } from './ai-approval-policy.js';
 import { AIConversationService } from './ai-conversation.service.js';
 import { type AIChatSearchScope, AIConversationSearchService } from './ai-conversation-search.service.js';
+import type { AIProviderRuntimeService, AIProviderSession } from './ai-provider-runtime.service.js';
 import { redactOneTimeSecretToolResult } from './ai-secret-result-redaction.js';
 
 const logger = createChildLogger('AIService');
@@ -350,11 +351,14 @@ function getEffectiveGroupScopes(group: { scopes?: string[]; inheritedScopes?: s
 
 const AI_SETTINGS_UPDATE_FIELDS = new Set([
   'enabled',
+  'providerType',
   'providerUrl',
   'endpointMode',
   'supportsImages',
   'apiKey',
   'model',
+  'gatewayInferenceModel',
+  'gatewayInferenceAllowUserModelSelection',
   'customSystemPrompt',
   'rateLimitMax',
   'rateLimitWindowSeconds',
@@ -498,8 +502,34 @@ export class AIService {
     private readonly notifDispatcherService?: import('@/modules/notifications/notification-dispatcher.service.js').NotificationDispatcherService,
     private readonly sandboxService?: AISandboxService,
     private readonly artifactService?: AISandboxArtifactService,
-    private readonly conversationSearchService?: AIConversationSearchService
+    private readonly conversationSearchService?: AIConversationSearchService,
+    private readonly providerRuntimeService?: AIProviderRuntimeService
   ) {}
+
+  private async resolveProviderSession(
+    user: User,
+    options: Parameters<AIProviderRuntimeService['resolveSession']>[1]
+  ): Promise<AIProviderSession> {
+    if (this.providerRuntimeService) return this.providerRuntimeService.resolveSession(user, options);
+
+    const config = await this.settingsService.getConfig();
+    if (config.providerType === 'gateway_inference') {
+      throw new AppError(503, 'AI_GATEWAY_INFERENCE_UNAVAILABLE', 'Gateway Inference runtime is unavailable');
+    }
+    const apiKey = await this.settingsService.getDecryptedApiKey();
+    if (!apiKey)
+      throw new AppError(503, 'AI_NOT_CONFIGURED', 'AI is not configured. An admin must set up the API key.');
+    const client = new OpenAI({ apiKey, baseURL: config.providerUrl || undefined });
+    return {
+      config,
+      reasoningEffort: config.reasoningEffort === 'none' ? null : config.reasoningEffort,
+      stream: (messages, tools) => streamModelResponse({ client, config, messages, tools, signal: options.signal }),
+    };
+  }
+
+  private async getAdminInferenceModels() {
+    return this.providerRuntimeService ? this.providerRuntimeService.adminModels() : [];
+  }
 
   async buildSystemPrompt(user: User, pageContext?: PageContext, conversationId?: string): Promise<string> {
     return (await this.buildSystemPromptDetailed(user, pageContext, conversationId)).prompt;
@@ -1088,15 +1118,24 @@ export class AIService {
         await this.authService.deleteUser(a.userId);
         return { success: true };
       }
-      case 'get_ai_settings':
-        return this.settingsService.getConfigForAdmin();
+      case 'get_ai_settings': {
+        const [config, gatewayInferenceModels] = await Promise.all([
+          this.settingsService.getConfigForAdmin(),
+          this.getAdminInferenceModels(),
+        ]);
+        return { ...config, gatewayInferenceModels };
+      }
       case 'update_ai_settings': {
         const updates = aiSettingsUpdatesFromArgs(args);
         if (Object.keys(updates).length === 0) {
           throw new Error('No supported AI settings fields were provided');
         }
         await this.settingsService.updateConfig(updates);
-        return this.settingsService.getConfigForAdmin();
+        const [config, gatewayInferenceModels] = await Promise.all([
+          this.settingsService.getConfigForAdmin(),
+          this.getAdminInferenceModels(),
+        ]);
+        return { ...config, gatewayInferenceModels };
       }
       case 'list_ai_tools':
         return AI_TOOLS.map((tool) => ({
@@ -1683,12 +1722,26 @@ export class AIService {
     user: User,
     clientMessages: ChatMessage[],
     pageContext: PageContext | undefined,
-    conversationId?: string
+    conversationId?: string,
+    selectedModel?: string,
+    selectedReasoningEffort?: string
   ): Promise<boolean> {
     if (selectCompactionSource(clientMessages).source.length === 0) return false;
 
-    const config = await this.settingsService.getConfig();
-    if (!(await this.settingsService.getDecryptedApiKey())) return false;
+    let config: Awaited<ReturnType<AISettingsService['getConfig']>>;
+    try {
+      config = (
+        await this.resolveProviderSession(user, {
+          requestId: `context-estimate:${conversationId ?? 'new'}`,
+          conversationId,
+          requestedModel: selectedModel,
+          requestedReasoningEffort: selectedReasoningEffort,
+          signal: new AbortController().signal,
+        })
+      ).config;
+    } catch {
+      return false;
+    }
     const systemPrompt = await this.buildSystemPrompt(user, pageContext, conversationId);
     const discoveredToolsets = mergeToolsets(
       (await this.getConversationDiscoveredToolsets(user, conversationId)) ?? [],
@@ -1714,11 +1767,14 @@ export class AIService {
   }
 
   async compactConversationContext(
-    _user: User,
+    user: User,
     clientMessages: ChatMessage[],
     _pageContext: PageContext | undefined,
     signal: AbortSignal,
-    trigger: AIContextCompactionTrigger
+    trigger: AIContextCompactionTrigger,
+    selectedModel?: string,
+    conversationId?: string,
+    selectedReasoningEffort?: string
   ): Promise<AIContextCompactionResult> {
     const { source, tail } = selectCompactionSource(clientMessages);
     if (source.length === 0) {
@@ -1732,9 +1788,15 @@ export class AIService {
       };
     }
 
-    const config = await this.settingsService.getConfig();
-    const apiKey = await this.settingsService.getDecryptedApiKey();
-    if (!apiKey) throw new Error('AI is not configured. An admin must set up the API key.');
+    const provider = await this.resolveProviderSession(user, {
+      requestId: `compact:${conversationId ?? 'new'}`,
+      conversationId,
+      requestedModel: selectedModel,
+      requestedReasoningEffort: selectedReasoningEffort,
+      signal,
+      isCompaction: true,
+    });
+    const { config } = provider;
 
     const rawSourceText = serializeMessagesForCompaction(source);
     const rawTailText = serializeMessagesForCompaction(tail);
@@ -1755,13 +1817,8 @@ export class AIService {
       },
     ];
 
-    const client = new OpenAI({
-      apiKey,
-      baseURL: config.providerUrl || undefined,
-    });
-
     let summary = '';
-    for await (const event of streamModelResponse({ client, config, messages, tools: [], signal })) {
+    for await (const event of provider.stream(messages, [])) {
       if (event.type === 'text_delta') {
         summary += event.content;
       } else {
@@ -1792,20 +1849,29 @@ export class AIService {
     signal: AbortSignal,
     requestId: string,
     conversationId?: string,
-    autoCompactContext?: AutoCompactContextHook
+    autoCompactContext?: AutoCompactContextHook,
+    selectedModel?: string,
+    selectedReasoningEffort?: string
   ): AsyncGenerator<WSServerMessage> {
-    const config = await this.settingsService.getConfig();
-    const apiKey = await this.settingsService.getDecryptedApiKey();
-    if (!apiKey) {
-      yield { type: 'error', requestId, message: 'AI is not configured. An admin must set up the API key.' };
+    let provider: AIProviderSession;
+    try {
+      provider = await this.resolveProviderSession(user, {
+        requestId,
+        conversationId,
+        requestedModel: selectedModel,
+        requestedReasoningEffort: selectedReasoningEffort,
+        signal,
+      });
+    } catch (error) {
+      yield {
+        type: 'error',
+        requestId,
+        message: error instanceof Error ? error.message : 'AI provider is unavailable',
+      };
       yield { type: 'done', requestId };
       return;
     }
-
-    const client = new OpenAI({
-      apiKey,
-      baseURL: config.providerUrl || undefined,
-    });
+    const { config } = provider;
 
     const systemPrompt = await this.buildSystemPrompt(user, pageContext, conversationId);
     const inferredToolsets = inferDiscoveredToolsetsFromMessages(clientMessages);
@@ -1844,7 +1910,7 @@ export class AIService {
           [...messages, { role: 'system', content: TOOL_COMMENT_REQUIRED_MESSAGE }],
           maxContextTokens
         );
-        yield* this.streamFinalTextResponse({ client, config, messages, requestId, signal });
+        yield* this.streamFinalTextResponse({ provider, messages, requestId, signal });
         return;
       }
       messages = await buildProviderMessages();
@@ -1857,7 +1923,7 @@ export class AIService {
       let toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
 
       try {
-        for await (const event of streamModelResponse({ client, config, messages, tools: activeTools, signal })) {
+        for await (const event of provider.stream(messages, activeTools)) {
           if (event.type === 'text_delta') {
             contentBuffer += event.content;
             yield {
@@ -1873,7 +1939,7 @@ export class AIService {
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') return;
         const message = err instanceof Error ? err.message : 'Stream error';
-        logger.error('OpenAI API error', { error: err });
+        logger.error('AI provider error', { error: err });
         if (isContextWindowError(err)) {
           yield {
             type: 'context_blocked',
@@ -2100,7 +2166,9 @@ export class AIService {
     queuedApprovals: QueuedApproval[] = [],
     conversationId?: string,
     autoCompactContext?: AutoCompactContextHook,
-    rejectionError?: string
+    rejectionError?: string,
+    selectedModel?: string,
+    selectedReasoningEffort?: string
   ): AsyncGenerator<WSServerMessage> {
     if (toolName === 'ask_question') {
       // Batch answers: { toolCallId: answer, ... }
@@ -2198,17 +2266,25 @@ export class AIService {
     }
 
     // Continue streaming with the updated messages
-    const config = await this.settingsService.getConfig();
-    const apiKey = await this.settingsService.getDecryptedApiKey();
-    if (!apiKey) {
+    let provider: AIProviderSession;
+    try {
+      provider = await this.resolveProviderSession(user, {
+        requestId,
+        conversationId,
+        requestedModel: selectedModel,
+        requestedReasoningEffort: selectedReasoningEffort,
+        signal,
+      });
+    } catch (error) {
+      yield {
+        type: 'error',
+        requestId,
+        message: error instanceof Error ? error.message : 'AI provider is unavailable',
+      };
       yield { type: 'done', requestId };
       return;
     }
-
-    const client = new OpenAI({
-      apiKey,
-      baseURL: config.providerUrl || undefined,
-    });
+    const { config } = provider;
 
     let discoveredToolsets = await this.getConversationDiscoveredToolsets(user, conversationId);
     let tools = this.buildModelTools(config, user, discoveredToolsets);
@@ -2238,7 +2314,7 @@ export class AIService {
           [...messages, { role: 'system', content: TOOL_COMMENT_REQUIRED_MESSAGE }],
           config.maxContextTokens
         );
-        yield* this.streamFinalTextResponse({ client, config, messages, requestId, signal });
+        yield* this.streamFinalTextResponse({ provider, messages, requestId, signal });
         return;
       }
       messages = await buildProviderMessages();
@@ -2251,7 +2327,7 @@ export class AIService {
       let toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
 
       try {
-        for await (const event of streamModelResponse({ client, config, messages, tools: activeTools, signal })) {
+        for await (const event of provider.stream(messages, activeTools)) {
           if (event.type === 'text_delta') {
             contentBuffer += event.content;
             yield {
@@ -2267,7 +2343,7 @@ export class AIService {
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') return;
         const message = err instanceof Error ? err.message : 'Stream error';
-        logger.error('OpenAI API error', { error: err });
+        logger.error('AI provider error', { error: err });
         if (isContextWindowError(err)) {
           yield {
             type: 'context_blocked',
@@ -2459,15 +2535,14 @@ export class AIService {
   }
 
   private async *streamFinalTextResponse(input: {
-    client: OpenAI;
-    config: Awaited<ReturnType<AISettingsService['getConfig']>>;
+    provider: AIProviderSession;
     messages: Record<string, unknown>[];
     requestId: string;
     signal: AbortSignal;
   }): AsyncGenerator<WSServerMessage> {
-    const { client, config, messages, requestId, signal } = input;
+    const { provider, messages, requestId } = input;
     try {
-      for await (const event of streamModelResponse({ client, config, messages, tools: [], signal })) {
+      for await (const event of provider.stream(messages, [])) {
         if (event.type === 'text_delta') {
           yield { type: 'text_delta', requestId, content: event.content };
         }
@@ -2475,7 +2550,7 @@ export class AIService {
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') return;
       const message = err instanceof Error ? err.message : 'Stream error';
-      logger.error('OpenAI API error', { error: err });
+      logger.error('AI provider error', { error: err });
       if (isContextWindowError(err)) {
         yield {
           type: 'context_blocked',
@@ -2500,7 +2575,9 @@ export class AIService {
   async getContextEstimate(
     user: User,
     pageContext?: PageContext,
-    conversationId?: string
+    conversationId?: string,
+    selectedModel?: string,
+    selectedReasoningEffort?: string
   ): Promise<{
     systemTokens: number;
     toolsTokens: number;
@@ -2511,7 +2588,20 @@ export class AIService {
     systemBreakdown: SystemPromptBreakdownItem[];
     toolBreakdown: Array<{ label: string; chars: number; tokens: number }>;
   }> {
-    const config = await this.settingsService.getConfig();
+    const storedConfig = await this.settingsService.getConfig();
+    let config = storedConfig;
+    let reasoningEffort: string = storedConfig.reasoningEffort;
+    if (storedConfig.providerType === 'gateway_inference') {
+      const provider = await this.resolveProviderSession(user, {
+        requestId: `context-estimate:${conversationId ?? 'new'}`,
+        conversationId,
+        requestedModel: selectedModel,
+        requestedReasoningEffort: selectedReasoningEffort,
+        signal: new AbortController().signal,
+      });
+      config = provider.config;
+      reasoningEffort = provider.reasoningEffort ?? 'none';
+    }
     const { prompt, breakdown } = await this.buildSystemPromptDetailed(user, pageContext, conversationId);
     const discoveredToolsets = await this.getConversationDiscoveredToolsets(user, conversationId);
     const tools = this.buildModelTools(config, user, discoveredToolsets);
@@ -2525,7 +2615,7 @@ export class AIService {
       toolsTokens,
       totalOverhead,
       limit: config.maxContextTokens,
-      reasoningEffort: config.reasoningEffort,
+      reasoningEffort,
       toolCount: tools.length,
       systemBreakdown: breakdown,
       toolBreakdown,

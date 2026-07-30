@@ -269,7 +269,7 @@ AI chat projects are saved conversation groupings, not source-control projects. 
   ) {
     push(
       'Inference boundary policy',
-      `- Gateway Inference is separate from the internal AI Assistant and Gateway MCP. Before configuring providers, models, limits, tokens, or client harnesses, read internal_documentation({ topic: "inference" }) and discover the Inference tools. Never reuse Assistant/MCP credentials or suggest the removed /api/inference/v1 endpoint.`
+      `- Gateway Inference is separate from the internal AI Assistant and Gateway MCP. Before configuring providers, models, limits, tokens, or client harnesses, read internal_documentation({ topic: "inference" }) and discover the Inference tools. Never reuse Assistant/MCP credentials. Use /api/inference/v1 for OpenAI-compatible clients; harness-specific adapters must be enabled separately.`
     );
   }
 

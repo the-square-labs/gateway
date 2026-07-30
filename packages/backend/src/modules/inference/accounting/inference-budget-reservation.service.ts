@@ -2,7 +2,12 @@ import type { Redis } from 'ioredis';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
-import type { EffectiveInferenceLimits, InferenceBudgetUsage } from './inference-budget-policy.js';
+import {
+  type EffectiveInferenceLimits,
+  type InferenceBudgetUsage,
+  SUBSCRIPTION_CHAT_BUDGET_FRACTION,
+  SUBSCRIPTION_LAST_REQUEST_BUDGET_FRACTION,
+} from './inference-budget-policy.js';
 
 const RESERVATION_TTL_MS = 15 * 60_000;
 const RESERVATION_HEARTBEAT_MS = 60_000;
@@ -95,11 +100,14 @@ export class InferenceBudgetReservationService {
     usage: InferenceBudgetUsage;
     limits: EffectiveInferenceLimits;
     isCompaction: boolean;
+    allowLastRequestGrace?: boolean;
   }): Promise<BudgetReservation> {
     const now = Date.now();
     const expiresAt = new Date(now + RESERVATION_TTL_MS);
     const dimensions: InferenceBudgetDimension[] = ['credits5h', 'credits7d', 'credits30d', 'apiMonthlyMicrodollars'];
-    const limits = dimensions.map((dimension) => reservationLimit(dimension, input.limits, input.isCompaction));
+    const limits = dimensions.map((dimension) =>
+      reservationLimit(dimension, input.limits, input.isCompaction, input.allowLastRequestGrace === true)
+    );
     let result: unknown;
     try {
       result = await this.redis.eval(
@@ -196,14 +204,17 @@ function reservationKeys(userId: string): string[] {
 function reservationLimit(
   dimension: InferenceBudgetDimension,
   limits: EffectiveInferenceLimits,
-  isCompaction: boolean
+  isCompaction: boolean,
+  allowLastRequestGrace = false
 ): number {
   const value = limits[dimension];
   if (dimension === 'credits5h' && !limits.credits5hEnabled) return UNLIMITED_RESERVATION_LIMIT;
   if (dimension === 'credits7d' && !limits.credits7dEnabled) return UNLIMITED_RESERVATION_LIMIT;
   if (dimension === 'credits30d' && !limits.credits30dEnabled) return UNLIMITED_RESERVATION_LIMIT;
   if (dimension === 'apiMonthlyMicrodollars' || isCompaction) return value;
-  return value * 0.95;
+  return (
+    value * (allowLastRequestGrace ? SUBSCRIPTION_LAST_REQUEST_BUDGET_FRACTION : SUBSCRIPTION_CHAT_BUDGET_FRACTION)
+  );
 }
 
 function recoveryFor(dimension: InferenceBudgetDimension, usage: InferenceBudgetUsage): Date {

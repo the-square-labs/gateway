@@ -45,15 +45,20 @@ export const ChatRequestSchema = z.object({
 export const AIContextEstimateRequestSchema = z.object({
   context: PageContextSchema.optional(),
   conversationId: z.string().uuid().optional().nullable(),
+  model: z.string().trim().max(255).optional(),
+  reasoningEffort: z.string().trim().max(64).optional(),
 });
 
 export const AIConfigUpdateSchema = z.object({
   enabled: z.boolean().optional(),
+  providerType: z.enum(['openai_compatible', 'gateway_inference']).optional(),
   providerUrl: z.union([z.string().url(), z.literal('')]).optional(),
   endpointMode: z.enum(['auto', 'chat_completions', 'responses']).optional(),
   supportsImages: z.boolean().optional(),
   apiKey: z.string().optional(),
   model: z.string().optional(),
+  gatewayInferenceModel: z.string().trim().max(255).optional(),
+  gatewayInferenceAllowUserModelSelection: z.boolean().optional(),
   customSystemPrompt: z.string().optional(),
   rateLimitMax: z.number().int().min(1).max(1000).optional(),
   rateLimitWindowSeconds: z.number().int().min(10).max(3600).optional(),

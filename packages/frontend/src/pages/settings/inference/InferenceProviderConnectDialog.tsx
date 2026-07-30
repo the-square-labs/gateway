@@ -205,7 +205,6 @@ export function InferenceProviderConnectDialog({
           "The provider may not permit third-party subscription connectors and may restrict or block your account. Review the provider's current Terms of Service before continuing. Continue only if you accept this risk.",
         confirmLabel: "Continue to authorization",
         cancelLabel: "Go back",
-        bodyDescription: true,
         variant: "default",
       }))
     )

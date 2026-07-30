@@ -570,13 +570,20 @@ describe('InferenceProviderHttpConnector', () => {
     });
   });
 
-  it('does not expose structured provider error details to data-plane callers', async () => {
+  it('returns the provider rejection reason without exposing credentials', async () => {
     const connector = new InferenceProviderHttpConnector(
       vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ error: { message: 'Unsupported input role' } }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' },
-        })
+        new Response(
+          JSON.stringify({
+            error: {
+              message: 'Unsupported input role for api_key=sk-secret-credential',
+            },
+          }),
+          {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
       )
     );
 
@@ -599,7 +606,76 @@ describe('InferenceProviderHttpConnector', () => {
       )
     ).rejects.toMatchObject({
       code: 'provider_request_rejected',
-      message: 'Provider request failed with HTTP 400',
+      message: 'Provider rejected the request: Unsupported input role for api_key=[redacted]',
+    });
+  });
+
+  it('maps a provider quota rejection to a useful public error', async () => {
+    const connector = new InferenceProviderHttpConnector(
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'insufficient_quota',
+              message: 'Your quota is exhausted for this billing period.',
+            },
+          }),
+          {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      )
+    );
+
+    await expect(
+      connector.execute!(
+        registry.require('openai'),
+        { accessToken: 'must-not-leak', accountId: 'acct-1' },
+        'https://chatgpt.com/backend-api/codex',
+        'gpt-test',
+        {
+          protocol: 'responses',
+          model: 'gpt-test',
+          messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
+          tools: [],
+          stream: true,
+          isCompaction: false,
+          extensions: {},
+        },
+        new AbortController().signal
+      )
+    ).rejects.toMatchObject({
+      code: 'provider_request_rejected',
+      message: 'Provider quota is exhausted. Try again later or choose another model.',
+    });
+  });
+
+  it('returns a useful error when the provider rate limits inference', async () => {
+    const connector = new InferenceProviderHttpConnector(
+      vi.fn().mockResolvedValue(new Response('busy', { status: 429 }))
+    );
+
+    await expect(
+      connector.execute!(
+        registry.require('kimi'),
+        { accessToken: 'must-not-leak' },
+        'https://api.kimi.com/coding',
+        'k3',
+        {
+          protocol: 'responses',
+          model: 'k3',
+          messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
+          tools: [],
+          stream: true,
+          isCompaction: false,
+          extensions: {},
+        },
+        new AbortController().signal
+      )
+    ).rejects.toMatchObject({
+      code: 'provider_rate_limited',
+      message: 'Provider is rate limited: busy',
     });
   });
 

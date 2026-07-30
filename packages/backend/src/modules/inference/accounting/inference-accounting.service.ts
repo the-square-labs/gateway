@@ -13,9 +13,11 @@ import { logInferenceFailure, logInferenceSettlement } from '../inference-observ
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 import type { InferenceRequest, InferenceUsage } from '../protocol/inference-protocol.types.js';
 import {
+  capSubscriptionEstimateToBudget,
   conservativeEstimate,
   errorCode,
   hash,
+  hasSpendableSubscriptionBudget,
   latestPricing,
   latestQuota,
   reservationAmounts,
@@ -54,6 +56,7 @@ export interface InferenceAdmission {
   serviceTierMultiplier: number;
   reservation: BudgetReservation;
   estimatedUsage: InferenceUsage;
+  admittedMaxOutputTokens?: number;
   startedAtMs: number;
   fixedApiMicrodollars?: number;
 }
@@ -68,7 +71,7 @@ export class InferenceAccountingService {
 
   async admit(input: {
     userId: string;
-    tokenId: string;
+    tokenId: string | null;
     protocol: 'responses' | 'chat_completions' | 'messages';
     request: InferenceRequest;
     model: InferenceModel;
@@ -92,11 +95,30 @@ export class InferenceAccountingService {
         input.connection.providerId,
         serviceTier
       );
-      const estimatedUsage = conservativeEstimate(
+      const conservativeUsage = conservativeEstimate(
         input.request,
         input.model.maxOutputTokens,
         input.model.maxInputTokens
       );
+      const allowLastRequestGrace =
+        input.source.sourceType === 'subscription' &&
+        !input.request.isCompaction &&
+        hasSpendableSubscriptionBudget(limits, usage);
+      const estimatedUsage =
+        input.source.sourceType === 'subscription'
+          ? capSubscriptionEstimateToBudget({
+              estimate: conservativeUsage,
+              limits,
+              usage,
+              modelMultiplier,
+              burnMultiplier,
+              serviceTierMultiplier,
+              isCompaction: input.request.isCompaction,
+              allowLastRequestGrace,
+            })
+          : conservativeUsage;
+      const admittedMaxOutputTokens =
+        estimatedUsage.outputTokens < conservativeUsage.outputTokens ? estimatedUsage.outputTokens : undefined;
       const fixedApiMicrodollars = input.apiUnitCharge
         ? unitCharge(pricing, input.apiUnitCharge.priceKey, input.apiUnitCharge.units)
         : 0;
@@ -180,6 +202,7 @@ export class InferenceAccountingService {
           usage,
           limits,
           isCompaction: input.request.isCompaction,
+          allowLastRequestGrace,
         });
       } catch (error) {
         if (!input.retryOf) await database.delete(inferenceRequests).where(eq(inferenceRequests.id, requestId));
@@ -241,6 +264,7 @@ export class InferenceAccountingService {
         serviceTierMultiplier,
         reservation,
         estimatedUsage,
+        ...(admittedMaxOutputTokens === undefined ? {} : { admittedMaxOutputTokens }),
         startedAtMs: Date.now(),
         ...(fixedApiMicrodollars > 0 ? { fixedApiMicrodollars } : {}),
       };

@@ -4,6 +4,15 @@ export const CreateInferenceTokenSchema = z.object({
   name: z.string().trim().min(1).max(255),
 });
 
+export const InferenceSettingsSchema = z.object({
+  harnessSpecificEndpointsEnabled: z.boolean(),
+});
+
+export const UpdateInferenceSettingsSchema = InferenceSettingsSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  'At least one field is required'
+);
+
 export const CreateInferenceProviderConnectionSchema = z.object({
   providerId: z.string().trim().min(1).max(80),
   name: z.string().trim().min(1).max(255),

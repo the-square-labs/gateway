@@ -1,3 +1,4 @@
+import { publishInferenceSelfUsage } from "@/lib/inference-self-usage";
 import type {
   InferenceActivityFilters,
   InferenceActivityPage,
@@ -9,6 +10,7 @@ import type {
   InferenceProviderCatalogItem,
   InferenceProviderConnection,
   InferenceSelfUsage,
+  InferenceSettings,
   InferenceSystemUsage,
   InferenceToken,
   InferenceUserUsage,
@@ -17,6 +19,19 @@ import type { ApiClientBaseConstructor } from "./api-mixins";
 
 export function withInferenceApi<TBase extends ApiClientBaseConstructor>(Base: TBase) {
   return class InferenceApi extends Base {
+    getInferenceSettings(): Promise<InferenceSettings> {
+      return this.request("/inference/settings");
+    }
+
+    async updateInferenceSettings(data: Partial<InferenceSettings>): Promise<InferenceSettings> {
+      const settings = await this.request<InferenceSettings>("/inference/settings", {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      });
+      this.setCache("req:/api/inference/settings", settings);
+      return settings;
+    }
+
     listInferenceTokens(): Promise<InferenceToken[]> {
       return this.request("/inference/tokens");
     }
@@ -32,8 +47,10 @@ export function withInferenceApi<TBase extends ApiClientBaseConstructor>(Base: T
       return this.request(`/inference/tokens/${id}`, { method: "DELETE" });
     }
 
-    getInferenceSelfUsage(): Promise<InferenceSelfUsage> {
-      return this.request("/inference/usage/self");
+    async getInferenceSelfUsage(): Promise<InferenceSelfUsage> {
+      const usage = await this.request<InferenceSelfUsage>("/inference/usage/self");
+      publishInferenceSelfUsage(usage);
+      return usage;
     }
 
     getInferenceSystemUsage(): Promise<InferenceSystemUsage> {

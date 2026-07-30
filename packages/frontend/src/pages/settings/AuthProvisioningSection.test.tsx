@@ -67,12 +67,7 @@ describe("AuthProvisioningSection inference setting", () => {
     const inferenceRow = (await screen.findByText("Inference")).parentElement?.parentElement;
     if (!inferenceRow) throw new Error("Inference settings row not found");
     await user.click(within(inferenceRow).getByRole("button", { name: "Enable inference" }));
-    expect(
-      screen.getByText(
-        "Inference is currently in alpha testing and has not been thoroughly validated. It may behave unexpectedly, fail, or change without notice. Enable it only if you accept the risk of unstable behavior."
-      )
-    ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Enable anyway" }));
+    expect(screen.queryByText("Enable alpha inference?")).not.toBeInTheDocument();
     const save = screen
       .getAllByRole("button", { name: "Save" })
       .find((button) => !(button as HTMLButtonElement).disabled);
@@ -93,12 +88,10 @@ describe("AuthProvisioningSection inference setting", () => {
     expect(useSystemConfigStore.getState().config.features.inferenceEnabled).toBe(true);
   });
 
-  it("keeps inference disabled when the alpha warning is dismissed", async () => {
+  it("keeps inference disabled by default without an alpha confirmation", async () => {
     api.setCache("settings:auth-provisioning", SETTINGS);
     vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(SETTINGS);
     const update = vi.spyOn(api, "updateAuthProvisioningSettings");
-    const user = userEvent.setup();
-
     render(
       <>
         <AuthProvisioningSection canEdit />
@@ -108,10 +101,7 @@ describe("AuthProvisioningSection inference setting", () => {
 
     const inferenceToggle = await screen.findByRole("button", { name: "Enable inference" });
     expect(inferenceToggle).toHaveAttribute("aria-pressed", "false");
-    await user.click(inferenceToggle);
-    await user.click(screen.getByRole("button", { name: "Keep disabled" }));
-
-    expect(inferenceToggle).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByText("Enable alpha inference?")).not.toBeInTheDocument();
     expect(update).not.toHaveBeenCalled();
   });
 

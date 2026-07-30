@@ -26,6 +26,24 @@ describe('InferenceGatewayExecutor helpers', () => {
     expect(mapped.reasoningEffort).toBe('max');
   });
 
+  it('applies an accounting output cap without mutating the client request', () => {
+    const request = {
+      protocol: 'responses' as const,
+      model: 'kimi-k3',
+      messages: [],
+      tools: [],
+      stream: true,
+      isCompaction: false,
+      extensions: {},
+    };
+    const admitted = __testOnly.applyAdmissionOutputLimit(request, {
+      admittedMaxOutputTokens: 774,
+    } as InferenceAdmission);
+
+    expect(admitted.maxOutputTokens).toBe(774);
+    expect(request).not.toHaveProperty('maxOutputTokens');
+  });
+
   it('rejects mixed providers, upstream models, and legacy sidecars', () => {
     const candidate = (providerId: string, upstreamModelId: string, metadata = {}) => ({
       source: { upstreamModelId, metadata },

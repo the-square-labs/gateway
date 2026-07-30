@@ -145,11 +145,8 @@ export class InferenceProviderHttpConnector implements InferenceProviderConnecto
     );
     if (!response.ok || !response.body) {
       const status = response.status === 401 || response.status === 403 ? 401 : response.status === 429 ? 429 : 502;
-      throw new InferenceProtocolError(
-        status,
-        providerErrorCode(response.status),
-        `Provider request failed with HTTP ${response.status}`
-      );
+      const message = await providerFailureMessage(response);
+      throw new InferenceProtocolError(status, providerErrorCode(response.status), message);
     }
     const state = createProviderStreamState(upstreamModel, request.tools);
     return {
@@ -295,6 +292,84 @@ function providerErrorCode(status: number): string {
   if (status === 429) return 'provider_rate_limited';
   if (status >= 500) return 'provider_unavailable';
   return 'provider_request_rejected';
+}
+
+async function providerFailureMessage(response: Response): Promise<string> {
+  if (response.status === 401 || response.status === 403) {
+    return 'Provider credential needs reauthentication.';
+  }
+
+  const reason = await readProviderFailureReason(response);
+  if (isQuotaFailure(reason)) {
+    return 'Provider quota is exhausted. Try again later or choose another model.';
+  }
+  if (response.status === 429) {
+    return reason
+      ? `Provider is rate limited: ${reason}`
+      : 'Provider is rate limited. Try again shortly or choose another model.';
+  }
+  if (reason) return `Provider rejected the request: ${reason}`;
+  return `Provider request failed with HTTP ${response.status}`;
+}
+
+async function readProviderFailureReason(response: Response): Promise<string | null> {
+  let raw: string;
+  try {
+    raw = await response.text();
+  } catch {
+    return null;
+  }
+  if (!raw.trim()) return null;
+
+  try {
+    const payload = asObject(JSON.parse(raw));
+    const error = asObject(payload?.error);
+    const code = firstNonEmptyString(error?.code, payload?.code);
+    if (isQuotaFailure(code)) return code;
+    const reason = firstNonEmptyString(
+      error?.message,
+      error?.detail,
+      error?.error,
+      payload?.message,
+      payload?.detail,
+      payload?.error_description
+    );
+    return reason ? sanitizeProviderFailureReason(reason) : null;
+  } catch {
+    const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+    if (!contentType.startsWith('text/plain') || raw.includes('<html')) return null;
+    return sanitizeProviderFailureReason(raw);
+  }
+}
+
+function firstNonEmptyString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return null;
+}
+
+function sanitizeProviderFailureReason(value: string): string | null {
+  const normalized = value
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\b(?:gwi|sk|rk|pk)[_-][A-Za-z0-9_-]{8,}\b/g, '[redacted]')
+    .replace(
+      /((?:access[_ -]?token|refresh[_ -]?token|api[_ -]?key|authorization)\s*[:=]\s*)(?:Bearer\s+)?[^\s,;]+/gi,
+      '$1[redacted]'
+    )
+    .trim();
+  return normalized ? normalized.slice(0, 400) : null;
+}
+
+function isQuotaFailure(reason: string | null): boolean {
+  return (
+    reason !== null &&
+    (/\binsufficient[_ -]?quota\b/i.test(reason) ||
+      /\b(?:quota|credits?|credit balance)\b.{0,80}\b(?:exhausted|exceeded|depleted|insufficient)\b/i.test(reason) ||
+      /\b(?:exhausted|exceeded|depleted)\b.{0,80}\bquota\b/i.test(reason) ||
+      /\bbilling limit\b/i.test(reason))
+  );
 }
 
 function joinUrl(baseUrl: string, path: string): string {

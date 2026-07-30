@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useInferenceQuotaSnapshot } from "@/components/ai/InferenceQuotaStatus";
 import {
   CommandDialog,
   CommandEmpty,
@@ -88,16 +89,19 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const resolvedPageStatus = useResolvedPageContext((s) => s.status);
   const resolvedPageRouteKey = useResolvedPageContext((s) => s.routeKey);
   const resolvedPageResource = useResolvedPageContext((s) => s.resource);
+  const gatewayInferenceMode = useAIStore(
+    (state) => state.providerStatus?.providerType === "gateway_inference"
+  );
+  const inferenceStreaming = useAIStore((state) => state.isStreaming);
+  const canViewInferenceUsage = hasScope("inference:usage:view:self");
+  const inferenceQuota = useInferenceQuotaSnapshot(gatewayInferenceMode && canViewInferenceUsage);
 
   // Lazy-loaded entities
   const [nodes, setNodes] = useState<Node[]>([]);
   const [proxyHosts, setProxyHosts] = useState<ProxyHost[]>([]);
 
   useEffect(() => {
-    if (!open) {
-      setSearch("");
-      return;
-    }
+    if (!open) return;
     // Fetch entities on palette open
     api
       .listNodes({ limit: 100 })
@@ -109,6 +113,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       .catch(() => {});
     // Containers are preloaded on app startup via DashboardLayout
   }, [open]);
+
+  useEffect(() => {
+    if (!open || !gatewayInferenceMode || !canViewInferenceUsage || inferenceStreaming) return;
+    void api.getInferenceSelfUsage().catch(() => {
+      // The command palette remains usable when quota visibility is temporarily unavailable.
+    });
+  }, [canViewInferenceUsage, gatewayInferenceMode, inferenceStreaming, open]);
 
   const handleSelect = (callback: () => void) => {
     callback();
@@ -125,6 +136,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   };
 
   const askAI = (query: string) => {
+    if (inferenceQuota.exhausted) return;
     const systemPrompt = `The user typed "${query}" in the command palette search but found no matching pages, entities, or commands. They are looking for help or information. Please ANSWER their question or explain how to do what they're asking about. Do NOT perform any actions, do NOT create or modify resources — just explain step by step how they can do it themselves through the UI or provide the information they need.`;
     const wrapped = `<system-instruction>${systemPrompt}</system-instruction>\n${query}`;
     useUIStore.getState().setAIPanelOpen(true);
@@ -506,7 +518,12 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const askAIFallback = searchQuery && !hasAnyResults && aiEnabled !== false && aiScopeOk;
 
   return (
-    <CommandDialog open={open} onOpenChange={onOpenChange} shouldFilter={false}>
+    <CommandDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      onExitComplete={() => setSearch("")}
+      shouldFilter={false}
+    >
       <CommandInput
         placeholder={
           isCommandMode ? "Type a command... (console, logs)" : "Search or type > for commands..."
@@ -530,10 +547,14 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             <CommandGroup heading="No commands found">
               <CommandItem
                 value="ask-ai"
+                disabled={inferenceQuota.exhausted}
                 onSelect={() => handleSelect(() => askAI(search.slice(1).trim()))}
               >
                 <Sparkles className="mr-2 h-4 w-4" />
                 Ask AI: "{search.slice(1).trim()}"
+                {inferenceQuota.exhausted && (
+                  <span className="ml-auto text-xs text-muted-foreground">Quota exhausted</span>
+                )}
               </CommandItem>
             </CommandGroup>
           ) : (
@@ -765,10 +786,14 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 <CommandGroup heading="No results">
                   <CommandItem
                     value="ask-ai"
+                    disabled={inferenceQuota.exhausted}
                     onSelect={() => handleSelect(() => askAI(searchQuery))}
                   >
                     <Sparkles className="mr-2 h-4 w-4" />
                     Ask AI: "{searchQuery}"
+                    {inferenceQuota.exhausted && (
+                      <span className="ml-auto text-xs text-muted-foreground">Quota exhausted</span>
+                    )}
                   </CommandItem>
                 </CommandGroup>
               </>
