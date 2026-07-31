@@ -203,10 +203,11 @@ function DockerContainerDetailGuard() {
         if (!containerId || !canonicalName) throw new Error("Container identity is missing");
         return { node, containerId, canonicalName, container };
       }),
-    ({ node, containerId, canonicalName }) => ({
+    ({ node, containerId, canonicalName, container }) => ({
       resourceType: "docker-container",
       resourceId: containerId,
       nodeId: node.id,
+      scopeResourceId: String((container as any).scopeResourceId ?? ""),
       label: canonicalName,
     })
   );

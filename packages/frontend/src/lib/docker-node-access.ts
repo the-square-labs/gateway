@@ -27,6 +27,11 @@ function hasBroadDockerNodeAccess(
   return scopeBases.some((scopeBase) => scopeMatches(scopes, scopeBase));
 }
 
+function dockerNodeIdFromScopeResourceId(resourceId: string): string {
+  const separator = resourceId.indexOf("/");
+  return separator > 0 ? resourceId.slice(0, separator) : resourceId;
+}
+
 export async function loadVisibleDockerNodes(
   scopes: readonly string[],
   scopeBases: readonly DockerViewNodeScope[],
@@ -42,7 +47,9 @@ export async function loadVisibleDockerNodes(
   const hasBroadAccess = hasBroadDockerNodeAccess(scopes, scopeBases);
   const allowedIdsByScope = deriveAllowedResourceIdsByScope(scopes);
   const allowedNodeIds = new Set(
-    scopeBases.flatMap((scopeBase) => allowedIdsByScope[scopeBase] ?? [])
+    scopeBases
+      .flatMap((scopeBase) => allowedIdsByScope[scopeBase] ?? [])
+      .map(dockerNodeIdFromScopeResourceId)
   );
   return response.data.filter(
     (node) =>

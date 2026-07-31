@@ -7,7 +7,7 @@ import { useAuthStore } from "@/stores/auth";
 export function DockerConsolePopout() {
   const { nodeId, containerId } = useParams<{ nodeId: string; containerId: string }>();
   const [searchParams] = useSearchParams();
-  const { hasScope } = useAuthStore();
+  const { hasScopedAccess } = useAuthStore();
   const shell = searchParams.get("shell") || "auto";
 
   const wsFactory = useCallback(
@@ -16,7 +16,7 @@ export function DockerConsolePopout() {
   );
 
   if (!nodeId || !containerId) return null;
-  if (!hasScope("docker:containers:console") && !hasScope(`docker:containers:console:${nodeId}`)) {
+  if (!hasScopedAccess("docker:containers:console")) {
     return (
       <div className="flex h-full items-center justify-center bg-background text-sm text-muted-foreground">
         You don't have permission to access the container console.

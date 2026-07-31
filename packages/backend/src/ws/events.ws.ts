@@ -4,6 +4,11 @@ import type { DrizzleClient } from '@/db/client.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { hasScope, hasScopeBase } from '@/lib/permissions.js';
 import { resolveLiveSessionUser, resolveLiveUser } from '@/modules/auth/live-session-user.js';
+import {
+  DockerAccessResourceService,
+  dockerScopedNodeIds,
+  hasDockerResourceScope,
+} from '@/modules/docker/docker-access-resource.service.js';
 import { hasAnyDockerNodeRouteAccess, hasDockerNodeRouteAccess } from '@/modules/docker/docker-route-resolvers.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
@@ -214,6 +219,37 @@ function isProxyFolderLayoutPayload(payload: unknown): boolean {
   );
 }
 
+function dockerEventResourceId(payload: unknown): string | null {
+  const event = payload as
+    | {
+        nodeId?: string;
+        scopeResourceId?: string;
+        deploymentId?: string;
+        containerId?: string;
+        id?: string;
+        containerName?: string;
+        name?: string;
+      }
+    | undefined;
+  if (event?.scopeResourceId) return event.scopeResourceId;
+  if (event?.deploymentId) return event.deploymentId;
+  if (!event?.nodeId) return null;
+  try {
+    return container.resolve(DockerAccessResourceService).cachedContainerResourceId(event.nodeId, {
+      runtimeId: event.containerId ?? event.id,
+      name: event.containerName ?? event.name,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function hasDockerEventAccess(scopes: string[], baseScope: string, payload: unknown): boolean {
+  const nodeId = (payload as { nodeId?: string } | undefined)?.nodeId;
+  if (!nodeId) return false;
+  return hasDockerResourceScope(scopes, baseScope, nodeId, dockerEventResourceId(payload) ?? '');
+}
+
 function canReceiveChannelPayload(scopes: string[], channel: string, payload: unknown): boolean {
   if (channel === 'system.update.changed') return true;
   if (channel === 'docker.snapshot.changed') {
@@ -229,7 +265,12 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
             : event.kind === 'networks'
               ? 'docker:networks:view'
               : null;
-    return !!scope && (hasScope(scopes, scope) || hasScope(scopes, `${scope}:${event.nodeId}`));
+    if (!scope) return false;
+    if (hasScope(scopes, scope) || hasScope(scopes, `${scope}:${event.nodeId}`)) return true;
+    return (
+      scope === 'docker:containers:view' &&
+      dockerScopedNodeIds(scopes, ['docker:containers:view']).includes(event.nodeId)
+    );
   }
   if (channel === 'docker.folder.changed') {
     if (
@@ -242,6 +283,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
       return true;
     }
     const nodeIds = (payload as { nodeIds?: string[] } | undefined)?.nodeIds;
+    const childScopedNodeIds = new Set(dockerScopedNodeIds(scopes, ['docker:containers:view']));
     return (
       Array.isArray(nodeIds) &&
       nodeIds.some(
@@ -249,44 +291,32 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
           hasScope(scopes, `docker:containers:view:${nodeId}`) ||
           hasScope(scopes, `docker:images:view:${nodeId}`) ||
           hasScope(scopes, `docker:volumes:view:${nodeId}`) ||
-          hasScope(scopes, `docker:networks:view:${nodeId}`)
+          hasScope(scopes, `docker:networks:view:${nodeId}`) ||
+          childScopedNodeIds.has(nodeId)
       )
     );
   }
   if (channel.startsWith('docker.webhook')) {
-    const nodeId = (payload as { nodeId?: string } | undefined)?.nodeId;
-    return (
-      hasScope(scopes, 'docker:containers:webhooks') ||
-      !!(nodeId && hasScope(scopes, `docker:containers:webhooks:${nodeId}`))
-    );
+    return hasDockerEventAccess(scopes, 'docker:containers:webhooks', payload);
   }
   if (channel.startsWith('docker.deployment') || channel.startsWith('docker.health')) {
-    const nodeId = (payload as { nodeId?: string } | undefined)?.nodeId;
-    return (
-      hasScope(scopes, 'docker:containers:view') || !!(nodeId && hasScope(scopes, `docker:containers:view:${nodeId}`))
-    );
+    return hasDockerEventAccess(scopes, 'docker:containers:view', payload);
   }
   if (channel.startsWith('docker.task')) {
     return hasScope(scopes, 'docker:tasks');
   }
   if (channel === 'docker.migration.changed') {
-    const event = payload as { sourceNodeId?: string; targetNodeId?: string } | undefined;
-    if (!event?.sourceNodeId || !event.targetNodeId) return false;
-    return [event.sourceNodeId, event.targetNodeId].every(
-      (nodeId) => hasScope(scopes, 'docker:containers:view') || hasScope(scopes, `docker:containers:view:${nodeId}`)
+    const event = payload as { sourceNodeId?: string; targetNodeId?: string; scopeResourceId?: string } | undefined;
+    if (!event?.sourceNodeId || !event.targetNodeId || !event.scopeResourceId) return false;
+    return [event.sourceNodeId, event.targetNodeId].some((nodeId) =>
+      hasDockerResourceScope(scopes, 'docker:containers:view', nodeId, event.scopeResourceId!)
     );
   }
   if (channel.startsWith('docker.container')) {
-    const nodeId = (payload as { nodeId?: string } | undefined)?.nodeId;
-    return (
-      hasScope(scopes, 'docker:containers:view') || !!(nodeId && hasScope(scopes, `docker:containers:view:${nodeId}`))
-    );
+    return hasDockerEventAccess(scopes, 'docker:containers:view', payload);
   }
   if (channel === 'docker.file.changed') {
-    const nodeId = (payload as { nodeId?: string } | undefined)?.nodeId;
-    return (
-      hasScope(scopes, 'docker:containers:files') || !!(nodeId && hasScope(scopes, `docker:containers:files:${nodeId}`))
-    );
+    return hasDockerEventAccess(scopes, 'docker:containers:files', payload);
   }
   if (channel === 'docker.volume.file.changed') {
     const nodeId = (payload as { nodeId?: string } | undefined)?.nodeId;
@@ -300,10 +330,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     return hasScope(scopes, 'nodes:files:read') || !!(nodeId && hasScope(scopes, `nodes:files:read:${nodeId}`));
   }
   if (channel === 'docker.image-cleanup.changed') {
-    const nodeId = (payload as { nodeId?: string } | undefined)?.nodeId;
-    return (
-      hasScope(scopes, 'docker:containers:edit') || !!(nodeId && hasScope(scopes, `docker:containers:edit:${nodeId}`))
-    );
+    return hasDockerEventAccess(scopes, 'docker:containers:edit', payload);
   }
   if (channel.startsWith('docker.image')) {
     const nodeId = (payload as { nodeId?: string } | undefined)?.nodeId;

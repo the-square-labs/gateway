@@ -729,9 +729,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     const actions: PaletteEntry[] = [];
     const nodeId = resource.nodeId;
     if (resource.resourceType === "docker-container" && nodeId) {
+      const resourceSuffix = `${nodeId}/${resource.scopeResourceId ?? ""}`;
       if (
         hasScope("docker:containers:console") ||
-        hasScope(`docker:containers:console:${nodeId}`)
+        hasScope(`docker:containers:console:${resourceSuffix}`)
       ) {
         actions.push({
           id: "context:container-console",
@@ -745,7 +746,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             ),
         });
       }
-      if (hasScope("docker:containers:view") || hasScope(`docker:containers:view:${nodeId}`)) {
+      if (
+        hasScope("docker:containers:view") ||
+        hasScope(`docker:containers:view:${resourceSuffix}`)
+      ) {
         actions.push({
           id: "context:container-logs",
           label: "Open container logs",
@@ -758,7 +762,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             ),
         });
       }
-      if (hasScope("docker:containers:files") || hasScope(`docker:containers:files:${nodeId}`)) {
+      if (
+        hasScope("docker:containers:files") ||
+        hasScope(`docker:containers:files:${resourceSuffix}`)
+      ) {
         actions.push({
           id: "context:container-files",
           label: "Browse container files",
@@ -769,17 +776,19 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     }
 
     if (resource.resourceType === "docker-deployment" && nodeId) {
-      actions.push({
-        id: "context:deployment-logs",
-        label: "Open deployment logs",
-        icon: ScrollText,
-        action: () =>
-          window.open(
-            `/docker/compose-logs/${nodeId}/${encodeURIComponent(resource.label ?? resource.resourceId)}`,
-            `compose-logs-${resource.resourceId}`,
-            "width=1000,height=700"
-          ),
-      });
+      if (hasScope(`docker:containers:view:${nodeId}/${resource.resourceId}`)) {
+        actions.push({
+          id: "context:deployment-logs",
+          label: "Open deployment logs",
+          icon: ScrollText,
+          action: () =>
+            window.open(
+              `/docker/compose-logs/${nodeId}/${encodeURIComponent(resource.label ?? resource.resourceId)}`,
+              `compose-logs-${resource.resourceId}`,
+              "width=1000,height=700"
+            ),
+        });
+      }
     }
 
     if (
@@ -971,6 +980,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     for (const container of commandContainers) {
       const nodeId = container._nodeId;
       if (!nodeId) continue;
+      const resourceSuffix = `${nodeId}/${container.scopeResourceId ?? ""}`;
       const filesRoute = container._nodeSlug
         ? container.kind === "deployment"
           ? dockerDeploymentRoute(container._nodeSlug, container.name, "files")
@@ -978,7 +988,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         : null;
       if (
         hasScope("docker:containers:console") ||
-        hasScope(`docker:containers:console:${nodeId}`)
+        hasScope(`docker:containers:console:${resourceSuffix}`)
       ) {
         entries.push({
           id: `command:container-console:${nodeId}:${container.id}`,
@@ -994,7 +1004,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             ),
         });
       }
-      if (hasScope("docker:containers:view") || hasScope(`docker:containers:view:${nodeId}`)) {
+      if (
+        hasScope("docker:containers:view") ||
+        hasScope(`docker:containers:view:${resourceSuffix}`)
+      ) {
         entries.push({
           id: `command:container-logs:${nodeId}:${container.id}`,
           label: `Logs ${container.name}`,
@@ -1011,7 +1024,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       }
       if (
         filesRoute &&
-        (hasScope("docker:containers:files") || hasScope(`docker:containers:files:${nodeId}`))
+        (hasScope("docker:containers:files") ||
+          hasScope(`docker:containers:files:${resourceSuffix}`))
       ) {
         entries.push({
           id: `command:container-files:${nodeId}:${container.id}`,

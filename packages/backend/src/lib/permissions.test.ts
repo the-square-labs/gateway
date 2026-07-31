@@ -37,6 +37,20 @@ describe('Scope-based permissions', () => {
       expect(hasScope(['nodes:details:node-123'], 'nodes:details:node-456')).toBe(false);
     });
 
+    it('lets a Docker node grant cover child resources without crossing nodes', () => {
+      expect(hasScope(['docker:containers:view:node-1'], 'docker:containers:view:node-1/container-1')).toBe(true);
+      expect(hasScope(['docker:containers:view:node-1/container-1'], 'docker:containers:view:node-1/container-2')).toBe(
+        false
+      );
+      expect(hasScope(['docker:containers:view:node-1/container-1'], 'docker:containers:view:node-2/container-1')).toBe(
+        false
+      );
+    });
+
+    it('does not apply Docker child hierarchy to unrelated slash resource ids', () => {
+      expect(hasScope(['proxy:view:folder'], 'proxy:view:folder/host')).toBe(false);
+    });
+
     it('does not let an exact scope grant a different exact scope with the same prefix', () => {
       expect(hasScope(['proxy:advanced'], 'proxy:advanced:bypass')).toBe(false);
       expect(hasScope(['proxy:advanced:bypass'], 'proxy:advanced:bypass:host-1')).toBe(true);

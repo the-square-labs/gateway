@@ -3,10 +3,19 @@ import { ConsolePanel } from "@/components/terminal/ConsolePanel";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 
-export function ConsoleTab({ nodeId, containerId }: { nodeId: string; containerId: string }) {
+export function ConsoleTab({
+  nodeId,
+  containerId,
+  scopeResourceId,
+}: {
+  nodeId: string;
+  containerId: string;
+  scopeResourceId?: string;
+}) {
   const { hasScope } = useAuthStore();
-  const canUseConsole =
-    hasScope("docker:containers:console") || hasScope(`docker:containers:console:${nodeId}`);
+  const canUseConsole = hasScope(
+    `docker:containers:console:${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`
+  );
 
   const wsFactory = useCallback(
     () => api.createExecWebSocket(nodeId, containerId, "auto"),

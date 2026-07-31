@@ -35,7 +35,12 @@ function createService(dispatch: { sendDockerContainerCommand: ReturnType<typeof
     { getNode: vi.fn().mockReturnValue({ id: 'node-1' }) } as never
   );
   service.setEventBus(eventBus as never);
-  return { service, audit, eventBus };
+  const accessResources = {
+    removeContainer: vi.fn().mockResolvedValue('scope-resource-1'),
+    cachedContainerResourceId: vi.fn().mockReturnValue(null),
+  };
+  service.setAccessResourceService(accessResources as never);
+  return { service, audit, eventBus, accessResources };
 }
 
 describe('DockerManagementService.removeContainer', () => {
@@ -52,7 +57,7 @@ describe('DockerManagementService.removeContainer', () => {
         .mockResolvedValueOnce(inspectResult(state, statePatch))
         .mockResolvedValueOnce(inspectResult(state, statePatch)),
     };
-    const { service, audit, eventBus } = createService(dispatch);
+    const { service, audit, eventBus, accessResources } = createService(dispatch);
 
     await expect(service.removeContainer('node-1', 'container-1', true, 'user-1')).rejects.toMatchObject({
       statusCode: 409,
@@ -62,6 +67,7 @@ describe('DockerManagementService.removeContainer', () => {
     expect(dispatch.sendDockerContainerCommand).toHaveBeenCalledTimes(3);
     expect(dispatch.sendDockerContainerCommand).not.toHaveBeenCalledWith('node-1', 'remove', expect.anything());
     expect(audit.log).not.toHaveBeenCalled();
+    expect(accessResources.removeContainer).not.toHaveBeenCalled();
     expect(eventBus.publish).not.toHaveBeenCalledWith('docker.container.changed', expect.anything());
   });
 
@@ -74,7 +80,7 @@ describe('DockerManagementService.removeContainer', () => {
         .mockResolvedValueOnce(inspectResult('exited'))
         .mockResolvedValueOnce({ success: true }),
     };
-    const { service, audit, eventBus } = createService(dispatch);
+    const { service, audit, eventBus, accessResources } = createService(dispatch);
 
     await service.removeContainer('node-1', 'container-1', false, 'user-1');
 
@@ -89,11 +95,13 @@ describe('DockerManagementService.removeContainer', () => {
       resourceId: 'container-1',
       details: { nodeId: 'node-1', name: 'api', containerName: 'api', force: false },
     });
+    expect(accessResources.removeContainer).toHaveBeenCalledWith('node-1', 'api');
     expect(eventBus.publish).toHaveBeenCalledWith('docker.container.changed', {
       nodeId: 'node-1',
       id: 'container-1',
       name: 'api',
       action: 'removed',
+      scopeResourceId: 'scope-resource-1',
     });
   });
 });

@@ -41,9 +41,11 @@ Gateway manages Docker through the `docker-daemon` installed on container hosts.
 Container workflows:
 
 - List containers across managed Docker nodes.
+- Grant container permissions for an entire Docker node or narrow them to one standalone container or blue/green deployment.
 - Start, stop, restart, recreate, duplicate, rename, and remove containers.
 - Create, inspect, and remove images, volumes, and networks across managed nodes.
 - Run durable cross-node migrations for containers and blue/green deployments, including image and volume transfer, capacity preflight, verification, cutover, cancellation, and cleanup recovery.
+- Move resource-scoped grants with a container or deployment during migration. Recreates preserve the stable access identity; explicit deletion removes its grants so a later same-name resource starts without inherited access.
 - Edit image, command, environment variables, secrets, labels, ports, restart policy, and runtime limits.
 - Edit mounts only with the dedicated `docker:containers:mounts` scope. Existing mounts are preserved during normal image, environment, and webhook updates.
 - Browse container logs with search and follow mode.

@@ -1,8 +1,7 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { requireScopeForResource } from '@/modules/auth/auth.middleware.js';
-import { TokensService } from '@/modules/tokens/tokens.service.js';
+import { requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { AppEnv } from '@/types.js';
 import {
@@ -29,6 +28,13 @@ import {
   upsertDeploymentWebhookRoute,
 } from './docker.docs.js';
 import { SecretCreateSchema, SecretUpdateSchema } from './docker.schemas.js';
+import {
+  assertDockerNodeScope,
+  assertDockerResourceScope,
+  filterDockerResourcesForScope,
+  requireDockerDeploymentScope,
+} from './docker-access.middleware.js';
+import { hasDockerResourceScope } from './docker-access-resource.service.js';
 import {
   DockerDeploymentCreateSchema,
   DockerDeploymentDeploySchema,
@@ -64,6 +70,7 @@ function compactDeploymentListItem(deployment: Record<string, any>) {
   const routes = Array.isArray(deployment.routes) ? deployment.routes : [];
   return {
     id: deployment.id,
+    scopeResourceId: deployment.id,
     nodeId: deployment.nodeId,
     name: deployment.name,
     status: deployment.status,
@@ -126,26 +133,29 @@ function matchesDeploymentSearch(deployment: Record<string, any>, search: string
 }
 
 export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
-  router.openapi(
-    { ...listDeploymentsRoute, middleware: requireScopeForResource('docker:containers:view', 'nodeId') },
-    async (c) => {
-      const service = container.resolve(DockerDeploymentService);
-      const nodeId = c.req.param('nodeId')!;
-      const availability = container.resolve(NodeRegistryService).getNode(nodeId) ? 'available' : 'unavailable';
-      const data = await service.listSummary(nodeId);
-      const search = c.req.query('search')?.trim().toLowerCase();
-      const compacted = data
+  router.openapi({ ...listDeploymentsRoute, middleware: requireScopeBase('docker:containers:view') }, async (c) => {
+    const service = container.resolve(DockerDeploymentService);
+    const nodeId = c.req.param('nodeId')!;
+    assertDockerNodeScope(c.get('effectiveScopes') || [], 'docker:containers:view', nodeId);
+    const availability = container.resolve(NodeRegistryService).getNode(nodeId) ? 'available' : 'unavailable';
+    const data = await service.listSummary(nodeId);
+    const search = c.req.query('search')?.trim().toLowerCase();
+    const compacted = filterDockerResourcesForScope(
+      data
         .filter((deployment) => matchesDeploymentSearch(deployment, search))
-        .map((deployment) => ({ ...compactDeploymentListItem(deployment), availability }));
-      const truncated = compacted.length > DOCKER_RESOURCE_LIST_MAX;
-      return c.json({
-        data: truncated ? compacted.slice(0, DOCKER_RESOURCE_LIST_MAX) : compacted,
-        total: compacted.length,
-        limit: DOCKER_RESOURCE_LIST_MAX,
-        truncated,
-      });
-    }
-  );
+        .map((deployment) => ({ ...compactDeploymentListItem(deployment), availability })),
+      c.get('effectiveScopes') || [],
+      'docker:containers:view',
+      nodeId
+    );
+    const truncated = compacted.length > DOCKER_RESOURCE_LIST_MAX;
+    return c.json({
+      data: truncated ? compacted.slice(0, DOCKER_RESOURCE_LIST_MAX) : compacted,
+      total: compacted.length,
+      limit: DOCKER_RESOURCE_LIST_MAX,
+      truncated,
+    });
+  });
 
   router.openapi(
     { ...createDeploymentRoute, middleware: requireScopeForResource('docker:containers:create', 'nodeId') },
@@ -162,26 +172,30 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
     }
   );
 
-  router.openapi(
-    { ...getDeploymentByNameRoute, middleware: requireScopeForResource('docker:containers:view', 'nodeId') },
-    async (c) => {
-      const service = container.resolve(DockerDeploymentService);
-      const db = container.resolve(TOKENS.DrizzleClient) as DrizzleClient;
-      const deploymentId = await resolveDockerDeploymentIdByName(
-        db,
-        c.req.param('nodeId')!,
-        c.req.param('deploymentName')!
-      );
-      const data = await service.get(c.req.param('nodeId')!, deploymentId);
-      const availability = container.resolve(NodeRegistryService).getNode(c.req.param('nodeId')!)
-        ? 'available'
-        : 'unavailable';
-      return c.json({ data: { ...data, availability } });
-    }
-  );
+  router.openapi({ ...getDeploymentByNameRoute, middleware: requireScopeBase('docker:containers:view') }, async (c) => {
+    const service = container.resolve(DockerDeploymentService);
+    const db = container.resolve(TOKENS.DrizzleClient) as DrizzleClient;
+    assertDockerNodeScope(c.get('effectiveScopes') || [], 'docker:containers:view', c.req.param('nodeId')!);
+    const deploymentId = await resolveDockerDeploymentIdByName(
+      db,
+      c.req.param('nodeId')!,
+      c.req.param('deploymentName')!
+    );
+    assertDockerResourceScope(
+      c.get('effectiveScopes') || [],
+      'docker:containers:view',
+      c.req.param('nodeId')!,
+      deploymentId
+    );
+    const data = await service.get(c.req.param('nodeId')!, deploymentId);
+    const availability = container.resolve(NodeRegistryService).getNode(c.req.param('nodeId')!)
+      ? 'available'
+      : 'unavailable';
+    return c.json({ data: { ...data, availability } });
+  });
 
   router.openapi(
-    { ...getDeploymentRoute, middleware: requireScopeForResource('docker:containers:view', 'nodeId') },
+    { ...getDeploymentRoute, middleware: requireDockerDeploymentScope('docker:containers:view') },
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const nodeId = c.req.param('nodeId')!;
@@ -192,7 +206,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...updateDeploymentRoute, middleware: requireScopeForResource('docker:containers:edit', 'nodeId') },
+    { ...updateDeploymentRoute, middleware: requireDockerDeploymentScope('docker:containers:edit') },
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
@@ -208,7 +222,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...deleteDeploymentRoute, middleware: requireScopeForResource('docker:containers:delete', 'nodeId') },
+    { ...deleteDeploymentRoute, middleware: requireDockerDeploymentScope('docker:containers:delete') },
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
@@ -218,7 +232,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...deploymentActionRoute('start'), middleware: requireScopeForResource('docker:containers:manage', 'nodeId') },
+    { ...deploymentActionRoute('start'), middleware: requireDockerDeploymentScope('docker:containers:manage') },
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
@@ -228,7 +242,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...deploymentActionRoute('stop'), middleware: requireScopeForResource('docker:containers:manage', 'nodeId') },
+    { ...deploymentActionRoute('stop'), middleware: requireDockerDeploymentScope('docker:containers:manage') },
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
@@ -238,7 +252,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...deploymentActionRoute('restart'), middleware: requireScopeForResource('docker:containers:manage', 'nodeId') },
+    { ...deploymentActionRoute('restart'), middleware: requireDockerDeploymentScope('docker:containers:manage') },
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
@@ -248,7 +262,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...deploymentActionRoute('kill'), middleware: requireScopeForResource('docker:containers:manage', 'nodeId') },
+    { ...deploymentActionRoute('kill'), middleware: requireDockerDeploymentScope('docker:containers:manage') },
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
@@ -258,7 +272,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...deployDeploymentRoute, middleware: requireScopeForResource('docker:containers:manage', 'nodeId') },
+    { ...deployDeploymentRoute, middleware: requireDockerDeploymentScope('docker:containers:manage') },
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
@@ -275,7 +289,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...switchDeploymentRoute, middleware: requireScopeForResource('docker:containers:manage', 'nodeId') },
+    { ...switchDeploymentRoute, middleware: requireDockerDeploymentScope('docker:containers:manage') },
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
@@ -292,7 +306,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...rollbackDeploymentRoute, middleware: requireScopeForResource('docker:containers:manage', 'nodeId') },
+    { ...rollbackDeploymentRoute, middleware: requireDockerDeploymentScope('docker:containers:manage') },
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
@@ -309,7 +323,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...stopDeploymentSlotRoute, middleware: requireScopeForResource('docker:containers:manage', 'nodeId') },
+    { ...stopDeploymentSlotRoute, middleware: requireDockerDeploymentScope('docker:containers:manage') },
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
@@ -320,7 +334,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...listDeploymentSecretsRoute, middleware: requireScopeForResource('docker:containers:secrets', 'nodeId') },
+    { ...listDeploymentSecretsRoute, middleware: requireDockerDeploymentScope('docker:containers:secrets') },
     async (c) => {
       const deploymentService = container.resolve(DockerDeploymentService);
       const secretService = container.resolve(DockerSecretService);
@@ -328,14 +342,14 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
       const deploymentId = c.req.param('deploymentId')!;
       await deploymentService.get(nodeId, deploymentId);
       const scopes = c.get('effectiveScopes') || [];
-      const canReveal = TokensService.hasScope(scopes, `docker:containers:secrets:${nodeId}`);
+      const canReveal = hasDockerResourceScope(scopes, 'docker:containers:secrets', nodeId, deploymentId);
       const data = await secretService.list(nodeId, deploymentSecretContainerName(deploymentId), canReveal);
       return c.json({ data });
     }
   );
 
   router.openapi(
-    { ...createDeploymentSecretRoute, middleware: requireScopeForResource('docker:containers:secrets', 'nodeId') },
+    { ...createDeploymentSecretRoute, middleware: requireDockerDeploymentScope('docker:containers:secrets') },
     async (c) => {
       const deploymentService = container.resolve(DockerDeploymentService);
       const secretService = container.resolve(DockerSecretService);
@@ -350,7 +364,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...updateDeploymentSecretRoute, middleware: requireScopeForResource('docker:containers:secrets', 'nodeId') },
+    { ...updateDeploymentSecretRoute, middleware: requireDockerDeploymentScope('docker:containers:secrets') },
     async (c) => {
       const deploymentService = container.resolve(DockerDeploymentService);
       const secretService = container.resolve(DockerSecretService);
@@ -371,7 +385,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...deleteDeploymentSecretRoute, middleware: requireScopeForResource('docker:containers:secrets', 'nodeId') },
+    { ...deleteDeploymentSecretRoute, middleware: requireDockerDeploymentScope('docker:containers:secrets') },
     async (c) => {
       const deploymentService = container.resolve(DockerDeploymentService);
       const secretService = container.resolve(DockerSecretService);
@@ -390,7 +404,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...deploymentWebhookRoute, middleware: requireScopeForResource('docker:containers:webhooks', 'nodeId') },
+    { ...deploymentWebhookRoute, middleware: requireDockerDeploymentScope('docker:containers:webhooks') },
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const data = await service.getWebhook(c.req.param('nodeId')!, c.req.param('deploymentId')!);
@@ -399,7 +413,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...upsertDeploymentWebhookRoute, middleware: requireScopeForResource('docker:containers:webhooks', 'nodeId') },
+    { ...upsertDeploymentWebhookRoute, middleware: requireDockerDeploymentScope('docker:containers:webhooks') },
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
@@ -414,7 +428,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...deleteDeploymentWebhookRoute, middleware: requireScopeForResource('docker:containers:webhooks', 'nodeId') },
+    { ...deleteDeploymentWebhookRoute, middleware: requireDockerDeploymentScope('docker:containers:webhooks') },
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
@@ -426,7 +440,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     {
       ...regenerateDeploymentWebhookRoute,
-      middleware: requireScopeForResource('docker:containers:webhooks', 'nodeId'),
+      middleware: requireDockerDeploymentScope('docker:containers:webhooks'),
     },
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
@@ -439,7 +453,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     {
       ...getDeploymentImageCleanupRoute,
-      middleware: requireScopeForResource('docker:containers:edit', 'nodeId'),
+      middleware: requireDockerDeploymentScope('docker:containers:edit'),
     },
     async (c) => {
       const nodeId = c.req.param('nodeId')!;
@@ -453,7 +467,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     {
       ...upsertDeploymentImageCleanupRoute,
-      middleware: requireScopeForResource('docker:containers:edit', 'nodeId'),
+      middleware: requireDockerDeploymentScope('docker:containers:edit'),
     },
     async (c) => {
       const nodeId = c.req.param('nodeId')!;

@@ -32,6 +32,7 @@ import { DatabaseFolderService } from '@/modules/databases/database-folders.serv
 import { DatabaseMonitoringService } from '@/modules/databases/database-monitoring.service.js';
 import { DatabaseConnectionService } from '@/modules/databases/databases.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
+import { DockerAccessResourceService } from '@/modules/docker/docker-access-resource.service.js';
 import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
 import { DockerEnvironmentService } from '@/modules/docker/docker-environment.service.js';
 import { DockerFolderService } from '@/modules/docker/docker-folder.service.js';
@@ -431,6 +432,9 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(NodeMonitoringService, nodeMonitoringService);
 
   const dockerManagementService = new DockerManagementService(db, auditService, nodeDispatch, nodeRegistry);
+  const dockerAccessResourceService = new DockerAccessResourceService(db);
+  container.registerInstance(DockerAccessResourceService, dockerAccessResourceService);
+  dockerManagementService.setAccessResourceService(dockerAccessResourceService);
   const dockerMigrationGuard = new DockerMigrationGuard(db);
   dockerManagementService.setMigrationGuard(dockerMigrationGuard);
   container.registerInstance(DockerManagementService, dockerManagementService);
@@ -478,6 +482,7 @@ export async function initializeContainer(): Promise<void> {
   );
   container.registerInstance(DockerDeploymentService, dockerDeploymentService);
   dockerDeploymentService.setMigrationGuard(dockerMigrationGuard);
+  dockerDeploymentService.setAccessResourceService(dockerAccessResourceService);
   const dockerHealthCheckService = new DockerHealthCheckService(db, nodeDispatch);
   container.registerInstance(DockerHealthCheckService, dockerHealthCheckService);
   const dockerImageCleanupService = new DockerImageCleanupService(db, dockerManagementService);
@@ -536,7 +541,12 @@ export async function initializeContainer(): Promise<void> {
   databaseConnectionService.setEventBus(eventBus);
   databaseFolderService.setEventBus(eventBus);
 
-  const proxyDockerUpstreamService = new ProxyDockerUpstreamService(db, dockerSnapshotService, nodeRegistry);
+  const proxyDockerUpstreamService = new ProxyDockerUpstreamService(
+    db,
+    dockerSnapshotService,
+    nodeRegistry,
+    dockerAccessResourceService
+  );
   container.registerInstance(ProxyDockerUpstreamService, proxyDockerUpstreamService);
   const proxyService = new ProxyService(
     db,
@@ -559,7 +569,12 @@ export async function initializeContainer(): Promise<void> {
     dockerMigrationDispatch
   );
   container.registerInstance(DockerMigrationPreflightService, dockerMigrationPreflight);
-  const dockerMigrationCoordinator = new DockerMigrationCoordinator(db, proxyService, dockerSnapshotReconciler);
+  const dockerMigrationCoordinator = new DockerMigrationCoordinator(
+    db,
+    proxyService,
+    dockerSnapshotReconciler,
+    dockerAccessResourceService
+  );
   container.registerInstance(DockerMigrationCoordinator, dockerMigrationCoordinator);
   const dockerMigrationExecutor = new DockerMigrationExecutor(
     db,

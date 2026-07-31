@@ -74,16 +74,14 @@ export function DockerFilePopout() {
     volumeName?: string;
   }>();
   const [searchParams] = useSearchParams();
-  const { hasScope } = useAuthStore();
+  const { hasScope, hasScopedAccess } = useAuthStore();
   const filePath = searchParams.get("path") || "/";
   const isWritable = searchParams.get("writable") === "1";
   const isVolumeFile = !!volumeName;
   const isNodeFile = !containerId && !volumeName;
   const resourceId = volumeName ?? containerId ?? nodeId;
   const canUseContainerFiles =
-    !!nodeId &&
-    !!containerId &&
-    (hasScope("docker:containers:files") || hasScope(`docker:containers:files:${nodeId}`));
+    !!nodeId && !!containerId && hasScopedAccess("docker:containers:files");
   const canUseVolumeFiles =
     !!nodeId &&
     !!volumeName &&

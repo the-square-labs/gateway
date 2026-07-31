@@ -16,6 +16,7 @@ import { type SecretRow, SecretsSection } from "./SecretsSection";
 export function EnvironmentTab({
   nodeId,
   containerId,
+  scopeResourceId,
   containerState,
   disabled,
   onMutationStart,
@@ -26,6 +27,7 @@ export function EnvironmentTab({
 }: {
   nodeId: string;
   containerId: string;
+  scopeResourceId?: string;
   containerState?: string;
   disabled?: boolean;
   onMutationStart?: (transition: "updating" | "recreating") => void;
@@ -48,11 +50,9 @@ export function EnvironmentTab({
   const [secretRows, setSecretRows] = useState<SecretRow[]>([]);
   const [deletedSecretIds, setDeletedSecretIds] = useState<Set<string>>(new Set());
 
-  const canEdit =
-    hasScope("docker:containers:environment") ||
-    hasScope(`docker:containers:environment:${nodeId}`);
-  const canManageSecrets =
-    hasScope("docker:containers:secrets") || hasScope(`docker:containers:secrets:${nodeId}`);
+  const scopeSuffix = `${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`;
+  const canEdit = hasScope(`docker:containers:environment:${scopeSuffix}`);
+  const canManageSecrets = hasScope(`docker:containers:secrets:${scopeSuffix}`);
   const recreatesRunningContainer = containerState === "running";
   const isServiceEnv = !!onSaveServiceEnv;
   const serviceEnvSignature = useMemo(() => JSON.stringify(serviceEnv ?? {}), [serviceEnv]);

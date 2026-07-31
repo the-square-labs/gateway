@@ -1,6 +1,5 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
-import { requireScopeForResource } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import {
   containerHealthCheckRoute,
@@ -11,11 +10,15 @@ import {
   upsertDeploymentHealthCheckRoute,
 } from './docker.docs.js';
 import { DockerHealthCheckUpsertSchema } from './docker.schemas.js';
+import { requireDockerContainerScope, requireDockerDeploymentScope } from './docker-access.middleware.js';
 import { DockerHealthCheckService } from './docker-health-check.service.js';
 
 export function registerDockerHealthCheckRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
-    { ...containerHealthCheckRoute, middleware: requireScopeForResource('docker:containers:view', 'nodeId') },
+    {
+      ...containerHealthCheckRoute,
+      middleware: requireDockerContainerScope('docker:containers:view', 'containerName'),
+    },
     async (c) => {
       const service = container.resolve(DockerHealthCheckService);
       const data = await service.getContainer(
@@ -27,7 +30,10 @@ export function registerDockerHealthCheckRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...upsertContainerHealthCheckRoute, middleware: requireScopeForResource('docker:containers:edit', 'nodeId') },
+    {
+      ...upsertContainerHealthCheckRoute,
+      middleware: requireDockerContainerScope('docker:containers:edit', 'containerName'),
+    },
     async (c) => {
       const service = container.resolve(DockerHealthCheckService);
       const data = await service.upsertContainer(
@@ -40,7 +46,10 @@ export function registerDockerHealthCheckRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...testContainerHealthCheckRoute, middleware: requireScopeForResource('docker:containers:edit', 'nodeId') },
+    {
+      ...testContainerHealthCheckRoute,
+      middleware: requireDockerContainerScope('docker:containers:edit', 'containerName'),
+    },
     async (c) => {
       const service = container.resolve(DockerHealthCheckService);
       const body = await c.req.json().catch(() => null);
@@ -54,7 +63,7 @@ export function registerDockerHealthCheckRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...deploymentHealthCheckRoute, middleware: requireScopeForResource('docker:containers:view', 'nodeId') },
+    { ...deploymentHealthCheckRoute, middleware: requireDockerDeploymentScope('docker:containers:view') },
     async (c) => {
       const service = container.resolve(DockerHealthCheckService);
       const data = await service.getDeployment(c.req.param('nodeId')!, c.req.param('deploymentId')!);
@@ -63,7 +72,7 @@ export function registerDockerHealthCheckRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...upsertDeploymentHealthCheckRoute, middleware: requireScopeForResource('docker:containers:edit', 'nodeId') },
+    { ...upsertDeploymentHealthCheckRoute, middleware: requireDockerDeploymentScope('docker:containers:edit') },
     async (c) => {
       const service = container.resolve(DockerHealthCheckService);
       const data = await service.upsertDeployment(
@@ -76,7 +85,7 @@ export function registerDockerHealthCheckRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...testDeploymentHealthCheckRoute, middleware: requireScopeForResource('docker:containers:edit', 'nodeId') },
+    { ...testDeploymentHealthCheckRoute, middleware: requireDockerDeploymentScope('docker:containers:edit') },
     async (c) => {
       const service = container.resolve(DockerHealthCheckService);
       const body = await c.req.json().catch(() => null);

@@ -1,7 +1,9 @@
 import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { dockerDeployments, nodes } from '@/db/schema/index.js';
+import { extractBaseScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { parseDockerChildScopeResourceId } from './docker-access-resource.service.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
 
 const BROAD_DOCKER_NODE_SCOPES = [
@@ -15,6 +17,9 @@ const SCOPED_DOCKER_NODE_SCOPES = [
   'docker:containers:view',
   'docker:containers:create',
   'docker:containers:manage',
+  'docker:containers:config',
+  'docker:containers:console',
+  'docker:containers:migrate',
   'docker:containers:delete',
   'docker:containers:edit',
   'docker:containers:environment',
@@ -58,7 +63,14 @@ function rethrowDockerInspectError(error: unknown, resource: 'Container' | 'Volu
 export function hasDockerNodeRouteAccess(scopes: string[], nodeId: string): boolean {
   return (
     BROAD_DOCKER_NODE_SCOPES.some((scope) => scopes.includes(scope)) ||
-    SCOPED_DOCKER_NODE_SCOPES.some((scope) => scopes.includes(`${scope}:${nodeId}`))
+    SCOPED_DOCKER_NODE_SCOPES.some((scope) =>
+      scopes.some((candidate) => {
+        const base = extractBaseScope(candidate);
+        if (base !== scope || candidate === base) return false;
+        const resourceId = candidate.slice(base.length + 1);
+        return (parseDockerChildScopeResourceId(resourceId)?.nodeId ?? resourceId) === nodeId;
+      })
+    )
   );
 }
 

@@ -130,8 +130,9 @@ export function SidebarContent({
     [hasScope]
   );
   const canViewContainerDetails = useCallback(
-    (nodeId: string) =>
-      hasScope("docker:containers:view") || hasScope(`docker:containers:view:${nodeId}`),
+    (nodeId: string, scopeResourceId?: string) =>
+      hasScope("docker:containers:view") ||
+      hasScope(`docker:containers:view:${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`),
     [hasScope]
   );
   const canViewDatabaseDetails = useCallback(
@@ -276,7 +277,7 @@ export function SidebarContent({
     let cancelled = false;
     for (const containerId of sidebarPinnedContainerIds) {
       const meta = pinnedContainerMeta[containerId];
-      if (!meta || !canViewContainerDetails(meta.nodeId)) continue;
+      if (!meta || !canViewContainerDetails(meta.nodeId, meta.scopeResourceId)) continue;
       const nodeSlug = dockerNodes.find((node) => node.id === meta.nodeId)?.slug || meta.nodeSlug;
       const request =
         meta.kind === "deployment"
@@ -704,7 +705,10 @@ export function SidebarContent({
                           })}
                           {sidebarPinnedContainerIds.map((cid) => {
                             const meta = pinnedContainerMeta[cid];
-                            if (!meta?.nodeSlug || !canViewContainerDetails(meta.nodeId))
+                            if (
+                              !meta?.nodeSlug ||
+                              !canViewContainerDetails(meta.nodeId, meta.scopeResourceId)
+                            )
                               return null;
                             const isDeployment = meta.kind === "deployment";
                             const containerPath = isDeployment

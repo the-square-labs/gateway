@@ -36,6 +36,8 @@ export interface DockerMount {
 
 export interface DockerContainer {
   id: string;
+  /** Stable Gateway authorization identity. Unlike the Docker runtime ID, this survives recreate and migration. */
+  scopeResourceId?: string;
   name: string;
   image: string;
   state: string;
@@ -166,6 +168,7 @@ export interface DockerDeploymentHealthConfig {
 
 export interface DockerDeployment {
   id: string;
+  scopeResourceId?: string;
   nodeId: string;
   name: string;
   desiredConfig: DockerDeploymentDesiredConfig;

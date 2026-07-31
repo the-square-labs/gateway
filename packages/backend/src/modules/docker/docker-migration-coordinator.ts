@@ -15,6 +15,7 @@ import {
   proxyHosts,
 } from '@/db/schema/index.js';
 import type { ProxyService } from '@/modules/proxy/proxy.service.js';
+import type { DockerAccessResourceService } from './docker-access-resource.service.js';
 import { migrationPlan } from './docker-migration-runtime.js';
 import type { DockerSnapshotReconciler } from './docker-snapshot-reconciler.service.js';
 
@@ -25,7 +26,8 @@ export class DockerMigrationCoordinator {
   constructor(
     private db: DrizzleClient,
     private proxy: ProxyService,
-    private snapshots: DockerSnapshotReconciler
+    private snapshots: DockerSnapshotReconciler,
+    private accessResources: DockerAccessResourceService
   ) {}
 
   async enterMaintenance(row: MigrationRow): Promise<void> {
@@ -94,6 +96,12 @@ export class DockerMigrationCoordinator {
               and(eq(dockerDeploymentSlots.deploymentId, row.deploymentId!), eq(dockerDeploymentSlots.slot, slot))
             );
         }
+        await this.accessResources.moveDeploymentWithExecutor(
+          tx,
+          row.sourceNodeId,
+          row.targetNodeId,
+          row.deploymentId!
+        );
       }
 
       const metadataName = row.resourceType === 'deployment' ? `deployment:${row.deploymentId}` : row.resourceName;
@@ -106,7 +114,16 @@ export class DockerMigrationCoordinator {
         .set({ nodeId: row.targetNodeId, updatedAt: new Date() })
         .where(and(eq(dockerSecrets.nodeId, row.sourceNodeId), eq(dockerSecrets.containerName, metadataName)));
 
-      if (row.resourceType === 'container') await this.moveStandaloneMetadata(tx, row);
+      if (row.resourceType === 'container') {
+        await this.moveStandaloneMetadata(tx, row);
+        await this.accessResources.moveContainerWithExecutor(
+          tx,
+          row.sourceNodeId,
+          row.targetNodeId,
+          row.resourceName,
+          storedPlan.target?.containerId
+        );
+      }
       await tx
         .update(dockerMigrations)
         .set({

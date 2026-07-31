@@ -12,6 +12,7 @@ export * from './certificate-templates.js';
 export * from './certificates.js';
 export * from './database-connection-folders.js';
 export * from './databases.js';
+export * from './docker-access-resources.js';
 export * from './docker-container-folder-assignments.js';
 export * from './docker-container-folders.js';
 export * from './docker-deployments.js';

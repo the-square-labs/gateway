@@ -40,15 +40,15 @@ afterEach(() => {
 });
 
 describe('events websocket authentication', () => {
-  it('delivers migration events only with view access to both nodes', async () => {
+  it('delivers migration events with view access to the stable migrated resource', async () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);
     mocks.resolveLiveSessionUser.mockResolvedValue({
       user: {
         ...USER,
-        scopes: ['docker:containers:view:node-1', 'docker:containers:view:node-2'],
+        scopes: ['docker:containers:view:node-2/resource-visible'],
       },
-      effectiveScopes: ['docker:containers:view:node-1', 'docker:containers:view:node-2'],
+      effectiveScopes: ['docker:containers:view:node-2/resource-visible'],
     });
     const ws = createWs();
     const handlers = createEventsWSHandlers();
@@ -66,12 +66,14 @@ describe('events websocket authentication', () => {
       id: 'migration-hidden',
       sourceNodeId: 'node-1',
       targetNodeId: 'node-3',
+      scopeResourceId: 'resource-hidden',
       status: 'running',
     });
     eventBus.publish('docker.migration.changed', {
       id: 'migration-visible',
       sourceNodeId: 'node-1',
       targetNodeId: 'node-2',
+      scopeResourceId: 'resource-visible',
       status: 'running',
     });
 
@@ -115,6 +117,39 @@ describe('events websocket authentication', () => {
     );
     expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('"kind":"containers"'));
     expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('"nodeId":"node-2"'));
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
+  it('delivers Docker folder changes for a node containing an accessible child resource', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({
+      user: { ...USER, scopes: ['docker:containers:view:node-1/resource-1'] },
+      effectiveScopes: ['docker:containers:view:node-1/resource-1'],
+    });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscribe', channels: ['docker.folder.changed'] }),
+      }),
+      ws as any
+    );
+
+    eventBus.publish('docker.folder.changed', { nodeIds: ['node-2'] });
+    eventBus.publish('docker.folder.changed', { nodeIds: ['node-1'] });
+
+    expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('node-2'));
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'event',
+        channel: 'docker.folder.changed',
+        payload: { nodeIds: ['node-1'] },
+      })
+    );
     handlers.onClose(new Event('close'), ws as any);
   });
 

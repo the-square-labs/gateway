@@ -1,8 +1,7 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { requireScopeForResource } from '@/modules/auth/auth.middleware.js';
-import { TokensService } from '@/modules/tokens/tokens.service.js';
+import { requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import {
   abortContainerFileUploadRoute,
@@ -61,6 +60,11 @@ import {
   SecretUpdateSchema,
 } from './docker.schemas.js';
 import { DockerManagementService } from './docker.service.js';
+import {
+  assertDockerNodeScope,
+  filterDockerResourcesForScope,
+  requireDockerContainerScope,
+} from './docker-access.middleware.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
 import { resolveDockerContainerByName } from './docker-route-resolvers.js';
 import { DockerSecretService } from './docker-secret.service.js';
@@ -100,6 +104,7 @@ export function compactContainerListItem(container: Record<string, any>) {
     folderId: container.folderId,
     folderIsSystem: container.folderIsSystem,
     folderSortOrder: container.folderSortOrder,
+    scopeResourceId: container.scopeResourceId,
     _transition: container._transition,
   };
 }
@@ -148,33 +153,37 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   // ─── Container routes ────────────────────────────────────────────────
 
   // List containers
-  router.openapi(
-    { ...listContainersRoute, middleware: requireScopeForResource('docker:containers:view', 'nodeId') },
-    async (c) => {
-      const service = container.resolve(DockerManagementService);
-      const snapshots = container.resolve(DockerSnapshotService);
-      const nodeId = c.req.param('nodeId')!;
-      await snapshots.assertDockerNode(nodeId);
-      const snapshot = await snapshots.getList<any[]>(nodeId, 'containers');
-      const data = await service.decorateContainerSnapshot(nodeId, snapshot.data);
-      if (!Array.isArray(data)) return c.json({ data });
-      const search = c.req.query('search')?.trim().toLowerCase();
-      const compacted = data
-        .filter((item) => matchesContainerSearch(item, search))
-        .map((item) => ({
-          ...compactContainerListItem(item),
-          nodeId,
-          availability: snapshots.availability(nodeId, snapshot),
-        }));
-      const truncated = compacted.length > DOCKER_RESOURCE_LIST_MAX;
-      return c.json({
-        data: truncated ? compacted.slice(0, DOCKER_RESOURCE_LIST_MAX) : compacted,
-        total: compacted.length,
-        limit: DOCKER_RESOURCE_LIST_MAX,
-        truncated,
-      });
-    }
-  );
+  router.openapi({ ...listContainersRoute, middleware: requireScopeBase('docker:containers:view') }, async (c) => {
+    const service = container.resolve(DockerManagementService);
+    const snapshots = container.resolve(DockerSnapshotService);
+    const nodeId = c.req.param('nodeId')!;
+    assertDockerNodeScope(c.get('effectiveScopes') ?? [], 'docker:containers:view', nodeId);
+    await snapshots.assertDockerNode(nodeId);
+    const snapshot = await snapshots.getList<any[]>(nodeId, 'containers');
+    const data = await service.decorateContainerSnapshot(nodeId, snapshot.data);
+    if (!Array.isArray(data)) return c.json({ data });
+    const search = c.req.query('search')?.trim().toLowerCase();
+    const visible = filterDockerResourcesForScope(
+      data.map((item) => compactContainerListItem(item)),
+      c.get('effectiveScopes') ?? [],
+      'docker:containers:view',
+      nodeId
+    );
+    const compacted = visible
+      .filter((item) => matchesContainerSearch(item, search))
+      .map((item) => ({
+        ...item,
+        nodeId,
+        availability: snapshots.availability(nodeId, snapshot),
+      }));
+    const truncated = compacted.length > DOCKER_RESOURCE_LIST_MAX;
+    return c.json({
+      data: truncated ? compacted.slice(0, DOCKER_RESOURCE_LIST_MAX) : compacted,
+      total: compacted.length,
+      limit: DOCKER_RESOURCE_LIST_MAX,
+      truncated,
+    });
+  });
 
   // Create container
   router.openapi(
@@ -192,7 +201,10 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Inspect container
   router.openapi(
-    { ...inspectContainerByNameRoute, middleware: requireScopeForResource('docker:containers:view', 'nodeId') },
+    {
+      ...inspectContainerByNameRoute,
+      middleware: requireDockerContainerScope('docker:containers:view', 'containerName'),
+    },
     async (c) => {
       const snapshots = container.resolve(DockerSnapshotService);
       const service = container.resolve(DockerManagementService);
@@ -215,7 +227,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...inspectContainerRoute, middleware: requireScopeForResource('docker:containers:view', 'nodeId') },
+    { ...inspectContainerRoute, middleware: requireDockerContainerScope('docker:containers:view') },
     async (c) => {
       const snapshots = container.resolve(DockerSnapshotService);
       const service = container.resolve(DockerManagementService);
@@ -238,7 +250,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Start container
   router.openapi(
-    { ...startContainerRoute, middleware: requireScopeForResource('docker:containers:manage', 'nodeId') },
+    { ...startContainerRoute, middleware: requireDockerContainerScope('docker:containers:manage') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -251,7 +263,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Stop container
   router.openapi(
-    { ...stopContainerRoute, middleware: requireScopeForResource('docker:containers:manage', 'nodeId') },
+    { ...stopContainerRoute, middleware: requireDockerContainerScope('docker:containers:manage') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -266,7 +278,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Restart container
   router.openapi(
-    { ...restartContainerRoute, middleware: requireScopeForResource('docker:containers:manage', 'nodeId') },
+    { ...restartContainerRoute, middleware: requireDockerContainerScope('docker:containers:manage') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -281,7 +293,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Kill container
   router.openapi(
-    { ...killContainerRoute, middleware: requireScopeForResource('docker:containers:manage', 'nodeId') },
+    { ...killContainerRoute, middleware: requireDockerContainerScope('docker:containers:manage') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -296,7 +308,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Remove container
   router.openapi(
-    { ...removeContainerRoute, middleware: requireScopeForResource('docker:containers:delete', 'nodeId') },
+    { ...removeContainerRoute, middleware: requireDockerContainerScope('docker:containers:delete') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -310,7 +322,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Rename container
   router.openapi(
-    { ...renameContainerRoute, middleware: requireScopeForResource('docker:containers:edit', 'nodeId') },
+    { ...renameContainerRoute, middleware: requireDockerContainerScope('docker:containers:edit') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -340,7 +352,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Update container (pull + redeploy)
   router.openapi(
-    { ...updateContainerRoute, middleware: requireScopeForResource('docker:containers:edit', 'nodeId') },
+    { ...updateContainerRoute, middleware: requireDockerContainerScope('docker:containers:edit') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -355,7 +367,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Live update container (no recreation — resource limits + restart policy)
   router.openapi(
-    { ...liveUpdateContainerRoute, middleware: requireScopeForResource('docker:containers:edit', 'nodeId') },
+    { ...liveUpdateContainerRoute, middleware: requireDockerContainerScope('docker:containers:edit') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -370,7 +382,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Recreate container with new config (ports, mounts, entrypoint, etc.)
   router.openapi(
-    { ...recreateContainerRoute, middleware: requireScopeForResource('docker:containers:manage', 'nodeId') },
+    { ...recreateContainerRoute, middleware: requireDockerContainerScope('docker:containers:manage') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -387,7 +399,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Container logs
   router.openapi(
-    { ...containerLogsRoute, middleware: requireScopeForResource('docker:containers:view', 'nodeId') },
+    { ...containerLogsRoute, middleware: requireDockerContainerScope('docker:containers:view') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -401,7 +413,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Container stats from background health reports (never dispatches from this GET)
   router.openapi(
-    { ...containerStatsRoute, middleware: requireScopeForResource('docker:containers:view', 'nodeId') },
+    { ...containerStatsRoute, middleware: requireDockerContainerScope('docker:containers:view') },
     async (c) => {
       const { NodeMonitoringService } = await import('@/modules/nodes/node-monitoring.service.js');
       const monitoring = container.resolve(NodeMonitoringService);
@@ -414,7 +426,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Container stats history (for sparklines)
   router.openapi(
-    { ...containerStatsHistoryRoute, middleware: requireScopeForResource('docker:containers:view', 'nodeId') },
+    { ...containerStatsHistoryRoute, middleware: requireDockerContainerScope('docker:containers:view') },
     async (c) => {
       const { NodeMonitoringService } = await import('@/modules/nodes/node-monitoring.service.js');
       const monitoring = container.resolve(NodeMonitoringService);
@@ -426,7 +438,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Container top (process list)
   router.openapi(
-    { ...containerTopRoute, middleware: requireScopeForResource('docker:containers:view', 'nodeId') },
+    { ...containerTopRoute, middleware: requireDockerContainerScope('docker:containers:view') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -450,7 +462,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Get container env
   router.openapi(
-    { ...containerEnvRoute, middleware: requireScopeForResource('docker:containers:environment', 'nodeId') },
+    { ...containerEnvRoute, middleware: requireDockerContainerScope('docker:containers:environment') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -462,7 +474,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Update container env
   router.openapi(
-    { ...updateContainerEnvRoute, middleware: requireScopeForResource('docker:containers:environment', 'nodeId') },
+    { ...updateContainerEnvRoute, middleware: requireDockerContainerScope('docker:containers:environment') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -479,22 +491,20 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // List secrets (values masked unless user has docker:containers:secrets scope)
   router.openapi(
-    { ...listContainerSecretsRoute, middleware: requireScopeForResource('docker:containers:secrets', 'nodeId') },
+    { ...listContainerSecretsRoute, middleware: requireDockerContainerScope('docker:containers:secrets') },
     async (c) => {
       const service = container.resolve(DockerSecretService);
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const containerName = await resolveContainerName(nodeId, containerId);
-      const scopes = c.get('effectiveScopes') || [];
-      const canReveal = TokensService.hasScope(scopes, `docker:containers:secrets:${nodeId}`);
-      const data = await service.list(nodeId, containerName, canReveal);
+      const data = await service.list(nodeId, containerName, true);
       return c.json({ data });
     }
   );
 
   // Create secret
   router.openapi(
-    { ...createContainerSecretRoute, middleware: requireScopeForResource('docker:containers:secrets', 'nodeId') },
+    { ...createContainerSecretRoute, middleware: requireDockerContainerScope('docker:containers:secrets') },
     async (c) => {
       const service = container.resolve(DockerSecretService);
       const nodeId = c.req.param('nodeId')!;
@@ -510,7 +520,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Update secret
   router.openapi(
-    { ...updateContainerSecretRoute, middleware: requireScopeForResource('docker:containers:secrets', 'nodeId') },
+    { ...updateContainerSecretRoute, middleware: requireDockerContainerScope('docker:containers:secrets') },
     async (c) => {
       const service = container.resolve(DockerSecretService);
       const nodeId = c.req.param('nodeId')!;
@@ -525,7 +535,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Delete secret
   router.openapi(
-    { ...deleteContainerSecretRoute, middleware: requireScopeForResource('docker:containers:secrets', 'nodeId') },
+    { ...deleteContainerSecretRoute, middleware: requireDockerContainerScope('docker:containers:secrets') },
     async (c) => {
       const service = container.resolve(DockerSecretService);
       const nodeId = c.req.param('nodeId')!;
@@ -540,7 +550,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // List directory
   router.openapi(
-    { ...listContainerFilesRoute, middleware: requireScopeForResource('docker:containers:files', 'nodeId') },
+    { ...listContainerFilesRoute, middleware: requireDockerContainerScope('docker:containers:files') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -560,7 +570,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Read file
   router.openapi(
-    { ...readContainerFileRoute, middleware: requireScopeForResource('docker:containers:files', 'nodeId') },
+    { ...readContainerFileRoute, middleware: requireDockerContainerScope('docker:containers:files') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -580,7 +590,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Write file
   router.openapi(
-    { ...writeContainerFileRoute, middleware: requireScopeForResource('docker:containers:files', 'nodeId') },
+    { ...writeContainerFileRoute, middleware: requireDockerContainerScope('docker:containers:files') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -593,7 +603,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...createContainerFileRoute, middleware: requireScopeForResource('docker:containers:files', 'nodeId') },
+    { ...createContainerFileRoute, middleware: requireDockerContainerScope('docker:containers:files') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -606,7 +616,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...initContainerFileUploadRoute, middleware: requireScopeForResource('docker:containers:files', 'nodeId') },
+    { ...initContainerFileUploadRoute, middleware: requireDockerContainerScope('docker:containers:files') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -619,7 +629,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...uploadContainerFileChunkRoute, middleware: requireScopeForResource('docker:containers:files', 'nodeId') },
+    { ...uploadContainerFileChunkRoute, middleware: requireDockerContainerScope('docker:containers:files') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -633,7 +643,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...completeContainerFileUploadRoute, middleware: requireScopeForResource('docker:containers:files', 'nodeId') },
+    { ...completeContainerFileUploadRoute, middleware: requireDockerContainerScope('docker:containers:files') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -646,7 +656,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...abortContainerFileUploadRoute, middleware: requireScopeForResource('docker:containers:files', 'nodeId') },
+    { ...abortContainerFileUploadRoute, middleware: requireDockerContainerScope('docker:containers:files') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -658,7 +668,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...createContainerDirectoryRoute, middleware: requireScopeForResource('docker:containers:files', 'nodeId') },
+    { ...createContainerDirectoryRoute, middleware: requireDockerContainerScope('docker:containers:files') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -672,7 +682,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...deleteContainerFileRoute, middleware: requireScopeForResource('docker:containers:files', 'nodeId') },
+    { ...deleteContainerFileRoute, middleware: requireDockerContainerScope('docker:containers:files') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -686,7 +696,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...moveContainerFileRoute, middleware: requireScopeForResource('docker:containers:files', 'nodeId') },
+    { ...moveContainerFileRoute, middleware: requireDockerContainerScope('docker:containers:files') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;

@@ -345,14 +345,15 @@ export function DockerContainers({
 
   const canViewContainer = useCallback(
     (container: DockerContainerListItem) =>
-      hasScope("docker:containers:view") || hasScope(`docker:containers:view:${container._nodeId}`),
+      !!container.scopeResourceId &&
+      hasScope(`docker:containers:view:${container._nodeId}/${container.scopeResourceId}`),
     [hasScope]
   );
 
   const canManageContainer = useCallback(
     (container: DockerContainerListItem) =>
-      hasScope("docker:containers:manage") ||
-      hasScope(`docker:containers:manage:${container._nodeId}`),
+      !!container.scopeResourceId &&
+      hasScope(`docker:containers:manage:${container._nodeId}/${container.scopeResourceId}`),
     [hasScope]
   );
 
@@ -360,8 +361,8 @@ export function DockerContainers({
     (container: DockerContainerListItem) =>
       !fixedNodeId &&
       !container.folderIsSystem &&
-      (hasScope("docker:containers:edit") ||
-        hasScope(`docker:containers:edit:${container._nodeId}`)),
+      !!container.scopeResourceId &&
+      hasScope(`docker:containers:edit:${container._nodeId}/${container.scopeResourceId}`),
     [fixedNodeId, hasScope]
   );
 

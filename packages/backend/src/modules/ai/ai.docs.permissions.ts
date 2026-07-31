@@ -266,7 +266,7 @@ Custom groups can be created with any combination of scopes.
 Groups can have a parent group. Inherited scopes from all ancestors are added to the effective scopes. Cycle detection prevents circular inheritance. Built-in groups cannot be modified.
 
 ## Resource-Scoped Permissions
-Scopes marked "resource-scopable" support resource-level suffixes (e.g., "pki:cert:issue:ca-uuid", "nodes:details:node-uuid", "docker:containers:view:container-id"). Without a suffix, the scope applies to all resources.
+Scopes marked "resource-scopable" support resource-level suffixes (e.g., "pki:cert:issue:ca-uuid" or "nodes:details:node-uuid"). Docker container scopes use "docker:containers:<action>:<node-id>" for a whole node or "docker:containers:<action>:<node-id>/<stable-resource-id>" for one container or deployment. Without a suffix, the scope applies to all resources.
 
 ## Scope Containment Rule
 A user can only manage another user whose scopes are a subset of their own.`;

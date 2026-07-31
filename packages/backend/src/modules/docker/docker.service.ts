@@ -8,6 +8,7 @@ import type { NotificationEvaluatorService } from '@/modules/notifications/notif
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
+import type { DockerAccessResourceService } from './docker-access-resource.service.js';
 import {
   createContainer as createDockerContainer,
   type DockerContainerMutationContext,
@@ -25,7 +26,7 @@ import {
 } from './docker-container-mutation-operations.js';
 import { type ContainerTransition, DockerContainerTransitions } from './docker-container-transitions.js';
 import type { DockerDeploymentService } from './docker-deployment.service.js';
-import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
+import { DOCKER_DEPLOYMENT_ID_LABEL, DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
 import { getContainerEnv as getDockerContainerEnv } from './docker-env-operations.js';
 import type { DockerEnvironmentService } from './docker-environment.service.js';
 import type { DockerFolderService } from './docker-folder.service.js';
@@ -121,6 +122,7 @@ export class DockerManagementService {
   private eventBus?: EventBusService;
   private evaluator?: NotificationEvaluatorService;
   private migrationGuard?: DockerMigrationGuard;
+  private accessResourceService?: DockerAccessResourceService;
 
   constructor(
     private db: DrizzleClient,
@@ -177,6 +179,10 @@ export class DockerManagementService {
     this.migrationGuard = guard;
   }
 
+  setAccessResourceService(service: DockerAccessResourceService) {
+    this.accessResourceService = service;
+  }
+
   private emitContainer(
     nodeId: string,
     name: string,
@@ -184,12 +190,34 @@ export class DockerManagementService {
     action: ContainerAction,
     extra?: Record<string, unknown>
   ) {
-    this.eventBus?.publish('docker.container.changed', { nodeId, name, id, action, ...(extra || {}) });
+    const scopeResourceId = this.accessResourceService?.cachedContainerResourceId(nodeId, {
+      name,
+      runtimeId: id,
+    });
+    this.eventBus?.publish('docker.container.changed', {
+      nodeId,
+      name,
+      id,
+      action,
+      ...(scopeResourceId ? { scopeResourceId } : {}),
+      ...(extra || {}),
+    });
     this.observeContainerLifecycle(nodeId, name, id, action, extra);
   }
 
   emitTransition(nodeId: string, name: string, id: string, transition: ContainerTransition | null) {
-    this.eventBus?.publish('docker.container.changed', { nodeId, name, id, action: 'transitioning', transition });
+    const scopeResourceId = this.accessResourceService?.cachedContainerResourceId(nodeId, {
+      name,
+      runtimeId: id,
+    });
+    this.eventBus?.publish('docker.container.changed', {
+      nodeId,
+      name,
+      id,
+      action: 'transitioning',
+      transition,
+      ...(scopeResourceId ? { scopeResourceId } : {}),
+    });
   }
 
   private observeContainerLifecycle(
@@ -298,6 +326,8 @@ export class DockerManagementService {
       clearTransition: (nodeId: string, name: string) => this.clearTransition(nodeId, name),
       emitContainer: (nodeId, name, id, action, extra) => this.emitContainer(nodeId, name, id, action, extra),
       failTask: (taskId, error, nodeId, containerName) => this.failTask(taskId, error, nodeId, containerName),
+      preserveContainerIdentity: (nodeId, name, runtimeId) =>
+        this.accessResourceService?.preserveContainerRuntimeId(nodeId, name, runtimeId) ?? Promise.resolve(),
     };
   }
 
@@ -555,6 +585,17 @@ export class DockerManagementService {
     // so the badge survives recreate/update which assigns a new ID).
     if (Array.isArray(containers)) {
       const visibleContainers = containers.filter((c: any) => !this.isManagedDeploymentInternal(c));
+      const accessIds = this.accessResourceService
+        ? await this.accessResourceService.syncContainers(
+            nodeId,
+            visibleContainers,
+            new Set(
+              visibleContainers
+                .map((container: any) => String(container.name ?? container.Name ?? '').replace(/^\/+/, ''))
+                .filter((name: string) => ['recreating', 'updating'].includes(this.getTransition(nodeId, name) ?? ''))
+            )
+          )
+        : new Map<string, string>();
       const containerHealth =
         this.healthCheckService && visibleContainers.length > 0
           ? await this.healthCheckService.getRowsForContainers(
@@ -577,6 +618,7 @@ export class DockerManagementService {
         }
         const transition = this.getTransition(nodeId, cName);
         if (transition) c._transition = transition;
+        c.scopeResourceId = accessIds.get(cName) ?? null;
         const health = containerHealth.get(cName);
         if (health) {
           c.healthCheckId = health.id;
@@ -609,6 +651,7 @@ export class DockerManagementService {
           }
         }
         for (const deployment of deploymentRows as any[]) {
+          deployment.scopeResourceId = deployment.deploymentId ?? deployment.id;
           const health = deploymentHealth.get(deployment.deploymentId ?? deployment.id);
           if (!health) continue;
           deployment.healthCheckId = health.id;
@@ -652,6 +695,19 @@ export class DockerManagementService {
     const transition = cName ? this.getTransition(nodeId, cName) : undefined;
     if (transition) data._transition = transition;
     else delete data._transition;
+    const runtimeId = String(data.Id ?? data.id ?? '');
+    const labels = (data.Config?.Labels ?? data.config?.labels ?? {}) as Record<string, string>;
+    const deploymentId = labels[DOCKER_DEPLOYMENT_ID_LABEL];
+    if (labels[DOCKER_DEPLOYMENT_MANAGED_LABEL] === 'true' && deploymentId) {
+      data.scopeResourceId = deploymentId;
+    } else if (this.accessResourceService && cName && runtimeId) {
+      data.scopeResourceId = await this.accessResourceService.ensureContainer(
+        nodeId,
+        cName,
+        runtimeId,
+        transition === 'recreating' || transition === 'updating'
+      );
+    }
     if (this.runtimeSettingsService && cName) {
       const persistedRuntime = await this.runtimeSettingsService.get(nodeId, cName);
       if (persistedRuntime) return applyRuntimeSettingsToInspect(data, persistedRuntime);
@@ -670,6 +726,7 @@ export class DockerManagementService {
       registryService: this.registryService,
       imageCleanupService: this.imageCleanupService,
       folderService: this.folderService,
+      accessResourceService: this.accessResourceService,
       taskService: this.taskService,
       longDockerOperationTimeoutMs: DockerManagementService.LONG_DOCKER_OPERATION_TIMEOUT_MS,
       validateDockerNode: (nodeId) => this.validateDockerNode(nodeId),

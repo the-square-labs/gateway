@@ -1,4 +1,5 @@
 import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
+import { dockerScopedNodeIds } from '@/modules/docker/docker-access-resource.service.js';
 import type { NodesService } from '@/modules/nodes/nodes.service.js';
 import type { User } from '@/types.js';
 import { textMatchesSearch } from './ai.service-helpers.js';
@@ -217,7 +218,7 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
     for (const node of dockerNodes) {
       if (results.length >= limit) break;
       const nodeId = node.id;
-      if (typeWanted('docker_container') && hasScopeForResource(user.scopes, 'docker:containers:view', nodeId)) {
+      if (typeWanted('docker_container') && hasScopeBase(user.scopes, 'docker:containers:view')) {
         await collect('docker_container', 'list_docker_containers', { nodeId, search: query }, (container) => ({
           id: container.id,
           name: container.name,
@@ -225,7 +226,7 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
           nodeSlug: node.slug,
         }));
       }
-      if (typeWanted('docker_deployment') && hasScopeForResource(user.scopes, 'docker:containers:view', nodeId)) {
+      if (typeWanted('docker_deployment') && hasScopeBase(user.scopes, 'docker:containers:view')) {
         await collect('docker_deployment', 'list_docker_deployments', { nodeId, search: query }, (deployment) => ({
           id: deployment.id,
           name: deployment.name,
@@ -280,14 +281,19 @@ async function findDockerSearchNodes(nodesService: NodesService, user: User, nod
     'docker:networks:view',
   ];
   if (nodeId) {
-    if (!dockerViewScopes.some((scope) => hasScopeForResource(user.scopes, scope, nodeId))) return [];
+    if (
+      !dockerViewScopes.some(
+        (scope) =>
+          hasScopeForResource(user.scopes, scope, nodeId) || dockerScopedNodeIds(user.scopes, [scope]).includes(nodeId)
+      )
+    ) {
+      return [];
+    }
     const node = await nodesService.get(nodeId);
     return node.type === 'docker' ? [{ id: node.id, slug: node.slug }] : [];
   }
   const broadAccess = dockerViewScopes.some((scope) => hasScope(user.scopes, scope));
-  const scopedIds = broadAccess
-    ? undefined
-    : [...new Set(dockerViewScopes.flatMap((scope) => getResourceScopedIds(user.scopes, scope)))];
+  const scopedIds = broadAccess ? undefined : dockerScopedNodeIds(user.scopes, dockerViewScopes);
   if (scopedIds?.length === 0) return [];
   const dockerNodes: Array<{ id: string; slug: string }> = [];
   let page = 1;

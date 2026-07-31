@@ -1,17 +1,40 @@
 import type { WSContext } from 'hono/ws';
 import { container } from '@/container.js';
 import { createChildLogger } from '@/lib/logger.js';
-import { resolveWebSocketCredential, type WebSocketCredential } from '@/modules/auth/websocket-auth.js';
+import {
+  resolveWebSocketCredentialForScopeBase,
+  type WebSocketAuthResult,
+  type WebSocketCredential,
+} from '@/modules/auth/websocket-auth.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
-import type { User } from '@/types.js';
+import { dockerScopedNodeIds, hasDockerResourceScope } from './docker-access-resource.service.js';
 
 const logger = createChildLogger('ComposeLogStream');
 
-async function authorizeComposeLogAccess(credential: WebSocketCredential | null, nodeId: string): Promise<User | null> {
-  const result = await resolveWebSocketCredential(credential, `docker:containers:view:${nodeId}`);
-  return result?.user ?? null;
+async function authorizeComposeLogAccess(
+  credential: WebSocketCredential | null,
+  nodeId: string,
+  resourceIds: string[] = []
+): Promise<WebSocketAuthResult | null> {
+  const result = await resolveWebSocketCredentialForScopeBase(credential, 'docker:containers:view');
+  if (!result) return null;
+  if (
+    !hasDockerResourceScope(result.scopes, 'docker:containers:view', nodeId, '') &&
+    !dockerScopedNodeIds(result.scopes, ['docker:containers:view']).includes(nodeId)
+  ) {
+    return null;
+  }
+  if (
+    resourceIds.length > 0 &&
+    !resourceIds.every((resourceId) =>
+      hasDockerResourceScope(result.scopes, 'docker:containers:view', nodeId, resourceId)
+    )
+  ) {
+    return null;
+  }
+  return result;
 }
 
 function send(ws: WSContext, msg: Record<string, unknown>): void {
@@ -27,6 +50,7 @@ interface ComposeLogState {
   handlerKeys: string[];
   keepaliveInterval: ReturnType<typeof setInterval> | null;
   credential: WebSocketCredential | null;
+  scopeResourceIds: string[];
 }
 
 const wsStates = new WeakMap<WSContext, ComposeLogState>();
@@ -43,7 +67,13 @@ export function createComposeLogsWSHandlers(nodeId: string, project: string, cre
 
   return {
     onOpen(_event: Event, ws: WSContext) {
-      const state: ComposeLogState = { authenticated: false, handlerKeys: [], keepaliveInterval: null, credential };
+      const state: ComposeLogState = {
+        authenticated: false,
+        handlerKeys: [],
+        keepaliveInterval: null,
+        credential,
+        scopeResourceIds: [],
+      };
       wsStates.set(ws, state);
 
       state.keepaliveInterval = setInterval(() => {
@@ -101,8 +131,8 @@ async function startComposeStream(
   registry: NodeRegistryService,
   dockerService: DockerManagementService
 ): Promise<void> {
-  const user = await authorizeComposeLogAccess(credential, nodeId);
-  if (!user) {
+  const auth = await authorizeComposeLogAccess(credential, nodeId);
+  if (!auth) {
     send(ws, { type: 'auth_error', message: 'Access revoked or token expired' });
     ws.close(1008, 'Auth failed');
     return;
@@ -129,7 +159,12 @@ async function startComposeStream(
 
   const composeContainers = allContainers.filter((c: any) => {
     const labels = c.labels ?? c.Labels ?? {};
-    return labels['com.docker.compose.project'] === project;
+    const resourceId = String(c.scopeResourceId ?? '');
+    return (
+      labels['com.docker.compose.project'] === project &&
+      !!resourceId &&
+      hasDockerResourceScope(auth.scopes, 'docker:containers:view', nodeId, resourceId)
+    );
   });
 
   if (composeContainers.length === 0) {
@@ -137,6 +172,7 @@ async function startComposeStream(
     ws.close(1011, 'No containers');
     return;
   }
+  state.scopeResourceIds = composeContainers.map((item: any) => String(item.scopeResourceId));
 
   send(ws, {
     type: 'connected',
@@ -220,8 +256,8 @@ async function revalidateComposeLogAccess(
   nodeId: string,
   emitPong = false
 ): Promise<boolean> {
-  const user = await authorizeComposeLogAccess(state.credential, nodeId);
-  if (!user) {
+  const auth = await authorizeComposeLogAccess(state.credential, nodeId, state.scopeResourceIds);
+  if (!auth) {
     state.authenticated = false;
     send(ws, { type: 'auth_error', message: 'Access revoked or token expired' });
     try {

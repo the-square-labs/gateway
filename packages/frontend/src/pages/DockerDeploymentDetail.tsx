@@ -133,36 +133,18 @@ export function DockerDeploymentDetail({
   const location = useLocation();
   const backTarget = getReturnNavigationTarget(location.state, "/docker");
   const { hasScope } = useAuthStore();
-  const canManage =
-    hasScope("docker:containers:manage") ||
-    !!(nodeId && hasScope(`docker:containers:manage:${nodeId}`));
-  const canDelete =
-    hasScope("docker:containers:delete") ||
-    !!(nodeId && hasScope(`docker:containers:delete:${nodeId}`));
-  const canMigrate =
-    hasScope("docker:containers:migrate") ||
-    !!(nodeId && hasScope(`docker:containers:migrate:${nodeId}`));
-  const canEdit =
-    hasScope("docker:containers:edit") ||
-    !!(nodeId && hasScope(`docker:containers:edit:${nodeId}`));
-  const canManageWebhooks =
-    hasScope("docker:containers:webhooks") ||
-    !!(nodeId && hasScope(`docker:containers:webhooks:${nodeId}`));
-  const canViewContainer =
-    hasScope("docker:containers:view") ||
-    !!(nodeId && hasScope(`docker:containers:view:${nodeId}`));
-  const canUseConsole =
-    hasScope("docker:containers:console") ||
-    !!(nodeId && hasScope(`docker:containers:console:${nodeId}`));
-  const canUseFiles =
-    hasScope("docker:containers:files") ||
-    !!(nodeId && hasScope(`docker:containers:files:${nodeId}`));
-  const canUseEnvironment =
-    hasScope("docker:containers:environment") ||
-    !!(nodeId && hasScope(`docker:containers:environment:${nodeId}`));
-  const canEditMounts =
-    hasScope("docker:containers:mounts") ||
-    !!(nodeId && hasScope(`docker:containers:mounts:${nodeId}`));
+  const hasDeploymentScope = (baseScope: string) =>
+    !!nodeId && !!deploymentId && hasScope(`${baseScope}:${nodeId}/${deploymentId}`);
+  const canManage = hasDeploymentScope("docker:containers:manage");
+  const canDelete = hasDeploymentScope("docker:containers:delete");
+  const canMigrate = hasDeploymentScope("docker:containers:migrate");
+  const canEdit = hasDeploymentScope("docker:containers:edit");
+  const canManageWebhooks = hasDeploymentScope("docker:containers:webhooks");
+  const canViewContainer = hasDeploymentScope("docker:containers:view");
+  const canUseConsole = hasDeploymentScope("docker:containers:console");
+  const canUseFiles = hasDeploymentScope("docker:containers:files");
+  const canUseEnvironment = hasDeploymentScope("docker:containers:environment");
+  const canEditMounts = hasDeploymentScope("docker:containers:mounts");
 
   const [deployment, setDeployment] = useState<DockerDeployment | null>(null);
   const [activeInspect, setActiveInspect] = useState<InspectData | null>(null);
@@ -228,6 +210,7 @@ export function DockerDeploymentDetail({
           name: migration.resourceName,
           state: deployment?.status,
           kind: "deployment",
+          scopeResourceId: deploymentId,
         });
       }
       navigate(dockerDeploymentRoute(migration.targetNodeSlug, migration.resourceName, activeTab), {
@@ -282,6 +265,7 @@ export function DockerDeploymentDetail({
           name: next.name,
           state: next._transition ?? next.status,
           kind: "deployment",
+          scopeResourceId: deploymentId,
         });
       }
 
@@ -908,12 +892,20 @@ export function DockerDeploymentDetail({
           )}
           {canUseConsole && activeContainerId && !unavailable && (
             <TabsContent value="console" className="flex flex-col flex-1 min-h-0">
-              <ConsoleTab nodeId={nodeId} containerId={activeContainerId} />
+              <ConsoleTab
+                nodeId={nodeId}
+                containerId={activeContainerId}
+                scopeResourceId={deploymentId}
+              />
             </TabsContent>
           )}
           {canUseFiles && activeContainerId && !unavailable && (
             <TabsContent value="files" className="pb-0">
-              <FilesTab nodeId={nodeId} containerId={activeContainerId} />
+              <FilesTab
+                nodeId={nodeId}
+                containerId={activeContainerId}
+                scopeResourceId={deploymentId}
+              />
             </TabsContent>
           )}
           {canViewContainer && activeContainerId && activeInspect && !unavailable && (
@@ -926,6 +918,7 @@ export function DockerDeploymentDetail({
               <EnvironmentTab
                 nodeId={nodeId}
                 containerId={deployment.id}
+                scopeResourceId={deploymentId}
                 containerState={activeState}
                 serviceEnv={serviceEnv}
                 onSaveServiceEnv={saveServiceEnv}
@@ -984,6 +977,7 @@ export function DockerDeploymentDetail({
                     name: deployment.name,
                     state: deployment._transition ?? deployment.status,
                     kind: "deployment",
+                    scopeResourceId: deployment.id,
                   });
                   usePinnedContainersStore.getState().invalidate();
                 }}

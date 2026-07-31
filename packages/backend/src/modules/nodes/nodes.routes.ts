@@ -12,6 +12,7 @@ import {
   FileUploadCompleteSchema,
   FileUploadInitSchema,
 } from '@/modules/docker/docker.schemas.js';
+import { dockerScopedNodeIds } from '@/modules/docker/docker-access-resource.service.js';
 import {
   daemonLogRelay,
   getDaemonLogHistory,
@@ -99,6 +100,9 @@ const RESOURCE_SCOPED_DOCKER_NODE_SCOPES = [
   'docker:containers:view',
   'docker:containers:create',
   'docker:containers:manage',
+  'docker:containers:config',
+  'docker:containers:console',
+  'docker:containers:migrate',
   'docker:containers:delete',
   'docker:containers:edit',
   'docker:containers:environment',
@@ -137,14 +141,6 @@ function nginxLogEntryKey(entry: RelayedLogEntry): string {
 
 function hasBroadDockerNodeListAccess(scopes: string[]) {
   return BROAD_DOCKER_VIEW_SCOPES.some((scope) => hasScope(scopes, scope));
-}
-
-function getDockerResourceScopedNodeIds(scopes: string[]) {
-  const ids = new Set<string>();
-  for (const scope of RESOURCE_SCOPED_DOCKER_NODE_SCOPES) {
-    for (const id of getResourceScopedIds(scopes, scope)) ids.add(id);
-  }
-  return [...ids];
 }
 
 function compactDockerNodeForDockerAccess(node: Record<string, unknown>) {
@@ -233,15 +229,16 @@ nodesRoutes.openapi(listNodesRoute, async (c) => {
   const hasNodeDetails = hasScope(scopes, 'nodes:details');
   const canManageFolders = hasScope(scopes, 'nodes:folders:manage');
   const allowedNodeIds = getResourceScopedIds(scopes, 'nodes:details');
-  const dockerScopedNodeIds = query.type === 'docker' ? getDockerResourceScopedNodeIds(scopes) : [];
+  const allowedDockerNodeIds =
+    query.type === 'docker' ? dockerScopedNodeIds(scopes, RESOURCE_SCOPED_DOCKER_NODE_SCOPES) : [];
   const canListAllDockerNodes = query.type === 'docker' && hasBroadDockerNodeListAccess(scopes);
-  const canListDockerNodes = canListAllDockerNodes || dockerScopedNodeIds.length > 0;
+  const canListDockerNodes = canListAllDockerNodes || allowedDockerNodeIds.length > 0;
   if (!hasNodeDetails && !canManageFolders && allowedNodeIds.length === 0 && !canListDockerNodes) {
     throw new AppError(403, 'FORBIDDEN', 'Missing required node access scope');
   }
   const scopedNodeIds =
     query.type === 'docker' && !canListAllDockerNodes
-      ? [...new Set([...allowedNodeIds, ...dockerScopedNodeIds])]
+      ? [...new Set([...allowedNodeIds, ...allowedDockerNodeIds])]
       : allowedNodeIds;
   const result = await service.list(
     query,

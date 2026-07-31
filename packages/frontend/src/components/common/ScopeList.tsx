@@ -1,4 +1,6 @@
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { api } from "@/services/api";
 import type { CA, DatabaseConnection, LoggingSchema, Node, ProxyHost } from "@/types";
 
 export interface ScopeItem {
@@ -11,6 +13,16 @@ export interface ScopeItem {
 interface ResourceOption {
   id: string;
   label: string;
+  parentId?: string;
+  depth?: number;
+  kind?: "container" | "deployment";
+}
+
+interface DockerResourceOption {
+  id: string;
+  nodeId: string;
+  label: string;
+  kind: "container" | "deployment";
 }
 
 interface ParsedScopedSelections {
@@ -94,7 +106,8 @@ function getResourceOptions(
   nodes?: Node[],
   proxyHosts?: ProxyHost[],
   databases?: DatabaseConnection[],
-  loggingSchemas?: LoggingSchema[]
+  loggingSchemas?: LoggingSchema[],
+  dockerResources?: DockerResourceOption[]
 ): ResourceOption[] {
   if (scope.startsWith("logs:schemas:")) {
     return (loggingSchemas ?? []).map((schema) => ({ id: schema.id, label: schema.name }));
@@ -105,10 +118,26 @@ function getResourceOptions(
       label: `${database.name} (${database.host}:${database.port})`,
     }));
   }
+  if (scope.startsWith("docker:containers:") && scope !== "docker:containers:create") {
+    return (nodes ?? [])
+      .filter((n) => n.type === "docker")
+      .flatMap((n) => [
+        { id: n.id, label: n.displayName || n.hostname, depth: 0 },
+        ...(dockerResources ?? [])
+          .filter((resource) => resource.nodeId === n.id)
+          .map((resource) => ({
+            id: `${n.id}/${resource.id}`,
+            label: resource.label,
+            parentId: n.id,
+            depth: 1,
+            kind: resource.kind,
+          })),
+      ]);
+  }
   if (scope.startsWith("docker:")) {
     return (nodes ?? [])
       .filter((n) => n.type === "docker")
-      .map((n) => ({ id: n.id, label: n.displayName || n.hostname }));
+      .map((n) => ({ id: n.id, label: n.displayName || n.hostname, depth: 0 }));
   }
   if (scope.startsWith("nodes:")) {
     return (nodes ?? []).map((n) => ({ id: n.id, label: n.displayName || n.hostname }));
@@ -127,7 +156,9 @@ function getResourceLabel(scope: string): string {
     return "Restrict to specific databases (leave unchecked for all):";
   }
   if (scope.startsWith("docker:")) {
-    return "Restrict to specific Docker nodes (leave unchecked for all):";
+    return scope.startsWith("docker:containers:") && scope !== "docker:containers:create"
+      ? "Restrict to Docker nodes or individual containers and deployments (leave unchecked for all):"
+      : "Restrict to specific Docker nodes (leave unchecked for all):";
   }
   if (scope.startsWith("nodes:")) return "Restrict to specific nodes (leave unchecked for all):";
   if (scope.startsWith("proxy:"))
@@ -156,10 +187,52 @@ export function ScopeList({
   readOnly,
   viewportClassName,
 }: ScopeListProps) {
+  const [dockerResources, setDockerResources] = useState<DockerResourceOption[]>([]);
   const q = search.toLowerCase().trim();
   const inheritedParsed = parseScopedSelections(inheritedScopes ?? [], restrictableScopes ?? []);
   const inheritedBaseSet = new Set(inheritedParsed.baseScopes);
   const categories = [...new Set(scopes.map((s) => s.group))];
+
+  useEffect(() => {
+    const dockerNodes = (nodes ?? []).filter((node) => node.type === "docker");
+    const needsDockerResources = scopes.some(
+      (scope) =>
+        scope.value.startsWith("docker:containers:") &&
+        scope.value !== "docker:containers:create" &&
+        restrictableScopes?.includes(scope.value)
+    );
+    if (!needsDockerResources || dockerNodes.length === 0) {
+      setDockerResources([]);
+      return;
+    }
+
+    let cancelled = false;
+    void Promise.all(
+      dockerNodes.map(async (node) => {
+        const containers = await api.listDockerContainers(node.id).catch(() => []);
+        return containers.flatMap((resource) =>
+          resource.scopeResourceId
+            ? [
+                {
+                  id: resource.scopeResourceId,
+                  nodeId: node.id,
+                  label: resource.name,
+                  kind:
+                    resource.kind === "deployment"
+                      ? ("deployment" as const)
+                      : ("container" as const),
+                },
+              ]
+            : []
+        );
+      })
+    ).then((resourcesByNode) => {
+      if (!cancelled) setDockerResources(resourcesByNode.flat());
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [nodes, restrictableScopes, scopes]);
 
   // When searching: split into matches (top) and rest (muted below)
   if (q) {
@@ -186,6 +259,7 @@ export function ScopeList({
             proxyHosts={proxyHosts}
             databases={databases}
             loggingSchemas={loggingSchemas}
+            dockerResources={dockerResources}
             restrictableScopes={restrictableScopes}
             allowedResourceIds={allowedResourceIds}
             inheritedFromName={inheritedFromName}
@@ -210,6 +284,7 @@ export function ScopeList({
             proxyHosts={proxyHosts}
             databases={databases}
             loggingSchemas={loggingSchemas}
+            dockerResources={dockerResources}
             restrictableScopes={restrictableScopes}
             allowedResourceIds={allowedResourceIds}
             inheritedFromName={inheritedFromName}
@@ -250,6 +325,7 @@ export function ScopeList({
                 proxyHosts={proxyHosts}
                 databases={databases}
                 loggingSchemas={loggingSchemas}
+                dockerResources={dockerResources}
                 restrictableScopes={restrictableScopes}
                 allowedResourceIds={allowedResourceIds}
                 inheritedFromName={inheritedFromName}
@@ -278,6 +354,7 @@ function ScopeRow({
   proxyHosts,
   databases,
   loggingSchemas,
+  dockerResources,
   restrictableScopes,
   allowedResourceIds,
   inheritedFromName,
@@ -297,6 +374,7 @@ function ScopeRow({
   proxyHosts?: ProxyHost[];
   databases?: DatabaseConnection[];
   loggingSchemas?: LoggingSchema[];
+  dockerResources?: DockerResourceOption[];
   restrictableScopes?: readonly string[];
   allowedResourceIds?: Record<string, string[]>;
   inheritedFromName?: string;
@@ -307,11 +385,22 @@ function ScopeRow({
   const inheritedSet = new Set(inheritedSelectedIds);
   const combinedSelectedIds = [...new Set([...inheritedSelectedIds, ...selectedIds])];
   const baseResourceOptions = isRestrictable
-    ? getResourceOptions(scope.value, cas, nodes, proxyHosts, databases, loggingSchemas)
+    ? getResourceOptions(
+        scope.value,
+        cas,
+        nodes,
+        proxyHosts,
+        databases,
+        loggingSchemas,
+        dockerResources
+      )
     : [];
   const allowedIds = allowedResourceIds?.[scope.value];
   const resourceOptions = allowedIds
-    ? baseResourceOptions.filter((opt) => allowedIds.includes(opt.id))
+    ? baseResourceOptions.filter(
+        (opt) =>
+          allowedIds.includes(opt.id) || (!!opt.parentId && allowedIds.includes(opt.parentId))
+      )
     : [...baseResourceOptions];
   for (const allowedId of allowedIds ?? []) {
     if (!resourceOptions.some((opt) => opt.id === allowedId)) {
@@ -367,29 +456,40 @@ function ScopeRow({
       {showRestrictions && (
         <div className="px-3 pb-2 pl-10">
           <p className="text-xs text-muted-foreground mb-1">{getResourceLabel(scope.value)}</p>
-          {resourceOptions.map((opt) => (
-            <label
-              key={opt.id}
-              className={cn(
-                "flex items-center gap-2 py-0.5 text-xs",
-                disabled ? "cursor-default opacity-60" : "cursor-pointer"
-              )}
-            >
-              <input
-                type="checkbox"
-                checked={combinedSelectedIds.includes(opt.id)}
-                onChange={() =>
-                  !disabled && !inheritedSet.has(opt.id) && onToggleResource?.(scope.value, opt.id)
-                }
-                disabled={disabled || inheritedSet.has(opt.id) || !onToggleResource}
-                className="form-checkbox"
-              />
-              <span>{opt.label}</span>
-              {inheritedSet.has(opt.id) && inheritedFromName && (
-                <span className="text-[10px] text-muted-foreground">inherited</span>
-              )}
-            </label>
-          ))}
+          {resourceOptions.map((opt) => {
+            const parentSelected = !!opt.parentId && combinedSelectedIds.includes(opt.parentId);
+            const parentInherited = !!opt.parentId && inheritedSet.has(opt.parentId);
+            return (
+              <label
+                key={opt.id}
+                className={cn(
+                  "flex items-center gap-2 py-0.5 text-xs",
+                  opt.depth === 1 && "pl-5",
+                  disabled || parentSelected ? "cursor-default opacity-60" : "cursor-pointer"
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={parentSelected || combinedSelectedIds.includes(opt.id)}
+                  onChange={() =>
+                    !disabled &&
+                    !parentSelected &&
+                    !inheritedSet.has(opt.id) &&
+                    onToggleResource?.(scope.value, opt.id)
+                  }
+                  disabled={
+                    disabled || parentSelected || inheritedSet.has(opt.id) || !onToggleResource
+                  }
+                  className="form-checkbox"
+                />
+                <span>{opt.label}</span>
+                {opt.kind && <span className="text-[10px] text-muted-foreground">{opt.kind}</span>}
+                {(inheritedSet.has(opt.id) || parentInherited) && inheritedFromName && (
+                  <span className="text-[10px] text-muted-foreground">inherited</span>
+                )}
+              </label>
+            );
+          })}
         </div>
       )}
     </div>

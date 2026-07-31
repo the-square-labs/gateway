@@ -112,37 +112,29 @@ export function DockerContainerDetail({
   const navigate = useStableNavigate();
   const location = useLocation();
   const backTarget = getReturnNavigationTarget(location.state, "/docker");
+  const [container, setContainer] = useState<InspectData | null>(resolvedContainer ?? null);
+  const containerRef = useRef<InspectData | null>(resolvedContainer ?? null);
+  const scopeResourceId = String(
+    container?.scopeResourceId ?? resolvedContainer?.scopeResourceId ?? ""
+  );
   const { hasScope, isLoading: authLoading } = useAuthStore();
-  const canManage =
-    hasScope("docker:containers:manage") ||
-    !!(nodeId && hasScope(`docker:containers:manage:${nodeId}`));
-  const canEdit =
-    hasScope("docker:containers:edit") ||
-    !!(nodeId && hasScope(`docker:containers:edit:${nodeId}`));
+  const hasContainerScope = (baseScope: string) =>
+    !!nodeId &&
+    (scopeResourceId
+      ? hasScope(`${baseScope}:${nodeId}/${scopeResourceId}`)
+      : hasScope(baseScope) || hasScope(`${baseScope}:${nodeId}`));
+  const canManage = hasContainerScope("docker:containers:manage");
+  const canEdit = hasContainerScope("docker:containers:edit");
   const canCreate =
     hasScope("docker:containers:create") ||
     !!(nodeId && hasScope(`docker:containers:create:${nodeId}`));
-  const canDelete =
-    hasScope("docker:containers:delete") ||
-    !!(nodeId && hasScope(`docker:containers:delete:${nodeId}`));
-  const canMigrate =
-    hasScope("docker:containers:migrate") ||
-    !!(nodeId && hasScope(`docker:containers:migrate:${nodeId}`));
-  const canViewContainer =
-    hasScope("docker:containers:view") ||
-    !!(nodeId && hasScope(`docker:containers:view:${nodeId}`));
-  const canUseConsole =
-    hasScope("docker:containers:console") ||
-    !!(nodeId && hasScope(`docker:containers:console:${nodeId}`));
-  const canUseFiles =
-    hasScope("docker:containers:files") ||
-    !!(nodeId && hasScope(`docker:containers:files:${nodeId}`));
-  const canUseEnvironment =
-    hasScope("docker:containers:environment") ||
-    !!(nodeId && hasScope(`docker:containers:environment:${nodeId}`));
-  const canUseSecrets =
-    hasScope("docker:containers:secrets") ||
-    !!(nodeId && hasScope(`docker:containers:secrets:${nodeId}`));
+  const canDelete = hasContainerScope("docker:containers:delete");
+  const canMigrate = hasContainerScope("docker:containers:migrate");
+  const canViewContainer = hasContainerScope("docker:containers:view");
+  const canUseConsole = hasContainerScope("docker:containers:console");
+  const canUseFiles = hasContainerScope("docker:containers:files");
+  const canUseEnvironment = hasContainerScope("docker:containers:environment");
+  const canUseSecrets = hasContainerScope("docker:containers:secrets");
   const invalidate = useDockerStore((s) => s.invalidate);
   const setSelectedNode = useDockerStore((s) => s.setSelectedNode);
   const previousNodeIdRef = useRef(useDockerStore.getState().selectedNodeId);
@@ -158,8 +150,6 @@ export function DockerContainerDetail({
       setSelectedNode(previousNodeIdRef.current);
     };
   }, [nodeId, setSelectedNode]);
-  const [container, setContainer] = useState<InspectData | null>(resolvedContainer ?? null);
-  const containerRef = useRef<InspectData | null>(resolvedContainer ?? null);
   const [healthCheck, setHealthCheck] = useState<DockerHealthCheck | null>(null);
 
   const [activeTab, setActiveTab] = useUrlTab(
@@ -206,6 +196,7 @@ export function DockerContainerDetail({
           nodeSlug: migration.targetNodeSlug,
           name: migration.resourceName,
           state: containerRef.current?.State?.Status,
+          scopeResourceId,
         });
       }
       navigate(dockerContainerRoute(migration.targetNodeSlug, migration.resourceName, activeTab), {
@@ -216,7 +207,7 @@ export function DockerContainerDetail({
         },
       });
     },
-    [activeTab, containerId, location.state, navigate]
+    [activeTab, containerId, location.state, navigate, scopeResourceId]
   );
 
   useEffect(() => {
@@ -281,7 +272,13 @@ export function DockerContainerDetail({
           const cName =
             String((data as any)?.Name ?? "").replace(/^\//, "") || containerId.slice(0, 12);
           const cState = (data as any)?._transition ?? (data as any)?.State?.Status ?? "unknown";
-          updateMeta(containerId, { nodeId, nodeSlug, name: cName, state: cState });
+          updateMeta(containerId, {
+            nodeId,
+            nodeSlug,
+            name: cName,
+            state: cState,
+            scopeResourceId: String((data as any)?.scopeResourceId ?? ""),
+          });
         }
       } catch (err) {
         if (!migrationHandoff && err instanceof ApiRequestError && err.status === 404) {
@@ -890,12 +887,20 @@ export function DockerContainerDetail({
           )}
           {canUseConsole && !unavailable && (
             <TabsContent value="console" className="flex flex-col flex-1 min-h-0">
-              <ConsoleTab nodeId={nodeId!} containerId={containerId!} />
+              <ConsoleTab
+                nodeId={nodeId!}
+                containerId={containerId!}
+                scopeResourceId={scopeResourceId}
+              />
             </TabsContent>
           )}
           {canUseFiles && !unavailable && (
             <TabsContent value="files" className="pb-0">
-              <FilesTab nodeId={nodeId!} containerId={containerId!} />
+              <FilesTab
+                nodeId={nodeId!}
+                containerId={containerId!}
+                scopeResourceId={scopeResourceId}
+              />
             </TabsContent>
           )}
           {canViewContainer && !unavailable && (
@@ -908,6 +913,7 @@ export function DockerContainerDetail({
               <EnvironmentTab
                 nodeId={nodeId!}
                 containerId={containerId!}
+                scopeResourceId={scopeResourceId}
                 containerState={state}
                 disabled={!!effectiveTransition}
                 onMutationStart={beginMutationTransition}
@@ -921,6 +927,7 @@ export function DockerContainerDetail({
               <SettingsTab
                 nodeId={nodeId!}
                 containerId={containerId!}
+                scopeResourceId={scopeResourceId}
                 data={container}
                 onMutationStart={beginMutationTransition}
                 onMutationEnd={clearMutationTransition}
@@ -972,6 +979,7 @@ export function DockerContainerDetail({
                     nodeSlug,
                     name,
                     state: baseState,
+                    scopeResourceId,
                   });
                   usePinnedContainersStore.getState().invalidate();
                 }}

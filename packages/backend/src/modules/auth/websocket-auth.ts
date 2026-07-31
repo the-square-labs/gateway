@@ -1,4 +1,4 @@
-import { hasScope } from '@/lib/permissions.js';
+import { hasScope, hasScopeBase } from '@/lib/permissions.js';
 import { authenticateBearerToken, SESSION_COOKIE_NAME } from '@/modules/auth/auth.middleware.js';
 import { resolveLiveSessionUser } from '@/modules/auth/live-session-user.js';
 import type { User } from '@/types.js';
@@ -58,6 +58,23 @@ export async function resolveWebSocketCredential(
   credential: WebSocketCredential | null,
   requiredScope: string
 ): Promise<WebSocketAuthResult | null> {
+  const result = await resolveWebSocketCredentialContext(credential);
+  if (!result || !hasScope(result.scopes, requiredScope)) return null;
+  return result;
+}
+
+export async function resolveWebSocketCredentialForScopeBase(
+  credential: WebSocketCredential | null,
+  requiredScopeBase: string
+): Promise<WebSocketAuthResult | null> {
+  const result = await resolveWebSocketCredentialContext(credential);
+  if (!result || !hasScopeBase(result.scopes, requiredScopeBase)) return null;
+  return result;
+}
+
+async function resolveWebSocketCredentialContext(
+  credential: WebSocketCredential | null
+): Promise<WebSocketAuthResult | null> {
   if (!credential) return null;
   const result =
     credential.type === 'session'
@@ -65,7 +82,7 @@ export async function resolveWebSocketCredential(
           value ? { user: value.user, scopes: value.effectiveScopes } : null
         )
       : await authenticateBearerToken(credential.value);
-  if (!result || result.user.isBlocked || !hasScope(result.scopes, requiredScope)) return null;
+  if (!result || result.user.isBlocked) return null;
   return {
     user: result.user,
     scopes: result.scopes,

@@ -3,6 +3,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
+import type { DockerAccessResourceService } from './docker-access-resource.service.js';
 import { normalizeEnvRecord } from './docker-env-operations.js';
 import type { ContainerAction } from './docker-lifecycle-watch.js';
 import { assertContainerNotUsedByProxy } from './docker-proxy-link.guard.js';
@@ -38,6 +39,7 @@ export interface DockerContainerMutationContext {
     deleteContainerAssignment(nodeId: string, containerName: string): Promise<unknown>;
     renameContainerAssignment(nodeId: string, oldName: string, newName: string): Promise<unknown>;
   };
+  accessResourceService?: DockerAccessResourceService;
   taskService?: DockerTaskService;
   longDockerOperationTimeoutMs: number;
   validateDockerNode(nodeId: string): Promise<unknown>;
@@ -141,6 +143,9 @@ export async function createContainer(
   });
   const createdName = (requestedName || data?.name || data?.Name || '') as string;
   const newId = (data?.Id ?? data?.id ?? '') as string;
+  if (createdName && newId) {
+    await ctx.accessResourceService?.ensureContainer(nodeId, createdName, newId, false);
+  }
   if (createdName && ctx.environmentService) {
     const env = normalizeEnvRecord(config.env);
     if (env) {
@@ -380,10 +385,13 @@ export async function removeContainer(
   if (ctx.folderService) {
     await ctx.folderService.deleteContainerAssignment(nodeId, name);
   }
+  const removedScopeResourceId = await ctx.accessResourceService?.removeContainer(nodeId, name);
   if (ctx.runtimeSettingsService) {
     await ctx.runtimeSettingsService.delete(nodeId, name);
   }
-  ctx.emitContainer(nodeId, name, containerId, 'removed');
+  ctx.emitContainer(nodeId, name, containerId, 'removed', {
+    ...(removedScopeResourceId ? { scopeResourceId: removedScopeResourceId } : {}),
+  });
 }
 
 export async function renameContainer(
@@ -416,6 +424,7 @@ export async function renameContainer(
   if (ctx.folderService) {
     await ctx.folderService.renameContainerAssignment(nodeId, oldName, newName);
   }
+  await ctx.accessResourceService?.renameContainer(nodeId, oldName, newName);
   await ctx.auditService.log({
     action: 'docker.container.rename',
     userId,
@@ -441,6 +450,7 @@ export async function duplicateContainer(
   const inspect = await ctx.inspectContainer(nodeId, containerId);
   assertDockerMountChangeAllowed({
     nodeId,
+    resourceId: String(inspect?.scopeResourceId ?? ''),
     actorScopes,
     currentDefinitions: [],
     nextDefinitions: normalizeMountDefinitionsFromInspect(inspect),
@@ -480,6 +490,7 @@ export async function duplicateContainer(
     details: { nodeId, sourceName, name, containerName: name },
   });
   const newId = (data?.Id ?? data?.id ?? '') as string;
+  if (newId) await ctx.accessResourceService?.ensureContainer(nodeId, name, newId, false);
   if (newId) ctx.emitContainer(nodeId, name, newId, 'duplicated', { sourceName });
   return data;
 }
@@ -498,6 +509,7 @@ export async function updateContainer(
   const inspect = await ctx.inspectContainer(nodeId, containerId);
   assertDockerMountChangeAllowed({
     nodeId,
+    resourceId: String(inspect?.scopeResourceId ?? ''),
     actorScopes,
     nextConfig: config,
     currentInspect: inspect,
@@ -535,6 +547,10 @@ export async function updateContainer(
       updateTimeoutMs
     );
     data = ctx.parseResult(result);
+    const newRuntimeId = String(data?.Id ?? data?.id ?? '');
+    if (newRuntimeId) {
+      await ctx.accessResourceService?.preserveContainerRuntimeId(nodeId, name, newRuntimeId);
+    }
   } catch (err) {
     await ctx.failTask(task?.id, err instanceof Error ? err.message : 'Failed to update container', nodeId, name);
     throw err;
@@ -605,6 +621,7 @@ export async function recreateWithConfig(
   const recreateStopTimeout = ctx.resolveStopTimeoutFromInspect(inspect as Record<string, any>, config);
   assertDockerMountChangeAllowed({
     nodeId,
+    resourceId: String(inspect?.scopeResourceId ?? ''),
     actorScopes: options?.actorScopes ?? [],
     nextConfig: config,
     currentInspect: inspect,
@@ -644,6 +661,10 @@ export async function recreateWithConfig(
       Math.max(120000, ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60))
     );
     const data = ctx.parseResult(result);
+    const newRuntimeId = String(data?.Id ?? data?.id ?? '');
+    if (newRuntimeId) {
+      await ctx.accessResourceService?.preserveContainerRuntimeId(nodeId, name, newRuntimeId);
+    }
     await ctx.auditService.log({
       action: 'docker.container.recreate',
       userId,

@@ -1,8 +1,12 @@
 import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { dockerDeploymentRoutes, dockerDeployments, nodes } from '@/db/schema/index.js';
-import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
+import {
+  type DockerAccessResourceService,
+  dockerScopedNodeIds,
+  hasDockerResourceScope,
+} from '@/modules/docker/docker-access-resource.service.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from '@/modules/docker/docker-deployment-labels.js';
 import type { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
 import { getEffectiveNodeServiceAddress } from '@/modules/nodes/node-service-address.js';
@@ -115,7 +119,8 @@ export class ProxyDockerUpstreamService {
   constructor(
     private readonly db: DrizzleClient,
     private readonly snapshots: DockerSnapshotService,
-    private readonly registry: NodeRegistryService
+    private readonly registry: NodeRegistryService,
+    private readonly accessResources?: DockerAccessResourceService
   ) {}
 
   async resolve(reference: DockerUpstreamReference, options: ResolveOptions = {}): Promise<ResolvedDockerUpstream> {
@@ -128,8 +133,18 @@ export class ProxyDockerUpstreamService {
     throw new AppError(400, 'INVALID_UPSTREAM', 'Docker upstream reference is required');
   }
 
-  private assertDockerViewScope(nodeId: string, actorScopes?: string[]) {
-    if (actorScopes && !hasScope(actorScopes, `docker:containers:view:${nodeId}`)) {
+  private assertDockerViewScope(nodeId: string, resourceId: string, actorScopes?: string[]) {
+    if (actorScopes && !hasDockerResourceScope(actorScopes, 'docker:containers:view', nodeId, resourceId)) {
+      throw new AppError(403, 'FORBIDDEN', 'Docker container access is required for this upstream');
+    }
+  }
+
+  private assertDockerNodeVisibility(nodeId: string, actorScopes?: string[]) {
+    if (
+      actorScopes &&
+      !hasDockerResourceScope(actorScopes, 'docker:containers:view', nodeId, '') &&
+      !dockerScopedNodeIds(actorScopes, ['docker:containers:view']).includes(nodeId)
+    ) {
       throw new AppError(403, 'FORBIDDEN', 'Docker container access is required for this upstream');
     }
   }
@@ -201,7 +216,7 @@ export class ProxyDockerUpstreamService {
     if (!nodeId || !containerName) {
       throw new AppError(400, 'INVALID_DOCKER_TARGET', 'Docker node and exact container name are required');
     }
-    this.assertDockerViewScope(nodeId, options.actorScopes);
+    this.assertDockerNodeVisibility(nodeId, options.actorScopes);
     const node = await this.getDockerNode(nodeId, options);
     const snapshot = await this.snapshots.getList<Record<string, unknown>[]>(nodeId, 'containers');
     if (options.requireAvailable && (snapshot.revision === 0 || snapshot.refreshStatus === 'error')) {
@@ -213,6 +228,11 @@ export class ProxyDockerUpstreamService {
     if (!container || isDeploymentInternal(container)) {
       throw new AppError(404, 'DOCKER_CONTAINER_NOT_FOUND', 'Docker container snapshot not found');
     }
+    const runtimeId = String(container.id ?? container.Id ?? '');
+    const resourceId = this.accessResources
+      ? await this.accessResources.ensureContainer(nodeId, containerName, runtimeId, false)
+      : '';
+    this.assertDockerViewScope(nodeId, resourceId, options.actorScopes);
     const selectedPort = this.choosePort(reference, readPorts(container), options);
     const forwardHost = isWildcardBinding(selectedPort.ip) ? this.getNodeAddress(node) : selectedPort.ip!;
     return {
@@ -240,7 +260,7 @@ export class ProxyDockerUpstreamService {
       .where(eq(dockerDeployments.id, deploymentId))
       .limit(1);
     if (!deployment) throw new AppError(404, 'DOCKER_DEPLOYMENT_NOT_FOUND', 'Docker deployment not found');
-    this.assertDockerViewScope(deployment.nodeId, options.actorScopes);
+    this.assertDockerViewScope(deployment.nodeId, deployment.id, options.actorScopes);
     const node = await this.getDockerNode(deployment.nodeId, options);
     const routes = await this.db
       .select()

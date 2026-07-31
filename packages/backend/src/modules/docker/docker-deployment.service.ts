@@ -17,6 +17,7 @@ import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creatio
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
+import type { DockerAccessResourceService } from './docker-access-resource.service.js';
 import type {
   DockerDeploymentCreateInput,
   DockerDeploymentDeployInput,
@@ -94,6 +95,7 @@ export class DockerDeploymentService {
   private imageCleanupService?: DockerImageCleanupService;
   private deploymentTransitions = new Map<string, DeploymentTransition>();
   private migrationGuard?: DockerMigrationGuard;
+  private accessResourceService?: DockerAccessResourceService;
 
   constructor(
     private db: DrizzleClient,
@@ -119,6 +121,10 @@ export class DockerDeploymentService {
 
   setMigrationGuard(guard: DockerMigrationGuard) {
     this.migrationGuard = guard;
+  }
+
+  setAccessResourceService(service: DockerAccessResourceService) {
+    this.accessResourceService = service;
   }
 
   private emit(action: string, deploymentId: string, nodeId: string, extra?: Record<string, unknown>) {
@@ -524,6 +530,7 @@ export class DockerDeploymentService {
       : current.desiredConfig;
     assertDockerMountChangeAllowed({
       nodeId,
+      resourceId: deploymentId,
       actorScopes,
       nextConfig: desiredConfig,
       currentDefinitions: normalizeMountDefinitionsFromConfig(current.desiredConfig),
@@ -611,6 +618,7 @@ export class DockerDeploymentService {
     };
     assertDockerMountChangeAllowed({
       nodeId,
+      resourceId: deploymentId,
       actorScopes,
       nextConfig: desiredConfig,
       currentDefinitions: normalizeMountDefinitionsFromConfig(deployment.desiredConfig),
@@ -713,6 +721,7 @@ export class DockerDeploymentService {
     };
     assertDockerMountChangeAllowed({
       nodeId,
+      resourceId: deploymentId,
       actorScopes,
       nextConfig: desiredConfig,
       currentDefinitions: normalizeMountDefinitionsFromConfig(deployment.desiredConfig),
@@ -848,6 +857,7 @@ export class DockerDeploymentService {
       const desiredConfig = rollbackSlot.desiredConfig ?? { ...deployment.desiredConfig, image: rollbackSlot.image };
       assertDockerMountChangeAllowed({
         nodeId,
+        resourceId: deploymentId,
         actorScopes,
         nextConfig: desiredConfig,
         currentDefinitions: normalizeMountDefinitionsFromConfig(deployment.desiredConfig),
@@ -883,6 +893,8 @@ export class DockerDeploymentService {
       clearTransition: (deployment) => this.clearTransition(deployment),
       parseResult: (result) => this.parseResult(result),
       emit: (action, deploymentId, nodeId, extra) => this.emit(action, deploymentId, nodeId, extra),
+      removeAccessScopes: (nodeId, deploymentId) =>
+        this.accessResourceService?.removeDeployment(nodeId, deploymentId) ?? Promise.resolve(),
       deploy: (nodeId, deploymentId, input, userId, source) => this.deploy(nodeId, deploymentId, input, userId, source),
     };
   }

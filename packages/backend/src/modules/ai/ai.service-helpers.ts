@@ -222,6 +222,13 @@ function hasToolExecutionScope(
   args: Record<string, unknown>
 ): boolean {
   if (!requiredScope) return false;
+  if (
+    requiredScope.startsWith('docker:containers:') &&
+    requiredScope !== 'docker:containers:create' &&
+    hasScopeBase(scopes, requiredScope)
+  ) {
+    return true;
+  }
   const anyRequirements = ANY_SCOPE_TOOL_REQUIREMENTS[toolName];
   if (anyRequirements) return anyRequirements.some((scope) => hasScopeBase(scopes, scope));
   if (BROAD_ONLY_TOOL_SCOPES.has(toolName)) return hasScope(scopes, requiredScope);

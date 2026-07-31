@@ -3,6 +3,10 @@ import { hasScope, hasScopeBase, hasScopeForResource } from '@/lib/permissions.j
 import { AdminUserFolderService } from '@/modules/admin/admin-user-folders.service.js';
 import { DatabaseFolderService } from '@/modules/databases/database-folders.service.js';
 import {
+  DockerAccessResourceService,
+  hasDockerResourceScope,
+} from '@/modules/docker/docker-access-resource.service.js';
+import {
   CreateDockerFolderSchema,
   DockerFolderResourceTypeSchema,
   MoveDockerResourcesToFolderSchema,
@@ -284,9 +288,13 @@ async function executeDockerFolderTool(user: User, args: Record<string, unknown>
   ensureScope(user, 'docker:containers:folders:manage');
   if (resourceType === 'container') {
     const items = Array.isArray(args.items) ? args.items : [];
+    const resources = container.resolve(DockerAccessResourceService);
     for (const item of items) {
-      if (item && typeof item === 'object' && 'nodeId' in item && typeof item.nodeId === 'string') {
-        ensureScopeForResource(user, 'docker:containers:edit', item.nodeId);
+      if (!item || typeof item !== 'object' || !('nodeId' in item) || typeof item.nodeId !== 'string') continue;
+      if (!('resourceKey' in item) || typeof item.resourceKey !== 'string') continue;
+      const resourceId = await resources.resolveResourceByName(item.nodeId, item.resourceKey);
+      if (!resourceId || !hasDockerResourceScope(user.scopes, 'docker:containers:edit', item.nodeId, resourceId)) {
+        throw new Error('Missing required scope: docker:containers:edit');
       }
     }
   }

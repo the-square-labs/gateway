@@ -144,7 +144,7 @@ export class DockerMigrationService {
     return rows
       .filter((row) => {
         try {
-          assertDockerMigrationReadAccess(scopes, row.sourceNodeId, row.targetNodeId);
+          assertDockerMigrationReadAccess(scopes, row.sourceNodeId, row.targetNodeId, this.scopeResourceId(row));
           return true;
         } catch {
           return false;
@@ -156,7 +156,7 @@ export class DockerMigrationService {
 
   async get(id: string, scopes: string[]) {
     const row = await this.getRow(id);
-    assertDockerMigrationReadAccess(scopes, row.sourceNodeId, row.targetNodeId);
+    assertDockerMigrationReadAccess(scopes, row.sourceNodeId, row.targetNodeId, this.scopeResourceId(row));
     const artifacts = await this.db
       .select()
       .from(dockerMigrationArtifacts)
@@ -166,7 +166,7 @@ export class DockerMigrationService {
 
   async cancel(id: string, userId: string, scopes: string[]) {
     const row = await this.getRow(id);
-    assertDockerMigrationManageAccess(scopes, row.sourceNodeId, row.targetNodeId);
+    assertDockerMigrationManageAccess(scopes, row.sourceNodeId, row.targetNodeId, this.scopeResourceId(row));
     if (row.cutoverAt || !ACTIVE_STATUSES.includes(row.status)) {
       throw new AppError(409, 'MIGRATION_CANNOT_CANCEL', 'Migration cannot be cancelled after cutover or completion');
     }
@@ -188,7 +188,7 @@ export class DockerMigrationService {
 
   async retryCleanup(id: string, userId: string, scopes: string[]) {
     const row = await this.getRow(id);
-    assertDockerMigrationManageAccess(scopes, row.sourceNodeId, row.targetNodeId);
+    assertDockerMigrationManageAccess(scopes, row.sourceNodeId, row.targetNodeId, this.scopeResourceId(row));
     if (row.status !== 'cleanup_pending') {
       throw new AppError(409, 'MIGRATION_CLEANUP_NOT_RETRYABLE', 'Migration does not have retryable cleanup');
     }
@@ -200,6 +200,8 @@ export class DockerMigrationService {
     assertDockerMigrationCleanupAccess(
       scopes,
       row.sourceNodeId,
+      row.targetNodeId,
+      this.scopeResourceId(row),
       artifacts.some((artifact) => artifact.kind === 'volume'),
       (proxySnapshot.hosts?.length ?? 0) > 0
     );
@@ -438,6 +440,7 @@ export class DockerMigrationService {
       targetNodeId: row.targetNodeId,
       targetNodeSlug: migration.targetNodeSlug,
       targetResourceId: migration.targetResourceId,
+      scopeResourceId: this.scopeResourceId(row),
       status: row.status,
       phase: row.phase,
       cutoverAt: row.cutoverAt,
@@ -457,6 +460,15 @@ export class DockerMigrationService {
     if (this.docker.setTransition(row.targetNodeId, row.resourceName, 'migrating')) {
       this.docker.emitTransition(row.targetNodeId, row.resourceName, '', 'migrating');
     }
+  }
+
+  private scopeResourceId(row: typeof dockerMigrations.$inferSelect): string {
+    return String(
+      (row.preflight as { scopeResourceId?: unknown } | null)?.scopeResourceId ??
+        row.deploymentId ??
+        (row.preflight as { sourceResourceId?: unknown } | null)?.sourceResourceId ??
+        row.resourceName
+    );
   }
 
   private clearMigrating(row: typeof dockerMigrations.$inferSelect): void {

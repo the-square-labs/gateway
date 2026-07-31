@@ -104,6 +104,7 @@ export function useContainerDetailRealtime({
       oldName?: string;
       action?: string;
       transition?: string | null;
+      scopeResourceId?: string;
     };
     if (!ev || ev.nodeId !== nodeId) return;
 
@@ -138,6 +139,7 @@ export function useContainerDetailRealtime({
           resourceType: "docker-container",
           resourceId: ev.id,
           nodeId,
+          scopeResourceId: ev.scopeResourceId,
           label: routeContainerName,
         });
       }

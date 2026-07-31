@@ -105,6 +105,7 @@ function deriveCurrentNanoCPUs(hostConfig: Record<string, any>): number {
 export function SettingsTab({
   nodeId,
   containerId,
+  scopeResourceId,
   data,
   onMutationStart,
   onMutationEnd,
@@ -115,6 +116,7 @@ export function SettingsTab({
 }: {
   nodeId: string;
   containerId: string;
+  scopeResourceId?: string;
   data: InspectData;
   onMutationStart?: (transition: "updating" | "recreating") => void;
   onMutationEnd?: () => void;
@@ -125,10 +127,9 @@ export function SettingsTab({
 }) {
   const { hasScope } = useAuthStore();
   const invalidate = useDockerStore((s) => s.invalidate);
-  const canEdit =
-    hasScope("docker:containers:edit") || hasScope(`docker:containers:edit:${nodeId}`);
-  const canEditMounts =
-    hasScope("docker:containers:mounts") || hasScope(`docker:containers:mounts:${nodeId}`);
+  const scopeSuffix = `${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`;
+  const canEdit = hasScope(`docker:containers:edit:${scopeSuffix}`);
+  const canEditMounts = hasScope(`docker:containers:mounts:${scopeSuffix}`);
   const canManageNetworks =
     hasScope("docker:networks:edit") || hasScope(`docker:networks:edit:${nodeId}`);
   const canListNetworks =
@@ -983,7 +984,7 @@ export function SettingsTab({
       {(() => {
         const canManageWebhooks =
           hasScope("docker:containers:webhooks") ||
-          hasScope(`docker:containers:webhooks:${nodeId}`);
+          hasScope(`docker:containers:webhooks:${scopeSuffix}`);
         if (!canManageWebhooks && !canEdit) return null;
         return (
           <WebhookSection

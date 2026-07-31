@@ -280,6 +280,7 @@ function isPathPending(path: string, pendingPaths: Set<string>) {
 export function FilesTab({
   nodeId,
   containerId,
+  scopeResourceId,
   canBrowse,
   fetchDirectory,
   operations,
@@ -288,6 +289,7 @@ export function FilesTab({
 }: {
   nodeId: string;
   containerId?: string;
+  scopeResourceId?: string;
   canBrowse?: boolean;
   fetchDirectory?: (path: string) => Promise<FileEntry[]>;
   operations?: FileManagerOperations;
@@ -297,7 +299,7 @@ export function FilesTab({
   const { hasScope } = useAuthStore();
   const canBrowseFiles =
     canBrowse ??
-    (hasScope("docker:containers:files") || hasScope(`docker:containers:files:${nodeId}`));
+    hasScope(`docker:containers:files:${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`);
   const containerOperations = useMemo<FileManagerOperations | undefined>(() => {
     if (!containerId) return undefined;
     return {

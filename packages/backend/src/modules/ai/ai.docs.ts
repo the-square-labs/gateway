@@ -497,7 +497,15 @@ Automated cleanup tasks, configurable in Settings.
   docker: `# Docker Container Management
 
 ## Overview
-Gateway provides Portainer-like Docker container management through a daemon running on Docker hosts. All Docker operations are node-scoped — you must specify which Docker node to target.
+Gateway provides Portainer-like Docker container management through a daemon running on Docker hosts. Docker tools still require a nodeId, while container permissions can be granted for the whole node or narrowed to one standalone container or blue/green deployment.
+
+## Granular Access
+- Every standalone container has a Gateway-managed stable access identity; every blue/green deployment uses its stable deployment ID.
+- A node-level \`docker:containers:*\` grant covers every container and deployment on that node. A child-level grant covers only the selected container or deployment.
+- Child grants are enforced consistently by the UI, REST routes, WebSockets, proxy Docker upstream resolution, AI tools, and MCP tools. Lists omit inaccessible resources.
+- Recreating or updating an existing container preserves its stable access identity and grants even though the Docker runtime ID changes.
+- Migrating a container or deployment to another node moves its child grants to the target node during metadata cutover.
+- Explicitly deleting a container or deployment removes its child grants. A later resource with the same name does not inherit them.
 
 ## Container Lifecycle
 - **Create**: Deploy from image with ports, volumes, env, networks, restart policy

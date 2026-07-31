@@ -15,11 +15,8 @@ const SERVICE_COLORS = [
 
 export function DockerComposeLogsPopout() {
   const { nodeId, project } = useParams<{ nodeId: string; project: string }>();
-  const { hasScope } = useAuthStore();
-  const canViewLogs =
-    !!nodeId &&
-    !!project &&
-    (hasScope("docker:containers:view") || hasScope(`docker:containers:view:${nodeId}`));
+  const { hasScopedAccess } = useAuthStore();
+  const canViewLogs = !!nodeId && !!project && hasScopedAccess("docker:containers:view");
   const termRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<any>(null);
   const wsRef = useRef<WebSocket | null>(null);

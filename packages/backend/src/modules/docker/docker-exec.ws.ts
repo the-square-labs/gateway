@@ -1,16 +1,25 @@
 import type { WSContext } from 'hono/ws';
 import { container } from '@/container.js';
 import { createChildLogger } from '@/lib/logger.js';
-import { resolveWebSocketCredential, type WebSocketCredential } from '@/modules/auth/websocket-auth.js';
+import {
+  resolveWebSocketCredential,
+  resolveWebSocketCredentialForScopeBase,
+  type WebSocketCredential,
+} from '@/modules/auth/websocket-auth.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { User } from '@/types.js';
 import { DockerManagementService } from './docker.service.js';
+import { dockerScopedNodeIds, hasDockerResourceScope } from './docker-access-resource.service.js';
 
 const logger = createChildLogger('DockerExec');
 
-async function authorizeExecAccess(credential: WebSocketCredential | null, nodeId: string): Promise<User | null> {
-  const result = await resolveWebSocketCredential(credential, `docker:containers:console:${nodeId}`);
+async function authorizeExecAccess(
+  credential: WebSocketCredential | null,
+  nodeId: string,
+  resourceId: string
+): Promise<User | null> {
+  const result = await resolveWebSocketCredential(credential, `docker:containers:console:${nodeId}/${resourceId}`);
   return result?.user ?? null;
 }
 
@@ -50,6 +59,7 @@ interface ExecWSState {
   keepaliveInterval: ReturnType<typeof setInterval> | null;
   outputQueue: Promise<void>;
   credential: WebSocketCredential | null;
+  scopeResourceId: string | null;
 }
 
 export interface DockerExecTerminalSize {
@@ -117,6 +127,7 @@ export function createDockerExecWSHandlers(
         keepaliveInterval: null,
         outputQueue: Promise.resolve(),
         credential,
+        scopeResourceId: null,
       };
       wsStates.set(ws, state);
 
@@ -237,7 +248,22 @@ async function authenticateAndCreateExec(
   registry: NodeRegistryService,
   docker: DockerManagementService
 ): Promise<void> {
-  const user = await authorizeExecAccess(credential, nodeId);
+  const initialAuth = await resolveWebSocketCredentialForScopeBase(credential, 'docker:containers:console');
+  if (
+    !initialAuth ||
+    (!hasDockerResourceScope(initialAuth.scopes, 'docker:containers:console', nodeId, '') &&
+      !dockerScopedNodeIds(initialAuth.scopes, ['docker:containers:console']).includes(nodeId))
+  ) {
+    send(ws, { type: 'auth_error', message: 'Access revoked or token expired' });
+    ws.close(1008, 'Authentication failed');
+    return;
+  }
+  const inspect = await docker.inspectContainer(nodeId, containerId).catch(() => null);
+  const scopeResourceId = String(inspect?.scopeResourceId ?? '');
+  const user =
+    scopeResourceId && hasDockerResourceScope(initialAuth.scopes, 'docker:containers:console', nodeId, scopeResourceId)
+      ? initialAuth.user
+      : null;
   if (!user) {
     send(ws, { type: 'auth_error', message: 'Access revoked or token expired' });
     ws.close(1008, 'Authentication failed');
@@ -246,6 +272,7 @@ async function authenticateAndCreateExec(
 
   state.user = user;
   state.authenticated = true;
+  state.scopeResourceId = scopeResourceId;
 
   logger.info('Docker exec authenticated', { nodeId, containerId, userId: user.id });
 
@@ -392,7 +419,9 @@ async function revalidateExecAccess(
   nodeId: string,
   emitPong = false
 ): Promise<boolean> {
-  const user = await authorizeExecAccess(state.credential, nodeId);
+  const user = state.scopeResourceId
+    ? await authorizeExecAccess(state.credential, nodeId, state.scopeResourceId)
+    : null;
   if (!user) {
     state.authenticated = false;
     send(ws, { type: 'auth_error', message: 'Access revoked or token expired' });

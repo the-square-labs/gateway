@@ -53,6 +53,7 @@ export const DockerMigrationPreflightSchema = z.object({
   resourceType: z.enum(['container', 'deployment']),
   resourceName: z.string(),
   sourceResourceId: z.string(),
+  scopeResourceId: z.string(),
   sourceNodeId: z.string().uuid(),
   targetNodeId: z.string().uuid(),
   targetNodeSlug: z.string(),

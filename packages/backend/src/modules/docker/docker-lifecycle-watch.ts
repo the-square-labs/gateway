@@ -28,6 +28,7 @@ export interface DockerLifecycleWatchContext {
     action: ContainerAction,
     extra?: Record<string, unknown>
   ) => void;
+  preserveContainerIdentity?: (nodeId: string, name: string, runtimeId: string) => Promise<unknown>;
   failTask: (taskId: string | undefined, error: string, nodeId?: string, containerName?: string) => Promise<void>;
 }
 
@@ -102,6 +103,7 @@ export function watchDockerRecreateByName(
         const state = match.state ?? match.State ?? '';
 
         if (newId !== oldContainerId && state === expectedState) {
+          await context.preserveContainerIdentity?.(nodeId, containerName, newId);
           context.clearTransition(nodeId, containerName);
           clearInterval(poll);
           if (taskId && context.taskService) {

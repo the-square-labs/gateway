@@ -540,6 +540,13 @@
       "when": 1785453559988,
       "tag": "0076_chief_hellfire_club",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1785494576977,
+      "tag": "0077_slim_synch",
+      "breakpoints": true
     }
   ]
 }

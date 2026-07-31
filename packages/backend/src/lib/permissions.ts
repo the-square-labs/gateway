@@ -5,6 +5,13 @@
 
 import { extractBaseScope, isValidBaseScope } from './scopes.js';
 
+function parentResourceId(baseScope: string, resourceId: string | null): string | null {
+  if (!baseScope.startsWith('docker:containers:')) return null;
+  if (!resourceId) return null;
+  const separator = resourceId.indexOf('/');
+  return separator > 0 ? resourceId.slice(0, separator) : null;
+}
+
 const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Record<string, readonly string[]> = {
   'pki:templates:view': ['pki:templates:edit'],
   'proxy:view': ['proxy:edit'],
@@ -53,9 +60,11 @@ function hasImpliedScope(scopes: readonly string[], requiredScope: string): bool
   if (impliedScopes.length === 0) return false;
 
   const resourceId = requiredBase === requiredScope ? null : requiredScope.slice(requiredBase.length + 1);
+  const parentId = parentResourceId(requiredBase, resourceId);
   for (const impliedScope of impliedScopes) {
     if (scopes.includes(impliedScope)) return true;
     if (resourceId && scopes.includes(`${impliedScope}:${resourceId}`)) return true;
+    if (parentId && scopes.includes(`${impliedScope}:${parentId}`)) return true;
   }
   return false;
 }
@@ -82,6 +91,9 @@ export function hasScope(scopes: string[], requiredScope: string): boolean {
   const baseScope = extractBaseScope(requiredScope);
   if (baseScope !== requiredScope) {
     if (scopes.includes(baseScope)) return true;
+    const resourceId = requiredScope.slice(baseScope.length + 1);
+    const parentId = parentResourceId(baseScope, resourceId);
+    if (parentId && scopes.includes(`${baseScope}:${parentId}`)) return true;
     return hasImpliedScope(scopes, requiredScope);
   }
 

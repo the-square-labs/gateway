@@ -4,6 +4,13 @@ const RESOURCE_SCOPABLE_BY_LENGTH = [...RESOURCE_SCOPABLE_SCOPES].sort(
   (a, b) => b.length - a.length
 );
 const ALL_SCOPE_VALUES = new Set<string>(TOKEN_SCOPES.map((scope) => scope.value));
+
+function parentResourceId(baseScope: string, resourceId: string | null): string | null {
+  if (!baseScope.startsWith("docker:containers:")) return null;
+  if (!resourceId) return null;
+  const separator = resourceId.indexOf("/");
+  return separator > 0 ? resourceId.slice(0, separator) : null;
+}
 const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Record<string, readonly string[]> = {
   "pki:templates:view": ["pki:templates:edit"],
   "proxy:view": ["proxy:edit"],
@@ -63,6 +70,10 @@ export function scopeMatches(availableScopes: readonly string[], requiredScope: 
   if (availableScopes.includes(requiredScope)) return true;
   const base = extractBaseScope(requiredScope);
   if (base !== requiredScope && availableScopes.includes(base)) return true;
+  if (base !== requiredScope) {
+    const parentId = parentResourceId(base, requiredScope.slice(base.length + 1));
+    if (parentId && availableScopes.includes(`${base}:${parentId}`)) return true;
+  }
   return hasImpliedScope(availableScopes, requiredScope);
 }
 
@@ -83,10 +94,12 @@ function hasImpliedScope(availableScopes: readonly string[], requiredScope: stri
 
   const resourceId =
     requiredBase === requiredScope ? null : requiredScope.slice(requiredBase.length + 1);
+  const parentId = parentResourceId(requiredBase, resourceId);
   return impliedScopes.some(
     (impliedScope) =>
       availableScopes.includes(impliedScope) ||
-      (resourceId !== null && availableScopes.includes(`${impliedScope}:${resourceId}`))
+      (resourceId !== null && availableScopes.includes(`${impliedScope}:${resourceId}`)) ||
+      (parentId !== null && availableScopes.includes(`${impliedScope}:${parentId}`))
   );
 }
 

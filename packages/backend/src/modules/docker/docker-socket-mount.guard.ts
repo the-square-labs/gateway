@@ -157,6 +157,7 @@ function hasConfigMountFields(config: { mounts?: unknown; volumes?: unknown } | 
 
 export function assertDockerMountChangeAllowed(args: {
   nodeId: string;
+  resourceId?: string;
   actorScopes: readonly string[];
   nextConfig?: { mounts?: DockerMountInput[] | null; volumes?: DockerMountInput[] | null };
   nextDefinitions?: NormalizedMountDefinition[];
@@ -172,7 +173,8 @@ export function assertDockerMountChangeAllowed(args: {
       : normalizeMountDefinitionsFromConfig(args.nextConfig ?? {});
   const mountsChanged = !definitionsEqual(currentDefinitions, nextDefinitions);
 
-  if (mountsChanged && !hasScope([...args.actorScopes], `docker:containers:mounts:${args.nodeId}`)) {
+  const resourceSuffix = args.resourceId ? `${args.nodeId}/${args.resourceId}` : args.nodeId;
+  if (mountsChanged && !hasScope([...args.actorScopes], `docker:containers:mounts:${resourceSuffix}`)) {
     throw new AppError(
       403,
       'MISSING_DOCKER_MOUNTS_SCOPE',

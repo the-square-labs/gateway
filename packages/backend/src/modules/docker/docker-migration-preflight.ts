@@ -95,6 +95,10 @@ export class DockerMigrationPreflightService {
     }
 
     const name = migrationResourceName(input, deployment);
+    const scopeResourceId = String(deployment?.id ?? inspect?.scopeResourceId ?? '');
+    if (!scopeResourceId) {
+      throw new AppError(500, 'DOCKER_ACCESS_RESOURCE_MISSING', 'Docker access resource identity is unavailable');
+    }
     const metadataName = deployment ? `deployment:${deployment.id}` : name;
     const sourceState = deployment ? String(deployment.status) : migrationContainerState(inspect ?? {});
     const allowedStates = deployment ? STABLE_DEPLOYMENT_STATES : STABLE_CONTAINER_STATES;
@@ -328,6 +332,7 @@ export class DockerMigrationPreflightService {
     if (enforcePermissions) {
       assertDockerMigrationPermissions(scopes, {
         sourceNodeId: input.sourceNodeId,
+        sourceResourceId: scopeResourceId,
         targetNodeId: input.targetNodeId,
         keepSource: input.keepSource,
         hasVolumes: volumeNames.size > 0,
@@ -365,6 +370,7 @@ export class DockerMigrationPreflightService {
       resourceName: name,
       sourceResourceId:
         input.resource.type === 'container' ? String(inspect?.Id ?? name) : String(deployment?.id ?? name),
+      scopeResourceId,
       sourceNodeId: input.sourceNodeId,
       targetNodeId: input.targetNodeId,
       targetNodeSlug: targetNode.slug,

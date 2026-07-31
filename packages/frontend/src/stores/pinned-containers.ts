@@ -7,6 +7,7 @@ type PinnedContainerMeta = {
   nodeId: string;
   nodeSlug: string;
   name: string;
+  scopeResourceId?: string;
   state?: string;
   kind?: "container" | "deployment";
 };
@@ -153,7 +154,8 @@ useDockerStore.subscribe((state) => {
       (existing.state !== effectiveState ||
         existing.name !== c.name ||
         existing.kind !== effectiveKind ||
-        existing.nodeSlug !== c._nodeSlug)
+        existing.nodeSlug !== c._nodeSlug ||
+        existing.scopeResourceId !== c.scopeResourceId)
     ) {
       usePinnedContainersStore.getState().updateMeta(c.id, {
         ...existing,
@@ -161,6 +163,7 @@ useDockerStore.subscribe((state) => {
         name: c.name || existing.name,
         state: effectiveState,
         kind: effectiveKind,
+        scopeResourceId: c.scopeResourceId ?? existing.scopeResourceId,
       });
     }
   }

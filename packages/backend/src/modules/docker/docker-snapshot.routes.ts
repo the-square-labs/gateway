@@ -5,6 +5,12 @@ import { AppError } from '@/middleware/error-handler.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import type { AppEnv } from '@/types.js';
 import { DockerManagementService } from './docker.service.js';
+import { filterDockerResourcesForScope } from './docker-access.middleware.js';
+import {
+  DockerAccessResourceService,
+  dockerScopedNodeIds,
+  hasDockerResourceScope,
+} from './docker-access-resource.service.js';
 import { compactContainerListItem, matchesContainerSearch } from './docker-container.routes.js';
 import { compactImageListItem, matchesImageSearch } from './docker-image.routes.js';
 import { compactNetworkListItem, matchesNetworkSearch } from './docker-network.routes.js';
@@ -44,6 +50,15 @@ const VIEW_SCOPE: Record<DockerRefreshKind, string> = {
   'volume-detail': 'docker:volumes:view',
 };
 
+async function canRefreshContainerDetail(scopes: string[], nodeId: string, key: string): Promise<boolean> {
+  if (hasDockerResourceScope(scopes, 'docker:containers:view', nodeId, '')) return true;
+  const resources = container.resolve(DockerAccessResourceService);
+  const resourceId =
+    (await resources.resolveContainer(nodeId, { runtimeId: key })) ??
+    (await resources.resolveContainer(nodeId, { name: key }));
+  return !!resourceId && hasDockerResourceScope(scopes, 'docker:containers:view', nodeId, resourceId);
+}
+
 function normalizeRows(kind: DockerSnapshotKind, data: Record<string, any>[], search?: string) {
   switch (kind) {
     case 'containers':
@@ -71,7 +86,17 @@ async function aggregate(c: any, kind: DockerSnapshotKind) {
       const source =
         kind === 'containers' ? await docker.decorateContainerSnapshot(node.id, snapshot.data) : snapshot.data;
       const availability = snapshots.availability(node.id, snapshot);
-      const rows = normalizeRows(kind, Array.isArray(source) ? source : [], search).map((item) => ({
+      const normalized = normalizeRows(kind, Array.isArray(source) ? source : [], search);
+      const scoped: Array<Record<string, unknown>> =
+        kind === 'containers'
+          ? filterDockerResourcesForScope(
+              normalized as Array<Record<string, unknown> & { scopeResourceId?: string | null }>,
+              scopes,
+              'docker:containers:view',
+              node.id
+            )
+          : normalized;
+      const rows = scoped.map((item) => ({
         ...item,
         nodeId: node.id,
         availability,
@@ -105,8 +130,14 @@ export function registerDockerSnapshotRoutes(router: OpenAPIHono<AppEnv>) {
     const reconciler = container.resolve(DockerSnapshotReconciler);
     if (input.nodeId) {
       await snapshots.assertDockerNode(input.nodeId);
-      if (!TokensService.hasScope(scopes, `${VIEW_SCOPE[resource]}:${input.nodeId}`)) {
+      const hasContainerChildAccess =
+        (resource === 'containers' || resource === 'container-detail') &&
+        dockerScopedNodeIds(scopes, ['docker:containers:view']).includes(input.nodeId);
+      if (!TokensService.hasScope(scopes, `${VIEW_SCOPE[resource]}:${input.nodeId}`) && !hasContainerChildAccess) {
         throw new AppError(403, 'FORBIDDEN', 'Missing required Docker node access scope');
+      }
+      if (resource === 'container-detail' && !(await canRefreshContainerDetail(scopes, input.nodeId, input.key!))) {
+        throw new AppError(403, 'FORBIDDEN', 'Missing required Docker container access scope');
       }
       reconciler.enqueue({ nodeId: input.nodeId, kind: resource, key: input.key }, { urgent: true });
       return c.json({ accepted: true, nodeCount: 1 }, 202);
@@ -115,6 +146,9 @@ export function registerDockerSnapshotRoutes(router: OpenAPIHono<AppEnv>) {
       resource === 'container-detail' ? 'containers' : resource === 'volume-detail' ? 'volumes' : resource;
     const visibleNodes = await snapshots.listVisibleNodes(listKind, scopes);
     for (const node of visibleNodes) {
+      if (resource === 'container-detail' && !(await canRefreshContainerDetail(scopes, node.id, input.key!))) {
+        continue;
+      }
       reconciler.enqueue({ nodeId: node.id, kind: resource, key: input.key }, { urgent: true });
     }
     return c.json({ accepted: true, nodeCount: visibleNodes.length }, 202);

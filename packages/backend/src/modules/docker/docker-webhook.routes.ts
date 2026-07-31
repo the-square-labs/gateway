@@ -2,7 +2,6 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { requireScopeForResource } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import {
   deleteContainerWebhookRoute,
@@ -13,6 +12,7 @@ import {
   upsertContainerImageCleanupRoute,
   upsertContainerWebhookRoute,
 } from './docker.docs.js';
+import { requireDockerContainerScope } from './docker-access.middleware.js';
 import { ImageCleanupUpsertSchema } from './docker-image-cleanup.schemas.js';
 import { DockerImageCleanupService } from './docker-image-cleanup.service.js';
 import { WebhookTriggerSchema, WebhookUpsertSchema } from './docker-webhook.schemas.js';
@@ -23,7 +23,10 @@ import { DockerWebhookService } from './docker-webhook.service.js';
 export function registerWebhookConfigRoutes(router: OpenAPIHono<AppEnv>) {
   // Get webhook config for a container
   router.openapi(
-    { ...getContainerWebhookRoute, middleware: requireScopeForResource('docker:containers:webhooks', 'nodeId') },
+    {
+      ...getContainerWebhookRoute,
+      middleware: requireDockerContainerScope('docker:containers:webhooks', 'containerName'),
+    },
     async (c) => {
       const service = container.resolve(DockerWebhookService);
       const nodeId = c.req.param('nodeId')!;
@@ -35,7 +38,10 @@ export function registerWebhookConfigRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Create or update webhook config
   router.openapi(
-    { ...upsertContainerWebhookRoute, middleware: requireScopeForResource('docker:containers:webhooks', 'nodeId') },
+    {
+      ...upsertContainerWebhookRoute,
+      middleware: requireDockerContainerScope('docker:containers:webhooks', 'containerName'),
+    },
     async (c) => {
       const service = container.resolve(DockerWebhookService);
       const nodeId = c.req.param('nodeId')!;
@@ -49,7 +55,10 @@ export function registerWebhookConfigRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Delete webhook config
   router.openapi(
-    { ...deleteContainerWebhookRoute, middleware: requireScopeForResource('docker:containers:webhooks', 'nodeId') },
+    {
+      ...deleteContainerWebhookRoute,
+      middleware: requireDockerContainerScope('docker:containers:webhooks', 'containerName'),
+    },
     async (c) => {
       const service = container.resolve(DockerWebhookService);
       const nodeId = c.req.param('nodeId')!;
@@ -62,7 +71,10 @@ export function registerWebhookConfigRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Regenerate webhook token
   router.openapi(
-    { ...regenerateContainerWebhookRoute, middleware: requireScopeForResource('docker:containers:webhooks', 'nodeId') },
+    {
+      ...regenerateContainerWebhookRoute,
+      middleware: requireDockerContainerScope('docker:containers:webhooks', 'containerName'),
+    },
     async (c) => {
       const service = container.resolve(DockerWebhookService);
       const nodeId = c.req.param('nodeId')!;
@@ -74,7 +86,10 @@ export function registerWebhookConfigRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...getContainerImageCleanupRoute, middleware: requireScopeForResource('docker:containers:edit', 'nodeId') },
+    {
+      ...getContainerImageCleanupRoute,
+      middleware: requireDockerContainerScope('docker:containers:edit', 'containerName'),
+    },
     async (c) => {
       const service = container.resolve(DockerImageCleanupService);
       const nodeId = c.req.param('nodeId')!;
@@ -87,7 +102,7 @@ export function registerWebhookConfigRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     {
       ...upsertContainerImageCleanupRoute,
-      middleware: requireScopeForResource('docker:containers:edit', 'nodeId'),
+      middleware: requireDockerContainerScope('docker:containers:edit', 'containerName'),
     },
     async (c) => {
       const service = container.resolve(DockerImageCleanupService);

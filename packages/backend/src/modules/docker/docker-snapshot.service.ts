@@ -6,6 +6,7 @@ import { TokensService } from '@/modules/tokens/tokens.service.js';
 import type { CacheService } from '@/services/cache.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
+import { dockerScopedNodeIds } from './docker-access-resource.service.js';
 
 export const DOCKER_SNAPSHOT_KINDS = ['containers', 'images', 'volumes', 'networks'] as const;
 export type DockerSnapshotKind = (typeof DOCKER_SNAPSHOT_KINDS)[number];
@@ -308,8 +309,12 @@ export class DockerSnapshotService {
       .from(nodes)
       .where(eq(nodes.type, 'docker'));
     const scope = VIEW_SCOPES[kind];
+    const childNodeIds =
+      kind === 'containers' ? new Set(dockerScopedNodeIds(scopes, ['docker:containers:view'])) : new Set<string>();
     return rows.filter(
-      (node) => (!nodeId || node.id === nodeId) && TokensService.hasScope(scopes, `${scope}:${node.id}`)
+      (node) =>
+        (!nodeId || node.id === nodeId) &&
+        (TokensService.hasScope(scopes, `${scope}:${node.id}`) || childNodeIds.has(node.id))
     );
   }
 

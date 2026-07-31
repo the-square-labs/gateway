@@ -27,11 +27,8 @@ function hasTimestamp(line: string): boolean {
 
 export function DockerLogsPopout() {
   const { nodeId, containerId } = useParams<{ nodeId: string; containerId: string }>();
-  const { hasScope } = useAuthStore();
-  const canViewLogs =
-    !!nodeId &&
-    !!containerId &&
-    (hasScope("docker:containers:view") || hasScope(`docker:containers:view:${nodeId}`));
+  const { hasScopedAccess } = useAuthStore();
+  const canViewLogs = !!nodeId && !!containerId && hasScopedAccess("docker:containers:view");
 
   const [lines, setLines] = useState<string[]>([]);
   const [hasMore, setHasMore] = useState(true);

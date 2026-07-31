@@ -1,15 +1,25 @@
 import type { WSContext } from 'hono/ws';
 import { container } from '@/container.js';
 import { createChildLogger } from '@/lib/logger.js';
-import { resolveWebSocketCredential, type WebSocketCredential } from '@/modules/auth/websocket-auth.js';
+import {
+  resolveWebSocketCredential,
+  resolveWebSocketCredentialForScopeBase,
+  type WebSocketCredential,
+} from '@/modules/auth/websocket-auth.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { User } from '@/types.js';
+import { DockerManagementService } from './docker.service.js';
+import { dockerScopedNodeIds, hasDockerResourceScope } from './docker-access-resource.service.js';
 
 const logger = createChildLogger('DockerLogStream');
 
-async function authorizeLogAccess(credential: WebSocketCredential | null, nodeId: string): Promise<User | null> {
-  const result = await resolveWebSocketCredential(credential, `docker:containers:view:${nodeId}`);
+async function authorizeLogAccess(
+  credential: WebSocketCredential | null,
+  nodeId: string,
+  resourceId: string
+): Promise<User | null> {
+  const result = await resolveWebSocketCredential(credential, `docker:containers:view:${nodeId}/${resourceId}`);
   return result?.user ?? null;
 }
 
@@ -70,6 +80,7 @@ interface LogStreamWSState {
   oldestTimestamp: string | undefined;
   /** Whether a load_more request is in-flight */
   loadingMore: boolean;
+  scopeResourceId: string | null;
 }
 
 const wsStates = new WeakMap<WSContext, LogStreamWSState>();
@@ -93,6 +104,7 @@ export function createDockerLogStreamWSHandlers(
 ) {
   const dispatch = container.resolve(NodeDispatchService);
   const registry = container.resolve(NodeRegistryService);
+  const docker = container.resolve(DockerManagementService);
 
   return {
     onOpen(_event: Event, ws: WSContext) {
@@ -104,6 +116,7 @@ export function createDockerLogStreamWSHandlers(
         keepaliveInterval: null,
         oldestTimestamp: undefined,
         loadingMore: false,
+        scopeResourceId: null,
       };
       wsStates.set(ws, state);
 
@@ -112,16 +125,18 @@ export function createDockerLogStreamWSHandlers(
       }, 30_000);
 
       // Authenticate, fetch initial logs, then start follow stream
-      authenticateAndStartStream(ws, state, credential, nodeId, containerId, tail, dispatch, registry).catch((err) => {
-        logger.error('Auth/stream start failed', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-        try {
-          ws.close();
-        } catch {
-          /* ignore */
+      authenticateAndStartStream(ws, state, credential, nodeId, containerId, tail, dispatch, registry, docker).catch(
+        (err) => {
+          logger.error('Auth/stream start failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          try {
+            ws.close();
+          } catch {
+            /* ignore */
+          }
         }
-      });
+      );
     },
 
     async onMessage(event: MessageEvent, ws: WSContext) {
@@ -200,9 +215,25 @@ async function authenticateAndStartStream(
   containerId: string,
   tail: number,
   dispatch: NodeDispatchService,
-  registry: NodeRegistryService
+  registry: NodeRegistryService,
+  docker: DockerManagementService
 ): Promise<void> {
-  const user = await authorizeLogAccess(credential, nodeId);
+  const initialAuth = await resolveWebSocketCredentialForScopeBase(credential, 'docker:containers:view');
+  if (
+    !initialAuth ||
+    (!hasDockerResourceScope(initialAuth.scopes, 'docker:containers:view', nodeId, '') &&
+      !dockerScopedNodeIds(initialAuth.scopes, ['docker:containers:view']).includes(nodeId))
+  ) {
+    send(ws, { type: 'auth_error', message: 'Access revoked or token expired' });
+    ws.close(1008, 'Authentication failed');
+    return;
+  }
+  const inspect = await docker.inspectContainer(nodeId, containerId).catch(() => null);
+  const scopeResourceId = String(inspect?.scopeResourceId ?? '');
+  const user =
+    scopeResourceId && hasDockerResourceScope(initialAuth.scopes, 'docker:containers:view', nodeId, scopeResourceId)
+      ? initialAuth.user
+      : null;
   if (!user) {
     send(ws, { type: 'auth_error', message: 'Access revoked or token expired' });
     ws.close(1008, 'Authentication failed');
@@ -211,6 +242,7 @@ async function authenticateAndStartStream(
 
   state.user = user;
   state.authenticated = true;
+  state.scopeResourceId = scopeResourceId;
 
   logger.info('Docker log stream authenticated', { nodeId, containerId, userId: user.id });
 
@@ -367,7 +399,7 @@ async function revalidateLogAccess(
   nodeId: string,
   emitPong = false
 ): Promise<boolean> {
-  const user = await authorizeLogAccess(credential, nodeId);
+  const user = state.scopeResourceId ? await authorizeLogAccess(credential, nodeId, state.scopeResourceId) : null;
   if (!user) {
     state.authenticated = false;
     if (state.handlerKey) {

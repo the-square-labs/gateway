@@ -9,6 +9,7 @@ import {
   SecretUpdateSchema,
 } from '@/modules/docker/docker.schemas.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
+import { dockerScopedNodeIds } from '@/modules/docker/docker-access-resource.service.js';
 import type { User } from '@/types.js';
 
 const FileWriteToolSchema = z.object({
@@ -32,35 +33,68 @@ export async function manageDockerContainerConfigTool(
   const containerName = String(args.containerName ?? '');
   const containerId = String(args.containerId ?? '');
   const secretContainerName = targetType === 'deployment' ? `deployment:${deploymentId}` : containerName;
+  const authorizationResourceId = async (baseScope: string) => {
+    if (targetType === 'deployment') return `${nodeId}/${deploymentId}`;
+    if (hasScopeForResource(user.scopes, baseScope, nodeId)) return nodeId;
+    if (!dockerScopedNodeIds(user.scopes, [baseScope]).includes(nodeId)) return nodeId;
+    const inspected = await context.dockerService.inspectContainer(nodeId, containerId || containerName);
+    const resourceId = String(inspected?.scopeResourceId ?? '');
+    if (!resourceId) throw new Error('PERMISSION_DENIED: Container authorization identity is unavailable');
+    return `${nodeId}/${resourceId}`;
+  };
 
   if (operation === 'get_env') {
-    ensureToolScopeForResource(user, 'docker:containers:environment', nodeId);
+    ensureToolScopeForResource(
+      user,
+      'docker:containers:environment',
+      await authorizationResourceId('docker:containers:environment')
+    );
     return context.dockerService.getContainerEnv(nodeId, containerId);
   }
   if (operation === 'update_env') {
-    ensureToolScopeForResource(user, 'docker:containers:environment', nodeId);
+    ensureToolScopeForResource(
+      user,
+      'docker:containers:environment',
+      await authorizationResourceId('docker:containers:environment')
+    );
     const input = EnvUpdateSchema.parse(args);
     return context.dockerService.updateContainerEnv(nodeId, containerId, input.env, input.removeEnv, user.id);
   }
   if (operation === 'list_files') {
-    ensureToolScopeForResource(user, 'docker:containers:files', nodeId);
+    ensureToolScopeForResource(
+      user,
+      'docker:containers:files',
+      await authorizationResourceId('docker:containers:files')
+    );
     const input = FileBrowseSchema.parse(args);
     return context.dockerService.listDirectory(nodeId, containerId, input.path);
   }
   if (operation === 'read_file') {
-    ensureToolScopeForResource(user, 'docker:containers:files', nodeId);
+    ensureToolScopeForResource(
+      user,
+      'docker:containers:files',
+      await authorizationResourceId('docker:containers:files')
+    );
     const input = FileBrowseSchema.parse(args);
     const content = await context.dockerService.readFile(nodeId, containerId, input.path);
     return { path: input.path, content: Buffer.from(content).toString('utf-8') };
   }
   if (operation === 'write_file') {
-    ensureToolScopeForResource(user, 'docker:containers:files', nodeId);
+    ensureToolScopeForResource(
+      user,
+      'docker:containers:files',
+      await authorizationResourceId('docker:containers:files')
+    );
     const input = FileWriteToolSchema.parse(args);
     await context.dockerService.writeFile(nodeId, containerId, input.path, input.content, user.id);
     return { success: true };
   }
   if (operation.endsWith('_secret') || operation === 'list_secrets') {
-    ensureToolScopeForResource(user, 'docker:containers:secrets', nodeId);
+    ensureToolScopeForResource(
+      user,
+      'docker:containers:secrets',
+      await authorizationResourceId('docker:containers:secrets')
+    );
     const { DockerSecretService } = await import('@/modules/docker/docker-secret.service.js');
     const secretService = container.resolve(DockerSecretService);
     if (targetType === 'deployment') {
@@ -84,7 +118,11 @@ export async function manageDockerContainerConfigTool(
     }
   }
   if (operation.includes('webhook')) {
-    ensureToolScopeForResource(user, 'docker:containers:webhooks', nodeId);
+    ensureToolScopeForResource(
+      user,
+      'docker:containers:webhooks',
+      await authorizationResourceId('docker:containers:webhooks')
+    );
     if (targetType === 'deployment') {
       const { DockerDeploymentService } = await import('@/modules/docker/docker-deployment.service.js');
       const deploymentService = container.resolve(DockerDeploymentService);
@@ -121,7 +159,11 @@ export async function manageDockerContainerConfigTool(
   }
   if (operation.includes('health_check')) {
     const readOnly = operation === 'get_health_check';
-    ensureToolScopeForResource(user, readOnly ? 'docker:containers:view' : 'docker:containers:edit', nodeId);
+    ensureToolScopeForResource(
+      user,
+      readOnly ? 'docker:containers:view' : 'docker:containers:edit',
+      await authorizationResourceId(readOnly ? 'docker:containers:view' : 'docker:containers:edit')
+    );
     const { DockerHealthCheckService } = await import('@/modules/docker/docker-health-check.service.js');
     const healthService = container.resolve(DockerHealthCheckService);
     const input =

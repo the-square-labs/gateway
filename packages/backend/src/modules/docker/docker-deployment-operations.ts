@@ -29,6 +29,7 @@ export interface DockerDeploymentOperationContext {
   clearTransition(deployment: Pick<DockerDeploymentDetail, 'id' | 'nodeId' | 'name'>): void;
   parseResult(result: { success: boolean; error?: string; detail?: string }): any;
   emit(action: string, deploymentId: string, nodeId: string, extra?: Record<string, unknown>): void;
+  removeAccessScopes?(nodeId: string, deploymentId: string): Promise<void>;
   deploy(
     nodeId: string,
     deploymentId: string,
@@ -320,6 +321,7 @@ export async function remove(
     ctx.parseResult(result);
     ctx.clearTransition(deployment);
     await ctx.db.delete(dockerDeployments).where(eq(dockerDeployments.id, deploymentId));
+    await ctx.removeAccessScopes?.(nodeId, deploymentId);
   } catch (err) {
     ctx.clearTransition(deployment);
     await ctx.db

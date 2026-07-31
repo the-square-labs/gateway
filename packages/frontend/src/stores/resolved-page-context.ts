@@ -15,6 +15,7 @@ export interface ResolvedPageResource {
   resourceType: ResolvedPageResourceType;
   resourceId: string;
   nodeId?: string;
+  scopeResourceId?: string;
   label?: string;
 }
 
