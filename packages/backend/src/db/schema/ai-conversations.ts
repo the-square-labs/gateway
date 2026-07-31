@@ -21,6 +21,8 @@ export const aiConversations = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     title: varchar('title', { length: 255 }).notNull(),
+    model: varchar('model', { length: 255 }),
+    reasoningEffort: varchar('reasoning_effort', { length: 64 }),
     lastContext: jsonb('last_context').$type<Record<string, unknown> | null>(),
     discoveredToolsets: jsonb('discovered_toolsets').$type<string[]>().notNull().default([]),
     checkpoint: jsonb('checkpoint').$type<Record<string, unknown> | null>(),

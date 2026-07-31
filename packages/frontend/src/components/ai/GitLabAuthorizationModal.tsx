@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { api } from "@/services/api";
 import { useAIStore } from "@/stores/ai";
 import type { GitLabUserCredentialStatus } from "@/types/integrations";
@@ -21,13 +22,15 @@ export function GitLabAuthorizationModal() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const open = pendingCredentialChallenge !== null;
+  const activeChallenge = useRetainedDialogValue(pendingCredentialChallenge, open);
 
   useEffect(() => {
     const challenge = pendingCredentialChallenge;
+    if (!challenge) return;
     setMetadata(null);
     setToken("");
     setError(null);
-    if (!challenge) return;
 
     let cancelled = false;
     void api
@@ -55,16 +58,15 @@ export function GitLabAuthorizationModal() {
     if (error && !loading) inputRef.current?.focus();
   }, [error, loading]);
 
-  if (!pendingCredentialChallenge) return null;
-
   const submit = async () => {
+    if (!activeChallenge) return;
     const nextToken = token.trim();
     if (!nextToken || loading) return;
     setLoading(true);
     setError(null);
     try {
       const status = await api.authorizeGitLabUserCredential(
-        pendingCredentialChallenge.connectorId,
+        activeChallenge.connectorId,
         nextToken
       );
       setMetadata(status);
@@ -85,7 +87,7 @@ export function GitLabAuthorizationModal() {
   };
 
   return (
-    <Dialog open onOpenChange={(open) => !open && reject()}>
+    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && reject()}>
       <DialogContent hideCloseButton>
         <DialogHeader>
           <DialogTitle>Authorize GitLab</DialogTitle>

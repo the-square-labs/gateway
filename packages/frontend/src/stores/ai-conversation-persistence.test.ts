@@ -3,6 +3,7 @@ import {
   getConversation,
   listConversations,
   rollbackConversationToMessage,
+  updateConversationProvider,
 } from "@/services/ai-conversations";
 import { api } from "@/services/api";
 import { getAIContextUsage, resetAIStateForAuthChange, useAIStore } from "@/stores/ai";
@@ -15,6 +16,7 @@ vi.mock("@/services/ai-conversations", () => ({
   getConversation: vi.fn(),
   deleteConversation: vi.fn(),
   rollbackConversationToMessage: vi.fn(),
+  updateConversationProvider: vi.fn(),
 }));
 
 class MockWebSocket {
@@ -139,6 +141,139 @@ describe("AI backend runtime store", () => {
     );
   });
 
+  it("restores the model and reasoning pinned to a saved conversation", async () => {
+    vi.mocked(getConversation).mockResolvedValue({
+      id: "conversation-1",
+      title: "Pinned chat",
+      messages: [],
+      model: "model-b",
+      reasoningEffort: "max",
+      lastContext: null,
+      createdAt: "2026-06-26T10:00:00.000Z",
+      updatedAt: "2026-06-26T10:00:00.000Z",
+      lastUserMessageAt: null,
+      folderId: null,
+      status: "active",
+      blockReason: null,
+      activeRunStatus: null,
+    });
+    useAIStore.setState({
+      providerStatus: {
+        enabled: true,
+        providerType: "gateway_inference",
+        defaultModel: "model-a",
+        allowUserModelSelection: true,
+        supportsImages: false,
+        models: [
+          {
+            id: "model-a",
+            displayName: "Model A",
+            supportsImages: false,
+            maxContextTokens: 1000,
+            maxOutputTokens: null,
+            reasoningEfforts: ["high"],
+            defaultReasoningEffort: "high",
+          },
+          {
+            id: "model-b",
+            displayName: "Model B",
+            supportsImages: false,
+            maxContextTokens: 1000,
+            maxOutputTokens: null,
+            reasoningEfforts: ["max"],
+            defaultReasoningEffort: "max",
+          },
+        ],
+      },
+      selectedModel: "model-a",
+      selectedReasoningEffort: "high",
+    });
+
+    await useAIStore.getState().loadConversation("conversation-1");
+
+    expect(useAIStore.getState()).toMatchObject({
+      selectedModel: "model-b",
+      selectedReasoningEffort: "max",
+    });
+  });
+
+  it("persists a model change and applies the returned timeline delimiter", async () => {
+    vi.mocked(updateConversationProvider).mockResolvedValue({
+      id: "conversation-1",
+      title: "Pinned chat",
+      messages: [
+        {
+          id: "model-change-1",
+          role: "assistant",
+          content: "",
+          localOnly: true,
+          modelChange: {
+            fromModel: "model-a",
+            toModel: "model-b",
+            fromDisplayName: "Model A",
+            toDisplayName: "Model B",
+          },
+        },
+      ],
+      model: "model-b",
+      reasoningEffort: "max",
+      lastContext: null,
+      createdAt: "2026-06-26T10:00:00.000Z",
+      updatedAt: "2026-06-26T10:00:01.000Z",
+      lastUserMessageAt: null,
+      folderId: null,
+      status: "active",
+      blockReason: null,
+      activeRunStatus: null,
+    });
+    useAIStore.setState({
+      activeConversationId: "conversation-1",
+      messages: [{ id: "user-1", role: "user", content: "Hello" }],
+      providerStatus: {
+        enabled: true,
+        providerType: "gateway_inference",
+        defaultModel: "model-a",
+        allowUserModelSelection: true,
+        supportsImages: false,
+        models: [
+          {
+            id: "model-a",
+            displayName: "Model A",
+            supportsImages: false,
+            maxContextTokens: 1000,
+            maxOutputTokens: null,
+            reasoningEfforts: ["high"],
+            defaultReasoningEffort: "high",
+          },
+          {
+            id: "model-b",
+            displayName: "Model B",
+            supportsImages: false,
+            maxContextTokens: 1000,
+            maxOutputTokens: null,
+            reasoningEfforts: ["max"],
+            defaultReasoningEffort: "max",
+          },
+        ],
+      },
+      selectedModel: "model-a",
+      selectedReasoningEffort: "high",
+    });
+
+    await useAIStore.getState().setSelectedModel("model-b");
+
+    expect(updateConversationProvider).toHaveBeenCalledWith("conversation-1", {
+      model: "model-b",
+      reasoningEffort: "max",
+    });
+    expect(useAIStore.getState().messages[0]?.modelChange).toEqual({
+      fromModel: "model-a",
+      toModel: "model-b",
+      fromDisplayName: "Model A",
+      toDisplayName: "Model B",
+    });
+  });
+
   it("sends the selected model only for Gateway Inference", async () => {
     const socket = await connectAI();
     const models = [
@@ -240,14 +375,18 @@ describe("AI backend runtime store", () => {
     expect(sentPayloads(socket)).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "conversation.send_message" })])
     );
-    const contextMessage = useAIStore.getState().messages.at(-1);
-    expect(contextMessage).toMatchObject({ role: "assistant", localOnly: true });
-    expect(contextMessage?.content).toContain("Estimated tokens: 207 / 1,000 (21%)");
-    expect(contextMessage?.content).toContain("Chat: ~7 tokens");
-    expect(contextMessage?.content).toContain("System prompt: ~120 tokens");
-    expect(contextMessage?.content).toContain("Tools: ~80 tokens (3 available)");
-    expect(contextMessage?.content).toContain("- Base instructions: ~120 tokens");
-    expect(contextMessage?.content).toContain("- Discovery: ~80 tokens");
+    expect(useAIStore.getState().messages).toHaveLength(2);
+    expect(useAIStore.getState().contextUsageDialog).toMatchObject({
+      estimatedTokens: 207,
+      limit: 1000,
+      percent: 21,
+      chatTokens: 7,
+      systemTokens: 120,
+      toolsTokens: 80,
+      toolCount: 3,
+      systemBreakdown: [{ label: "Base instructions", chars: 480, tokens: 120 }],
+      toolBreakdown: [{ label: "Discovery", chars: 320, tokens: 80 }],
+    });
   });
 
   it("reports context usage after the backend deterministic message trim", async () => {

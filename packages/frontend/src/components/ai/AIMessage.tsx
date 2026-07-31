@@ -1,4 +1,5 @@
 import {
+  Box,
   ChevronDown,
   ChevronRight,
   Download,
@@ -104,6 +105,21 @@ export function AIMessage({
   const showArtifacts = artifacts.length > 0 && !message.isStreaming;
 
   if (message.conversationStatus) return null;
+
+  if (message.modelChange) {
+    const from = message.modelChange.fromDisplayName?.trim() || message.modelChange.fromModel;
+    const to = message.modelChange.toDisplayName?.trim() || message.modelChange.toModel;
+    return (
+      <div className="flex w-full items-center gap-3 py-1 text-xs text-muted-foreground">
+        <div className="h-px flex-1 bg-border" />
+        <span className="flex shrink-0 items-center gap-1.5">
+          <Box className="h-3.5 w-3.5" />
+          Model changed from {from} to {to}
+        </span>
+        <div className="h-px flex-1 bg-border" />
+      </div>
+    );
+  }
 
   if (message.role === "user") {
     // Strip hidden system instructions (e.g. from command palette "Ask AI")

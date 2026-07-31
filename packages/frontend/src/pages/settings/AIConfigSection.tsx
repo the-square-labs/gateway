@@ -1,5 +1,6 @@
 import { Download, Eye, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { AIToolAccessModal } from "@/components/ai/AIToolAccessModal";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -19,6 +20,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAIStore } from "@/stores/ai";
@@ -118,7 +120,12 @@ function SandboxJobsPanel() {
   const [jobs, setJobs] = useState<AISandboxJob[]>([]);
   const [loading, setLoading] = useState(false);
   const [killingId, setKillingId] = useState<string | null>(null);
-  const [outputJob, setOutputJob] = useState<AISandboxJob | null>(null);
+  const {
+    open: outputOpen,
+    value: outputJob,
+    setValue: setOutputJob,
+    onOpenChange: onOutputOpenChange,
+  } = useDeferredDialogState<AISandboxJob>();
   const [outputText, setOutputText] = useState("");
   const [outputLoading, setOutputLoading] = useState(false);
 
@@ -277,7 +284,7 @@ function SandboxJobsPanel() {
           tableClassName="table-fixed"
         />
       </PanelShell>
-      <Dialog open={!!outputJob} onOpenChange={(nextOpen) => !nextOpen && setOutputJob(null)}>
+      <Dialog open={outputOpen} onOpenChange={onOutputOpenChange}>
         <DialogContent className="max-w-full overflow-x-hidden sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>Sandbox Output</DialogTitle>
@@ -840,7 +847,24 @@ export function AIConfigSection() {
         >
           <SettingsControlRow
             title="Provider type"
-            description="Response provider for the AI assistant."
+            description={
+              <>
+                Response provider for the AI assistant.
+                {!inferenceEnabled && (
+                  <>
+                    {" "}
+                    To use Gateway Inference and subscription providers,{" "}
+                    <Link
+                      to="/settings/gateway"
+                      className="underline underline-offset-2 hover:text-foreground"
+                    >
+                      enable and configure Inference in Gateway settings
+                    </Link>
+                    .
+                  </>
+                )}
+              </>
+            }
           >
             <Select
               value={aiConfig.providerType || "openai_compatible"}

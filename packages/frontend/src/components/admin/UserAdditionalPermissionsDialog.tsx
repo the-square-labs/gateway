@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import {
   buildFinalScopes,
   canonicalizeScopeSelection,
@@ -64,6 +65,7 @@ export function UserAdditionalPermissionsDialog({
   onOpenChange,
   onSaved,
 }: UserAdditionalPermissionsDialogProps) {
+  const displayedUser = useRetainedDialogValue(user, open);
   const currentUser = useAuthStore((state) => state.user);
   const { cas, fetchCAs } = useCAStore();
   const [baseScopes, setBaseScopes] = useState<string[]>([]);
@@ -77,7 +79,7 @@ export function UserAdditionalPermissionsDialog({
   const [loggingSchemas, setLoggingSchemas] = useState<LoggingSchema[]>([]);
 
   const actorScopes = currentUser?.scopes ?? [];
-  const groupScopes = user?.groupScopes ?? [];
+  const groupScopes = displayedUser?.groupScopes ?? [];
   const allowedResourceIdsByScope = useMemo(
     () => deriveAllowedResourceIdsByScope(actorScopes),
     [actorScopes]
@@ -200,8 +202,8 @@ export function UserAdditionalPermissionsDialog({
         <DialogHeader>
           <DialogTitle>Additional permissions</DialogTitle>
           <p className="text-sm text-muted-foreground">
-            {user?.name || user?.email} receives these permissions in addition to the{" "}
-            {user?.groupName} group.
+            {displayedUser?.name || displayedUser?.email} receives these permissions in addition to
+            the {displayedUser?.groupName} group.
           </p>
         </DialogHeader>
 
@@ -240,7 +242,7 @@ export function UserAdditionalPermissionsDialog({
               restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
               allowedResourceIds={allowedResourceIdsByScope}
               inheritedScopes={groupScopes}
-              inheritedFromName={user?.groupName}
+              inheritedFromName={displayedUser?.groupName}
               viewportClassName="max-h-[min(25rem,48dvh)] overflow-y-auto overscroll-contain"
             />
           </TabsContent>

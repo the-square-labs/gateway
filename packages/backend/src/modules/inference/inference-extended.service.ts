@@ -1,4 +1,4 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
@@ -112,7 +112,11 @@ export class InferenceExtendedService {
   ): Promise<Response> {
     const { user, tokenId } = requireAuth(c);
     const resolved = await this.models.resolveForUser(user, input.model);
-    const sources = await this.sources(resolved.model.id, input.operation);
+    const sources = await this.sources(
+      resolved.model.id,
+      input.operation,
+      resolved.sources.map((source) => source.id)
+    );
     if (sources.length === 0) {
       throw new InferenceProtocolError(503, 'operation_unavailable', `No API source supports ${input.operation}`);
     }
@@ -178,7 +182,12 @@ export class InferenceExtendedService {
       : new InferenceProtocolError(502, 'provider_unavailable', 'Provider failed');
   }
 
-  private async sources(modelId: string, operation: ExtendedOperation): Promise<SourceRow[]> {
+  private async sources(
+    modelId: string,
+    operation: ExtendedOperation,
+    allowedSourceIds: string[]
+  ): Promise<SourceRow[]> {
+    if (!allowedSourceIds.length) return [];
     const rows = await this.db
       .select({ source: inferenceModelSources, connection: inferenceProviderConnections })
       .from(inferenceModelSources)
@@ -186,14 +195,18 @@ export class InferenceExtendedService {
       .where(
         and(
           eq(inferenceModelSources.modelId, modelId),
+          inArray(inferenceModelSources.id, allowedSourceIds),
           eq(inferenceModelSources.sourceType, 'api'),
           eq(inferenceModelSources.enabled, true),
           eq(inferenceProviderConnections.enabled, true)
         )
       )
       .orderBy(asc(inferenceModelSources.priority), asc(inferenceProviderConnections.routingOrder));
-    return rows.filter((row) =>
-      (this.registry.require(row.connection.providerId).supportedOperations ?? ['inference']).includes(operation)
+    const allowedSources = new Set(allowedSourceIds);
+    return rows.filter(
+      (row) =>
+        allowedSources.has(row.source.id) &&
+        (this.registry.require(row.connection.providerId).supportedOperations ?? ['inference']).includes(operation)
     );
   }
 }

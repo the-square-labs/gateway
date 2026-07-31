@@ -1,9 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import {
+  countVisibleMessages,
   deriveConversationStatus,
   sanitizeConversationMessagesForStorage,
   sortConversationSummariesByLastUserMessage,
 } from './ai-conversation.service.js';
+
+describe('AIConversationService visible message count', () => {
+  it('does not count model-change timeline events as chat messages', () => {
+    expect(
+      countVisibleMessages([
+        { role: 'user', content: 'Hello' },
+        {
+          role: 'assistant',
+          content: '',
+          localOnly: true,
+          modelChange: { fromModel: 'model-a', toModel: 'model-b' },
+        },
+        { role: 'assistant', content: 'Hi' },
+      ])
+    ).toBe(2);
+  });
+});
 
 function toolCall(index: number) {
   return {

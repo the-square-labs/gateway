@@ -1,8 +1,9 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, Brain, Check, ChevronDown, Plus, Send, Square, X } from "lucide-react";
+import { Check, ChevronDown, Plus, Send, Square, X } from "lucide-react";
 import type { ChangeEvent, KeyboardEvent, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { confirm } from "@/components/common/ConfirmDialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,7 +18,7 @@ import {
   type AIApprovalMode,
 } from "@/lib/ai-approval-mode";
 import { cn } from "@/lib/utils";
-import { type AIContextUsage, getAIContextUsage } from "@/stores/ai";
+import { type AIContextUsage, getAIContextUsage, useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
 import type {
   AIComposerAttachment,
@@ -25,6 +26,8 @@ import type {
   AIMessage as AIMessageType,
   PageContext,
 } from "@/types/ai";
+import { AIContextUsageDialog } from "./AIContextUsageDialog";
+import { AIProviderControls } from "./AIProviderControls";
 import { InferenceQuotaStatus, useInferenceQuota } from "./InferenceQuotaStatus";
 import { getComposerAttachmentId, getComposerAttachmentPreviewUrl } from "./useAIComposerDraft";
 
@@ -55,10 +58,10 @@ interface AIComposerProps {
   setApprovalMode: (mode: AIApprovalMode) => void | Promise<void>;
   modelOptions?: AIInferenceModelOption[];
   selectedModel?: string | null;
-  onModelChange?: (model: string) => void;
+  onModelChange?: (model: string) => void | Promise<void>;
   reasoningOptions?: string[];
   selectedReasoningEffort?: string | null;
-  onReasoningEffortChange?: (effort: string) => void;
+  onReasoningEffortChange?: (effort: string) => void | Promise<void>;
   gatewayInferenceMode?: boolean;
   attachments?: AIComposerAttachment[];
   canAttachImages?: boolean;
@@ -69,6 +72,7 @@ interface AIComposerProps {
   maxRows?: number;
   className?: string;
   surfaceClassName?: string;
+  slashPaletteClassName?: string;
   showDisclaimer?: boolean;
 }
 
@@ -182,13 +186,17 @@ export function AIComposer({
   onPreviewAttachment,
   className,
   surfaceClassName,
+  slashPaletteClassName,
   showDisclaimer = false,
 }: AIComposerProps) {
   const modeMeta = AI_APPROVAL_MODE_META[approvalMode];
   const ModeIcon = modeMeta.icon;
   const [usage, setUsage] = useState<AIContextUsage | null>(null);
   const [textareaFocused, setTextareaFocused] = useState(false);
+  const [updatingProvider, setUpdatingProvider] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const contextUsageDialog = useAIStore((state) => state.contextUsageDialog);
+  const closeContextUsageDialog = useAIStore((state) => state.closeContextUsageDialog);
   const canViewInferenceUsage = useAuthStore((state) =>
     state.hasScope("inference:usage:view:self")
   );
@@ -215,6 +223,41 @@ export function AIComposer({
   });
   const disabled = !isConnected || !!retryAfter;
 
+  const changeModel = async (model: string) => {
+    if (!onModelChange || model === selectedModel || updatingProvider) return;
+    if (conversationId && messages.length > 0) {
+      const accepted = await confirm({
+        title: "Change model?",
+        description:
+          "Changing the model during a conversation may increase costs and reduce performance.",
+        confirmLabel: "Change model",
+        cancelLabel: "Cancel",
+        cancelVariant: "ghost",
+      });
+      if (!accepted) return;
+    }
+    setUpdatingProvider(true);
+    try {
+      await onModelChange(model);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to change model");
+    } finally {
+      setUpdatingProvider(false);
+    }
+  };
+
+  const changeReasoningEffort = async (effort: string) => {
+    if (!onReasoningEffortChange || effort === selectedReasoningEffort || updatingProvider) return;
+    setUpdatingProvider(true);
+    try {
+      await onReasoningEffortChange(effort);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to change reasoning effort");
+    } finally {
+      setUpdatingProvider(false);
+    }
+  };
+
   const attachFiles = (files: FileList | File[] | null) => {
     if (!canAttachImages || !files || !onAttachFiles) return;
     const images = Array.from(files).filter((file) => file.type.startsWith("image/"));
@@ -238,14 +281,18 @@ export function AIComposer({
         attachFiles(event.dataTransfer.files);
       }}
     >
+      <AIContextUsageDialog usage={contextUsageDialog} onClose={closeContextUsageDialog} />
+
       <AnimatePresence>
         {!inferenceQuota.exhausted && slashResults.length > 0 && (
           <motion.div
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 6 }}
-            className="absolute left-0 right-0 z-10 border border-border bg-background shadow-md"
-            style={{ bottom: "calc(100% + 8px)" }}
+            className={cn(
+              "absolute bottom-full left-0 right-0 z-10 -mb-px border border-border bg-background shadow-md",
+              slashPaletteClassName
+            )}
           >
             {slashResults.map((command, index) => (
               <button
@@ -326,8 +373,8 @@ export function AIComposer({
             rows={1}
             className="block min-h-[42px] resize-none border-0 bg-transparent px-3 pb-1.5 pt-3 pr-3 leading-5 focus-visible:ring-0"
           />
-          <div className="-mt-1 flex min-h-10 items-center justify-between gap-2 px-2 pb-2">
-            <div className="flex min-w-0 items-center gap-1">
+          <div className="-mt-1 flex min-h-10 items-center gap-1 px-2 pb-2">
+            <div className="min-w-0 shrink">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
@@ -360,71 +407,19 @@ export function AIComposer({
                   })}
                 </DropdownMenuContent>
               </DropdownMenu>
-              {modelOptions.length > 0 && onModelChange && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      className="flex h-8 max-w-[13rem] items-center gap-2 px-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground"
-                      title={modelOptions.find((model) => model.id === selectedModel)?.displayName}
-                      aria-label="AI model"
-                      disabled={isStreaming}
-                    >
-                      <Bot className="h-4 w-4 shrink-0" />
-                      <span className="truncate">
-                        {modelOptions.find((model) => model.id === selectedModel)?.displayName ??
-                          selectedModel}
-                      </span>
-                      <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" side="top" className="w-64">
-                    {modelOptions.map((model) => (
-                      <DropdownMenuItem key={model.id} onClick={() => onModelChange(model.id)}>
-                        <Bot className="h-4 w-4" />
-                        <span className="truncate">{model.displayName}</span>
-                        {selectedModel === model.id && <Check className="ml-auto h-4 w-4" />}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )}
-              {reasoningOptions.length > 0 && onReasoningEffortChange && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      className="flex h-8 max-w-[10rem] items-center gap-2 px-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground"
-                      title={`Reasoning: ${selectedReasoningEffort ?? "default"}`}
-                      aria-label="Reasoning effort"
-                      disabled={isStreaming}
-                    >
-                      <Brain className="h-4 w-4 shrink-0" />
-                      <span className="truncate capitalize">
-                        {selectedReasoningEffort ?? "Default"}
-                      </span>
-                      <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" side="top" className="w-48">
-                    {reasoningOptions.map((effort) => (
-                      <DropdownMenuItem
-                        key={effort}
-                        onClick={() => onReasoningEffortChange(effort)}
-                      >
-                        <Brain className="h-4 w-4" />
-                        <span className="capitalize">{effort}</span>
-                        {selectedReasoningEffort === effort && (
-                          <Check className="ml-auto h-4 w-4" />
-                        )}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )}
             </div>
 
-            <div className="flex items-center">
+            <AIProviderControls
+              modelOptions={modelOptions}
+              selectedModel={selectedModel}
+              onModelChange={onModelChange ? changeModel : undefined}
+              reasoningOptions={reasoningOptions}
+              selectedReasoningEffort={selectedReasoningEffort}
+              onReasoningEffortChange={onReasoningEffortChange ? changeReasoningEffort : undefined}
+              disabled={isStreaming || updatingProvider}
+            />
+
+            <div className="flex shrink-0 items-center">
               {canAttachImages && (
                 <>
                   <input

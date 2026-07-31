@@ -17,6 +17,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -37,7 +38,12 @@ export function NginxTemplates({
     : undefined;
   const [templates, setTemplates] = useState<NginxTemplate[]>(cachedTemplates ?? []);
   const [isLoading, setIsLoading] = useState(canViewTemplates && !cachedTemplates);
-  const [previewTemplate, setPreviewTemplate] = useState<NginxTemplate | null>(null);
+  const {
+    open: previewOpen,
+    value: previewTemplate,
+    setValue: setPreviewTemplate,
+    onOpenChange: onPreviewOpenChange,
+  } = useDeferredDialogState<NginxTemplate>();
   const [previewContent, setPreviewContent] = useState("");
 
   const load = useCallback(async () => {
@@ -228,7 +234,7 @@ export function NginxTemplates({
           />
         )}
       </div>
-      <Dialog open={!!previewTemplate} onOpenChange={(open) => !open && setPreviewTemplate(null)}>
+      <Dialog open={previewOpen} onOpenChange={onPreviewOpenChange}>
         <DialogContent className="w-[92vw] sm:max-w-[64rem] h-[85vh] flex flex-col">
           <DialogHeader>
             <DialogTitle>{previewTemplate?.name ?? "Template Preview"}</DialogTitle>

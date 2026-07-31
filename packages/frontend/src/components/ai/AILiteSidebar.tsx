@@ -57,6 +57,7 @@ import { ResizeHandle } from "@/components/ui/resize-handle";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { cn, getInitials } from "@/lib/utils";
 import type { AIConversationFolder, AIConversationSummary } from "@/services/ai-conversations";
 import { api } from "@/services/api";
@@ -144,7 +145,12 @@ export function AILiteSidebar({
   } = useAIStore();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(readExpandedProjectIds);
-  const [folderDialog, setFolderDialog] = useState<FolderDialogState | null>(null);
+  const {
+    open: folderDialogOpen,
+    value: folderDialog,
+    setValue: setFolderDialog,
+    onOpenChange: onFolderDialogOpenChange,
+  } = useDeferredDialogState<FolderDialogState>();
   const [dragOverlayConversationId, setDragOverlayConversationId] = useState<string | null>(null);
   const canAccessAdministration = hasAnyScope("admin:audit", "admin:users", "admin:groups");
   const isExpanded = sidebarOpen;
@@ -599,10 +605,9 @@ export function AILiteSidebar({
       </AnimatePresence>
       {folderDialog && (
         <ConversationFolderDialog
+          open={folderDialogOpen}
           state={folderDialog}
-          onOpenChange={(open) => {
-            if (!open) setFolderDialog(null);
-          }}
+          onOpenChange={onFolderDialogOpenChange}
           onCreate={(name, description) => handleCreateFolder(name, description)}
           onUpdate={(folderId, name, description) =>
             handleUpdateFolder(folderId, name, description)
@@ -618,11 +623,13 @@ type FolderDialogState =
   | { mode: "edit"; folderId: string; name: string; description: string };
 
 function ConversationFolderDialog({
+  open,
   state,
   onOpenChange,
   onCreate,
   onUpdate,
 }: {
+  open: boolean;
   state: FolderDialogState;
   onOpenChange: (open: boolean) => void;
   onCreate: (name: string, description: string) => Promise<void>;
@@ -654,7 +661,7 @@ function ConversationFolderDialog({
   };
 
   return (
-    <Dialog open onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{state.mode === "create" ? "New project" : "Edit project"}</DialogTitle>

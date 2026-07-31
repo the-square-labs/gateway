@@ -117,6 +117,11 @@ const UpdateAIConversationSchema = z.object({
   title: z.string().trim().min(1).max(255),
 });
 
+const UpdateAIConversationProviderSchema = z.object({
+  model: z.string().trim().min(1).max(255),
+  reasoningEffort: z.string().trim().min(1).max(64).nullable(),
+});
+
 aiRoutes.use('*', authMiddleware);
 aiRoutes.use('*', sessionOnly);
 
@@ -214,6 +219,51 @@ aiRoutes.patch('/conversations/:id', requireScope('feat:ai:use'), async (c) => {
   const user = c.get('user')!;
   const data = await service.renameConversation(user.id, c.req.param('id'), parsed.data.title);
   if (!data) return c.json({ code: 'NOT_FOUND', message: 'Conversation not found' }, 404);
+  return c.json({ data });
+});
+
+aiRoutes.patch('/conversations/:id/provider', requireScope('feat:ai:use'), async (c) => {
+  const parsed = UpdateAIConversationProviderSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) return c.json({ code: 'VALIDATION_ERROR', message: parsed.error.message }, 400);
+
+  const user = c.get('user')!;
+  const conversationService = container.resolve(AIConversationService);
+  const conversation = await conversationService.getConversation(user.id, c.req.param('id'));
+  if (!conversation) return c.json({ code: 'NOT_FOUND', message: 'Conversation not found' }, 404);
+
+  const status = await container.resolve(AIProviderRuntimeService).statusForUser(user);
+  if (status.providerType !== 'gateway_inference') {
+    return c.json(
+      { code: 'AI_PROVIDER_UNSUPPORTED', message: 'Per-chat model selection requires Gateway Inference' },
+      409
+    );
+  }
+  const model = status.models.find((candidate) => candidate.id === parsed.data.model);
+  if (!model) return c.json({ code: 'AI_MODEL_UNAVAILABLE', message: 'The selected model is unavailable' }, 404);
+  const modelAllowedWithoutSelection = model.id === status.defaultModel || conversation.model === model.id;
+  if (!status.allowUserModelSelection && !modelAllowedWithoutSelection) {
+    return c.json({ code: 'AI_MODEL_SELECTION_DISABLED', message: 'AI model selection is disabled' }, 403);
+  }
+  if (parsed.data.reasoningEffort && !model.reasoningEfforts.includes(parsed.data.reasoningEffort)) {
+    return c.json(
+      {
+        code: 'AI_REASONING_EFFORT_UNAVAILABLE',
+        message: 'The selected reasoning effort is unavailable for this model',
+      },
+      400
+    );
+  }
+
+  const previousModel = status.models.find((candidate) => candidate.id === conversation.model);
+  await container.resolve(AIRunService).updateConversationProvider({
+    userId: user.id,
+    conversationId: conversation.id,
+    model: model.id,
+    reasoningEffort: parsed.data.reasoningEffort,
+    modelDisplayName: model.displayName,
+    previousModelDisplayName: previousModel?.displayName,
+  });
+  const data = await conversationService.getConversation(user.id, conversation.id);
   return c.json({ data });
 });
 

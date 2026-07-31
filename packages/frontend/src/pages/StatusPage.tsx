@@ -43,6 +43,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -208,7 +209,12 @@ export function StatusPage() {
   const [editingService, setEditingService] = useState<StatusPageServiceItem | null>(null);
   const [incidentOpen, setIncidentOpen] = useState(false);
   const [editingIncident, setEditingIncident] = useState<StatusPageIncident | null>(null);
-  const [updateIncident, setUpdateIncident] = useState<StatusPageIncident | null>(null);
+  const {
+    open: updateIncidentOpen,
+    value: updateIncident,
+    setValue: setUpdateIncident,
+    onOpenChange: onUpdateIncidentOpenChange,
+  } = useDeferredDialogState<StatusPageIncident>();
 
   const loadSourceOptions = useCallback(async () => {
     setSourceOptionsLoading(true);
@@ -586,10 +592,9 @@ export function StatusPage() {
           onSaved={loadStatusPage}
         />
         <IncidentUpdateDialog
+          open={updateIncidentOpen}
           incident={updateIncident}
-          onOpenChange={(open) => {
-            if (!open) setUpdateIncident(null);
-          }}
+          onOpenChange={onUpdateIncidentOpenChange}
           onSaved={loadStatusPage}
         />
       </div>
@@ -892,10 +897,12 @@ function IncidentsTab({
 }
 
 function IncidentUpdateDialog({
+  open,
   incident,
   onOpenChange,
   onSaved,
 }: {
+  open: boolean;
   incident: StatusPageIncident | null;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
@@ -930,7 +937,7 @@ function IncidentUpdateDialog({
   };
 
   return (
-    <Dialog open={Boolean(incident)} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Post Incident Update</DialogTitle>

@@ -43,6 +43,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
 import { cn, daysUntil, formatDate, hoursUntil } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth";
@@ -189,20 +190,31 @@ export function SSLCertificates() {
     deleteCert,
   } = useSSLStore();
   const [searchInput, setSearchInput] = useState(filters.search);
-  const [pendingRenewal, setPendingRenewal] = useState<{
+  type PendingRenewal = {
     certId: string;
     certName: string;
     operation: "issue" | "renewal";
     challenges: DNSChallenge[];
-  } | null>(null);
+  };
+  const {
+    open: pendingRenewalOpen,
+    value: pendingRenewal,
+    setValue: setPendingRenewal,
+    onOpenChange: onPendingRenewalOpenChange,
+  } = useDeferredDialogState<PendingRenewal>();
   const [previewCert, setPreviewCert] = useState<SSLCertificate | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [isVerifyingRenewal, setIsVerifyingRenewal] = useState(false);
-  const [renewingCert, setRenewingCert] = useState<{
+  type RenewingCertificate = {
     id: string;
     name: string;
     challengeType: SSLCertificate["acmeChallengeType"];
-  } | null>(null);
+  };
+  const {
+    open: renewingCertOpen,
+    value: renewingCert,
+    setValue: setRenewingCert,
+  } = useDeferredDialogState<RenewingCertificate>();
   const previewCleanupTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -724,7 +736,7 @@ export function SSLCertificates() {
           )}
         </DialogContent>
       </Dialog>
-      <Dialog open={!!renewingCert}>
+      <Dialog open={renewingCertOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Renewing Certificate</DialogTitle>
@@ -747,7 +759,7 @@ export function SSLCertificates() {
           </div>
         </DialogContent>
       </Dialog>
-      <Dialog open={!!pendingRenewal} onOpenChange={(open) => !open && setPendingRenewal(null)}>
+      <Dialog open={pendingRenewalOpen} onOpenChange={onPendingRenewalOpenChange}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>

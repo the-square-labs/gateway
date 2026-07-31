@@ -117,6 +117,25 @@ describe('inference model publication validation', () => {
       ])
     ).toBe(false);
   });
+
+  it('hides API-only models when the effective API budget is zero', () => {
+    const modelIds = ['subscription-only', 'api-only', 'mixed'];
+    expect(__testOnly.filterModelIdsByApiBudget(modelIds, ['subscription-only', 'mixed'], 0)).toEqual([
+      'subscription-only',
+      'mixed',
+    ]);
+    expect(__testOnly.filterModelIdsByApiBudget(modelIds, [], 0)).toEqual([]);
+    expect(__testOnly.filterModelIdsByApiBudget(modelIds, [], 1)).toEqual(modelIds);
+  });
+
+  it('removes API sources from mixed models when API usage is disabled', () => {
+    const sources = [
+      { id: 'subscription', sourceType: 'subscription' },
+      { id: 'api', sourceType: 'api' },
+    ];
+    expect(__testOnly.filterSourcesByApiUsage(sources, false)).toEqual([sources[0]]);
+    expect(__testOnly.filterSourcesByApiUsage(sources, true)).toEqual(sources);
+  });
 });
 
 function sourceRow(input: {

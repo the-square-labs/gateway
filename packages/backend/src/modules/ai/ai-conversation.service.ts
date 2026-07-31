@@ -52,6 +52,8 @@ export interface AIConversationSummary {
 
 export interface AIConversationDetail extends AIConversationSummary {
   messages: unknown[];
+  model: string | null;
+  reasoningEffort: string | null;
   lastContext: Record<string, unknown> | null;
   discoveredToolsets: string[];
   checkpoint: Record<string, unknown> | null;
@@ -150,6 +152,8 @@ export class AIConversationService {
       ...deriveConversationStatus(messages),
       activeRunStatus: activeRuns[0]?.status ?? null,
       messages,
+      model: row.model,
+      reasoningEffort: row.reasoningEffort,
       lastContext: row.lastContext,
       discoveredToolsets: row.discoveredToolsets,
       checkpoint: toClientCheckpoint(row.checkpoint),
@@ -619,7 +623,10 @@ export function deriveConversationStatus(messages: unknown[]): {
 }
 
 export function countVisibleMessages(messages: unknown[]): number {
-  return messages.filter((message) => !toRecord(message)?.conversationStatus).length;
+  return messages.filter((message) => {
+    const record = toRecord(message);
+    return !record?.conversationStatus && !record?.modelChange;
+  }).length;
 }
 
 function collectConversationArtifactIds(messages: unknown[]): string[] {

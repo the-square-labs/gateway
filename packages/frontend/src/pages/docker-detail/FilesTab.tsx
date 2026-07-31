@@ -43,6 +43,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
 import { isImageFileName } from "@/lib/file-types";
 import { api } from "@/services/api";
@@ -341,7 +342,12 @@ export function FilesTab({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [isContextMenuVisible, setIsContextMenuVisible] = useState(false);
-  const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null);
+  const {
+    open: createDialogOpen,
+    value: createDialog,
+    setValue: setCreateDialog,
+    onOpenChange: onCreateDialogOpenChange,
+  } = useDeferredDialogState<CreateDialogState>();
   const [newEntryName, setNewEntryName] = useState("");
   const [isCreatingEntry, setIsCreatingEntry] = useState(false);
   const [pendingMovePaths, setPendingMovePaths] = useState<Set<string>>(() => new Set());
@@ -622,7 +628,7 @@ export function FilesTab({
       setCreateDialog({ type, directory });
       setNewEntryName("");
     },
-    [closeContextMenu]
+    [closeContextMenu, setCreateDialog]
   );
 
   const handleCreateEntry = useCallback(async () => {
@@ -654,7 +660,7 @@ export function FilesTab({
     } finally {
       setIsCreatingEntry(false);
     }
-  }, [createDialog, fileOperations, newEntryName, reloadDirectory]);
+  }, [createDialog, fileOperations, newEntryName, reloadDirectory, setCreateDialog]);
 
   const handleUploadClick = useCallback(
     (directory: string) => {
@@ -1030,7 +1036,7 @@ export function FilesTab({
           onDelete={handleDeletePath}
         />
       )}
-      <Dialog open={!!createDialog} onOpenChange={(open) => !open && setCreateDialog(null)}>
+      <Dialog open={createDialogOpen} onOpenChange={onCreateDialogOpenChange}>
         <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-md">
           <DialogHeader>
             <DialogTitle>

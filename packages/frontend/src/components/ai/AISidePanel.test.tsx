@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useConfirmDialog } from "@/components/common/ConfirmDialog";
@@ -51,14 +51,20 @@ describe("AISidePanel autoscroll", () => {
         isConnected: false,
         isStreaming: false,
         retryAfter: null,
+        recentConversations: [],
+        isLoadingRecentConversations: false,
+        activeConversationId: null,
+        activeRunId: null,
         providerStatus: null,
         selectedModel: null,
         selectedReasoningEffort: null,
+        contextUsageDialog: null,
       });
       useUIStore.setState({ aiPanelOpen: false, aiLiteMode: false, sidebarOpen: true });
       useAuthStore.setState({ user: null, isAuthenticated: false, isLoading: false });
       useConfirmDialog.getState().close();
     });
+    localStorage.removeItem("gateway-ai-panel-width");
   });
 
   it("keeps the message viewport pinned when a tool call appears at the bottom", async () => {
@@ -135,6 +141,217 @@ describe("AISidePanel autoscroll", () => {
     await waitFor(() => expect(log.scrollTop).toBe(300));
   });
 
+  it("uses a 360px minimum width for the normal side panel", async () => {
+    localStorage.setItem("gateway-ai-panel-width", "320");
+    act(() => {
+      useAIStore.setState({
+        messages: [],
+        isConnected: true,
+        isStreaming: false,
+        retryAfter: null,
+        connect: vi.fn().mockResolvedValue(true),
+        refreshProviderStatus: vi.fn().mockResolvedValue(undefined),
+        fetchRecentConversations: vi.fn().mockResolvedValue(undefined),
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    renderAISidePanel();
+
+    const panelContent = screen.getByText("New chat").closest<HTMLDivElement>("div[style]");
+    expect(panelContent).toHaveStyle({ width: "360px" });
+  });
+
+  it("loads and shows only the five most recent chats in an empty normal panel", async () => {
+    const conversations = Array.from({ length: 6 }, (_, index) => ({
+      id: `conversation-${index + 1}`,
+      title: `Recent chat ${index + 1}`,
+      createdAt: new Date(Date.now() - index * 60_000).toISOString(),
+      updatedAt: new Date(Date.now() - index * 60_000).toISOString(),
+      lastUserMessageAt: new Date(Date.now() - index * 60_000).toISOString(),
+      folderId: null,
+      messageCount: index + 1,
+      status: "active" as const,
+      blockReason: null,
+      activeRunStatus: null,
+    }));
+    const fetchRecentConversations = vi.fn(async () => {
+      useAIStore.setState({
+        recentConversations: conversations,
+        isLoadingRecentConversations: false,
+      });
+    });
+    act(() => {
+      useAIStore.setState({
+        messages: [],
+        recentConversations: [],
+        isLoadingRecentConversations: false,
+        isConnected: true,
+        isStreaming: false,
+        retryAfter: null,
+        connect: vi.fn().mockResolvedValue(true),
+        refreshProviderStatus: vi.fn().mockResolvedValue(undefined),
+        fetchRecentConversations,
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    renderAISidePanel();
+
+    await waitFor(() => expect(fetchRecentConversations).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("Recent chat 1")).toBeInTheDocument();
+    expect(screen.getByText("Recent chat 5")).toBeInTheDocument();
+    expect(screen.queryByText("Recent chat 6")).not.toBeInTheDocument();
+  });
+
+  it("groups chat actions in a menu and starts a new chat from the plus button", async () => {
+    const user = userEvent.setup();
+    const clearMessages = vi.fn();
+    const togglePinnedAIConversation = vi.fn();
+    act(() => {
+      useAIStore.setState({
+        messages: [{ id: "user-1", role: "user", content: "Hello" }],
+        savedName: "Existing chat",
+        activeConversationId: "conversation-1",
+        isConnected: true,
+        isStreaming: false,
+        retryAfter: null,
+        connect: vi.fn().mockResolvedValue(true),
+        refreshProviderStatus: vi.fn().mockResolvedValue(undefined),
+        clearMessages,
+      });
+      useUIStore.setState({
+        aiPanelOpen: true,
+        aiLiteMode: false,
+        pinnedAIConversationIds: [],
+        togglePinnedAIConversation,
+      });
+    });
+
+    renderAISidePanel();
+
+    const header = screen.getByText("Existing chat").parentElement;
+    expect(header).not.toBeNull();
+    expect(
+      within(header as HTMLElement)
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label"))
+    ).toEqual(["Full screen", "New chat", "Chat actions", "Close AI Assistant"]);
+
+    expect(screen.queryByRole("button", { name: "Pin chat" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Rename chat" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete chat" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Chat actions" }));
+    expect(screen.getByRole("menuitem", { name: "Pin chat" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Rename chat" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Delete chat" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("menuitem", { name: "Pin chat" }));
+    expect(togglePinnedAIConversation).toHaveBeenCalledWith("conversation-1");
+
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    expect(clearMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps chat actions available for a new draft and disables only persisted actions", async () => {
+    const user = userEvent.setup();
+    act(() => {
+      useAIStore.setState({
+        messages: [{ id: "user-1", role: "user", content: "Unsaved draft" }],
+        savedName: null,
+        activeConversationId: null,
+        isConnected: true,
+        isStreaming: false,
+        retryAfter: null,
+        connect: vi.fn().mockResolvedValue(true),
+        refreshProviderStatus: vi.fn().mockResolvedValue(undefined),
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    renderAISidePanel();
+
+    const actions = screen.getByRole("button", { name: "Chat actions" });
+    const newChat = screen.getByRole("button", { name: "New chat" });
+    expect(actions).toBeEnabled();
+    expect(newChat).toBeEnabled();
+    await user.click(actions);
+
+    expect(screen.getByRole("menuitem", { name: "Pin chat" })).toHaveAttribute("data-disabled");
+    expect(screen.getByRole("menuitem", { name: "Rename chat" })).toHaveAttribute("data-disabled");
+    expect(screen.getByRole("menuitem", { name: "Delete chat" })).toHaveAttribute("data-disabled");
+  });
+
+  it("attaches the slash command palette directly to the composer", async () => {
+    const user = userEvent.setup();
+    act(() => {
+      useAIStore.setState({
+        messages: [{ id: "user-1", role: "user", content: "Hello" }],
+        activeConversationId: "conversation-1",
+        isConnected: true,
+        isStreaming: false,
+        retryAfter: null,
+        connect: vi.fn().mockResolvedValue(true),
+        refreshProviderStatus: vi.fn().mockResolvedValue(undefined),
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    renderAISidePanel();
+
+    await user.type(screen.getByPlaceholderText("Ask anything... (/ commands)"), "/");
+    const newCommand = await screen.findByRole("button", {
+      name: "/new Start new conversation",
+    });
+
+    expect(newCommand.parentElement).toHaveClass("bottom-full", "-mb-px");
+    expect(newCommand.parentElement).toHaveClass("border-x-0");
+    expect(newCommand.parentElement).not.toHaveStyle({ bottom: "calc(100% + 8px)" });
+  });
+
+  it("renders context usage in a modal instead of the message list", async () => {
+    const user = userEvent.setup();
+    act(() => {
+      useAIStore.setState({
+        messages: [{ id: "user-1", role: "user", content: "Hello" }],
+        activeConversationId: "conversation-1",
+        isConnected: true,
+        isStreaming: false,
+        retryAfter: null,
+        contextUsageDialog: {
+          messageCount: 1,
+          estimatedTokens: 207,
+          limit: 1000,
+          percent: 21,
+          chatTokens: 7,
+          systemTokens: 120,
+          toolsTokens: 80,
+          overheadTokens: 200,
+          toolCount: 3,
+          systemBreakdown: [{ label: "Base instructions", chars: 480, tokens: 120 }],
+          toolBreakdown: [{ label: "Discovery", chars: 320, tokens: 80 }],
+          source: "server",
+          reasoningEffort: "low",
+        },
+        connect: vi.fn().mockResolvedValue(true),
+        refreshProviderStatus: vi.fn().mockResolvedValue(undefined),
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    renderAISidePanel();
+
+    expect(screen.getByRole("heading", { name: "Context usage" })).toBeInTheDocument();
+    expect(screen.getByText("207 / 1,000 (21%)")).toBeInTheDocument();
+    expect(screen.getByText("~7 tokens · 1 message")).toBeInTheDocument();
+    expect(screen.getByText("Base instructions")).toBeInTheDocument();
+    expect(screen.getByText("Discovery")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(useAIStore.getState().contextUsageDialog).toBeNull();
+  });
+
   it("prompts before switching the side panel into persisted lite mode", async () => {
     act(() => {
       useAIStore.setState({
@@ -162,6 +379,71 @@ describe("AISidePanel autoscroll", () => {
       expect(useUIStore.getState().aiLiteMode).toBe(true);
       expect(useUIStore.getState().aiPanelOpen).toBe(false);
     });
+  });
+
+  it("warns before changing the model of an existing conversation", async () => {
+    const user = userEvent.setup();
+    const setSelectedModel = vi.fn().mockResolvedValue(undefined);
+    const providerStatus = {
+      enabled: true,
+      providerType: "gateway_inference" as const,
+      defaultModel: "model-a",
+      allowUserModelSelection: true,
+      supportsImages: false,
+      models: [
+        {
+          id: "model-a",
+          displayName: "Model A",
+          supportsImages: false,
+          maxContextTokens: 1000,
+          maxOutputTokens: null,
+          reasoningEfforts: ["high"],
+          defaultReasoningEffort: "high",
+        },
+        {
+          id: "model-b",
+          displayName: "Model B",
+          supportsImages: false,
+          maxContextTokens: 1000,
+          maxOutputTokens: null,
+          reasoningEfforts: ["max"],
+          defaultReasoningEffort: "max",
+        },
+      ],
+    };
+    vi.spyOn(api, "getAIStatus").mockResolvedValue(providerStatus);
+    act(() => {
+      useAIStore.setState({
+        messages: [{ id: "user-1", role: "user", content: "Hello" }],
+        isConnected: true,
+        isStreaming: false,
+        retryAfter: null,
+        activeConversationId: "conversation-1",
+        connect: vi.fn().mockResolvedValue(true),
+        providerStatus,
+        selectedModel: "model-a",
+        selectedReasoningEffort: "high",
+        setSelectedModel,
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    renderAISidePanel();
+    await user.click(screen.getByRole("button", { name: "AI model" }));
+    await user.click(await screen.findByText("Model B"));
+
+    expect(useConfirmDialog.getState()).toMatchObject({
+      open: true,
+      title: "Change model?",
+      description:
+        "Changing the model during a conversation may increase costs and reduce performance.",
+    });
+    expect(setSelectedModel).not.toHaveBeenCalled();
+
+    act(() => {
+      useConfirmDialog.getState().onConfirm?.();
+    });
+    await waitFor(() => expect(setSelectedModel).toHaveBeenCalledWith("model-b"));
   });
 
   it("allows sending an empty new chat while another chat is running in the background", async () => {

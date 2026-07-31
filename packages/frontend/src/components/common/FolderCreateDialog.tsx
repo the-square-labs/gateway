@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 
 interface FolderCreateDialogProps {
   open: boolean;
@@ -29,6 +30,8 @@ export function FolderCreateDialog({
 }: FolderCreateDialogProps) {
   const [name, setName] = useState(initialName);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const displayedTitle = useRetainedDialogValue(title, open);
+  const displayedDescription = useRetainedDialogValue(description, open);
 
   useEffect(() => {
     if (open) {
@@ -53,8 +56,8 @@ export function FolderCreateDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
+          <DialogTitle>{displayedTitle}</DialogTitle>
+          <DialogDescription>{displayedDescription}</DialogDescription>
         </DialogHeader>
         <Input
           value={name}

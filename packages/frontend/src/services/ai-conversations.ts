@@ -5,6 +5,8 @@ export interface SavedAIConversation {
   id: string;
   title: string;
   messages: AIMessage[];
+  model?: string | null;
+  reasoningEffort?: string | null;
   lastContext: PageContext | null;
   createdAt: string;
   updatedAt: string;
@@ -43,6 +45,8 @@ export async function getConversation(id: string): Promise<SavedAIConversation> 
     id: conversation.id,
     title: conversation.title,
     messages: conversation.messages,
+    model: conversation.model,
+    reasoningEffort: conversation.reasoningEffort,
     lastContext: conversation.lastContext,
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
@@ -80,6 +84,30 @@ export async function renameConversation(id: string, title: string): Promise<Sav
     id: conversation.id,
     title: conversation.title,
     messages: conversation.messages,
+    model: conversation.model,
+    reasoningEffort: conversation.reasoningEffort,
+    lastContext: conversation.lastContext,
+    createdAt: conversation.createdAt,
+    updatedAt: conversation.updatedAt,
+    lastUserMessageAt: conversation.lastUserMessageAt,
+    folderId: conversation.folderId,
+    status: conversation.status,
+    blockReason: conversation.blockReason,
+    activeRunStatus: conversation.activeRunStatus,
+  };
+}
+
+export async function updateConversationProvider(
+  id: string,
+  input: { model: string; reasoningEffort: string | null }
+): Promise<SavedAIConversation> {
+  const conversation = await api.updateAIConversationProvider(id, input);
+  return {
+    id: conversation.id,
+    title: conversation.title,
+    messages: conversation.messages,
+    model: conversation.model,
+    reasoningEffort: conversation.reasoningEffort,
     lastContext: conversation.lastContext,
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
@@ -103,6 +131,8 @@ export async function rollbackConversationToMessage(
       id: result.conversation.id,
       title: result.conversation.title,
       messages: result.conversation.messages,
+      model: result.conversation.model,
+      reasoningEffort: result.conversation.reasoningEffort,
       lastContext: result.conversation.lastContext,
       createdAt: result.conversation.createdAt,
       updatedAt: result.conversation.updatedAt,

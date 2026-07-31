@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { cn } from "@/lib/utils";
 import type { DockerFolderTreeNode } from "@/types";
 
@@ -71,6 +72,7 @@ export function DockerMoveToFolderDialog({
   onMove,
 }: DockerMoveToFolderDialogProps) {
   const [selected, setSelected] = useState<string | null>(currentFolderId);
+  const displayedCurrentFolderId = useRetainedDialogValue(currentFolderId, open);
 
   useEffect(() => {
     if (open) setSelected(currentFolderId);
@@ -115,7 +117,7 @@ export function DockerMoveToFolderDialog({
               onMove(selected);
               onOpenChange(false);
             }}
-            disabled={selected === currentFolderId}
+            disabled={selected === displayedCurrentFolderId}
           >
             Move
           </Button>

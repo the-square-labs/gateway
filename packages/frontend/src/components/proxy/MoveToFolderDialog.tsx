@@ -1,5 +1,5 @@
 import { ChevronRight, Folder } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { cn } from "@/lib/utils";
 import type { FolderTreeNode } from "@/types";
 
@@ -68,6 +69,11 @@ export function MoveToFolderDialog({
   onMove,
 }: MoveToFolderDialogProps) {
   const [selected, setSelected] = useState<string | null>(currentFolderId);
+  const displayedCurrentFolderId = useRetainedDialogValue(currentFolderId, open);
+
+  useEffect(() => {
+    if (open) setSelected(currentFolderId);
+  }, [open, currentFolderId]);
 
   const handleMove = () => {
     onMove(selected);
@@ -108,7 +114,7 @@ export function MoveToFolderDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleMove} disabled={selected === currentFolderId}>
+          <Button onClick={handleMove} disabled={selected === displayedCurrentFolderId}>
             Move
           </Button>
         </DialogFooter>

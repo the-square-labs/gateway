@@ -10,6 +10,7 @@ import type { AppEnv, SessionData, User } from '@/types.js';
 import { aiRoutes } from './ai.routes.js';
 import { AISettingsService } from './ai.settings.service.js';
 import { AIConversationService } from './ai-conversation.service.js';
+import { AIProviderRuntimeService } from './ai-provider-runtime.service.js';
 import { AIRunService } from './ai-run.service.js';
 
 const USER: User = {
@@ -208,6 +209,73 @@ describe('AI routes session-only authentication', () => {
         id: 'conversation-1',
         title: 'renamed chat',
       },
+    });
+  });
+
+  it('validates and persists a per-conversation model change', async () => {
+    registerServices();
+    const currentConversation = {
+      id: 'conversation-1',
+      title: 'debug session',
+      model: 'model-a',
+      reasoningEffort: 'high',
+      messages: [],
+    };
+    const updatedConversation = {
+      ...currentConversation,
+      model: 'model-b',
+      reasoningEffort: 'max',
+    };
+    const getConversation = vi
+      .fn()
+      .mockResolvedValueOnce(currentConversation)
+      .mockResolvedValueOnce(updatedConversation);
+    const updateConversationProvider = vi.fn().mockResolvedValue(undefined);
+    container.registerInstance(AIConversationService, {
+      getConversation,
+    } as unknown as AIConversationService);
+    container.registerInstance(AIProviderRuntimeService, {
+      statusForUser: vi.fn().mockResolvedValue({
+        enabled: true,
+        providerType: 'gateway_inference',
+        defaultModel: 'model-a',
+        allowUserModelSelection: true,
+        supportsImages: false,
+        models: [
+          {
+            id: 'model-a',
+            displayName: 'Model A',
+            reasoningEfforts: ['high'],
+          },
+          {
+            id: 'model-b',
+            displayName: 'Model B',
+            reasoningEfforts: ['max'],
+          },
+        ],
+      }),
+    } as unknown as AIProviderRuntimeService);
+    container.registerInstance(AIRunService, {
+      updateConversationProvider,
+    } as unknown as AIRunService);
+
+    const response = await createApp().request('/api/ai/conversations/conversation-1/provider', {
+      method: 'PATCH',
+      headers: { Cookie: 'session_id=session-1', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'model-b', reasoningEffort: 'max' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(updateConversationProvider).toHaveBeenCalledWith({
+      userId: USER.id,
+      conversationId: 'conversation-1',
+      model: 'model-b',
+      reasoningEffort: 'max',
+      modelDisplayName: 'Model B',
+      previousModelDisplayName: 'Model A',
+    });
+    expect(await response.json()).toMatchObject({
+      data: { id: 'conversation-1', model: 'model-b', reasoningEffort: 'max' },
     });
   });
 

@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import type { WebhookDelivery } from "@/types";
@@ -63,7 +64,12 @@ export function DeliveryLogTab({ refreshToken }: { refreshToken: number }) {
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [detail, setDetail] = useState<WebhookDelivery | null>(null);
+  const {
+    open: detailOpen,
+    value: detail,
+    setValue: setDetail,
+    onOpenChange: onDetailOpenChange,
+  } = useDeferredDialogState<WebhookDelivery>();
   const [detailLoadFailed, setDetailLoadFailed] = useState(false);
   const pageRef = useRef(0);
   const requestIdRef = useRef(0);
@@ -320,11 +326,13 @@ export function DeliveryLogTab({ refreshToken }: { refreshToken: number }) {
       )}
       {detail && (
         <Dialog
-          open={!!detail}
-          onOpenChange={() => {
-            detailRequestIdRef.current++;
-            setDetailLoadFailed(false);
-            setDetail(null);
+          open={detailOpen}
+          onOpenChange={(open) => {
+            if (!open) {
+              detailRequestIdRef.current++;
+              setDetailLoadFailed(false);
+            }
+            onDetailOpenChange(open);
           }}
         >
           <DialogContent className="max-w-xl">

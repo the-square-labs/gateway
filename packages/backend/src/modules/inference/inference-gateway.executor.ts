@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
@@ -46,7 +46,10 @@ export class InferenceGatewayExecutor implements InferenceExecutor {
   async execute(request: InferenceRequest, context: InferenceExecutionContext): Promise<InferenceExecution> {
     const user = await this.requireUser(context.userId);
     const resolved = await this.models.resolveForUser(user, request.model);
-    const candidates = await this.candidates(resolved.model.id);
+    const candidates = await this.candidates(
+      resolved.model.id,
+      resolved.sources.map((source) => source.id)
+    );
     assertSingleProviderModel(candidates);
     let lastError: unknown;
     let retryOf: InferenceAdmission | undefined;
@@ -219,7 +222,8 @@ export class InferenceGatewayExecutor implements InferenceExecutor {
     return remaining.find((row) => row.connection.id === selection.connectionId) ?? null;
   }
 
-  private async candidates(modelId: string): Promise<SourceCandidate[]> {
+  private async candidates(modelId: string, allowedSourceIds: string[]): Promise<SourceCandidate[]> {
+    if (!allowedSourceIds.length) return [];
     const rows = await this.db
       .select({
         source: inferenceModelSources,
@@ -232,12 +236,14 @@ export class InferenceGatewayExecutor implements InferenceExecutor {
       .where(
         and(
           eq(inferenceModelSources.modelId, modelId),
+          inArray(inferenceModelSources.id, allowedSourceIds),
           eq(inferenceModelSources.enabled, true),
           eq(inferenceProviderConnections.enabled, true)
         )
       )
       .orderBy(asc(inferenceModelSources.priority));
-    return rows;
+    const allowedSources = new Set(allowedSourceIds);
+    return rows.filter((row) => allowedSources.has(row.source.id));
   }
 
   private async requireUser(userId: string) {

@@ -256,6 +256,8 @@ export async function initializeContainer(): Promise<void> {
   inferenceProviderService.start();
   const inferenceRoutingService = new InferenceRoutingService(db, redis);
   container.registerInstance(InferenceRoutingService, inferenceRoutingService);
+  const inferenceBudgetPolicyService = new InferenceBudgetPolicyService(db);
+  container.registerInstance(InferenceBudgetPolicyService, inferenceBudgetPolicyService);
   const inferenceModelAccessService = new InferenceModelAccessService(db, redis);
   container.registerInstance(InferenceModelAccessService, inferenceModelAccessService);
   const inferenceModelService = new InferenceModelService(
@@ -263,6 +265,7 @@ export async function initializeContainer(): Promise<void> {
     inferenceProviderRegistry,
     inferenceModelAccessService,
     auditService,
+    inferenceBudgetPolicyService,
     inferenceSetupEvents
   );
   container.registerInstance(InferenceModelService, inferenceModelService);
@@ -270,8 +273,6 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(InferenceContinuationService, inferenceContinuationService);
   const inferenceRuntimeService = new InferenceRuntimeService();
   container.registerInstance(InferenceRuntimeService, inferenceRuntimeService);
-  const inferenceBudgetPolicyService = new InferenceBudgetPolicyService(db);
-  container.registerInstance(InferenceBudgetPolicyService, inferenceBudgetPolicyService);
   const inferenceBudgetReservationService = new InferenceBudgetReservationService(redis);
   container.registerInstance(InferenceBudgetReservationService, inferenceBudgetReservationService);
   const inferenceBudgetLockService = new InferenceBudgetLockService(db);

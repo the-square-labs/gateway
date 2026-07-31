@@ -100,7 +100,12 @@ function createRuntimeSnapshotDb() {
 
 describe('AIRunService startUserRun', () => {
   it('creates a conversation, user message, and queued run atomically', async () => {
-    const conversation = { id: 'conversation-1', lastContext: null };
+    const conversation = {
+      id: 'conversation-1',
+      lastContext: null,
+      model: 'model-a',
+      reasoningEffort: 'high',
+    };
     const message = { id: 'message-1' };
     const run = {
       id: 'run-1',
@@ -122,6 +127,8 @@ describe('AIRunService startUserRun', () => {
         userMessage: { role: 'user', content: 'hello' },
         clientCommandId: 'cmd-1',
         lastContext: { route: '/nodes' },
+        model: 'model-a',
+        reasoningEffort: 'high',
       })
     ).resolves.toEqual({
       conversationId: 'conversation-1',
@@ -136,6 +143,8 @@ describe('AIRunService startUserRun', () => {
         userId: 'user-1',
         title: 'New chat',
         lastContext: { route: '/nodes' },
+        model: 'model-a',
+        reasoningEffort: 'high',
       })
     );
     expect(harness.insertValues).toHaveBeenCalledWith(
@@ -152,13 +161,20 @@ describe('AIRunService startUserRun', () => {
         userId: 'user-1',
         clientCommandId: 'cmd-1',
         activeMessageId: 'message-1',
+        model: 'model-a',
+        reasoningEffort: 'high',
         status: 'queued',
       })
     );
   });
 
   it('appends a new user turn after the existing conversation history', async () => {
-    const conversation = { id: 'conversation-1', lastContext: null };
+    const conversation = {
+      id: 'conversation-1',
+      lastContext: null,
+      model: 'pinned-model',
+      reasoningEffort: null,
+    };
     const message = { id: 'message-2' };
     const run = {
       id: 'run-2',
@@ -180,6 +196,8 @@ describe('AIRunService startUserRun', () => {
         title: 'Existing chat',
         userMessage: { role: 'user', content: 'follow up' },
         clientCommandId: 'cmd-2',
+        model: 'stale-client-model',
+        reasoningEffort: 'high',
       })
     ).resolves.toEqual({
       conversationId: 'conversation-1',
@@ -194,6 +212,14 @@ describe('AIRunService startUserRun', () => {
         sequence: 5,
         role: 'user',
         content: 'follow up',
+      })
+    );
+    expect(harness.insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'conversation-1',
+        model: 'pinned-model',
+        reasoningEffort: null,
+        status: 'queued',
       })
     );
   });

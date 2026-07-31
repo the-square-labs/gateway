@@ -32,6 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 
@@ -164,7 +165,12 @@ export function LogsTab({ hostId }: { hostId: string }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [selectedLog, setSelectedLog] = useState<NginxLogEntry | null>(null);
+  const {
+    open: selectedLogOpen,
+    value: selectedLog,
+    setValue: setSelectedLog,
+    onOpenChange: onSelectedLogOpenChange,
+  } = useDeferredDialogState<NginxLogEntry>();
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [prependVersion, setPrependVersion] = useState(0);
@@ -450,7 +456,7 @@ export function LogsTab({ hostId }: { hostId: string }) {
         </div>
       </ResourceListFrame>
 
-      <Dialog open={!!selectedLog} onOpenChange={(open) => !open && setSelectedLog(null)}>
+      <Dialog open={selectedLogOpen} onOpenChange={onSelectedLogOpenChange}>
         <DialogContent className="max-w-full sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Log Details</DialogTitle>

@@ -5,9 +5,11 @@ import {
   Loader2,
   Lock,
   MessageSquare,
+  MoreHorizontal,
   Pencil,
   Pin,
   PinOff,
+  Plus,
   Sparkles,
   Trash2,
   X,
@@ -24,6 +26,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ResizeHandle } from "@/components/ui/resize-handle";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -102,8 +111,9 @@ async function uploadLocalComposerAttachment(
 
 const PANEL_WIDTH_KEY = "gateway-ai-panel-width";
 const DEFAULT_WIDTH = 360;
-const MIN_WIDTH = 300;
+const MIN_WIDTH = 360;
 const MAX_WIDTH = 560;
+const NORMAL_RECENT_CONVERSATION_LIMIT = 5;
 const BOTTOM_SCROLL_THRESHOLD = 48;
 
 function readPanelWidth(): number {
@@ -226,6 +236,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     setSelectedModel,
     setSelectedReasoningEffort,
     refreshProviderStatus,
+    fetchRecentConversations,
   } = useAIStore();
 
   const [input, setInput] = useAIComposerDraft(activeConversationId);
@@ -260,6 +271,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     ? pinnedAIConversationIds.includes(activeConversationId)
     : false;
   const selectedProviderModel = providerStatus?.models.find((model) => model.id === selectedModel);
+  const normalRecentConversations = recentConversations.slice(0, NORMAL_RECENT_CONVERSATION_LIMIT);
 
   const openRenameDialog = () => {
     if (!activeConversationId) return;
@@ -309,6 +321,11 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     if (!active) return;
     void refreshProviderStatus().catch(() => setCanAttachImages(false));
   }, [active, refreshProviderStatus]);
+
+  useEffect(() => {
+    if (!active || !isNewConversationDraft) return;
+    void fetchRecentConversations();
+  }, [active, fetchRecentConversations, isNewConversationDraft]);
 
   useEffect(() => {
     const selected = providerStatus?.models.find((model) => model.id === selectedModel);
@@ -583,39 +600,6 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
           {currentChatTitle}
         </span>
         <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9"
-            onClick={() => activeConversationId && togglePinnedAIConversation(activeConversationId)}
-            disabled={!activeConversationId}
-            title={isCurrentChatPinned ? "Unpin chat" : "Pin chat"}
-            aria-label={isCurrentChatPinned ? "Unpin chat" : "Pin chat"}
-          >
-            {isCurrentChatPinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9"
-            onClick={openRenameDialog}
-            disabled={!activeConversationId}
-            title="Rename chat"
-            aria-label="Rename chat"
-          >
-            <Pencil className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9"
-            onClick={() => activeConversationId && void deleteConversation(activeConversationId)}
-            disabled={!activeConversationId}
-            title="Delete chat"
-            aria-label="Delete chat"
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
           {onEnterLiteMode && (
             <Button
               variant="ghost"
@@ -628,8 +612,65 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
               <Expand className="h-4 w-4" />
             </Button>
           )}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9"
+            onClick={clearMessages}
+            disabled={!activeConversationId && isNewConversationDraft}
+            title="New chat"
+            aria-label="New chat"
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9"
+                title="Chat actions"
+                aria-label="Chat actions"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem
+                disabled={!activeConversationId}
+                onClick={() =>
+                  activeConversationId && togglePinnedAIConversation(activeConversationId)
+                }
+              >
+                {isCurrentChatPinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
+                {isCurrentChatPinned ? "Unpin chat" : "Pin chat"}
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={!activeConversationId} onClick={openRenameDialog}>
+                <Pencil className="h-4 w-4" />
+                Rename chat
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-destructive"
+                disabled={!activeConversationId}
+                onClick={() =>
+                  activeConversationId && void deleteConversation(activeConversationId)
+                }
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete chat
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           {onClose && (
-            <Button variant="ghost" size="icon" className="h-9 w-9" onClick={onClose}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9"
+              onClick={onClose}
+              title="Close AI Assistant"
+              aria-label="Close AI Assistant"
+            >
               <X className="h-4 w-4" />
             </Button>
           )}
@@ -686,7 +727,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
               {isLoadingRecentConversations && recentConversations.length === 0 ? (
                 <div className="px-3 py-3 text-xs text-muted-foreground">Loading...</div>
               ) : (
-                recentConversations.map((conversation) => (
+                normalRecentConversations.map((conversation) => (
                   <div
                     key={conversation.id}
                     className="group flex items-center border-b border-border last:border-b-0 hover:bg-muted/50 focus-within:bg-muted/50"
@@ -844,6 +885,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
             }
             onPreviewAttachment={previewAttachment}
             surfaceClassName="border-x-0 border-b-0 focus-within:ring-0"
+            slashPaletteClassName="border-x-0"
           />
         </div>
       )}

@@ -146,6 +146,8 @@ export interface AIConversationRuntimeSnapshot {
     messageCount: number;
     status: 'active' | 'ended' | 'context_blocked';
     blockReason: string | null;
+    model: string | null;
+    reasoningEffort: string | null;
     lastContext: Record<string, unknown> | null;
     discoveredToolsets: string[];
     checkpoint: Record<string, unknown> | null;
@@ -198,6 +200,8 @@ export class AIRunService {
             userId: input.userId,
             title: await resolveUniqueTitle(tx, input.userId, title),
             lastContext: input.lastContext ?? null,
+            model: normalizeOptionalString(input.model),
+            reasoningEffort: normalizeOptionalString(input.reasoningEffort),
           });
 
       if (!conversation) {
@@ -224,6 +228,11 @@ export class AIRunService {
       }
 
       const now = new Date();
+      const hasPinnedProvider = conversation.model !== null;
+      const model = conversation.model ?? normalizeOptionalString(input.model);
+      const reasoningEffort = hasPinnedProvider
+        ? conversation.reasoningEffort
+        : normalizeOptionalString(input.reasoningEffort);
       const sequence = await nextMessageSequence(tx, conversation.id);
       const [message] = await tx
         .insert(aiConversationMessages)
@@ -237,8 +246,8 @@ export class AIRunService {
           userId: input.userId,
           clientCommandId: input.clientCommandId,
           activeMessageId: message.id,
-          model: input.model?.trim() || null,
-          reasoningEffort: input.reasoningEffort?.trim() || null,
+          model,
+          reasoningEffort,
           status: 'queued',
           updatedAt: now,
         })
@@ -246,7 +255,12 @@ export class AIRunService {
 
       await tx
         .update(aiConversations)
-        .set({ lastContext: input.lastContext ?? conversation.lastContext, updatedAt: now })
+        .set({
+          model,
+          reasoningEffort,
+          lastContext: input.lastContext ?? conversation.lastContext,
+          updatedAt: now,
+        })
         .where(eq(aiConversations.id, conversation.id));
 
       return {
@@ -295,6 +309,11 @@ export class AIRunService {
       }
 
       const now = new Date();
+      const hasPinnedProvider = conversation.model !== null;
+      const model = conversation.model ?? normalizeOptionalString(input.model);
+      const reasoningEffort = hasPinnedProvider
+        ? conversation.reasoningEffort
+        : normalizeOptionalString(input.reasoningEffort);
       const [run] = await tx
         .insert(aiRuns)
         .values({
@@ -302,8 +321,8 @@ export class AIRunService {
           userId: input.userId,
           clientCommandId: input.clientCommandId,
           activeMessageId: null,
-          model: input.model?.trim() || null,
-          reasoningEffort: input.reasoningEffort?.trim() || null,
+          model,
+          reasoningEffort,
           status: 'queued',
           updatedAt: now,
         })
@@ -311,7 +330,12 @@ export class AIRunService {
 
       await tx
         .update(aiConversations)
-        .set({ lastContext: input.lastContext ?? conversation.lastContext, updatedAt: now })
+        .set({
+          model,
+          reasoningEffort,
+          lastContext: input.lastContext ?? conversation.lastContext,
+          updatedAt: now,
+        })
         .where(eq(aiConversations.id, conversation.id));
 
       return {
@@ -324,6 +348,64 @@ export class AIRunService {
 
     this.publishConversationChanged(input.userId, result.conversationId);
     return result;
+  }
+
+  async updateConversationProvider(input: {
+    userId: string;
+    conversationId: string;
+    model: string;
+    reasoningEffort: string | null;
+    modelDisplayName: string;
+    previousModelDisplayName?: string | null;
+  }): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      const conversation = await getOwnedConversation(tx, input.userId, input.conversationId);
+      if (!conversation) {
+        throw new AppError(404, 'AI_CONVERSATION_NOT_FOUND', 'AI conversation not found');
+      }
+
+      const activeRun = await getActiveRunForUpdate(tx, conversation.id);
+      if (activeRun) {
+        throw new AppError(409, 'AI_RUN_ACTIVE', 'The model cannot be changed while the assistant is responding');
+      }
+
+      const model = input.model.trim();
+      const reasoningEffort = normalizeOptionalString(input.reasoningEffort);
+      if (!model) {
+        throw new AppError(400, 'AI_MODEL_REQUIRED', 'A model is required');
+      }
+      if (conversation.model === model && conversation.reasoningEffort === reasoningEffort) return;
+
+      const now = new Date();
+      if (conversation.model && conversation.model !== model) {
+        const sequence = await nextMessageSequence(tx, conversation.id);
+        await tx.insert(aiConversationMessages).values(
+          toConversationMessage(
+            conversation.id,
+            {
+              role: 'assistant',
+              content: '',
+              localOnly: true,
+              modelChange: {
+                fromModel: conversation.model,
+                toModel: model,
+                fromDisplayName: input.previousModelDisplayName?.trim() || conversation.model,
+                toDisplayName: input.modelDisplayName.trim() || model,
+              },
+            },
+            sequence
+          )
+        );
+      }
+
+      await tx
+        .update(aiConversations)
+        .set({ model, reasoningEffort, updatedAt: now })
+        .where(and(eq(aiConversations.id, conversation.id), eq(aiConversations.userId, input.userId)));
+    });
+
+    this.publishConversationChanged(input.userId, input.conversationId);
+    this.conversationSearchService?.rebuildConversationIndexBestEffort(input.userId, input.conversationId);
   }
 
   async createRun(input: CreateAIRunInput): Promise<{ run: AIRun; duplicate: boolean }> {
@@ -888,6 +970,8 @@ export class AIRunService {
         lastUserMessageAt: getLastUserMessageAt(loadedMessageRows),
         messageCount: countVisibleMessages(uiMessages),
         ...deriveConversationStatus(uiMessages),
+        model: conversation.model,
+        reasoningEffort: conversation.reasoningEffort,
         lastContext: conversation.lastContext,
         discoveredToolsets: conversation.discoveredToolsets,
         checkpoint: toClientCheckpoint(conversation.checkpoint),
@@ -1057,19 +1141,31 @@ async function assertOwnedConversation(db: DbLike, userId: string, conversationI
 
 async function createConversation(
   db: DbLike,
-  input: { userId: string; title: string; lastContext: Record<string, unknown> | null }
+  input: {
+    userId: string;
+    title: string;
+    lastContext: Record<string, unknown> | null;
+    model: string | null;
+    reasoningEffort: string | null;
+  }
 ) {
   const [conversation] = await db
     .insert(aiConversations)
     .values({
       userId: input.userId,
       title: input.title,
+      model: input.model,
+      reasoningEffort: input.reasoningEffort,
       lastContext: input.lastContext,
       discoveredToolsets: [],
       updatedAt: new Date(),
     })
     .returning();
   return conversation;
+}
+
+function normalizeOptionalString(value: string | null | undefined): string | null {
+  return value?.trim() || null;
 }
 
 async function resolveUniqueTitle(db: DbLike, userId: string, title: string): Promise<string> {

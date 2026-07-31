@@ -28,8 +28,9 @@ export function AIMessageList({
   retryDisabled,
   editUserMessageDisabled,
 }: AIMessageListProps) {
-  const groups = groupAssistantTurns(messages);
-  const retryTargets = buildRetryTargets(messages);
+  const visibleMessages = collapseConsecutiveModelChanges(messages);
+  const groups = groupAssistantTurns(visibleMessages);
+  const retryTargets = buildRetryTargets(visibleMessages);
 
   return (
     <>
@@ -76,6 +77,35 @@ export function AIMessageList({
       )}
     </>
   );
+}
+
+function collapseConsecutiveModelChanges(messages: AIMessageType[]): AIMessageType[] {
+  return messages.filter((message, index) => {
+    if (!message.modelChange) return true;
+
+    let nextIndex = index + 1;
+    while (nextIndex < messages.length && messages[nextIndex].conversationStatus) {
+      nextIndex += 1;
+    }
+    if (messages[nextIndex]?.modelChange) return false;
+
+    let firstChange = message.modelChange;
+    let previousIndex = index - 1;
+    while (previousIndex >= 0) {
+      const previousMessage = messages[previousIndex];
+      if (previousMessage.conversationStatus) {
+        previousIndex -= 1;
+        continue;
+      }
+      if (!previousMessage.modelChange) break;
+      firstChange = previousMessage.modelChange;
+      previousIndex -= 1;
+    }
+
+    if (firstChange.fromModel === message.modelChange.toModel) return false;
+
+    return true;
+  });
 }
 
 function buildRetryTargets(messages: AIMessageType[]): Map<AIMessageType, string> {

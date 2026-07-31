@@ -974,6 +974,8 @@ class ApiClient extends withInferenceApi(
     blockReason: string | null;
     activeRunStatus: AIRunStatus | null;
     messages: AIMessage[];
+    model: string | null;
+    reasoningEffort: string | null;
     lastContext: PageContext | null;
     discoveredToolsets: string[];
     checkpoint: Record<string, unknown> | null;
@@ -991,6 +993,8 @@ class ApiClient extends withInferenceApi(
         blockReason: string | null;
         activeRunStatus: AIRunStatus | null;
         messages: AIMessage[];
+        model: string | null;
+        reasoningEffort: string | null;
         lastContext: PageContext | null;
         discoveredToolsets: string[];
         checkpoint: Record<string, unknown> | null;
@@ -1014,6 +1018,8 @@ class ApiClient extends withInferenceApi(
     blockReason: string | null;
     activeRunStatus: AIRunStatus | null;
     messages: AIMessage[];
+    model: string | null;
+    reasoningEffort: string | null;
     lastContext: PageContext | null;
     discoveredToolsets: string[];
     checkpoint: Record<string, unknown> | null;
@@ -1031,11 +1037,60 @@ class ApiClient extends withInferenceApi(
         blockReason: string | null;
         activeRunStatus: AIRunStatus | null;
         messages: AIMessage[];
+        model: string | null;
+        reasoningEffort: string | null;
         lastContext: PageContext | null;
         discoveredToolsets: string[];
         checkpoint: Record<string, unknown> | null;
       };
     }>(`/ai/conversations/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    return res.data;
+  }
+
+  async updateAIConversationProvider(
+    id: string,
+    data: { model: string; reasoningEffort: string | null }
+  ): Promise<{
+    id: string;
+    title: string;
+    createdAt: string;
+    updatedAt: string;
+    lastUserMessageAt: string | null;
+    messageCount: number;
+    folderId: string | null;
+    status: "active" | "ended" | "context_blocked";
+    blockReason: string | null;
+    activeRunStatus: AIRunStatus | null;
+    messages: AIMessage[];
+    model: string | null;
+    reasoningEffort: string | null;
+    lastContext: PageContext | null;
+    discoveredToolsets: string[];
+    checkpoint: Record<string, unknown> | null;
+  }> {
+    const res = await this.request<{
+      data: {
+        id: string;
+        title: string;
+        createdAt: string;
+        updatedAt: string;
+        lastUserMessageAt: string | null;
+        messageCount: number;
+        folderId: string | null;
+        status: "active" | "ended" | "context_blocked";
+        blockReason: string | null;
+        activeRunStatus: AIRunStatus | null;
+        messages: AIMessage[];
+        model: string | null;
+        reasoningEffort: string | null;
+        lastContext: PageContext | null;
+        discoveredToolsets: string[];
+        checkpoint: Record<string, unknown> | null;
+      };
+    }>(`/ai/conversations/${id}/provider`, {
       method: "PATCH",
       body: JSON.stringify(data),
     });
@@ -1064,6 +1119,8 @@ class ApiClient extends withInferenceApi(
       blockReason: string | null;
       activeRunStatus: AIRunStatus | null;
       messages: AIMessage[];
+      model: string | null;
+      reasoningEffort: string | null;
       lastContext: PageContext | null;
       discoveredToolsets: string[];
       checkpoint: Record<string, unknown> | null;
@@ -1084,6 +1141,8 @@ class ApiClient extends withInferenceApi(
           blockReason: string | null;
           activeRunStatus: AIRunStatus | null;
           messages: AIMessage[];
+          model: string | null;
+          reasoningEffort: string | null;
           lastContext: PageContext | null;
           discoveredToolsets: string[];
           checkpoint: Record<string, unknown> | null;

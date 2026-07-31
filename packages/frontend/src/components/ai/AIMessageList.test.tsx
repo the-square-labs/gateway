@@ -65,4 +65,99 @@ describe("AIMessageList", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetryUserMessage).toHaveBeenCalledWith("user-1");
   });
+
+  it("renders a persisted model change as a timeline divider", () => {
+    const { container } = render(
+      <AIMessageList
+        messages={[
+          {
+            id: "model-change-1",
+            role: "assistant",
+            content: "",
+            localOnly: true,
+            modelChange: {
+              fromModel: "model-a",
+              toModel: "model-b",
+              fromDisplayName: "Model A",
+              toDisplayName: "Model B",
+            },
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByText("Model changed from Model A to Model B")).toBeInTheDocument();
+    expect(container.querySelector(".lucide-box")).toBeInTheDocument();
+  });
+
+  it("renders only the latest divider from consecutive model changes", () => {
+    render(
+      <AIMessageList
+        messages={[
+          {
+            id: "model-change-1",
+            role: "assistant",
+            content: "",
+            localOnly: true,
+            modelChange: {
+              fromModel: "model-a",
+              toModel: "model-b",
+              fromDisplayName: "Model A",
+              toDisplayName: "Model B",
+            },
+          },
+          {
+            id: "model-change-2",
+            role: "assistant",
+            content: "",
+            localOnly: true,
+            modelChange: {
+              fromModel: "model-b",
+              toModel: "model-c",
+              fromDisplayName: "Model B",
+              toDisplayName: "Model C",
+            },
+          },
+        ]}
+      />
+    );
+
+    expect(screen.queryByText("Model changed from Model A to Model B")).not.toBeInTheDocument();
+    expect(screen.getByText("Model changed from Model B to Model C")).toBeInTheDocument();
+  });
+
+  it("hides a consecutive model-change chain that returns to its original model", () => {
+    render(
+      <AIMessageList
+        messages={[
+          {
+            id: "model-change-1",
+            role: "assistant",
+            content: "",
+            localOnly: true,
+            modelChange: {
+              fromModel: "model-a",
+              toModel: "model-b",
+              fromDisplayName: "Model A",
+              toDisplayName: "Model B",
+            },
+          },
+          {
+            id: "model-change-2",
+            role: "assistant",
+            content: "",
+            localOnly: true,
+            modelChange: {
+              fromModel: "model-b",
+              toModel: "model-a",
+              fromDisplayName: "Model B",
+              toDisplayName: "Model A",
+            },
+          },
+        ]}
+      />
+    );
+
+    expect(screen.queryByText(/Model changed from/)).not.toBeInTheDocument();
+  });
 });

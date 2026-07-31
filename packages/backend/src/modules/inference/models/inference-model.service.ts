@@ -13,6 +13,7 @@ import {
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { User } from '@/types.js';
+import type { InferenceBudgetPolicyService } from '../accounting/inference-budget-policy.js';
 import type { InferenceSetupEventsService } from '../inference-setup-events.service.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 import type { InferenceProviderRegistry } from '../providers/inference-provider.registry.js';
@@ -39,6 +40,7 @@ export class InferenceModelService {
     private readonly registry: InferenceProviderRegistry,
     private readonly access: InferenceModelAccessService,
     private readonly audit: AuditService,
+    private readonly budgetPolicies: InferenceBudgetPolicyService,
     private readonly setupEvents?: InferenceSetupEventsService
   ) {}
 
@@ -338,12 +340,14 @@ export class InferenceModelService {
   async listForUser(user: User) {
     const allowed = await this.access.allowedModelIds(user);
     if (!allowed.size) return { object: 'list', data: [] };
+    const availability = await this.modelAvailabilityForUser(user.id, [...allowed]);
+    if (!availability.modelIds.length) return { object: 'list', data: [] };
     const models = await this.db
       .select()
       .from(inferenceModels)
-      .where(and(eq(inferenceModels.enabled, true), inArray(inferenceModels.id, [...allowed])))
+      .where(and(eq(inferenceModels.enabled, true), inArray(inferenceModels.id, availability.modelIds)))
       .orderBy(asc(inferenceModels.publicId));
-    const data = await Promise.all(models.map((model) => this.publicModel(model)));
+    const data = await Promise.all(models.map((model) => this.publicModel(model, availability.apiUsageEnabled)));
     return { object: 'list', data };
   }
 
@@ -352,8 +356,47 @@ export class InferenceModelService {
     if (!model?.enabled || !(await this.access.canAccess(user, model.id))) {
       throw new InferenceProtocolError(404, 'model_not_found', `Model "${publicId}" is not available`);
     }
+    const availability = await this.modelAvailabilityForUser(user.id, [model.id]);
+    if (!availability.modelIds.length) {
+      throw new InferenceProtocolError(404, 'model_not_found', `Model "${publicId}" is not available`);
+    }
     const full = await this.serializeModel(model);
-    return { model, sources: full.sources };
+    return {
+      model,
+      sources: filterSourcesByApiUsage(full.sources, availability.apiUsageEnabled),
+    };
+  }
+
+  private async modelAvailabilityForUser(
+    userId: string,
+    modelIds: string[]
+  ): Promise<{ modelIds: string[]; apiUsageEnabled: boolean }> {
+    if (!modelIds.length) return { modelIds: [], apiUsageEnabled: false };
+    const limits = await this.budgetPolicies.effective(userId);
+    if (limits.apiMonthlyMicrodollars > 0) {
+      return { modelIds, apiUsageEnabled: true };
+    }
+
+    const subscriptionSources = await this.db
+      .select({ modelId: inferenceModelSources.modelId })
+      .from(inferenceModelSources)
+      .innerJoin(inferenceProviderConnections, eq(inferenceModelSources.connectionId, inferenceProviderConnections.id))
+      .where(
+        and(
+          inArray(inferenceModelSources.modelId, modelIds),
+          eq(inferenceModelSources.enabled, true),
+          eq(inferenceModelSources.sourceType, 'subscription'),
+          eq(inferenceProviderConnections.enabled, true)
+        )
+      );
+    return {
+      modelIds: filterModelIdsByApiBudget(
+        modelIds,
+        subscriptionSources.map((source) => source.modelId),
+        limits.apiMonthlyMicrodollars
+      ),
+      apiUsageEnabled: false,
+    };
   }
 
   private async validatePublish(modelId: string, candidate?: InferenceModelInput) {
@@ -402,13 +445,16 @@ export class InferenceModelService {
 
   private async safeLimits(
     modelId: string,
-    model: Pick<InferenceModelInput, 'contextWindow' | 'maxInputTokens' | 'maxOutputTokens' | 'autoCompactTokenLimit'>
+    model: Pick<InferenceModelInput, 'contextWindow' | 'maxInputTokens' | 'maxOutputTokens' | 'autoCompactTokenLimit'>,
+    apiUsageEnabled = true
   ) {
+    const conditions = [eq(inferenceModelSources.modelId, modelId), eq(inferenceModelSources.enabled, true)];
+    if (!apiUsageEnabled) conditions.push(eq(inferenceModelSources.sourceType, 'subscription'));
     const sources = await this.db
       .select({ source: inferenceModelSources, discovered: inferenceDiscoveredModels })
       .from(inferenceModelSources)
       .leftJoin(inferenceDiscoveredModels, eq(inferenceModelSources.discoveredModelId, inferenceDiscoveredModels.id))
-      .where(and(eq(inferenceModelSources.modelId, modelId), eq(inferenceModelSources.enabled, true)));
+      .where(and(...conditions));
     const technical = sources
       .filter(({ source }) => sourceRole(source) === 'primary')
       .map(({ source, discovered }) => {
@@ -430,10 +476,10 @@ export class InferenceModelService {
     };
   }
 
-  private async publicModel(model: typeof inferenceModels.$inferSelect) {
+  private async publicModel(model: typeof inferenceModels.$inferSelect, apiUsageEnabled = true) {
     const [limits, sourceState] = await Promise.all([
-      this.safeLimits(model.id, model),
-      this.sourceState(model.id, model.capabilities),
+      this.safeLimits(model.id, model, apiUsageEnabled),
+      this.sourceState(model.id, model.capabilities, apiUsageEnabled),
     ]);
     return {
       id: model.publicId,
@@ -522,7 +568,9 @@ export class InferenceModelService {
     };
   }
 
-  private async sourceState(modelId: string, configured: Record<string, boolean>) {
+  private async sourceState(modelId: string, configured: Record<string, boolean>, apiUsageEnabled = true) {
+    const conditions = [eq(inferenceModelSources.modelId, modelId)];
+    if (!apiUsageEnabled) conditions.push(eq(inferenceModelSources.sourceType, 'subscription'));
     const sources = await this.db
       .select({
         source: inferenceModelSources,
@@ -532,7 +580,7 @@ export class InferenceModelService {
       .from(inferenceModelSources)
       .innerJoin(inferenceProviderConnections, eq(inferenceModelSources.connectionId, inferenceProviderConnections.id))
       .leftJoin(inferenceDiscoveredModels, eq(inferenceModelSources.discoveredModelId, inferenceDiscoveredModels.id))
-      .where(eq(inferenceModelSources.modelId, modelId));
+      .where(and(...conditions));
     return {
       capabilities: detectedCapabilityState(configured, sources),
       supportsFast: supportsFastServiceTier(sources),
@@ -661,6 +709,23 @@ function sourceOriginMetadata(
   };
 }
 
+function filterModelIdsByApiBudget(
+  modelIds: readonly string[],
+  subscriptionSourceModelIds: readonly string[],
+  apiMonthlyMicrodollars: number
+): string[] {
+  if (apiMonthlyMicrodollars > 0) return [...modelIds];
+  const subscriptionModels = new Set(subscriptionSourceModelIds);
+  return modelIds.filter((modelId) => subscriptionModels.has(modelId));
+}
+
+function filterSourcesByApiUsage<T extends { sourceType: string }>(
+  sources: readonly T[],
+  apiUsageEnabled: boolean
+): T[] {
+  return apiUsageEnabled ? [...sources] : sources.filter((source) => source.sourceType === 'subscription');
+}
+
 type TransactionLike = Pick<DrizzleClient, 'insert'>;
 
 async function insertPricing(tx: TransactionLike, sourceId: string, userId: string, input: InferencePricingInput) {
@@ -688,4 +753,6 @@ export const __testOnly = {
   supportsFastServiceTier,
   assertSingleProviderBindings,
   sourceOriginMetadata,
+  filterModelIdsByApiBudget,
+  filterSourcesByApiUsage,
 };

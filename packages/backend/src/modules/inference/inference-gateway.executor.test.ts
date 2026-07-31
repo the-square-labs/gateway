@@ -164,12 +164,18 @@ describe('InferenceGatewayExecutor helpers', () => {
     const connector = {
       execute: vi.fn().mockRejectedValue(new InferenceProtocolError(503, 'provider_unavailable', 'failed')),
     };
+    const routing = {
+      select: vi.fn(async ({ allowedConnectionIds }) => ({ connectionId: allowedConnectionIds[0] })),
+    };
     const executor = new InferenceGatewayExecutor(
       db as never,
-      { resolveForUser: vi.fn().mockResolvedValue({ model }) } as never,
       {
-        select: vi.fn(async ({ allowedConnectionIds }) => ({ connectionId: allowedConnectionIds[0] })),
+        resolveForUser: vi.fn().mockResolvedValue({
+          model,
+          sources: [firstAccount.source],
+        }),
       } as never,
+      routing as never,
       accounting as never,
       { get: vi.fn().mockResolvedValue({}) } as never,
       { require: vi.fn().mockReturnValue({ supportedOperations: ['inference'] }) } as never,
@@ -196,6 +202,9 @@ describe('InferenceGatewayExecutor helpers', () => {
     ).rejects.toMatchObject({ code: 'provider_unavailable' });
 
     expect(connector.execute).toHaveBeenCalledTimes(1);
+    expect(routing.select).toHaveBeenCalledWith(
+      expect.objectContaining({ allowedConnectionIds: [firstAccount.connection.id] })
+    );
     expect(accounting.admit).toHaveBeenCalledTimes(1);
     expect(accounting.failForRetry).not.toHaveBeenCalled();
     expect(accounting.fail).toHaveBeenCalledWith(first, expect.any(InferenceProtocolError), false);

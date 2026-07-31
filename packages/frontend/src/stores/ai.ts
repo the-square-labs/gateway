@@ -13,6 +13,7 @@ import {
   reorderConversationFolders,
   rollbackConversationToMessage,
   updateConversationFolder,
+  updateConversationProvider,
 } from "@/services/ai-conversations";
 import { AIWebSocketClient } from "@/services/ai-websocket";
 import { api } from "@/services/api";
@@ -64,12 +65,41 @@ function loadStoredAIReasoningEffort(model: string | null): string | null {
   }
 }
 
-function storeAIReasoningEffort(model: string, effort: string): void {
+function storeAIReasoningEffort(model: string, effort: string | null): void {
   try {
-    window.localStorage.setItem(`${AI_REASONING_STORAGE_PREFIX}${model}`, effort);
+    if (effort) window.localStorage.setItem(`${AI_REASONING_STORAGE_PREFIX}${model}`, effort);
+    else window.localStorage.removeItem(`${AI_REASONING_STORAGE_PREFIX}${model}`);
   } catch {
     // Local preferences are best-effort.
   }
+}
+
+function resolveReasoningEffort(
+  status: AIProviderStatus | null,
+  model: string | null
+): string | null {
+  const option = status?.models.find((candidate) => candidate.id === model);
+  const stored = loadStoredAIReasoningEffort(model);
+  return option?.reasoningEfforts.includes(stored ?? "")
+    ? stored
+    : option?.defaultReasoningEffort || option?.reasoningEfforts[0] || null;
+}
+
+function resolveDraftProviderSelection(
+  status: AIProviderStatus | null
+): Pick<AIState, "selectedModel" | "selectedReasoningEffort"> {
+  if (status?.providerType !== "gateway_inference" || status.models.length === 0) {
+    return { selectedModel: null, selectedReasoningEffort: null };
+  }
+  const storedModel = loadStoredAIModel();
+  const selectedModel =
+    status.allowUserModelSelection && status.models.some((model) => model.id === storedModel)
+      ? storedModel
+      : status.defaultModel || status.models[0]?.id || null;
+  return {
+    selectedModel,
+    selectedReasoningEffort: resolveReasoningEffort(status, selectedModel),
+  };
 }
 
 interface AIContextOverheadEstimate {
@@ -318,6 +348,7 @@ interface AIState {
   providerStatus: AIProviderStatus | null;
   selectedModel: string | null;
   selectedReasoningEffort: string | null;
+  contextUsageDialog: AIContextUsage | null;
 
   // Actions
   connect: () => Promise<boolean>;
@@ -355,9 +386,10 @@ interface AIState {
   setEnabled: (enabled: boolean) => void;
   setProviderStatus: (status: AIProviderStatus) => void;
   refreshProviderStatus: () => Promise<void>;
-  setSelectedModel: (model: string) => void;
-  setSelectedReasoningEffort: (effort: string) => void;
+  setSelectedModel: (model: string) => Promise<void>;
+  setSelectedReasoningEffort: (effort: string) => Promise<void>;
   handleSlashCommand: (input: string) => Promise<boolean>;
+  closeContextUsageDialog: () => void;
   setMessages: (messages: AIMessage[]) => void;
 }
 
@@ -704,6 +736,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
   providerStatus: null,
   selectedModel: loadStoredAIModel(),
   selectedReasoningEffort: loadStoredAIReasoningEffort(loadStoredAIModel()),
+  contextUsageDialog: null,
 
   connect: async () => {
     const auth = useAuthStore.getState();
@@ -1015,6 +1048,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
     if (activeConversationId) {
       trySendWSMessage({ type: "conversation.unsubscribe", conversationId: activeConversationId });
     }
+    const draftSelection = resolveDraftProviderSelection(get().providerStatus);
     set({
       messages: [],
       savedName: null,
@@ -1023,6 +1057,8 @@ export const useAIStore = create<AIState>()((set, get) => ({
       activeRunId: null,
       isCompactingContext: false,
       lastContext: null,
+      contextUsageDialog: null,
+      ...draftSelection,
     });
   },
 
@@ -1179,6 +1215,10 @@ export const useAIStore = create<AIState>()((set, get) => ({
         activeRunId: null,
         isCompactingContext: false,
         lastContext: conversation.lastContext,
+        selectedModel: conversation.model ?? get().selectedModel,
+        selectedReasoningEffort:
+          conversation.reasoningEffort ??
+          resolveReasoningEffort(get().providerStatus, conversation.model ?? get().selectedModel),
       });
       trySendWSMessage({ type: "conversation.subscribe", conversationId });
     } catch {
@@ -1223,6 +1263,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
               activeRunId: null,
               isCompactingContext: false,
               lastContext: null,
+              ...resolveDraftProviderSelection(state.providerStatus),
             }
           : {}),
       }));
@@ -1283,6 +1324,13 @@ export const useAIStore = create<AIState>()((set, get) => ({
       activeRunId: null,
       isCompactingContext: false,
       lastContext: result.conversation.lastContext,
+      selectedModel: result.conversation.model ?? state.selectedModel,
+      selectedReasoningEffort:
+        result.conversation.reasoningEffort ??
+        resolveReasoningEffort(
+          state.providerStatus,
+          result.conversation.model ?? state.selectedModel
+        ),
       pendingApprovalToolCallId: null,
       pendingCredentialChallenge: null,
       isStreaming: false,
@@ -1323,9 +1371,11 @@ export const useAIStore = create<AIState>()((set, get) => ({
   setProviderStatus: (status: AIProviderStatus) => {
     set((state) => {
       const selectable = status.providerType === "gateway_inference" && status.models.length > 0;
+      const hasLoadedConversation =
+        Boolean(state.activeConversationId) && state.messages.length > 0;
       const currentAllowed =
         selectable &&
-        status.allowUserModelSelection &&
+        (status.allowUserModelSelection || hasLoadedConversation) &&
         status.models.some((model) => model.id === state.selectedModel);
       const selectedModel = selectable
         ? currentAllowed
@@ -1334,16 +1384,17 @@ export const useAIStore = create<AIState>()((set, get) => ({
         : null;
       const selectedModelOption = status.models.find((model) => model.id === selectedModel);
       const storedReasoningEffort = loadStoredAIReasoningEffort(selectedModel);
-      const selectedReasoningEffort = selectedModelOption?.reasoningEfforts.includes(
-        state.selectedReasoningEffort ?? ""
-      )
-        ? state.selectedReasoningEffort
-        : selectedModelOption?.reasoningEfforts.includes(storedReasoningEffort ?? "")
-          ? storedReasoningEffort
-          : selectedModelOption?.defaultReasoningEffort ||
-            selectedModelOption?.reasoningEfforts[0] ||
-            null;
-      storeAIModel(selectedModel);
+      const selectedReasoningEffort =
+        hasLoadedConversation && currentAllowed
+          ? state.selectedReasoningEffort
+          : selectedModelOption?.reasoningEfforts.includes(state.selectedReasoningEffort ?? "")
+            ? state.selectedReasoningEffort
+            : selectedModelOption?.reasoningEfforts.includes(storedReasoningEffort ?? "")
+              ? storedReasoningEffort
+              : selectedModelOption?.defaultReasoningEffort ||
+                selectedModelOption?.reasoningEfforts[0] ||
+                null;
+      if (!hasLoadedConversation) storeAIModel(selectedModel);
       return {
         providerStatus: status,
         selectedModel,
@@ -1358,8 +1409,9 @@ export const useAIStore = create<AIState>()((set, get) => ({
     get().setProviderStatus(status);
   },
 
-  setSelectedModel: (model: string) => {
-    const status = get().providerStatus;
+  setSelectedModel: async (model: string) => {
+    const state = get();
+    const status = state.providerStatus;
     if (
       status?.providerType !== "gateway_inference" ||
       !status.allowUserModelSelection ||
@@ -1373,11 +1425,42 @@ export const useAIStore = create<AIState>()((set, get) => ({
     const selectedReasoningEffort = option?.reasoningEfforts.includes(storedReasoningEffort ?? "")
       ? storedReasoningEffort
       : option?.defaultReasoningEffort || option?.reasoningEfforts[0] || null;
+    const previousModel = state.selectedModel;
+    const previousReasoningEffort = state.selectedReasoningEffort;
     set({ selectedModel: model, selectedReasoningEffort });
+    if (!state.activeConversationId || state.messages.length === 0) return;
+
+    try {
+      const conversation = await updateConversationProvider(state.activeConversationId, {
+        model,
+        reasoningEffort: selectedReasoningEffort,
+      });
+      if (get().activeConversationId !== conversation.id) return;
+      set({
+        messages: applyConversationStatus(
+          normalizeConversationMessages(conversation.messages, conversation.id),
+          conversation.id,
+          conversation.status,
+          conversation.blockReason
+        ),
+        selectedModel: conversation.model ?? model,
+        selectedReasoningEffort: conversation.reasoningEffort ?? selectedReasoningEffort,
+      });
+    } catch (error) {
+      if (get().activeConversationId === state.activeConversationId) {
+        set({
+          selectedModel: previousModel,
+          selectedReasoningEffort: previousReasoningEffort,
+        });
+      }
+      storeAIModel(previousModel);
+      throw error;
+    }
   },
 
-  setSelectedReasoningEffort: (effort: string) => {
-    const { providerStatus, selectedModel } = get();
+  setSelectedReasoningEffort: async (effort: string) => {
+    const state = get();
+    const { providerStatus, selectedModel } = state;
     const option = providerStatus?.models.find((model) => model.id === selectedModel);
     if (
       providerStatus?.providerType !== "gateway_inference" ||
@@ -1388,10 +1471,33 @@ export const useAIStore = create<AIState>()((set, get) => ({
     }
     storeAIReasoningEffort(selectedModel, effort);
     set({ selectedReasoningEffort: effort });
+    if (!state.activeConversationId || state.messages.length === 0) return;
+
+    try {
+      const conversation = await updateConversationProvider(state.activeConversationId, {
+        model: selectedModel,
+        reasoningEffort: effort,
+      });
+      if (get().activeConversationId !== conversation.id) return;
+      set({
+        selectedModel: conversation.model ?? selectedModel,
+        selectedReasoningEffort: conversation.reasoningEffort ?? effort,
+      });
+    } catch (error) {
+      if (get().activeConversationId === state.activeConversationId) {
+        set({ selectedReasoningEffort: state.selectedReasoningEffort });
+      }
+      storeAIReasoningEffort(selectedModel, state.selectedReasoningEffort);
+      throw error;
+    }
   },
 
   setMessages: (messages: AIMessage[]) => {
     set({ messages });
+  },
+
+  closeContextUsageDialog: () => {
+    set({ contextUsageDialog: null });
   },
 
   handleSlashCommand: async (input: string): Promise<boolean> => {
@@ -1407,6 +1513,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
           conversationId: activeConversationId,
         });
       }
+      const draftSelection = resolveDraftProviderSelection(get().providerStatus);
       set({
         messages: [],
         savedName: null,
@@ -1415,6 +1522,8 @@ export const useAIStore = create<AIState>()((set, get) => ({
         activeRunId: null,
         isCompactingContext: false,
         lastContext: null,
+        contextUsageDialog: null,
+        ...draftSelection,
       });
       return true;
     }
@@ -1487,36 +1596,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
         providerStatus?.providerType === "gateway_inference" ? selectedModel : undefined,
         providerStatus?.providerType === "gateway_inference" ? selectedReasoningEffort : undefined
       );
-      const sourceNote =
-        usage.source === "fallback"
-          ? "\n- Estimate source: fallback (context estimate unavailable)"
-          : usage.source === "settings"
-            ? "\n- Estimate source: local chat + AI settings fallback"
-            : "";
-      const systemBreakdown =
-        usage.systemBreakdown.length > 0
-          ? `\n\n**System breakdown**\n${[...usage.systemBreakdown]
-              .sort((left, right) => right.tokens - left.tokens)
-              .slice(0, 6)
-              .map((item) => `- ${item.label}: ~${item.tokens.toLocaleString()} tokens`)
-              .join("\n")}`
-          : "";
-      const toolBreakdown =
-        usage.toolBreakdown.length > 0
-          ? `\n\n**Tool breakdown**\n${usage.toolBreakdown
-              .slice(0, 6)
-              .map((item) => `- ${item.label}: ~${item.tokens.toLocaleString()} tokens`)
-              .join("\n")}`
-          : "";
-
-      const localMsg: AIMessage = {
-        id: generateId(),
-        role: "assistant",
-        content: `**Context Usage**\n- Messages: ${usage.messageCount}\n- Estimated tokens: ${usage.estimatedTokens.toLocaleString()} / ${usage.limit.toLocaleString()} (${usage.percent}%)\n- Chat: ~${usage.chatTokens.toLocaleString()} tokens\n- System prompt: ~${usage.systemTokens.toLocaleString()} tokens\n- Tools: ~${usage.toolsTokens.toLocaleString()} tokens (${usage.toolCount} available)\n- Reasoning: ${usage.reasoningEffort}${sourceNote}${systemBreakdown}${toolBreakdown}`,
-        createdAt: nowIso(),
-        localOnly: true,
-      };
-      set((state) => ({ messages: [...state.messages, localMsg] }));
+      set({ contextUsageDialog: usage });
       return true;
     }
 
@@ -1552,6 +1632,7 @@ export function resetAIStateForAuthChange() {
     providerStatus: null,
     selectedModel: loadStoredAIModel(),
     selectedReasoningEffort: loadStoredAIReasoningEffort(loadStoredAIModel()),
+    contextUsageDialog: null,
   });
 }
 
@@ -1795,6 +1876,12 @@ function projectConversationSnapshot(
         isActiveRunStatus(snapshot.runtime.activeRun.status)
     ),
     lastContext: snapshot.conversation.lastContext,
+    ...(typeof snapshot.conversation.model === "string"
+      ? {
+          selectedModel: snapshot.conversation.model,
+          selectedReasoningEffort: snapshot.conversation.reasoningEffort ?? null,
+        }
+      : {}),
     pendingApprovalToolCallId:
       snapshot.runtime.pendingApprovals[0]?.toolCallId ?? pendingQuestions[0]?.toolCallId ?? null,
     pendingCredentialChallenge,
@@ -2032,10 +2119,26 @@ function normalizeConversationMessage(
         : undefined,
     conversationStatus: normalizeConversationBlockStatus(message.conversationStatus),
     blockReason: typeof message.blockReason === "string" ? message.blockReason : undefined,
+    modelChange: normalizeModelChange(message.modelChange),
     localOnly: message.localOnly === true,
     runError: message.runError === true,
     runId: typeof message.runId === "string" ? message.runId : undefined,
     isStreaming: false,
+  };
+}
+
+function normalizeModelChange(value: unknown): AIMessage["modelChange"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.fromModel !== "string" || typeof record.toModel !== "string") {
+    return undefined;
+  }
+  return {
+    fromModel: record.fromModel,
+    toModel: record.toModel,
+    fromDisplayName:
+      typeof record.fromDisplayName === "string" ? record.fromDisplayName : undefined,
+    toDisplayName: typeof record.toDisplayName === "string" ? record.toDisplayName : undefined,
   };
 }
 

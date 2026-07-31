@@ -32,6 +32,12 @@ export interface AIMessage {
   compactTailMessageCount?: number;
   conversationStatus?: Exclude<AIConversationStatus, "active">;
   blockReason?: string;
+  modelChange?: {
+    fromModel: string;
+    toModel: string;
+    fromDisplayName?: string;
+    toDisplayName?: string;
+  };
   rawToolCalls?: Array<{
     id: string;
     type: string;
@@ -317,6 +323,8 @@ export interface AIConversationRuntimeSnapshot {
     messageCount?: number;
     status?: AIConversationStatus;
     blockReason?: string | null;
+    model?: string | null;
+    reasoningEffort?: string | null;
     lastContext: PageContext | null;
     discoveredToolsets: string[];
     checkpoint: Record<string, unknown> | null;

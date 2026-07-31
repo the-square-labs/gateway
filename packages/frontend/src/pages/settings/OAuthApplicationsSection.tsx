@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import {
   buildFinalScopes,
   deriveAllowedResourceIdsByScope,
@@ -79,9 +80,12 @@ export function OAuthApplicationsSection({
     () => api.getCached<OAuthAuthorization[]>("settings:oauth-authorizations") === undefined
   );
   const [revokingKey, setRevokingKey] = useState<string | null>(null);
-  const [selectedAuthorization, setSelectedAuthorization] = useState<OAuthAuthorization | null>(
-    null
-  );
+  const {
+    open: authorizationOpen,
+    value: selectedAuthorization,
+    setValue: setSelectedAuthorization,
+    onOpenChange: onAuthorizationOpenChange,
+  } = useDeferredDialogState<OAuthAuthorization>();
   const [editableBaseScopes, setEditableBaseScopes] = useState<string[]>([]);
   const [editableResourceScopes, setEditableResourceScopes] = useState<Record<string, string[]>>(
     {}
@@ -238,11 +242,12 @@ export function OAuthApplicationsSection({
         api.setCache("settings:oauth-authorizations", next);
         return next;
       });
-      setSelectedAuthorization((current) =>
-        current?.clientId === authorization.clientId && current.resource === authorization.resource
-          ? null
-          : current
-      );
+      if (
+        selectedAuthorization?.clientId === authorization.clientId &&
+        selectedAuthorization.resource === authorization.resource
+      ) {
+        setSelectedAuthorization(null);
+      }
       toast.success("OAuth application disconnected");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to disconnect application");
@@ -332,18 +337,7 @@ export function OAuthApplicationsSection({
         )}
       </PanelShell>
 
-      <Dialog
-        open={!!selectedAuthorization}
-        onOpenChange={(open) => {
-          if (!open) {
-            setSelectedAuthorization(null);
-            setEditableBaseScopes([]);
-            setEditableResourceScopes({});
-            setInitialResourceLimitedScopes([]);
-            setScopeSearch("");
-          }
-        }}
-      >
+      <Dialog open={authorizationOpen} onOpenChange={onAuthorizationOpenChange}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>OAuth Application</DialogTitle>
