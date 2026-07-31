@@ -38,6 +38,29 @@ interface RelaySession {
   reject: (error: Error) => void;
 }
 
+interface DownloadSession {
+  key: string;
+  migrationId: string;
+  artifactId: string;
+  source: TransferConnection;
+  offset: bigint;
+  controller: ReadableStreamDefaultController<Uint8Array>;
+  paused: boolean;
+}
+
+interface UploadSession {
+  key: string;
+  migrationId: string;
+  artifactId: string;
+  target: TransferConnection;
+  offset: bigint;
+  iterator: AsyncIterator<Uint8Array>;
+  pendingBytes: number;
+  sentEof: boolean;
+  resolve: (offset: number) => void;
+  reject: (error: Error) => void;
+}
+
 function relayKey(migrationId: string, artifactId: string): string {
   return `${migrationId}:${artifactId}`;
 }
@@ -53,6 +76,21 @@ function offsetOf(value: string): bigint {
 class MigrationTransferRelay {
   private connections = new Map<string, TransferConnection>();
   private relays = new Map<string, RelaySession>();
+  private downloads = new Map<string, DownloadSession>();
+  private uploads = new Map<string, UploadSession>();
+
+  private assertNodesIdle(...nodeIds: string[]): void {
+    const requested = new Set(nodeIds);
+    const busy =
+      [...this.relays.values()].some(
+        (session) => requested.has(session.source.nodeId) || requested.has(session.target.nodeId)
+      ) ||
+      [...this.downloads.values()].some((session) => requested.has(session.source.nodeId)) ||
+      [...this.uploads.values()].some((session) => requested.has(session.target.nodeId));
+    if (busy) {
+      throw new AppError(409, 'MIGRATION_TRANSFER_ACTIVE', 'Another archive transfer is active on this node');
+    }
+  }
 
   register(connection: TransferConnection): void {
     const previous = this.connections.get(connection.nodeId);
@@ -66,6 +104,14 @@ class MigrationTransferRelay {
       if (relay.source.stream === stream || relay.target.stream === stream) {
         this.fail(relay, new AppError(503, 'MIGRATION_NODE_UNAVAILABLE', 'Migration transfer stream disconnected'));
       }
+    }
+    for (const session of this.downloads.values()) {
+      if (session.source.stream === stream)
+        this.failDownload(session, new AppError(503, 'MIGRATION_NODE_UNAVAILABLE', 'Archive stream disconnected'));
+    }
+    for (const session of this.uploads.values()) {
+      if (session.target.stream === stream)
+        this.failUpload(session, new AppError(503, 'MIGRATION_NODE_UNAVAILABLE', 'Archive stream disconnected'));
     }
   }
 
@@ -86,6 +132,7 @@ class MigrationTransferRelay {
     if (!source || !target) {
       throw new AppError(503, 'MIGRATION_NODE_UNAVAILABLE', 'Both Docker migration streams must be connected');
     }
+    this.assertNodesIdle(args.sourceNodeId, args.targetNodeId);
     const key = relayKey(args.migrationId, args.artifactId);
     if (this.relays.has(key)) {
       throw new AppError(409, 'MIGRATION_TRANSFER_ACTIVE', 'Artifact transfer is already active');
@@ -116,6 +163,71 @@ class MigrationTransferRelay {
     });
   }
 
+  readArtifact(args: { nodeId: string; migrationId: string; artifactId: string }): ReadableStream<Uint8Array> {
+    const source = this.connections.get(args.nodeId);
+    if (!source) throw new AppError(503, 'MIGRATION_NODE_UNAVAILABLE', 'Docker archive stream is not connected');
+    this.assertNodesIdle(args.nodeId);
+    const key = relayKey(args.migrationId, args.artifactId);
+    if (this.relays.has(key) || this.downloads.has(key) || this.uploads.has(key)) {
+      throw new AppError(409, 'MIGRATION_TRANSFER_ACTIVE', 'Archive transfer is already active');
+    }
+    return new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        this.downloads.set(key, {
+          key,
+          migrationId: args.migrationId,
+          artifactId: args.artifactId,
+          source,
+          offset: 0n,
+          controller,
+          paused: false,
+        });
+        source.stream.write({ read: { migrationId: args.migrationId, artifactId: args.artifactId, offset: '0' } });
+      },
+      cancel: () => {
+        const session = this.downloads.get(key);
+        if (session) this.failDownload(session, new Error('Archive download was cancelled'), false);
+      },
+      pull: () => {
+        const session = this.downloads.get(key);
+        if (session?.paused) {
+          session.paused = false;
+          session.source.stream.resume();
+        }
+      },
+    });
+  }
+
+  writeArtifact(args: {
+    nodeId: string;
+    migrationId: string;
+    artifactId: string;
+    chunks: AsyncIterable<Uint8Array>;
+  }): Promise<number> {
+    const target = this.connections.get(args.nodeId);
+    if (!target) throw new AppError(503, 'MIGRATION_NODE_UNAVAILABLE', 'Docker archive stream is not connected');
+    this.assertNodesIdle(args.nodeId);
+    const key = relayKey(args.migrationId, args.artifactId);
+    if (this.relays.has(key) || this.downloads.has(key) || this.uploads.has(key)) {
+      throw new AppError(409, 'MIGRATION_TRANSFER_ACTIVE', 'Archive transfer is already active');
+    }
+    return new Promise<number>((resolve, reject) => {
+      this.uploads.set(key, {
+        key,
+        migrationId: args.migrationId,
+        artifactId: args.artifactId,
+        target,
+        offset: 0n,
+        iterator: args.chunks[Symbol.asyncIterator](),
+        pendingBytes: 0,
+        sentEof: false,
+        resolve,
+        reject,
+      });
+      target.stream.write({ write: { migrationId: args.migrationId, artifactId: args.artifactId, offset: '0' } });
+    });
+  }
+
   handle(nodeId: string, message: MigrationTransferMessage): void {
     if (message.chunk) this.handleChunk(nodeId, message.chunk);
     else if (message.ack) this.handleAck(nodeId, message.ack);
@@ -123,6 +235,40 @@ class MigrationTransferRelay {
   }
 
   private handleChunk(nodeId: string, chunk: MigrationArtifactChunk): void {
+    const download = this.downloads.get(relayKey(chunk.migrationId, chunk.artifactId));
+    if (download && download.source.nodeId === nodeId) {
+      try {
+        if (
+          offsetOf(chunk.offset) !== download.offset ||
+          chunk.data.length > MAX_CHUNK_BYTES ||
+          (chunk.eof && chunk.data.length > 0)
+        ) {
+          throw new AppError(502, 'MIGRATION_TRANSFER_PROTOCOL', 'Archive chunk is invalid or out of sequence');
+        }
+        if (chunk.data.length > 0) {
+          download.controller.enqueue(new Uint8Array(chunk.data));
+          download.offset += BigInt(chunk.data.length);
+          download.paused = true;
+          download.source.stream.pause();
+          download.source.stream.write({
+            ack: {
+              migrationId: download.migrationId,
+              artifactId: download.artifactId,
+              acknowledgedOffset: download.offset.toString(),
+              complete: false,
+            },
+          });
+        }
+        if (chunk.eof) {
+          this.downloads.delete(download.key);
+          download.source.stream.resume();
+          download.controller.close();
+        }
+      } catch (error) {
+        this.failDownload(download, error instanceof Error ? error : new Error(String(error)));
+      }
+      return;
+    }
     const session = this.relays.get(relayKey(chunk.migrationId, chunk.artifactId));
     if (!session || session.source.nodeId !== nodeId) return;
     try {
@@ -145,6 +291,26 @@ class MigrationTransferRelay {
   }
 
   private handleAck(nodeId: string, ack: MigrationArtifactAck): void {
+    const upload = this.uploads.get(relayKey(ack.migrationId, ack.artifactId));
+    if (upload && upload.target.nodeId === nodeId) {
+      try {
+        const expected = upload.offset + BigInt(upload.pendingBytes);
+        if (offsetOf(ack.acknowledgedOffset) !== expected || ack.complete !== upload.sentEof) {
+          throw new AppError(502, 'MIGRATION_TRANSFER_PROTOCOL', 'Archive acknowledgement is invalid');
+        }
+        upload.offset = expected;
+        upload.pendingBytes = 0;
+        if (upload.sentEof) {
+          this.uploads.delete(upload.key);
+          upload.resolve(Number(upload.offset));
+        } else {
+          void this.advanceUpload(upload);
+        }
+      } catch (error) {
+        this.failUpload(upload, error instanceof Error ? error : new Error(String(error)));
+      }
+      return;
+    }
     const session = this.relays.get(relayKey(ack.migrationId, ack.artifactId));
     if (!session || session.target.nodeId !== nodeId) return;
     try {
@@ -191,6 +357,22 @@ class MigrationTransferRelay {
   }
 
   private handleError(nodeId: string, message: MigrationArtifactError): void {
+    const download = this.downloads.get(relayKey(message.migrationId, message.artifactId));
+    if (download && download.source.nodeId === nodeId) {
+      this.failDownload(
+        download,
+        new AppError(502, 'MIGRATION_TRANSFER_FAILED', message.message || 'Archive transfer failed')
+      );
+      return;
+    }
+    const upload = this.uploads.get(relayKey(message.migrationId, message.artifactId));
+    if (upload && upload.target.nodeId === nodeId) {
+      this.failUpload(
+        upload,
+        new AppError(502, 'MIGRATION_TRANSFER_FAILED', message.message || 'Archive transfer failed')
+      );
+      return;
+    }
     const session = this.relays.get(relayKey(message.migrationId, message.artifactId));
     if (!session || (session.source.nodeId !== nodeId && session.target.nodeId !== nodeId)) return;
     this.fail(session, new AppError(502, 'MIGRATION_TRANSFER_FAILED', message.message || 'Artifact transfer failed'));
@@ -208,6 +390,62 @@ class MigrationTransferRelay {
     session.source.stream.write(message);
     session.target.stream.write(message);
     session.source.stream.resume();
+    session.reject(error);
+  }
+
+  private async advanceUpload(session: UploadSession): Promise<void> {
+    try {
+      const next = await session.iterator.next();
+      if (!this.uploads.has(session.key)) return;
+      if (next.done) {
+        session.sentEof = true;
+        session.target.stream.write({
+          chunk: {
+            migrationId: session.migrationId,
+            artifactId: session.artifactId,
+            offset: session.offset.toString(),
+            data: Buffer.alloc(0),
+            eof: true,
+          },
+        });
+        return;
+      }
+      const data = Buffer.from(next.value);
+      if (data.length === 0) return void this.advanceUpload(session);
+      if (data.length > Math.min(MAX_CHUNK_BYTES, session.target.maxChunkBytes)) {
+        throw new AppError(413, 'ARCHIVE_CHUNK_TOO_LARGE', 'Archive image chunk exceeds 1 MiB');
+      }
+      session.pendingBytes = data.length;
+      session.target.stream.write({
+        chunk: {
+          migrationId: session.migrationId,
+          artifactId: session.artifactId,
+          offset: session.offset.toString(),
+          data,
+          eof: false,
+        },
+      });
+    } catch (error) {
+      this.failUpload(session, error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  private failDownload(session: DownloadSession, error: Error, signalDaemon = true): void {
+    if (!this.downloads.delete(session.key)) return;
+    if (signalDaemon)
+      session.source.stream.write({
+        error: { migrationId: session.migrationId, artifactId: session.artifactId, message: error.message },
+      });
+    session.source.stream.resume();
+    session.controller.error(error);
+  }
+
+  private failUpload(session: UploadSession, error: Error): void {
+    if (!this.uploads.delete(session.key)) return;
+    session.target.stream.write({
+      error: { migrationId: session.migrationId, artifactId: session.artifactId, message: error.message },
+    });
+    void session.iterator.return?.();
     session.reject(error);
   }
 }

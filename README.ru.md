@@ -16,7 +16,7 @@ Gateway дает небольшим инфраструктурным коман�
 - Управлять несколькими proxy, Docker и monitoring узлами без открытия входящих management-портов на этих узлах.
 - Дать операторам сфокусированный UI и API для production-задач без выдачи root shell access.
 - Централизовать TLS, внутреннюю PKI, ACME-сертификаты, домены, статус-страницы, уведомления и audit history.
-- Управлять Docker-контейнерами, deployments, логами, файлами, консолями, secrets и registry workflows из одного места.
+- Управлять Docker-контейнерами, deployments, portable и registry-backed `.gwca` archives, логами, файлами, консолями, secrets и registry workflows из одного места.
 - Предоставить контролируемую автоматизацию через API tokens, OAuth, CI/CD webhooks и MCP clients.
 
 ## Самая быстрая установка
@@ -55,6 +55,7 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 | Понять, чем может управлять Gateway | [Capabilities](docs/capabilities.md) |
 | Установить Gateway | [Installation guide](docs/installation.md) |
 | Добавить nginx, Docker или monitoring узлы | [Nodes and daemons](docs/nodes.md) |
+| Экспортировать или импортировать Docker-контейнеры со встроенным image или без него | [GWCA container archives](docs/docker-container-archives.md) |
 | Настроить tokens, OAuth, MCP, logging, updates и AI | [Operations guide](docs/operations.md) |
 | Настроить multi-provider inference proxy | [Inference proxy](docs/inference.md) |
 | Изучить security model | [Security model](docs/security.md) |

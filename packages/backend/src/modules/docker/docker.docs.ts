@@ -10,6 +10,8 @@ import {
   UnknownDataResponseSchema,
 } from '@/lib/openapi.js';
 import {
+  ContainerArchiveExportQuerySchema,
+  ContainerArchiveImportQuerySchema,
   ContainerCreateSchema,
   ContainerDuplicateSchema,
   ContainerKillSchema,
@@ -180,6 +182,34 @@ export const duplicateContainerRoute = appRoute({
   tags: ['Docker Containers'],
   summary: 'Duplicate a container',
   request: { params: containerParams, ...jsonBody(ContainerDuplicateSchema) },
+  responses: createdJson(UnknownDataResponseSchema),
+});
+export const exportContainerArchiveRoute = appRoute({
+  method: 'get',
+  path: '/nodes/{nodeId}/containers/{containerId}/archive',
+  tags: ['Docker Containers'],
+  summary: 'Stream a Gateway container archive',
+  request: { params: containerParams, query: ContainerArchiveExportQuerySchema },
+  responses: {
+    200: {
+      description: 'GWCA v1 stream. Volume contents are never included.',
+      content: { 'application/vnd.wiolett.gwca': { schema: { type: 'string', format: 'binary' } } },
+    },
+  },
+});
+export const importContainerArchiveRoute = appRoute({
+  method: 'post',
+  path: '/nodes/{nodeId}/containers/archive',
+  tags: ['Docker Containers'],
+  summary: 'Import a streamed Gateway container archive',
+  request: {
+    params: nodeParams,
+    query: ContainerArchiveImportQuerySchema,
+    body: {
+      required: true,
+      content: { 'application/vnd.wiolett.gwca': { schema: { type: 'string', format: 'binary' } } },
+    },
+  },
   responses: createdJson(UnknownDataResponseSchema),
 });
 export const updateContainerRoute = appRoute({

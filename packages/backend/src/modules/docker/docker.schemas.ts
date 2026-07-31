@@ -114,6 +114,39 @@ export const ContainerStopSchema = z.object({ timeout: DockerStopTimeoutSchema.o
 export const ContainerKillSchema = z.object({ signal: z.string().default('SIGKILL') });
 export const ContainerRenameSchema = z.object({ name: ContainerNameSchema });
 export const ContainerDuplicateSchema = z.object({ name: ContainerNameSchema });
+export const ContainerArchiveExportQuerySchema = z.object({
+  imageMode: z.enum(['portable', 'registry']).default('portable'),
+  includeWritableLayer: z.preprocess(
+    (value) => (value === 'true' ? true : value === 'false' ? false : value),
+    z.boolean().default(false)
+  ),
+  includeSecrets: z.preprocess(
+    (value) => (value === 'true' ? true : value === 'false' ? false : value),
+    z.boolean().default(false)
+  ),
+});
+const ContainerArchiveStringMappingsSchema = z
+  .record(z.string().min(1).max(512), z.string().min(1).max(4096))
+  .refine((value) => Object.keys(value).length <= 256, 'Too many archive mappings');
+export const ContainerArchiveResolutionSchema = z.object({
+  networks: ContainerArchiveStringMappingsSchema.optional(),
+  createNetworks: z.array(z.string().min(1).max(512)).max(256).optional(),
+  bindPaths: ContainerArchiveStringMappingsSchema.optional(),
+  volumes: ContainerArchiveStringMappingsSchema.optional(),
+  createVolumes: z.array(z.string().min(1).max(512)).max(256).optional(),
+  ports: z
+    .record(z.string().min(1).max(128), z.number().int().min(0).max(65535))
+    .refine((value) => Object.keys(value).length <= 256, 'Too many archive port mappings')
+    .optional(),
+});
+
+export const ContainerArchiveImportQuerySchema = z.object({
+  name: ContainerNameSchema,
+  resolution: z
+    .string()
+    .max(32 * 1024)
+    .optional(),
+});
 
 // Image pull
 export const ImagePullSchema = z.object({

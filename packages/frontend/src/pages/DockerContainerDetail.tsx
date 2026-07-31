@@ -1,14 +1,27 @@
-import { Copy, Pin, Play, RotateCcw, Skull, Square, Trash2, Truck, Type } from "lucide-react";
+import {
+  Archive,
+  Copy,
+  Pin,
+  Play,
+  RotateCcw,
+  Skull,
+  Square,
+  Trash2,
+  Truck,
+  Type,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
+import { PanelShell } from "@/components/common/PanelShell";
 import {
   HeaderOverflowMenu,
   ResponsiveHeaderActions,
 } from "@/components/common/ResponsiveHeaderActions";
+import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { DockerMigrationDialog } from "@/components/docker/DockerMigrationDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,18 +34,26 @@ import {
 } from "@/components/ui/dialog";
 import { HealthBars } from "@/components/ui/health-bars";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
-import { formatDisplayImageRef } from "@/lib/docker-image-ref";
+import { formatDisplayImageRef, resolveContainerImageReference } from "@/lib/docker-image-ref";
 import {
   isDockerMigrationOwnedByTab,
   resolveMigrationTarget,
 } from "@/lib/docker-migration-navigation";
 import { dockerContainerRoute } from "@/lib/resource-routes";
 import { getReturnNavigationTarget, preserveReturnNavigationState } from "@/lib/return-navigation";
+import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
@@ -148,6 +169,30 @@ export function DockerContainerDetail({
   const [migrationOpen, setMigrationOpen] = useState(false);
   const [restoredMigration, setRestoredMigration] = useState<DockerMigration | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveImageMode, setArchiveImageMode] = useState<"portable" | "registry">("portable");
+  const [archiveWritableLayer, setArchiveWritableLayer] = useState(false);
+  const [archiveIncludeSecrets, setArchiveIncludeSecrets] = useState(false);
+  const [archiveExporting, setArchiveExporting] = useState(false);
+  const [archiveDevPreview, setArchiveDevPreview] = useState(false);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || typeof window === "undefined") return;
+    const gatewayDev = (window.gatewayDev ??= {});
+    const openGwcaExportModal = () => {
+      setArchiveDevPreview(true);
+      setArchiveImageMode("portable");
+      setArchiveWritableLayer(true);
+      setArchiveIncludeSecrets(true);
+      setArchiveOpen(true);
+    };
+    gatewayDev.openGwcaExportModal = openGwcaExportModal;
+    return () => {
+      if (gatewayDev.openGwcaExportModal === openGwcaExportModal) {
+        delete gatewayDev.openGwcaExportModal;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     setContainerId(resolvedContainerId ?? params.containerId);
@@ -464,6 +509,66 @@ export function DockerContainerDetail({
     }
   };
 
+  const handleArchiveExport = async () => {
+    if (archiveDevPreview) {
+      toast.info("GWCA export development preview", {
+        description: "No archive was downloaded.",
+      });
+      return;
+    }
+    setArchiveExporting(true);
+    const toastId = toast.loading("Exporting container archive...", {
+      description: "Preparing archive",
+      duration: Infinity,
+      dismissible: false,
+    });
+    try {
+      const archive = await api.downloadContainerArchive(
+        nodeId!,
+        containerId!,
+        archiveWritableLayer,
+        archiveImageMode,
+        archiveIncludeSecrets,
+        ({ loaded, total }) => {
+          const description =
+            total > 0
+              ? `${Math.min(100, Math.round((loaded / total) * 100))}% (${formatBytes(loaded)} / ${formatBytes(total)})`
+              : loaded > 0
+                ? `${formatBytes(loaded)} downloaded`
+                : "Preparing archive";
+          toast.loading("Exporting container archive...", {
+            id: toastId,
+            description,
+            duration: Infinity,
+            dismissible: false,
+          });
+        }
+      );
+
+      const link = document.createElement("a");
+      const downloadUrl = URL.createObjectURL(archive);
+      link.href = downloadUrl;
+      link.download = `${containerDisplayName(container?.Name ?? "container")}.gwca`;
+      link.click();
+      URL.revokeObjectURL(downloadUrl);
+      setArchiveOpen(false);
+      toast.success("Container archive downloaded", {
+        id: toastId,
+        duration: 5000,
+        dismissible: true,
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to export archive", {
+        id: toastId,
+        description: null,
+        duration: 8000,
+        dismissible: true,
+      });
+    } finally {
+      setArchiveExporting(false);
+    }
+  };
+
   const openRename = () => {
     setRenameValue(containerDisplayName(container?.Name ?? ""));
     setRenameOpen(true);
@@ -495,7 +600,7 @@ export function DockerContainerDetail({
   const baseState = container?.State?.Status ?? (container?.State?.Running ? "running" : "stopped");
   const state = effectiveTransition ?? baseState;
   const lifecycleActions = containerLifecycleActions(baseState);
-  const image = container?.Config?.Image ?? "";
+  const image = container ? resolveContainerImageReference(container) : "";
   const unavailable = container?.availability === "unavailable";
   const actionDisabled = actionLoading || !!effectiveTransition || unavailable;
   const labels = (container?.Config?.Labels ?? container?.Labels ?? {}) as Record<string, string>;
@@ -624,6 +729,19 @@ export function DockerContainerDetail({
             label: "Duplicate",
             icon: <Copy className="h-4 w-4" />,
             onClick: handleDuplicate,
+            disabled: actionDisabled,
+          },
+        ]
+      : []),
+    ...(canUseFiles && canUseEnvironment
+      ? [
+          {
+            label: "Export archive",
+            icon: <Archive className="h-4 w-4" />,
+            onClick: () => {
+              setArchiveDevPreview(false);
+              setArchiveOpen(true);
+            },
             disabled: actionDisabled,
           },
         ]
@@ -925,6 +1043,103 @@ export function DockerContainerDetail({
               />
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={archiveOpen}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && archiveExporting) return;
+          setArchiveOpen(nextOpen);
+          if (!nextOpen) {
+            setArchiveIncludeSecrets(false);
+            setArchiveDevPreview(false);
+          }
+        }}
+      >
+        <DialogContent
+          className="sm:max-w-md"
+          hideCloseButton={archiveExporting}
+          onEscapeKeyDown={(event) => {
+            if (archiveExporting) event.preventDefault();
+          }}
+          onPointerDownOutside={(event) => {
+            if (archiveExporting) event.preventDefault();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Export container archive</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 text-sm">
+            <p className="text-muted-foreground">
+              Container settings, environment values, and volume declarations are included. Volume
+              contents are not included.
+            </p>
+            <div className="space-y-1.5">
+              <p className="font-medium">Image mode</p>
+              <Select
+                value={archiveImageMode}
+                disabled={archiveExporting}
+                onValueChange={(value) => {
+                  const mode = value as "portable" | "registry";
+                  setArchiveImageMode(mode);
+                  if (mode === "registry") setArchiveWritableLayer(false);
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="portable">Portable · include Docker image</SelectItem>
+                  <SelectItem value="registry">Registry-backed · configuration only</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {archiveImageMode === "portable"
+                  ? "The archive is self-contained and can be imported without registry access."
+                  : "The target node must already have or be able to pull the exact image digest."}
+              </p>
+            </div>
+            <PanelShell>
+              <SettingsControlRow
+                title="Include writable layer"
+                description="Captures current container filesystem changes without pausing it. Concurrent writes may produce an application-inconsistent snapshot."
+                controlsClassName="sm:min-w-0"
+              >
+                <Switch
+                  checked={archiveWritableLayer}
+                  onChange={setArchiveWritableLayer}
+                  disabled={archiveExporting || archiveImageMode === "registry"}
+                  ariaLabel="Include writable container layer"
+                />
+              </SettingsControlRow>
+              {(canUseSecrets || archiveDevPreview) && (
+                <SettingsControlRow
+                  title="Include secrets"
+                  description="Stores decrypted secret values in the archive. Treat the downloaded file as sensitive."
+                  controlsClassName="sm:min-w-0"
+                >
+                  <Switch
+                    checked={archiveIncludeSecrets}
+                    onChange={setArchiveIncludeSecrets}
+                    disabled={archiveExporting}
+                    ariaLabel="Include container secrets"
+                  />
+                </SettingsControlRow>
+              )}
+            </PanelShell>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setArchiveOpen(false)}
+              disabled={archiveExporting}
+            >
+              Cancel
+            </Button>
+            <Button onClick={() => void handleArchiveExport()} disabled={archiveExporting}>
+              {archiveExporting ? "Exporting..." : "Download .gwca"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
       {/* Rename Dialog */}

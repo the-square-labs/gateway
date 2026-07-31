@@ -37,6 +37,7 @@ type DockerPlugin struct {
 	statsCollector *StatsCollector
 	execMgr        *ExecManager
 	migrationStore *migrationArtifactStore
+	archiveStreams *archiveLiveStore
 
 	// Log stream follow support
 	writer          *stream.Writer
@@ -114,6 +115,7 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	if err := p.migrationStore.cleanupStale(time.Now()); err != nil {
 		p.logger.Warn("stale migration artifact cleanup failed", "error", err)
 	}
+	p.archiveStreams = newArchiveLiveStore()
 
 	// Initialize registry credentials map
 	p.registryCreds = make(map[string]string)
@@ -140,7 +142,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		// Store docker version in the NginxVersion field as a capability hint.
 		// The gateway uses DaemonType to interpret this field correctly.
 		NginxVersion: p.version,
-		Capabilities: []string{"docker_deployments_v1", "docker_migration_v1"},
+		Capabilities: []string{"docker_deployments_v1", "docker_migration_v1", "docker_archive_v1"},
 	}
 }
 
@@ -380,11 +382,15 @@ func (p *DockerPlugin) handleContainerCommand(cmd *pb.DockerContainerCommand, re
 			if inspErr == nil {
 				var inspJSON struct {
 					Config struct {
-						Image string `json:"Image"`
+						Image  string            `json:"Image"`
+						Labels map[string]string `json:"Labels"`
 					} `json:"Config"`
 				}
-				if json.Unmarshal(inspData, &inspJSON) == nil && inspJSON.Config.Image != "" {
-					registryAuth = resolveRegistryAuth(inspJSON.Config.Image, regCreds)
+				if json.Unmarshal(inspData, &inspJSON) == nil {
+					imageReference := configuredArchiveImageReference(inspJSON.Config.Image, inspJSON.Config.Labels)
+					if imageReference != "" {
+						registryAuth = resolveRegistryAuth(imageReference, regCreds)
+					}
 				}
 			}
 

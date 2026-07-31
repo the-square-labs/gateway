@@ -49,6 +49,14 @@ func (p *DockerPlugin) handleMigrationCommand(cmd *pb.DockerMigrationCommand, re
 		err = p.migrationStore.heartbeat(cmd.MigrationId)
 	case "capture_manifest":
 		detail, err = p.client.CaptureMigrationManifest(ctx, cmd.ResourceId)
+	case "open_archive_export":
+		detail, err = p.openArchiveExport(ctx, cmd.MigrationId, cmd.ArtifactId, cmd.ResourceId, cmd.ConfigJson)
+	case "open_archive_import":
+		err = p.openArchiveImport(ctx, cmd.MigrationId, cmd.ArtifactId, cmd.ConfigJson)
+	case "finish_archive_import":
+		detail, err = p.finishArchiveImport(ctx, cmd.MigrationId, cmd.ArtifactId, cmd.ConfigJson)
+	case "cleanup_archive_import":
+		err = p.cleanupGwcaImportResources(ctx, cmd.MigrationId)
 	case "prepare_image":
 		detail, err = p.prepareMigrationImage(ctx, cmd.MigrationId, cmd.ArtifactId, cmd.ResourceId)
 	case "prepare_volume":
@@ -74,6 +82,9 @@ func (p *DockerPlugin) handleMigrationCommand(cmd *pb.DockerMigrationCommand, re
 			detail, err = p.client.CreateDeploymentStopped(ctx, request)
 		}
 	case "finalize", "abort":
+		if p.archiveStreams != nil {
+			p.archiveStreams.removeArchive(cmd.MigrationId)
+		}
 		err = p.migrationStore.remove(cmd.MigrationId)
 	default:
 		err = fmt.Errorf("unknown Docker migration action %q", cmd.Action)

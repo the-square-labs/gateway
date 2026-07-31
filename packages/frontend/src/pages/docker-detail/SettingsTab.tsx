@@ -8,6 +8,10 @@ import { DockerHealthCheckSection } from "@/components/docker/DockerHealthCheckS
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  GATEWAY_ARCHIVE_IMAGE_REFERENCE_LABEL,
+  resolveContainerImageReference,
+} from "@/lib/docker-image-ref";
+import {
   type DockerRuntimeCapacity,
   loadDockerRuntimeCapacity,
   UNKNOWN_DOCKER_RUNTIME_CAPACITY,
@@ -241,7 +245,8 @@ export function SettingsTab({
     () => ((data.Name ?? "") as string).replace(/^\//, ""),
     [data.Name]
   );
-  const currentImage = (config.Image ?? "") as string;
+  const configLabels = (config.Labels ?? {}) as Record<string, string>;
+  const currentImage = resolveContainerImageReference(data);
   const { imageName: parsedImageName, tag: parsedTag } = useMemo(() => {
     if (currentImage.includes("@")) {
       return { imageName: currentImage, tag: "" };
@@ -267,7 +272,9 @@ export function SettingsTab({
   const initialWorkdir = (config.WorkingDir ?? "") as string;
   const initialUser = (config.User ?? "") as string;
   const initialHostname = (config.Hostname ?? "") as string;
-  const initialLabels = (config.Labels ?? {}) as Record<string, string>;
+  const initialLabels = Object.fromEntries(
+    Object.entries(configLabels).filter(([key]) => key !== GATEWAY_ARCHIVE_IMAGE_REFERENCE_LABEL)
+  );
 
   const [ports, setPorts] = useState<PortMapping[]>(initialPorts);
   const [mounts, setMounts] = useState<MountEntry[]>(initialMounts);

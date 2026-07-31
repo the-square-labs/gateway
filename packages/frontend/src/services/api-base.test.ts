@@ -13,6 +13,10 @@ class TestApiClient extends ApiClientBase {
   getRouteContextThing() {
     return this.requestRouteContext<{ value: number }>("/route-context");
   }
+
+  downloadThing(onProgress: (progress: { loaded: number; total: number }) => void) {
+    return this.requestBinary("/binary", {}, onProgress);
+  }
 }
 
 describe("ApiClientBase", () => {
@@ -147,6 +151,33 @@ describe("ApiClientBase", () => {
     );
     const headers = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as Headers;
     expect(headers.has("Authorization")).toBe(false);
+  });
+
+  it("reports streamed binary download progress until the response is complete", async () => {
+    const client = new TestApiClient();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2]));
+        controller.enqueue(new Uint8Array([3, 4, 5]));
+        controller.close();
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(stream, {
+        status: 200,
+        headers: { "Content-Length": "5" },
+      })
+    );
+    const progress = vi.fn();
+
+    const bytes = await client.downloadThing(progress);
+
+    expect(Array.from(new Uint8Array(bytes))).toEqual([1, 2, 3, 4, 5]);
+    expect(progress.mock.calls).toEqual([
+      [{ loaded: 0, total: 5 }],
+      [{ loaded: 2, total: 5 }],
+      [{ loaded: 5, total: 5 }],
+    ]);
   });
 
   it("preserves JSON error details and does not enter maintenance mode for ordinary 5xx API responses", async () => {

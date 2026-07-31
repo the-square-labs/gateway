@@ -16,7 +16,7 @@ Use it when you want to:
 - Operate multiple proxy, Docker, and monitoring nodes without opening inbound management ports on those nodes.
 - Give operators a focused UI and API for production tasks without giving them root shell access.
 - Centralize TLS, internal PKI, ACME certificates, domains, status pages, notifications, and audit history.
-- Manage Docker containers, deployments, logs, files, consoles, secrets, and registry workflows from one place.
+- Manage Docker containers, deployments, portable or registry-backed `.gwca` archives, logs, files, consoles, secrets, and registry workflows from one place.
 - Expose controlled automation through API tokens, OAuth, CI/CD webhooks, and MCP clients.
 
 ## Fastest Install
@@ -55,6 +55,7 @@ For flags, non-interactive installs, custom SSL, OIDC details, updates, and node
 | Understand what Gateway can manage | [Capabilities](docs/capabilities.md) |
 | Install Gateway | [Installation guide](docs/installation.md) |
 | Add nginx, Docker, or monitoring nodes | [Nodes and daemons](docs/nodes.md) |
+| Export or import Docker containers with or without an embedded image | [GWCA container archives](docs/docker-container-archives.md) |
 | Configure tokens, OAuth, MCP, logging, updates, and AI | [Operations guide](docs/operations.md) |
 | Configure the multi-provider inference proxy | [Inference proxy](docs/inference.md) |
 | Review the security model | [Security model](docs/security.md) |

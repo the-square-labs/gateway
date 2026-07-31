@@ -19,6 +19,27 @@ type migrationIncomingArtifact struct {
 	artifactID  string
 	offset      int64
 	file        *os.File
+	writer      io.WriteCloser
+}
+
+func (a *migrationIncomingArtifact) close() error {
+	if a.file != nil {
+		return a.file.Close()
+	}
+	if a.writer != nil {
+		return a.writer.Close()
+	}
+	return nil
+}
+
+func (a *migrationIncomingArtifact) write(data []byte) (int, error) {
+	if a.file != nil {
+		return a.file.Write(data)
+	}
+	if a.writer != nil {
+		return a.writer.Write(data)
+	}
+	return 0, io.ErrClosedPipe
 }
 
 func (p *DockerPlugin) RunMigrationStream(ctx context.Context, conn *grpc.ClientConn, nodeID string) {
@@ -48,7 +69,7 @@ func (p *DockerPlugin) runMigrationStream(ctx context.Context, conn *grpc.Client
 	var incoming *migrationIncomingArtifact
 	defer func() {
 		if incoming != nil {
-			_ = incoming.file.Close()
+			_ = incoming.close()
 		}
 	}()
 	for {
@@ -66,10 +87,18 @@ func (p *DockerPlugin) runMigrationStream(ctx context.Context, conn *grpc.Client
 			}
 		case *pb.MigrationTransferControl_Write:
 			if incoming != nil {
-				_ = incoming.file.Close()
+				_ = incoming.close()
 				incoming = nil
 			}
-			f, err := p.migrationStore.openWrite(payload.Write.MigrationId, payload.Write.ArtifactId, payload.Write.Offset)
+			var f *os.File
+			var writer io.WriteCloser
+			var err error
+			if payload.Write.Offset == 0 && p.archiveStreams != nil {
+				writer, _ = p.archiveStreams.writer(payload.Write.MigrationId, payload.Write.ArtifactId)
+			}
+			if writer == nil {
+				f, err = p.migrationStore.openWrite(payload.Write.MigrationId, payload.Write.ArtifactId, payload.Write.Offset)
+			}
 			if err != nil {
 				_ = sendMigrationStreamError(stream, payload.Write.MigrationId, payload.Write.ArtifactId, err)
 				continue
@@ -79,6 +108,7 @@ func (p *DockerPlugin) runMigrationStream(ctx context.Context, conn *grpc.Client
 				artifactID:  payload.Write.ArtifactId,
 				offset:      payload.Write.Offset,
 				file:        f,
+				writer:      writer,
 			}
 			if err := sendMigrationAck(stream, incoming, false); err != nil {
 				return err
@@ -91,23 +121,25 @@ func (p *DockerPlugin) runMigrationStream(ctx context.Context, conn *grpc.Client
 			complete, err := receiveMigrationChunk(incoming, payload.Chunk)
 			if err != nil {
 				_ = sendMigrationStreamError(stream, incoming.migrationID, incoming.artifactID, err)
-				_ = incoming.file.Close()
+				_ = incoming.close()
 				incoming = nil
 				continue
 			}
 			if complete {
-				if err := incoming.file.Sync(); err != nil {
-					_ = sendMigrationStreamError(stream, incoming.migrationID, incoming.artifactID, fmt.Errorf("fsync migration artifact: %w", err))
-					_ = incoming.file.Close()
-					incoming = nil
-					continue
+				if incoming.file != nil {
+					if err := incoming.file.Sync(); err != nil {
+						_ = sendMigrationStreamError(stream, incoming.migrationID, incoming.artifactID, fmt.Errorf("fsync migration artifact: %w", err))
+						_ = incoming.close()
+						incoming = nil
+						continue
+					}
 				}
 			}
 			if err := sendMigrationAck(stream, incoming, complete); err != nil {
 				return err
 			}
 			if complete {
-				_ = incoming.file.Close()
+				_ = incoming.close()
 				incoming = nil
 			}
 		case *pb.MigrationTransferControl_Heartbeat:
@@ -120,7 +152,7 @@ func (p *DockerPlugin) runMigrationStream(ctx context.Context, conn *grpc.Client
 				"artifact_id", payload.Error.ArtifactId,
 				"error", payload.Error.Message)
 			if incoming != nil {
-				_ = incoming.file.Close()
+				_ = incoming.close()
 				incoming = nil
 			}
 		case *pb.MigrationTransferControl_Ack:
@@ -133,6 +165,13 @@ func (p *DockerPlugin) runMigrationStream(ctx context.Context, conn *grpc.Client
 }
 
 func (p *DockerPlugin) sendMigrationArtifact(stream pb.MigrationTransfer_TransferClient, req *pb.MigrationArtifactRead) error {
+	if req.Offset == 0 && p.archiveStreams != nil {
+		if reader, ok := p.archiveStreams.reader(req.MigrationId, req.ArtifactId); ok {
+			defer p.archiveStreams.remove(req.MigrationId, req.ArtifactId)
+			defer reader.Close()
+			return sendMigrationReader(stream, req, reader)
+		}
+	}
 	f, size, err := p.migrationStore.openRead(req.MigrationId, req.ArtifactId, req.Offset)
 	if err != nil {
 		return err
@@ -166,6 +205,32 @@ func (p *DockerPlugin) sendMigrationArtifact(stream pb.MigrationTransfer_Transfe
 	}}})
 }
 
+func sendMigrationReader(stream pb.MigrationTransfer_TransferClient, req *pb.MigrationArtifactRead, reader io.Reader) error {
+	offset := req.Offset
+	buf := make([]byte, migrationChunkBytes)
+	for {
+		n, readErr := reader.Read(buf)
+		if n > 0 {
+			chunk := append([]byte(nil), buf[:n]...)
+			if err := stream.Send(&pb.MigrationTransferMessage{Payload: &pb.MigrationTransferMessage_Chunk{Chunk: &pb.MigrationArtifactChunk{
+				MigrationId: req.MigrationId, ArtifactId: req.ArtifactId, Offset: offset, Data: chunk,
+			}}}); err != nil {
+				return fmt.Errorf("send archive image chunk: %w", err)
+			}
+			offset += int64(n)
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return fmt.Errorf("read archive image: %w", readErr)
+		}
+	}
+	return stream.Send(&pb.MigrationTransferMessage{Payload: &pb.MigrationTransferMessage_Chunk{Chunk: &pb.MigrationArtifactChunk{
+		MigrationId: req.MigrationId, ArtifactId: req.ArtifactId, Offset: offset, Eof: true,
+	}}})
+}
+
 func receiveMigrationChunk(incoming *migrationIncomingArtifact, chunk *pb.MigrationArtifactChunk) (bool, error) {
 	if chunk.MigrationId != incoming.migrationID || chunk.ArtifactId != incoming.artifactID {
 		return false, fmt.Errorf("artifact chunk identity mismatch")
@@ -180,7 +245,7 @@ func receiveMigrationChunk(incoming *migrationIncomingArtifact, chunk *pb.Migrat
 		return false, fmt.Errorf("EOF artifact chunk must not contain data")
 	}
 	if len(chunk.Data) > 0 {
-		n, err := incoming.file.Write(chunk.Data)
+		n, err := incoming.write(chunk.Data)
 		if err != nil {
 			return false, fmt.Errorf("write migration artifact: %w", err)
 		}

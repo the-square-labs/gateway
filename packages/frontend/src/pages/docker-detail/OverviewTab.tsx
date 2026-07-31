@@ -5,7 +5,7 @@ import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
 import { Badge } from "@/components/ui/badge";
 import { useRealtime } from "@/hooks/use-realtime";
-import { formatDisplayImageRef } from "@/lib/docker-image-ref";
+import { formatDisplayImageRef, resolveContainerImageReference } from "@/lib/docker-image-ref";
 import { api } from "@/services/api";
 import { copyToClipboard, formatDate, type InspectData, STATUS_BADGE } from "./helpers";
 
@@ -21,7 +21,7 @@ export function OverviewTab({
   const transition = data._transition as string | undefined;
   const state = transition ?? data.State?.Status ?? (data.State?.Running ? "running" : "stopped");
   const id = data.Id ?? containerId;
-  const image = formatDisplayImageRef(data.Config?.Image ?? "");
+  const image = formatDisplayImageRef(resolveContainerImageReference(data));
   const created = data.Created ?? "";
   const restartPolicy = data.HostConfig?.RestartPolicy?.Name ?? "no";
   const platform = data.Platform ?? "";

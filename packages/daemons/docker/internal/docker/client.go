@@ -644,7 +644,10 @@ func (c *Client) UpdateContainer(ctx context.Context, id string, newTag string, 
 		return fmt.Errorf("clone container for rollback: %w", err)
 	}
 
-	imageRef := insp.Config.Image
+	imageRef := ""
+	if insp.Config != nil {
+		imageRef = configuredArchiveImageReference(insp.Config.Image, insp.Config.Labels)
+	}
 	if imageRef == "" {
 		imageRef = insp.Image
 	}
@@ -667,6 +670,11 @@ func (c *Client) UpdateContainer(ctx context.Context, id string, newTag string, 
 			return fmt.Errorf("apply tag %q: %w", newTag, err)
 		}
 		imageRef = newRef.String()
+		if insp.Config.Labels != nil {
+			if _, imported := insp.Config.Labels[archiveImageReferenceLabel]; imported {
+				insp.Config.Labels[archiveImageReferenceLabel] = imageRef
+			}
+		}
 
 		pullOpts := client.ImagePullOptions{}
 		if registryAuth != "" {
@@ -867,6 +875,9 @@ func (c *Client) RecreateWithConfig(ctx context.Context, id string, configJSON s
 
 	// Apply labels override
 	if params.Labels != nil {
+		if imageReference := insp.Config.Labels[archiveImageReferenceLabel]; imageReference != "" {
+			params.Labels[archiveImageReferenceLabel] = imageReference
+		}
 		insp.Config.Labels = params.Labels
 	}
 	if params.StopTimeout != nil {
@@ -903,6 +914,10 @@ func (c *Client) RecreateWithConfig(ctx context.Context, id string, configJSON s
 	imageRef := params.Image
 	if imageRef == "" {
 		imageRef = insp.Config.Image
+	} else if insp.Config.Labels != nil {
+		if _, imported := insp.Config.Labels[archiveImageReferenceLabel]; imported {
+			insp.Config.Labels[archiveImageReferenceLabel] = imageRef
+		}
 	}
 	if imageRef == "" {
 		imageRef = insp.Image

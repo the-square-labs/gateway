@@ -34,6 +34,12 @@ export class DockerEnvironmentService {
     await this.write(nodeId, containerName, env);
   }
 
+  async deleteImported(nodeId: string, containerName: string): Promise<void> {
+    await this.db
+      .delete(dockerEnvVars)
+      .where(and(eq(dockerEnvVars.nodeId, nodeId), eq(dockerEnvVars.containerName, containerName)));
+  }
+
   private async write(nodeId: string, containerName: string, env: Record<string, string>): Promise<void> {
     await this.db.transaction(async (tx) => {
       await tx

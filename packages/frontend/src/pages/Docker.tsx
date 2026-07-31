@@ -1,5 +1,14 @@
-import { Box, FolderPlus, HardDrive, Layers, ListTodo, Network, Plus } from "lucide-react";
-import { useEffect, useRef } from "react";
+import {
+  ArchiveRestore,
+  Box,
+  FolderPlus,
+  HardDrive,
+  Layers,
+  ListTodo,
+  Network,
+  Plus,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
@@ -17,6 +26,7 @@ import { DockerImages } from "./DockerImages";
 import { DockerNetworks } from "./DockerNetworks";
 import { DockerTasks } from "./DockerTasks";
 import { DockerVolumes } from "./DockerVolumes";
+import { GwcaImportDialog } from "./docker/GwcaImportDialog";
 
 const TABS = [
   { value: "containers", label: "Containers", icon: Box, scope: "docker:containers:view" },
@@ -47,6 +57,13 @@ export function Docker() {
   const fetchNetworks = useDockerStore((s) => s.fetchNetworks);
   const fetchTasks = useDockerStore((s) => s.fetchTasks);
   const loading = useDockerStore((s) => s.loading);
+  const dockerNodes = useDockerStore((s) => s.dockerNodes);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importDevPreview, setImportDevPreview] = useState(false);
+  const archiveImportNodes = dockerNodes.filter(
+    (node) =>
+      hasScope("docker:containers:create") || hasScope(`docker:containers:create:${node.id}`)
+  );
 
   const deployContainerRef = useRef<(() => void) | null>(null);
   const createFolderRef = useRef<(() => void) | null>(null);
@@ -169,6 +186,26 @@ export function Docker() {
     }
   };
 
+  const openImport = () => {
+    setImportDevPreview(false);
+    setImportOpen(true);
+  };
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || typeof window === "undefined") return;
+    const gatewayDev = (window.gatewayDev ??= {});
+    const openGwcaImportModal = () => {
+      setImportDevPreview(true);
+      setImportOpen(true);
+    };
+    gatewayDev.openGwcaImportModal = openGwcaImportModal;
+    return () => {
+      if (gatewayDev.openGwcaImportModal === openGwcaImportModal) {
+        delete gatewayDev.openGwcaImportModal;
+      }
+    };
+  }, []);
+
   const renderActions = () => {
     switch (activeTab) {
       case "containers":
@@ -180,7 +217,13 @@ export function Docker() {
                 New Folder
               </Button>
             )}
-            {hasScope("docker:containers:create") && (
+            {hasScopedAccess("docker:containers:create") && (
+              <Button variant="outline" onClick={openImport}>
+                <ArchiveRestore className="h-4 w-4 mr-1" />
+                Import .gwca
+              </Button>
+            )}
+            {hasScopedAccess("docker:containers:create") && (
               <Button onClick={() => deployContainerRef.current?.()}>
                 <Plus className="h-4 w-4 mr-1" />
                 Deploy
@@ -254,8 +297,13 @@ export function Docker() {
           },
         ]
       : []),
-    ...(activeTab === "containers" && hasScope("docker:containers:create")
+    ...(activeTab === "containers" && hasScopedAccess("docker:containers:create")
       ? [
+          {
+            label: "Import .gwca",
+            icon: <ArchiveRestore className="h-4 w-4" />,
+            onClick: openImport,
+          },
           {
             label: "Deploy",
             icon: <Plus className="h-4 w-4" />,
@@ -422,6 +470,16 @@ export function Docker() {
             <DockerTasks embedded />
           </TabsContent>
         </Tabs>
+        <GwcaImportDialog
+          open={importOpen}
+          onOpenChange={(nextOpen) => {
+            setImportOpen(nextOpen);
+            if (!nextOpen) setImportDevPreview(false);
+          }}
+          nodes={archiveImportNodes}
+          onImported={() => refreshContainersRef.current?.()}
+          devPreview={importDevPreview}
+        />
       </div>
     </PageTransition>
   );

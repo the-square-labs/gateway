@@ -1,7 +1,11 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
-import { container } from '@/container.js';
+import { container, TOKENS } from '@/container.js';
+import type { DrizzleClient } from '@/db/client.js';
+import { hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { AuditService } from '@/modules/audit/audit.service.js';
 import { requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
+import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { AppEnv } from '@/types.js';
 import {
   abortContainerFileUploadRoute,
@@ -18,6 +22,8 @@ import {
   deleteContainerFileRoute,
   deleteContainerSecretRoute,
   duplicateContainerRoute,
+  exportContainerArchiveRoute,
+  importContainerArchiveRoute,
   initContainerFileUploadRoute,
   inspectContainerByNameRoute,
   inspectContainerRoute,
@@ -41,6 +47,9 @@ import {
   writeContainerFileRoute,
 } from './docker.docs.js';
 import {
+  ContainerArchiveExportQuerySchema,
+  ContainerArchiveImportQuerySchema,
+  ContainerArchiveResolutionSchema,
   ContainerCreateSchema,
   ContainerDuplicateSchema,
   ContainerKillSchema,
@@ -65,14 +74,22 @@ import {
   filterDockerResourcesForScope,
   requireDockerContainerScope,
 } from './docker-access.middleware.js';
+import { hasDockerResourceScope } from './docker-access-resource.service.js';
+import { importGwca, openGwcaExport } from './docker-container-archive.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
+import { envListToMap } from './docker-env-operations.js';
+import { DockerEnvironmentService } from './docker-environment.service.js';
+import { DockerMigrationDispatchAdapter } from './docker-migration-dispatch.js';
+import { DockerRegistryService } from './docker-registry.service.js';
 import { resolveDockerContainerByName } from './docker-route-resolvers.js';
 import { DockerSecretService } from './docker-secret.service.js';
 import { DockerSnapshotService } from './docker-snapshot.service.js';
 import { DockerSnapshotReconciler } from './docker-snapshot-reconciler.service.js';
+import { assertDockerMountChangeAllowed } from './docker-socket-mount.guard.js';
 
 const DOCKER_RESOURCE_LIST_MAX = 1000;
 const DOCKER_CONTAINER_PORT_PREVIEW_MAX = 64;
+const ARCHIVE_IMAGE_REFERENCE_LABEL = 'wiolett.gateway.archive.image.reference';
 
 async function parseFileContentRequest(c: Parameters<Parameters<OpenAPIHono<AppEnv>['openapi']>[1]>[0]) {
   const path = FileBrowseSchema.parse(c.req.query()).path;
@@ -82,10 +99,11 @@ async function parseFileContentRequest(c: Parameters<Parameters<OpenAPIHono<AppE
 
 export function compactContainerListItem(container: Record<string, any>) {
   const ports = container.ports ?? container.Ports;
+  const labels = (container.labels ?? container.Labels ?? {}) as Record<string, string>;
   return {
     id: container.id ?? container.Id,
     name: ((container.name ?? container.Name ?? '') as string).replace(/^\//, ''),
-    image: container.image ?? container.Image,
+    image: labels[ARCHIVE_IMAGE_REFERENCE_LABEL] || container.image || container.Image,
     state: container.state ?? container.State,
     status: container.status ?? container.Status,
     created: container.created ?? container.Created,
@@ -347,6 +365,181 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const { name } = ContainerDuplicateSchema.parse(body);
       const data = await service.duplicateContainer(nodeId, containerId, name, user.id, c.get('effectiveScopes') || []);
       return c.json({ data }, 201);
+    }
+  );
+
+  router.openapi(
+    { ...exportContainerArchiveRoute, middleware: requireDockerContainerScope('docker:containers:files') },
+    async (c) => {
+      const nodeId = c.req.param('nodeId')!;
+      const containerId = c.req.param('containerId')!;
+      const query = ContainerArchiveExportQuerySchema.parse(c.req.query());
+      const actorScopes = c.get('effectiveScopes') || [];
+      const docker = container.resolve(DockerManagementService);
+      const inspected = await docker.inspectContainer(nodeId, containerId);
+      const scopeResourceId = String(inspected?.scopeResourceId ?? '');
+      if (!hasDockerResourceScope(actorScopes, 'docker:containers:environment', nodeId, scopeResourceId)) {
+        throw new AppError(403, 'FORBIDDEN', 'Exporting a container archive requires environment access');
+      }
+      if (
+        query.includeSecrets &&
+        !hasDockerResourceScope(actorScopes, 'docker:containers:secrets', nodeId, scopeResourceId)
+      ) {
+        throw new AppError(403, 'FORBIDDEN', 'Exporting archive secrets is not permitted for this container');
+      }
+      const containerName = String(inspected?.Name ?? '').replace(/^\/+/, '');
+      if (!containerName) throw new AppError(409, 'GWCA_SOURCE_INVALID', 'Could not resolve container name');
+      const environment = envListToMap(await docker.getContainerEnv(nodeId, containerId));
+      const secretService = container.resolve(DockerSecretService);
+      const secretKeys = [...(await secretService.getSecretKeys(nodeId, containerName))];
+      const secrets = query.includeSecrets ? await secretService.getDecryptedMap(nodeId, containerName) : {};
+      const dispatch = container.resolve(DockerMigrationDispatchAdapter);
+      const archive = await openGwcaExport({
+        dispatch,
+        nodeId,
+        containerId,
+        includeWritableLayer: query.includeWritableLayer,
+        imageMode: query.imageMode,
+        environment,
+        secrets,
+        secretKeys,
+        includeSecrets: query.includeSecrets,
+      });
+      await container.resolve(AuditService).log({
+        action: 'docker.container.archive.export',
+        userId: c.get('user')!.id,
+        resourceType: 'docker-container',
+        resourceId: containerId,
+        details: {
+          nodeId,
+          includeWritableLayer: query.includeWritableLayer,
+          includeSecrets: query.includeSecrets,
+          imageMode: query.imageMode,
+        },
+      });
+      return new Response(archive.stream, {
+        headers: {
+          'Content-Type': 'application/vnd.wiolett.gwca',
+          'Content-Disposition': `attachment; filename="${archive.filename}"`,
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }
+  );
+
+  router.openapi(
+    { ...importContainerArchiveRoute, middleware: requireScopeForResource('docker:containers:create', 'nodeId') },
+    async (c) => {
+      const nodeId = c.req.param('nodeId')!;
+      const query = ContainerArchiveImportQuerySchema.parse(c.req.query());
+      if (c.req.header('content-type')?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/vnd.wiolett.gwca') {
+        throw new AppError(415, 'GWCA_MEDIA_TYPE_REQUIRED', 'Content-Type must be application/vnd.wiolett.gwca');
+      }
+      const body = c.req.raw.body;
+      if (!body) throw new AppError(400, 'GWCA_EMPTY', 'Container archive body is required');
+      await assertNodeAllowsServiceCreation(container.resolve(TOKENS.DrizzleClient) as DrizzleClient, nodeId, 'docker');
+      let resolution: ReturnType<typeof ContainerArchiveResolutionSchema.parse> = {};
+      if (query.resolution) {
+        try {
+          resolution = ContainerArchiveResolutionSchema.parse(JSON.parse(query.resolution));
+        } catch {
+          throw new AppError(400, 'GWCA_RESOLUTION_INVALID', 'Archive import resolution is invalid');
+        }
+      }
+      const dispatch = container.resolve(DockerMigrationDispatchAdapter);
+      const actorScopes = c.get('effectiveScopes') || [];
+      const registryService = container.resolve(DockerRegistryService);
+      const data = await importGwca({
+        dispatch,
+        nodeId,
+        name: query.name,
+        body,
+        resolution,
+        authorizeContents: (archiveContainer) => {
+          assertDockerMountChangeAllowed({
+            nodeId,
+            actorScopes,
+            currentDefinitions: [],
+            nextDefinitions: (archiveContainer.mounts ?? []).map((mount) => ({
+              type: mount.type,
+              source: mount.source,
+              target: mount.target,
+              readOnly: mount.readOnly,
+            })),
+          });
+          if (!hasDockerResourceScope(actorScopes, 'docker:containers:environment', nodeId, '')) {
+            throw new AppError(403, 'FORBIDDEN', 'Importing archive environment is not permitted on the target node');
+          }
+          if (
+            Object.keys(archiveContainer.secrets ?? {}).length > 0 &&
+            !hasDockerResourceScope(actorScopes, 'docker:containers:secrets', nodeId, '')
+          ) {
+            throw new AppError(403, 'FORBIDDEN', 'Importing archive secrets is not permitted on the target node');
+          }
+          const canCreateNetworks = hasScopeForResource(actorScopes, 'docker:networks:create', nodeId);
+          if (!canCreateNetworks && (archiveContainer.networks ?? []).some((network) => network.createNew)) {
+            throw new AppError(403, 'FORBIDDEN', 'Creating archive networks is not permitted on the target node');
+          }
+          for (const network of archiveContainer.networks ?? []) {
+            if (!canCreateNetworks) network.createable = false;
+          }
+          const canCreateVolumes = hasScopeForResource(actorScopes, 'docker:volumes:create', nodeId);
+          if (!canCreateVolumes && (archiveContainer.mounts ?? []).some((mount) => mount.createNew)) {
+            throw new AppError(403, 'FORBIDDEN', 'Creating archive volumes is not permitted on the target node');
+          }
+        },
+        resolveRegistryAuthCandidates: async (imageReference) =>
+          (
+            await registryService.resolveAuthCandidatesForImagePull(nodeId, imageReference, undefined, {
+              actorScopes,
+            })
+          ).map((candidate) => candidate.authJson),
+      });
+      const docker = container.resolve(DockerManagementService);
+      try {
+        await container.resolve(DockerEnvironmentService).replace(nodeId, data.containerName, data.environment);
+        await container
+          .resolve(DockerSecretService)
+          .replaceImported(nodeId, data.containerName, data.secrets, c.get('user')!.id);
+        await docker.registerImportedContainer(nodeId, data.containerName, data.containerId);
+      } catch (error) {
+        await container
+          .resolve(DockerEnvironmentService)
+          .deleteImported(nodeId, data.containerName)
+          .catch(() => undefined);
+        await container
+          .resolve(DockerSecretService)
+          .deleteImported(nodeId, data.containerName)
+          .catch(() => undefined);
+        await docker.removeContainer(nodeId, data.containerId, true, c.get('user')!.id).catch(() => undefined);
+        await dispatch.cleanupArchiveImport(nodeId, data.archiveId).catch(() => undefined);
+        throw error;
+      }
+      await container.resolve(AuditService).log({
+        action: 'docker.container.archive.import',
+        userId: c.get('user')!.id,
+        resourceType: 'docker-container',
+        resourceId: data.containerId,
+        details: {
+          nodeId,
+          requestedName: query.name,
+          name: data.containerName,
+          imageId: data.imageId,
+          resolution,
+          importedSecretKeys: Object.keys(data.secrets),
+        },
+      });
+      return c.json(
+        {
+          data: {
+            containerId: data.containerId,
+            containerName: data.containerName,
+            imageId: data.imageId,
+          },
+        },
+        201
+      );
     }
   );
 

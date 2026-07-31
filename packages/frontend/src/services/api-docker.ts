@@ -547,6 +547,71 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       );
     }
 
+    containerArchiveDownloadUrl(
+      nodeId: string,
+      containerId: string,
+      includeWritableLayer = false,
+      imageMode: "portable" | "registry" = "portable",
+      includeSecrets = false
+    ): string {
+      const query = new URLSearchParams({
+        includeWritableLayer: String(includeWritableLayer),
+        imageMode,
+        includeSecrets: String(includeSecrets),
+      });
+      return `${API_BASE}/docker/nodes/${nodeId}/containers/${containerId}/archive?${query}`;
+    }
+
+    async downloadContainerArchive(
+      nodeId: string,
+      containerId: string,
+      includeWritableLayer = false,
+      imageMode: "portable" | "registry" = "portable",
+      includeSecrets = false,
+      onProgress?: (progress: { loaded: number; total: number }) => void
+    ): Promise<Blob> {
+      const bytes = await this.requestBinary(
+        this.containerArchiveDownloadUrl(
+          nodeId,
+          containerId,
+          includeWritableLayer,
+          imageMode,
+          includeSecrets
+        ),
+        {},
+        onProgress
+      );
+      return new Blob([bytes], { type: "application/vnd.wiolett.gwca" });
+    }
+
+    async importContainerArchive(
+      nodeId: string,
+      name: string,
+      archive: File,
+      resolution: {
+        networks?: Record<string, string>;
+        createNetworks?: string[];
+        bindPaths?: Record<string, string>;
+        volumes?: Record<string, string>;
+        createVolumes?: string[];
+        ports?: Record<string, number>;
+      } = {},
+      onProgress?: (progress: { loaded: number; total: number }) => void
+    ): Promise<{ containerId: string; containerName: string; imageId: string }> {
+      const query = new URLSearchParams({ name });
+      if (Object.keys(resolution).length > 0) query.set("resolution", JSON.stringify(resolution));
+      return this.unwrapData(
+        this.uploadRaw<{
+          data: { containerId: string; containerName: string; imageId: string };
+        }>(`/docker/nodes/${nodeId}/containers/archive?${query}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/vnd.wiolett.gwca" },
+          body: archive,
+          onProgress,
+        })
+      );
+    }
+
     async updateContainer(
       nodeId: string,
       containerId: string,

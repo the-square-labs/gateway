@@ -16,7 +16,7 @@ Gateway 为小型基础设施团队提供一个产品，用来处理日常工作
 - 管理多个 proxy、Docker 和 monitoring 节点，而不需要在这些节点上开放入站 management 端口。
 - 给运维人员一个聚焦的 UI 和 API 来处理 production 任务，而不需要给他们 root shell access。
 - 集中管理 TLS、内部 PKI、ACME 证书、域名、状态页、通知和审计历史。
-- 在一个地方管理 Docker containers、deployments、logs、files、consoles、secrets 和 registry workflows。
+- 在一个地方管理 Docker containers、deployments、portable 或 registry-backed `.gwca` archives、logs、files、consoles、secrets 和 registry workflows。
 - 通过 API tokens、OAuth、CI/CD webhooks 和 MCP clients 提供受控自动化。
 
 ## 最快安装
@@ -55,6 +55,7 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 | 了解 Gateway 可以管理什么 | [Capabilities](docs/capabilities.md) |
 | 安装 Gateway | [Installation guide](docs/installation.md) |
 | 添加 nginx、Docker 或 monitoring 节点 | [Nodes and daemons](docs/nodes.md) |
+| 导出或导入包含或不包含内嵌 image 的 Docker containers | [GWCA container archives](docs/docker-container-archives.md) |
 | 配置 tokens、OAuth、MCP、logging、updates 和 AI | [Operations guide](docs/operations.md) |
 | 配置 multi-provider inference proxy | [Inference proxy](docs/inference.md) |
 | 查看 security model | [Security model](docs/security.md) |

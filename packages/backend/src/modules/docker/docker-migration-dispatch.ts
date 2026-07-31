@@ -32,6 +32,81 @@ export class DockerMigrationDispatchAdapter {
     return this.command(nodeId, 'capture_manifest', { resourceId });
   }
 
+  openArchiveExport(args: {
+    nodeId: string;
+    archiveId: string;
+    artifactId: string;
+    containerId: string;
+    includeWritableLayer: boolean;
+    imageMode: 'portable' | 'registry';
+    environment: Record<string, string>;
+    secrets: Record<string, string>;
+    secretKeys: string[];
+    includeSecrets: boolean;
+  }): Promise<Record<string, unknown>> {
+    return this.command(args.nodeId, 'open_archive_export', {
+      migrationId: args.archiveId,
+      artifactId: args.artifactId,
+      resourceId: args.containerId,
+      configJson: JSON.stringify({
+        includeWritableLayer: args.includeWritableLayer,
+        imageMode: args.imageMode,
+        environment: args.environment,
+        secrets: args.secrets,
+        secretKeys: args.secretKeys,
+        includeSecrets: args.includeSecrets,
+      }),
+    });
+  }
+
+  readArchiveImage(nodeId: string, archiveId: string, artifactId: string): ReadableStream<Uint8Array> {
+    return migrationTransferRelay.readArtifact({ nodeId, migrationId: archiveId, artifactId });
+  }
+
+  async openArchiveImport(
+    nodeId: string,
+    archiveId: string,
+    artifactId: string,
+    config: {
+      expectedImageId: string;
+      imageEmbedded: boolean;
+      pullReference?: string;
+      registryAuthCandidates?: string[];
+    }
+  ): Promise<void> {
+    await this.command(nodeId, 'open_archive_import', {
+      migrationId: archiveId,
+      artifactId,
+      configJson: JSON.stringify(config),
+    });
+  }
+
+  writeArchiveImage(
+    nodeId: string,
+    archiveId: string,
+    artifactId: string,
+    chunks: AsyncIterable<Uint8Array>
+  ): Promise<number> {
+    return migrationTransferRelay.writeArtifact({ nodeId, migrationId: archiveId, artifactId, chunks });
+  }
+
+  finishArchiveImport(
+    nodeId: string,
+    archiveId: string,
+    artifactId: string,
+    config: Record<string, unknown>
+  ): Promise<{ containerId: string; containerName: string; imageId: string }> {
+    return this.command(nodeId, 'finish_archive_import', {
+      migrationId: archiveId,
+      artifactId,
+      configJson: JSON.stringify(config),
+    });
+  }
+
+  async cleanupArchiveImport(nodeId: string, archiveId: string): Promise<void> {
+    await this.command(nodeId, 'cleanup_archive_import', { migrationId: archiveId });
+  }
+
   measureVolume(nodeId: string, volumeName: string): Promise<MigrationVolumeMeasure> {
     return this.command<MigrationVolumeMeasure>(nodeId, 'measure_volume', { resourceId: volumeName });
   }

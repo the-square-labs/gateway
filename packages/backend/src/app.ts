@@ -97,6 +97,7 @@ const HEALTH_REDIS_TIMEOUT_MS = 1000;
 const DOCKER_FILE_BODY_LIMIT_PATH =
   /^\/api\/docker\/nodes\/[^/]+\/(?:containers\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks)|volumes\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks))$/;
 const NODE_FILE_BODY_LIMIT_PATH = /^\/api\/nodes\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks)$/;
+const DOCKER_ARCHIVE_IMPORT_PATH = /^\/api\/docker\/nodes\/[^/]+\/containers\/archive$/;
 const INFERENCE_DATA_PLANE_PREFIX = /^\/api\/inference\/(?:(?:anthropic|codex)\/v1|v1)(?:\/|$)/;
 
 function isInferenceDataPlanePath(path: string): boolean {
@@ -376,7 +377,10 @@ export function createApp() {
     requestBodyLimitExcept(
       env.REQUEST_BODY_MAX_BYTES,
       (path) =>
-        DOCKER_FILE_BODY_LIMIT_PATH.test(path) || NODE_FILE_BODY_LIMIT_PATH.test(path) || isInferenceDataPlanePath(path)
+        DOCKER_FILE_BODY_LIMIT_PATH.test(path) ||
+        NODE_FILE_BODY_LIMIT_PATH.test(path) ||
+        DOCKER_ARCHIVE_IMPORT_PATH.test(path) ||
+        isInferenceDataPlanePath(path)
     )
   );
 

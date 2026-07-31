@@ -9,7 +9,7 @@ Gateway manages infrastructure hosts through small Go daemons. Each daemon conne
 | Type | Daemon | Purpose |
 |------|--------|---------|
 | nginx | `nginx-daemon` | Reverse proxy management for host-native nginx. |
-| docker | `docker-daemon` | Docker containers, deployments, cross-node migrations, images, volumes, networks, tasks, files, consoles, registries, and offline inventory snapshots. |
+| docker | `docker-daemon` | Docker containers, deployments, cross-node migrations, portable and registry-backed `.gwca` archives, images, volumes, networks, tasks, files, consoles, registries, and offline inventory snapshots. |
 | monitoring | `monitoring-daemon` | Metrics-only host monitoring without nginx or Docker control. |
 
 Use a monitoring node when you want host metrics but do not want to grant Gateway proxy or Docker management on that host.

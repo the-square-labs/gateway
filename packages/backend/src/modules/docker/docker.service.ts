@@ -205,6 +205,11 @@ export class DockerManagementService {
     this.observeContainerLifecycle(nodeId, name, id, action, extra);
   }
 
+  async registerImportedContainer(nodeId: string, name: string, runtimeId: string): Promise<void> {
+    await this.accessResourceService?.ensureContainer(nodeId, name, runtimeId, false);
+    this.emitContainer(nodeId, name, runtimeId, 'created', { source: 'gwca-import' });
+  }
+
   emitTransition(nodeId: string, name: string, id: string, transition: ContainerTransition | null) {
     const scopeResourceId = this.accessResourceService?.cachedContainerResourceId(nodeId, {
       name,

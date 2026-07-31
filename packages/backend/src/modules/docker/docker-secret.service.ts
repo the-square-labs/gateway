@@ -140,6 +140,44 @@ export class DockerSecretService {
     return map;
   }
 
+  /** Replace all stored secrets after a trusted archive import. */
+  async replaceImported(
+    nodeId: string,
+    containerName: string,
+    secrets: Record<string, string>,
+    userId: string
+  ): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      await tx
+        .delete(dockerSecrets)
+        .where(and(eq(dockerSecrets.nodeId, nodeId), eq(dockerSecrets.containerName, containerName)));
+      const entries = Object.entries(secrets);
+      if (entries.length > 0) {
+        await tx.insert(dockerSecrets).values(
+          entries.map(([key, value]) => ({
+            nodeId,
+            containerName,
+            key,
+            encryptedValue: JSON.stringify(this.cryptoService.encryptString(value)),
+          }))
+        );
+      }
+    });
+    await this.auditService.log({
+      action: 'docker.secret.archive.import',
+      userId,
+      resourceType: 'docker-container',
+      resourceId: containerName,
+      details: { nodeId, containerName, secretKeys: Object.keys(secrets).sort() },
+    });
+  }
+
+  async deleteImported(nodeId: string, containerName: string): Promise<void> {
+    await this.db
+      .delete(dockerSecrets)
+      .where(and(eq(dockerSecrets.nodeId, nodeId), eq(dockerSecrets.containerName, containerName)));
+  }
+
   /**
    * Get the set of secret key names for a container (for stripping from env responses).
    */

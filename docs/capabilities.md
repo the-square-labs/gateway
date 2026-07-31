@@ -43,6 +43,7 @@ Container workflows:
 - List containers across managed Docker nodes.
 - Grant container permissions for an entire Docker node or narrow them to one standalone container or blue/green deployment.
 - Start, stop, restart, recreate, duplicate, rename, and remove containers.
+- Stream `.gwca` exports and imports in either self-contained portable mode or smaller registry-backed mode. Archives use a Gateway-supported configuration whitelist, always carry ordinary environment values, can optionally carry secrets, and can optionally capture the writable layer without pausing. Registry-backed archives pull and verify an immutable digest. Volume contents are never included; local volumes are recreated empty, while bind paths, external volumes, networks, and occupied ports can be remapped for the target node.
 - Create, inspect, and remove images, volumes, and networks across managed nodes.
 - Run durable cross-node migrations for containers and blue/green deployments, including image and volume transfer, capacity preflight, verification, cutover, cancellation, and cleanup recovery.
 - Move resource-scoped grants with a container or deployment during migration. Recreates preserve the stable access identity; explicit deletion removes its grants so a later same-name resource starts without inherited access.

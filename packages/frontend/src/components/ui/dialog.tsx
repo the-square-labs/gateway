@@ -45,6 +45,8 @@ DialogFooter.displayName = "DialogFooter";
 
 const DIALOG_OUTER_OVERFLOW_CLASS_RE =
   /(?:^|\s)(?:[^\s:]+:)*overflow(?:-[xy])?-(?:auto|scroll|hidden|visible|clip)(?=\s|$)/g;
+const DIALOG_NESTED_VERTICAL_SCROLL_CLASS_RE =
+  /(?:^|\s)(?:[^\s:]+:)*overflow-y-(?:auto|scroll)(?=\s|$)/;
 
 function stripOuterOverflowClasses(className?: string) {
   return className?.replace(DIALOG_OUTER_OVERFLOW_CLASS_RE, " ").replace(/\s+/g, " ").trim();
@@ -54,6 +56,18 @@ function isDialogSlot(child: React.ReactNode, displayName: string) {
   if (!React.isValidElement(child)) return false;
   const type = child.type as { displayName?: string };
   return type.displayName === displayName;
+}
+
+export function assertNoNestedDialogVerticalScroll(children: React.ReactNode[]) {
+  for (const child of children) {
+    if (!React.isValidElement<{ className?: unknown }>(child)) continue;
+    const className = child.props.className;
+    if (typeof className === "string" && DIALOG_NESTED_VERTICAL_SCROLL_CLASS_RE.test(className)) {
+      throw new Error(
+        "DialogContent owns vertical scrolling. Remove overflow-y-auto/scroll from its body child."
+      );
+    }
+  }
 }
 
 const DialogContent = React.forwardRef<
@@ -82,6 +96,8 @@ const DialogContent = React.forwardRef<
 
   const hasHeader = headerChildren.length > 0;
   const hasFooter = footerChildren.length > 0;
+
+  assertNoNestedDialogVerticalScroll(bodyChildren);
 
   if (unstyled) {
     return (

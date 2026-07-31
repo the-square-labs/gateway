@@ -1,3 +1,11 @@
+export const GATEWAY_ARCHIVE_IMAGE_REFERENCE_LABEL = "wiolett.gateway.archive.image.reference";
+
+export function resolveContainerImageReference(container: Record<string, any>): string {
+  const config = (container.Config ?? {}) as Record<string, any>;
+  const labels = (config.Labels ?? container.Labels ?? {}) as Record<string, string>;
+  return labels[GATEWAY_ARCHIVE_IMAGE_REFERENCE_LABEL] || config.Image || container.Image || "";
+}
+
 export function stripRegistryHostFromImageName(imageName: string): string {
   const trimmed = imageName.trim();
   if (!trimmed) return trimmed;

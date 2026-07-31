@@ -36,6 +36,14 @@ type createStoppedContainerRequest struct {
 }
 
 const migrationOwnershipLabel = "wiolett.gateway.migration.id"
+const archiveImageReferenceLabel = "wiolett.gateway.archive.image.reference"
+
+func configuredArchiveImageReference(image string, labels map[string]string) string {
+	if archivedReference := strings.TrimSpace(labels[archiveImageReferenceLabel]); archivedReference != "" {
+		return archivedReference
+	}
+	return strings.TrimSpace(image)
+}
 
 func (c *Client) CaptureMigrationManifest(ctx context.Context, id string) (dockerMigrationManifest, error) {
 	inspected, err := c.cli.ContainerInspect(ctx, id, mobyclient.ContainerInspectOptions{Size: true})
@@ -48,13 +56,15 @@ func (c *Client) CaptureMigrationManifest(ctx context.Context, id string) (docke
 	}
 	config := cloneContainerConfig(ctr.Config)
 	delete(config.Labels, migrationOwnershipLabel)
+	imageReference := configuredArchiveImageReference(ctr.Config.Image, config.Labels)
+	delete(config.Labels, archiveImageReferenceLabel)
 	hostConfig := cloneHostConfig(ctr.HostConfig)
 	manifest := dockerMigrationManifest{
 		SchemaVersion:  1,
 		SourceID:       ctr.ID,
 		Name:           strings.TrimPrefix(ctr.Name, "/"),
 		ImageID:        ctr.Image,
-		ImageReference: ctr.Config.Image,
+		ImageReference: imageReference,
 		Platform:       ctr.Platform,
 		Config:         config,
 		HostConfig:     hostConfig,

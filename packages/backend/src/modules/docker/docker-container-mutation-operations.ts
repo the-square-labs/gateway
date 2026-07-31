@@ -564,7 +564,11 @@ export async function updateContainer(
     details: { nodeId, name, containerName: name },
   });
   if (hasImageChange) {
-    const imageRef = imageRefWithTag(inspect?.Config?.Image ?? inspect?.Image, config.tag as string);
+    const labels = (inspect?.Config?.Labels ?? {}) as Record<string, string>;
+    const imageRef = imageRefWithTag(
+      labels['wiolett.gateway.archive.image.reference'] || inspect?.Config?.Image || inspect?.Image,
+      config.tag as string
+    );
     ctx.imageCleanupService?.scheduleCleanupForContainer(nodeId, name, imageRef).catch(() => {});
   }
   return data;

@@ -387,7 +387,11 @@ export class ApiClientBase {
     return this.fetchRaw<T>(url, {}, { suppressGlobalStatus: true });
   }
 
-  protected async requestBinary(endpoint: string, options: RequestInit = {}): Promise<ArrayBuffer> {
+  protected async requestBinary(
+    endpoint: string,
+    options: RequestInit = {},
+    onProgress?: (progress: { loaded: number; total: number }) => void
+  ): Promise<ArrayBuffer> {
     const url =
       endpoint.startsWith("/auth") || endpoint.startsWith(API_BASE)
         ? endpoint
@@ -475,9 +479,36 @@ export class ApiClientBase {
       });
     }
 
-    const data = await response.arrayBuffer();
+    const contentLength = Number(response.headers.get("Content-Length"));
+    const total = Number.isFinite(contentLength) && contentLength > 0 ? contentLength : 0;
+    onProgress?.({ loaded: 0, total });
+
+    if (!response.body || !onProgress) {
+      const data = await response.arrayBuffer();
+      this.assertSessionGeneration(generation);
+      onProgress?.({ loaded: data.byteLength, total });
+      return data;
+    }
+
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let loaded = 0;
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      chunks.push(next.value);
+      loaded += next.value.byteLength;
+      onProgress({ loaded, total });
+    }
+
+    const data = new Uint8Array(loaded);
+    let offset = 0;
+    for (const chunk of chunks) {
+      data.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
     this.assertSessionGeneration(generation);
-    return data;
+    return data.buffer;
   }
 
   protected async uploadRaw<T>(
