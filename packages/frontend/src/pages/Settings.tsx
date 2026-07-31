@@ -52,7 +52,13 @@ export function Settings() {
   const canManageLicense = hasScope("license:manage");
   const canViewStatusPage = hasScope("status-page:view");
   const canViewIntegrations =
-    hasScope("integrations:gitlab:view") || hasScope("integrations:gitlab:manage");
+    hasScope("integrations:gitlab:view") ||
+    hasScope("integrations:gitlab:manage") ||
+    hasScope("integrations:cloudflare:view") ||
+    hasScope("integrations:cloudflare:manage") ||
+    hasScope("integrations:cloudflare:dns:view") ||
+    hasScope("integrations:cloudflare:dns:edit") ||
+    hasScope("integrations:cloudflare:dns:delete");
   const canAccessGatewayTab =
     canViewGatewaySettings || canManageRegistries || canUpdate || canViewLicense;
   const canAccessFeaturesTab = canViewStatusPage || canViewHousekeeping;

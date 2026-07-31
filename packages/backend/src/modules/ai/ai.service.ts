@@ -920,15 +920,7 @@ export class AIService {
       }
 
       case 'find_resource':
-        return findResource(
-          {
-            executeToolInternal: (executionUser, delegatedToolName, delegatedArgs) =>
-              this.executeToolInternal(executionUser, delegatedToolName, delegatedArgs, runtimeContext),
-            nodesService: this.nodesService,
-          },
-          user,
-          args
-        );
+        return this.searchResources(user, args, runtimeContext);
       case 'search_chats':
         return (this.conversationSearchService ?? container.resolve(AIConversationSearchService)).searchChats(user.id, {
           query: String(a.query ?? ''),
@@ -1501,6 +1493,22 @@ export class AIService {
       default:
         throw new Error(`Tool not implemented: ${toolName}`);
     }
+  }
+
+  async searchResources(
+    user: User,
+    args: Record<string, unknown>,
+    runtimeContext: { pageContext?: PageContext; conversationId?: string } = {}
+  ) {
+    return findResource(
+      {
+        executeToolInternal: (executionUser, delegatedToolName, delegatedArgs) =>
+          this.executeToolInternal(executionUser, delegatedToolName, delegatedArgs, runtimeContext),
+        nodesService: this.nodesService,
+      },
+      user,
+      args
+    );
   }
 
   private async discoverTools(user: User, args: Record<string, unknown>) {

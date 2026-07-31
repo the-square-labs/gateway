@@ -13,6 +13,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { CACreateDialog } from "@/components/ca/CACreateDialog";
 import { CertificateIssueDialog } from "@/components/certificates/CertificateIssueDialog";
+import { CommandPalettePageActions } from "@/components/common/CommandPalettePageActions";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailRow } from "@/components/common/DetailRow";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -177,6 +178,36 @@ export function CADetail() {
   const canRevokeCA = hasScope(
     ca.type === "root" ? "pki:ca:revoke:root" : "pki:ca:revoke:intermediate"
   );
+  const downloadPem = () => {
+    const blob = new Blob([ca.certificatePem || ""], {
+      type: "application/x-pem-file",
+    });
+    const anchor = document.createElement("a");
+    anchor.href = URL.createObjectURL(blob);
+    anchor.download = `${ca.commonName}.pem`;
+    anchor.click();
+    URL.revokeObjectURL(anchor.href);
+  };
+  const downloadCrt = () => {
+    const b64 = (ca.certificatePem || "").replace(/-----[^-]+-----/g, "").replace(/\s/g, "");
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let index = 0; index < bin.length; index++) bytes[index] = bin.charCodeAt(index);
+    const blob = new Blob([bytes], { type: "application/x-x509-ca-cert" });
+    const anchor = document.createElement("a");
+    anchor.href = URL.createObjectURL(blob);
+    anchor.download = `${ca.commonName}.crt`;
+    anchor.click();
+    URL.revokeObjectURL(anchor.href);
+  };
+  const copyPem = () => {
+    void navigator.clipboard.writeText(ca.certificatePem || "");
+    toast.success("PEM copied");
+  };
+  const copySerial = () => {
+    void navigator.clipboard.writeText(ca.serialNumber);
+    toast.success("Serial copied");
+  };
   const issuedCertificateColumns: SimpleTableColumn<Certificate>[] = [
     {
       id: "common-name",
@@ -227,6 +258,74 @@ export function CADetail() {
   return (
     <PageTransition>
       <div className="h-full overflow-y-auto p-6 space-y-6">
+        <CommandPalettePageActions
+          actions={[
+            ...(canCreateIntermediate && ca.status === "active" && !ca.isSystem
+              ? [
+                  {
+                    id: "ca:create-intermediate",
+                    label: "Create intermediate CA",
+                    icon: <Shield className="h-4 w-4" />,
+                    action: () => setCreateIntermediateOpen(true),
+                  },
+                ]
+              : []),
+            ...(canIssueCertificate && ca.status === "active" && !ca.isSystem
+              ? [
+                  {
+                    id: "ca:issue-certificate",
+                    label: "Issue certificate",
+                    icon: <Plus className="h-4 w-4" />,
+                    action: () => setIssueDialogOpen(true),
+                  },
+                ]
+              : []),
+            {
+              id: "ca:download-pem",
+              label: "Download CA as PEM",
+              icon: <Download className="h-4 w-4" />,
+              action: downloadPem,
+            },
+            {
+              id: "ca:download-crt",
+              label: "Download CA as CRT",
+              icon: <Download className="h-4 w-4" />,
+              action: downloadCrt,
+            },
+            ...(ca.type === "root"
+              ? [
+                  {
+                    id: "ca:install-guide",
+                    label: "Open CA install guide",
+                    icon: <Shield className="h-4 w-4" />,
+                    action: () => setInstallGuideOpen(true),
+                  },
+                ]
+              : []),
+            {
+              id: "ca:copy-pem",
+              label: "Copy CA PEM",
+              icon: <Copy className="h-4 w-4" />,
+              action: copyPem,
+            },
+            {
+              id: "ca:copy-serial",
+              label: "Copy CA serial",
+              icon: <Copy className="h-4 w-4" />,
+              action: copySerial,
+            },
+            ...(canRevokeCA && ca.status === "active" && !ca.isSystem
+              ? [
+                  {
+                    id: "ca:revoke",
+                    label: "Revoke CA",
+                    icon: <ShieldOff className="h-4 w-4" />,
+                    action: handleRevoke,
+                  },
+                ]
+              : []),
+          ]}
+        />
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-3">
@@ -266,37 +365,11 @@ export function CADetail() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  onClick={() => {
-                    const blob = new Blob([ca.certificatePem || ""], {
-                      type: "application/x-pem-file",
-                    });
-                    const a = document.createElement("a");
-                    a.href = URL.createObjectURL(blob);
-                    a.download = `${ca.commonName}.pem`;
-                    a.click();
-                    URL.revokeObjectURL(a.href);
-                  }}
-                >
+                <DropdownMenuItem onClick={downloadPem}>
                   <Download className="h-4 w-4" />
                   Download PEM
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => {
-                    const b64 = (ca.certificatePem || "")
-                      .replace(/-----[^-]+-----/g, "")
-                      .replace(/\s/g, "");
-                    const bin = atob(b64);
-                    const arr = new Uint8Array(bin.length);
-                    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-                    const blob = new Blob([arr], { type: "application/x-x509-ca-cert" });
-                    const a = document.createElement("a");
-                    a.href = URL.createObjectURL(blob);
-                    a.download = `${ca.commonName}.crt`;
-                    a.click();
-                    URL.revokeObjectURL(a.href);
-                  }}
-                >
+                <DropdownMenuItem onClick={downloadCrt}>
                   <Download className="h-4 w-4" />
                   Download CRT
                 </DropdownMenuItem>
@@ -307,21 +380,11 @@ export function CADetail() {
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={() => {
-                    navigator.clipboard.writeText(ca.certificatePem || "");
-                    toast.success("PEM copied");
-                  }}
-                >
+                <DropdownMenuItem onClick={copyPem}>
                   <Copy className="h-4 w-4" />
                   Copy PEM
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => {
-                    navigator.clipboard.writeText(ca.serialNumber);
-                    toast.success("Serial copied");
-                  }}
-                >
+                <DropdownMenuItem onClick={copySerial}>
                   <Copy className="h-4 w-4" />
                   Copy Serial
                 </DropdownMenuItem>

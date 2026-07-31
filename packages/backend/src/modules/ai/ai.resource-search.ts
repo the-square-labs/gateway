@@ -32,7 +32,13 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
   const add = (
     type: string,
     item: Record<string, any>,
-    options: { id?: unknown; name?: unknown; nodeId?: unknown; skipMatch?: boolean } = {}
+    options: {
+      id?: unknown;
+      name?: unknown;
+      nodeId?: unknown;
+      nodeSlug?: unknown;
+      skipMatch?: boolean;
+    } = {}
   ) => {
     if (results.length >= limit) return;
     if (
@@ -64,6 +70,7 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
       id,
       name: options.name ?? item.name ?? item.title ?? item.hostname ?? item.domain ?? item.commonName ?? item.id ?? id,
       nodeId: options.nodeId ?? item.nodeId,
+      nodeSlug: options.nodeSlug ?? item.nodeSlug,
       summary: item,
     });
   };
@@ -71,7 +78,12 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
     type: string,
     toolName: string,
     toolArgs: Record<string, unknown>,
-    map: (item: Record<string, any>) => { id?: unknown; name?: unknown; nodeId?: unknown } = () => ({})
+    map: (item: Record<string, any>) => {
+      id?: unknown;
+      name?: unknown;
+      nodeId?: unknown;
+      nodeSlug?: unknown;
+    } = () => ({})
   ) => {
     if (results.length >= limit) return;
     try {
@@ -182,27 +194,35 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
       limit,
     });
   }
-  if (typeWanted('notification_rule') && hasScope(user.scopes, 'notifications:view')) {
+  if (
+    typeWanted('notification_rule') &&
+    (hasScope(user.scopes, 'notifications:view') || hasScope(user.scopes, 'notifications:alerts:view'))
+  ) {
     await collect('notification_rule', 'list_alert_rules', {});
   }
-  if (typeWanted('notification_webhook') && hasScope(user.scopes, 'notifications:view')) {
+  if (
+    typeWanted('notification_webhook') &&
+    (hasScope(user.scopes, 'notifications:view') || hasScope(user.scopes, 'notifications:webhooks:view'))
+  ) {
     await collect('notification_webhook', 'list_webhooks', {});
   }
 
   const dockerTypes = ['docker_container', 'docker_deployment', 'docker_image', 'docker_volume', 'docker_network'];
   if (dockerTypes.some((type) => typeWanted(type))) {
-    const nodeIds = await findDockerSearchNodeIds(
+    const dockerNodes = await findDockerSearchNodes(
       deps.nodesService,
       user,
       typeof args.nodeId === 'string' ? args.nodeId : undefined
     );
-    for (const nodeId of nodeIds) {
+    for (const node of dockerNodes) {
       if (results.length >= limit) break;
+      const nodeId = node.id;
       if (typeWanted('docker_container') && hasScopeForResource(user.scopes, 'docker:containers:view', nodeId)) {
         await collect('docker_container', 'list_docker_containers', { nodeId, search: query }, (container) => ({
           id: container.id,
           name: container.name,
           nodeId,
+          nodeSlug: node.slug,
         }));
       }
       if (typeWanted('docker_deployment') && hasScopeForResource(user.scopes, 'docker:containers:view', nodeId)) {
@@ -210,6 +230,7 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
           id: deployment.id,
           name: deployment.name,
           nodeId,
+          nodeSlug: node.slug,
         }));
       }
       if (typeWanted('docker_image') && hasScopeForResource(user.scopes, 'docker:images:view', nodeId)) {
@@ -217,6 +238,7 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
           id: image.id,
           name: Array.isArray(image.repoTags) ? image.repoTags[0] : image.id,
           nodeId,
+          nodeSlug: node.slug,
         }));
       }
       if (typeWanted('docker_volume') && hasScopeForResource(user.scopes, 'docker:volumes:view', nodeId)) {
@@ -224,6 +246,7 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
           id: volume.name,
           name: volume.name,
           nodeId,
+          nodeSlug: node.slug,
         }));
       }
       if (typeWanted('docker_network') && hasScopeForResource(user.scopes, 'docker:networks:view', nodeId)) {
@@ -231,6 +254,7 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
           id: network.id,
           name: network.name,
           nodeId,
+          nodeSlug: node.slug,
         }));
       }
     }
@@ -248,7 +272,7 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
   };
 }
 
-async function findDockerSearchNodeIds(nodesService: NodesService, user: User, nodeId?: string) {
+async function findDockerSearchNodes(nodesService: NodesService, user: User, nodeId?: string) {
   const dockerViewScopes = [
     'docker:containers:view',
     'docker:images:view',
@@ -256,14 +280,16 @@ async function findDockerSearchNodeIds(nodesService: NodesService, user: User, n
     'docker:networks:view',
   ];
   if (nodeId) {
-    return dockerViewScopes.some((scope) => hasScopeForResource(user.scopes, scope, nodeId)) ? [nodeId] : [];
+    if (!dockerViewScopes.some((scope) => hasScopeForResource(user.scopes, scope, nodeId))) return [];
+    const node = await nodesService.get(nodeId);
+    return node.type === 'docker' ? [{ id: node.id, slug: node.slug }] : [];
   }
   const broadAccess = dockerViewScopes.some((scope) => hasScope(user.scopes, scope));
   const scopedIds = broadAccess
     ? undefined
     : [...new Set(dockerViewScopes.flatMap((scope) => getResourceScopedIds(user.scopes, scope)))];
   if (scopedIds?.length === 0) return [];
-  const nodeIds: string[] = [];
+  const dockerNodes: Array<{ id: string; slug: string }> = [];
   let page = 1;
   let totalPages = 1;
   do {
@@ -271,9 +297,9 @@ async function findDockerSearchNodeIds(nodesService: NodesService, user: User, n
       { type: 'docker', page, limit: 100 },
       scopedIds ? { allowedIds: scopedIds } : undefined
     );
-    nodeIds.push(...nodes.data.map((node) => node.id));
+    dockerNodes.push(...nodes.data.map((node) => ({ id: node.id, slug: node.slug })));
     totalPages = nodes.totalPages;
     page += 1;
   } while (page <= totalPages);
-  return nodeIds;
+  return dockerNodes;
 }

@@ -1,4 +1,5 @@
 import { EllipsisVertical, KeyRound, Pin, RefreshCw, Settings, Trash2 } from "lucide-react";
+import { CommandPalettePageActions } from "@/components/common/CommandPalettePageActions";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -66,6 +67,52 @@ export function DatabaseHeader({
 
   return (
     <div className="flex shrink-0 items-center justify-between gap-3">
+      <CommandPalettePageActions
+        actions={[
+          {
+            id: "database:pin",
+            label: "Pin database",
+            icon: <Pin className="h-4 w-4" />,
+            action: onOpenPin,
+          },
+          ...(canEdit
+            ? [
+                {
+                  id: "database:test",
+                  label: "Test database connection",
+                  icon: <RefreshCw className="h-4 w-4" />,
+                  action: onTest,
+                },
+                {
+                  id: "database:settings",
+                  label: "Database settings",
+                  icon: <Settings className="h-4 w-4" />,
+                  action: onOpenSettings,
+                },
+              ]
+            : []),
+          ...(canReveal
+            ? [
+                {
+                  id: "database:reveal-credentials",
+                  label: "Reveal database credentials",
+                  icon: <KeyRound className="h-4 w-4" />,
+                  action: onRevealCredentials,
+                },
+              ]
+            : []),
+          ...(canDelete
+            ? [
+                {
+                  id: "database:remove",
+                  label: "Remove database",
+                  icon: <Trash2 className="h-4 w-4" />,
+                  action: onRemove,
+                },
+              ]
+            : []),
+        ]}
+      />
       <div className="flex min-w-0 flex-1 items-center gap-3">
         <PageBackButton onClick={onBack} />
         <div className="min-w-0">

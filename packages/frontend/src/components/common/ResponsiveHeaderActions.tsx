@@ -8,8 +8,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useRegisterCommandPalettePageActions } from "@/hooks/use-command-palette-page-actions";
 
 export interface ResponsiveHeaderAction {
+  id?: string;
   label: string;
   icon?: ReactNode;
   onClick: () => void;
@@ -28,6 +30,18 @@ export function ResponsiveHeaderActions({
   actions: ResponsiveHeaderAction[];
   className?: string;
 }) {
+  useRegisterCommandPalettePageActions(
+    actions.map((action, index) => ({
+      id:
+        action.id ??
+        `header:${action.label.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "action"}:${index}`,
+      label: action.label,
+      icon: action.icon,
+      action: action.onClick,
+      disabled: action.disabled,
+    }))
+  );
+
   if (actions.length === 0) return null;
 
   return (

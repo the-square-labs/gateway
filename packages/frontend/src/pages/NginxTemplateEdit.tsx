@@ -11,6 +11,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
+import { CommandPalettePageActions } from "@/components/common/CommandPalettePageActions";
 import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
@@ -441,6 +442,51 @@ export function NginxTemplateEdit() {
   return (
     <PageTransition>
       <div className="h-full flex flex-col p-6 gap-4 overflow-hidden">
+        <CommandPalettePageActions
+          actions={[
+            ...(!isBuiltin
+              ? [
+                  {
+                    id: "template:settings",
+                    label: "Template settings",
+                    icon: <Settings2 className="h-4 w-4" />,
+                    action: () => setSettingsOpen(true),
+                  },
+                ]
+              : []),
+            {
+              id: "template:test",
+              label: isTesting ? "Testing template" : "Test template",
+              icon: <FlaskConical className="h-4 w-4" />,
+              disabled: !content.trim() || isTesting,
+              action: handleTest,
+            },
+            ...(!isBuiltin
+              ? [
+                  {
+                    id: "template:save",
+                    label: isSaving ? "Saving template" : "Save template",
+                    icon: <Save className="h-4 w-4" />,
+                    disabled: isSaving || !name.trim() || !content.trim(),
+                    action: handleSave,
+                  },
+                ]
+              : []),
+            {
+              id: "template:preview",
+              label: "Preview template",
+              icon: <Eye className="h-4 w-4" />,
+              disabled: !content.trim(),
+              action: handlePreview,
+            },
+            {
+              id: "template:cheatsheet",
+              label: "Variables cheatsheet",
+              icon: <HelpCircle className="h-4 w-4" />,
+              action: () => setCheatsheetOpen(true),
+            },
+          ]}
+        />
         <div className="flex flex-wrap items-center justify-between gap-2 shrink-0">
           <div className="flex items-center gap-3">
             <PageBackButton onClick={() => navigate(backHref)} />

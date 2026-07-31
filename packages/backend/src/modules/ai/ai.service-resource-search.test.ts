@@ -97,7 +97,10 @@ describe('AIService resource search tool', () => {
   it('discovers docker nodes from scoped grants and searches only authorized nodes', async () => {
     const nodesService = {
       list: vi.fn().mockResolvedValue({
-        data: [{ id: 'node-1' }, { id: 'node-2' }],
+        data: [
+          { id: 'node-1', slug: 'node-one' },
+          { id: 'node-2', slug: 'node-two' },
+        ],
         totalPages: 1,
       }),
     };
@@ -124,16 +127,28 @@ describe('AIService resource search tool', () => {
     expect(dockerService.listContainers).toHaveBeenCalledTimes(2);
     expect(dockerService.listContainers).toHaveBeenNthCalledWith(1, 'node-1');
     expect(dockerService.listContainers).toHaveBeenNthCalledWith(2, 'node-2');
-    expect((result.result as { results: Array<{ id: string; nodeId: string }> }).results).toEqual([
-      expect.objectContaining({ type: 'docker_container', id: 'container-1', name: 'api', nodeId: 'node-1' }),
-      expect.objectContaining({ type: 'docker_container', id: 'container-2', name: 'worker', nodeId: 'node-2' }),
+    expect((result.result as { results: Array<{ id: string; nodeId: string; nodeSlug: string }> }).results).toEqual([
+      expect.objectContaining({
+        type: 'docker_container',
+        id: 'container-1',
+        name: 'api',
+        nodeId: 'node-1',
+        nodeSlug: 'node-one',
+      }),
+      expect.objectContaining({
+        type: 'docker_container',
+        id: 'container-2',
+        name: 'worker',
+        nodeId: 'node-2',
+        nodeSlug: 'node-two',
+      }),
     ]);
   });
 
   it('lists typed resources when query is empty', async () => {
     const nodesService = {
       list: vi.fn().mockResolvedValue({
-        data: [{ id: 'node-1' }],
+        data: [{ id: 'node-1', slug: 'node-one' }],
         totalPages: 1,
       }),
     };

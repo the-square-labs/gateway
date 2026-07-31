@@ -2,7 +2,7 @@ import { filterLegacyIdRecentPages, useUIStore } from "./ui";
 
 describe("recent pages", () => {
   beforeEach(() => {
-    useUIStore.setState({ recentPages: [] });
+    useUIStore.setState({ recentPages: [], commandActionUsage: {} });
   });
 
   it("replaces the previous route when the same resource is renamed", () => {
@@ -18,6 +18,37 @@ describe("recent pages", () => {
         resourceKey: "node:node-1",
       },
     ]);
+  });
+
+  it("tracks command action frequency independently per user and page context", () => {
+    const store = useUIStore.getState();
+    store.recordCommandActionUsage("user-1", "proxy-hosts", "action:new-proxy");
+    store.recordCommandActionUsage("user-1", "proxy-hosts", "action:new-proxy");
+    store.recordCommandActionUsage("user-1", "dashboard", "action:new-proxy");
+    store.recordCommandActionUsage("user-2", "proxy-hosts", "action:new-proxy");
+
+    expect(Object.values(useUIStore.getState().commandActionUsage)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          userId: "user-1",
+          context: "proxy-hosts",
+          actionId: "action:new-proxy",
+          count: 2,
+        }),
+        expect.objectContaining({
+          userId: "user-1",
+          context: "dashboard",
+          actionId: "action:new-proxy",
+          count: 1,
+        }),
+        expect.objectContaining({
+          userId: "user-2",
+          context: "proxy-hosts",
+          actionId: "action:new-proxy",
+          count: 1,
+        }),
+      ])
+    );
   });
 
   it("removes every recent tab for a renamed volume", () => {

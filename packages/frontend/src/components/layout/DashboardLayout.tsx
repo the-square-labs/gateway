@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { keyboardNavigationRoutes } from "@/lib/app-navigation";
 import { DOCKER_VIEW_NODE_SCOPES, loadVisibleDockerNodes } from "@/lib/docker-node-access";
 import { hasScopeBase, scopeMatches } from "@/lib/scope-utils";
 import { api } from "@/services/api";
@@ -428,17 +429,14 @@ export function DashboardLayout() {
       // Cmd+number navigation
       if (mod && !e.altKey && !e.shiftKey) {
         const features = useSystemConfigStore.getState().config.features;
-        const routes: Record<string, string> = {
-          "1": "/",
-          "2": "/proxy-hosts",
-          "3": "/domains",
-          "4": "/nginx-templates",
-          "5": "/ssl-certificates",
-          ...(features.pkiEnabled ? { "6": "/cas", "7": "/certificates" } : {}),
-          "8": "/templates",
-          "9": "/nodes",
-          "0": "/access-lists",
-        };
+        const auth = useAuthStore.getState();
+        const routes = keyboardNavigationRoutes({
+          scopes: auth.user?.scopes ?? [],
+          pkiEnabled: features.pkiEnabled,
+          loggingEnabled: features.loggingEnabled,
+          inferenceEnabled: features.inferenceEnabled,
+          hasDockerNodes: useDockerStore.getState().dockerNodes.length > 0,
+        });
         if (e.key in routes) {
           e.preventDefault();
           navigate(routes[e.key]);

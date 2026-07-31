@@ -1,28 +1,15 @@
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  Activity,
   ArrowUpCircle,
-  Award,
-  Bell,
   Box,
   Database,
   Expand,
-  FileText,
   GitBranch,
   Globe,
-  Globe2,
-  LayoutDashboard,
-  Lock,
   PanelLeft,
   PanelLeftClose,
-  ScrollText,
   Search,
   Server,
-  Settings,
-  ShieldAlert,
-  ShieldCheck,
-  UserRound,
-  Users,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -43,6 +30,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRealtime } from "@/hooks/use-realtime";
+import { visibleNavigationGroups } from "@/lib/app-navigation";
 import {
   databaseRoute,
   dockerContainerRoute,
@@ -50,7 +38,6 @@ import {
   nodeRoute,
   proxyHostRoute,
 } from "@/lib/resource-routes";
-import { deriveAllowedResourceIdsByScope } from "@/lib/scope-utils";
 import { isSidebarNavigationActive } from "@/lib/sidebar-navigation";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -79,92 +66,6 @@ function getInitials(name: string | null): string {
     .toUpperCase();
 }
 
-interface NavItem {
-  name: string;
-  href: string;
-  icon: React.ElementType;
-  scope?: string;
-  requiresStatusPageEnabled?: boolean;
-  requiresLoggingEnabled?: boolean;
-}
-
-interface NavGroup {
-  label: string;
-  items: NavItem[];
-}
-
-const navigationGroups: NavGroup[] = [
-  {
-    label: "Main",
-    items: [
-      { name: "Dashboard", href: "/", icon: LayoutDashboard },
-      { name: "Profile", href: "/profile", icon: UserRound },
-    ],
-  },
-  {
-    label: "Reverse Proxy",
-    items: [
-      { name: "Proxy Hosts", href: "/proxy-hosts", icon: Globe, scope: "proxy:view" },
-      { name: "Domains", href: "/domains", icon: Globe2, scope: "domains:view" },
-      { name: "SSL Certificates", href: "/ssl-certificates", icon: Lock, scope: "ssl:cert:view" },
-    ],
-  },
-  {
-    label: "PKI",
-    items: [
-      { name: "Authorities", href: "/cas", icon: ShieldCheck, scope: "pki:ca:view:root" },
-      { name: "Certificates", href: "/certificates", icon: FileText, scope: "pki:cert:view" },
-    ],
-  },
-  {
-    label: "Resources",
-    items: [
-      {
-        name: "Docker",
-        href: "/docker",
-        icon: Box,
-        scope: "docker:containers:view",
-      },
-      {
-        name: "Databases",
-        href: "/databases",
-        icon: Database,
-        scope: "databases:view",
-      },
-      {
-        name: "Logging",
-        href: "/logging",
-        icon: ScrollText,
-        scope: "logs:read",
-        requiresLoggingEnabled: true,
-      },
-      { name: "Nodes", href: "/nodes", icon: Server, scope: "nodes:details" },
-    ],
-  },
-  {
-    label: "Management",
-    items: [
-      { name: "Templates", href: "/templates", icon: Award },
-      { name: "Access Lists", href: "/access-lists", icon: ShieldAlert, scope: "acl:view" },
-      {
-        name: "Notifications",
-        href: "/notifications",
-        icon: Bell,
-        scope: "notifications:view",
-      },
-      {
-        name: "Status Page",
-        href: "/status-page",
-        icon: Activity,
-        scope: "status-page:view",
-        requiresStatusPageEnabled: true,
-      },
-      { name: "Administration", href: "/administration", icon: Users },
-      { name: "Settings", href: "/settings", icon: Settings },
-    ],
-  },
-];
-
 export interface SidebarContentProps {
   onNavigate?: () => void;
   alwaysExpanded?: boolean;
@@ -188,7 +89,7 @@ export function SidebarContent({
 }: SidebarContentProps) {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, hasScope, hasAnyScope, hasScopedAccess, logout } = useAuthStore();
+  const { user, hasScope, logout } = useAuthStore();
   const {
     sidebarOpen,
     toggleSidebar,
@@ -207,6 +108,7 @@ export function SidebarContent({
   const [statusPageEnabled, setStatusPageEnabled] = useState(false);
   const pkiEnabled = useSystemConfigStore((s) => s.config.features.pkiEnabled);
   const loggingEnabled = useSystemConfigStore((s) => s.config.features.loggingEnabled);
+  const inferenceEnabled = useSystemConfigStore((s) => s.config.features.inferenceEnabled);
 
   const sidebarPinnedProxyIds = usePinnedProxiesStore((s) => s.sidebarProxyIds);
   const pinnedProxyRefreshTick = usePinnedProxiesStore((s) => s.refreshTick);
@@ -488,49 +390,6 @@ export function SidebarContent({
 
   const isExpanded = alwaysExpanded || sidebarOpen;
 
-  const hasDockerNodes = dockerNodes.length > 0;
-  const canAccessProxyHosts = hasScopedAccess("proxy:view") || hasScope("proxy:folders:manage");
-  const canAccessDocker =
-    hasScopedAccess("docker:containers:view") ||
-    hasScopedAccess("docker:images:view") ||
-    hasScopedAccess("docker:volumes:view") ||
-    hasScopedAccess("docker:networks:view") ||
-    hasScopedAccess("docker:tasks") ||
-    hasScope("docker:containers:folders:manage");
-  const canAccessNotifications = hasAnyScope(
-    "notifications:alerts:view",
-    "notifications:alerts:view",
-    "notifications:alerts:create",
-    "notifications:alerts:edit",
-    "notifications:alerts:delete",
-    "notifications:webhooks:view",
-    "notifications:webhooks:view",
-    "notifications:webhooks:create",
-    "notifications:webhooks:edit",
-    "notifications:webhooks:delete",
-    "notifications:deliveries:view",
-    "notifications:deliveries:view",
-    "notifications:view",
-    "notifications:manage"
-  );
-  const canAccessDatabases =
-    hasScopedAccess("databases:view") || hasScope("databases:folders:manage");
-  const canAccessNodes = hasScopedAccess("nodes:details") || hasScope("nodes:folders:manage");
-  const hasResourceScopedSchemaView = user
-    ? (deriveAllowedResourceIdsByScope(user.scopes)["logs:schemas:view"]?.length ?? 0) > 0
-    : false;
-  const canAccessLogging =
-    loggingEnabled &&
-    (hasScopedAccess("logs:environments:view") ||
-      hasAnyScope(
-        "logs:environments:view",
-        "logs:schemas:view",
-        "logs:schemas:create",
-        "logs:read",
-        "logs:manage"
-      ) ||
-      hasResourceScopedSchemaView);
-  const canAccessAuthorities = hasAnyScope("pki:ca:view:root", "pki:ca:view:intermediate");
   const canUseAI = hasScope(AI_SCOPE) && aiEnabled !== false;
 
   const handleTryLiteMode = useCallback(async () => {
@@ -542,60 +401,15 @@ export function SidebarContent({
     onNavigate?.();
   }, [navigate, onNavigate, setAIPanelOpen, setAILiteMode]);
 
-  // Build nav groups with scope + context filtering
-  const effectiveGroups = navigationGroups
-    .map((group) => {
-      // Hide entire Reverse Proxy group when no nginx nodes
-      if (group.label === "Reverse Proxy" && !hasNginxNodes && !canAccessProxyHosts)
-        return { ...group, items: [] };
-      if (group.label === "PKI" && !pkiEnabled) return { ...group, items: [] };
-      return {
-        ...group,
-        items: group.items.filter((item) => {
-          if (item.href === "/proxy-hosts") {
-            if (!canAccessProxyHosts) return false;
-          } else if (item.href === "/docker") {
-            if (!canAccessDocker) return false;
-          } else if (item.href === "/databases") {
-            if (!canAccessDatabases) return false;
-          } else if (item.href === "/logging") {
-            if (!canAccessLogging) return false;
-          } else if (item.href === "/cas") {
-            if (!pkiEnabled || !canAccessAuthorities) return false;
-          } else if (item.href === "/certificates") {
-            if (!pkiEnabled) return false;
-          } else if (item.href === "/notifications") {
-            if (!canAccessNotifications) return false;
-          } else if (item.href === "/nodes") {
-            if (!canAccessNodes) return false;
-          } else if (item.requiresStatusPageEnabled && !statusPageEnabled) {
-            return false;
-          } else if (item.href === "/administration") {
-            if (!hasAnyScope("admin:audit", "admin:users", "admin:groups")) return false;
-          } else if (item.scope) {
-            if (!hasScopedAccess(item.scope)) {
-              return false;
-            }
-          }
-          // Hide Docker when no docker nodes exist
-          if (
-            item.href === "/docker" &&
-            !hasDockerNodes &&
-            !hasScope("docker:containers:folders:manage")
-          )
-            return false;
-          // Templates: need at least one template scope
-          if (
-            item.href === "/templates" &&
-            (!pkiEnabled || !hasScopedAccess("pki:templates:view")) &&
-            !hasScopedAccess("proxy:templates:view")
-          )
-            return false;
-          return true;
-        }),
-      };
-    })
-    .filter((group) => group.items.length > 0);
+  const effectiveGroups = visibleNavigationGroups({
+    scopes: user?.scopes ?? [],
+    pkiEnabled,
+    loggingEnabled,
+    inferenceEnabled,
+    statusPageEnabled,
+    hasNginxNodes,
+    hasDockerNodes: dockerNodes.length > 0,
+  });
 
   const allNavItems = effectiveGroups.flatMap((g) => g.items);
 

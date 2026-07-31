@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { CommandPalettePageActions } from "@/components/common/CommandPalettePageActions";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -87,6 +88,31 @@ export function LoggingSchemaDetail({
   return (
     <PageTransition>
       <div className="h-full overflow-y-auto p-6 space-y-4">
+        <CommandPalettePageActions
+          actions={[
+            ...(canEdit
+              ? [
+                  {
+                    id: "logging-schema:save",
+                    label: saving ? "Saving schema" : "Save schema changes",
+                    icon: <Save className="h-4 w-4" />,
+                    disabled: saving || !dirty,
+                    action: () => void save(),
+                  },
+                ]
+              : []),
+            ...(canDelete
+              ? [
+                  {
+                    id: "logging-schema:delete",
+                    label: "Delete logging schema",
+                    icon: <Trash2 className="h-4 w-4" />,
+                    action: () => void onDelete(schema),
+                  },
+                ]
+              : []),
+          ]}
+        />
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-3">
             <PageBackButton onClick={() => navigate("/logging/schemas")} />
@@ -259,6 +285,52 @@ export function LoggingEnvironmentDetail({
             : "h-full overflow-y-auto p-6 space-y-4"
         }
       >
+        <CommandPalettePageActions
+          actions={[
+            ...(activeTab === "logs"
+              ? [
+                  {
+                    id: "logging-environment:refresh",
+                    label: "Refresh logs",
+                    icon: <ScrollText className="h-4 w-4" />,
+                    disabled: !loggingEnabled,
+                    action: () => setLogsRefreshKey((current) => current + 1),
+                  },
+                ]
+              : []),
+            ...(activeTab === "tokens" && canCreateToken
+              ? [
+                  {
+                    id: "logging-environment:new-token",
+                    label: "Create ingest token",
+                    icon: <Plus className="h-4 w-4" />,
+                    action: () => setTokenDialogOpen(true),
+                  },
+                ]
+              : []),
+            ...(activeTab === "settings" && canEdit
+              ? [
+                  {
+                    id: "logging-environment:save",
+                    label: settingsSaving ? "Saving environment" : "Save environment settings",
+                    icon: <Save className="h-4 w-4" />,
+                    disabled: !settingsDirty || settingsSaving,
+                    action: () => void saveSettings(),
+                  },
+                ]
+              : []),
+            ...(activeTab === "settings" && canDelete
+              ? [
+                  {
+                    id: "logging-environment:delete",
+                    label: "Delete logging environment",
+                    icon: <Trash2 className="h-4 w-4" />,
+                    action: () => void onDelete(environment),
+                  },
+                ]
+              : []),
+          ]}
+        />
         <div className="flex flex-wrap items-center justify-between gap-2 shrink-0">
           <div className="flex min-w-0 items-center gap-3">
             <PageBackButton onClick={() => navigate("/logging/environments")} />

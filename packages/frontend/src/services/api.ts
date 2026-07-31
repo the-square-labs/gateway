@@ -22,6 +22,7 @@ import type {
   ProxyHostFolder,
   PublicStatusPageDto,
   RequestACMECertRequest,
+  ResourceSearchResponse,
   SSLCertificate,
   SSLCertificateOperationResult,
   SSLCertStatus,
@@ -199,6 +200,19 @@ class ApiClient extends withInferenceApi(
 
   async dismissAlert(id: string): Promise<void> {
     return this.request<void>(`/alerts/${id}/dismiss`, { method: "POST" });
+  }
+
+  async searchResources(
+    query: string,
+    options?: { types?: string[]; nodeId?: string; limit?: number }
+  ): Promise<ResourceSearchResponse> {
+    const params = new URLSearchParams({ q: query });
+    if (options?.types?.length) params.set("types", options.types.join(","));
+    if (options?.nodeId) params.set("nodeId", options.nodeId);
+    if (options?.limit) params.set("limit", String(options.limit));
+    return this.unwrapData(
+      this.request<{ data: ResourceSearchResponse }>(`/resources/search?${params.toString()}`)
+    );
   }
 
   // ── Tokens ────────────────────────────────────────────────────────

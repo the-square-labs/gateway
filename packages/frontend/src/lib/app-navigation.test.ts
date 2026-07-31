@@ -1,0 +1,71 @@
+import { describe, expect, it } from "vitest";
+import {
+  type AppNavigationVisibility,
+  keyboardNavigationRoutes,
+  visibleNavigationGroups,
+} from "./app-navigation";
+
+function context(overrides: Partial<AppNavigationVisibility> = {}): AppNavigationVisibility {
+  return {
+    scopes: [],
+    pkiEnabled: false,
+    loggingEnabled: false,
+    inferenceEnabled: false,
+    ...overrides,
+  };
+}
+
+describe("app navigation registry", () => {
+  it("keeps numeric shortcuts aligned with their visible destinations", () => {
+    const routes = keyboardNavigationRoutes(
+      context({
+        scopes: [
+          "proxy:view",
+          "domains:view",
+          "ssl:cert:view",
+          "pki:ca:view:root",
+          "pki:cert:view",
+          "pki:templates:view",
+          "docker:containers:view",
+          "nodes:details",
+          "acl:view",
+        ],
+        pkiEnabled: true,
+      })
+    );
+
+    expect(routes).toEqual({
+      "1": "/",
+      "2": "/proxy-hosts",
+      "3": "/domains",
+      "4": "/ssl-certificates",
+      "5": "/cas",
+      "6": "/certificates",
+      "7": "/templates",
+      "8": "/docker",
+      "9": "/nodes",
+      "0": "/access-lists",
+    });
+  });
+
+  it("shows Settings for Cloudflare-only integration administrators", () => {
+    const groups = visibleNavigationGroups(context({ scopes: ["integrations:cloudflare:view"] }));
+
+    expect(groups.flatMap((group) => group.items.map((item) => item.id))).toContain("settings");
+  });
+
+  it("hides feature-backed destinations while their features are disabled", () => {
+    const groups = visibleNavigationGroups(
+      context({
+        scopes: ["pki:ca:view:root", "pki:cert:view", "logs:environments:view", "status-page:view"],
+        statusPageEnabled: false,
+      })
+    );
+    const ids = groups.flatMap((group) => group.items.map((item) => item.id));
+
+    expect(ids).not.toContain("authorities");
+    expect(ids).not.toContain("certificates");
+    expect(ids).not.toContain("logging");
+    expect(ids).not.toContain("status-page");
+  });
+});

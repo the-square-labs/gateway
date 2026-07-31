@@ -2,6 +2,7 @@ import { Copy, Download, MoreVertical, ShieldOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
+import { CommandPalettePageActions } from "@/components/common/CommandPalettePageActions";
 import { DetailRow } from "@/components/common/DetailRow";
 import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageBackButton } from "@/components/common/PageBackButton";
@@ -149,10 +150,70 @@ export function CertificateDetail() {
     hasScope(`pki:cert:export:${cert.id}`) || hasScope("pki:cert:export");
   const canRevokeCertificate =
     hasScope(`pki:cert:revoke:${cert.id}`) || hasScope("pki:cert:revoke");
+  const copySerial = () => {
+    void navigator.clipboard.writeText(cert.serialNumber);
+    toast.success("Serial number copied");
+  };
+  const copyPem = () => {
+    void navigator.clipboard.writeText(cert.certificatePem || "");
+    toast.success("PEM copied to clipboard");
+  };
 
   return (
     <PageTransition>
       <div className="h-full overflow-y-auto p-6 space-y-6">
+        <CommandPalettePageActions
+          actions={[
+            ...(canExportCertificate
+              ? [
+                  {
+                    id: "certificate:download-pem",
+                    label: "Download certificate as PEM",
+                    icon: <Download className="h-4 w-4" />,
+                    action: () => void handleDownload("pem"),
+                  },
+                  {
+                    id: "certificate:download-der",
+                    label: "Download certificate as DER",
+                    icon: <Download className="h-4 w-4" />,
+                    action: () => void handleDownload("der"),
+                  },
+                  {
+                    id: "certificate:download-pkcs12",
+                    label: "Download certificate as PKCS#12",
+                    icon: <Download className="h-4 w-4" />,
+                    action: () => setPkcs12DialogOpen(true),
+                  },
+                ]
+              : []),
+            {
+              id: "certificate:copy-serial",
+              label: "Copy certificate serial",
+              icon: <Copy className="h-4 w-4" />,
+              action: copySerial,
+            },
+            ...(canExportCertificate && cert.certificatePem
+              ? [
+                  {
+                    id: "certificate:copy-pem",
+                    label: "Copy certificate PEM",
+                    icon: <Copy className="h-4 w-4" />,
+                    action: copyPem,
+                  },
+                ]
+              : []),
+            ...(canRevokeCertificate && cert.status === "active" && !cert.isSystem
+              ? [
+                  {
+                    id: "certificate:revoke",
+                    label: "Revoke certificate",
+                    icon: <ShieldOff className="h-4 w-4" />,
+                    action: () => setRevokeDialogOpen(true),
+                  },
+                ]
+              : []),
+          ]}
+        />
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-3">
@@ -198,22 +259,12 @@ export function CertificateDetail() {
                     <DropdownMenuSeparator />
                   </>
                 )}
-                <DropdownMenuItem
-                  onClick={() => {
-                    navigator.clipboard.writeText(cert.serialNumber);
-                    toast.success("Serial number copied");
-                  }}
-                >
+                <DropdownMenuItem onClick={copySerial}>
                   <Copy className="h-4 w-4" />
                   Copy Serial Number
                 </DropdownMenuItem>
                 {canExportCertificate && cert.certificatePem && (
-                  <DropdownMenuItem
-                    onClick={() => {
-                      navigator.clipboard.writeText(cert.certificatePem!);
-                      toast.success("PEM copied to clipboard");
-                    }}
-                  >
+                  <DropdownMenuItem onClick={copyPem}>
                     <Copy className="h-4 w-4" />
                     Copy PEM
                   </DropdownMenuItem>

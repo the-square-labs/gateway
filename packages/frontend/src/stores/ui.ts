@@ -19,6 +19,20 @@ export interface RecentPage {
   resourceKey?: string;
 }
 
+export interface CommandActionUsage {
+  userId: string;
+  context: string;
+  actionId: string;
+  count: number;
+  lastUsedAt: number;
+}
+
+const MAX_COMMAND_ACTION_USAGE_ENTRIES = 200;
+
+function commandActionUsageKey(userId: string, context: string, actionId: string): string {
+  return `${userId}\u001f${context}\u001f${actionId}`;
+}
+
 const UUID_PATH_SEGMENT = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const LEGACY_ID_DETAIL_PATHS = [
   new RegExp(`^/(?:nodes|databases|proxy-hosts)/${UUID_PATH_SEGMENT}(?:/|$)`, "i"),
@@ -70,6 +84,8 @@ interface UIState {
   // Command palette
   commandPaletteOpen: boolean;
   setCommandPaletteOpen: (open: boolean) => void;
+  commandActionUsage: Record<string, CommandActionUsage>;
+  recordCommandActionUsage: (userId: string, context: string, actionId: string) => void;
 
   // AI Panel
   aiPanelOpen: boolean;
@@ -136,6 +152,32 @@ export const useUIStore = create<UIState>()(
       // Command palette
       commandPaletteOpen: false,
       setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
+      commandActionUsage: {},
+      recordCommandActionUsage: (userId, context, actionId) =>
+        set((state) => {
+          const key = commandActionUsageKey(userId, context, actionId);
+          const previous = state.commandActionUsage[key];
+          const next = {
+            ...state.commandActionUsage,
+            [key]: {
+              userId,
+              context,
+              actionId,
+              count: (previous?.count ?? 0) + 1,
+              lastUsedAt: Date.now(),
+            },
+          };
+          const entries = Object.entries(next);
+          if (entries.length <= MAX_COMMAND_ACTION_USAGE_ENTRIES) {
+            return { commandActionUsage: next };
+          }
+          entries.sort(([, left], [, right]) => right.lastUsedAt - left.lastUsedAt);
+          return {
+            commandActionUsage: Object.fromEntries(
+              entries.slice(0, MAX_COMMAND_ACTION_USAGE_ENTRIES)
+            ),
+          };
+        }),
 
       // AI Panel
       aiPanelOpen: false,
@@ -191,6 +233,7 @@ export const useUIStore = create<UIState>()(
         pinnedAIConversationIds: state.pinnedAIConversationIds,
         aiApprovalMode: state.aiApprovalMode,
         recentPages: state.recentPages,
+        commandActionUsage: state.commandActionUsage,
       }),
       migrate: (persisted, persistedVersion) => {
         const state = persisted as (Partial<UIState> & Record<string, unknown>) | undefined;
@@ -209,6 +252,7 @@ export const useUIStore = create<UIState>()(
           aiApprovalMode: isAIApprovalMode(state.aiApprovalMode) ? state.aiApprovalMode : "normal",
           recentPages:
             persistedVersion < 1 ? filterLegacyIdRecentPages(state.recentPages) : state.recentPages,
+          commandActionUsage: state.commandActionUsage ?? {},
         };
       },
     }

@@ -79,6 +79,7 @@ import { templateRoutes } from '@/modules/pki/templates.routes.js';
 import { folderRoutes } from '@/modules/proxy/folder.routes.js';
 import { nginxTemplateRoutes } from '@/modules/proxy/nginx-template.routes.js';
 import { proxyRoutes } from '@/modules/proxy/proxy.routes.js';
+import { resourceSearchRoutes } from '@/modules/resource-search/resource-search.routes.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { setupApiDisabledMiddleware, setupRoutes } from '@/modules/setup/setup.routes.js';
 import { sslRoutes } from '@/modules/ssl/ssl.routes.js';
@@ -504,6 +505,7 @@ export function createApp() {
   app.route('/api/webhooks/docker', dockerWebhookTriggerRoutes);
   app.route('/api/nodes', nodesRoutes);
   app.route('/api/proxy-hosts', proxyRoutes);
+  app.route('/api/resources', resourceSearchRoutes);
   app.route('/api/proxy-host-folders', folderRoutes);
   app.route('/api/nginx-templates', nginxTemplateRoutes);
   app.route('/api/ssl-certificates', sslRoutes);
