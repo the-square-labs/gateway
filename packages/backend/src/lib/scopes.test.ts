@@ -28,6 +28,27 @@ function listScopeRemovalMigration(): string {
   return readFileSync(join(process.cwd(), 'src/db/migrations/0030_remove_list_scopes.sql'), 'utf8');
 }
 
+function documentedScopes(): string[] {
+  const source = readFileSync(join(process.cwd(), '../../SCOPES.md'), 'utf8');
+  const section = source.match(/## Scope List([\s\S]*?)## API Token Delegation/);
+  if (!section) throw new Error('SCOPES.md scope list not found');
+  return [...section[1].matchAll(/\| `([^`]+)` \|/g)].map((entry) => entry[1]);
+}
+
+function documentedProgrammaticDeniedScopes(): string[] {
+  const source = readFileSync(join(process.cwd(), '../../SCOPES.md'), 'utf8');
+  const section = source.match(/## API Token Delegation([\s\S]*?)## OAuth Manual Approval Scopes/);
+  if (!section) throw new Error('SCOPES.md API token delegation list not found');
+  return [...section[1].matchAll(/\| `([^`]+)` \|/g)].map((entry) => entry[1]);
+}
+
+function documentedManualApprovalScopes(): string[] {
+  const source = readFileSync(join(process.cwd(), '../../SCOPES.md'), 'utf8');
+  const section = source.match(/## OAuth Manual Approval Scopes([\s\S]*)$/);
+  if (!section) throw new Error('SCOPES.md OAuth manual approval list not found');
+  return [...section[1].matchAll(/\| `([^`]+)` \|/g)].map((entry) => entry[1]);
+}
+
 function migratedProgrammaticStoredScopes(scopes: string[]): string[] {
   return canonicalizeScopes(
     scopes.filter(
@@ -39,6 +60,12 @@ function migratedProgrammaticStoredScopes(scopes: string[]): string[] {
 describe('canonical scope definitions', () => {
   it('keeps system-admin on every canonical scope', () => {
     expect(SYSTEM_ADMIN_SCOPES).toEqual([...ALL_SCOPES]);
+  });
+
+  it('keeps the public scope reference aligned with canonical scope contracts', () => {
+    expect(documentedScopes()).toEqual([...ALL_SCOPES]);
+    expect(documentedProgrammaticDeniedScopes()).toEqual([...PROGRAMMATIC_DENIED_BASE_SCOPES]);
+    expect(documentedManualApprovalScopes()).toEqual([...MANUAL_APPROVAL_SCOPES]);
   });
 
   it('keeps built-in admin broad while excluding protected operational scopes', () => {

@@ -62,6 +62,17 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 | Запустить проект локально или внести вклад | [Development guide](docs/development.md) |
 | Посмотреть permission scopes | [SCOPES.md](SCOPES.md) |
 
+## Настройка AI harnesses
+
+Пакет [`@wiolett/gateway-inference`](packages/gateway-inference) настраивает поддерживаемые AI harnesses, не записывая Gateway inference token в их конфигурационные файлы. Сначала включите **Inference** в **Settings > Gateway settings > General settings**, затем включите **Harness-specific endpoints** в **Settings > Inference** и выполните одну из команд:
+
+```bash
+npx -y @wiolett/gateway-inference@latest setup codex
+npx -y @wiolett/gateway-inference@latest setup claude-code
+```
+
+Если активного подключения нет, CLI запросит URL Gateway и выполнит OAuth-авторизацию. Для Codex Desktop также требуется обычный вход в OpenAI account и полный перезапуск приложения после настройки. Для Claude Code требуется версия 2.1.129 или новее; настраивается только CLI, но не Claude Desktop и не VS Code extension. Полный lifecycle и ручная настройка API описаны в [README пакета](packages/gateway-inference/README.md) и [руководстве по inference](docs/inference.md).
+
 ## Обзор продукта
 
 <table>
@@ -87,15 +98,16 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 
 | Область | Кратко |
 |---------|--------|
-| Reverse proxy | Multi-node nginx management, proxy hosts, redirects, WebSockets, access lists, health checks, host folders, templates, logs и stats. |
-| Docker | Container lifecycle, deployments, rollout/rollback, registries, images, webhooks, logs, console, file browser, secrets, env vars, ports, mounts и cleanup. |
+| Reverse proxy | Multi-node nginx management, proxy hosts, Docker container/deployment upstreams, maintenance mode, redirects, WebSockets, access lists, health checks, host folders, templates, logs и stats. |
+| Docker | Container lifecycle, deployments, rollout/rollback, cross-node migrations контейнеров и volumes, offline inventory snapshots, registries, images, networks, volumes, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, mounts и cleanup. |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports и proxy binding. |
 | Domains | Central domain registry, DNS checks, record validation и usage tracking. |
 | Databases | Saved PostgreSQL и Redis connections, encrypted credentials, health history, schema/key browsing, query consoles и write operations. |
 | Monitoring | Node CPU, memory, disk, network, service status, daemon runtime details, log streaming и update checks. |
 | Logging | Опциональный ClickHouse-backed structured log ingestion со schemas, retention, ingest tokens, rate limits и search. |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages и optional AI assistant. |
-| Administration | OIDC login, group-based permissions, scoped programmatic access, audit logs, setup state, updates и license controls. |
+| Inference | Опциональный multi-provider model gateway с отдельными tokens, usage controls, OpenAI-compatible API и управляемой настройкой Codex или Claude Code через `@wiolett/gateway-inference`. |
+| Administration | OIDC login, group-based и дополнительные per-user permissions, scoped programmatic access, audit logs, setup state, updates и license controls. |
 
 ## Как это работает
 
@@ -146,6 +158,7 @@ Gateway уже ориентирован на production operations, а не на
 - [x] PostgreSQL and Redis database explorer with encrypted saved credentials.
 - [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
 - [x] Optional ClickHouse-backed structured logging and optional AI assistant.
+- [x] Опциональный multi-provider inference gateway с OpenAI-compatible и harness-specific APIs.
 - [x] View-based, resource-scoped permission model with filtered list visibility.
 - [x] Hardened OIDC/OAuth flows, setup lockout, fail-closed public endpoints, and signed update trust.
 - [x] Gateway and daemon update workflows with signature-verified artifacts.

@@ -2,7 +2,7 @@
 
 `@wiolett/gateway-inference` is the interactive inference companion for Wiolett Gateway. It configures supported AI harnesses while keeping dedicated `gwi_` runtime tokens out of their configuration files.
 
-Node.js 22 or newer is required. Run the package through npm exec; a global installation and `PATH` changes are not required. Before setup, an administrator must enable **Inference** and **Harness-specific endpoints** in **Settings > Inference**.
+Node.js 22 or newer is required. Run the package through npm exec; a global installation and `PATH` changes are not required. Before setup, an administrator must enable **Inference** under **Settings > Gateway settings > General settings**, then enable **Harness-specific endpoints** under **Settings > Inference**.
 
 ## Interactive manager
 

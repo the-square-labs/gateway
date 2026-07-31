@@ -120,8 +120,9 @@ Gateway intentionally separates token families:
 | `gw_` | REST API automation token. |
 | `gwo_` | OAuth access token for one resource, either Gateway API or Gateway MCP. |
 | `gwl_` | Write-only structured logging ingest token. |
+| `gwi_` | Dedicated Gateway Inference runtime token. |
 
-REST API tokens are not accepted by the MCP endpoint. MCP accepts only OAuth access tokens issued for the Gateway MCP resource. Logging ingest tokens can write logs only to their logging environment.
+REST API tokens are not accepted by the MCP endpoint. MCP accepts only OAuth access tokens issued for the Gateway MCP resource. Logging ingest tokens can write logs only to their logging environment. Inference data-plane routes accept only `gwi_` tokens and reject browser sessions plus `gw_`, `gwo_`, and `gwl_` credentials.
 
 OAuth consent also treats dangerous scopes differently: high-risk scopes are visible but unchecked by default and must be explicitly selected.
 

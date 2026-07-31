@@ -124,6 +124,7 @@ When an SSL cert is assigned to a proxy host, Gateway:
 - nodeId: the daemon node this host is deployed on (required when creating).
 - domainNames: array of domains this host serves.
 - forwardHost/forwardPort/forwardScheme: backend server details (for proxy type).
+- upstreamKind: manual, docker_container, or docker_deployment. Docker upstreams store a stable container name or deployment ID plus a published TCP port and resolve the current node address at apply time.
 - sslEnabled: enable HTTPS. Requires sslCertificateId (SSL cert UUID, NOT PKI cert UUID).
 - sslForced: redirect HTTP to HTTPS.
 - http2Support: enable HTTP/2.
@@ -138,6 +139,15 @@ When an SSL cert is assigned to a proxy host, Gateway:
 - nginxTemplateId: use a custom nginx template.
 
 Ordinary list_proxy_hosts and get_proxy_host responses omit rawConfig and rawConfigEnabled. Raw content is only available through explicit raw config read/render tools with raw-read permission.
+
+## Maintenance Mode
+- Maintenance mode is available for enabled managed proxy hosts that are not using raw config. It keeps the configured HTTP/HTTPS vhosts but returns HTTP 503 and pauses managed health checks until maintenance ends.
+- Maintenance state is audited and can feed notification rules and status pages.
+- The current Assistant proxy tools do not expose maintenance toggling or Docker upstream fields. Direct the user to the proxy host UI or documented REST API instead of trying to emulate maintenance by disabling the host or rewriting its config.
+
+## Docker Upstreams
+- The UI and REST API can bind a proxy host to a Docker container by stable name or to a blue/green deployment by deployment ID. Gateway validates a reachable published TCP port and follows deployment slot changes.
+- The current Assistant create/update proxy tools support manual upstream fields only. Do not invent Docker-upstream arguments.
 
 ## Nginx Config
 Each proxy host generates an nginx server block. Changes are applied by reloading nginx.
@@ -296,6 +306,7 @@ Users authenticate via OIDC (OpenID Connect). Gateway acts as a relying party �
 ## Managing Users
 - View all users: list_users
 - Change a user's group: update_user_role(userId, groupId) — changes their permissions immediately
+- The Administration UI can assign additional per-user scopes on top of the user's group, but only from scopes the acting administrator already has. The current AI user tool does not expose this override mutation.
 - Block/unblock users from the Administration UI/API; there is no current AI tool for blocking users.
 - Users cannot be deleted (they're linked to audit logs), only blocked
 
@@ -443,6 +454,7 @@ Daemons report hardware/OS info on registration:
 
 ## Monitoring & Health
 - **Health reports** (every 30s): CPU%, memory, disk, load average, swap, network I/O, open FDs.
+- Daemons report localIpAddresses and publicIpAddresses. Docker nodes may set serviceAddress explicitly; otherwise Gateway uses the first reported local address and then a public address for cross-node/proxy-upstream traffic.
 - **Nginx nodes** additionally report: nginx status, uptime, worker count, error rates (4xx/5xx), stub status stats.
 - **Docker nodes** additionally report: container count (running/stopped/total), per-container CPU/memory/network stats, Docker version.
 - **Traffic stats** (nginx only): parsed from access logs — status code distribution, response times.
@@ -456,6 +468,7 @@ Daemons report hardware/OS info on registration:
 
 ## Key Fields
 - id, hostname, displayName, type, status (pending/online/offline/error)
+- serviceAddress (optional Docker reachability override)
 - lastSeenAt, capabilities (daemon version, features, system info)
 - certificateSerial (mTLS cert), enrollmentTokenHash
 - metadata (extensible metadata object)`,
@@ -526,6 +539,15 @@ other stable hint to locate the recreated container and continue with its new ID
 - Images: list, pull from registries, remove, prune unused
 - Volumes: list, create, remove (shows which containers use each volume)
 - Networks: list, create, remove, connect/disconnect containers
+
+## Inventory Availability
+- Gateway keeps sanitized container, deployment, image, volume, and network inventory snapshots. Read views can show the last synchronized state while a Docker node is offline or refreshing.
+- Treat snapshot availability metadata as authoritative. Do not attempt mutations against unavailable resources; explain that the node must reconnect before Gateway can change them.
+
+## Cross-Node Migrations
+- Gateway can migrate a standalone container or a blue/green deployment to another Docker node, including referenced images, named-volume data, capacity preflight, verification, proxy cutover, cancellation, and cleanup recovery.
+- Migration requires \`docker:containers:migrate\` plus the source-resource permissions needed to inspect protected configuration, secrets, and mounts.
+- The current AI tool surface does not expose migration mutation. Direct the user to the Docker container or deployment migration UI instead of inventing a tool call.
 
 ## Registries & Templates
 - Registries: add private Docker registries with encrypted credentials. Global or node-specific scope.
@@ -781,6 +803,13 @@ Resource tiers are low, medium, and high. TTL is capped by tier. The agent may r
 
 AI conversations are stored on the backend. Tool discovery is conversation-scoped, so discovered toolsets remain available when returning to a saved conversation.
 
+## Provider State
+- The selected provider model and reasoning effort are pinned to the conversation when its first run starts.
+- A model cannot be changed while the assistant is responding.
+- Changing the model later requires a user confirmation because it can increase cost and reduce continuity or provider cache efficiency.
+- Persisted model changes appear as timeline events. Consecutive changes collapse to the final transition, and a chain that returns to the original model is hidden.
+- In Gateway Inference mode, model choices are filtered by the user's model access and effective API/subscription budget. A zero API budget hides API-only models.
+
 ## Context
 - get_current_context returns the current UI route and focused resource when the user says "this page" or "current resource".
 - compact summarizes older conversation history when context grows.
@@ -793,6 +822,11 @@ AI conversations are stored on the backend. Tool discovery is conversation-scope
 - manage_ai_conversation never creates, rewrites, or repairs conversation history. Use the chat UI/runtime for saving active messages.
 - end_conversation closes the current chat with a localized reason. Use it only when the conversation should stop, especially after the third unrelated/off-topic request in the same conversation.
 - If context is exhausted, the UI can block the composer and offer to clear the oldest saved context. Do not keep retrying the same oversized request.
+
+## Attachments And Artifacts
+- The composer accepts up to three supported images when the selected model advertises image input.
+- Uploaded attachments become Gateway-managed artifacts tied to the conversation.
+- Tool-generated files are attached through send_artifact and should not be duplicated as manual download links.
 
 ## Lite Mode
 Lite mode is an AI-first desktop layout. The assistant becomes the main screen, the sidebar shows recent and pinned conversations, and Settings/Administration/top-level pages keep a back button to return to chat.
@@ -933,6 +967,44 @@ Token permissions are controlled by scopes. Each endpoint requires specific scop
 - Token last-used timestamp is tracked for auditing
 - Tokens inherit the user's resource restrictions (if the user's group restricts a scope to specific resources, the token is similarly restricted)`,
 
+  'gateway-settings': `# Gateway Settings And MCP
+
+Use \`get_gateway_settings\` before changing control-plane settings and \`update_gateway_settings\` with only the fields the user explicitly requested.
+
+## Sign-in And OAuth
+- oidcAutoCreateUsers controls whether a valid OIDC login may create a Gateway user automatically.
+- oidcDefaultGroupId is the permission group assigned to automatically created users.
+- oidcRequireVerifiedEmail requires the provider to assert a verified email.
+- oauthExtendedCallbackCompatibility allows unverified public OAuth clients to use external HTTPS callbacks. Loopback callbacks are the safer default. External callbacks are marked as higher risk in consent.
+
+## MCP
+- mcpServerEnabled enables the remote MCP endpoint. MCP still requires an OAuth token issued for the MCP resource and the owning user must have \`mcp:use\`.
+- The default MCP mode starts with a compact core toolset. \`discover_tools\` activates domain toolsets for the current session, Gateway sends \`notifications/tools/list_changed\`, and the client should refresh \`tools/list\`.
+- mcpExtendedCompatibility is a fallback for clients that ignore list-change notifications. It returns every OAuth-scoped tool in the initial \`tools/list\` response and omits \`discover_tools\`. This may expose hundreds of tool schemas, so keep it disabled for compliant clients.
+
+## General And Network Settings
+- generalSettings contains feature flags and shared limits. Inference is disabled by default under Settings > Gateway settings > General settings, and its harness-specific endpoints are configured separately under Settings > Inference.
+- networkSecurity controls trusted private destinations and outbound request restrictions.
+- outboundWebhookPolicy controls allowed webhook destinations.
+
+Never weaken callback, network, or webhook restrictions without explaining the resulting external-data or SSRF exposure and receiving explicit user approval.`,
+
+  'licensing-updates': `# Licensing And Updates
+
+## Licensing
+- \`get_license_status\` reads tier, installation ID, expiry, grace state, and masked key metadata.
+- \`manage_license({ operation: "activate", licenseKey })\` activates a key. Treat the key as a secret and never repeat it in chat.
+- \`manage_license({ operation: "check" })\` refreshes the current state.
+- \`manage_license({ operation: "clear" })\` removes the active key and is destructive.
+- Current license tiers are informational and do not gate product features. Read the live status instead of inferring a tier from available UI.
+
+## Gateway And Daemon Updates
+- Use \`manage_system_updates({ operation: "get_gateway_status" })\` or \`manage_system_updates({ operation: "check_gateway" })\` before proposing an update.
+- Read release notes with \`manage_system_updates({ operation: "get_gateway_release_notes", version })\` for the exact advertised version.
+- Apply an app update with \`manage_system_updates({ operation: "perform_gateway_update", version })\` only after explicit approval.
+- Use the \`list_daemon_updates\` and \`check_daemon_updates\` operations before \`manage_system_updates({ operation: "update_daemon", nodeId })\`; pass the exact nodeId and verify the node reconnects on the expected version.
+- Never invent a version, claim an update completed before its status confirms success, or update unrelated daemons as a side effect.`,
+
   inference: `# Gateway Inference
 
 Gateway Inference is a standalone external model gateway. It is not the internal AI Assistant provider and it is not Gateway MCP. It has separate provider credentials, model configuration, scopes, accounting, continuation state, and dedicated \`gwi_\` runtime tokens. Never use a normal \`gw_\` API token, a \`gwo_\` OAuth token, an Assistant provider key, or an MCP credential on the inference data plane.
@@ -989,7 +1061,7 @@ Subscription connections can set minimumRemainingPercent. API connections can se
 
 ## Default And Per-user Limits
 
-\`manage_inference_limits\` uses one complete policy object. \`enabled\` controls inference access. Subscription windows use credits5hEnabled/credits5h, credits7dEnabled/credits7d, and credits30dEnabled/credits30d. A disabled window is unlimited; if all three are disabled, subscription-credit usage is unlimited. apiMonthlyMicrodollars is the user's monthly API budget and 0 disables API usage. billingTimezone is an IANA timezone. Per-user policies override the default policy.
+\`manage_inference_limits\` uses one complete policy object. \`enabled\` controls inference access. Subscription windows use credits5hEnabled/credits5h, credits7dEnabled/credits7d, and credits30dEnabled/credits30d. A disabled window is unlimited; if all three are disabled, subscription-credit usage is unlimited. apiMonthlyMicrodollars is the user's monthly API budget and 0 disables API usage. When API usage is disabled, models whose usable sources are API-only are omitted from OpenAI, harness, and internal Assistant catalogs for that user. billingTimezone is an IANA timezone. Per-user policies override the default policy.
 
 ## User Tokens And Harness Setup
 
@@ -1010,7 +1082,7 @@ No global installation or PATH change is required:
 npx -y @wiolett/gateway-inference@latest
 \`\`\`
 
-An administrator must first enable **Harness-specific endpoints** in **Settings > Inference**. The interactive manager asks for the Gateway URL, completes isolated OAuth/PKCE, and can configure, diagnose, repair, or remove supported harness integrations. The only direct commands are \`login [gateway]\`, \`logout\`, and \`setup [harness]\`. If the user does not name a harness, ask whether they use Codex or Claude Code before giving harness-specific instructions.
+An administrator must first enable **Harness-specific endpoints** in **Settings > Inference** and accept the alpha-risk warning. Harness APIs track unstable upstream contracts and may stop working after a client update; the base OpenAI-compatible adapter does not require this toggle. The interactive manager asks for the Gateway URL, completes isolated OAuth/PKCE, and can configure, diagnose, repair, or remove supported harness integrations. The only direct commands are \`login [gateway]\`, \`logout\`, and \`setup [harness]\`. If the user does not name a harness, ask whether they use Codex or Claude Code before giving harness-specific instructions.
 
 #### Codex CLI and Desktop
 
@@ -1285,6 +1357,8 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   housekeeping: 'housekeeping:view',
   permissions: 'feat:ai:use',
   api: 'feat:ai:use',
+  'gateway-settings': ['settings:gateway:view', 'settings:gateway:edit'],
+  'licensing-updates': ['license:view', 'license:manage', 'admin:update'],
   inference: [
     'inference:use',
     'inference:tokens:create',

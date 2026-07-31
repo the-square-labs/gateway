@@ -9,7 +9,7 @@ Gateway manages infrastructure hosts through small Go daemons. Each daemon conne
 | Type | Daemon | Purpose |
 |------|--------|---------|
 | nginx | `nginx-daemon` | Reverse proxy management for host-native nginx. |
-| docker | `docker-daemon` | Docker container, image, registry, file, console, and deployment management. |
+| docker | `docker-daemon` | Docker containers, deployments, cross-node migrations, images, volumes, networks, tasks, files, consoles, registries, and offline inventory snapshots. |
 | monitoring | `monitoring-daemon` | Metrics-only host monitoring without nginx or Docker control. |
 
 Use a monitoring node when you want host metrics but do not want to grant Gateway proxy or Docker management on that host.
@@ -117,6 +117,8 @@ The token is only needed for enrollment. Long-term daemon authentication uses mT
 Managed nodes do not need inbound management ports for Gateway.
 
 If Gateway is behind Cloudflare for the UI/API, make sure daemon setup uses a direct `9443/tcp` endpoint. Cloudflare-proxied hostnames for the web UI should not be used for daemon enrollment unless they explicitly route the Gateway gRPC port.
+
+Daemons report local and detected public IP addresses in their health data. For Docker nodes, Gateway uses an explicitly configured service address first, then the first reported local address, then a reported public address when proxy Docker upstreams or cross-node workflows need to reach the host. Configure the service address on the node detail page when automatic selection is not routable from the other managed hosts.
 
 ## Daemon Configuration
 

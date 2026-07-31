@@ -56,10 +56,22 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 | 安装 Gateway | [Installation guide](docs/installation.md) |
 | 添加 nginx、Docker 或 monitoring 节点 | [Nodes and daemons](docs/nodes.md) |
 | 配置 tokens、OAuth、MCP、logging、updates 和 AI | [Operations guide](docs/operations.md) |
+| 配置 multi-provider inference proxy | [Inference proxy](docs/inference.md) |
 | 查看 security model | [Security model](docs/security.md) |
 | 了解 license tiers 和 activation | [Licensing](docs/licensing.md) |
 | 本地运行项目或参与贡献 | [Development guide](docs/development.md) |
 | 查看 permission scopes | [SCOPES.md](SCOPES.md) |
+
+## 配置 AI Harnesses
+
+[`@wiolett/gateway-inference`](packages/gateway-inference) companion 可以配置受支持的 AI harnesses，而不会把 Gateway inference token 写入它们的配置文件。先在 **Settings > Gateway settings > General settings** 中启用 **Inference**，再在 **Settings > Inference** 中启用 **Harness-specific endpoints**，然后运行：
+
+```bash
+npx -y @wiolett/gateway-inference@latest setup codex
+npx -y @wiolett/gateway-inference@latest setup claude-code
+```
+
+如果没有活动连接，CLI 会询问 Gateway URL 并完成 OAuth。Codex Desktop 还必须通过 Codex 的正常流程登录 OpenAI account，并在配置后完全退出并重新打开。Claude Code 需要 2.1.129 或更高版本；这里只配置 CLI，不配置 Claude Desktop 或 VS Code extension。完整 lifecycle 和手动 API 配置请参见[包 README](packages/gateway-inference/README.md)和 [inference guide](docs/inference.md)。
 
 ## 产品导览
 
@@ -86,15 +98,16 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 
 | 领域 | 摘要 |
 |------|------|
-| Reverse proxy | Multi-node nginx management, proxy hosts, redirects, WebSockets, access lists, health checks, host folders, templates, logs 和 stats。 |
-| Docker | Container lifecycle, deployments, rollout/rollback, registries, images, webhooks, logs, console, file browser, secrets, env vars, ports, mounts 和 cleanup。 |
+| Reverse proxy | Multi-node nginx management, proxy hosts, Docker container/deployment upstreams, maintenance mode, redirects, WebSockets, access lists, health checks, host folders, templates, logs 和 stats。 |
+| Docker | Container lifecycle, deployments, rollout/rollback, cross-node container 和 volume migrations, offline inventory snapshots, registries, images, networks, volumes, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, mounts 和 cleanup。 |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports 和 proxy binding。 |
 | Domains | Central domain registry, DNS checks, record validation 和 usage tracking。 |
 | Databases | Saved PostgreSQL 和 Redis connections, encrypted credentials, health history, schema/key browsing, query consoles 和 write operations。 |
 | Monitoring | Node CPU, memory, disk, network, service status, daemon runtime details, log streaming 和 update checks。 |
 | Logging | 可选的 ClickHouse-backed structured log ingestion，包含 schemas、retention、ingest tokens、rate limits 和 search。 |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages 和 optional AI assistant。 |
-| Administration | OIDC login, group-based permissions, scoped programmatic access, audit logs, setup state, updates 和 license controls。 |
+| Inference | 可选的 multi-provider model gateway，包含独立 tokens、usage controls、OpenAI-compatible APIs，以及通过 `@wiolett/gateway-inference` 管理的 Codex 或 Claude Code 配置。 |
+| Administration | OIDC login, group-based 和 per-user additional permissions, scoped programmatic access, audit logs, setup state, updates 和 license controls。 |
 
 ## 工作方式
 
@@ -144,6 +157,7 @@ Gateway 已经面向 production operations，而不是狭窄的 MVP。当前方�
 - [x] PostgreSQL and Redis database explorer with encrypted saved credentials.
 - [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
 - [x] Optional ClickHouse-backed structured logging and optional AI assistant.
+- [x] 可选的 multi-provider inference gateway，提供 OpenAI-compatible 和 harness-specific APIs。
 - [x] View-based, resource-scoped permission model with filtered list visibility.
 - [x] Hardened OIDC/OAuth flows, setup lockout, fail-closed public endpoints, and signed update trust.
 - [x] Gateway and daemon update workflows with signature-verified artifacts.

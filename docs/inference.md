@@ -6,7 +6,7 @@ The server-side connector baseline is OpenCodex commit `357acee62458684bc027e9d5
 
 ## Enable inference
 
-Inference is disabled by default. An administrator with Gateway settings access enables it under **Settings > Gateway > General > Inference**. No process restart is required.
+Inference is disabled by default. An administrator with Gateway settings access enables it under **Settings > Gateway settings > General settings > Inference**. No process restart is required.
 
 When disabled, management and data-plane routes return `INFERENCE_DISABLED`, and the frontend omits Inference usage, token management, and administration surfaces. Connected provider credentials, model configuration, and accounting history remain stored.
 
@@ -59,7 +59,7 @@ Codex setup issues a dedicated runtime token, installs a private stable helper a
 
 Claude Code setup requires Claude Code 2.1.129 or newer. It configures Claude Code's native Anthropic gateway contract through `ANTHROPIC_BASE_URL`, model discovery, and a private `apiKeyHelper`; it does not run a loopback proxy. The integration applies only to the Claude Code CLI, not Claude Desktop or the VS Code extension.
 
-Enable **Harness-specific endpoints** in **Settings > Inference** before running either setup. The package does not require a global install or modify `PATH`.
+Enable **Harness-specific endpoints** in **Settings > Inference** before running either setup. Gateway displays a risk acknowledgement because harness APIs are alpha integrations that can change upstream and may stop working after a harness update. The base OpenAI-compatible adapter does not require this toggle. The package does not require a global install or modify `PATH`.
 
 For ChatGPT subscription-backed models whose upstream catalog advertises it, Codex also exposes `/fast`. Gateway forwards the `priority` service tier and charges a fixed 2x subscription-credit multiplier; API dollar accounting is unchanged.
 
@@ -87,6 +87,8 @@ Users see percentages only:
 - recovery/reset timestamps.
 
 Administrators can see raw cost, tokens, credits, upstream quota, and request metadata.
+
+Setting a user's monthly API budget to zero disables API-funded usage for that user. Logical models whose usable sources are API-only are then omitted from the base OpenAI catalog, harness-specific catalogs, and the internal AI Assistant model picker instead of being shown as unusable choices.
 
 Subscription credits use:
 
@@ -127,7 +129,7 @@ Back up the PostgreSQL inference tables with the normal database backup and pres
 
 To disable inference:
 
-1. Turn off **Settings > Gateway > General > Inference**. The change applies immediately.
+1. Turn off **Settings > Gateway settings > General settings > Inference**. The change applies immediately.
 2. Revoke routing/user scopes or individual `gwi_` tokens if required.
 3. Keep provider credentials and immutable accounting/audit rows unless an administrator explicitly disconnects a provider.
 4. Do not delete inference tables as part of rollback.

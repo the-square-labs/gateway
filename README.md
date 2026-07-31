@@ -64,7 +64,7 @@ For flags, non-interactive installs, custom SSL, OIDC details, updates, and node
 
 ## Configure AI Harnesses
 
-The [`@wiolett/gateway-inference`](packages/gateway-inference) companion configures supported AI harnesses without copying a Gateway inference token into their config files. Enable **Inference** and **Harness-specific endpoints** in **Settings > Inference**, then run one of:
+The [`@wiolett/gateway-inference`](packages/gateway-inference) companion configures supported AI harnesses without copying a Gateway inference token into their config files. Enable **Inference** under **Settings > Gateway settings > General settings**, then enable **Harness-specific endpoints** under **Settings > Inference** and run one of:
 
 ```bash
 npx -y @wiolett/gateway-inference@latest setup codex
@@ -98,8 +98,8 @@ The CLI asks for the Gateway URL and completes OAuth when no active connection e
 
 | Area | Summary |
 |------|---------|
-| Reverse proxy | Multi-node nginx management, proxy hosts, redirects, WebSockets, access lists, health checks, host folders, templates, logs, and stats. |
-| Docker | Container lifecycle, deployments, rollout/rollback, registries, images, webhooks, logs, console, file browser, secrets, env vars, ports, mounts, and cleanup. |
+| Reverse proxy | Multi-node nginx management, proxy hosts, Docker container/deployment upstreams, maintenance mode, redirects, WebSockets, access lists, health checks, host folders, templates, logs, and stats. |
+| Docker | Container lifecycle, deployments, rollout/rollback, cross-node container and volume migrations, offline inventory snapshots, registries, images, networks, volumes, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, mounts, and cleanup. |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports, and proxy binding. |
 | Domains | Central domain registry, DNS checks, record validation, and usage tracking. |
 | Databases | Saved PostgreSQL and Redis connections, encrypted credentials, health history, schema/key browsing, query consoles, and write operations. |
@@ -107,7 +107,7 @@ The CLI asks for the Gateway URL and completes OAuth when no active connection e
 | Logging | Optional ClickHouse-backed structured log ingestion with schemas, retention, ingest tokens, rate limits, and search. |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages, and optional AI assistant. |
 | Inference | Optional multi-provider model gateway with dedicated tokens, usage controls, OpenAI-compatible APIs, and managed Codex or Claude Code setup through `@wiolett/gateway-inference`. |
-| Administration | OIDC login, group-based permissions, scoped programmatic access, audit logs, setup state, updates, and license controls. |
+| Administration | OIDC login, group-based and per-user additional permissions, scoped programmatic access, audit logs, setup state, updates, and license controls. |
 
 ## How It Works
 
@@ -158,6 +158,7 @@ Completed foundations:
 - [x] PostgreSQL and Redis database explorer with encrypted saved credentials.
 - [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
 - [x] Optional ClickHouse-backed structured logging and optional AI assistant.
+- [x] Optional multi-provider inference gateway with OpenAI-compatible and harness-specific APIs.
 - [x] View-based, resource-scoped permission model with filtered list visibility.
 - [x] Hardened OIDC/OAuth flows, setup lockout, fail-closed public endpoints, and signed update trust.
 - [x] Gateway and daemon update workflows with signature-verified artifacts.

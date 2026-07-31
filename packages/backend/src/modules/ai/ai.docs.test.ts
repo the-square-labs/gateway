@@ -30,6 +30,8 @@ describe('AI internal docs registry', () => {
       'conversations',
       'status-page',
       'api',
+      'gateway-settings',
+      'licensing-updates',
       'inference',
       'ai-settings',
       'gitlab',
@@ -46,6 +48,8 @@ describe('AI internal docs registry', () => {
       conversations: 'feat:ai:use',
       'ai-settings': 'feat:ai:configure',
       'status-page': 'status-page:view',
+      'gateway-settings': ['settings:gateway:view', 'settings:gateway:edit'],
+      'licensing-updates': ['license:view', 'license:manage', 'admin:update'],
       gitlab: 'integrations:gitlab:view',
       notifications: 'notifications:view',
       proxy: 'proxy:view',
@@ -78,6 +82,13 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('logging', ['logs:read:env-1']).content).toContain('External Logging');
     expect(getInternalDocumentation('folders', ['nodes:folders:manage']).content).toContain('list_resource_folders');
     expect(getInternalDocumentation('nodes', ['nodes:details']).content).toContain('manage_node_config');
+    expect(getInternalDocumentation('nodes', ['nodes:details']).content).toContain('publicIpAddresses');
+    expect(getInternalDocumentation('nodes', ['nodes:details']).content).toContain('serviceAddress');
+    expect(getInternalDocumentation('proxy', ['proxy:view']).content).toContain('Maintenance Mode');
+    expect(getInternalDocumentation('proxy', ['proxy:view']).content).toContain('Docker Upstreams');
+    expect(getInternalDocumentation('users', ['admin:users']).content).toContain('additional per-user scopes');
+    expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain('Cross-Node Migrations');
+    expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain('last synchronized state');
     expect(getInternalDocumentation('node-files', ['nodes:files:read']).content).toContain('manage_node_file');
     expect(getInternalDocumentation('sandbox', ['ai:sandbox:use']).content).toContain('download_artifact');
     expect(getInternalDocumentation('sandbox', ['ai:sandbox:use']).content).toContain('list_artifact_files');
@@ -88,11 +99,25 @@ describe('AI internal docs registry', () => {
       'run_process returns as soon as the process starts'
     );
     expect(getInternalDocumentation('conversations', ['feat:ai:use']).content).toContain('manage_ai_conversation');
+    expect(getInternalDocumentation('conversations', ['feat:ai:use']).content).toContain(
+      'reasoning effort are pinned to the conversation'
+    );
+    expect(getInternalDocumentation('conversations', ['feat:ai:use']).content).toContain(
+      'up to three supported images'
+    );
     expect(getInternalDocumentation('api', ['feat:ai:use']).content).toContain('manage_oauth_authorization');
     expect(getInternalDocumentation('api', ['feat:ai:use']).content).toContain('manage_api_token');
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).toContain('update_ai_settings');
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).toContain('providerUrl');
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).not.toContain('baseUrl:');
+    expect(getInternalDocumentation('gateway-settings', ['settings:gateway:view']).content).toContain(
+      'notifications/tools/list_changed'
+    );
+    expect(getInternalDocumentation('gateway-settings', ['settings:gateway:view']).content).toContain(
+      'mcpExtendedCompatibility'
+    );
+    expect(getInternalDocumentation('licensing-updates', ['license:view']).content).toContain('get_license_status');
+    expect(getInternalDocumentation('licensing-updates', ['admin:update']).content).toContain('manage_system_updates');
     expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
       'npx -y @wiolett/gateway-inference@latest setup codex'
     );
@@ -109,6 +134,9 @@ describe('AI internal docs registry', () => {
     );
     expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
       'Profile > Authorizations > Inference API tokens'
+    );
+    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
+      'models whose usable sources are API-only are omitted'
     );
     expect(getInternalDocumentation('inference', ['inference:providers:manage']).content).toContain(
       'manage_inference_provider'

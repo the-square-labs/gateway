@@ -314,8 +314,8 @@ The `app` service also mounts `/var/run/docker.sock` so Gateway can perform loca
 
 From the UI:
 
-1. Go to **Settings > Check for updates**.
-2. Review the available version.
+1. Go to **Settings > Gateway settings > About**.
+2. Click **Check for updates** and review the available version.
 3. Click **Update**.
 
 Gateway verifies the signed release manifest, pulls the selected image by digest, writes `GATEWAY_IMAGE_REF=<image>@sha256:<digest>`, and recreates its container.

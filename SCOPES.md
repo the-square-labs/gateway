@@ -6,20 +6,21 @@ All scopes follow `domain:resource:action[:qualifier]`. Resource-scopable scopes
 
 | Group | Description |
 |-------|-------------|
-| `system-admin` | All 149 scopes, including protected `admin:system`. |
+| `system-admin` | All canonical scopes, including protected `admin:system`. |
 | `admin` | Curated broad access, excluding `admin:system`, gateway settings edit, housekeeping configure, and Docker registry mutation defaults. |
 | `operator` | Operational access for day-to-day PKI, proxy, SSL, ACL, node, Docker container, database, notification, and logging read/query work. |
 | `viewer` | Read-only view/discovery access. |
 
 ## Programmatic Access
 
-Gateway has three token families:
+Gateway has four token families:
 
 | Prefix | Purpose |
 |--------|---------|
 | `gw_` | API token for REST API automation. |
 | `gwo_` | OAuth access token for one OAuth resource. |
 | `gwl_` | External logging ingest token. |
+| `gwi_` | Dedicated Gateway Inference runtime token. |
 
 OAuth tokens are bound to exactly one resource:
 
@@ -28,7 +29,7 @@ OAuth tokens are bound to exactly one resource:
 | Gateway API | `/api` | REST API routes |
 | Gateway MCP | `/api/mcp` | Remote MCP endpoint |
 
-The REST API accepts browser sessions, `gw_` API tokens, and `gwo_` OAuth tokens issued for the Gateway API resource. The MCP endpoint accepts only `gwo_` OAuth tokens issued for the Gateway MCP resource; API tokens, browser cookies, and logging tokens are rejected.
+The REST API accepts browser sessions, `gw_` API tokens, and `gwo_` OAuth tokens issued for the Gateway API resource. The MCP endpoint accepts only `gwo_` OAuth tokens issued for the Gateway MCP resource; API tokens, browser cookies, logging tokens, and inference tokens are rejected. Inference data-plane routes accept only `gwi_` tokens.
 
 OAuth lifetime behavior is resource-specific:
 
@@ -110,11 +111,11 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `nodes:console` | Yes |
 | `nodes:files:read` | Yes |
 | `nodes:files:write` | Yes |
-| `nodes:folders:manage` |  |
 | `nodes:lock` | Yes |
+| `nodes:folders:manage` |  |
 | `admin:users` |  |
-| `admin:groups` |  |
 | `admin:users:folders:manage` |  |
+| `admin:groups` |  |
 | `admin:groups:folders:manage` |  |
 | `admin:audit` |  |
 | `admin:system` |  |
@@ -123,6 +124,28 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `admin:alerts` |  |
 | `settings:gateway:view` |  |
 | `settings:gateway:edit` |  |
+| `integrations:gitlab:view` |  |
+| `integrations:gitlab:manage` |  |
+| `integrations:gitlab:sync` |  |
+| `integrations:gitlab:system` |  |
+| `integrations:gitlab:projects:view` |  |
+| `integrations:gitlab:repo:read` |  |
+| `integrations:gitlab:repo:write` |  |
+| `integrations:gitlab:ci:view` |  |
+| `integrations:gitlab:ci:edit` |  |
+| `integrations:gitlab:variables:view` |  |
+| `integrations:gitlab:variables:edit` |  |
+| `integrations:gitlab:variables:delete` |  |
+| `integrations:gitlab:webhooks:manage` |  |
+| `integrations:gitlab:registry:view` |  |
+| `integrations:gitlab:registry:use` |  |
+| `integrations:gitlab:registry:manage` |  |
+| `integrations:gitlab:sandbox:clone` |  |
+| `integrations:cloudflare:view` |  |
+| `integrations:cloudflare:manage` |  |
+| `integrations:cloudflare:dns:view` |  |
+| `integrations:cloudflare:dns:edit` |  |
+| `integrations:cloudflare:dns:delete` |  |
 | `housekeeping:view` |  |
 | `housekeeping:run` |  |
 | `housekeeping:configure` |  |
@@ -135,6 +158,16 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `ai:sandbox:tier:high` |  |
 | `ai:sandbox:manage` |  |
 | `mcp:use` |  |
+| `inference:use` |  |
+| `inference:setup` |  |
+| `inference:tokens:create` |  |
+| `inference:tokens:revoke` |  |
+| `inference:usage:view:self` |  |
+| `inference:providers:view` |  |
+| `inference:providers:manage` |  |
+| `inference:models:manage` |  |
+| `inference:limits:manage` |  |
+| `inference:usage:view` |  |
 | `docker:containers:view` | Yes |
 | `docker:containers:create` | Yes |
 | `docker:containers:edit` | Yes |
@@ -147,6 +180,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `docker:containers:secrets` | Yes |
 | `docker:containers:webhooks` | Yes |
 | `docker:containers:mounts` | Yes |
+| `docker:containers:migrate` | Yes |
 | `docker:containers:folders:manage` |  |
 | `docker:images:view` | Yes |
 | `docker:images:pull` | Yes |
@@ -221,11 +255,19 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 | `ai:sandbox:tier:high` | User/session-only sandbox runner tier access. |
 | `ai:sandbox:manage` | User/session-only sandbox runner management. |
 | `mcp:use` | User-account capability gate for remote MCP. |
+| `inference:use` | User/session-only inference access. |
+| `inference:setup` | User/session-only companion CLI authorization resource. |
+| `inference:tokens:create` | User/session-only inference token creation. |
+| `inference:tokens:revoke` | User/session-only inference token revocation. |
+| `inference:usage:view:self` | User/session-only current-user inference usage. |
 | `admin:system` | Protected system-administrator shielding. |
 | `admin:users` | User administration is session-only. |
 | `admin:groups` | Permission group administration is session-only. |
 | `settings:gateway:view` | Gateway auth/control-plane settings are session-only. |
 | `settings:gateway:edit` | Gateway auth/control-plane settings are session-only. |
+| `integrations:gitlab:manage` | GitLab connector administration is session-only. |
+| `integrations:gitlab:system` | System GitLab credential access is session-only. |
+| `integrations:cloudflare:manage` | Cloudflare connector administration is session-only. |
 | `proxy:raw:read` | Raw nginx config is session-only. |
 | `proxy:raw:write` | Raw nginx config is session-only. |
 | `proxy:raw:toggle` | Raw nginx mode is session-only. |
@@ -233,8 +275,11 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 | `proxy:advanced:bypass` | Unrestricted advanced nginx snippets are session-only. |
 | `nodes:config:view` | Global node nginx config is session-only. |
 | `nodes:config:edit` | Global node nginx config is session-only. |
-| `nodes:files:read` | Node filesystem access is session-only and is not delegated to API tokens or MCP. |
-| `nodes:files:write` | Node filesystem writes are session-only and are not delegated to API tokens or MCP. |
+| `inference:providers:view` | Inference provider credentials and account state are session-only. |
+| `inference:providers:manage` | Inference provider administration is session-only. |
+| `inference:models:manage` | Inference model publication is session-only. |
+| `inference:limits:manage` | Inference budget administration is session-only. |
+| `inference:usage:view` | System-wide inference accounting is session-only. |
 
 `mcp:use` is not a token scope. It gates whether the owning user account may use the MCP endpoint at all. MCP tokens use ordinary delegated Gateway scopes such as `nodes:details`, `proxy:view`, or `docker:containers:view` to determine which MCP tools and resources are available.
 
@@ -255,14 +300,28 @@ OAuth consent leaves high-risk scopes unchecked by default. The user must explic
 | `ssl:cert:export` | Reserved for SSL certificate export capability. |
 | `proxy:raw:bypass` | Can bypass dangerous directive validation for raw nginx config. |
 | `nodes:console` | Can open an interactive shell on nodes. |
+| `nodes:files:read` | Can read files from managed node filesystems. |
+| `nodes:files:write` | Can create, modify, move, or delete files on managed nodes. |
 | `docker:containers:console` | Can open an interactive console in containers. |
 | `docker:containers:files` | Can read and write container filesystem contents. |
 | `docker:containers:secrets` | Can reveal and manage encrypted container/deployment secrets. |
 | `docker:containers:mounts` | Can add, remove, or change container/deployment mounts. |
+| `docker:containers:migrate` | Can move containers or deployments and their data between Docker nodes. |
+| `docker:volumes:files:read` | Can read files from Docker volumes. |
+| `docker:volumes:files:write` | Can create, modify, move, or delete files in Docker volumes. |
 | `databases:query:read` | Can read data from saved database connections. |
 | `databases:query:write` | Can modify data in saved database connections. |
 | `databases:query:admin` | Can run administrative database commands. |
 | `databases:credentials:reveal` | Can reveal stored database credentials and connection strings. |
+| `integrations:gitlab:repo:write` | Can modify repositories through connected GitLab projects. |
+| `integrations:gitlab:ci:edit` | Can modify GitLab CI configuration and trigger write-capable CI operations. |
+| `integrations:gitlab:variables:edit` | Can create or update GitLab CI/CD variables. |
+| `integrations:gitlab:variables:delete` | Can delete GitLab CI/CD variables. |
+| `integrations:gitlab:webhooks:manage` | Can create, update, or delete GitLab webhooks. |
+| `integrations:gitlab:registry:manage` | Can mutate GitLab container registry state. |
+| `integrations:gitlab:sandbox:clone` | Can clone connected GitLab repositories into AI sandboxes. |
+| `integrations:cloudflare:dns:edit` | Can create or update Cloudflare DNS records. |
+| `integrations:cloudflare:dns:delete` | Can delete Cloudflare DNS records. |
 | `logs:tokens:create` | Can mint logging ingest tokens. |
 | `admin:audit` | Can read audit history. |
 | `admin:details:certificates` | Can view internal system PKI and SSL certificates. |

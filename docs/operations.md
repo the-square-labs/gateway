@@ -10,8 +10,8 @@ This guide covers day-two operation: updates, configuration, programmatic access
 
 From the UI:
 
-1. Go to **Settings > Check for updates**.
-2. Review the available version.
+1. Go to **Settings > Gateway settings > About**.
+2. Click **Check for updates** and review the available version.
 3. Click **Update**.
 
 Gateway verifies the signed release manifest, pulls the selected image by its immutable digest, updates `GATEWAY_IMAGE_REF`, and recreates its own container. Automatic gateway updates fail closed when the signed manifest is missing, invalid, or does not match the requested version and running image repository.
@@ -114,13 +114,14 @@ For install-time flags, see [Docker log rotation](installation.md#docker-log-rot
 
 ## Programmatic Access
 
-Gateway supports browser sessions, REST API tokens, OAuth access tokens, MCP access, and logging ingest tokens. These are intentionally separate.
+Gateway supports browser sessions, REST API tokens, OAuth access tokens, MCP access, logging ingest tokens, and inference runtime tokens. These are intentionally separate.
 
 | Prefix | Token family | Purpose |
 |--------|--------------|---------|
 | `gw_` | API token | REST API automation. |
 | `gwo_` | OAuth access token | Gateway API or Gateway MCP resource. |
 | `gwl_` | Logging ingest token | Write-only structured log ingestion. |
+| `gwi_` | Inference runtime token | Gateway Inference data-plane requests. |
 
 ### API Tokens
 
@@ -159,7 +160,7 @@ Gateway intentionally treats the two OAuth resources differently:
 
 MCP authorizations should be removed explicitly when access is no longer needed; revocation immediately stops the corresponding MCP token from being accepted.
 
-OAuth authorizations are managed in **Settings > OAuth Applications**. If the same client has grants for both API and MCP resources, Gateway displays them as separate rows.
+OAuth authorizations are managed in **Profile > Authorizations > OAuth Applications**. If the same client has grants for both API and MCP resources, Gateway displays them as separate rows.
 
 ### MCP
 
@@ -170,9 +171,14 @@ MCP accepts only OAuth access tokens issued for the Gateway MCP resource. It rej
 - Browser cookies.
 - `gw_` API tokens.
 - `gwl_` logging tokens.
+- `gwi_` inference tokens.
 - OAuth tokens issued for the Gateway API resource.
 
 The `mcp:use` scope is a user-account capability gate. The owning user must have it for MCP access.
+
+By default, MCP starts with a compact core toolset. Clients call `discover_tools` to activate a domain toolset in the current MCP session. Gateway then sends `notifications/tools/list_changed`, and a compliant client refreshes `tools/list` so the newly activated tools become callable.
+
+Some MCP clients do not refresh their tool list after that notification. Enable **Extended MCP compatibility** in Gateway settings for those clients. In compatibility mode, the first `tools/list` response contains every tool allowed by the OAuth grant and `discover_tools` is omitted. This can expose hundreds of schemas, so keep the default discovery mode for clients that support list-change notifications.
 
 ### Scope Rules
 
@@ -244,6 +250,7 @@ Search:
 
 ```bash
 curl -H "Content-Type: application/json" \
+  -H "Authorization: Bearer gw_xxx" \
   -X POST https://gw.example.com/api/logging/environments/<environment-id>/search \
   -d '{"from":"2026-04-27T00:00:00.000Z","to":"2026-04-27T23:59:59.999Z","severities":["error","fatal"],"message":"failed","limit":100}'
 ```
@@ -289,9 +296,10 @@ To use it:
 
 1. Go to **Settings > AI Assistant**.
 2. Enable the assistant.
-3. Configure an OpenAI-compatible provider.
-4. Configure model and API key.
-5. Review tool access and approval behavior.
+3. Choose **OpenAI-compatible** or, when the Inference feature is enabled, **Gateway Inference** as the provider type.
+4. For OpenAI-compatible mode, configure the provider URL, endpoint family, model, and API key.
+5. For Gateway Inference mode, choose a published default model and whether users may select another model they can access.
+6. Review tool access and approval behavior.
 
 Operational notes:
 
@@ -302,6 +310,11 @@ Operational notes:
 - Destructive operations require approval unless the user's AI approval mode allows the backend to auto-approve that class of tool.
 - AI-initiated actions are flagged in audit logs.
 - The assistant can use Gateway-specific context from its knowledge base.
+- The selected model and reasoning effort are stored with each conversation. Changing a model after the conversation starts requires confirmation and adds a model-change marker to history.
+- Gateway Inference mode uses the user's Inference limits instead of the Assistant request-limit block. The composer warns when an applicable quota window has 10% or less remaining and blocks new turns only when the budget is effectively exhausted.
+- If a user's API budget is disabled, models backed only by API-provider connections are hidden from that user in both Assistant and Inference model catalogs.
+- OpenAI-compatible provider values are preserved while Gateway Inference is selected. Disabling Inference restores the previous OpenAI-compatible configuration; if none exists, the Assistant is disabled.
+- Supported image attachments and generated artifacts are stored and previewed through Gateway-managed artifact routes.
 
 ## Notifications And Status Pages
 
@@ -329,7 +342,7 @@ Back up:
 
 Critical secrets:
 
-- `PKI_MASTER_KEY` is required to decrypt PKI private key material.
+- `PKI_MASTER_KEY` is required to decrypt PKI private key material and encrypted provider/infrastructure credentials stored in PostgreSQL.
 - Redis session data controls browser session validity; preserve Redis data only when session continuity matters.
 - OIDC client secret is needed for login.
 - ClickHouse and database credentials are needed for service startup.
@@ -343,7 +356,7 @@ For the full security model, including daemon PKI, mTLS enrollment, token bounda
 - Prefer OIDC with MFA enforced at the identity provider.
 - Grant users only the groups and scopes they need.
 - Separate read, write, reveal, export, and destructive scopes.
-- Treat API tokens, OAuth access tokens, OAuth refresh tokens, and logging tokens as secrets.
+- Treat API tokens, OAuth access tokens, OAuth refresh tokens, logging tokens, and inference runtime tokens as secrets.
 - Use OAuth resource separation for API and MCP clients.
 - Review audit logs after sensitive operations.
 - Keep daemon update capability limited to trusted admins.
