@@ -737,7 +737,7 @@ function FolderMenuItem({
     StatusIcon === Loader2
       ? "animate-spin text-primary"
       : StatusIcon === CircleAlert
-        ? "text-yellow-600 dark:text-yellow-400"
+        ? "text-warning-foreground"
         : ""
   );
 
@@ -865,7 +865,7 @@ function ConversationDragOverlayItem({
       : conversation.activeRunStatus === "waiting_for_approval" ||
           conversation.activeRunStatus === "waiting_for_answer" ||
           conversation.activeRunStatus === "waiting_for_credential"
-        ? "text-yellow-600 dark:text-yellow-400"
+        ? "text-warning-foreground"
         : ""
   );
 
@@ -906,7 +906,7 @@ function ConversationMenuItem({
       : conversation.activeRunStatus === "waiting_for_approval" ||
           conversation.activeRunStatus === "waiting_for_answer" ||
           conversation.activeRunStatus === "waiting_for_credential"
-        ? "text-yellow-600 dark:text-yellow-400"
+        ? "text-warning-foreground"
         : ""
   );
 

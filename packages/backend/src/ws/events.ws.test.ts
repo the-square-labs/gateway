@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
+import { INFERENCE_USAGE_CHANGED_CHANNEL } from '@/modules/inference/accounting/inference-usage-events.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
 
@@ -40,6 +41,65 @@ afterEach(() => {
 });
 
 describe('events websocket authentication', () => {
+  it('delivers inference usage invalidations only to the affected user', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({
+      user: { ...USER, scopes: ['inference:use'] },
+      effectiveScopes: ['inference:use'],
+    });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscribe', channels: [INFERENCE_USAGE_CHANGED_CHANNEL] }),
+      }),
+      ws as any
+    );
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'subscribed',
+        channels: [INFERENCE_USAGE_CHANGED_CHANNEL],
+        rejected: [],
+      })
+    );
+
+    eventBus.publish(INFERENCE_USAGE_CHANGED_CHANNEL, {
+      targetUserId: '22222222-2222-4222-8222-222222222222',
+      reason: 'limits',
+    });
+    eventBus.publish(INFERENCE_USAGE_CHANGED_CHANNEL, {
+      targetUserId: USER.id,
+      reason: 'limits',
+    });
+    eventBus.publish(INFERENCE_USAGE_CHANGED_CHANNEL, {
+      targetUserId: null,
+      reason: 'limits',
+    });
+
+    expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('22222222-2222-4222-8222-222222222222'));
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'event',
+        channel: INFERENCE_USAGE_CHANGED_CHANNEL,
+        payload: { targetUserId: USER.id, reason: 'limits' },
+      })
+    );
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'event',
+        channel: INFERENCE_USAGE_CHANGED_CHANNEL,
+        payload: { targetUserId: null, reason: 'limits' },
+      })
+    );
+
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
   it('delivers migration events with view access to the stable migrated resource', async () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);

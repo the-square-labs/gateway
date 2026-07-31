@@ -51,6 +51,7 @@ services:
       CLICKHOUSE_PASSWORD: dev
     volumes:
       - clickhouse_dev_data:/var/lib/clickhouse
+      - ./clickhouse-config/gateway-safety.xml:/etc/clickhouse-server/config.d/gateway-safety.xml:ro
     healthcheck:
       test:
         [

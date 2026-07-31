@@ -27,6 +27,11 @@ describe("canonicalizeScopeSelection", () => {
     expect(scopeMatches(["inference:models:manage"], "inference:providers:view")).toBe(true);
   });
 
+  it("lets inference users view their own usage without a separate grant", () => {
+    expect(scopeMatches(["inference:use"], "inference:usage:view:self")).toBe(true);
+    expect(scopeMatches(["inference:usage:view:self"], "inference:use")).toBe(false);
+  });
+
   it("matches Docker node scopes against child resources only on the same node", () => {
     expect(
       scopeMatches(["docker:containers:view:node-1"], "docker:containers:view:node-1/container-1")

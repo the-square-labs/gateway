@@ -18,6 +18,7 @@ services:
       - CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE:-gateway_logs}
       - CLICKHOUSE_LOGS_TABLE=${CLICKHOUSE_LOGS_TABLE:-logs}
       - CLICKHOUSE_REQUEST_TIMEOUT_MS=${CLICKHOUSE_REQUEST_TIMEOUT_MS:-5000}
+      - CLICKHOUSE_MANAGED_INTERNAL_LOGS=${CLICKHOUSE_MANAGED_INTERNAL_LOGS:-false}
       - LOGGING_INGEST_MAX_BODY_BYTES=${LOGGING_INGEST_MAX_BODY_BYTES:-1048576}
       - LOGGING_INGEST_MAX_BATCH_SIZE=${LOGGING_INGEST_MAX_BATCH_SIZE:-500}
       - LOGGING_INGEST_MAX_MESSAGE_BYTES=${LOGGING_INGEST_MAX_MESSAGE_BYTES:-16384}
@@ -123,6 +124,7 @@ services:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-gateway}
     volumes:
       - clickhouse_data:/var/lib/clickhouse
+      - ./clickhouse-config/gateway-safety.xml:/etc/clickhouse-server/config.d/gateway-safety.xml:ro
     healthcheck:
       test:
         [

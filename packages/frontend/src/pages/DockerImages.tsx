@@ -560,7 +560,7 @@ export function DockerImages({
         }}
         afterSearch={
           truncatedListMeta ? (
-            <div className="border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
+            <div className="border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
               Showing first {truncatedListMeta._listLimit ?? images.length} of{" "}
               {truncatedListMeta._listTotal ?? "many"} images. Narrow the node or search filters for
               more specific data.

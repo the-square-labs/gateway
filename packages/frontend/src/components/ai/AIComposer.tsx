@@ -382,7 +382,7 @@ export function AIComposer({
                     className={cn(
                       "flex h-8 max-w-[15rem] items-center gap-2 px-1.5 text-sm transition-colors focus-visible:outline-none",
                       approvalMode === "bypass-everything"
-                        ? "text-amber-600 hover:text-amber-500 focus-visible:text-amber-500 dark:text-amber-400 dark:hover:text-amber-300 dark:focus-visible:text-amber-300"
+                        ? "text-warning-foreground hover:text-warning focus-visible:text-warning"
                         : "text-muted-foreground hover:text-foreground focus-visible:text-foreground"
                     )}
                     title={approvalModeLabel}

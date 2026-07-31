@@ -14,6 +14,8 @@ export interface StatCardProps {
   sparklineMax?: number;
   /** Override text color for label and value (e.g. for warning state) */
   valueColor?: string;
+  /** Additional classes for the primary value only. */
+  valueClassName?: string;
   appearance?: "default" | "dashboard";
   className?: string;
   style?: React.CSSProperties;
@@ -30,6 +32,7 @@ export function StatCard({
   progress,
   sparklineMax,
   valueColor,
+  valueClassName,
   appearance = "default",
   className,
   style,
@@ -58,7 +61,11 @@ export function StatCard({
           />
         </div>
         <p
-          className={cn(appearance === "dashboard" ? "text-2xl" : "text-xl", "font-bold")}
+          className={cn(
+            appearance === "dashboard" ? "text-2xl" : "text-xl",
+            "font-bold",
+            valueClassName
+          )}
           style={valueColor ? { color: valueColor } : undefined}
         >
           {value}

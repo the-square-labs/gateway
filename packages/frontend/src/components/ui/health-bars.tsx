@@ -167,7 +167,7 @@ export function HealthBars({
               status === "ok"
                 ? "bg-emerald-500"
                 : status === "warn"
-                  ? "bg-yellow-500"
+                  ? "bg-warning"
                   : status === "error"
                     ? "bg-red-400"
                     : "bg-muted"

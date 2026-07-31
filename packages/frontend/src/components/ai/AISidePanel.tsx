@@ -748,7 +748,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
                                 : conversation.activeRunStatus === "waiting_for_approval" ||
                                     conversation.activeRunStatus === "waiting_for_answer" ||
                                     conversation.activeRunStatus === "waiting_for_credential"
-                                  ? "text-yellow-600 dark:text-yellow-400"
+                                  ? "text-warning-foreground"
                                   : ""
                             }`}
                           />
@@ -947,7 +947,7 @@ export function AISidePanel({ isMobile = false }: AISidePanelProps) {
           animate={{ width: panelWidth }}
           exit={{ width: 0 }}
           transition={isResizing ? { duration: 0 } : { duration: 0.15, ease: "easeOut" }}
-          className="relative h-full shrink-0 overflow-visible"
+          className="relative h-full min-w-0 shrink-0 overflow-visible"
         >
           <ResizeHandle
             side="right"

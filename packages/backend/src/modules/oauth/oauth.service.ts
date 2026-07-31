@@ -183,11 +183,7 @@ export class OAuthService {
   }
 
   private canUseInferenceSetup(user: User): boolean {
-    return (
-      hasScope(user.scopes, 'inference:use') &&
-      hasScope(user.scopes, 'inference:tokens:create') &&
-      hasScope(user.scopes, 'inference:tokens:revoke')
-    );
+    return hasScope(user.scopes, 'inference:use') && hasScope(user.scopes, 'inference:tokens:manage');
   }
 
   async registerClient(input: OAuthClientRegistrationInput) {

@@ -3,7 +3,7 @@ import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { extractBaseScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { authMiddleware } from '@/modules/auth/auth.middleware.js';
+import { authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js';
 import {
   CreateResourceFolderSchema,
   MoveResourceFolderSchema,
@@ -36,6 +36,7 @@ import {
   listLoggingTokensRoute,
   loggingBatchIngestRoute,
   loggingFacetsRoute,
+  loggingHealthRoute,
   loggingIngestRoute,
   loggingMetadataRoute,
   moveLoggingEnvironmentFolderRoute,
@@ -67,6 +68,7 @@ import { LoggingEnvironmentFolderService } from './logging-environment-folders.s
 import { LoggingFeatureService } from './logging-feature.service.js';
 import { LoggingIngestService } from './logging-ingest.service.js';
 import { loggingIngestAuthMiddleware } from './logging-ingest-auth.middleware.js';
+import { LoggingMaintenanceService } from './logging-maintenance.service.js';
 import { LoggingMetadataService } from './logging-metadata.service.js';
 import { LoggingRateLimitService } from './logging-rate-limit.service.js';
 import { LoggingSchemaService } from './logging-schema.service.js';
@@ -97,6 +99,11 @@ loggingRoutes.openapi({ ...loggingBatchIngestRoute, middleware: loggingIngestAut
 });
 
 loggingRoutes.use('*', authMiddleware);
+
+loggingRoutes.openapi({ ...loggingHealthRoute, middleware: requireScope('housekeeping:view') }, async (c) => {
+  const service = container.resolve(LoggingMaintenanceService);
+  return c.json({ data: service.getSnapshot() });
+});
 
 for (const path of ['/environments', '/environment-folders', '/schemas', '/schema-folders']) {
   loggingRoutes.use(path, requireLoggingEnabledMiddleware);
@@ -474,7 +481,7 @@ loggingRoutes.openapi({ ...loggingMetadataRoute, middleware: requireLoggingResou
 
 async function handleIngest(c: any, body: unknown, logs: unknown[]) {
   const feature = container.resolve(LoggingFeatureService);
-  feature.requireAvailableForStorage();
+  feature.requireAvailableForIngest();
   const ingestContext = c.get('loggingIngest');
   if (!ingestContext) throw new AppError(401, 'LOGGING_AUTH_REQUIRED', 'Logging ingest token required');
   const rateLimit = container.resolve(LoggingRateLimitService);

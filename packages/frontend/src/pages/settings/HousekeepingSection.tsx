@@ -1,5 +1,5 @@
 import { Check, Loader2, Play, Save, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
@@ -30,6 +30,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
     auditLog: { enabled: true, retentionDays: 90 },
     dismissedAlerts: { enabled: true, retentionDays: 30 },
     deliveryLog: { enabled: true, retentionDays: 7 },
+    structuredLogs: { enabled: false, maxRows: 100_000, maxSizeBytes: 10 * 1024 ** 3 },
     orphanedAIArtifacts: { enabled: true },
     gatewayLogs: { enabled: false },
     orphanedVolumes: { enabled: false, retentionDays: 30 },
@@ -116,7 +117,14 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
     }
   };
 
-  const controlsDisabled = hkRunning || hkSaving || !canConfigure;
+  const masterControlsDisabled = hkRunning || hkSaving || !canConfigure;
+  const controlsDisabled = masterControlsDisabled || !hkConfig.enabled;
+  const structuredLogsValid =
+    !hkConfig.structuredLogs.enabled ||
+    (Number.isInteger(hkConfig.structuredLogs.maxRows) &&
+      hkConfig.structuredLogs.maxRows >= 1_000 &&
+      Number.isInteger(hkConfig.structuredLogs.maxSizeBytes) &&
+      hkConfig.structuredLogs.maxSizeBytes >= 1024 ** 2);
   const historyColumns: SimpleTableColumn<HousekeepingRunResult>[] = [
     {
       id: "time",
@@ -176,7 +184,10 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
         title="Housekeeping"
         description="Automated cleanup of logs, old data, and unused resources"
         actions={
-          <Button onClick={saveHkConfig} disabled={!hkHasChanges || controlsDisabled}>
+          <Button
+            onClick={saveHkConfig}
+            disabled={!hkHasChanges || masterControlsDisabled || !structuredLogsValid}
+          >
             <Save className="h-4 w-4" />
             Save
           </Button>
@@ -194,14 +205,14 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
             <Switch
               checked={hkConfig.enabled}
               onChange={(enabled) => setHkConfig((current) => ({ ...current, enabled }))}
-              disabled={controlsDisabled}
+              disabled={masterControlsDisabled}
             />
           </div>
         </div>
-        <div
-          className={`transition-opacity duration-200 ${!hkConfig.enabled ? "opacity-50 pointer-events-none" : ""}`}
-        >
-          <div className="p-4 space-y-3">
+        <div>
+          <div
+            className={`p-4 space-y-3 transition-opacity duration-200 ${!hkConfig.enabled ? "opacity-50" : ""}`}
+          >
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
               <div>
                 <p className="text-sm font-medium">Schedule</p>
@@ -257,6 +268,86 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
               disabled={controlsDisabled}
             />
             <HousekeepingCard
+              label="Structured Logs"
+              description="Limit stored logs by rows and size"
+              stat={hkStats ? formatBytes(hkStats.structuredLogs.totalSizeBytes) : "..."}
+              statDetail={
+                hkStats ? `${hkStats.structuredLogs.totalRows.toLocaleString()} rows` : "rows"
+              }
+              enabled={hkConfig.structuredLogs.enabled}
+              onToggle={(enabled) =>
+                setHkConfig((current) => ({
+                  ...current,
+                  structuredLogs: { ...current.structuredLogs, enabled },
+                }))
+              }
+              lastResult={hkStats?.lastRun?.categories.find(
+                (category) => category.category === "Structured Logs"
+              )}
+              disabled={controlsDisabled}
+              inlineControls={
+                <>
+                  <span>&middot;</span>
+                  <span>keep</span>
+                  <input
+                    type="number"
+                    aria-label="Maximum structured log rows"
+                    min={1000}
+                    className="w-[4.25rem] border border-input bg-background px-1 text-center text-xs text-foreground tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    value={hkConfig.structuredLogs.maxRows || ""}
+                    disabled={!hkConfig.structuredLogs.enabled || controlsDisabled}
+                    onChange={(event) =>
+                      setHkConfig((current) => ({
+                        ...current,
+                        structuredLogs: {
+                          ...current.structuredLogs,
+                          maxRows: Number(event.target.value),
+                        },
+                      }))
+                    }
+                  />
+                  <span>rows and</span>
+                  <input
+                    type="number"
+                    aria-label="Maximum structured log size in GiB"
+                    min={0.001}
+                    step={0.25}
+                    className="w-8 border border-input bg-background px-1 text-center text-xs text-foreground tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    value={
+                      hkConfig.structuredLogs.maxSizeBytes > 0
+                        ? Number((hkConfig.structuredLogs.maxSizeBytes / 1024 ** 3).toFixed(3))
+                        : ""
+                    }
+                    disabled={!hkConfig.structuredLogs.enabled || controlsDisabled}
+                    onChange={(event) =>
+                      setHkConfig((current) => ({
+                        ...current,
+                        structuredLogs: {
+                          ...current.structuredLogs,
+                          maxSizeBytes: Math.round(Number(event.target.value) * 1024 ** 3),
+                        },
+                      }))
+                    }
+                  />
+                  <span>GiB</span>
+                </>
+              }
+            />
+            <HousekeepingCard
+              label="ClickHouse Internals"
+              description="Monitor ClickHouse system logs"
+              stat={hkStats ? formatBytes(hkStats.clickHouseInternals.totalSizeBytes) : "..."}
+              statDetail={
+                hkStats?.clickHouseInternals.capBytes
+                  ? `of ${formatBytes(hkStats.clickHouseInternals.capBytes)}`
+                  : undefined
+              }
+              enabled
+              onToggle={() => {}}
+              disabled
+              disabledReason="Always on"
+            />
+            <HousekeepingCard
               label="Audit Log"
               description="Delete old audit trail entries"
               stat={hkStats ? hkStats.auditLog.totalRows.toLocaleString() : "..."}
@@ -299,6 +390,30 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
               }
               lastResult={hkStats?.lastRun?.categories.find(
                 (c) => c.category === "Dismissed Alerts"
+              )}
+              disabled={controlsDisabled}
+            />
+            <HousekeepingCard
+              label="Delivery Log"
+              description="Delete old notification delivery attempts"
+              stat={hkStats ? hkStats.deliveryLog.total.toLocaleString() : "..."}
+              statDetail={hkStats ? `entries · ${hkStats.deliveryLog.failed} failed` : "entries"}
+              enabled={hkConfig.deliveryLog.enabled}
+              onToggle={(enabled) =>
+                setHkConfig((current) => ({
+                  ...current,
+                  deliveryLog: { ...current.deliveryLog, enabled },
+                }))
+              }
+              retentionDays={hkConfig.deliveryLog.retentionDays}
+              onRetentionChange={(retentionDays) =>
+                setHkConfig((current) => ({
+                  ...current,
+                  deliveryLog: { ...current.deliveryLog, retentionDays },
+                }))
+              }
+              lastResult={hkStats?.lastRun?.categories.find(
+                (category) => category.category === "Delivery Log"
               )}
               disabled={controlsDisabled}
             />
@@ -458,6 +573,7 @@ function HousekeepingCard({
   lastResult,
   disabled,
   disabledReason,
+  inlineControls,
 }: {
   label: string;
   description: string;
@@ -470,6 +586,7 @@ function HousekeepingCard({
   lastResult?: HousekeepingCategoryResult;
   disabled?: boolean;
   disabledReason?: string;
+  inlineControls?: ReactNode;
 }) {
   const [localDays, setLocalDays] = useState(retentionDays ?? 30);
 
@@ -522,6 +639,7 @@ function HousekeepingCard({
               <span>days</span>
             </>
           )}
+          {inlineControls}
         </div>
       </div>
       <Switch checked={enabled} onChange={onToggle} disabled={disabled} />

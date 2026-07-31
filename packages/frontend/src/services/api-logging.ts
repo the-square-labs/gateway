@@ -2,6 +2,7 @@ import type {
   LoggingEnvironment,
   LoggingFacets,
   LoggingIngestToken,
+  LoggingMaintenanceSnapshot,
   LoggingMetadata,
   LoggingSchema,
   LoggingSearchRequest,
@@ -14,6 +15,10 @@ import type { ApiClientBaseConstructor } from "./api-mixins";
 export function withLoggingApi<TBase extends ApiClientBaseConstructor>(Base: TBase) {
   return class LoggingApiClient extends Base {
     // ── External Logging ────────────────────────────────────────────
+
+    async getLoggingHealth(): Promise<LoggingMaintenanceSnapshot> {
+      return this.unwrapData(this.request<{ data: LoggingMaintenanceSnapshot }>("/logging/health"));
+    }
 
     async listLoggingEnvironments(params?: { search?: string }): Promise<LoggingEnvironment[]> {
       const query = new URLSearchParams();

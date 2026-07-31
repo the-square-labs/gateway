@@ -257,8 +257,7 @@ AI chat projects are saved conversation groupings, not source-control projects. 
   if (
     [
       'inference:use',
-      'inference:tokens:create',
-      'inference:tokens:revoke',
+      'inference:tokens:manage',
       'inference:providers:view',
       'inference:providers:manage',
       'inference:models:manage',

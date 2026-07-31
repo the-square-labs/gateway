@@ -124,7 +124,7 @@ describe('canonical scope definitions', () => {
     expect(API_TOKEN_SCOPES).not.toContain('admin:system');
     expect(API_TOKEN_SCOPES).not.toContain('mcp:use');
     expect(API_TOKEN_SCOPES).not.toContain('inference:use');
-    expect(API_TOKEN_SCOPES).not.toContain('inference:tokens:create');
+    expect(API_TOKEN_SCOPES).not.toContain('inference:tokens:manage');
     expect(API_TOKEN_SCOPES).not.toContain('inference:providers:manage');
     expect(API_TOKEN_SCOPES).not.toContain('admin:users');
     expect(API_TOKEN_SCOPES).not.toContain('settings:gateway:edit');
@@ -155,8 +155,7 @@ describe('canonical scope definitions', () => {
   it('grants inference administration only to built-in admin tiers by default', () => {
     for (const scope of [
       'inference:use',
-      'inference:tokens:create',
-      'inference:tokens:revoke',
+      'inference:tokens:manage',
       'inference:usage:view:self',
       'inference:providers:view',
       'inference:providers:manage',
@@ -168,6 +167,9 @@ describe('canonical scope definitions', () => {
       expect(ADMIN_SCOPES).toContain(scope);
       expect(OPERATOR_SCOPES).not.toContain(scope);
     }
+
+    expect(isValidBaseScope('inference:tokens:create')).toBe(false);
+    expect(isValidBaseScope('inference:tokens:revoke')).toBe(false);
   });
 
   it('keeps OAuth manual approval scopes focused on high-risk delegated access', () => {

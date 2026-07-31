@@ -27,7 +27,7 @@ There is no user-visible or administrator-managed Pool entity. One logical model
 
 ## User setup
 
-Users need `inference:use`. Token creation and revocation additionally require `inference:tokens:create` and `inference:tokens:revoke`.
+Users need `inference:use`. Token creation and revocation additionally require `inference:tokens:manage`.
 
 Create a token under **Profile > Authorizations > Inference API tokens**. The `gwi_` secret is shown once.
 

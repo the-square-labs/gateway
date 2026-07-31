@@ -126,7 +126,7 @@ export function CAs() {
           <span
             className={`text-sm ${
               expDays <= 90 && expDays > 0
-                ? "text-amber-600 dark:text-amber-400"
+                ? "text-warning-foreground"
                 : expDays <= 0
                   ? "text-destructive"
                   : "text-muted-foreground"

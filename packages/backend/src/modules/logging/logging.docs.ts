@@ -57,6 +57,13 @@ export const loggingBatchIngestRoute = appRoute({
   request: jsonBody(LoggingBatchSchema),
   responses: okJson(UnknownDataResponseSchema),
 });
+export const loggingHealthRoute = appRoute({
+  method: 'get',
+  path: '/health',
+  tags: ['Logging'],
+  summary: 'Get ClickHouse logging storage health',
+  responses: okJson(UnknownDataResponseSchema),
+});
 export const listLoggingEnvironmentsRoute = appRoute({
   method: 'get',
   path: '/environments',

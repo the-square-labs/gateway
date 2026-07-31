@@ -12,8 +12,10 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useInferenceSelfUsage } from "@/hooks/use-inference-self-usage";
 import { keyboardNavigationRoutes } from "@/lib/app-navigation";
 import { DOCKER_VIEW_NODE_SCOPES, loadVisibleDockerNodes } from "@/lib/docker-node-access";
+import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
 import { hasScopeBase, scopeMatches } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
@@ -61,6 +63,11 @@ export function DashboardLayout() {
     aiLiteMode,
   } = useUIStore();
   const aiEnabled = useAIStore((state) => state.isEnabled);
+  const inferenceEnabled = useSystemConfigStore((state) => state.config.features.inferenceEnabled);
+  const canViewInferenceUsage =
+    inferenceEnabled && scopeMatches(currentUser?.scopes ?? [], "inference:use");
+  const { usage: inferenceUsage } = useInferenceSelfUsage(canViewInferenceUsage);
+  const dashboardHasLowInferenceUsage = hasLowInferenceUsage(inferenceUsage);
 
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
   const [isResizing, setIsResizing] = useState(false);
@@ -435,6 +442,7 @@ export function DashboardLayout() {
           pkiEnabled: features.pkiEnabled,
           loggingEnabled: features.loggingEnabled,
           inferenceEnabled: features.inferenceEnabled,
+          hasLowInferenceUsage: dashboardHasLowInferenceUsage,
           hasDockerNodes: useDockerStore.getState().dockerNodes.length > 0,
         });
         if (e.key in routes) {
@@ -448,7 +456,7 @@ export function DashboardLayout() {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [commandPaletteOpen, setCommandPaletteOpen, navigate]);
+  }, [commandPaletteOpen, dashboardHasLowInferenceUsage, setCommandPaletteOpen, navigate]);
 
   if (isLoading || !systemConfigReady) {
     return (
@@ -548,7 +556,7 @@ export function DashboardLayout() {
 
   return (
     <TooltipProvider>
-      <div className="flex h-screen bg-background dashboard-scrollbar">
+      <div className="flex h-screen min-w-0 overflow-hidden bg-background dashboard-scrollbar">
         <SidebarContent
           sidebarWidth={sidebarWidth}
           onSidebarWidthChange={handleSidebarResize}

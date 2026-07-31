@@ -102,7 +102,7 @@ const ANY_SCOPE_TOOL_REQUIREMENTS: Record<string, string[]> = {
     'status-page:incidents:delete',
   ],
   manage_inference_provider: ['inference:providers:view', 'inference:providers:manage'],
-  manage_inference_token: ['inference:tokens:create', 'inference:tokens:revoke'],
+  manage_inference_token: ['inference:tokens:manage'],
   list_resource_folders: [...FOLDER_TOOL_REQUIREMENT_SCOPES],
   manage_resource_folder: [...FOLDER_TOOL_REQUIREMENT_SCOPES],
   manage_node_config: ['nodes:config:view', 'nodes:config:edit'],

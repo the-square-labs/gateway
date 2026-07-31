@@ -67,6 +67,7 @@ describe('Scope-based permissions', () => {
       expect(hasScope(['proxy:edit'], 'proxy:view')).toBe(true);
       expect(hasScope(['proxy:edit'], 'proxy:view')).toBe(true);
       expect(hasScope(['databases:query:admin'], 'databases:query:read')).toBe(true);
+      expect(hasScope(['inference:use'], 'inference:usage:view:self')).toBe(true);
       expect(hasScope(['inference:providers:manage'], 'inference:providers:view')).toBe(true);
       expect(hasScope(['inference:models:manage'], 'inference:providers:view')).toBe(true);
     });
@@ -81,6 +82,7 @@ describe('Scope-based permissions', () => {
       expect(hasScope(['databases:credentials:reveal'], 'databases:view')).toBe(false);
       expect(hasScope(['databases:credentials:reveal:db-1'], 'databases:view:db-1')).toBe(false);
       expect(hasScope(['logs:schemas:delete'], 'logs:schemas:view')).toBe(false);
+      expect(hasScope(['inference:usage:view:self'], 'inference:use')).toBe(false);
     });
 
     it('keeps write-to-read implications inside the same resource boundary', () => {

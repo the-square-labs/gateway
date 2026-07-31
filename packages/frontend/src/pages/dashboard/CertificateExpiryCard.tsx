@@ -31,16 +31,16 @@ export function CertificateExpiryCard({ expiringItems, hasScope }: CertificateEx
   if (visible.length === 0) return null;
 
   return (
-    <div className="border bg-card" style={{ borderColor: "rgb(234 179 8 / 0.6)" }}>
+    <div className="border border-warning/60 bg-card">
       <SectionHeader
         title="Expiring Soon"
         titleClassName="font-semibold"
         actions={
-          <Badge variant="warning" style={{ backgroundColor: "rgb(234 179 8)", color: "#111" }}>
+          <Badge variant="warning" className="bg-warning text-black">
             {visible.length}
           </Badge>
         }
-        style={{ color: "rgb(234 179 8)" }}
+        className="text-warning"
       />
       <div className="divide-y">
         {[...visible]
@@ -65,9 +65,8 @@ export function CertificateExpiryCard({ expiringItems, hasScope }: CertificateEx
               <span
                 className={cn(
                   "text-xs font-medium",
-                  item.daysLeft <= 7
-                    ? "text-amber-600 dark:text-amber-400 font-semibold"
-                    : "text-amber-600 dark:text-amber-400"
+                  "text-warning-foreground",
+                  item.daysLeft <= 7 && "font-semibold"
                 )}
               >
                 {formatTimeLeft(item.expiresAt)}

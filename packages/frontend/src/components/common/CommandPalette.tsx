@@ -48,7 +48,9 @@ import {
   CommandSeparator,
   CommandShortcut,
 } from "@/components/ui/command";
+import { useInferenceSelfUsage } from "@/hooks/use-inference-self-usage";
 import { type AppNavigationItemId, visibleNavigationGroups } from "@/lib/app-navigation";
+import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
 import {
   databaseRoute,
   dockerContainerRoute,
@@ -262,6 +264,9 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const inferenceStreaming = useAIStore((state) => state.isStreaming);
   const aiEnabled = useAIStore((state) => state.isEnabled);
   const canViewInferenceUsage = hasScope("inference:usage:view:self");
+  const { usage: inferenceUsage } = useInferenceSelfUsage(
+    inferenceEnabled && hasScope("inference:use")
+  );
   const inferenceQuota = useInferenceQuotaSnapshot(gatewayInferenceMode && canViewInferenceUsage);
   const isCommandMode = search.startsWith(">");
   const commandQuery = isCommandMode ? search.slice(1).trim().toLowerCase() : "";
@@ -423,9 +428,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         pkiEnabled,
         loggingEnabled,
         inferenceEnabled,
+        hasLowInferenceUsage: hasLowInferenceUsage(inferenceUsage),
         statusPageEnabled,
       }),
-    [inferenceEnabled, loggingEnabled, pkiEnabled, statusPageEnabled, user?.scopes]
+    [inferenceEnabled, inferenceUsage, loggingEnabled, pkiEnabled, statusPageEnabled, user?.scopes]
   );
 
   const baseNavigationEntries = useMemo<PaletteEntry[]>(

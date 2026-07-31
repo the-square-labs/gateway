@@ -260,10 +260,10 @@ export function OAuthConsent() {
             </div>
           </section>
 
-          <section className="bg-amber-500/15 px-5 py-3">
+          <section className="bg-warning/15 px-5 py-3">
             <div className="flex items-center gap-3">
-              <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
-              <p className="text-sm font-semibold text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="h-5 w-5 shrink-0 text-warning-foreground" />
+              <p className="text-sm font-semibold text-warning-foreground">
                 Only authorize tools you trust. Gateway cannot verify this client; it can only
                 enforce the scopes you approve and the permissions your account currently has.
               </p>

@@ -28,12 +28,7 @@ describe("Profile", () => {
       user: makeUser({
         name: "Alex Gateway",
         email: "alex@example.com",
-        scopes: [
-          "inference:use",
-          "inference:usage:view:self",
-          "inference:tokens:create",
-          "inference:tokens:revoke",
-        ],
+        scopes: ["inference:use", "inference:tokens:manage"],
       }),
       isAuthenticated: true,
       isLoading: false,
@@ -70,6 +65,12 @@ describe("Profile", () => {
     expect(screen.getByText("Alex Gateway")).toBeInTheDocument();
     expect(screen.getByText("Inference usage panel")).toBeInTheDocument();
     expect(screen.queryByText("Gateway API authorizations")).not.toBeInTheDocument();
+
+    const profile = screen.getByText("Alex Gateway");
+    const usage = screen.getByText("Inference usage panel");
+    const theme = screen.getByText("Theme");
+    expect(profile.compareDocumentPosition(usage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(usage.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("groups API, OAuth, and inference credentials on the Authorizations tab", async () => {

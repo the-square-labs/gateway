@@ -100,4 +100,18 @@ describe('drizzle migration metadata', () => {
     expect(migration).toContain('"inference_tokens_managed_identity_active_unique"');
     expect(migration).toContain('"revoked_at" is null');
   });
+
+  it('collapses existing inference token grants into the manage permission', () => {
+    const migration = readFileSync(
+      join(process.cwd(), 'src/db/migrations/0078_collapse_inference_token_permissions.sql'),
+      'utf8'
+    );
+
+    expect(migration).toContain("THEN 'inference:tokens:manage'");
+    expect(migration).toContain('UPDATE "permission_groups"');
+    expect(migration).toContain('UPDATE "users"');
+    expect(migration).toContain('UPDATE "oauth_authorization_codes"');
+    expect(migration).toContain('UPDATE "ai_run_tool_calls"');
+    expect(migration).toContain('UPDATE "sandbox_jobs"');
+  });
 });

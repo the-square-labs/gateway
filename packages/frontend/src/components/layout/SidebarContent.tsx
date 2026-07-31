@@ -29,8 +29,10 @@ import { ResizeHandle } from "@/components/ui/resize-handle";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useInferenceSelfUsage } from "@/hooks/use-inference-self-usage";
 import { useRealtime } from "@/hooks/use-realtime";
 import { visibleNavigationGroups } from "@/lib/app-navigation";
+import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
 import {
   databaseRoute,
   dockerContainerRoute,
@@ -109,6 +111,8 @@ export function SidebarContent({
   const pkiEnabled = useSystemConfigStore((s) => s.config.features.pkiEnabled);
   const loggingEnabled = useSystemConfigStore((s) => s.config.features.loggingEnabled);
   const inferenceEnabled = useSystemConfigStore((s) => s.config.features.inferenceEnabled);
+  const canViewInferenceUsage = inferenceEnabled && hasScope("inference:use");
+  const { usage: inferenceUsage } = useInferenceSelfUsage(canViewInferenceUsage);
 
   const sidebarPinnedProxyIds = usePinnedProxiesStore((s) => s.sidebarProxyIds);
   const pinnedProxyRefreshTick = usePinnedProxiesStore((s) => s.refreshTick);
@@ -407,6 +411,7 @@ export function SidebarContent({
     pkiEnabled,
     loggingEnabled,
     inferenceEnabled,
+    hasLowInferenceUsage: hasLowInferenceUsage(inferenceUsage),
     statusPageEnabled,
     hasNginxNodes,
     hasDockerNodes: dockerNodes.length > 0,
@@ -487,8 +492,7 @@ export function SidebarContent({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8"
-                    style={{ backgroundColor: "rgb(234 179 8)", color: "#111" }}
+                    className="h-8 w-8 bg-warning text-black hover:bg-warning/90"
                     onClick={() => navigate("/settings/gateway")}
                   >
                     <ArrowUpCircle className="h-4 w-4" />
@@ -659,10 +663,10 @@ export function SidebarContent({
                                     status === "online"
                                       ? "bg-emerald-500"
                                       : status === "degraded"
-                                        ? "bg-yellow-500"
+                                        ? "bg-warning"
                                         : status === "offline" || status === "error"
                                           ? "bg-red-400"
-                                          : "bg-yellow-500"
+                                          : "bg-warning"
                                   )}
                                 />
                               </Link>
@@ -694,7 +698,7 @@ export function SidebarContent({
                                     meta.healthStatus === "online"
                                       ? "bg-emerald-500"
                                       : meta.healthStatus === "degraded"
-                                        ? "bg-yellow-500"
+                                        ? "bg-warning"
                                         : meta.healthStatus === "offline"
                                           ? "bg-red-400"
                                           : "bg-muted-foreground/40"
@@ -745,7 +749,7 @@ export function SidebarContent({
                                             meta.state === "killing" ||
                                             meta.state === "updating" ||
                                             meta.state === "migrating"
-                                          ? "bg-amber-400 animate-pulse"
+                                          ? "animate-pulse bg-warning"
                                           : "bg-muted-foreground/40"
                                   )}
                                 />
@@ -811,8 +815,7 @@ export function SidebarContent({
                   <Link
                     to="/settings/gateway"
                     onClick={onNavigate}
-                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium transition-colors"
-                    style={{ backgroundColor: "rgb(234 179 8)", color: "#111" }}
+                    className="flex w-full items-center gap-2 bg-warning px-3 py-2 text-left text-sm font-medium text-black transition-colors hover:bg-warning/90"
                   >
                     <ArrowUpCircle className="h-4 w-4 shrink-0" />
                     <span className="truncate">Update available</span>

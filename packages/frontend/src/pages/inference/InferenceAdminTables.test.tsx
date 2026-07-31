@@ -61,8 +61,20 @@ describe("InferenceUsersTable", () => {
       name: "5-hour credit limit value",
     });
     expect(fiveHourInput).toBeDisabled();
+    expect(fiveHourInput).toHaveAttribute("placeholder", "Unlimited");
+    expect(screen.queryByText("Unlimited while disabled")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "5 hours limit enabled" }));
     expect(fiveHourInput).toBeEnabled();
+
+    const apiInput = screen.getByRole("spinbutton", { name: "API monthly limit · USD value" });
+    const apiSwitch = screen.getByRole("button", { name: "API usage enabled" });
+    expect(apiSwitch).toHaveAttribute("aria-pressed", "false");
+    expect(apiInput).toBeDisabled();
+    expect(apiInput).toHaveAttribute("placeholder", "Unlimited");
+    await user.click(apiSwitch);
+    expect(apiSwitch).toHaveAttribute("aria-pressed", "true");
+    expect(apiInput).toBeEnabled();
+    expect(apiInput).toHaveValue(10);
 
     const timezone = screen.getByRole("combobox", { name: "Billing timezone" });
     expect(timezone).toHaveValue("UTC");
@@ -76,9 +88,61 @@ describe("InferenceUsersTable", () => {
         credits5hEnabled: true,
         credits7dEnabled: false,
         credits30dEnabled: false,
+        apiMonthlyMicrodollars: 10_000_000,
         billingTimezone: "Europe/Chisinau",
       })
     );
+  });
+
+  it("keeps empty numeric drafts and disables save until active values are valid", async () => {
+    vi.spyOn(api, "listInferenceUsersUsage").mockResolvedValue([]);
+    vi.spyOn(api, "listInferenceLimits").mockResolvedValue([]);
+    const user = userEvent.setup();
+
+    render(<InferenceUsersTable canManage />);
+    await user.click(await screen.findByRole("button", { name: "Configure limits" }));
+
+    await user.click(screen.getByRole("button", { name: "5 hours limit enabled" }));
+    const fiveHourInput = screen.getByRole("spinbutton", {
+      name: "5-hour credit limit value",
+    });
+    const save = screen.getByRole("button", { name: "Save limits" });
+
+    await user.clear(fiveHourInput);
+    expect(fiveHourInput).toHaveValue(null);
+    expect(save).toBeDisabled();
+
+    await user.type(fiveHourInput, "25");
+    expect(fiveHourInput).toHaveValue(25);
+    expect(save).toBeEnabled();
+  });
+
+  it("turns API usage off at zero and restores the default limit when re-enabled", async () => {
+    vi.spyOn(api, "listInferenceUsersUsage").mockResolvedValue([]);
+    vi.spyOn(api, "listInferenceLimits").mockResolvedValue([
+      limitPolicy({ apiMonthlyMicrodollars: 5_000_000 }),
+    ]);
+    const user = userEvent.setup();
+
+    render(<InferenceUsersTable canManage />);
+    await user.click(await screen.findByRole("button", { name: "Configure limits" }));
+
+    const apiInput = screen.getByRole("spinbutton", { name: "API monthly limit · USD value" });
+    const apiSwitch = screen.getByRole("button", { name: "API usage enabled" });
+    expect(apiSwitch).toHaveAttribute("aria-pressed", "true");
+    expect(apiInput).toHaveValue(5);
+
+    await user.clear(apiInput);
+    expect(screen.getByRole("button", { name: "Save limits" })).toBeDisabled();
+    await user.type(apiInput, "0");
+    expect(apiSwitch).toHaveAttribute("aria-pressed", "false");
+    expect(apiInput).toBeDisabled();
+    expect(apiInput).toHaveAttribute("placeholder", "Unlimited");
+
+    await user.click(apiSwitch);
+    expect(apiSwitch).toHaveAttribute("aria-pressed", "true");
+    expect(apiInput).toBeEnabled();
+    expect(apiInput).toHaveValue(10);
   });
 
   it("keeps a raw user preference but disables a window gated off globally", async () => {

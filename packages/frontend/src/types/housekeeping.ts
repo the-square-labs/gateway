@@ -6,6 +6,7 @@ export interface HousekeepingConfig {
   auditLog: { enabled: boolean; retentionDays: number };
   dismissedAlerts: { enabled: boolean; retentionDays: number };
   deliveryLog: { enabled: boolean; retentionDays: number };
+  structuredLogs: { enabled: boolean; maxRows: number; maxSizeBytes: number };
   orphanedAIArtifacts: { enabled: boolean };
   gatewayLogs: { enabled: false };
   orphanedVolumes: { enabled: boolean; retentionDays: number };
@@ -37,6 +38,14 @@ export interface HousekeepingStats {
   nginxLogs: { totalSizeBytes: number; fileCount: number; oldestFile: string | null };
   auditLog: { totalRows: number; oldestEntry: string | null };
   dismissedAlerts: { count: number; oldestAlert: string | null };
+  deliveryLog: { total: number; success: number; failed: number; retrying: number };
+  structuredLogs: { totalRows: number; totalSizeBytes: number; status: string };
+  clickHouseInternals: {
+    totalRows: number;
+    totalSizeBytes: number;
+    status: string;
+    capBytes: number;
+  };
   orphanedAIArtifacts: { count: number; totalSizeBytes: number };
   gatewayLogs: { totalSizeBytes: number; fileCount: number; available: false };
   orphanedVolumes: { count: number; reclaimableBytes: number };

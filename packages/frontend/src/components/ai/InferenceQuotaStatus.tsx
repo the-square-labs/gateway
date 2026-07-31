@@ -1,11 +1,7 @@
 import { TriangleAlert } from "lucide-react";
-import { useEffect, useState } from "react";
-import {
-  INFERENCE_SELF_USAGE_CACHE_KEY,
-  subscribeToInferenceSelfUsage,
-} from "@/lib/inference-self-usage";
+import { useEffect } from "react";
+import { useInferenceSelfUsage } from "@/hooks/use-inference-self-usage";
 import { cn } from "@/lib/utils";
-import { api } from "@/services/api";
 import type { InferenceSelfUsage } from "@/types/inference";
 
 const LOW_USAGE_THRESHOLD = 10;
@@ -91,59 +87,26 @@ export function useInferenceQuota({
   enabled: boolean;
   isStreaming: boolean;
 }): InferenceQuotaState {
-  const [usage, setUsage] = useState<InferenceSelfUsage | null>(() =>
-    enabled ? (api.getCached<InferenceSelfUsage>(INFERENCE_SELF_USAGE_CACHE_KEY) ?? null) : null
-  );
+  const { usage, load } = useInferenceSelfUsage(enabled);
 
   useEffect(() => {
-    if (!enabled) {
-      setUsage(null);
-      return;
-    }
-
-    let active = true;
-    const refresh = async () => {
-      try {
-        const nextUsage = await api.getInferenceSelfUsage();
-        if (active) setUsage(nextUsage);
-      } catch {
-        // Usage visibility is best-effort and must never break the chat surface.
-      }
-    };
-    const unsubscribe = subscribeToInferenceSelfUsage((nextUsage) => {
-      if (active) setUsage(nextUsage);
-    });
-
-    void refresh();
-    const pollTimer = window.setInterval(() => void refresh(), USAGE_POLL_INTERVAL_MS);
+    if (!enabled) return;
+    const pollTimer = window.setInterval(() => void load(), USAGE_POLL_INTERVAL_MS);
     const settlementTimer = isStreaming
       ? null
-      : window.setTimeout(() => void refresh(), USAGE_SETTLEMENT_DELAY_MS);
+      : window.setTimeout(() => void load(), USAGE_SETTLEMENT_DELAY_MS);
 
     return () => {
-      active = false;
-      unsubscribe();
       window.clearInterval(pollTimer);
       if (settlementTimer !== null) window.clearTimeout(settlementTimer);
     };
-  }, [enabled, isStreaming]);
+  }, [enabled, isStreaming, load]);
 
   return getInferenceQuotaState(usage);
 }
 
 export function useInferenceQuotaSnapshot(enabled: boolean): InferenceQuotaState {
-  const [usage, setUsage] = useState<InferenceSelfUsage | null>(() =>
-    enabled ? (api.getCached<InferenceSelfUsage>(INFERENCE_SELF_USAGE_CACHE_KEY) ?? null) : null
-  );
-
-  useEffect(() => {
-    if (!enabled) {
-      setUsage(null);
-      return;
-    }
-    return subscribeToInferenceSelfUsage(setUsage);
-  }, [enabled]);
-
+  const { usage } = useInferenceSelfUsage(enabled);
   return getInferenceQuotaState(usage);
 }
 

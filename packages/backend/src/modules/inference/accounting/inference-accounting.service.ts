@@ -9,6 +9,7 @@ import {
   inferenceRequests,
   inferenceUsageLedger,
 } from '@/db/schema/index.js';
+import type { EventBusService } from '@/services/event-bus.service.js';
 import { logInferenceFailure, logInferenceSettlement } from '../inference-observability.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 import type { InferenceRequest, InferenceUsage } from '../protocol/inference-protocol.types.js';
@@ -39,6 +40,7 @@ import type {
 } from './inference-budget-reservation.service.js';
 import { assertProviderApiBudget } from './inference-provider-budget.js';
 import { normalizeServiceTier, serviceTierCreditMultiplier } from './inference-service-tier.js';
+import { publishInferenceUsageChanged } from './inference-usage-events.js';
 
 export interface InferenceAdmission {
   requestId: string;
@@ -66,7 +68,8 @@ export class InferenceAccountingService {
   constructor(
     private readonly policies: InferenceBudgetPolicyService,
     private readonly reservations: InferenceBudgetReservationService,
-    private readonly locks: InferenceBudgetLockService
+    private readonly locks: InferenceBudgetLockService,
+    private readonly eventBus?: EventBusService
   ) {}
 
   async admit(input: {
@@ -482,7 +485,13 @@ export class InferenceAccountingService {
       await this.reservations.release(admission.reservation);
       return didClaim;
     });
-    if (claimed) logInferenceSettlement(admission, usage, status, latencyMs);
+    if (claimed) {
+      logInferenceSettlement(admission, usage, status, latencyMs);
+      publishInferenceUsageChanged(this.eventBus, {
+        targetUserId: admission.userId,
+        reason: 'settlement',
+      });
+    }
   }
 
   async fail(admission: InferenceAdmission, error: unknown, emittedOutput: boolean): Promise<void> {

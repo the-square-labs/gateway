@@ -139,7 +139,7 @@ export function AIToolAccessModal({
                             <p className="break-words text-sm font-medium">
                               {tool.displayName}
                               {tool.destructive && (
-                                <span className="ml-1 text-[10px] text-yellow-600 dark:text-yellow-400">
+                                <span className="ml-1 text-[10px] text-warning-foreground">
                                   (requires approval)
                                 </span>
                               )}

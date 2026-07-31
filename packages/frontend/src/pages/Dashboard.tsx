@@ -1,4 +1,4 @@
-import { ArrowRight } from "lucide-react";
+import { AlertTriangle, ArrowRight } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { LoadingSpinner } from "@/components/common/LoadingSpinner";
@@ -14,7 +14,14 @@ import { usePinnedProxiesStore } from "@/stores/pinned-proxies";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
 import { useUpdateStore } from "@/stores/update";
-import type { AuditLogEntry, DashboardStats, Node, NodeHealthReport, ProxyHost } from "@/types";
+import type {
+  AuditLogEntry,
+  DashboardStats,
+  LoggingMaintenanceSnapshot,
+  Node,
+  NodeHealthReport,
+  ProxyHost,
+} from "@/types";
 import { CertificateAuthoritiesCard } from "./dashboard/CertificateAuthoritiesCard";
 import { CertificateExpiryCard, type ExpiringItem } from "./dashboard/CertificateExpiryCard";
 import { HealthOverviewCard } from "./dashboard/HealthOverviewCard";
@@ -23,6 +30,7 @@ import { PinnedNodeCard, WARN_THRESHOLD } from "./dashboard/PinnedNodeCard";
 import { PinnedProxyCard } from "./dashboard/PinnedProxyCard";
 import { QuickStatsCard } from "./dashboard/QuickStatsCard";
 import { RecentActivityCard } from "./dashboard/RecentActivityCard";
+import { DashboardInferenceUsage } from "./inference/InferenceUsagePanels";
 
 type DashboardDevWindow = Window & {
   gatewayDev?: Record<string, unknown>;
@@ -53,6 +61,8 @@ export function Dashboard() {
   const dashboardPinnedProxyIds = usePinnedProxiesStore((s) => s.dashboardProxyIds);
   const updateStatus = useUpdateStore((s) => s.status);
   const pkiEnabled = useSystemConfigStore((s) => s.config.features.pkiEnabled);
+  const inferenceEnabled = useSystemConfigStore((s) => s.config.features.inferenceEnabled);
+  const loggingEnabled = useSystemConfigStore((s) => s.config.features.loggingEnabled);
   const showUpdateNotifications = useUIStore((s) => s.showUpdateNotifications);
   const canViewSystemCertificates = useAuthStore((s) => s.hasScope("admin:details:certificates"));
   const showSystemCertificatePreference = useUIStore((s) => s.showSystemCertificates);
@@ -99,6 +109,7 @@ export function Dashboard() {
   const [pinnedProxyHosts, setPinnedProxyHosts] = useState<ProxyHost[]>(
     () => api.getCached<ProxyHost[]>(pinnedProxiesCacheKey) ?? []
   );
+  const [loggingHealth, setLoggingHealth] = useState<LoggingMaintenanceSnapshot | null>(null);
   const canViewNodeDetails = useCallback(
     (nodeId: string) => hasScope("nodes:details") || hasScope(`nodes:details:${nodeId}`),
     [hasScope]
@@ -109,6 +120,31 @@ export function Dashboard() {
   );
   const canViewCAs =
     pkiEnabled && (hasScope("pki:ca:view:root") || hasScope("pki:ca:view:intermediate"));
+  const canViewInferenceUsage =
+    inferenceEnabled && hasScope("inference:use") && hasScope("inference:usage:view:self");
+  const canViewLoggingHealth = loggingEnabled && hasScope("housekeeping:view");
+
+  useEffect(() => {
+    if (!canViewLoggingHealth) {
+      setLoggingHealth(null);
+      return;
+    }
+    let active = true;
+    const refresh = () => {
+      api
+        .getLoggingHealth()
+        .then((health) => {
+          if (active) setLoggingHealth(health);
+        })
+        .catch(() => {});
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 30_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [canViewLoggingHealth]);
 
   useEffect(() => {
     if (!import.meta.env.DEV || typeof window === "undefined") return;
@@ -487,20 +523,17 @@ export function Dashboard() {
           {updateStatus?.updateAvailable &&
             updateStatus.latestVersion &&
             showUpdateNotifications && (
-              <div className="border bg-card" style={{ borderColor: "rgb(234 179 8 / 0.6)" }}>
+              <div className="border border-warning/60 bg-card">
                 <div className="flex items-center justify-between px-4 py-3">
                   <div className="flex items-center gap-3">
-                    <span className="font-semibold text-sm" style={{ color: "rgb(234 179 8)" }}>
-                      Update Available
-                    </span>
+                    <span className="text-sm font-semibold text-warning">Update Available</span>
                     <span className="text-sm text-muted-foreground">
                       {updateStatus.latestVersion} is ready to install
                     </span>
                   </div>
                   <Link
                     to="/settings/gateway"
-                    className="flex items-center gap-1 text-sm font-medium hover:underline"
-                    style={{ color: "rgb(234 179 8)" }}
+                    className="flex items-center gap-1 text-sm font-medium text-warning hover:underline"
                   >
                     Go to Settings
                     <ArrowRight className="h-3.5 w-3.5" />
@@ -509,12 +542,46 @@ export function Dashboard() {
               </div>
             )}
 
+          {loggingHealth && !["disabled", "healthy"].includes(loggingHealth.status) && (
+            <div className="border border-warning/60 bg-card">
+              <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 items-center gap-3">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-warning">
+                      {loggingHealth.status === "exhausted"
+                        ? "Structured logging capacity exhausted"
+                        : loggingHealth.status === "unavailable"
+                          ? "Structured logging unavailable"
+                          : loggingHealth.status === "pressure"
+                            ? "Structured logging storage is running low"
+                            : "Structured logging maintenance degraded"}
+                    </p>
+                    <p className="truncate text-sm text-muted-foreground">
+                      {loggingHealth.reason ??
+                        "Check ClickHouse storage health and maintenance settings."}
+                    </p>
+                  </div>
+                </div>
+                <Link
+                  to="/settings/housekeeping"
+                  className="flex shrink-0 items-center gap-1 text-sm font-medium text-warning hover:underline"
+                >
+                  Open Housekeeping
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+              </div>
+            </div>
+          )}
+
           <QuickStatsCard
             displayStats={displayStats}
             nodesList={nodesList}
             hasScope={hasScopedAccess}
             pkiEnabled={pkiEnabled}
           />
+
+          <DashboardInferenceUsage enabled={canViewInferenceUsage} />
 
           {/* Pinned Proxy Host Cards */}
           {pinnedProxyHosts

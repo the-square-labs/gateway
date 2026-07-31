@@ -2,7 +2,12 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
-import { CompactInferenceUsage, InferenceOverview, InferenceUsage } from "./InferenceUsagePanels";
+import {
+  CompactInferenceUsage,
+  DashboardInferenceUsage,
+  InferenceOverview,
+  InferenceUsage,
+} from "./InferenceUsagePanels";
 
 vi.mock("@/services/api", () => ({
   api: { getCached: vi.fn(), getInferenceSelfUsage: vi.fn(), getInferenceSystemUsage: vi.fn() },
@@ -41,11 +46,38 @@ describe("InferenceUsage", () => {
     expect(usageValue).toHaveClass("text-xl");
     expect(screen.getByText("Recovers Aug 1, 2026")).toHaveClass("text-xs");
     expect(screen.queryByText(/Just now/)).not.toBeInTheDocument();
+    expect(screen.getByText("90%")).not.toHaveClass("text-warning");
+    expect(screen.getByText("96%")).not.toHaveClass("text-warning");
     const text = document.body.textContent ?? "";
     expect(text).not.toMatch(/\$|credits|tokens|openai|anthropic|kimi/i);
   });
 
-  it("hides API usage when the effective monthly budget is zero", async () => {
+  it("uses the warning color below 20 percent remaining", async () => {
+    vi.mocked(api.getInferenceSelfUsage).mockResolvedValue({
+      enabled: true,
+      api: { configured: true, percentage: 80, recoveryAt: "2026-08-01T00:00:00.000Z" },
+      subscription: {
+        "5h": { configured: true, percentage: 83, recoveryAt: "2026-07-24T22:00:00.000Z" },
+        "7d": { configured: false, percentage: 0, recoveryAt: "2026-07-31T00:00:00.000Z" },
+        "30d": { configured: false, percentage: 0, recoveryAt: "2026-08-23T00:00:00.000Z" },
+      },
+    });
+
+    render(<InferenceUsage />);
+
+    const boundaryValue = await screen.findByText("20%");
+    const lowValue = screen.getByText("17%");
+    expect(boundaryValue).not.toHaveClass("text-warning");
+    expect(lowValue).toHaveClass("text-warning");
+    expect(
+      boundaryValue.closest<HTMLElement>(".border-0")?.querySelector(".bg-primary")
+    ).toHaveStyle({ backgroundColor: "var(--color-primary)" });
+    expect(lowValue.closest<HTMLElement>(".border-0")?.querySelector(".bg-primary")).toHaveStyle({
+      backgroundColor: "var(--color-warning)",
+    });
+  });
+
+  it("keeps a disabled API card when the effective monthly budget is zero", async () => {
     vi.mocked(api.getInferenceSelfUsage).mockResolvedValue({
       enabled: true,
       api: { configured: false, percentage: 0, recoveryAt: "2026-08-01T00:00:00.000Z" },
@@ -59,7 +91,80 @@ describe("InferenceUsage", () => {
     render(<InferenceUsage />);
 
     expect(await screen.findByText("5 hours")).toBeInTheDocument();
+    const apiLabel = screen.getByText("API usage");
+    const apiCard = apiLabel.closest<HTMLElement>(".border-0");
+    expect(apiCard).toHaveTextContent("Disabled");
+    expect(apiCard).toHaveTextContent("API usage is disabled.");
+    expect(apiCard?.querySelector(".bg-primary")).toHaveStyle({ width: "0%" });
+  });
+
+  it("shows an unlimited credit card when every subscription window is disabled", async () => {
+    vi.mocked(api.getInferenceSelfUsage).mockResolvedValue({
+      enabled: true,
+      api: { configured: false, percentage: 0, recoveryAt: "2026-08-01T00:00:00.000Z" },
+      subscription: {
+        "5h": { configured: false, percentage: 0, recoveryAt: "2026-07-24T22:00:00.000Z" },
+        "7d": { configured: false, percentage: 0, recoveryAt: "2026-07-31T00:00:00.000Z" },
+        "30d": { configured: false, percentage: 0, recoveryAt: "2026-08-23T00:00:00.000Z" },
+      },
+    });
+
+    const { container } = render(<InferenceUsage />);
+
+    expect(await screen.findByText("API usage")).toBeInTheDocument();
+    expect(screen.getByText("Disabled")).toBeInTheDocument();
+    expect(screen.getByText("AI credits")).toBeInTheDocument();
+    expect(screen.getByText("Unlimited")).toBeInTheDocument();
+    expect(screen.getByText("API usage is disabled.")).toHaveClass("text-xs");
+    expect(screen.getByText("No credit limits configured.")).toHaveClass("text-xs");
+    expect(container.querySelectorAll(".border-0")).toHaveLength(2);
+    const emptyProgress = container.querySelector(".grid")?.querySelectorAll(".bg-primary");
+    expect(emptyProgress).toHaveLength(2);
+    for (const indicator of emptyProgress ?? []) {
+      expect(indicator).toHaveStyle({ width: "0%" });
+    }
+  });
+
+  it("shows dashboard usage only below 20 percent remaining", async () => {
+    vi.mocked(api.getInferenceSelfUsage).mockResolvedValue({
+      enabled: true,
+      api: { configured: false, percentage: 0, recoveryAt: "2026-08-01T00:00:00.000Z" },
+      subscription: {
+        "5h": { configured: true, percentage: 80, recoveryAt: "2026-07-24T22:00:00.000Z" },
+        "7d": { configured: true, percentage: 50, recoveryAt: "2026-07-31T00:00:00.000Z" },
+        "30d": { configured: false, percentage: 100, recoveryAt: "2026-08-23T00:00:00.000Z" },
+      },
+    });
+
+    const { unmount } = render(<DashboardInferenceUsage enabled />);
+    await waitFor(() => expect(api.getInferenceSelfUsage).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("Inference usage")).not.toBeInTheDocument();
+    unmount();
+
+    vi.mocked(api.getInferenceSelfUsage).mockResolvedValue({
+      enabled: true,
+      api: { configured: true, percentage: 0, recoveryAt: "2026-08-01T00:00:00.000Z" },
+      subscription: {
+        "5h": { configured: true, percentage: 50, recoveryAt: "2026-07-24T22:00:00.000Z" },
+        "7d": { configured: true, percentage: 83, recoveryAt: "2026-07-31T00:00:00.000Z" },
+        "30d": { configured: false, percentage: 100, recoveryAt: "2026-08-23T00:00:00.000Z" },
+      },
+    });
+
+    render(<DashboardInferenceUsage enabled />);
+    const warning = await screen.findByRole("status", {
+      name: "Weekly inference quota warning",
+    });
+    expect(screen.getByText("Weekly inference quota is running low")).toBeInTheDocument();
+    expect(screen.getByText("17%")).toHaveClass("text-warning");
+    expect(warning.querySelector(".bg-warning")).toHaveStyle({ width: "17%" });
+    expect(warning).toHaveClass("border-warning/60");
+    expect(warning.parentElement).toHaveClass("grid-cols-1");
+    expect(warning.parentElement).not.toHaveClass("sm:grid-cols-2");
+    expect(warning.querySelector(".items-center.gap-3")).toBeInTheDocument();
+    expect(screen.queryByText("Inference usage")).not.toBeInTheDocument();
     expect(screen.queryByText("API usage")).not.toBeInTheDocument();
+    expect(screen.queryByText("5 hours")).not.toBeInTheDocument();
   });
 
   it("renders the compact summary without a zero-budget API row", async () => {
@@ -135,24 +240,6 @@ describe("InferenceUsage", () => {
     expect(unlimited).toBeDisabled();
     expect(unlimited).not.toHaveAttribute("aria-expanded");
     expect(unlimited.querySelector(".lucide-chevron-down")).not.toBeInTheDocument();
-  });
-
-  it("shows unlimited usage when every dimension is disabled", async () => {
-    vi.mocked(api.getInferenceSelfUsage).mockResolvedValue({
-      enabled: true,
-      api: { configured: false, percentage: 0, recoveryAt: "2026-08-01T00:00:00.000Z" },
-      subscription: {
-        "5h": { configured: false, percentage: 0, recoveryAt: "2026-07-24T22:00:00.000Z" },
-        "7d": { configured: false, percentage: 0, recoveryAt: "2026-07-31T00:00:00.000Z" },
-        "30d": { configured: false, percentage: 0, recoveryAt: "2026-08-23T00:00:00.000Z" },
-      },
-    });
-
-    render(<InferenceUsage />);
-
-    expect(await screen.findByText("Usage is unlimited.")).toBeInTheDocument();
-    expect(screen.queryByText("5 hours")).not.toBeInTheDocument();
-    expect(screen.queryByText("API usage")).not.toBeInTheDocument();
   });
 
   it("keeps a retryable inline error instead of replacing the page", async () => {

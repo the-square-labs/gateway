@@ -123,3 +123,28 @@ export interface LoggingMetadata {
   fieldKeys: string[];
   labelValues: Record<string, string[]>;
 }
+
+export type LoggingStorageHealth =
+  | "disabled"
+  | "healthy"
+  | "pressure"
+  | "exhausted"
+  | "degraded"
+  | "unavailable";
+
+export interface LoggingMaintenanceSnapshot {
+  configured: boolean;
+  status: LoggingStorageHealth;
+  reason: string | null;
+  checkedAt: string | null;
+  structured: {
+    rows: number;
+    bytes: number;
+    maxRows: number | null;
+    maxSizeBytes: number | null;
+    usageRatio: number;
+  };
+  internal: { rows: number; bytes: number; capBytes: number; warningBytes: number };
+  disk: { totalBytes: number; freeBytes: number; freeRatio: number };
+  maintenance: { lastCleanupAt: string | null; lastCleanupError: string | null };
+}

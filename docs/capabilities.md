@@ -173,6 +173,8 @@ Logging features:
 - Payload, token, environment, and global rate limits.
 - Partial batch acceptance.
 - Search UI with filters and event detail inspection.
+- Housekeeping caps by total rows and approximate on-disk size, in addition to per-environment TTL.
+- Always-on ClickHouse health and internal-log budget guard with Dashboard warnings.
 - Official TypeScript SDK published as [`@wiolett/gateway-logger`](https://www.npmjs.com/package/@wiolett/gateway-logger), with source in `packages/logging-sdk`.
 
 Logging is optional. If `CLICKHOUSE_URL` is not configured, logging routes report that logging is disabled and the frontend hides the Logging section.

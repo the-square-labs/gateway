@@ -104,7 +104,7 @@ The CLI asks for the Gateway URL and completes OAuth when no active connection e
 | Domains | Central domain registry, DNS checks, record validation, and usage tracking. |
 | Databases | Saved PostgreSQL and Redis connections, encrypted credentials, health history, schema/key browsing, query consoles, and write operations. |
 | Monitoring | Node CPU, memory, disk, network, service status, daemon runtime details, log streaming, and update checks. |
-| Logging | Optional ClickHouse-backed structured log ingestion with schemas, retention, ingest tokens, rate limits, and search. |
+| Logging | Optional ClickHouse-backed structured log ingestion with schemas, retention, ingest tokens, rate limits, search, storage caps, and health safeguards. |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages, and optional AI assistant. |
 | Inference | Optional multi-provider model gateway with dedicated tokens, usage controls, OpenAI-compatible APIs, and managed Codex or Claude Code setup through `@wiolett/gateway-inference`. |
 | Administration | OIDC login, group-based and per-user additional permissions, scoped programmatic access, audit logs, setup state, updates, and license controls. |

@@ -129,7 +129,7 @@ export function Certificates() {
           <span
             className={`text-sm ${
               expDays <= 30 && expDays > 0
-                ? "text-yellow-600 dark:text-yellow-400"
+                ? "text-warning-foreground"
                 : expDays <= 0
                   ? "text-destructive"
                   : "text-muted-foreground"

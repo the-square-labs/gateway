@@ -21,7 +21,7 @@ const USER: User = {
   avatarUrl: null,
   groupId: 'group-1',
   groupName: 'inference-users',
-  scopes: ['inference:use', 'inference:tokens:create', 'inference:tokens:revoke'],
+  scopes: ['inference:use', 'inference:tokens:manage'],
   isBlocked: false,
 };
 
@@ -457,8 +457,7 @@ describe('inference management token routes', () => {
   });
 
   it('returns only percentages and recovery times from self usage', async () => {
-    const usageUser = { ...USER, scopes: [...USER.scopes, 'inference:usage:view:self'] };
-    registerSession(usageUser);
+    registerSession(USER);
     container.registerInstance(InferenceUsageService, {
       self: vi.fn().mockResolvedValue({
         enabled: true,

@@ -21,6 +21,37 @@ export interface ResponsiveHeaderAction {
   separatorBefore?: boolean;
 }
 
+export function HeaderOverflowMenu({
+  actions,
+  disabled = false,
+  ariaLabel = "More page actions",
+}: {
+  actions: ResponsiveHeaderAction[];
+  disabled?: boolean;
+  ariaLabel?: string;
+}) {
+  if (actions.length === 0) return null;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="icon" disabled={disabled} aria-label={ariaLabel}>
+          <EllipsisVertical className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {actions.map((action, index) => (
+          <ResponsiveHeaderActionItem
+            key={action.id ?? `${action.label}:${index}`}
+            action={action}
+            showSeparator={index > 0 && action.separatorBefore}
+          />
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export function ResponsiveHeaderActions({
   children,
   actions,
@@ -65,10 +96,16 @@ export function ResponsiveHeaderActions({
   );
 }
 
-function ResponsiveHeaderActionItem({ action }: { action: ResponsiveHeaderAction }) {
+function ResponsiveHeaderActionItem({
+  action,
+  showSeparator = action.separatorBefore,
+}: {
+  action: ResponsiveHeaderAction;
+  showSeparator?: boolean;
+}) {
   return (
     <>
-      {action.separatorBefore ? <DropdownMenuSeparator /> : null}
+      {showSeparator ? <DropdownMenuSeparator /> : null}
       <DropdownMenuItem
         disabled={action.disabled}
         title={action.disabled ? action.disabledReason : undefined}

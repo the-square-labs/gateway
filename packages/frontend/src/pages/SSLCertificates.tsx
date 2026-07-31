@@ -410,7 +410,7 @@ export function SSLCertificates() {
               expDays !== null && expDays <= 7
                 ? "font-medium text-red-600 dark:text-red-400"
                 : expDays !== null && expDays <= 30
-                  ? "text-yellow-600 dark:text-yellow-400"
+                  ? "text-warning-foreground"
                   : "text-muted-foreground"
             )}
           >

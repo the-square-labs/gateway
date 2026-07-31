@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./css/base.css" layer(base);
 @plugin "@tailwindcss/typography";
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -27,7 +28,8 @@
 
   /* Status colors */
   --color-success: #16a34a;
-  --color-warning: #d97706;
+  --color-warning: #eab308;
+  --color-warning-foreground: #854d0e;
   --color-error: #dc2626;
 
   /* Sidebar colors */
@@ -98,7 +100,8 @@
     --color-popover-foreground: #e5e5e5;
     --color-link: #5ba3d9;
     --color-success: #22c55e;
-    --color-warning: #f59e0b;
+    --color-warning: #eab308;
+    --color-warning-foreground: #fde047;
     --color-error: #ef4444;
     --color-sidebar-background: #111111;
     --color-sidebar-foreground: #e5e5e5;
@@ -134,7 +137,8 @@
   --color-popover-foreground: #1a1a1a;
   --color-link: #1974CF;
   --color-success: #16a34a;
-  --color-warning: #d97706;
+  --color-warning: #eab308;
+  --color-warning-foreground: #854d0e;
   --color-error: #dc2626;
   --color-sidebar-background: #f0f0f0;
   --color-sidebar-foreground: #1a1a1a;
@@ -168,7 +172,8 @@
   --color-popover-foreground: #e5e5e5;
   --color-link: #5ba3d9;
   --color-success: #22c55e;
-  --color-warning: #f59e0b;
+  --color-warning: #eab308;
+  --color-warning-foreground: #fde047;
   --color-error: #ef4444;
   --color-sidebar-background: #111111;
   --color-sidebar-foreground: #e5e5e5;
@@ -178,16 +183,6 @@
   --color-sidebar-primary: #ffffff;
   --color-sidebar-primary-foreground: #0e0e0e;
   --color-sidebar-ring: #e5e5e5;
-}
-
-/* Base styles */
-* {
-  border-color: var(--color-border);
-}
-
-body {
-  background-color: var(--color-background);
-  color: var(--color-foreground);
 }
 
 /* Scrollbar styles */
@@ -214,7 +209,6 @@ textarea::-webkit-resizer {
 }
 
 @import "./css/animations.css";
-@import "./css/base.css";
 @import "./css/scrollbars.css";
 
 /* xterm reserves a scrollbar gutter in the fitted column count, while the

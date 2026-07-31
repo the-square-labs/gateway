@@ -301,6 +301,7 @@ The production stack includes:
 | `clickhouse` | Structured logging storage, only when local ClickHouse is selected. |
 
 The bundled ClickHouse service uses a pinned image tag; treat ClickHouse upgrades as explicit version changes, not automatic `latest` pulls.
+Local installations also mount a generated `clickhouse-config/gateway-safety.xml` that bounds ClickHouse file and internal system logs. Keep this managed mount when customizing the generated Compose file; structured application-log limits remain configurable separately in Settings > Housekeeping.
 
 The generated Gateway stack exposes:
 

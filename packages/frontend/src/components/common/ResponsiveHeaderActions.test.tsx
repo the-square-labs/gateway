@@ -1,8 +1,8 @@
-import { render, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { RefreshCw } from "lucide-react";
 import { MemoryRouter } from "react-router-dom";
 import { useCommandPalettePageActions } from "@/stores/command-palette-page-actions";
-import { ResponsiveHeaderActions } from "./ResponsiveHeaderActions";
+import { HeaderOverflowMenu, ResponsiveHeaderActions } from "./ResponsiveHeaderActions";
 
 describe("ResponsiveHeaderActions command palette registration", () => {
   beforeEach(() => {
@@ -42,5 +42,21 @@ describe("ResponsiveHeaderActions command palette registration", () => {
         }),
       ]);
     });
+  });
+});
+
+describe("HeaderOverflowMenu", () => {
+  it("does not render the overflow trigger when no actions are available", () => {
+    render(<HeaderOverflowMenu actions={[]} />);
+
+    expect(screen.queryByRole("button", { name: "More page actions" })).not.toBeInTheDocument();
+  });
+
+  it("renders the overflow trigger when at least one action is available", () => {
+    render(
+      <HeaderOverflowMenu actions={[{ label: "Remove", onClick: vi.fn(), destructive: true }]} />
+    );
+
+    expect(screen.getByRole("button", { name: "More page actions" })).toBeInTheDocument();
   });
 });

@@ -1,22 +1,14 @@
-import {
-  Copy,
-  EllipsisVertical,
-  Pin,
-  Play,
-  RotateCcw,
-  Skull,
-  Square,
-  Trash2,
-  Truck,
-  Type,
-} from "lucide-react";
+import { Copy, Pin, Play, RotateCcw, Skull, Square, Trash2, Truck, Type } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
-import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import {
+  HeaderOverflowMenu,
+  ResponsiveHeaderActions,
+} from "@/components/common/ResponsiveHeaderActions";
 import { DockerMigrationDialog } from "@/components/docker/DockerMigrationDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,13 +19,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { HealthBars } from "@/components/ui/health-bars";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -669,6 +654,9 @@ export function DockerContainerDetail({
         ]
       : []),
   ];
+  const overflowActions = headerActions.filter(
+    (action) => !["Pin", "Start", "Stop", "Restart"].includes(action.label)
+  );
 
   const isTerminalTab = activeTab === "console" || activeTab === "logs";
   const isStopped = baseState !== "running";
@@ -768,60 +756,11 @@ export function DockerContainerDetail({
                 )}
               </>
             )}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon" disabled={actionDisabled}>
-                  <EllipsisVertical className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {canMigrate && (
-                  <DropdownMenuItem
-                    disabled={Boolean(migrationDisabledReason)}
-                    title={migrationDisabledReason}
-                    onClick={() => setMigrationOpen(true)}
-                  >
-                    <Truck className="mr-2 h-3.5 w-3.5" />
-                    Migrate
-                  </DropdownMenuItem>
-                )}
-                {canEdit && (
-                  <DropdownMenuItem onClick={openRename}>
-                    <Type className="h-3.5 w-3.5 mr-2" />
-                    Rename
-                  </DropdownMenuItem>
-                )}
-                {canCreate && (
-                  <DropdownMenuItem onClick={handleDuplicate}>
-                    <Copy className="h-3.5 w-3.5 mr-2" />
-                    Duplicate
-                  </DropdownMenuItem>
-                )}
-                {lifecycleActions.canKill && canManage && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onClick={() =>
-                        doAction(() => api.killContainer(nodeId!, containerId!), "Container killed")
-                      }
-                      className="text-destructive"
-                    >
-                      <Skull className="h-3.5 w-3.5 mr-2" />
-                      Kill
-                    </DropdownMenuItem>
-                  </>
-                )}
-                {canDelete && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={handleRemove} className="text-destructive">
-                      <Trash2 className="h-3.5 w-3.5 mr-2" />
-                      Remove
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <HeaderOverflowMenu
+              actions={overflowActions}
+              disabled={actionDisabled}
+              ariaLabel="More container actions"
+            />
           </ResponsiveHeaderActions>
         </div>
 

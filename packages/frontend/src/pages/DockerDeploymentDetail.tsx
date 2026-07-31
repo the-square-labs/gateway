@@ -1,7 +1,6 @@
 import {
   Activity,
   Code2,
-  EllipsisVertical,
   Folder,
   LayoutDashboard,
   ListTodo,
@@ -23,18 +22,14 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
-import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import {
+  HeaderOverflowMenu,
+  ResponsiveHeaderActions,
+} from "@/components/common/ResponsiveHeaderActions";
 import { DockerMigrationDialog } from "@/components/docker/DockerMigrationDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { HealthBars } from "@/components/ui/health-bars";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -645,6 +640,9 @@ export function DockerDeploymentDetail({
         ]
       : []),
   ];
+  const overflowActions = headerActions.filter(
+    (action) => !["Pin", "Start", "Stop", "Restart"].includes(action.label)
+  );
 
   return (
     <PageTransition>
@@ -730,81 +728,11 @@ export function DockerDeploymentDetail({
                 </Button>
               </>
             )}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon" disabled={actionDisabled}>
-                  <EllipsisVertical className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {canMigrate && (
-                  <DropdownMenuItem
-                    disabled={Boolean(migrationDisabledReason)}
-                    title={migrationDisabledReason}
-                    onClick={() => setMigrationOpen(true)}
-                  >
-                    <Truck className="mr-2 h-3.5 w-3.5" />
-                    Migrate
-                  </DropdownMenuItem>
-                )}
-                {canManage && (
-                  <DropdownMenuItem
-                    onClick={() =>
-                      runAction("rollback", async () => {
-                        await api.rollbackDockerDeployment(nodeId, deployment.id);
-                        toast.success("Rollback started");
-                      })
-                    }
-                  >
-                    <RotateCcw className="h-3.5 w-3.5 mr-2" />
-                    Rollback
-                  </DropdownMenuItem>
-                )}
-                {!isStopped && canManage && (
-                  <>
-                    <DropdownMenuSeparator />
-                    {drainingSlot?.containerId && (
-                      <DropdownMenuItem
-                        onClick={() =>
-                          runAction(`stop-${drainingSlot.slot}`, async () => {
-                            await api.stopDockerDeploymentSlot(
-                              nodeId,
-                              deployment.id,
-                              drainingSlot.slot
-                            );
-                            toast.success("Draining slot stopped");
-                          })
-                        }
-                      >
-                        <Square className="h-3.5 w-3.5 mr-2" />
-                        Stop draining slot
-                      </DropdownMenuItem>
-                    )}
-                    <DropdownMenuItem
-                      onClick={() =>
-                        runAction("kill", async () => {
-                          await api.killDockerDeployment(nodeId, deployment.id);
-                          toast.success("Deployment killed");
-                        })
-                      }
-                      className="text-destructive"
-                    >
-                      <Skull className="h-3.5 w-3.5 mr-2" />
-                      Kill
-                    </DropdownMenuItem>
-                  </>
-                )}
-                {canDelete && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={removeDeployment} className="text-destructive">
-                      <Trash2 className="h-3.5 w-3.5 mr-2" />
-                      Remove
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <HeaderOverflowMenu
+              actions={overflowActions}
+              disabled={actionDisabled}
+              ariaLabel="More deployment actions"
+            />
           </ResponsiveHeaderActions>
         </div>
 

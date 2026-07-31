@@ -271,7 +271,7 @@ export function AdminNodes() {
   const copyCommandValue = (command: string) => command.replace(/\\\n\s*/g, "");
   const canCreateNode = enrollDisplayName.trim().length > 0;
   const warningClassName =
-    "border bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300";
+    "border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground";
 
   const columns = useMemo<ResourceListColumn<Node>[]>(
     () => [
@@ -333,11 +333,7 @@ export function AdminNodes() {
           const typeStatus = daemonUpdates.find((s) => s.daemonType === node.type);
           const nodeStatus = typeStatus?.nodes.find((n) => n.nodeId === node.id);
           if (nodeStatus?.updateAvailable && typeStatus?.latestVersion) {
-            return (
-              <Badge style={{ backgroundColor: "rgb(234 179 8)", color: "#111" }}>
-                {typeStatus.latestVersion}
-              </Badge>
-            );
+            return <Badge className="bg-warning text-black">{typeStatus.latestVersion}</Badge>;
           }
           const eStatus = effectiveNodeStatus(node);
           return <Badge variant={STATUS_BADGE[eStatus] || "secondary"}>{eStatus}</Badge>;
@@ -542,7 +538,7 @@ export function AdminNodes() {
 
           {enrollResult && (
             <div className="space-y-4">
-              <div className={warningClassName} style={{ borderColor: "#facc15" }}>
+              <div className={warningClassName}>
                 <p className="font-medium">
                   The enrollment token is single-use and will not be shown again.
                 </p>

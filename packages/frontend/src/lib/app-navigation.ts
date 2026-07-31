@@ -61,6 +61,7 @@ export interface AppNavigationVisibility {
   pkiEnabled: boolean;
   loggingEnabled: boolean;
   inferenceEnabled: boolean;
+  hasLowInferenceUsage?: boolean;
   statusPageEnabled?: boolean;
   hasNginxNodes?: boolean;
   hasDockerNodes?: boolean;
@@ -279,6 +280,22 @@ function hasAnyScope(scopes: readonly string[], required: readonly string[]): bo
   return required.some((scope) => scopeMatches(scopes, scope));
 }
 
+export function hasDashboardContent(context: AppNavigationVisibility): boolean {
+  const { scopes } = context;
+  return (
+    hasScopeBase(scopes, "proxy:view") ||
+    hasScopeBase(scopes, "ssl:cert:view") ||
+    hasScopeBase(scopes, "nodes:details") ||
+    scopeMatches(scopes, "admin:audit") ||
+    (context.pkiEnabled &&
+      (hasScopeBase(scopes, "pki:cert:view") ||
+        hasAnyScope(scopes, ["pki:ca:view:root", "pki:ca:view:intermediate"]))) ||
+    (context.inferenceEnabled &&
+      context.hasLowInferenceUsage === true &&
+      scopeMatches(scopes, "inference:use"))
+  );
+}
+
 export function canAccessNavigationItem(
   item: AppNavigationItem,
   context: AppNavigationVisibility
@@ -286,6 +303,7 @@ export function canAccessNavigationItem(
   const { scopes } = context;
   switch (item.id) {
     case "dashboard":
+      return hasDashboardContent(context);
     case "profile":
       return true;
     case "proxy-hosts":

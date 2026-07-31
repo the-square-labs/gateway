@@ -821,8 +821,7 @@ export function SettingsTab({
           actions={
             canEdit ? (
               <Button
-                style={{ backgroundColor: "rgb(234 179 8)", color: "#111" }}
-                className="hover:opacity-90 disabled:opacity-50"
+                className="bg-warning text-black hover:bg-warning/90 disabled:opacity-50"
                 onClick={handleRecreate}
                 disabled={
                   recreateLoading ||
@@ -849,7 +848,7 @@ export function SettingsTab({
                   onChange={(e) => setImageTag(e.target.value)}
                   placeholder={imageTagLocked ? "digest" : "latest"}
                   disabled={!canEdit || imageTagLocked}
-                  style={imageTagChanged ? { borderColor: "rgb(234 179 8)" } : undefined}
+                  style={imageTagChanged ? { borderColor: "var(--color-warning)" } : undefined}
                 />
               </SettingsInlineControl>
             </div>
@@ -922,7 +921,7 @@ export function SettingsTab({
                   disabled={!canEdit}
                   style={
                     stopTimeout !== recreateBaseline.stopTimeout
-                      ? { borderColor: "rgb(234 179 8)" }
+                      ? { borderColor: "var(--color-warning)" }
                       : undefined
                   }
                 />

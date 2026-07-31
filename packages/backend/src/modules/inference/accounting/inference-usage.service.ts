@@ -6,7 +6,9 @@ import { inferenceLimitPolicies, inferenceRequests, inferenceUsageLedger, users 
 import type { InferenceRequestStatus } from '@/db/schema/inference-usage.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { EventBusService } from '@/services/event-bus.service.js';
 import { type InferenceBudgetPolicyService, SUBSCRIPTION_CHAT_BUDGET_FRACTION } from './inference-budget-policy.js';
+import { publishInferenceUsageChanged } from './inference-usage-events.js';
 
 export interface InferenceLimitPolicyInput {
   enabled: boolean;
@@ -27,7 +29,8 @@ export class InferenceUsageService {
   constructor(
     @inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient,
     private readonly policies: InferenceBudgetPolicyService,
-    private readonly audit: AuditService
+    private readonly audit: AuditService,
+    private readonly eventBus?: EventBusService
   ) {}
 
   async self(userId: string) {
@@ -241,6 +244,7 @@ export class InferenceUsageService {
         set: { ...dbPolicy(input), updatedAt: new Date() },
       });
     await this.changed(userId, 'default', input);
+    publishInferenceUsageChanged(this.eventBus, { targetUserId: null, reason: 'limits' });
     return this.listPolicies();
   }
 
@@ -257,6 +261,7 @@ export class InferenceUsageService {
         set: { ...dbPolicy(input), updatedAt: new Date() },
       });
     await this.changed(userId, targetUserId, input);
+    publishInferenceUsageChanged(this.eventBus, { targetUserId, reason: 'limits' });
     return this.listPolicies();
   }
 
@@ -270,6 +275,7 @@ export class InferenceUsageService {
       resourceType: 'inference_limit_policy',
       resourceId: targetUserId,
     });
+    publishInferenceUsageChanged(this.eventBus, { targetUserId, reason: 'limits' });
   }
 
   private async changed(userId: string, target: string, input: InferenceLimitPolicyInput) {

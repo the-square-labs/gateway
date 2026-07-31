@@ -48,7 +48,7 @@ const DATABASE_TAG_COLORS = {
   blue: "bg-blue-500/15 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400",
   red: "bg-red-500/15 text-red-600 dark:bg-red-500/15 dark:text-red-400",
   green: "bg-emerald-500/15 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400",
-  yellow: "bg-amber-500/15 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400",
+  yellow: "bg-warning/15 text-warning-foreground",
   purple: "bg-violet-500/15 text-violet-600 dark:bg-violet-500/15 dark:text-violet-400",
   pink: "bg-pink-500/15 text-pink-600 dark:bg-pink-500/15 dark:text-pink-400",
   orange: "bg-orange-500/15 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400",

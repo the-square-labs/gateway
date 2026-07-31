@@ -859,10 +859,7 @@ export function ProxyHostDetail({
         )}
 
         {host.maintenanceEnabled && (
-          <div
-            className="border bg-yellow-500/10 p-3 text-sm text-yellow-700 dark:text-yellow-400"
-            style={{ borderColor: "#eab308" }}
-          >
+          <div className="border border-warning bg-warning/10 p-3 text-sm text-warning-foreground">
             Maintenance mode is active. User requests receive HTTP 503 and managed health checks are
             paused.
           </div>
@@ -870,10 +867,7 @@ export function ProxyHostDetail({
 
         {/* ── Raw mode warning banner ────────────────────────── */}
         {isRawMode && (
-          <div
-            className="border bg-yellow-500/10 p-3 text-sm text-yellow-700 dark:text-yellow-400"
-            style={{ borderColor: "#eab308" }}
-          >
+          <div className="border border-warning bg-warning/10 p-3 text-sm text-warning-foreground">
             Raw mode active — template rendering is bypassed. Config is sent directly to the daemon.
           </div>
         )}

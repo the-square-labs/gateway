@@ -205,9 +205,12 @@ CLICKHOUSE_REQUEST_TIMEOUT_MS=5000
 
 Gateway pins the bundled ClickHouse container to an explicit `clickhouse/clickhouse-server` release tag instead of using `latest`. Upgrade ClickHouse intentionally by changing the pinned tag in `docker-compose.yml`, `docker-compose.dev.yml`, and `scripts/install.sh`, then test startup and log search against existing ClickHouse data before rolling the change into production. When generating a new compose file with the installer, `CLICKHOUSE_IMAGE_REF` must include an explicit non-`latest` tag or a digest; the installer rejects empty, whitespace-containing, or unsupported image references before it writes `docker-compose.yml`.
 
+The bundled service also mounts `clickhouse-config/gateway-safety.xml`. It limits ClickHouse file logs to three 50 MB files, disables high-volume diagnostic system tables, and keeps one day of `system.query_log`. An always-on five-minute guard monitors disk, structured logs, and ClickHouse internal logs. Internal logs warn at 80% of their 256 MiB budget. Destructive internal-table cleanup is enabled only when `CLICKHOUSE_MANAGED_INTERNAL_LOGS=true`; the installer sets it for its bundled local ClickHouse and leaves remote ClickHouse monitor-only by default. Set it manually only when the entire ClickHouse instance is dedicated to and managed by Gateway.
+
+Settings > Housekeeping can additionally cap the shared structured-log table by row count and approximate on-disk size. Cleanup drops only complete oldest daily partitions and preserves the current partition. Per-environment `retentionDays` TTL remains active independently. Remote ClickHouse instances are monitored when their account can read storage metadata; internal cleanup is best effort and does not make ingest unavailable merely because maintenance privileges are absent.
+
 If logging is disabled:
 
-- `GET /api/logging/status` returns `enabled: false`.
 - Logging actions return `LOGGING_DISABLED`.
 - The frontend hides the Logging section.
 
@@ -215,6 +218,8 @@ If ClickHouse is configured but unavailable:
 
 - Environment metadata remains manageable.
 - Ingest and search return `LOGGING_UNAVAILABLE`.
+
+Authenticated users with `housekeeping:view` can inspect `GET /api/logging/health`. Confirmed disk or configured structured-log capacity exhaustion pauses ingest with `LOGGING_CAPACITY_EXHAUSTED` while existing log search remains available. The Dashboard shows storage pressure, degraded maintenance, exhaustion, and unavailability warnings.
 
 ### Logging Schemas
 

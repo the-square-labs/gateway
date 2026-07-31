@@ -9,8 +9,6 @@ import type { Node, NodeHealthReport } from "@/types";
 import { effectiveNodeStatus } from "@/types";
 
 export const WARN_THRESHOLD = 80;
-const WARN_COLOR = "rgb(234 179 8)";
-const WARN_BORDER = "rgb(234 179 8 / 0.6)";
 
 function warnStyle(pct: number): {
   style?: React.CSSProperties;
@@ -20,12 +18,12 @@ function warnStyle(pct: number): {
   if (pct < WARN_THRESHOLD) return {};
   return {
     style: {
-      border: `1px solid ${WARN_BORDER}`,
+      border: "1px solid color-mix(in srgb, var(--color-warning) 60%, transparent)",
       margin: "-1px",
       position: "relative" as const,
       zIndex: 1 as number,
     },
-    progressColor: WARN_COLOR,
+    progressColor: "var(--color-warning)",
   };
 }
 
@@ -75,7 +73,7 @@ export function PinnedNodeCard({ node, liveHealth, healthHistory }: PinnedNodeCa
             variant={statusColor}
             className="uppercase"
             style={{
-              border: `1px solid ${eStatus === "online" ? "rgb(16 185 129)" : eStatus === "degraded" ? "rgb(234 179 8)" : "rgb(248 113 113)"}`,
+              border: `1px solid ${eStatus === "online" ? "rgb(16 185 129)" : eStatus === "degraded" ? "var(--color-warning)" : "rgb(248 113 113)"}`,
             }}
           >
             {eStatus}

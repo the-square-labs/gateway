@@ -70,8 +70,7 @@ export function Profile() {
   const canUseAI = hasScope("feat:ai:use");
   const canUseInference = inferenceEnabled && hasScope("inference:use");
   const canViewInferenceUsage = hasScope("inference:usage:view:self");
-  const canCreateInferenceTokens = hasScope("inference:tokens:create");
-  const canRevokeInferenceTokens = hasScope("inference:tokens:revoke");
+  const canManageInferenceTokens = hasScope("inference:tokens:manage");
   const canViewSystemCertificates = hasScope("admin:details:certificates");
   const userScopes = user?.scopes;
 
@@ -186,6 +185,8 @@ export function Profile() {
                 )}
               </PanelShell>
 
+              {canUseInference && canViewInferenceUsage && <InferenceUsage />}
+
               <PanelShell title="Preferences">
                 <div className="divide-y divide-border">
                   <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
@@ -257,8 +258,6 @@ export function Profile() {
                   )}
                 </div>
               </PanelShell>
-
-              {canUseInference && canViewInferenceUsage && <InferenceUsage />}
             </div>
           </TabsContent>
 
@@ -277,12 +276,7 @@ export function Profile() {
                 databasesList={databasesList}
                 loggingSchemasList={loggingSchemasList}
               />
-              {canUseInference && (
-                <InferenceTokensSection
-                  canCreate={canCreateInferenceTokens}
-                  canRevoke={canRevokeInferenceTokens}
-                />
-              )}
+              {canUseInference && <InferenceTokensSection canManage={canManageInferenceTokens} />}
             </div>
           </TabsContent>
         </Tabs>

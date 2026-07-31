@@ -282,10 +282,7 @@ export function ApprovalBlock({
       : "This action requires your approval";
 
   return (
-    <div
-      className="flex items-center gap-3 bg-muted/30 px-3 py-2"
-      style={{ border: "1px solid #eab308" }}
-    >
+    <div className="flex items-center gap-3 border border-warning bg-muted/30 px-3 py-2">
       <span className="min-w-0 flex-1 text-sm text-foreground">{label}</span>
       <div className="flex shrink-0 items-center gap-2">
         <Button
@@ -297,7 +294,7 @@ export function ApprovalBlock({
           Reject
         </Button>
         <Button
-          className="h-9 bg-yellow-500 text-black hover:bg-yellow-500/90"
+          className="h-9 bg-warning text-black hover:bg-warning/90"
           disabled={isSending}
           onClick={() => onApprove?.(toolCall.id)}
         >

@@ -450,8 +450,7 @@ export function DeploymentSettings({
           bodyClassName="p-4 space-y-4"
           actions={
             <Button
-              style={{ backgroundColor: "rgb(234 179 8)", color: "#111" }}
-              className="hover:opacity-90 disabled:opacity-50"
+              className="bg-warning text-black hover:bg-warning/90 disabled:opacity-50"
               disabled={!!action || !settingsChanged || !nextImage.trim()}
               onClick={() =>
                 runAction("update-execution", async () => {
@@ -504,7 +503,7 @@ export function DeploymentSettings({
                 disabled={imageTagLocked}
                 style={
                   nextImage !== deployment.desiredConfig.image
-                    ? { borderColor: "rgb(234 179 8)" }
+                    ? { borderColor: "var(--color-warning)" }
                     : undefined
                 }
               />

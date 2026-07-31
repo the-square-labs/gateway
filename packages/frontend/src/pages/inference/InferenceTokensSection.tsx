@@ -19,13 +19,7 @@ import { formatDate, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import type { InferenceToken } from "@/types/inference";
 
-export function InferenceTokensSection({
-  canCreate,
-  canRevoke,
-}: {
-  canCreate: boolean;
-  canRevoke: boolean;
-}) {
+export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
   const [tokens, setTokens] = useState<InferenceToken[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
@@ -88,7 +82,7 @@ export function InferenceTokensSection({
         title="Inference API Tokens"
         description="Use the Gateway inference base URL with a dedicated gwi_ credential."
         actions={
-          canCreate ? (
+          canManage ? (
             <Button onClick={() => setCreateOpen(true)}>
               <Plus className="h-4 w-4" />
               Create Token
@@ -101,11 +95,11 @@ export function InferenceTokensSection({
         ) : tokens.length === 0 ? (
           <EmptyState
             message={
-              canCreate
+              canManage
                 ? "No inference API tokens created yet."
                 : "No inference API tokens available."
             }
-            {...(canCreate
+            {...(canManage
               ? { actionLabel: "Create one", onAction: () => setCreateOpen(true) }
               : {})}
             embedded
@@ -132,7 +126,7 @@ export function InferenceTokensSection({
                     </p>
                   </div>
                 </div>
-                {canRevoke && (
+                {canManage && (
                   <Button
                     variant="outline"
                     size="icon"

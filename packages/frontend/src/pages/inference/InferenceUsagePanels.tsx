@@ -1,14 +1,20 @@
-import { ChevronDown, CircleDollarSign, Clock3, Gauge, Server, Sigma } from "lucide-react";
+import {
+  ChevronDown,
+  CircleDollarSign,
+  Clock3,
+  Gauge,
+  Server,
+  Sigma,
+  TriangleAlert,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanelShell } from "@/components/common/PanelShell";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { StatCard } from "@/components/ui/stat-card";
-import {
-  INFERENCE_SELF_USAGE_CACHE_KEY,
-  subscribeToInferenceSelfUsage,
-} from "@/lib/inference-self-usage";
+import { useInferenceSelfUsage } from "@/hooks/use-inference-self-usage";
+import { DASHBOARD_INFERENCE_USAGE_THRESHOLD } from "@/lib/inference-self-usage";
 import { cn, formatDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import type {
@@ -32,30 +38,101 @@ function initialCompactUsageOpen() {
   }
 }
 
-function useInferenceSelfUsage() {
-  const cached = api.getCached<InferenceSelfUsage>(INFERENCE_SELF_USAGE_CACHE_KEY);
-  const [usage, setUsage] = useState<InferenceSelfUsage | null>(cached ?? null);
-  const [loading, setLoading] = useState(!cached);
-  const [error, setError] = useState<string | null>(null);
+function InferenceUsagePanel({ usage }: { usage: InferenceSelfUsage }) {
+  const subscriptionWindows: Array<{
+    label: string;
+    value: InferenceUsageWindow;
+    icon: typeof Gauge;
+  }> = [
+    ...(usage.subscription["5h"].configured
+      ? [{ label: "5 hours", value: usage.subscription["5h"], icon: Clock3 }]
+      : []),
+    ...(usage.subscription["7d"].configured
+      ? [{ label: "Weekly", value: usage.subscription["7d"], icon: Gauge }]
+      : []),
+    ...(usage.subscription["30d"].configured
+      ? [{ label: "Monthly", value: usage.subscription["30d"], icon: Gauge }]
+      : []),
+  ];
+  const cardCount = 1 + Math.max(1, subscriptionWindows.length);
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      setUsage(await api.getInferenceSelfUsage());
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Failed to load inference usage");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  return (
+    <PanelShell
+      title="Inference usage"
+      description="Credit limits are shared across eligible AI providers. Limits recover automatically."
+    >
+      {!usage.enabled && (
+        <div className="border-b border-border px-4 py-3 text-sm text-muted-foreground">
+          Inference is currently unavailable for your account.
+        </div>
+      )}
+      <div
+        className={cn(
+          "grid grid-cols-1 gap-px bg-border sm:grid-cols-2",
+          cardCount === 4 && "xl:grid-cols-4",
+          cardCount === 3 && "xl:grid-cols-3",
+          cardCount === 2 && "xl:grid-cols-2"
+        )}
+      >
+        {usage.api.configured ? (
+          <UsageStatCard label="API usage" value={usage.api} icon={CircleDollarSign} />
+        ) : (
+          <StatCard
+            className="border-0"
+            label="API usage"
+            value="Disabled"
+            icon={CircleDollarSign}
+            progress={{ percent: 0 }}
+            subtitle="API usage is disabled."
+            subtitleClassName="text-xs"
+          />
+        )}
+        {subscriptionWindows.length > 0 ? (
+          subscriptionWindows.map(({ label, value, icon }) => (
+            <UsageStatCard key={label} label={label} value={value} icon={icon} />
+          ))
+        ) : (
+          <StatCard
+            className="border-0"
+            label="AI credits"
+            value="Unlimited"
+            icon={Gauge}
+            progress={{ percent: 0 }}
+            subtitle="No credit limits configured."
+            subtitleClassName="text-xs"
+          />
+        )}
+      </div>
+    </PanelShell>
+  );
+}
 
-  useEffect(() => {
-    const unsubscribe = subscribeToInferenceSelfUsage(setUsage);
-    void load();
-    return unsubscribe;
-  }, [load]);
-
-  return { usage, loading, error, load };
+function UsageStatCard({
+  label,
+  value,
+  icon,
+}: {
+  label: string;
+  value: InferenceUsageWindow;
+  icon: typeof Gauge;
+}) {
+  const remaining = remainingPercentage(value.percentage);
+  const isLow = 100 - value.percentage < DASHBOARD_INFERENCE_USAGE_THRESHOLD;
+  return (
+    <StatCard
+      className="border-0"
+      label={label}
+      value={`${remaining}%`}
+      valueClassName={isLow ? "text-warning" : undefined}
+      icon={icon}
+      progress={{
+        percent: remaining,
+        color: isLow ? "var(--color-warning)" : undefined,
+      }}
+      subtitle={`Recovers ${formatDate(value.recoveryAt)}`}
+      subtitleClassName="text-xs"
+    />
+  );
 }
 
 export function InferenceUsage() {
@@ -83,60 +160,65 @@ export function InferenceUsage() {
     );
   }
 
-  const windows: Array<{ label: string; value: InferenceUsageWindow; icon: typeof Gauge }> = [
-    ...(usage.subscription["5h"].configured
-      ? [{ label: "5 hours", value: usage.subscription["5h"], icon: Clock3 }]
-      : []),
-    ...(usage.subscription["7d"].configured
-      ? [{ label: "Weekly", value: usage.subscription["7d"], icon: Gauge }]
-      : []),
-    ...(usage.subscription["30d"].configured
-      ? [{ label: "Monthly", value: usage.subscription["30d"], icon: Gauge }]
-      : []),
-  ];
-  if (usage.api.configured) {
-    windows.unshift({ label: "API usage", value: usage.api, icon: CircleDollarSign });
-  }
+  return <InferenceUsagePanel usage={usage} />;
+}
+
+export function DashboardInferenceUsage({ enabled }: { enabled: boolean }) {
+  const { usage, loading, error } = useInferenceSelfUsage(enabled);
+
+  if (loading || error || !usage?.enabled) return null;
+
+  const lowWindows: Array<{
+    label: string;
+    value: InferenceUsageWindow;
+  }> = [
+    { label: "API usage", value: usage.api },
+    { label: "5 hours", value: usage.subscription["5h"] },
+    { label: "Weekly", value: usage.subscription["7d"] },
+    { label: "Monthly", value: usage.subscription["30d"] },
+  ].filter(
+    ({ value }) => value.configured && 100 - value.percentage < DASHBOARD_INFERENCE_USAGE_THRESHOLD
+  );
+
+  if (lowWindows.length === 0) return null;
 
   return (
-    <PanelShell
-      title="Inference usage"
-      description="Credit limits are shared across eligible AI providers. Limits recover automatically."
-    >
-      {!usage.enabled && (
-        <div className="border-b border-border px-4 py-3 text-sm text-muted-foreground">
-          Inference is currently unavailable for your account.
-        </div>
-      )}
-      {windows.length > 0 ? (
-        <div
-          className={cn(
-            "grid grid-cols-1 gap-px bg-border sm:grid-cols-2",
-            windows.length === 4 && "xl:grid-cols-4",
-            windows.length === 3 && "xl:grid-cols-3",
-            windows.length === 2 && "xl:grid-cols-2"
-          )}
-        >
-          {windows.map(({ label, value, icon }) => {
-            const remaining = remainingPercentage(value.percentage);
-            return (
-              <StatCard
-                key={label}
-                className="border-0"
-                label={label}
-                value={`${remaining}%`}
-                icon={icon}
-                progress={{ percent: remaining }}
-                subtitle={`Recovers ${formatDate(value.recoveryAt)}`}
-                subtitleClassName="text-xs"
-              />
-            );
-          })}
-        </div>
-      ) : (
-        <div className="px-4 py-6 text-sm text-muted-foreground">Usage is unlimited.</div>
-      )}
-    </PanelShell>
+    <div className="grid grid-cols-1 gap-4">
+      {lowWindows.map(({ label, value }) => {
+        const remaining = remainingPercentage(value.percentage);
+        return (
+          <div
+            key={label}
+            role="status"
+            aria-label={`${label} inference quota warning`}
+            className="border border-warning/60 bg-card"
+          >
+            <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center bg-warning/10 text-warning">
+                  <TriangleAlert className="h-4 w-4" aria-hidden="true" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-foreground">
+                    {label} inference quota is running low
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Recovers {formatDate(value.recoveryAt)}.
+                  </p>
+                </div>
+              </div>
+              <div className="w-full shrink-0 sm:w-48">
+                <div className="mb-1.5 flex items-center justify-between gap-3 text-xs">
+                  <span className="text-muted-foreground">Remaining</span>
+                  <span className="font-semibold text-warning">{remaining}%</span>
+                </div>
+                <ProgressBar value={remaining} className="h-2" indicatorClassName="bg-warning" />
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

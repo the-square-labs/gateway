@@ -65,7 +65,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
       {/* Update available */}
       {updateStatus?.updateAvailable && updateStatus.latestVersion && (
         <PanelShell
-          title={<span style={{ color: "rgb(234 179 8)" }}>Update Available</span>}
+          title={<span className="text-warning">Update Available</span>}
           description={`${updateStatus.latestVersion} is ready to install`}
           className="xl:col-span-2"
           dirty
@@ -93,8 +93,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
               {canUpdate && (
                 <Button
                   onClick={handleUpdate}
-                  style={{ backgroundColor: "rgb(234 179 8)", color: "#111" }}
-                  className="hover:opacity-90"
+                  className="bg-warning text-black hover:bg-warning/90"
                 >
                   Update to {updateStatus.latestVersion}
                 </Button>

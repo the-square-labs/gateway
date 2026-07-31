@@ -1,5 +1,5 @@
 import { SlidersHorizontal } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -36,6 +36,14 @@ const EMPTY_LIMITS: InferenceLimitInput = {
   credits30d: 0,
   apiMonthlyMicrodollars: 0,
   billingTimezone: "UTC",
+};
+
+const DEFAULT_API_MONTHLY_DOLLARS = 10;
+
+type CreditLimitDraft = {
+  credits5h: string;
+  credits7d: string;
+  credits30d: string;
 };
 
 const BILLING_TIMEZONE_OPTIONS: ComboboxOption[] = [
@@ -83,9 +91,24 @@ export function InferenceUsersTable({
   const [editingDefault, setEditingDefault] = useState(false);
   const [limitsOpen, setLimitsOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_LIMITS);
-  const [apiDollars, setApiDollars] = useState(0);
+  const [creditLimitDraft, setCreditLimitDraft] = useState<CreditLimitDraft>(() =>
+    creditLimitDraftFrom(EMPTY_LIMITS)
+  );
+  const [apiDollars, setApiDollars] = useState("0");
+  const [apiUsageEnabled, setApiUsageEnabled] = useState(false);
   const [saving, setSaving] = useState(false);
   const initializedRef = useRef(hasCachedData);
+
+  const parsedCredits5h = parseNonNegativeNumber(creditLimitDraft.credits5h);
+  const parsedCredits7d = parseNonNegativeNumber(creditLimitDraft.credits7d);
+  const parsedCredits30d = parseNonNegativeNumber(creditLimitDraft.credits30d);
+  const parsedApiDollars = parseNonNegativeNumber(apiDollars);
+  const formValid =
+    Boolean(form.billingTimezone.trim()) &&
+    (!form.credits5hEnabled || parsedCredits5h !== null) &&
+    (!form.credits7dEnabled || parsedCredits7d !== null) &&
+    (!form.credits30dEnabled || parsedCredits30d !== null) &&
+    (!apiUsageEnabled || (parsedApiDollars !== null && parsedApiDollars > 0));
 
   const load = useCallback(
     async ({ showLoading = !initializedRef.current }: { showLoading?: boolean } = {}) => {
@@ -124,7 +147,9 @@ export function InferenceUsersTable({
     setEditing(user);
     setEditingDefault(false);
     setForm(next);
-    setApiDollars(next.apiMonthlyMicrodollars / 1_000_000);
+    setCreditLimitDraft(creditLimitDraftFrom(next));
+    setApiDollars(String(next.apiMonthlyMicrodollars / 1_000_000));
+    setApiUsageEnabled(next.apiMonthlyMicrodollars > 0);
     setLimitsOpen(true);
   };
 
@@ -134,17 +159,25 @@ export function InferenceUsersTable({
     setEditingDefault(true);
     setEditing(null);
     setForm(next);
-    setApiDollars(next.apiMonthlyMicrodollars / 1_000_000);
+    setCreditLimitDraft(creditLimitDraftFrom(next));
+    setApiDollars(String(next.apiMonthlyMicrodollars / 1_000_000));
+    setApiUsageEnabled(next.apiMonthlyMicrodollars > 0);
     setLimitsOpen(true);
   };
 
   const save = async () => {
-    if (!editing && !editingDefault) return;
+    if ((!editing && !editingDefault) || !formValid) return;
     setSaving(true);
     try {
       const payload = {
         ...form,
-        apiMonthlyMicrodollars: Math.round(apiDollars * 1_000_000),
+        credits5h: parsedCredits5h ?? 0,
+        credits7d: parsedCredits7d ?? 0,
+        credits30d: parsedCredits30d ?? 0,
+        apiMonthlyMicrodollars:
+          apiUsageEnabled && parsedApiDollars !== null
+            ? Math.round(parsedApiDollars * 1_000_000)
+            : 0,
       };
       if (editingDefault) await api.setInferenceDefaultLimits(payload);
       else await api.setInferenceUserLimits(editing!.id, payload);
@@ -317,48 +350,50 @@ export function InferenceUsersTable({
           >
             <LimitInput
               label="5-hour credit limit"
-              value={form.credits5h}
-              onChange={(credits5h) => setForm((value) => ({ ...value, credits5h }))}
+              value={creditLimitDraft.credits5h}
+              onChange={(credits5h) => setCreditLimitDraft((value) => ({ ...value, credits5h }))}
               disabled={!form.credits5hEnabled || !globallyEnabled.credits5h}
-              description={
-                !globallyEnabled.credits5h
-                  ? "Disabled globally"
-                  : form.credits5hEnabled
-                    ? undefined
-                    : "Unlimited while disabled"
-              }
+              description={!globallyEnabled.credits5h ? "Disabled globally" : undefined}
             />
             <LimitInput
               label="Weekly credit limit"
-              value={form.credits7d}
-              onChange={(credits7d) => setForm((value) => ({ ...value, credits7d }))}
+              value={creditLimitDraft.credits7d}
+              onChange={(credits7d) => setCreditLimitDraft((value) => ({ ...value, credits7d }))}
               disabled={!form.credits7dEnabled || !globallyEnabled.credits7d}
-              description={
-                !globallyEnabled.credits7d
-                  ? "Disabled globally"
-                  : form.credits7dEnabled
-                    ? undefined
-                    : "Unlimited while disabled"
-              }
+              description={!globallyEnabled.credits7d ? "Disabled globally" : undefined}
             />
             <LimitInput
               label="Monthly credit limit"
-              value={form.credits30d}
-              onChange={(credits30d) => setForm((value) => ({ ...value, credits30d }))}
+              value={creditLimitDraft.credits30d}
+              onChange={(credits30d) => setCreditLimitDraft((value) => ({ ...value, credits30d }))}
               disabled={!form.credits30dEnabled || !globallyEnabled.credits30d}
-              description={
-                !globallyEnabled.credits30d
-                  ? "Disabled globally"
-                  : form.credits30dEnabled
-                    ? undefined
-                    : "Unlimited while disabled"
-              }
+              description={!globallyEnabled.credits30d ? "Disabled globally" : undefined}
             />
             <LimitInput
               label="API monthly limit · USD"
               value={apiDollars}
-              onChange={setApiDollars}
+              onChange={(value) => {
+                setApiDollars(value);
+                if (value.trim() && Number(value) === 0) setApiUsageEnabled(false);
+              }}
               step="0.01"
+              disabled={!apiUsageEnabled}
+              trailingControl={
+                <Switch
+                  checked={apiUsageEnabled}
+                  onChange={(enabled) => {
+                    setApiUsageEnabled(enabled);
+                    setApiDollars((value) =>
+                      enabled && !(parseNonNegativeNumber(value) ?? 0)
+                        ? String(DEFAULT_API_MONTHLY_DOLLARS)
+                        : enabled
+                          ? value
+                          : "0"
+                    );
+                  }}
+                  ariaLabel="API usage enabled"
+                />
+              }
             />
             <SettingsControlRow title="Billing timezone">
               <Combobox
@@ -423,7 +458,7 @@ export function InferenceUsersTable({
             <Button variant="outline" onClick={() => setLimitsOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={() => void save()} disabled={saving || !form.billingTimezone.trim()}>
+            <Button onClick={() => void save()} disabled={saving || !formValid}>
               {saving ? "Saving..." : "Save limits"}
             </Button>
           </DialogFooter>
@@ -440,25 +475,31 @@ function LimitInput({
   step = "1",
   disabled = false,
   description,
+  trailingControl,
 }: {
   label: string;
-  value: number;
-  onChange: (value: number) => void;
+  value: string;
+  onChange: (value: string) => void;
   step?: string;
   disabled?: boolean;
   description?: string;
+  trailingControl?: ReactNode;
 }) {
   return (
     <SettingsControlRow title={label} description={description}>
-      <Input
-        aria-label={`${label} value`}
-        type="number"
-        min="0"
-        step={step}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => onChange(Math.max(0, Number(event.target.value)))}
-      />
+      <div className="flex w-full items-center gap-3">
+        <Input
+          aria-label={`${label} value`}
+          type="number"
+          min="0"
+          step={step}
+          value={disabled ? "" : value}
+          placeholder={disabled ? "Unlimited" : undefined}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        {trailingControl}
+      </div>
     </SettingsControlRow>
   );
 }
@@ -501,6 +542,20 @@ function policyInput(policy: InferenceLimitPolicy): InferenceLimitInput {
     apiMonthlyMicrodollars: policy.apiMonthlyMicrodollars,
     billingTimezone: policy.billingTimezone,
   };
+}
+
+function creditLimitDraftFrom(input: InferenceLimitInput): CreditLimitDraft {
+  return {
+    credits5h: String(input.credits5h),
+    credits7d: String(input.credits7d),
+    credits30d: String(input.credits30d),
+  };
+}
+
+function parseNonNegativeNumber(value: string): number | null {
+  if (!value.trim()) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function billingTimezoneOptions(value: string): ComboboxOption[] {

@@ -481,6 +481,10 @@ Automated cleanup tasks, configurable in Settings.
   - Nginx Logs: rotate/compress/delete old log files. Retention in days.
   - Audit Log: delete entries older than retention days.
   - Dismissed Alerts: remove old dismissed alerts.
+  - Delivery Log: delete old notification delivery attempts.
+  - Structured Logs: cap ClickHouse application logs by total rows and approximate disk size while preserving the newest daily partition.
+  - ClickHouse Internals: an always-on safety guard monitors high-volume system logs independently of the housekeeping schedule. Automatic internal-table cleanup is limited to explicitly Gateway-managed ClickHouse instances; remote instances are monitor-only by default.
+  - Orphaned AI Artifacts: delete files no longer attached to a chat.
   - Orphaned Certs: remove unreferenced certificate files.
   - ACME Challenges: clean up old validation tokens.
   - Docker Prune: remove unused Docker images.
@@ -637,6 +641,8 @@ Gateway can store and operate external Postgres and Redis connections directly f
   logging: `# External Logging
 
 Gateway can ingest structured logs from external services into ClickHouse-backed logging environments.
+
+Per-environment retention TTL is complemented by optional Housekeeping caps for total rows and approximate disk size. ClickHouse also has an always-on internal-log safety budget and health guard; destructive internal cleanup is restricted to explicitly Gateway-managed instances, while remote instances are monitor-only by default. Users with housekeeping access see storage pressure on the Dashboard.
 
 ## Resource Types
 Use manage_logging with singular resource names:
@@ -1073,7 +1079,7 @@ Subscription connections can set minimumRemainingPercent. API connections can se
 
 ## User Tokens And Harness Setup
 
-Users need \`inference:use\`. Creating and revoking tokens additionally require \`inference:tokens:create\` and \`inference:tokens:revoke\`.
+Users need \`inference:use\`. Creating and revoking tokens additionally require \`inference:tokens:manage\`.
 
 Token options:
 
@@ -1369,8 +1375,7 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   'licensing-updates': ['license:view', 'license:manage', 'admin:update'],
   inference: [
     'inference:use',
-    'inference:tokens:create',
-    'inference:tokens:revoke',
+    'inference:tokens:manage',
     'inference:usage:view:self',
     'inference:providers:view',
     'inference:providers:manage',

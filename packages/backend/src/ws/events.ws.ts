@@ -10,6 +10,10 @@ import {
   hasDockerResourceScope,
 } from '@/modules/docker/docker-access-resource.service.js';
 import { hasAnyDockerNodeRouteAccess, hasDockerNodeRouteAccess } from '@/modules/docker/docker-route-resolvers.js';
+import {
+  INFERENCE_USAGE_CHANGED_CHANNEL,
+  type InferenceUsageChangedEvent,
+} from '@/modules/inference/accounting/inference-usage-events.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
 
@@ -101,6 +105,7 @@ function requiredScopeFor(channel: string): string | null {
   if (channel === 'notification.alert-rule.changed') return 'notifications:view';
   if (channel === 'notification.webhook.changed') return 'notifications:view';
   if (channel === 'integration.connector.changed') return 'integrations:gitlab:view';
+  if (channel === INFERENCE_USAGE_CHANGED_CHANNEL) return 'inference:usage:view:self';
   if (channel.startsWith('alert.')) return 'notifications:view';
   // permissions.changed.<userId> is filtered separately (own user only)
   return null;
@@ -250,8 +255,12 @@ function hasDockerEventAccess(scopes: string[], baseScope: string, payload: unkn
   return hasDockerResourceScope(scopes, baseScope, nodeId, dockerEventResourceId(payload) ?? '');
 }
 
-function canReceiveChannelPayload(scopes: string[], channel: string, payload: unknown): boolean {
+function canReceiveChannelPayload(scopes: string[], channel: string, payload: unknown, userId?: string): boolean {
   if (channel === 'system.update.changed') return true;
+  if (channel === INFERENCE_USAGE_CHANGED_CHANNEL) {
+    const event = payload as Partial<InferenceUsageChangedEvent> | undefined;
+    return event?.targetUserId === null || event?.targetUserId === userId;
+  }
   if (channel === 'docker.snapshot.changed') {
     const event = payload as { nodeId?: string; kind?: string } | undefined;
     if (!event?.nodeId || !event.kind) return false;
@@ -605,7 +614,7 @@ function processMessage(ws: WSContext, state: ConnState, msg: ClientMsg) {
         }
       }
       const unsub = eventBus.subscribe(ch, (payload) => {
-        if (!canReceiveChannelPayload(state.scopes, ch, payload)) return;
+        if (!canReceiveChannelPayload(state.scopes, ch, payload, state.user?.id)) return;
         send(ws, { type: 'event', channel: ch, payload });
       });
       state.subs.set(ch, unsub);

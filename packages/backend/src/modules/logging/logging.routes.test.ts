@@ -7,6 +7,7 @@ import { TokensService } from '@/modules/tokens/tokens.service.js';
 import type { AppEnv, User } from '@/types.js';
 import { loggingRoutes } from './logging.routes.js';
 import { LoggingFeatureService } from './logging-feature.service.js';
+import { LoggingMaintenanceService } from './logging-maintenance.service.js';
 import { LoggingSchemaService } from './logging-schema.service.js';
 
 const USER: User = {
@@ -71,6 +72,19 @@ afterEach(() => {
 });
 
 describe('logging schema route permissions', () => {
+  it('exposes logging health only with housekeeping view scope', async () => {
+    registerServices(['housekeeping:view'], {});
+    const snapshot = { configured: true, status: 'healthy', checkedAt: new Date().toISOString() };
+    container.registerInstance(LoggingMaintenanceService, {
+      getSnapshot: vi.fn().mockReturnValue(snapshot),
+    } as unknown as LoggingMaintenanceService);
+
+    const response = await createApp().request('/api/logging/health', { headers: authHeaders() });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ data: snapshot });
+  });
+
   it('does not expose logging status without authentication', async () => {
     const response = await createApp().request('/api/logging/status');
 

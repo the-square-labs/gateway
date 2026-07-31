@@ -464,11 +464,7 @@ export function CADetail() {
               <DetailRow
                 label="Expires in"
                 value={
-                  <span
-                    className={
-                      expiryDays <= 30 ? "text-yellow-600 dark:text-yellow-400" : undefined
-                    }
-                  >
+                  <span className={expiryDays <= 30 ? "text-warning-foreground" : undefined}>
                     {expiryDays > 0
                       ? `${expiryDays} days`
                       : hoursUntil(ca.notAfter) > 0
@@ -503,9 +499,9 @@ export function CADetail() {
             </PanelShell>
 
             {expiryDays <= 30 && expiryDays > 0 && (
-              <div className="flex items-start gap-2 border border-yellow-600/30 bg-yellow-600/5 p-3">
-                <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 mt-0.5 shrink-0" />
-                <p className="text-sm text-yellow-600 dark:text-yellow-400">
+              <div className="flex items-start gap-2 border border-warning/30 bg-warning/5 p-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning-foreground" />
+                <p className="text-sm text-warning-foreground">
                   Expires in{" "}
                   {expiryDays > 0 ? `${expiryDays} days` : `${hoursUntil(ca.notAfter)} hours`}.
                 </p>

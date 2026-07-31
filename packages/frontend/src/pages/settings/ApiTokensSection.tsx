@@ -396,10 +396,7 @@ export function ApiTokensSection({
 
           {createdSecret && (
             <div className="space-y-4">
-              <div
-                className="border bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300"
-                style={{ borderColor: "#facc15" }}
-              >
+              <div className="border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
                 <p className="font-medium">Copy this token now. It will not be shown again.</p>
               </div>
               <CopyValueField

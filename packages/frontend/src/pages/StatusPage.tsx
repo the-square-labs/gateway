@@ -137,14 +137,14 @@ function displayIncidentUpdateStatus(
 
 function incidentSeverityBorderColor(severity: StatusPageIncidentSeverity) {
   if (severity === "critical") return "#f87171";
-  if (severity === "warning") return "#eab308";
+  if (severity === "warning") return "var(--color-warning)";
   return "#60a5fa";
 }
 
 function incidentUpdateMarkerClass(status: StatusPageIncidentUpdateStatus) {
   return {
     update: "bg-muted-foreground",
-    investigating: "rotate-45 bg-amber-500",
+    investigating: "rotate-45 bg-warning",
     identified: "rotate-45 bg-blue-500",
     monitoring: "bg-emerald-500",
     resolved: "rounded-full bg-emerald-500",

@@ -51,6 +51,7 @@ const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Record<string, readonly string[]> = {
     'integrations:cloudflare:dns:edit',
     'integrations:cloudflare:dns:delete',
   ],
+  'inference:usage:view:self': ['inference:use'],
   'inference:providers:view': ['inference:providers:manage', 'inference:models:manage'],
 };
 

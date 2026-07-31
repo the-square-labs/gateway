@@ -162,15 +162,15 @@ async function manageToken(user: User, args: Record<string, unknown>) {
   const operation = requiredString(args.operation, 'operation');
   const service = container.resolve(InferenceTokenService);
   if (operation === 'list') {
-    requireAnyScope(user, ['inference:tokens:create', 'inference:tokens:revoke']);
+    requireScope(user, 'inference:tokens:manage');
     return (await service.listTokens(user.id)).filter((token) => token.status === 'active');
   }
   if (operation === 'create') {
-    requireScope(user, 'inference:tokens:create');
+    requireScope(user, 'inference:tokens:manage');
     return service.createToken(user.id, CreateInferenceTokenSchema.parse({ name: args.name }));
   }
   if (operation === 'revoke') {
-    requireScope(user, 'inference:tokens:revoke');
+    requireScope(user, 'inference:tokens:manage');
     await service.revokeToken(user.id, requiredString(args.tokenId, 'tokenId'));
     return { success: true };
   }
@@ -187,12 +187,6 @@ async function requireInferenceEnabled(): Promise<void> {
 
 function requireScope(user: User, scope: string): void {
   if (!hasScope(user.scopes, scope)) throw new Error(`PERMISSION_DENIED: ${scope} is required`);
-}
-
-function requireAnyScope(user: User, scopes: string[]): void {
-  if (!scopes.some((scope) => hasScope(user.scopes, scope))) {
-    throw new Error(`PERMISSION_DENIED: one of ${scopes.join(', ')} is required`);
-  }
 }
 
 function requiredString(value: unknown, label: string): string {

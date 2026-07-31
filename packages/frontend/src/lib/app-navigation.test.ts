@@ -16,6 +16,34 @@ function context(overrides: Partial<AppNavigationVisibility> = {}): AppNavigatio
 }
 
 describe("app navigation registry", () => {
+  it("hides Dashboard when none of its content is available", () => {
+    const groups = visibleNavigationGroups(context());
+    const ids = groups.flatMap((group) => group.items.map((item) => item.id));
+
+    expect(ids).not.toContain("dashboard");
+    expect(ids).toContain("profile");
+  });
+
+  it("shows Dashboard for personal inference usage only when a quota is low", () => {
+    const regularUsageGroups = visibleNavigationGroups(
+      context({ scopes: ["inference:use"], inferenceEnabled: true })
+    );
+    const regularUsageIds = regularUsageGroups.flatMap((group) =>
+      group.items.map((item) => item.id)
+    );
+    const groups = visibleNavigationGroups(
+      context({
+        scopes: ["inference:use"],
+        inferenceEnabled: true,
+        hasLowInferenceUsage: true,
+      })
+    );
+    const ids = groups.flatMap((group) => group.items.map((item) => item.id));
+
+    expect(regularUsageIds).not.toContain("dashboard");
+    expect(ids).toContain("dashboard");
+  });
+
   it("keeps numeric shortcuts aligned with their visible destinations", () => {
     const routes = keyboardNavigationRoutes(
       context({

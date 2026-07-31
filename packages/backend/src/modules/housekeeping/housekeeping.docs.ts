@@ -20,6 +20,18 @@ export const HousekeepingConfigUpdateSchema = z
     deliveryLog: z
       .object({ enabled: z.boolean().optional(), retentionDays: z.number().int().min(1).max(365).optional() })
       .optional(),
+    structuredLogs: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxRows: z.number().int().min(1_000).max(Number.MAX_SAFE_INTEGER).optional(),
+        maxSizeBytes: z
+          .number()
+          .int()
+          .min(1024 * 1024)
+          .max(Number.MAX_SAFE_INTEGER)
+          .optional(),
+      })
+      .optional(),
     orphanedAIArtifacts: z.object({ enabled: z.boolean().optional() }).optional(),
     gatewayLogs: z.object({ enabled: z.literal(false).optional() }).optional(),
     orphanedVolumes: z

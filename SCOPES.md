@@ -162,8 +162,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `mcp:use` |  |
 | `inference:use` |  |
 | `inference:setup` |  |
-| `inference:tokens:create` |  |
-| `inference:tokens:revoke` |  |
+| `inference:tokens:manage` |  |
 | `inference:usage:view:self` |  |
 | `inference:providers:view` |  |
 | `inference:providers:manage` |  |
@@ -257,11 +256,10 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 | `ai:sandbox:tier:high` | User/session-only sandbox runner tier access. |
 | `ai:sandbox:manage` | User/session-only sandbox runner management. |
 | `mcp:use` | User-account capability gate for remote MCP. |
-| `inference:use` | User/session-only inference access. |
+| `inference:use` | User/session-only inference access; also grants current-user usage visibility. |
 | `inference:setup` | User/session-only companion CLI authorization resource. |
-| `inference:tokens:create` | User/session-only inference token creation. |
-| `inference:tokens:revoke` | User/session-only inference token revocation. |
-| `inference:usage:view:self` | User/session-only current-user inference usage. |
+| `inference:tokens:manage` | User/session-only inference token creation and revocation. |
+| `inference:usage:view:self` | User/session-only current-user inference usage; implicitly granted by `inference:use`. |
 | `admin:system` | Protected system-administrator shielding. |
 | `admin:users` | User administration is session-only. |
 | `admin:groups` | Permission group administration is session-only. |

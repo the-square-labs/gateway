@@ -88,6 +88,7 @@ import { LoggingEnvironmentService } from '@/modules/logging/logging-environment
 import { LoggingEnvironmentFolderService } from '@/modules/logging/logging-environment-folders.service.js';
 import { LoggingFeatureService } from '@/modules/logging/logging-feature.service.js';
 import { LoggingIngestService } from '@/modules/logging/logging-ingest.service.js';
+import { LoggingMaintenanceService } from '@/modules/logging/logging-maintenance.service.js';
 import { LoggingMetadataService } from '@/modules/logging/logging-metadata.service.js';
 import { LoggingRateLimitService } from '@/modules/logging/logging-rate-limit.service.js';
 import { LoggingSchemaService } from '@/modules/logging/logging-schema.service.js';
@@ -281,10 +282,11 @@ export async function initializeContainer(): Promise<void> {
   const inferenceAccountingService = new InferenceAccountingService(
     inferenceBudgetPolicyService,
     inferenceBudgetReservationService,
-    inferenceBudgetLockService
+    inferenceBudgetLockService,
+    eventBus
   );
   container.registerInstance(InferenceAccountingService, inferenceAccountingService);
-  const inferenceUsageService = new InferenceUsageService(db, inferenceBudgetPolicyService, auditService);
+  const inferenceUsageService = new InferenceUsageService(db, inferenceBudgetPolicyService, auditService, eventBus);
   container.registerInstance(InferenceUsageService, inferenceUsageService);
   const inferenceReservationReconciler = new InferenceReservationReconciler(
     db,
@@ -735,6 +737,12 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(LoggingFeatureService, loggingFeatureService);
   const loggingClickHouseService = new LoggingClickHouseService(env);
   container.registerInstance(LoggingClickHouseService, loggingClickHouseService);
+  const loggingMaintenanceService = new LoggingMaintenanceService(
+    loggingClickHouseService,
+    loggingFeatureService,
+    env.CLICKHOUSE_MANAGED_INTERNAL_LOGS
+  );
+  container.registerInstance(LoggingMaintenanceService, loggingMaintenanceService);
   if (loggingClickHouseService.isConfigured()) {
     try {
       await loggingClickHouseService.ensureSchema();
@@ -799,6 +807,7 @@ export async function initializeContainer(): Promise<void> {
   const housekeepingService = new HousekeepingService(db, dockerService, nodeDispatch, env);
   housekeepingService.setSandboxArtifactService(aiSandboxArtifactService);
   housekeepingService.setDockerManagementService(dockerManagementService);
+  housekeepingService.setLoggingMaintenanceService(loggingMaintenanceService);
   container.registerInstance(HousekeepingService, housekeepingService);
 
   // Group service (injectable — resolve from container)
@@ -938,6 +947,10 @@ export async function initializeContainer(): Promise<void> {
   const housekeepingJob = new HousekeepingJob(housekeepingService);
   const hkConfig = await housekeepingService.getConfig();
   scheduler.register('housekeeping', hkConfig.cronExpression, () => housekeepingJob.run());
+  scheduler.registerInterval('clickhouse-health-guard', 5 * 60 * 1000, async () => {
+    const config = await housekeepingService.getConfig();
+    await loggingMaintenanceService.runGuard(config.enabled ? config.structuredLogs : undefined);
+  });
 
   // Stale node detection (every 60 seconds) + missed health report detection (every 30 seconds)
   scheduler.registerInterval('stale-node-check', 60000, () => nodeRegistry.markStaleNodesOffline());
@@ -959,6 +972,12 @@ export async function initializeContainer(): Promise<void> {
         error: error instanceof Error ? error.message : String(error),
       });
     });
+  }, 1000);
+  setTimeout(() => {
+    housekeepingService
+      .getConfig()
+      .then((config) => loggingMaintenanceService.runGuard(config.enabled ? config.structuredLogs : undefined))
+      .catch((error) => logger.warn('Initial ClickHouse health guard failed', { error }));
   }, 1000);
 
   logger.info('Dependency injection container initialized');

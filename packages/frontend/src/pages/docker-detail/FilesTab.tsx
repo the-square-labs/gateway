@@ -946,7 +946,7 @@ export function FilesTab({
         onChange={handleUploadChange}
       />
       {hasTruncatedDirectory && (
-        <div className="mb-3 border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
+        <div className="mb-3 border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
           Some directories are showing only the first{" "}
           {roots.find((entry) => entry._listTruncated)?._listLimit ?? 1000} entries.
         </div>

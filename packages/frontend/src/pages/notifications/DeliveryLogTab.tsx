@@ -189,7 +189,7 @@ export function DeliveryLogTab({ refreshToken }: { refreshToken: number }) {
       ) : s === "failed" ? (
         <XCircle className="h-4 w-4 text-red-500" />
       ) : (
-        <Clock className="h-4 w-4 text-amber-500" />
+        <Clock className="h-4 w-4 text-warning" />
       );
 
     return (

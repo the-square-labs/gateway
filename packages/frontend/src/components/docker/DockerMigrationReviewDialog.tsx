@@ -246,7 +246,7 @@ function PreflightReview({ preflight }: { preflight: DockerMigrationPreflight })
       {(preflight.deletionPlan?.length ?? 0) > 0 ? (
         <section className="space-y-2">
           <div className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+            <AlertTriangle className="h-4 w-4 text-warning-foreground" />
             <h3 className="text-sm font-semibold">Removed from source after verification</h3>
           </div>
           <div className="divide-y divide-border border border-border">

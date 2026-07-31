@@ -188,13 +188,12 @@ export function NodeDetailsTab({
 
       {!nodeUpdating && daemonUpdate.available && !pendingUpdateTarget && (
         <PanelShell
-          title={<span style={{ color: "rgb(234 179 8)" }}>Update Available</span>}
+          title={<span className="text-warning">Update Available</span>}
           description={`${daemonUpdate.latestVersion} is ready to install`}
           dirty
           actions={
             <Button
-              style={{ backgroundColor: "rgb(234 179 8)", color: "#111" }}
-              className="hover:opacity-90 disabled:opacity-50"
+              className="bg-warning text-black hover:bg-warning/90 disabled:opacity-50"
               onClick={handleDaemonUpdate}
               disabled={isUpdating || !canTriggerDaemonUpdate}
               title={
@@ -335,7 +334,7 @@ export function NodeDetailsTab({
                     </div>
                     <div className="h-1.5 w-full bg-muted overflow-hidden">
                       <div
-                        className={`h-full ${m.usagePercent >= 90 ? "bg-red-400" : m.usagePercent >= 80 ? "bg-yellow-500" : "bg-foreground"}`}
+                        className={`h-full ${m.usagePercent >= 90 ? "bg-red-400" : m.usagePercent >= 80 ? "bg-warning" : "bg-foreground"}`}
                         style={{ width: `${Math.min(m.usagePercent, 100)}%` }}
                       />
                     </div>

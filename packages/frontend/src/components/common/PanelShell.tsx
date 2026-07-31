@@ -42,7 +42,7 @@ export function PanelShell({
   return (
     <div
       className={cn("border border-border bg-card overflow-hidden", className)}
-      style={{ ...(dirty ? { borderColor: "rgb(234 179 8)" } : null), ...style }}
+      style={{ ...(dirty ? { borderColor: "var(--color-warning)" } : null), ...style }}
       {...props}
     >
       {header ??

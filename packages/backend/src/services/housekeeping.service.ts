@@ -11,6 +11,7 @@ import { settings } from '@/db/schema/settings.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { AISandboxArtifactService } from '@/modules/ai/ai.sandbox-artifact.service.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
+import type { LoggingMaintenanceService } from '@/modules/logging/logging-maintenance.service.js';
 import type { NotificationDeliveryService } from '@/modules/notifications/notification-delivery.service.js';
 import type { DockerService } from './docker.service.js';
 import type { NodeDispatchService } from './node-dispatch.service.js';
@@ -27,6 +28,7 @@ export interface HousekeepingConfig {
   auditLog: { enabled: boolean; retentionDays: number };
   dismissedAlerts: { enabled: boolean; retentionDays: number };
   deliveryLog: { enabled: boolean; retentionDays: number };
+  structuredLogs: { enabled: boolean; maxRows: number; maxSizeBytes: number };
   orphanedAIArtifacts: { enabled: boolean };
   gatewayLogs: { enabled: false };
   orphanedVolumes: { enabled: boolean; retentionDays: number };
@@ -58,6 +60,9 @@ export interface HousekeepingStats {
   nginxLogs: { totalSizeBytes: number; fileCount: number; oldestFile: string | null };
   auditLog: { totalRows: number; oldestEntry: string | null };
   dismissedAlerts: { count: number; oldestAlert: string | null };
+  deliveryLog: { total: number; success: number; failed: number; retrying: number };
+  structuredLogs: { totalRows: number; totalSizeBytes: number; status: string };
+  clickHouseInternals: { totalRows: number; totalSizeBytes: number; status: string; capBytes: number };
   orphanedAIArtifacts: { count: number; totalSizeBytes: number };
   gatewayLogs: { totalSizeBytes: number; fileCount: number; available: false };
   orphanedVolumes: { count: number; reclaimableBytes: number };
@@ -81,6 +86,9 @@ const KEYS = {
   dismissedAlertsRetention: 'housekeeping:dismissed_alerts:retention_days',
   deliveryLogEnabled: 'housekeeping:delivery_log:enabled',
   deliveryLogRetention: 'housekeeping:delivery_log:retention_days',
+  structuredLogsEnabled: 'housekeeping:structured_logs:enabled',
+  structuredLogsMaxRows: 'housekeeping:structured_logs:max_rows',
+  structuredLogsMaxSizeBytes: 'housekeeping:structured_logs:max_size_bytes',
   orphanedAIArtifactsEnabled: 'housekeeping:orphaned_ai_artifacts:enabled',
   orphanedVolumesEnabled: 'housekeeping:orphaned_volumes:enabled',
   orphanedVolumesRetention: 'housekeeping:orphaned_volumes:retention_days',
@@ -102,6 +110,9 @@ const DEFAULTS: Record<string, unknown> = {
   [KEYS.dismissedAlertsRetention]: 30,
   [KEYS.deliveryLogEnabled]: true,
   [KEYS.deliveryLogRetention]: 7,
+  [KEYS.structuredLogsEnabled]: false,
+  [KEYS.structuredLogsMaxRows]: 100_000,
+  [KEYS.structuredLogsMaxSizeBytes]: 10 * 1024 * 1024 * 1024,
   [KEYS.orphanedAIArtifactsEnabled]: true,
   [KEYS.orphanedVolumesEnabled]: false,
   [KEYS.orphanedVolumesRetention]: 30,
@@ -158,6 +169,11 @@ export class HousekeepingService {
         enabled: get(KEYS.deliveryLogEnabled, DEFAULTS[KEYS.deliveryLogEnabled] as boolean),
         retentionDays: get(KEYS.deliveryLogRetention, DEFAULTS[KEYS.deliveryLogRetention] as number),
       },
+      structuredLogs: {
+        enabled: get(KEYS.structuredLogsEnabled, DEFAULTS[KEYS.structuredLogsEnabled] as boolean),
+        maxRows: get(KEYS.structuredLogsMaxRows, DEFAULTS[KEYS.structuredLogsMaxRows] as number),
+        maxSizeBytes: get(KEYS.structuredLogsMaxSizeBytes, DEFAULTS[KEYS.structuredLogsMaxSizeBytes] as number),
+      },
       orphanedAIArtifacts: {
         enabled: get(KEYS.orphanedAIArtifactsEnabled, DEFAULTS[KEYS.orphanedAIArtifactsEnabled] as boolean),
       },
@@ -199,6 +215,12 @@ export class HousekeepingService {
       updates.push([KEYS.deliveryLogEnabled, partial.deliveryLog.enabled]);
     if (partial.deliveryLog?.retentionDays !== undefined)
       updates.push([KEYS.deliveryLogRetention, partial.deliveryLog.retentionDays]);
+    if (partial.structuredLogs?.enabled !== undefined)
+      updates.push([KEYS.structuredLogsEnabled, partial.structuredLogs.enabled]);
+    if (partial.structuredLogs?.maxRows !== undefined)
+      updates.push([KEYS.structuredLogsMaxRows, partial.structuredLogs.maxRows]);
+    if (partial.structuredLogs?.maxSizeBytes !== undefined)
+      updates.push([KEYS.structuredLogsMaxSizeBytes, partial.structuredLogs.maxSizeBytes]);
     if (partial.orphanedAIArtifacts?.enabled !== undefined)
       updates.push([KEYS.orphanedAIArtifactsEnabled, partial.orphanedAIArtifacts.enabled]);
     if (partial.orphanedVolumes?.enabled !== undefined)
@@ -212,9 +234,17 @@ export class HousekeepingService {
     if (partial.acmeCleanup?.enabled !== undefined)
       updates.push([KEYS.acmeCleanupEnabled, partial.acmeCleanup.enabled]);
 
-    for (const [key, value] of updates) {
-      await this.upsertSetting(key, value);
-    }
+    await this.db.transaction(async (tx) => {
+      for (const [key, value] of updates) {
+        await tx
+          .insert(settings)
+          .values({ key, value, updatedAt: new Date() })
+          .onConflictDoUpdate({
+            target: settings.key,
+            set: { value, updatedAt: new Date() },
+          });
+      }
+    });
 
     return this.getConfig();
   }
@@ -226,6 +256,8 @@ export class HousekeepingService {
       nginxLogs,
       auditLogStats,
       alertStats,
+      deliveryLog,
+      clickHouse,
       orphanedAIArtifacts,
       gatewayLogs,
       orphanedVolumes,
@@ -237,6 +269,8 @@ export class HousekeepingService {
       this.getNginxLogStats(),
       this.getAuditLogStats(),
       this.getDismissedAlertStats(),
+      this.getDeliveryLogStats(),
+      Promise.resolve(this.loggingMaintenanceService?.getSnapshot() ?? null),
       this.getOrphanedAIArtifactStats(),
       this.getGatewayLogStats(),
       this.getOrphanedVolumeStats(),
@@ -250,6 +284,18 @@ export class HousekeepingService {
       nginxLogs,
       auditLog: auditLogStats,
       dismissedAlerts: alertStats,
+      deliveryLog,
+      structuredLogs: {
+        totalRows: clickHouse?.structured.rows ?? 0,
+        totalSizeBytes: clickHouse?.structured.bytes ?? 0,
+        status: clickHouse?.status ?? 'disabled',
+      },
+      clickHouseInternals: {
+        totalRows: clickHouse?.internal.rows ?? 0,
+        totalSizeBytes: clickHouse?.internal.bytes ?? 0,
+        status: clickHouse?.status ?? 'disabled',
+        capBytes: clickHouse?.internal.capBytes ?? 0,
+      },
       orphanedAIArtifacts,
       gatewayLogs,
       orphanedVolumes,
@@ -293,6 +339,11 @@ export class HousekeepingService {
       if (config.deliveryLog.enabled) {
         categories.push(
           await this.runCategory('Delivery Log', () => this.cleanDeliveryLog(config.deliveryLog.retentionDays))
+        );
+      }
+      if (config.structuredLogs.enabled) {
+        categories.push(
+          await this.runCategory('Structured Logs', () => this.cleanStructuredLogs(config.structuredLogs))
         );
       }
       if (config.orphanedAIArtifacts.enabled) {
@@ -384,6 +435,11 @@ export class HousekeepingService {
     this.notifDeliveryService = svc;
   }
 
+  private loggingMaintenanceService?: LoggingMaintenanceService;
+  setLoggingMaintenanceService(svc: LoggingMaintenanceService) {
+    this.loggingMaintenanceService = svc;
+  }
+
   private sandboxArtifactService?: AISandboxArtifactService;
   setSandboxArtifactService(svc: AISandboxArtifactService) {
     this.sandboxArtifactService = svc;
@@ -398,6 +454,11 @@ export class HousekeepingService {
     if (!this.notifDeliveryService) return { itemsCleaned: 0 };
     const count = await this.notifDeliveryService.cleanOldEntries(retentionDays);
     return { itemsCleaned: count };
+  }
+
+  private async cleanStructuredLogs(config: HousekeepingConfig['structuredLogs']) {
+    if (!this.loggingMaintenanceService) return { itemsCleaned: 0, spaceFreedBytes: 0 };
+    return this.loggingMaintenanceService.cleanupStructuredLogsAndRefresh(config);
   }
 
   private async cleanOrphanedAIArtifacts(): Promise<{ itemsCleaned: number; spaceFreedBytes?: number }> {
@@ -570,6 +631,11 @@ export class HousekeepingService {
       count: countResult?.total ?? 0,
       oldestAlert: oldestResult?.oldest?.toISOString() ?? null,
     };
+  }
+
+  private async getDeliveryLogStats(): Promise<HousekeepingStats['deliveryLog']> {
+    if (!this.notifDeliveryService) return { total: 0, success: 0, failed: 0, retrying: 0 };
+    return this.notifDeliveryService.getStats();
   }
 
   private async getOrphanedAIArtifactStats(): Promise<HousekeepingStats['orphanedAIArtifacts']> {

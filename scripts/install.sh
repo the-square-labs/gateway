@@ -1115,6 +1115,7 @@ CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
 CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE}
 CLICKHOUSE_LOGS_TABLE=${CLICKHOUSE_LOGS_TABLE}
 CLICKHOUSE_REQUEST_TIMEOUT_MS=5000
+CLICKHOUSE_MANAGED_INTERNAL_LOGS=$([ "$LOGGING_MODE" = "local" ] && printf true || printf false)
 
 # Logging ingest guardrails
 LOGGING_INGEST_MAX_BODY_BYTES=1048576
@@ -1208,6 +1209,12 @@ ensure_clickhouse_env() {
     clickhouse_password=$(openssl rand -hex 16)
 
     local additions=""
+    local reset_managed_internal_logs=0
+    if [ "$LOGGING_MODE" != "local" ] && grep -q '^CLICKHOUSE_MANAGED_INTERNAL_LOGS=' .env; then
+        if [ "$(env_value "CLICKHOUSE_MANAGED_INTERNAL_LOGS")" != "false" ]; then
+            reset_managed_internal_logs=1
+        fi
+    fi
     grep -q '^CLICKHOUSE_URL=' .env || additions="${additions}
 CLICKHOUSE_URL=http://clickhouse:8123"
     grep -q '^CLICKHOUSE_USERNAME=' .env || additions="${additions}
@@ -1220,6 +1227,8 @@ CLICKHOUSE_DATABASE=gateway_logs"
 CLICKHOUSE_LOGS_TABLE=logs"
     grep -q '^CLICKHOUSE_REQUEST_TIMEOUT_MS=' .env || additions="${additions}
 CLICKHOUSE_REQUEST_TIMEOUT_MS=5000"
+    grep -q '^CLICKHOUSE_MANAGED_INTERNAL_LOGS=' .env || additions="${additions}
+CLICKHOUSE_MANAGED_INTERNAL_LOGS=$([ "$LOGGING_MODE" = "local" ] && printf true || printf false)"
     grep -q '^LOGGING_INGEST_MAX_BODY_BYTES=' .env || additions="${additions}
 LOGGING_INGEST_MAX_BODY_BYTES=1048576"
     grep -q '^LOGGING_INGEST_MAX_BATCH_SIZE=' .env || additions="${additions}
@@ -1249,8 +1258,14 @@ LOGGING_TOKEN_EVENTS_PER_WINDOW=10000"
     grep -q '^SANDBOX_RUNNER_WORKSPACE_DIR=' .env || additions="${additions}
 SANDBOX_RUNNER_WORKSPACE_DIR=/var/lib/gateway/sandbox-workspaces"
 
-    if [ -n "$additions" ]; then
+    if [ -n "$additions" ] || [ "$reset_managed_internal_logs" -eq 1 ]; then
         backup_if_exists ".env"
+        if [ "$reset_managed_internal_logs" -eq 1 ]; then
+            set_env_value "CLICKHOUSE_MANAGED_INTERNAL_LOGS" "false"
+            warn "Disabled managed ClickHouse internal-log cleanup for ${LOGGING_MODE} logging storage."
+        fi
+    fi
+    if [ -n "$additions" ]; then
         {
             echo ""
             echo "# Added defaults"
@@ -1342,6 +1357,7 @@ compose_clickhouse_service() {
       CLICKHOUSE_PASSWORD: \${CLICKHOUSE_PASSWORD:-gateway}
     volumes:
       - clickhouse_data:/var/lib/clickhouse
+      - ./clickhouse-config/gateway-safety.xml:/etc/clickhouse-server/config.d/gateway-safety.xml:ro
     mem_limit: ${CLICKHOUSE_MEM_LIMIT}
     healthcheck:
       test:
@@ -1366,6 +1382,36 @@ compose_volumes() {
     if [ "$LOGGING_MODE" = "local" ]; then
         echo "  clickhouse_data:"
     fi
+}
+
+write_clickhouse_safety_config() {
+    [ "$LOGGING_MODE" = "local" ] || return 0
+    mkdir -p clickhouse-config
+    cat > clickhouse-config/gateway-safety.xml <<'CLICKHOUSECONFIG'
+<clickhouse>
+    <logger>
+        <level>information</level>
+        <size>50M</size>
+        <count>3</count>
+    </logger>
+    <trace_log remove="1" />
+    <text_log remove="1" />
+    <part_log remove="1" />
+    <metric_log remove="1" />
+    <asynchronous_metric_log remove="1" />
+    <query_metric_log remove="1" />
+    <processors_profile_log remove="1" />
+    <background_schedule_pool_log remove="1" />
+    <query_log>
+        <database>system</database>
+        <table>query_log</table>
+        <partition_by>toDate(event_date)</partition_by>
+        <ttl>event_date + INTERVAL 1 DAY DELETE</ttl>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+    </query_log>
+</clickhouse>
+CLICKHOUSECONFIG
+    info "clickhouse-config/gateway-safety.xml"
 }
 
 # ── Write docker-compose.yml ─────────────────────────────────────────
@@ -2126,6 +2172,7 @@ main() {
             title "Writing Files"
             infer_storage_config_from_env
             ensure_clickhouse_env
+            write_clickhouse_safety_config
             write_compose
             if [[ "$OPT_SKIP_START" -eq 0 ]]; then
                 start_services
@@ -2146,6 +2193,7 @@ main() {
     title "Writing Files"
 
     write_env
+    write_clickhouse_safety_config
     write_compose
 
     if [[ "$OPT_SKIP_START" -eq 0 ]]; then
@@ -2190,4 +2238,6 @@ main() {
     show_summary
 }
 
-main "$@"
+if [[ "${GATEWAY_INSTALLER_LIBRARY_MODE:-0}" != "1" ]]; then
+    main "$@"
+fi

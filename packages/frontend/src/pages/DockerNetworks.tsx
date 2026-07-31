@@ -512,7 +512,7 @@ export function DockerNetworks({
         }}
         afterSearch={
           truncatedListMeta ? (
-            <div className="border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
+            <div className="border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
               Showing first {truncatedListMeta._listLimit ?? networks.length} of{" "}
               {truncatedListMeta._listTotal ?? "many"} networks. Narrow the node or search filters
               for more specific data.
@@ -670,7 +670,7 @@ export function DockerNetworks({
 
               <PanelShell title="Connected Containers">
                 {selectedNetwork.containersTruncated && (
-                  <div className="border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
+                  <div className="border-b border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
                     Showing a preview of connected containers.
                   </div>
                 )}

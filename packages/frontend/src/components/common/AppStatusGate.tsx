@@ -128,7 +128,7 @@ function GatewayUpdatingScreen() {
     <div className="fixed inset-0 z-[205] flex min-h-screen items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm space-y-8 text-center">
         <div className="flex flex-col items-center gap-4">
-          <div className="flex h-12 w-12 items-center justify-center border border-amber-500/30 bg-amber-500/5 text-amber-600">
+          <div className="flex h-12 w-12 items-center justify-center border border-warning/30 bg-warning/5 text-warning-foreground">
             <RotateCw className="h-6 w-6 animate-spin" />
           </div>
           <h2 className="text-lg font-semibold text-foreground">Updating Gateway</h2>
@@ -267,7 +267,7 @@ function RateLimitScreen() {
     <div className="fixed inset-0 z-[210] flex min-h-screen items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm space-y-8 text-center">
         <div className="flex flex-col items-center gap-4">
-          <div className="flex h-12 w-12 items-center justify-center border border-amber-500/30 bg-amber-500/5 text-amber-600">
+          <div className="flex h-12 w-12 items-center justify-center border border-warning/30 bg-warning/5 text-warning-foreground">
             <AlertTriangle className="h-6 w-6" />
           </div>
           <h2 className="text-lg font-semibold text-foreground">Rate Limit Reached</h2>

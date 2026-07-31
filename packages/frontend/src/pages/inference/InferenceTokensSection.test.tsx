@@ -19,7 +19,7 @@ describe("InferenceTokensSection", () => {
   });
 
   it("hides token creation without scope", async () => {
-    render(<InferenceTokensSection canCreate={false} canRevoke={false} />);
+    render(<InferenceTokensSection canManage={false} />);
     await waitFor(() => expect(api.listInferenceTokens).toHaveBeenCalled());
     expect(screen.queryByRole("button", { name: /create token/i })).not.toBeInTheDocument();
   });
@@ -46,7 +46,7 @@ describe("InferenceTokensSection", () => {
       },
     ]);
 
-    render(<InferenceTokensSection canCreate canRevoke />);
+    render(<InferenceTokensSection canManage />);
 
     expect(await screen.findByText("Active Codex")).toBeInTheDocument();
     expect(screen.queryByText("Old Codex")).not.toBeInTheDocument();
@@ -63,7 +63,7 @@ describe("InferenceTokensSection", () => {
       createdAt: "2026-07-24T00:00:00.000Z",
       token: "gwi_secret-once",
     });
-    render(<InferenceTokensSection canCreate canRevoke />);
+    render(<InferenceTokensSection canManage />);
     fireEvent.click(await screen.findByRole("button", { name: "Create Token" }));
     const submit = screen.getByRole("button", { name: "Create token" });
     expect(submit).toBeDisabled();

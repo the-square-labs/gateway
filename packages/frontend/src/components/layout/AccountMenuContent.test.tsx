@@ -23,7 +23,7 @@ describe("AccountMenuContent", () => {
       user: makeUser({
         name: "Alex Gateway",
         email: "alex@example.com",
-        scopes: ["inference:use", "inference:usage:view:self"],
+        scopes: ["inference:use"],
       }),
       isAuthenticated: true,
       isLoading: false,

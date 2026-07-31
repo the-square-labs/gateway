@@ -1,0 +1,27 @@
+<clickhouse>
+    <!-- Keep server text logs bounded even if the host has no external logrotate policy. -->
+    <logger>
+        <level>information</level>
+        <size>50M</size>
+        <count>3</count>
+    </logger>
+
+    <!-- High-volume diagnostic tables are intentionally disabled for Gateway-managed ClickHouse. -->
+    <trace_log remove="1" />
+    <text_log remove="1" />
+    <part_log remove="1" />
+    <metric_log remove="1" />
+    <asynchronous_metric_log remove="1" />
+    <query_metric_log remove="1" />
+    <processors_profile_log remove="1" />
+    <background_schedule_pool_log remove="1" />
+
+    <!-- Query history remains available for short-term diagnostics and expires automatically. -->
+    <query_log>
+        <database>system</database>
+        <table>query_log</table>
+        <partition_by>toDate(event_date)</partition_by>
+        <ttl>event_date + INTERVAL 1 DAY DELETE</ttl>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+    </query_log>
+</clickhouse>

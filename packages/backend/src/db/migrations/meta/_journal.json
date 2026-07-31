@@ -547,6 +547,13 @@
       "when": 1785494576977,
       "tag": "0077_slim_synch",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1785501341970,
+      "tag": "0078_collapse_inference_token_permissions",
+      "breakpoints": true
     }
   ]
 }
