@@ -178,6 +178,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `docker:containers:delete` | Yes |
 | `docker:containers:console` | Yes |
 | `docker:containers:files` | Yes |
+| `docker:containers:export` | Yes |
 | `docker:containers:secrets` | Yes |
 | `docker:containers:webhooks` | Yes |
 | `docker:containers:mounts` | Yes |
@@ -304,6 +305,7 @@ OAuth consent leaves high-risk scopes unchecked by default. The user must explic
 | `nodes:files:write` | Can create, modify, move, or delete files on managed nodes. |
 | `docker:containers:console` | Can open an interactive console in containers. |
 | `docker:containers:files` | Can read and write container filesystem contents. |
+| `docker:containers:export` | Can export a container as a portable Gateway archive. |
 | `docker:containers:secrets` | Can reveal and manage encrypted container/deployment secrets. |
 | `docker:containers:mounts` | Can add, remove, or change container/deployment mounts. |
 | `docker:containers:migrate` | Can move containers or deployments and their data between Docker nodes. |

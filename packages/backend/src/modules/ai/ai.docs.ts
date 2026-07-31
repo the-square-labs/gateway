@@ -559,6 +559,7 @@ other stable hint to locate the recreated container and continue with its new ID
 ## Cross-Node Migrations
 - Gateway can migrate a standalone container or a blue/green deployment to another Docker node, including referenced images, named-volume data, capacity preflight, verification, proxy cutover, cancellation, and cleanup recovery.
 - Migration requires \`docker:containers:migrate\` plus the source-resource permissions needed to inspect protected configuration, secrets, and mounts.
+- Container archive export requires \`docker:containers:export\` plus file and environment access for the source container. Secret values are included only when the caller also has \`docker:containers:secrets\`.
 - The current AI tool surface does not expose migration mutation. Direct the user to the Docker container or deployment migration UI instead of inventing a tool call.
 
 ## Registries & Templates

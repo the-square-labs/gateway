@@ -51,7 +51,7 @@ The export/import UI is available only for standalone containers. Gateway deploy
 
 ## API
 
-- `GET /api/docker/nodes/{nodeId}/containers/{containerId}/archive?imageMode=portable&includeWritableLayer=false&includeSecrets=false` streams an archive. Export requires container file and environment access; `includeSecrets=true` additionally requires secret access. `imageMode=registry` does not allow writable-layer capture.
+- `GET /api/docker/nodes/{nodeId}/containers/{containerId}/archive?imageMode=portable&includeWritableLayer=false&includeSecrets=false` streams an archive. Export requires the dedicated `docker:containers:export` scope plus container file and environment access; `includeSecrets=true` additionally requires secret access. `imageMode=registry` does not allow writable-layer capture.
 - `POST /api/docker/nodes/{nodeId}/containers/archive?name={newName}&resolution={json}` accepts an `application/vnd.wiolett.gwca` body and requires container-create and environment access on the target node. The optional `resolution` object can contain `networks`, `bindPaths`, `volumes`, and `ports` mappings. Importing secret values additionally requires secret access; creating archive-declared local volumes or missing networks requires the corresponding create permissions.
 
 Example resolution:

@@ -3,7 +3,11 @@ import {
   buildContainerMutationSnapshot,
   shouldSettleMutationTransition,
 } from "./DockerContainerDetail";
-import { containerLifecycleActions, STATUS_BADGE } from "./docker-detail/helpers";
+import {
+  containerArchiveCapabilities,
+  containerLifecycleActions,
+  STATUS_BADGE,
+} from "./docker-detail/helpers";
 
 function makeContainer(overrides: Record<string, unknown> = {}) {
   return {
@@ -93,5 +97,16 @@ describe("DockerContainerDetail lifecycle actions", () => {
       canRestart: false,
       canKill: false,
     });
+  });
+});
+
+describe("DockerContainerDetail archive permissions", () => {
+  it("requires export, files, and environment access while keeping secrets optional", () => {
+    expect(
+      containerArchiveCapabilities({ export: true, files: true, environment: true, secrets: false })
+    ).toEqual({ canExport: true, canIncludeSecrets: false });
+    expect(
+      containerArchiveCapabilities({ export: false, files: true, environment: true, secrets: true })
+    ).toEqual({ canExport: false, canIncludeSecrets: true });
   });
 });

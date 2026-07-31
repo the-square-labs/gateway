@@ -25,6 +25,7 @@ const SCOPED_DOCKER_NODE_SCOPES = [
   'docker:containers:environment',
   'docker:containers:secrets',
   'docker:containers:files',
+  'docker:containers:export',
   'docker:containers:webhooks',
   'docker:containers:mounts',
   'docker:images:view',

@@ -47,6 +47,7 @@ export const RESOURCE_SCOPABLE_SCOPES = [
   "docker:containers:delete",
   "docker:containers:console",
   "docker:containers:files",
+  "docker:containers:export",
   "docker:containers:secrets",
   "docker:containers:webhooks",
   "docker:containers:mounts",
@@ -854,6 +855,12 @@ const RAW_TOKEN_SCOPES = [
     value: "docker:containers:files",
     label: "Container Files",
     desc: "Browse and edit files in containers",
+    group: "Docker: Containers",
+  },
+  {
+    value: "docker:containers:export",
+    label: "Export Containers",
+    desc: "Export portable container archives",
     group: "Docker: Containers",
   },
   {

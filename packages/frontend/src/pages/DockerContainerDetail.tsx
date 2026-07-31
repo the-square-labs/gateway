@@ -65,6 +65,7 @@ import { ConsoleTab } from "./docker-detail/ConsoleTab";
 import { EnvironmentTab } from "./docker-detail/EnvironmentTab";
 import { FilesTab } from "./docker-detail/FilesTab";
 import {
+  containerArchiveCapabilities,
   containerDisplayName,
   containerLifecycleActions,
   type InspectData,
@@ -141,6 +142,12 @@ export function DockerContainerDetail({
   const canUseFiles = hasContainerScope("docker:containers:files");
   const canUseEnvironment = hasContainerScope("docker:containers:environment");
   const canUseSecrets = hasContainerScope("docker:containers:secrets");
+  const archiveCapabilities = containerArchiveCapabilities({
+    export: hasContainerScope("docker:containers:export"),
+    files: canUseFiles,
+    environment: canUseEnvironment,
+    secrets: canUseSecrets,
+  });
   const invalidate = useDockerStore((s) => s.invalidate);
   const setSelectedNode = useDockerStore((s) => s.setSelectedNode);
   const previousNodeIdRef = useRef(useDockerStore.getState().selectedNodeId);
@@ -528,7 +535,7 @@ export function DockerContainerDetail({
         containerId!,
         archiveWritableLayer,
         archiveImageMode,
-        archiveIncludeSecrets,
+        archiveCapabilities.canIncludeSecrets && archiveIncludeSecrets,
         ({ loaded, total }) => {
           const description =
             total > 0
@@ -733,7 +740,7 @@ export function DockerContainerDetail({
           },
         ]
       : []),
-    ...(canUseFiles && canUseEnvironment
+    ...(archiveCapabilities.canExport
       ? [
           {
             label: "Export archive",
@@ -1112,7 +1119,7 @@ export function DockerContainerDetail({
                   ariaLabel="Include writable container layer"
                 />
               </SettingsControlRow>
-              {(canUseSecrets || archiveDevPreview) && (
+              {(archiveCapabilities.canIncludeSecrets || archiveDevPreview) && (
                 <SettingsControlRow
                   title="Include secrets"
                   description="Stores decrypted secret values in the archive. Treat the downloaded file as sensitive."

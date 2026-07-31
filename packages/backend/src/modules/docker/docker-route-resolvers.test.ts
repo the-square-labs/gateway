@@ -24,6 +24,7 @@ describe('Docker route resolvers', () => {
     expect(hasDockerNodeRouteAccess(['docker:containers:manage:node-2'], 'node-1')).toBe(false);
     expect(hasDockerNodeRouteAccess(['docker:containers:create'], 'node-1')).toBe(false);
     expect(hasDockerNodeRouteAccess(['docker:containers:config:node-1'], 'node-1')).toBe(true);
+    expect(hasDockerNodeRouteAccess(['docker:containers:export:node-1/container-1'], 'node-1')).toBe(true);
     expect(hasDockerNodeRouteAccess(['docker:containers:view:node-1/container-1'], 'node-1')).toBe(true);
   });
 

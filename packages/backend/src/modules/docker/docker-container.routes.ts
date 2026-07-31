@@ -369,7 +369,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...exportContainerArchiveRoute, middleware: requireDockerContainerScope('docker:containers:files') },
+    { ...exportContainerArchiveRoute, middleware: requireDockerContainerScope('docker:containers:export') },
     async (c) => {
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;

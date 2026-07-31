@@ -15,6 +15,7 @@ import {
   PROGRAMMATIC_DENIED_BASE_SCOPES,
   RESOURCE_SCOPABLE,
   SYSTEM_ADMIN_SCOPES,
+  VIEWER_SCOPES,
 } from './scopes.js';
 
 function frontendResourceScopableScopes(): string[] {
@@ -92,6 +93,12 @@ describe('canonical scope definitions', () => {
     expect(ALL_SCOPES).toContain('docker:containers:mounts');
   });
 
+  it('lets built-in viewers use configured GitLab registries without managing them', () => {
+    expect(VIEWER_SCOPES).toContain('integrations:gitlab:registry:use');
+    expect(VIEWER_SCOPES).not.toContain('integrations:gitlab:registry:view');
+    expect(VIEWER_SCOPES).not.toContain('integrations:gitlab:registry:manage');
+  });
+
   it('grants Docker migrations only to admin tiers and requires manual approval', () => {
     expect(SYSTEM_ADMIN_SCOPES).toContain('docker:containers:migrate');
     expect(ADMIN_SCOPES).toContain('docker:containers:migrate');
@@ -103,6 +110,28 @@ describe('canonical scope definitions', () => {
     expect(hasScopeForResource(['docker:containers:migrate:node-1'], 'docker:containers:migrate', 'node-2')).toBe(
       false
     );
+  });
+
+  it('protects Docker archive export with a resource-scoped manual-approval permission', () => {
+    expect(SYSTEM_ADMIN_SCOPES).toContain('docker:containers:export');
+    expect(ADMIN_SCOPES).toContain('docker:containers:export');
+    expect(OPERATOR_SCOPES).not.toContain('docker:containers:export');
+    expect(RESOURCE_SCOPABLE).toContain('docker:containers:export');
+    expect(MANUAL_APPROVAL_SCOPES).toContain('docker:containers:export');
+    expect(
+      hasScopeForResource(
+        ['docker:containers:export:node-1/container-1'],
+        'docker:containers:export',
+        'node-1/container-1'
+      )
+    ).toBe(true);
+    expect(
+      hasScopeForResource(
+        ['docker:containers:export:node-1/container-1'],
+        'docker:containers:export',
+        'node-1/container-2'
+      )
+    ).toBe(false);
   });
 
   it('requires explicit grants for high-risk host node consoles', () => {
@@ -189,6 +218,7 @@ describe('canonical scope definitions', () => {
       'nodes:files:write',
       'docker:containers:console',
       'docker:containers:files',
+      'docker:containers:export',
       'docker:containers:secrets',
       'docker:containers:mounts',
       'docker:containers:migrate',

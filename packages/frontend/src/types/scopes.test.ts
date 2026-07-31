@@ -16,6 +16,7 @@ describe("scope constants", () => {
     expect(AI_SCOPE).toBe("feat:ai:use");
     expect(RESOURCE_SCOPABLE_SCOPES).toContain("proxy:view");
     expect(RESOURCE_SCOPABLE_SCOPES).toContain("docker:containers:manage");
+    expect(RESOURCE_SCOPABLE_SCOPES).toContain("docker:containers:export");
     expect(RESOURCE_SCOPABLE_SCOPES).toContain("databases:query:admin");
     expect(RESOURCE_SCOPABLE_SCOPES).toContain("logs:read");
     expect(RESOURCE_SCOPABLE_SCOPES).not.toContain("admin:system");

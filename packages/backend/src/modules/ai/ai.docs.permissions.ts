@@ -162,6 +162,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | docker:containers:delete | Remove containers (resource-scopable) |
 | docker:containers:console | Open exec terminal (resource-scopable) |
 | docker:containers:files | Browse/edit container files (resource-scopable) |
+| docker:containers:export | Export portable container archives (resource-scopable) |
 | docker:containers:secrets | Manage encrypted secrets (resource-scopable) |
 | docker:containers:webhooks | Configure CI/CD webhook URLs |
 | docker:containers:mounts | Add, remove, or change container/deployment mounts (resource-scopable) |
