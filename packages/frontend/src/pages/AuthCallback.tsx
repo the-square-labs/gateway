@@ -4,6 +4,17 @@ import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 
+let currentUserRequest: ReturnType<typeof api.getCurrentUser> | null = null;
+
+function loadCurrentUserOnce() {
+  if (!currentUserRequest) {
+    currentUserRequest = api.getCurrentUser().finally(() => {
+      currentUserRequest = null;
+    });
+  }
+  return currentUserRequest;
+}
+
 export function AuthCallback() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -11,25 +22,33 @@ export function AuthCallback() {
   const { login } = useAuthStore();
 
   useEffect(() => {
+    let cancelled = false;
+
     const handleCallback = async () => {
       const errorParam = searchParams.get("error");
 
       if (errorParam) {
-        setError(errorParam);
+        if (!cancelled) setError(errorParam);
         return;
       }
 
       try {
-        const user = await api.getCurrentUser();
+        const user = await loadCurrentUserOnce();
+        if (cancelled) return;
         login(user);
         navigate("/", { replace: true });
       } catch (err) {
+        if (cancelled) return;
         const message = err instanceof Error ? err.message : "Authentication failed";
         setError(message);
       }
     };
 
-    handleCallback();
+    void handleCallback();
+
+    return () => {
+      cancelled = true;
+    };
   }, [searchParams, login, navigate]);
 
   if (error) {

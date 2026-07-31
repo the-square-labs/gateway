@@ -845,7 +845,7 @@ export default function App() {
         <RealtimeBridge />
         <AppStatusGate />
         <BrowserRouter>
-          <Routes key={authRouteKey}>
+          <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/callback" element={<AuthCallback />} />
             <Route path="/oauth/consent" element={<OAuthConsent />} />
@@ -915,7 +915,7 @@ export default function App() {
                 </PopoutAuthGate>
               }
             />
-            <Route element={<DashboardLayout />}>
+            <Route element={<DashboardLayout key={authRouteKey} />}>
               <Route path="/" element={<Dashboard />} />
               <Route path="/proxy-hosts" element={<ProxyHostsPageGuard />} />
               <Route path="/proxy-hosts/new" element={<ProxyHostsPageGuard create />} />
