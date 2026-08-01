@@ -326,7 +326,11 @@ function ManagedDatabaseCreateForm({
                     type,
                     version: catalogVersions(catalog, type)[0]!,
                     ...(type === "clickhouse"
-                      ? { publishNativeTcp: draft.publishNativeTcp ?? true }
+                      ? {
+                          publishNativeTcp: draft.publishTcp
+                            ? (draft.publishNativeTcp ?? true)
+                            : false,
+                        }
                       : { publishNativeTcp: undefined, publishedNativePort: undefined }),
                   });
                 }}
@@ -805,7 +809,11 @@ export function Databases({
     }
     setManagedSaving(true);
     try {
-      const created = await api.createManagedDatabase(managedDraft);
+      const created = await api.createManagedDatabase({
+        ...managedDraft,
+        publishNativeTcp: managedDraft.publishTcp ? managedDraft.publishNativeTcp : false,
+        publishedNativePort: managedDraft.publishTcp ? managedDraft.publishedNativePort : undefined,
+      });
       toast.success("Managed database provisioning started");
       closeManagedCreate();
       setManagedDraft(defaultManagedDraft(managedCatalog));
