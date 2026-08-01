@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { Database as DatabaseIcon, FolderPlus, Plus, RefreshCw, ServerCog } from "lucide-react";
+import { Database as DatabaseIcon, DatabaseZap, FolderPlus, Plus, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -643,7 +643,7 @@ export function Databases({
         label: "Name",
         width: "38%",
         renderCell: (row) => {
-          const Icon = row.managed ? ServerCog : DatabaseIcon;
+          const Icon = row.managed ? DatabaseZap : DatabaseIcon;
 
           return (
             <div className="flex min-w-0 items-center gap-4">
