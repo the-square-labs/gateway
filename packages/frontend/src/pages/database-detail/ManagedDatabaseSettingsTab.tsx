@@ -339,7 +339,7 @@ export function ManagedDatabaseSettingsTab({
               value={clickhouseConfigXml}
               onChange={setClickhouseConfigXml}
               language="xml"
-              height="min(48dvh, 520px)"
+              height="min(42dvh, 440px)"
               bordered={false}
               showGutterBorder={false}
               readOnly={saving || confirmingRecreate || managed.status !== "ready"}

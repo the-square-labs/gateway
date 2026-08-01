@@ -605,7 +605,7 @@ function ManagedDatabaseCreateForm({
               value={draft.clickhouseConfigXml ?? ""}
               onChange={(value) => set("clickhouseConfigXml", value || undefined)}
               language="xml"
-              height="min(48dvh, 520px)"
+              height="min(42dvh, 440px)"
               bordered={false}
               showGutterBorder={false}
             />
