@@ -63,7 +63,7 @@ export function EnvironmentTab({
   // Secrets state — edited locally, flushed to DB on recreate
   const [secretRows, setSecretRows] = useState<SecretRow[]>([]);
   const [deletedSecretIds, setDeletedSecretIds] = useState<Set<string>>(new Set());
-  const [hasOnlineDatabaseNode, setHasOnlineDatabaseNode] = useState(false);
+  const [hasDatabaseNode, setHasDatabaseNode] = useState(false);
   const databaseLinksRef = useRef<ManagedDatabaseLinksSectionHandle>(null);
   const [databaseLinkDraft, setDatabaseLinkDraft] =
     useState<ManagedDatabaseLinkDraft>(EMPTY_DATABASE_LINK_DRAFT);
@@ -171,18 +171,18 @@ export function EnvironmentTab({
 
   useEffect(() => {
     if (!canEdit || !canManageSecrets || isServiceEnv || !containerName) {
-      setHasOnlineDatabaseNode(false);
+      setHasDatabaseNode(false);
       return;
     }
 
     let cancelled = false;
     void api
-      .listNodes({ type: "databases", status: "online", limit: 1 })
+      .listNodes({ type: "databases", limit: 1 })
       .then((result) => {
-        if (!cancelled) setHasOnlineDatabaseNode(result.data.some((node) => node.isConnected));
+        if (!cancelled) setHasDatabaseNode(result.data.length > 0);
       })
       .catch(() => {
-        if (!cancelled) setHasOnlineDatabaseNode(false);
+        if (!cancelled) setHasDatabaseNode(false);
       });
     return () => {
       cancelled = true;
@@ -571,7 +571,7 @@ export function EnvironmentTab({
 
   return (
     <div className={rawMode ? "flex flex-col flex-1 min-h-0" : "pb-6 space-y-4"}>
-      {canEdit && canManageSecrets && !isServiceEnv && containerName && hasOnlineDatabaseNode && (
+      {canEdit && canManageSecrets && !isServiceEnv && containerName && hasDatabaseNode && (
         <ManagedDatabaseLinksSection
           ref={databaseLinksRef}
           nodeId={nodeId}

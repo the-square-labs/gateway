@@ -1,9 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps, FormEvent } from "react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { api } from "@/services/api";
+import { makeNode } from "@/test/fixtures";
 import type { ManagedDatabase, ManagedDatabaseBinding } from "@/types";
 import { ManagedDatabaseLinksSection } from "./ManagedDatabaseLinksSection";
 
@@ -55,6 +56,23 @@ function renderLinks(props: Partial<ComponentProps<typeof ManagedDatabaseLinksSe
 }
 
 describe("ManagedDatabaseLinksSection", () => {
+  beforeEach(() => {
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [
+        makeNode({
+          id: database.nodeId,
+          type: "databases",
+          displayName: "Database Blue",
+          appearanceColor: "blue",
+        }),
+      ],
+      total: 1,
+      page: 1,
+      limit: 100,
+      totalPages: 1,
+    });
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.mocked(confirm).mockReset();
@@ -79,6 +97,7 @@ describe("ManagedDatabaseLinksSection", () => {
     const databaseOption = await screen.findByRole("option", { name: "App Postgres" });
     expect(databaseOption).toHaveTextContent("App Postgres");
     expect(databaseOption).toHaveTextContent("postgres");
+    expect(databaseOption).toHaveTextContent("Database Blue");
     fireEvent.click(databaseOption);
 
     fireEvent.click(screen.getByRole("button", { name: "Add link" }));
@@ -164,6 +183,35 @@ describe("ManagedDatabaseLinksSection", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save & Recreate" }));
     await waitFor(() => expect(remove).toHaveBeenCalledWith(database.id, binding.id));
+  });
+
+  it("keeps links visible but unavailable when their databases node is offline", async () => {
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [
+        makeNode({
+          id: database.nodeId,
+          type: "databases",
+          displayName: "Database Blue",
+          appearanceColor: "blue",
+          status: "offline",
+          isConnected: false,
+        }),
+      ],
+      total: 1,
+      page: 1,
+      limit: 100,
+      totalPages: 1,
+    });
+    vi.spyOn(api, "listManagedDatabases").mockResolvedValue([database]);
+    vi.spyOn(api, "listManagedDatabaseBindings").mockResolvedValue([binding]);
+
+    renderLinks();
+
+    expect(await screen.findByText("App Postgres")).toBeInTheDocument();
+    expect(screen.getByText("Database Blue")).toBeInTheDocument();
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(await screen.findByText("No managed databases available")).toBeInTheDocument();
   });
 
   it("unlocks link controls without waiting for the background container refresh", async () => {

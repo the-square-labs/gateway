@@ -30,6 +30,8 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useRealtime } from "@/hooks/use-realtime";
+import { nodeIconClassNames } from "@/lib/node-appearance";
 import { databaseRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -556,14 +558,14 @@ export function Databases({
         }
         setRows(result.data);
       }
-      if (!embedded) {
-        const [nodes, catalog] = await Promise.allSettled([
-          api.listNodes({ type: "databases", status: "online", limit: 100 }),
-          api.listManagedDatabaseCatalog(),
-        ]);
-        if (nodes.status === "fulfilled") setDatabaseNodes(nodes.value.data);
-        if (catalog.status === "fulfilled") setManagedCatalog(catalog.value);
-      }
+      const [nodes, catalog] = await Promise.allSettled([
+        api.listNodes({ type: "databases", limit: 100 }),
+        embedded
+          ? Promise.resolve([] as ManagedDatabaseCatalogEntry[])
+          : api.listManagedDatabaseCatalog(),
+      ]);
+      if (nodes.status === "fulfilled") setDatabaseNodes(nodes.value.data);
+      if (catalog.status === "fulfilled") setManagedCatalog(catalog.value);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to load databases");
     } finally {
@@ -574,6 +576,13 @@ export function Databases({
   useEffect(() => {
     void load();
   }, [load]);
+
+  useRealtime(hasScopedAccess("nodes:details") ? "node.changed" : null, () => {
+    void api
+      .listNodes({ type: "databases", limit: 100 })
+      .then((result) => setDatabaseNodes(result.data))
+      .catch(() => undefined);
+  });
 
   const canCreate = !embedded && hasScope("databases:create");
   const canManageFolders = !embedded && hasScope("databases:folders:manage");
@@ -592,13 +601,27 @@ export function Databases({
     () => catalogVersions(managedCatalog, managedDraft.type),
     [managedCatalog, managedDraft.type]
   );
+  const databaseNodeById = useMemo(
+    () => new Map(databaseNodes.map((node) => [node.id, node])),
+    [databaseNodes]
+  );
+  const deployableDatabaseNodes = useMemo(
+    () => databaseNodes.filter((node) => node.status === "online" && node.isConnected),
+    [databaseNodes]
+  );
+  const selectedDeployableDatabaseNode = useMemo(
+    () => deployableDatabaseNodes.find((node) => node.id === managedDraft.nodeId),
+    [deployableDatabaseNodes, managedDraft.nodeId]
+  );
   const managedCapacity = useMemo(
-    () => managedDatabaseCapacity(databaseNodes.find((node) => node.id === managedDraft.nodeId)),
-    [databaseNodes, managedDraft.nodeId]
+    () => managedDatabaseCapacity(selectedDeployableDatabaseNode),
+    [selectedDeployableDatabaseNode]
   );
   const canDeployManaged = useMemo(
-    () => canDeployManagedDatabase(managedDraft, managedVersions, managedCapacity),
-    [managedCapacity, managedDraft, managedVersions]
+    () =>
+      !!selectedDeployableDatabaseNode &&
+      canDeployManagedDatabase(managedDraft, managedVersions, managedCapacity),
+    [managedCapacity, managedDraft, managedVersions, selectedDeployableDatabaseNode]
   );
 
   const save = async () => {
@@ -644,11 +667,13 @@ export function Databases({
         width: "38%",
         renderCell: (row) => {
           const Icon = row.managed ? DatabaseZap : DatabaseIcon;
+          const node = row.managed ? databaseNodeById.get(row.managed.nodeId) : undefined;
+          const iconClassNames = nodeIconClassNames(node?.appearanceColor);
 
           return (
             <div className="flex min-w-0 items-center gap-4">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center bg-muted">
-                <Icon className="h-5 w-5 text-muted-foreground" />
+              <div className={iconClassNames.wrapper}>
+                <Icon className={cn("h-5 w-5", iconClassNames.icon)} />
               </div>
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium">{row.name}</p>
@@ -682,19 +707,19 @@ export function Databases({
         label: "Health",
         width: "14%",
         align: "center",
-        renderCell: (row) => (
-          <Badge
-            variant={
-              HEALTH_BADGE[row.managed?.status === "paused" ? "paused" : row.healthStatus] ??
-              "secondary"
-            }
-          >
-            {formatHealthLabel(row.managed?.status === "paused" ? "paused" : row.healthStatus)}
-          </Badge>
-        ),
+        renderCell: (row) => {
+          const node = row.managed ? databaseNodeById.get(row.managed.nodeId) : undefined;
+          if (node && (node.status !== "online" || !node.isConnected)) {
+            return <Badge variant="secondary">Unavailable</Badge>;
+          }
+          const status = row.managed?.status === "paused" ? "paused" : row.healthStatus;
+          return (
+            <Badge variant={HEALTH_BADGE[status] ?? "secondary"}>{formatHealthLabel(status)}</Badge>
+          );
+        },
       },
     ],
-    []
+    [databaseNodeById]
   );
 
   return (
@@ -880,7 +905,7 @@ export function Databases({
                 >
                   <ManagedDatabaseCreateForm
                     draft={managedDraft}
-                    nodes={databaseNodes}
+                    nodes={deployableDatabaseNodes}
                     catalog={managedCatalog}
                     capacity={managedCapacity}
                     onChange={setManagedDraft}

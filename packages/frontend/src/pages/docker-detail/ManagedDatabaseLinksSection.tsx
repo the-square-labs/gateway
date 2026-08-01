@@ -26,6 +26,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useRealtime } from "@/hooks/use-realtime";
+import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { api } from "@/services/api";
 import type {
   DatabaseType,
@@ -33,6 +35,7 @@ import type {
   ManagedDatabaseBinding,
   ManagedDatabaseBindingEnvironment,
   ManagedDatabaseBindingTargetType,
+  Node,
 } from "@/types";
 
 type ConnectionMode = "uri" | "credentials";
@@ -171,6 +174,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
 ) {
   const navigate = useNavigate();
   const [databases, setDatabases] = useState<ManagedDatabase[]>([]);
+  const [databaseNodes, setDatabaseNodes] = useState<Node[]>([]);
   const [bindings, setBindings] = useState<ManagedDatabaseBinding[]>([]);
   const [changes, setChanges] = useState<PendingDatabaseLinkChanges>(EMPTY_CHANGES);
   const [selectedDatabaseId, setSelectedDatabaseId] = useState("");
@@ -186,15 +190,17 @@ export const ManagedDatabaseLinksSection = forwardRef<
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const nextDatabases = await api.listManagedDatabases();
+      const [nextDatabases, nodeResult] = await Promise.all([
+        api.listManagedDatabases(),
+        api.listNodes({ type: "databases", limit: 100 }),
+      ]);
       const results = await Promise.all(
-        nextDatabases
-          .filter((database) => database.status === "ready")
-          .map(async (database) =>
-            api.listManagedDatabaseBindings(database.id).catch(() => [] as ManagedDatabaseBinding[])
-          )
+        nextDatabases.map(async (database) =>
+          api.listManagedDatabaseBindings(database.id).catch(() => [] as ManagedDatabaseBinding[])
+        )
       );
       setDatabases(nextDatabases);
+      setDatabaseNodes(nodeResult.data);
       setBindings(
         results
           .flat()
@@ -215,6 +221,13 @@ export const ManagedDatabaseLinksSection = forwardRef<
   useEffect(() => {
     void load();
   }, [load]);
+
+  useRealtime("node.changed", () => {
+    void api
+      .listNodes({ type: "databases", limit: 100 })
+      .then((result) => setDatabaseNodes(result.data))
+      .catch(() => undefined);
+  });
 
   const displayBindings = useMemo<DisplayBinding[]>(
     () => [
@@ -243,10 +256,21 @@ export const ManagedDatabaseLinksSection = forwardRef<
     () => new Set(displayBindings.map(({ binding }) => binding.managedDatabaseId)),
     [displayBindings]
   );
+  const databaseNodeById = useMemo(
+    () => new Map(databaseNodes.map((node) => [node.id, node])),
+    [databaseNodes]
+  );
+  const databaseIsAvailable = useCallback(
+    (database: ManagedDatabase) => {
+      const node = databaseNodeById.get(database.nodeId);
+      return database.status === "ready" && !!node && node.status === "online" && node.isConnected;
+    },
+    [databaseNodeById]
+  );
   const available = useMemo(
     () =>
-      databases.filter((database) => database.status === "ready" && !linkedIds.has(database.id)),
-    [databases, linkedIds]
+      databases.filter((database) => databaseIsAvailable(database) && !linkedIds.has(database.id)),
+    [databaseIsAvailable, databases, linkedIds]
   );
   const selected = available.find((database) => database.id === selectedDatabaseId) ?? available[0];
   const hasChanges = changes.additions.length > 0 || changes.removals.length > 0;
@@ -316,6 +340,8 @@ export const ManagedDatabaseLinksSection = forwardRef<
     binding.managedDatabaseId;
   const databaseType = (binding: ManagedDatabaseBinding) =>
     databases.find((database) => database.id === binding.managedDatabaseId)?.type ?? "database";
+  const databaseForBinding = (binding: ManagedDatabaseBinding) =>
+    databases.find((database) => database.id === binding.managedDatabaseId);
   const environmentSummary = (binding: ManagedDatabaseBinding) =>
     Object.values(binding.environment).filter(Boolean).join(", ") || "credentials injected";
 
@@ -496,53 +522,68 @@ export const ManagedDatabaseLinksSection = forwardRef<
         ) : displayBindings.length === 0 ? (
           <EmptyState message="No managed database links" embedded />
         ) : (
-          displayBindings.map((entry) => (
-            <SettingsControlRow
-              key={entry.binding.id}
-              title={databaseName(entry.binding)}
-              description={`${databaseType(entry.binding)} · ${environmentSummary(entry.binding)}`}
-            >
-              <div className="flex items-center gap-2">
-                <Badge
-                  variant={
-                    entry.pending === "remove"
-                      ? "warning"
-                      : entry.pending === "add"
-                        ? "secondary"
-                        : entry.binding.status === "ready"
-                          ? "success"
-                          : "secondary"
-                  }
-                >
-                  {entry.pending === "remove"
-                    ? "will unlink"
-                    : entry.pending === "add"
-                      ? "pending"
-                      : entry.binding.status}
-                </Badge>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
-                  disabled={disabled || saving}
-                  onClick={() => void stageUnlink(entry)}
-                  aria-label={
-                    entry.pending === "remove"
-                      ? `Keep ${databaseName(entry.binding)} linked`
-                      : `Unlink ${databaseName(entry.binding)}`
-                  }
-                  title={entry.pending === "remove" ? "Keep link" : "Unlink database"}
-                >
-                  {entry.pending === "remove" ? (
-                    <Undo2 className="h-4 w-4" />
-                  ) : (
-                    <Trash2 className="h-4 w-4" />
+          displayBindings.map((entry) => {
+            const database = databaseForBinding(entry.binding);
+            const databaseNode = database ? databaseNodeById.get(database.nodeId) : undefined;
+            const unavailable = !!database && !!databaseNode && !databaseIsAvailable(database);
+            return (
+              <SettingsControlRow
+                key={entry.binding.id}
+                title={databaseName(entry.binding)}
+                description={`${databaseType(entry.binding)} · ${environmentSummary(entry.binding)}`}
+              >
+                <div className="flex items-center gap-2">
+                  {databaseNode && (
+                    <Badge
+                      variant="secondary"
+                      size="inline"
+                      className={nodeBadgeClassName(databaseNode.appearanceColor)}
+                    >
+                      {databaseNode.displayName || databaseNode.hostname}
+                    </Badge>
                   )}
-                </Button>
-              </div>
-            </SettingsControlRow>
-          ))
+                  {unavailable && <Badge variant="secondary">Unavailable</Badge>}
+                  <Badge
+                    variant={
+                      entry.pending === "remove"
+                        ? "warning"
+                        : entry.pending === "add"
+                          ? "secondary"
+                          : entry.binding.status === "ready"
+                            ? "success"
+                            : "secondary"
+                    }
+                  >
+                    {entry.pending === "remove"
+                      ? "will unlink"
+                      : entry.pending === "add"
+                        ? "pending"
+                        : entry.binding.status}
+                  </Badge>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                    disabled={disabled || saving}
+                    onClick={() => void stageUnlink(entry)}
+                    aria-label={
+                      entry.pending === "remove"
+                        ? `Keep ${databaseName(entry.binding)} linked`
+                        : `Unlink ${databaseName(entry.binding)}`
+                    }
+                    title={entry.pending === "remove" ? "Keep link" : "Unlink database"}
+                  >
+                    {entry.pending === "remove" ? (
+                      <Undo2 className="h-4 w-4" />
+                    ) : (
+                      <Trash2 className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
+              </SettingsControlRow>
+            );
+          })
         )}
       </PanelShell>
 
@@ -552,8 +593,8 @@ export const ManagedDatabaseLinksSection = forwardRef<
             <DialogTitle>No managed databases available</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            There are no unlinked ready managed databases for this workload. Create a database, then
-            return here to add a private connection.
+            There are no unlinked ready managed databases on an online databases node for this
+            workload. Create a database, then return here to add a private connection.
           </p>
           <DialogFooter>
             <Button
@@ -612,7 +653,23 @@ export const ManagedDatabaseLinksSection = forwardRef<
                           <SelectItem
                             key={database.id}
                             value={database.id}
-                            description={database.type}
+                            description={
+                              <span className="flex items-center gap-2">
+                                <span>{database.type}</span>
+                                {databaseNodeById.get(database.nodeId) && (
+                                  <Badge
+                                    variant="secondary"
+                                    size="inline"
+                                    className={nodeBadgeClassName(
+                                      databaseNodeById.get(database.nodeId)?.appearanceColor
+                                    )}
+                                  >
+                                    {databaseNodeById.get(database.nodeId)?.displayName ||
+                                      databaseNodeById.get(database.nodeId)?.hostname}
+                                  </Badge>
+                                )}
+                              </span>
+                            }
                           >
                             {database.name}
                           </SelectItem>

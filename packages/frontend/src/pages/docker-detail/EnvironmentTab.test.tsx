@@ -58,7 +58,7 @@ describe("EnvironmentTab managed database links", () => {
     vi.spyOn(api, "getContainerEnv").mockResolvedValue(["PATH=/usr/bin", "DATABASE_URL=old-value"]);
     vi.spyOn(api, "listDockerSecrets").mockResolvedValue([]);
     vi.spyOn(api, "listNodes").mockResolvedValue({
-      data: [makeNode({ type: "databases" })],
+      data: [makeNode({ id: database.nodeId, type: "databases" })],
       total: 1,
       page: 1,
       limit: 1,
@@ -86,7 +86,7 @@ describe("EnvironmentTab managed database links", () => {
     }
   });
 
-  it("does not show managed database links until a databases node is online", async () => {
+  it("does not show managed database links when no databases node exists", async () => {
     useAuthStore.setState({
       user: makeUser({ scopes: ["docker:containers:environment", "docker:containers:secrets"] }),
       isAuthenticated: true,
@@ -111,7 +111,7 @@ describe("EnvironmentTab managed database links", () => {
 
     expect(await screen.findByDisplayValue("DATABASE_URL")).toBeInTheDocument();
     await waitFor(() =>
-      expect(api.listNodes).toHaveBeenCalledWith({ type: "databases", status: "online", limit: 1 })
+      expect(api.listNodes).toHaveBeenCalledWith({ type: "databases", limit: 1 })
     );
     expect(screen.queryByText("Managed Database Links")).not.toBeInTheDocument();
   });
@@ -126,7 +126,7 @@ describe("EnvironmentTab managed database links", () => {
     vi.spyOn(api, "getContainerEnv").mockResolvedValue(["PATH=/usr/bin"]);
     vi.spyOn(api, "listDockerSecrets").mockResolvedValue([]);
     vi.spyOn(api, "listNodes").mockResolvedValue({
-      data: [makeNode({ type: "databases" })],
+      data: [makeNode({ id: database.nodeId, type: "databases" })],
       total: 1,
       page: 1,
       limit: 1,
@@ -154,7 +154,7 @@ describe("EnvironmentTab managed database links", () => {
     const getContainerEnv = vi.spyOn(api, "getContainerEnv").mockResolvedValue(["PATH=/usr/bin"]);
     vi.spyOn(api, "listDockerSecrets").mockResolvedValue([]);
     vi.spyOn(api, "listNodes").mockResolvedValue({
-      data: [makeNode({ type: "databases" })],
+      data: [makeNode({ id: database.nodeId, type: "databases" })],
       total: 1,
       page: 1,
       limit: 1,
