@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { Database as DatabaseIcon, FolderPlus, Plus, RefreshCw } from "lucide-react";
+import { Database as DatabaseIcon, FolderPlus, Plus, RefreshCw, ServerCog } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -642,20 +642,24 @@ export function Databases({
         id: "name",
         label: "Name",
         width: "38%",
-        renderCell: (row) => (
-          <div className="flex min-w-0 items-center gap-4">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center bg-muted">
-              <DatabaseIcon className="h-5 w-5 text-muted-foreground" />
+        renderCell: (row) => {
+          const Icon = row.managed ? ServerCog : DatabaseIcon;
+
+          return (
+            <div className="flex min-w-0 items-center gap-4">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center bg-muted">
+                <Icon className="h-5 w-5 text-muted-foreground" />
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{row.name}</p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {row.host}:{row.port}
+                  {row.databaseName ? ` · ${row.databaseName}` : ""}
+                </p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{row.name}</p>
-              <p className="truncate text-xs text-muted-foreground">
-                {row.host}:{row.port}
-                {row.databaseName ? ` · ${row.databaseName}` : ""}
-              </p>
-            </div>
-          </div>
-        ),
+          );
+        },
       },
       {
         id: "tags",
