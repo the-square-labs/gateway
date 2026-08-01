@@ -8,8 +8,10 @@ import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
+import { PanelShell } from "@/components/common/PanelShell";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -64,9 +66,19 @@ const HEALTH_BADGE: Record<string, "success" | "secondary" | "warning" | "destru
 };
 
 const DEFAULT_MANAGED_DATABASE_VERSIONS: Record<DatabaseType, string[]> = {
-  postgres: ["18.4", "17.10", "16.14", "15.18", "14.23"],
-  redis: ["8.10.0", "8.8.1", "8.6.5", "8.4.5", "8.2.8"],
-  clickhouse: ["26.7.1.1315", "26.6.2.81", "26.5.6.64", "26.4.5.143", "26.3.17.56"],
+  postgres: ["18.4", "18.3", "17.10", "17.8", "16.14", "16.10", "15.18", "15.14", "14.23", "14.19"],
+  redis: ["8.10.0", "8.8.1", "8.6.5", "8.4.5", "8.2.8", "7.4.10", "7.2.12", "6.2.20"],
+  clickhouse: [
+    "26.7.1.1315",
+    "26.6.2.81",
+    "26.5.6.64",
+    "26.4.5.143",
+    "26.3.17.56",
+    "25.8.28.1",
+    "25.3.8.23",
+    "24.8.14.39",
+    "24.3.18.7",
+  ],
 };
 
 const MANAGED_DATABASE_FORM_ANIMATION = {
@@ -96,6 +108,7 @@ function defaultManagedDraft(
     memoryMb: 1024,
     swapMb: 0,
     publishTcp: false,
+    tlsEnabled: true,
   };
 }
 
@@ -283,7 +296,12 @@ function ManagedDatabaseCreateForm({
             value={draft.type}
             onValueChange={(value) => {
               const type = value as DatabaseType;
-              onChange({ ...draft, type, version: catalogVersions(catalog, type)[0]! });
+              onChange({
+                ...draft,
+                type,
+                version: catalogVersions(catalog, type)[0]!,
+                ...(type === "clickhouse" ? {} : { publishedNativePort: undefined }),
+              });
             }}
           >
             <SelectTrigger>
@@ -404,47 +422,78 @@ function ManagedDatabaseCreateForm({
           )}
         </div>
       </div>
-      <div className="flex items-center justify-between gap-4 border border-border p-3">
-        <div>
-          <p className="text-sm font-medium">Publish TCP endpoint</p>
-          <p className="text-xs text-muted-foreground">
-            Required only for clients outside Gateway. Native engine TLS is configured separately.
-          </p>
-        </div>
-        <Switch
-          checked={draft.publishTcp}
-          onChange={(checked) =>
-            onChange({
-              ...draft,
-              publishTcp: checked,
-              ...(checked ? {} : { publishedPort: undefined }),
-            })
-          }
-        />
-      </div>
-      {draft.publishTcp && (
-        <div className="space-y-2">
-          <label className="text-sm font-medium" htmlFor="managed-db-published-port">
-            Host TCP port (optional)
-          </label>
-          <Input
-            id="managed-db-published-port"
-            type="number"
-            min="1"
-            max="65535"
-            value={draft.publishedPort ?? ""}
-            onChange={(event) => {
-              const value = event.target.value;
-              set("publishedPort", value === "" ? undefined : Number(value));
-            }}
-            placeholder="Allocate automatically"
+      <PanelShell
+        title="Publish TCP port"
+        description="Enables direct network connections in addition to secure managed links."
+        headerBorder={draft.publishTcp}
+        actions={
+          <Switch
+            checked={draft.publishTcp}
+            onChange={(checked) =>
+              onChange({
+                ...draft,
+                publishTcp: checked,
+                ...(checked ? {} : { publishedPort: undefined, publishedNativePort: undefined }),
+              })
+            }
+            ariaLabel="Publish TCP port"
           />
-          <p className="text-xs text-muted-foreground">
-            Leave empty to allocate a free port on the database node. Gateway does not change host
-            firewalls.
-          </p>
-        </div>
-      )}
+        }
+      >
+        <AnimatePresence initial={false} mode="popLayout">
+          {draft.publishTcp && (
+            <motion.div key="published-tcp-settings" {...MANAGED_DATABASE_FORM_ANIMATION}>
+              <SettingsControlRow
+                title="Published TCP port"
+                description="Leave empty to let Docker allocate a free port. Gateway does not change host firewalls."
+              >
+                <Input
+                  id="managed-db-published-port"
+                  aria-label="Published TCP port"
+                  type="number"
+                  min="1"
+                  max="65535"
+                  value={draft.publishedPort ?? ""}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    set("publishedPort", value === "" ? undefined : Number(value));
+                  }}
+                  placeholder="Automatic"
+                />
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="TLS"
+                description="Encrypt direct database traffic. Secure managed links always remain encrypted."
+              >
+                <Switch
+                  checked={draft.tlsEnabled ?? true}
+                  onChange={(checked) => set("tlsEnabled", checked)}
+                  ariaLabel="Enable TLS"
+                />
+              </SettingsControlRow>
+              {draft.type === "clickhouse" && (
+                <SettingsControlRow
+                  title="Native TCP port"
+                  description="A second published port for ClickHouse native clients. Leave empty for automatic allocation."
+                >
+                  <Input
+                    aria-label="Native TCP port"
+                    type="number"
+                    min="1"
+                    max="65535"
+                    value={draft.publishedNativePort ?? ""}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      set("publishedNativePort", value === "" ? undefined : Number(value));
+                    }}
+                    placeholder="Automatic"
+                  />
+                </SettingsControlRow>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </PanelShell>
       {draft.type === "clickhouse" && (
         <div className="space-y-2">
           <label className="text-sm font-medium" htmlFor="managed-db-clickhouse-xml">
@@ -898,20 +947,13 @@ export function Databases({
               <DialogTitle>Deploy managed database</DialogTitle>
             </DialogHeader>
             <AnimatedHeight>
-              <AnimatePresence mode="wait">
-                <motion.div
-                  key={`${managedDraft.type}:${managedDraft.publishTcp ? "tcp" : "private"}`}
-                  {...MANAGED_DATABASE_FORM_ANIMATION}
-                >
-                  <ManagedDatabaseCreateForm
-                    draft={managedDraft}
-                    nodes={deployableDatabaseNodes}
-                    catalog={managedCatalog}
-                    capacity={managedCapacity}
-                    onChange={setManagedDraft}
-                  />
-                </motion.div>
-              </AnimatePresence>
+              <ManagedDatabaseCreateForm
+                draft={managedDraft}
+                nodes={deployableDatabaseNodes}
+                catalog={managedCatalog}
+                capacity={managedCapacity}
+                onChange={setManagedDraft}
+              />
             </AnimatedHeight>
             <DialogFooter>
               <Button variant="outline" onClick={() => setManagedCreateOpen(false)}>

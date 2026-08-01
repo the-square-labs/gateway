@@ -33,39 +33,20 @@ func TestValidateManagedDatabaseInputRejectsMutableOrForeignImages(t *testing.T)
 }
 
 func TestValidateManagedDatabaseInputAcceptsEachCuratedEngineVersion(t *testing.T) {
-	tests := []struct {
-		name   string
-		engine string
-		image  string
-	}{
-		{"Postgres 14", "postgres", "docker.io/library/postgres@sha256:caf49e3b10d377aa2cfee478591d623808527beb27125d38797b418013f72d81"},
-		{"Postgres 15", "postgres", "docker.io/library/postgres@sha256:74e110c41804365e3915fcc09d5e7a1eff50161aaa94d5da0e58e0cd75ae509c"},
-		{"Postgres 16", "postgres", "docker.io/library/postgres@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20"},
-		{"Postgres 17", "postgres", "docker.io/library/postgres@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d"},
-		{"Postgres 18", "postgres", "docker.io/library/postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"},
-		{"Redis 8.2", "redis", "docker.io/library/redis@sha256:616bb446d5db225ddf786052834279e7c7222c48694d4451e8af22b8f5953b28"},
-		{"Redis 8.4", "redis", "docker.io/library/redis@sha256:6159aff1adde991d8747d705fa1135ceda04b0414dc372b381a6af415ec3b374"},
-		{"Redis 8.6", "redis", "docker.io/library/redis@sha256:aefcda4d4388a70e628ad5ebbf162ae65509b20ea3dd6eeac7dcbbb675d94dba"},
-		{"Redis 8.8", "redis", "docker.io/library/redis@sha256:c88d347edef6249a6d2293f926f1eeb48bd40c57cbcd02c07f52e7f1fd2cb46b"},
-		{"Redis 8.10", "redis", "docker.io/library/redis@sha256:c29e49ab2f85760a3827b53882e6dd9f5c6c3f0bb7d724e07bb31cbf275a5236"},
-		{"ClickHouse 26.3", "clickhouse", "docker.io/clickhouse/clickhouse-server@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3"},
-		{"ClickHouse 26.4", "clickhouse", "docker.io/clickhouse/clickhouse-server@sha256:ab3f33278b99576ea2ff2b0fa316b5e078c8b25f8ba08956cdbbb67d85c8b30f"},
-		{"ClickHouse 26.5", "clickhouse", "docker.io/clickhouse/clickhouse-server@sha256:0d16977194aca61e26631e616e0678c2a745344d7d9da5729d2356f413dd28e1"},
-		{"ClickHouse 26.6", "clickhouse", "docker.io/clickhouse/clickhouse-server@sha256:fdc22372465a336fa47e9deab61fad8277b9e2f2473234a1294b33b53f01d377"},
-		{"ClickHouse 26.7", "clickhouse", "docker.io/clickhouse/clickhouse-server@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			input := validManagedDatabaseInput()
-			input.Type = test.engine
-			input.Image = test.image
-			if test.engine == "redis" {
-				input.OwnerUsername = "default"
-			}
-			if err := validateManagedDatabaseInput(input); err != nil {
-				t.Fatalf("expected curated image to be accepted: %v", err)
-			}
-		})
+	for engine, images := range curatedManagedDatabaseImages {
+		for image := range images {
+			t.Run(engine+"/"+image, func(t *testing.T) {
+				input := validManagedDatabaseInput()
+				input.Type = engine
+				input.Image = image
+				if engine == "redis" {
+					input.OwnerUsername = "default"
+				}
+				if err := validateManagedDatabaseInput(input); err != nil {
+					t.Fatalf("expected curated image to be accepted: %v", err)
+				}
+			})
+		}
 	}
 }
 

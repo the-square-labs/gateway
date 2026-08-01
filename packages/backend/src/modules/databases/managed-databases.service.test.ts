@@ -58,10 +58,10 @@ describe('managed database catalog and input guardrails', () => {
     }
   });
 
-  it('offers the five current curated versions for every supported engine', () => {
-    for (const versions of Object.values(MANAGED_DATABASE_CATALOG)) {
-      expect(Object.keys(versions)).toHaveLength(5);
-    }
+  it('offers current and compatible historical curated versions for every supported engine', () => {
+    expect(Object.keys(MANAGED_DATABASE_CATALOG.postgres)).toHaveLength(10);
+    expect(Object.keys(MANAGED_DATABASE_CATALOG.redis)).toHaveLength(8);
+    expect(Object.keys(MANAGED_DATABASE_CATALOG.clickhouse)).toHaveLength(9);
   });
 
   it('does not accept a published port without explicit publication', () => {
