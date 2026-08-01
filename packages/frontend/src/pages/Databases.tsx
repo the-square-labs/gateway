@@ -293,6 +293,19 @@ function ManagedDatabaseCreateForm({
     key: K,
     value: ManagedDatabaseCreateInput[K]
   ) => onChange({ ...draft, [key]: value });
+  const [resourceInputs, setResourceInputs] = useState(() => ({
+    storageSizeGb: String(draft.storageSizeGb),
+    cpuCores: String(draft.cpuCores),
+    memoryMb: String(draft.memoryMb),
+    swapMb: String(draft.swapMb),
+  }));
+  const setResourceInput = (
+    key: "storageSizeGb" | "cpuCores" | "memoryMb" | "swapMb",
+    value: string
+  ) => {
+    setResourceInputs((current) => ({ ...current, [key]: value }));
+    set(key, value === "" ? 0 : Number(value));
+  };
   const versions = catalogVersions(catalog, draft.type);
 
   return (
@@ -412,8 +425,8 @@ function ManagedDatabaseCreateForm({
                 type="number"
                 min="1"
                 max={capacity.storageSizeGb}
-                value={draft.storageSizeGb || ""}
-                onChange={(event) => set("storageSizeGb", Number(event.target.value))}
+                value={resourceInputs.storageSizeGb}
+                onChange={(event) => setResourceInput("storageSizeGb", event.target.value)}
               />
               {capacity.storageSizeGb !== undefined && (
                 <p className="text-xs text-muted-foreground">
@@ -431,8 +444,8 @@ function ManagedDatabaseCreateForm({
                 min="0.25"
                 step="0.25"
                 max={capacity.cpuCores}
-                value={draft.cpuCores || ""}
-                onChange={(event) => set("cpuCores", Number(event.target.value))}
+                value={resourceInputs.cpuCores}
+                onChange={(event) => setResourceInput("cpuCores", event.target.value)}
               />
               {capacity.cpuCores !== undefined && (
                 <p className="text-xs text-muted-foreground">
@@ -450,8 +463,8 @@ function ManagedDatabaseCreateForm({
                 min="128"
                 step="128"
                 max={capacity.memoryMb}
-                value={draft.memoryMb || ""}
-                onChange={(event) => set("memoryMb", Number(event.target.value))}
+                value={resourceInputs.memoryMb}
+                onChange={(event) => setResourceInput("memoryMb", event.target.value)}
               />
               {capacity.memoryMb !== undefined && (
                 <p className="text-xs text-muted-foreground">
@@ -469,8 +482,8 @@ function ManagedDatabaseCreateForm({
                 min="0"
                 step="128"
                 max={capacity.swapMb}
-                value={draft.swapMb || ""}
-                onChange={(event) => set("swapMb", Number(event.target.value))}
+                value={resourceInputs.swapMb}
+                onChange={(event) => setResourceInput("swapMb", event.target.value)}
               />
               {capacity.swapMb !== undefined && (
                 <p className="text-xs text-muted-foreground">
@@ -641,6 +654,7 @@ export function Databases({
   const [createOpen, setCreateOpen] = useState(false);
   const [managedCreateOpen, setManagedCreateOpen] = useState(false);
   const [managedCreateStep, setManagedCreateStep] = useState<1 | 2 | 3>(1);
+  const [managedCreateSession, setManagedCreateSession] = useState(0);
   const [draft, setDraft] = useState<DatabaseConnectionDraft>(draftFromConnection(null));
   const [managedDraft, setManagedDraft] = useState<ManagedDatabaseCreateInput>(defaultManagedDraft);
   const [managedCatalog, setManagedCatalog] = useState<ManagedDatabaseCatalogEntry[]>([]);
@@ -652,6 +666,7 @@ export function Databases({
   const openManagedCreate = useCallback(() => {
     setManagedDraft(defaultManagedDraft(managedCatalog));
     setManagedCreateStep(1);
+    setManagedCreateSession((session) => session + 1);
     setManagedCreateOpen(true);
   }, [managedCatalog]);
 
@@ -1072,6 +1087,7 @@ export function Databases({
             </DialogHeader>
             <AnimatedHeight>
               <ManagedDatabaseCreateForm
+                key={managedCreateSession}
                 draft={managedDraft}
                 nodes={deployableDatabaseNodes}
                 catalog={managedCatalog}
