@@ -332,13 +332,15 @@ export function ManagedDatabaseSettingsTab({
           <PanelShell
             title="ClickHouse configuration fragment"
             description="Optional XML configuration. Network and managed storage paths remain controlled by Gateway."
-            bodyClassName="min-h-0"
+            className="bg-background"
+            headerClassName="!bg-background"
+            bodyClassName="min-h-0 bg-background"
           >
             <CodeEditor
               value={clickhouseConfigXml}
               onChange={setClickhouseConfigXml}
               language="xml"
-              minHeight="360px"
+              height="min(48dvh, 520px)"
               bordered={false}
               showGutterBorder={false}
               readOnly={saving || confirmingRecreate || managed.status !== "ready"}

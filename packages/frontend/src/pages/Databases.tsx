@@ -581,13 +581,15 @@ function ManagedDatabaseCreateForm({
           <PanelShell
             title="ClickHouse configuration fragment"
             description="Optional XML configuration. Security, networking and managed data paths remain controlled by Gateway."
-            bodyClassName="min-h-0"
+            className="bg-background"
+            headerClassName="!bg-background"
+            bodyClassName="min-h-0 bg-background"
           >
             <CodeEditor
               value={draft.clickhouseConfigXml ?? ""}
               onChange={(value) => set("clickhouseConfigXml", value || undefined)}
               language="xml"
-              minHeight="360px"
+              height="min(48dvh, 520px)"
               bordered={false}
               showGutterBorder={false}
             />
