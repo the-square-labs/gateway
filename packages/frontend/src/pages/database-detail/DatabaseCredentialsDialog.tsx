@@ -1,5 +1,6 @@
-import { Download, Eye, EyeOff } from "lucide-react";
-import { useState } from "react";
+import { Check, Download, Eye, EyeOff } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { CopyButton } from "@/components/common/CopyButton";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -36,16 +37,71 @@ function managedConnectionUri(
   return `${database.managed?.tlsEnabled ? "rediss" : "redis"}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}/${encodeURIComponent(db)}`;
 }
 
+function DownloadButton({
+  value,
+  label,
+  filename,
+}: {
+  value: string;
+  label: string;
+  filename: string;
+}) {
+  const [downloaded, setDownloaded] = useState(false);
+  const downloadedTimerRef = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (downloadedTimerRef.current !== null) window.clearTimeout(downloadedTimerRef.current);
+    },
+    []
+  );
+
+  const handleDownload = () => {
+    const url = URL.createObjectURL(new Blob([value], { type: "application/x-pem-file" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+
+    setDownloaded(true);
+    toast.success("Downloaded");
+    if (downloadedTimerRef.current !== null) window.clearTimeout(downloadedTimerRef.current);
+    downloadedTimerRef.current = window.setTimeout(() => {
+      setDownloaded(false);
+      downloadedTimerRef.current = null;
+    }, 2000);
+  };
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="relative shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+      onClick={handleDownload}
+      aria-label={`Download ${label}`}
+      title={downloaded ? "Downloaded" : `Download ${label}`}
+    >
+      <Check
+        className={`absolute h-4 w-4 transition-all duration-200 ${downloaded ? "scale-100 opacity-100" : "scale-0 opacity-0"}`}
+      />
+      <Download
+        className={`h-4 w-4 transition-all duration-200 ${downloaded ? "scale-0 opacity-0" : "scale-100 opacity-100"}`}
+      />
+    </Button>
+  );
+}
+
 function CredentialField({
   label,
   value,
   sensitive = false,
-  onDownload,
+  downloadFilename,
 }: {
   label: string;
   value: string;
   sensitive?: boolean;
-  onDownload?: () => void;
+  downloadFilename?: string;
 }) {
   const [revealed, setRevealed] = useState(false);
   const showValue = !sensitive || revealed;
@@ -78,17 +134,8 @@ function CredentialField({
             />
           </Button>
         )}
-        {onDownload && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
-            onClick={onDownload}
-            aria-label={`Download ${label}`}
-            title={`Download ${label}`}
-          >
-            <Download className="h-4 w-4" />
-          </Button>
+        {downloadFilename && (
+          <DownloadButton value={value} label={label} filename={downloadFilename} />
         )}
         <CopyButton value={value} label={label} className="border-l border-input" />
       </div>
@@ -129,16 +176,7 @@ export function DatabaseCredentialsDialog({
   const password = stringValue(credentials?.password);
   const caCertificate = stringValue(credentials?.caCertificate);
   const caFingerprint = stringValue(credentials?.caFingerprint);
-  const downloadCaCertificate = () => {
-    if (!caCertificate) return;
-
-    const url = URL.createObjectURL(new Blob([caCertificate], { type: "application/x-pem-file" }));
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = "gateway-database-ca.pem";
-    anchor.click();
-    URL.revokeObjectURL(url);
-  };
+  const caFilename = `${database.name.trim().replace(/[<>:"/\\|?*]/g, "-") || "database"}-ca.pem`;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -172,7 +210,7 @@ export function DatabaseCredentialsDialog({
                 <CredentialField
                   label="CA certificate"
                   value={caCertificate}
-                  onDownload={downloadCaCertificate}
+                  downloadFilename={caFilename}
                 />
               )}
             </>

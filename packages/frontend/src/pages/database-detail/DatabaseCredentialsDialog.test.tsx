@@ -88,6 +88,8 @@ describe("DatabaseCredentialsDialog", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: "Download CA certificate" })).toBeInTheDocument();
+    const downloadButton = screen.getByRole("button", { name: "Download CA certificate" });
+    expect(downloadButton).toBeInTheDocument();
+    expect(downloadButton).toHaveAttribute("title", "Download CA certificate");
   });
 });
