@@ -1,4 +1,4 @@
-import { Eye, EyeOff } from "lucide-react";
+import { Download, Eye, EyeOff } from "lucide-react";
 import { useState } from "react";
 import { CopyButton } from "@/components/common/CopyButton";
 import { Button } from "@/components/ui/button";
@@ -40,10 +40,12 @@ function CredentialField({
   label,
   value,
   sensitive = false,
+  onDownload,
 }: {
   label: string;
   value: string;
   sensitive?: boolean;
+  onDownload?: () => void;
 }) {
   const [revealed, setRevealed] = useState(false);
   const showValue = !sensitive || revealed;
@@ -74,6 +76,18 @@ function CredentialField({
             <EyeOff
               className={`absolute h-4 w-4 transition-all duration-200 ${revealed ? "scale-100 opacity-100" : "scale-0 opacity-0"}`}
             />
+          </Button>
+        )}
+        {onDownload && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+            onClick={onDownload}
+            aria-label={`Download ${label}`}
+            title={`Download ${label}`}
+          >
+            <Download className="h-4 w-4" />
           </Button>
         )}
         <CopyButton value={value} label={label} className="border-l border-input" />
@@ -115,6 +129,16 @@ export function DatabaseCredentialsDialog({
   const password = stringValue(credentials?.password);
   const caCertificate = stringValue(credentials?.caCertificate);
   const caFingerprint = stringValue(credentials?.caFingerprint);
+  const downloadCaCertificate = () => {
+    if (!caCertificate) return;
+
+    const url = URL.createObjectURL(new Blob([caCertificate], { type: "application/x-pem-file" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "gateway-database-ca.pem";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -144,7 +168,13 @@ export function DatabaseCredentialsDialog({
               {caFingerprint && (
                 <CredentialField label="CA fingerprint (SHA-256)" value={caFingerprint} />
               )}
-              {caCertificate && <CredentialField label="CA certificate" value={caCertificate} />}
+              {caCertificate && (
+                <CredentialField
+                  label="CA certificate"
+                  value={caCertificate}
+                  onDownload={downloadCaCertificate}
+                />
+              )}
             </>
           ) : (
             <div className="border border-border bg-card p-6 text-sm text-muted-foreground">

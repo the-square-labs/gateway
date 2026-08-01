@@ -71,4 +71,23 @@ describe("DatabaseCredentialsDialog", () => {
     expect(screen.getByRole("button", { name: "Hide Password" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy Connection URI" })).toBeInTheDocument();
   });
+
+  it("offers the direct-access CA certificate as a PEM download", () => {
+    render(
+      <DatabaseCredentialsDialog
+        database={database}
+        credentials={{
+          username: "owner",
+          password: "secret",
+          databaseName: "orders",
+          caCertificate: "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----",
+        }}
+        loading={false}
+        open
+        onOpenChange={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Download CA certificate" })).toBeInTheDocument();
+  });
 });
