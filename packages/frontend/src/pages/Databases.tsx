@@ -412,7 +412,7 @@ function ManagedDatabaseCreateForm({
                 type="number"
                 min="1"
                 max={capacity.storageSizeGb}
-                value={draft.storageSizeGb}
+                value={draft.storageSizeGb || ""}
                 onChange={(event) => set("storageSizeGb", Number(event.target.value))}
               />
               {capacity.storageSizeGb !== undefined && (
@@ -431,7 +431,7 @@ function ManagedDatabaseCreateForm({
                 min="0.25"
                 step="0.25"
                 max={capacity.cpuCores}
-                value={draft.cpuCores}
+                value={draft.cpuCores || ""}
                 onChange={(event) => set("cpuCores", Number(event.target.value))}
               />
               {capacity.cpuCores !== undefined && (
@@ -450,7 +450,7 @@ function ManagedDatabaseCreateForm({
                 min="128"
                 step="128"
                 max={capacity.memoryMb}
-                value={draft.memoryMb}
+                value={draft.memoryMb || ""}
                 onChange={(event) => set("memoryMb", Number(event.target.value))}
               />
               {capacity.memoryMb !== undefined && (
@@ -469,7 +469,7 @@ function ManagedDatabaseCreateForm({
                 min="0"
                 step="128"
                 max={capacity.swapMb}
-                value={draft.swapMb}
+                value={draft.swapMb || ""}
                 onChange={(event) => set("swapMb", Number(event.target.value))}
               />
               {capacity.swapMb !== undefined && (
