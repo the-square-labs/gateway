@@ -68,6 +68,13 @@ export function canDeployManagedDatabase(
     (draft.publishedPort === undefined ||
       (Number.isInteger(draft.publishedPort) &&
         draft.publishedPort >= 1 &&
-        draft.publishedPort <= 65_535))
+        draft.publishedPort <= 65_535)) &&
+    (draft.publishedNativePort === undefined ||
+      (draft.publishTcp &&
+        draft.type === "clickhouse" &&
+        draft.publishNativeTcp !== false &&
+        Number.isInteger(draft.publishedNativePort) &&
+        draft.publishedNativePort >= 1 &&
+        draft.publishedNativePort <= 65_535))
   );
 }

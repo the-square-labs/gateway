@@ -1,5 +1,13 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { Database as DatabaseIcon, DatabaseZap, FolderPlus, Plus, RefreshCw } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Database as DatabaseIcon,
+  DatabaseZap,
+  FolderPlus,
+  Plus,
+  RefreshCw,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -14,9 +22,11 @@ import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderAct
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CodeEditor } from "@/components/ui/code-editor";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -44,7 +54,6 @@ import type {
   ManagedDatabaseCreateInput,
   Node,
 } from "@/types";
-import { ClickHouseConfigField } from "./database-detail/ClickHouseConfigField";
 import {
   buildDatabasePayload,
   canCreateDatabase,
@@ -107,9 +116,21 @@ function defaultManagedDraft(
     cpuCores: 1,
     memoryMb: 1024,
     swapMb: 0,
+    tags: [],
     publishTcp: false,
     tlsEnabled: true,
   };
+}
+
+function parseTags(value: string) {
+  return Array.from(
+    new Set(
+      value
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter(Boolean)
+    )
+  );
 }
 
 const DATABASE_TAG_COLORS = {
@@ -258,12 +279,14 @@ function ManagedDatabaseCreateForm({
   nodes,
   catalog,
   capacity,
+  step,
   onChange,
 }: {
   draft: ManagedDatabaseCreateInput;
   nodes: Node[];
   catalog: ManagedDatabaseCatalogEntry[];
   capacity: ManagedDatabaseCapacity;
+  step: 1 | 2 | 3;
   onChange: (draft: ManagedDatabaseCreateInput) => void;
 }) {
   const set = <K extends keyof ManagedDatabaseCreateInput>(
@@ -273,268 +296,305 @@ function ManagedDatabaseCreateForm({
   const versions = catalogVersions(catalog, draft.type);
 
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        Gateway provisions a private database on the selected databases node. The owner credentials
-        are shown only once after creation.
-      </p>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="space-y-2">
-          <label className="text-sm font-medium" htmlFor="managed-db-name">
-            Name
-          </label>
-          <Input
-            id="managed-db-name"
-            value={draft.name}
-            onChange={(event) => set("name", event.target.value)}
-            placeholder="Production database"
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium">Engine</label>
-          <Select
-            value={draft.type}
-            onValueChange={(value) => {
-              const type = value as DatabaseType;
-              onChange({
-                ...draft,
-                type,
-                version: catalogVersions(catalog, type)[0]!,
-                ...(type === "clickhouse"
-                  ? { publishNativeTcp: draft.publishNativeTcp ?? true }
-                  : { publishNativeTcp: undefined, publishedNativePort: undefined }),
-              });
-            }}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="postgres">Postgres</SelectItem>
-              <SelectItem value="redis">Redis</SelectItem>
-              <SelectItem value="clickhouse">ClickHouse</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium" htmlFor="managed-db-node">
-            Databases node
-          </label>
-          <Select value={draft.nodeId} onValueChange={(value) => set("nodeId", value)}>
-            <SelectTrigger id="managed-db-node">
-              <SelectValue placeholder="Select node" />
-            </SelectTrigger>
-            <SelectContent>
-              {nodes.map((node) => (
-                <SelectItem key={node.id} value={node.id}>
-                  {node.displayName || node.hostname}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium">Curated version</label>
-          <Select value={draft.version} onValueChange={(value) => set("version", value)}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {versions.map((version) => (
-                <SelectItem key={version} value={version}>
-                  {version}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium" htmlFor="managed-db-storage">
-            Storage (GB)
-          </label>
-          <Input
-            id="managed-db-storage"
-            type="number"
-            min="1"
-            max={capacity.storageSizeGb}
-            value={draft.storageSizeGb}
-            onChange={(event) => set("storageSizeGb", Number(event.target.value))}
-          />
-          {capacity.storageSizeGb !== undefined && (
-            <p className="text-xs text-muted-foreground">
-              Maximum available now: {capacity.storageSizeGb} GB
-            </p>
-          )}
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium" htmlFor="managed-db-cpu">
-            CPU cores
-          </label>
-          <Input
-            id="managed-db-cpu"
-            type="number"
-            min="0.25"
-            step="0.25"
-            max={capacity.cpuCores}
-            value={draft.cpuCores}
-            onChange={(event) => set("cpuCores", Number(event.target.value))}
-          />
-          {capacity.cpuCores !== undefined && (
-            <p className="text-xs text-muted-foreground">
-              Maximum available: {capacity.cpuCores} cores
-            </p>
-          )}
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium" htmlFor="managed-db-memory">
-            Memory (MB)
-          </label>
-          <Input
-            id="managed-db-memory"
-            type="number"
-            min="128"
-            step="128"
-            max={capacity.memoryMb}
-            value={draft.memoryMb}
-            onChange={(event) => set("memoryMb", Number(event.target.value))}
-          />
-          {capacity.memoryMb !== undefined && (
-            <p className="text-xs text-muted-foreground">
-              Maximum available now: {capacity.memoryMb} MB
-            </p>
-          )}
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium" htmlFor="managed-db-swap">
-            Swap (MB)
-          </label>
-          <Input
-            id="managed-db-swap"
-            type="number"
-            min="0"
-            step="128"
-            max={capacity.swapMb}
-            value={draft.swapMb}
-            onChange={(event) => set("swapMb", Number(event.target.value))}
-          />
-          {capacity.swapMb !== undefined && (
-            <p className="text-xs text-muted-foreground">
-              Maximum available now: {capacity.swapMb} MB
-            </p>
-          )}
-        </div>
-      </div>
-      <PanelShell
-        title="Publish TCP port"
-        description="Enables direct network connections in addition to secure managed links."
-        headerBorder={draft.publishTcp}
-        actions={
-          <Switch
-            checked={draft.publishTcp}
-            onChange={(checked) =>
-              onChange({
-                ...draft,
-                publishTcp: checked,
-                ...(checked
-                  ? {}
-                  : {
-                      publishedPort: undefined,
-                      publishNativeTcp: false,
-                      publishedNativePort: undefined,
-                    }),
-              })
-            }
-            ariaLabel="Publish TCP port"
-          />
-        }
-      >
-        <AnimatePresence initial={false} mode="popLayout">
-          {draft.publishTcp && (
-            <motion.div key="published-tcp-settings" {...MANAGED_DATABASE_FORM_ANIMATION}>
-              <SettingsControlRow
-                title="Published TCP port"
-                description="Leave empty to let Docker allocate a free port. Gateway does not change host firewalls."
+    <AnimatePresence mode="wait" initial={false}>
+      {step === 1 && (
+        <motion.div
+          key="managed-database-step-1"
+          {...MANAGED_DATABASE_FORM_ANIMATION}
+          className="space-y-4"
+        >
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="managed-db-name">
+                Name
+              </label>
+              <Input
+                id="managed-db-name"
+                value={draft.name}
+                onChange={(event) => set("name", event.target.value)}
+                placeholder="Production database"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Engine</label>
+              <Select
+                value={draft.type}
+                onValueChange={(value) => {
+                  const type = value as DatabaseType;
+                  onChange({
+                    ...draft,
+                    type,
+                    version: catalogVersions(catalog, type)[0]!,
+                    ...(type === "clickhouse"
+                      ? { publishNativeTcp: draft.publishNativeTcp ?? true }
+                      : { publishNativeTcp: undefined, publishedNativePort: undefined }),
+                  });
+                }}
               >
-                <Input
-                  id="managed-db-published-port"
-                  aria-label="Published TCP port"
-                  type="number"
-                  min="1"
-                  max="65535"
-                  value={draft.publishedPort ?? ""}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    set("publishedPort", value === "" ? undefined : Number(value));
-                  }}
-                  placeholder="Automatic"
-                />
-              </SettingsControlRow>
-              {draft.type === "clickhouse" && (
-                <>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="postgres">Postgres</SelectItem>
+                  <SelectItem value="redis">Redis</SelectItem>
+                  <SelectItem value="clickhouse">ClickHouse</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="managed-db-node">
+                Databases node
+              </label>
+              <Select value={draft.nodeId} onValueChange={(value) => set("nodeId", value)}>
+                <SelectTrigger id="managed-db-node">
+                  <SelectValue placeholder="Select node" />
+                </SelectTrigger>
+                <SelectContent>
+                  {nodes.map((node) => (
+                    <SelectItem key={node.id} value={node.id}>
+                      {node.displayName || node.hostname}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Curated version</label>
+              <Select value={draft.version} onValueChange={(value) => set("version", value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {versions.map((version) => (
+                    <SelectItem key={version} value={version}>
+                      {version}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium" htmlFor="managed-db-tags">
+              Tags
+            </label>
+            <Input
+              id="managed-db-tags"
+              value={(draft.tags ?? []).join(", ")}
+              onChange={(event) => set("tags", parseTags(event.target.value))}
+              placeholder="team, green:production, analytics"
+            />
+            <p className="text-xs text-muted-foreground">
+              Use color:name for colored tags. Supported colors: blue, red, green, yellow, purple,
+              pink, orange, gray.
+            </p>
+          </div>
+        </motion.div>
+      )}
+
+      {step === 2 && (
+        <motion.div
+          key="managed-database-step-2"
+          {...MANAGED_DATABASE_FORM_ANIMATION}
+          className="space-y-4"
+        >
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="managed-db-storage">
+                Storage (GB)
+              </label>
+              <Input
+                id="managed-db-storage"
+                type="number"
+                min="1"
+                max={capacity.storageSizeGb}
+                value={draft.storageSizeGb}
+                onChange={(event) => set("storageSizeGb", Number(event.target.value))}
+              />
+              {capacity.storageSizeGb !== undefined && (
+                <p className="text-xs text-muted-foreground">
+                  Maximum available now: {capacity.storageSizeGb} GB
+                </p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="managed-db-cpu">
+                CPU cores
+              </label>
+              <Input
+                id="managed-db-cpu"
+                type="number"
+                min="0.25"
+                step="0.25"
+                max={capacity.cpuCores}
+                value={draft.cpuCores}
+                onChange={(event) => set("cpuCores", Number(event.target.value))}
+              />
+              {capacity.cpuCores !== undefined && (
+                <p className="text-xs text-muted-foreground">
+                  Maximum available: {capacity.cpuCores} cores
+                </p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="managed-db-memory">
+                Memory (MB)
+              </label>
+              <Input
+                id="managed-db-memory"
+                type="number"
+                min="128"
+                step="128"
+                max={capacity.memoryMb}
+                value={draft.memoryMb}
+                onChange={(event) => set("memoryMb", Number(event.target.value))}
+              />
+              {capacity.memoryMb !== undefined && (
+                <p className="text-xs text-muted-foreground">
+                  Maximum available now: {capacity.memoryMb} MB
+                </p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="managed-db-swap">
+                Swap (MB)
+              </label>
+              <Input
+                id="managed-db-swap"
+                type="number"
+                min="0"
+                step="128"
+                max={capacity.swapMb}
+                value={draft.swapMb}
+                onChange={(event) => set("swapMb", Number(event.target.value))}
+              />
+              {capacity.swapMb !== undefined && (
+                <p className="text-xs text-muted-foreground">
+                  Maximum available now: {capacity.swapMb} MB
+                </p>
+              )}
+            </div>
+          </div>
+          <PanelShell
+            title="Publish TCP port"
+            description="Enables direct network connections in addition to secure managed links."
+            headerBorder={draft.publishTcp}
+            actions={
+              <Switch
+                checked={draft.publishTcp}
+                onChange={(checked) =>
+                  onChange({
+                    ...draft,
+                    publishTcp: checked,
+                    ...(checked
+                      ? {}
+                      : {
+                          publishedPort: undefined,
+                          publishNativeTcp: false,
+                          publishedNativePort: undefined,
+                        }),
+                  })
+                }
+                ariaLabel="Publish TCP port"
+              />
+            }
+          >
+            <AnimatePresence initial={false} mode="popLayout">
+              {draft.publishTcp && (
+                <motion.div key="published-tcp-settings" {...MANAGED_DATABASE_FORM_ANIMATION}>
                   <SettingsControlRow
-                    title="Publish native TCP port"
-                    description="Expose the ClickHouse native protocol for native clients."
+                    title="Published TCP port"
+                    description="Leave empty to let Docker allocate a free port. Gateway does not change host firewalls."
                   >
-                    <Switch
-                      checked={draft.publishNativeTcp ?? true}
-                      onChange={(checked) =>
-                        onChange({
-                          ...draft,
-                          publishNativeTcp: checked,
-                          ...(checked ? {} : { publishedNativePort: undefined }),
-                        })
-                      }
-                      ariaLabel="Publish native TCP port"
+                    <Input
+                      id="managed-db-published-port"
+                      aria-label="Published TCP port"
+                      type="number"
+                      min="1"
+                      max="65535"
+                      value={draft.publishedPort ?? ""}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        set("publishedPort", value === "" ? undefined : Number(value));
+                      }}
+                      placeholder="Automatic"
                     />
                   </SettingsControlRow>
-                  {(draft.publishNativeTcp ?? true) && (
-                    <SettingsControlRow
-                      title="Native TCP port"
-                      description="Leave empty to let Docker allocate a free port."
-                    >
-                      <Input
-                        aria-label="Native TCP port"
-                        type="number"
-                        min="1"
-                        max="65535"
-                        value={draft.publishedNativePort ?? ""}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          set("publishedNativePort", value === "" ? undefined : Number(value));
-                        }}
-                        placeholder="Automatic"
-                      />
-                    </SettingsControlRow>
+                  {draft.type === "clickhouse" && (
+                    <>
+                      <SettingsControlRow
+                        title="Publish native TCP port"
+                        description="Expose the ClickHouse native protocol for native clients."
+                      >
+                        <Switch
+                          checked={draft.publishNativeTcp ?? true}
+                          onChange={(checked) =>
+                            onChange({
+                              ...draft,
+                              publishNativeTcp: checked,
+                              ...(checked ? {} : { publishedNativePort: undefined }),
+                            })
+                          }
+                          ariaLabel="Publish native TCP port"
+                        />
+                      </SettingsControlRow>
+                      {(draft.publishNativeTcp ?? true) && (
+                        <SettingsControlRow
+                          title="Native TCP port"
+                          description="Leave empty to let Docker allocate a free port."
+                        >
+                          <Input
+                            aria-label="Native TCP port"
+                            type="number"
+                            min="1"
+                            max="65535"
+                            value={draft.publishedNativePort ?? ""}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              set("publishedNativePort", value === "" ? undefined : Number(value));
+                            }}
+                            placeholder="Automatic"
+                          />
+                        </SettingsControlRow>
+                      )}
+                    </>
                   )}
-                </>
+                  <SettingsControlRow
+                    title="TLS"
+                    description="Encrypt direct database traffic. Secure managed links always remain encrypted."
+                  >
+                    <Switch
+                      checked={draft.tlsEnabled ?? true}
+                      onChange={(checked) => set("tlsEnabled", checked)}
+                      ariaLabel="Enable TLS"
+                    />
+                  </SettingsControlRow>
+                </motion.div>
               )}
-              <SettingsControlRow
-                title="TLS"
-                description="Encrypt direct database traffic. Secure managed links always remain encrypted."
-              >
-                <Switch
-                  checked={draft.tlsEnabled ?? true}
-                  onChange={(checked) => set("tlsEnabled", checked)}
-                  ariaLabel="Enable TLS"
-                />
-              </SettingsControlRow>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </PanelShell>
-      {draft.type === "clickhouse" && (
-        <div className="space-y-2">
-          <ClickHouseConfigField
-            label="Optional ClickHouse XML fragment"
-            value={draft.clickhouseConfigXml ?? ""}
-            onChange={(value) => set("clickhouseConfigXml", value || undefined)}
-          />
-          <p className="text-xs text-muted-foreground">
-            Security, networking and managed data paths cannot be overridden.
-          </p>
-        </div>
+            </AnimatePresence>
+          </PanelShell>
+        </motion.div>
       )}
-    </div>
+
+      {step === 3 && draft.type === "clickhouse" && (
+        <motion.div key="managed-database-step-3" {...MANAGED_DATABASE_FORM_ANIMATION}>
+          <PanelShell
+            title="ClickHouse configuration fragment"
+            description="Optional XML configuration. Security, networking and managed data paths remain controlled by Gateway."
+            bodyClassName="min-h-0"
+          >
+            <CodeEditor
+              value={draft.clickhouseConfigXml ?? ""}
+              onChange={(value) => set("clickhouseConfigXml", value || undefined)}
+              language="xml"
+              minHeight="360px"
+              bordered={false}
+              showGutterBorder={false}
+            />
+          </PanelShell>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 
@@ -575,6 +635,7 @@ export function Databases({
   );
   const [createOpen, setCreateOpen] = useState(false);
   const [managedCreateOpen, setManagedCreateOpen] = useState(false);
+  const [managedCreateStep, setManagedCreateStep] = useState<1 | 2 | 3>(1);
   const [draft, setDraft] = useState<DatabaseConnectionDraft>(draftFromConnection(null));
   const [managedDraft, setManagedDraft] = useState<ManagedDatabaseCreateInput>(defaultManagedDraft);
   const [managedCatalog, setManagedCatalog] = useState<ManagedDatabaseCatalogEntry[]>([]);
@@ -583,13 +644,24 @@ export function Databases({
   const [managedSaving, setManagedSaving] = useState(false);
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
 
+  const openManagedCreate = useCallback(() => {
+    setManagedDraft(defaultManagedDraft(managedCatalog));
+    setManagedCreateStep(1);
+    setManagedCreateOpen(true);
+  }, [managedCatalog]);
+
+  const closeManagedCreate = useCallback(() => {
+    setManagedCreateOpen(false);
+    setManagedCreateStep(1);
+  }, []);
+
   useEffect(() => {
     if (!(location.state as { createManagedDatabase?: boolean } | null)?.createManagedDatabase) {
       return;
     }
-    setManagedCreateOpen(true);
+    openManagedCreate();
     navigate(location.pathname, { replace: true, state: null });
-  }, [location.pathname, location.state, navigate]);
+  }, [location.pathname, location.state, navigate, openManagedCreate]);
 
   const load = useCallback(async () => {
     const cachedRows = api.getCached<DatabaseConnection[]>(databaseCacheKey);
@@ -696,6 +768,19 @@ export function Databases({
       canDeployManagedDatabase(managedDraft, managedVersions, managedCapacity),
     [managedCapacity, managedDraft, managedVersions, selectedDeployableDatabaseNode]
   );
+  const managedCreateStepCount = managedDraft.type === "clickhouse" ? 3 : 2;
+  const managedCreateStepLabel =
+    managedCreateStep === 1
+      ? "Database"
+      : managedCreateStep === 2
+        ? "Resources & network"
+        : "Configuration";
+  const canContinueManagedCreate =
+    managedCreateStep === 1
+      ? managedDraft.name.trim().length > 0 &&
+        deployableDatabaseNodes.some((node) => node.id === managedDraft.nodeId) &&
+        managedVersions.includes(managedDraft.version)
+      : canDeployManaged;
 
   const save = async () => {
     setSaving(true);
@@ -721,7 +806,7 @@ export function Databases({
     try {
       const created = await api.createManagedDatabase(managedDraft);
       toast.success("Managed database provisioning started");
-      setManagedCreateOpen(false);
+      closeManagedCreate();
       setManagedDraft(defaultManagedDraft(managedCatalog));
       const database = await api.getDatabase(created.databaseConnectionId);
       navigate(databaseRoute(database.slug, "overview"));
@@ -830,7 +915,7 @@ export function Databases({
                       {
                         label: "Deploy managed database",
                         icon: <Plus className="h-4 w-4" />,
-                        onClick: () => setManagedCreateOpen(true),
+                        onClick: openManagedCreate,
                       },
                       {
                         label: "Connect existing database",
@@ -857,7 +942,7 @@ export function Databases({
                 </Button>
               )}
               {canCreate && (
-                <Button onClick={() => setManagedCreateOpen(true)}>
+                <Button onClick={openManagedCreate}>
                   <Plus className="h-4 w-4" />
                   Deploy database
                 </Button>
@@ -965,10 +1050,16 @@ export function Databases({
       )}
 
       {!embedded && (
-        <Dialog open={managedCreateOpen} onOpenChange={setManagedCreateOpen}>
+        <Dialog
+          open={managedCreateOpen}
+          onOpenChange={(open) => (open ? openManagedCreate() : closeManagedCreate())}
+        >
           <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
             <DialogHeader>
               <DialogTitle>Deploy managed database</DialogTitle>
+              <DialogDescription>
+                Step {managedCreateStep} of {managedCreateStepCount} — {managedCreateStepLabel}
+              </DialogDescription>
             </DialogHeader>
             <AnimatedHeight>
               <ManagedDatabaseCreateForm
@@ -976,19 +1067,49 @@ export function Databases({
                 nodes={deployableDatabaseNodes}
                 catalog={managedCatalog}
                 capacity={managedCapacity}
+                step={managedCreateStep}
                 onChange={setManagedDraft}
               />
             </AnimatedHeight>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setManagedCreateOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={() => void saveManaged()}
-                disabled={managedSaving || !canDeployManaged}
-              >
-                {managedSaving ? "Deploying..." : "Deploy database"}
-              </Button>
+              {managedCreateStep === 1 ? (
+                <>
+                  <Button variant="outline" onClick={closeManagedCreate} disabled={managedSaving}>
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={() => setManagedCreateStep(2)}
+                    disabled={managedSaving || !canContinueManagedCreate}
+                  >
+                    Next <ArrowRight className="h-4 w-4" />
+                  </Button>
+                </>
+              ) : (
+                <div className="flex w-full justify-between">
+                  <Button
+                    variant="outline"
+                    onClick={() => setManagedCreateStep((step) => (step - 1) as 1 | 2 | 3)}
+                    disabled={managedSaving}
+                  >
+                    <ArrowLeft className="h-4 w-4" /> Back
+                  </Button>
+                  {managedCreateStep < managedCreateStepCount ? (
+                    <Button
+                      onClick={() => setManagedCreateStep(3)}
+                      disabled={managedSaving || !canContinueManagedCreate}
+                    >
+                      Next <ArrowRight className="h-4 w-4" />
+                    </Button>
+                  ) : (
+                    <Button
+                      onClick={() => void saveManaged()}
+                      disabled={managedSaving || !canDeployManaged}
+                    >
+                      {managedSaving ? "Deploying..." : "Deploy database"}
+                    </Button>
+                  )}
+                </div>
+              )}
             </DialogFooter>
           </DialogContent>
         </Dialog>

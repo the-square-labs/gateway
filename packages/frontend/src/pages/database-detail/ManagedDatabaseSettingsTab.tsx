@@ -7,12 +7,12 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
+import { CodeEditor } from "@/components/ui/code-editor";
 import { DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/services/api";
 import type { DatabaseConnection } from "@/types";
-import { ClickHouseConfigField } from "./ClickHouseConfigField";
 
 const FORM_ANIMATION = {
   initial: { opacity: 0, y: 4 },
@@ -329,16 +329,21 @@ export function ManagedDatabaseSettingsTab({
         </PanelShell>
 
         {database.type === "clickhouse" && (
-          <div className="space-y-2">
-            <ClickHouseConfigField
+          <PanelShell
+            title="ClickHouse configuration fragment"
+            description="Optional XML configuration. Network and managed storage paths remain controlled by Gateway."
+            bodyClassName="min-h-0"
+          >
+            <CodeEditor
               value={clickhouseConfigXml}
               onChange={setClickhouseConfigXml}
-              disabled={saving || confirmingRecreate || managed.status !== "ready"}
+              language="xml"
+              minHeight="360px"
+              bordered={false}
+              showGutterBorder={false}
+              readOnly={saving || confirmingRecreate || managed.status !== "ready"}
             />
-            <p className="text-xs text-muted-foreground">
-              Network and managed storage paths remain controlled by Gateway.
-            </p>
-          </div>
+          </PanelShell>
         )}
 
         <DialogFooter>

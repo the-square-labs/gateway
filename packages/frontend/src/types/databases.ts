@@ -44,6 +44,7 @@ export interface ManagedDatabaseCreateInput {
   cpuCores: number;
   memoryMb: number;
   swapMb: number;
+  tags?: string[];
   publishTcp: boolean;
   publishNativeTcp?: boolean;
   publishedPort?: number;

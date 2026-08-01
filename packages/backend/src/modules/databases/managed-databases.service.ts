@@ -478,7 +478,8 @@ export class ManagedDatabaseService {
       input.type,
       directCredentials,
       input.storageSizeGb * GIBIBYTE,
-      userId
+      userId,
+      input.tags
     );
     let row: ManagedDatabaseRow;
     try {
@@ -1299,7 +1300,8 @@ export class ManagedDatabaseService {
     type: ManagedDatabaseRow['type'],
     credentials: OwnerCredentials,
     storageSizeBytes: number,
-    userId: string
+    userId: string,
+    tags: string[] = []
   ) {
     const config = managedConnectionConfig(type, credentials);
     const encryptedConfig = JSON.stringify(this.cryptoService.encryptString(JSON.stringify(config)));
@@ -1314,7 +1316,7 @@ export class ManagedDatabaseService {
             name,
             slug,
             type,
-            tags: [],
+            tags,
             host: config.host,
             port: config.port,
             databaseName: config.type === 'redis' ? `db${config.db}` : config.database,

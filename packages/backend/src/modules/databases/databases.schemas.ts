@@ -62,6 +62,7 @@ export const CreateManagedDatabaseSchema = z
     cpuCores: z.number().min(0.1).max(128),
     memoryMb: z.number().int().min(128).max(1_048_576),
     swapMb: z.number().int().min(0).max(1_048_576).default(0),
+    tags: tagsSchema,
     publishTcp: z.boolean().default(false),
     publishNativeTcp: z.boolean().optional(),
     publishedPort: z.number().int().min(1).max(65535).optional(),

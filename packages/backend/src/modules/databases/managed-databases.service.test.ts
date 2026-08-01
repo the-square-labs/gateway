@@ -95,6 +95,21 @@ describe('managed database catalog and input guardrails', () => {
     expect(result.success).toBe(true);
   });
 
+  it('accepts tags when creating a managed database', () => {
+    const result = CreateManagedDatabaseSchema.safeParse({
+      name: 'orders',
+      type: 'postgres',
+      version: '18.4',
+      nodeId: '44d553a4-8978-4ad1-8ca7-4d53c6e74a1d',
+      storageSizeGb: 10,
+      cpuCores: 1,
+      memoryMb: 1024,
+      tags: ['green:production', 'orders'],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it('does not accept a native ClickHouse port when native publication is disabled', () => {
     const result = CreateManagedDatabaseSchema.safeParse({
       name: 'analytics',

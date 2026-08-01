@@ -46,4 +46,24 @@ describe("managed database capacity", () => {
     expect(canDeployManagedDatabase({ ...draft, memoryMb: 3_073 }, ["17.5"], capacity)).toBe(false);
     expect(canDeployManagedDatabase(draft, ["17.5"], capacity)).toBe(true);
   });
+
+  it("requires explicit native ClickHouse publication for a native host port", () => {
+    const capacity = managedDatabaseCapacity(node);
+    const clickhouse = {
+      ...draft,
+      type: "clickhouse" as const,
+      version: "26.7.1.1315",
+      publishTcp: true,
+      publishedNativePort: 9000,
+    };
+
+    expect(canDeployManagedDatabase(clickhouse, ["26.7.1.1315"], capacity)).toBe(true);
+    expect(
+      canDeployManagedDatabase(
+        { ...clickhouse, publishNativeTcp: false },
+        ["26.7.1.1315"],
+        capacity
+      )
+    ).toBe(false);
+  });
 });
