@@ -53,6 +53,8 @@ func (p *DockerPlugin) handleMigrationCommand(cmd *pb.DockerMigrationCommand, re
 		detail, err = p.openArchiveExport(ctx, cmd.MigrationId, cmd.ArtifactId, cmd.ResourceId, cmd.ConfigJson)
 	case "open_archive_import":
 		err = p.openArchiveImport(ctx, cmd.MigrationId, cmd.ArtifactId, cmd.ConfigJson)
+	case "plan_archive_import":
+		detail, err = p.planGwcaArchiveImport(ctx, cmd.ConfigJson)
 	case "finish_archive_import":
 		detail, err = p.finishArchiveImport(ctx, cmd.MigrationId, cmd.ArtifactId, cmd.ConfigJson)
 	case "cleanup_archive_import":

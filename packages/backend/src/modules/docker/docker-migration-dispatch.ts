@@ -21,6 +21,19 @@ export interface MigrationVolumeMeasure {
   logicalBytes: number;
 }
 
+export interface ArchiveImportPlan {
+  networks: Array<{ id: string; name: string; driver: string; scope: string }>;
+  volumes: Array<{ name: string; driver: string; mountpoint: string; scope: string }>;
+  resolution: {
+    networks: Record<string, string>;
+    createNetworks: string[];
+    volumes: Record<string, string>;
+    createVolumes: string[];
+    ports: Record<string, number>;
+  };
+  conflictingPorts: string[];
+}
+
 export class DockerMigrationDispatchAdapter {
   constructor(private dispatch: NodeDispatchService) {}
 
@@ -77,6 +90,21 @@ export class DockerMigrationDispatchAdapter {
     await this.command(nodeId, 'open_archive_import', {
       migrationId: archiveId,
       artifactId,
+      configJson: JSON.stringify(config),
+    });
+  }
+
+  planArchiveImport(
+    nodeId: string,
+    config: {
+      manifest: unknown;
+      canViewNetworks: boolean;
+      canCreateNetworks: boolean;
+      canViewVolumes: boolean;
+      canCreateVolumes: boolean;
+    }
+  ): Promise<ArchiveImportPlan> {
+    return this.command<ArchiveImportPlan>(nodeId, 'plan_archive_import', {
       configJson: JSON.stringify(config),
     });
   }

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { ContainerArchiveExportQuerySchema } from './docker.schemas.js';
+import { ContainerArchiveExportQuerySchema, ContainerArchivePlanSchema } from './docker.schemas.js';
 import {
   applyGwcaImportResolution,
   GwcaImportReader,
@@ -104,6 +104,29 @@ function registryArchiveBytes(imageId = `sha256:${'f'.repeat(64)}`): Buffer {
 }
 
 describe('GWCA v1', () => {
+  it('validates bounded archive planning metadata', () => {
+    expect(
+      ContainerArchivePlanSchema.parse({
+        networks: [{ name: 'app', driver: 'bridge', createable: true }],
+        mounts: [
+          {
+            type: 'volume',
+            source: 'app-data',
+            target: '/target',
+            readOnly: false,
+            driver: 'local',
+            labels: { 'com.docker.compose.volume': 'app-data' },
+          },
+        ],
+        ports: [{ containerPort: 8080, hostPort: 8080, protocol: 'tcp' }],
+      })
+    ).toMatchObject({
+      mounts: [{ labels: { 'com.docker.compose.volume': 'app-data' } }],
+      ports: [{ hostPort: 8080 }],
+    });
+    expect(() => ContainerArchivePlanSchema.parse({ networks: [], mounts: [], ports: [], privileged: true })).toThrow();
+  });
+
   it('does not coerce false query strings to true', () => {
     expect(ContainerArchiveExportQuerySchema.parse({})).toEqual({
       imageMode: 'portable',
@@ -240,6 +263,7 @@ describe('GWCA v1', () => {
     const imageId = `sha256:${'e'.repeat(64)}`;
     const received: Buffer[] = [];
     const dispatch = {
+      planArchiveImport: vi.fn().mockResolvedValue({ conflictingPorts: [] }),
       openArchiveImport: vi.fn().mockResolvedValue(undefined),
       writeArchiveImage: vi.fn().mockImplementation(async (_nodeId, _archiveId, _artifactId, chunks) => {
         for await (const chunk of chunks as AsyncIterable<Uint8Array>) received.push(Buffer.from(chunk));
@@ -307,6 +331,31 @@ describe('GWCA v1', () => {
       secrets: { DATABASE_PASSWORD: 'secret' },
     });
     expect(dispatch.abort).not.toHaveBeenCalled();
+  });
+
+  it('rejects occupied host ports before opening the archive import stream', async () => {
+    const dispatch = {
+      planArchiveImport: vi.fn().mockResolvedValue({ conflictingPorts: ['8080/tcp:8080'] }),
+      openArchiveImport: vi.fn(),
+    } as unknown as DockerMigrationDispatchAdapter;
+
+    await expect(
+      importGwca({
+        dispatch,
+        nodeId: 'node-2',
+        name: 'restored-app',
+        body: streamBytes(
+          archiveBytes(Buffer.from('image'), undefined, {
+            ports: [{ containerPort: 8080, hostPort: 8080, protocol: 'tcp' }],
+          })
+        ),
+      })
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'GWCA_PORT_CONFLICT',
+      details: { conflictingPorts: ['8080/tcp:8080'] },
+    });
+    expect(dispatch.openArchiveImport).not.toHaveBeenCalled();
   });
 
   it('rejects resolution keys that are not present in the archive', () => {
@@ -385,6 +434,7 @@ describe('GWCA v1', () => {
   it('imports a registry-backed archive using target registry credentials', async () => {
     const imageId = `sha256:${'f'.repeat(64)}`;
     const dispatch = {
+      planArchiveImport: vi.fn().mockResolvedValue({ conflictingPorts: [] }),
       openArchiveImport: vi.fn().mockResolvedValue(undefined),
       writeArchiveImage: vi.fn(),
       finishArchiveImport: vi

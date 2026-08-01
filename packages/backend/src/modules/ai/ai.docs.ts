@@ -1231,7 +1231,7 @@ The notification system sends HTTP webhook notifications when alert conditions a
 
 ## Alert Rules
 Each alert rule defines:
-- **Category**: node, container, proxy, certificate, database_postgres, or database_redis
+- **Category**: node, container, proxy, certificate, database_postgres, database_clickhouse, or database_redis
 - **Type**: threshold (metric breaches a value) or event (something happens)
 - **Threshold fields** (for threshold type): metric, metricTarget (optional sub-target such as a specific node disk mount), operator (>, >=, <, <=), thresholdValue, durationSeconds (fire observation window), fireThresholdPercent (percent of probes in that window that must breach), resolveAfterSeconds (resolve observation window, default 60s), resolveThresholdPercent (percent of probes in that window that must be clear)
 - **Event fields** (for event type): eventPattern (offline, stopped, oom_killed, etc.)
@@ -1279,6 +1279,7 @@ Available in message templates (per-alert) and body templates (per-webhook):
 
 ## Database Alert Categories
 - database_postgres metrics: latency_ms, active_connections_pct, database_size_mb.
+- database_clickhouse metrics: latency_ms, database_size_mb, disk_used_pct, disk_available_mb, pending_mutations.
 - database_redis metrics: latency_ms, memory_pct.
 - database health events: health.offline, health.degraded, health.online. These events can also be used with threshold-style observation windows when supportsThreshold is true.
 

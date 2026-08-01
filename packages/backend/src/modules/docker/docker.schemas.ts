@@ -140,6 +140,45 @@ export const ContainerArchiveResolutionSchema = z.object({
     .optional(),
 });
 
+const ContainerArchivePlanNetworkSchema = z
+  .object({
+    name: z.string().min(1).max(512),
+    driver: z.string().max(512).optional(),
+    subnet: z.string().max(512).optional(),
+    gateway: z.string().max(512).optional(),
+    createable: z.boolean(),
+    createNew: z.boolean().optional(),
+    requiresMapping: z.boolean().optional(),
+  })
+  .strict();
+const ContainerArchivePlanMountSchema = z
+  .object({
+    type: z.enum(['bind', 'volume']),
+    source: z.string().min(1).max(4096),
+    target: z.string().min(1).max(4096),
+    readOnly: z.boolean(),
+    driver: z.string().max(512).optional(),
+    labels: z.record(z.string(), z.string()).optional(),
+    createNew: z.boolean().optional(),
+    requiresMapping: z.boolean().optional(),
+  })
+  .strict();
+const ContainerArchivePlanPortSchema = z
+  .object({
+    containerPort: z.number().int().min(1).max(65535),
+    hostPort: z.number().int().min(0).max(65535),
+    protocol: z.enum(['tcp', 'udp']),
+  })
+  .strict();
+
+export const ContainerArchivePlanSchema = z
+  .object({
+    networks: z.array(ContainerArchivePlanNetworkSchema).max(64),
+    mounts: z.array(ContainerArchivePlanMountSchema).max(256),
+    ports: z.array(ContainerArchivePlanPortSchema).max(DOCKER_CONTAINER_PORTS_MAX),
+  })
+  .strict();
+
 export const ContainerArchiveImportQuerySchema = z.object({
   name: ContainerNameSchema,
   resolution: z

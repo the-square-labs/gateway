@@ -3,53 +3,13 @@
   "edges": [
     {
       "from_id": "7abclq2n",
-      "to_id": "sg6sqaui",
-      "relation": "same_workflow",
-      "weight": 0.54,
-      "reason": "shared gateway refactor/test-first mindset with safe extraction of top-level helpers.",
-      "source": "auto",
-      "created_at": 1782003083605,
-      "updated_at": 1782003083605
-    },
-    {
-      "from_id": "7abclq2n",
-      "to_id": "412x4uua",
-      "relation": "same_area",
-      "weight": 0.43,
-      "reason": "API client refactor parallels in gateway frontend/backend integration work observed.",
-      "source": "auto",
-      "created_at": 1782003083605,
-      "updated_at": 1782003083605
-    },
-    {
-      "from_id": "7abclq2n",
       "to_id": "3b6g7z3k",
-      "relation": "same_area",
-      "weight": 0.42,
-      "reason": "Postgres backend/database-viewer style changes reflect similar backend/database concerns in gateway.",
+      "relation": "same_workflow",
+      "weight": 0.9,
+      "reason": "Postgres viewer contract directly constrains how the databases service must cast/delta edits and classify DB errors—closely tied to database extraction ownership.",
       "source": "auto",
-      "created_at": 1782003083605,
-      "updated_at": 1782003083605
-    },
-    {
-      "from_id": "7abclq2n",
-      "to_id": "sg6sqaui",
-      "relation": "same_area",
-      "weight": 0.41,
-      "reason": "gateway backend/ai tooling context common to repository-wide refactor strategies.",
-      "source": "auto",
-      "created_at": 1782003083605,
-      "updated_at": 1782003083605
-    },
-    {
-      "from_id": "7abclq2n",
-      "to_id": "ph8ejel0",
-      "relation": "same_area",
-      "weight": 0.4,
-      "reason": "AI web-search extraction aligns with modularization and contract preservation in gateway AI tools.",
-      "source": "auto",
-      "created_at": 1782003083605,
-      "updated_at": 1782003083605
+      "created_at": 1785537771249,
+      "updated_at": 1785537771249
     }
   ]
 }

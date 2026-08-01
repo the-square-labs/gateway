@@ -400,6 +400,9 @@ func (p *DockerPlugin) finishArchiveImport(ctx context.Context, archiveID, artif
 	if err != nil {
 		return nil, err
 	}
+	if err := p.assertGwcaHostPortsAvailable(ctx, req.Manifest); err != nil {
+		return nil, err
+	}
 	imageReference, preservedReference := p.prepareArchiveCreateImageReference(ctx, loaded.ID, req.Manifest.ImageReference)
 	if preservedReference != "" {
 		if req.Manifest.Labels == nil {

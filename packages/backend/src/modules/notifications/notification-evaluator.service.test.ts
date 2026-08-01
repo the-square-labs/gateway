@@ -471,6 +471,76 @@ describe('NotificationEvaluatorService database threshold evaluation', () => {
       status: 'resolved',
     });
   });
+
+  it('evaluates ClickHouse metrics against the ClickHouse notification category', async () => {
+    const databaseRule = {
+      ...BASE_RULE,
+      id: 'clickhouse-rule-1',
+      name: 'High ClickHouse disk usage',
+      category: 'database_clickhouse',
+      metric: 'disk_used_pct',
+      operator: '>',
+      thresholdValue: 90,
+      severity: 'critical',
+    };
+    const { evaluator, states } = createEvaluator([], [databaseRule]);
+
+    await evaluator.evaluateDatabaseSnapshot({
+      databaseId: 'clickhouse-1',
+      type: 'clickhouse',
+      name: 'Analytics ClickHouse',
+      metrics: { disk_used_pct: 95 },
+    });
+    await evaluator.evaluateDatabaseSnapshot({
+      databaseId: 'clickhouse-1',
+      type: 'clickhouse',
+      name: 'Analytics ClickHouse',
+      metrics: { disk_used_pct: 40 },
+    });
+
+    expect(states).toHaveLength(1);
+    expect(states[0]).toMatchObject({
+      resourceType: 'database_clickhouse',
+      resourceId: 'clickhouse-1',
+      resourceName: 'Analytics ClickHouse',
+      status: 'resolved',
+    });
+  });
+
+  it('fires and resolves ClickHouse low available disk alerts', async () => {
+    const databaseRule = {
+      ...BASE_RULE,
+      id: 'clickhouse-available-disk-rule',
+      name: 'Low ClickHouse available disk',
+      category: 'database_clickhouse',
+      metric: 'disk_available_mb',
+      operator: '<',
+      thresholdValue: 10_240,
+      severity: 'critical',
+    };
+    const { evaluator, states } = createEvaluator([], [databaseRule]);
+
+    await evaluator.evaluateDatabaseSnapshot({
+      databaseId: 'clickhouse-1',
+      type: 'clickhouse',
+      name: 'Analytics ClickHouse',
+      metrics: { disk_available_mb: 5_000 },
+    });
+    await evaluator.evaluateDatabaseSnapshot({
+      databaseId: 'clickhouse-1',
+      type: 'clickhouse',
+      name: 'Analytics ClickHouse',
+      metrics: { disk_available_mb: 20_000 },
+    });
+
+    expect(states).toHaveLength(1);
+    expect(states[0]).toMatchObject({
+      resourceType: 'database_clickhouse',
+      resourceId: 'clickhouse-1',
+      resourceName: 'Analytics ClickHouse',
+      status: 'resolved',
+    });
+  });
 });
 
 describe('NotificationEvaluatorService ratio window evaluation', () => {

@@ -248,6 +248,72 @@ describe("api client contract", () => {
     });
   });
 
+  it("serializes provider-neutral SQL browsing and execution requests", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: {
+            metadata: { provider: "clickhouse", columns: [] },
+            rows: [],
+            total: null,
+            totalKind: "unavailable",
+            page: 2,
+            limit: 100,
+            truncated: false,
+          },
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse({ csrfToken: "csrf-token" }))
+      .mockResolvedValueOnce(
+        jsonResponse({ data: { results: [], truncated: false, resultLimit: 10 } })
+      )
+      .mockResolvedValueOnce(jsonResponse({ data: { success: true, affectedRows: 1 } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { success: true, affectedRows: 1 } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { success: true, affectedRows: 1 } }));
+
+    await api.browseSqlRows("clickhouse-1", {
+      namespace: "analytics",
+      table: "events",
+      page: 2,
+      limit: 100,
+      sortBy: "event_id",
+      sortOrder: "desc",
+      searchColumn: "name",
+      searchOperation: "like",
+      searchValue: "signup",
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "/api/databases/clickhouse-1/sql/rows?namespace=analytics&table=events&page=2&limit=100&sortBy=event_id&sortOrder=desc&searchColumn=name&searchOperation=like&searchValue=signup"
+    );
+
+    await api.executeSql("clickhouse-1", "select 1");
+    expect(fetchMock.mock.calls[2]?.[0]).toBe("/api/databases/clickhouse-1/sql/query");
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: "POST" });
+    expect(lastJsonBody(fetchMock)).toEqual({ sql: "select 1", maxRows: 500 });
+
+    await api.insertSqlRow("clickhouse-1", "analytics", "events", { event_id: 2 });
+    expect(fetchMock.mock.calls[3]?.[0]).toBe("/api/databases/clickhouse-1/sql/rows");
+    expect(fetchMock.mock.calls[3]?.[1]).toMatchObject({ method: "POST" });
+
+    await api.updateSqlRow(
+      "clickhouse-1",
+      "analytics",
+      "events",
+      { event_id: 2 },
+      { name: "purchase" }
+    );
+    expect(fetchMock.mock.calls[4]?.[1]).toMatchObject({ method: "PATCH" });
+
+    await api.deleteSqlRow("clickhouse-1", "analytics", "events", { event_id: 2 });
+    expect(fetchMock.mock.calls[5]?.[1]).toMatchObject({ method: "DELETE" });
+    expect(lastJsonBody(fetchMock)).toEqual({
+      namespace: "analytics",
+      table: "events",
+      locator: { event_id: 2 },
+    });
+  });
+
   it("serializes PKI CA, certificate, and template requests", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -363,6 +429,35 @@ describe("api client contract", () => {
     expect(fetchMock.mock.calls[1]?.[0]).toBe(
       "/api/docker/nodes/node-1/containers/container-1?_t=1782043200000"
     );
+  });
+
+  it("requests an authoritative container archive import plan", async () => {
+    const plan = {
+      networks: [{ id: "bridge", name: "bridge", driver: "bridge", scope: "local" }],
+      volumes: [],
+      resolution: {
+        networks: { source: "bridge" },
+        createNetworks: [],
+        volumes: {},
+        createVolumes: [],
+        ports: { "8080/tcp:8080": 0 },
+      },
+      conflictingPorts: ["8080/tcp:8080"],
+    };
+    const metadata = {
+      networks: [{ name: "source", driver: "bridge", createable: false }],
+      mounts: [],
+      ports: [{ containerPort: 8080, hostPort: 8080, protocol: "tcp" as const }],
+    };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ csrfToken: "csrf-token" }))
+      .mockResolvedValueOnce(jsonResponse({ data: plan }));
+
+    await expect(api.planContainerArchiveImport("node-1", metadata)).resolves.toEqual(plan);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/docker/nodes/node-1/containers/archive/plan");
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "POST" });
+    expect(lastJsonBody(fetchMock)).toEqual(metadata);
   });
 
   it("reads Docker inventory through aggregate snapshots and sends refresh hints", async () => {

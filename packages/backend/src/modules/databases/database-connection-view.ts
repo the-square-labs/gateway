@@ -24,7 +24,29 @@ export interface RedisConnectionConfig {
   tlsEnabled: boolean;
 }
 
-export type DatabaseConnectionConfig = PostgresConnectionConfig | RedisConnectionConfig;
+export interface ClickHouseConnectionConfig {
+  type: 'clickhouse';
+  url: string;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
+  tlsEnabled: boolean;
+}
+
+export type DatabaseConnectionConfig = PostgresConnectionConfig | RedisConnectionConfig | ClickHouseConnectionConfig;
+
+export interface DatabaseCapabilities {
+  sqlConsole: boolean;
+  commandConsole: boolean;
+  catalogExplorer: boolean;
+  rowInsert: boolean;
+  rowUpdate: boolean;
+  rowDelete: boolean;
+  schemaMutation: boolean;
+  exactRowCount: boolean;
+}
 
 export interface DatabaseConnectionView {
   id: string;
@@ -47,6 +69,7 @@ export interface DatabaseConnectionView {
   sortOrder: number;
   hasStoredPassword: boolean;
   config: Record<string, unknown>;
+  capabilities: DatabaseCapabilities;
   createdById: string;
   updatedById: string | null;
   createdAt: string;
@@ -92,6 +115,13 @@ export function buildDatabaseConnectionString(config: DatabaseConnectionConfig):
     const sslMode = config.sslEnabled ? '?sslmode=require' : '';
     return `${protocol}://${encodeURIComponent(config.username)}:${encodeURIComponent(config.password)}@${config.host}:${config.port}/${encodeURIComponent(config.database)}${sslMode}`;
   }
+  if (config.type === 'clickhouse') {
+    const url = new URL(config.url);
+    url.username = config.username;
+    url.password = config.password;
+    url.searchParams.set('database', config.database);
+    return url.toString();
+  }
   const protocol = config.tlsEnabled ? 'rediss' : 'redis';
   const auth = config.username
     ? `${encodeURIComponent(config.username)}:${encodeURIComponent(config.password)}`
@@ -105,6 +135,39 @@ export function toDatabaseConnectionView(
   revealCredentials: boolean,
   includeHealthHistory = true
 ): DatabaseConnectionView {
+  const capabilities: DatabaseCapabilities =
+    config.type === 'postgres'
+      ? {
+          sqlConsole: true,
+          commandConsole: false,
+          catalogExplorer: true,
+          rowInsert: true,
+          rowUpdate: true,
+          rowDelete: true,
+          schemaMutation: true,
+          exactRowCount: true,
+        }
+      : config.type === 'clickhouse'
+        ? {
+            sqlConsole: true,
+            commandConsole: false,
+            catalogExplorer: true,
+            rowInsert: true,
+            rowUpdate: true,
+            rowDelete: true,
+            schemaMutation: false,
+            exactRowCount: false,
+          }
+        : {
+            sqlConsole: false,
+            commandConsole: true,
+            catalogExplorer: false,
+            rowInsert: false,
+            rowUpdate: false,
+            rowDelete: false,
+            schemaMutation: false,
+            exactRowCount: false,
+          };
   return {
     id: row.id,
     name: row.name,
@@ -135,14 +198,25 @@ export function toDatabaseConnectionView(
             password: revealCredentials ? config.password : maskDatabaseCredential(config.password),
             sslEnabled: config.sslEnabled,
           }
-        : {
-            host: config.host,
-            port: config.port,
-            username: config.username,
-            password: revealCredentials ? config.password : maskDatabaseCredential(config.password),
-            db: config.db,
-            tlsEnabled: config.tlsEnabled,
-          },
+        : config.type === 'clickhouse'
+          ? {
+              url: config.url,
+              host: config.host,
+              port: config.port,
+              database: config.database,
+              username: config.username,
+              password: revealCredentials ? config.password : maskDatabaseCredential(config.password),
+              tlsEnabled: config.tlsEnabled,
+            }
+          : {
+              host: config.host,
+              port: config.port,
+              username: config.username,
+              password: revealCredentials ? config.password : maskDatabaseCredential(config.password),
+              db: config.db,
+              tlsEnabled: config.tlsEnabled,
+            },
+    capabilities,
     createdById: row.createdById,
     updatedById: row.updatedById,
     createdAt: row.createdAt.toISOString(),

@@ -23,7 +23,7 @@ import { DatabaseConsoleTab } from "./database-detail/DatabaseConsoleTab";
 import { DatabaseHeader } from "./database-detail/DatabaseHeader";
 import { DatabaseOverviewTab } from "./database-detail/DatabaseOverviewTab";
 import { DatabaseSettingsTab } from "./database-detail/DatabaseSettingsTab";
-import { PostgresExplorer } from "./database-detail/PostgresExplorer";
+import { SqlExplorer } from "./database-detail/SqlExplorer";
 
 export function DatabaseDetail({
   resolvedDatabaseId,
@@ -110,12 +110,13 @@ export function DatabaseDetail({
 
   useEffect(() => {
     if (
-      (database?.type === "redis" || liveHealthStatus === "offline") &&
+      ((database && !(database.capabilities?.catalogExplorer ?? database.type !== "redis")) ||
+        liveHealthStatus === "offline") &&
       activeTab === "explorer"
     ) {
       setActiveTab("overview");
     }
-  }, [activeTab, database?.type, liveHealthStatus, setActiveTab]);
+  }, [activeTab, database, liveHealthStatus, setActiveTab]);
 
   useEffect(() => {
     if (liveHealthStatus === "offline" && activeTab === "console") {
@@ -124,10 +125,13 @@ export function DatabaseDetail({
   }, [activeTab, liveHealthStatus, setActiveTab]);
 
   useEffect(() => {
-    if (activeTab !== "explorer" || database?.type !== "postgres") {
+    if (
+      activeTab !== "explorer" ||
+      (database && !(database.capabilities?.catalogExplorer ?? database.type !== "redis"))
+    ) {
       setExplorerFocused(false);
     }
-  }, [activeTab, database?.type]);
+  }, [activeTab, database]);
 
   useEffect(() => {
     if (!database) return;
@@ -256,8 +260,11 @@ export function DatabaseDetail({
   }
 
   const isFullHeightTab = activeTab === "explorer" || activeTab === "console";
-  const hideDatabaseChrome =
-    explorerFocused && activeTab === "explorer" && database.type === "postgres";
+  const supportsExplorer = database.capabilities?.catalogExplorer ?? database.type !== "redis";
+  const supportsConsole =
+    (database.capabilities?.sqlConsole ?? database.type !== "redis") ||
+    (database.capabilities?.commandConsole ?? database.type === "redis");
+  const hideDatabaseChrome = explorerFocused && activeTab === "explorer" && supportsExplorer;
   const consoleDisabled = liveHealthStatus === "offline";
   const explorerDisabled = liveHealthStatus === "offline";
 
@@ -304,7 +311,7 @@ export function DatabaseDetail({
                 Overview
               </TabsTrigger>
               {canRead &&
-                (database.type === "postgres" ? (
+                (supportsExplorer ? (
                   <TabsTrigger value="explorer" disabled={explorerDisabled} className="gap-1.5">
                     <Table2 className="h-3.5 w-3.5" />
                     Explorer
@@ -318,7 +325,7 @@ export function DatabaseDetail({
                     </span>
                   </TabsTrigger>
                 ))}
-              {(canRead || canWrite || canAdmin) && (
+              {(canRead || canWrite || canAdmin) && supportsConsole && (
                 <TabsTrigger value="console" disabled={consoleDisabled} className="gap-1.5">
                   <Terminal className="h-3.5 w-3.5" />
                   Console
@@ -342,8 +349,9 @@ export function DatabaseDetail({
               value="explorer"
               className={cn("flex flex-col flex-1 min-h-0", hideDatabaseChrome && "mt-0")}
             >
-              {database.type === "postgres" && !explorerDisabled ? (
-                <PostgresExplorer
+              {(database.type === "postgres" || database.type === "clickhouse") &&
+              !explorerDisabled ? (
+                <SqlExplorer
                   database={database}
                   canWrite={canWrite || canAdmin}
                   canAdmin={canAdmin}
@@ -356,13 +364,13 @@ export function DatabaseDetail({
                 </div>
               ) : (
                 <div className="border border-border bg-card p-8 text-center text-sm text-muted-foreground">
-                  Redis explorer is coming soon.
+                  Explorer is not available for this database provider.
                 </div>
               )}
             </TabsContent>
           )}
 
-          {(canRead || canWrite || canAdmin) && !consoleDisabled && (
+          {(canRead || canWrite || canAdmin) && supportsConsole && !consoleDisabled && (
             <TabsContent
               value="console"
               className="space-y-4 flex flex-col flex-1 min-h-0 overflow-hidden"

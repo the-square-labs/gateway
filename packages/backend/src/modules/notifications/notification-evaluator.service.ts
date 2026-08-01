@@ -159,14 +159,19 @@ export class NotificationEvaluatorService {
 
   async evaluateDatabaseSnapshot(snapshot: {
     databaseId: string;
-    type: 'postgres' | 'redis';
+    type: 'postgres' | 'redis' | 'clickhouse';
     name: string;
     metrics: Record<string, number | null>;
   }): Promise<void> {
     const rules = await this.getThresholdRules();
     if (rules.length === 0) return;
 
-    const category = snapshot.type === 'postgres' ? 'database_postgres' : 'database_redis';
+    const category =
+      snapshot.type === 'postgres'
+        ? 'database_postgres'
+        : snapshot.type === 'clickhouse'
+          ? 'database_clickhouse'
+          : 'database_redis';
 
     for (const rule of rules) {
       if (rule.category !== category) continue;
@@ -1139,7 +1144,12 @@ export class NotificationEvaluatorService {
 
   private getThresholdResourceId(rule: any, sourceId?: string): string | null {
     if (!sourceId) return null;
-    if (rule.category === 'node' || rule.category === 'database_postgres' || rule.category === 'database_redis') {
+    if (
+      rule.category === 'node' ||
+      rule.category === 'database_postgres' ||
+      rule.category === 'database_clickhouse' ||
+      rule.category === 'database_redis'
+    ) {
       return sourceId;
     }
     return null;

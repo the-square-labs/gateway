@@ -5,22 +5,8 @@ import { CodeEditor } from "@/components/ui/code-editor";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
-import type { DatabaseConnection } from "@/types";
+import type { DatabaseConnection, SqlExecutionResult } from "@/types";
 import { stringifyCell } from "./shared";
-
-type PostgresConsoleResult = {
-  results: Array<{
-    command: string;
-    rowCount: number;
-    durationMs?: number;
-    fields: string[];
-    rows: Record<string, unknown>[];
-    truncated?: boolean;
-    maxRows?: number;
-  }>;
-  truncated?: boolean;
-  resultLimit?: number;
-};
 
 type RedisConsoleResult = {
   results: Array<{ command: string; result: unknown; truncated?: boolean }>;
@@ -43,7 +29,7 @@ function readStoredSplitPercent() {
 }
 
 function defaultConsoleInput(databaseType: DatabaseConnection["type"]) {
-  return databaseType === "postgres" ? "select 1" : "PING";
+  return databaseType === "redis" ? "PING" : "select 1";
 }
 
 function consoleInputStorageKey(databaseId: string) {
@@ -117,7 +103,7 @@ function formatTable(fields: string[], rows: Record<string, unknown>[]) {
   return `${header}\n${divider}\n${body}`;
 }
 
-function formatPostgresOutput(result: PostgresConsoleResult) {
+function formatSqlOutput(result: SqlExecutionResult) {
   const lines: string[] = [];
   const cappedMessages: string[] = [];
   if (result.truncated) {
@@ -135,6 +121,19 @@ function formatPostgresOutput(result: PostgresConsoleResult) {
       `${rowLabel}: ${entry.rowCount}`,
       `Time: ${formatDuration(entry.durationMs)}`
     );
+    if (entry.queryId) lines.push(`Query ID: ${entry.queryId}`);
+    if (entry.columns.length > 0) {
+      lines.push(
+        `Columns: ${entry.columns.map((column) => `${column.name} ${column.type}`).join(", ")}`
+      );
+    }
+    if (entry.statistics && Object.keys(entry.statistics).length > 0) {
+      lines.push(
+        `Statistics: ${Object.entries(entry.statistics)
+          .map(([key, value]) => `${key}=${value}`)
+          .join(", ")}`
+      );
+    }
     if (entry.truncated) {
       cappedMessages.push(
         `statement ${index + 1} rows capped at ${entry.maxRows ?? entry.rows.length}`
@@ -230,9 +229,9 @@ export function DatabaseConsoleTab({ database }: { database: DatabaseConnection 
     recordHistory(input);
     try {
       const data =
-        database.type === "postgres"
-          ? await api.executePostgresSql(database.id, input)
-          : await api.executeRedisCommand(database.id, input);
+        database.type === "redis"
+          ? await api.executeRedisCommand(database.id, input)
+          : await api.executeSql(database.id, input);
       setResult(data);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Query failed";
@@ -249,12 +248,12 @@ export function DatabaseConsoleTab({ database }: { database: DatabaseConnection 
       return `Error: ${(result as { error?: string }).error ?? "Query failed"}`;
     }
     if (
-      database.type === "postgres" &&
+      database.type !== "redis" &&
       typeof result === "object" &&
       "results" in result &&
       Array.isArray((result as { results: unknown[] }).results)
     ) {
-      return formatPostgresOutput(result as PostgresConsoleResult);
+      return formatSqlOutput(result as SqlExecutionResult);
     }
     if (
       database.type === "redis" &&
@@ -307,10 +306,10 @@ export function DatabaseConsoleTab({ database }: { database: DatabaseConnection 
       <div className="flex items-center justify-between gap-4 px-4 py-3 bg-card border-b border-border shrink-0">
         <div>
           <h3 className="text-sm font-semibold">
-            {database.type === "postgres" ? "SQL Console" : "Redis Command Console"}
+            {database.type === "redis" ? "Redis Command Console" : "SQL Console"}
           </h3>
           <p className="text-xs text-muted-foreground">
-            Run one or more {database.type === "postgres" ? "SQL statements" : "Redis commands"}.
+            Run one or more {database.type === "redis" ? "Redis commands" : "SQL statements"}.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -344,7 +343,7 @@ export function DatabaseConsoleTab({ database }: { database: DatabaseConnection 
           <CodeEditor
             value={input}
             onChange={updateInput}
-            language={database.type === "postgres" ? "sql" : "plain"}
+            language={database.type === "redis" ? "plain" : "sql"}
             minHeight="0px"
             showGutterBorder={false}
             className="border-0 flex-1 min-h-0"

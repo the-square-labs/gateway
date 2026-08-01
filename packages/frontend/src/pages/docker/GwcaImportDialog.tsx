@@ -20,11 +20,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { type GwcaImportMetadata, gwcaPortKey, readGwcaImportMetadata } from "@/lib/gwca";
+import {
+  type GwcaImportMetadata,
+  type GwcaPortMappingInput,
+  gwcaPortKey,
+  normalizeGwcaPortMappings,
+  readGwcaImportMetadata,
+} from "@/lib/gwca";
 import { cn, formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
-import type { DockerContainer, DockerNetwork, DockerVolume, Node as GatewayNode } from "@/types";
+import type { DockerNetwork, DockerVolume, Node as GatewayNode } from "@/types";
 
 const BRIDGE_NETWORK: DockerNetwork = {
   id: "bridge",
@@ -100,16 +106,6 @@ interface GwcaImportDialogProps {
   devPreview?: boolean;
 }
 
-function uniqueNetworkName(source: string, networks: DockerNetwork[]): string {
-  const used = new Set(networks.map((network) => network.name));
-  if (!used.has(source)) return source;
-  for (let index = 2; index < 10_000; index += 1) {
-    const candidate = `${source}-gwca-${index}`;
-    if (!used.has(candidate)) return candidate;
-  }
-  return `${source}-gwca`;
-}
-
 function hasNodeScope(hasScope: (scope: string) => boolean, scope: string, nodeId: string) {
   return hasScope(scope) || hasScope(`${scope}:${nodeId}`);
 }
@@ -132,7 +128,7 @@ export function GwcaImportDialog({
   const [networkMappings, setNetworkMappings] = useState<Record<string, string>>({});
   const [bindPaths, setBindPaths] = useState<Record<string, string>>({});
   const [volumeMappings, setVolumeMappings] = useState<Record<string, string>>({});
-  const [portMappings, setPortMappings] = useState<Record<string, number>>({});
+  const [portMappings, setPortMappings] = useState<Record<string, GwcaPortMappingInput>>({});
   const [planError, setPlanError] = useState("");
   const [planning, setPlanning] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -157,14 +153,8 @@ export function GwcaImportDialog({
 
   const canCreateNetworks =
     devPreview || (!!nodeId && hasNodeScope(hasScope, "docker:networks:create", nodeId));
-  const canViewNetworks =
-    devPreview || (!!nodeId && hasNodeScope(hasScope, "docker:networks:view", nodeId));
-  const canViewVolumes =
-    devPreview || (!!nodeId && hasNodeScope(hasScope, "docker:volumes:view", nodeId));
   const canCreateVolumes =
     devPreview || (!!nodeId && hasNodeScope(hasScope, "docker:volumes:create", nodeId));
-  const canViewContainers =
-    devPreview || (!!nodeId && hasNodeScope(hasScope, "docker:containers:view", nodeId));
   const canImportSecrets =
     devPreview || (!!nodeId && hasNodeScope(hasScope, "docker:containers:secrets", nodeId));
 
@@ -204,60 +194,39 @@ export function GwcaImportDialog({
     let cancelled = false;
     setPlanning(true);
     setPlanError("");
-    Promise.all([
-      readGwcaImportMetadata(file),
-      canViewNetworks ? api.listDockerNetworks(nodeId) : Promise.resolve([BRIDGE_NETWORK]),
-      canViewVolumes ? api.listDockerVolumes(nodeId) : Promise.resolve([]),
-      canViewContainers ? api.listDockerContainers(nodeId) : Promise.resolve([]),
-    ])
-      .then(([archive, listedNetworks, listedVolumes, listedContainers]) => {
+    readGwcaImportMetadata(file)
+      .then(async (archive) => ({
+        archive,
+        plan: await api.planContainerArchiveImport(nodeId, {
+          networks: archive.networks,
+          mounts: archive.mounts,
+          ports: archive.ports,
+        }),
+      }))
+      .then(({ archive, plan }) => {
         if (cancelled) return;
-        const networks = listedNetworks.some((network) => network.name === "bridge")
-          ? listedNetworks
-          : [BRIDGE_NETWORK, ...listedNetworks];
-        const networkMap: Record<string, string> = {};
-        for (const source of archive.networks) {
-          const exact = networks.find((network) => network.name === source.name);
-          if (exact && (!source.driver || exact.driver === source.driver)) {
-            networkMap[source.name] = source.name;
-          } else if (source.createable && canCreateNetworks) {
-            networkMap[source.name] = uniqueNetworkName(source.name, networks);
-          } else {
-            networkMap[source.name] = "bridge";
-          }
-        }
-
-        const volumeMap: Record<string, string> = {};
-        for (const mount of archive.mounts.filter(
-          (entry) => entry.type === "volume" && entry.requiresMapping
-        )) {
-          const exact = listedVolumes.find(
-            (volume) =>
-              volume.name === mount.source && (!mount.driver || volume.driver === mount.driver)
-          );
-          const compatible = listedVolumes.find(
-            (volume) => !mount.driver || volume.driver === mount.driver
-          );
-          volumeMap[mount.source] =
-            exact?.name ?? compatible?.name ?? (canCreateVolumes ? CREATE_NEW_VALUE : "");
-        }
-
-        const occupiedPorts = new Set(
-          (listedContainers as DockerContainer[]).flatMap((container) =>
-            (container.ports ?? []).flatMap((port) =>
-              typeof port.publicPort === "number" ? [port.publicPort] : []
-            )
-          )
+        const createNetworks = new Set(plan.resolution.createNetworks);
+        const createVolumes = new Set(plan.resolution.createVolumes);
+        const networkMap = Object.fromEntries(
+          Object.entries(plan.resolution.networks).map(([source, target]) => [
+            source,
+            createNetworks.has(source) ? CREATE_NEW_VALUE : target,
+          ])
         );
-        const remappedPorts = Object.fromEntries(
-          archive.ports
-            .filter((port) => port.hostPort > 0 && occupiedPorts.has(port.hostPort))
-            .map((port) => [gwcaPortKey(port), 0])
+        const volumeMap = Object.fromEntries(
+          archive.mounts
+            .filter((entry) => entry.type === "volume" && entry.requiresMapping)
+            .map((entry) => [
+              entry.source,
+              createVolumes.has(entry.source)
+                ? CREATE_NEW_VALUE
+                : (plan.resolution.volumes[entry.source] ?? ""),
+            ])
         );
         setMetadata(archive);
         setName((current) => current || archive.name);
-        setTargetNetworks(networks);
-        setTargetVolumes(listedVolumes);
+        setTargetNetworks(plan.networks);
+        setTargetVolumes(plan.volumes);
         setNetworkMappings(networkMap);
         setBindPaths(
           Object.fromEntries(
@@ -267,7 +236,7 @@ export function GwcaImportDialog({
           )
         );
         setVolumeMappings(volumeMap);
-        setPortMappings(remappedPorts);
+        setPortMappings(plan.resolution.ports);
         if (archive.secretKeys.length > 0 && !canImportSecrets) {
           setPlanError(
             "This archive contains secrets, but you cannot import secrets on the target node."
@@ -284,22 +253,15 @@ export function GwcaImportDialog({
     return () => {
       cancelled = true;
     };
-  }, [
-    canCreateNetworks,
-    canCreateVolumes,
-    canImportSecrets,
-    canViewContainers,
-    canViewNetworks,
-    canViewVolumes,
-    devPreview,
-    file,
-    nodeId,
-    open,
-  ]);
+  }, [canImportSecrets, devPreview, file, nodeId, open]);
 
   const unresolvedVolumes = useMemo(
     () => Object.values(volumeMappings).filter((value) => !value).length,
     [volumeMappings]
+  );
+  const resolvedPortMappings = useMemo(
+    () => normalizeGwcaPortMappings(portMappings),
+    [portMappings]
   );
   const bindMounts = metadata?.mounts.filter((entry) => entry.type === "bind") ?? [];
   const externalVolumes =
@@ -308,7 +270,16 @@ export function GwcaImportDialog({
     metadata?.ports.filter((entry) => Object.hasOwn(portMappings, gwcaPortKey(entry))) ?? [];
 
   const handleImport = async () => {
-    if (!file || !nodeId || !name.trim() || planning || planError || unresolvedVolumes > 0) return;
+    if (
+      !file ||
+      !nodeId ||
+      !name.trim() ||
+      planning ||
+      planError ||
+      unresolvedVolumes > 0 ||
+      !resolvedPortMappings
+    )
+      return;
     if (devPreview) {
       toast.info("GWCA import development preview", {
         description: "No container was created.",
@@ -347,7 +318,7 @@ export function GwcaImportDialog({
             Object.entries(volumeMappings).filter(([, target]) => target !== CREATE_NEW_VALUE)
           ),
           createVolumes,
-          ports: portMappings,
+          ports: resolvedPortMappings,
         },
         ({ loaded, total }) => {
           const description =
@@ -673,13 +644,15 @@ export function GwcaImportDialog({
                               type="number"
                               min={0}
                               max={65535}
-                              value={portMappings[key] ?? 0}
-                              onChange={(event) =>
+                              step={1}
+                              value={portMappings[key] ?? ""}
+                              onChange={(event) => {
+                                const value = event.target.value;
                                 setPortMappings((current) => ({
                                   ...current,
-                                  [key]: Number(event.target.value),
-                                }))
-                              }
+                                  [key]: value === "" ? "" : Number(value),
+                                }));
+                              }}
                               className="h-9 rounded-none border-0 border-l border-border shadow-none"
                             />
                           </div>
@@ -720,6 +693,7 @@ export function GwcaImportDialog({
               planning ||
               !!planError ||
               unresolvedVolumes > 0 ||
+              !resolvedPortMappings ||
               !file ||
               !nodeId ||
               !name.trim()

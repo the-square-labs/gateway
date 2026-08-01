@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { LoadingSpinner } from "@/components/common/LoadingSpinner";
+import { ScopeList } from "@/components/common/ScopeList";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -194,10 +195,20 @@ export function AlertDialog({
         return;
       }
 
-      if (category === "database_postgres" || category === "database_redis") {
+      if (
+        category === "database_postgres" ||
+        category === "database_clickhouse" ||
+        category === "database_redis"
+      ) {
+        const databaseType =
+          category === "database_postgres"
+            ? "postgres"
+            : category === "database_clickhouse"
+              ? "clickhouse"
+              : "redis";
         const response = await api.listDatabases({
           limit: 200,
-          type: category === "database_postgres" ? "postgres" : "redis",
+          type: databaseType,
         });
         if (resourceLoadTokenRef.current !== loadToken) return;
         setAvailableResources(
@@ -297,6 +308,29 @@ export function AlertDialog({
           )
         : webhooks,
     [webhookSearch, webhooks]
+  );
+  const resourceScopeItems = useMemo(
+    () =>
+      filteredResources.map((resource) => ({
+        value: resource.id,
+        label: resource.label,
+        desc: resource.label,
+        group: "",
+        hideValue: true,
+      })),
+    [filteredResources]
+  );
+  const webhookScopeItems = useMemo(
+    () =>
+      filteredWebhooks.map((webhook) => ({
+        value: webhook.id,
+        label: webhook.name,
+        desc: webhook.name,
+        group: "",
+        hideValue: true,
+        meta: webhook.templatePreset ?? "custom",
+      })),
+    [filteredWebhooks]
   );
 
   const canSelectNodeDiskTarget =
@@ -800,25 +834,18 @@ export function AlertDialog({
                       className="border-0 border-b border-border rounded-none h-9 text-sm focus-visible:ring-0"
                       disabled={!scopeEnabled}
                     />
-                    <div className="max-sm:max-h-[30vh] max-sm:overflow-y-auto">
+                    <div>
                       {filteredResources.length === 0 ? (
                         <p className="p-3 text-sm text-muted-foreground">No resources found.</p>
                       ) : (
-                        filteredResources.map((res) => (
-                          <label
-                            key={res.id}
-                            className="flex items-center gap-2.5 px-3 py-1.5 hover:bg-accent cursor-pointer text-sm"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={resourceIds.includes(res.id)}
-                              onChange={() => toggleResource(res.id)}
-                              className="rounded"
-                              disabled={!scopeEnabled}
-                            />
-                            {res.label}
-                          </label>
-                        ))
+                        <ScopeList
+                          scopes={resourceScopeItems}
+                          search=""
+                          selected={resourceIds}
+                          onToggle={toggleResource}
+                          readOnly={!scopeEnabled}
+                          viewportClassName="max-sm:max-h-[30vh] max-sm:overflow-y-auto"
+                        />
                       )}
                     </div>
                     <div className="border-t border-border px-3 py-1.5">
@@ -876,24 +903,14 @@ export function AlertDialog({
                         placeholder="Search webhooks..."
                         className="border-0 border-b border-border rounded-none h-9 text-sm focus-visible:ring-0"
                       />
-                      <div className="max-sm:max-h-[25vh] max-sm:overflow-y-auto">
-                        {filteredWebhooks.map((wh) => (
-                          <label
-                            key={wh.id}
-                            className="flex items-center gap-2.5 px-3 py-1.5 hover:bg-accent cursor-pointer text-sm"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={selectedWebhookIds.includes(wh.id)}
-                              onChange={() => toggleWebhook(wh.id)}
-                              className="rounded"
-                            />
-                            <span className="font-medium">{wh.name}</span>
-                            <span className="text-muted-foreground text-xs ml-auto">
-                              {wh.templatePreset ?? "custom"}
-                            </span>
-                          </label>
-                        ))}
+                      <div>
+                        <ScopeList
+                          scopes={webhookScopeItems}
+                          search=""
+                          selected={selectedWebhookIds}
+                          onToggle={toggleWebhook}
+                          viewportClassName="max-sm:max-h-[25vh] max-sm:overflow-y-auto"
+                        />
                       </div>
                       <div className="border-t border-border px-3 py-1.5">
                         <p className="text-xs text-muted-foreground">

@@ -12,6 +12,7 @@ import {
 import {
   ContainerArchiveExportQuerySchema,
   ContainerArchiveImportQuerySchema,
+  ContainerArchivePlanSchema,
   ContainerCreateSchema,
   ContainerDuplicateSchema,
   ContainerKillSchema,
@@ -211,6 +212,14 @@ export const importContainerArchiveRoute = appRoute({
     },
   },
   responses: createdJson(UnknownDataResponseSchema),
+});
+export const planContainerArchiveImportRoute = appRoute({
+  method: 'post',
+  path: '/nodes/{nodeId}/containers/archive/plan',
+  tags: ['Docker Containers'],
+  summary: 'Plan target resource mappings for a Gateway container archive',
+  request: { params: nodeParams, ...jsonBody(ContainerArchivePlanSchema) },
+  responses: okJson(UnknownDataResponseSchema),
 });
 export const updateContainerRoute = appRoute({
   method: 'post',

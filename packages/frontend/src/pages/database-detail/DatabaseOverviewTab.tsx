@@ -133,6 +133,79 @@ export function DatabaseOverviewTab({
       ];
     }
 
+    if (database.type === "clickhouse") {
+      const databaseSize = latest.metrics.database_size_bytes ?? null;
+      const diskTotal = latest.metrics.disk_total_bytes ?? null;
+      const diskFree = latest.metrics.disk_free_bytes ?? null;
+      const diskAvailable = latest.metrics.disk_unreserved_bytes ?? diskFree;
+      const diskUsedPercent = latest.metrics.disk_used_pct ?? null;
+
+      return [
+        {
+          key: "latency_ms",
+          label: "Latency",
+          value: formatMetricValue("latency_ms", latest.metrics.latency_ms ?? null),
+          history: history.map((item) => item.metrics.latency_ms ?? 0),
+        },
+        {
+          key: "database_size_bytes",
+          label: "Database Size",
+          value: formatMetricValue("database_size_bytes", databaseSize),
+          history: history.map((item) => item.metrics.database_size_bytes ?? 0),
+        },
+        {
+          key: "row_count",
+          label: "Rows in Active Parts",
+          value: latest.metrics.row_count == null ? "-" : latest.metrics.row_count.toLocaleString(),
+          history: history.map((item) => item.metrics.row_count ?? 0),
+        },
+        {
+          key: "active_parts",
+          label: "Active Parts",
+          value: formatMetricValue("active_parts", latest.metrics.active_parts ?? null),
+          history: history.map((item) => item.metrics.active_parts ?? 0),
+        },
+        {
+          key: "running_queries",
+          label: "Running Queries",
+          value: formatMetricValue("running_queries", latest.metrics.running_queries ?? null),
+          history: history.map((item) => item.metrics.running_queries ?? 0),
+        },
+        {
+          key: "query_rate",
+          label: "Query Rate",
+          value:
+            latest.metrics.query_rate == null ? "-" : `${latest.metrics.query_rate.toFixed(1)}/s`,
+          history: history.map((item) => item.metrics.query_rate ?? 0),
+        },
+        {
+          key: "memory_usage_bytes",
+          label: "Query Memory",
+          value: formatMetricValue("memory_usage_bytes", latest.metrics.memory_usage_bytes ?? null),
+          history: history.map((item) => item.metrics.memory_usage_bytes ?? 0),
+        },
+        {
+          key: "disk_used_pct",
+          label: "Server Disk",
+          value:
+            diskTotal == null || diskFree == null
+              ? "-"
+              : `${formatMetricValue("disk_total_bytes", diskTotal - diskFree)} / ${formatMetricValue("disk_total_bytes", diskTotal)}`,
+          history: history.map((item) => item.metrics.disk_used_pct ?? 0),
+          progress: diskUsedPercent == null ? undefined : { percent: diskUsedPercent },
+          sparklineMax: 100,
+          subtitle:
+            diskUsedPercent == null
+              ? undefined
+              : `${diskUsedPercent.toFixed(1)}% used${
+                  diskAvailable == null
+                    ? ""
+                    : ` · ${formatMetricValue("disk_total_bytes", diskAvailable)} available`
+                } · ${latest.metrics.active_merges ?? 0} merges · ${latest.metrics.pending_mutations ?? 0} mutations`,
+        },
+      ];
+    }
+
     const usedMemory = latest.metrics.used_memory_bytes ?? null;
     const maxMemory = latest.metrics.maxmemory_bytes ?? null;
     const memoryPct = latest.metrics.memory_pct ?? null;

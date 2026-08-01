@@ -1,3 +1,4 @@
+import type { ClickHouseClient } from '@clickhouse/client';
 import { asc, count, eq, ilike, inArray, or, type SQL } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pg from 'pg';
@@ -11,6 +12,8 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { PaginatedResponse } from '@/types.js';
+import { createClickHouseDatabaseClient, normalizeClickHouseConnection } from './clickhouse-connection.js';
+import { ClickHouseSqlAdapter } from './clickhouse-sql-adapter.js';
 import {
   buildDatabaseConnectionString,
   type DatabaseConnectionConfig,
@@ -26,6 +29,7 @@ import {
   executePostgresSql as executePostgresSqlOperation,
   executeRedisCommand as executeRedisCommandOperation,
 } from './database-query-execution.js';
+import { inferPostgresIntent } from './database-query-intent.js';
 import type {
   CreateDatabaseConnectionInput,
   DatabaseListQuery,
@@ -49,17 +53,20 @@ import {
   listPostgresTables as listPostgresTablesOperation,
   type PostgresSchemaOperationContext,
 } from './postgres-schema-operations.js';
+import { PostgresSqlAdapter } from './postgres-sql-adapter.js';
 import {
   getRedisKey as getRedisKeyOperation,
   type RedisKeyValueType,
   scanRedisKeys as scanRedisKeysOperation,
   setRedisKey as setRedisKeyOperation,
 } from './redis-key-operations.js';
+import type { SqlDatabaseAdapter } from './sql-database-adapter.js';
 
 const { Pool } = pg;
 const DATABASE_HEALTH_HISTORY_MIN_INTERVAL_MS = 30_000;
 
 export type {
+  ClickHouseConnectionConfig,
   DatabaseConnectionConfig,
   DatabaseConnectionView,
   DatabaseHealthStatus,
@@ -77,18 +84,62 @@ interface PostgresRowSearchFilter {
   value: string;
 }
 
-export { inferPostgresIntent, inferRedisIntent } from './database-query-intent.js';
+export { inferClickHouseIntent, inferPostgresIntent, inferRedisIntent } from './database-query-intent.js';
 
 export class DatabaseConnectionService {
   private eventBus?: EventBusService;
   private readonly postgresPools = new Map<string, pg.Pool>();
   private readonly redisClients = new Map<string, Redis>();
+  private readonly clickHouseClients = new Map<string, ClickHouseClient>();
+  private readonly sqlAdapters: Map<'postgres' | 'clickhouse', SqlDatabaseAdapter>;
 
   constructor(
     private readonly db: DrizzleClient,
     private readonly auditService: AuditService,
     private readonly cryptoService: CryptoService
-  ) {}
+  ) {
+    this.sqlAdapters = new Map<'postgres' | 'clickhouse', SqlDatabaseAdapter>([
+      [
+        'postgres',
+        new PostgresSqlAdapter({
+          listSchemas: (id) => this.listPostgresSchemas(id),
+          listTables: (id, schema) => this.listPostgresTables(id, schema),
+          getTableMetadata: (id, schema, table) => this.getPostgresTableMetadata(id, schema, table),
+          browseRows: (id, schema, table, page, limit, sortBy, sortOrder, search) =>
+            this.browsePostgresRows(id, schema, table, page, limit, sortBy, sortOrder, search),
+          insertRow: (id, schema, table, values, userId) => this.insertPostgresRow(id, schema, table, values, userId),
+          updateRow: (id, schema, table, primaryKey, values, userId) =>
+            this.updatePostgresRow(id, schema, table, primaryKey, values, userId),
+          deleteRow: (id, schema, table, primaryKey, userId) =>
+            this.deletePostgresRow(id, schema, table, primaryKey, userId),
+          executeSql: async (id, sql, userId, options) => {
+            const result = await executePostgresSqlOperation(this.queryExecutionContext(), id, sql, userId, options);
+            return {
+              ...result,
+              results: result.results.map((entry) => ({
+                ...entry,
+                durationMs: entry.durationMs ?? 0,
+                columns: entry.fields.map((name) => ({ name, type: '' })),
+                truncated: entry.truncated ?? false,
+                maxRows: entry.maxRows ?? options?.maxRows ?? 500,
+              })),
+            };
+          },
+          inferIntent: inferPostgresIntent,
+        }),
+      ],
+      [
+        'clickhouse',
+        new ClickHouseSqlAdapter({
+          withClient: (id, operation, fn) => this.withClickHouseClient(id, operation, fn),
+          auditLog: async (entry) => {
+            await this.auditService.log(entry);
+          },
+          emitChange: (id, action, extra) => this.emitChange(id, action, extra),
+        }),
+      ],
+    ]);
+  }
 
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
@@ -118,6 +169,64 @@ export class DatabaseConnectionService {
     return {
       withPostgresPool: (id, operation, fn) => this.withPostgresPool(id, operation, fn),
     };
+  }
+
+  async getSqlCapabilities(id: string) {
+    return (await this.getSqlAdapter(id)).capabilities;
+  }
+
+  async inferSqlIntent(id: string, sql: string) {
+    return (await this.getSqlAdapter(id)).inferIntent(sql);
+  }
+
+  async listSqlNamespaces(id: string) {
+    return (await this.getSqlAdapter(id)).listNamespaces(id);
+  }
+
+  async listSqlObjects(id: string, namespace: string) {
+    return (await this.getSqlAdapter(id)).listObjects(id, namespace);
+  }
+
+  async getSqlTableMetadata(id: string, namespace: string, table: string) {
+    return (await this.getSqlAdapter(id)).getTableMetadata(id, namespace, table);
+  }
+
+  async browseSqlRows(
+    id: string,
+    namespace: string,
+    table: string,
+    page: number,
+    limit: number,
+    options?: {
+      sortBy?: string;
+      sortOrder?: 'asc' | 'desc';
+      search?: PostgresRowSearchFilter;
+    }
+  ) {
+    return (await this.getSqlAdapter(id)).browseRows(id, namespace, table, page, limit, options);
+  }
+
+  async executeSql(id: string, sql: string, userId: string, options: { maxRows?: number } = {}) {
+    return (await this.getSqlAdapter(id)).executeSql(id, sql, userId, options);
+  }
+
+  async insertSqlRow(id: string, namespace: string, table: string, values: Record<string, unknown>, userId: string) {
+    return (await this.getSqlAdapter(id)).insertRow(id, namespace, table, values, userId);
+  }
+
+  async updateSqlRow(
+    id: string,
+    namespace: string,
+    table: string,
+    locator: Record<string, unknown>,
+    values: Record<string, unknown>,
+    userId: string
+  ) {
+    return (await this.getSqlAdapter(id)).updateRow(id, namespace, table, locator, values, userId);
+  }
+
+  async deleteSqlRow(id: string, namespace: string, table: string, locator: Record<string, unknown>, userId: string) {
+    return (await this.getSqlAdapter(id)).deleteRow(id, namespace, table, locator, userId);
   }
 
   async list(
@@ -209,7 +318,11 @@ export class DatabaseConnectionService {
 
   async create(input: CreateDatabaseConnectionInput, userId: string): Promise<DatabaseConnectionView> {
     const normalized =
-      input.type === 'postgres' ? this.normalizePostgres(input.config) : this.normalizeRedis(input.config);
+      input.type === 'postgres'
+        ? this.normalizePostgres(input.config)
+        : input.type === 'clickhouse'
+          ? normalizeClickHouseConnection(input.config)
+          : this.normalizeRedis(input.config);
     const testResult = await this.testNormalizedConnection(normalized);
     const encryptedConfig = this.encryptConfig(normalized);
     const row = await writeWithAllocatedSlug({
@@ -228,7 +341,7 @@ export class DatabaseConnectionService {
             manualSizeLimitMb: input.type === 'postgres' ? (input.manualSizeLimitMb ?? null) : null,
             host: normalized.host,
             port: normalized.port,
-            databaseName: normalized.type === 'postgres' ? normalized.database : `db${normalized.db}`,
+            databaseName: normalized.type === 'redis' ? `db${normalized.db}` : normalized.database,
             username: normalized.username ?? null,
             tlsEnabled: normalized.type === 'postgres' ? normalized.sslEnabled : normalized.tlsEnabled,
             encryptedConfig,
@@ -286,22 +399,37 @@ export class DatabaseConnectionService {
                   password: nextPassword,
                 }
           )
-        : this.normalizeRedis(
-            inputConfig.connectionString
-              ? {
-                  ...inputConfig,
-                  password: nextPassword,
-                }
-              : {
-                  host: currentConfig.host,
-                  port: currentConfig.port,
-                  username: currentConfig.username ?? undefined,
-                  db: currentConfig.db,
-                  tlsEnabled: currentConfig.tlsEnabled,
-                  ...inputConfig,
-                  password: nextPassword,
-                }
-          );
+        : currentConfig.type === 'clickhouse'
+          ? normalizeClickHouseConnection(
+              inputConfig.connectionString || inputConfig.url
+                ? {
+                    ...inputConfig,
+                    password: nextPassword,
+                  }
+                : {
+                    url: currentConfig.url,
+                    database: currentConfig.database,
+                    username: currentConfig.username,
+                    ...inputConfig,
+                    password: nextPassword,
+                  }
+            )
+          : this.normalizeRedis(
+              inputConfig.connectionString
+                ? {
+                    ...inputConfig,
+                    password: nextPassword,
+                  }
+                : {
+                    host: currentConfig.host,
+                    port: currentConfig.port,
+                    username: currentConfig.username ?? undefined,
+                    db: currentConfig.db,
+                    tlsEnabled: currentConfig.tlsEnabled,
+                    ...inputConfig,
+                    password: nextPassword,
+                  }
+            );
 
     this.assertOriginChangeHasReplacementPassword(currentConfig, mergedConfig, replacementPassword);
 
@@ -328,7 +456,7 @@ export class DatabaseConnectionService {
           : null,
       host: mergedConfig.host,
       port: mergedConfig.port,
-      databaseName: mergedConfig.type === 'postgres' ? mergedConfig.database : `db${mergedConfig.db}`,
+      databaseName: mergedConfig.type === 'redis' ? `db${mergedConfig.db}` : mergedConfig.database,
       username: mergedConfig.username ?? null,
       tlsEnabled: mergedConfig.type === 'postgres' ? mergedConfig.sslEnabled : mergedConfig.tlsEnabled,
       encryptedConfig: this.encryptConfig(mergedConfig),
@@ -809,10 +937,11 @@ export class DatabaseConnectionService {
   private extractReplacementPassword(inputConfig: UpdateDatabaseConnectionInput['config']): string | undefined {
     if (!inputConfig) return undefined;
     if ('password' in inputConfig) return inputConfig.password;
-    if (!inputConfig.connectionString) return undefined;
+    const connectionUrl = inputConfig.connectionString || inputConfig.url;
+    if (!connectionUrl) return undefined;
 
     try {
-      const url = new URL(inputConfig.connectionString);
+      const url = new URL(connectionUrl);
       return url.password ? decodeURIComponent(url.password) : undefined;
     } catch {
       return undefined;
@@ -828,6 +957,16 @@ export class DatabaseConnectionService {
         database: config.database,
         username: config.username,
         sslEnabled: config.sslEnabled,
+      };
+    }
+
+    if (config.type === 'clickhouse') {
+      return {
+        type: config.type,
+        url: config.url.trim(),
+        database: config.database,
+        username: config.username,
+        tlsEnabled: config.tlsEnabled,
       };
     }
 
@@ -978,6 +1117,16 @@ export class DatabaseConnectionService {
       } finally {
         await pool.end().catch(() => {});
       }
+    } else if (config.type === 'clickhouse') {
+      const client = createClickHouseDatabaseClient(config, 1);
+      try {
+        const result = await client.ping();
+        if (!result.success) throw result.error;
+      } catch (error) {
+        this.rethrowDatabaseError(error, 'clickhouse', 'connect');
+      } finally {
+        await client.close().catch(() => {});
+      }
     } else {
       const client = new Redis({
         host: config.host,
@@ -1054,6 +1203,23 @@ export class DatabaseConnectionService {
     return client;
   }
 
+  async getClickHouseClient(id: string): Promise<ClickHouseClient> {
+    const existing = this.clickHouseClients.get(id);
+    if (existing) return existing;
+    const config = await this.getDecryptedConfig(id);
+    if (config.type !== 'clickhouse') throw new AppError(400, 'INVALID_PROVIDER', 'Database is not ClickHouse');
+    const client = createClickHouseDatabaseClient(config, 10);
+    try {
+      const result = await client.ping();
+      if (!result.success) throw result.error;
+    } catch (error) {
+      await client.close().catch(() => {});
+      this.rethrowDatabaseError(error, 'clickhouse', 'connect');
+    }
+    this.clickHouseClients.set(id, client);
+    return client;
+  }
+
   async disposeClient(id: string): Promise<void> {
     const pool = this.postgresPools.get(id);
     if (pool) {
@@ -1064,6 +1230,11 @@ export class DatabaseConnectionService {
     if (redisClient) {
       this.redisClients.delete(id);
       await redisClient.quit().catch(() => redisClient.disconnect());
+    }
+    const clickHouseClient = this.clickHouseClients.get(id);
+    if (clickHouseClient) {
+      this.clickHouseClients.delete(id);
+      await clickHouseClient.close().catch(() => {});
     }
   }
 
@@ -1091,6 +1262,27 @@ export class DatabaseConnectionService {
     } catch (error) {
       this.rethrowDatabaseError(error, 'redis', operation);
     }
+  }
+
+  private async withClickHouseClient<T>(
+    id: string,
+    operation: DatabaseOperation,
+    run: (client: ClickHouseClient) => Promise<T>
+  ): Promise<T> {
+    const client = await this.getClickHouseClient(id);
+    try {
+      return await run(client);
+    } catch (error) {
+      this.rethrowDatabaseError(error, 'clickhouse', operation);
+    }
+  }
+
+  private async getSqlAdapter(id: string): Promise<SqlDatabaseAdapter> {
+    const config = await this.getDecryptedConfig(id);
+    if (config.type === 'redis') {
+      throw new AppError(400, 'INVALID_PROVIDER', 'Database does not support SQL operations');
+    }
+    return this.sqlAdapters.get(config.type)!;
   }
 
   private rethrowDatabaseError(error: unknown, provider: DatabaseType, operation: DatabaseOperation): never {

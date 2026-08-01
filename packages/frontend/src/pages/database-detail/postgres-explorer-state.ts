@@ -1,4 +1,6 @@
-import type { PostgresTableMetadata } from "@/types";
+import type { SqlColumnMetadata } from "@/types";
+
+type PostgresColumnLike = SqlColumnMetadata & { udtName?: string };
 
 export const POSTGRES_COLUMN_TYPE_OPTIONS = [
   "text",
@@ -78,18 +80,19 @@ export function normalizePostgresTypeAlias(typeName: string) {
   return POSTGRES_UDT_TYPE_ALIASES.get(normalized) ?? normalized;
 }
 
-export function currentColumnTypeValue(column: PostgresTableMetadata["columns"][number]) {
+export function currentColumnTypeValue(column: PostgresColumnLike) {
   const normalized = normalizeColumnType(column.dataType);
   if (normalized === "timestamp without time zone") return "timestamp";
   if (normalized === "time without time zone") return "time";
   return normalized;
 }
 
-export function secondaryColumnTypeLabel(column: PostgresTableMetadata["columns"][number]) {
-  if (!column.udtName) return "";
-  const normalizedUdtName = normalizeColumnType(column.udtName);
+export function secondaryColumnTypeLabel(column: PostgresColumnLike) {
+  const nativeTypeName = column.nativeTypeName ?? column.udtName;
+  if (!nativeTypeName) return "";
+  const normalizedUdtName = normalizeColumnType(nativeTypeName);
   const normalizedDataType = normalizeColumnType(column.dataType);
-  const canonicalUdtName = normalizePostgresTypeAlias(column.udtName);
+  const canonicalUdtName = normalizePostgresTypeAlias(nativeTypeName);
   const canonicalDataType = normalizePostgresTypeAlias(column.dataType);
   const currentType = normalizePostgresTypeAlias(currentColumnTypeValue(column));
   if (
@@ -99,5 +102,5 @@ export function secondaryColumnTypeLabel(column: PostgresTableMetadata["columns"
   ) {
     return "";
   }
-  return column.udtName;
+  return nativeTypeName;
 }

@@ -1,3 +1,4 @@
+import { AnimatePresence, motion } from "framer-motion";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
@@ -9,11 +10,19 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import type {
+  ClickHouseDatabaseConfig,
   DatabaseConnection,
   DatabaseType,
   PostgresDatabaseConfig,
   RedisDatabaseConfig,
 } from "@/types";
+
+const CONNECTION_FIELDS_ANIMATION = {
+  initial: { opacity: 0, y: 8 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -4 },
+  transition: { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] as const },
+};
 
 export interface DatabaseConnectionDraft {
   name: string;
@@ -21,6 +30,7 @@ export interface DatabaseConnectionDraft {
   tags: string;
   manualSizeLimitMb: string;
   type: DatabaseType;
+  connectionMethod: "credentials" | "uri";
   connectionString: string;
   host: string;
   port: string;
@@ -33,6 +43,49 @@ export interface DatabaseConnectionDraft {
   hasStoredPassword?: boolean;
 }
 
+function isValidPort(value: string) {
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
+function hasValidConnectionUri(type: DatabaseType, value: string) {
+  try {
+    const url = new URL(value.trim());
+    if (!url.hostname || !url.username || !url.password) return false;
+    if (type === "postgres") {
+      return (
+        ["postgres:", "postgresql:"].includes(url.protocol) &&
+        decodeURIComponent(url.pathname.replace(/^\//, "")).trim().length > 0
+      );
+    }
+    if (type === "clickhouse") {
+      return (
+        ["http:", "https:"].includes(url.protocol) &&
+        (url.searchParams.get("database")?.trim().length ?? 0) > 0
+      );
+    }
+    const db = Number(url.pathname.replace(/^\//, "") || "0");
+    return (
+      ["redis:", "rediss:"].includes(url.protocol) && Number.isInteger(db) && db >= 0 && db <= 15
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function canCreateDatabase(draft: DatabaseConnectionDraft) {
+  if (!draft.name.trim()) return false;
+  if (draft.connectionMethod === "uri") {
+    return hasValidConnectionUri(draft.type, draft.connectionString);
+  }
+  if (!draft.host.trim() || !isValidPort(draft.port) || draft.password.length === 0) return false;
+  if (draft.type === "redis") {
+    const db = Number(draft.db);
+    return Number.isInteger(db) && db >= 0 && db <= 15;
+  }
+  return Boolean(draft.database.trim() && draft.username.trim());
+}
+
 export function draftFromConnection(
   connection?: DatabaseConnection | null
 ): DatabaseConnectionDraft {
@@ -43,6 +96,7 @@ export function draftFromConnection(
       tags: "",
       manualSizeLimitMb: "",
       type: "postgres",
+      connectionMethod: "credentials",
       connectionString: "",
       host: "",
       port: "5432",
@@ -65,6 +119,7 @@ export function draftFromConnection(
       manualSizeLimitMb:
         connection.manualSizeLimitMb != null ? String(connection.manualSizeLimitMb) : "",
       type: "postgres",
+      connectionMethod: "credentials",
       connectionString: "",
       host: config.host,
       port: String(config.port),
@@ -78,6 +133,28 @@ export function draftFromConnection(
     };
   }
 
+  if (connection.type === "clickhouse") {
+    const config = connection.config as ClickHouseDatabaseConfig;
+    return {
+      name: connection.name,
+      description: connection.description ?? "",
+      tags: connection.tags.join(", "),
+      manualSizeLimitMb: "",
+      type: "clickhouse",
+      connectionMethod: "credentials",
+      connectionString: "",
+      host: config.host,
+      port: String(config.port),
+      database: config.database,
+      username: config.username,
+      password: "",
+      sslEnabled: false,
+      db: "0",
+      tlsEnabled: config.tlsEnabled,
+      hasStoredPassword: connection.hasStoredPassword,
+    };
+  }
+
   const config = connection.config as RedisDatabaseConfig;
   return {
     name: connection.name,
@@ -85,6 +162,7 @@ export function draftFromConnection(
     tags: connection.tags.join(", "),
     manualSizeLimitMb: "",
     type: "redis",
+    connectionMethod: "credentials",
     connectionString: "",
     host: config.host,
     port: String(config.port),
@@ -113,15 +191,37 @@ export function buildDatabasePayload(draft: DatabaseConnectionDraft): Record<str
         draft.manualSizeLimitMb.trim() === "" ? null : Number(draft.manualSizeLimitMb),
       type: "postgres",
       config: {
-        ...(draft.connectionString.trim()
+        ...(draft.connectionMethod === "uri"
           ? { connectionString: draft.connectionString.trim() }
-          : {}),
-        ...(draft.host.trim() ? { host: draft.host.trim() } : {}),
-        ...(draft.port.trim() ? { port: Number(draft.port) } : {}),
-        ...(draft.database.trim() ? { database: draft.database.trim() } : {}),
-        ...(draft.username.trim() ? { username: draft.username.trim() } : {}),
-        ...(draft.password !== "" ? { password: draft.password } : {}),
-        sslEnabled: draft.sslEnabled,
+          : {
+              ...(draft.host.trim() ? { host: draft.host.trim() } : {}),
+              ...(draft.port.trim() ? { port: Number(draft.port) } : {}),
+              ...(draft.database.trim() ? { database: draft.database.trim() } : {}),
+              ...(draft.username.trim() ? { username: draft.username.trim() } : {}),
+              ...(draft.password !== "" ? { password: draft.password } : {}),
+              sslEnabled: draft.sslEnabled,
+            }),
+      },
+    };
+  }
+
+  if (draft.type === "clickhouse") {
+    return {
+      name: draft.name.trim(),
+      description: draft.description.trim() || null,
+      tags,
+      type: "clickhouse",
+      config: {
+        ...(draft.connectionMethod === "uri"
+          ? { connectionString: draft.connectionString.trim() }
+          : {
+              ...(draft.host.trim() ? { host: draft.host.trim() } : {}),
+              ...(draft.port.trim() ? { port: Number(draft.port) } : {}),
+              ...(draft.database.trim() ? { database: draft.database.trim() } : {}),
+              ...(draft.username.trim() ? { username: draft.username.trim() } : {}),
+              ...(draft.password !== "" ? { password: draft.password } : {}),
+              tlsEnabled: draft.tlsEnabled,
+            }),
       },
     };
   }
@@ -132,13 +232,16 @@ export function buildDatabasePayload(draft: DatabaseConnectionDraft): Record<str
     tags,
     type: "redis",
     config: {
-      ...(draft.connectionString.trim() ? { connectionString: draft.connectionString.trim() } : {}),
-      ...(draft.host.trim() ? { host: draft.host.trim() } : {}),
-      ...(draft.port.trim() ? { port: Number(draft.port) } : {}),
-      ...(draft.username.trim() ? { username: draft.username.trim() } : {}),
-      ...(draft.password !== "" ? { password: draft.password } : {}),
-      db: Number(draft.db || "0"),
-      tlsEnabled: draft.tlsEnabled,
+      ...(draft.connectionMethod === "uri"
+        ? { connectionString: draft.connectionString.trim() }
+        : {
+            ...(draft.host.trim() ? { host: draft.host.trim() } : {}),
+            ...(draft.port.trim() ? { port: Number(draft.port) } : {}),
+            ...(draft.username.trim() ? { username: draft.username.trim() } : {}),
+            ...(draft.password !== "" ? { password: draft.password } : {}),
+            db: Number(draft.db || "0"),
+            tlsEnabled: draft.tlsEnabled,
+          }),
     },
   };
 }
@@ -176,7 +279,16 @@ export function DatabaseConnectionForm({
                 onChange({
                   ...draft,
                   type: value as DatabaseType,
-                  port: value === "postgres" ? "5432" : "6379",
+                  port: value === "postgres" ? "5432" : value === "clickhouse" ? "8123" : "6379",
+                  connectionString: "",
+                  host: "",
+                  database: "",
+                  username: "",
+                  password: "",
+                  db: "0",
+                  manualSizeLimitMb: value === "postgres" ? draft.manualSizeLimitMb : "",
+                  sslEnabled: false,
+                  tlsEnabled: false,
                 })
               }
               disabled={disableType}
@@ -186,6 +298,7 @@ export function DatabaseConnectionForm({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="postgres">Postgres</SelectItem>
+                <SelectItem value="clickhouse">ClickHouse</SelectItem>
                 <SelectItem value="redis">Redis</SelectItem>
               </SelectContent>
             </Select>
@@ -228,122 +341,171 @@ export function DatabaseConnectionForm({
       {!metadataOnly && (
         <>
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Connection String</label>
-            <Input
-              placeholder={
-                draft.type === "postgres"
-                  ? "postgresql://user:password@host:5432/database"
-                  : "redis://:password@host:6379/0"
+            <label htmlFor="database-connection-method" className="text-sm font-medium">
+              Connection method
+            </label>
+            <Select
+              value={draft.connectionMethod}
+              onValueChange={(value) =>
+                set("connectionMethod", value as DatabaseConnectionDraft["connectionMethod"])
               }
-              value={draft.connectionString}
-              onChange={(e) => set("connectionString", e.target.value)}
-            />
+            >
+              <SelectTrigger id="database-connection-method">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="credentials">Credentials</SelectItem>
+                <SelectItem value="uri">Connection URI</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr),140px]">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Host</label>
-              <Input value={draft.host} onChange={(e) => set("host", e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Port</label>
-              <Input value={draft.port} onChange={(e) => set("port", e.target.value)} />
-            </div>
+          <div className="relative overflow-hidden">
+            <AnimatePresence initial={false} mode="popLayout">
+              {draft.connectionMethod === "uri" ? (
+                <motion.div
+                  key={`uri-${draft.type}`}
+                  {...CONNECTION_FIELDS_ANIMATION}
+                  className="space-y-1.5 overflow-hidden"
+                >
+                  <label htmlFor="database-connection-uri" className="text-sm font-medium">
+                    Connection URI
+                  </label>
+                  <Input
+                    id="database-connection-uri"
+                    placeholder={
+                      draft.type === "postgres"
+                        ? "postgresql://user:password@host:5432/database"
+                        : draft.type === "clickhouse"
+                          ? "https://user:password@clickhouse.example.com:8443?database=analytics"
+                          : "redis://:password@host:6379/0"
+                    }
+                    value={draft.connectionString}
+                    onChange={(e) => set("connectionString", e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Include credentials and the TLS scheme in the URI.
+                  </p>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key={`credentials-${draft.type}`}
+                  {...CONNECTION_FIELDS_ANIMATION}
+                  className="space-y-3 overflow-hidden"
+                >
+                  <div className="grid gap-3 md:grid-cols-[minmax(0,1fr),140px]">
+                    <div className="space-y-1.5">
+                      <label className="text-sm font-medium">Host</label>
+                      <Input value={draft.host} onChange={(e) => set("host", e.target.value)} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-sm font-medium">Port</label>
+                      <Input value={draft.port} onChange={(e) => set("port", e.target.value)} />
+                    </div>
+                  </div>
+
+                  {draft.type !== "redis" ? (
+                    <>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium">Database</label>
+                          <Input
+                            value={draft.database}
+                            onChange={(e) => set("database", e.target.value)}
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium">Username</label>
+                          <Input
+                            value={draft.username}
+                            onChange={(e) => set("username", e.target.value)}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-sm font-medium">Password</label>
+                        <Input
+                          type="password"
+                          placeholder={
+                            draft.hasStoredPassword ? "Leave blank to keep current password" : ""
+                          }
+                          value={draft.password}
+                          onChange={(e) => set("password", e.target.value)}
+                        />
+                        {draft.hasStoredPassword && draft.password === "" && (
+                          <Badge variant="secondary">Existing password preserved</Badge>
+                        )}
+                      </div>
+
+                      <div className="flex items-center justify-between gap-4 border border-border bg-card px-3 py-2.5">
+                        <div>
+                          <p className="text-sm font-medium">TLS / SSL</p>
+                          <p className="text-xs text-muted-foreground">
+                            {draft.type === "postgres"
+                              ? "Require TLS for the Postgres connection"
+                              : "Use HTTPS for the ClickHouse connection"}
+                          </p>
+                        </div>
+                        <Switch
+                          checked={draft.type === "postgres" ? draft.sslEnabled : draft.tlsEnabled}
+                          onChange={(checked) =>
+                            draft.type === "postgres"
+                              ? set("sslEnabled", checked)
+                              : set("tlsEnabled", checked)
+                          }
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr),140px]">
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium">Username</label>
+                          <Input
+                            value={draft.username}
+                            onChange={(e) => set("username", e.target.value)}
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium">Redis DB</label>
+                          <Input value={draft.db} onChange={(e) => set("db", e.target.value)} />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-sm font-medium">Password</label>
+                        <Input
+                          type="password"
+                          placeholder={
+                            draft.hasStoredPassword ? "Leave blank to keep current password" : ""
+                          }
+                          value={draft.password}
+                          onChange={(e) => set("password", e.target.value)}
+                        />
+                        {draft.hasStoredPassword && draft.password === "" && (
+                          <Badge variant="secondary">Existing password preserved</Badge>
+                        )}
+                      </div>
+
+                      <div className="flex items-center justify-between gap-4 border border-border bg-card px-3 py-2.5">
+                        <div>
+                          <p className="text-sm font-medium">TLS</p>
+                          <p className="text-xs text-muted-foreground">
+                            Use TLS when connecting to Redis
+                          </p>
+                        </div>
+                        <Switch
+                          checked={draft.tlsEnabled}
+                          onChange={(checked) => set("tlsEnabled", checked)}
+                        />
+                      </div>
+                    </>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
-        </>
-      )}
-
-      {draft.type === "postgres" ? (
-        <>
-          {!metadataOnly && (
-            <>
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Database</label>
-                  <Input value={draft.database} onChange={(e) => set("database", e.target.value)} />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Username</label>
-                  <Input value={draft.username} onChange={(e) => set("username", e.target.value)} />
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Password</label>
-                <Input
-                  type="password"
-                  placeholder={
-                    draft.hasStoredPassword ? "Leave blank to keep current password" : ""
-                  }
-                  value={draft.password}
-                  onChange={(e) => set("password", e.target.value)}
-                />
-                {draft.hasStoredPassword && draft.password === "" && (
-                  <Badge variant="secondary">Existing password preserved</Badge>
-                )}
-              </div>
-            </>
-          )}
-
-          {!metadataOnly && (
-            <div className="flex items-center justify-between gap-4 border border-border bg-card px-3 py-2.5">
-              <div>
-                <p className="text-sm font-medium">TLS / SSL</p>
-                <p className="text-xs text-muted-foreground">
-                  Require TLS for the Postgres connection
-                </p>
-              </div>
-              <Switch
-                checked={draft.sslEnabled}
-                onChange={(checked) => set("sslEnabled", checked)}
-              />
-            </div>
-          )}
-        </>
-      ) : (
-        <>
-          {!metadataOnly && (
-            <>
-              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr),140px]">
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Username</label>
-                  <Input value={draft.username} onChange={(e) => set("username", e.target.value)} />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Redis DB</label>
-                  <Input value={draft.db} onChange={(e) => set("db", e.target.value)} />
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Password</label>
-                <Input
-                  type="password"
-                  placeholder={
-                    draft.hasStoredPassword ? "Leave blank to keep current password" : ""
-                  }
-                  value={draft.password}
-                  onChange={(e) => set("password", e.target.value)}
-                />
-                {draft.hasStoredPassword && draft.password === "" && (
-                  <Badge variant="secondary">Existing password preserved</Badge>
-                )}
-              </div>
-            </>
-          )}
-
-          {!metadataOnly && (
-            <div className="flex items-center justify-between gap-4 border border-border bg-card px-3 py-2.5">
-              <div>
-                <p className="text-sm font-medium">TLS</p>
-                <p className="text-xs text-muted-foreground">Use TLS when connecting to Redis</p>
-              </div>
-              <Switch
-                checked={draft.tlsEnabled}
-                onChange={(checked) => set("tlsEnabled", checked)}
-              />
-            </div>
-          )}
         </>
       )}
     </div>

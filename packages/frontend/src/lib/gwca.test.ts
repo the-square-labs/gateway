@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readGwcaImportMetadata } from "./gwca";
+import { normalizeGwcaPortMappings, readGwcaImportMetadata } from "./gwca";
 
 const MAGIC = new Uint8Array([0x47, 0x57, 0x43, 0x41, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -33,6 +33,7 @@ describe("readGwcaImportMetadata", () => {
             target: "/data",
             readOnly: true,
             driver: "nfs",
+            labels: { "com.docker.compose.volume": "shared-data" },
             requiresMapping: true,
           },
         ],
@@ -56,6 +57,7 @@ describe("readGwcaImportMetadata", () => {
           target: "/data",
           readOnly: true,
           driver: "nfs",
+          labels: { "com.docker.compose.volume": "shared-data" },
           requiresMapping: true,
         },
       ],
@@ -83,5 +85,18 @@ describe("readGwcaImportMetadata", () => {
     await expect(readGwcaImportMetadata(file)).rejects.toThrow(
       "Unsupported Gateway container archive"
     );
+  });
+});
+
+describe("normalizeGwcaPortMappings", () => {
+  it("accepts only integer ports from 0 through 65535", () => {
+    expect(normalizeGwcaPortMappings({ dynamic: 0, highest: 65535 })).toEqual({
+      dynamic: 0,
+      highest: 65535,
+    });
+    expect(normalizeGwcaPortMappings({ empty: "" })).toBeNull();
+    expect(normalizeGwcaPortMappings({ tooLarge: 2452524 })).toBeNull();
+    expect(normalizeGwcaPortMappings({ negative: -1 })).toBeNull();
+    expect(normalizeGwcaPortMappings({ fractional: 8080.5 })).toBeNull();
   });
 });

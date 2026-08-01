@@ -2,6 +2,7 @@ import { Database as DatabaseIcon, FolderPlus, Plus, RefreshCw } from "lucide-re
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
@@ -32,6 +33,7 @@ import { useAuthStore } from "@/stores/auth";
 import type { DatabaseConnection } from "@/types";
 import {
   buildDatabasePayload,
+  canCreateDatabase,
   type DatabaseConnectionDraft,
   DatabaseConnectionForm,
   draftFromConnection,
@@ -189,7 +191,7 @@ export function Databases() {
   const navigate = useNavigate();
   const { hasScope, hasScopedAccess, isLoading: authLoading } = useAuthStore();
   const [search, setSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState<"all" | "postgres" | "redis">("all");
+  const [typeFilter, setTypeFilter] = useState<"all" | "postgres" | "clickhouse" | "redis">("all");
   const [healthFilter, setHealthFilter] = useState<
     "all" | "online" | "offline" | "degraded" | "unknown"
   >("all");
@@ -334,7 +336,7 @@ export function Databases() {
             <div>
               <h1 className="text-2xl font-bold">Databases</h1>
               <p className="text-sm text-muted-foreground">
-                Saved Postgres and Redis connections managed through Gateway
+                Saved PostgreSQL, ClickHouse, and Redis connections managed through Gateway
               </p>
             </div>
           </div>
@@ -411,6 +413,7 @@ export function Databases() {
                   <SelectContent>
                     <SelectItem value="all">All types</SelectItem>
                     <SelectItem value="postgres">Postgres</SelectItem>
+                    <SelectItem value="clickhouse">ClickHouse</SelectItem>
                     <SelectItem value="redis">Redis</SelectItem>
                   </SelectContent>
                 </Select>
@@ -436,7 +439,7 @@ export function Databases() {
           loadingLabel="Loading database connections..."
           emptyState={
             <EmptyState
-              message="No databases. Add a Postgres or Redis connection to manage it through Gateway."
+              message="No databases. Add a PostgreSQL, ClickHouse, or Redis connection to manage it through Gateway."
               {...(canCreate
                 ? { actionLabel: "Add Database", onAction: () => setCreateOpen(true) }
                 : {})}
@@ -460,16 +463,18 @@ export function Databases() {
       </div>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Add Database</DialogTitle>
           </DialogHeader>
-          <DatabaseConnectionForm draft={draft} onChange={setDraft} />
+          <AnimatedHeight>
+            <DatabaseConnectionForm draft={draft} onChange={setDraft} />
+          </AnimatedHeight>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={() => void save()} disabled={saving}>
+            <Button onClick={() => void save()} disabled={saving || !canCreateDatabase(draft)}>
               {saving ? "Creating..." : "Create"}
             </Button>
           </DialogFooter>

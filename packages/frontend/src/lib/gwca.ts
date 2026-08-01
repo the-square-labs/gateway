@@ -70,6 +70,7 @@ export interface GwcaMountMetadata {
   target: string;
   readOnly: boolean;
   driver?: string;
+  labels?: Record<string, string>;
   createNew?: boolean;
   requiresMapping?: boolean;
 }
@@ -87,6 +88,19 @@ export interface GwcaImportMetadata {
   ports: GwcaPortMetadata[];
   secretKeys: string[];
   warnings: string[];
+}
+
+export type GwcaPortMappingInput = number | "";
+
+export function normalizeGwcaPortMappings(
+  mappings: Record<string, GwcaPortMappingInput>
+): Record<string, number> | null {
+  const normalized: Record<string, number> = {};
+  for (const [key, value] of Object.entries(mappings)) {
+    if (value === "" || !Number.isInteger(value) || value < 0 || value > 65535) return null;
+    normalized[key] = value;
+  }
+  return normalized;
 }
 
 function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {

@@ -8,6 +8,8 @@ export interface ScopeItem {
   label: string;
   desc: string;
   group: string;
+  hideValue?: boolean;
+  meta?: string;
 }
 
 interface ResourceOption {
@@ -36,7 +38,6 @@ interface ScopeListProps {
   search: string;
   selected: string[];
   onToggle: (scope: string) => void;
-  /** Resource restrictions per scope (e.g. cert:issue → [ca-id-1, ca-id-2]) */
   resources?: Record<string, string[]>;
   onToggleResource?: (scope: string, resourceId: string) => void;
   cas?: CA[];
@@ -46,10 +47,8 @@ interface ScopeListProps {
   loggingSchemas?: LoggingSchema[];
   restrictableScopes?: readonly string[];
   allowedResourceIds?: Record<string, string[]>;
-  /** Inherited scopes from parent group — shown as read-only checked at bottom */
   inheritedScopes?: string[];
   inheritedFromName?: string;
-  /** When true, all scopes are shown as non-interactive (view only) */
   readOnly?: boolean;
   viewportClassName?: string;
 }
@@ -302,11 +301,13 @@ export function ScopeList({
         if (catScopes.length === 0) return null;
         return (
           <div key={cat}>
-            <div className="px-3 py-1.5 bg-muted sticky top-0 z-10 border-b border-border">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                {cat}
-              </p>
-            </div>
+            {cat && (
+              <div className="px-3 py-1.5 bg-muted sticky top-0 z-10 border-b border-border">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  {cat}
+                </p>
+              </div>
+            )}
             {catScopes.map((scope) => (
               <ScopeRow
                 key={scope.value}
@@ -419,7 +420,7 @@ function ScopeRow({
     (!disabled || combinedSelectedIds.length > 0);
   const baseLocked = (!!inheritedExactBase || inheritedSelectedIds.length > 0) && !isOwnSelected;
   const rowDisabled = disabled || baseLocked;
-  const showTechnicalValue = scope.value !== scope.label;
+  const showTechnicalValue = !scope.hideValue && scope.value !== scope.label;
   const showDescription = scope.desc !== scope.label && scope.desc !== scope.value;
 
   return (
@@ -452,6 +453,7 @@ function ScopeRow({
           </div>
           {showDescription && <p className="text-xs text-muted-foreground">{scope.desc}</p>}
         </div>
+        {scope.meta && <span className="text-xs text-muted-foreground">{scope.meta}</span>}
       </label>
       {showRestrictions && (
         <div className="px-3 pb-2 pl-10">

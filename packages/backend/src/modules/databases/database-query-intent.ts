@@ -1,11 +1,12 @@
 import { AppError } from '@/middleware/error-handler.js';
 
-export function splitPostgresStatements(sql: string): string[] {
+export function splitSqlStatements(sql: string): string[] {
   const statements: string[] = [];
   let current = '';
   let i = 0;
   let inSingleQuote = false;
   let inDoubleQuote = false;
+  let inBacktick = false;
   let inLineComment = false;
   let inBlockComment = false;
   let dollarQuoteTag: string | null = null;
@@ -69,6 +70,18 @@ export function splitPostgresStatements(sql: string): string[] {
       continue;
     }
 
+    if (inBacktick) {
+      current += char;
+      if (char === '`' && next === '`') {
+        current += next;
+        i += 2;
+        continue;
+      }
+      if (char === '`') inBacktick = false;
+      i += 1;
+      continue;
+    }
+
     if (char === '-' && next === '-') {
       current += char + next;
       inLineComment = true;
@@ -93,6 +106,13 @@ export function splitPostgresStatements(sql: string): string[] {
     if (char === '"') {
       current += char;
       inDoubleQuote = true;
+      i += 1;
+      continue;
+    }
+
+    if (char === '`') {
+      current += char;
+      inBacktick = true;
       i += 1;
       continue;
     }
@@ -127,6 +147,8 @@ export function splitPostgresStatements(sql: string): string[] {
   }
   return statements;
 }
+
+export const splitPostgresStatements = splitSqlStatements;
 
 export function splitRedisCommands(commandText: string): string[] {
   const commands: string[] = [];
@@ -288,7 +310,31 @@ function inferPostgresStatementIntent(sql: string): 'read' | 'write' | 'admin' {
 }
 
 export function inferPostgresIntent(sql: string): 'read' | 'write' | 'admin' {
-  const intents = splitPostgresStatements(sql).map(inferPostgresStatementIntent);
+  const intents = splitSqlStatements(sql).map(inferPostgresStatementIntent);
+  if (intents.includes('admin')) return 'admin';
+  if (intents.includes('write')) return 'write';
+  return 'read';
+}
+
+function inferClickHouseStatementIntent(sql: string): 'read' | 'write' | 'admin' {
+  const normalized = sql.trim().toLowerCase();
+  const token = normalized.split(/\s+/, 1)[0] ?? '';
+  if (['select', 'show', 'describe', 'desc', 'explain', 'exists'].includes(token) || normalized.startsWith('with ')) {
+    if (
+      /\b(insert|delete|update|alter|create|drop|truncate|rename|optimize|system|kill|grant|revoke|attach|detach)\b/i.test(
+        normalized
+      )
+    ) {
+      return 'admin';
+    }
+    return 'read';
+  }
+  if (['insert', 'delete'].includes(token)) return 'write';
+  return 'admin';
+}
+
+export function inferClickHouseIntent(sql: string): 'read' | 'write' | 'admin' {
+  const intents = splitSqlStatements(sql).map(inferClickHouseStatementIntent);
   if (intents.includes('admin')) return 'admin';
   if (intents.includes('write')) return 'write';
   return 'read';

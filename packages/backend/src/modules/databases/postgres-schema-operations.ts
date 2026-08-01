@@ -33,7 +33,7 @@ export async function listPostgresTables(context: PostgresSchemaOperationContext
     );
     return result.rows.map((row) => ({
       name: row.table_name,
-      type: row.table_type === 'VIEW' ? 'view' : 'table',
+      type: row.table_type === 'VIEW' ? ('view' as const) : ('table' as const),
     }));
   });
 }

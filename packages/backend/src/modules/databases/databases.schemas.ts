@@ -24,11 +24,22 @@ const redisConnectionFields = z.object({
   tlsEnabled: z.boolean().optional(),
 });
 
+const clickHouseConnectionFields = z.object({
+  connectionString: z.string().trim().min(1).max(4096).optional(),
+  url: z.string().trim().min(1).max(4096).optional(),
+  host: z.string().trim().min(1).max(255).optional(),
+  port: z.number().int().min(1).max(65535).optional(),
+  database: z.string().trim().min(1).max(255).optional(),
+  username: z.string().trim().min(1).max(255).optional(),
+  password: z.string().max(4096).optional(),
+  tlsEnabled: z.boolean().optional(),
+});
+
 export const DatabaseListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   search: z.string().trim().optional(),
-  type: z.enum(['postgres', 'redis']).optional(),
+  type: z.enum(['postgres', 'redis', 'clickhouse']).optional(),
   healthStatus: z.enum(['online', 'offline', 'degraded', 'unknown']).optional(),
 });
 
@@ -54,6 +65,13 @@ export const CreateDatabaseConnectionSchema = z.discriminatedUnion('type', [
     type: z.literal('redis'),
     config: redisConnectionFields,
   }),
+  z.object({
+    name: nameSchema,
+    description: optionalTextSchema,
+    tags: tagsSchema,
+    type: z.literal('clickhouse'),
+    config: clickHouseConnectionFields,
+  }),
 ]);
 
 export const UpdateDatabaseConnectionSchema = z
@@ -71,6 +89,7 @@ export const UpdateDatabaseConnectionSchema = z
     config: z
       .object({
         connectionString: z.string().trim().min(1).max(4096).optional(),
+        url: z.string().trim().min(1).max(4096).optional(),
         host: z.string().trim().min(1).max(255).optional(),
         port: z.number().int().min(1).max(65535).optional(),
         database: z.string().trim().min(1).max(255).optional(),
@@ -121,6 +140,39 @@ export const ExecutePostgresSqlSchema = z.object({
   sql: z.string().trim().min(1).max(100_000),
   maxRows: z.number().int().min(1).max(2000).default(500),
 });
+
+export const SqlTableQuerySchema = z.object({
+  namespace: z.string().trim().min(1).max(255),
+  table: z.string().trim().min(1).max(255),
+});
+
+export const SqlObjectSchema = z
+  .record(z.string(), z.any())
+  .refine((value) => Object.keys(value).length > 0, 'At least one column value is required');
+
+export const InsertSqlRowSchema = SqlTableQuerySchema.extend({
+  values: SqlObjectSchema,
+});
+
+export const UpdateSqlRowSchema = InsertSqlRowSchema.extend({
+  locator: SqlObjectSchema,
+});
+
+export const DeleteSqlRowSchema = SqlTableQuerySchema.extend({
+  locator: SqlObjectSchema,
+});
+
+export const BrowseSqlRowsQuerySchema = SqlTableQuerySchema.extend({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  sortBy: z.string().trim().min(1).max(255).optional(),
+  sortOrder: z.enum(['asc', 'desc']).default('asc'),
+  searchColumn: z.string().trim().min(1).max(255).optional(),
+  searchOperation: z.enum(['like', 'equals', 'notEquals', 'greaterThan', 'lessThan']).optional(),
+  searchValue: z.string().trim().max(1024).optional(),
+});
+
+export const ExecuteSqlSchema = ExecutePostgresSqlSchema;
 
 export const RedisScanKeysQuerySchema = z.object({
   cursor: z.coerce.number().int().min(0).default(0),

@@ -6,6 +6,7 @@ const alertCategorySchema = z.enum([
   'proxy',
   'certificate',
   'database_postgres',
+  'database_clickhouse',
   'database_redis',
 ]);
 

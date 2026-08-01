@@ -33,6 +33,7 @@ import {
   listContainersRoute,
   liveUpdateContainerRoute,
   moveContainerFileRoute,
+  planContainerArchiveImportRoute,
   readContainerFileRoute,
   recreateContainerRoute,
   removeContainerRoute,
@@ -49,6 +50,7 @@ import {
 import {
   ContainerArchiveExportQuerySchema,
   ContainerArchiveImportQuerySchema,
+  ContainerArchivePlanSchema,
   ContainerArchiveResolutionSchema,
   ContainerCreateSchema,
   ContainerDuplicateSchema,
@@ -90,6 +92,15 @@ import { assertDockerMountChangeAllowed } from './docker-socket-mount.guard.js';
 const DOCKER_RESOURCE_LIST_MAX = 1000;
 const DOCKER_CONTAINER_PORT_PREVIEW_MAX = 64;
 const ARCHIVE_IMAGE_REFERENCE_LABEL = 'wiolett.gateway.archive.image.reference';
+
+function archiveImportPlanAccess(actorScopes: readonly string[], nodeId: string) {
+  return {
+    canViewNetworks: hasScopeForResource([...actorScopes], 'docker:networks:view', nodeId),
+    canCreateNetworks: hasScopeForResource([...actorScopes], 'docker:networks:create', nodeId),
+    canViewVolumes: hasScopeForResource([...actorScopes], 'docker:volumes:view', nodeId),
+    canCreateVolumes: hasScopeForResource([...actorScopes], 'docker:volumes:create', nodeId),
+  };
+}
 
 async function parseFileContentRequest(c: Parameters<Parameters<OpenAPIHono<AppEnv>['openapi']>[1]>[0]) {
   const path = FileBrowseSchema.parse(c.req.query()).path;
@@ -429,6 +440,21 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
+    { ...planContainerArchiveImportRoute, middleware: requireScopeForResource('docker:containers:create', 'nodeId') },
+    async (c) => {
+      const nodeId = c.req.param('nodeId')!;
+      const body = ContainerArchivePlanSchema.parse(await c.req.json());
+      await assertNodeAllowsServiceCreation(container.resolve(TOKENS.DrizzleClient) as DrizzleClient, nodeId, 'docker');
+      const actorScopes = c.get('effectiveScopes') || [];
+      const data = await container.resolve(DockerMigrationDispatchAdapter).planArchiveImport(nodeId, {
+        manifest: { schemaVersion: 1, ...body },
+        ...archiveImportPlanAccess(actorScopes, nodeId),
+      });
+      return c.json({ data });
+    }
+  );
+
+  router.openapi(
     { ...importContainerArchiveRoute, middleware: requireScopeForResource('docker:containers:create', 'nodeId') },
     async (c) => {
       const nodeId = c.req.param('nodeId')!;
@@ -456,7 +482,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
         name: query.name,
         body,
         resolution,
-        authorizeContents: (archiveContainer) => {
+        authorizeContents: async (archiveContainer) => {
           assertDockerMountChangeAllowed({
             nodeId,
             actorScopes,

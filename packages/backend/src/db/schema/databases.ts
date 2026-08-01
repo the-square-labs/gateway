@@ -14,7 +14,7 @@ import {
 import { databaseConnectionFolders } from './database-connection-folders.js';
 import { users } from './users.js';
 
-export const databaseTypeEnum = pgEnum('database_type', ['postgres', 'redis']);
+export const databaseTypeEnum = pgEnum('database_type', ['postgres', 'redis', 'clickhouse']);
 export const databaseHealthStatusEnum = pgEnum('database_health_status', ['online', 'offline', 'degraded', 'unknown']);
 
 export interface DatabaseHealthEntry {

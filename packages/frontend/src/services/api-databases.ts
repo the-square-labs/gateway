@@ -5,6 +5,12 @@ import type {
   RedisKeyRecord,
   ResourceFolder,
   ResourceFolderTreeNode,
+  SqlBrowseResult,
+  SqlExecutionResult,
+  SqlNamespace,
+  SqlObjectSummary,
+  SqlRowMutationResult,
+  SqlTableMetadata,
 } from "@/types";
 import { API_BASE } from "./api-base";
 import type { ApiClientBaseConstructor } from "./api-mixins";
@@ -17,7 +23,7 @@ export function withDatabaseApi<TBase extends ApiClientBaseConstructor>(Base: TB
       page?: number;
       limit?: number;
       search?: string;
-      type?: "postgres" | "redis";
+      type?: "postgres" | "redis" | "clickhouse";
       healthStatus?: "online" | "offline" | "degraded" | "unknown";
     }): Promise<PaginatedResponse<DatabaseConnection>> {
       const searchParams = new URLSearchParams();
@@ -141,6 +147,113 @@ export function withDatabaseApi<TBase extends ApiClientBaseConstructor>(Base: TB
     }
 
     // ── Database Query Tools ─────────────────────────────────────────
+
+    async listSqlNamespaces(id: string): Promise<SqlNamespace[]> {
+      return this.unwrapData(
+        this.request<{ data: SqlNamespace[] }>(`/databases/${id}/sql/namespaces`)
+      );
+    }
+
+    async listSqlObjects(id: string, namespace: string): Promise<SqlObjectSummary[]> {
+      return this.unwrapData(
+        this.request<{ data: SqlObjectSummary[] }>(
+          `/databases/${id}/sql/objects?namespace=${encodeURIComponent(namespace)}`
+        )
+      );
+    }
+
+    async getSqlTableMetadata(
+      id: string,
+      namespace: string,
+      table: string
+    ): Promise<SqlTableMetadata> {
+      const query = new URLSearchParams({ namespace, table }).toString();
+      return this.unwrapData(
+        this.request<{ data: SqlTableMetadata }>(`/databases/${id}/sql/table-metadata?${query}`)
+      );
+    }
+
+    async browseSqlRows(
+      id: string,
+      params: {
+        namespace: string;
+        table: string;
+        page?: number;
+        limit?: number;
+        sortBy?: string;
+        sortOrder?: "asc" | "desc";
+        searchColumn?: string;
+        searchOperation?: "like" | "equals" | "notEquals" | "greaterThan" | "lessThan";
+        searchValue?: string;
+      }
+    ): Promise<SqlBrowseResult> {
+      const query = new URLSearchParams({
+        namespace: params.namespace,
+        table: params.table,
+        page: String(params.page ?? 1),
+        limit: String(params.limit ?? 100),
+        ...(params.sortBy ? { sortBy: params.sortBy } : {}),
+        ...(params.sortOrder ? { sortOrder: params.sortOrder } : {}),
+        ...(params.searchColumn ? { searchColumn: params.searchColumn } : {}),
+        ...(params.searchOperation ? { searchOperation: params.searchOperation } : {}),
+        ...(params.searchValue ? { searchValue: params.searchValue } : {}),
+      }).toString();
+      return this.unwrapData(
+        this.request<{ data: SqlBrowseResult }>(`/databases/${id}/sql/rows?${query}`)
+      );
+    }
+
+    async insertSqlRow(
+      id: string,
+      namespace: string,
+      table: string,
+      values: Record<string, unknown>
+    ): Promise<SqlRowMutationResult> {
+      return this.unwrapData(
+        this.request<{ data: SqlRowMutationResult }>(`/databases/${id}/sql/rows`, {
+          method: "POST",
+          body: JSON.stringify({ namespace, table, values }),
+        })
+      );
+    }
+
+    async updateSqlRow(
+      id: string,
+      namespace: string,
+      table: string,
+      locator: Record<string, unknown>,
+      values: Record<string, unknown>
+    ): Promise<SqlRowMutationResult> {
+      return this.unwrapData(
+        this.request<{ data: SqlRowMutationResult }>(`/databases/${id}/sql/rows`, {
+          method: "PATCH",
+          body: JSON.stringify({ namespace, table, locator, values }),
+        })
+      );
+    }
+
+    async deleteSqlRow(
+      id: string,
+      namespace: string,
+      table: string,
+      locator: Record<string, unknown>
+    ): Promise<SqlRowMutationResult> {
+      return this.unwrapData(
+        this.request<{ data: SqlRowMutationResult }>(`/databases/${id}/sql/rows`, {
+          method: "DELETE",
+          body: JSON.stringify({ namespace, table, locator }),
+        })
+      );
+    }
+
+    async executeSql(id: string, sql: string): Promise<SqlExecutionResult> {
+      return this.unwrapData(
+        this.request<{ data: SqlExecutionResult }>(`/databases/${id}/sql/query`, {
+          method: "POST",
+          body: JSON.stringify({ sql, maxRows: 500 }),
+        })
+      );
+    }
 
     async listPostgresSchemas(id: string): Promise<string[]> {
       return this.unwrapData(this.request<{ data: string[] }>(`/databases/${id}/postgres/schemas`));

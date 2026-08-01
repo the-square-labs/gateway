@@ -302,6 +302,21 @@ export async function importGwca(args: {
   const manifest = await reader.readManifest();
   applyGwcaImportResolution(manifest, args.resolution ?? {});
   await args.authorizeContents?.(manifest.container);
+  const plan = await args.dispatch.planArchiveImport(args.nodeId, {
+    manifest: manifest.container,
+    canViewNetworks: false,
+    canCreateNetworks: false,
+    canViewVolumes: false,
+    canCreateVolumes: false,
+  });
+  if (plan.conflictingPorts.length > 0) {
+    throw new AppError(
+      409,
+      'GWCA_PORT_CONFLICT',
+      'Archive host ports are occupied. Remap the conflicting bindings to port 0.',
+      { conflictingPorts: plan.conflictingPorts }
+    );
+  }
   const imageEmbedded = manifest.image.embedded !== false;
   const registryAuthCandidates =
     !imageEmbedded && manifest.image.pullReference && args.resolveRegistryAuthCandidates

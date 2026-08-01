@@ -1,5 +1,5 @@
 // Databases
-export type DatabaseType = "postgres" | "redis";
+export type DatabaseType = "postgres" | "redis" | "clickhouse";
 export type DatabaseHealthStatus = "online" | "offline" | "degraded" | "unknown";
 
 export interface DatabaseHealthEntry {
@@ -27,6 +27,27 @@ export interface RedisDatabaseConfig {
   tlsEnabled: boolean;
 }
 
+export interface ClickHouseDatabaseConfig {
+  url: string;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
+  tlsEnabled: boolean;
+}
+
+export interface DatabaseCapabilities {
+  sqlConsole: boolean;
+  commandConsole: boolean;
+  catalogExplorer: boolean;
+  rowInsert: boolean;
+  rowUpdate: boolean;
+  rowDelete: boolean;
+  schemaMutation: boolean;
+  exactRowCount: boolean;
+}
+
 export interface DatabaseConnection {
   id: string;
   slug: string;
@@ -47,7 +68,8 @@ export interface DatabaseConnection {
   folderId?: string | null;
   sortOrder?: number;
   hasStoredPassword: boolean;
-  config: PostgresDatabaseConfig | RedisDatabaseConfig;
+  config: PostgresDatabaseConfig | RedisDatabaseConfig | ClickHouseDatabaseConfig;
+  capabilities?: DatabaseCapabilities;
   createdById: string;
   updatedById: string | null;
   createdAt: string;
@@ -80,6 +102,90 @@ export interface PostgresTableMetadata {
   columns: PostgresTableColumn[];
   primaryKey: string[];
   hasPrimaryKey: boolean;
+}
+
+export interface SqlNamespace {
+  name: string;
+  system: boolean;
+}
+
+export interface SqlObjectSummary {
+  name: string;
+  type: "table" | "view" | "materialized-view" | "dictionary" | "other";
+  engine?: string;
+  estimatedRows?: number | null;
+  estimatedBytes?: number | null;
+}
+
+export interface SqlColumnMetadata {
+  name: string;
+  dataType: string;
+  nativeTypeName?: string;
+  nativeTypeNamespace?: string;
+  nullable: boolean;
+  isPrimaryKey: boolean;
+  isSortingKey?: boolean;
+  isPartitionKey?: boolean;
+  hasDefault: boolean;
+  defaultExpression?: string | null;
+  comment?: string | null;
+}
+
+export interface SqlTableMutationCapabilities {
+  rowInsert: boolean;
+  rowUpdate: boolean;
+  rowDelete: boolean;
+  identityColumns: string[];
+  immutableColumns: string[];
+  reason?: string;
+}
+
+export interface SqlTableMetadata {
+  provider: "postgres" | "clickhouse";
+  namespace: string;
+  table: string;
+  objectType: SqlObjectSummary["type"];
+  engine?: string;
+  columns: SqlColumnMetadata[];
+  primaryKey: string[];
+  hasPrimaryKey: boolean;
+  sortingKey?: string | null;
+  partitionKey?: string | null;
+  providerMetadata?: Record<string, unknown>;
+  mutations: SqlTableMutationCapabilities;
+}
+
+export interface SqlBrowseResult {
+  metadata: SqlTableMetadata;
+  rows: Record<string, unknown>[];
+  page: number;
+  limit: number;
+  total: number | null;
+  totalKind: "exact" | "approximate" | "unavailable";
+  truncated: boolean;
+}
+
+export interface SqlExecutionResult {
+  results: Array<{
+    command: string;
+    queryId?: string;
+    rowCount: number;
+    durationMs: number;
+    fields: string[];
+    columns: Array<{ name: string; type: string }>;
+    rows: Record<string, unknown>[];
+    truncated: boolean;
+    maxRows: number;
+    statistics?: Record<string, number>;
+  }>;
+  truncated: boolean;
+  resultLimit: number;
+}
+
+export interface SqlRowMutationResult {
+  success: true;
+  affectedRows: number;
+  queryId?: string;
 }
 
 export interface RedisKeyRecord {

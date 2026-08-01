@@ -612,6 +612,67 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       );
     }
 
+    async planContainerArchiveImport(
+      nodeId: string,
+      metadata: {
+        networks: Array<{
+          name: string;
+          driver?: string;
+          subnet?: string;
+          gateway?: string;
+          createable: boolean;
+          createNew?: boolean;
+          requiresMapping?: boolean;
+        }>;
+        mounts: Array<{
+          type: "bind" | "volume";
+          source: string;
+          target: string;
+          readOnly: boolean;
+          driver?: string;
+          labels?: Record<string, string>;
+          createNew?: boolean;
+          requiresMapping?: boolean;
+        }>;
+        ports: Array<{
+          containerPort: number;
+          hostPort: number;
+          protocol: "tcp" | "udp";
+        }>;
+      }
+    ): Promise<{
+      networks: DockerNetwork[];
+      volumes: DockerVolume[];
+      resolution: {
+        networks: Record<string, string>;
+        createNetworks: string[];
+        volumes: Record<string, string>;
+        createVolumes: string[];
+        ports: Record<string, number>;
+      };
+      conflictingPorts: string[];
+    }> {
+      return this.unwrapData(
+        this.request<{
+          data: {
+            networks: DockerNetwork[];
+            volumes: DockerVolume[];
+            resolution: {
+              networks: Record<string, string>;
+              createNetworks: string[];
+              volumes: Record<string, string>;
+              createVolumes: string[];
+              ports: Record<string, number>;
+            };
+            conflictingPorts: string[];
+          };
+        }>(`/docker/nodes/${nodeId}/containers/archive/plan`, {
+          method: "POST",
+          body: JSON.stringify(metadata),
+        })
+      );
+    }
+
     async updateContainer(
       nodeId: string,
       containerId: string,

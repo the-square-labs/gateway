@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   DatabaseConnectionService,
+  inferClickHouseIntent,
   inferPostgresIntent,
   inferRedisIntent,
   mapDatabaseDriverError,
@@ -26,6 +27,31 @@ describe('mapDatabaseDriverError', () => {
     expect(mapped).toBeInstanceOf(AppError);
     expect(mapped?.statusCode).toBe(401);
     expect(mapped?.code).toBe('DATABASE_AUTH_FAILED');
+  });
+
+  it('maps ClickHouse authentication and query failures without hiding the driver message', () => {
+    const auth = mapDatabaseDriverError(
+      new Error('Authentication failed: password is incorrect'),
+      'clickhouse',
+      'connect'
+    );
+    const query = mapDatabaseDriverError(new Error('Code: 62. DB::Exception: Syntax error'), 'clickhouse', 'query');
+
+    expect(auth).toMatchObject({ statusCode: 401, code: 'DATABASE_AUTH_FAILED' });
+    expect(query).toMatchObject({ statusCode: 400, code: 'DATABASE_QUERY_FAILED' });
+  });
+
+  it('maps nested ClickHouse fetch failures as connection errors', () => {
+    const error = new TypeError('fetch failed', {
+      cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:8123'), {
+        code: 'ECONNREFUSED',
+      }),
+    });
+
+    expect(mapDatabaseDriverError(error, 'clickhouse', 'connect')).toMatchObject({
+      statusCode: 422,
+      code: 'DATABASE_CONNECTION_FAILED',
+    });
   });
 
   it('maps network and connectivity failures to 422', () => {
@@ -90,6 +116,13 @@ describe('database query intent inference', () => {
     expect(inferRedisIntent('GET "key;with;semicolons"; TTL key')).toBe('read');
     expect(inferRedisIntent('GET key\nSET key value')).toBe('write');
     expect(inferRedisIntent('CONFIG GET *')).toBe('admin');
+  });
+
+  it('infers ClickHouse intent conservatively across provider-specific statements', () => {
+    expect(inferClickHouseIntent('select `semi;column` from events; show tables')).toBe('read');
+    expect(inferClickHouseIntent('insert into events values (1)')).toBe('write');
+    expect(inferClickHouseIntent('alter table events delete where id = 1')).toBe('admin');
+    expect(inferClickHouseIntent('optimize table events final')).toBe('admin');
   });
 });
 
@@ -359,6 +392,54 @@ describe('DatabaseConnectionService connection views', () => {
       connectionString: 'postgresql://app%20user:p%40ss%20word@db.example.com:5432/app%20db?sslmode=require',
     });
   });
+
+  it('masks and reveals ClickHouse credentials with database selection', async () => {
+    const service = createService({
+      id: 'db-ch-1',
+      slug: 'analytics-clickhouse',
+      name: 'Analytics ClickHouse',
+      type: 'clickhouse',
+      description: null,
+      tags: [],
+      manualSizeLimitMb: null,
+      host: 'ch.example.com',
+      port: 8443,
+      databaseName: 'analytics',
+      username: 'reporter',
+      tlsEnabled: true,
+      encryptedConfig: encryptedConfig({
+        type: 'clickhouse',
+        url: 'https://ch.example.com/',
+        host: 'ch.example.com',
+        port: 8443,
+        database: 'analytics',
+        username: 'reporter',
+        password: 'secret password',
+        tlsEnabled: true,
+      }),
+      healthStatus: 'online',
+      lastHealthCheckAt: null,
+      lastError: null,
+      healthHistory: [],
+      folderId: null,
+      sortOrder: 0,
+      createdById: 'user-1',
+      updatedById: null,
+      createdAt: new Date('2026-06-20T10:00:00.000Z'),
+      updatedAt: new Date('2026-06-21T10:00:00.000Z'),
+    });
+
+    await expect(service.get('db-ch-1')).resolves.toMatchObject({
+      type: 'clickhouse',
+      hasStoredPassword: true,
+      capabilities: { catalogExplorer: true, rowUpdate: true },
+      config: { password: '••••••••', url: 'https://ch.example.com/' },
+    });
+    await expect(service.revealCredentials('db-ch-1')).resolves.toMatchObject({
+      password: 'secret password',
+      connectionString: expect.stringContaining('database=analytics'),
+    });
+  });
 });
 
 describe('DatabaseConnectionService credential retargeting guard', () => {
@@ -448,6 +529,33 @@ describe('DatabaseConnectionService credential retargeting guard', () => {
     const config = decryptCapturedConfig(capturedUpdates, cryptoService);
     expect(config.password).toBe('secret-password');
     expect(config.host).toBe('db.example.com');
+  });
+
+  it('clears legacy manual size limits when a ClickHouse connection is updated', async () => {
+    const { capturedUpdates, service } = createUpdateService({
+      type: 'clickhouse',
+      name: 'Analytics ClickHouse',
+      manualSizeLimitMb: 2048,
+      host: 'ch.example.com',
+      port: 8443,
+      databaseName: 'analytics',
+      username: 'reporter',
+      tlsEnabled: true,
+      encryptedConfig: encryptedConfig({
+        type: 'clickhouse',
+        url: 'https://ch.example.com:8443/',
+        host: 'ch.example.com',
+        port: 8443,
+        database: 'analytics',
+        username: 'reporter',
+        password: 'secret-password',
+        tlsEnabled: true,
+      }),
+    });
+
+    await service.update('db-1', { name: 'Renamed ClickHouse' }, 'user-1');
+
+    expect(capturedUpdates[0]?.manualSizeLimitMb).toBeNull();
   });
 
   it('rejects target-changing edits without a replacement password before testing the connection', async () => {

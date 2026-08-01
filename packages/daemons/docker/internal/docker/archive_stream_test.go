@@ -129,6 +129,34 @@ func TestGwcaManifestToMigrationRejectsDuplicateSecretKey(t *testing.T) {
 	}
 }
 
+func TestGwcaPortConflictsAreProtocolAware(t *testing.T) {
+	manifest := gwcaContainerManifest{Ports: []gwcaPortMapping{
+		{ContainerPort: 8080, HostPort: 18080, Protocol: "tcp"},
+		{ContainerPort: 8080, HostPort: 18080, Protocol: "udp"},
+		{ContainerPort: 9090, HostPort: 19090, Protocol: "tcp"},
+	}}
+	containers := []ContainerInfo{{Ports: []PortInfo{
+		{PublicPort: 18080, Type: "tcp"},
+		{PublicPort: 19090, Type: "udp"},
+	}}}
+	want := []string{"8080/tcp:18080"}
+	if got := gwcaPortConflicts(manifest, containers); !reflect.DeepEqual(got, want) {
+		t.Fatalf("port conflicts = %#v, want %#v", got, want)
+	}
+}
+
+func TestGwcaPortConflictsRejectDuplicateArchiveBindings(t *testing.T) {
+	manifest := gwcaContainerManifest{Ports: []gwcaPortMapping{
+		{ContainerPort: 8080, HostPort: 18080, Protocol: "tcp"},
+		{ContainerPort: 8081, HostPort: 18080, Protocol: "tcp"},
+		{ContainerPort: 8082, HostPort: 0, Protocol: "tcp"},
+	}}
+	want := []string{"8080/tcp:18080", "8081/tcp:18080"}
+	if got := gwcaPortConflicts(manifest, nil); !reflect.DeepEqual(got, want) {
+		t.Fatalf("port conflicts = %#v, want %#v", got, want)
+	}
+}
+
 func TestSelectArchivePullReferencePrefersOriginalRepository(t *testing.T) {
 	got := selectArchivePullReference("registry.example/team/app:stable", []string{
 		"mirror.example/team/app@sha256:" + repeatHex("a"),

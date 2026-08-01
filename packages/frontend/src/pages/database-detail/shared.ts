@@ -1,5 +1,12 @@
 import { formatBytes } from "@/lib/utils";
-import type { DatabaseConnection, PostgresTableColumn, PostgresTableMetadata } from "@/types";
+import type {
+  DatabaseConnection,
+  PostgresTableColumn,
+  PostgresTableMetadata,
+  SqlBrowseResult,
+  SqlColumnMetadata,
+  SqlTableMetadata,
+} from "@/types";
 
 export const HEALTH_BADGE: Record<string, "success" | "secondary" | "warning" | "destructive"> = {
   online: "success",
@@ -30,9 +37,15 @@ export const METRIC_COLORS: Record<string, string> = {
   instantaneous_ops_per_sec: "#10b981",
   key_count: "#10b981",
   redis_db: "#64748b",
+  row_count: "#10b981",
+  active_parts: "#0891b2",
+  running_queries: "#f97316",
+  query_rate: "#10b981",
+  memory_usage_bytes: "#2563eb",
+  disk_used_pct: "#f59e0b",
 };
 
-export const POSTGRES_EXPLORER_PAGE_SIZE = 100;
+export const SQL_EXPLORER_PAGE_SIZE = 100;
 export const VIRTUAL_ROW_HEIGHT = 37;
 export const VIRTUAL_RESULT_ROW_HEIGHT = 49;
 
@@ -56,9 +69,12 @@ export function formatHealthStatusLabel(
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
-export function isNumericColumn(column: PostgresTableColumn): boolean {
-  const normalized = `${column.dataType} ${column.udtName}`.toLowerCase();
+export function isNumericColumn(column: PostgresTableColumn | SqlColumnMetadata): boolean {
+  const udtName = "udtName" in column ? column.udtName : (column.nativeTypeName ?? "");
+  const normalized = `${column.dataType} ${udtName}`.toLowerCase();
   return (
+    /(^|\W)u?int(8|16|32|64|128|256)(\W|$)/.test(normalized) ||
+    /(^|\W)float(32|64)(\W|$)/.test(normalized) ||
     normalized.includes("smallint") ||
     normalized.includes("integer") ||
     normalized.includes("bigint") ||
@@ -74,8 +90,8 @@ export function isNumericColumn(column: PostgresTableColumn): boolean {
   );
 }
 
-export function isBooleanColumn(column: PostgresTableColumn): boolean {
-  return column.dataType === "boolean";
+export function isBooleanColumn(column: PostgresTableColumn | SqlColumnMetadata): boolean {
+  return column.dataType.toLowerCase() === "boolean" || column.dataType === "Bool";
 }
 
 export function stringifyCell(value: unknown): string {
@@ -94,7 +110,7 @@ export function isBlankValue(value: unknown): boolean {
 
 export function isPendingRowValid(
   row: Record<string, unknown>,
-  columns: PostgresTableColumn[]
+  columns: Array<PostgresTableColumn | SqlColumnMetadata>
 ): boolean {
   const hasAnyValue = columns.some((column) => !isBlankValue(row[column.name]));
   if (!hasAnyValue) return false;
@@ -107,14 +123,17 @@ export function isPendingRowValid(
 
 export function getPendingRowState(
   row: Record<string, unknown>,
-  columns: PostgresTableColumn[]
+  columns: Array<PostgresTableColumn | SqlColumnMetadata>
 ): "empty" | "valid" | "invalid" {
   const hasAnyValue = columns.some((column) => !isBlankValue(row[column.name]));
   if (!hasAnyValue) return "empty";
   return isPendingRowValid(row, columns) ? "valid" : "invalid";
 }
 
-export function coerceCellInput(column: PostgresTableColumn, raw: string): unknown {
+export function coerceCellInput(
+  column: PostgresTableColumn | SqlColumnMetadata,
+  raw: string
+): unknown {
   if (raw === "") return null;
   if (isBooleanColumn(column)) {
     if (raw.toLowerCase() === "true") return true;
@@ -136,13 +155,34 @@ export function coerceCellInput(column: PostgresTableColumn, raw: string): unkno
   return raw;
 }
 
-export function getRowKey(metadata: PostgresTableMetadata, row: Record<string, unknown>): string {
-  if (metadata.primaryKey.length > 0) {
-    return metadata.primaryKey.map((key) => String(row[key] ?? "")).join(":");
+export function getRowKey(
+  metadata: PostgresTableMetadata | SqlTableMetadata,
+  row: Record<string, unknown>
+): string {
+  const identityColumns =
+    "mutations" in metadata ? metadata.mutations.identityColumns : metadata.primaryKey;
+  if (identityColumns.length > 0) {
+    return identityColumns.map((key) => String(row[key] ?? "")).join(":");
   }
   return JSON.stringify(row);
 }
 
 export function buildPrimaryKey(metadata: PostgresTableMetadata, row: Record<string, unknown>) {
   return Object.fromEntries(metadata.primaryKey.map((key) => [key, row[key]]));
+}
+
+export function buildRowLocator(metadata: SqlTableMetadata, row: Record<string, unknown>) {
+  return Object.fromEntries(metadata.mutations.identityColumns.map((key) => [key, row[key]]));
+}
+
+export function hasMoreSqlRows(input: {
+  loadedRows: number;
+  total: number | null;
+  totalKind: SqlBrowseResult["totalKind"];
+  pageTruncated: boolean;
+}): boolean {
+  if (input.totalKind === "exact" && input.total != null) {
+    return input.loadedRows < input.total;
+  }
+  return input.pageTruncated;
 }

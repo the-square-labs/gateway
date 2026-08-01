@@ -23,16 +23,6 @@
     },
     {
       "from_id": "7oked0dp",
-      "to_id": "7abclq2n",
-      "relation": "depends_on",
-      "weight": 0.6,
-      "reason": "Data flow and test scaffolding for database extraction seams referenced by databases service changes.",
-      "source": "auto",
-      "created_at": 1782520396384,
-      "updated_at": 1782520396384
-    },
-    {
-      "from_id": "7oked0dp",
       "to_id": "3b6g7z3k",
       "relation": "depends_on",
       "weight": 0.58,

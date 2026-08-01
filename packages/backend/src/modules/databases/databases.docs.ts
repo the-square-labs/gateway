@@ -19,18 +19,24 @@ import {
 import {
   AddPostgresColumnSchema,
   BrowsePostgresRowsQuerySchema,
+  BrowseSqlRowsQuerySchema,
   CreateDatabaseConnectionSchema,
   DatabaseListQuerySchema,
   DeletePostgresColumnSchema,
+  DeleteSqlRowSchema,
   ExecutePostgresSqlSchema,
   ExecuteRedisCommandSchema,
+  ExecuteSqlSchema,
+  InsertSqlRowSchema,
   PostgresObjectSchema,
   RedisExpireKeySchema,
   RedisGetKeyQuerySchema,
   RedisScanKeysQuerySchema,
   RedisSetKeySchema,
+  SqlTableQuerySchema,
   UpdateDatabaseConnectionSchema,
   UpdatePostgresColumnTypeSchema,
+  UpdateSqlRowSchema,
 } from './databases.schemas.js';
 
 const PostgresTableQuerySchema = BrowsePostgresRowsQuerySchema.pick({ schema: true, table: true });
@@ -203,6 +209,78 @@ export const databaseMonitoringStreamRoute = appRoute({
   summary: 'Stream database monitoring snapshots',
   request: { params: IdParamSchema },
   responses: { 200: { description: 'Server-sent events stream' } },
+});
+
+export const listSqlNamespacesRoute = appRoute({
+  method: 'get',
+  path: '/{id}/sql/namespaces',
+  tags: ['Databases'],
+  summary: 'List SQL database namespaces',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const listSqlObjectsRoute = appRoute({
+  method: 'get',
+  path: '/{id}/sql/objects',
+  tags: ['Databases'],
+  summary: 'List SQL tables and views',
+  request: { params: IdParamSchema, query: z.object({ namespace: z.string().min(1) }) },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const sqlTableMetadataRoute = appRoute({
+  method: 'get',
+  path: '/{id}/sql/table-metadata',
+  tags: ['Databases'],
+  summary: 'Get SQL table metadata',
+  request: { params: IdParamSchema, query: SqlTableQuerySchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const browseSqlRowsRoute = appRoute({
+  method: 'get',
+  path: '/{id}/sql/rows',
+  tags: ['Databases'],
+  summary: 'Browse SQL table rows',
+  request: { params: IdParamSchema, query: BrowseSqlRowsQuerySchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const insertSqlRowRoute = appRoute({
+  method: 'post',
+  path: '/{id}/sql/rows',
+  tags: ['Databases'],
+  summary: 'Insert a SQL table row',
+  request: { params: IdParamSchema, ...jsonBody(InsertSqlRowSchema) },
+  responses: createdJson(UnknownDataResponseSchema),
+});
+
+export const updateSqlRowRoute = appRoute({
+  method: 'patch',
+  path: '/{id}/sql/rows',
+  tags: ['Databases'],
+  summary: 'Update one uniquely identified SQL table row',
+  request: { params: IdParamSchema, ...jsonBody(UpdateSqlRowSchema) },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const deleteSqlRowRoute = appRoute({
+  method: 'delete',
+  path: '/{id}/sql/rows',
+  tags: ['Databases'],
+  summary: 'Delete one uniquely identified SQL table row',
+  request: { params: IdParamSchema, ...jsonBody(DeleteSqlRowSchema) },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const executeSqlRoute = appRoute({
+  method: 'post',
+  path: '/{id}/sql/query',
+  tags: ['Databases'],
+  summary: 'Execute a provider-specific SQL statement',
+  request: { params: IdParamSchema, ...jsonBody(ExecuteSqlSchema) },
+  responses: okJson(UnknownDataResponseSchema),
 });
 
 export const listPostgresSchemasRoute = appRoute({

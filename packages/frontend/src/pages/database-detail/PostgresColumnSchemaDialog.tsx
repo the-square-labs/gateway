@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { PostgresTableMetadata } from "@/types";
+import type { SqlTableMetadata } from "@/types";
 import {
   createNewColumnDraft,
   currentColumnTypeValue,
@@ -41,7 +41,7 @@ export function PostgresColumnSchemaDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  metadata: PostgresTableMetadata | null;
+  metadata: SqlTableMetadata | null;
   canChangeColumnTypes: boolean;
   currentTableType: string | undefined;
   columnTypeDrafts: Record<string, string>;
@@ -93,9 +93,7 @@ export function PostgresColumnSchemaDialog({
                   } border-b border-border last:border-b-0 ${markedDeleted ? "bg-destructive/10 opacity-70" : ""}`}
                 >
                   <div className="flex h-9 min-w-0 items-center gap-2 px-3">
-                    <span
-                      className={`truncate font-mono text-sm ${markedDeleted ? "line-through" : ""}`}
-                    >
+                    <span className={`truncate text-sm ${markedDeleted ? "line-through" : ""}`}>
                       {column.name}
                     </span>
                     {column.isPrimaryKey && (
@@ -167,7 +165,7 @@ export function PostgresColumnSchemaDialog({
                         )
                       )
                     }
-                    className={`h-9 rounded-none border-0 font-mono text-xs shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${
+                    className={`h-9 rounded-none border-0 text-xs shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${
                       invalid ? "bg-red-500/15 text-red-400" : ""
                     }`}
                     placeholder="new_column"

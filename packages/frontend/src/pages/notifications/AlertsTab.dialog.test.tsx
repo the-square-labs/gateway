@@ -148,6 +148,43 @@ describe("AlertDialog", () => {
     expect(onSaved).toHaveBeenCalled();
   });
 
+  it("uses the shared scope list for resources and webhooks", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.listNodes).mockResolvedValue({
+      data: [
+        {
+          id: "node-1",
+          type: "nginx",
+          hostname: "node-1",
+          displayName: "Primary Node",
+        },
+      ] as never,
+      total: 1,
+      page: 1,
+      limit: 100,
+      totalPages: 1,
+    });
+
+    renderWithRouter(
+      <AlertDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        rule={{ ...makeRule(), resourceIds: ["node-1"] }}
+        onSaved={vi.fn()}
+      />,
+      { path: "/notifications", route: "/notifications" }
+    );
+
+    await screen.findByDisplayValue("CPU High");
+    await user.click(screen.getByRole("button", { name: /next/i }));
+
+    expect(await screen.findByRole("checkbox", { name: "Primary Node" })).toHaveClass(
+      "form-checkbox"
+    );
+    expect(screen.getByRole("checkbox", { name: /Ops/ })).toHaveClass("form-checkbox");
+    expect(screen.queryByText("node-1")).not.toBeInTheDocument();
+  });
+
   it("does not replay a stale create token when the alerts tab mounts", async () => {
     vi.spyOn(api, "listAlertRules").mockResolvedValue({
       data: [makeRule()],

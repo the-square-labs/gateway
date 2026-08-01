@@ -31,7 +31,14 @@ export const SEVERITY_COLOR: Record<Severity, number> = {
 
 // ── Alert Categories ──────────────────────────────────────────────────
 
-export type AlertCategory = 'node' | 'container' | 'proxy' | 'certificate' | 'database_postgres' | 'database_redis';
+export type AlertCategory =
+  | 'node'
+  | 'container'
+  | 'proxy'
+  | 'certificate'
+  | 'database_postgres'
+  | 'database_clickhouse'
+  | 'database_redis';
 
 export interface MetricDefinition {
   id: string;
@@ -187,6 +194,44 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
         defaultOperator: '>',
         defaultValue: 1024,
       },
+    ],
+    events: [
+      { id: 'health.offline', label: 'Database Offline', defaultSeverity: 'critical', supportsThreshold: true },
+      { id: 'health.degraded', label: 'Database Degraded', defaultSeverity: 'warning', supportsThreshold: true },
+      { id: 'health.online', label: 'Database Online', defaultSeverity: 'info', supportsThreshold: true },
+    ],
+    variables: [
+      { name: '{{resource.name}}', description: 'Database connection name' },
+      { name: '{{resource.id}}', description: 'Database connection ID' },
+      { name: '{{resource.key}}', description: 'Internal alert resource key' },
+      { name: '{{metric.name}}', description: 'Metric name' },
+      { name: '{{metric.value}}', description: 'Current metric value' },
+      { name: '{{metric.threshold}}', description: 'Configured threshold' },
+      { name: '{{metric.operator}}', description: 'Comparison operator' },
+      { name: '{{health.status}}', description: 'Health status' },
+    ],
+  },
+  {
+    id: 'database_clickhouse',
+    label: 'Database - ClickHouse',
+    metrics: [
+      { id: 'latency_ms', label: 'Latency (ms)', unit: 'ms', defaultOperator: '>', defaultValue: 1000 },
+      {
+        id: 'database_size_mb',
+        label: 'Database Size (MB)',
+        unit: 'MB',
+        defaultOperator: '>',
+        defaultValue: 1024,
+      },
+      { id: 'disk_used_pct', label: 'Disk Usage (%)', unit: '%', defaultOperator: '>', defaultValue: 90 },
+      {
+        id: 'disk_available_mb',
+        label: 'Disk Available (MB)',
+        unit: 'MB',
+        defaultOperator: '<',
+        defaultValue: 10_240,
+      },
+      { id: 'pending_mutations', label: 'Pending Mutations', unit: '', defaultOperator: '>', defaultValue: 5 },
     ],
     events: [
       { id: 'health.offline', label: 'Database Offline', defaultSeverity: 'critical', supportsThreshold: true },
@@ -402,6 +447,27 @@ export const EVENT_BUS_MAPPINGS: Record<string, EventMapping[]> = {
       extractData: (p) => ({ health_status: p.healthStatus }),
     },
     {
+      category: 'database_clickhouse',
+      eventId: 'health.offline',
+      match: (p) => p.action === 'health.offline' && p.type === 'clickhouse',
+      extractResource: (p) => ({ type: 'database', id: p.id, name: p.name }),
+      extractData: (p) => ({ health_status: p.healthStatus }),
+    },
+    {
+      category: 'database_clickhouse',
+      eventId: 'health.degraded',
+      match: (p) => p.action === 'health.degraded' && p.type === 'clickhouse',
+      extractResource: (p) => ({ type: 'database', id: p.id, name: p.name }),
+      extractData: (p) => ({ health_status: p.healthStatus }),
+    },
+    {
+      category: 'database_clickhouse',
+      eventId: 'health.online',
+      match: (p) => p.action === 'health.online' && p.type === 'clickhouse',
+      extractResource: (p) => ({ type: 'database', id: p.id, name: p.name }),
+      extractData: (p) => ({ health_status: p.healthStatus }),
+    },
+    {
       category: 'database_redis',
       eventId: 'health.offline',
       match: (p) => p.action === 'health.offline' && p.type === 'redis',
@@ -505,7 +571,9 @@ export function extractMetricFromDatabaseSnapshot(
   metric: string,
   snapshot: { databaseId: string; metrics: Record<string, number | null> }
 ): { values: Array<{ resourceId: string; value: number }> } | null {
-  if (category !== 'database_postgres' && category !== 'database_redis') return null;
+  if (category !== 'database_postgres' && category !== 'database_clickhouse' && category !== 'database_redis') {
+    return null;
+  }
   const value = snapshot.metrics[metric];
   if (typeof value !== 'number' || Number.isNaN(value)) return null;
   return { values: [{ resourceId: snapshot.databaseId, value }] };

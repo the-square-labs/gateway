@@ -93,6 +93,7 @@ describe('evaluateWindowRatio', () => {
     expect(eventSupportsThreshold('proxy', 'health.degraded')).toBe(true);
     expect(eventSupportsThreshold('proxy', 'maintenance.active')).toBe(true);
     expect(eventSupportsThreshold('database_postgres', 'health.online')).toBe(true);
+    expect(eventSupportsThreshold('database_clickhouse', 'health.online')).toBe(true);
     expect(eventSupportsThreshold('container', 'stopped')).toBe(true);
     expect(eventSupportsThreshold('container', 'exited')).toBe(true);
     expect(eventSupportsThreshold('container', 'health.offline')).toBe(true);
@@ -112,6 +113,18 @@ describe('evaluateWindowRatio', () => {
       defaultValue: 14,
       defaultDurationSeconds: 0,
       defaultResolveAfterSeconds: 0,
+    });
+  });
+
+  it('defines ClickHouse available disk as a native low-space threshold', () => {
+    const clickHouseCategory = ALERT_CATEGORIES.find((category) => category.id === 'database_clickhouse');
+    const metric = clickHouseCategory?.metrics.find((item) => item.id === 'disk_available_mb');
+
+    expect(metric).toMatchObject({
+      label: 'Disk Available (MB)',
+      unit: 'MB',
+      defaultOperator: '<',
+      defaultValue: 10_240,
     });
   });
 

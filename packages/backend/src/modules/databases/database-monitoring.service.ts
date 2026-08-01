@@ -115,7 +115,9 @@ export class DatabaseMonitoringService extends EventEmitter {
       const snapshot =
         config.type === 'postgres'
           ? await this.collectPostgresSnapshot(databaseId, connection.name)
-          : await this.collectRedisSnapshot(databaseId, connection.name, config);
+          : config.type === 'clickhouse'
+            ? await this.collectClickHouseSnapshot(databaseId, connection.name, config.database)
+            : await this.collectRedisSnapshot(databaseId, connection.name, config);
 
       await this.pushHistory(snapshot);
       await this.databaseService.updateHealth(databaseId, {
@@ -125,7 +127,7 @@ export class DatabaseMonitoringService extends EventEmitter {
       });
       await this.evaluator?.evaluateDatabaseSnapshot(snapshot);
       await this.evaluator?.observeStatefulEvent(
-        snapshot.type === 'postgres' ? 'database_postgres' : 'database_redis',
+        this.notificationCategory(snapshot.type),
         snapshot.status === 'online'
           ? 'health.online'
           : snapshot.status === 'degraded'
@@ -146,7 +148,7 @@ export class DatabaseMonitoringService extends EventEmitter {
       });
       if (connection) {
         await this.evaluator?.observeStatefulEvent(
-          connection.type === 'postgres' ? 'database_postgres' : 'database_redis',
+          this.notificationCategory(connection.type),
           'health.offline',
           { type: 'database', id: databaseId, name: connection.name },
           { health_status: 'offline', error: message }
@@ -317,6 +319,110 @@ export class DatabaseMonitoringService extends EventEmitter {
         redis_db: config.db,
       },
     };
+  }
+
+  private async collectClickHouseSnapshot(
+    databaseId: string,
+    name: string,
+    database: string
+  ): Promise<DatabaseMetricSnapshot> {
+    const client = await this.databaseService.getClickHouseClient(databaseId);
+    const started = Date.now();
+    const ping = await client.ping();
+    if (!ping.success) throw ping.error;
+    const previousSnapshot = await this.getLatestSnapshot(databaseId);
+    const queryRows = async <T extends Record<string, unknown>>(
+      query: string,
+      queryParams?: Record<string, unknown>
+    ) => {
+      try {
+        const result = await client.query({
+          query,
+          format: 'JSONEachRow',
+          query_params: queryParams,
+          clickhouse_settings: { max_execution_time: 5, readonly: '1', log_queries: 0 },
+        });
+        return await result.json<T>();
+      } catch {
+        return [];
+      }
+    };
+    const [partsRows, processRows, activityRows, diskRows] = await Promise.all([
+      queryRows<{
+        rows: string;
+        bytes: string;
+        active_parts: string;
+      }>(
+        `SELECT sum(rows) AS rows, sum(bytes_on_disk) AS bytes, count() AS active_parts
+           FROM system.parts
+          WHERE active AND database = {database: String}`,
+        { database }
+      ),
+      queryRows<{ running_queries: string; memory_usage: string }>(
+        `SELECT count() AS running_queries, sum(memory_usage) AS memory_usage FROM system.processes`
+      ),
+      queryRows<{ merges: string; pending_mutations: string; query_total: string }>(
+        `SELECT
+           (SELECT count() FROM system.merges WHERE database = {database: String}) AS merges,
+           (SELECT count() FROM system.mutations WHERE database = {database: String} AND NOT is_done) AS pending_mutations,
+           (SELECT sum(value) FROM system.events WHERE event = 'Query') AS query_total`,
+        { database }
+      ),
+      queryRows<{ disk_total: string; disk_free: string; disk_unreserved: string }>(
+        `SELECT
+           sum(total_space) AS disk_total,
+           sum(free_space) AS disk_free,
+           sum(unreserved_space) AS disk_unreserved
+         FROM system.disks`
+      ),
+    ]);
+    const responseMs = Date.now() - started;
+    const parts = partsRows[0];
+    const processes = processRows[0];
+    const activity = activityRows[0];
+    const disks = diskRows[0];
+    const queryTotal = Number(activity?.query_total ?? 0);
+    const previousQueryTotal = Number(previousSnapshot?.metrics.query_total ?? 0);
+    const previousAt = previousSnapshot ? Date.parse(previousSnapshot.timestamp) : null;
+    const elapsedSeconds =
+      previousAt && Number.isFinite(previousAt) ? Math.max((Date.now() - previousAt) / 1000, 1) : null;
+    const queryRate = elapsedSeconds == null ? null : Math.max(0, (queryTotal - previousQueryTotal) / elapsedSeconds);
+    const diskTotal = Number(disks?.disk_total ?? 0);
+    const diskFree = Number(disks?.disk_free ?? 0);
+    const diskUnreserved = Number(disks?.disk_unreserved ?? disks?.disk_free ?? 0);
+    const status: DatabaseHealthStatus = responseMs >= 1000 ? 'degraded' : 'online';
+    return {
+      timestamp: new Date().toISOString(),
+      databaseId,
+      type: 'clickhouse',
+      name,
+      status,
+      responseMs,
+      metrics: {
+        latency_ms: responseMs,
+        database_size_bytes: parts ? Number(parts.bytes ?? 0) : null,
+        database_size_mb: parts ? Number(parts.bytes ?? 0) / (1024 * 1024) : null,
+        row_count: parts ? Number(parts.rows ?? 0) : null,
+        active_parts: parts ? Number(parts.active_parts ?? 0) : null,
+        running_queries: processes ? Number(processes.running_queries ?? 0) : null,
+        memory_usage_bytes: processes ? Number(processes.memory_usage ?? 0) : null,
+        active_merges: activity ? Number(activity.merges ?? 0) : null,
+        pending_mutations: activity ? Number(activity.pending_mutations ?? 0) : null,
+        query_rate: queryRate,
+        query_total: activity ? queryTotal : null,
+        disk_total_bytes: disks ? diskTotal : null,
+        disk_free_bytes: disks ? diskFree : null,
+        disk_unreserved_bytes: disks ? diskUnreserved : null,
+        disk_available_mb: disks ? diskUnreserved / (1024 * 1024) : null,
+        disk_used_pct: disks && diskTotal > 0 ? ((diskTotal - diskFree) / diskTotal) * 100 : null,
+      },
+    };
+  }
+
+  private notificationCategory(type: DatabaseType) {
+    if (type === 'postgres') return 'database_postgres' as const;
+    if (type === 'clickhouse') return 'database_clickhouse' as const;
+    return 'database_redis' as const;
   }
 
   private parseRedisInfo(raw: string): Record<string, string> {

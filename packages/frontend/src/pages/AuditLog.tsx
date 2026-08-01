@@ -93,6 +93,7 @@ const AUDIT_ACTION_OPTIONS = [
   "database.connection.delete",
   "database.connection.test",
   "database.connection.update",
+  "database.clickhouse.query",
   "database.postgres.query",
   "database.postgres.row.delete",
   "database.postgres.row.insert",

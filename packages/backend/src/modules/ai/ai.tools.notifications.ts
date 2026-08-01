@@ -4,13 +4,21 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'list_alert_rules',
     description:
-      'List all notification alert rules. Returns id, name, enabled, type (threshold/event), category (node/container/proxy/certificate/database_postgres/database_redis), severity, metric, operator, thresholdValue, eventPattern, resourceIds, webhookIds, cooldownSeconds.',
+      'List all notification alert rules. Returns id, name, enabled, type (threshold/event), category (node/container/proxy/certificate/database_postgres/database_clickhouse/database_redis), severity, metric, operator, thresholdValue, eventPattern, resourceIds, webhookIds, cooldownSeconds.',
     parameters: {
       type: 'object',
       properties: {
         category: {
           type: 'string',
-          enum: ['node', 'container', 'proxy', 'certificate', 'database_postgres', 'database_redis'],
+          enum: [
+            'node',
+            'container',
+            'proxy',
+            'certificate',
+            'database_postgres',
+            'database_clickhouse',
+            'database_redis',
+          ],
           description: 'Filter by category',
         },
         enabled: { type: 'boolean', description: 'Filter by enabled/disabled' },
@@ -47,7 +55,15 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
         type: { type: 'string', enum: ['threshold', 'event'], description: 'Rule type' },
         category: {
           type: 'string',
-          enum: ['node', 'container', 'proxy', 'certificate', 'database_postgres', 'database_redis'],
+          enum: [
+            'node',
+            'container',
+            'proxy',
+            'certificate',
+            'database_postgres',
+            'database_clickhouse',
+            'database_redis',
+          ],
           description: 'Resource category',
         },
         severity: { type: 'string', enum: ['info', 'warning', 'critical'], description: 'Alert severity' },

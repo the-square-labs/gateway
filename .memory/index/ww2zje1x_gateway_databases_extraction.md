@@ -3,17 +3,21 @@
   "id": "ww2zje1x",
   "file_name": "ww2zje1x_gateway_databases_extraction",
   "tags": [
-    "backend",
+    "clickhouse",
+    "connection-form",
     "databases",
     "gateway",
-    "refactor",
-    "tests-first",
+    "postgresql",
+    "sql-adapter",
     "verification"
   ],
   "layer": "lite",
   "ref": "7abclq2n",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1782003066839,
-  "updated_at": 1782003066839
+  "updated_at": 1785537765392
 }
 ---
-[→ 7abclq2n] Gateway databases.service extraction pattern
+[→ 7abclq2n] Gateway database connector architecture, form UX, and safe service extraction seams

@@ -5,7 +5,14 @@ export interface AlertRule {
   name: string;
   enabled: boolean;
   type: "threshold" | "event";
-  category: "node" | "container" | "proxy" | "certificate" | "database_postgres" | "database_redis";
+  category:
+    | "node"
+    | "container"
+    | "proxy"
+    | "certificate"
+    | "database_postgres"
+    | "database_clickhouse"
+    | "database_redis";
   severity: "info" | "warning" | "critical";
   metric: string | null;
   metricTarget: string | null;
