@@ -63,6 +63,7 @@ export const CreateManagedDatabaseSchema = z
     memoryMb: z.number().int().min(128).max(1_048_576),
     swapMb: z.number().int().min(0).max(1_048_576).default(0),
     publishTcp: z.boolean().default(false),
+    publishNativeTcp: z.boolean().optional(),
     publishedPort: z.number().int().min(1).max(65535).optional(),
     publishedNativePort: z.number().int().min(1).max(65535).optional(),
     tlsEnabled: z.boolean().default(true),
@@ -78,7 +79,17 @@ export const CreateManagedDatabaseSchema = z
         message: 'publishedPort requires publishTcp',
       });
     }
-    if (value.publishedNativePort !== undefined && (!value.publishTcp || value.type !== 'clickhouse')) {
+    if (value.publishNativeTcp === true && (!value.publishTcp || value.type !== 'clickhouse')) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['publishNativeTcp'],
+        message: 'publishNativeTcp requires published ClickHouse TCP',
+      });
+    }
+    if (
+      value.publishedNativePort !== undefined &&
+      (!value.publishTcp || value.type !== 'clickhouse' || value.publishNativeTcp === false)
+    ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['publishedNativePort'],
@@ -110,6 +121,7 @@ export const UpdateManagedDatabaseSchema = z
     memoryMb: z.number().int().min(128).max(1_048_576).optional(),
     swapMb: z.number().int().min(0).max(1_048_576).optional(),
     publishTcp: z.boolean().optional(),
+    publishNativeTcp: z.boolean().optional(),
     publishedPort: z.number().int().min(1).max(65535).nullable().optional(),
     publishedNativePort: z.number().int().min(1).max(65535).nullable().optional(),
     tlsEnabled: z.boolean().optional(),

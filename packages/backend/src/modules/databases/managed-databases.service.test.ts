@@ -79,6 +79,39 @@ describe('managed database catalog and input guardrails', () => {
     expect(result.success).toBe(false);
   });
 
+  it('allows ClickHouse HTTP publication without its native endpoint', () => {
+    const result = CreateManagedDatabaseSchema.safeParse({
+      name: 'analytics',
+      type: 'clickhouse',
+      version: '26.7.1.1315',
+      nodeId: '44d553a4-8978-4ad1-8ca7-4d53c6e74a1d',
+      storageSizeGb: 10,
+      cpuCores: 1,
+      memoryMb: 1024,
+      publishTcp: true,
+      publishNativeTcp: false,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('does not accept a native ClickHouse port when native publication is disabled', () => {
+    const result = CreateManagedDatabaseSchema.safeParse({
+      name: 'analytics',
+      type: 'clickhouse',
+      version: '26.7.1.1315',
+      nodeId: '44d553a4-8978-4ad1-8ca7-4d53c6e74a1d',
+      storageSizeGb: 10,
+      cpuCores: 1,
+      memoryMb: 1024,
+      publishTcp: true,
+      publishNativeTcp: false,
+      publishedNativePort: 9000,
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it('rejects ClickHouse configuration for other engines', () => {
     const result = CreateManagedDatabaseSchema.safeParse({
       name: 'cache',

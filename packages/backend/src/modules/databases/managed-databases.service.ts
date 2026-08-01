@@ -112,10 +112,24 @@ function runtimeValues(runtimeConfig: Record<string, unknown>) {
   };
 }
 
+function managedDatabasePublishTcp(row: ManagedDatabaseRow) {
+  const engineConfig = row.engineConfig as unknown as Record<string, unknown>;
+  return typeof engineConfig.publishTcp === 'boolean' ? engineConfig.publishTcp : row.publishedPort !== null;
+}
+
+function managedDatabasePublishNativeTcp(row: ManagedDatabaseRow) {
+  if (row.type !== 'clickhouse' || !managedDatabasePublishTcp(row)) return false;
+  const engineConfig = row.engineConfig as unknown as Record<string, unknown>;
+  return typeof engineConfig.publishNativeTcp === 'boolean'
+    ? engineConfig.publishNativeTcp
+    : row.publishedNativePort !== null;
+}
+
 async function daemonCreateConfig(
   row: ManagedDatabaseRow,
   credentials: OwnerCredentials,
   publishTcp: boolean,
+  publishNativeTcp: boolean,
   operationId: string,
   databaseCA?: DatabaseCAService
 ) {
@@ -134,8 +148,9 @@ async function daemonCreateConfig(
     // safe logical name so all commands have a uniform identity shape.
     databaseName: credentials.databaseName ?? 'redis',
     publishTcp,
+    publishNativeTcp,
     publishedPort: row.publishedPort ?? 0,
-    publishedNativePort: row.publishedNativePort ?? 0,
+    publishedNativePort: publishNativeTcp ? (row.publishedNativePort ?? 0) : 0,
     tlsEnabled: row.tlsEnabled,
     tlsCertificateId: row.tlsEnabled ? (row.certificateId ?? '') : '',
     ...(tls
@@ -449,8 +464,11 @@ export class ManagedDatabaseService {
       memoryLimitBytes: input.memoryMb * MEBIBYTE,
       memorySwapBytes: (input.memoryMb + input.swapMb) * MEBIBYTE,
     };
+    const publishNativeTcp = input.publishTcp && input.type === 'clickhouse' && input.publishNativeTcp !== false;
     const engineConfig = {
       ownerUsername: credentials.username,
+      publishTcp: input.publishTcp,
+      ...(input.type === 'clickhouse' ? { publishNativeTcp } : {}),
       ...(credentials.databaseName ? { databaseName: credentials.databaseName } : {}),
       ...(input.clickhouseConfigXml ? { clickhouseConfigXml: input.clickhouseConfigXml } : {}),
     };
@@ -486,8 +504,7 @@ export class ManagedDatabaseService {
               runtimeConfig,
               tlsEnabled: input.tlsEnabled,
               publishedPort: input.publishTcp ? (input.publishedPort ?? null) : null,
-              publishedNativePort:
-                input.publishTcp && input.type === 'clickhouse' ? (input.publishedNativePort ?? null) : null,
+              publishedNativePort: publishNativeTcp ? (input.publishedNativePort ?? null) : null,
               status: 'creating',
               pendingOperation,
               createdById: userId,
@@ -517,7 +534,7 @@ export class ManagedDatabaseService {
       details: { name: row.name, type: row.type, version: row.version, nodeId: row.nodeId },
     });
 
-    return this.dispatchCreate(row, credentials, input.publishTcp, userId);
+    return this.dispatchCreate(row, credentials, input.publishTcp, publishNativeTcp, userId);
   }
 
   async update(id: string, input: UpdateManagedDatabaseInput, userId: string) {
@@ -543,18 +560,35 @@ export class ManagedDatabaseService {
     const node = await this.assertDatabaseNode(existing.nodeId);
     existing = await this.ensureManagedDatabaseCertificate(existing, node);
     const nextPublishTcp = input.publishTcp ?? existing.publishedPort !== null;
+    if (input.publishNativeTcp !== undefined && existing.type !== 'clickhouse') {
+      throw new AppError(
+        400,
+        'MANAGED_DATABASE_NATIVE_PUBLICATION_UNSUPPORTED',
+        'Only ClickHouse has a native TCP endpoint'
+      );
+    }
+    if (input.publishNativeTcp && !nextPublishTcp) {
+      throw new AppError(
+        400,
+        'MANAGED_DATABASE_NATIVE_PUBLICATION_REQUIRES_TCP',
+        'Publish the ClickHouse TCP endpoint before publishing its native endpoint'
+      );
+    }
     const nextPublishedPort =
       input.publishTcp === false
         ? null
         : input.publishedPort === undefined
           ? existing.publishedPort
           : input.publishedPort;
-    const nextPublishedNativePort =
-      !nextPublishTcp || existing.type !== 'clickhouse'
-        ? null
-        : input.publishedNativePort === undefined
-          ? existing.publishedNativePort
-          : input.publishedNativePort;
+    const nextPublishNativeTcp =
+      nextPublishTcp &&
+      existing.type === 'clickhouse' &&
+      (input.publishNativeTcp ?? existing.publishedNativePort !== null);
+    const nextPublishedNativePort = !nextPublishNativeTcp
+      ? null
+      : input.publishedNativePort === undefined
+        ? existing.publishedNativePort
+        : input.publishedNativePort;
     const next = {
       name: input.name ?? existing.name,
       storageSizeBytes: input.storageSizeGb === undefined ? existing.storageSizeBytes : input.storageSizeGb * GIBIBYTE,
@@ -584,6 +618,8 @@ export class ManagedDatabaseService {
       publishedNativePort: nextPublishedNativePort,
       engineConfig: {
         ...existing.engineConfig,
+        publishTcp: nextPublishTcp,
+        ...(existing.type === 'clickhouse' ? { publishNativeTcp: nextPublishNativeTcp } : {}),
         ...(input.clickhouseConfigXml === undefined ? {} : { clickhouseConfigXml: input.clickhouseConfigXml }),
       },
     };
@@ -605,7 +641,7 @@ export class ManagedDatabaseService {
       .returning();
     await this.syncCanonicalConnectionName(updating!, existing.name);
     await this.syncCanonicalConnectionTags(updating!, input.tags);
-    return this.dispatchUpdate(updating!, existingCredentials, nextPublishTcp, userId);
+    return this.dispatchUpdate(updating!, existingCredentials, nextPublishTcp, nextPublishNativeTcp, userId);
   }
 
   async rotateCertificate(id: string, userId: string) {
@@ -661,7 +697,13 @@ export class ManagedDatabaseService {
       details: { name: existing.name, type: existing.type, serviceAddresses },
     });
     this.emit(updating!, 'tls_certificate.rotating');
-    return this.dispatchUpdate(updating!, credentials, updating!.publishedPort !== null, userId);
+    return this.dispatchUpdate(
+      updating!,
+      credentials,
+      managedDatabasePublishTcp(updating!),
+      managedDatabasePublishNativeTcp(updating!),
+      userId
+    );
   }
 
   async pause(id: string, userId: string) {
@@ -736,7 +778,13 @@ export class ManagedDatabaseService {
       details: { name: retrying!.name, type: retrying!.type, nodeId: retrying!.nodeId },
     });
     this.emit(retrying!, 'retrying');
-    return this.dispatchCreate(retrying!, credentials, retrying!.publishedPort !== null, userId);
+    return this.dispatchCreate(
+      retrying!,
+      credentials,
+      managedDatabasePublishTcp(retrying!),
+      managedDatabasePublishNativeTcp(retrying!),
+      userId
+    );
   }
 
   async revealCredentials(id: string) {
@@ -856,19 +904,20 @@ export class ManagedDatabaseService {
     row: ManagedDatabaseRow,
     credentials: OwnerCredentials,
     publishTcp: boolean,
+    publishNativeTcp: boolean,
     userId: string | null
   ) {
     const operation = this.pendingOperation(row, 'create');
     const direct = await this.ensureDirectAccessCredentials(row, userId, false);
     const configJson = JSON.stringify(
-      await daemonCreateConfig(row, credentials, publishTcp, operation.id, this.databaseCA)
+      await daemonCreateConfig(row, credentials, publishTcp, publishNativeTcp, operation.id, this.databaseCA)
     );
     try {
       const result = await this.nodeDispatch.sendDockerDatabaseCommand(row.nodeId, 'create', row.id, configJson);
       if (!result.success) return this.markError(row, 'create');
       await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
       const publishedPort = await this.resolvePublishedPort(direct.row, publishTcp, result);
-      const publishedNativePort = await this.resolvePublishedNativePort(direct.row, publishTcp, result);
+      const publishedNativePort = await this.resolvePublishedNativePort(direct.row, publishNativeTcp, result);
       return this.markReady(direct.row, userId, publishedPort, 'ready', publishedNativePort);
     } catch {
       return this.markOutcomeUnknown(row);
@@ -879,19 +928,20 @@ export class ManagedDatabaseService {
     row: ManagedDatabaseRow,
     credentials: OwnerCredentials,
     publishTcp: boolean,
+    publishNativeTcp: boolean,
     userId: string | null
   ) {
     const operation = this.pendingOperation(row, 'update');
     const direct = await this.ensureDirectAccessCredentials(row, userId, false);
     const configJson = JSON.stringify(
-      await daemonCreateConfig(row, credentials, publishTcp, operation.id, this.databaseCA)
+      await daemonCreateConfig(row, credentials, publishTcp, publishNativeTcp, operation.id, this.databaseCA)
     );
     try {
       const result = await this.nodeDispatch.sendDockerDatabaseCommand(row.nodeId, 'update', row.id, configJson);
       if (!result.success) return this.markError(row, 'update');
       await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
       const publishedPort = await this.resolvePublishedPort(direct.row, publishTcp, result);
-      const publishedNativePort = await this.resolvePublishedNativePort(direct.row, publishTcp, result);
+      const publishedNativePort = await this.resolvePublishedNativePort(direct.row, publishNativeTcp, result);
       const [ready] = await this.db
         .update(managedDatabaseInstances)
         .set({
@@ -1007,9 +1057,21 @@ export class ManagedDatabaseService {
       this.cryptoService.decryptString(parseEncryptedCredentials(row.encryptedOwnerCredentials))
     ) as OwnerCredentials;
     if (operation.action === 'create') {
-      return this.dispatchCreate(row, credentials, row.publishedPort !== null, null);
+      return this.dispatchCreate(
+        row,
+        credentials,
+        managedDatabasePublishTcp(row),
+        managedDatabasePublishNativeTcp(row),
+        null
+      );
     }
-    return this.dispatchUpdate(row, credentials, row.publishedPort !== null, null);
+    return this.dispatchUpdate(
+      row,
+      credentials,
+      managedDatabasePublishTcp(row),
+      managedDatabasePublishNativeTcp(row),
+      null
+    );
   }
 
   private pendingOperation(row: ManagedDatabaseRow, action: ManagedDatabaseOperation['action']) {
@@ -1365,10 +1427,10 @@ export class ManagedDatabaseService {
 
   private async resolvePublishedNativePort(
     row: ManagedDatabaseRow,
-    publishTcp: boolean,
+    publishNativeTcp: boolean,
     result: { detail?: string }
   ): Promise<number | null> {
-    if (row.type !== 'clickhouse' || !publishTcp) return null;
+    if (row.type !== 'clickhouse' || !publishNativeTcp) return null;
     const returned = allocatedPublishedNativePort(result);
     if (returned !== null) return returned;
     if (row.publishedNativePort !== null) return row.publishedNativePort;

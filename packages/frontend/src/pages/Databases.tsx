@@ -30,7 +30,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRealtime } from "@/hooks/use-realtime";
 import { nodeIconClassNames } from "@/lib/node-appearance";
@@ -45,6 +44,7 @@ import type {
   ManagedDatabaseCreateInput,
   Node,
 } from "@/types";
+import { ClickHouseConfigField } from "./database-detail/ClickHouseConfigField";
 import {
   buildDatabasePayload,
   canCreateDatabase,
@@ -300,7 +300,9 @@ function ManagedDatabaseCreateForm({
                 ...draft,
                 type,
                 version: catalogVersions(catalog, type)[0]!,
-                ...(type === "clickhouse" ? {} : { publishedNativePort: undefined }),
+                ...(type === "clickhouse"
+                  ? { publishNativeTcp: draft.publishNativeTcp ?? true }
+                  : { publishNativeTcp: undefined, publishedNativePort: undefined }),
               });
             }}
           >
@@ -433,7 +435,13 @@ function ManagedDatabaseCreateForm({
               onChange({
                 ...draft,
                 publishTcp: checked,
-                ...(checked ? {} : { publishedPort: undefined, publishedNativePort: undefined }),
+                ...(checked
+                  ? {}
+                  : {
+                      publishedPort: undefined,
+                      publishNativeTcp: false,
+                      publishedNativePort: undefined,
+                    }),
               })
             }
             ariaLabel="Publish TCP port"
@@ -461,6 +469,45 @@ function ManagedDatabaseCreateForm({
                   placeholder="Automatic"
                 />
               </SettingsControlRow>
+              {draft.type === "clickhouse" && (
+                <>
+                  <SettingsControlRow
+                    title="Publish native TCP port"
+                    description="Expose the ClickHouse native protocol for native clients."
+                  >
+                    <Switch
+                      checked={draft.publishNativeTcp ?? true}
+                      onChange={(checked) =>
+                        onChange({
+                          ...draft,
+                          publishNativeTcp: checked,
+                          ...(checked ? {} : { publishedNativePort: undefined }),
+                        })
+                      }
+                      ariaLabel="Publish native TCP port"
+                    />
+                  </SettingsControlRow>
+                  {(draft.publishNativeTcp ?? true) && (
+                    <SettingsControlRow
+                      title="Native TCP port"
+                      description="Leave empty to let Docker allocate a free port."
+                    >
+                      <Input
+                        aria-label="Native TCP port"
+                        type="number"
+                        min="1"
+                        max="65535"
+                        value={draft.publishedNativePort ?? ""}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          set("publishedNativePort", value === "" ? undefined : Number(value));
+                        }}
+                        placeholder="Automatic"
+                      />
+                    </SettingsControlRow>
+                  )}
+                </>
+              )}
               <SettingsControlRow
                 title="TLS"
                 description="Encrypt direct database traffic. Secure managed links always remain encrypted."
@@ -471,39 +518,16 @@ function ManagedDatabaseCreateForm({
                   ariaLabel="Enable TLS"
                 />
               </SettingsControlRow>
-              {draft.type === "clickhouse" && (
-                <SettingsControlRow
-                  title="Native TCP port"
-                  description="A second published port for ClickHouse native clients. Leave empty for automatic allocation."
-                >
-                  <Input
-                    aria-label="Native TCP port"
-                    type="number"
-                    min="1"
-                    max="65535"
-                    value={draft.publishedNativePort ?? ""}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      set("publishedNativePort", value === "" ? undefined : Number(value));
-                    }}
-                    placeholder="Automatic"
-                  />
-                </SettingsControlRow>
-              )}
             </motion.div>
           )}
         </AnimatePresence>
       </PanelShell>
       {draft.type === "clickhouse" && (
         <div className="space-y-2">
-          <label className="text-sm font-medium" htmlFor="managed-db-clickhouse-xml">
-            Optional ClickHouse XML fragment
-          </label>
-          <Textarea
-            id="managed-db-clickhouse-xml"
+          <ClickHouseConfigField
+            label="Optional ClickHouse XML fragment"
             value={draft.clickhouseConfigXml ?? ""}
-            onChange={(event) => set("clickhouseConfigXml", event.target.value || undefined)}
-            placeholder="&lt;clickhouse&gt;…&lt;/clickhouse&gt;"
+            onChange={(value) => set("clickhouseConfigXml", value || undefined)}
           />
           <p className="text-xs text-muted-foreground">
             Security, networking and managed data paths cannot be overridden.

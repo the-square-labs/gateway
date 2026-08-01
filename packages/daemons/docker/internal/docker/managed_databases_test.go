@@ -83,6 +83,21 @@ func TestValidateManagedDatabaseInputRequiresRedisDefaultOwner(t *testing.T) {
 	}
 }
 
+func TestValidateManagedDatabaseInputRequiresNativeClickHousePublication(t *testing.T) {
+	input := validManagedDatabaseInput()
+	input.Type = "clickhouse"
+	input.Image = "docker.io/clickhouse/clickhouse-server@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5"
+	input.PublishTCP = true
+	input.PublishedNativePort = 9000
+	if err := validateManagedDatabaseInput(input); err == nil {
+		t.Fatal("expected native port to require native TCP publication")
+	}
+	input.PublishNativeTCP = true
+	if err := validateManagedDatabaseInput(input); err != nil {
+		t.Fatalf("expected explicitly published native ClickHouse port to be accepted: %v", err)
+	}
+}
+
 func TestValidateManagedDatabaseInputRequiresCompleteTLSMaterial(t *testing.T) {
 	input := validManagedDatabaseInput()
 	input.TLSEnabled = true

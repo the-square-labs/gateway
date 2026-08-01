@@ -107,4 +107,26 @@ describe("ManagedDatabaseSettingsTab", () => {
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Publish TCP port" })).toBeDisabled();
   });
+
+  it("lets ClickHouse publish HTTP without publishing its native TCP endpoint", async () => {
+    const user = userEvent.setup();
+    render(
+      <ManagedDatabaseSettingsTab
+        database={{
+          ...database,
+          type: "clickhouse",
+          managed: { ...database.managed!, publishedPort: 8443, publishedNativePort: 9440 },
+        }}
+        onSaved={() => undefined}
+      />
+    );
+
+    expect(screen.getByLabelText("Native TCP port")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Publish native TCP port" }));
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Native TCP port")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Save & Recreate" })).toBeInTheDocument();
+    });
+  });
 });

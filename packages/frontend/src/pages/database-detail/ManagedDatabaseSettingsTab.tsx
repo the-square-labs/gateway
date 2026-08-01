@@ -10,9 +10,9 @@ import { Button } from "@/components/ui/button";
 import { DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/services/api";
 import type { DatabaseConnection } from "@/types";
+import { ClickHouseConfigField } from "./ClickHouseConfigField";
 
 const FORM_ANIMATION = {
   initial: { opacity: 0, y: 4 },
@@ -52,6 +52,7 @@ export function ManagedDatabaseSettingsTab({
   const [publishedNativePort, setPublishedNativePort] = useState(
     managed.publishedNativePort == null ? "" : String(managed.publishedNativePort)
   );
+  const [publishNativeTcp, setPublishNativeTcp] = useState(managed.publishedNativePort !== null);
   const [tlsEnabled, setTlsEnabled] = useState(managed.tlsEnabled ?? true);
   const [clickhouseConfigXml, setClickhouseConfigXml] = useState(managed.clickhouseConfigXml ?? "");
   const [saving, setSaving] = useState(false);
@@ -68,6 +69,7 @@ export function ManagedDatabaseSettingsTab({
     setPublishedNativePort(
       managed.publishedNativePort == null ? "" : String(managed.publishedNativePort)
     );
+    setPublishNativeTcp(managed.publishedNativePort !== null);
     setTlsEnabled(managed.tlsEnabled ?? true);
     setClickhouseConfigXml(managed.clickhouseConfigXml ?? "");
   }, [database.name, database.tags, managed]);
@@ -90,6 +92,7 @@ export function ManagedDatabaseSettingsTab({
   const nativePortIsValid =
     database.type !== "clickhouse" ||
     !publishTcp ||
+    !publishNativeTcp ||
     !publishedNativePort.trim() ||
     (Number.isInteger(requestedNativePort) &&
       requestedNativePort != null &&
@@ -98,8 +101,12 @@ export function ManagedDatabaseSettingsTab({
   const publicationChanged =
     publishTcp !== (managed.publishedPort !== null) ||
     (publishTcp ? requestedPort : null) !== managed.publishedPort ||
-    (publishTcp && database.type === "clickhouse" ? requestedNativePort : null) !==
-      (managed.publishedNativePort ?? null) ||
+    (database.type === "clickhouse" &&
+      publishTcp &&
+      publishNativeTcp !== (managed.publishedNativePort !== null)) ||
+    (publishTcp && database.type === "clickhouse" && publishNativeTcp
+      ? requestedNativePort
+      : null) !== (managed.publishedNativePort ?? null) ||
     tlsEnabled !== (managed.tlsEnabled ?? true);
 
   const save = async () => {
@@ -141,8 +148,12 @@ export function ManagedDatabaseSettingsTab({
         swapMb: swap,
         publishTcp,
         publishedPort: publishTcp ? requestedPort : null,
-        publishedNativePort:
-          publishTcp && database.type === "clickhouse" ? requestedNativePort : null,
+        ...(database.type === "clickhouse"
+          ? {
+              publishNativeTcp: publishTcp && publishNativeTcp,
+              publishedNativePort: publishTcp && publishNativeTcp ? requestedNativePort : null,
+            }
+          : {}),
         tlsEnabled,
         ...(database.type === "clickhouse" && clickhouseConfigXml.trim()
           ? { clickhouseConfigXml: clickhouseConfigXml.trim() }
@@ -238,7 +249,10 @@ export function ManagedDatabaseSettingsTab({
           actions={
             <Switch
               checked={publishTcp}
-              onChange={setPublishTcp}
+              onChange={(checked) => {
+                setPublishTcp(checked);
+                if (!checked) setPublishNativeTcp(false);
+              }}
               disabled={saving || confirmingRecreate || managed.status !== "ready"}
               ariaLabel="Publish TCP port"
             />
@@ -263,6 +277,41 @@ export function ManagedDatabaseSettingsTab({
                     disabled={saving || confirmingRecreate || managed.status !== "ready"}
                   />
                 </SettingsControlRow>
+                {database.type === "clickhouse" && (
+                  <>
+                    <SettingsControlRow
+                      title="Publish native TCP port"
+                      description="Expose the ClickHouse native protocol for native clients."
+                    >
+                      <Switch
+                        checked={publishNativeTcp}
+                        onChange={(checked) => {
+                          setPublishNativeTcp(checked);
+                          if (!checked) setPublishedNativePort("");
+                        }}
+                        disabled={saving || confirmingRecreate || managed.status !== "ready"}
+                        ariaLabel="Publish native TCP port"
+                      />
+                    </SettingsControlRow>
+                    {publishNativeTcp && (
+                      <SettingsControlRow
+                        title="Native TCP port"
+                        description="Leave empty to let Docker allocate a free port."
+                      >
+                        <Input
+                          aria-label="Native TCP port"
+                          type="number"
+                          min={1}
+                          max={65535}
+                          value={publishedNativePort}
+                          onChange={(event) => setPublishedNativePort(event.target.value)}
+                          placeholder="Automatic"
+                          disabled={saving || confirmingRecreate || managed.status !== "ready"}
+                        />
+                      </SettingsControlRow>
+                    )}
+                  </>
+                )}
                 <SettingsControlRow
                   title="TLS"
                   description="Encrypt direct database traffic. Secure managed links always remain encrypted."
@@ -274,23 +323,6 @@ export function ManagedDatabaseSettingsTab({
                     ariaLabel="Enable TLS"
                   />
                 </SettingsControlRow>
-                {database.type === "clickhouse" && (
-                  <SettingsControlRow
-                    title="Native TCP port"
-                    description="A second published port for ClickHouse native clients. Leave empty for automatic allocation."
-                  >
-                    <Input
-                      aria-label="Native TCP port"
-                      type="number"
-                      min={1}
-                      max={65535}
-                      value={publishedNativePort}
-                      onChange={(event) => setPublishedNativePort(event.target.value)}
-                      placeholder="Automatic"
-                      disabled={saving || confirmingRecreate || managed.status !== "ready"}
-                    />
-                  </SettingsControlRow>
-                )}
               </motion.div>
             )}
           </AnimatePresence>
@@ -298,14 +330,10 @@ export function ManagedDatabaseSettingsTab({
 
         {database.type === "clickhouse" && (
           <div className="space-y-2">
-            <label htmlFor="managed-clickhouse-config" className="text-sm font-medium">
-              ClickHouse configuration fragment
-            </label>
-            <Textarea
-              id="managed-clickhouse-config"
+            <ClickHouseConfigField
               value={clickhouseConfigXml}
-              onChange={(event) => setClickhouseConfigXml(event.target.value)}
-              placeholder="&lt;clickhouse&gt;…&lt;/clickhouse&gt;"
+              onChange={setClickhouseConfigXml}
+              disabled={saving || confirmingRecreate || managed.status !== "ready"}
             />
             <p className="text-xs text-muted-foreground">
               Network and managed storage paths remain controlled by Gateway.

@@ -64,6 +64,7 @@ type managedDatabaseCommand struct {
 	OwnerPassword       string `json:"ownerPassword"`
 	DatabaseName        string `json:"databaseName"`
 	PublishTCP          bool   `json:"publishTcp"`
+	PublishNativeTCP    bool   `json:"publishNativeTcp"`
 	PublishedPort       uint16 `json:"publishedPort"`
 	PublishedNativePort uint16 `json:"publishedNativePort"`
 	TLSEnabled          bool   `json:"tlsEnabled"`
@@ -478,6 +479,7 @@ func (m *managedDatabaseManager) update(ctx context.Context, record *managedData
 	}
 	publicationChanged := input.PublishedPort != record.PublishedPort ||
 		input.PublishedNativePort != record.PublishedNativePort ||
+		(input.PublishNativeTCP != (record.PublishedNativePort != 0)) ||
 		input.TLSEnabled != record.TLSEnabled ||
 		input.TLSCertificateID != record.TLSCertificateID ||
 		(input.PublishTCP != (record.PublishedPort != 0))
@@ -673,6 +675,12 @@ func validateManagedDatabaseInput(input managedDatabaseCommand) error {
 	}
 	if !input.PublishTCP && input.PublishedNativePort != 0 {
 		return errors.New("native host port is not allowed unless TCP publishing is enabled")
+	}
+	if input.PublishNativeTCP && (!input.PublishTCP || input.Type != "clickhouse") {
+		return errors.New("native TCP publishing is supported only for published ClickHouse databases")
+	}
+	if !input.PublishNativeTCP && input.PublishedNativePort != 0 {
+		return errors.New("native host port is not allowed unless native TCP publishing is enabled")
 	}
 	if input.Type != "clickhouse" && input.PublishedNativePort != 0 {
 		return errors.New("native host port is supported only for ClickHouse")
@@ -1011,7 +1019,7 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 			hostPort = fmt.Sprintf("%d", input.PublishedPort)
 		}
 		hostCfg.PortBindings = network.PortMap{containerPort: {{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: hostPort}}}
-		if input.Type == "clickhouse" {
+		if input.Type == "clickhouse" && input.PublishNativeTCP {
 			nativePort, parseErr := network.ParsePort(clickHouseNativePort(input.TLSEnabled))
 			if parseErr != nil {
 				return "", fmt.Errorf("parse ClickHouse native port: %w", parseErr)
@@ -1043,7 +1051,7 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 		_ = m.client.RemoveContainer(ctx, created.ID, true)
 		return "", err
 	}
-	if input.PublishTCP && (input.PublishedPort == 0 || (input.Type == "clickhouse" && input.PublishedNativePort == 0)) {
+	if input.PublishTCP && (input.PublishedPort == 0 || (input.Type == "clickhouse" && input.PublishNativeTCP && input.PublishedNativePort == 0)) {
 		inspect, err := m.client.cli.ContainerInspect(ctx, created.ID, mobyclient.ContainerInspectOptions{})
 		if err != nil {
 			_ = m.client.RemoveContainer(ctx, created.ID, true)
@@ -1064,7 +1072,7 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 			return "", errors.New("Docker returned an invalid managed database host port")
 		}
 		record.PublishedPort = uint16(allocated)
-		if input.Type == "clickhouse" {
+		if input.Type == "clickhouse" && input.PublishNativeTCP {
 			nativePort, parseErr := network.ParsePort(clickHouseNativePort(input.TLSEnabled))
 			if parseErr != nil {
 				return "", fmt.Errorf("parse allocated ClickHouse native port: %w", parseErr)

@@ -6,6 +6,7 @@ interface CopyValueFieldProps {
   label: string;
   value: string;
   copyValue?: string;
+  copyable?: boolean;
   className?: string;
   valueClassName?: string;
   actions?: ReactNode;
@@ -15,6 +16,7 @@ export function CopyValueField({
   label,
   value,
   copyValue = value,
+  copyable = true,
   className,
   valueClassName,
   actions,
@@ -32,12 +34,14 @@ export function CopyValueField({
         >
           <span className="truncate">{value}</span>
         </div>
-        <CopyButton
-          value={copyValue}
-          label={label}
-          className="relative h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
-          iconClassName="h-3.5 w-3.5"
-        />
+        {copyable && (
+          <CopyButton
+            value={copyValue}
+            label={label}
+            className="relative h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+            iconClassName="h-3.5 w-3.5"
+          />
+        )}
         {actions}
       </div>
     </div>
