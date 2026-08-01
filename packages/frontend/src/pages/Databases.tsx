@@ -582,7 +582,6 @@ function ManagedDatabaseCreateForm({
             title="ClickHouse configuration fragment"
             description="Optional XML configuration. Security, networking and managed data paths remain controlled by Gateway."
             className="bg-background"
-            headerClassName="!bg-background"
             bodyClassName="min-h-0 bg-background"
           >
             <CodeEditor

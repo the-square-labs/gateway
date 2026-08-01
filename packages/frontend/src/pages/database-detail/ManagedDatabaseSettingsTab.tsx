@@ -333,7 +333,6 @@ export function ManagedDatabaseSettingsTab({
             title="ClickHouse configuration fragment"
             description="Optional XML configuration. Network and managed storage paths remain controlled by Gateway."
             className="bg-background"
-            headerClassName="!bg-background"
             bodyClassName="min-h-0 bg-background"
           >
             <CodeEditor
