@@ -7,6 +7,7 @@ import { canManageUser, isScopeSubset } from '@/lib/permissions.js';
 import { getRemoteAddress, resolveClientIp } from '@/lib/request-ip.js';
 import {
   CreateUserSchema,
+  RestoreUserSchema,
   UpdateAuthProvisioningSettingsSchema,
   UpdateBlockSchema,
   UpdateUserAdditionalPermissionsSchema,
@@ -41,10 +42,12 @@ import {
   getAuthSettingsRoute,
   listAdminUserFoldersRoute,
   listAdminUsersRoute,
+  listDeletedAdminUsersRoute,
   moveAdminUserFolderRoute,
   moveAdminUsersToFolderRoute,
   reorderAdminUserFoldersRoute,
   reorderAdminUsersRoute,
+  restoreAdminUserRoute,
   updateAdminUserFolderRoute,
   updateAuthSettingsRoute,
   updateUserAdditionalPermissionsRoute,
@@ -83,6 +86,12 @@ adminRoutes.openapi({ ...listAdminUsersRoute, middleware: requireScope('admin:us
   const authService = container.resolve(AuthService);
   const userList = await authService.listUsers();
   return c.json(userList);
+});
+
+// Deleted accounts are operationally invisible; only system administrators can inspect them.
+adminRoutes.openapi({ ...listDeletedAdminUsersRoute, middleware: requireScope('admin:system') }, async (c) => {
+  const authService = container.resolve(AuthService);
+  return c.json(await authService.listDeletedUsers());
 });
 
 adminRoutes.openapi(
@@ -449,6 +458,9 @@ adminRoutes.openapi({ ...updateUserBlockRoute, middleware: requireScope('admin:u
   if (!targetUser) {
     return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
   }
+  if (targetUser.isDeleted) {
+    return c.json({ code: 'USER_DELETED', message: 'Deleted users must be restored before they can be changed' }, 409);
+  }
   if (targetUser.oidcSubject.startsWith('system:')) {
     return c.json({ code: 'SYSTEM_USER', message: 'Cannot modify the system user' }, 403);
   }
@@ -497,6 +509,9 @@ adminRoutes.openapi({ ...deleteAdminUserRoute, middleware: requireScope('admin:u
   if (!targetUser) {
     return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
   }
+  if (targetUser.isDeleted) {
+    return c.json({ code: 'USER_DELETED', message: 'User is already deleted' }, 409);
+  }
   if (targetUser.oidcSubject.startsWith('system:')) {
     return c.json({ code: 'SYSTEM_USER', message: 'Cannot delete the system user' }, 403);
   }
@@ -505,7 +520,7 @@ adminRoutes.openapi({ ...deleteAdminUserRoute, middleware: requireScope('admin:u
     return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
   }
 
-  await authService.deleteUser(userId);
+  await authService.deleteUser(userId, currentUser.id);
 
   await auditService.log({
     userId: currentUser.id,
@@ -522,5 +537,33 @@ adminRoutes.openapi({ ...deleteAdminUserRoute, middleware: requireScope('admin:u
     userAgent: c.req.header('user-agent'),
   });
 
-  return c.json({ message: 'User deleted' });
+  return c.json({ message: 'User deleted and access revoked' });
+});
+
+// Restoring deliberately leaves the account blocked. A separate unblock action is required to grant access.
+adminRoutes.openapi({ ...restoreAdminUserRoute, middleware: requireScope('admin:system') }, async (c) => {
+  const authService = container.resolve(AuthService);
+  const auditService = container.resolve(AuditService);
+  const currentUser = c.get('user')!;
+  const userId = c.req.param('id')!;
+  const { groupId } = RestoreUserSchema.parse(await c.req.json());
+  const restoredUser = await authService.restoreUser(userId, groupId);
+
+  await auditService.log({
+    userId: currentUser.id,
+    action: 'user.restore',
+    resourceType: 'user',
+    resourceId: userId,
+    details: {
+      targetUserId: restoredUser.id,
+      targetUserEmail: restoredUser.email,
+      targetUserName: restoredUser.name,
+      groupId: restoredUser.groupId,
+      groupName: restoredUser.groupName,
+      remainsBlocked: true,
+    },
+    userAgent: c.req.header('user-agent'),
+  });
+
+  return c.json(restoredUser);
 });

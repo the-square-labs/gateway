@@ -1091,7 +1091,8 @@ export const AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'delete_user',
-    description: 'Delete a user account. Cannot target yourself, the system user, or users whose scopes exceed yours.',
+    description:
+      'Soft-delete a user account and revoke access. Cannot target yourself, the system user, or users whose scopes exceed yours. Restoration is available only to system administrators through the Administration UI/API.',
     parameters: {
       type: 'object',
       properties: {

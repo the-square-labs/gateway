@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { describe, expect, it, vi } from 'vitest';
+import { inferenceProviderConnections, users } from '@/db/schema/index.js';
 import { AuthService, type NormalizedOidcClaims, normalizeOidcClaims } from './auth.service.js';
 
 const authorizationCodeGrantMock = vi.hoisted(() => vi.fn());
@@ -63,6 +64,66 @@ describe('AuthService.blockUser', () => {
     expect(eventBus.publish).toHaveBeenCalledWith(`permissions.changed.${dbUser.id}`, {
       scopes: [],
       groupId: null,
+      reason: 'user_blocked',
+    });
+  });
+});
+
+describe('AuthService.deleteUser', () => {
+  it('soft-deletes, revokes user-owned credentials, and preserves shared inference connections', async () => {
+    const target = {
+      id: '22222222-2222-4222-8222-222222222222',
+      oidcSubject: 'target-subject',
+      email: 'target@example.com',
+      name: 'Target',
+      avatarUrl: null,
+      groupId: 'group-original',
+      additionalScopes: [],
+      isBlocked: false,
+      deletedAt: null,
+    };
+    const updatedValues: unknown[] = [];
+    const deleteQuery = vi.fn((_table: unknown) => ({ where: vi.fn().mockResolvedValue(undefined) }));
+    const updateQuery = vi.fn((table: unknown) => ({
+      set: vi.fn((values: unknown) => {
+        updatedValues.push(values);
+        return {
+          where: vi.fn(() => ({
+            returning: vi.fn().mockResolvedValue(table === users ? [{ id: target.id }] : []),
+          })),
+        };
+      }),
+    }));
+    const db = {
+      query: {
+        users: { findFirst: vi.fn().mockResolvedValue(target) },
+        permissionGroups: { findFirst: vi.fn().mockResolvedValue({ id: 'group-system-admin', name: 'system-admin' }) },
+      },
+      update: updateQuery,
+      delete: deleteQuery,
+    };
+    const sessionService = { destroyAllUserSessions: vi.fn().mockResolvedValue(undefined) };
+    const eventBus = { publish: vi.fn() };
+    const service = new AuthService(db as any, sessionService as any, {} as any, {} as any, {} as any);
+    service.setEventBus(eventBus as any);
+
+    await service.deleteUser(target.id, '11111111-1111-4111-8111-111111111111');
+
+    expect(updatedValues[0]).toEqual(
+      expect.objectContaining({
+        groupId: 'group-system-admin',
+        deletedFromGroupId: 'group-original',
+        deletedByUserId: '11111111-1111-4111-8111-111111111111',
+        isBlocked: true,
+        deletedAt: expect.any(Date),
+      })
+    );
+    expect(sessionService.destroyAllUserSessions).toHaveBeenCalledWith(target.id);
+    expect(deleteQuery.mock.calls.map(([table]) => table)).not.toContain(inferenceProviderConnections);
+    expect(eventBus.publish).toHaveBeenCalledWith(`permissions.changed.${target.id}`, {
+      scopes: [],
+      groupId: null,
+      reason: 'user_deleted',
     });
   });
 });
@@ -214,6 +275,7 @@ describe('AuthService additional permissions', () => {
     expect(eventBus.publish).toHaveBeenCalledWith(`permissions.changed.${targetUser.id}`, {
       scopes: ['nodes:details', 'nodes:console:node-1'],
       groupId: 'group-2',
+      reason: 'permissions_changed',
     });
   });
 });
@@ -275,6 +337,30 @@ describe('normalizeOidcClaims', () => {
 });
 
 describe('AuthService OIDC identity binding', () => {
+  it('rejects a deleted subject before creating a session', async () => {
+    const sessionService = { createSession: vi.fn() };
+    const harness = createAuthServiceHarness({
+      authSettings: {
+        oidcAutoCreateUsers: true,
+        oidcDefaultGroupId: 'viewer-group',
+        oidcRequireVerifiedEmail: false,
+      },
+      existingBySubject: dbUser({ deletedAt: new Date() }),
+      sessionService,
+    });
+
+    await expect(
+      harness.loginWithClaims({
+        oidcSubject: 'real-sub',
+        email: 'user@example.com',
+        emailVerified: true,
+        name: 'User',
+        avatarUrl: null,
+      })
+    ).rejects.toMatchObject({ statusCode: 403, code: 'ACCOUNT_DELETED' });
+    expect(sessionService.createSession).not.toHaveBeenCalled();
+  });
+
   it('allows an existing subject-bound user when the provider omits email', async () => {
     const existingUser = dbUser({
       oidcSubject: 'real-sub',
@@ -526,6 +612,7 @@ interface DbUser {
   avatarUrl: string | null;
   groupId: string;
   isBlocked: boolean;
+  deletedAt?: Date | null;
 }
 
 function createAuthServiceHarness(options: {
@@ -540,6 +627,7 @@ function createAuthServiceHarness(options: {
   provisioningGroup?: { id: string; name: string } | null;
   updateReturning?: DbUser;
   insertReturning?: DbUser;
+  sessionService?: { createSession: ReturnType<typeof vi.fn> };
 }) {
   const updateSet = vi.fn((_: unknown) => ({
     where: vi.fn(() => ({
@@ -576,7 +664,7 @@ function createAuthServiceHarness(options: {
       values: insertValues,
     })),
   };
-  const sessionService = {
+  const sessionService = options.sessionService ?? {
     createSession: vi.fn().mockResolvedValue({ sessionId: 'session-1' }),
   };
   const cacheService = {
@@ -600,6 +688,7 @@ function createAuthServiceHarness(options: {
 
   return {
     auditService,
+    sessionService,
     updateSet,
     async loginWithClaims(claims: NormalizedOidcClaims) {
       authorizationCodeGrantMock.mockResolvedValueOnce({

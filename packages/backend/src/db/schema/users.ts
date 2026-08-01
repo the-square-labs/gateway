@@ -27,6 +27,10 @@ export const users = pgTable(
       .references((): AnyPgColumn => permissionGroups.id),
     additionalScopes: jsonb('additional_scopes').$type<string[]>().notNull().default([]),
     isBlocked: boolean('is_blocked').notNull().default(false),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    deletedByUserId: uuid('deleted_by_user_id').references((): AnyPgColumn => users.id, { onDelete: 'set null' }),
+    // Deliberately not a foreign key: the original group may be deleted while the user is archived.
+    deletedFromGroupId: uuid('deleted_from_group_id'),
     aiApprovalMode: varchar('ai_approval_mode', { length: 32 })
       .$type<'always-ask' | 'normal' | 'bypass-non-destructive' | 'bypass-everything'>()
       .notNull()
@@ -41,5 +45,6 @@ export const users = pgTable(
     emailIdx: uniqueIndex('users_email_idx').on(table.email),
     groupIdx: index('users_group_id_idx').on(table.groupId),
     folderIdx: index('users_folder_idx').on(table.folderId),
+    deletedIdx: index('users_deleted_at_idx').on(table.deletedAt),
   })
 );

@@ -12,6 +12,7 @@ export interface User {
   additionalScopes?: string[];
   scopes: string[];
   isBlocked: boolean;
+  isDeleted?: boolean;
   aiApprovalMode?: 'always-ask' | 'normal' | 'bypass-non-destructive' | 'bypass-everything';
   folderId?: string | null;
   sortOrder?: number;
@@ -37,6 +38,7 @@ export interface AppEnv {
     inferenceAuth?: {
       tokenId: string;
       tokenPrefix: string;
+      rawToken: string;
     };
     inferenceAdapter?: 'anthropic' | 'codex' | 'openai';
     mcpAuth?: {
@@ -74,6 +76,7 @@ export type AuthenticatedContext = Context<AppEnv> & {
     inferenceAuth?: {
       tokenId: string;
       tokenPrefix: string;
+      rawToken: string;
     };
     requestId: string;
   };

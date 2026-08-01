@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ilike, not, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, isNull, not, or, sql } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
@@ -122,7 +122,7 @@ export class InferenceUsageService {
     const rows = await this.db
       .select({ id: users.id, email: users.email, name: users.name, avatarUrl: users.avatarUrl })
       .from(users)
-      .where(not(eq(users.oidcSubject, GATEWAY_SYSTEM_OIDC_SUBJECT)));
+      .where(and(not(eq(users.oidcSubject, GATEWAY_SYSTEM_OIDC_SUBJECT)), isNull(users.deletedAt)));
     return Promise.all(
       rows.map(async (user) => {
         try {
@@ -250,7 +250,9 @@ export class InferenceUsageService {
 
   async setUser(userId: string, targetUserId: string, input: InferenceLimitPolicyInput) {
     validatePolicy(input);
-    const target = await this.db.query.users.findFirst({ where: eq(users.id, targetUserId) });
+    const target = await this.db.query.users.findFirst({
+      where: and(eq(users.id, targetUserId), isNull(users.deletedAt)),
+    });
     if (!target) throw new AppError(404, 'INFERENCE_LIMIT_USER_NOT_FOUND', 'User not found');
     await this.db
       .insert(inferenceLimitPolicies)

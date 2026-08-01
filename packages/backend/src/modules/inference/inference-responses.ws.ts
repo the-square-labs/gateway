@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { WSContext, WSEvents } from 'hono/ws';
 import { container } from '@/container.js';
+import { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
 import { acquireInferenceConcurrency, consumeInferenceRateLimit } from './inference-limit.middleware.js';
 import { InferenceProtocolService, inferenceProtocolError } from './inference-protocol.service.js';
 import { InferenceRuntimeService } from './inference-runtime.service.js';
+import { InferenceTokenService } from './inference-token.service.js';
 import { parseResponsesRequest } from './protocol/inference-parse.js';
 import { InferenceResponseCollector } from './protocol/inference-response.js';
 import { ResponsesEventEncoder } from './protocol/inference-responses-events.js';
@@ -13,10 +15,14 @@ export interface InferenceWebSocketAuth {
   user: User;
   tokenId: string;
   tokenPrefix: string;
+  /** Raw token is retained only per connection to revalidate each new request. */
+  rawToken: string;
 }
 
 interface ConnectionState {
   active: ActiveResponse | null;
+  unsubscribe: (() => void) | null;
+  closedForRevocation: boolean;
 }
 
 interface ActiveResponse {
@@ -32,12 +38,21 @@ export function createInferenceResponsesWSHandlers(
   auth: InferenceWebSocketAuth | null,
   maxPayloadBytes = 33_554_432
 ): WSEvents {
-  const state: ConnectionState = { active: null };
+  const state: ConnectionState = { active: null, unsubscribe: null, closedForRevocation: false };
   return {
     onOpen(_event, ws) {
       if (!auth) {
         sendError(ws, 401, 'invalid_api_key', 'Invalid inference token');
         ws.close(1008, 'Unauthorized');
+        return;
+      }
+
+      if (container.isRegistered(EventBusService)) {
+        state.unsubscribe = container
+          .resolve(EventBusService)
+          .subscribe(`permissions.changed.${auth.user.id}`, (payload) => {
+            if (isAccessRevocation(payload)) closeForRevocation(state, ws);
+          });
       }
     },
     async onMessage(event, ws) {
@@ -69,6 +84,12 @@ export function createInferenceResponsesWSHandlers(
         sendError(ws, 400, 'invalid_request_error', 'Unsupported WebSocket event');
         return;
       }
+      const freshAuth = await revalidateAuth(auth);
+      if (!freshAuth) {
+        sendError(ws, 401, 'invalid_api_key', 'Invalid or revoked Gateway inference token');
+        ws.close(1008, 'Unauthorized');
+        return;
+      }
       if (state.active) {
         sendError(ws, 409, 'response_in_progress', 'A response is already running');
         return;
@@ -92,7 +113,7 @@ export function createInferenceResponsesWSHandlers(
       try {
         const request = parseResponsesRequest({ ...payload, stream: true });
         const protocol = container.resolve(InferenceProtocolService);
-        const prepared = await protocol.prepareWebSocket(request, auth, controller.signal, requestId);
+        const prepared = await protocol.prepareWebSocket(request, freshAuth, controller.signal, requestId);
         if (active.cancelled) return;
         if (!generate) {
           const responseId = `resp_${randomUUID()}`;
@@ -131,7 +152,7 @@ export function createInferenceResponsesWSHandlers(
           active.terminalSent = true;
           return;
         }
-        release = await acquireInferenceConcurrency(auth);
+        release = await acquireInferenceConcurrency(freshAuth);
         if (active.cancelled) return;
         const execution = await container.resolve(InferenceRuntimeService).execute(prepared.request, prepared.context);
         if (active.cancelled) return;
@@ -174,18 +195,43 @@ export function createInferenceResponsesWSHandlers(
     onClose() {
       state.active?.controller.abort(new Error('WebSocket closed'));
       state.active = null;
+      state.unsubscribe?.();
+      state.unsubscribe = null;
     },
     onError() {
       state.active?.controller.abort(new Error('WebSocket failed'));
       state.active = null;
+      state.unsubscribe?.();
+      state.unsubscribe = null;
     },
   };
 }
 
-function cancelActiveResponse(active: ActiveResponse, ws: WSContext): void {
+async function revalidateAuth(auth: InferenceWebSocketAuth): Promise<InferenceWebSocketAuth | null> {
+  const fresh = await container.resolve(InferenceTokenService).validateToken(auth.rawToken);
+  if (!fresh || fresh.tokenId !== auth.tokenId) return null;
+  return { ...fresh, rawToken: auth.rawToken };
+}
+
+function isAccessRevocation(payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object') return false;
+  const reason = (payload as { reason?: unknown }).reason;
+  return reason === 'user_blocked' || reason === 'user_deleted';
+}
+
+function closeForRevocation(state: ConnectionState, ws: WSContext): void {
+  if (state.closedForRevocation) return;
+  state.closedForRevocation = true;
+  if (state.active) cancelActiveResponse(state.active, ws, 'Access revoked');
+  state.unsubscribe?.();
+  state.unsubscribe = null;
+  ws.close(1008, 'Access revoked');
+}
+
+function cancelActiveResponse(active: ActiveResponse, ws: WSContext, reason = 'Client cancelled'): void {
   if (active.cancelled) return;
   active.cancelled = true;
-  active.controller.abort(new Error('Client cancelled'));
+  active.controller.abort(new Error(reason));
   if (!active.terminalSent) {
     send(ws, active.encoder.cancelled());
     active.terminalSent = true;

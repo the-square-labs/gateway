@@ -1,10 +1,20 @@
-import { count, eq, not } from 'drizzle-orm';
+import { and, count, eq, isNotNull, isNull, not } from 'drizzle-orm';
 import * as client from 'openid-client';
 import { inject, injectable } from 'tsyringe';
 import { getEnv } from '@/config/env.js';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { permissionGroups, users } from '@/db/schema/index.js';
+import {
+  apiTokens,
+  gitLabUserCredentials,
+  inferenceOAuthSessions,
+  inferenceTokens,
+  oauthAccessTokens,
+  oauthAuthorizationCodes,
+  oauthRefreshTokens,
+  permissionGroups,
+  users,
+} from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { canManageUser, isScopeSubset } from '@/lib/permissions.js';
 import { canonicalizeScopes, isValidBaseScope } from '@/lib/scopes.js';
@@ -30,6 +40,17 @@ const SYSTEM_SUBJECT_PREFIX = 'system:';
 const GATEWAY_SYSTEM_OIDC_SUBJECT = 'system:gateway-setup';
 export const AI_APPROVAL_MODES = ['always-ask', 'normal', 'bypass-non-destructive', 'bypass-everything'] as const;
 export type AIApprovalMode = (typeof AI_APPROVAL_MODES)[number];
+
+export interface DeletedUser {
+  id: string;
+  email: string;
+  name: string | null;
+  avatarUrl: string | null;
+  deletedAt: string;
+  deletedByUserId: string | null;
+  deletedFromGroupId: string | null;
+  originalGroupExists: boolean;
+}
 
 export interface NormalizedOidcClaims {
   oidcSubject: string;
@@ -89,7 +110,7 @@ export class AuthService {
     this.eventBus?.publish('user.changed', { id, action });
   }
   private emitPermissions(userId: string, scopes: string[], groupId: string | null, reason = 'permissions_changed') {
-    this.eventBus?.publish(`permissions.changed.${userId}`, { scopes, groupId });
+    this.eventBus?.publish(`permissions.changed.${userId}`, { scopes, groupId, reason });
     void this.sandboxService?.revokeUserAccess(userId, scopes, reason).catch((error) => {
       logger.warn('Failed to revoke sandbox jobs after permission change', { userId, reason, error });
     });
@@ -195,6 +216,13 @@ export class AuthService {
     });
 
     if (existingUser) {
+      if (existingUser.deletedAt) {
+        throw new AppError(
+          403,
+          'ACCOUNT_DELETED',
+          'This account has been deleted and must be restored by a system administrator'
+        );
+      }
       const authSettings = await this.authSettingsService.getConfig();
       const canSyncEmail =
         normalizedEmail !== null &&
@@ -405,6 +433,7 @@ export class AuthService {
 
   private async mapDbUserToUser(dbUser: typeof users.$inferSelect): Promise<User> {
     const effective = await resolveEffectiveUserAccess(this.db, dbUser.groupId, dbUser.additionalScopes);
+    const isDeleted = Boolean(dbUser.deletedAt);
 
     return {
       id: dbUser.id,
@@ -414,10 +443,11 @@ export class AuthService {
       avatarUrl: dbUser.avatarUrl,
       groupId: dbUser.groupId,
       groupName: effective.groupName,
-      groupScopes: effective.groupScopes,
+      groupScopes: isDeleted ? [] : effective.groupScopes,
       additionalScopes: effective.additionalScopes,
-      scopes: effective.scopes,
-      isBlocked: dbUser.isBlocked,
+      scopes: isDeleted ? [] : effective.scopes,
+      isBlocked: dbUser.isBlocked || isDeleted,
+      isDeleted,
       aiApprovalMode: dbUser.aiApprovalMode,
     };
   }
@@ -482,6 +512,7 @@ export class AuthService {
 
   async listUsers(): Promise<User[]> {
     const allUsers = await this.db.query.users.findMany({
+      where: isNull(users.deletedAt),
       orderBy: (users, { asc }) => [asc(users.sortOrder), asc(users.createdAt)],
     });
 
@@ -501,6 +532,7 @@ export class AuthService {
         additionalScopes: effective.additionalScopes,
         scopes: effective.scopes,
         isBlocked: u.isBlocked,
+        isDeleted: false,
         aiApprovalMode: u.aiApprovalMode,
         folderId: u.folderId,
         sortOrder: u.sortOrder,
@@ -520,7 +552,7 @@ export class AuthService {
     const [updatedUser] = await this.db
       .update(users)
       .set({ groupId, updatedAt: new Date() })
-      .where(eq(users.id, userId))
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
       .returning();
 
     if (!updatedUser) {
@@ -546,6 +578,9 @@ export class AuthService {
     const targetUser = await this.getUserById(userId);
     if (!targetUser) {
       throw new AppError(404, 'NOT_FOUND', 'User not found');
+    }
+    if (targetUser.isDeleted) {
+      throw new AppError(409, 'USER_DELETED', 'Deleted users must be restored before they can be changed');
     }
     if (targetUser.oidcSubject.startsWith(SYSTEM_SUBJECT_PREFIX)) {
       throw new AppError(403, 'SYSTEM_USER', 'Cannot modify the system user');
@@ -587,7 +622,7 @@ export class AuthService {
     const [updatedUser] = await this.db
       .update(users)
       .set({ additionalScopes: canonicalizeScopes(additionalScopes), updatedAt: new Date() })
-      .where(eq(users.id, userId))
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
       .returning();
 
     if (!updatedUser) {
@@ -613,6 +648,9 @@ export class AuthService {
     const targetUser = await this.getUserById(userId);
     if (!targetUser) {
       throw new AppError(404, 'NOT_FOUND', 'User not found');
+    }
+    if (targetUser.isDeleted) {
+      throw new AppError(409, 'USER_DELETED', 'Deleted users must be restored before they can be changed');
     }
 
     if (targetUser.oidcSubject.startsWith('system:')) {
@@ -641,7 +679,7 @@ export class AuthService {
     const [updatedUser] = await this.db
       .update(users)
       .set({ isBlocked: true, updatedAt: new Date() })
-      .where(eq(users.id, userId))
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
       .returning();
 
     if (!updatedUser) {
@@ -657,7 +695,7 @@ export class AuthService {
     const [updatedUser] = await this.db
       .update(users)
       .set({ isBlocked: false, updatedAt: new Date() })
-      .where(eq(users.id, userId))
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
       .returning();
 
     if (!updatedUser) {
@@ -670,19 +708,102 @@ export class AuthService {
     return mapped;
   }
 
-  async deleteUser(userId: string): Promise<void> {
-    // Destroy all sessions first
+  async deleteUser(userId: string, deletedByUserId: string): Promise<void> {
+    const target = await this.db.query.users.findFirst({ where: eq(users.id, userId) });
+    if (!target) throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
+    if (target.deletedAt) throw new AppError(409, 'USER_DELETED', 'User is already deleted');
+
+    const systemAdminGroup = await this.db.query.permissionGroups.findFirst({
+      where: eq(permissionGroups.name, 'system-admin'),
+    });
+    if (!systemAdminGroup) throw new Error('System administrator group not found');
+
+    const deletedAt = new Date();
+    const [deleted] = await this.db
+      .update(users)
+      .set({
+        isBlocked: true,
+        deletedAt,
+        deletedByUserId,
+        deletedFromGroupId: target.groupId,
+        groupId: systemAdminGroup.id,
+        updatedAt: deletedAt,
+      })
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
+      .returning({ id: users.id });
+    if (!deleted) throw new AppError(409, 'USER_DELETED', 'User is already deleted');
+
     await this.sessionService.destroyAllUserSessions(userId);
+    await Promise.all([
+      this.db.delete(apiTokens).where(eq(apiTokens.userId, userId)),
+      this.db.delete(oauthAuthorizationCodes).where(eq(oauthAuthorizationCodes.userId, userId)),
+      this.db.update(oauthAccessTokens).set({ revokedAt: deletedAt }).where(eq(oauthAccessTokens.userId, userId)),
+      this.db.update(oauthRefreshTokens).set({ revokedAt: deletedAt }).where(eq(oauthRefreshTokens.userId, userId)),
+      this.db.update(inferenceTokens).set({ revokedAt: deletedAt }).where(eq(inferenceTokens.userId, userId)),
+      this.db.delete(gitLabUserCredentials).where(eq(gitLabUserCredentials.userId, userId)),
+      this.db.delete(inferenceOAuthSessions).where(eq(inferenceOAuthSessions.userId, userId)),
+    ]);
 
-    const result = await this.db.delete(users).where(eq(users.id, userId)).returning({ id: users.id });
-
-    if (!result.length) {
-      throw new Error('User not found');
-    }
-
-    logger.info('User deleted', { userId });
+    logger.info('User soft-deleted', { userId, deletedByUserId });
     this.emitUser(userId, 'deleted');
     this.emitPermissions(userId, [], null, 'user_deleted');
+  }
+
+  async listDeletedUsers(): Promise<DeletedUser[]> {
+    const deletedUsers = await this.db.query.users.findMany({
+      where: isNotNull(users.deletedAt),
+      orderBy: (users, { desc }) => [desc(users.deletedAt)],
+    });
+    const groupMap = await fetchGroupScopeMap(this.db);
+
+    return deletedUsers.map((user) => ({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      avatarUrl: user.avatarUrl,
+      deletedAt: user.deletedAt!.toISOString(),
+      deletedByUserId: user.deletedByUserId,
+      deletedFromGroupId: user.deletedFromGroupId,
+      originalGroupExists: Boolean(user.deletedFromGroupId && groupMap.has(user.deletedFromGroupId)),
+    }));
+  }
+
+  async restoreUser(userId: string, requestedGroupId?: string): Promise<User> {
+    const deletedUser = await this.db.query.users.findFirst({
+      where: and(eq(users.id, userId), isNotNull(users.deletedAt)),
+    });
+    if (!deletedUser) throw new AppError(404, 'USER_NOT_FOUND', 'Deleted user not found');
+
+    const groupId = requestedGroupId ?? deletedUser.deletedFromGroupId;
+    if (!groupId) {
+      throw new AppError(409, 'RESTORE_GROUP_REQUIRED', 'Choose a permission group before restoring this user');
+    }
+    const group = await this.db.query.permissionGroups.findFirst({ where: eq(permissionGroups.id, groupId) });
+    if (!group) {
+      if (!requestedGroupId) {
+        throw new AppError(409, 'RESTORE_GROUP_REQUIRED', 'The original permission group no longer exists');
+      }
+      throw new AppError(404, 'GROUP_NOT_FOUND', 'Permission group not found');
+    }
+
+    const [restored] = await this.db
+      .update(users)
+      .set({
+        groupId: group.id,
+        isBlocked: true,
+        deletedAt: null,
+        deletedByUserId: null,
+        deletedFromGroupId: null,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(users.id, userId), isNotNull(users.deletedAt)))
+      .returning();
+    if (!restored) throw new AppError(404, 'USER_NOT_FOUND', 'Deleted user not found');
+
+    const mapped = await this.mapDbUserToUser(restored);
+    this.emitUser(userId, 'updated');
+    this.emitPermissions(userId, [], group.id, 'user_restored');
+    return mapped;
   }
 
   async validateSession(sessionId: string): Promise<User | null> {
