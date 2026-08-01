@@ -76,3 +76,10 @@ type LogStreamPlugin interface {
 type MigrationStreamPlugin interface {
 	RunMigrationStream(ctx context.Context, conn *grpc.ClientConn, nodeID string)
 }
+
+// DatabaseTunnelPlugin is implemented by daemons that maintain the separately
+// authenticated managed-database TCP tunnel. The plugin receives the existing
+// mTLS connection; connector sidecars never receive node certificate material.
+type DatabaseTunnelPlugin interface {
+	RunDatabaseTunnel(ctx context.Context, conn *grpc.ClientConn, nodeID string)
+}

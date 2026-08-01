@@ -12,6 +12,7 @@ export const HEALTH_BADGE: Record<string, "success" | "secondary" | "warning" | 
   online: "success",
   degraded: "warning",
   offline: "destructive",
+  paused: "warning",
   unknown: "secondary",
 };
 
@@ -43,6 +44,10 @@ export const METRIC_COLORS: Record<string, string> = {
   query_rate: "#10b981",
   memory_usage_bytes: "#2563eb",
   disk_used_pct: "#f59e0b",
+  managed_cpu_percent: "#f97316",
+  managed_memory_usage_bytes: "#2563eb",
+  managed_swap_usage_bytes: "#8b5cf6",
+  managed_pids: "#10b981",
 };
 
 export const SQL_EXPLORER_PAGE_SIZE = 100;
@@ -63,7 +68,7 @@ export function formatMetricValue(key: string, value: number | null): string {
 }
 
 export function formatHealthStatusLabel(
-  status: DatabaseConnection["healthStatus"] | "unknown"
+  status: DatabaseConnection["healthStatus"] | "paused" | "unknown"
 ): string {
   if (!status) return "Unknown";
   return status.charAt(0).toUpperCase() + status.slice(1);

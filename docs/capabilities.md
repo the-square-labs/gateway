@@ -113,7 +113,15 @@ Domain workflows:
 
 ## Databases
 
-Gateway can store PostgreSQL and Redis connections with encrypted credentials.
+Gateway can store external PostgreSQL and Redis connections with encrypted credentials, and deploy managed Postgres, Redis, and ClickHouse instances on dedicated database nodes.
+
+Managed instances are private by default. Gateway binds applications through a private connector and authenticated tunnel, with a separate engine identity per binding. Publishing TCP for external infrastructure is an explicit opt-in; it requires database authentication, Gateway does not open host firewalls automatically, and the path is not tunnel-encrypted unless native database TLS is configured.
+
+TCP publication and its host port are fixed at provisioning time because Docker cannot safely change live port bindings; recreate the managed instance to change that endpoint.
+
+Each binding creates a dedicated Postgres role, Redis ACL user, or ClickHouse user; deleting the binding revokes that principal. For normal containers Gateway attaches a private binding network and recreates the workload with the selected connection variables. For blue/green deployments it adds the private network and encrypted variables to the desired configuration, then rolls a slot so future blue and green containers receive the same connector endpoint.
+
+Managed lifecycle actions use durable operation IDs and reconciliation, so a temporary daemon disconnect leaves the instance in a transitional state until Gateway verifies the final daemon state rather than guessing success or failure.
 
 PostgreSQL:
 
@@ -133,7 +141,7 @@ Redis:
 - Set, delete, and expire keys when permitted.
 - Run Redis commands through a scoped console.
 
-Credential reveal and query execution are intentionally separate permissions. Users can be allowed to monitor a database without being allowed to reveal credentials or run arbitrary commands.
+Credential reveal and query execution are intentionally separate permissions. Users can be allowed to monitor a database without being allowed to reveal credentials or run arbitrary commands. Binding-injected application credentials are not displayed by default.
 
 ## Nodes And Monitoring
 

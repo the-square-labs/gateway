@@ -54,6 +54,14 @@ service MigrationTransfer {
   rpc Transfer(stream MigrationTransferMessage) returns (stream MigrationTransferControl);
 }
 
+// Dedicated raw TCP transport for authorized managed-database bindings. The
+// gateway authenticates each daemon stream and relays only frames for bindings
+// that it has authorized; daemons must never treat this as an arbitrary TCP
+// proxy.
+service DatabaseTunnel {
+  rpc Tunnel(stream DatabaseTunnelMessage) returns (stream DatabaseTunnelMessage);
+}
+
 // Messages FROM daemon TO Gateway
 message DaemonMessage {
   oneof payload {
@@ -207,6 +215,13 @@ message GatewayCommand {
     DockerDeploymentCommand docker_deployment = 29;
     NodeFileCommand node_file = 30;
     DockerMigrationCommand docker_migration = 31;
+    // Restricted managed database lifecycle; accepted only by docker-daemon
+    // running with docker.mode = "databases".
+    DockerDatabaseCommand docker_database = 32;
+    // Creates/removes a daemon-owned Unix socket admission for one authorized
+    // managed database binding on a general Docker node. No host, TCP port or
+    // credential is ever passed through this command.
+    DockerDatabaseBindingCommand docker_database_binding = 33;
   }
 }
 
@@ -504,6 +519,21 @@ message DockerMigrationCommand {
   string config_json = 6;
 }
 
+// Database control intentionally carries a typed managed database id, rather
+// than allowing the Gateway to issue arbitrary container commands to a
+// database node. The opaque config is validated by the database profile.
+message DockerDatabaseCommand {
+  string action = 1; // create, start, stop, update, remove, inspect
+  string managed_database_id = 2;
+  string config_json = 3;
+}
+
+message DockerDatabaseBindingCommand {
+  string action = 1; // prepare, remove
+  string binding_id = 2;
+  string managed_database_id = 3;
+}
+
 message MigrationTransferMessage {
   oneof payload {
     MigrationTransferHello hello = 1;
@@ -565,4 +595,64 @@ message MigrationArtifactError {
 
 message MigrationHeartbeat {
   string migration_id = 1;
+}
+
+// DatabaseTunnelMessage is used in both directions. Send DatabaseTunnelHello
+// as the first frame, then wait for DatabaseTunnelReady before sending any
+// tunnel frames. Implementations must reject DatabaseTunnelData larger than
+// the negotiated max_chunk_bytes instead of buffering it.
+message DatabaseTunnelMessage {
+  oneof payload {
+    DatabaseTunnelHello hello = 1;
+    DatabaseTunnelReady ready = 2;
+    DatabaseTunnelOpen open = 3;
+    DatabaseTunnelData data = 4;
+    DatabaseTunnelClose close = 5;
+    DatabaseTunnelError error = 6;
+  }
+}
+
+// Identifies the authenticated daemon and advertises the maximum raw data
+// payload it will accept in one DatabaseTunnelData frame.
+message DatabaseTunnelHello {
+  string node_id = 1;
+  string capability = 2;
+  int32 max_chunk_bytes = 3;
+}
+
+// Confirms the bounded payload size selected by Gateway. It must be positive
+// and no greater than the daemon's advertised max_chunk_bytes.
+message DatabaseTunnelReady {
+  int32 max_chunk_bytes = 1;
+}
+
+// Opens one authorized binding. managed_database_id is an opaque managed
+// database identifier; deliberately no network address or port is carried by
+// this protocol.
+message DatabaseTunnelOpen {
+  string tunnel_id = 1;
+  string binding_id = 2;
+  string managed_database_id = 3;
+}
+
+// Opaque database-protocol bytes. Chunking and flow control are implemented by
+// stream users; this envelope must not be used to encode another destination.
+message DatabaseTunnelData {
+  string tunnel_id = 1;
+  string binding_id = 2;
+  bytes data = 3;
+}
+
+// Closes one tunnel. A close is terminal for its tunnel_id and binding_id.
+message DatabaseTunnelClose {
+  string tunnel_id = 1;
+  string binding_id = 2;
+}
+
+// Terminates a tunnel with a stable machine-readable code and a safe message.
+message DatabaseTunnelError {
+  string tunnel_id = 1;
+  string binding_id = 2;
+  string code = 3;
+  string message = 4;
 }

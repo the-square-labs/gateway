@@ -459,14 +459,16 @@ export class DockerDeploymentService {
       await this.db.transaction(async (tx) => {
         await tx
           .update(dockerDeployments)
-          .set({ status: 'ready', desiredConfig: deployedDesiredConfig, updatedAt: new Date() })
+          // `deployedDesiredConfig` contains decrypted runtime secrets. Keep
+          // only the encrypted-at-rest desired configuration in PostgreSQL.
+          .set({ status: 'ready', desiredConfig, updatedAt: new Date() })
           .where(eq(dockerDeployments.id, id));
         await tx
           .update(dockerDeploymentSlots)
           .set({
             containerId: data.blueContainerId ?? data.containerId ?? null,
-            image: deployedDesiredConfig.image,
-            desiredConfig: deployedDesiredConfig,
+            image: desiredConfig.image,
+            desiredConfig,
             status: 'running',
             health: 'healthy',
             updatedAt: new Date(),
@@ -476,8 +478,8 @@ export class DockerDeploymentService {
           .update(dockerDeploymentSlots)
           .set({
             containerId: data.greenContainerId ?? null,
-            image: deployedDesiredConfig.image,
-            desiredConfig: deployedDesiredConfig,
+            image: desiredConfig.image,
+            desiredConfig,
             status: 'created',
             health: 'unknown',
             updatedAt: new Date(),
@@ -594,6 +596,41 @@ export class DockerDeploymentService {
       ...(input.name && input.name !== current.name ? { oldName: current.name, name: input.name } : {}),
     });
     return this.loadDeployment(nodeId, deploymentId);
+  }
+
+  /**
+   * Attach or detach a Gateway-owned private network and roll a deployment so
+   * both blue/green slots receive the same desired network topology. This is
+   * deliberately not part of the public deployment input surface.
+   */
+  async setManagedDatabaseBindingNetwork(
+    nodeId: string,
+    deploymentId: string,
+    networkName: string,
+    enabled: boolean,
+    userId: string | null
+  ) {
+    if (!/^gateway-db-[a-z0-9-]{8,64}$/.test(networkName)) {
+      throw new AppError(400, 'INVALID_MANAGED_DATABASE_NETWORK', 'Invalid managed database network');
+    }
+    await this.validateDockerNode(nodeId);
+    const current = await this.loadDeployment(nodeId, deploymentId);
+    const currentNetworks = current.desiredConfig.networks ?? [];
+    const networks = enabled
+      ? [...new Set([...currentNetworks, networkName])]
+      : currentNetworks.filter((name) => name !== networkName);
+    if (
+      networks.length === currentNetworks.length &&
+      currentNetworks.every((name, index) => name === networks[index])
+    ) {
+      return current;
+    }
+    await this.db
+      .update(dockerDeployments)
+      .set({ desiredConfig: { ...current.desiredConfig, networks }, updatedById: userId, updatedAt: new Date() })
+      .where(eq(dockerDeployments.id, deploymentId));
+    this.emit('updated', deploymentId, nodeId, { managedDatabaseNetwork: enabled ? 'attached' : 'detached' });
+    return this.deploy(nodeId, deploymentId, {}, userId, 'managed_database_binding');
   }
 
   async deploy(
@@ -784,7 +821,9 @@ export class DockerDeploymentService {
           .set({
             activeSlot: input.slot,
             status: 'ready',
-            desiredConfig: successfulDesiredConfig,
+            // Never persist the daemon payload here: it includes decrypted
+            // deployment secrets (including managed database credentials).
+            desiredConfig,
             updatedAt: new Date(),
             updatedById: userId,
           })
@@ -793,8 +832,8 @@ export class DockerDeploymentService {
           .update(dockerDeploymentSlots)
           .set({
             containerId: data.containerId ?? target.containerId,
-            image: successfulDesiredConfig.image,
-            desiredConfig: successfulDesiredConfig,
+            image: desiredConfig.image,
+            desiredConfig,
             status: 'running',
             health: 'healthy',
             drainingUntil: null,
@@ -808,14 +847,14 @@ export class DockerDeploymentService {
         if (releaseContext?.releaseId) {
           await tx
             .update(dockerDeploymentReleases)
-            .set({ image: successfulDesiredConfig.image, status: 'succeeded', completedAt: new Date() })
+            .set({ image: desiredConfig.image, status: 'succeeded', completedAt: new Date() })
             .where(eq(dockerDeploymentReleases.id, releaseContext.releaseId));
         } else {
           await tx.insert(dockerDeploymentReleases).values({
             deploymentId,
             fromSlot: previous,
             toSlot: input.slot,
-            image: successfulDesiredConfig.image,
+            image: desiredConfig.image,
             triggerSource: releaseContext?.source ?? 'switch',
             status: 'succeeded',
             createdById: userId,

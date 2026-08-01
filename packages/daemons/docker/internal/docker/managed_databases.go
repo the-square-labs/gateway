@@ -1,0 +1,1257 @@
+package docker
+
+import (
+	"context"
+	"encoding/json"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	cerrdefs "github.com/containerd/errdefs"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	mobyclient "github.com/moby/moby/client"
+	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/docker-daemon/internal/config"
+	"golang.org/x/sys/unix"
+)
+
+const (
+	managedDatabaseLabel   = "wiolett.gateway.managed-database.id"
+	managedDatabaseTypeTag = "wiolett.gateway.managed-database.type"
+	minimumDatabaseBytes   = 64 * 1024 * 1024
+	// Keep the daemon's bounded lifecycle operation and rollback shorter than
+	// the controller-side command timeout. This prevents an operation from
+	// continuing after the Gateway has already declared it failed.
+	managedDatabaseCommandTimeout    = 13 * time.Minute
+	managedDatabaseCleanupTimeout    = time.Minute
+	managedDatabaseReadinessTimeout  = 90 * time.Second
+	managedDatabaseReadinessInterval = 500 * time.Millisecond
+)
+
+var (
+	managedDatabaseIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
+	managedDatabaseName      = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,62}$`)
+	digestImagePattern       = regexp.MustCompile(`@sha256:[a-f0-9]{64}$`)
+)
+
+// managedDatabaseCommand is deliberately private to the database-profile
+// daemon. It must never become a generic Docker container payload.
+type managedDatabaseCommand struct {
+	Type             string `json:"type"`
+	Image            string `json:"image"`
+	StorageSizeBytes int64  `json:"storageSizeBytes"`
+	MemoryBytes      int64  `json:"memoryBytes"`
+	MemorySwapBytes  int64  `json:"memorySwapBytes"`
+	NanoCPUs         int64  `json:"nanoCPUs"`
+	CPUShares        int64  `json:"cpuShares"`
+	PidsLimit        int64  `json:"pidsLimit"`
+	OperationID      string `json:"operationId"`
+	OwnerUsername    string `json:"ownerUsername"`
+	OwnerPassword    string `json:"ownerPassword"`
+	DatabaseName     string `json:"databaseName"`
+	PublishTCP       bool   `json:"publishTcp"`
+	PublishedPort    uint16 `json:"publishedPort"`
+	ClickhouseConfig string `json:"clickhouseConfigXml"`
+}
+
+// managedDatabaseBindingCommand is intentionally separate from the instance
+// lifecycle payload. It carries a short-lived command to create or revoke one
+// engine-level account; credentials are never persisted by the database node.
+type managedDatabaseBindingCommand struct {
+	BindingID     string `json:"bindingId"`
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+	DatabaseName  string `json:"databaseName"`
+	OwnerUsername string `json:"ownerUsername"`
+	OwnerPassword string `json:"ownerPassword"`
+}
+
+type managedDatabaseOperationCommand struct {
+	OperationID string `json:"operationId"`
+}
+
+// managedDatabaseRecord is enough to remount a fixed-size image before a
+// database container is started after a daemon or host restart. It contains
+// neither owner credentials nor arbitrary configuration.
+type managedDatabaseRecord struct {
+	ID             string `json:"id"`
+	Type           string `json:"type"`
+	ContainerID    string `json:"containerId"`
+	ContainerName  string `json:"containerName"`
+	NetworkName    string `json:"networkName"`
+	ImagePath      string `json:"imagePath"`
+	MountPath      string `json:"mountPath"`
+	LoopDevice     string `json:"loopDevice,omitempty"`
+	StorageSize    int64  `json:"storageSizeBytes"`
+	DesiredRunning bool   `json:"desiredRunning"`
+	PublishedPort  uint16 `json:"publishedPort,omitempty"`
+	OperationID    string `json:"operationId"`
+}
+
+// managedDatabaseRuntimeStats is intentionally a narrow managed-database
+// payload. It reuses Docker's live container accounting without exposing the
+// generic container stats surface to a databases node.
+type managedDatabaseRuntimeStats struct {
+	Status           string  `json:"status"`
+	CPUPercent       float64 `json:"cpuPercent,omitempty"`
+	MemoryUsageBytes int64   `json:"memoryUsageBytes,omitempty"`
+	MemoryLimitBytes int64   `json:"memoryLimitBytes,omitempty"`
+	SwapUsageBytes   int64   `json:"swapUsageBytes,omitempty"`
+	SwapLimitBytes   int64   `json:"swapLimitBytes,omitempty"`
+	Pids             int64   `json:"pids,omitempty"`
+}
+
+type managedDatabaseManager struct {
+	cfg     *config.Config
+	client  *Client
+	logger  *slog.Logger
+	root    string
+	reserve int64
+	mu      sync.Mutex
+}
+
+func newManagedDatabaseManager(cfg *config.Config, client *Client, logger *slog.Logger) (*managedDatabaseManager, error) {
+	root := filepath.Clean(cfg.Docker.Database.StorageRoot)
+	if !filepath.IsAbs(root) || root == "/" {
+		return nil, fmt.Errorf("database storage root must be an absolute non-root path")
+	}
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return nil, fmt.Errorf("create database storage root: %w", err)
+	}
+	for _, dir := range []string{"images", "mounts", "records"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0700); err != nil {
+			return nil, fmt.Errorf("create database storage directory: %w", err)
+		}
+	}
+	reserve := cfg.Docker.Database.ReserveBytes
+	if reserve < 0 {
+		return nil, fmt.Errorf("database reserve bytes cannot be negative")
+	}
+	return &managedDatabaseManager{cfg: cfg, client: client, logger: logger, root: root, reserve: reserve}, nil
+}
+
+func (p *DockerPlugin) handleManagedDatabaseCommand(cmd *pb.DockerDatabaseCommand, result *pb.CommandResult) {
+	if p.databaseManager == nil {
+		result.Success = false
+		result.Error = "managed database storage is not initialized"
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), managedDatabaseCommandTimeout)
+	defer cancel()
+	detail, err := p.databaseManager.handle(ctx, cmd.Action, cmd.ManagedDatabaseId, cmd.ConfigJson)
+	if err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return
+	}
+	result.Detail = detail
+}
+
+func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJSON string) (string, error) {
+	if !managedDatabaseIDPattern.MatchString(id) {
+		return "", errors.New("invalid managed database id")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	switch action {
+	case "create":
+		var input managedDatabaseCommand
+		if err := json.Unmarshal([]byte(configJSON), &input); err != nil {
+			return "", fmt.Errorf("parse managed database config: %w", err)
+		}
+		record, err := m.create(ctx, id, input)
+		if err != nil {
+			return "", err
+		}
+		return marshalManagedDatabaseDetail(record, "ready")
+	case "start":
+		record, err := m.loadRecord(id)
+		if err != nil {
+			return "", err
+		}
+		if err := m.ensureMounted(ctx, &record); err != nil {
+			return "", err
+		}
+		if err := m.startContainer(ctx, record.ContainerID); err != nil {
+			return "", err
+		}
+		record.DesiredRunning = true
+		if err := m.saveRecord(record); err != nil {
+			return "", err
+		}
+		return marshalManagedDatabaseDetail(record, "ready")
+	case "update":
+		var input managedDatabaseCommand
+		if err := json.Unmarshal([]byte(configJSON), &input); err != nil {
+			return "", fmt.Errorf("parse managed database config: %w", err)
+		}
+		record, err := m.loadRecord(id)
+		if err != nil {
+			return "", err
+		}
+		if err := m.update(ctx, &record, input); err != nil {
+			return "", err
+		}
+		if err := m.saveRecord(record); err != nil {
+			return "", err
+		}
+		return marshalManagedDatabaseDetail(record, "ready")
+	case "stop":
+		record, err := m.loadRecord(id)
+		if err != nil {
+			return "", err
+		}
+		if err := m.stopContainer(ctx, record.ContainerID); err != nil {
+			return "", err
+		}
+		record.DesiredRunning = false
+		if err := m.saveRecord(record); err != nil {
+			return "", err
+		}
+		return marshalManagedDatabaseDetail(record, "stopped")
+	case "pause", "unpause":
+		var input managedDatabaseOperationCommand
+		if err := json.Unmarshal([]byte(configJSON), &input); err != nil {
+			return "", fmt.Errorf("parse managed database operation: %w", err)
+		}
+		if !managedDatabaseIDPattern.MatchString(input.OperationID) {
+			return "", errors.New("managed database operation id is invalid")
+		}
+		record, err := m.loadRecord(id)
+		if err != nil {
+			return "", err
+		}
+		if action == "pause" {
+			if err := m.pauseContainer(ctx, record.ContainerID); err != nil {
+				return "", err
+			}
+		} else if err := m.unpauseContainer(ctx, record.ContainerID); err != nil {
+			return "", err
+		}
+		record.OperationID = input.OperationID
+		if err := m.saveRecord(record); err != nil {
+			return "", err
+		}
+		if action == "pause" {
+			return marshalManagedDatabaseDetail(record, "paused")
+		}
+		return marshalManagedDatabaseDetail(record, "ready")
+	case "remove":
+		record, err := m.loadRecord(id)
+		if errors.Is(err, os.ErrNotExist) {
+			// The prior remove may have completed while its response was lost.
+			// Reporting success makes control-plane deletion safe to retry.
+			return `{"status":"deleted"}`, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if err := m.remove(ctx, record); err != nil {
+			return "", err
+		}
+		return `{"status":"deleted"}`, nil
+	case "inspect":
+		record, err := m.loadRecord(id)
+		if errors.Is(err, os.ErrNotExist) {
+			return `{"status":"missing"}`, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		inspect, inspectErr := m.client.cli.ContainerInspect(ctx, record.ContainerID, mobyclient.ContainerInspectOptions{})
+		status := "stopped"
+		if inspectErr == nil {
+			status = managedDatabaseContainerStatus(inspect.Container.State)
+		}
+		return marshalManagedDatabaseDetail(record, status)
+	case "stats":
+		record, err := m.loadRecord(id)
+		if err != nil {
+			return "", err
+		}
+		return m.runtimeStats(ctx, record)
+	case "binding_create", "binding_remove":
+		var input managedDatabaseBindingCommand
+		if err := json.Unmarshal([]byte(configJSON), &input); err != nil {
+			return "", fmt.Errorf("parse managed database binding config: %w", err)
+		}
+		record, err := m.loadRecord(id)
+		if err != nil {
+			return "", err
+		}
+		if err := validateManagedDatabaseBindingInput(input); err != nil {
+			return "", err
+		}
+		if action == "binding_create" {
+			if err := m.createBindingPrincipal(ctx, record, input); err != nil {
+				return "", err
+			}
+		} else if err := m.removeBindingPrincipal(ctx, record, input); err != nil {
+			return "", err
+		}
+		return `{"status":"ok"}`, nil
+	default:
+		return "", fmt.Errorf("unsupported managed database action: %s", action)
+	}
+}
+
+func managedDatabaseContainerStatus(state *container.State) string {
+	if state == nil || !state.Running {
+		return "stopped"
+	}
+	if state.Paused {
+		return "paused"
+	}
+	return "ready"
+}
+
+func validateManagedDatabaseBindingInput(input managedDatabaseBindingCommand) error {
+	if !managedDatabaseIDPattern.MatchString(input.BindingID) {
+		return errors.New("invalid database binding identifier")
+	}
+	if !managedDatabaseName.MatchString(input.Username) || !managedDatabaseName.MatchString(input.OwnerUsername) || !managedDatabaseName.MatchString(input.DatabaseName) {
+		return errors.New("database binding names must be safe SQL identifiers")
+	}
+	if len(input.Password) < 16 || len(input.Password) > 512 || len(input.OwnerPassword) < 16 || len(input.OwnerPassword) > 512 {
+		return errors.New("database binding passwords must be between 16 and 512 characters")
+	}
+	return nil
+}
+
+func (m *managedDatabaseManager) createBindingPrincipal(ctx context.Context, record managedDatabaseRecord, input managedDatabaseBindingCommand) error {
+	var command []string
+	var stdin string
+	var env []string
+	switch record.Type {
+	case "postgres":
+		stdin = postgresBindingCreateSQL(input)
+		command = []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", input.OwnerUsername, "-d", input.DatabaseName}
+	case "redis":
+		// Redis accepts the ACL password only as an argument. The owner password
+		// stays in the exec environment, not in a process argument. Binding users
+		// may use normal data commands, but must never administer the server or
+		// mutate ACLs (which would let one binding take over another).
+		command = []string{"sh", "-ec", redisBindingACLCommand()}
+		env = []string{
+			"REDISCLI_AUTH=" + input.OwnerPassword,
+			"GATEWAY_DB_BINDING_USER=" + input.Username,
+			"GATEWAY_DB_BINDING_PASSWORD=" + input.Password,
+		}
+	case "clickhouse":
+		stdin = clickHouseBindingCreateSQL(input)
+		command = []string{"clickhouse-client", "--user", input.OwnerUsername, "--database", input.DatabaseName, "--multiquery"}
+		env = []string{"CLICKHOUSE_PASSWORD=" + input.OwnerPassword}
+	default:
+		return errors.New("unsupported managed database engine")
+	}
+	return m.runManagedDatabaseExec(ctx, record.ContainerID, command, stdin, env)
+}
+
+func redisBindingACLCommand() string {
+	return `redis-cli --no-auth-warning --user default ACL SETUSER "$GATEWAY_DB_BINDING_USER" reset on ">$GATEWAY_DB_BINDING_PASSWORD" '~*' '&*' '+@read' '+@write' '+@connection' '+@transaction' '+@pubsub' '+eval' '+evalsha' '+eval_ro' '+evalsha_ro' '+fcall' '+fcall_ro' '+script|load' '+script|exists' '-function' '-script|flush' '-script|kill' '-script|debug' '-@dangerous'`
+}
+
+func (m *managedDatabaseManager) removeBindingPrincipal(ctx context.Context, record managedDatabaseRecord, input managedDatabaseBindingCommand) error {
+	var command []string
+	var stdin string
+	var env []string
+	switch record.Type {
+	case "postgres":
+		stdin = postgresBindingRemoveSQL(input)
+		command = []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", input.OwnerUsername, "-d", input.DatabaseName}
+	case "redis":
+		command = []string{"sh", "-ec", `redis-cli --no-auth-warning --user default ACL DELUSER "$GATEWAY_DB_BINDING_USER" >/dev/null || true`}
+		env = []string{"REDISCLI_AUTH=" + input.OwnerPassword, "GATEWAY_DB_BINDING_USER=" + input.Username}
+	case "clickhouse":
+		stdin = clickHouseBindingRemoveSQL(input)
+		command = []string{"clickhouse-client", "--user", input.OwnerUsername, "--database", input.DatabaseName, "--multiquery"}
+		env = []string{"CLICKHOUSE_PASSWORD=" + input.OwnerPassword}
+	default:
+		return errors.New("unsupported managed database engine")
+	}
+	return m.runManagedDatabaseExec(ctx, record.ContainerID, command, stdin, env)
+}
+
+func postgresBindingCreateSQL(input managedDatabaseBindingCommand) string {
+	return fmt.Sprintf(
+		"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s) THEN EXECUTE 'CREATE ROLE ' || quote_ident(%s) || ' LOGIN PASSWORD ' || quote_literal(%s); ELSE EXECUTE 'ALTER ROLE ' || quote_ident(%s) || ' LOGIN PASSWORD ' || quote_literal(%s); END IF; END $$; GRANT ALL PRIVILEGES ON DATABASE %s TO %s;\n",
+		quoteSQLLiteral(input.Username), quoteSQLLiteral(input.Username), quoteSQLLiteral(input.Password), quoteSQLLiteral(input.Username), quoteSQLLiteral(input.Password), quoteSQLIdentifier(input.DatabaseName), quoteSQLIdentifier(input.Username),
+	)
+}
+
+func postgresBindingRemoveSQL(input managedDatabaseBindingCommand) string {
+	return fmt.Sprintf(
+		"DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s) THEN EXECUTE 'DROP OWNED BY ' || quote_ident(%s); EXECUTE 'DROP ROLE ' || quote_ident(%s); END IF; END $$;\n",
+		quoteSQLLiteral(input.Username), quoteSQLLiteral(input.Username), quoteSQLLiteral(input.Username),
+	)
+}
+
+func clickHouseBindingCreateSQL(input managedDatabaseBindingCommand) string {
+	return fmt.Sprintf(
+		"CREATE USER IF NOT EXISTS %s IDENTIFIED WITH sha256_password BY %s; ALTER USER %s IDENTIFIED WITH sha256_password BY %s; GRANT ALL ON %s.* TO %s;\n",
+		quoteSQLIdentifier(input.Username), quoteSQLLiteral(input.Password), quoteSQLIdentifier(input.Username), quoteSQLLiteral(input.Password), quoteSQLIdentifier(input.DatabaseName), quoteSQLIdentifier(input.Username),
+	)
+}
+
+func clickHouseBindingRemoveSQL(input managedDatabaseBindingCommand) string {
+	return fmt.Sprintf("DROP USER IF EXISTS %s;\n", quoteSQLIdentifier(input.Username))
+}
+
+func quoteSQLIdentifier(value string) string {
+	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
+}
+
+func quoteSQLLiteral(value string) string {
+	return `'` + strings.ReplaceAll(value, `'`, `''`) + `'`
+}
+
+// runManagedDatabaseExec runs a fixed engine client command. It deliberately
+// suppresses command output: output can contain a query fragment, and callers
+// only need a stable operational error, never a credential-bearing diagnostic.
+func (m *managedDatabaseManager) runManagedDatabaseExec(ctx context.Context, containerID string, command []string, stdin string, env []string) error {
+	created, err := m.client.cli.ExecCreate(ctx, containerID, mobyclient.ExecCreateOptions{
+		Cmd: command, Env: env, AttachStdin: stdin != "", AttachStdout: true, AttachStderr: true,
+	})
+	if err != nil {
+		return errors.New("managed database engine command could not start")
+	}
+	attached, err := m.client.cli.ExecAttach(ctx, created.ID, mobyclient.ExecAttachOptions{})
+	if err != nil {
+		return errors.New("managed database engine command could not attach")
+	}
+	defer attached.Close()
+	if stdin != "" {
+		if _, err := io.WriteString(attached.Conn, stdin); err != nil {
+			return errors.New("managed database engine command could not receive input")
+		}
+		if err := attached.CloseWrite(); err != nil {
+			return errors.New("managed database engine command could not close input")
+		}
+	}
+	_, _ = stdcopy.StdCopy(io.Discard, io.Discard, attached.Reader)
+	inspect, err := m.client.cli.ExecInspect(ctx, created.ID, mobyclient.ExecInspectOptions{})
+	if err != nil || inspect.ExitCode != 0 {
+		return errors.New("managed database engine command failed")
+	}
+	return nil
+}
+
+func (m *managedDatabaseManager) update(ctx context.Context, record *managedDatabaseRecord, input managedDatabaseCommand) error {
+	if err := validateManagedDatabaseInput(input); err != nil {
+		return err
+	}
+	if input.Type != record.Type {
+		return errors.New("managed database engine cannot be changed")
+	}
+	if record.OperationID == input.OperationID {
+		return nil
+	}
+	if input.StorageSizeBytes < record.StorageSize {
+		return errors.New("managed database storage cannot be reduced")
+	}
+	if err := m.ensureStorageSize(ctx, record, input.StorageSizeBytes); err != nil {
+		return err
+	}
+	publicationChanged := input.PublishedPort != record.PublishedPort || (input.PublishTCP != (record.PublishedPort != 0))
+	if publicationChanged {
+		if err := m.recreateContainer(ctx, record, input); err != nil {
+			return err
+		}
+	} else if err := m.client.LiveUpdateContainer(ctx, record.ContainerID, managedDatabaseRuntimeJSON(input)); err != nil {
+		return err
+	}
+	record.OperationID = input.OperationID
+	return nil
+}
+
+// recreateContainer applies the only Docker setting that cannot be changed
+// live (port bindings) while deliberately retaining the mounted managed data
+// image and its isolated network.
+func (m *managedDatabaseManager) recreateContainer(ctx context.Context, record *managedDatabaseRecord, input managedDatabaseCommand) error {
+	if record.ContainerID != "" {
+		if err := m.stopContainer(ctx, record.ContainerID); err != nil {
+			return err
+		}
+		if err := m.client.RemoveContainer(ctx, record.ContainerID, true); err != nil && !cerrdefs.IsNotFound(err) {
+			return fmt.Errorf("remove managed database container for publication change: %w", err)
+		}
+	}
+	// A disabled publication and an auto-assigned port must not inherit the
+	// previous host binding from the record.
+	record.ContainerID = ""
+	record.PublishedPort = input.PublishedPort
+	containerID, err := m.createContainer(ctx, record, input)
+	if err != nil {
+		return err
+	}
+	record.ContainerID = containerID
+	record.DesiredRunning = true
+	return nil
+}
+
+func managedDatabaseRuntimeJSON(input managedDatabaseCommand) string {
+	value, _ := json.Marshal(map[string]int64{
+		"memoryLimit": input.MemoryBytes,
+		"memorySwap":  input.MemorySwapBytes,
+		"nanoCPUs":    input.NanoCPUs,
+		"cpuShares":   input.CPUShares,
+		"pidsLimit":   input.PidsLimit,
+	})
+	return string(value)
+}
+
+func (m *managedDatabaseManager) create(ctx context.Context, id string, input managedDatabaseCommand) (managedDatabaseRecord, error) {
+	if err := validateManagedDatabaseInput(input); err != nil {
+		return managedDatabaseRecord{}, err
+	}
+	if existing, err := m.loadRecord(id); err == nil {
+		// A response can be lost after the record is written. Treat a repeated
+		// create for the same managed-database ID as recovery, rather than
+		// allocating a second volume or leaving the control plane in error.
+		if existing.Type != input.Type {
+			return managedDatabaseRecord{}, errors.New("managed database engine cannot be changed")
+		}
+		if existing.OperationID != input.OperationID {
+			return managedDatabaseRecord{}, errors.New("managed database operation conflicts with an existing instance")
+		}
+		if err := m.ensureMounted(ctx, &existing); err != nil {
+			return managedDatabaseRecord{}, err
+		}
+		if err := m.startContainer(ctx, existing.ContainerID); err != nil {
+			return managedDatabaseRecord{}, err
+		}
+		if err := m.waitForDatabaseReady(ctx, existing.ContainerID, input); err != nil {
+			return managedDatabaseRecord{}, err
+		}
+		existing.DesiredRunning = true
+		if err := m.saveRecord(existing); err != nil {
+			return managedDatabaseRecord{}, err
+		}
+		return existing, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return managedDatabaseRecord{}, err
+	}
+	if err := m.ensureCapacity(input.StorageSizeBytes); err != nil {
+		return managedDatabaseRecord{}, err
+	}
+
+	record := managedDatabaseRecord{
+		ID:             id,
+		Type:           input.Type,
+		ContainerName:  "gwdb-" + id,
+		NetworkName:    "gwdb-" + id + "-net",
+		ImagePath:      filepath.Join(m.root, "images", id+".img"),
+		MountPath:      filepath.Join(m.root, "mounts", id),
+		StorageSize:    input.StorageSizeBytes,
+		DesiredRunning: true,
+		PublishedPort:  input.PublishedPort,
+		OperationID:    input.OperationID,
+	}
+
+	if err := m.createImage(ctx, record); err != nil {
+		return managedDatabaseRecord{}, err
+	}
+	created := false
+	defer func() {
+		if !created {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), managedDatabaseCleanupTimeout)
+			defer cancel()
+			_ = m.cleanupStorage(cleanupCtx, &record, true)
+		}
+	}()
+	if err := m.ensureMounted(ctx, &record); err != nil {
+		return managedDatabaseRecord{}, err
+	}
+	if err := m.client.PullImage(ctx, input.Image, ""); err != nil {
+		return managedDatabaseRecord{}, err
+	}
+	if err := m.createNetwork(ctx, record.NetworkName); err != nil {
+		return managedDatabaseRecord{}, err
+	}
+	containerID, err := m.createContainer(ctx, &record, input)
+	if err != nil {
+		return managedDatabaseRecord{}, err
+	}
+	record.ContainerID = containerID
+	if err := m.saveRecord(record); err != nil {
+		_ = m.client.RemoveContainer(ctx, containerID, true)
+		return managedDatabaseRecord{}, err
+	}
+	created = true
+	return record, nil
+}
+
+func validateManagedDatabaseInput(input managedDatabaseCommand) error {
+	if input.Type != "postgres" && input.Type != "redis" && input.Type != "clickhouse" {
+		return errors.New("unsupported managed database type")
+	}
+	if input.Type == "redis" && input.OwnerUsername != "default" {
+		return errors.New("Redis owner username must be default")
+	}
+	if !managedDatabaseIDPattern.MatchString(input.OperationID) {
+		return errors.New("managed database operation id is invalid")
+	}
+	if !isCuratedDigestImage(input.Type, input.Image) {
+		return errors.New("managed database image must be a curated sha256-pinned engine image")
+	}
+	if input.StorageSizeBytes < minimumDatabaseBytes {
+		return fmt.Errorf("database storage must be at least %d bytes", minimumDatabaseBytes)
+	}
+	if input.MemoryBytes < 0 || input.NanoCPUs < 0 || input.CPUShares < 0 || input.PidsLimit < 0 {
+		return errors.New("runtime limits cannot be negative")
+	}
+	if input.MemorySwapBytes != 0 && input.MemorySwapBytes != -1 && input.MemorySwapBytes < input.MemoryBytes {
+		return errors.New("memory swap limit must be unlimited or at least the memory limit")
+	}
+	if !managedDatabaseName.MatchString(input.OwnerUsername) || !managedDatabaseName.MatchString(input.DatabaseName) {
+		return errors.New("database and owner names must be safe SQL identifiers")
+	}
+	if len(input.OwnerPassword) < 16 || len(input.OwnerPassword) > 512 {
+		return errors.New("managed database password must be between 16 and 512 characters")
+	}
+	if !input.PublishTCP && input.PublishedPort != 0 {
+		return errors.New("host port is not allowed unless TCP publishing is enabled")
+	}
+	if input.Type != "clickhouse" && input.ClickhouseConfig != "" {
+		return errors.New("ClickHouse XML is supported only for ClickHouse")
+	}
+	return validateClickHouseFragment(input.ClickhouseConfig)
+}
+
+func isCuratedDigestImage(engine, image string) bool {
+	if !digestImagePattern.MatchString(image) {
+		return false
+	}
+	switch engine {
+	case "postgres":
+		return image == "docker.io/library/postgres@sha256:980e5d98958b0918ff1bbb63d5f3e883debe74130ea137d11ac1f8e40a84d6dc" ||
+			image == "docker.io/library/postgres@sha256:5fdd7ebaa553af131db4021414d753791dce12e0b5ac1e27ca9ac57e3982e78a"
+	case "redis":
+		return image == "docker.io/library/redis@sha256:73d68753a2c3e9be8473dc06290ec2236058f358db8bf1fd9a8492f3e1874dd1" ||
+			image == "docker.io/library/redis@sha256:f452836040018082f5383b5969c66ed3009bfd38932ae188a28d206870ae277b"
+	case "clickhouse":
+		return image == "docker.io/clickhouse/clickhouse-server@sha256:d7f76cd5ed162bf496af581a4d50498fef7d91dcedb1f55e4eab58cc9f22281b" ||
+			image == "docker.io/clickhouse/clickhouse-server@sha256:5b5f6c6db63f75220d2bb68f1e571684bdac7f10ff591dec61c30ba6395f974c"
+	default:
+		return false
+	}
+}
+
+func validateClickHouseFragment(fragment string) error {
+	if fragment == "" {
+		return nil
+	}
+	if len(fragment) > 64*1024 {
+		return errors.New("ClickHouse XML fragment exceeds 64 KiB")
+	}
+	decoder := xml.NewDecoder(strings.NewReader(fragment))
+	rootSeen := false
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("invalid ClickHouse XML: %w", err)
+		}
+		switch t := token.(type) {
+		case xml.Directive:
+			return errors.New("ClickHouse XML directives are not allowed")
+		case xml.ProcInst:
+			return errors.New("ClickHouse XML processing instructions are not allowed")
+		case xml.StartElement:
+			name := strings.ToLower(t.Name.Local)
+			if !rootSeen {
+				if name != "clickhouse" {
+					return errors.New("ClickHouse XML fragment root must be <clickhouse>")
+				}
+				rootSeen = true
+			}
+			if forbiddenClickHouseElement(name) {
+				return fmt.Errorf("ClickHouse XML element %q is managed by Gateway", name)
+			}
+			for _, attr := range t.Attr {
+				attrName := strings.ToLower(attr.Name.Local)
+				if attrName == "incl" || attrName == "from_env" || attrName == "replace" {
+					return fmt.Errorf("ClickHouse XML attribute %q is not allowed", attrName)
+				}
+			}
+		}
+	}
+	if !rootSeen {
+		return errors.New("ClickHouse XML fragment is empty")
+	}
+	return nil
+}
+
+func forbiddenClickHouseElement(name string) bool {
+	switch name {
+	case "listen_host", "http_port", "tcp_port", "interserver_http_port", "path", "tmp_path", "user_directories", "users", "profiles", "quotas", "remote_servers", "zookeeper", "keeper_server", "macros", "open_ssl", "certificates":
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *managedDatabaseManager) ensureCapacity(bytes int64) error {
+	var stat unix.Statfs_t
+	if err := unix.Statfs(m.root, &stat); err != nil {
+		return fmt.Errorf("stat database storage: %w", err)
+	}
+	free := int64(stat.Bavail) * int64(stat.Bsize)
+	if free < bytes || free-bytes < m.reserve {
+		return fmt.Errorf("insufficient database storage capacity after reserve")
+	}
+	return nil
+}
+
+func (m *managedDatabaseManager) createImage(ctx context.Context, record managedDatabaseRecord) error {
+	file, err := os.OpenFile(record.ImagePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+	if err != nil {
+		return fmt.Errorf("create storage image: %w", err)
+	}
+	defer file.Close()
+	if output, err := exec.CommandContext(ctx, "fallocate", "-l", fmt.Sprintf("%d", record.StorageSize), record.ImagePath).CombinedOutput(); err != nil {
+		return fmt.Errorf("preallocate non-sparse storage image: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync storage image: %w", err)
+	}
+	if output, err := exec.CommandContext(ctx, "mkfs.ext4", "-q", "-F", record.ImagePath).CombinedOutput(); err != nil {
+		return fmt.Errorf("format database storage image: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func (m *managedDatabaseManager) ensureMounted(ctx context.Context, record *managedDatabaseRecord) error {
+	if mounted(record.MountPath) {
+		return nil
+	}
+	if err := os.MkdirAll(record.MountPath, 0700); err != nil {
+		return fmt.Errorf("create database mount point: %w", err)
+	}
+	loopDevice, err := attachDatabaseLoopDevice(ctx, record.ImagePath)
+	if err != nil {
+		return err
+	}
+	record.LoopDevice = loopDevice
+	if record.LoopDevice == "" {
+		return errors.New("losetup did not return a loop device")
+	}
+	if output, err := exec.CommandContext(ctx, "mount", "-o", "noatime", record.LoopDevice, record.MountPath).CombinedOutput(); err != nil {
+		_ = exec.Command("losetup", "-d", record.LoopDevice).Run()
+		record.LoopDevice = ""
+		return fmt.Errorf("mount database storage image: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// ensureStorageSize converges both layers of the managed database volume: the
+// backing image and the mounted ext4 filesystem. A loop device caches the
+// backing file capacity, so it must be refreshed after fallocate before
+// resize2fs can see the new space.
+func (m *managedDatabaseManager) ensureStorageSize(ctx context.Context, record *managedDatabaseRecord, targetSize int64) error {
+	if err := m.ensureMounted(ctx, record); err != nil {
+		return err
+	}
+	info, err := os.Stat(record.ImagePath)
+	if err != nil {
+		return fmt.Errorf("stat managed database storage image: %w", err)
+	}
+	if targetSize < info.Size() {
+		return errors.New("managed database storage cannot be reduced")
+	}
+	if targetSize > info.Size() {
+		if err := m.ensureCapacity(targetSize - info.Size()); err != nil {
+			return err
+		}
+		if output, err := exec.CommandContext(ctx, "fallocate", "-l", fmt.Sprintf("%d", targetSize), record.ImagePath).CombinedOutput(); err != nil {
+			return fmt.Errorf("grow managed database storage image: %w: %s", err, strings.TrimSpace(string(output)))
+		}
+	}
+	if err := refreshDatabaseLoopDeviceCapacity(ctx, record.LoopDevice); err != nil {
+		return err
+	}
+	if output, err := exec.CommandContext(ctx, "resize2fs", record.LoopDevice).CombinedOutput(); err != nil {
+		return fmt.Errorf("grow managed database filesystem: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	record.StorageSize = targetSize
+	return nil
+}
+
+func refreshDatabaseLoopDeviceCapacity(ctx context.Context, loopDevice string) error {
+	if loopDevice == "" {
+		return errors.New("managed database loop device is not attached")
+	}
+	if output, err := exec.CommandContext(ctx, "losetup", "-c", loopDevice).CombinedOutput(); err != nil {
+		return fmt.Errorf("refresh managed database loop device capacity: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func attachDatabaseLoopDevice(ctx context.Context, imagePath string) (string, error) {
+	output, err := exec.CommandContext(ctx, "losetup", "--find", "--show", "--nooverlap", imagePath).CombinedOutput()
+	if err == nil {
+		loopDevice := strings.TrimSpace(string(output))
+		if loopDevice == "" {
+			return "", errors.New("losetup did not return a loop device")
+		}
+		return loopDevice, nil
+	}
+
+	// Minimal BusyBox images do not implement GNU's --find/--show flags. The
+	// database installer supports regular Ubuntu hosts first, and falls back to
+	// the portable two-step form for these local/DIND environments.
+	if !strings.Contains(strings.ToLower(string(output)), "unrecognized option") {
+		return "", fmt.Errorf("attach database storage image: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	found, findErr := exec.CommandContext(ctx, "losetup", "-f").CombinedOutput()
+	if findErr != nil {
+		return "", fmt.Errorf("find free database loop device: %w: %s", findErr, strings.TrimSpace(string(found)))
+	}
+	loopDevice := strings.TrimSpace(string(found))
+	if loopDevice == "" {
+		return "", errors.New("losetup did not return a free loop device")
+	}
+	if attached, attachErr := exec.CommandContext(ctx, "losetup", loopDevice, imagePath).CombinedOutput(); attachErr != nil {
+		return "", fmt.Errorf("attach database storage image: %w: %s", attachErr, strings.TrimSpace(string(attached)))
+	}
+	return loopDevice, nil
+}
+
+func mounted(path string) bool {
+	return exec.Command("mountpoint", "-q", path).Run() == nil
+}
+
+func (m *managedDatabaseManager) createNetwork(ctx context.Context, name string) error {
+	_, err := m.client.cli.NetworkInspect(ctx, name, mobyclient.NetworkInspectOptions{})
+	if err == nil {
+		return nil
+	}
+	_, err = m.client.cli.NetworkCreate(ctx, name, mobyclient.NetworkCreateOptions{
+		Driver: "bridge",
+		Labels: map[string]string{managedDatabaseLabel: name},
+	})
+	if err != nil {
+		return fmt.Errorf("create managed database network: %w", err)
+	}
+	return nil
+}
+
+func (m *managedDatabaseManager) createContainer(ctx context.Context, record *managedDatabaseRecord, input managedDatabaseCommand) (string, error) {
+	dataPath, port := engineDataPathAndPort(input.Type)
+	env := engineEnvironment(input)
+	containerCfg := &container.Config{
+		Image: input.Image,
+		Env:   env,
+		Labels: map[string]string{
+			managedDatabaseLabel:   record.ID,
+			managedDatabaseTypeTag: input.Type,
+		},
+	}
+	if input.Type == "redis" {
+		containerCfg.Cmd = []string{"redis-server", "--appendonly", "yes", "--requirepass", input.OwnerPassword}
+	}
+	if input.Type == "clickhouse" && input.ClickhouseConfig != "" {
+		if err := os.WriteFile(filepath.Join(record.MountPath, "gateway-managed.xml"), []byte(input.ClickhouseConfig), 0600); err != nil {
+			return "", fmt.Errorf("write ClickHouse managed config: %w", err)
+		}
+	}
+	binds := []string{record.MountPath + ":" + dataPath}
+	if input.Type == "clickhouse" && input.ClickhouseConfig != "" {
+		binds = append(binds, filepath.Join(record.MountPath, "gateway-managed.xml")+":/etc/clickhouse-server/config.d/gateway-managed.xml:ro")
+	}
+	hostCfg := &container.HostConfig{
+		Binds: binds,
+		Resources: container.Resources{
+			Memory:     input.MemoryBytes,
+			MemorySwap: input.MemorySwapBytes,
+			NanoCPUs:   input.NanoCPUs,
+			CPUShares:  input.CPUShares,
+		},
+	}
+	if input.PidsLimit > 0 {
+		pids := input.PidsLimit
+		hostCfg.PidsLimit = &pids
+	}
+	var containerPort network.Port
+	if input.PublishTCP {
+		var err error
+		containerPort, err = network.ParsePort(port)
+		if err != nil {
+			return "", fmt.Errorf("parse managed database port: %w", err)
+		}
+		containerCfg.ExposedPorts = network.PortSet{containerPort: {}}
+		hostPort := ""
+		if input.PublishedPort != 0 {
+			hostPort = fmt.Sprintf("%d", input.PublishedPort)
+		}
+		hostCfg.PortBindings = network.PortMap{containerPort: {{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: hostPort}}}
+	}
+	created, err := m.client.cli.ContainerCreate(ctx, mobyclient.ContainerCreateOptions{
+		Config:     containerCfg,
+		HostConfig: hostCfg,
+		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
+			record.NetworkName: {Aliases: []string{"database"}},
+		}},
+		Name: record.ContainerName,
+	})
+	if err != nil {
+		return "", fmt.Errorf("create managed database container: %w", err)
+	}
+	if _, err := m.client.cli.ContainerStart(ctx, created.ID, mobyclient.ContainerStartOptions{}); err != nil {
+		_ = m.client.RemoveContainer(ctx, created.ID, true)
+		return "", fmt.Errorf("start managed database container: %w", err)
+	}
+	if err := m.waitForDatabaseReady(ctx, created.ID, input); err != nil {
+		_ = m.client.RemoveContainer(ctx, created.ID, true)
+		return "", err
+	}
+	if input.PublishTCP && input.PublishedPort == 0 {
+		inspect, err := m.client.cli.ContainerInspect(ctx, created.ID, mobyclient.ContainerInspectOptions{})
+		if err != nil {
+			_ = m.client.RemoveContainer(ctx, created.ID, true)
+			return "", fmt.Errorf("inspect allocated managed database port: %w", err)
+		}
+		bindings := inspect.Container.NetworkSettings.Ports[containerPort]
+		if len(bindings) != 1 || bindings[0].HostPort == "" {
+			_ = m.client.RemoveContainer(ctx, created.ID, true)
+			return "", errors.New("Docker did not allocate one managed database host port")
+		}
+		allocated, parseErr := strconv.ParseUint(bindings[0].HostPort, 10, 16)
+		if parseErr != nil || allocated == 0 {
+			_ = m.client.RemoveContainer(ctx, created.ID, true)
+			return "", errors.New("Docker returned an invalid managed database host port")
+		}
+		record.PublishedPort = uint16(allocated)
+	}
+	return created.ID, nil
+}
+
+// waitForDatabaseReady keeps lifecycle completion aligned with actual engine
+// availability. Docker reports ContainerStart before a database has finished
+// initialization, which otherwise produces a false-ready/offline UI transition.
+func (m *managedDatabaseManager) waitForDatabaseReady(ctx context.Context, containerID string, input managedDatabaseCommand) error {
+	readyCtx, cancel := context.WithTimeout(ctx, managedDatabaseReadinessTimeout)
+	defer cancel()
+
+	for {
+		if err := m.probeDatabaseReady(readyCtx, containerID, input); err == nil {
+			return nil
+		}
+
+		timer := time.NewTimer(managedDatabaseReadinessInterval)
+		select {
+		case <-readyCtx.Done():
+			timer.Stop()
+			return errors.New("managed database did not become ready before timeout")
+		case <-timer.C:
+		}
+	}
+}
+
+func (m *managedDatabaseManager) probeDatabaseReady(ctx context.Context, containerID string, input managedDatabaseCommand) error {
+	command, env, err := managedDatabaseReadinessCommand(input)
+	if err != nil {
+		return err
+	}
+	return m.runManagedDatabaseExec(ctx, containerID, command, "", env)
+}
+
+// managedDatabaseReadinessCommand only returns fixed engine client commands.
+// Passwords are passed through the exec environment, never as process args.
+func managedDatabaseReadinessCommand(input managedDatabaseCommand) ([]string, []string, error) {
+	switch input.Type {
+	case "postgres":
+		return []string{"pg_isready", "-q", "-h", "127.0.0.1", "-U", input.OwnerUsername, "-d", input.DatabaseName}, []string{"PGPASSWORD=" + input.OwnerPassword}, nil
+	case "redis":
+		return []string{"redis-cli", "--no-auth-warning", "--user", "default", "PING"}, []string{"REDISCLI_AUTH=" + input.OwnerPassword}, nil
+	case "clickhouse":
+		return []string{"clickhouse-client", "--host", "127.0.0.1", "--user", input.OwnerUsername, "--database", input.DatabaseName, "--query", "SELECT 1"}, []string{"CLICKHOUSE_PASSWORD=" + input.OwnerPassword}, nil
+	default:
+		return nil, nil, errors.New("unsupported managed database engine")
+	}
+}
+
+func engineDataPathAndPort(engine string) (string, string) {
+	switch engine {
+	case "postgres":
+		return "/var/lib/postgresql/data", "5432/tcp"
+	case "redis":
+		return "/data", "6379/tcp"
+	default:
+		return "/var/lib/clickhouse", "8123/tcp"
+	}
+}
+
+func engineEnvironment(input managedDatabaseCommand) []string {
+	switch input.Type {
+	case "postgres":
+		// An ext4 image has a lost+found directory at its mount root. PostgreSQL
+		// correctly refuses to initialize a cluster in that non-empty directory,
+		// so keep the bind mount at its conventional parent and put PGDATA in an
+		// engine-managed child directory.
+		return []string{
+			"POSTGRES_USER=" + input.OwnerUsername,
+			"POSTGRES_PASSWORD=" + input.OwnerPassword,
+			"POSTGRES_DB=" + input.DatabaseName,
+			"PGDATA=/var/lib/postgresql/data/pgdata",
+		}
+	case "clickhouse":
+		return []string{"CLICKHOUSE_USER=" + input.OwnerUsername, "CLICKHOUSE_PASSWORD=" + input.OwnerPassword, "CLICKHOUSE_DB=" + input.DatabaseName}
+	default:
+		return nil
+	}
+}
+
+func (m *managedDatabaseManager) startContainer(ctx context.Context, id string) error {
+	inspect, err := m.client.cli.ContainerInspect(ctx, id, mobyclient.ContainerInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("inspect managed database container: %w", err)
+	}
+	if inspect.Container.State != nil && inspect.Container.State.Running {
+		return nil
+	}
+	if _, err := m.client.cli.ContainerStart(ctx, id, mobyclient.ContainerStartOptions{}); err != nil {
+		return fmt.Errorf("start managed database container: %w", err)
+	}
+	return nil
+}
+
+func (m *managedDatabaseManager) stopContainer(ctx context.Context, id string) error {
+	inspect, err := m.client.cli.ContainerInspect(ctx, id, mobyclient.ContainerInspectOptions{})
+	if cerrdefs.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect managed database container: %w", err)
+	}
+	if inspect.Container.State == nil || !inspect.Container.State.Running {
+		return nil
+	}
+	timeout := 30
+	if _, err := m.client.cli.ContainerStop(ctx, id, mobyclient.ContainerStopOptions{Timeout: &timeout}); err != nil {
+		return fmt.Errorf("stop managed database container: %w", err)
+	}
+	return nil
+}
+
+func (m *managedDatabaseManager) pauseContainer(ctx context.Context, id string) error {
+	inspect, err := m.client.cli.ContainerInspect(ctx, id, mobyclient.ContainerInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("inspect managed database container: %w", err)
+	}
+	if inspect.Container.State == nil || !inspect.Container.State.Running {
+		return errors.New("managed database container is not running")
+	}
+	if inspect.Container.State.Paused {
+		return nil
+	}
+	if _, err := m.client.cli.ContainerPause(ctx, id, mobyclient.ContainerPauseOptions{}); err != nil {
+		return fmt.Errorf("pause managed database container: %w", err)
+	}
+	return nil
+}
+
+func (m *managedDatabaseManager) unpauseContainer(ctx context.Context, id string) error {
+	inspect, err := m.client.cli.ContainerInspect(ctx, id, mobyclient.ContainerInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("inspect managed database container: %w", err)
+	}
+	if inspect.Container.State == nil || !inspect.Container.State.Running {
+		return errors.New("managed database container is not running")
+	}
+	if !inspect.Container.State.Paused {
+		return nil
+	}
+	if _, err := m.client.cli.ContainerUnpause(ctx, id, mobyclient.ContainerUnpauseOptions{}); err != nil {
+		return fmt.Errorf("unpause managed database container: %w", err)
+	}
+	return nil
+}
+
+func (m *managedDatabaseManager) runtimeStats(ctx context.Context, record managedDatabaseRecord) (string, error) {
+	inspect, err := m.client.cli.ContainerInspect(ctx, record.ContainerID, mobyclient.ContainerInspectOptions{})
+	if cerrdefs.IsNotFound(err) {
+		return marshalManagedDatabaseRuntimeStats(managedDatabaseRuntimeStats{Status: "missing"})
+	}
+	if err != nil {
+		return "", fmt.Errorf("inspect managed database container for stats: %w", err)
+	}
+	if managedDatabaseContainerStatus(inspect.Container.State) == "paused" {
+		return marshalManagedDatabaseRuntimeStats(managedDatabaseRuntimeStats{Status: "paused"})
+	}
+	if inspect.Container.State == nil || !inspect.Container.State.Running {
+		return marshalManagedDatabaseRuntimeStats(managedDatabaseRuntimeStats{Status: "stopped"})
+	}
+	result, err := m.client.cli.ContainerStats(ctx, record.ContainerID, mobyclient.ContainerStatsOptions{
+		Stream:                false,
+		IncludePreviousSample: true,
+	})
+	if err != nil {
+		return "", fmt.Errorf("collect managed database stats: %w", err)
+	}
+	defer result.Body.Close()
+	data, err := io.ReadAll(result.Body)
+	if err != nil {
+		return "", fmt.Errorf("read managed database stats: %w", err)
+	}
+	var stats container.StatsResponse
+	if err := json.Unmarshal(data, &stats); err != nil {
+		return "", fmt.Errorf("parse managed database stats: %w", err)
+	}
+	normalized := statsResponseToProto(&stats, &inspect.Container)
+	swapLimit := managedDatabaseSwapLimit(inspect.Container.HostConfig)
+	swapUsage := int64(stats.MemoryStats.Stats["swap"])
+	return marshalManagedDatabaseRuntimeStats(managedDatabaseRuntimeStats{
+		Status:           "ready",
+		CPUPercent:       normalized.CpuPercent,
+		MemoryUsageBytes: normalized.MemoryUsageBytes,
+		MemoryLimitBytes: normalized.MemoryLimitBytes,
+		SwapUsageBytes:   swapUsage,
+		SwapLimitBytes:   swapLimit,
+		Pids:             normalized.Pids,
+	})
+}
+
+func managedDatabaseSwapLimit(hostConfig *container.HostConfig) int64 {
+	if hostConfig == nil || hostConfig.MemorySwap == 0 {
+		return 0
+	}
+	if hostConfig.MemorySwap < 0 {
+		return -1
+	}
+	if hostConfig.MemorySwap <= hostConfig.Memory {
+		return 0
+	}
+	return hostConfig.MemorySwap - hostConfig.Memory
+}
+
+func marshalManagedDatabaseRuntimeStats(stats managedDatabaseRuntimeStats) (string, error) {
+	data, err := json.Marshal(stats)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func (m *managedDatabaseManager) remove(ctx context.Context, record managedDatabaseRecord) error {
+	if record.ContainerID != "" {
+		_ = m.client.RemoveContainer(ctx, record.ContainerID, true)
+	}
+	if record.NetworkName != "" {
+		_, _ = m.client.cli.NetworkRemove(ctx, record.NetworkName, mobyclient.NetworkRemoveOptions{})
+	}
+	return m.cleanupStorage(ctx, &record, true)
+}
+
+func (m *managedDatabaseManager) cleanupStorage(ctx context.Context, record *managedDatabaseRecord, removeImage bool) error {
+	if mounted(record.MountPath) {
+		if output, err := exec.CommandContext(ctx, "umount", record.MountPath).CombinedOutput(); err != nil {
+			return fmt.Errorf("unmount database storage image: %w: %s", err, strings.TrimSpace(string(output)))
+		}
+	}
+	if record.LoopDevice != "" {
+		if output, err := exec.CommandContext(ctx, "losetup", "-d", record.LoopDevice).CombinedOutput(); err != nil {
+			return fmt.Errorf("detach database loop device: %w: %s", err, strings.TrimSpace(string(output)))
+		}
+	}
+	if removeImage {
+		if err := os.Remove(record.ImagePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove database storage image: %w", err)
+		}
+		if err := os.Remove(m.recordPath(record.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove managed database record: %w", err)
+		}
+	}
+	return nil
+}
+
+func (m *managedDatabaseManager) reconcile(ctx context.Context) error {
+	entries, err := os.ReadDir(filepath.Join(m.root, "records"))
+	if err != nil {
+		return fmt.Errorf("read managed database records: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), ".json")
+		record, err := m.loadRecord(id)
+		if err != nil {
+			return err
+		}
+		if !record.DesiredRunning {
+			continue
+		}
+		if err := m.ensureStorageSize(ctx, &record, record.StorageSize); err != nil {
+			return fmt.Errorf("reconcile storage %s: %w", id, err)
+		}
+		if err := m.startContainer(ctx, record.ContainerID); err != nil {
+			return fmt.Errorf("restart %s: %w", id, err)
+		}
+		if err := m.saveRecord(record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *managedDatabaseManager) recordPath(id string) string {
+	return filepath.Join(m.root, "records", id+".json")
+}
+
+func (m *managedDatabaseManager) loadRecord(id string) (managedDatabaseRecord, error) {
+	data, err := os.ReadFile(m.recordPath(id))
+	if err != nil {
+		return managedDatabaseRecord{}, err
+	}
+	var record managedDatabaseRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return managedDatabaseRecord{}, fmt.Errorf("parse managed database record: %w", err)
+	}
+	if record.ID != id || record.ImagePath != filepath.Join(m.root, "images", id+".img") || record.MountPath != filepath.Join(m.root, "mounts", id) {
+		return managedDatabaseRecord{}, errors.New("managed database record has invalid storage paths")
+	}
+	return record, nil
+}
+
+func (m *managedDatabaseManager) saveRecord(record managedDatabaseRecord) error {
+	data, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("marshal managed database record: %w", err)
+	}
+	path := m.recordPath(record.ID)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return fmt.Errorf("write managed database record: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("commit managed database record: %w", err)
+	}
+	return nil
+}
+
+func marshalManagedDatabaseDetail(record managedDatabaseRecord, status string) (string, error) {
+	value, err := json.Marshal(map[string]any{
+		"id": record.ID, "containerId": record.ContainerID, "status": status, "publishedPort": record.PublishedPort, "operationId": record.OperationID,
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(value), nil
+}

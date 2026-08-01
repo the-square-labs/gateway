@@ -209,15 +209,15 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 ### Databases
 | Scope | Description |
 |-------|-------------|
-| databases:view | List saved database connections |
-| databases:view | View database connection details (resource-scopable) |
-| databases:create | Create saved database connections |
-| databases:edit | Edit saved database connections (resource-scopable) |
-| databases:delete | Delete saved database connections (resource-scopable) |
+| databases:view | List external connections and managed database instances |
+| databases:view | View database details (resource-scopable) |
+| databases:create | Create external connections or deploy managed database instances |
+| databases:edit | Edit external connections, managed instances, publication settings, and bindings (resource-scopable) |
+| databases:delete | Delete external connections, managed instances, or bindings (resource-scopable) |
 | databases:query:read | Run read-only queries; AI/MCP database tools also require databases:view for the same database |
 | databases:query:write | Run write queries; AI/MCP database tools also require databases:view for the same database |
 | databases:query:admin | Run admin queries; AI/MCP database tools also require databases:view for the same database |
-| databases:credentials:reveal | Reveal saved database credentials (resource-scopable) |
+| databases:credentials:reveal | Reveal explicitly requested external or managed owner/published credentials (resource-scopable); does not reveal per-binding injected secrets by default |
 | databases:folders:manage | Manage database folders and placement |
 
 ### Logging

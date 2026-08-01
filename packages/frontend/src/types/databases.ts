@@ -1,6 +1,90 @@
 // Databases
 export type DatabaseType = "postgres" | "redis" | "clickhouse";
 export type DatabaseHealthStatus = "online" | "offline" | "degraded" | "unknown";
+export type ManagedDatabaseStatus =
+  | "creating"
+  | "updating"
+  | "ready"
+  | "paused"
+  | "stopped"
+  | "error"
+  | "deleting";
+
+/** A database provisioned on a dedicated Gateway databases node. Credentials are never returned here. */
+export interface ManagedDatabase {
+  id: string;
+  databaseConnectionId: string;
+  slug: string;
+  name: string;
+  type: DatabaseType;
+  version: string;
+  nodeId: string;
+  storageSizeBytes: string | number;
+  runtimeConfig: { cpuCores: number; memoryMb: number; swapMb: number };
+  publishedPort: number | null;
+  status: ManagedDatabaseStatus;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManagedDatabaseCatalogEntry {
+  type: DatabaseType;
+  versions: string[];
+}
+
+export interface ManagedDatabaseCreateInput {
+  name: string;
+  type: DatabaseType;
+  version: string;
+  nodeId: string;
+  storageSizeGb: number;
+  cpuCores: number;
+  memoryMb: number;
+  swapMb: number;
+  publishTcp: boolean;
+  publishedPort?: number;
+  clickhouseConfigXml?: string;
+}
+
+export type ManagedDatabaseBindingTargetType = "container" | "deployment";
+
+export interface ManagedDatabaseBindingEnvironment {
+  connectionUri?: string;
+  host?: string;
+  port?: string;
+  database?: string;
+  username?: string;
+  password?: string;
+}
+
+export interface ManagedDatabaseBinding {
+  id: string;
+  managedDatabaseId: string;
+  targetNodeId: string;
+  targetType: ManagedDatabaseBindingTargetType;
+  targetResourceId: string;
+  environment: ManagedDatabaseBindingEnvironment;
+  status: "creating" | "ready" | "error" | "deleting";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManagedDatabaseBindingCreateInput {
+  targetNodeId: string;
+  targetType: ManagedDatabaseBindingTargetType;
+  targetResourceId: string;
+  environment: ManagedDatabaseBindingEnvironment;
+  /** Explicit acknowledgement that colliding ordinary env/secrets are replaced. */
+  replaceExistingEnvironment?: boolean;
+  /** Full ordinary environment draft saved with the binding update. */
+  targetEnvironment?: Record<string, string>;
+}
+
+export interface ManagedDatabaseBindingDeleteInput {
+  /** Full ordinary environment draft saved with the binding removal. */
+  targetEnvironment?: Record<string, string>;
+}
 
 export interface DatabaseHealthEntry {
   ts: string;
@@ -70,6 +154,18 @@ export interface DatabaseConnection {
   hasStoredPassword: boolean;
   config: PostgresDatabaseConfig | RedisDatabaseConfig | ClickHouseDatabaseConfig;
   capabilities?: DatabaseCapabilities;
+  managed?: {
+    id: string;
+    nodeId: string;
+    version: string;
+    storageSizeBytes: number;
+    runtimeConfig: { cpuCores: number; memoryMb: number; swapMb: number };
+    publishedPort: number | null;
+    endpointHost: string | null;
+    status: ManagedDatabaseStatus;
+    lastError: string | null;
+    clickhouseConfigXml?: string;
+  };
   createdById: string;
   updatedById: string | null;
   createdAt: string;

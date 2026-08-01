@@ -21,7 +21,10 @@ import {
   BrowsePostgresRowsQuerySchema,
   BrowseSqlRowsQuerySchema,
   CreateDatabaseConnectionSchema,
+  CreateManagedDatabaseBindingSchema,
+  CreateManagedDatabaseSchema,
   DatabaseListQuerySchema,
+  DeleteManagedDatabaseBindingSchema,
   DeletePostgresColumnSchema,
   DeleteSqlRowSchema,
   ExecutePostgresSqlSchema,
@@ -35,6 +38,7 @@ import {
   RedisSetKeySchema,
   SqlTableQuerySchema,
   UpdateDatabaseConnectionSchema,
+  UpdateManagedDatabaseSchema,
   UpdatePostgresColumnTypeSchema,
   UpdateSqlRowSchema,
 } from './databases.schemas.js';
@@ -56,6 +60,142 @@ export const listDatabaseConnectionsRoute = appRoute({
   tags: ['Databases'],
   summary: 'List database connections',
   request: { query: DatabaseListQuerySchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const listManagedDatabaseCatalogRoute = appRoute({
+  method: 'get',
+  path: '/managed/catalog',
+  tags: ['Databases'],
+  summary: 'List curated managed database versions',
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const listManagedDatabasesRoute = appRoute({
+  method: 'get',
+  path: '/managed',
+  tags: ['Databases'],
+  summary: 'List managed database instances',
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const createManagedDatabaseRoute = appRoute({
+  method: 'post',
+  path: '/managed',
+  tags: ['Databases'],
+  summary: 'Deploy a managed database instance',
+  request: jsonBody(CreateManagedDatabaseSchema),
+  responses: createdJson(UnknownDataResponseSchema),
+});
+
+export const getManagedDatabaseRoute = appRoute({
+  method: 'get',
+  path: '/managed/{id}',
+  tags: ['Databases'],
+  summary: 'Get managed database instance details',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const updateManagedDatabaseRoute = appRoute({
+  method: 'patch',
+  path: '/managed/{id}',
+  tags: ['Databases'],
+  summary: 'Update managed database configuration',
+  request: { params: IdParamSchema, ...jsonBody(UpdateManagedDatabaseSchema) },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const deleteManagedDatabaseRoute = appRoute({
+  method: 'delete',
+  path: '/managed/{id}',
+  tags: ['Databases'],
+  summary: 'Delete a managed database instance',
+  request: { params: IdParamSchema },
+  responses: okJson(z.object({ success: z.boolean() })),
+});
+
+export const retryManagedDatabaseProvisioningRoute = appRoute({
+  method: 'post',
+  path: '/managed/{id}/retry-provisioning',
+  tags: ['Databases'],
+  summary: 'Retry failed managed database provisioning',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const pauseManagedDatabaseRoute = appRoute({
+  method: 'post',
+  path: '/managed/{id}/pause',
+  tags: ['Databases'],
+  summary: 'Pause a managed database container',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const unpauseManagedDatabaseRoute = appRoute({
+  method: 'post',
+  path: '/managed/{id}/unpause',
+  tags: ['Databases'],
+  summary: 'Unpause a managed database container',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const revealManagedDatabaseCredentialsRoute = appRoute({
+  method: 'get',
+  path: '/managed/{id}/reveal-credentials',
+  tags: ['Databases'],
+  summary: 'Reveal managed database direct-access credentials',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const rotateManagedDatabaseDirectCredentialsRoute = appRoute({
+  method: 'post',
+  path: '/managed/{id}/rotate-direct-credentials',
+  tags: ['Databases'],
+  summary: 'Rotate managed database direct-access credentials',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const listManagedDatabaseBindingsRoute = appRoute({
+  method: 'get',
+  path: '/managed/{id}/bindings',
+  tags: ['Databases'],
+  summary: 'List managed database bindings',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const createManagedDatabaseBindingRoute = appRoute({
+  method: 'post',
+  path: '/managed/{id}/bindings',
+  tags: ['Databases'],
+  summary: 'Create a managed database binding',
+  request: { params: IdParamSchema, ...jsonBody(CreateManagedDatabaseBindingSchema) },
+  responses: createdJson(UnknownDataResponseSchema),
+});
+
+export const deleteManagedDatabaseBindingRoute = appRoute({
+  method: 'delete',
+  path: '/managed/{id}/bindings/{bindingId}',
+  tags: ['Databases'],
+  summary: 'Delete a managed database binding',
+  request: {
+    params: IdParamSchema.extend({ bindingId: z.string().uuid() }),
+    ...jsonBody(DeleteManagedDatabaseBindingSchema),
+  },
+  responses: okJson(z.object({ success: z.boolean() })),
+});
+
+export const revealManagedDatabaseBindingCredentialsRoute = appRoute({
+  method: 'get',
+  path: '/managed/{id}/bindings/{bindingId}/reveal-credentials',
+  tags: ['Databases'],
+  summary: 'Reveal managed database binding credentials',
+  request: { params: IdParamSchema.extend({ bindingId: z.string().uuid() }) },
   responses: okJson(UnknownDataResponseSchema),
 });
 

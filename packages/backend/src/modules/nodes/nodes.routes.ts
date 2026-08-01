@@ -504,8 +504,18 @@ nodesRoutes.openapi({ ...updateNodeRoute, middleware: requireScopeForResource('n
   const id = c.req.param('id')!;
   const input = UpdateNodeSchema.parse(await c.req.json());
   const scopes = c.get('effectiveScopes') || [];
-  if (input.serviceAddress !== undefined && !hasScope(scopes, `docker:containers:config:${id}`)) {
-    throw new AppError(403, 'FORBIDDEN', 'Editing the Docker service address requires Docker config access');
+  if (input.serviceAddress !== undefined) {
+    const current = await service.get(id);
+    if (current.type === 'docker' && !hasScope(scopes, `docker:containers:config:${id}`)) {
+      throw new AppError(403, 'FORBIDDEN', 'Editing the Docker service address requires Docker config access');
+    }
+    if (current.type !== 'docker' && current.type !== 'databases') {
+      throw new AppError(
+        400,
+        'INVALID_SERVICE_ADDRESS_NODE',
+        'Service address is only supported for Docker and database nodes'
+      );
+    }
   }
   const node = await service.update(id, input, user.id);
   return c.json({ data: node });

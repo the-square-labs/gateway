@@ -67,6 +67,12 @@ const NODE_TYPES = [
     disabled: false,
   },
   {
+    value: "databases",
+    label: "Databases",
+    description: "Dedicated managed PostgreSQL, Redis, and ClickHouse node",
+    disabled: false,
+  },
+  {
     value: "monitoring",
     label: "Monitoring",
     description: "System monitoring agent — no nginx required",
@@ -330,7 +336,8 @@ export function AdminNodes() {
         renderCell: (node) => {
           if (isNodeUpdating(node)) return <Badge variant="warning">UPDATING</Badge>;
           if (isNodeIncompatible(node)) return <Badge variant="destructive">INCOMPATIBLE</Badge>;
-          const typeStatus = daemonUpdates.find((s) => s.daemonType === node.type);
+          const daemonType = node.type === "databases" ? "docker" : node.type;
+          const typeStatus = daemonUpdates.find((s) => s.daemonType === daemonType);
           const nodeStatus = typeStatus?.nodes.find((n) => n.nodeId === node.id);
           if (nodeStatus?.updateAvailable && typeStatus?.latestVersion) {
             return <Badge className="bg-warning text-black">{typeStatus.latestVersion}</Badge>;
@@ -550,9 +557,11 @@ export function AdminNodes() {
                   Run on the target host as root.{" "}
                   {enrollResult.type === "docker"
                     ? "Installs the Docker management daemon and enrolls with this Gateway."
-                    : enrollResult.type === "monitoring"
-                      ? "Installs the monitoring agent and enrolls with this Gateway."
-                      : "Installs nginx, the daemon, and enrolls with this Gateway."}
+                    : enrollResult.type === "databases"
+                      ? "Verifies safe ext4 image storage, then installs the managed database daemon and enrolls with this Gateway."
+                      : enrollResult.type === "monitoring"
+                        ? "Installs the monitoring agent and enrolls with this Gateway."
+                        : "Installs nginx, the daemon, and enrolls with this Gateway."}
                 </p>
                 {enrollmentTargets.length > 1 && (
                   <p className="text-xs text-muted-foreground">

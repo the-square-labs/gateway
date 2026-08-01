@@ -11,9 +11,91 @@ import { formatHealthStatusLabel, formatMetricValue, HEALTH_BADGE, METRIC_COLORS
 interface DatabaseOverviewTabProps {
   database: DatabaseConnection;
   canViewMonitoring: boolean;
-  healthStatus: DatabaseConnection["healthStatus"];
+  healthStatus: DatabaseConnection["healthStatus"] | "paused";
   history: DatabaseMetricSnapshot[];
   monitoringLoading: boolean;
+}
+
+type OverviewMetric = {
+  key: string;
+  label: string;
+  value: string;
+  history: number[];
+  progress?: { percent: number; color?: string };
+  sparklineMax?: number;
+  subtitle?: string;
+};
+
+function managedRuntimeMetrics(
+  database: DatabaseConnection,
+  latest: DatabaseMetricSnapshot,
+  history: DatabaseMetricSnapshot[]
+): OverviewMetric[] {
+  if (!database.managed) return [];
+  const memoryUsage = latest.metrics.managed_memory_usage_bytes ?? null;
+  const memoryLimit = latest.metrics.managed_memory_limit_bytes ?? null;
+  const swapUsage = latest.metrics.managed_swap_usage_bytes ?? null;
+  const swapLimit = latest.metrics.managed_swap_limit_bytes ?? null;
+  const swapDisabled = swapLimit === 0;
+  const memoryPercent =
+    memoryUsage != null && memoryLimit != null && memoryLimit > 0
+      ? (memoryUsage / memoryLimit) * 100
+      : null;
+  const swapPercent =
+    swapUsage != null && swapLimit != null && swapLimit > 0 ? (swapUsage / swapLimit) * 100 : null;
+  return [
+    {
+      key: "managed_cpu_percent",
+      label: "CPU",
+      value:
+        latest.metrics.managed_cpu_percent == null
+          ? "-"
+          : `${latest.metrics.managed_cpu_percent.toFixed(1)}%`,
+      history: history.map((item) => item.metrics.managed_cpu_percent ?? 0),
+      progress:
+        latest.metrics.managed_cpu_percent == null
+          ? undefined
+          : { percent: latest.metrics.managed_cpu_percent },
+      sparklineMax: 100,
+    },
+    {
+      key: "managed_memory_usage_bytes",
+      label: "Memory",
+      value:
+        memoryUsage == null
+          ? "-"
+          : memoryLimit && memoryLimit > 0
+            ? `${formatMetricValue("managed_memory_usage_bytes", memoryUsage)} / ${formatMetricValue("managed_memory_limit_bytes", memoryLimit)}`
+            : formatMetricValue("managed_memory_usage_bytes", memoryUsage),
+      history: history.map((item) => item.metrics.managed_memory_usage_bytes ?? 0),
+      progress: memoryPercent == null ? undefined : { percent: memoryPercent },
+      subtitle: memoryPercent == null ? undefined : `${memoryPercent.toFixed(1)}% used`,
+    },
+    {
+      key: "managed_swap_usage_bytes",
+      label: "Swap",
+      value: swapDisabled
+        ? "Disabled"
+        : swapUsage == null
+          ? "-"
+          : swapLimit === -1
+            ? `${formatMetricValue("managed_swap_usage_bytes", swapUsage)} / unlimited`
+            : swapLimit && swapLimit > 0
+              ? `${formatMetricValue("managed_swap_usage_bytes", swapUsage)} / ${formatMetricValue("managed_swap_limit_bytes", swapLimit)}`
+              : formatMetricValue("managed_swap_usage_bytes", swapUsage),
+      history: swapDisabled
+        ? []
+        : history.map((item) => item.metrics.managed_swap_usage_bytes ?? 0),
+      progress: swapDisabled || swapPercent == null ? undefined : { percent: swapPercent },
+      subtitle: swapDisabled || swapPercent == null ? undefined : `${swapPercent.toFixed(1)}% used`,
+    },
+    {
+      key: "managed_pids",
+      label: "PIDs",
+      value: formatMetricValue("managed_pids", latest.metrics.managed_pids ?? null),
+      history: history.map((item) => item.metrics.managed_pids ?? 0),
+    },
+  ];
 }
 
 export function DatabaseOverviewTab({
@@ -24,19 +106,36 @@ export function DatabaseOverviewTab({
   monitoringLoading,
 }: DatabaseOverviewTabProps) {
   const latest = history.at(-1);
-  const showMonitoring = canViewMonitoring && healthStatus !== "offline";
-  const overviewMetrics = useMemo<
-    Array<{
-      key: string;
-      label: string;
-      value: string;
-      history: number[];
-      progress?: { percent: number; color?: string };
-      sparklineMax?: number;
-      subtitle?: string;
-    }>
-  >(() => {
+  const showMonitoring =
+    canViewMonitoring && healthStatus !== "offline" && database.managed?.status !== "paused";
+  const overviewMetrics = useMemo<OverviewMetric[]>(() => {
     if (!latest) return [];
+    const appendManaged = (metrics: OverviewMetric[]) => {
+      if (!database.managed) return metrics;
+
+      const managedMetrics = managedRuntimeMetrics(database, latest, history);
+      const diskMetricKey =
+        database.type === "clickhouse" ? "disk_used_pct" : "database_size_bytes";
+      const diskMetric = metrics.find((metric) => metric.key === diskMetricKey);
+      const runtimeByKey = new Map(managedMetrics.map((metric) => [metric.key, metric]));
+      const resourceMetrics = [
+        runtimeByKey.get("managed_memory_usage_bytes"),
+        runtimeByKey.get("managed_cpu_percent"),
+        runtimeByKey.get("managed_swap_usage_bytes"),
+      ].filter((metric): metric is OverviewMetric => metric != null);
+
+      return [
+        ...(diskMetric ? [diskMetric] : []),
+        ...resourceMetrics,
+        ...metrics.filter((metric) => metric.key !== diskMetricKey),
+        ...managedMetrics.filter(
+          (metric) =>
+            metric.key !== "managed_memory_usage_bytes" &&
+            metric.key !== "managed_cpu_percent" &&
+            metric.key !== "managed_swap_usage_bytes"
+        ),
+      ];
+    };
 
     if (database.type === "postgres") {
       const active = latest.metrics.active_connections ?? null;
@@ -51,13 +150,14 @@ export function DatabaseOverviewTab({
       const writeBlocksPerSec = latest.metrics.write_blocks_per_sec ?? null;
       const databaseSizeBytes = latest.metrics.database_size_bytes ?? null;
       const sizeLimitBytes =
-        database.manualSizeLimitMb != null ? database.manualSizeLimitMb * 1024 * 1024 : null;
+        database.managed?.storageSizeBytes ??
+        (database.manualSizeLimitMb != null ? database.manualSizeLimitMb * 1024 * 1024 : null);
       const databaseSizePct =
         databaseSizeBytes != null && sizeLimitBytes && sizeLimitBytes > 0
           ? (databaseSizeBytes / sizeLimitBytes) * 100
           : null;
 
-      return [
+      return appendManaged([
         {
           key: "latency_ms",
           label: "Latency",
@@ -130,7 +230,7 @@ export function DatabaseOverviewTab({
           ),
           subtitle: "read / write per sec",
         },
-      ];
+      ]);
     }
 
     if (database.type === "clickhouse") {
@@ -140,7 +240,7 @@ export function DatabaseOverviewTab({
       const diskAvailable = latest.metrics.disk_unreserved_bytes ?? diskFree;
       const diskUsedPercent = latest.metrics.disk_used_pct ?? null;
 
-      return [
+      return appendManaged([
         {
           key: "latency_ms",
           label: "Latency",
@@ -203,14 +303,14 @@ export function DatabaseOverviewTab({
                     : ` · ${formatMetricValue("disk_total_bytes", diskAvailable)} available`
                 } · ${latest.metrics.active_merges ?? 0} merges · ${latest.metrics.pending_mutations ?? 0} mutations`,
         },
-      ];
+      ]);
     }
 
     const usedMemory = latest.metrics.used_memory_bytes ?? null;
     const maxMemory = latest.metrics.maxmemory_bytes ?? null;
     const memoryPct = latest.metrics.memory_pct ?? null;
 
-    return [
+    return appendManaged([
       {
         key: "latency_ms",
         label: "Latency",
@@ -246,7 +346,7 @@ export function DatabaseOverviewTab({
         ),
         history: history.map((item) => item.metrics.instantaneous_ops_per_sec ?? 0),
       },
-    ];
+    ]);
   }, [database, history, latest]);
 
   return (
@@ -284,14 +384,32 @@ export function DatabaseOverviewTab({
           title="Connection Details"
           bodyClassName="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border"
         >
-          <DetailRow
-            label="Endpoint"
-            value={
-              <span className="block break-all font-mono">
-                {database.host}:{database.port}
-              </span>
-            }
-          />
+          {database.managed ? (
+            <DetailRow label="Connection" value="Secure managed link" />
+          ) : (
+            <DetailRow
+              label="Endpoint"
+              value={
+                <span className="block break-all font-mono">
+                  {database.host}:{database.port}
+                </span>
+              }
+            />
+          )}
+          {database.managed?.publishedPort != null && database.managed.endpointHost && (
+            <>
+              <DetailRow
+                label="Host"
+                value={
+                  <span className="block break-all font-mono">{database.managed.endpointHost}</span>
+                }
+              />
+              <DetailRow
+                label="Published TCP Port"
+                value={<span className="font-mono">{database.managed.publishedPort}</span>}
+              />
+            </>
+          )}
           <DetailRow
             label="Target"
             value={<span className="font-mono">{database.databaseName || "-"}</span>}

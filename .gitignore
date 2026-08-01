@@ -40,3 +40,4 @@ update-signing-private.pem.b64
 .pnpm-store
 .shannon
 .playwright-mcp
+.workflow/

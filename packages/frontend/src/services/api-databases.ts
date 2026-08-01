@@ -1,5 +1,11 @@
 import type {
   DatabaseConnection,
+  ManagedDatabase,
+  ManagedDatabaseBinding,
+  ManagedDatabaseBindingCreateInput,
+  ManagedDatabaseBindingDeleteInput,
+  ManagedDatabaseCatalogEntry,
+  ManagedDatabaseCreateInput,
   PaginatedResponse,
   PostgresTableMetadata,
   RedisKeyRecord,
@@ -60,6 +66,144 @@ export function withDatabaseApi<TBase extends ApiClientBaseConstructor>(Base: TB
           method: "POST",
           body: JSON.stringify(data),
         })
+      );
+    }
+
+    // ── Managed databases ──────────────────────────────────────────
+
+    async listManagedDatabaseCatalog(): Promise<ManagedDatabaseCatalogEntry[]> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabaseCatalogEntry[] }>("/databases/managed/catalog")
+      );
+    }
+
+    async listManagedDatabases(): Promise<ManagedDatabase[]> {
+      return this.unwrapData(this.request<{ data: ManagedDatabase[] }>("/databases/managed"));
+    }
+
+    async getManagedDatabase(id: string): Promise<ManagedDatabase> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabase }>(`/databases/managed/${encodeURIComponent(id)}`)
+      );
+    }
+
+    async createManagedDatabase(data: ManagedDatabaseCreateInput): Promise<ManagedDatabase> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabase }>("/databases/managed", {
+          method: "POST",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async updateManagedDatabase(
+      id: string,
+      data: Omit<Partial<ManagedDatabaseCreateInput>, "publishedPort"> & {
+        publishedPort?: number | null;
+        tags?: string[];
+      }
+    ): Promise<ManagedDatabase> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabase }>(`/databases/managed/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async deleteManagedDatabase(id: string): Promise<void> {
+      await this.request<void>(`/databases/managed/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+    }
+
+    async retryManagedDatabaseProvisioning(id: string): Promise<ManagedDatabase> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabase }>(
+          `/databases/managed/${encodeURIComponent(id)}/retry-provisioning`,
+          { method: "POST" }
+        )
+      );
+    }
+
+    async pauseManagedDatabase(id: string): Promise<ManagedDatabase> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabase }>(
+          `/databases/managed/${encodeURIComponent(id)}/pause`,
+          {
+            method: "POST",
+          }
+        )
+      );
+    }
+
+    async unpauseManagedDatabase(id: string): Promise<ManagedDatabase> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabase }>(
+          `/databases/managed/${encodeURIComponent(id)}/unpause`,
+          {
+            method: "POST",
+          }
+        )
+      );
+    }
+
+    async revealManagedDatabaseCredentials(id: string): Promise<Record<string, unknown>> {
+      return this.unwrapData(
+        this.request<{ data: Record<string, unknown> }>(
+          `/databases/managed/${encodeURIComponent(id)}/reveal-credentials`
+        )
+      );
+    }
+
+    async rotateManagedDatabaseDirectCredentials(id: string): Promise<Record<string, unknown>> {
+      return this.unwrapData(
+        this.request<{ data: Record<string, unknown> }>(
+          `/databases/managed/${encodeURIComponent(id)}/rotate-direct-credentials`,
+          { method: "POST" }
+        )
+      );
+    }
+
+    async listManagedDatabaseBindings(id: string): Promise<ManagedDatabaseBinding[]> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabaseBinding[] }>(
+          `/databases/managed/${encodeURIComponent(id)}/bindings`
+        )
+      );
+    }
+
+    async createManagedDatabaseBinding(
+      id: string,
+      data: ManagedDatabaseBindingCreateInput
+    ): Promise<ManagedDatabaseBinding> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabaseBinding }>(
+          `/databases/managed/${encodeURIComponent(id)}/bindings`,
+          { method: "POST", body: JSON.stringify(data) }
+        )
+      );
+    }
+
+    async deleteManagedDatabaseBinding(
+      id: string,
+      bindingId: string,
+      data?: ManagedDatabaseBindingDeleteInput
+    ): Promise<void> {
+      await this.request<void>(
+        `/databases/managed/${encodeURIComponent(id)}/bindings/${encodeURIComponent(bindingId)}`,
+        { method: "DELETE", ...(data ? { body: JSON.stringify(data) } : {}) }
+      );
+    }
+
+    async revealManagedDatabaseBindingCredentials(
+      id: string,
+      bindingId: string
+    ): Promise<Record<string, unknown>> {
+      return this.unwrapData(
+        this.request<{ data: Record<string, unknown> }>(
+          `/databases/managed/${encodeURIComponent(id)}/bindings/${encodeURIComponent(bindingId)}/reveal-credentials`
+        )
       );
     }
 

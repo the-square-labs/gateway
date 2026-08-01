@@ -1,0 +1,1 @@
+ALTER TABLE "managed_database_instances" ADD COLUMN "encrypted_direct_credentials" text;

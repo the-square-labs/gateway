@@ -43,6 +43,121 @@ export const DatabaseListQuerySchema = z.object({
   healthStatus: z.enum(['online', 'offline', 'degraded', 'unknown']).optional(),
 });
 
+const managedDatabaseTypeSchema = z.enum(['postgres', 'redis', 'clickhouse']);
+const managedDatabaseNameSchema = z.string().trim().min(1).max(255);
+const managedDatabaseVersionSchema = z.string().trim().min(1).max(128);
+
+export const ManagedDatabaseListQuerySchema = z.object({
+  nodeId: z.string().uuid().optional(),
+  type: managedDatabaseTypeSchema.optional(),
+});
+
+export const CreateManagedDatabaseSchema = z
+  .object({
+    name: managedDatabaseNameSchema,
+    type: managedDatabaseTypeSchema,
+    version: managedDatabaseVersionSchema,
+    nodeId: z.string().uuid(),
+    storageSizeGb: z.number().int().min(1).max(16_384),
+    cpuCores: z.number().min(0.1).max(128),
+    memoryMb: z.number().int().min(128).max(1_048_576),
+    swapMb: z.number().int().min(0).max(1_048_576).default(0),
+    publishTcp: z.boolean().default(false),
+    publishedPort: z.number().int().min(1).max(65535).optional(),
+    databaseName: z.string().trim().min(1).max(63).optional(),
+    ownerUsername: z.string().trim().min(1).max(63).optional(),
+    clickhouseConfigXml: z.string().trim().min(1).max(32_768).optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.publishedPort !== undefined && !value.publishTcp) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['publishedPort'],
+        message: 'publishedPort requires publishTcp',
+      });
+    }
+    if (value.clickhouseConfigXml !== undefined && value.type !== 'clickhouse') {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['clickhouseConfigXml'],
+        message: 'clickhouseConfigXml is only supported for ClickHouse',
+      });
+    }
+    if (value.type === 'redis' && value.ownerUsername !== undefined && value.ownerUsername !== 'default') {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ownerUsername'],
+        message: 'Redis uses the built-in default owner username',
+      });
+    }
+  });
+
+export const UpdateManagedDatabaseSchema = z
+  .object({
+    name: managedDatabaseNameSchema.optional(),
+    tags: tagsSchema,
+    storageSizeGb: z.number().int().min(1).max(16_384).optional(),
+    cpuCores: z.number().min(0.1).max(128).optional(),
+    memoryMb: z.number().int().min(128).max(1_048_576).optional(),
+    swapMb: z.number().int().min(0).max(1_048_576).optional(),
+    publishTcp: z.boolean().optional(),
+    publishedPort: z.number().int().min(1).max(65535).nullable().optional(),
+    clickhouseConfigXml: z.string().trim().min(1).max(32_768).optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, { message: 'At least one field must be provided' });
+
+const bindingEnvironmentVariableSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'Environment variable names must be valid identifiers');
+
+const bindingEnvironmentSchema = z
+  .object({
+    connectionUri: bindingEnvironmentVariableSchema.optional(),
+    host: bindingEnvironmentVariableSchema.optional(),
+    port: bindingEnvironmentVariableSchema.optional(),
+    database: bindingEnvironmentVariableSchema.optional(),
+    username: bindingEnvironmentVariableSchema.optional(),
+    password: bindingEnvironmentVariableSchema.optional(),
+  })
+  .default({})
+  .superRefine((value, context) => {
+    const entries = Object.entries(value).filter(([, variable]) => variable !== undefined) as Array<[string, string]>;
+    const seen = new Set<string>();
+    for (const [field, variable] of entries) {
+      if (seen.has(variable)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field],
+          message: 'Each binding field must use a distinct environment variable name',
+        });
+      }
+      seen.add(variable);
+    }
+  });
+
+export const CreateManagedDatabaseBindingSchema = z.object({
+  targetNodeId: z.string().uuid(),
+  targetType: z.enum(['container', 'deployment']),
+  targetResourceId: z.string().trim().min(1).max(255),
+  environment: bindingEnvironmentSchema,
+  /**
+   * Container-only opt-in. The caller explicitly acknowledges that a managed
+   * binding replaces existing ordinary env values and/or Docker secrets with
+   * the same names.
+   */
+  replaceExistingEnvironment: z.boolean().optional(),
+  /** Complete ordinary-container env draft to persist with this binding update. */
+  targetEnvironment: z.record(z.string(), z.string()).optional(),
+});
+
+export const DeleteManagedDatabaseBindingSchema = z.object({
+  /** Complete ordinary-container env draft to persist with the binding removal. */
+  targetEnvironment: z.record(z.string(), z.string()).optional(),
+});
+
 export const CreateDatabaseConnectionSchema = z.discriminatedUnion('type', [
   z.object({
     name: nameSchema,
@@ -212,3 +327,7 @@ export const ExecuteRedisCommandSchema = z.object({
 export type DatabaseListQuery = z.infer<typeof DatabaseListQuerySchema>;
 export type CreateDatabaseConnectionInput = z.infer<typeof CreateDatabaseConnectionSchema>;
 export type UpdateDatabaseConnectionInput = z.infer<typeof UpdateDatabaseConnectionSchema>;
+export type ManagedDatabaseListQuery = z.infer<typeof ManagedDatabaseListQuerySchema>;
+export type CreateManagedDatabaseInput = z.infer<typeof CreateManagedDatabaseSchema>;
+export type UpdateManagedDatabaseInput = z.infer<typeof UpdateManagedDatabaseSchema>;
+export type CreateManagedDatabaseBindingInput = z.infer<typeof CreateManagedDatabaseBindingSchema>;

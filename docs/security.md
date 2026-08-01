@@ -13,6 +13,10 @@ Gateway defaults to security controls that reduce the most common self-hosted co
 - No long-lived daemon shared secret. First enrollment uses a one-time token plus a pinned Gateway gRPC TLS leaf fingerprint, then replaces the token with an mTLS client certificate.
 - No global trust for programmatic tokens. API/OAuth scopes are bounded by the owning user's current effective permissions.
 - No silent secret reveal. Certificate exports, database credential reveal, Docker secret access, and dangerous OAuth scopes require explicit permissions.
+- Managed databases are private by default. Application bindings use Gateway-authenticated tunnels and per-binding engine identities; a published database TCP endpoint is an explicit opt-in and is not tunnel-encrypted unless native database TLS is configured.
+- A connector sidecar exposes only an ordinary database TCP endpoint on a private Docker network. It has no database credentials and no Gateway mTLS material; a daemon-owned Unix socket admits it by a binding ID and carries traffic on the daemon's existing mTLS session.
+- Binding identities are least-privilege: Redis bindings receive ordinary data, connection, transaction, and pub/sub commands plus explicit script execution/load commands; they cannot administer ACLs, flush/kill scripts, or manage Redis Functions. Connector, daemon, and Gateway enforce per-binding/session admission caps and close idle tunnel sessions.
+- Managed database lifecycle commands carry durable operation IDs. A lost command response is reconciled against daemon state before Gateway reports a terminal result, so a delayed create, resize, or delete cannot be mistaken for a different operation.
 - No anonymous control plane. Administrative and automation actions are permission-gated and audited.
 
 Gateway still needs to be treated as sensitive infrastructure. Run it in an isolated VM or dedicated host, protect `.env`, back up secrets carefully, and limit Docker socket access to trusted operators.
@@ -105,7 +109,7 @@ Authorization uses granular scopes:
 - Write-capable scopes satisfy matching read/view checks, but resource-scoped grants stay bounded to the same resource.
 - Create-only and destructive-only scopes do not grant browse access by themselves.
 
-Sensitive operations have dedicated scopes. Examples include Docker mount editing, Docker secret reveal, database credential reveal, certificate export, node console access, container file access, raw nginx validation bypass, and audit log access.
+Sensitive operations have dedicated scopes. Examples include Docker mount editing, Docker secret reveal, database credential reveal, certificate export, node console access, container file access, raw nginx validation bypass, and audit log access. Managed databases reuse the database create, edit, delete, and credential-reveal scopes; generated binding secrets are not displayed by default.
 
 Docker mount editing is guarded by `docker:containers:mounts`. Gateway does not maintain a hardcoded host-path denylist for this scope; users granted it for a node are trusted to define host bind mounts for that node, including high-risk control surfaces such as Docker sockets.
 

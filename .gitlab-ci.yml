@@ -129,6 +129,17 @@ variables:
         - config/update-trust/**/*
         - scripts/sync-update-trust-anchor.sh
 
+.daemon-database-connector-rules: &daemon-database-connector-rules
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-database-connector$/
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - packages/daemons/go.work
+        - packages/daemons/database-connector/**/*
+        - packages/daemons/shared/**/*
+        - config/update-trust/**/*
+        - scripts/sync-update-trust-anchor.sh
+
 # ── Tests ─────────────────────────────────────────────────────────
 
 test-frontend:
@@ -173,6 +184,13 @@ test-monitoring-daemon:
   script:
     - go test ./monitoring/... ./shared/...
   <<: *daemon-monitoring-rules
+
+test-database-connector:
+  stage: test
+  extends: .go-job
+  script:
+    - go test ./database-connector/... ./shared/...
+  <<: *daemon-database-connector-rules
 
 # ── Gateway (backend + frontend Docker image) ─────────────────────
 # Triggered by tags like: v1.3.0
@@ -266,6 +284,28 @@ publish-gateway-aliases:
     - echo "Pushed $IMAGE:${CI_COMMIT_TAG#v}, $IMAGE:latest after signing"
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+publish-database-connector:
+  stage: publish
+  image: ${DOCKER_CI_IMAGE}
+  needs:
+    - job: test-database-connector
+  <<: *docker-login
+  script:
+    - |
+      CONNECTOR_IMAGE="${CI_REGISTRY_IMAGE}/database-connector:${CI_COMMIT_TAG}"
+      docker build --tag "$CONNECTOR_IMAGE" packages/daemons/database-connector
+      docker push "$CONNECTOR_IMAGE"
+      DIGEST=$(docker buildx imagetools inspect "$CONNECTOR_IMAGE" | awk '/^Digest:[[:space:]]*sha256:/ {print $2; exit}')
+      echo "$DIGEST" | grep -Eq '^sha256:[a-f0-9]{64}$' || (echo "Could not resolve valid pushed database connector image digest" && exit 1)
+      printf '%s\n' "$DIGEST" > database-connector.digest
+      printf 'Published %s@%s\n' "$CONNECTOR_IMAGE" "$DIGEST"
+  artifacts:
+    paths:
+      - database-connector.digest
+    expire_in: 1 hour
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-database-connector$/
 
 release:
   stage: release

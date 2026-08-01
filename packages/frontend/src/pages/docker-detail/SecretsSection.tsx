@@ -24,6 +24,7 @@ interface SecretsSectionProps {
   setDeletedSecretIds: React.Dispatch<React.SetStateAction<Set<string>>>;
   duplicateSecretIndices: Set<number>;
   invalidKeyPattern: RegExp;
+  hiddenKeys?: Set<string>;
 }
 
 export function SecretsSection({
@@ -37,8 +38,12 @@ export function SecretsSection({
   setDeletedSecretIds,
   duplicateSecretIndices,
   invalidKeyPattern,
+  hiddenKeys = new Set(),
 }: SecretsSectionProps) {
   const [revealedSecrets, setRevealedSecrets] = useState<Set<number>>(new Set());
+  const visibleSecretRows = secretRows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => !hiddenKeys.has(row.key.trim()));
 
   const addSecretRow = () =>
     setSecretRows((prev) => [...prev, { key: "", value: "", dirty: true }]);
@@ -97,7 +102,7 @@ export function SecretsSection({
         ) : null
       }
     >
-      {secretRows.length > 0 && (
+      {visibleSecretRows.length > 0 && (
         <div className="grid grid-cols-[1fr_1fr] border-b border-border bg-muted text-xs font-medium text-muted-foreground uppercase tracking-wider">
           <div className="px-3 py-2">Key</div>
           <div className="px-3 py-2 border-l border-border">Value</div>
@@ -105,7 +110,7 @@ export function SecretsSection({
       )}
 
       <div>
-        {secretRows.map((row, idx) => {
+        {visibleSecretRows.map(({ row, index: idx }) => {
           const isNew = !row.id;
           const isMasked = row.value === "••••••••";
           const isRevealed = revealedSecrets.has(idx);
@@ -175,7 +180,7 @@ export function SecretsSection({
         })}
       </div>
 
-      {secretRows.length === 0 && (
+      {visibleSecretRows.length === 0 && (
         <div className="flex items-center justify-center py-8">
           <p className="text-sm text-muted-foreground">
             No secrets configured.

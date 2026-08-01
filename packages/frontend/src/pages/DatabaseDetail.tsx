@@ -20,10 +20,17 @@ import { useAuthStore } from "@/stores/auth";
 import { usePinnedDatabasesStore } from "@/stores/pinned-databases";
 import type { DatabaseConnection, DatabaseMetricSnapshot } from "@/types";
 import { DatabaseConsoleTab } from "./database-detail/DatabaseConsoleTab";
+import { DatabaseCredentialsDialog } from "./database-detail/DatabaseCredentialsDialog";
 import { DatabaseHeader } from "./database-detail/DatabaseHeader";
 import { DatabaseOverviewTab } from "./database-detail/DatabaseOverviewTab";
 import { DatabaseSettingsTab } from "./database-detail/DatabaseSettingsTab";
+import { ManagedDatabaseSettingsTab } from "./database-detail/ManagedDatabaseSettingsTab";
+import { ResizeManagedDatabaseDialog } from "./database-detail/ResizeManagedDatabaseDialog";
 import { SqlExplorer } from "./database-detail/SqlExplorer";
+
+export function isPrivateManagedDatabase(database: DatabaseConnection) {
+  return database.managed !== undefined && database.managed.publishedPort === null;
+}
 
 export function DatabaseDetail({
   resolvedDatabaseId,
@@ -48,15 +55,23 @@ export function DatabaseDetail({
   const [monitoringLoading, setMonitoringLoading] = useState(true);
   const [pinOpen, setPinOpen] = useState(false);
   const [credentialsOpen, setCredentialsOpen] = useState(false);
+  const [privateManagedInfoOpen, setPrivateManagedInfoOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [resizeOpen, setResizeOpen] = useState(false);
   const [explorerFocused, setExplorerFocused] = useState(false);
   const [revealedCredentials, setRevealedCredentials] = useState<Record<string, unknown> | null>(
     null
   );
   const [loadingCredentials, setLoadingCredentials] = useState(false);
   const { isPinnedSidebar, toggleSidebar } = usePinnedDatabasesStore();
+  const loadedDatabaseId = database?.id ?? "";
+  const isManagedPaused = database?.managed?.status === "paused";
 
   const canEdit = !!(id && (hasScope("databases:edit") || hasScope(`databases:edit:${id}`)));
+  const canManageSettings = canEdit && (!database?.managed || database.managed.status === "ready");
+  const canResize = canManageSettings && database?.managed?.status === "ready";
+  const canPause = canEdit && database?.managed?.status === "ready";
+  const canUnpause = canEdit && database?.managed?.status === "paused";
   const canDelete = !!(id && (hasScope("databases:delete") || hasScope(`databases:delete:${id}`)));
   const canRead = !!(
     id &&
@@ -109,20 +124,27 @@ export function DatabaseDetail({
   }, [load]);
 
   useEffect(() => {
+    if (!loadedDatabaseId) return;
+    setRevealedCredentials(null);
+    setCredentialsOpen(false);
+  }, [loadedDatabaseId]);
+
+  useEffect(() => {
     if (
       ((database && !(database.capabilities?.catalogExplorer ?? database.type !== "redis")) ||
-        liveHealthStatus === "offline") &&
+        liveHealthStatus === "offline" ||
+        isManagedPaused) &&
       activeTab === "explorer"
     ) {
       setActiveTab("overview");
     }
-  }, [activeTab, database, liveHealthStatus, setActiveTab]);
+  }, [activeTab, database, isManagedPaused, liveHealthStatus, setActiveTab]);
 
   useEffect(() => {
-    if (liveHealthStatus === "offline" && activeTab === "console") {
+    if ((liveHealthStatus === "offline" || isManagedPaused) && activeTab === "console") {
       setActiveTab("overview");
     }
-  }, [activeTab, liveHealthStatus, setActiveTab]);
+  }, [activeTab, isManagedPaused, liveHealthStatus, setActiveTab]);
 
   useEffect(() => {
     if (
@@ -137,11 +159,15 @@ export function DatabaseDetail({
     if (!database) return;
     setLiveHealthStatus(database.healthStatus);
     setMonitoringHistory([]);
-    setMonitoringLoading(canViewMonitoring && database.healthStatus !== "offline");
+    setMonitoringLoading(
+      canViewMonitoring &&
+        database.healthStatus !== "offline" &&
+        database.managed?.status !== "paused"
+    );
   }, [canViewMonitoring, database]);
 
   useEffect(() => {
-    if (!database || !canViewMonitoring) {
+    if (!database || !canViewMonitoring || database.managed?.status === "paused") {
       setMonitoringLoading(false);
       return;
     }
@@ -239,15 +265,78 @@ export function DatabaseDetail({
 
   const revealCredentials = async () => {
     if (!database || !canReveal) return;
+    if (isPrivateManagedDatabase(database)) {
+      setPrivateManagedInfoOpen(true);
+      return;
+    }
     setCredentialsOpen(true);
     if (revealedCredentials) return;
     setLoadingCredentials(true);
     try {
-      setRevealedCredentials(await api.revealDatabaseCredentials(database.id));
+      setRevealedCredentials(
+        database.managed
+          ? await api.revealManagedDatabaseCredentials(database.managed.id)
+          : await api.revealDatabaseCredentials(database.id)
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to reveal credentials");
     } finally {
       setLoadingCredentials(false);
+    }
+  };
+
+  const rotateDirectCredentials = async () => {
+    if (!database?.managed || !canEdit || database.managed.publishedPort == null) return;
+    const ok = await confirm({
+      title: "Rotate Direct-Access Credentials",
+      description:
+        "Existing direct TCP clients will stop authenticating. Secure database links are not affected.",
+      confirmLabel: "Rotate credentials",
+      variant: "destructive",
+    });
+    if (!ok) return;
+    setLoadingCredentials(true);
+    try {
+      const credentials = await api.rotateManagedDatabaseDirectCredentials(database.managed.id);
+      setRevealedCredentials(credentials);
+      setCredentialsOpen(true);
+      toast.success("Direct-access credentials rotated");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to rotate direct-access credentials"
+      );
+    } finally {
+      setLoadingCredentials(false);
+    }
+  };
+
+  const pause = async () => {
+    if (!database?.managed || !canPause) return;
+    const ok = await confirm({
+      title: "Pause database",
+      description:
+        "This pauses the database container and disconnects active clients. Health checks, metrics, Explorer, and Console will be disabled until you unpause it.",
+      confirmLabel: "Pause database",
+      variant: "default",
+    });
+    if (!ok) return;
+    try {
+      await api.pauseManagedDatabase(database.managed.id);
+      toast.success("Database paused");
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to pause database");
+    }
+  };
+
+  const unpause = async () => {
+    if (!database?.managed || !canUnpause) return;
+    try {
+      await api.unpauseManagedDatabase(database.managed.id);
+      toast.success("Database unpaused");
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to unpause database");
     }
   };
 
@@ -265,8 +354,9 @@ export function DatabaseDetail({
     (database.capabilities?.sqlConsole ?? database.type !== "redis") ||
     (database.capabilities?.commandConsole ?? database.type === "redis");
   const hideDatabaseChrome = explorerFocused && activeTab === "explorer" && supportsExplorer;
-  const consoleDisabled = liveHealthStatus === "offline";
-  const explorerDisabled = liveHealthStatus === "offline";
+  const displayHealthStatus = isManagedPaused ? "paused" : liveHealthStatus;
+  const consoleDisabled = liveHealthStatus === "offline" || isManagedPaused;
+  const explorerDisabled = liveHealthStatus === "offline" || isManagedPaused;
 
   return (
     <PageTransition>
@@ -283,19 +373,31 @@ export function DatabaseDetail({
           <>
             <DatabaseHeader
               database={database}
-              healthStatus={liveHealthStatus}
-              canEdit={canEdit}
+              healthStatus={displayHealthStatus}
+              canEdit={canManageSettings}
+              canResize={canResize}
+              canPause={canPause}
+              canUnpause={canUnpause}
               canReveal={canReveal}
+              canRotateDirectCredentials={
+                canManageSettings && database.managed?.publishedPort != null
+              }
               canDelete={canDelete}
               onOpenPin={() => setPinOpen(true)}
               onBack={() => navigate("/databases")}
               onTest={() => void testConnection()}
               onOpenSettings={() => setSettingsOpen(true)}
+              onOpenResize={() => setResizeOpen(true)}
+              onPause={() => void pause()}
+              onUnpause={() => void unpause()}
               onRevealCredentials={() => void revealCredentials()}
+              onRotateDirectCredentials={() => void rotateDirectCredentials()}
               onRemove={() => void remove()}
             />
 
-            <HealthBars history={liveHealthHistory} currentStatus={liveHealthStatus} />
+            {!isManagedPaused && (
+              <HealthBars history={liveHealthHistory} currentStatus={liveHealthStatus} />
+            )}
           </>
         )}
 
@@ -338,7 +440,7 @@ export function DatabaseDetail({
             <DatabaseOverviewTab
               database={database}
               canViewMonitoring={canViewMonitoring}
-              healthStatus={liveHealthStatus}
+              healthStatus={displayHealthStatus}
               history={monitoringHistory}
               monitoringLoading={monitoringLoading}
             />
@@ -360,7 +462,7 @@ export function DatabaseDetail({
                 />
               ) : explorerDisabled ? (
                 <div className="border border-border bg-card p-8 text-center text-sm text-muted-foreground">
-                  Explorer is unavailable while the database is offline.
+                  Explorer is unavailable while the database is offline or paused.
                 </div>
               ) : (
                 <div className="border border-border bg-card p-8 text-center text-sm text-muted-foreground">
@@ -381,21 +483,25 @@ export function DatabaseDetail({
         </Tabs>
       </div>
 
-      <Dialog open={credentialsOpen} onOpenChange={setCredentialsOpen}>
-        <DialogContent className="max-w-3xl">
+      <DatabaseCredentialsDialog
+        database={database}
+        credentials={revealedCredentials}
+        loading={loadingCredentials}
+        open={credentialsOpen}
+        onOpenChange={setCredentialsOpen}
+      />
+
+      <Dialog open={privateManagedInfoOpen} onOpenChange={setPrivateManagedInfoOpen}>
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Stored Credentials</DialogTitle>
+            <DialogTitle>Private managed database</DialogTitle>
           </DialogHeader>
-          <div className="border border-border bg-card overflow-hidden">
-            {loadingCredentials ? (
-              <div className="p-6 text-sm text-muted-foreground">Revealing credentials...</div>
-            ) : (
-              <pre className="overflow-x-auto p-4 text-sm whitespace-pre-wrap">
-                {revealedCredentials
-                  ? JSON.stringify(revealedCredentials, null, 2)
-                  : "Credentials are hidden."}
-              </pre>
-            )}
+          <div className="space-y-3 text-sm text-muted-foreground">
+            <p>
+              This database has no published network interface. It currently accepts connections
+              only through a secure managed database link.
+            </p>
+            <p>Publish a TCP port in Database Settings to enable direct connections.</p>
           </div>
         </DialogContent>
       </Dialog>
@@ -434,20 +540,39 @@ export function DatabaseDetail({
             <DialogHeader>
               <DialogTitle>Database Settings</DialogTitle>
             </DialogHeader>
-            <DatabaseSettingsTab
-              database={database}
-              onSaved={(updated) => {
-                setSettingsOpen(false);
-                setDatabase(updated);
-                if (updated.slug !== routeSlug) {
-                  navigate(databaseRoute(updated.slug, activeTab), { replace: true });
-                } else {
+            {database.managed ? (
+              <ManagedDatabaseSettingsTab
+                database={database}
+                onSaved={() => {
+                  setSettingsOpen(false);
                   void load();
-                }
-              }}
-            />
+                }}
+              />
+            ) : (
+              <DatabaseSettingsTab
+                database={database}
+                onSaved={(updated) => {
+                  setSettingsOpen(false);
+                  setDatabase(updated);
+                  if (updated.slug !== routeSlug) {
+                    navigate(databaseRoute(updated.slug, activeTab), { replace: true });
+                  } else {
+                    void load();
+                  }
+                }}
+              />
+            )}
           </DialogContent>
         </Dialog>
+      )}
+
+      {canResize && (
+        <ResizeManagedDatabaseDialog
+          database={database}
+          open={resizeOpen}
+          onOpenChange={setResizeOpen}
+          onResized={() => void load()}
+        />
       )}
     </PageTransition>
   );

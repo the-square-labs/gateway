@@ -1,6 +1,7 @@
+import { AnimatePresence, motion } from "framer-motion";
 import { Database as DatabaseIcon, FolderPlus, Plus, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -18,6 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -25,12 +27,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { databaseRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
-import type { DatabaseConnection } from "@/types";
+import type {
+  DatabaseConnection,
+  DatabaseType,
+  ManagedDatabaseCatalogEntry,
+  ManagedDatabaseCreateInput,
+  Node,
+} from "@/types";
 import {
   buildDatabasePayload,
   canCreateDatabase,
@@ -38,6 +48,11 @@ import {
   DatabaseConnectionForm,
   draftFromConnection,
 } from "./database-detail/DatabaseConnectionForm";
+import {
+  canDeployManagedDatabase,
+  type ManagedDatabaseCapacity,
+  managedDatabaseCapacity,
+} from "./database-detail/managed-database-capacity";
 
 const HEALTH_BADGE: Record<string, "success" | "secondary" | "warning" | "destructive"> = {
   online: "success",
@@ -45,6 +60,42 @@ const HEALTH_BADGE: Record<string, "success" | "secondary" | "warning" | "destru
   offline: "destructive",
   unknown: "secondary",
 };
+
+const DEFAULT_MANAGED_DATABASE_VERSIONS: Record<DatabaseType, string[]> = {
+  postgres: ["17.5", "16.9"],
+  redis: ["7.4.2", "7.2.8"],
+  clickhouse: ["25.3.2.39", "24.8.14.39"],
+};
+
+const MANAGED_DATABASE_FORM_ANIMATION = {
+  initial: { opacity: 0, y: 8 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -4 },
+  transition: { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] as const },
+};
+
+function catalogVersions(catalog: ManagedDatabaseCatalogEntry[], type: DatabaseType): string[] {
+  return (
+    catalog.find((entry) => entry.type === type)?.versions ??
+    DEFAULT_MANAGED_DATABASE_VERSIONS[type]
+  );
+}
+
+function defaultManagedDraft(
+  catalog: ManagedDatabaseCatalogEntry[] = []
+): ManagedDatabaseCreateInput {
+  return {
+    name: "",
+    type: "postgres",
+    version: catalogVersions(catalog, "postgres")[0]!,
+    nodeId: "",
+    storageSizeGb: 10,
+    cpuCores: 1,
+    memoryMb: 1024,
+    swapMb: 0,
+    publishTcp: false,
+  };
+}
 
 const DATABASE_TAG_COLORS = {
   blue: "bg-blue-500/15 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400",
@@ -96,7 +147,7 @@ function formatLastCheck(dateStr: string | null): string {
   return date.toLocaleDateString();
 }
 
-function formatHealthLabel(status: DatabaseConnection["healthStatus"]): string {
+function formatHealthLabel(status: DatabaseConnection["healthStatus"] | "paused"): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
@@ -187,8 +238,240 @@ function DatabaseTagSummary({ tags, type }: { tags: string[]; type: DatabaseConn
   );
 }
 
-export function Databases() {
+function ManagedDatabaseCreateForm({
+  draft,
+  nodes,
+  catalog,
+  capacity,
+  onChange,
+}: {
+  draft: ManagedDatabaseCreateInput;
+  nodes: Node[];
+  catalog: ManagedDatabaseCatalogEntry[];
+  capacity: ManagedDatabaseCapacity;
+  onChange: (draft: ManagedDatabaseCreateInput) => void;
+}) {
+  const set = <K extends keyof ManagedDatabaseCreateInput>(
+    key: K,
+    value: ManagedDatabaseCreateInput[K]
+  ) => onChange({ ...draft, [key]: value });
+  const versions = catalogVersions(catalog, draft.type);
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Gateway provisions a private database on the selected databases node. The owner credentials
+        are shown only once after creation.
+      </p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <label className="text-sm font-medium" htmlFor="managed-db-name">
+            Name
+          </label>
+          <Input
+            id="managed-db-name"
+            value={draft.name}
+            onChange={(event) => set("name", event.target.value)}
+            placeholder="Production database"
+          />
+        </div>
+        <div className="space-y-2">
+          <label className="text-sm font-medium">Engine</label>
+          <Select
+            value={draft.type}
+            onValueChange={(value) => {
+              const type = value as DatabaseType;
+              onChange({ ...draft, type, version: catalogVersions(catalog, type)[0]! });
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="postgres">Postgres</SelectItem>
+              <SelectItem value="redis">Redis</SelectItem>
+              <SelectItem value="clickhouse">ClickHouse</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <label className="text-sm font-medium" htmlFor="managed-db-node">
+            Databases node
+          </label>
+          <Select value={draft.nodeId} onValueChange={(value) => set("nodeId", value)}>
+            <SelectTrigger id="managed-db-node">
+              <SelectValue placeholder="Select node" />
+            </SelectTrigger>
+            <SelectContent>
+              {nodes.map((node) => (
+                <SelectItem key={node.id} value={node.id}>
+                  {node.displayName || node.hostname}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <label className="text-sm font-medium">Curated version</label>
+          <Select value={draft.version} onValueChange={(value) => set("version", value)}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {versions.map((version) => (
+                <SelectItem key={version} value={version}>
+                  {version}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <label className="text-sm font-medium" htmlFor="managed-db-storage">
+            Storage (GB)
+          </label>
+          <Input
+            id="managed-db-storage"
+            type="number"
+            min="1"
+            max={capacity.storageSizeGb}
+            value={draft.storageSizeGb}
+            onChange={(event) => set("storageSizeGb", Number(event.target.value))}
+          />
+          {capacity.storageSizeGb !== undefined && (
+            <p className="text-xs text-muted-foreground">
+              Maximum available now: {capacity.storageSizeGb} GB
+            </p>
+          )}
+        </div>
+        <div className="space-y-2">
+          <label className="text-sm font-medium" htmlFor="managed-db-cpu">
+            CPU cores
+          </label>
+          <Input
+            id="managed-db-cpu"
+            type="number"
+            min="0.25"
+            step="0.25"
+            max={capacity.cpuCores}
+            value={draft.cpuCores}
+            onChange={(event) => set("cpuCores", Number(event.target.value))}
+          />
+          {capacity.cpuCores !== undefined && (
+            <p className="text-xs text-muted-foreground">
+              Maximum available: {capacity.cpuCores} cores
+            </p>
+          )}
+        </div>
+        <div className="space-y-2">
+          <label className="text-sm font-medium" htmlFor="managed-db-memory">
+            Memory (MB)
+          </label>
+          <Input
+            id="managed-db-memory"
+            type="number"
+            min="128"
+            step="128"
+            max={capacity.memoryMb}
+            value={draft.memoryMb}
+            onChange={(event) => set("memoryMb", Number(event.target.value))}
+          />
+          {capacity.memoryMb !== undefined && (
+            <p className="text-xs text-muted-foreground">
+              Maximum available now: {capacity.memoryMb} MB
+            </p>
+          )}
+        </div>
+        <div className="space-y-2">
+          <label className="text-sm font-medium" htmlFor="managed-db-swap">
+            Swap (MB)
+          </label>
+          <Input
+            id="managed-db-swap"
+            type="number"
+            min="0"
+            step="128"
+            max={capacity.swapMb}
+            value={draft.swapMb}
+            onChange={(event) => set("swapMb", Number(event.target.value))}
+          />
+          {capacity.swapMb !== undefined && (
+            <p className="text-xs text-muted-foreground">
+              Maximum available now: {capacity.swapMb} MB
+            </p>
+          )}
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-4 border border-border p-3">
+        <div>
+          <p className="text-sm font-medium">Publish TCP endpoint</p>
+          <p className="text-xs text-muted-foreground">
+            Required only for clients outside Gateway. Native engine TLS is configured separately.
+          </p>
+        </div>
+        <Switch
+          checked={draft.publishTcp}
+          onChange={(checked) =>
+            onChange({
+              ...draft,
+              publishTcp: checked,
+              ...(checked ? {} : { publishedPort: undefined }),
+            })
+          }
+        />
+      </div>
+      {draft.publishTcp && (
+        <div className="space-y-2">
+          <label className="text-sm font-medium" htmlFor="managed-db-published-port">
+            Host TCP port (optional)
+          </label>
+          <Input
+            id="managed-db-published-port"
+            type="number"
+            min="1"
+            max="65535"
+            value={draft.publishedPort ?? ""}
+            onChange={(event) => {
+              const value = event.target.value;
+              set("publishedPort", value === "" ? undefined : Number(value));
+            }}
+            placeholder="Allocate automatically"
+          />
+          <p className="text-xs text-muted-foreground">
+            Leave empty to allocate a free port on the database node. Gateway does not change host
+            firewalls.
+          </p>
+        </div>
+      )}
+      {draft.type === "clickhouse" && (
+        <div className="space-y-2">
+          <label className="text-sm font-medium" htmlFor="managed-db-clickhouse-xml">
+            Optional ClickHouse XML fragment
+          </label>
+          <Textarea
+            id="managed-db-clickhouse-xml"
+            value={draft.clickhouseConfigXml ?? ""}
+            onChange={(event) => set("clickhouseConfigXml", event.target.value || undefined)}
+            placeholder="&lt;clickhouse&gt;…&lt;/clickhouse&gt;"
+          />
+          <p className="text-xs text-muted-foreground">
+            Security, networking and managed data paths cannot be overridden.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function Databases({
+  embedded = false,
+  managedNodeId,
+}: {
+  embedded?: boolean;
+  managedNodeId?: string;
+} = {}) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { hasScope, hasScopedAccess, isLoading: authLoading } = useAuthStore();
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<"all" | "postgres" | "clickhouse" | "redis">("all");
@@ -196,24 +479,42 @@ export function Databases() {
     "all" | "online" | "offline" | "degraded" | "unknown"
   >("all");
   const databaseCacheKey = useMemo(
-    () => `databases:list:${search}:${typeFilter}:${healthFilter}`,
-    [healthFilter, search, typeFilter]
-  );
-  const [rows, setRows] = useState<DatabaseConnection[]>(
     () =>
-      api.getCached<DatabaseConnection[]>("databases:list::all:all") ??
-      api.getCached<DatabaseConnection[]>("databases:list") ??
-      []
+      managedNodeId
+        ? `databases:managed-node:${managedNodeId}:${search}:${typeFilter}:${healthFilter}`
+        : `databases:list:${search}:${typeFilter}:${healthFilter}`,
+    [healthFilter, managedNodeId, search, typeFilter]
+  );
+  const [rows, setRows] = useState<DatabaseConnection[]>(() =>
+    embedded
+      ? []
+      : (api.getCached<DatabaseConnection[]>("databases:list::all:all") ??
+        api.getCached<DatabaseConnection[]>("databases:list") ??
+        [])
   );
   const [loading, setLoading] = useState(
     () =>
-      api.getCached<DatabaseConnection[]>("databases:list::all:all") === undefined &&
-      api.getCached<DatabaseConnection[]>("databases:list") === undefined
+      embedded ||
+      (api.getCached<DatabaseConnection[]>("databases:list::all:all") === undefined &&
+        api.getCached<DatabaseConnection[]>("databases:list") === undefined)
   );
   const [createOpen, setCreateOpen] = useState(false);
+  const [managedCreateOpen, setManagedCreateOpen] = useState(false);
   const [draft, setDraft] = useState<DatabaseConnectionDraft>(draftFromConnection(null));
+  const [managedDraft, setManagedDraft] = useState<ManagedDatabaseCreateInput>(defaultManagedDraft);
+  const [managedCatalog, setManagedCatalog] = useState<ManagedDatabaseCatalogEntry[]>([]);
+  const [databaseNodes, setDatabaseNodes] = useState<Node[]>([]);
   const [saving, setSaving] = useState(false);
+  const [managedSaving, setManagedSaving] = useState(false);
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (!(location.state as { createManagedDatabase?: boolean } | null)?.createManagedDatabase) {
+      return;
+    }
+    setManagedCreateOpen(true);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.pathname, location.state, navigate]);
 
   const load = useCallback(async () => {
     const cachedRows = api.getCached<DatabaseConnection[]>(databaseCacheKey);
@@ -225,30 +526,57 @@ export function Databases() {
       setLoading(true);
     }
     try {
-      const result = await api.listDatabases({
-        limit: 200,
-        search: search || undefined,
-        type: typeFilter === "all" ? undefined : typeFilter,
-        healthStatus: healthFilter === "all" ? undefined : healthFilter,
-      });
-      api.setCache(databaseCacheKey, result.data);
-      if (search === "" && typeFilter === "all" && healthFilter === "all") {
-        api.setCache("databases:list", result.data);
+      if (managedNodeId) {
+        const managed = await api.listManagedDatabases();
+        const data = await Promise.all(
+          managed
+            .filter(
+              (database) => database.nodeId === managedNodeId && database.databaseConnectionId
+            )
+            .map((database) => api.getDatabase(database.databaseConnectionId))
+        );
+        const filteredBySearch = data.filter(
+          (database) =>
+            (!search || database.name.toLowerCase().includes(search.toLowerCase())) &&
+            (typeFilter === "all" || database.type === typeFilter) &&
+            (healthFilter === "all" || database.healthStatus === healthFilter)
+        );
+        api.setCache(databaseCacheKey, filteredBySearch);
+        setRows(filteredBySearch);
+      } else {
+        const result = await api.listDatabases({
+          limit: 200,
+          search: search || undefined,
+          type: typeFilter === "all" ? undefined : typeFilter,
+          healthStatus: healthFilter === "all" ? undefined : healthFilter,
+        });
+        api.setCache(databaseCacheKey, result.data);
+        if (search === "" && typeFilter === "all" && healthFilter === "all") {
+          api.setCache("databases:list", result.data);
+        }
+        setRows(result.data);
       }
-      setRows(result.data);
+      if (!embedded) {
+        const [nodes, catalog] = await Promise.allSettled([
+          api.listNodes({ type: "databases", status: "online", limit: 100 }),
+          api.listManagedDatabaseCatalog(),
+        ]);
+        if (nodes.status === "fulfilled") setDatabaseNodes(nodes.value.data);
+        if (catalog.status === "fulfilled") setManagedCatalog(catalog.value);
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to load databases");
     } finally {
       setLoading(false);
     }
-  }, [databaseCacheKey, healthFilter, search, typeFilter]);
+  }, [databaseCacheKey, embedded, healthFilter, managedNodeId, search, typeFilter]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const canCreate = hasScope("databases:create");
-  const canManageFolders = hasScope("databases:folders:manage");
+  const canCreate = !embedded && hasScope("databases:create");
+  const canManageFolders = !embedded && hasScope("databases:folders:manage");
 
   const filtered = useMemo(
     () =>
@@ -258,6 +586,19 @@ export function Databases() {
           (hasScope("databases:view") || hasScope(`databases:view:${row.id}`))
       ),
     [hasScope, hasScopedAccess, rows]
+  );
+
+  const managedVersions = useMemo(
+    () => catalogVersions(managedCatalog, managedDraft.type),
+    [managedCatalog, managedDraft.type]
+  );
+  const managedCapacity = useMemo(
+    () => managedDatabaseCapacity(databaseNodes.find((node) => node.id === managedDraft.nodeId)),
+    [databaseNodes, managedDraft.nodeId]
+  );
+  const canDeployManaged = useMemo(
+    () => canDeployManagedDatabase(managedDraft, managedVersions, managedCapacity),
+    [managedCapacity, managedDraft, managedVersions]
   );
 
   const save = async () => {
@@ -272,6 +613,26 @@ export function Databases() {
       toast.error(error instanceof Error ? error.message : "Failed to create database connection");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const saveManaged = async () => {
+    if (!canDeployManaged) {
+      toast.error("Complete the managed database settings with valid resource limits");
+      return;
+    }
+    setManagedSaving(true);
+    try {
+      const created = await api.createManagedDatabase(managedDraft);
+      toast.success("Managed database provisioning started");
+      setManagedCreateOpen(false);
+      setManagedDraft(defaultManagedDraft(managedCatalog));
+      const database = await api.getDatabase(created.databaseConnectionId);
+      navigate(databaseRoute(database.slug, "overview"));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to create managed database");
+    } finally {
+      setManagedSaving(false);
     }
   };
 
@@ -318,8 +679,13 @@ export function Databases() {
         width: "14%",
         align: "center",
         renderCell: (row) => (
-          <Badge variant={HEALTH_BADGE[row.healthStatus] ?? "secondary"}>
-            {formatHealthLabel(row.healthStatus)}
+          <Badge
+            variant={
+              HEALTH_BADGE[row.managed?.status === "paused" ? "paused" : row.healthStatus] ??
+              "secondary"
+            }
+          >
+            {formatHealthLabel(row.managed?.status === "paused" ? "paused" : row.healthStatus)}
           </Badge>
         ),
       },
@@ -329,61 +695,74 @@ export function Databases() {
 
   return (
     <PageTransition>
-      <div className="h-full overflow-y-auto p-6 space-y-4">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <LiteModeBackButton />
-            <div>
-              <h1 className="text-2xl font-bold">Databases</h1>
-              <p className="text-sm text-muted-foreground">
-                Saved PostgreSQL, ClickHouse, and Redis connections managed through Gateway
-              </p>
+      <div className={embedded ? "space-y-4" : "h-full overflow-y-auto p-6 space-y-4"}>
+        {!embedded && (
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <LiteModeBackButton />
+              <div>
+                <h1 className="text-2xl font-bold">Databases</h1>
+                <p className="text-sm text-muted-foreground">
+                  Saved PostgreSQL, ClickHouse, and Redis connections managed through Gateway
+                </p>
+              </div>
             </div>
+            <ResponsiveHeaderActions
+              actions={[
+                {
+                  label: "Refresh",
+                  icon: <RefreshCw className="h-4 w-4" />,
+                  onClick: () => void load(),
+                },
+                ...(canManageFolders && createFolderAction
+                  ? [
+                      {
+                        label: "Add Folder",
+                        icon: <FolderPlus className="h-4 w-4" />,
+                        onClick: createFolderAction,
+                      },
+                    ]
+                  : []),
+                ...(canCreate
+                  ? [
+                      {
+                        label: "Deploy managed database",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: () => setManagedCreateOpen(true),
+                      },
+                      {
+                        label: "Connect existing database",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: () => setCreateOpen(true),
+                      },
+                    ]
+                  : []),
+              ]}
+            >
+              <Button variant="outline" size="icon" onClick={() => void load()} title="Refresh">
+                <RefreshCw className="h-4 w-4" />
+              </Button>
+              {canManageFolders && (
+                <Button variant="outline" onClick={() => createFolderAction?.()}>
+                  <FolderPlus className="h-4 w-4" />
+                  Add Folder
+                </Button>
+              )}
+              {canCreate && (
+                <Button variant="outline" onClick={() => setCreateOpen(true)}>
+                  <Plus className="h-4 w-4" />
+                  Connect existing
+                </Button>
+              )}
+              {canCreate && (
+                <Button onClick={() => setManagedCreateOpen(true)}>
+                  <Plus className="h-4 w-4" />
+                  Deploy database
+                </Button>
+              )}
+            </ResponsiveHeaderActions>
           </div>
-          <ResponsiveHeaderActions
-            actions={[
-              {
-                label: "Refresh",
-                icon: <RefreshCw className="h-4 w-4" />,
-                onClick: () => void load(),
-              },
-              ...(canManageFolders && createFolderAction
-                ? [
-                    {
-                      label: "Add Folder",
-                      icon: <FolderPlus className="h-4 w-4" />,
-                      onClick: createFolderAction,
-                    },
-                  ]
-                : []),
-              ...(canCreate
-                ? [
-                    {
-                      label: "Add Database",
-                      icon: <Plus className="h-4 w-4" />,
-                      onClick: () => setCreateOpen(true),
-                    },
-                  ]
-                : []),
-            ]}
-          >
-            <Button variant="outline" size="icon" onClick={() => void load()} title="Refresh">
-              <RefreshCw className="h-4 w-4" />
-            </Button>
-            {canManageFolders && (
-              <Button variant="outline" onClick={() => createFolderAction?.()}>
-                <FolderPlus className="h-4 w-4" />
-                Add Folder
-              </Button>
-            )}
-            {canCreate && (
-              <Button onClick={() => setCreateOpen(true)}>
-                <Plus className="h-4 w-4" />
-                Add Database
-              </Button>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+        )}
 
         <FolderedResourceList<DatabaseConnection>
           resourceType="database"
@@ -436,12 +815,12 @@ export function Databases() {
             ),
           }}
           loading={loading || authLoading}
-          loadingLabel="Loading database connections..."
+          loadingLabel="Loading databases..."
           emptyState={
             <EmptyState
-              message="No databases. Add a PostgreSQL, ClickHouse, or Redis connection to manage it through Gateway."
+              message="No databases yet. Connect an existing database or deploy a managed instance."
               {...(canCreate
-                ? { actionLabel: "Add Database", onAction: () => setCreateOpen(true) }
+                ? { actionLabel: "Connect existing database", onAction: () => setCreateOpen(true) }
                 : {})}
               hasActiveFilters={search !== "" || typeFilter !== "all" || healthFilter !== "all"}
               onReset={() => {
@@ -462,24 +841,63 @@ export function Databases() {
         />
       </div>
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Add Database</DialogTitle>
-          </DialogHeader>
-          <AnimatedHeight>
-            <DatabaseConnectionForm draft={draft} onChange={setDraft} />
-          </AnimatedHeight>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={() => void save()} disabled={saving || !canCreateDatabase(draft)}>
-              {saving ? "Creating..." : "Create"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {!embedded && (
+        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+          <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Add Database</DialogTitle>
+            </DialogHeader>
+            <AnimatedHeight>
+              <DatabaseConnectionForm draft={draft} onChange={setDraft} />
+            </AnimatedHeight>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setCreateOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={() => void save()} disabled={saving || !canCreateDatabase(draft)}>
+                {saving ? "Creating..." : "Create"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {!embedded && (
+        <Dialog open={managedCreateOpen} onOpenChange={setManagedCreateOpen}>
+          <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Deploy managed database</DialogTitle>
+            </DialogHeader>
+            <AnimatedHeight>
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={`${managedDraft.type}:${managedDraft.publishTcp ? "tcp" : "private"}`}
+                  {...MANAGED_DATABASE_FORM_ANIMATION}
+                >
+                  <ManagedDatabaseCreateForm
+                    draft={managedDraft}
+                    nodes={databaseNodes}
+                    catalog={managedCatalog}
+                    capacity={managedCapacity}
+                    onChange={setManagedDraft}
+                  />
+                </motion.div>
+              </AnimatePresence>
+            </AnimatedHeight>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setManagedCreateOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => void saveManaged()}
+                disabled={managedSaving || !canDeployManaged}
+              >
+                {managedSaving ? "Deploying..." : "Deploy database"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </PageTransition>
   );
 }

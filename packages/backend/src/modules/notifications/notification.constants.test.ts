@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ALERT_CATEGORIES,
+  EVENT_BUS_MAPPINGS,
   evaluateWindowRatio,
   eventSupportsThreshold,
   extractMetricFromHealthReport,
@@ -126,6 +127,25 @@ describe('evaluateWindowRatio', () => {
       defaultOperator: '<',
       defaultValue: 10_240,
     });
+  });
+
+  it('maps managed database lifecycle events without forwarding credentials or errors', () => {
+    const mapping = EVENT_BUS_MAPPINGS['database.changed'].find(
+      (candidate) => candidate.category === 'database_postgres' && candidate.eventId === 'error'
+    );
+    const payload = {
+      managedDatabaseId: 'managed-db-1',
+      type: 'postgres',
+      action: 'error',
+      status: 'error',
+      name: 'orders',
+      error: 'password=should-not-leak',
+      connectionUri: 'postgres://user:secret@example.test/orders',
+    };
+
+    expect(mapping?.match(payload)).toBe(true);
+    expect(mapping?.extractResource(payload)).toEqual({ type: 'database', id: 'managed-db-1', name: 'orders' });
+    expect(mapping?.extractData?.(payload)).toEqual({ status: 'error' });
   });
 
   it('skips Docker container state-only rows for metric extraction', () => {

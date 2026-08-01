@@ -561,6 +561,41 @@
       "when": 1785534541856,
       "tag": "0079_colorful_invaders",
       "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1785583804265,
+      "tag": "0080_volatile_synch",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1785587327808,
+      "tag": "0081_high_maelstrom",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1785593516996,
+      "tag": "0082_rapid_lorna_dane",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1785618091182,
+      "tag": "0083_breezy_frightful_four",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1785621021599,
+      "tag": "0084_sticky_wild_child",
+      "breakpoints": true
     }
   ]
 }

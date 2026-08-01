@@ -31,6 +31,9 @@ import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import { DatabaseFolderService } from '@/modules/databases/database-folders.service.js';
 import { DatabaseMonitoringService } from '@/modules/databases/database-monitoring.service.js';
 import { DatabaseConnectionService } from '@/modules/databases/databases.service.js';
+import { ManagedDatabaseBindingService } from '@/modules/databases/managed-database-bindings.service.js';
+import { ManagedDatabaseTunnelProxy } from '@/modules/databases/managed-database-tunnel-proxy.js';
+import { ManagedDatabaseService } from '@/modules/databases/managed-databases.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { DockerAccessResourceService } from '@/modules/docker/docker-access-resource.service.js';
 import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
@@ -532,13 +535,44 @@ export async function initializeContainer(): Promise<void> {
   nginxTemplateService.setEventBus(eventBus);
   dockerRegistryService.setEventBus(eventBus);
 
-  const databaseConnectionService = new DatabaseConnectionService(db, auditService, cryptoService);
+  const managedDatabaseTunnelProxy = new ManagedDatabaseTunnelProxy();
+  const databaseConnectionService = new DatabaseConnectionService(
+    db,
+    auditService,
+    cryptoService,
+    managedDatabaseTunnelProxy
+  );
   container.registerInstance(DatabaseConnectionService, databaseConnectionService);
+
+  const managedDatabaseService = new ManagedDatabaseService(db, auditService, cryptoService, nodeDispatch);
+  managedDatabaseService.setEventBus(eventBus);
+  container.registerInstance(ManagedDatabaseService, managedDatabaseService);
+  void managedDatabaseService.reconcileDatabaseConnections().catch((error) => {
+    logger.warn('Failed to backfill managed database connection records', { error });
+  });
+
+  const managedDatabaseBindingService = new ManagedDatabaseBindingService(
+    db,
+    auditService,
+    cryptoService,
+    nodeDispatch,
+    dockerManagementService,
+    dockerDeploymentService,
+    dockerSecretService,
+    getEnv().DATABASE_CONNECTOR_IMAGE,
+    getEnv().NODE_ENV === 'development'
+  );
+  managedDatabaseBindingService.setEventBus(eventBus);
+  container.registerInstance(ManagedDatabaseBindingService, managedDatabaseBindingService);
 
   const databaseFolderService = new DatabaseFolderService(db, auditService);
   container.registerInstance(DatabaseFolderService, databaseFolderService);
 
-  const databaseMonitoringService = new DatabaseMonitoringService(databaseConnectionService, cacheService);
+  const databaseMonitoringService = new DatabaseMonitoringService(
+    databaseConnectionService,
+    cacheService,
+    managedDatabaseService
+  );
   container.registerInstance(DatabaseMonitoringService, databaseMonitoringService);
   databaseConnectionService.setEventBus(eventBus);
   databaseFolderService.setEventBus(eventBus);
@@ -919,6 +953,9 @@ export async function initializeContainer(): Promise<void> {
     notifEvaluatorService.reconcileProxyMaintenance()
   );
   scheduler.registerInterval('docker-health-check', 10000, () => dockerHealthCheckService.runDueChecks());
+  scheduler.registerInterval('managed-database-reconcile', 30000, () =>
+    managedDatabaseService.reconcilePendingOperations()
+  );
   scheduler.registerInterval('docker-snapshot-containers', 10000, async () => {
     dockerSnapshotReconciler.enqueueConnected('containers');
   });

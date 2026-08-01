@@ -1,0 +1,3 @@
+ALTER TABLE "managed_database_instances" ADD COLUMN "database_connection_id" uuid;--> statement-breakpoint
+ALTER TABLE "managed_database_instances" ADD CONSTRAINT "managed_database_instances_database_connection_id_database_connections_id_fk" FOREIGN KEY ("database_connection_id") REFERENCES "public"."database_connections"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "managed_database_instances" ADD CONSTRAINT "managed_database_instances_database_connection_unique" UNIQUE("database_connection_id");

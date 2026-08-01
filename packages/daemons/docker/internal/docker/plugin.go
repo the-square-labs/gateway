@@ -29,15 +29,19 @@ type DockerPlugin struct {
 	client  *Client
 	version string // Docker engine version
 
-	allowlist      *AllowlistChecker
-	envStore       *EnvStore
-	taskMgr        *TaskManager
-	registryMu     sync.RWMutex
-	registryCreds  map[string]string // registry URL -> base64-encoded auth
-	statsCollector *StatsCollector
-	execMgr        *ExecManager
-	migrationStore *migrationArtifactStore
-	archiveStreams *archiveLiveStore
+	allowlist        *AllowlistChecker
+	envStore         *EnvStore
+	taskMgr          *TaskManager
+	registryMu       sync.RWMutex
+	registryCreds    map[string]string // registry URL -> base64-encoded auth
+	statsCollector   *StatsCollector
+	execMgr          *ExecManager
+	migrationStore   *migrationArtifactStore
+	archiveStreams   *archiveLiveStore
+	databaseManager  *managedDatabaseManager
+	databaseBindings *databaseBindingRegistry
+	databaseTunnelMu sync.Mutex
+	databaseTunnel   *databaseTunnelTransport
 
 	// Log stream follow support
 	writer          *stream.Writer
@@ -47,6 +51,10 @@ type DockerPlugin struct {
 }
 
 const dockerLogsCommandTimeout = 15 * time.Second
+
+// This tag exists solely for the local development workflow. Production
+// connector provisioning uses the separate `ensure` action and digest refs.
+const developmentDatabaseConnectorImage = "gateway-database-connector:dev"
 
 func dockerTimeoutProvided(configJSON string) bool {
 	if configJSON == "" {
@@ -116,6 +124,20 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		p.logger.Warn("stale migration artifact cleanup failed", "error", err)
 	}
 	p.archiveStreams = newArchiveLiveStore()
+	if p.cfg.Docker.Mode == "databases" {
+		p.databaseManager, err = newManagedDatabaseManager(p.cfg, p.client, p.logger)
+		if err != nil {
+			return fmt.Errorf("initialize managed database storage: %w", err)
+		}
+		if err := p.databaseManager.reconcile(ctx); err != nil {
+			return fmt.Errorf("reconcile managed database storage: %w", err)
+		}
+	} else {
+		p.databaseBindings, err = newDatabaseBindingRegistry(p.cfg.StateDir)
+		if err != nil {
+			return fmt.Errorf("initialize managed database binding registry: %w", err)
+		}
+	}
 
 	// Initialize registry credentials map
 	p.registryCreds = make(map[string]string)
@@ -142,15 +164,32 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		// Store docker version in the NginxVersion field as a capability hint.
 		// The gateway uses DaemonType to interpret this field correctly.
 		NginxVersion: p.version,
-		Capabilities: []string{"docker_deployments_v1", "docker_migration_v1", "docker_archive_v1"},
+		Capabilities: func() []string {
+			if p.cfg.Docker.Mode == "databases" {
+				return []string{"managed_databases_v1", "managed_database_storage_images_v1", "database_tunnel_v1"}
+			}
+			return []string{"docker_deployments_v1", "docker_migration_v1", "docker_archive_v1", "database_tunnel_v1", "docker_database_bindings_v1"}
+		}(),
 	}
 }
 
 // HandleCommand dispatches a gateway command to the appropriate handler.
 func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 	result := &pb.CommandResult{CommandId: cmd.CommandId, Success: true}
+	if p.cfg.Docker.Mode == "databases" {
+		if payload, ok := cmd.Payload.(*pb.GatewayCommand_DockerDatabase); ok {
+			p.handleManagedDatabaseCommand(payload.DockerDatabase, result)
+			return result
+		}
+		result.Success = false
+		result.Error = "database-profile daemon accepts only docker_database commands"
+		return result
+	}
 
 	switch payload := cmd.Payload.(type) {
+	case *pb.GatewayCommand_DockerDatabaseBinding:
+		p.handleDatabaseBindingCommand(payload.DockerDatabaseBinding, result)
+
 	case *pb.GatewayCommand_DockerContainer:
 		p.handleContainerCommand(payload.DockerContainer, result)
 
@@ -183,6 +222,10 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 
 	case *pb.GatewayCommand_DockerMigration:
 		p.handleMigrationCommand(payload.DockerMigration, result)
+
+	case *pb.GatewayCommand_DockerDatabase:
+		result.Success = false
+		result.Error = "managed database commands require docker.mode=databases"
 
 	case *pb.GatewayCommand_SetDaemonLogStream:
 		stream.SetDaemonLogStreaming(payload.SetDaemonLogStream.Enabled, payload.SetDaemonLogStream.MinLevel)
@@ -519,11 +562,21 @@ func (p *DockerPlugin) handleImageCommand(cmd *pb.DockerImageCommand, result *pb
 		}
 		result.Detail = string(data)
 
-	case "pull":
+	case "pull", "ensure", "ensure-local":
 		imageRef := cmd.ImageRef
 		if imageRef == "" {
 			result.Success = false
-			result.Error = "image_ref is required for pull"
+			result.Error = "image_ref is required for " + cmd.Action
+			return
+		}
+		if cmd.Action == "ensure" && !digestImagePattern.MatchString(imageRef) {
+			result.Success = false
+			result.Error = "image_ref must use an immutable sha256 digest for ensure"
+			return
+		}
+		if cmd.Action == "ensure-local" && imageRef != developmentDatabaseConnectorImage {
+			result.Success = false
+			result.Error = "image_ref must use the fixed development connector image for ensure-local"
 			return
 		}
 
@@ -535,8 +588,16 @@ func (p *DockerPlugin) handleImageCommand(cmd *pb.DockerImageCommand, result *pb
 			p.registryMu.RUnlock()
 		}
 
-		// Pull synchronously — backend wraps in its own task system
-		if err := p.client.PullImage(ctx, imageRef, registryAuth); err != nil {
+		// "ensure" is used by the digest-pinned production connector and
+		// "ensure-local" by the one fixed development image. Both avoid a
+		// registry round-trip when the exact reference is already local.
+		var err error
+		if cmd.Action == "ensure" || cmd.Action == "ensure-local" {
+			err = p.client.EnsureImage(ctx, imageRef, registryAuth)
+		} else {
+			err = p.client.PullImage(ctx, imageRef, registryAuth)
+		}
+		if err != nil {
 			result.Success = false
 			result.Error = err.Error()
 			return

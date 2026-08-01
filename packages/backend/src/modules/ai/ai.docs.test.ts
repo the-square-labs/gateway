@@ -89,6 +89,13 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('users', ['admin:users']).content).toContain('additional per-user scopes');
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain('Cross-Node Migrations');
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain('last synchronized state');
+    expect(getInternalDocumentation('databases', ['databases:view']).content).toContain('Managed Instance Access');
+    expect(getInternalDocumentation('databases', ['databases:view']).content).toContain(
+      'private connector and authenticated Gateway tunnel'
+    );
+    expect(getInternalDocumentation('databases', ['databases:view']).content).toContain(
+      'must not claim to deploy, bind, publish, or reveal managed-instance or binding secrets'
+    );
     expect(getInternalDocumentation('node-files', ['nodes:files:read']).content).toContain('manage_node_file');
     expect(getInternalDocumentation('sandbox', ['ai:sandbox:use']).content).toContain('download_artifact');
     expect(getInternalDocumentation('sandbox', ['ai:sandbox:use']).content).toContain('list_artifact_files');
@@ -176,6 +183,8 @@ describe('AI internal docs registry', () => {
     expect(allDocs).not.toContain('static-site');
     expect(allDocs).not.toContain('Satisfy Mode');
     expect(allDocs).not.toContain('status-page:incidents:*');
+    expect(INTERNAL_DOCS.databases).not.toContain('deploy_managed_database');
+    expect(INTERNAL_DOCS.databases).not.toContain('publish_managed_database');
   });
 
   it('filters unknown-topic suggestions and denies unauthorized topics', () => {

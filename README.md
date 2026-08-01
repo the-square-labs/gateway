@@ -156,7 +156,7 @@ Completed foundations:
 - [x] Docker host management with deployments, webhooks, registries, logs, files, consoles, and secrets.
 - [x] Monitoring daemon for host metrics, runtime state, and log streaming.
 - [x] Internal PKI, ACME SSL, certificate templates, domain tracking, and expiry alerts.
-- [x] PostgreSQL and Redis database explorer with encrypted saved credentials.
+- [x] PostgreSQL and Redis database explorer with encrypted saved credentials, plus private-by-default managed Postgres, Redis, and ClickHouse database nodes with secure application bindings.
 - [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
 - [x] Optional ClickHouse-backed structured logging and optional AI assistant.
 - [x] Optional multi-provider inference gateway with OpenAI-compatible and harness-specific APIs.

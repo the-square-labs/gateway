@@ -67,6 +67,13 @@ const prompts: PromptDefinition[] = [
     requiredScopes: ['ssl:cert:view', 'ssl:cert:issue', 'pki:cert:view'],
     text: 'Troubleshoot certificate renewal. Read expiring certificates and related proxy usage, distinguish ACME SSL certificates from internal PKI certificates, verify domain coverage and challenge assumptions, and recommend renewal or replacement steps allowed by this token.',
   },
+  {
+    name: 'plan-managed-database-access',
+    title: 'Plan managed database access',
+    description: 'Explain the safe access model for a managed database without provisioning or exposing it.',
+    requiredScopes: ['databases:view'],
+    text: 'Plan access to a Gateway managed database. Read the databases internal documentation first. Treat the instance as private by default: application access uses a per-binding connector and authenticated Gateway tunnel, while a published TCP endpoint is a separate explicit choice for external infrastructure. Do not invent database deployment, binding, publication, or secret-reveal tool calls. Do not include credentials, connection URIs, binding environment variables, connector aliases, or daemon error text in the plan; direct the operator to the Databases or container/deployment Settings UI for supported changes.',
+  },
 ];
 
 export function registerMcpPrompts(server: McpServer, scopes: string[]): void {

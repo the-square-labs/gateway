@@ -17,6 +17,7 @@ import (
 	imagetypes "github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
+	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 )
 
 func writeDockerLogFrame(t *testing.T, buf *bytes.Buffer, payload string) {
@@ -305,5 +306,136 @@ func TestContainerTopFallsBackWhenDetailedPsArgsFail(t *testing.T) {
 	}
 	if strings.Contains(requests[1], "ps_args=") {
 		t.Fatalf("expected fallback request without ps_args, got %q", requests[1])
+	}
+}
+
+func TestEnsureImageSkipsRegistryPullWhenExactReferenceExists(t *testing.T) {
+	inspectCalls := 0
+	pullCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/images/") && strings.HasSuffix(r.URL.Path, "/json"):
+			inspectCalls++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`))
+		case strings.HasSuffix(r.URL.Path, "/images/create"):
+			pullCalls++
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cli, err := client.NewClientWithOpts(client.WithHost(server.URL), client.WithVersion("1.43"))
+	if err != nil {
+		t.Fatalf("create docker client: %v", err)
+	}
+	defer cli.Close()
+
+	c := &Client{cli: cli, logger: slog.Default()}
+	imageRef := "registry.example.com/gateway/database-connector@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := c.EnsureImage(context.Background(), imageRef, ""); err != nil {
+		t.Fatalf("ensure image: %v", err)
+	}
+	if inspectCalls != 1 {
+		t.Fatalf("inspect calls = %d, want 1", inspectCalls)
+	}
+	if pullCalls != 0 {
+		t.Fatalf("pull calls = %d, want 0", pullCalls)
+	}
+}
+
+func TestEnsureImagePullsWhenExactReferenceIsMissing(t *testing.T) {
+	inspectCalls := 0
+	pullCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/images/") && strings.HasSuffix(r.URL.Path, "/json"):
+			inspectCalls++
+			http.NotFound(w, r)
+		case strings.HasSuffix(r.URL.Path, "/images/create"):
+			pullCalls++
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cli, err := client.NewClientWithOpts(client.WithHost(server.URL), client.WithVersion("1.43"))
+	if err != nil {
+		t.Fatalf("create docker client: %v", err)
+	}
+	defer cli.Close()
+
+	c := &Client{cli: cli, logger: slog.Default()}
+	imageRef := "registry.example.com/gateway/database-connector@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := c.EnsureImage(context.Background(), imageRef, ""); err != nil {
+		t.Fatalf("ensure image: %v", err)
+	}
+	if inspectCalls != 1 {
+		t.Fatalf("inspect calls = %d, want 1", inspectCalls)
+	}
+	if pullCalls != 1 {
+		t.Fatalf("pull calls = %d, want 1", pullCalls)
+	}
+}
+
+func TestEnsureImageDoesNotHideInspectFailures(t *testing.T) {
+	pullCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/images/") && strings.HasSuffix(r.URL.Path, "/json"):
+			http.Error(w, "docker engine unavailable", http.StatusInternalServerError)
+		case strings.HasSuffix(r.URL.Path, "/images/create"):
+			pullCalls++
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cli, err := client.NewClientWithOpts(client.WithHost(server.URL), client.WithVersion("1.43"))
+	if err != nil {
+		t.Fatalf("create docker client: %v", err)
+	}
+	defer cli.Close()
+
+	c := &Client{cli: cli, logger: slog.Default()}
+	imageRef := "registry.example.com/gateway/database-connector@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := c.EnsureImage(context.Background(), imageRef, ""); err == nil {
+		t.Fatal("expected inspect failure")
+	}
+	if pullCalls != 0 {
+		t.Fatalf("pull calls = %d, want 0", pullCalls)
+	}
+}
+
+func TestEnsureImageCommandRequiresImmutableDigest(t *testing.T) {
+	for _, imageRef := range []string{
+		"registry.example.com/gateway/database-connector:latest",
+		"registry.example.com/gateway/database-connector@sha256:short",
+	} {
+		result := &pb.CommandResult{}
+		(&DockerPlugin{}).handleImageCommand(&pb.DockerImageCommand{Action: "ensure", ImageRef: imageRef}, result)
+		if result.Success || !strings.Contains(result.Error, "immutable sha256 digest") {
+			t.Fatalf("ensure %q result = %#v, want immutable digest rejection", imageRef, result)
+		}
+	}
+}
+
+func TestEnsureLocalImageCommandRequiresFixedDevelopmentImage(t *testing.T) {
+	for _, imageRef := range []string{
+		"registry.example.com/gateway/database-connector:dev",
+		"gateway-database-connector:latest",
+		"gateway-db-connector:managed-db-final",
+	} {
+		result := &pb.CommandResult{}
+		(&DockerPlugin{}).handleImageCommand(&pb.DockerImageCommand{Action: "ensure-local", ImageRef: imageRef}, result)
+		if result.Success || !strings.Contains(result.Error, "fixed development connector image") {
+			t.Fatalf("ensure-local %q result = %#v, want fixed image rejection", imageRef, result)
+		}
 	}
 }

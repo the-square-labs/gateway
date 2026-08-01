@@ -311,10 +311,10 @@ OAuth consent leaves high-risk scopes unchecked by default. The user must explic
 | `docker:containers:migrate` | Can move containers or deployments and their data between Docker nodes. |
 | `docker:volumes:files:read` | Can read files from Docker volumes. |
 | `docker:volumes:files:write` | Can create, modify, move, or delete files in Docker volumes. |
-| `databases:query:read` | Can read data from saved database connections. |
-| `databases:query:write` | Can modify data in saved database connections. |
+| `databases:query:read` | Can read data from database resources. |
+| `databases:query:write` | Can modify data in database resources. |
 | `databases:query:admin` | Can run administrative database commands. |
-| `databases:credentials:reveal` | Can reveal stored database credentials and connection strings. |
+| `databases:credentials:reveal` | Can reveal stored database credentials and connection strings. This does not reveal a binding's injected application secret by default. |
 | `integrations:gitlab:repo:write` | Can modify repositories through connected GitLab projects. |
 | `integrations:gitlab:ci:edit` | Can modify GitLab CI configuration and trigger write-capable CI operations. |
 | `integrations:gitlab:variables:edit` | Can create or update GitLab CI/CD variables. |

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/distribution/reference"
 	"github.com/moby/moby/api/types/container"
 	imagetypes "github.com/moby/moby/api/types/image"
@@ -432,10 +433,14 @@ type ContainerCreateConfig struct {
 	OpenStdin   bool              `json:"open_stdin,omitempty"`
 
 	// Host config
-	Binds         []string          `json:"binds,omitempty"`
-	PortBindings  map[string]string `json:"port_bindings,omitempty"` // "80/tcp": "8080"
-	NetworkMode   string            `json:"network_mode,omitempty"`
-	RestartPolicy string            `json:"restartPolicy,omitempty"` // "no", "always", "unless-stopped", "on-failure"
+	Binds        []string          `json:"binds,omitempty"`
+	PortBindings map[string]string `json:"port_bindings,omitempty"` // "80/tcp": "8080"
+	NetworkMode  string            `json:"network_mode,omitempty"`
+	// NetworkAliases are scoped to NetworkMode. They are used by first-party
+	// database connector sidecars so application containers never need a host
+	// port or a daemon address.
+	NetworkAliases []string `json:"network_aliases,omitempty"`
+	RestartPolicy  string   `json:"restartPolicy,omitempty"` // "no", "always", "unless-stopped", "on-failure"
 	// Backward-compatible alias for older daemon-local config payloads.
 	RestartPolicyLegacy string   `json:"restart_policy,omitempty"`
 	Privileged          bool     `json:"privileged,omitempty"`
@@ -506,10 +511,18 @@ func (c *Client) CreateContainer(ctx context.Context, configJSON string) (string
 		hostCfg.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyMode(restartPolicy)}
 	}
 
+	var networkingConfig *network.NetworkingConfig
+	if cfg.NetworkMode != "" && len(cfg.NetworkAliases) > 0 {
+		networkingConfig = &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
+			cfg.NetworkMode: {Aliases: cfg.NetworkAliases},
+		}}
+	}
+
 	result, err := c.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Config:     containerCfg,
-		HostConfig: hostCfg,
-		Name:       cfg.Name,
+		Config:           containerCfg,
+		HostConfig:       hostCfg,
+		NetworkingConfig: networkingConfig,
+		Name:             cfg.Name,
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("create container: %w", err)
@@ -1216,6 +1229,18 @@ func (c *Client) PullImage(ctx context.Context, imageRef string, registryAuth st
 		return fmt.Errorf("image pull: %s", lastErr)
 	}
 	return nil
+}
+
+// EnsureImage keeps an already-present exact image reference available without
+// contacting a registry. Callers that require immutable image references can
+// use this for local/offline nodes while retaining digest pinning themselves.
+func (c *Client) EnsureImage(ctx context.Context, imageRef string, registryAuth string) error {
+	if _, err := c.cli.ImageInspect(ctx, imageRef); err == nil {
+		return nil
+	} else if !cerrdefs.IsNotFound(err) {
+		return fmt.Errorf("inspect image: %w", err)
+	}
+	return c.PullImage(ctx, imageRef, registryAuth)
 }
 
 // RemoveImage removes an image by ID or reference.

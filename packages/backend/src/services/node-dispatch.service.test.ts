@@ -1,11 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import { NodeDispatchService } from './node-dispatch.service.js';
 
-function createService() {
+function createService(nodeType = 'docker') {
   const registry = {
     sendCommand: vi.fn().mockResolvedValue({ success: true }),
   };
-  const service = new NodeDispatchService(registry as never, {} as never);
+  const db = {
+    select: () => ({
+      from: () => ({
+        where: () => ({ limit: vi.fn().mockResolvedValue([{ type: nodeType }]) }),
+      }),
+    }),
+  };
+  const service = new NodeDispatchService(registry as never, db as never);
   return { registry, service };
 }
 
@@ -83,5 +90,17 @@ describe('NodeDispatchService', () => {
         content,
       },
     });
+  });
+
+  it('uses a bounded long timeout for durable managed database operations', async () => {
+    const { registry, service } = createService('databases');
+
+    await service.sendDockerDatabaseCommand('node-1', 'create', 'database-1', '{"operationId":"op-1"}');
+
+    expect(registry.sendCommand).toHaveBeenCalledWith(
+      'node-1',
+      { dockerDatabase: { action: 'create', managedDatabaseId: 'database-1', configJson: '{"operationId":"op-1"}' } },
+      15 * 60 * 1000
+    );
   });
 });

@@ -8,6 +8,7 @@ import type {
   DatabaseHealthStatus,
   DatabaseType,
 } from './databases.service.js';
+import type { ManagedDatabaseRuntimeStats, ManagedDatabaseService } from './managed-databases.service.js';
 
 const logger = createChildLogger('DatabaseMonitoringService');
 
@@ -33,7 +34,8 @@ export class DatabaseMonitoringService extends EventEmitter {
 
   constructor(
     private readonly databaseService: DatabaseConnectionService,
-    private readonly cacheService: CacheService | null
+    private readonly cacheService: CacheService | null,
+    private readonly managedDatabaseService?: ManagedDatabaseService
   ) {
     super();
     this.setMaxListeners(100);
@@ -111,6 +113,7 @@ export class DatabaseMonitoringService extends EventEmitter {
   private async pollOnce(databaseId: string) {
     try {
       const connection = await this.databaseService.get(databaseId);
+      if (connection.managed?.status === 'paused') return;
       const config = await this.databaseService.getDecryptedConfig(databaseId);
       const snapshot =
         config.type === 'postgres'
@@ -118,6 +121,17 @@ export class DatabaseMonitoringService extends EventEmitter {
           : config.type === 'clickhouse'
             ? await this.collectClickHouseSnapshot(databaseId, connection.name, config.database)
             : await this.collectRedisSnapshot(databaseId, connection.name, config);
+
+      const managedRuntime = this.managedDatabaseService
+        ? await this.managedDatabaseService.getRuntimeStatsByDatabaseConnectionId(databaseId).catch((error) => {
+            logger.debug('Managed database runtime stats unavailable', {
+              databaseId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return null;
+          })
+        : null;
+      if (managedRuntime) this.attachManagedRuntimeMetrics(snapshot, managedRuntime);
 
       await this.pushHistory(snapshot);
       await this.databaseService.updateHealth(databaseId, {
@@ -166,6 +180,15 @@ export class DatabaseMonitoringService extends EventEmitter {
     await client.expire(key, HISTORY_TTL_SECONDS);
   }
 
+  private attachManagedRuntimeMetrics(snapshot: DatabaseMetricSnapshot, runtime: ManagedDatabaseRuntimeStats) {
+    snapshot.metrics.managed_cpu_percent = runtime.cpuPercent;
+    snapshot.metrics.managed_memory_usage_bytes = runtime.memoryUsageBytes;
+    snapshot.metrics.managed_memory_limit_bytes = runtime.memoryLimitBytes;
+    snapshot.metrics.managed_swap_usage_bytes = runtime.swapUsageBytes;
+    snapshot.metrics.managed_swap_limit_bytes = runtime.swapLimitBytes;
+    snapshot.metrics.managed_pids = runtime.pids;
+  }
+
   private async getLatestSnapshot(databaseId: string): Promise<DatabaseMetricSnapshot | null> {
     const history = await this.getHistory(databaseId);
     return history.at(-1) ?? null;
@@ -175,6 +198,19 @@ export class DatabaseMonitoringService extends EventEmitter {
     const pool = await this.databaseService.getPostgresPool(databaseId);
     const started = Date.now();
     const previousSnapshot = await this.getLatestSnapshot(databaseId);
+    const versionResult = await pool.query<{ server_version_num: string }>('show server_version_num');
+    const serverVersion = Number(versionResult.rows[0]?.server_version_num ?? 0);
+    // PostgreSQL 17 moved checkpoint counters out of pg_stat_bgwriter into
+    // pg_stat_checkpointer. Keep the total metric compatible with both view
+    // layouts so a successful connection is never marked offline just because
+    // a non-essential monitoring query changed between major versions.
+    const blocksWrittenQuery =
+      serverVersion >= 170_000
+        ? `select (bgwriter.buffers_clean + checkpointer.buffers_written)::text as blocks_written
+             from pg_stat_bgwriter bgwriter
+             cross join pg_stat_checkpointer checkpointer`
+        : `select (buffers_checkpoint + buffers_clean + buffers_backend)::text as blocks_written
+             from pg_stat_bgwriter`;
     const [pingResult, statsResult, dbSizeResult, lockResult, bgwriterResult] = await Promise.all([
       pool.query('select 1'),
       pool.query<{
@@ -215,10 +251,7 @@ export class DatabaseMonitoringService extends EventEmitter {
          join pg_database d on d.oid = l.database
         where d.datname = current_database()`
       ),
-      pool.query<{ blocks_written: string }>(
-        `select (buffers_checkpoint + buffers_clean + buffers_backend)::text as blocks_written
-         from pg_stat_bgwriter`
-      ),
+      pool.query<{ blocks_written: string }>(blocksWrittenQuery),
     ]);
     void pingResult;
     const responseMs = Date.now() - started;

@@ -51,6 +51,7 @@ type deploymentDesiredConfig struct {
 	WorkingDir    string            `json:"workingDir"`
 	User          string            `json:"user"`
 	Labels        map[string]string `json:"labels"`
+	Networks      []string          `json:"networks"`
 	RestartPolicy string            `json:"restartPolicy"`
 	Runtime       map[string]any    `json:"runtime"`
 }
@@ -543,6 +544,15 @@ func (c *Client) createDeploymentSlot(ctx context.Context, deploymentID, network
 	})
 	if err != nil {
 		return "", fmt.Errorf("create deployment slot: %w", err)
+	}
+	for _, additionalNetwork := range desired.Networks {
+		if additionalNetwork == "" || additionalNetwork == networkName {
+			continue
+		}
+		if _, err := c.cli.NetworkConnect(ctx, additionalNetwork, mobyclient.NetworkConnectOptions{Container: resp.ID}); err != nil {
+			_ = c.RemoveContainer(ctx, resp.ID, true)
+			return "", fmt.Errorf("connect deployment slot to managed network: %w", err)
+		}
 	}
 	if start {
 		if _, err := c.cli.ContainerStart(ctx, resp.ID, mobyclient.ContainerStartOptions{}); err != nil {

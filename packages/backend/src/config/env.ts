@@ -1,5 +1,9 @@
 import { z } from 'zod';
 
+// Development only. Production database bindings require a registry image
+// pinned by manifest digest.
+export const DEVELOPMENT_DATABASE_CONNECTOR_IMAGE = 'gateway-database-connector:dev';
+
 const rateLimitWindowSchema = z.coerce.number().int().positive();
 const rateLimitMaxSchema = z.coerce.number().int().positive();
 const optionalClickHouseUrlSchema = z
@@ -96,6 +100,11 @@ const envSchema = z.object({
   APP_VERSION: z.string().default('dev'),
   BIND_HOST: z.string().default('0.0.0.0'),
 
+  // First-party TCP connector for managed database bindings. Production must
+  // provide an immutable release reference; development receives the fixed
+  // local image after parsing below.
+  DATABASE_CONNECTOR_IMAGE: z.string().trim().default(''),
+
   // Compose project dir (for self-update sidecar)
   COMPOSE_PROJECT_DIR: z.string().optional(),
 
@@ -169,6 +178,9 @@ export function getEnv(): Env {
   }
 
   cachedEnv = result.data;
+  if (cachedEnv.NODE_ENV === 'development' && !cachedEnv.DATABASE_CONNECTOR_IMAGE) {
+    cachedEnv.DATABASE_CONNECTOR_IMAGE = DEVELOPMENT_DATABASE_CONNECTOR_IMAGE;
+  }
   return cachedEnv;
 }
 

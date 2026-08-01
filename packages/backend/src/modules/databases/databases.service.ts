@@ -3,12 +3,14 @@ import { asc, count, eq, ilike, inArray, or, type SQL } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pg from 'pg';
 import type { DrizzleClient } from '@/db/client.js';
-import { type DatabaseHealthEntry, databaseConnections } from '@/db/schema/index.js';
+import { type DatabaseHealthEntry, databaseConnections, managedDatabaseInstances, nodes } from '@/db/schema/index.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
+import { createChildLogger } from '@/lib/logger.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import { getEffectiveNodeServiceAddress } from '@/modules/nodes/node-service-address.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { PaginatedResponse } from '@/types.js';
@@ -19,6 +21,7 @@ import {
   type DatabaseConnectionConfig,
   type DatabaseConnectionView,
   type DatabaseHealthStatus,
+  type ManagedDatabaseConnectionMetadata,
   type PostgresConnectionConfig,
   type RedisConnectionConfig,
   toDatabaseConnectionView,
@@ -35,6 +38,7 @@ import type {
   DatabaseListQuery,
   UpdateDatabaseConnectionInput,
 } from './databases.schemas.js';
+import type { ManagedDatabaseTunnelProxy } from './managed-database-tunnel-proxy.js';
 import {
   ensurePostgresBaseTable,
   normalizePostgresColumnType,
@@ -64,6 +68,7 @@ import type { SqlDatabaseAdapter } from './sql-database-adapter.js';
 
 const { Pool } = pg;
 const DATABASE_HEALTH_HISTORY_MIN_INTERVAL_MS = 30_000;
+const logger = createChildLogger('DatabaseConnectionService');
 
 export type {
   ClickHouseConnectionConfig,
@@ -96,7 +101,8 @@ export class DatabaseConnectionService {
   constructor(
     private readonly db: DrizzleClient,
     private readonly auditService: AuditService,
-    private readonly cryptoService: CryptoService
+    private readonly cryptoService: CryptoService,
+    private readonly managedTunnelProxy?: ManagedDatabaseTunnelProxy
   ) {
     this.sqlAdapters = new Map<'postgres' | 'clickhouse', SqlDatabaseAdapter>([
       [
@@ -274,9 +280,7 @@ export class DatabaseConnectionService {
       this.db.select({ count: count() }).from(databaseConnections).where(where),
     ]);
 
-    const data = rows.map((row) =>
-      toDatabaseConnectionView(row, this.decryptConfig(row.encryptedConfig), false, false)
-    );
+    const data = await Promise.all(rows.map((row) => this.toView(row, false, false)));
     const total = Number(totalCount);
     return {
       data,
@@ -291,7 +295,7 @@ export class DatabaseConnectionService {
 
   async get(id: string, revealCredentials = false): Promise<DatabaseConnectionView> {
     const row = await this.getRow(id);
-    return toDatabaseConnectionView(row, this.decryptConfig(row.encryptedConfig), revealCredentials, false);
+    return this.toView(row, revealCredentials, false);
   }
 
   async getBySlug(slug: string): Promise<DatabaseConnectionView> {
@@ -299,7 +303,7 @@ export class DatabaseConnectionService {
       where: eq(databaseConnections.slug, slug),
     });
     if (!row) throw new AppError(404, 'DATABASE_NOT_FOUND', 'Database connection not found');
-    return toDatabaseConnectionView(row, this.decryptConfig(row.encryptedConfig), false, false);
+    return this.toView(row, false, false);
   }
 
   async getHealthHistory(id: string): Promise<DatabaseHealthEntry[]> {
@@ -310,6 +314,19 @@ export class DatabaseConnectionService {
   async revealCredentials(id: string): Promise<Record<string, unknown>> {
     const row = await this.getRow(id);
     const config = this.decryptConfig(row.encryptedConfig);
+    const managed = await this.getManagedMetadata(id);
+    if (managed) {
+      // Managed rows used to retain the database owner in this canonical
+      // connection. It is an internal control-plane credential and must never
+      // escape through the generic connection endpoint. Consumers must use the
+      // managed route, which returns only the separately generated direct
+      // access principal and only after TCP publication.
+      throw new AppError(
+        409,
+        'MANAGED_DATABASE_CREDENTIALS_REQUIRE_DIRECT_ACCESS',
+        'Use the managed database credential endpoint after publishing a TCP port'
+      );
+    }
     return {
       ...config,
       connectionString: buildDatabaseConnectionString(config),
@@ -377,6 +394,13 @@ export class DatabaseConnectionService {
 
   async update(id: string, input: UpdateDatabaseConnectionInput, userId: string): Promise<DatabaseConnectionView> {
     const existing = await this.getRow(id);
+    if (await this.getManagedMetadata(id)) {
+      throw new AppError(
+        409,
+        'MANAGED_DATABASE_SETTINGS',
+        'Managed database connection settings must be updated through its managed configuration'
+      );
+    }
     const currentConfig = this.decryptConfig(existing.encryptedConfig);
     const replacementPassword = this.extractReplacementPassword(input.config);
     const nextPassword = replacementPassword !== undefined ? replacementPassword : currentConfig.password;
@@ -502,7 +526,7 @@ export class DatabaseConnectionService {
       healthStatus: row.healthStatus,
       ...(row.slug === existing.slug ? {} : { oldSlug: existing.slug, slug: row.slug }),
     });
-    return toDatabaseConnectionView(row, mergedConfig, false, false);
+    return this.toView(row, false, false);
   }
 
   async delete(id: string, userId: string): Promise<void> {
@@ -525,7 +549,7 @@ export class DatabaseConnectionService {
     userId: string
   ): Promise<{ ok: true; responseMs: number; status: DatabaseHealthStatus }> {
     const row = await this.getRow(id);
-    const config = this.decryptConfig(row.encryptedConfig);
+    const config = await this.getDecryptedConfig(id);
     let result: { status: DatabaseHealthStatus; responseMs: number };
     try {
       result = await this.testNormalizedConnection(config);
@@ -841,7 +865,26 @@ export class DatabaseConnectionService {
 
   async getDecryptedConfig(id: string): Promise<DatabaseConnectionConfig> {
     const row = await this.getRow(id);
-    return this.decryptConfig(row.encryptedConfig);
+    const config = this.decryptConfig(row.encryptedConfig);
+    const managed = await this.getManagedMetadata(id);
+    if (!managed) return config;
+    if (!this.managedTunnelProxy) {
+      throw new AppError(503, 'MANAGED_DATABASE_TUNNEL_UNAVAILABLE', 'Managed database tunnel is unavailable');
+    }
+    const endpoint = await this.managedTunnelProxy.getEndpoint(managed.id);
+    if (config.type === 'postgres') {
+      return { ...config, host: endpoint.host, port: endpoint.port, sslEnabled: false };
+    }
+    if (config.type === 'redis') {
+      return { ...config, host: endpoint.host, port: endpoint.port, tlsEnabled: false };
+    }
+    return {
+      ...config,
+      url: `http://${endpoint.host}:${endpoint.port}`,
+      host: endpoint.host,
+      port: endpoint.port,
+      tlsEnabled: false,
+    };
   }
 
   async listAllRows() {
@@ -919,6 +962,70 @@ export class DatabaseConnectionService {
     });
     if (!row) throw new AppError(404, 'DATABASE_NOT_FOUND', 'Database connection not found');
     return row;
+  }
+
+  private async toView(
+    row: typeof databaseConnections.$inferSelect,
+    revealCredentials: boolean,
+    includeHealthHistory: boolean
+  ): Promise<DatabaseConnectionView> {
+    return toDatabaseConnectionView(
+      row,
+      this.decryptConfig(row.encryptedConfig),
+      revealCredentials,
+      includeHealthHistory,
+      await this.getManagedMetadata(row.id)
+    );
+  }
+
+  private async getManagedMetadata(
+    databaseConnectionId: string
+  ): Promise<ManagedDatabaseConnectionMetadata | undefined> {
+    const [managed] = await this.db
+      .select({
+        id: managedDatabaseInstances.id,
+        nodeId: managedDatabaseInstances.nodeId,
+        version: managedDatabaseInstances.version,
+        storageSizeBytes: managedDatabaseInstances.storageSizeBytes,
+        runtimeConfig: managedDatabaseInstances.runtimeConfig,
+        engineConfig: managedDatabaseInstances.engineConfig,
+        publishedPort: managedDatabaseInstances.publishedPort,
+        status: managedDatabaseInstances.status,
+        lastError: managedDatabaseInstances.lastError,
+        serviceAddress: nodes.serviceAddress,
+        lastHealthReport: nodes.lastHealthReport,
+      })
+      .from(managedDatabaseInstances)
+      .leftJoin(nodes, eq(nodes.id, managedDatabaseInstances.nodeId))
+      .where(eq(managedDatabaseInstances.databaseConnectionId, databaseConnectionId))
+      .limit(1);
+    if (!managed) return undefined;
+    const runtime = managed.runtimeConfig as Record<string, unknown>;
+    const memoryBytes = Number(runtime.memoryLimitBytes ?? 0);
+    const swapBytes = Number(runtime.memorySwapBytes ?? 0);
+    const clickhouseConfigXml = (managed.engineConfig as unknown as Record<string, unknown>).clickhouseConfigXml;
+    return {
+      id: managed.id,
+      nodeId: managed.nodeId,
+      version: managed.version,
+      storageSizeBytes: Number(managed.storageSizeBytes),
+      runtimeConfig: {
+        cpuCores: Number(runtime.nanoCPUs ?? 0) / 1_000_000_000,
+        memoryMb: Math.round(memoryBytes / (1024 * 1024)),
+        swapMb: Math.max(0, Math.round((swapBytes - memoryBytes) / (1024 * 1024))),
+      },
+      publishedPort: managed.publishedPort,
+      endpointHost:
+        managed.publishedPort === null
+          ? null
+          : getEffectiveNodeServiceAddress({
+              serviceAddress: managed.serviceAddress,
+              lastHealthReport: managed.lastHealthReport,
+            }),
+      status: managed.status,
+      lastError: managed.lastError,
+      ...(typeof clickhouseConfigXml === 'string' ? { clickhouseConfigXml } : {}),
+    };
   }
 
   private emitChange(id: string, action: string, extra: Record<string, unknown> = {}) {
@@ -1166,6 +1273,19 @@ export class DatabaseConnectionService {
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 15_000,
       ssl: config.sslEnabled ? { rejectUnauthorized: false } : undefined,
+    });
+    // `pg.Pool` emits an `error` event when an idle client is disconnected.
+    // EventEmitter treats that event as fatal when no listener is attached,
+    // which must never let a transient managed-database tunnel disconnect
+    // terminate the Gateway process. Drop the affected cached pool so the
+    // next operation establishes a fresh connection through the tunnel.
+    pool.on('error', (error) => {
+      logger.debug('Postgres pool connection lost', {
+        databaseId: id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      if (this.postgresPools.get(id) === pool) this.postgresPools.delete(id);
+      void pool.end().catch(() => {});
     });
     try {
       await pool.query('select 1');

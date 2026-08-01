@@ -135,3 +135,10 @@ func OpenMigrationTransferStream(ctx context.Context, conn *grpc.ClientConn) (pb
 	client := pb.NewMigrationTransferClient(conn)
 	return client.Transfer(ctx)
 }
+
+// OpenDatabaseTunnelStream opens the dedicated bidirectional managed-database
+// tunnel RPC. The caller must send DatabaseTunnelHello before opening tunnels.
+func OpenDatabaseTunnelStream(ctx context.Context, conn *grpc.ClientConn) (pb.DatabaseTunnel_TunnelClient, error) {
+	client := pb.NewDatabaseTunnelClient(conn)
+	return client.Tunnel(ctx)
+}

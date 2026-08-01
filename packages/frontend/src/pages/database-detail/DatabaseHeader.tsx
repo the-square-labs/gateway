@@ -1,4 +1,14 @@
-import { EllipsisVertical, KeyRound, Pin, RefreshCw, Settings, Trash2 } from "lucide-react";
+import {
+  EllipsisVertical,
+  HardDrive,
+  KeyRound,
+  Pause,
+  Pin,
+  Play,
+  RefreshCw,
+  Settings,
+  Trash2,
+} from "lucide-react";
 import { CommandPalettePageActions } from "@/components/common/CommandPalettePageActions";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { Badge } from "@/components/ui/badge";
@@ -15,15 +25,23 @@ import { formatHealthStatusLabel, HEALTH_BADGE } from "./shared";
 
 interface DatabaseHeaderProps {
   database: DatabaseConnection;
-  healthStatus: DatabaseConnection["healthStatus"];
+  healthStatus: DatabaseConnection["healthStatus"] | "paused";
   canEdit: boolean;
+  canResize: boolean;
+  canPause: boolean;
+  canUnpause: boolean;
   canReveal: boolean;
+  canRotateDirectCredentials: boolean;
   canDelete: boolean;
   onOpenPin: () => void;
   onBack: () => void;
   onTest: () => void;
   onOpenSettings: () => void;
+  onOpenResize: () => void;
+  onPause: () => void;
+  onUnpause: () => void;
   onRevealCredentials: () => void;
+  onRotateDirectCredentials: () => void;
   onRemove: () => void;
 }
 
@@ -31,13 +49,21 @@ export function DatabaseHeader({
   database,
   healthStatus,
   canEdit,
+  canResize,
+  canPause,
+  canUnpause,
   canReveal,
+  canRotateDirectCredentials,
   canDelete,
   onOpenPin,
   onBack,
   onTest,
   onOpenSettings,
+  onOpenResize,
+  onPause,
+  onUnpause,
   onRevealCredentials,
+  onRotateDirectCredentials,
   onRemove,
 }: DatabaseHeaderProps) {
   const menuItems = (
@@ -48,11 +74,33 @@ export function DatabaseHeader({
           Settings
         </DropdownMenuItem>
       )}
-      {canEdit && (canReveal || canDelete) && <DropdownMenuSeparator />}
+      {canResize && (
+        <DropdownMenuItem onClick={onOpenResize}>
+          <HardDrive className="h-3.5 w-3.5 mr-2" />
+          Resize database
+        </DropdownMenuItem>
+      )}
+      {(canPause || canUnpause) && (
+        <DropdownMenuItem onClick={canPause ? onPause : onUnpause}>
+          {canPause ? (
+            <Pause className="h-3.5 w-3.5 mr-2" />
+          ) : (
+            <Play className="h-3.5 w-3.5 mr-2" />
+          )}
+          {canPause ? "Pause database" : "Unpause database"}
+        </DropdownMenuItem>
+      )}
+      {(canEdit || canPause || canUnpause) && (canReveal || canDelete) && <DropdownMenuSeparator />}
       {canReveal && (
         <DropdownMenuItem onClick={onRevealCredentials}>
           <KeyRound className="h-3.5 w-3.5 mr-2" />
           Reveal credentials
+        </DropdownMenuItem>
+      )}
+      {canRotateDirectCredentials && (
+        <DropdownMenuItem onClick={onRotateDirectCredentials}>
+          <RefreshCw className="h-3.5 w-3.5 mr-2" />
+          Rotate direct-access credentials
         </DropdownMenuItem>
       )}
       {canReveal && canDelete && <DropdownMenuSeparator />}
@@ -91,6 +139,26 @@ export function DatabaseHeader({
                 },
               ]
             : []),
+          ...(canPause
+            ? [
+                {
+                  id: "database:pause",
+                  label: "Pause database",
+                  icon: <Pause className="h-4 w-4" />,
+                  action: onPause,
+                },
+              ]
+            : []),
+          ...(canUnpause
+            ? [
+                {
+                  id: "database:unpause",
+                  label: "Unpause database",
+                  icon: <Play className="h-4 w-4" />,
+                  action: onUnpause,
+                },
+              ]
+            : []),
           ...(canReveal
             ? [
                 {
@@ -98,6 +166,16 @@ export function DatabaseHeader({
                   label: "Reveal database credentials",
                   icon: <KeyRound className="h-4 w-4" />,
                   action: onRevealCredentials,
+                },
+              ]
+            : []),
+          ...(canRotateDirectCredentials
+            ? [
+                {
+                  id: "database:rotate-direct-credentials",
+                  label: "Rotate direct-access credentials",
+                  icon: <RefreshCw className="h-4 w-4" />,
+                  action: onRotateDirectCredentials,
                 },
               ]
             : []),
@@ -130,8 +208,9 @@ export function DatabaseHeader({
             </Badge>
           </div>
           <p className="break-all text-sm text-muted-foreground">
-            {database.host}:{database.port}
-            {database.databaseName ? ` · ${database.databaseName}` : ""}
+            {database.managed
+              ? `Managed ${database.type} ${database.managed.version} · ${database.managed.publishedPort === null ? "private" : `TCP ${database.managed.publishedPort}`}`
+              : `${database.host}:${database.port}${database.databaseName ? ` · ${database.databaseName}` : ""}`}
           </p>
         </div>
       </div>
@@ -146,7 +225,12 @@ export function DatabaseHeader({
             Test
           </Button>
         )}
-        {(canEdit || canReveal || canDelete) && (
+        {(canEdit ||
+          canPause ||
+          canUnpause ||
+          canReveal ||
+          canRotateDirectCredentials ||
+          canDelete) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="icon">
@@ -176,7 +260,12 @@ export function DatabaseHeader({
                 Test
               </DropdownMenuItem>
             )}
-            {(canEdit || canReveal || canDelete) && <DropdownMenuSeparator />}
+            {(canEdit ||
+              canPause ||
+              canUnpause ||
+              canReveal ||
+              canRotateDirectCredentials ||
+              canDelete) && <DropdownMenuSeparator />}
             {menuItems}
           </DropdownMenuContent>
         </DropdownMenu>

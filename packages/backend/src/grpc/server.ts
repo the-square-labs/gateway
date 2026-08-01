@@ -13,6 +13,7 @@ import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { SystemCAService } from '@/services/system-ca.service.js';
 import { createControlHandlers } from './services/control.js';
+import { createDatabaseTunnelHandlers } from './services/database-tunnel.js';
 import { createEnrollmentHandlers } from './services/enrollment.js';
 import { createLogStreamHandlers } from './services/log-stream.js';
 import { createMigrationTransferHandlers } from './services/migration-transfer.js';
@@ -182,6 +183,7 @@ export async function startGrpcServer(
   server.addService(gatewayV1.NodeControl.service, createControlHandlers(deps));
   server.addService(gatewayV1.LogStream.service, createLogStreamHandlers(deps));
   server.addService(gatewayV1.MigrationTransfer.service, createMigrationTransferHandlers(deps));
+  server.addService(gatewayV1.DatabaseTunnel.service, createDatabaseTunnelHandlers(deps));
 
   const credentials = await createGrpcServerCredentials(tlsCertPath, tlsKeyPath, deps.systemCA);
   logger.info('gRPC server using TLS with Gateway system CA client certificate validation');

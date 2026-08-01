@@ -33,11 +33,17 @@ const DAEMON_NAME_MAP: Record<DaemonType, string> = {
 };
 
 /** Maps node.type values to daemon types */
-const NODE_TYPE_MAP: Record<string, DaemonType> = {
+export const NODE_TYPE_MAP: Record<string, DaemonType> = {
   nginx: 'nginx',
   docker: 'docker',
+  // Database nodes run the same docker-daemon binary in its database-only profile.
+  databases: 'docker',
   monitoring: 'monitoring',
 };
+
+export function daemonTypeForNodeType(nodeType: string): DaemonType | null {
+  return NODE_TYPE_MAP[nodeType] ?? null;
+}
 
 interface GitLabRelease {
   tag_name: string;

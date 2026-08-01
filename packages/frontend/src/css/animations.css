@@ -175,8 +175,13 @@
 [data-sonner-toast] [data-description] {
   min-width: 0;
   overflow: hidden;
+  overflow-wrap: anywhere;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
 }
 [data-sonner-toast] [data-description] { color: #a1a1aa; }
 [data-sonner-toast] [data-close-button] {

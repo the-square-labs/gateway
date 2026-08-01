@@ -65,6 +65,9 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 	if migrationStreamer, ok := d.plugin.(MigrationStreamPlugin); ok {
 		go migrationStreamer.RunMigrationStream(sessionCtx, conn, d.state.NodeID)
 	}
+	if databaseTunnel, ok := d.plugin.(DatabaseTunnelPlugin); ok {
+		go databaseTunnel.RunDatabaseTunnel(sessionCtx, conn, d.state.NodeID)
+	}
 
 	asyncCommandSlots := make(chan struct{}, maxAsyncCommandHandlers)
 	sendAsyncCommandResult := func(c *pb.GatewayCommand, handle func(*pb.GatewayCommand) *pb.CommandResult) {
@@ -165,7 +168,9 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 			*pb.GatewayCommand_DockerVolume,
 			*pb.GatewayCommand_DockerFile,
 			*pb.GatewayCommand_DockerExec,
-			*pb.GatewayCommand_DockerMigration:
+			*pb.GatewayCommand_DockerMigration,
+			*pb.GatewayCommand_DockerDatabase,
+			*pb.GatewayCommand_DockerDatabaseBinding:
 			// Long-running Docker I/O must not block the command receive loop.
 			sendAsyncCommandResult(cmd, d.plugin.HandleCommand)
 			continue

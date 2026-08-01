@@ -9,6 +9,11 @@ import type { NodeRegistryService } from './node-registry.service.js';
 
 const logger = createChildLogger('NodeDispatch');
 
+// The database daemon caps its operation and rollback at 14 minutes. Keep this
+// controller deadline slightly longer so it always receives the final result
+// instead of marking an operation failed while it still changes disk state.
+const managedDatabaseCommandTimeoutMs = 15 * 60 * 1000;
+
 export class NodeDispatchService {
   private daemonUpdateService?: DaemonUpdateService;
 
@@ -24,6 +29,23 @@ export class NodeDispatchService {
   private async assertNodeMutable(nodeId: string) {
     if (this.daemonUpdateService && (await this.daemonUpdateService.isNodeUpdateInProgress(nodeId))) {
       throw new AppError(409, 'NODE_UPDATING', 'Node daemon update is in progress');
+    }
+  }
+
+  /** Database-profile docker daemons are not general workload nodes. */
+  private async assertGenericDockerNode(nodeId: string) {
+    const [node] = await this.db.select({ type: nodes.type }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
+    if (node.type !== 'docker') {
+      throw new AppError(409, 'NODE_TYPE_MISMATCH', 'Generic Docker operations require a Docker node');
+    }
+  }
+
+  private async assertDatabaseNode(nodeId: string) {
+    const [node] = await this.db.select({ type: nodes.type }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
+    if (node.type !== 'databases') {
+      throw new AppError(409, 'NODE_TYPE_MISMATCH', 'Managed database operations require a databases node');
     }
   }
 
@@ -186,12 +208,49 @@ export class NodeDispatchService {
     } = {},
     timeoutMs?: number
   ): Promise<CommandResult> {
+    await this.assertGenericDockerNode(nodeId);
     await this.assertNodeMutable(nodeId);
     return this.registry.sendCommand(
       nodeId,
       {
         dockerMigration: { action, ...options } as any,
       },
+      timeoutMs
+    );
+  }
+
+  /**
+   * Send a restricted managed-database lifecycle command. This is a separate
+   * proto command so a database node never receives arbitrary Docker commands.
+   */
+  async sendDockerDatabaseCommand(
+    nodeId: string,
+    action: string,
+    managedDatabaseId: string,
+    configJson = '',
+    timeoutMs?: number
+  ): Promise<CommandResult> {
+    await this.assertDatabaseNode(nodeId);
+    await this.assertNodeMutable(nodeId);
+    return this.registry.sendCommand(
+      nodeId,
+      { dockerDatabase: { action, managedDatabaseId, configJson } as any },
+      timeoutMs ?? managedDatabaseCommandTimeoutMs
+    );
+  }
+
+  async sendDockerDatabaseBindingCommand(
+    nodeId: string,
+    action: 'prepare' | 'remove',
+    bindingId: string,
+    managedDatabaseId: string,
+    timeoutMs?: number
+  ): Promise<CommandResult> {
+    await this.assertGenericDockerNode(nodeId);
+    await this.assertNodeMutable(nodeId);
+    return this.registry.sendCommand(
+      nodeId,
+      { dockerDatabaseBinding: { action, bindingId, managedDatabaseId } as any },
       timeoutMs
     );
   }
@@ -209,6 +268,7 @@ export class NodeDispatchService {
     } = {},
     timeoutMs?: number
   ): Promise<CommandResult> {
+    await this.assertGenericDockerNode(nodeId);
     if (!['list', 'inspect', 'stats', 'top', 'http_probe'].includes(action)) {
       await this.assertNodeMutable(nodeId);
     }
@@ -231,6 +291,7 @@ export class NodeDispatchService {
     } = {},
     timeoutMs?: number
   ): Promise<CommandResult> {
+    await this.assertGenericDockerNode(nodeId);
     if (action !== 'list') {
       await this.assertNodeMutable(nodeId);
     }
@@ -259,6 +320,7 @@ export class NodeDispatchService {
     } = {},
     timeoutMs?: number
   ): Promise<CommandResult> {
+    await this.assertGenericDockerNode(nodeId);
     if (!['list', 'inspect'].includes(action)) {
       await this.assertNodeMutable(nodeId);
     }
@@ -287,6 +349,7 @@ export class NodeDispatchService {
     } = {},
     timeoutMs?: number
   ): Promise<CommandResult> {
+    await this.assertGenericDockerNode(nodeId);
     if (action !== 'list') {
       await this.assertNodeMutable(nodeId);
     }
@@ -310,6 +373,7 @@ export class NodeDispatchService {
     } = {},
     timeoutMs?: number
   ): Promise<CommandResult> {
+    await this.assertGenericDockerNode(nodeId);
     if (action !== 'inspect') {
       await this.assertNodeMutable(nodeId);
     }
@@ -337,6 +401,7 @@ export class NodeDispatchService {
     } = {},
     timeoutMs?: number
   ): Promise<CommandResult> {
+    await this.assertGenericDockerNode(nodeId);
     await this.assertNodeMutable(nodeId);
     return this.registry.sendCommand(
       nodeId,
@@ -405,6 +470,7 @@ export class NodeDispatchService {
       content?: string | Buffer;
     } = {}
   ): Promise<CommandResult> {
+    await this.assertGenericDockerNode(nodeId);
     if (!['list', 'read'].includes(action)) {
       await this.assertNodeMutable(nodeId);
     }
@@ -431,6 +497,7 @@ export class NodeDispatchService {
       until?: string;
     } = {}
   ): Promise<CommandResult> {
+    await this.assertGenericDockerNode(nodeId);
     return this.registry.sendCommand(nodeId, {
       dockerLogs: { containerId, ...options } as any,
     });
@@ -441,6 +508,7 @@ export class NodeDispatchService {
     registries: Array<{ url: string; username: string; password: string }>,
     allowlist: string[]
   ): Promise<CommandResult> {
+    await this.assertGenericDockerNode(nodeId);
     await this.assertNodeMutable(nodeId);
     return this.registry.sendCommand(nodeId, {
       dockerConfigPush: { registries, allowlist },

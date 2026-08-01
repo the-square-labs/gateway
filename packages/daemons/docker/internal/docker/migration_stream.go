@@ -43,6 +43,9 @@ func (a *migrationIncomingArtifact) write(data []byte) (int, error) {
 }
 
 func (p *DockerPlugin) RunMigrationStream(ctx context.Context, conn *grpc.ClientConn, nodeID string) {
+	if p.cfg.Docker.Mode == "databases" {
+		return
+	}
 	for ctx.Err() == nil {
 		if err := p.runMigrationStream(ctx, conn, nodeID); err != nil && ctx.Err() == nil {
 			p.logger.Warn("migration transfer stream disconnected", "error", err)
