@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { isIP } from 'node:net';
 import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { databaseConnections, managedDatabaseBindings, managedDatabaseInstances, nodes } from '@/db/schema/index.js';
@@ -6,6 +7,7 @@ import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
+import type { DatabaseCAService } from '@/services/database-ca.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { DatabaseConnectionConfig } from './database-connection-view.js';
@@ -44,6 +46,25 @@ interface OwnerCredentials {
   databaseName?: string;
 }
 
+function managedDatabaseServiceAddresses(node: { serviceAddress: string | null; lastHealthReport: unknown }): string[] {
+  const health = node.lastHealthReport as
+    | { localIpAddresses?: unknown; publicIpAddresses?: unknown }
+    | null
+    | undefined;
+  const values = [
+    node.serviceAddress,
+    ...(Array.isArray(health?.publicIpAddresses) ? health.publicIpAddresses : []),
+    ...(Array.isArray(health?.localIpAddresses) ? health.localIpAddresses : []),
+  ];
+  return [
+    ...new Set(
+      values
+        .filter((address): address is string => typeof address === 'string' && isIP(address.trim()) !== 0)
+        .map((address) => address.trim())
+    ),
+  ];
+}
+
 export interface ManagedDatabaseRuntimeStats {
   cpuPercent: number;
   memoryUsageBytes: number;
@@ -63,13 +84,16 @@ function runtimeValues(runtimeConfig: Record<string, unknown>) {
   };
 }
 
-function daemonCreateConfig(
+async function daemonCreateConfig(
   row: ManagedDatabaseRow,
   credentials: OwnerCredentials,
   publishTcp: boolean,
-  operationId: string
+  operationId: string,
+  databaseCA?: DatabaseCAService
 ) {
   const engineConfig = row.engineConfig as unknown as Record<string, unknown>;
+  const tls =
+    databaseCA && row.certificateId ? await databaseCA.getManagedDatabaseCertificateMaterial(row.certificateId) : null;
   return {
     type: row.type,
     image: row.imageRef,
@@ -83,6 +107,16 @@ function daemonCreateConfig(
     databaseName: credentials.databaseName ?? 'redis',
     publishTcp,
     publishedPort: row.publishedPort ?? 0,
+    publishedNativePort: row.publishedNativePort ?? 0,
+    tlsEnabled: row.tlsEnabled,
+    tlsCertificateId: row.tlsEnabled ? (row.certificateId ?? '') : '',
+    ...(tls
+      ? {
+          tlsCertificatePem: tls.certificatePem,
+          tlsPrivateKeyPem: tls.privateKeyPem,
+          tlsCaCertificatePem: tls.caCertificatePem,
+        }
+      : {}),
     clickhouseConfigXml: typeof engineConfig.clickhouseConfigXml === 'string' ? engineConfig.clickhouseConfigXml : '',
   };
 }
@@ -137,6 +171,8 @@ function safeManagedDatabaseView(row: ManagedDatabaseRow) {
       swapMb: Math.max(0, Math.round((runtime.memorySwapBytes - runtime.memoryBytes) / MEBIBYTE)),
     },
     publishedPort: row.publishedPort,
+    publishedNativePort: row.publishedNativePort,
+    tlsEnabled: row.tlsEnabled,
     status: row.status,
     lastError: row.lastError,
     createdAt: row.createdAt,
@@ -219,19 +255,23 @@ function validateClickHouseFragment(value: string | undefined) {
   }
 }
 
-function allocatedPublishedPort(result: { detail?: string }): number | null {
+function allocatedPort(result: { detail?: string }, field: 'publishedPort' | 'publishedNativePort'): number | null {
   if (!result.detail) return null;
   try {
-    const parsed = JSON.parse(result.detail) as { publishedPort?: unknown };
-    return typeof parsed.publishedPort === 'number' &&
-      Number.isInteger(parsed.publishedPort) &&
-      parsed.publishedPort >= 1 &&
-      parsed.publishedPort <= 65535
-      ? parsed.publishedPort
-      : null;
+    const parsed = JSON.parse(result.detail) as Record<string, unknown>;
+    const value = parsed[field];
+    return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65535 ? value : null;
   } catch {
     return null;
   }
+}
+
+function allocatedPublishedPort(result: { detail?: string }): number | null {
+  return allocatedPort(result, 'publishedPort');
+}
+
+function allocatedPublishedNativePort(result: { detail?: string }): number | null {
+  return allocatedPort(result, 'publishedNativePort');
 }
 
 function parseManagedRuntimeStats(result: { detail?: string }): ManagedDatabaseRuntimeStats | null {
@@ -264,7 +304,8 @@ export class ManagedDatabaseService {
     private readonly db: DrizzleClient,
     private readonly auditService: AuditService,
     private readonly cryptoService: CryptoService,
-    private readonly nodeDispatch: NodeDispatchService
+    private readonly nodeDispatch: NodeDispatchService,
+    private readonly databaseCA?: DatabaseCAService
   ) {}
 
   setEventBus(bus: EventBusService) {
@@ -333,10 +374,35 @@ export class ManagedDatabaseService {
     }
   }
 
+  /** Backfill certificates for instances created before direct TLS existed. */
+  async reconcileDatabaseCertificates() {
+    if (!this.databaseCA) return;
+    const rows = await this.db
+      .select({
+        id: managedDatabaseInstances.id,
+        nodeId: managedDatabaseInstances.nodeId,
+        certificateId: managedDatabaseInstances.certificateId,
+        serviceAddress: nodes.serviceAddress,
+        lastHealthReport: nodes.lastHealthReport,
+      })
+      .from(managedDatabaseInstances)
+      .innerJoin(nodes, eq(nodes.id, managedDatabaseInstances.nodeId))
+      .where(isNull(managedDatabaseInstances.certificateId));
+    for (const row of rows) {
+      const serviceAddresses = managedDatabaseServiceAddresses(row);
+      if (serviceAddresses.length === 0) continue;
+      const issued = await this.databaseCA.issueManagedDatabaseCertificate(row.id, serviceAddresses);
+      await this.db
+        .update(managedDatabaseInstances)
+        .set({ certificateId: issued.certificate.id, updatedAt: new Date() })
+        .where(and(eq(managedDatabaseInstances.id, row.id), isNull(managedDatabaseInstances.certificateId)));
+    }
+  }
+
   async create(input: CreateManagedDatabaseInput, userId: string) {
     validateClickHouseFragment(input.clickhouseConfigXml);
     const imageRef = catalogImage(input.type, input.version);
-    await this.assertDatabaseNode(input.nodeId);
+    const node = await this.assertDatabaseNode(input.nodeId);
     const credentials: OwnerCredentials = {
       // Redis `requirepass` configures Redis's built-in `default` ACL user.
       // Retaining an invented username here would make revealed direct
@@ -390,7 +456,10 @@ export class ManagedDatabaseService {
               encryptedDirectCredentials,
               storageSizeBytes: input.storageSizeGb * GIBIBYTE,
               runtimeConfig,
+              tlsEnabled: input.tlsEnabled,
               publishedPort: input.publishTcp ? (input.publishedPort ?? null) : null,
+              publishedNativePort:
+                input.publishTcp && input.type === 'clickhouse' ? (input.publishedNativePort ?? null) : null,
               status: 'creating',
               pendingOperation,
               createdById: userId,
@@ -401,6 +470,13 @@ export class ManagedDatabaseService {
         },
       });
     } catch (error) {
+      await this.db.delete(databaseConnections).where(eq(databaseConnections.id, connection.id));
+      throw error;
+    }
+    try {
+      row = await this.ensureManagedDatabaseCertificate(row, node);
+    } catch (error) {
+      await this.db.delete(managedDatabaseInstances).where(eq(managedDatabaseInstances.id, row.id));
       await this.db.delete(databaseConnections).where(eq(databaseConnections.id, connection.id));
       throw error;
     }
@@ -418,7 +494,7 @@ export class ManagedDatabaseService {
 
   async update(id: string, input: UpdateManagedDatabaseInput, userId: string) {
     validateClickHouseFragment(input.clickhouseConfigXml);
-    const existing = await this.getRow(id);
+    let existing = await this.getRow(id);
     if (existing.pendingOperation) {
       throw new AppError(
         409,
@@ -436,14 +512,21 @@ export class ManagedDatabaseService {
         'Managed database storage can only be increased'
       );
     }
-    await this.assertDatabaseNode(existing.nodeId);
+    const node = await this.assertDatabaseNode(existing.nodeId);
+    existing = await this.ensureManagedDatabaseCertificate(existing, node);
+    const nextPublishTcp = input.publishTcp ?? existing.publishedPort !== null;
     const nextPublishedPort =
       input.publishTcp === false
         ? null
         : input.publishedPort === undefined
           ? existing.publishedPort
           : input.publishedPort;
-    const nextPublishTcp = input.publishTcp ?? existing.publishedPort !== null;
+    const nextPublishedNativePort =
+      !nextPublishTcp || existing.type !== 'clickhouse'
+        ? null
+        : input.publishedNativePort === undefined
+          ? existing.publishedNativePort
+          : input.publishedNativePort;
     const next = {
       name: input.name ?? existing.name,
       storageSizeBytes: input.storageSizeGb === undefined ? existing.storageSizeBytes : input.storageSizeGb * GIBIBYTE,
@@ -468,7 +551,9 @@ export class ManagedDatabaseService {
                 MEBIBYTE,
             }),
       },
+      tlsEnabled: input.tlsEnabled ?? existing.tlsEnabled,
       publishedPort: nextPublishedPort,
+      publishedNativePort: nextPublishedNativePort,
       engineConfig: {
         ...existing.engineConfig,
         ...(input.clickhouseConfigXml === undefined ? {} : { clickhouseConfigXml: input.clickhouseConfigXml }),
@@ -493,6 +578,62 @@ export class ManagedDatabaseService {
     await this.syncCanonicalConnectionName(updating!, existing.name);
     await this.syncCanonicalConnectionTags(updating!, input.tags);
     return this.dispatchUpdate(updating!, existingCredentials, nextPublishTcp, userId);
+  }
+
+  async rotateCertificate(id: string, userId: string) {
+    const existing = await this.getRow(id);
+    if (existing.pendingOperation) {
+      throw new AppError(
+        409,
+        'MANAGED_DATABASE_OPERATION_PENDING',
+        'Managed database operation is still being reconciled'
+      );
+    }
+    if (existing.status === 'paused') {
+      throw new AppError(
+        409,
+        'MANAGED_DATABASE_PAUSED',
+        'Unpause the managed database before rotating its certificate'
+      );
+    }
+    if (!this.databaseCA) {
+      throw new AppError(503, 'MANAGED_DATABASE_TLS_UNAVAILABLE', 'Managed database TLS is not available');
+    }
+    const node = await this.assertDatabaseNode(existing.nodeId);
+    const serviceAddresses = managedDatabaseServiceAddresses(node);
+    if (serviceAddresses.length === 0) {
+      throw new AppError(
+        409,
+        'MANAGED_DATABASE_TLS_IDENTITY_UNAVAILABLE',
+        'Database node has no service IP addresses available for the managed TLS certificate'
+      );
+    }
+    const issued = await this.databaseCA.issueManagedDatabaseCertificate(existing.id, serviceAddresses);
+    const credentials = JSON.parse(
+      this.cryptoService.decryptString(parseEncryptedCredentials(existing.encryptedOwnerCredentials))
+    ) as OwnerCredentials;
+    const pendingOperation: ManagedDatabaseOperation = { id: crypto.randomUUID(), action: 'update' };
+    const [updating] = await this.db
+      .update(managedDatabaseInstances)
+      .set({
+        certificateId: issued.certificate.id,
+        status: 'updating',
+        pendingOperation,
+        lastError: null,
+        updatedById: userId,
+        updatedAt: new Date(),
+      })
+      .where(eq(managedDatabaseInstances.id, existing.id))
+      .returning();
+    await this.auditService.log({
+      userId,
+      action: 'database.managed.tls_certificate.rotate',
+      resourceType: 'managed_database',
+      resourceId: existing.id,
+      details: { name: existing.name, type: existing.type, serviceAddresses },
+    });
+    this.emit(updating!, 'tls_certificate.rotating');
+    return this.dispatchUpdate(updating!, credentials, updating!.publishedPort !== null, userId);
   }
 
   async pause(id: string, userId: string) {
@@ -540,7 +681,7 @@ export class ManagedDatabaseService {
   }
 
   async retryProvisioning(id: string, userId: string) {
-    const row = await this.getRow(id);
+    let row = await this.getRow(id);
     if (row.status !== 'error' || row.lastError !== 'Managed database create failed') {
       throw new AppError(
         409,
@@ -548,7 +689,8 @@ export class ManagedDatabaseService {
         'Only a failed managed database deployment can be retried'
       );
     }
-    await this.assertDatabaseNode(row.nodeId);
+    const node = await this.assertDatabaseNode(row.nodeId);
+    row = await this.ensureManagedDatabaseCertificate(row, node);
     const credentials = JSON.parse(
       this.cryptoService.decryptString(parseEncryptedCredentials(row.encryptedOwnerCredentials))
     ) as OwnerCredentials;
@@ -586,11 +728,20 @@ export class ManagedDatabaseService {
     const { row: current, credentials } = existing
       ? { row, credentials: existing }
       : await this.ensureDirectAccessCredentials(row, null);
+    const ca = row.tlsEnabled && this.databaseCA ? await this.databaseCA.getDatabaseCA() : null;
     return {
       username: credentials.username,
       password: credentials.password,
       ...(credentials.databaseName ? { databaseName: credentials.databaseName } : {}),
       publishedPort: current.publishedPort,
+      publishedNativePort: current.publishedNativePort,
+      tlsEnabled: current.tlsEnabled,
+      ...(ca
+        ? {
+            caCertificate: ca.certificatePem,
+            caFingerprint: crypto.createHash('sha256').update(ca.certificatePem).digest('hex'),
+          }
+        : {}),
     };
   }
 
@@ -681,13 +832,16 @@ export class ManagedDatabaseService {
   ) {
     const operation = this.pendingOperation(row, 'create');
     const direct = await this.ensureDirectAccessCredentials(row, userId, false);
-    const configJson = JSON.stringify(daemonCreateConfig(row, credentials, publishTcp, operation.id));
+    const configJson = JSON.stringify(
+      await daemonCreateConfig(row, credentials, publishTcp, operation.id, this.databaseCA)
+    );
     try {
       const result = await this.nodeDispatch.sendDockerDatabaseCommand(row.nodeId, 'create', row.id, configJson);
       if (!result.success) return this.markError(row, 'create');
       await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
       const publishedPort = await this.resolvePublishedPort(direct.row, publishTcp, result);
-      return this.markReady(direct.row, userId, publishedPort);
+      const publishedNativePort = await this.resolvePublishedNativePort(direct.row, publishTcp, result);
+      return this.markReady(direct.row, userId, publishedPort, 'ready', publishedNativePort);
     } catch {
       return this.markOutcomeUnknown(row);
     }
@@ -701,12 +855,15 @@ export class ManagedDatabaseService {
   ) {
     const operation = this.pendingOperation(row, 'update');
     const direct = await this.ensureDirectAccessCredentials(row, userId, false);
-    const configJson = JSON.stringify(daemonCreateConfig(row, credentials, publishTcp, operation.id));
+    const configJson = JSON.stringify(
+      await daemonCreateConfig(row, credentials, publishTcp, operation.id, this.databaseCA)
+    );
     try {
       const result = await this.nodeDispatch.sendDockerDatabaseCommand(row.nodeId, 'update', row.id, configJson);
       if (!result.success) return this.markError(row, 'update');
       await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
       const publishedPort = await this.resolvePublishedPort(direct.row, publishTcp, result);
+      const publishedNativePort = await this.resolvePublishedNativePort(direct.row, publishTcp, result);
       const [ready] = await this.db
         .update(managedDatabaseInstances)
         .set({
@@ -714,6 +871,7 @@ export class ManagedDatabaseService {
           pendingOperation: null,
           lastError: null,
           publishedPort,
+          publishedNativePort,
           updatedById: userId,
           updatedAt: new Date(),
         })
@@ -803,6 +961,10 @@ export class ManagedDatabaseService {
   }
 
   private async replayPendingOperation(row: ManagedDatabaseRow) {
+    if (this.databaseCA) {
+      const node = await this.assertDatabaseNode(row.nodeId);
+      row = await this.ensureManagedDatabaseCertificate(row, node);
+    }
     const operation = this.pendingOperation(row, row.pendingOperation!.action);
     if (operation.action === 'delete') return this.dispatchDelete(row, null);
     if (operation.action === 'pause' || operation.action === 'unpause') {
@@ -931,7 +1093,8 @@ export class ManagedDatabaseService {
     row: ManagedDatabaseRow,
     userId: string | null,
     publishedPort: number | null,
-    status: 'ready' | 'stopped' = 'ready'
+    status: 'ready' | 'stopped' = 'ready',
+    publishedNativePort: number | null = row.publishedNativePort
   ) {
     const [ready] = await this.db
       .update(managedDatabaseInstances)
@@ -940,6 +1103,7 @@ export class ManagedDatabaseService {
         pendingOperation: null,
         lastError: null,
         publishedPort,
+        publishedNativePort,
         ...(userId ? { updatedById: userId } : {}),
         updatedAt: new Date(),
       })
@@ -1001,7 +1165,13 @@ export class ManagedDatabaseService {
 
   private async assertDatabaseNode(nodeId: string) {
     const [node] = await this.db
-      .select({ id: nodes.id, type: nodes.type, status: nodes.status })
+      .select({
+        id: nodes.id,
+        type: nodes.type,
+        status: nodes.status,
+        serviceAddress: nodes.serviceAddress,
+        lastHealthReport: nodes.lastHealthReport,
+      })
       .from(nodes)
       .where(eq(nodes.id, nodeId))
       .limit(1);
@@ -1009,6 +1179,29 @@ export class ManagedDatabaseService {
     if (node.type !== 'databases')
       throw new AppError(400, 'INVALID_DATABASE_NODE', 'Managed databases require a database node');
     if (node.status !== 'online') throw new AppError(409, 'NODE_OFFLINE', 'Database node is offline');
+    return node;
+  }
+
+  private async ensureManagedDatabaseCertificate(
+    row: ManagedDatabaseRow,
+    node: { serviceAddress: string | null; lastHealthReport: unknown }
+  ): Promise<ManagedDatabaseRow> {
+    if (row.certificateId || !this.databaseCA) return row;
+    const serviceAddresses = managedDatabaseServiceAddresses(node);
+    if (serviceAddresses.length === 0) {
+      throw new AppError(
+        409,
+        'MANAGED_DATABASE_TLS_IDENTITY_UNAVAILABLE',
+        'Database node has no service IP addresses available for the managed TLS certificate'
+      );
+    }
+    const issued = await this.databaseCA.issueManagedDatabaseCertificate(row.id, serviceAddresses);
+    const [updated] = await this.db
+      .update(managedDatabaseInstances)
+      .set({ certificateId: issued.certificate.id, updatedAt: new Date() })
+      .where(eq(managedDatabaseInstances.id, row.id))
+      .returning();
+    return updated!;
   }
 
   private async createCanonicalConnection(
@@ -1139,6 +1332,25 @@ export class ManagedDatabaseService {
       503,
       'MANAGED_DATABASE_PUBLICATION_UNCONFIRMED',
       'Managed database started, but its published TCP port could not be confirmed'
+    );
+  }
+
+  private async resolvePublishedNativePort(
+    row: ManagedDatabaseRow,
+    publishTcp: boolean,
+    result: { detail?: string }
+  ): Promise<number | null> {
+    if (row.type !== 'clickhouse' || !publishTcp) return null;
+    const returned = allocatedPublishedNativePort(result);
+    if (returned !== null) return returned;
+    if (row.publishedNativePort !== null) return row.publishedNativePort;
+    const inspected = await this.nodeDispatch.sendDockerDatabaseCommand(row.nodeId, 'inspect', row.id, '', 10_000);
+    const inspectedPort = inspected.success ? allocatedPublishedNativePort(inspected) : null;
+    if (inspectedPort !== null) return inspectedPort;
+    throw new AppError(
+      503,
+      'MANAGED_DATABASE_NATIVE_PUBLICATION_UNCONFIRMED',
+      'Managed ClickHouse started, but its published native TCP port could not be confirmed'
     );
   }
 

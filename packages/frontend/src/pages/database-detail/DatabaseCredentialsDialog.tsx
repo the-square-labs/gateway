@@ -26,14 +26,14 @@ function managedConnectionUri(
 
   if (database.type === "postgres") {
     const target = stringValue(credentials.databaseName) ?? database.databaseName ?? "";
-    return `postgresql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}/${encodeURIComponent(target)}`;
+    return `postgresql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}/${encodeURIComponent(target)}${database.managed?.tlsEnabled ? "?sslmode=verify-full" : ""}`;
   }
   if (database.type === "clickhouse") {
     const target = stringValue(credentials.databaseName) ?? database.databaseName ?? "";
-    return `http://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}/?database=${encodeURIComponent(target)}`;
+    return `${database.managed?.tlsEnabled ? "https" : "http"}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}/?database=${encodeURIComponent(target)}`;
   }
   const db = stringValue(credentials.database) ?? "0";
-  return `redis://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}/${encodeURIComponent(db)}`;
+  return `${database.managed?.tlsEnabled ? "rediss" : "redis"}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}/${encodeURIComponent(db)}`;
 }
 
 function CredentialField({
@@ -113,6 +113,8 @@ export function DatabaseCredentialsDialog({
     null;
   const username = stringValue(credentials?.username) ?? database.username;
   const password = stringValue(credentials?.password);
+  const caCertificate = stringValue(credentials?.caCertificate);
+  const caFingerprint = stringValue(credentials?.caFingerprint);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -133,6 +135,16 @@ export function DatabaseCredentialsDialog({
               {target && <CredentialField label="Database" value={target} />}
               {username && <CredentialField label="Username" value={username} />}
               {password && <CredentialField label="Password" value={password} sensitive />}
+              {database.type === "clickhouse" && managed?.publishedNativePort != null && (
+                <CredentialField
+                  label="Native TCP Port"
+                  value={String(managed.publishedNativePort)}
+                />
+              )}
+              {caFingerprint && (
+                <CredentialField label="CA fingerprint (SHA-256)" value={caFingerprint} />
+              )}
+              {caCertificate && <CredentialField label="CA certificate" value={caCertificate} />}
             </>
           ) : (
             <div className="border border-border bg-card p-6 text-sm text-muted-foreground">

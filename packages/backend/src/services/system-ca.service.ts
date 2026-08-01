@@ -99,10 +99,26 @@ export class SystemCAService {
     const [existing] = await this.db
       .select({ id: certificateAuthorities.id })
       .from(certificateAuthorities)
-      .where(eq(certificateAuthorities.isSystem, true))
+      .where(eq(certificateAuthorities.systemPurpose, 'node-mtls'))
       .limit(1);
 
     if (existing) return existing.id;
+
+    // Installations created before purpose-scoped system CAs have exactly one
+    // locked CA: it is the node mTLS CA. Adopt it instead of minting a second
+    // root during the migration to database TLS.
+    const [legacy] = await this.db
+      .select({ id: certificateAuthorities.id })
+      .from(certificateAuthorities)
+      .where(eq(certificateAuthorities.isSystem, true))
+      .limit(1);
+    if (legacy) {
+      await this.db
+        .update(certificateAuthorities)
+        .set({ systemPurpose: 'node-mtls' })
+        .where(eq(certificateAuthorities.id, legacy.id));
+      return legacy.id;
+    }
 
     logger.info('Creating system CA for node mTLS...');
 
@@ -117,7 +133,10 @@ export class SystemCAService {
       SYSTEM_USER_ID
     );
 
-    await this.db.update(certificateAuthorities).set({ isSystem: true }).where(eq(certificateAuthorities.id, ca.id));
+    await this.db
+      .update(certificateAuthorities)
+      .set({ isSystem: true, systemPurpose: 'node-mtls' })
+      .where(eq(certificateAuthorities.id, ca.id));
 
     logger.info('System CA created', { caId: ca.id });
     return ca.id;
@@ -128,7 +147,7 @@ export class SystemCAService {
     const [ca] = await this.db
       .select({ certificatePem: certificateAuthorities.certificatePem })
       .from(certificateAuthorities)
-      .where(eq(certificateAuthorities.isSystem, true))
+      .where(eq(certificateAuthorities.systemPurpose, 'node-mtls'))
       .limit(1);
     return ca?.certificatePem ?? null;
   }
@@ -138,7 +157,7 @@ export class SystemCAService {
     const [ca] = await this.db
       .select({ id: certificateAuthorities.id })
       .from(certificateAuthorities)
-      .where(eq(certificateAuthorities.isSystem, true))
+      .where(eq(certificateAuthorities.systemPurpose, 'node-mtls'))
       .limit(1);
 
     if (!ca) throw new Error('System CA not found — run ensureSystemCA first');

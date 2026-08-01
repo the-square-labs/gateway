@@ -22,6 +22,8 @@ const database: ManagedDatabase = {
   storageSizeBytes: 1_073_741_824,
   runtimeConfig: { cpuCores: 1, memoryMb: 512, swapMb: 0 },
   publishedPort: null,
+  publishedNativePort: null,
+  tlsEnabled: true,
   status: "ready",
   lastError: null,
   createdAt: "2026-08-01T00:00:00.000Z",

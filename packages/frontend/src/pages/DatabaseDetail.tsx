@@ -310,6 +310,24 @@ export function DatabaseDetail({
     }
   };
 
+  const rotateCertificate = async () => {
+    if (!database?.managed || !canManageSettings || database.managed.publishedPort == null) return;
+    const ok = await confirm({
+      title: "Rotate TLS Certificate",
+      description:
+        "Gateway will issue a replacement certificate for this database node's current IP addresses and briefly recreate the database. Direct clients must continue trusting the same Gateway Database CA.",
+      confirmLabel: "Rotate certificate",
+    });
+    if (!ok) return;
+    try {
+      await api.rotateManagedDatabaseCertificate(database.managed.id);
+      toast.success("TLS certificate rotated — database recreated");
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to rotate TLS certificate");
+    }
+  };
+
   const pause = async () => {
     if (!database?.managed || !canPause) return;
     const ok = await confirm({
@@ -382,6 +400,7 @@ export function DatabaseDetail({
               canRotateDirectCredentials={
                 canManageSettings && database.managed?.publishedPort != null
               }
+              canRotateCertificate={canManageSettings && database.managed?.publishedPort != null}
               canDelete={canDelete}
               onOpenPin={() => setPinOpen(true)}
               onBack={() => navigate("/databases")}
@@ -392,6 +411,7 @@ export function DatabaseDetail({
               onUnpause={() => void unpause()}
               onRevealCredentials={() => void revealCredentials()}
               onRotateDirectCredentials={() => void rotateDirectCredentials()}
+              onRotateCertificate={() => void rotateCertificate()}
               onRemove={() => void remove()}
             />
 

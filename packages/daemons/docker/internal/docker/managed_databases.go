@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -50,21 +51,27 @@ var (
 // managedDatabaseCommand is deliberately private to the database-profile
 // daemon. It must never become a generic Docker container payload.
 type managedDatabaseCommand struct {
-	Type             string `json:"type"`
-	Image            string `json:"image"`
-	StorageSizeBytes int64  `json:"storageSizeBytes"`
-	MemoryBytes      int64  `json:"memoryBytes"`
-	MemorySwapBytes  int64  `json:"memorySwapBytes"`
-	NanoCPUs         int64  `json:"nanoCPUs"`
-	CPUShares        int64  `json:"cpuShares"`
-	PidsLimit        int64  `json:"pidsLimit"`
-	OperationID      string `json:"operationId"`
-	OwnerUsername    string `json:"ownerUsername"`
-	OwnerPassword    string `json:"ownerPassword"`
-	DatabaseName     string `json:"databaseName"`
-	PublishTCP       bool   `json:"publishTcp"`
-	PublishedPort    uint16 `json:"publishedPort"`
-	ClickhouseConfig string `json:"clickhouseConfigXml"`
+	Type                string `json:"type"`
+	Image               string `json:"image"`
+	StorageSizeBytes    int64  `json:"storageSizeBytes"`
+	MemoryBytes         int64  `json:"memoryBytes"`
+	MemorySwapBytes     int64  `json:"memorySwapBytes"`
+	NanoCPUs            int64  `json:"nanoCPUs"`
+	CPUShares           int64  `json:"cpuShares"`
+	PidsLimit           int64  `json:"pidsLimit"`
+	OperationID         string `json:"operationId"`
+	OwnerUsername       string `json:"ownerUsername"`
+	OwnerPassword       string `json:"ownerPassword"`
+	DatabaseName        string `json:"databaseName"`
+	PublishTCP          bool   `json:"publishTcp"`
+	PublishedPort       uint16 `json:"publishedPort"`
+	PublishedNativePort uint16 `json:"publishedNativePort"`
+	TLSEnabled          bool   `json:"tlsEnabled"`
+	TLSCertificatePEM   string `json:"tlsCertificatePem"`
+	TLSPrivateKeyPEM    string `json:"tlsPrivateKeyPem"`
+	TLSCACertificatePEM string `json:"tlsCaCertificatePem"`
+	TLSCertificateID    string `json:"tlsCertificateId"`
+	ClickhouseConfig    string `json:"clickhouseConfigXml"`
 }
 
 // managedDatabaseBindingCommand is intentionally separate from the instance
@@ -87,18 +94,21 @@ type managedDatabaseOperationCommand struct {
 // database container is started after a daemon or host restart. It contains
 // neither owner credentials nor arbitrary configuration.
 type managedDatabaseRecord struct {
-	ID             string `json:"id"`
-	Type           string `json:"type"`
-	ContainerID    string `json:"containerId"`
-	ContainerName  string `json:"containerName"`
-	NetworkName    string `json:"networkName"`
-	ImagePath      string `json:"imagePath"`
-	MountPath      string `json:"mountPath"`
-	LoopDevice     string `json:"loopDevice,omitempty"`
-	StorageSize    int64  `json:"storageSizeBytes"`
-	DesiredRunning bool   `json:"desiredRunning"`
-	PublishedPort  uint16 `json:"publishedPort,omitempty"`
-	OperationID    string `json:"operationId"`
+	ID                  string `json:"id"`
+	Type                string `json:"type"`
+	ContainerID         string `json:"containerId"`
+	ContainerName       string `json:"containerName"`
+	NetworkName         string `json:"networkName"`
+	ImagePath           string `json:"imagePath"`
+	MountPath           string `json:"mountPath"`
+	LoopDevice          string `json:"loopDevice,omitempty"`
+	StorageSize         int64  `json:"storageSizeBytes"`
+	DesiredRunning      bool   `json:"desiredRunning"`
+	PublishedPort       uint16 `json:"publishedPort,omitempty"`
+	PublishedNativePort uint16 `json:"publishedNativePort,omitempty"`
+	TLSEnabled          bool   `json:"tlsEnabled"`
+	TLSCertificateID    string `json:"tlsCertificateId,omitempty"`
+	OperationID         string `json:"operationId"`
 }
 
 // managedDatabaseRuntimeStats is intentionally a narrow managed-database
@@ -131,7 +141,7 @@ func newManagedDatabaseManager(cfg *config.Config, client *Client, logger *slog.
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, fmt.Errorf("create database storage root: %w", err)
 	}
-	for _, dir := range []string{"images", "mounts", "records"} {
+	for _, dir := range []string{"images", "mounts", "records", "tls"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0700); err != nil {
 			return nil, fmt.Errorf("create database storage directory: %w", err)
 		}
@@ -466,7 +476,11 @@ func (m *managedDatabaseManager) update(ctx context.Context, record *managedData
 	if err := m.ensureStorageSize(ctx, record, input.StorageSizeBytes); err != nil {
 		return err
 	}
-	publicationChanged := input.PublishedPort != record.PublishedPort || (input.PublishTCP != (record.PublishedPort != 0))
+	publicationChanged := input.PublishedPort != record.PublishedPort ||
+		input.PublishedNativePort != record.PublishedNativePort ||
+		input.TLSEnabled != record.TLSEnabled ||
+		input.TLSCertificateID != record.TLSCertificateID ||
+		(input.PublishTCP != (record.PublishedPort != 0))
 	if publicationChanged {
 		if err := m.recreateContainer(ctx, record, input); err != nil {
 			return err
@@ -482,24 +496,52 @@ func (m *managedDatabaseManager) update(ctx context.Context, record *managedData
 // live (port bindings) while deliberately retaining the mounted managed data
 // image and its isolated network.
 func (m *managedDatabaseManager) recreateContainer(ctx context.Context, record *managedDatabaseRecord, input managedDatabaseCommand) error {
+	previous := *record
+	rollbackName := previous.ContainerName + "-rollback"
+	previousRenamed := false
 	if record.ContainerID != "" {
 		if err := m.stopContainer(ctx, record.ContainerID); err != nil {
 			return err
 		}
-		if err := m.client.RemoveContainer(ctx, record.ContainerID, true); err != nil && !cerrdefs.IsNotFound(err) {
-			return fmt.Errorf("remove managed database container for publication change: %w", err)
+		if err := m.client.RenameContainer(ctx, record.ContainerID, rollbackName); err != nil {
+			return fmt.Errorf("preserve managed database container for publication change: %w", err)
+		}
+		previousRenamed = true
+	}
+	rollback := func() {
+		*record = previous
+		if !previousRenamed {
+			return
+		}
+		rollbackCtx, cancel := context.WithTimeout(context.Background(), managedDatabaseCleanupTimeout)
+		defer cancel()
+		if err := m.client.RenameContainer(rollbackCtx, previous.ContainerID, previous.ContainerName); err != nil {
+			m.logger.Error("restore managed database container name after recreate failure", "id", previous.ID, "error", err)
+			return
+		}
+		if err := m.startContainer(rollbackCtx, previous.ContainerID); err != nil {
+			m.logger.Error("restart managed database after recreate failure", "id", previous.ID, "error", err)
 		}
 	}
 	// A disabled publication and an auto-assigned port must not inherit the
 	// previous host binding from the record.
 	record.ContainerID = ""
 	record.PublishedPort = input.PublishedPort
+	record.PublishedNativePort = input.PublishedNativePort
+	record.TLSEnabled = input.TLSEnabled
+	record.TLSCertificateID = input.TLSCertificateID
 	containerID, err := m.createContainer(ctx, record, input)
 	if err != nil {
+		rollback()
 		return err
 	}
 	record.ContainerID = containerID
 	record.DesiredRunning = true
+	if previousRenamed {
+		if err := m.client.RemoveContainer(ctx, previous.ContainerID, true); err != nil && !cerrdefs.IsNotFound(err) {
+			m.logger.Warn("remove preserved managed database container after recreate", "id", previous.ID, "error", err)
+		}
+	}
 	return nil
 }
 
@@ -550,16 +592,19 @@ func (m *managedDatabaseManager) create(ctx context.Context, id string, input ma
 	}
 
 	record := managedDatabaseRecord{
-		ID:             id,
-		Type:           input.Type,
-		ContainerName:  "gwdb-" + id,
-		NetworkName:    "gwdb-" + id + "-net",
-		ImagePath:      filepath.Join(m.root, "images", id+".img"),
-		MountPath:      filepath.Join(m.root, "mounts", id),
-		StorageSize:    input.StorageSizeBytes,
-		DesiredRunning: true,
-		PublishedPort:  input.PublishedPort,
-		OperationID:    input.OperationID,
+		ID:                  id,
+		Type:                input.Type,
+		ContainerName:       "gwdb-" + id,
+		NetworkName:         "gwdb-" + id + "-net",
+		ImagePath:           filepath.Join(m.root, "images", id+".img"),
+		MountPath:           filepath.Join(m.root, "mounts", id),
+		StorageSize:         input.StorageSizeBytes,
+		DesiredRunning:      true,
+		PublishedPort:       input.PublishedPort,
+		PublishedNativePort: input.PublishedNativePort,
+		TLSEnabled:          input.TLSEnabled,
+		TLSCertificateID:    input.TLSCertificateID,
+		OperationID:         input.OperationID,
 	}
 
 	if err := m.createImage(ctx, record); err != nil {
@@ -625,6 +670,23 @@ func validateManagedDatabaseInput(input managedDatabaseCommand) error {
 	}
 	if !input.PublishTCP && input.PublishedPort != 0 {
 		return errors.New("host port is not allowed unless TCP publishing is enabled")
+	}
+	if !input.PublishTCP && input.PublishedNativePort != 0 {
+		return errors.New("native host port is not allowed unless TCP publishing is enabled")
+	}
+	if input.Type != "clickhouse" && input.PublishedNativePort != 0 {
+		return errors.New("native host port is supported only for ClickHouse")
+	}
+	if input.TLSEnabled {
+		if input.TLSCertificatePEM == "" || input.TLSPrivateKeyPEM == "" || input.TLSCACertificatePEM == "" {
+			return errors.New("managed database TLS material is required when TLS is enabled")
+		}
+		if !managedDatabaseIDPattern.MatchString(input.TLSCertificateID) {
+			return errors.New("managed database TLS certificate id is invalid")
+		}
+		if _, err := tls.X509KeyPair([]byte(input.TLSCertificatePEM), []byte(input.TLSPrivateKeyPEM)); err != nil {
+			return errors.New("managed database TLS certificate and key are invalid")
+		}
 	}
 	if input.Type != "clickhouse" && input.ClickhouseConfig != "" {
 		return errors.New("ClickHouse XML is supported only for ClickHouse")
@@ -853,7 +915,7 @@ func (m *managedDatabaseManager) createNetwork(ctx context.Context, name string)
 }
 
 func (m *managedDatabaseManager) createContainer(ctx context.Context, record *managedDatabaseRecord, input managedDatabaseCommand) (string, error) {
-	dataPath, port := engineDataPathAndPort(input.Type)
+	dataPath, port := engineDataPathAndPort(input.Type, input.TLSEnabled)
 	env := engineEnvironment(input)
 	containerCfg := &container.Config{
 		Image: input.Image,
@@ -863,17 +925,41 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 			managedDatabaseTypeTag: input.Type,
 		},
 	}
+	tlsDir := m.tlsDirectory(*record)
+	if input.TLSEnabled {
+		if err := writeManagedDatabaseTLS(tlsDir, input); err != nil {
+			return "", err
+		}
+	}
+	if input.Type == "postgres" && input.TLSEnabled {
+		containerCfg.Cmd = []string{"postgres", "-c", "ssl=on", "-c", "ssl_cert_file=/run/gateway-tls/cert.pem", "-c", "ssl_key_file=/run/gateway-tls/key.pem"}
+	}
 	if input.Type == "redis" {
 		containerCfg.Cmd = []string{"redis-server", "--appendonly", "yes", "--requirepass", input.OwnerPassword}
+		if input.TLSEnabled {
+			containerCfg.Cmd = append(containerCfg.Cmd, "--port", "6379", "--tls-port", "6380", "--tls-cert-file", "/run/gateway-tls/cert.pem", "--tls-key-file", "/run/gateway-tls/key.pem", "--tls-ca-cert-file", "/run/gateway-tls/ca.pem", "--tls-auth-clients", "no")
+		}
 	}
 	if input.Type == "clickhouse" && input.ClickhouseConfig != "" {
 		if err := os.WriteFile(filepath.Join(record.MountPath, "gateway-managed.xml"), []byte(input.ClickhouseConfig), 0600); err != nil {
 			return "", fmt.Errorf("write ClickHouse managed config: %w", err)
 		}
 	}
+	if input.Type == "clickhouse" && input.TLSEnabled {
+		config := `<clickhouse><https_port>8443</https_port><tcp_port_secure>9440</tcp_port_secure><openSSL><server><certificateFile>/run/gateway-tls/cert.pem</certificateFile><privateKeyFile>/run/gateway-tls/key.pem</privateKeyFile></server></openSSL></clickhouse>`
+		if err := os.WriteFile(filepath.Join(record.MountPath, "gateway-tls.xml"), []byte(config), 0600); err != nil {
+			return "", fmt.Errorf("write ClickHouse TLS config: %w", err)
+		}
+	}
 	binds := []string{record.MountPath + ":" + dataPath}
+	if input.TLSEnabled {
+		binds = append(binds, tlsDir+":/run/gateway-tls:ro")
+	}
 	if input.Type == "clickhouse" && input.ClickhouseConfig != "" {
 		binds = append(binds, filepath.Join(record.MountPath, "gateway-managed.xml")+":/etc/clickhouse-server/config.d/gateway-managed.xml:ro")
+	}
+	if input.Type == "clickhouse" && input.TLSEnabled {
+		binds = append(binds, filepath.Join(record.MountPath, "gateway-tls.xml")+":/etc/clickhouse-server/config.d/gateway-tls.xml:ro")
 	}
 	hostCfg := &container.HostConfig{
 		Binds: binds,
@@ -888,10 +974,8 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 		pids := input.PidsLimit
 		hostCfg.PidsLimit = &pids
 	}
-	var containerPort network.Port
 	if input.PublishTCP {
-		var err error
-		containerPort, err = network.ParsePort(port)
+		containerPort, err := network.ParsePort(port)
 		if err != nil {
 			return "", fmt.Errorf("parse managed database port: %w", err)
 		}
@@ -901,6 +985,18 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 			hostPort = fmt.Sprintf("%d", input.PublishedPort)
 		}
 		hostCfg.PortBindings = network.PortMap{containerPort: {{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: hostPort}}}
+		if input.Type == "clickhouse" {
+			nativePort, parseErr := network.ParsePort(clickHouseNativePort(input.TLSEnabled))
+			if parseErr != nil {
+				return "", fmt.Errorf("parse ClickHouse native port: %w", parseErr)
+			}
+			containerCfg.ExposedPorts[nativePort] = struct{}{}
+			nativeHostPort := ""
+			if input.PublishedNativePort != 0 {
+				nativeHostPort = fmt.Sprintf("%d", input.PublishedNativePort)
+			}
+			hostCfg.PortBindings[nativePort] = []network.PortBinding{{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: nativeHostPort}}
+		}
 	}
 	created, err := m.client.cli.ContainerCreate(ctx, mobyclient.ContainerCreateOptions{
 		Config:     containerCfg,
@@ -921,13 +1017,17 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 		_ = m.client.RemoveContainer(ctx, created.ID, true)
 		return "", err
 	}
-	if input.PublishTCP && input.PublishedPort == 0 {
+	if input.PublishTCP && (input.PublishedPort == 0 || (input.Type == "clickhouse" && input.PublishedNativePort == 0)) {
 		inspect, err := m.client.cli.ContainerInspect(ctx, created.ID, mobyclient.ContainerInspectOptions{})
 		if err != nil {
 			_ = m.client.RemoveContainer(ctx, created.ID, true)
 			return "", fmt.Errorf("inspect allocated managed database port: %w", err)
 		}
-		bindings := inspect.Container.NetworkSettings.Ports[containerPort]
+		primaryPort, parseErr := network.ParsePort(port)
+		if parseErr != nil {
+			return "", fmt.Errorf("parse allocated managed database port: %w", parseErr)
+		}
+		bindings := inspect.Container.NetworkSettings.Ports[primaryPort]
 		if len(bindings) != 1 || bindings[0].HostPort == "" {
 			_ = m.client.RemoveContainer(ctx, created.ID, true)
 			return "", errors.New("Docker did not allocate one managed database host port")
@@ -938,6 +1038,23 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 			return "", errors.New("Docker returned an invalid managed database host port")
 		}
 		record.PublishedPort = uint16(allocated)
+		if input.Type == "clickhouse" {
+			nativePort, parseErr := network.ParsePort(clickHouseNativePort(input.TLSEnabled))
+			if parseErr != nil {
+				return "", fmt.Errorf("parse allocated ClickHouse native port: %w", parseErr)
+			}
+			nativeBindings := inspect.Container.NetworkSettings.Ports[nativePort]
+			if len(nativeBindings) != 1 || nativeBindings[0].HostPort == "" {
+				_ = m.client.RemoveContainer(ctx, created.ID, true)
+				return "", errors.New("Docker did not allocate one ClickHouse native host port")
+			}
+			allocatedNative, parseNativeErr := strconv.ParseUint(nativeBindings[0].HostPort, 10, 16)
+			if parseNativeErr != nil || allocatedNative == 0 {
+				_ = m.client.RemoveContainer(ctx, created.ID, true)
+				return "", errors.New("Docker returned an invalid ClickHouse native host port")
+			}
+			record.PublishedNativePort = uint16(allocatedNative)
+		}
 	}
 	return created.ID, nil
 }
@@ -987,14 +1104,70 @@ func managedDatabaseReadinessCommand(input managedDatabaseCommand) ([]string, []
 	}
 }
 
-func engineDataPathAndPort(engine string) (string, string) {
+func engineDataPathAndPort(engine string, tlsEnabled bool) (string, string) {
 	switch engine {
 	case "postgres":
 		return "/var/lib/postgresql/data", "5432/tcp"
 	case "redis":
+		if tlsEnabled {
+			return "/data", "6380/tcp"
+		}
 		return "/data", "6379/tcp"
 	default:
+		if tlsEnabled {
+			return "/var/lib/clickhouse", "8443/tcp"
+		}
 		return "/var/lib/clickhouse", "8123/tcp"
+	}
+}
+
+func clickHouseNativePort(tlsEnabled bool) string {
+	if tlsEnabled {
+		return "9440/tcp"
+	}
+	return "9000/tcp"
+}
+
+func writeManagedDatabaseTLS(dir string, input managedDatabaseCommand) error {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("create managed database TLS directory: %w", err)
+	}
+	uid, gid, err := managedDatabaseTLSOwner(input.Type)
+	if err != nil {
+		return err
+	}
+	if err := os.Chown(dir, uid, gid); err != nil {
+		return fmt.Errorf("restrict managed database TLS directory: %w", err)
+	}
+	for _, file := range []struct {
+		name, value string
+		mode        os.FileMode
+	}{
+		{"cert.pem", input.TLSCertificatePEM, 0644},
+		{"key.pem", input.TLSPrivateKeyPEM, 0600},
+		{"ca.pem", input.TLSCACertificatePEM, 0644},
+	} {
+		if err := os.WriteFile(filepath.Join(dir, file.name), []byte(file.value), file.mode); err != nil {
+			return fmt.Errorf("write managed database TLS material: %w", err)
+		}
+	}
+	if err := os.Chown(filepath.Join(dir, "key.pem"), uid, gid); err != nil {
+		return fmt.Errorf("restrict managed database TLS key: %w", err)
+	}
+	return nil
+}
+
+// All accepted engine images are digest-pinned and use these service accounts.
+// Keeping the private key outside the data volume and readable only by that
+// account prevents it from being inherited by database backups or data mounts.
+func managedDatabaseTLSOwner(engine string) (int, int, error) {
+	switch engine {
+	case "postgres", "redis":
+		return 999, 999, nil
+	case "clickhouse":
+		return 101, 101, nil
+	default:
+		return 0, 0, errors.New("unsupported managed database engine")
 	}
 }
 
@@ -1171,6 +1344,9 @@ func (m *managedDatabaseManager) cleanupStorage(ctx context.Context, record *man
 		}
 	}
 	if removeImage {
+		if err := os.RemoveAll(m.tlsDirectory(*record)); err != nil {
+			return fmt.Errorf("remove managed database TLS material: %w", err)
+		}
 		if err := os.Remove(record.ImagePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove database storage image: %w", err)
 		}
@@ -1211,6 +1387,10 @@ func (m *managedDatabaseManager) reconcile(ctx context.Context) error {
 	return nil
 }
 
+func (m *managedDatabaseManager) tlsDirectory(record managedDatabaseRecord) string {
+	return filepath.Join(m.root, "tls", record.ID)
+}
+
 func (m *managedDatabaseManager) recordPath(id string) string {
 	return filepath.Join(m.root, "records", id+".json")
 }
@@ -1248,7 +1428,7 @@ func (m *managedDatabaseManager) saveRecord(record managedDatabaseRecord) error 
 
 func marshalManagedDatabaseDetail(record managedDatabaseRecord, status string) (string, error) {
 	value, err := json.Marshal(map[string]any{
-		"id": record.ID, "containerId": record.ContainerID, "status": status, "publishedPort": record.PublishedPort, "operationId": record.OperationID,
+		"id": record.ID, "containerId": record.ContainerID, "status": status, "publishedPort": record.PublishedPort, "publishedNativePort": record.PublishedNativePort, "tlsEnabled": record.TLSEnabled, "operationId": record.OperationID,
 	})
 	if err != nil {
 		return "", err

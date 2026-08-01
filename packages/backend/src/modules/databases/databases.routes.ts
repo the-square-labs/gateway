@@ -65,6 +65,7 @@ import {
   revealDatabaseCredentialsRoute,
   revealManagedDatabaseBindingCredentialsRoute,
   revealManagedDatabaseCredentialsRoute,
+  rotateManagedDatabaseCertificateRoute,
   rotateManagedDatabaseDirectCredentialsRoute,
   scanRedisKeysRoute,
   setRedisKeyRoute,
@@ -240,6 +241,16 @@ databaseRoutes.openapi(
     const user = c.get('user')!;
     return c.json({
       data: await container.resolve(ManagedDatabaseService).rotateDirectAccessCredentials(c.req.param('id')!, user.id),
+    });
+  }
+);
+
+databaseRoutes.openapi(
+  { ...rotateManagedDatabaseCertificateRoute, middleware: requireScopeForResource('databases:edit', 'id') },
+  async (c) => {
+    const user = c.get('user')!;
+    return c.json({
+      data: await container.resolve(ManagedDatabaseService).rotateCertificate(c.req.param('id')!, user.id),
     });
   }
 );

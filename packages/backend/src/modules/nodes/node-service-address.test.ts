@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { getEffectiveNodeServiceAddress, isValidNodeServiceAddress } from './node-service-address.js';
+import {
+  getEffectiveNodeServiceAddress,
+  getEffectivePublishedNodeIP,
+  isValidNodeServiceAddress,
+} from './node-service-address.js';
 
 describe('node service address', () => {
   it('uses an explicit override before reported local addresses', () => {
@@ -34,5 +38,14 @@ describe('node service address', () => {
     expect(isValidNodeServiceAddress('fd00::10')).toBe(true);
     expect(isValidNodeServiceAddress('docker-node.internal')).toBe(true);
     expect(isValidNodeServiceAddress('http://docker-node.internal')).toBe(false);
+  });
+
+  it('uses a certificate-covered published IP instead of a hostname override', () => {
+    expect(
+      getEffectivePublishedNodeIP({
+        serviceAddress: 'database.example.test',
+        lastHealthReport: { localIpAddresses: ['10.0.0.8'], publicIpAddresses: ['203.0.113.10'] } as never,
+      })
+    ).toBe('203.0.113.10');
   });
 });

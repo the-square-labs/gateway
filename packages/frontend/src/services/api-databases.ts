@@ -98,8 +98,9 @@ export function withDatabaseApi<TBase extends ApiClientBaseConstructor>(Base: TB
 
     async updateManagedDatabase(
       id: string,
-      data: Omit<Partial<ManagedDatabaseCreateInput>, "publishedPort"> & {
+      data: Omit<Partial<ManagedDatabaseCreateInput>, "publishedPort" | "publishedNativePort"> & {
         publishedPort?: number | null;
+        publishedNativePort?: number | null;
         tags?: string[];
       }
     ): Promise<ManagedDatabase> {
@@ -160,6 +161,15 @@ export function withDatabaseApi<TBase extends ApiClientBaseConstructor>(Base: TB
       return this.unwrapData(
         this.request<{ data: Record<string, unknown> }>(
           `/databases/managed/${encodeURIComponent(id)}/rotate-direct-credentials`,
+          { method: "POST" }
+        )
+      );
+    }
+
+    async rotateManagedDatabaseCertificate(id: string): Promise<ManagedDatabase> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabase }>(
+          `/databases/managed/${encodeURIComponent(id)}/rotate-certificate`,
           { method: "POST" }
         )
       );

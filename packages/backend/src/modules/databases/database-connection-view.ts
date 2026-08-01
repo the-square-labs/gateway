@@ -59,6 +59,8 @@ export interface ManagedDatabaseConnectionMetadata {
     swapMb: number;
   };
   publishedPort: number | null;
+  publishedNativePort: number | null;
+  tlsEnabled: boolean;
   /** Selected database-node address, available only for a published TCP endpoint. */
   endpointHost: string | null;
   status: 'creating' | 'updating' | 'ready' | 'paused' | 'stopped' | 'error' | 'deleting';

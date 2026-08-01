@@ -12,6 +12,7 @@ import {
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
+import { certificates } from './certificates.js';
 import { databaseConnectionFolders } from './database-connection-folders.js';
 import { nodes } from './nodes.js';
 import { users } from './users.js';
@@ -131,7 +132,14 @@ export const managedDatabaseInstances = pgTable(
     encryptedDirectCredentials: text('encrypted_direct_credentials'),
     storageSizeBytes: bigint('storage_size_bytes', { mode: 'number' }).notNull(),
     runtimeConfig: jsonb('runtime_config').$type<ManagedDatabaseRuntimeConfig>().notNull().default({}),
+    // Database TLS material exists independently from the direct-publication
+    // toggle. The certificate's key is held only by Gateway and the daemon.
+    certificateId: uuid('certificate_id').references(() => certificates.id, { onDelete: 'restrict' }),
+    tlsEnabled: boolean('tls_enabled').notNull().default(true),
     publishedPort: integer('published_port'),
+    // ClickHouse uses a second published endpoint for secure native TCP while
+    // publishedPort remains the primary HTTPS endpoint for compatibility.
+    publishedNativePort: integer('published_native_port'),
     status: managedDatabaseStatusEnum('status').notNull().default('creating'),
     pendingOperation: jsonb('pending_operation').$type<ManagedDatabasePendingOperation>(),
     lastError: text('last_error'),

@@ -20,3 +20,22 @@ export function getEffectiveNodeServiceAddress(node: {
     null
   );
 }
+
+/**
+ * Returns the address exposed by a published managed database. When TLS is
+ * enabled this must be an IP literal, because Gateway-issued database
+ * certificates intentionally contain all reported node IP SANs, never an
+ * arbitrary configured hostname.
+ */
+export function getEffectivePublishedNodeIP(node: {
+  serviceAddress?: string | null;
+  lastHealthReport?: NodeHealthReport | null;
+}): string | null {
+  const configured = node.serviceAddress?.trim();
+  if (configured && isIP(configured) !== 0) return configured;
+  const candidates = [
+    ...(node.lastHealthReport?.publicIpAddresses ?? []),
+    ...(node.lastHealthReport?.localIpAddresses ?? []),
+  ];
+  return candidates.find((address) => isIP(address.trim()) !== 0) ?? null;
+}

@@ -10,7 +10,7 @@ import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
-import { getEffectiveNodeServiceAddress } from '@/modules/nodes/node-service-address.js';
+import { getEffectiveNodeServiceAddress, getEffectivePublishedNodeIP } from '@/modules/nodes/node-service-address.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { PaginatedResponse } from '@/types.js';
@@ -990,6 +990,8 @@ export class DatabaseConnectionService {
         runtimeConfig: managedDatabaseInstances.runtimeConfig,
         engineConfig: managedDatabaseInstances.engineConfig,
         publishedPort: managedDatabaseInstances.publishedPort,
+        publishedNativePort: managedDatabaseInstances.publishedNativePort,
+        tlsEnabled: managedDatabaseInstances.tlsEnabled,
         status: managedDatabaseInstances.status,
         lastError: managedDatabaseInstances.lastError,
         serviceAddress: nodes.serviceAddress,
@@ -1015,13 +1017,20 @@ export class DatabaseConnectionService {
         swapMb: Math.max(0, Math.round((swapBytes - memoryBytes) / (1024 * 1024))),
       },
       publishedPort: managed.publishedPort,
+      publishedNativePort: managed.publishedNativePort,
+      tlsEnabled: managed.tlsEnabled,
       endpointHost:
         managed.publishedPort === null
           ? null
-          : getEffectiveNodeServiceAddress({
-              serviceAddress: managed.serviceAddress,
-              lastHealthReport: managed.lastHealthReport,
-            }),
+          : managed.tlsEnabled
+            ? getEffectivePublishedNodeIP({
+                serviceAddress: managed.serviceAddress,
+                lastHealthReport: managed.lastHealthReport,
+              })
+            : getEffectiveNodeServiceAddress({
+                serviceAddress: managed.serviceAddress,
+                lastHealthReport: managed.lastHealthReport,
+              }),
       status: managed.status,
       lastError: managed.lastError,
       ...(typeof clickhouseConfigXml === 'string' ? { clickhouseConfigXml } : {}),

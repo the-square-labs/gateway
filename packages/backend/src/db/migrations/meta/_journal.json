@@ -596,6 +596,13 @@
       "when": 1785621021599,
       "tag": "0084_sticky_wild_child",
       "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1785623374364,
+      "tag": "0085_oval_power_man",
+      "breakpoints": true
     }
   ]
 }

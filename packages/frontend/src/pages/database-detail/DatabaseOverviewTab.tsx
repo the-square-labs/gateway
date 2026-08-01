@@ -108,6 +108,7 @@ export function DatabaseOverviewTab({
   const latest = history.at(-1);
   const showMonitoring =
     canViewMonitoring && healthStatus !== "offline" && database.managed?.status !== "paused";
+  const connectionTLSEnabled = database.managed?.tlsEnabled ?? database.tlsEnabled;
   const overviewMetrics = useMemo<OverviewMetric[]>(() => {
     if (!latest) return [];
     const appendManaged = (metrics: OverviewMetric[]) => {
@@ -385,7 +386,14 @@ export function DatabaseOverviewTab({
           bodyClassName="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border"
         >
           {database.managed ? (
-            <DetailRow label="Connection" value="Secure managed link" />
+            <DetailRow
+              label="Connection"
+              value={
+                database.managed.publishedPort == null
+                  ? "Secure managed link"
+                  : "Secure managed link + direct TCP"
+              }
+            />
           ) : (
             <DetailRow
               label="Endpoint"
@@ -408,6 +416,12 @@ export function DatabaseOverviewTab({
                 label="Published TCP Port"
                 value={<span className="font-mono">{database.managed.publishedPort}</span>}
               />
+              {database.type === "clickhouse" && database.managed.publishedNativePort != null && (
+                <DetailRow
+                  label="Published Native TCP Port"
+                  value={<span className="font-mono">{database.managed.publishedNativePort}</span>}
+                />
+              )}
             </>
           )}
           <DetailRow
@@ -417,8 +431,8 @@ export function DatabaseOverviewTab({
           <DetailRow
             label="TLS"
             value={
-              <Badge variant={database.tlsEnabled ? "success" : "secondary"}>
-                {database.tlsEnabled ? "Enabled" : "Disabled"}
+              <Badge variant={connectionTLSEnabled ? "success" : "secondary"}>
+                {connectionTLSEnabled ? "Enabled" : "Disabled"}
               </Badge>
             }
           />

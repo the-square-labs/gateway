@@ -32,6 +32,7 @@ interface DatabaseHeaderProps {
   canUnpause: boolean;
   canReveal: boolean;
   canRotateDirectCredentials: boolean;
+  canRotateCertificate: boolean;
   canDelete: boolean;
   onOpenPin: () => void;
   onBack: () => void;
@@ -42,6 +43,7 @@ interface DatabaseHeaderProps {
   onUnpause: () => void;
   onRevealCredentials: () => void;
   onRotateDirectCredentials: () => void;
+  onRotateCertificate: () => void;
   onRemove: () => void;
 }
 
@@ -54,6 +56,7 @@ export function DatabaseHeader({
   canUnpause,
   canReveal,
   canRotateDirectCredentials,
+  canRotateCertificate,
   canDelete,
   onOpenPin,
   onBack,
@@ -64,6 +67,7 @@ export function DatabaseHeader({
   onUnpause,
   onRevealCredentials,
   onRotateDirectCredentials,
+  onRotateCertificate,
   onRemove,
 }: DatabaseHeaderProps) {
   const menuItems = (
@@ -103,7 +107,15 @@ export function DatabaseHeader({
           Rotate direct-access credentials
         </DropdownMenuItem>
       )}
-      {canReveal && canDelete && <DropdownMenuSeparator />}
+      {canRotateCertificate && (
+        <DropdownMenuItem onClick={onRotateCertificate}>
+          <RefreshCw className="h-3.5 w-3.5 mr-2" />
+          Rotate TLS certificate
+        </DropdownMenuItem>
+      )}
+      {(canReveal || canRotateDirectCredentials || canRotateCertificate) && canDelete && (
+        <DropdownMenuSeparator />
+      )}
       {canDelete && (
         <DropdownMenuItem onClick={onRemove} className="text-destructive">
           <Trash2 className="h-3.5 w-3.5 mr-2" />
@@ -179,6 +191,16 @@ export function DatabaseHeader({
                 },
               ]
             : []),
+          ...(canRotateCertificate
+            ? [
+                {
+                  id: "database:rotate-tls-certificate",
+                  label: "Rotate TLS certificate",
+                  icon: <RefreshCw className="h-4 w-4" />,
+                  action: onRotateCertificate,
+                },
+              ]
+            : []),
           ...(canDelete
             ? [
                 {
@@ -209,7 +231,7 @@ export function DatabaseHeader({
           </div>
           <p className="break-all text-sm text-muted-foreground">
             {database.managed
-              ? `Managed ${database.type} ${database.managed.version} · ${database.managed.publishedPort === null ? "private" : `TCP ${database.managed.publishedPort}`}`
+              ? `Managed ${database.type} ${database.managed.version} · ${database.managed.publishedPort === null ? "private" : `TCP ${database.managed.publishedPort}${database.type === "clickhouse" && database.managed.publishedNativePort != null ? ` · native ${database.managed.publishedNativePort}` : ""}`}`
               : `${database.host}:${database.port}${database.databaseName ? ` · ${database.databaseName}` : ""}`}
           </p>
         </div>
@@ -230,6 +252,7 @@ export function DatabaseHeader({
           canUnpause ||
           canReveal ||
           canRotateDirectCredentials ||
+          canRotateCertificate ||
           canDelete) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -265,6 +288,7 @@ export function DatabaseHeader({
               canUnpause ||
               canReveal ||
               canRotateDirectCredentials ||
+              canRotateCertificate ||
               canDelete) && <DropdownMenuSeparator />}
             {menuItems}
           </DropdownMenuContent>

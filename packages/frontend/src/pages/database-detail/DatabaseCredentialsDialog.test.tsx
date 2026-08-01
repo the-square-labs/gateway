@@ -35,6 +35,8 @@ const database = {
     storageSizeBytes: 1024,
     runtimeConfig: { cpuCores: 1, memoryMb: 1024, swapMb: 0 },
     publishedPort: 15432,
+    publishedNativePort: null,
+    tlsEnabled: true,
     endpointHost: "database.example.test",
     status: "ready",
     lastError: null,
@@ -58,7 +60,7 @@ describe("DatabaseCredentialsDialog", () => {
     );
 
     expect(screen.getByLabelText("Connection URI")).toHaveValue(
-      "postgresql://owner:secret@database.example.test:15432/orders"
+      "postgresql://owner:secret@database.example.test:15432/orders?sslmode=verify-full"
     );
     expect(screen.getByLabelText("Host")).toHaveValue("database.example.test");
     expect(screen.getByLabelText("Port")).toHaveValue("15432");

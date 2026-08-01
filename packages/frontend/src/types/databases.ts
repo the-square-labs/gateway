@@ -22,6 +22,8 @@ export interface ManagedDatabase {
   storageSizeBytes: string | number;
   runtimeConfig: { cpuCores: number; memoryMb: number; swapMb: number };
   publishedPort: number | null;
+  publishedNativePort: number | null;
+  tlsEnabled: boolean;
   status: ManagedDatabaseStatus;
   lastError: string | null;
   createdAt: string;
@@ -44,6 +46,8 @@ export interface ManagedDatabaseCreateInput {
   swapMb: number;
   publishTcp: boolean;
   publishedPort?: number;
+  publishedNativePort?: number;
+  tlsEnabled?: boolean;
   clickhouseConfigXml?: string;
 }
 
@@ -161,6 +165,8 @@ export interface DatabaseConnection {
     storageSizeBytes: number;
     runtimeConfig: { cpuCores: number; memoryMb: number; swapMb: number };
     publishedPort: number | null;
+    publishedNativePort: number | null;
+    tlsEnabled: boolean;
     endpointHost: string | null;
     status: ManagedDatabaseStatus;
     lastError: string | null;

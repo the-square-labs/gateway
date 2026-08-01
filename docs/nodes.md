@@ -218,6 +218,8 @@ It rejects a host that cannot create, mount, write, and detach a temporary ext4 
 
 Managed application bindings also require `DATABASE_CONNECTOR_IMAGE` on Gateway to contain the release-published, immutable `.../database-connector@sha256:<digest>` reference. Gateway refuses to create a binding when this release setting is absent or mutable; the connector itself receives no Gateway endpoint, certificate, or database credentials.
 
+Published managed databases use native direct TLS by default. Gateway issues the server certificate from its independent Database CA and keeps the private key in daemon-owned storage outside the database image. PostgreSQL and Redis publish one TLS endpoint; ClickHouse publishes both HTTPS and its native TLS endpoint. The UI exposes the CA certificate/fingerprint with direct credentials and supports certificate rotation after node IP changes.
+
 ## Offline Behavior
 
 If Gateway is offline:

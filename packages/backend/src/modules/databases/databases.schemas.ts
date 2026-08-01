@@ -64,6 +64,8 @@ export const CreateManagedDatabaseSchema = z
     swapMb: z.number().int().min(0).max(1_048_576).default(0),
     publishTcp: z.boolean().default(false),
     publishedPort: z.number().int().min(1).max(65535).optional(),
+    publishedNativePort: z.number().int().min(1).max(65535).optional(),
+    tlsEnabled: z.boolean().default(true),
     databaseName: z.string().trim().min(1).max(63).optional(),
     ownerUsername: z.string().trim().min(1).max(63).optional(),
     clickhouseConfigXml: z.string().trim().min(1).max(32_768).optional(),
@@ -74,6 +76,13 @@ export const CreateManagedDatabaseSchema = z
         code: z.ZodIssueCode.custom,
         path: ['publishedPort'],
         message: 'publishedPort requires publishTcp',
+      });
+    }
+    if (value.publishedNativePort !== undefined && (!value.publishTcp || value.type !== 'clickhouse')) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['publishedNativePort'],
+        message: 'publishedNativePort requires published ClickHouse TCP',
       });
     }
     if (value.clickhouseConfigXml !== undefined && value.type !== 'clickhouse') {
@@ -102,6 +111,8 @@ export const UpdateManagedDatabaseSchema = z
     swapMb: z.number().int().min(0).max(1_048_576).optional(),
     publishTcp: z.boolean().optional(),
     publishedPort: z.number().int().min(1).max(65535).nullable().optional(),
+    publishedNativePort: z.number().int().min(1).max(65535).nullable().optional(),
+    tlsEnabled: z.boolean().optional(),
     clickhouseConfigXml: z.string().trim().min(1).max(32_768).optional(),
   })
   .refine((value) => Object.keys(value).length > 0, { message: 'At least one field must be provided' });

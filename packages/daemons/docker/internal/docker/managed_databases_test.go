@@ -93,10 +93,60 @@ func TestValidateManagedDatabaseInputRequiresRedisDefaultOwner(t *testing.T) {
 	}
 }
 
+func TestValidateManagedDatabaseInputRequiresCompleteTLSMaterial(t *testing.T) {
+	input := validManagedDatabaseInput()
+	input.TLSEnabled = true
+	input.TLSCertificateID = "certificate_123"
+	if err := validateManagedDatabaseInput(input); err == nil {
+		t.Fatal("expected TLS without certificate material to be rejected")
+	}
+}
+
 func TestPostgresEngineEnvironmentUsesChildPGDATA(t *testing.T) {
 	env := engineEnvironment(validManagedDatabaseInput())
 	if !strings.Contains(strings.Join(env, "\n"), "PGDATA=/var/lib/postgresql/data/pgdata") {
 		t.Fatal("PostgreSQL must initialize below the ext4 mount root, not beside lost+found")
+	}
+}
+
+func TestManagedDatabaseTLSPortsMatchEngineProtocols(t *testing.T) {
+	if _, port := engineDataPathAndPort("postgres", true); port != "5432/tcp" {
+		t.Fatalf("unexpected PostgreSQL TLS port: %s", port)
+	}
+	if _, port := engineDataPathAndPort("redis", true); port != "6380/tcp" {
+		t.Fatalf("unexpected Redis TLS port: %s", port)
+	}
+	if _, port := engineDataPathAndPort("clickhouse", true); port != "8443/tcp" {
+		t.Fatalf("unexpected ClickHouse HTTPS port: %s", port)
+	}
+	if port := clickHouseNativePort(true); port != "9440/tcp" {
+		t.Fatalf("unexpected ClickHouse secure native port: %s", port)
+	}
+	if port := clickHouseNativePort(false); port != "9000/tcp" {
+		t.Fatalf("unexpected ClickHouse plain native port: %s", port)
+	}
+}
+
+func TestManagedDatabaseTLSOwnerIsPinnedToCuratedEngineUsers(t *testing.T) {
+	tests := []struct {
+		engine  string
+		wantUID int
+		wantGID int
+	}{
+		{"postgres", 999, 999},
+		{"redis", 999, 999},
+		{"clickhouse", 101, 101},
+	}
+	for _, test := range tests {
+		t.Run(test.engine, func(t *testing.T) {
+			uid, gid, err := managedDatabaseTLSOwner(test.engine)
+			if err != nil || uid != test.wantUID || gid != test.wantGID {
+				t.Fatalf("got uid=%d gid=%d err=%v", uid, gid, err)
+			}
+		})
+	}
+	if _, _, err := managedDatabaseTLSOwner("unknown"); err == nil {
+		t.Fatal("expected unknown engine TLS owner to be rejected")
 	}
 }
 

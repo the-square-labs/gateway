@@ -134,6 +134,7 @@ import { CacheService, createRedisClient } from '@/services/cache.service.js';
 import { ConfigValidatorService } from '@/services/config-validator.service.js';
 import { CryptoService } from '@/services/crypto.service.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
+import { DatabaseCAService } from '@/services/database-ca.service.js';
 import { DockerService } from '@/services/docker.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { GrpcIdentityService } from '@/services/grpc-identity.service.js';
@@ -402,6 +403,10 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(SystemCAService, systemCA);
   await systemCA.ensureSystemCA();
 
+  const databaseCA = new DatabaseCAService(db, caService, certService);
+  container.registerInstance(DatabaseCAService, databaseCA);
+  await databaseCA.ensureDatabaseCA();
+
   const grpcIdentityService = new GrpcIdentityService(env, systemCA);
   container.registerInstance(GrpcIdentityService, grpcIdentityService);
   await grpcIdentityService.resolve();
@@ -544,11 +549,14 @@ export async function initializeContainer(): Promise<void> {
   );
   container.registerInstance(DatabaseConnectionService, databaseConnectionService);
 
-  const managedDatabaseService = new ManagedDatabaseService(db, auditService, cryptoService, nodeDispatch);
+  const managedDatabaseService = new ManagedDatabaseService(db, auditService, cryptoService, nodeDispatch, databaseCA);
   managedDatabaseService.setEventBus(eventBus);
   container.registerInstance(ManagedDatabaseService, managedDatabaseService);
   void managedDatabaseService.reconcileDatabaseConnections().catch((error) => {
     logger.warn('Failed to backfill managed database connection records', { error });
+  });
+  void managedDatabaseService.reconcileDatabaseCertificates().catch((error) => {
+    logger.warn('Failed to backfill managed database TLS certificates', { error });
   });
 
   const managedDatabaseBindingService = new ManagedDatabaseBindingService(

@@ -160,6 +160,15 @@ export const rotateManagedDatabaseDirectCredentialsRoute = appRoute({
   responses: okJson(UnknownDataResponseSchema),
 });
 
+export const rotateManagedDatabaseCertificateRoute = appRoute({
+  method: 'post',
+  path: '/managed/{id}/rotate-certificate',
+  tags: ['Databases'],
+  summary: 'Rotate a managed database direct-TLS certificate',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const listManagedDatabaseBindingsRoute = appRoute({
   method: 'get',
   path: '/managed/{id}/bindings',
