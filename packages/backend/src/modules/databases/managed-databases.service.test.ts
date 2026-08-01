@@ -8,8 +8,8 @@ const managedRow = {
   name: 'orders',
   slug: 'orders',
   type: 'postgres',
-  version: '17.5',
-  imageRef: MANAGED_DATABASE_CATALOG.postgres['17.5'],
+  version: '17.10',
+  imageRef: MANAGED_DATABASE_CATALOG.postgres['17.10'],
   engineConfig: { ownerUsername: 'owner', databaseName: 'app' },
   encryptedOwnerCredentials: JSON.stringify({ encryptedKey: 'key', encryptedDek: 'dek' }),
   encryptedDirectCredentials: JSON.stringify({ encryptedKey: 'direct-key', encryptedDek: 'direct-dek' }),
@@ -58,9 +58,9 @@ describe('managed database catalog and input guardrails', () => {
     }
   });
 
-  it('offers more than one curated version for every supported engine', () => {
+  it('offers the five current curated versions for every supported engine', () => {
     for (const versions of Object.values(MANAGED_DATABASE_CATALOG)) {
-      expect(Object.keys(versions).length).toBeGreaterThanOrEqual(2);
+      expect(Object.keys(versions)).toHaveLength(5);
     }
   });
 
@@ -68,7 +68,7 @@ describe('managed database catalog and input guardrails', () => {
     const result = CreateManagedDatabaseSchema.safeParse({
       name: 'orders',
       type: 'postgres',
-      version: '17.5',
+      version: '17.10',
       nodeId: '44d553a4-8978-4ad1-8ca7-4d53c6e74a1d',
       storageSizeGb: 10,
       cpuCores: 1,
@@ -83,7 +83,7 @@ describe('managed database catalog and input guardrails', () => {
     const result = CreateManagedDatabaseSchema.safeParse({
       name: 'cache',
       type: 'redis',
-      version: '7.4.2',
+      version: '8.8.1',
       nodeId: '44d553a4-8978-4ad1-8ca7-4d53c6e74a1d',
       storageSizeGb: 10,
       cpuCores: 1,

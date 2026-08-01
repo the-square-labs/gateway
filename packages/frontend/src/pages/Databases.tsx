@@ -62,9 +62,9 @@ const HEALTH_BADGE: Record<string, "success" | "secondary" | "warning" | "destru
 };
 
 const DEFAULT_MANAGED_DATABASE_VERSIONS: Record<DatabaseType, string[]> = {
-  postgres: ["17.5", "16.9"],
-  redis: ["7.4.2", "7.2.8"],
-  clickhouse: ["25.3.2.39", "24.8.14.39"],
+  postgres: ["18.4", "17.10", "16.14", "15.18", "14.23"],
+  redis: ["8.10.0", "8.8.1", "8.6.5", "8.4.5", "8.2.8"],
+  clickhouse: ["26.7.1.1315", "26.6.2.81", "26.5.6.64", "26.4.5.143", "26.3.17.56"],
 };
 
 const MANAGED_DATABASE_FORM_ANIMATION = {

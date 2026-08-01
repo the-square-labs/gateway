@@ -11,7 +11,7 @@ import (
 func validManagedDatabaseInput() managedDatabaseCommand {
 	return managedDatabaseCommand{
 		Type:             "postgres",
-		Image:            "docker.io/library/postgres@sha256:5fdd7ebaa553af131db4021414d753791dce12e0b5ac1e27ca9ac57e3982e78a",
+		Image:            "docker.io/library/postgres@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d",
 		StorageSizeBytes: minimumDatabaseBytes,
 		OperationID:      "operation_123",
 		OwnerUsername:    "app_owner",
@@ -26,7 +26,7 @@ func TestValidateManagedDatabaseInputRejectsMutableOrForeignImages(t *testing.T)
 	if err := validateManagedDatabaseInput(input); err == nil {
 		t.Fatal("expected mutable image tag to be rejected")
 	}
-	input.Image = "docker.io/example/postgres@sha256:5fdd7ebaa553af131db4021414d753791dce12e0b5ac1e27ca9ac57e3982e78a"
+	input.Image = "docker.io/example/postgres@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d"
 	if err := validateManagedDatabaseInput(input); err == nil {
 		t.Fatal("expected non-curated repository to be rejected")
 	}
@@ -38,12 +38,21 @@ func TestValidateManagedDatabaseInputAcceptsEachCuratedEngineVersion(t *testing.
 		engine string
 		image  string
 	}{
-		{"Postgres 16", "postgres", "docker.io/library/postgres@sha256:980e5d98958b0918ff1bbb63d5f3e883debe74130ea137d11ac1f8e40a84d6dc"},
-		{"Postgres 17", "postgres", "docker.io/library/postgres@sha256:5fdd7ebaa553af131db4021414d753791dce12e0b5ac1e27ca9ac57e3982e78a"},
-		{"Redis 7.2", "redis", "docker.io/library/redis@sha256:73d68753a2c3e9be8473dc06290ec2236058f358db8bf1fd9a8492f3e1874dd1"},
-		{"Redis 7.4", "redis", "docker.io/library/redis@sha256:f452836040018082f5383b5969c66ed3009bfd38932ae188a28d206870ae277b"},
-		{"ClickHouse 24.8", "clickhouse", "docker.io/clickhouse/clickhouse-server@sha256:d7f76cd5ed162bf496af581a4d50498fef7d91dcedb1f55e4eab58cc9f22281b"},
-		{"ClickHouse 25.3", "clickhouse", "docker.io/clickhouse/clickhouse-server@sha256:5b5f6c6db63f75220d2bb68f1e571684bdac7f10ff591dec61c30ba6395f974c"},
+		{"Postgres 14", "postgres", "docker.io/library/postgres@sha256:caf49e3b10d377aa2cfee478591d623808527beb27125d38797b418013f72d81"},
+		{"Postgres 15", "postgres", "docker.io/library/postgres@sha256:74e110c41804365e3915fcc09d5e7a1eff50161aaa94d5da0e58e0cd75ae509c"},
+		{"Postgres 16", "postgres", "docker.io/library/postgres@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20"},
+		{"Postgres 17", "postgres", "docker.io/library/postgres@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d"},
+		{"Postgres 18", "postgres", "docker.io/library/postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"},
+		{"Redis 8.2", "redis", "docker.io/library/redis@sha256:616bb446d5db225ddf786052834279e7c7222c48694d4451e8af22b8f5953b28"},
+		{"Redis 8.4", "redis", "docker.io/library/redis@sha256:6159aff1adde991d8747d705fa1135ceda04b0414dc372b381a6af415ec3b374"},
+		{"Redis 8.6", "redis", "docker.io/library/redis@sha256:aefcda4d4388a70e628ad5ebbf162ae65509b20ea3dd6eeac7dcbbb675d94dba"},
+		{"Redis 8.8", "redis", "docker.io/library/redis@sha256:c88d347edef6249a6d2293f926f1eeb48bd40c57cbcd02c07f52e7f1fd2cb46b"},
+		{"Redis 8.10", "redis", "docker.io/library/redis@sha256:c29e49ab2f85760a3827b53882e6dd9f5c6c3f0bb7d724e07bb31cbf275a5236"},
+		{"ClickHouse 26.3", "clickhouse", "docker.io/clickhouse/clickhouse-server@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3"},
+		{"ClickHouse 26.4", "clickhouse", "docker.io/clickhouse/clickhouse-server@sha256:ab3f33278b99576ea2ff2b0fa316b5e078c8b25f8ba08956cdbbb67d85c8b30f"},
+		{"ClickHouse 26.5", "clickhouse", "docker.io/clickhouse/clickhouse-server@sha256:0d16977194aca61e26631e616e0678c2a745344d7d9da5729d2356f413dd28e1"},
+		{"ClickHouse 26.6", "clickhouse", "docker.io/clickhouse/clickhouse-server@sha256:fdc22372465a336fa47e9deab61fad8277b9e2f2473234a1294b33b53f01d377"},
+		{"ClickHouse 26.7", "clickhouse", "docker.io/clickhouse/clickhouse-server@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -63,7 +72,7 @@ func TestValidateManagedDatabaseInputAcceptsEachCuratedEngineVersion(t *testing.
 func TestValidateManagedDatabaseInputRejectsUnsafeClickHouseOverrides(t *testing.T) {
 	input := validManagedDatabaseInput()
 	input.Type = "clickhouse"
-	input.Image = "docker.io/clickhouse/clickhouse-server@sha256:5b5f6c6db63f75220d2bb68f1e571684bdac7f10ff591dec61c30ba6395f974c"
+	input.Image = "docker.io/clickhouse/clickhouse-server@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5"
 	input.ClickhouseConfig = "<clickhouse><listen_host>0.0.0.0</listen_host></clickhouse>"
 	if err := validateManagedDatabaseInput(input); err == nil {
 		t.Fatal("expected managed listen_host override to be rejected")
@@ -73,7 +82,7 @@ func TestValidateManagedDatabaseInputRejectsUnsafeClickHouseOverrides(t *testing
 func TestValidateManagedDatabaseInputAcceptsSafeClickHouseFragment(t *testing.T) {
 	input := validManagedDatabaseInput()
 	input.Type = "clickhouse"
-	input.Image = "docker.io/clickhouse/clickhouse-server@sha256:5b5f6c6db63f75220d2bb68f1e571684bdac7f10ff591dec61c30ba6395f974c"
+	input.Image = "docker.io/clickhouse/clickhouse-server@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5"
 	input.ClickhouseConfig = "<clickhouse><max_server_memory_usage>1024</max_server_memory_usage></clickhouse>"
 	if err := validateManagedDatabaseInput(input); err != nil {
 		t.Fatalf("expected safe config to be accepted: %v", err)
@@ -83,7 +92,7 @@ func TestValidateManagedDatabaseInputAcceptsSafeClickHouseFragment(t *testing.T)
 func TestValidateManagedDatabaseInputRequiresRedisDefaultOwner(t *testing.T) {
 	input := validManagedDatabaseInput()
 	input.Type = "redis"
-	input.Image = "docker.io/library/redis@sha256:f452836040018082f5383b5969c66ed3009bfd38932ae188a28d206870ae277b"
+	input.Image = "docker.io/library/redis@sha256:c29e49ab2f85760a3827b53882e6dd9f5c6c3f0bb7d724e07bb31cbf275a5236"
 	if err := validateManagedDatabaseInput(input); err == nil {
 		t.Fatal("expected custom Redis owner username to be rejected")
 	}
@@ -174,7 +183,7 @@ func TestManagedDatabaseReadinessCommandsUseEngineClientsAndSecretEnvironment(t 
 		{
 			name:          "Postgres",
 			engine:        "postgres",
-			image:         "docker.io/library/postgres@sha256:5fdd7ebaa553af131db4021414d753791dce12e0b5ac1e27ca9ac57e3982e78a",
+			image:         "docker.io/library/postgres@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d",
 			ownerUsername: "app_owner",
 			wantCommand:   []string{"pg_isready", "-h", "127.0.0.1"},
 			wantEnv:       "PGPASSWORD=",
@@ -182,7 +191,7 @@ func TestManagedDatabaseReadinessCommandsUseEngineClientsAndSecretEnvironment(t 
 		{
 			name:          "Redis",
 			engine:        "redis",
-			image:         "docker.io/library/redis@sha256:f452836040018082f5383b5969c66ed3009bfd38932ae188a28d206870ae277b",
+			image:         "docker.io/library/redis@sha256:c29e49ab2f85760a3827b53882e6dd9f5c6c3f0bb7d724e07bb31cbf275a5236",
 			ownerUsername: "default",
 			wantCommand:   []string{"redis-cli", "PING"},
 			wantEnv:       "REDISCLI_AUTH=",
@@ -190,7 +199,7 @@ func TestManagedDatabaseReadinessCommandsUseEngineClientsAndSecretEnvironment(t 
 		{
 			name:          "ClickHouse",
 			engine:        "clickhouse",
-			image:         "docker.io/clickhouse/clickhouse-server@sha256:5b5f6c6db63f75220d2bb68f1e571684bdac7f10ff591dec61c30ba6395f974c",
+			image:         "docker.io/clickhouse/clickhouse-server@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5",
 			ownerUsername: "app_owner",
 			wantCommand:   []string{"clickhouse-client", "SELECT 1"},
 			wantEnv:       "CLICKHOUSE_PASSWORD=",

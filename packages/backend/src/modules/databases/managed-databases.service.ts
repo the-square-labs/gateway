@@ -22,18 +22,30 @@ const GIBIBYTE = 1024 * MEBIBYTE;
 
 export const MANAGED_DATABASE_CATALOG = {
   postgres: {
-    '16.9': 'docker.io/library/postgres@sha256:980e5d98958b0918ff1bbb63d5f3e883debe74130ea137d11ac1f8e40a84d6dc',
-    '17.5': 'docker.io/library/postgres@sha256:5fdd7ebaa553af131db4021414d753791dce12e0b5ac1e27ca9ac57e3982e78a',
+    '18.4': 'docker.io/library/postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a',
+    '17.10': 'docker.io/library/postgres@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d',
+    '16.14': 'docker.io/library/postgres@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20',
+    '15.18': 'docker.io/library/postgres@sha256:74e110c41804365e3915fcc09d5e7a1eff50161aaa94d5da0e58e0cd75ae509c',
+    '14.23': 'docker.io/library/postgres@sha256:caf49e3b10d377aa2cfee478591d623808527beb27125d38797b418013f72d81',
   },
   redis: {
-    '7.2.8': 'docker.io/library/redis@sha256:73d68753a2c3e9be8473dc06290ec2236058f358db8bf1fd9a8492f3e1874dd1',
-    '7.4.2': 'docker.io/library/redis@sha256:f452836040018082f5383b5969c66ed3009bfd38932ae188a28d206870ae277b',
+    '8.10.0': 'docker.io/library/redis@sha256:c29e49ab2f85760a3827b53882e6dd9f5c6c3f0bb7d724e07bb31cbf275a5236',
+    '8.8.1': 'docker.io/library/redis@sha256:c88d347edef6249a6d2293f926f1eeb48bd40c57cbcd02c07f52e7f1fd2cb46b',
+    '8.6.5': 'docker.io/library/redis@sha256:aefcda4d4388a70e628ad5ebbf162ae65509b20ea3dd6eeac7dcbbb675d94dba',
+    '8.4.5': 'docker.io/library/redis@sha256:6159aff1adde991d8747d705fa1135ceda04b0414dc372b381a6af415ec3b374',
+    '8.2.8': 'docker.io/library/redis@sha256:616bb446d5db225ddf786052834279e7c7222c48694d4451e8af22b8f5953b28',
   },
   clickhouse: {
-    '24.8.14.39':
-      'docker.io/clickhouse/clickhouse-server@sha256:d7f76cd5ed162bf496af581a4d50498fef7d91dcedb1f55e4eab58cc9f22281b',
-    '25.3.2.39':
-      'docker.io/clickhouse/clickhouse-server@sha256:5b5f6c6db63f75220d2bb68f1e571684bdac7f10ff591dec61c30ba6395f974c',
+    '26.7.1.1315':
+      'docker.io/clickhouse/clickhouse-server@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5',
+    '26.6.2.81':
+      'docker.io/clickhouse/clickhouse-server@sha256:fdc22372465a336fa47e9deab61fad8277b9e2f2473234a1294b33b53f01d377',
+    '26.5.6.64':
+      'docker.io/clickhouse/clickhouse-server@sha256:0d16977194aca61e26631e616e0678c2a745344d7d9da5729d2356f413dd28e1',
+    '26.4.5.143':
+      'docker.io/clickhouse/clickhouse-server@sha256:ab3f33278b99576ea2ff2b0fa316b5e078c8b25f8ba08956cdbbb67d85c8b30f',
+    '26.3.17.56':
+      'docker.io/clickhouse/clickhouse-server@sha256:422be85ae7344058369cdd366ac0efea9daa8428b55c9cf50258e83a7d12fcb3',
   },
 } as const;
 
