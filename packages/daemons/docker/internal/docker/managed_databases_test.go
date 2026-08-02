@@ -71,6 +71,24 @@ func TestValidateManagedDatabaseInputAcceptsSafeClickHouseFragment(t *testing.T)
 	}
 }
 
+func TestManagedDatabaseRequiresRecreateWhenClickHouseConfigChanges(t *testing.T) {
+	input := validManagedDatabaseInput()
+	input.Type = "clickhouse"
+	input.ClickhouseConfig = "<clickhouse><max_threads>4</max_threads></clickhouse>"
+	record := managedDatabaseRecord{
+		Type:                 "clickhouse",
+		ClickhouseConfigHash: clickHouseConfigHash(input.ClickhouseConfig),
+	}
+
+	if managedDatabaseRequiresRecreate(record, input) {
+		t.Fatal("expected unchanged ClickHouse config to keep the existing container")
+	}
+	input.ClickhouseConfig = "<clickhouse><max_threads>8</max_threads></clickhouse>"
+	if !managedDatabaseRequiresRecreate(record, input) {
+		t.Fatal("expected changed ClickHouse config to recreate the container")
+	}
+}
+
 func TestValidateManagedDatabaseInputRequiresClickHouseMemoryFloor(t *testing.T) {
 	input := validManagedDatabaseInput()
 	input.Type = "clickhouse"

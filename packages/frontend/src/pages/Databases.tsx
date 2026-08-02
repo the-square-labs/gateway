@@ -567,6 +567,7 @@ function ManagedDatabaseCreateForm({
                       <SettingsControlRow
                         title="Publish native TCP port"
                         description="Expose the ClickHouse native protocol for native clients."
+                        controlsClassName="sm:min-w-0"
                       >
                         <Switch
                           checked={draft.publishNativeTcp ?? true}
@@ -604,6 +605,7 @@ function ManagedDatabaseCreateForm({
                   <SettingsControlRow
                     title="TLS"
                     description="Encrypt direct database traffic. Secure managed links always remain encrypted."
+                    controlsClassName="sm:min-w-0"
                   >
                     <Switch
                       checked={draft.tlsEnabled ?? true}

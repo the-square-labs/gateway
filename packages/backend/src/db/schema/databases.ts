@@ -80,6 +80,8 @@ export const databaseConnections = pgTable(
 export interface ManagedDatabaseEngineConfig {
   databaseName?: string;
   ownerUsername: string;
+  publishTcp?: boolean;
+  publishNativeTcp?: boolean;
   clickhouseConfigXml?: string;
 }
 

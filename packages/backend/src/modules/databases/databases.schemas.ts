@@ -134,7 +134,7 @@ export const UpdateManagedDatabaseSchema = z
     publishedPort: z.number().int().min(1).max(65535).nullable().optional(),
     publishedNativePort: z.number().int().min(1).max(65535).nullable().optional(),
     tlsEnabled: z.boolean().optional(),
-    clickhouseConfigXml: z.string().trim().min(1).max(32_768).optional(),
+    clickhouseConfigXml: z.string().trim().max(32_768).optional(),
   })
   .refine((value) => Object.keys(value).length > 0, { message: 'At least one field must be provided' });
 

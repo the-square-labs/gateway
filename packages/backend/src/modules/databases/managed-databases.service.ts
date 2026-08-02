@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { isIP } from 'node:net';
 import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
+import type { ManagedDatabaseEngineConfig } from '@/db/schema/databases.js';
 import { databaseConnections, managedDatabaseBindings, managedDatabaseInstances, nodes } from '@/db/schema/index.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -598,6 +599,15 @@ export class ManagedDatabaseService {
       : input.publishedNativePort === undefined
         ? existing.publishedNativePort
         : input.publishedNativePort;
+    const nextEngineConfig: ManagedDatabaseEngineConfig = {
+      ...existing.engineConfig,
+      publishTcp: nextPublishTcp,
+      ...(existing.type === 'clickhouse' ? { publishNativeTcp: nextPublishNativeTcp } : {}),
+    };
+    if (input.clickhouseConfigXml !== undefined) {
+      if (input.clickhouseConfigXml) nextEngineConfig.clickhouseConfigXml = input.clickhouseConfigXml;
+      else delete nextEngineConfig.clickhouseConfigXml;
+    }
     const next = {
       name: input.name ?? existing.name,
       storageSizeBytes: input.storageSizeGb === undefined ? existing.storageSizeBytes : input.storageSizeGb * GIBIBYTE,
@@ -625,12 +635,7 @@ export class ManagedDatabaseService {
       tlsEnabled: input.tlsEnabled ?? existing.tlsEnabled,
       publishedPort: nextPublishedPort,
       publishedNativePort: nextPublishedNativePort,
-      engineConfig: {
-        ...existing.engineConfig,
-        publishTcp: nextPublishTcp,
-        ...(existing.type === 'clickhouse' ? { publishNativeTcp: nextPublishNativeTcp } : {}),
-        ...(input.clickhouseConfigXml === undefined ? {} : { clickhouseConfigXml: input.clickhouseConfigXml }),
-      },
+      engineConfig: nextEngineConfig,
     };
     const existingCredentials = JSON.parse(
       this.cryptoService.decryptString(parseEncryptedCredentials(existing.encryptedOwnerCredentials))
@@ -1070,17 +1075,10 @@ export class ManagedDatabaseService {
       // A create/update may have reached Docker before the controller lost its
       // response. A direct principal exists only for published databases;
       // private managed links use per-binding accounts instead.
-      const direct = managedDatabasePublishTcp(row)
-        ? await this.ensureDirectAccessCredentials(row, null)
-        : null;
+      const direct = managedDatabasePublishTcp(row) ? await this.ensureDirectAccessCredentials(row, null) : null;
       // Inspect is also the recovery source of truth for an auto-assigned
       // host port when the original create/update response was lost.
-      await this.markReady(
-        direct?.row ?? row,
-        null,
-        allocatedPublishedPort(result) ?? row.publishedPort,
-        state.status
-      );
+      await this.markReady(direct?.row ?? row, null, allocatedPublishedPort(result) ?? row.publishedPort, state.status);
     } catch {
       // The node is offline or the inspect response is still unavailable.
       // Keep the durable pending operation for the next scheduled pass.
@@ -1284,12 +1282,11 @@ export class ManagedDatabaseService {
     }
   }
 
-  private async markError(
-    row: ManagedDatabaseRow,
-    operation: ManagedDatabaseOperation['action'],
-    detail?: string
-  ) {
-    const sanitizedDetail = detail?.replace(/[\r\n\t]+/g, ' ').trim().slice(0, 480);
+  private async markError(row: ManagedDatabaseRow, operation: ManagedDatabaseOperation['action'], detail?: string) {
+    const sanitizedDetail = detail
+      ?.replace(/[\r\n\t]+/g, ' ')
+      .trim()
+      .slice(0, 480);
     const [failed] = await this.db
       .update(managedDatabaseInstances)
       .set({

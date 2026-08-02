@@ -7,7 +7,6 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
-import { CodeEditor } from "@/components/ui/code-editor";
 import { DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -60,7 +59,6 @@ export function ManagedDatabaseSettingsTab({
   );
   const [publishNativeTcp, setPublishNativeTcp] = useState(managed.publishedNativePort !== null);
   const [tlsEnabled, setTlsEnabled] = useState(managed.tlsEnabled ?? true);
-  const [clickhouseConfigXml, setClickhouseConfigXml] = useState(managed.clickhouseConfigXml ?? "");
   const [saving, setSaving] = useState(false);
   const [confirmingRecreate, setConfirmingRecreate] = useState(false);
 
@@ -77,8 +75,7 @@ export function ManagedDatabaseSettingsTab({
     );
     setPublishNativeTcp(managed.publishedNativePort !== null);
     setTlsEnabled(managed.tlsEnabled ?? true);
-    setClickhouseConfigXml(managed.clickhouseConfigXml ?? "");
-  }, [database.name, database.tags, managed]);
+  }, [database.name, database.tags, database.type, managed]);
 
   const requestedPort = useMemo(() => {
     const value = publishedPort.trim();
@@ -161,9 +158,6 @@ export function ManagedDatabaseSettingsTab({
             }
           : {}),
         tlsEnabled,
-        ...(database.type === "clickhouse" && clickhouseConfigXml.trim()
-          ? { clickhouseConfigXml: clickhouseConfigXml.trim() }
-          : {}),
       });
       toast.success(
         publicationChanged
@@ -288,6 +282,7 @@ export function ManagedDatabaseSettingsTab({
                     <SettingsControlRow
                       title="Publish native TCP port"
                       description="Expose the ClickHouse native protocol for native clients."
+                      controlsClassName="sm:min-w-0"
                     >
                       <Switch
                         checked={publishNativeTcp}
@@ -321,6 +316,7 @@ export function ManagedDatabaseSettingsTab({
                 <SettingsControlRow
                   title="TLS"
                   description="Encrypt direct database traffic. Secure managed links always remain encrypted."
+                  controlsClassName="sm:min-w-0"
                 >
                   <Switch
                     checked={tlsEnabled}
@@ -333,25 +329,6 @@ export function ManagedDatabaseSettingsTab({
             )}
           </AnimatePresence>
         </PanelShell>
-
-        {database.type === "clickhouse" && (
-          <PanelShell
-            title="ClickHouse configuration fragment"
-            description="Optional XML configuration. Network and managed storage paths remain controlled by Gateway."
-            className="bg-background"
-            bodyClassName="min-h-0 bg-background"
-          >
-            <CodeEditor
-              value={clickhouseConfigXml}
-              onChange={setClickhouseConfigXml}
-              language="xml"
-              height="min(42dvh, 440px)"
-              bordered={false}
-              showGutterBorder={false}
-              readOnly={saving || confirmingRecreate || managed.status === "paused"}
-            />
-          </PanelShell>
-        )}
 
         <DialogFooter>
           <Button

@@ -1,5 +1,6 @@
 import {
   EllipsisVertical,
+  FileCode2,
   HardDrive,
   KeyRound,
   Pause,
@@ -31,6 +32,7 @@ interface DatabaseHeaderProps {
   canPause: boolean;
   canUnpause: boolean;
   canRestart: boolean;
+  canConfigureClickHouse: boolean;
   canReveal: boolean;
   canRotateDirectCredentials: boolean;
   canRotateCertificate: boolean;
@@ -43,6 +45,7 @@ interface DatabaseHeaderProps {
   onPause: () => void;
   onUnpause: () => void;
   onRestart: () => void;
+  onConfigureClickHouse: () => void;
   onRevealCredentials: () => void;
   onRotateDirectCredentials: () => void;
   onRotateCertificate: () => void;
@@ -57,6 +60,7 @@ export function DatabaseHeader({
   canPause,
   canUnpause,
   canRestart,
+  canConfigureClickHouse,
   canReveal,
   canRotateDirectCredentials,
   canRotateCertificate,
@@ -69,6 +73,7 @@ export function DatabaseHeader({
   onPause,
   onUnpause,
   onRestart,
+  onConfigureClickHouse,
   onRevealCredentials,
   onRotateDirectCredentials,
   onRotateCertificate,
@@ -88,6 +93,12 @@ export function DatabaseHeader({
           Resize database
         </DropdownMenuItem>
       )}
+      {canConfigureClickHouse && (
+        <DropdownMenuItem onClick={onConfigureClickHouse}>
+          <FileCode2 className="h-3.5 w-3.5 mr-2" />
+          Configure ClickHouse
+        </DropdownMenuItem>
+      )}
       {(canPause || canUnpause) && (
         <DropdownMenuItem onClick={canPause ? onPause : onUnpause}>
           {canPause ? (
@@ -104,7 +115,8 @@ export function DatabaseHeader({
           Restart database
         </DropdownMenuItem>
       )}
-      {(canEdit || canPause || canUnpause) && (canReveal || canDelete) && <DropdownMenuSeparator />}
+      {(canEdit || canPause || canUnpause || canConfigureClickHouse) &&
+        (canReveal || canDelete) && <DropdownMenuSeparator />}
       {canReveal && (
         <DropdownMenuItem onClick={onRevealCredentials}>
           <KeyRound className="h-3.5 w-3.5 mr-2" />
@@ -168,6 +180,16 @@ export function DatabaseHeader({
                   label: "Pause database",
                   icon: <Pause className="h-4 w-4" />,
                   action: onPause,
+                },
+              ]
+            : []),
+          ...(canConfigureClickHouse
+            ? [
+                {
+                  id: "database:configure-clickhouse",
+                  label: "Configure ClickHouse",
+                  icon: <FileCode2 className="h-4 w-4" />,
+                  action: onConfigureClickHouse,
                 },
               ]
             : []),
@@ -271,6 +293,7 @@ export function DatabaseHeader({
           canPause ||
           canUnpause ||
           canRestart ||
+          canConfigureClickHouse ||
           canReveal ||
           canRotateDirectCredentials ||
           canRotateCertificate ||
@@ -307,6 +330,7 @@ export function DatabaseHeader({
             {(canEdit ||
               canPause ||
               canUnpause ||
+              canConfigureClickHouse ||
               canReveal ||
               canRotateDirectCredentials ||
               canRotateCertificate ||

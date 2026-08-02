@@ -122,6 +122,10 @@ describe("ManagedDatabaseSettingsTab", () => {
     );
 
     expect(screen.getByLabelText("Native TCP port")).toBeInTheDocument();
+    expect(screen.queryByText("ClickHouse configuration fragment")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Publish native TCP port" }).parentElement
+    ).toHaveClass("sm:min-w-0");
     await user.click(screen.getByRole("button", { name: "Publish native TCP port" }));
 
     await waitFor(() => {

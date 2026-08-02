@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
 	"encoding/xml"
@@ -96,21 +97,22 @@ type managedDatabaseOperationCommand struct {
 // database container is started after a daemon or host restart. It contains
 // neither owner credentials nor arbitrary configuration.
 type managedDatabaseRecord struct {
-	ID                  string `json:"id"`
-	Type                string `json:"type"`
-	ContainerID         string `json:"containerId"`
-	ContainerName       string `json:"containerName"`
-	NetworkName         string `json:"networkName"`
-	ImagePath           string `json:"imagePath"`
-	MountPath           string `json:"mountPath"`
-	LoopDevice          string `json:"loopDevice,omitempty"`
-	StorageSize         int64  `json:"storageSizeBytes"`
-	DesiredRunning      bool   `json:"desiredRunning"`
-	PublishedPort       uint16 `json:"publishedPort,omitempty"`
-	PublishedNativePort uint16 `json:"publishedNativePort,omitempty"`
-	TLSEnabled          bool   `json:"tlsEnabled"`
-	TLSCertificateID    string `json:"tlsCertificateId,omitempty"`
-	OperationID         string `json:"operationId"`
+	ID                   string `json:"id"`
+	Type                 string `json:"type"`
+	ContainerID          string `json:"containerId"`
+	ContainerName        string `json:"containerName"`
+	NetworkName          string `json:"networkName"`
+	ImagePath            string `json:"imagePath"`
+	MountPath            string `json:"mountPath"`
+	LoopDevice           string `json:"loopDevice,omitempty"`
+	StorageSize          int64  `json:"storageSizeBytes"`
+	DesiredRunning       bool   `json:"desiredRunning"`
+	PublishedPort        uint16 `json:"publishedPort,omitempty"`
+	PublishedNativePort  uint16 `json:"publishedNativePort,omitempty"`
+	TLSEnabled           bool   `json:"tlsEnabled"`
+	TLSCertificateID     string `json:"tlsCertificateId,omitempty"`
+	ClickhouseConfigHash string `json:"clickhouseConfigHash,omitempty"`
+	OperationID          string `json:"operationId"`
 }
 
 // managedDatabaseRuntimeStats is intentionally a narrow managed-database
@@ -494,13 +496,7 @@ func (m *managedDatabaseManager) update(ctx context.Context, record *managedData
 	if err := m.ensureStorageSize(ctx, record, input.StorageSizeBytes); err != nil {
 		return err
 	}
-	publicationChanged := input.PublishedPort != record.PublishedPort ||
-		input.PublishedNativePort != record.PublishedNativePort ||
-		(input.PublishNativeTCP != (record.PublishedNativePort != 0)) ||
-		input.TLSEnabled != record.TLSEnabled ||
-		input.TLSCertificateID != record.TLSCertificateID ||
-		(input.PublishTCP != (record.PublishedPort != 0))
-	if publicationChanged {
+	if managedDatabaseRequiresRecreate(*record, input) {
 		if err := m.recreateContainer(ctx, record, input); err != nil {
 			return err
 		}
@@ -509,6 +505,24 @@ func (m *managedDatabaseManager) update(ctx context.Context, record *managedData
 	}
 	record.OperationID = input.OperationID
 	return nil
+}
+
+func clickHouseConfigHash(value string) string {
+	if value == "" {
+		return ""
+	}
+	digest := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("%x", digest)
+}
+
+func managedDatabaseRequiresRecreate(record managedDatabaseRecord, input managedDatabaseCommand) bool {
+	return input.PublishedPort != record.PublishedPort ||
+		input.PublishedNativePort != record.PublishedNativePort ||
+		(input.PublishNativeTCP != (record.PublishedNativePort != 0)) ||
+		input.TLSEnabled != record.TLSEnabled ||
+		input.TLSCertificateID != record.TLSCertificateID ||
+		(input.PublishTCP != (record.PublishedPort != 0)) ||
+		(record.Type == "clickhouse" && clickHouseConfigHash(input.ClickhouseConfig) != record.ClickhouseConfigHash)
 }
 
 func (m *managedDatabaseManager) restart(ctx context.Context, record *managedDatabaseRecord, input managedDatabaseCommand) error {
@@ -581,6 +595,7 @@ func (m *managedDatabaseManager) recreateContainer(ctx context.Context, record *
 	record.PublishedNativePort = input.PublishedNativePort
 	record.TLSEnabled = input.TLSEnabled
 	record.TLSCertificateID = input.TLSCertificateID
+	record.ClickhouseConfigHash = clickHouseConfigHash(input.ClickhouseConfig)
 	containerID, err := m.createContainer(ctx, record, input)
 	if err != nil {
 		rollback()
@@ -643,19 +658,20 @@ func (m *managedDatabaseManager) create(ctx context.Context, id string, input ma
 	}
 
 	record := managedDatabaseRecord{
-		ID:                  id,
-		Type:                input.Type,
-		ContainerName:       "gwdb-" + id,
-		NetworkName:         "gwdb-" + id + "-net",
-		ImagePath:           filepath.Join(m.root, "images", id+".img"),
-		MountPath:           filepath.Join(m.root, "mounts", id),
-		StorageSize:         input.StorageSizeBytes,
-		DesiredRunning:      true,
-		PublishedPort:       input.PublishedPort,
-		PublishedNativePort: input.PublishedNativePort,
-		TLSEnabled:          input.TLSEnabled,
-		TLSCertificateID:    input.TLSCertificateID,
-		OperationID:         input.OperationID,
+		ID:                   id,
+		Type:                 input.Type,
+		ContainerName:        "gwdb-" + id,
+		NetworkName:          "gwdb-" + id + "-net",
+		ImagePath:            filepath.Join(m.root, "images", id+".img"),
+		MountPath:            filepath.Join(m.root, "mounts", id),
+		StorageSize:          input.StorageSizeBytes,
+		DesiredRunning:       true,
+		PublishedPort:        input.PublishedPort,
+		PublishedNativePort:  input.PublishedNativePort,
+		TLSEnabled:           input.TLSEnabled,
+		TLSCertificateID:     input.TLSCertificateID,
+		ClickhouseConfigHash: clickHouseConfigHash(input.ClickhouseConfig),
+		OperationID:          input.OperationID,
 	}
 
 	if err := m.createImage(ctx, record); err != nil {

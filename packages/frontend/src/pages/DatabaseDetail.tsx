@@ -19,6 +19,7 @@ import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { usePinnedDatabasesStore } from "@/stores/pinned-databases";
 import type { DatabaseConnection, DatabaseMetricSnapshot } from "@/types";
+import { ClickHouseConfigDialog } from "./database-detail/ClickHouseConfigDialog";
 import { DatabaseConsoleTab } from "./database-detail/DatabaseConsoleTab";
 import { DatabaseCredentialsDialog } from "./database-detail/DatabaseCredentialsDialog";
 import { DatabaseHeader } from "./database-detail/DatabaseHeader";
@@ -58,6 +59,7 @@ export function DatabaseDetail({
   const [privateManagedInfoOpen, setPrivateManagedInfoOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [resizeOpen, setResizeOpen] = useState(false);
+  const [clickHouseConfigOpen, setClickHouseConfigOpen] = useState(false);
   const [explorerFocused, setExplorerFocused] = useState(false);
   const [revealedCredentials, setRevealedCredentials] = useState<Record<string, unknown> | null>(
     null
@@ -409,6 +411,9 @@ export function DatabaseDetail({
               canPause={canPause}
               canUnpause={canUnpause}
               canRestart={canRestart}
+              canConfigureClickHouse={
+                canManageSettings && database.type === "clickhouse" && !!database.managed
+              }
               canReveal={canReveal}
               canRotateDirectCredentials={
                 canManageSettings && database.managed?.publishedPort != null
@@ -423,6 +428,7 @@ export function DatabaseDetail({
               onPause={() => void pause()}
               onUnpause={() => void unpause()}
               onRestart={() => void restart()}
+              onConfigureClickHouse={() => setClickHouseConfigOpen(true)}
               onRevealCredentials={() => void revealCredentials()}
               onRotateDirectCredentials={() => void rotateDirectCredentials()}
               onRotateCertificate={() => void rotateCertificate()}
@@ -606,6 +612,15 @@ export function DatabaseDetail({
           open={resizeOpen}
           onOpenChange={setResizeOpen}
           onResized={() => void load()}
+        />
+      )}
+
+      {canManageSettings && database.type === "clickhouse" && database.managed && (
+        <ClickHouseConfigDialog
+          database={database}
+          open={clickHouseConfigOpen}
+          onOpenChange={setClickHouseConfigOpen}
+          onSaved={() => void load()}
         />
       )}
     </PageTransition>
