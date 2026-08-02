@@ -42,6 +42,7 @@ import { authMiddleware, requireActiveUser } from '@/modules/auth/auth.middlewar
 import { authRoutes } from '@/modules/auth/auth.routes.js';
 import { getProgrammaticWebSocketCredential, getSessionWebSocketCredential } from '@/modules/auth/websocket-auth.js';
 import { databaseRoutes } from '@/modules/databases/databases.routes.js';
+import { createManagedDatabaseLogStreamWSHandlers } from '@/modules/databases/managed-database-logs.ws.js';
 import { dockerRoutes } from '@/modules/docker/docker.routes.js';
 import { DOCKER_LOG_TAIL_MAX } from '@/modules/docker/docker.schemas.js';
 import { createComposeLogsWSHandlers } from '@/modules/docker/docker-compose-logs.ws.js';
@@ -407,6 +408,7 @@ export function createApp() {
   app.use('/api/docker/nodes/:nodeId/containers/:containerId/exec', streamRateLimitMiddleware);
   app.use('/api/nodes/:nodeId/exec', streamRateLimitMiddleware);
   app.use('/api/docker/nodes/:nodeId/containers/:containerId/logs/stream', streamRateLimitMiddleware);
+  app.use('/api/databases/:databaseId/logs/stream', streamRateLimitMiddleware);
   app.use('/api/docker/nodes/:nodeId/compose/:project/logs/stream', streamRateLimitMiddleware);
   app.use('/api/monitoring/logs/:hostId/ws', streamRateLimitMiddleware);
   app.use('/api/nodes/:nodeId/nginx-logs/ws', streamRateLimitMiddleware);
@@ -600,6 +602,22 @@ export function createApp() {
         isAllowedWebSocketOrigin
       );
       return createDockerLogStreamWSHandlers(nodeId, containerId, tail, credential);
+    })
+  );
+
+  app.get(
+    '/api/databases/:databaseId/logs/stream',
+    upgradeWebSocket((c) => {
+      const databaseId = c.req.param('databaseId') ?? '';
+      const requestedTail = Number(c.req.query('tail')) || 100;
+      const tail = Math.min(Math.max(Math.trunc(requestedTail), 1), DOCKER_LOG_TAIL_MAX);
+      const credential = getProgrammaticWebSocketCredential(
+        c.req.header('cookie'),
+        c.req.header('origin'),
+        c.req.header('authorization'),
+        isAllowedWebSocketOrigin
+      );
+      return createManagedDatabaseLogStreamWSHandlers(databaseId, tail, credential);
     })
   );
 

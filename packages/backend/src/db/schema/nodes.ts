@@ -1,7 +1,7 @@
 import { boolean, index, integer, jsonb, pgEnum, pgTable, timestamp, unique, uuid, varchar } from 'drizzle-orm/pg-core';
 import { nodeFolders } from './node-folders.js';
 
-export const nodeTypeEnum = pgEnum('node_type', ['nginx', 'bastion', 'monitoring', 'docker']);
+export const nodeTypeEnum = pgEnum('node_type', ['nginx', 'bastion', 'monitoring', 'docker', 'databases']);
 export const nodeStatusEnum = pgEnum('node_status', ['pending', 'online', 'offline', 'error']);
 
 export interface NodeCapabilities {

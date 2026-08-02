@@ -196,6 +196,11 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       },
     ],
     events: [
+      { id: 'created', label: 'Managed Database Created', defaultSeverity: 'info' },
+      { id: 'ready', label: 'Managed Database Ready', defaultSeverity: 'info' },
+      { id: 'stopped', label: 'Managed Database Stopped', defaultSeverity: 'warning', supportsThreshold: true },
+      { id: 'error', label: 'Managed Database Error', defaultSeverity: 'critical', supportsThreshold: true },
+      { id: 'deleted', label: 'Managed Database Deleted', defaultSeverity: 'info' },
       { id: 'health.offline', label: 'Database Offline', defaultSeverity: 'critical', supportsThreshold: true },
       { id: 'health.degraded', label: 'Database Degraded', defaultSeverity: 'warning', supportsThreshold: true },
       { id: 'health.online', label: 'Database Online', defaultSeverity: 'info', supportsThreshold: true },
@@ -234,6 +239,11 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { id: 'pending_mutations', label: 'Pending Mutations', unit: '', defaultOperator: '>', defaultValue: 5 },
     ],
     events: [
+      { id: 'created', label: 'Managed Database Created', defaultSeverity: 'info' },
+      { id: 'ready', label: 'Managed Database Ready', defaultSeverity: 'info' },
+      { id: 'stopped', label: 'Managed Database Stopped', defaultSeverity: 'warning', supportsThreshold: true },
+      { id: 'error', label: 'Managed Database Error', defaultSeverity: 'critical', supportsThreshold: true },
+      { id: 'deleted', label: 'Managed Database Deleted', defaultSeverity: 'info' },
       { id: 'health.offline', label: 'Database Offline', defaultSeverity: 'critical', supportsThreshold: true },
       { id: 'health.degraded', label: 'Database Degraded', defaultSeverity: 'warning', supportsThreshold: true },
       { id: 'health.online', label: 'Database Online', defaultSeverity: 'info', supportsThreshold: true },
@@ -257,6 +267,11 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { id: 'memory_pct', label: 'Memory Usage (%)', unit: '%', defaultOperator: '>', defaultValue: 90 },
     ],
     events: [
+      { id: 'created', label: 'Managed Database Created', defaultSeverity: 'info' },
+      { id: 'ready', label: 'Managed Database Ready', defaultSeverity: 'info' },
+      { id: 'stopped', label: 'Managed Database Stopped', defaultSeverity: 'warning', supportsThreshold: true },
+      { id: 'error', label: 'Managed Database Error', defaultSeverity: 'critical', supportsThreshold: true },
+      { id: 'deleted', label: 'Managed Database Deleted', defaultSeverity: 'info' },
       { id: 'health.offline', label: 'Database Offline', defaultSeverity: 'critical', supportsThreshold: true },
       { id: 'health.degraded', label: 'Database Degraded', defaultSeverity: 'warning', supportsThreshold: true },
       { id: 'health.online', label: 'Database Online', defaultSeverity: 'info', supportsThreshold: true },
@@ -425,6 +440,24 @@ export const EVENT_BUS_MAPPINGS: Record<string, EventMapping[]> = {
     },
   ],
   'database.changed': [
+    ...(['postgres', 'clickhouse', 'redis'] as const).flatMap((type) => {
+      const category = `database_${type}` as AlertCategory;
+      return ['created', 'ready', 'stopped', 'error', 'deleted'].map(
+        (eventId): EventMapping => ({
+          category,
+          eventId,
+          match: (p) => p.type === type && p.action === eventId && !!(p.managedDatabaseId ?? p.databaseId),
+          extractResource: (p) => ({
+            type: 'database',
+            id: p.managedDatabaseId ?? p.databaseId,
+            name: p.name,
+          }),
+          // Keep notification payloads safe: lifecycle events never forward
+          // daemon errors, credentials, endpoint data, or connector metadata.
+          extractData: (p) => ({ status: p.status ?? eventId }),
+        })
+      );
+    }),
     {
       category: 'database_postgres',
       eventId: 'health.offline',

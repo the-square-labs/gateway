@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { ManagedRedisConfig } from '@/db/schema/databases.js';
 import type { DatabaseHealthEntry } from '@/db/schema/index.js';
 import type { DatabaseType } from './database-error-mapping.js';
 
@@ -48,6 +49,30 @@ export interface DatabaseCapabilities {
   exactRowCount: boolean;
 }
 
+export interface ManagedDatabaseConnectionMetadata {
+  id: string;
+  nodeId: string;
+  nodeAvailable: boolean;
+  version: string;
+  storageSizeBytes: number;
+  runtimeConfig: {
+    cpuCores: number;
+    memoryMb: number;
+    swapMb: number;
+  };
+  publishedPort: number | null;
+  publishedNativePort: number | null;
+  publishTcp: boolean;
+  publishNativeTcp: boolean;
+  tlsEnabled: boolean;
+  /** Selected database-node address, available only for a published TCP endpoint. */
+  endpointHost: string | null;
+  status: 'creating' | 'updating' | 'ready' | 'paused' | 'stopped' | 'error' | 'deleting';
+  lastError: string | null;
+  clickhouseConfigXml?: string;
+  redisConfig?: ManagedRedisConfig;
+}
+
 export interface DatabaseConnectionView {
   id: string;
   name: string;
@@ -70,6 +95,7 @@ export interface DatabaseConnectionView {
   hasStoredPassword: boolean;
   config: Record<string, unknown>;
   capabilities: DatabaseCapabilities;
+  managed?: ManagedDatabaseConnectionMetadata;
   createdById: string;
   updatedById: string | null;
   createdAt: string;
@@ -133,7 +159,8 @@ export function toDatabaseConnectionView(
   row: DatabaseConnectionRow,
   config: DatabaseConnectionConfig,
   revealCredentials: boolean,
-  includeHealthHistory = true
+  includeHealthHistory = true,
+  managed?: ManagedDatabaseConnectionMetadata
 ): DatabaseConnectionView {
   const capabilities: DatabaseCapabilities =
     config.type === 'postgres'
@@ -217,6 +244,7 @@ export function toDatabaseConnectionView(
               tlsEnabled: config.tlsEnabled,
             },
     capabilities,
+    ...(managed ? { managed } : {}),
     createdById: row.createdById,
     updatedById: row.updatedById,
     createdAt: row.createdAt.toISOString(),

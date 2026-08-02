@@ -3,12 +3,15 @@ import { asc, count, eq, ilike, inArray, or, type SQL } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pg from 'pg';
 import type { DrizzleClient } from '@/db/client.js';
-import { type DatabaseHealthEntry, databaseConnections } from '@/db/schema/index.js';
+import { type DatabaseHealthEntry, databaseConnections, managedDatabaseInstances, nodes } from '@/db/schema/index.js';
+import type { ManagedDatabaseTunnelLane } from '@/grpc/services/database-tunnel.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
+import { createChildLogger } from '@/lib/logger.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import { getEffectiveNodeServiceAddress, getEffectivePublishedNodeIP } from '@/modules/nodes/node-service-address.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { PaginatedResponse } from '@/types.js';
@@ -19,6 +22,7 @@ import {
   type DatabaseConnectionConfig,
   type DatabaseConnectionView,
   type DatabaseHealthStatus,
+  type ManagedDatabaseConnectionMetadata,
   type PostgresConnectionConfig,
   type RedisConnectionConfig,
   toDatabaseConnectionView,
@@ -35,6 +39,7 @@ import type {
   DatabaseListQuery,
   UpdateDatabaseConnectionInput,
 } from './databases.schemas.js';
+import type { ManagedDatabaseTunnelProxy } from './managed-database-tunnel-proxy.js';
 import {
   ensurePostgresBaseTable,
   normalizePostgresColumnType,
@@ -64,6 +69,7 @@ import type { SqlDatabaseAdapter } from './sql-database-adapter.js';
 
 const { Pool } = pg;
 const DATABASE_HEALTH_HISTORY_MIN_INTERVAL_MS = 30_000;
+const logger = createChildLogger('DatabaseConnectionService');
 
 export type {
   ClickHouseConnectionConfig,
@@ -84,11 +90,66 @@ interface PostgresRowSearchFilter {
   value: string;
 }
 
+export interface ManagedPostgresExtension {
+  name: string;
+  defaultVersion: string;
+  installedVersion: string | null;
+  comment: string | null;
+}
+
+interface PostgresExtensionRow {
+  name: string;
+  default_version: string;
+  comment: string | null;
+}
+
+interface InstalledPostgresExtensionRow {
+  name: string;
+  installed_version: string;
+}
+
+type ManagedPostgresExtensionDefinition = Omit<ManagedPostgresExtension, 'installedVersion'>;
+
+interface ManagedPostgresExtensionContext {
+  imageRef: string;
+}
+
+interface ManagedPostgresExtensionStateCacheEntry {
+  expiresAt: number;
+  value: Promise<ManagedPostgresExtension[]>;
+}
+
+const POSTGRES_EXTENSION_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const POSTGRES_EXTENSIONS_EXCLUDED_FROM_MANAGER = new Set(['pg_stat_statements', 'plpgsql']);
+const MANAGED_POSTGRES_EXTENSION_STATE_CACHE_TTL_MS = 30_000;
+
+function normalizePostgresExtensionName(value: string): string {
+  const name = value.trim();
+  if (!POSTGRES_EXTENSION_NAME_PATTERN.test(name)) {
+    throw new AppError(400, 'INVALID_POSTGRES_EXTENSION', 'Invalid PostgreSQL extension name');
+  }
+  return name;
+}
+
+function quotePostgresExtensionName(name: string): string {
+  return `"${normalizePostgresExtensionName(name)}"`;
+}
+
+function toManagedPostgresExtensionDefinition(row: PostgresExtensionRow): ManagedPostgresExtensionDefinition {
+  return {
+    name: row.name,
+    defaultVersion: row.default_version,
+    comment: row.comment,
+  };
+}
+
 export { inferClickHouseIntent, inferPostgresIntent, inferRedisIntent } from './database-query-intent.js';
 
 export class DatabaseConnectionService {
   private eventBus?: EventBusService;
   private readonly postgresPools = new Map<string, pg.Pool>();
+  private readonly postgresExtensionCatalogs = new Map<string, Promise<ManagedPostgresExtensionDefinition[]>>();
+  private readonly postgresExtensionStates = new Map<string, ManagedPostgresExtensionStateCacheEntry>();
   private readonly redisClients = new Map<string, Redis>();
   private readonly clickHouseClients = new Map<string, ClickHouseClient>();
   private readonly sqlAdapters: Map<'postgres' | 'clickhouse', SqlDatabaseAdapter>;
@@ -96,7 +157,8 @@ export class DatabaseConnectionService {
   constructor(
     private readonly db: DrizzleClient,
     private readonly auditService: AuditService,
-    private readonly cryptoService: CryptoService
+    private readonly cryptoService: CryptoService,
+    private readonly managedTunnelProxy?: ManagedDatabaseTunnelProxy
   ) {
     this.sqlAdapters = new Map<'postgres' | 'clickhouse', SqlDatabaseAdapter>([
       [
@@ -274,9 +336,7 @@ export class DatabaseConnectionService {
       this.db.select({ count: count() }).from(databaseConnections).where(where),
     ]);
 
-    const data = rows.map((row) =>
-      toDatabaseConnectionView(row, this.decryptConfig(row.encryptedConfig), false, false)
-    );
+    const data = await Promise.all(rows.map((row) => this.toView(row, false, false)));
     const total = Number(totalCount);
     return {
       data,
@@ -291,7 +351,7 @@ export class DatabaseConnectionService {
 
   async get(id: string, revealCredentials = false): Promise<DatabaseConnectionView> {
     const row = await this.getRow(id);
-    return toDatabaseConnectionView(row, this.decryptConfig(row.encryptedConfig), revealCredentials, false);
+    return this.toView(row, revealCredentials, false);
   }
 
   async getBySlug(slug: string): Promise<DatabaseConnectionView> {
@@ -299,7 +359,7 @@ export class DatabaseConnectionService {
       where: eq(databaseConnections.slug, slug),
     });
     if (!row) throw new AppError(404, 'DATABASE_NOT_FOUND', 'Database connection not found');
-    return toDatabaseConnectionView(row, this.decryptConfig(row.encryptedConfig), false, false);
+    return this.toView(row, false, false);
   }
 
   async getHealthHistory(id: string): Promise<DatabaseHealthEntry[]> {
@@ -310,6 +370,19 @@ export class DatabaseConnectionService {
   async revealCredentials(id: string): Promise<Record<string, unknown>> {
     const row = await this.getRow(id);
     const config = this.decryptConfig(row.encryptedConfig);
+    const managed = await this.getManagedMetadata(id);
+    if (managed) {
+      // Managed rows used to retain the database owner in this canonical
+      // connection. It is an internal control-plane credential and must never
+      // escape through the generic connection endpoint. Consumers must use the
+      // managed route, which returns only the separately generated direct
+      // access principal and only after TCP publication.
+      throw new AppError(
+        409,
+        'MANAGED_DATABASE_CREDENTIALS_REQUIRE_DIRECT_ACCESS',
+        'Use the managed database credential endpoint after publishing a TCP port'
+      );
+    }
     return {
       ...config,
       connectionString: buildDatabaseConnectionString(config),
@@ -377,6 +450,13 @@ export class DatabaseConnectionService {
 
   async update(id: string, input: UpdateDatabaseConnectionInput, userId: string): Promise<DatabaseConnectionView> {
     const existing = await this.getRow(id);
+    if (await this.getManagedMetadata(id)) {
+      throw new AppError(
+        409,
+        'MANAGED_DATABASE_SETTINGS',
+        'Managed database connection settings must be updated through its managed configuration'
+      );
+    }
     const currentConfig = this.decryptConfig(existing.encryptedConfig);
     const replacementPassword = this.extractReplacementPassword(input.config);
     const nextPassword = replacementPassword !== undefined ? replacementPassword : currentConfig.password;
@@ -502,7 +582,7 @@ export class DatabaseConnectionService {
       healthStatus: row.healthStatus,
       ...(row.slug === existing.slug ? {} : { oldSlug: existing.slug, slug: row.slug }),
     });
-    return toDatabaseConnectionView(row, mergedConfig, false, false);
+    return this.toView(row, false, false);
   }
 
   async delete(id: string, userId: string): Promise<void> {
@@ -525,7 +605,7 @@ export class DatabaseConnectionService {
     userId: string
   ): Promise<{ ok: true; responseMs: number; status: DatabaseHealthStatus }> {
     const row = await this.getRow(id);
-    const config = this.decryptConfig(row.encryptedConfig);
+    const config = await this.getDecryptedConfig(id);
     let result: { status: DatabaseHealthStatus; responseMs: number };
     try {
       result = await this.testNormalizedConnection(config);
@@ -576,6 +656,89 @@ export class DatabaseConnectionService {
 
   async listPostgresSchemas(id: string) {
     return listPostgresSchemasOperation(this.postgresSchemaOperationContext(), id);
+  }
+
+  async listManagedPostgresExtensions(id: string): Promise<ManagedPostgresExtension[]> {
+    return this.loadManagedPostgresExtensionState(id);
+  }
+
+  async warmManagedPostgresExtensionCatalog(id: string): Promise<void> {
+    await this.loadManagedPostgresExtensionState(id);
+  }
+
+  async enableManagedPostgresExtension(
+    id: string,
+    rawName: string,
+    userId: string
+  ): Promise<ManagedPostgresExtension[]> {
+    const context = await this.getManagedPostgresExtensionContext(id);
+    const name = normalizePostgresExtensionName(rawName);
+    return this.withPostgresPool(id, 'query', async (pool) => {
+      const extension = await this.getManagedPostgresExtension(pool, context, name);
+      if (!extension) {
+        throw new AppError(
+          404,
+          'POSTGRES_EXTENSION_NOT_AVAILABLE',
+          'PostgreSQL extension is not available in this image'
+        );
+      }
+      if (!extension.installedVersion) {
+        await pool.query(`create extension if not exists ${quotePostgresExtensionName(name)}`);
+        await this.auditService.log({
+          userId,
+          action: 'database.postgres.extension.enable',
+          resourceType: 'database',
+          resourceId: id,
+          details: { name, version: extension.defaultVersion },
+        });
+        this.emitChange(id, 'extensions.updated', { provider: 'postgres', name, enabled: true });
+      }
+
+      return this.refreshManagedPostgresExtensionState(id, pool, context);
+    });
+  }
+
+  async disableManagedPostgresExtension(
+    id: string,
+    rawName: string,
+    userId: string
+  ): Promise<ManagedPostgresExtension[]> {
+    const context = await this.getManagedPostgresExtensionContext(id);
+    const name = normalizePostgresExtensionName(rawName);
+    return this.withPostgresPool(id, 'query', async (pool) => {
+      const extension = await this.getManagedPostgresExtension(pool, context, name);
+      if (!extension) {
+        throw new AppError(
+          404,
+          'POSTGRES_EXTENSION_NOT_AVAILABLE',
+          'PostgreSQL extension is not available in this image'
+        );
+      }
+      if (extension.installedVersion) {
+        try {
+          await pool.query(`drop extension ${quotePostgresExtensionName(name)}`);
+        } catch (error) {
+          if ((error as { code?: string }).code === '2BP01') {
+            throw new AppError(
+              409,
+              'POSTGRES_EXTENSION_HAS_DEPENDENCIES',
+              `Cannot disable ${name} while database objects depend on it`
+            );
+          }
+          throw error;
+        }
+        await this.auditService.log({
+          userId,
+          action: 'database.postgres.extension.disable',
+          resourceType: 'database',
+          resourceId: id,
+          details: { name, version: extension.installedVersion },
+        });
+        this.emitChange(id, 'extensions.updated', { provider: 'postgres', name, enabled: false });
+      }
+
+      return this.refreshManagedPostgresExtensionState(id, pool, context);
+    });
   }
 
   async listPostgresTables(id: string, schema: string) {
@@ -839,9 +1002,31 @@ export class DatabaseConnectionService {
     return executeRedisCommandOperation(this.queryExecutionContext(), id, commandText, userId);
   }
 
-  async getDecryptedConfig(id: string): Promise<DatabaseConnectionConfig> {
+  async getDecryptedConfig(
+    id: string,
+    lane: ManagedDatabaseTunnelLane = 'interactive'
+  ): Promise<DatabaseConnectionConfig> {
     const row = await this.getRow(id);
-    return this.decryptConfig(row.encryptedConfig);
+    const config = this.decryptConfig(row.encryptedConfig);
+    const managed = await this.getManagedMetadata(id);
+    if (!managed) return config;
+    if (!this.managedTunnelProxy) {
+      throw new AppError(503, 'MANAGED_DATABASE_TUNNEL_UNAVAILABLE', 'Managed database tunnel is unavailable');
+    }
+    const endpoint = await this.managedTunnelProxy.getEndpoint(managed.id, lane);
+    if (config.type === 'postgres') {
+      return { ...config, host: endpoint.host, port: endpoint.port, sslEnabled: false };
+    }
+    if (config.type === 'redis') {
+      return { ...config, host: endpoint.host, port: endpoint.port, tlsEnabled: false };
+    }
+    return {
+      ...config,
+      url: `http://${endpoint.host}:${endpoint.port}`,
+      host: endpoint.host,
+      port: endpoint.port,
+      tlsEnabled: false,
+    };
   }
 
   async listAllRows() {
@@ -919,6 +1104,223 @@ export class DatabaseConnectionService {
     });
     if (!row) throw new AppError(404, 'DATABASE_NOT_FOUND', 'Database connection not found');
     return row;
+  }
+
+  private async getManagedPostgresExtensionContext(id: string): Promise<ManagedPostgresExtensionContext> {
+    const row = await this.getRow(id);
+    const config = this.decryptConfig(row.encryptedConfig);
+    if (config.type !== 'postgres') {
+      throw new AppError(400, 'INVALID_PROVIDER', 'PostgreSQL extensions are available only for PostgreSQL databases');
+    }
+    const [managed] = await this.db
+      .select({ imageRef: managedDatabaseInstances.imageRef })
+      .from(managedDatabaseInstances)
+      .where(eq(managedDatabaseInstances.databaseConnectionId, id))
+      .limit(1);
+    if (!managed) {
+      throw new AppError(
+        400,
+        'MANAGED_DATABASE_REQUIRED',
+        'PostgreSQL extensions are available only for managed databases'
+      );
+    }
+    return { imageRef: managed.imageRef };
+  }
+
+  private async readManagedPostgresExtensionsWithPool(
+    pool: pg.Pool,
+    context: ManagedPostgresExtensionContext
+  ): Promise<ManagedPostgresExtension[]> {
+    const [definitions, installed] = await Promise.all([
+      this.getManagedPostgresExtensionCatalog(pool, context.imageRef),
+      pool.query<InstalledPostgresExtensionRow>(
+        `select extname as name, extversion as installed_version
+           from pg_extension`
+      ),
+    ]);
+    const installedByName = new Map(installed.rows.map((extension) => [extension.name, extension.installed_version]));
+    return definitions.map((extension) => ({
+      ...extension,
+      installedVersion: installedByName.get(extension.name) ?? null,
+    }));
+  }
+
+  private async refreshManagedPostgresExtensionState(
+    id: string,
+    pool: pg.Pool,
+    context: ManagedPostgresExtensionContext
+  ): Promise<ManagedPostgresExtension[]> {
+    const value = this.readManagedPostgresExtensionsWithPool(pool, context);
+    const entry: ManagedPostgresExtensionStateCacheEntry = {
+      expiresAt: Date.now() + MANAGED_POSTGRES_EXTENSION_STATE_CACHE_TTL_MS,
+      value,
+    };
+    this.postgresExtensionStates.set(id, entry);
+    try {
+      return await value;
+    } catch (error) {
+      if (this.postgresExtensionStates.get(id) === entry) {
+        this.postgresExtensionStates.delete(id);
+      }
+      throw error;
+    }
+  }
+
+  private async loadManagedPostgresExtensionState(id: string): Promise<ManagedPostgresExtension[]> {
+    const cached = this.getCachedManagedPostgresExtensionState(id);
+    if (cached) return cached;
+
+    const value = (async () => {
+      const context = await this.getManagedPostgresExtensionContext(id);
+      return this.withPostgresPool(id, 'query', (pool) => this.readManagedPostgresExtensionsWithPool(pool, context));
+    })();
+    const entry: ManagedPostgresExtensionStateCacheEntry = {
+      expiresAt: Date.now() + MANAGED_POSTGRES_EXTENSION_STATE_CACHE_TTL_MS,
+      value,
+    };
+    this.postgresExtensionStates.set(id, entry);
+    try {
+      return await value;
+    } catch (error) {
+      if (this.postgresExtensionStates.get(id) === entry) {
+        this.postgresExtensionStates.delete(id);
+      }
+      throw error;
+    }
+  }
+
+  private getCachedManagedPostgresExtensionState(id: string): Promise<ManagedPostgresExtension[]> | null {
+    const cached = this.postgresExtensionStates.get(id);
+    if (!cached) return null;
+    if (cached.expiresAt <= Date.now()) {
+      this.postgresExtensionStates.delete(id);
+      return null;
+    }
+    return cached.value;
+  }
+
+  private async getManagedPostgresExtensionCatalog(
+    pool: pg.Pool,
+    imageRef: string
+  ): Promise<ManagedPostgresExtensionDefinition[]> {
+    const cached = this.postgresExtensionCatalogs.get(imageRef);
+    if (cached) return cached;
+
+    const catalog = pool
+      .query<PostgresExtensionRow>(
+        `select name, default_version, comment
+           from pg_available_extensions
+           order by name asc`
+      )
+      .then((result) =>
+        result.rows
+          .filter((extension) => !POSTGRES_EXTENSIONS_EXCLUDED_FROM_MANAGER.has(extension.name))
+          .map(toManagedPostgresExtensionDefinition)
+      );
+    this.postgresExtensionCatalogs.set(imageRef, catalog);
+    try {
+      return await catalog;
+    } catch (error) {
+      if (this.postgresExtensionCatalogs.get(imageRef) === catalog) {
+        this.postgresExtensionCatalogs.delete(imageRef);
+      }
+      throw error;
+    }
+  }
+
+  private async getManagedPostgresExtension(
+    pool: pg.Pool,
+    context: ManagedPostgresExtensionContext,
+    name: string
+  ): Promise<ManagedPostgresExtension | undefined> {
+    const extensions = await this.readManagedPostgresExtensionsWithPool(pool, context);
+    return extensions.find((extension) => extension.name === name);
+  }
+
+  private async toView(
+    row: typeof databaseConnections.$inferSelect,
+    revealCredentials: boolean,
+    includeHealthHistory: boolean
+  ): Promise<DatabaseConnectionView> {
+    return toDatabaseConnectionView(
+      row,
+      this.decryptConfig(row.encryptedConfig),
+      revealCredentials,
+      includeHealthHistory,
+      await this.getManagedMetadata(row.id)
+    );
+  }
+
+  private async getManagedMetadata(
+    databaseConnectionId: string
+  ): Promise<ManagedDatabaseConnectionMetadata | undefined> {
+    const [managed] = await this.db
+      .select({
+        id: managedDatabaseInstances.id,
+        nodeId: managedDatabaseInstances.nodeId,
+        version: managedDatabaseInstances.version,
+        storageSizeBytes: managedDatabaseInstances.storageSizeBytes,
+        runtimeConfig: managedDatabaseInstances.runtimeConfig,
+        engineConfig: managedDatabaseInstances.engineConfig,
+        publishedPort: managedDatabaseInstances.publishedPort,
+        publishedNativePort: managedDatabaseInstances.publishedNativePort,
+        tlsEnabled: managedDatabaseInstances.tlsEnabled,
+        status: managedDatabaseInstances.status,
+        lastError: managedDatabaseInstances.lastError,
+        serviceAddress: nodes.serviceAddress,
+        lastHealthReport: nodes.lastHealthReport,
+        nodeStatus: nodes.status,
+      })
+      .from(managedDatabaseInstances)
+      .leftJoin(nodes, eq(nodes.id, managedDatabaseInstances.nodeId))
+      .where(eq(managedDatabaseInstances.databaseConnectionId, databaseConnectionId))
+      .limit(1);
+    if (!managed) return undefined;
+    const runtime = managed.runtimeConfig as Record<string, unknown>;
+    const memoryBytes = Number(runtime.memoryLimitBytes ?? 0);
+    const swapBytes = Number(runtime.memorySwapBytes ?? 0);
+    const engineConfig = managed.engineConfig as unknown as Record<string, unknown>;
+    const clickhouseConfigXml = engineConfig.clickhouseConfigXml;
+    const redisConfig = engineConfig.redisConfig;
+    return {
+      id: managed.id,
+      nodeId: managed.nodeId,
+      nodeAvailable: managed.nodeStatus === 'online',
+      version: managed.version,
+      storageSizeBytes: Number(managed.storageSizeBytes),
+      runtimeConfig: {
+        cpuCores: Number(runtime.nanoCPUs ?? 0) / 1_000_000_000,
+        memoryMb: Math.round(memoryBytes / (1024 * 1024)),
+        swapMb: Math.max(0, Math.round((swapBytes - memoryBytes) / (1024 * 1024))),
+      },
+      publishedPort: managed.publishedPort,
+      publishedNativePort: managed.publishedNativePort,
+      publishTcp:
+        typeof engineConfig.publishTcp === 'boolean' ? engineConfig.publishTcp : managed.publishedPort !== null,
+      publishNativeTcp:
+        typeof engineConfig.publishNativeTcp === 'boolean'
+          ? engineConfig.publishNativeTcp
+          : managed.publishedNativePort !== null,
+      tlsEnabled: managed.tlsEnabled,
+      endpointHost:
+        managed.publishedPort === null
+          ? null
+          : managed.tlsEnabled
+            ? getEffectivePublishedNodeIP({
+                serviceAddress: managed.serviceAddress,
+                lastHealthReport: managed.lastHealthReport,
+              })
+            : getEffectiveNodeServiceAddress({
+                serviceAddress: managed.serviceAddress,
+                lastHealthReport: managed.lastHealthReport,
+              }),
+      status: managed.status,
+      lastError: managed.lastError,
+      ...(typeof clickhouseConfigXml === 'string' ? { clickhouseConfigXml } : {}),
+      ...(redisConfig && typeof redisConfig === 'object'
+        ? { redisConfig: redisConfig as ManagedDatabaseConnectionMetadata['redisConfig'] }
+        : {}),
+    };
   }
 
   private emitChange(id: string, action: string, extra: Record<string, unknown> = {}) {
@@ -1151,10 +1553,11 @@ export class DatabaseConnectionService {
     return { status: responseMs >= 1_000 ? 'degraded' : 'online', responseMs };
   }
 
-  async getPostgresPool(id: string): Promise<pg.Pool> {
-    const existing = this.postgresPools.get(id);
+  async getPostgresPool(id: string, lane: ManagedDatabaseTunnelLane = 'interactive'): Promise<pg.Pool> {
+    const key = this.databaseClientKey(id, lane);
+    const existing = this.postgresPools.get(key);
     if (existing) return existing;
-    const config = await this.getDecryptedConfig(id);
+    const config = await this.getDecryptedConfig(id, lane);
     if (config.type !== 'postgres') throw new AppError(400, 'INVALID_PROVIDER', 'Database is not Postgres');
     const pool = new Pool({
       host: config.host,
@@ -1167,20 +1570,34 @@ export class DatabaseConnectionService {
       connectionTimeoutMillis: 15_000,
       ssl: config.sslEnabled ? { rejectUnauthorized: false } : undefined,
     });
+    // `pg.Pool` emits an `error` event when an idle client is disconnected.
+    // EventEmitter treats that event as fatal when no listener is attached,
+    // which must never let a transient managed-database tunnel disconnect
+    // terminate the Gateway process. Drop the affected cached pool so the
+    // next operation establishes a fresh connection through the tunnel.
+    pool.on('error', (error) => {
+      logger.debug('Postgres pool connection lost', {
+        databaseId: id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      if (this.postgresPools.get(key) === pool) this.postgresPools.delete(key);
+      void pool.end().catch(() => {});
+    });
     try {
       await pool.query('select 1');
     } catch (error) {
       await pool.end().catch(() => {});
       this.rethrowDatabaseError(error, 'postgres', 'connect');
     }
-    this.postgresPools.set(id, pool);
+    this.postgresPools.set(key, pool);
     return pool;
   }
 
-  async getRedisClient(id: string): Promise<Redis> {
-    const existing = this.redisClients.get(id);
+  async getRedisClient(id: string, lane: ManagedDatabaseTunnelLane = 'interactive'): Promise<Redis> {
+    const key = this.databaseClientKey(id, lane);
+    const existing = this.redisClients.get(key);
     if (existing) return existing;
-    const config = await this.getDecryptedConfig(id);
+    const config = await this.getDecryptedConfig(id, lane);
     if (config.type !== 'redis') throw new AppError(400, 'INVALID_PROVIDER', 'Database is not Redis');
     const client = new Redis({
       host: config.host,
@@ -1199,14 +1616,15 @@ export class DatabaseConnectionService {
       client.disconnect();
       this.rethrowDatabaseError(error, 'redis', 'connect');
     }
-    this.redisClients.set(id, client);
+    this.redisClients.set(key, client);
     return client;
   }
 
-  async getClickHouseClient(id: string): Promise<ClickHouseClient> {
-    const existing = this.clickHouseClients.get(id);
+  async getClickHouseClient(id: string, lane: ManagedDatabaseTunnelLane = 'interactive'): Promise<ClickHouseClient> {
+    const key = this.databaseClientKey(id, lane);
+    const existing = this.clickHouseClients.get(key);
     if (existing) return existing;
-    const config = await this.getDecryptedConfig(id);
+    const config = await this.getDecryptedConfig(id, lane);
     if (config.type !== 'clickhouse') throw new AppError(400, 'INVALID_PROVIDER', 'Database is not ClickHouse');
     const client = createClickHouseDatabaseClient(config, 10);
     try {
@@ -1216,26 +1634,40 @@ export class DatabaseConnectionService {
       await client.close().catch(() => {});
       this.rethrowDatabaseError(error, 'clickhouse', 'connect');
     }
-    this.clickHouseClients.set(id, client);
+    this.clickHouseClients.set(key, client);
     return client;
   }
 
   async disposeClient(id: string): Promise<void> {
-    const pool = this.postgresPools.get(id);
-    if (pool) {
-      this.postgresPools.delete(id);
+    if (this.managedTunnelProxy) {
+      const [managed] = await this.db
+        .select({ id: managedDatabaseInstances.id })
+        .from(managedDatabaseInstances)
+        .where(eq(managedDatabaseInstances.databaseConnectionId, id))
+        .limit(1);
+      if (managed) await this.managedTunnelProxy.disposeDatabase(managed.id);
+    }
+    this.postgresExtensionStates.delete(id);
+    const prefix = `${id}:`;
+    for (const [key, pool] of this.postgresPools) {
+      if (!key.startsWith(prefix)) continue;
+      this.postgresPools.delete(key);
       await pool.end().catch(() => {});
     }
-    const redisClient = this.redisClients.get(id);
-    if (redisClient) {
-      this.redisClients.delete(id);
+    for (const [key, redisClient] of this.redisClients) {
+      if (!key.startsWith(prefix)) continue;
+      this.redisClients.delete(key);
       await redisClient.quit().catch(() => redisClient.disconnect());
     }
-    const clickHouseClient = this.clickHouseClients.get(id);
-    if (clickHouseClient) {
-      this.clickHouseClients.delete(id);
+    for (const [key, clickHouseClient] of this.clickHouseClients) {
+      if (!key.startsWith(prefix)) continue;
+      this.clickHouseClients.delete(key);
       await clickHouseClient.close().catch(() => {});
     }
+  }
+
+  private databaseClientKey(id: string, lane: ManagedDatabaseTunnelLane): string {
+    return `${id}:${lane}`;
   }
 
   private async withPostgresPool<T>(

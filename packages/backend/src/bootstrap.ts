@@ -31,6 +31,9 @@ import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import { DatabaseFolderService } from '@/modules/databases/database-folders.service.js';
 import { DatabaseMonitoringService } from '@/modules/databases/database-monitoring.service.js';
 import { DatabaseConnectionService } from '@/modules/databases/databases.service.js';
+import { ManagedDatabaseBindingService } from '@/modules/databases/managed-database-bindings.service.js';
+import { ManagedDatabaseTunnelProxy } from '@/modules/databases/managed-database-tunnel-proxy.js';
+import { ManagedDatabaseService } from '@/modules/databases/managed-databases.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { DockerAccessResourceService } from '@/modules/docker/docker-access-resource.service.js';
 import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
@@ -131,6 +134,7 @@ import { CacheService, createRedisClient } from '@/services/cache.service.js';
 import { ConfigValidatorService } from '@/services/config-validator.service.js';
 import { CryptoService } from '@/services/crypto.service.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
+import { DatabaseCAService } from '@/services/database-ca.service.js';
 import { DockerService } from '@/services/docker.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { GrpcIdentityService } from '@/services/grpc-identity.service.js';
@@ -399,6 +403,10 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(SystemCAService, systemCA);
   await systemCA.ensureSystemCA();
 
+  const databaseCA = new DatabaseCAService(db, caService, certService);
+  container.registerInstance(DatabaseCAService, databaseCA);
+  await databaseCA.ensureDatabaseCA();
+
   const grpcIdentityService = new GrpcIdentityService(env, systemCA);
   container.registerInstance(GrpcIdentityService, grpcIdentityService);
   await grpcIdentityService.resolve();
@@ -532,13 +540,64 @@ export async function initializeContainer(): Promise<void> {
   nginxTemplateService.setEventBus(eventBus);
   dockerRegistryService.setEventBus(eventBus);
 
-  const databaseConnectionService = new DatabaseConnectionService(db, auditService, cryptoService);
+  const managedDatabaseTunnelProxy = new ManagedDatabaseTunnelProxy();
+  container.registerInstance(ManagedDatabaseTunnelProxy, managedDatabaseTunnelProxy);
+  const databaseConnectionService = new DatabaseConnectionService(
+    db,
+    auditService,
+    cryptoService,
+    managedDatabaseTunnelProxy
+  );
   container.registerInstance(DatabaseConnectionService, databaseConnectionService);
+
+  const managedDatabaseService = new ManagedDatabaseService(
+    db,
+    auditService,
+    cryptoService,
+    nodeDispatch,
+    databaseCA,
+    databaseConnectionService
+  );
+  managedDatabaseService.setEventBus(eventBus);
+  container.registerInstance(ManagedDatabaseService, managedDatabaseService);
+  void (async () => {
+    try {
+      await managedDatabaseService.reconcileDatabaseConnections();
+    } catch (error) {
+      logger.warn('Failed to backfill managed database connection records', { error });
+    }
+    try {
+      await managedDatabaseService.warmReadyPostgresExtensionCatalogs();
+    } catch (error) {
+      logger.warn('Failed to warm managed PostgreSQL extension catalogs', { error });
+    }
+  })();
+  void managedDatabaseService.reconcileDatabaseCertificates().catch((error) => {
+    logger.warn('Failed to backfill managed database TLS certificates', { error });
+  });
+
+  const managedDatabaseBindingService = new ManagedDatabaseBindingService(
+    db,
+    auditService,
+    cryptoService,
+    nodeDispatch,
+    dockerManagementService,
+    dockerDeploymentService,
+    dockerSecretService,
+    getEnv().DATABASE_CONNECTOR_IMAGE,
+    getEnv().NODE_ENV === 'development'
+  );
+  managedDatabaseBindingService.setEventBus(eventBus);
+  container.registerInstance(ManagedDatabaseBindingService, managedDatabaseBindingService);
 
   const databaseFolderService = new DatabaseFolderService(db, auditService);
   container.registerInstance(DatabaseFolderService, databaseFolderService);
 
-  const databaseMonitoringService = new DatabaseMonitoringService(databaseConnectionService, cacheService);
+  const databaseMonitoringService = new DatabaseMonitoringService(
+    databaseConnectionService,
+    cacheService,
+    managedDatabaseService
+  );
   container.registerInstance(DatabaseMonitoringService, databaseMonitoringService);
   databaseConnectionService.setEventBus(eventBus);
   databaseFolderService.setEventBus(eventBus);
@@ -919,6 +978,9 @@ export async function initializeContainer(): Promise<void> {
     notifEvaluatorService.reconcileProxyMaintenance()
   );
   scheduler.registerInterval('docker-health-check', 10000, () => dockerHealthCheckService.runDueChecks());
+  scheduler.registerInterval('managed-database-reconcile', 30000, () =>
+    managedDatabaseService.reconcilePendingOperations()
+  );
   scheduler.registerInterval('docker-snapshot-containers', 10000, async () => {
     dockerSnapshotReconciler.enqueueConnected('containers');
   });

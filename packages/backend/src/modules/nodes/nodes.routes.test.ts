@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   scopes: [] as string[],
   nodesService: {
     list: vi.fn(),
+    get: vi.fn(),
     update: vi.fn(),
   },
 }));
@@ -129,6 +130,7 @@ describe('nodesRoutes service address access', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.nodesService.update.mockResolvedValue({ id: nodeId, serviceAddress: 'docker.internal' });
+    mocks.nodesService.get.mockResolvedValue({ id: nodeId, type: 'docker' });
   });
 
   it('rejects service address changes with rename-only access', async () => {
@@ -155,5 +157,19 @@ describe('nodesRoutes service address access', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.nodesService.update).toHaveBeenCalledWith(nodeId, { serviceAddress: 'docker.internal' }, 'user-1');
+  });
+
+  it('allows database node endpoint address changes with rename access', async () => {
+    mocks.scopes = [`nodes:rename:${nodeId}`];
+    mocks.nodesService.get.mockResolvedValue({ id: nodeId, type: 'databases' });
+
+    const response = await createApp().request(`/${nodeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceAddress: 'database.internal' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.nodesService.update).toHaveBeenCalledWith(nodeId, { serviceAddress: 'database.internal' }, 'user-1');
   });
 });

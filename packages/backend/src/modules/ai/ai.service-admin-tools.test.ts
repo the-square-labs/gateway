@@ -103,7 +103,7 @@ describe('AIService admin user lifecycle tools', () => {
       result: { success: true },
       invalidateStores: ['users'],
     });
-    expect(authService.deleteUser).toHaveBeenCalledWith('user-2');
+    expect(authService.deleteUser).toHaveBeenCalledWith('user-2', 'user-1');
   });
 
   it('rejects self and system user lifecycle mutations', async () => {

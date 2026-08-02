@@ -33,6 +33,8 @@ export interface DockerDeploymentDesiredConfig {
   workingDir?: string;
   user?: string;
   labels?: Record<string, string>;
+  /** Internal, Gateway-owned private networks (for managed database connectors). */
+  networks?: string[];
   restartPolicy?: 'no' | 'always' | 'unless-stopped' | 'on-failure';
   runtime?: Record<string, unknown>;
 }

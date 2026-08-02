@@ -43,6 +43,198 @@ export const DatabaseListQuerySchema = z.object({
   healthStatus: z.enum(['online', 'offline', 'degraded', 'unknown']).optional(),
 });
 
+const managedDatabaseTypeSchema = z.enum(['postgres', 'redis', 'clickhouse']);
+const managedDatabaseNameSchema = z.string().trim().min(1).max(255);
+const managedDatabaseVersionSchema = z.string().trim().min(1).max(128);
+const minimumClickHouseMemoryMb = 512;
+
+export const ManagedRedisConfigSchema = z.object({
+  maxmemoryPercent: z.number().int().min(10).max(95),
+  maxmemoryPolicy: z.enum([
+    'noeviction',
+    'allkeys-lru',
+    'allkeys-lfu',
+    'allkeys-random',
+    'volatile-lru',
+    'volatile-lfu',
+    'volatile-random',
+    'volatile-ttl',
+  ]),
+  appendOnly: z.boolean(),
+  appendFsync: z.enum(['always', 'everysec', 'no']),
+  rdbSnapshotsEnabled: z.boolean(),
+  rdbSaveSeconds: z.number().int().min(1).max(31_536_000),
+  rdbSaveChanges: z.number().int().min(1).max(1_000_000_000),
+  autoAofRewritePercentage: z.number().int().min(0).max(10_000),
+  autoAofRewriteMinSizeMb: z.number().int().min(1).max(1_048_576),
+  maxclients: z.number().int().min(1).max(1_000_000),
+  timeoutSeconds: z.number().int().min(0).max(31_536_000),
+  tcpKeepaliveSeconds: z.number().int().min(0).max(31_536_000),
+  slowlogThresholdMicroseconds: z.number().int().min(-1).max(2_147_483_647),
+  slowlogMaxLen: z.number().int().min(0).max(1_000_000),
+  activeDefrag: z.boolean(),
+});
+
+export const ManagedDatabaseListQuerySchema = z.object({
+  nodeId: z.string().uuid().optional(),
+  type: managedDatabaseTypeSchema.optional(),
+});
+
+const managedDatabaseCreateStorageSizeGbSchema = z
+  .number()
+  .finite()
+  .min(0.1)
+  .max(16_384)
+  .refine((value) => Math.abs(value * 10 - Math.round(value * 10)) < 1e-9, {
+    message: 'Storage size supports at most one decimal place',
+  });
+
+export const CreateManagedDatabaseSchema = z
+  .object({
+    name: managedDatabaseNameSchema,
+    type: managedDatabaseTypeSchema,
+    version: managedDatabaseVersionSchema,
+    nodeId: z.string().uuid(),
+    storageSizeGb: managedDatabaseCreateStorageSizeGbSchema,
+    cpuCores: z.number().min(0.1).max(128),
+    memoryMb: z.number().int().min(128).max(1_048_576),
+    swapMb: z.number().int().min(0).max(1_048_576).default(0),
+    tags: tagsSchema,
+    publishTcp: z.boolean().default(false),
+    publishNativeTcp: z.boolean().optional(),
+    publishedPort: z.number().int().min(1).max(65535).optional(),
+    publishedNativePort: z.number().int().min(1).max(65535).optional(),
+    tlsEnabled: z.boolean().default(true),
+    databaseName: z.string().trim().min(1).max(63).optional(),
+    ownerUsername: z.string().trim().min(1).max(63).optional(),
+    clickhouseConfigXml: z.string().trim().min(1).max(32_768).optional(),
+    redisConfig: ManagedRedisConfigSchema.optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.type === 'clickhouse' && value.memoryMb < minimumClickHouseMemoryMb) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['memoryMb'],
+        message: `ClickHouse requires at least ${minimumClickHouseMemoryMb} MB of memory`,
+      });
+    }
+    if (value.publishedPort !== undefined && !value.publishTcp) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['publishedPort'],
+        message: 'publishedPort requires publishTcp',
+      });
+    }
+    if (value.publishNativeTcp === true && (!value.publishTcp || value.type !== 'clickhouse')) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['publishNativeTcp'],
+        message: 'publishNativeTcp requires published ClickHouse TCP',
+      });
+    }
+    if (
+      value.publishedNativePort !== undefined &&
+      (!value.publishTcp || value.type !== 'clickhouse' || value.publishNativeTcp === false)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['publishedNativePort'],
+        message: 'publishedNativePort requires published ClickHouse TCP',
+      });
+    }
+    if (value.clickhouseConfigXml !== undefined && value.type !== 'clickhouse') {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['clickhouseConfigXml'],
+        message: 'clickhouseConfigXml is only supported for ClickHouse',
+      });
+    }
+    if (value.redisConfig !== undefined && value.type !== 'redis') {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['redisConfig'],
+        message: 'redisConfig is only supported for Redis',
+      });
+    }
+    if (value.type === 'redis' && value.ownerUsername !== undefined && value.ownerUsername !== 'default') {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ownerUsername'],
+        message: 'Redis uses the built-in default owner username',
+      });
+    }
+  });
+
+export const UpdateManagedDatabaseSchema = z
+  .object({
+    name: managedDatabaseNameSchema.optional(),
+    tags: tagsSchema,
+    storageSizeGb: z.number().int().min(1).max(16_384).optional(),
+    cpuCores: z.number().min(0.1).max(128).optional(),
+    memoryMb: z.number().int().min(128).max(1_048_576).optional(),
+    swapMb: z.number().int().min(0).max(1_048_576).optional(),
+    publishTcp: z.boolean().optional(),
+    publishNativeTcp: z.boolean().optional(),
+    publishedPort: z.number().int().min(1).max(65535).nullable().optional(),
+    publishedNativePort: z.number().int().min(1).max(65535).nullable().optional(),
+    tlsEnabled: z.boolean().optional(),
+    clickhouseConfigXml: z.string().trim().max(32_768).optional(),
+    redisConfig: ManagedRedisConfigSchema.optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, { message: 'At least one field must be provided' });
+
+const bindingEnvironmentVariableSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'Environment variable names must be valid identifiers');
+
+const bindingEnvironmentSchema = z
+  .object({
+    connectionUri: bindingEnvironmentVariableSchema.optional(),
+    host: bindingEnvironmentVariableSchema.optional(),
+    port: bindingEnvironmentVariableSchema.optional(),
+    database: bindingEnvironmentVariableSchema.optional(),
+    username: bindingEnvironmentVariableSchema.optional(),
+    password: bindingEnvironmentVariableSchema.optional(),
+  })
+  .default({})
+  .superRefine((value, context) => {
+    const entries = Object.entries(value).filter(([, variable]) => variable !== undefined) as Array<[string, string]>;
+    const seen = new Set<string>();
+    for (const [field, variable] of entries) {
+      if (seen.has(variable)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field],
+          message: 'Each binding field must use a distinct environment variable name',
+        });
+      }
+      seen.add(variable);
+    }
+  });
+
+export const CreateManagedDatabaseBindingSchema = z.object({
+  targetNodeId: z.string().uuid(),
+  targetType: z.enum(['container', 'deployment']),
+  targetResourceId: z.string().trim().min(1).max(255),
+  environment: bindingEnvironmentSchema,
+  /**
+   * Container-only opt-in. The caller explicitly acknowledges that a managed
+   * binding replaces existing ordinary env values and/or Docker secrets with
+   * the same names.
+   */
+  replaceExistingEnvironment: z.boolean().optional(),
+  /** Complete ordinary-container env draft to persist with this binding update. */
+  targetEnvironment: z.record(z.string(), z.string()).optional(),
+});
+
+export const DeleteManagedDatabaseBindingSchema = z.object({
+  /** Complete ordinary-container env draft to persist with the binding removal. */
+  targetEnvironment: z.record(z.string(), z.string()).optional(),
+});
+
 export const CreateDatabaseConnectionSchema = z.discriminatedUnion('type', [
   z.object({
     name: nameSchema,
@@ -212,3 +404,7 @@ export const ExecuteRedisCommandSchema = z.object({
 export type DatabaseListQuery = z.infer<typeof DatabaseListQuerySchema>;
 export type CreateDatabaseConnectionInput = z.infer<typeof CreateDatabaseConnectionSchema>;
 export type UpdateDatabaseConnectionInput = z.infer<typeof UpdateDatabaseConnectionSchema>;
+export type ManagedDatabaseListQuery = z.infer<typeof ManagedDatabaseListQuerySchema>;
+export type CreateManagedDatabaseInput = z.infer<typeof CreateManagedDatabaseSchema>;
+export type UpdateManagedDatabaseInput = z.infer<typeof UpdateManagedDatabaseSchema>;
+export type CreateManagedDatabaseBindingInput = z.infer<typeof CreateManagedDatabaseBindingSchema>;

@@ -64,6 +64,10 @@ vi.mock("./DockerNetworks", () => ({
   DockerNetworks: () => <div>Docker networks content</div>,
 }));
 
+vi.mock("./Databases", () => ({
+  Databases: () => <div>Managed databases content</div>,
+}));
+
 describe("AdminNodeDetail", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -141,6 +145,41 @@ describe("AdminNodeDetail", () => {
     expect(screen.getByRole("tab", { name: "Nginx Logs" })).toBeDisabled();
     expect(screen.getByRole("tab", { name: "Logs" })).toBeDisabled();
     expect(screen.queryByText("Node logs content")).not.toBeInTheDocument();
+  });
+
+  it("keeps standard console and files and adds the managed database list on a databases node", async () => {
+    useAuthStore.setState({
+      user: makeUser({
+        scopes: ["nodes:details", "nodes:files:read", "nodes:console", "nodes:logs"],
+      }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.mocked(api.getNode).mockResolvedValue({
+      ...makeNode({
+        id: "database-node",
+        slug: "database-node",
+        type: "databases",
+        hostname: "database-1",
+      }),
+      lastHealthReport: null,
+      lastStatsReport: null,
+      liveHealthReport: null,
+      liveStatsReport: null,
+    });
+    vi.mocked(api.getNodeHealthHistory).mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={["/nodes/database-node/databases"]}>
+        <Routes>
+          <Route path="/nodes/:id/:tab?" element={<AdminNodeDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("Managed databases content")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Files" })).toBeEnabled();
+    expect(screen.getByRole("tab", { name: "Console" })).toBeEnabled();
   });
 
   it("saves node appearance name and predefined color", async () => {

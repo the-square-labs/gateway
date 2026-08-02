@@ -10,6 +10,7 @@ Gateway manages infrastructure hosts through small Go daemons. Each daemon conne
 |------|--------|---------|
 | nginx | `nginx-daemon` | Reverse proxy management for host-native nginx. |
 | docker | `docker-daemon` | Docker containers, deployments, cross-node migrations, portable and registry-backed `.gwca` archives, images, volumes, networks, tasks, files, consoles, registries, and offline inventory snapshots. |
+| databases | `docker-daemon` | Gateway-managed Postgres, Redis, and ClickHouse instances only; generic workloads are rejected. |
 | monitoring | `monitoring-daemon` | Metrics-only host monitoring without nginx or Docker control. |
 
 Use a monitoring node when you want host metrics but do not want to grant Gateway proxy or Docker management on that host.
@@ -205,7 +206,19 @@ nginx-daemon install --gateway gw.example.com:9443 --token <TOKEN> --gateway-cer
 systemctl enable --now nginx-daemon
 ```
 
-Replace `nginx-daemon` with `docker-daemon` or `monitoring-daemon` as needed.
+Replace `nginx-daemon` with `docker-daemon` or `monitoring-daemon` as needed. A database node also uses `docker-daemon`, installed in its `databases` profile.
+
+For a database node, use the installer rather than preparing filesystems manually:
+
+```bash
+sudo ./scripts/setup-daemon.sh --type databases
+```
+
+It rejects a host that cannot create, mount, write, and detach a temporary ext4 image. The database profile then uses fixed-size preallocated ext4 images under `/var/lib/docker-daemon/databases` by default (or the configured external mount), so each managed database has a hard storage limit without reformatting the VM disk.
+
+Managed application bindings also require `DATABASE_CONNECTOR_IMAGE` on Gateway to contain the release-published, immutable `.../database-connector@sha256:<digest>` reference. Gateway refuses to create a binding when this release setting is absent or mutable; the connector itself receives no Gateway endpoint, certificate, or database credentials.
+
+Published managed databases use native direct TLS by default. Gateway issues the server certificate from its independent Database CA and keeps the private key in daemon-owned storage outside the database image. PostgreSQL and Redis publish one TLS endpoint; ClickHouse publishes both HTTPS and its native TLS endpoint. The UI exposes the CA certificate/fingerprint with direct credentials and supports certificate rotation after node IP changes.
 
 ## Offline Behavior
 

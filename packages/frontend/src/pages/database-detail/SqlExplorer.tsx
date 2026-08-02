@@ -94,6 +94,13 @@ export function SqlExplorer({
     toggleSort,
     deleteRow,
   } = explorer;
+  const hasSchemas = schemas.length > 0;
+  const hasTables = tables.length > 0;
+  const emptyExplorerMessage = !hasSchemas
+    ? "No schemas found."
+    : !hasTables
+      ? `No tables found in ${schema || "this schema"}.`
+      : "No table selected.";
   const panelDescription = metadata
     ? `${metadata.columns.length} columns${
         metadata.mutations.rowUpdate
@@ -111,7 +118,11 @@ export function SqlExplorer({
       {!focused && (
         <div className="grid shrink-0 grid-cols-[minmax(0,0.9fr)_minmax(0,1.25fr)_auto] items-end gap-2 sm:flex sm:flex-wrap sm:gap-3">
           <div className="min-w-0">
-            <Select value={schema} onValueChange={selectSchema} disabled={loadingSchemas}>
+            <Select
+              value={schema}
+              onValueChange={selectSchema}
+              disabled={loadingSchemas || !hasSchemas}
+            >
               <SelectTrigger className="w-full sm:w-[180px]">
                 <SelectValue placeholder={loadingSchemas ? "Loading schemas..." : "Schema"} />
               </SelectTrigger>
@@ -126,7 +137,11 @@ export function SqlExplorer({
             </Select>
           </div>
           <div className="min-w-0">
-            <Select value={table} onValueChange={selectTable} disabled={loadingTables || !schema}>
+            <Select
+              value={table}
+              onValueChange={selectTable}
+              disabled={loadingTables || !schema || !hasTables}
+            >
               <SelectTrigger className="w-full sm:w-[260px]">
                 <SelectValue placeholder={loadingTables ? "Loading tables..." : "Table"} />
               </SelectTrigger>
@@ -448,9 +463,7 @@ export function SqlExplorer({
           </span>
         </div>
       ) : (
-        <div className="border border-border bg-card p-8 text-sm text-muted-foreground">
-          No table selected.
-        </div>
+        <EmptyState message={emptyExplorerMessage} />
       )}
 
       {database.type === "postgres" && (

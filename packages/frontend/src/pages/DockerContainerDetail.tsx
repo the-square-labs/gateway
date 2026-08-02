@@ -977,6 +977,7 @@ export function DockerContainerDetail({
               <EnvironmentTab
                 nodeId={nodeId!}
                 containerId={containerId!}
+                containerName={name}
                 scopeResourceId={scopeResourceId}
                 containerState={state}
                 disabled={!!effectiveTransition}

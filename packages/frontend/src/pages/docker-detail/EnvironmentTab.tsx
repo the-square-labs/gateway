@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { Code2, Minus, Plus, RotateCcw, Table2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -11,11 +11,24 @@ import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import type { DockerSecret } from "@/types";
+import {
+  type ManagedDatabaseLinkDraft,
+  ManagedDatabaseLinksSection,
+  type ManagedDatabaseLinksSectionHandle,
+} from "./ManagedDatabaseLinksSection";
 import { type SecretRow, SecretsSection } from "./SecretsSection";
+
+const EMPTY_DATABASE_LINK_DRAFT: ManagedDatabaseLinkDraft = {
+  hasChanges: false,
+  managedVariableNames: [],
+  pendingAdditionVariableNames: [],
+  replacementVariableNames: [],
+};
 
 export function EnvironmentTab({
   nodeId,
   containerId,
+  containerName,
   scopeResourceId,
   containerState,
   disabled,
@@ -27,6 +40,7 @@ export function EnvironmentTab({
 }: {
   nodeId: string;
   containerId: string;
+  containerName?: string;
   scopeResourceId?: string;
   containerState?: string;
   disabled?: boolean;
@@ -49,6 +63,10 @@ export function EnvironmentTab({
   // Secrets state — edited locally, flushed to DB on recreate
   const [secretRows, setSecretRows] = useState<SecretRow[]>([]);
   const [deletedSecretIds, setDeletedSecretIds] = useState<Set<string>>(new Set());
+  const [hasDatabaseNode, setHasDatabaseNode] = useState(false);
+  const databaseLinksRef = useRef<ManagedDatabaseLinksSectionHandle>(null);
+  const [databaseLinkDraft, setDatabaseLinkDraft] =
+    useState<ManagedDatabaseLinkDraft>(EMPTY_DATABASE_LINK_DRAFT);
 
   const scopeSuffix = `${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`;
   const canEdit = hasScope(`docker:containers:environment:${scopeSuffix}`);
@@ -56,6 +74,27 @@ export function EnvironmentTab({
   const recreatesRunningContainer = containerState === "running";
   const isServiceEnv = !!onSaveServiceEnv;
   const serviceEnvSignature = useMemo(() => JSON.stringify(serviceEnv ?? {}), [serviceEnv]);
+  const managedDatabaseVariableNames = useMemo(
+    () => new Set(databaseLinkDraft.managedVariableNames),
+    [databaseLinkDraft.managedVariableNames]
+  );
+  const pendingDatabaseVariableNames = useMemo(
+    () => new Set(databaseLinkDraft.pendingAdditionVariableNames),
+    [databaseLinkDraft.pendingAdditionVariableNames]
+  );
+  const replacementDatabaseVariableNames = useMemo(
+    () => new Set(databaseLinkDraft.replacementVariableNames),
+    [databaseLinkDraft.replacementVariableNames]
+  );
+  const activeManagedDatabaseVariableNames = useMemo(
+    () =>
+      new Set(
+        databaseLinkDraft.managedVariableNames.filter(
+          (name) => !pendingDatabaseVariableNames.has(name)
+        )
+      ),
+    [databaseLinkDraft.managedVariableNames, pendingDatabaseVariableNames]
+  );
 
   const fetchEnv = useCallback(async () => {
     setIsLoading((current) => (isServiceEnv ? current : true));
@@ -130,35 +169,87 @@ export function EnvironmentTab({
     fetchEnv();
   }, [fetchEnv]);
 
+  useEffect(() => {
+    if (!canEdit || !canManageSecrets || isServiceEnv || !containerName) {
+      setHasDatabaseNode(false);
+      return;
+    }
+
+    let cancelled = false;
+    void api
+      .listNodes({ type: "databases", limit: 1 })
+      .then((result) => {
+        if (!cancelled) setHasDatabaseNode(result.data.length > 0);
+      })
+      .catch(() => {
+        if (!cancelled) setHasDatabaseNode(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canEdit, canManageSecrets, containerName, isServiceEnv]);
+
+  useEffect(() => {
+    if (activeManagedDatabaseVariableNames.size === 0) return;
+    setSecretRows((current) =>
+      current.filter((row) => !activeManagedDatabaseVariableNames.has(row.key.trim()))
+    );
+  }, [activeManagedDatabaseVariableNames]);
+
+  const existingVariableNames = useMemo(() => {
+    const environmentKeys = rawMode
+      ? rawText
+          .split("\n")
+          .map((line) => line.trim().replace(/^export\s+/, ""))
+          .map((line) => line.slice(0, line.indexOf("=")).trim())
+          .filter(Boolean)
+      : envVars.map((entry) => entry.key.trim()).filter(Boolean);
+    return [...environmentKeys, ...secretRows.map((row) => row.key.trim()).filter(Boolean)];
+  }, [envVars, rawMode, rawText, secretRows]);
+
+  const handleDatabaseLinkDraftChange = useCallback((draft: ManagedDatabaseLinkDraft) => {
+    setDatabaseLinkDraft(draft);
+  }, []);
+
   // ── Env handlers ─────────────────────────────────────────────────
 
-  const validateRaw = (text: string): number[] => {
-    const errors = new Set<number>();
-    const lines = text.split("\n");
-    const keyLines = new Map<string, number[]>();
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line || line.startsWith("#")) continue;
-      const stripped = line.startsWith("export ") ? line.slice(7).trim() : line;
-      const eqIdx = stripped.indexOf("=");
-      if (eqIdx < 1) {
-        errors.add(i + 1);
-        continue;
+  const validateRaw = useCallback(
+    (text: string): number[] => {
+      const errors = new Set<number>();
+      const lines = text.split("\n");
+      const keyLines = new Map<string, number[]>();
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line || line.startsWith("#")) continue;
+        const stripped = line.startsWith("export ") ? line.slice(7).trim() : line;
+        const eqIdx = stripped.indexOf("=");
+        if (eqIdx < 1) {
+          errors.add(i + 1);
+          continue;
+        }
+        const key = stripped.slice(0, eqIdx);
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+          errors.add(i + 1);
+        } else {
+          if (managedDatabaseVariableNames.has(key) && !replacementDatabaseVariableNames.has(key)) {
+            errors.add(i + 1);
+          }
+          const existing = keyLines.get(key) ?? [];
+          existing.push(i + 1);
+          keyLines.set(key, existing);
+        }
       }
-      const key = stripped.slice(0, eqIdx);
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
-        errors.add(i + 1);
-      } else {
-        const existing = keyLines.get(key) ?? [];
-        existing.push(i + 1);
-        keyLines.set(key, existing);
+      for (const lineNums of keyLines.values()) {
+        if (lineNums.length > 1) for (const ln of lineNums) errors.add(ln);
       }
-    }
-    for (const lineNums of keyLines.values()) {
-      if (lineNums.length > 1) for (const ln of lineNums) errors.add(ln);
-    }
-    return Array.from(errors).sort((a, b) => a - b);
-  };
+      return Array.from(errors).sort((a, b) => a - b);
+    },
+    [managedDatabaseVariableNames, replacementDatabaseVariableNames]
+  );
+
+  useEffect(() => {
+    if (rawMode) setErrorLines(validateRaw(rawText));
+  }, [rawMode, rawText, validateRaw]);
 
   const switchToRaw = () => {
     const text = envVars.map((e) => `${e.key}=${e.value}`).join("\n");
@@ -205,35 +296,36 @@ export function EnvironmentTab({
               ? { key: line.slice(0, idx), value: line.slice(idx + 1) }
               : { key: line, value: "" };
           })
-      : envVars;
+      : visibleEnvRows.map(({ entry }) => entry);
 
+    const savingDatabaseLinks = databaseLinkDraft.hasChanges;
     const ok = await confirm({
       title: onSaveServiceEnv
         ? "Save Environment"
-        : canEdit
-          ? recreatesRunningContainer
-            ? "Save & Recreate"
-            : "Save"
-          : "Save Secrets",
+        : savingDatabaseLinks || recreatesRunningContainer
+          ? "Save & Recreate"
+          : canEdit
+            ? "Save"
+            : "Save Secrets",
       description: onSaveServiceEnv
         ? "Environment changes will be saved to the deployment and apply on the next deploy."
-        : canEdit
-          ? recreatesRunningContainer
-            ? "Updating environment variables will recreate the container. The container will experience brief downtime. Continue?"
-            : "Updating environment variables will save the new container configuration. The container will remain stopped. Continue?"
-          : "Secret changes will be stored, but without environment permission they will only apply after the container is recreated. Continue?",
+        : savingDatabaseLinks
+          ? "Managed database links and environment changes will be applied together. The container will be recreated and experience brief downtime. Continue?"
+          : canEdit
+            ? recreatesRunningContainer
+              ? "Updating environment variables will recreate the container. The container will experience brief downtime. Continue?"
+              : "Updating environment variables will save the new container configuration. The container will remain stopped. Continue?"
+            : "Secret changes will be stored, but without environment permission they will only apply after the container is recreated. Continue?",
       confirmLabel: onSaveServiceEnv
         ? "Save"
-        : canEdit
-          ? recreatesRunningContainer
-            ? "Recreate"
-            : "Save"
+        : savingDatabaseLinks || recreatesRunningContainer
+          ? "Recreate"
           : "Save",
     });
     if (!ok) return;
 
     setIsSaving(true);
-    onMutationStart?.("updating");
+    onMutationStart?.(savingDatabaseLinks ? "recreating" : "updating");
     try {
       // 1. Flush secret changes to DB
       if (hasSecretsChanges) {
@@ -247,7 +339,13 @@ export function EnvironmentTab({
         }
         // Create/update secrets
         for (const row of secretRows) {
-          if (!row.key.trim() || !row.dirty) continue;
+          if (
+            !row.key.trim() ||
+            !row.dirty ||
+            replacementDatabaseVariableNames.has(row.key.trim())
+          ) {
+            continue;
+          }
           if (row.id) {
             // Existing secret with new value
             if (onSaveServiceEnv) {
@@ -285,48 +383,62 @@ export function EnvironmentTab({
         setDeletedSecretIds(new Set());
       }
 
-      if (canEdit) {
-        // 2. Save env vars (triggers recreate — backend merges secrets into env)
-        const newEnv: Record<string, string> = {};
-        for (const e of vars) {
-          if (e.key.trim()) newEnv[e.key.trim()] = e.value;
-        }
-        if (onSaveServiceEnv) {
-          await onSaveServiceEnv(newEnv);
-          const entries = Object.entries(newEnv).map(([key, value]) => `${key}=${value}`);
-          setOriginalEnv(entries);
-          setRawText(entries.join("\n"));
-          toast.success("Environment updated");
-          onMutationEnd?.();
-          setIsSaving(false);
-          return;
-        }
+      const newEnv: Record<string, string> = {};
+      for (const entry of vars) {
+        const key = entry.key.trim();
+        if (key && !managedDatabaseVariableNames.has(key)) newEnv[key] = entry.value;
+      }
+
+      if (onSaveServiceEnv) {
+        await onSaveServiceEnv(newEnv);
+        const entries = Object.entries(newEnv).map(([key, value]) => `${key}=${value}`);
+        setOriginalEnv(entries);
+        setRawText(entries.join("\n"));
+        toast.success("Environment updated");
+        onMutationEnd?.();
+        return;
+      }
+
+      if (savingDatabaseLinks) {
+        const replaceExistingEnvironment = databaseLinkDraft.replacementVariableNames.length > 0;
+        await databaseLinksRef.current?.applyChanges({
+          replaceExistingEnvironment,
+          targetEnvironment: newEnv,
+        });
+      } else if (canEdit && hasEnvChanges) {
         const newKeys = new Set(Object.keys(newEnv));
         const removeEnv = originalEnv
           .map((entry) => entry.split("=")[0])
-          .filter((k) => !newKeys.has(k));
-
+          .filter((key) => !newKeys.has(key));
         await api.updateContainerEnv(
           nodeId,
           containerId,
           newEnv,
           removeEnv.length > 0 ? removeEnv : undefined
         );
+      }
+
+      if (canEdit || savingDatabaseLinks) {
         toast.success(
-          recreatesRunningContainer
-            ? "Environment updated — recreating container"
+          savingDatabaseLinks || recreatesRunningContainer
+            ? "Environment and database links updated — recreating container"
             : "Environment updated"
         );
         invalidate("containers", "tasks");
-        await Promise.resolve(onRecreating?.());
+        // updateContainerEnv recreates the workload asynchronously. Fetching
+        // with this component's old container ID races Docker's removal and
+        // surfaces a spurious "container inspect" daemon error. The detail
+        // page switches to the replacement ID from its recreate event, which
+        // re-runs fetchEnv through the containerId dependency.
+        void Promise.resolve(onRecreating?.()).catch(() => undefined);
       } else {
         toast.success("Secrets updated — changes will apply on next container recreate");
         onMutationEnd?.();
       }
-      setIsSaving(false);
     } catch (err) {
       onMutationEnd?.();
       toast.error(err instanceof Error ? err.message : "Failed to update environment");
+    } finally {
       setIsSaving(false);
     }
   };
@@ -337,63 +449,117 @@ export function EnvironmentTab({
     return <div className="py-12 text-center text-muted-foreground">Loading environment...</div>;
   }
 
-  // Build a unified key map across both sections for cross-section duplicate detection
   const invalidKeyPattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
-  const allKeyLocations = new Map<string, { envIndices: number[]; secretIndices: number[] }>();
-  if (!rawMode) {
-    envVars.forEach((e, i) => {
-      const k = e.key.trim();
-      if (!k) return;
-      const entry = allKeyLocations.get(k) ?? { envIndices: [], secretIndices: [] };
-      entry.envIndices.push(i);
-      allKeyLocations.set(k, entry);
+  const visibleEnvRows = envVars
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => !replacementDatabaseVariableNames.has(entry.key.trim()));
+  const rawManagedOnlyErrorLines = new Set<number>();
+  const rawActiveManagedErrorLines = new Set<number>();
+  if (rawMode) {
+    const keyLines = new Map<string, number[]>();
+    rawText.split("\n").forEach((line, index) => {
+      const stripped = line.trim().replace(/^export\s+/, "");
+      const separator = stripped.indexOf("=");
+      const key = separator > 0 ? stripped.slice(0, separator).trim() : "";
+      if (key && invalidKeyPattern.test(key)) {
+        keyLines.set(key, [...(keyLines.get(key) ?? []), index + 1]);
+      }
     });
-    secretRows.forEach((r, i) => {
-      const k = r.key.trim();
-      if (!k) return;
-      const entry = allKeyLocations.get(k) ?? { envIndices: [], secretIndices: [] };
-      entry.secretIndices.push(i);
-      allKeyLocations.set(k, entry);
-    });
-  }
-
-  // Env error indices: duplicate within envs OR cross-duplicate with secrets
-  const duplicateKeyIndices = new Set<number>();
-  // Secret error indices: duplicate within secrets, cross-duplicate with envs, or invalid key name
-  const duplicateSecretIndices = new Set<number>();
-
-  for (const [, loc] of allKeyLocations) {
-    const totalOccurrences = loc.envIndices.length + loc.secretIndices.length;
-    if (totalOccurrences > 1) {
-      for (const i of loc.envIndices) duplicateKeyIndices.add(i);
-      for (const i of loc.secretIndices) duplicateSecretIndices.add(i);
+    for (const [key, lines] of keyLines) {
+      if (
+        managedDatabaseVariableNames.has(key) &&
+        !replacementDatabaseVariableNames.has(key) &&
+        lines.length === 1
+      ) {
+        rawManagedOnlyErrorLines.add(lines[0]!);
+        if (activeManagedDatabaseVariableNames.has(key)) rawActiveManagedErrorLines.add(lines[0]!);
+      }
     }
   }
 
-  // Secret-specific: invalid key names
-  secretRows.forEach((r, i) => {
-    const k = r.key.trim();
-    if (k && !invalidKeyPattern.test(k)) duplicateSecretIndices.add(i);
+  // Build a unified key map across both user-editable sections. Managed names
+  // are styled as conflicts too, but pending link additions remain saveable so
+  // the confirmed save can replace the collided value.
+  const allKeyLocations = new Map<string, { envIndices: number[]; secretIndices: number[] }>();
+  if (!rawMode) {
+    envVars.forEach((entry, index) => {
+      const key = entry.key.trim();
+      if (!key || replacementDatabaseVariableNames.has(key)) return;
+      const location = allKeyLocations.get(key) ?? { envIndices: [], secretIndices: [] };
+      location.envIndices.push(index);
+      allKeyLocations.set(key, location);
+    });
+    secretRows.forEach((row, index) => {
+      const key = row.key.trim();
+      if (!key || replacementDatabaseVariableNames.has(key)) return;
+      const location = allKeyLocations.get(key) ?? { envIndices: [], secretIndices: [] };
+      location.secretIndices.push(index);
+      allKeyLocations.set(key, location);
+    });
+  }
+
+  const duplicateKeyIndices = new Set<number>();
+  const duplicateSecretIndices = new Set<number>();
+  const managedEnvCollisionIndices = new Set<number>();
+  const managedSecretCollisionIndices = new Set<number>();
+  const activeManagedEnvCollisionIndices = new Set<number>();
+  const activeManagedSecretCollisionIndices = new Set<number>();
+
+  for (const [, location] of allKeyLocations) {
+    if (location.envIndices.length + location.secretIndices.length > 1) {
+      for (const index of location.envIndices) duplicateKeyIndices.add(index);
+      for (const index of location.secretIndices) duplicateSecretIndices.add(index);
+    }
+  }
+  envVars.forEach((entry, index) => {
+    const key = entry.key.trim();
+    if (!managedDatabaseVariableNames.has(key) || replacementDatabaseVariableNames.has(key)) return;
+    managedEnvCollisionIndices.add(index);
+    if (activeManagedDatabaseVariableNames.has(key)) activeManagedEnvCollisionIndices.add(index);
+  });
+  secretRows.forEach((row, index) => {
+    const key = row.key.trim();
+    if (!managedDatabaseVariableNames.has(key) || replacementDatabaseVariableNames.has(key)) return;
+    managedSecretCollisionIndices.add(index);
+    if (activeManagedDatabaseVariableNames.has(key)) activeManagedSecretCollisionIndices.add(index);
+    if (key && !invalidKeyPattern.test(key)) duplicateSecretIndices.add(index);
   });
 
   const hasEnvTableErrors =
     !rawMode &&
-    (envVars.some((e) => !e.key.trim() || !invalidKeyPattern.test(e.key.trim())) ||
+    (visibleEnvRows.some(
+      ({ entry }) => !entry.key.trim() || !invalidKeyPattern.test(entry.key.trim())
+    ) ||
       duplicateKeyIndices.size > 0);
   const hasSecretErrors =
     !rawMode &&
-    (secretRows.some((r) => !r.key.trim() || !invalidKeyPattern.test(r.key.trim())) ||
+    (secretRows
+      .filter((row) => !replacementDatabaseVariableNames.has(row.key.trim()))
+      .some((row) => !row.key.trim() || !invalidKeyPattern.test(row.key.trim())) ||
       duplicateSecretIndices.size > 0);
-  const hasErrors = rawMode ? errorLines.length > 0 : hasEnvTableErrors || hasSecretErrors;
+  const hasActiveManagedConflicts = rawMode
+    ? rawActiveManagedErrorLines.size > 0
+    : activeManagedEnvCollisionIndices.size > 0 || activeManagedSecretCollisionIndices.size > 0;
+  const hasRawStructuralErrors = errorLines.some((line) => !rawManagedOnlyErrorLines.has(line));
+  const hasErrors = rawMode
+    ? hasRawStructuralErrors || hasActiveManagedConflicts
+    : hasEnvTableErrors || hasSecretErrors || hasActiveManagedConflicts;
 
   // Env changes
-  const currentEnvStr = rawMode ? rawText : envVars.map((e) => `${e.key}=${e.value}`).join("\n");
-  const originalEnvStr = originalEnv.join("\n");
+  const currentEnvStr = rawMode
+    ? rawText
+    : visibleEnvRows.map(({ entry }) => `${entry.key}=${entry.value}`).join("\n");
+  const originalEnvStr = originalEnv
+    .filter((entry) => !replacementDatabaseVariableNames.has(entry.split("=")[0]!))
+    .join("\n");
   const hasEnvChanges = currentEnvStr !== originalEnvStr;
 
   // Secret changes
-  const hasSecretsChanges = deletedSecretIds.size > 0 || secretRows.some((r) => r.dirty);
+  const hasSecretsChanges =
+    deletedSecretIds.size > 0 ||
+    secretRows.some((row) => !replacementDatabaseVariableNames.has(row.key.trim()) && row.dirty);
   const hasChanges = hasEnvChanges || hasSecretsChanges;
+  const hasCombinedChanges = hasChanges || databaseLinkDraft.hasChanges;
 
   if (!canEdit && !canManageSecrets) {
     return (
@@ -404,162 +570,183 @@ export function EnvironmentTab({
   }
 
   return (
-    <div
-      className={`${rawMode ? "flex flex-col flex-1 min-h-0" : "pb-6 space-y-4"} ${disabled || isSaving ? "pointer-events-none opacity-60" : ""}`}
-    >
-      {canEdit && (
-        <PanelShell
-          title="Environment Variables"
-          description={
-            onSaveServiceEnv
-              ? "Saved to deployment configuration"
-              : "Changes will recreate the container"
-          }
-          className={rawMode ? "flex flex-1 flex-col min-h-0" : undefined}
-          bodyClassName={rawMode ? "flex min-h-0 flex-1 flex-col" : undefined}
-          actions={
-            <>
-              {canEdit && !rawMode && (
+    <div className={rawMode ? "flex flex-col flex-1 min-h-0" : "pb-6 space-y-4"}>
+      {canEdit && canManageSecrets && !isServiceEnv && containerName && hasDatabaseNode && (
+        <ManagedDatabaseLinksSection
+          ref={databaseLinksRef}
+          nodeId={nodeId}
+          targetType="container"
+          targetResourceId={containerName}
+          containerName={containerName}
+          disabled={disabled || isSaving || hasErrors}
+          existingVariableNames={existingVariableNames}
+          externalHasChanges={hasChanges}
+          onDraftChange={handleDatabaseLinkDraftChange}
+          onSaveRequested={() => void handleSave()}
+        />
+      )}
+
+      <div
+        className={`${rawMode ? "flex min-h-0 flex-1 flex-col" : "space-y-4"} ${disabled || isSaving ? "pointer-events-none opacity-60" : ""}`}
+      >
+        {canEdit && (
+          <PanelShell
+            title="Environment Variables"
+            description={
+              onSaveServiceEnv
+                ? "Saved to deployment configuration"
+                : "Changes will recreate the container"
+            }
+            className={rawMode ? "flex flex-1 flex-col min-h-0" : undefined}
+            bodyClassName={rawMode ? "flex min-h-0 flex-1 flex-col" : undefined}
+            actions={
+              <>
+                {canEdit && !rawMode && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={addVar}
+                    title="Add variable"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
-                  onClick={addVar}
-                  title="Add variable"
+                  onClick={rawMode ? switchToTable : switchToRaw}
+                  title={rawMode ? "Table view" : "Raw view"}
+                  disabled={hasErrors}
                 >
-                  <Plus className="h-3.5 w-3.5" />
+                  {rawMode ? <Table2 className="h-3.5 w-3.5" /> : <Code2 className="h-3.5 w-3.5" />}
                 </Button>
-              )}
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={rawMode ? switchToTable : switchToRaw}
-                title={rawMode ? "Table view" : "Raw view"}
-                disabled={hasErrors}
-              >
-                {rawMode ? <Table2 className="h-3.5 w-3.5" /> : <Code2 className="h-3.5 w-3.5" />}
-              </Button>
-              {canEdit && (
-                <Button
-                  className="bg-warning text-black hover:bg-warning/90 disabled:opacity-50"
-                  onClick={handleSave}
-                  disabled={isSaving || !hasChanges || hasErrors}
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  {onSaveServiceEnv
-                    ? "Save"
-                    : recreatesRunningContainer
-                      ? "Save & Recreate"
-                      : "Save"}
-                </Button>
-              )}
-            </>
-          }
-        >
-          <AnimatePresence mode="popLayout" initial={false}>
-            {rawMode ? (
-              <motion.div
-                key="raw"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
-                className="flex-1 min-h-0 flex flex-col"
-              >
-                <CodeEditor
-                  value={rawText}
-                  onChange={(val) => {
-                    setRawText(val);
-                    setErrorLines(validateRaw(val));
-                  }}
-                  readOnly={!canEdit}
-                  language="env"
-                  errorLines={errorLines}
-                  className="-m-px"
-                />
-              </motion.div>
-            ) : (
-              <motion.div
-                key="table"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
-              >
-                {envVars.length > 0 && (
-                  <div className="grid grid-cols-[1fr_1fr] border-b border-border bg-muted text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    <div className="px-3 py-2">Key</div>
-                    <div className="px-3 py-2 border-l border-border">Value</div>
-                  </div>
+                {canEdit && (
+                  <Button
+                    className="bg-warning text-black hover:bg-warning/90 disabled:opacity-50"
+                    onClick={handleSave}
+                    disabled={isSaving || !hasCombinedChanges || hasErrors}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    {onSaveServiceEnv
+                      ? "Save"
+                      : databaseLinkDraft.hasChanges || recreatesRunningContainer
+                        ? "Save & Recreate"
+                        : "Save"}
+                  </Button>
                 )}
-                <div>
-                  {envVars.map((env, idx) => (
-                    <div
-                      key={idx}
-                      className="grid grid-cols-[1fr_1fr] border-b border-border last:border-b-0"
-                    >
-                      <Input
-                        value={env.key}
-                        onChange={(e) => updateVar(idx, "key", e.target.value)}
-                        className={`h-9 border-0 rounded-none shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${
-                          duplicateKeyIndices.has(idx) ||
-                          (env.key.trim() && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(env.key.trim()))
-                            ? "bg-red-500/15 text-red-400"
-                            : ""
-                        }`}
-                        placeholder="KEY"
-                      />
-                      <div className="flex items-center border-l border-border">
-                        <Input
-                          value={env.value}
-                          onChange={(e) => updateVar(idx, "value", e.target.value)}
-                          className="h-9 border-0 rounded-none shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring flex-1 min-w-0"
-                          placeholder="value"
-                        />
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-9 w-9 shrink-0 rounded-none border-l border-border"
-                          onClick={() => removeVar(idx)}
-                        >
-                          <Minus className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
+              </>
+            }
+          >
+            <AnimatePresence mode="popLayout" initial={false}>
+              {rawMode ? (
+                <motion.div
+                  key="raw"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
+                  className="flex-1 min-h-0 flex flex-col"
+                >
+                  <CodeEditor
+                    value={rawText}
+                    onChange={(val) => {
+                      setRawText(val);
+                      setErrorLines(validateRaw(val));
+                    }}
+                    readOnly={!canEdit}
+                    language="env"
+                    errorLines={errorLines}
+                    className="-m-px"
+                  />
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="table"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
+                >
+                  {visibleEnvRows.length > 0 && (
+                    <div className="grid grid-cols-[1fr_1fr] border-b border-border bg-muted text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                      <div className="px-3 py-2">Key</div>
+                      <div className="px-3 py-2 border-l border-border">Value</div>
                     </div>
-                  ))}
-                </div>
-                {envVars.length === 0 && (
-                  <div className="flex items-center justify-center py-8">
-                    <p className="text-sm text-muted-foreground">
-                      No environment variables.{" "}
-                      <button onClick={addVar} className="text-foreground hover:underline">
-                        Add one
-                      </button>
-                    </p>
+                  )}
+                  <div>
+                    {visibleEnvRows.map(({ entry: env, index: idx }) => (
+                      <div
+                        key={idx}
+                        className="grid grid-cols-[1fr_1fr] border-b border-border last:border-b-0"
+                      >
+                        <Input
+                          value={env.key}
+                          onChange={(e) => updateVar(idx, "key", e.target.value)}
+                          className={`h-9 border-0 rounded-none shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${
+                            duplicateKeyIndices.has(idx) ||
+                            managedEnvCollisionIndices.has(idx) ||
+                            (env.key.trim() && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(env.key.trim()))
+                              ? "bg-red-500/15 text-red-400"
+                              : ""
+                          }`}
+                          placeholder="KEY"
+                        />
+                        <div className="flex items-center border-l border-border">
+                          <Input
+                            value={env.value}
+                            onChange={(e) => updateVar(idx, "value", e.target.value)}
+                            className="h-9 border-0 rounded-none shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring flex-1 min-w-0"
+                            placeholder="value"
+                          />
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-9 w-9 shrink-0 rounded-none border-l border-border"
+                            onClick={() => removeVar(idx)}
+                          >
+                            <Minus className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </PanelShell>
-      )}
+                  {visibleEnvRows.length === 0 && (
+                    <div className="flex items-center justify-center py-8">
+                      <p className="text-sm text-muted-foreground">
+                        No environment variables.{" "}
+                        <button onClick={addVar} className="text-foreground hover:underline">
+                          Add one
+                        </button>
+                      </p>
+                    </div>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </PanelShell>
+        )}
 
-      {/* Secrets section — only in table mode */}
-      {!rawMode && canManageSecrets && (
-        <SecretsSection
-          canManageSecrets={canManageSecrets}
-          onSave={!canEdit ? handleSave : undefined}
-          saveButtonLabel="Save"
-          saveDisabled={isSaving || !hasSecretsChanges || hasErrors}
-          isSaving={isSaving}
-          secretRows={secretRows}
-          setSecretRows={setSecretRows}
-          setDeletedSecretIds={setDeletedSecretIds}
-          duplicateSecretIndices={duplicateSecretIndices}
-          invalidKeyPattern={invalidKeyPattern}
-        />
-      )}
+        {/* Secrets section — only in table mode */}
+        {!rawMode && canManageSecrets && (
+          <SecretsSection
+            canManageSecrets={canManageSecrets}
+            onSave={!canEdit ? handleSave : undefined}
+            saveButtonLabel="Save"
+            saveDisabled={isSaving || !hasCombinedChanges || hasErrors}
+            isSaving={isSaving}
+            secretRows={secretRows}
+            setSecretRows={setSecretRows}
+            setDeletedSecretIds={setDeletedSecretIds}
+            duplicateSecretIndices={
+              new Set([...duplicateSecretIndices, ...managedSecretCollisionIndices])
+            }
+            invalidKeyPattern={invalidKeyPattern}
+            hiddenKeys={replacementDatabaseVariableNames}
+          />
+        )}
+      </div>
     </div>
   );
 }

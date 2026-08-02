@@ -23,6 +23,7 @@ import { logger } from '@/lib/logger.js';
 import { AISandboxService } from '@/modules/ai/ai.sandbox.service.js';
 import { AISandboxRunnerService } from '@/modules/ai/ai.sandbox-runner.service.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
+import { ManagedDatabaseTunnelProxy } from '@/modules/databases/managed-database-tunnel-proxy.js';
 import { LoggingClickHouseService } from '@/modules/logging/logging-clickhouse.service.js';
 import { LoggingMetadataService } from '@/modules/logging/logging-metadata.service.js';
 import { CAService } from '@/modules/pki/ca.service.js';
@@ -114,6 +115,12 @@ async function main() {
         await stopGrpcServer();
       } catch (err) {
         logger.error('Failed to stop gRPC server', { err });
+      }
+
+      try {
+        await container.resolve(ManagedDatabaseTunnelProxy).shutdown();
+      } catch (err) {
+        logger.error('Failed to close managed database tunnel listeners', { err });
       }
 
       try {

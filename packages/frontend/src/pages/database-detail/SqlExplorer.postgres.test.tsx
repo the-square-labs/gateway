@@ -157,6 +157,47 @@ describe("SqlExplorer (PostgreSQL)", () => {
     expect(emptyMessage.parentElement?.querySelector("a, button")).toBeNull();
   });
 
+  it("disables both selectors and uses the shared empty state when there are no schemas", async () => {
+    vi.mocked(api.listSqlNamespaces).mockResolvedValue([]);
+
+    renderWithRouter(
+      <SqlExplorer
+        database={makeDatabase()}
+        canWrite={true}
+        canAdmin={true}
+        focused={false}
+        onToggleFocus={vi.fn()}
+      />,
+      { path: "/databases/:id", route: "/databases/db-1" }
+    );
+
+    const emptyMessage = await screen.findByText("No schemas found.");
+    const [schemaSelect, tableSelect] = screen.getAllByRole("combobox");
+    expect(schemaSelect).toBeDisabled();
+    expect(tableSelect).toBeDisabled();
+    expect(emptyMessage.parentElement).toHaveClass("bg-card");
+  });
+
+  it("disables the table selector when the selected schema has no tables", async () => {
+    vi.mocked(api.listSqlObjects).mockResolvedValue([]);
+
+    renderWithRouter(
+      <SqlExplorer
+        database={makeDatabase()}
+        canWrite={true}
+        canAdmin={true}
+        focused={false}
+        onToggleFocus={vi.fn()}
+      />,
+      { path: "/databases/:id", route: "/databases/db-1" }
+    );
+
+    await screen.findByText("No tables found in public.");
+    const [schemaSelect, tableSelect] = screen.getAllByRole("combobox");
+    expect(schemaSelect).toBeEnabled();
+    expect(tableSelect).toBeDisabled();
+  });
+
   it("saves column type changes from the column dialog", async () => {
     const user = userEvent.setup();
     const updatePostgresColumnType = vi.spyOn(api, "updatePostgresColumnType").mockResolvedValue({

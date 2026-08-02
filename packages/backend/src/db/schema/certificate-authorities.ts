@@ -15,6 +15,9 @@ import { users } from './users.js';
 export const caTypeEnum = pgEnum('ca_type', ['root', 'intermediate']);
 export const caStatusEnum = pgEnum('ca_status', ['active', 'revoked', 'expired']);
 export const keyAlgorithmEnum = pgEnum('key_algorithm', ['rsa-2048', 'rsa-4096', 'ecdsa-p256', 'ecdsa-p384']);
+// System-managed CAs are purpose-scoped. Node mTLS and published database TLS
+// must never share a trust anchor.
+export const systemCAPurposeEnum = pgEnum('system_ca_purpose', ['node-mtls', 'database-tls']);
 
 export const certificateAuthorities = pgTable(
   'certificate_authorities',
@@ -62,6 +65,7 @@ export const certificateAuthorities = pgTable(
 
     // System flag — locked CAs cannot be deleted (e.g. node mTLS CA)
     isSystem: boolean('is_system').notNull().default(false),
+    systemPurpose: systemCAPurposeEnum('system_purpose'),
 
     // Metadata
     createdById: uuid('created_by_id')
@@ -77,5 +81,6 @@ export const certificateAuthorities = pgTable(
     statusIdx: index('ca_status_idx').on(table.status),
     serialIdx: uniqueIndex('ca_serial_idx').on(table.serialNumber),
     createdByIdx: index('ca_created_by_idx').on(table.createdById),
+    systemPurposeUnique: uniqueIndex('ca_system_purpose_unique').on(table.systemPurpose),
   })
 );

@@ -4,7 +4,7 @@ export const DEV_FORCE_UPDATES_STORAGE_KEY = "gateway-dev-force-updates";
 
 const FORCED_GATEWAY_VERSION = "v9.9.9";
 const FORCED_DAEMON_VERSION = "9.9.9";
-const DAEMON_NODE_TYPES = new Set<NodeType>(["nginx", "docker", "monitoring"]);
+const DAEMON_NODE_TYPES = new Set<NodeType>(["nginx", "docker", "databases", "monitoring"]);
 
 export function isDevForceUpdatesEnabled(): boolean {
   if (!import.meta.env.DEV || typeof window === "undefined") return false;

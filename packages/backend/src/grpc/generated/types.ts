@@ -179,6 +179,8 @@ export interface GatewayCommand {
   updateDaemon?: UpdateDaemonCommand;
   nodeFile?: NodeFileCommand;
   dockerMigration?: DockerMigrationCommand;
+  dockerDatabase?: DockerDatabaseCommand;
+  dockerDatabaseBinding?: DockerDatabaseBindingCommand;
 }
 
 export interface ApplyConfigCommand {
@@ -353,6 +355,20 @@ export interface DockerLogsCommand {
   timestamps: boolean;
   since?: string;
   until?: string;
+}
+
+/** Restricted lifecycle command accepted only by a database-profile docker daemon. */
+export interface DockerDatabaseCommand {
+  action: string;
+  managedDatabaseId: string;
+  configJson: string;
+}
+
+/** Admission control for a first-party database connector sidecar on a Docker node. */
+export interface DockerDatabaseBindingCommand {
+  action: string;
+  bindingId: string;
+  managedDatabaseId: string;
 }
 
 export interface NodeExecCommand {

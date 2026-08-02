@@ -298,13 +298,20 @@ describe('DatabaseConnectionService connection views', () => {
     return JSON.stringify({ payload: JSON.stringify(config) });
   }
 
-  function createService(row: Record<string, unknown>) {
+  function createService(row: Record<string, unknown>, managed?: Record<string, unknown>) {
     const db = {
       query: {
         databaseConnections: {
           findFirst: vi.fn().mockResolvedValue(row),
         },
       },
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          leftJoin: vi.fn(() => ({
+            where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue(managed ? [managed] : []) })),
+          })),
+        })),
+      })),
     };
     const cryptoService = {
       decryptString: vi.fn((payload: { payload: string }) => payload.payload),
@@ -440,6 +447,43 @@ describe('DatabaseConnectionService connection views', () => {
       connectionString: expect.stringContaining('database=analytics'),
     });
   });
+
+  it('does not expose a managed database owner through the generic credential endpoint', async () => {
+    const service = createService(
+      {
+        id: 'db-managed-1',
+        type: 'postgres',
+        encryptedConfig: encryptedConfig({
+          type: 'postgres',
+          host: 'managed.gateway.internal',
+          port: 5432,
+          database: 'app',
+          username: 'app_owner',
+          password: 'internal-owner-password',
+          sslEnabled: false,
+        }),
+      },
+      {
+        id: 'managed-1',
+        nodeId: 'node-1',
+        version: '17.5',
+        storageSizeBytes: 1,
+        runtimeConfig: {},
+        engineConfig: {},
+        publishedPort: 32768,
+        status: 'ready',
+        lastError: null,
+        serviceAddress: '127.0.0.1',
+        lastHealthReport: null,
+        nodeStatus: 'online',
+      }
+    );
+
+    await expect(service.revealCredentials('db-managed-1')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'MANAGED_DATABASE_CREDENTIALS_REQUIRE_DIRECT_ACCESS',
+    });
+  });
 });
 
 describe('DatabaseConnectionService credential retargeting guard', () => {
@@ -495,6 +539,13 @@ describe('DatabaseConnectionService credential retargeting guard', () => {
             })),
           };
         }),
+      })),
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          leftJoin: vi.fn(() => ({
+            where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([]) })),
+          })),
+        })),
       })),
     };
     const cryptoService = {

@@ -102,6 +102,8 @@ describe('AIService system prompt', () => {
     expect(prompt).toContain('Use discover_tools');
     expect(prompt).toContain('Use find_resource FIRST');
     expect(prompt).toContain('Never call GitLab read/write/lint/commit tools with a blank');
+    expect(prompt).toContain('Managed databases are private by default');
+    expect(prompt).toContain('authenticated private connector-and-tunnel path');
     expect(prompt).toContain('## Conversation Retrieval');
     expect(prompt).toContain('search_chats');
   });

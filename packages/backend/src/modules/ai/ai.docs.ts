@@ -583,25 +583,35 @@ Long-running operations (stop, restart, kill, recreate, update) create tasks vis
   databases: `# Databases
 
 ## Overview
-Gateway can store and operate external Postgres and Redis connections directly from the backend. No daemon is involved.
+Gateway supports two database resource models:
+- **External connections** store operator-supplied connection details and are operated directly by the backend.
+- **Managed instances** run curated Postgres, Redis, or ClickHouse images on a dedicated database node. They are private by default and use daemon-managed storage.
+
+Managed database instances are not generic Docker workloads. The database node only runs Gateway-managed database containers.
+
+## Managed Instance Access
+- A managed instance has no published host port by default. Application bindings use the private connector and authenticated Gateway tunnel; do not substitute direct TCP for a binding.
+- A TCP endpoint is an independent, explicit publication option for infrastructure outside Gateway. It requires engine authentication and may not be tunnel-encrypted unless the database engine is configured with TLS. Gateway does not change host firewalls automatically.
+- Each application binding gets a separate engine identity. Its URI and optional host/port/database/user/password environment values are injected into the selected application; do not reveal, log, or copy those values unless an explicit secret-reveal flow permits it.
+- The current AI/MCP database tools operate saved external connection workflows. They must not claim to deploy, bind, publish, or reveal managed-instance or binding secrets when no matching tool is available; direct the operator to the Databases or container/deployment Settings UI instead.
 
 ## Providers
 - **Postgres**: schema/table explorer, paginated row browser, row insert/update/delete for PK-backed tables, SQL console, monitoring.
 - **Redis**: key browser, type-aware viewer/editor for common types (string, hash, list, set, zset), Redis command console, monitoring.
 
 ## Credentials
-- Connection credentials are encrypted at rest in the Gateway database using the same envelope-encryption primitive used for Docker secrets and PKI keys.
-- Raw credentials are hidden by default. Revealing them requires the \`databases:credentials:reveal\` scope.
+- Connection credentials and managed owner credentials are encrypted at rest in the Gateway database using the same envelope-encryption primitive used for Docker secrets and PKI keys.
+- Raw credentials are hidden by default. Revealing an explicitly requested credential requires the \`databases:credentials:reveal\` scope. Binding-injected credentials remain hidden by default.
 - Team members can operate databases through Gateway without being given the raw hosting credentials.
 
 ## Permissions
-- \`databases:view\`, \`databases:create\`, \`databases:edit\`, \`databases:delete\`
+- \`databases:view\`, \`databases:create\`, \`databases:edit\`, \`databases:delete\` govern both external connections and managed instances/bindings; no new managed-database scope is introduced.
 - \`databases:query:read\`, \`databases:query:write\`, \`databases:query:admin\`; AI/MCP query tools also require \`databases:view\` on the same database.
 - \`databases:credentials:reveal\`
 - Most database scopes are resource-scopable by database ID, so access can be limited per saved connection.
 
 ## Monitoring
-- Gateway stores short rolling metric history for database sparklines and persists health-history entries for health bars.
+- Gateway stores short rolling metric history for database sparklines and persists health-history entries for health bars. Managed lifecycle and health notifications contain only the database ID, display name, engine, and safe status; never credentials, connection URIs, generated aliases, or daemon errors.
 - Postgres metrics include latency and active connection utilization.
 - Redis metrics include latency and memory utilization.
 

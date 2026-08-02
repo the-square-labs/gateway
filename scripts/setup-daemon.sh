@@ -71,10 +71,10 @@ show_help() {
 Gateway Daemon Setup — downloads and runs the appropriate setup script
 
 Usage:
-  setup-daemon.sh --type <nginx|docker|monitoring> [options...]
+  setup-daemon.sh --type <nginx|docker|databases|monitoring> [options...]
 
 Options:
-  --type <type>            Daemon type: nginx, docker, or monitoring
+  --type <type>            Daemon type: nginx, docker, databases, or monitoring
   --gitlab-url <url>       GitLab instance URL (default: https://gitlab.wiolett.net)
   --gitlab-project <proj>  GitLab project path (default: wiolett/gateway)
   -h, --help               Show this help
@@ -121,17 +121,19 @@ if [[ -z "$DAEMON_TYPE" ]]; then
     echo ""
     echo -e "    ${BRAND_MINT}1)${NC} nginx       — Reverse proxy node (nginx + nginx-daemon)"
     echo -e "    ${BRAND_MINT}2)${NC} docker      — Docker container management node"
-    echo -e "    ${BRAND_MINT}3)${NC} monitoring  — System metrics agent (no nginx/docker)"
+    echo -e "    ${BRAND_MINT}3)${NC} databases   — Restricted Docker database node"
+    echo -e "    ${BRAND_MINT}4)${NC} monitoring  — System metrics agent (no nginx/docker)"
     echo ""
     if [ -e /dev/tty ]; then
-        read -r -p "$(echo -e "  ${BRAND_MINT}Choose [1-3]: ${NC}")" choice < /dev/tty
+        read -r -p "$(echo -e "  ${BRAND_MINT}Choose [1-4]: ${NC}")" choice < /dev/tty
     else
         die "Cannot prompt for type — use --type flag"
     fi
     case "$choice" in
         1|nginx)      DAEMON_TYPE="nginx" ;;
         2|docker)     DAEMON_TYPE="docker" ;;
-        3|monitoring) DAEMON_TYPE="monitoring" ;;
+        3|databases)   DAEMON_TYPE="databases" ;;
+        4|monitoring) DAEMON_TYPE="monitoring" ;;
         *) die "Invalid choice: $choice" ;;
     esac
     echo ""
@@ -139,14 +141,15 @@ fi
 
 # ── Validate type ───────────────────────────────────────────────────
 case "$DAEMON_TYPE" in
-    nginx|docker|monitoring) ;;
-    *) die "Unknown daemon type: $DAEMON_TYPE. Use: nginx, docker, or monitoring" ;;
+    nginx|docker|databases|monitoring) ;;
+    *) die "Unknown daemon type: $DAEMON_TYPE. Use: nginx, docker, databases, or monitoring" ;;
 esac
 
 # ── Map type to script name ─────────────────────────────────────────
 case "$DAEMON_TYPE" in
     nginx)      SCRIPT_NAME="setup-node.sh" ;;
     docker)     SCRIPT_NAME="setup-docker-node.sh" ;;
+    databases)  SCRIPT_NAME="setup-database-node.sh" ;;
     monitoring) SCRIPT_NAME="setup-monitoring-node.sh" ;;
 esac
 

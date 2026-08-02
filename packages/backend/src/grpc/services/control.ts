@@ -94,6 +94,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
       let nodeId: string | null = null;
       let closed = false;
       let registering = false;
+      const pendingDaemonLogs: Array<NonNullable<DaemonMessage['daemonLog']>> = [];
       const isCurrentCommandStream = () =>
         !!nodeId && !closed && deps.registry.getNode(nodeId)?.commandStream === stream;
       const endStaleStream = async () => {
@@ -117,10 +118,34 @@ export function createControlHandlers(deps: GrpcServerDeps) {
       };
       const isClaimedStreamCurrent = (claimedNodeId: string) =>
         !closed && deps.registry.getNode(claimedNodeId)?.commandStream === stream;
+      const relayDaemonLog = (activeNodeId: string, daemonLog: NonNullable<DaemonMessage['daemonLog']>) => {
+        daemonLogRelay.emit('log', {
+          nodeId: activeNodeId,
+          timestamp: daemonLog.timestamp || new Date().toISOString(),
+          level: daemonLog.level,
+          message: daemonLog.message,
+          component: daemonLog.component,
+          fields: daemonLog.fields || {},
+        });
+        logger.debug('Daemon log', {
+          nodeId: activeNodeId,
+          level: daemonLog.level,
+          component: daemonLog.component,
+          message: daemonLog.message,
+        });
+      };
 
       stream.on('data', async (msg: DaemonMessage) => {
         try {
           if (closed) return;
+          // A daemon can log from an auxiliary stream while its registration
+          // is still awaiting database/certificate validation. Keep only
+          // those operational logs until the command stream has an identity;
+          // other pre-registration frames retain the existing rejection path.
+          if (registering && msg.daemonLog) {
+            pendingDaemonLogs.push(msg.daemonLog);
+            return;
+          }
           if (msg.register) {
             // First message must be RegisterMessage
             if (nodeId || registering) {
@@ -218,7 +243,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               stream.end();
               return;
             }
-            const nodeType = node.type as 'nginx' | 'bastion' | 'monitoring' | 'docker';
+            const nodeType = node.type as 'nginx' | 'bastion' | 'monitoring' | 'docker' | 'databases';
             const gatewayHash = node.configVersionHash;
 
             try {
@@ -247,6 +272,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
             nodeId = claimedNodeId;
             registering = false;
             clearPendingCommandRegistration(claimedNodeId, registrationToken);
+            for (const daemonLog of pendingDaemonLogs.splice(0)) relayDaemonLog(claimedNodeId, daemonLog);
 
             // Update DB with latest info — do NOT overwrite configVersionHash
             // (the gateway's stored hash is authoritative, set by FullSync)
@@ -618,21 +644,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 .where(eq(nodes.id, activeNodeId));
               if (!isCurrentCommandStream()) return;
             } else if (msg.daemonLog) {
-              // Relay daemon operational logs to SSE consumers
-              daemonLogRelay.emit('log', {
-                nodeId: activeNodeId,
-                timestamp: msg.daemonLog.timestamp || new Date().toISOString(),
-                level: msg.daemonLog.level,
-                message: msg.daemonLog.message,
-                component: msg.daemonLog.component,
-                fields: msg.daemonLog.fields || {},
-              });
-              logger.debug('Daemon log', {
-                nodeId: activeNodeId,
-                level: msg.daemonLog.level,
-                component: msg.daemonLog.component,
-                message: msg.daemonLog.message,
-              });
+              relayDaemonLog(activeNodeId, msg.daemonLog);
             } else if (msg.execOutput) {
               // Route exec output to registered WebSocket handler
               deps.registry.handleExecOutput(msg.execOutput.execId, msg.execOutput);

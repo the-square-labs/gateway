@@ -56,6 +56,7 @@ import {
   isNodeIncompatible,
   isNodeUpdating,
 } from "@/types";
+import { Databases } from "./Databases";
 import { DockerContainers } from "./DockerContainers";
 import { DockerImages } from "./DockerImages";
 import { DockerNetworks } from "./DockerNetworks";
@@ -109,6 +110,7 @@ export function AdminNodeDetail({
     [
       "details",
       "monitoring",
+      "databases",
       "files",
       "console",
       "configuration",
@@ -171,7 +173,10 @@ export function AdminNodeDetail({
     hasScope("nodes:config:view") ||
     hasScope("nodes:config:edit");
   const canEditNodeServiceAddress =
-    !!id && (hasScope("docker:containers:config") || hasScope(`docker:containers:config:${id}`));
+    !!id &&
+    (node?.type === "databases"
+      ? hasScope("nodes:rename") || hasScope(`nodes:rename:${id}`)
+      : hasScope("docker:containers:config") || hasScope(`docker:containers:config:${id}`));
   const canReadNodeFiles =
     !!id && (hasScope("nodes:files:read") || hasScope(`nodes:files:read:${id}`));
   const canWriteNodeFiles =
@@ -191,7 +196,8 @@ export function AdminNodeDetail({
     if (!id || !node) return { available: false, latestVersion: null };
     const forced = getForcedDaemonUpdateForNode(node);
     if (forced) return forced;
-    const typeStatus = daemonUpdates.find((status) => status.daemonType === node.type);
+    const daemonType = node.type === "databases" ? "docker" : node.type;
+    const typeStatus = daemonUpdates.find((status) => status.daemonType === daemonType);
     const nodeStatus = typeStatus?.nodes.find((status) => status.nodeId === id);
     return {
       available: !!(nodeStatus?.updateAvailable && typeStatus?.latestVersion),
@@ -203,6 +209,7 @@ export function AdminNodeDetail({
     () => [
       "details",
       ...(isCompatibleNode ? ["monitoring"] : []),
+      ...(isCompatibleNode && node?.type === "databases" ? ["databases"] : []),
       ...(isCompatibleNode && node.type === "nginx" && canViewNodeConfig ? ["configuration"] : []),
       ...(isCompatibleNode && node.type === "nginx" && canViewNodeLogs ? ["nginx-logs"] : []),
       ...(isCompatibleNode && canReadNodeFiles ? ["files"] : []),
@@ -362,7 +369,9 @@ export function AdminNodeDetail({
       const updated = await api.updateNode(id, {
         displayName: appearanceName.trim() || null,
         appearanceColor,
-        ...(node?.type === "docker" && canEditNodeServiceAddress ? { serviceAddress } : {}),
+        ...((node?.type === "docker" || node?.type === "databases") && canEditNodeServiceAddress
+          ? { serviceAddress }
+          : {}),
       });
       setNode((prev) => (prev ? { ...prev, ...updated } : prev));
       if (updated.slug && updated.slug !== routeSlug) {
@@ -403,7 +412,8 @@ export function AdminNodeDetail({
     try {
       const statuses = await api.checkDaemonUpdates();
       setDaemonUpdates(statuses);
-      const typeStatus = statuses.find((status) => status.daemonType === node.type);
+      const daemonType = node.type === "databases" ? "docker" : node.type;
+      const typeStatus = statuses.find((status) => status.daemonType === daemonType);
       const nodeStatus = typeStatus?.nodes.find((status) => status.nodeId === node.id);
 
       if (nodeStatus?.updateAvailable && typeStatus?.latestVersion) {
@@ -625,6 +635,11 @@ export function AdminNodeDetail({
                 Monitoring
               </TabsTrigger>
             )}
+            {!isNodeIncompatible(node) && node.type === "databases" && (
+              <TabsTrigger value="databases" disabled={nodeUpdating}>
+                Databases
+              </TabsTrigger>
+            )}
             {!isNodeIncompatible(node) && canReadNodeFiles && (
               <TabsTrigger value="files" disabled={nodeUpdating || nodeOffline}>
                 Files
@@ -707,6 +722,11 @@ export function AdminNodeDetail({
                     initialStatsReport={node.liveStatsReport ?? node.lastStatsReport}
                   />
                 )}
+              </TabsContent>
+            )}
+            {!isNodeIncompatible(node) && node.type === "databases" && (
+              <TabsContent value="databases" className="pb-0">
+                {activeTab === "databases" && <Databases embedded managedNodeId={node.id} />}
               </TabsContent>
             )}
             {!isNodeIncompatible(node) && node.type === "nginx" && canViewNodeConfig && (
@@ -837,7 +857,7 @@ export function AdminNodeDetail({
                 </Badge>
               </div>
             </div>
-            {node.type === "docker" && (
+            {(node.type === "docker" || node.type === "databases") && (
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Service Address</label>
                 <Select
@@ -886,12 +906,16 @@ export function AdminNodeDetail({
                     aria-label="Custom Service Address"
                     value={customServiceAddress}
                     onChange={(event) => setCustomServiceAddress(event.target.value)}
-                    placeholder="docker-node.internal"
+                    placeholder={
+                      node.type === "databases" ? "database-node.internal" : "docker-node.internal"
+                    }
                     disabled={!canEditNodeServiceAddress}
                   />
                 )}
                 <p className="text-xs text-muted-foreground">
-                  Used by proxy hosts to reach published Docker ports.
+                  {node.type === "databases"
+                    ? "Used as the host shown for published managed database ports."
+                    : "Used by proxy hosts to reach published Docker ports."}
                 </p>
               </div>
             )}

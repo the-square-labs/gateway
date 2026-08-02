@@ -1,6 +1,143 @@
 // Databases
 export type DatabaseType = "postgres" | "redis" | "clickhouse";
 export type DatabaseHealthStatus = "online" | "offline" | "degraded" | "unknown";
+export type ManagedDatabaseStatus =
+  | "creating"
+  | "updating"
+  | "ready"
+  | "paused"
+  | "stopped"
+  | "error"
+  | "deleting";
+
+/** A database provisioned on a dedicated Gateway databases node. Credentials are never returned here. */
+export interface ManagedDatabase {
+  id: string;
+  databaseConnectionId: string;
+  slug: string;
+  name: string;
+  type: DatabaseType;
+  version: string;
+  nodeId: string;
+  storageSizeBytes: string | number;
+  runtimeConfig: { cpuCores: number; memoryMb: number; swapMb: number };
+  publishedPort: number | null;
+  publishedNativePort: number | null;
+  tlsEnabled: boolean;
+  status: ManagedDatabaseStatus;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManagedDatabaseCatalogEntry {
+  type: DatabaseType;
+  versions: string[];
+}
+
+export type ManagedRedisEvictionPolicy =
+  | "noeviction"
+  | "allkeys-lru"
+  | "allkeys-lfu"
+  | "allkeys-random"
+  | "volatile-lru"
+  | "volatile-lfu"
+  | "volatile-random"
+  | "volatile-ttl";
+
+export interface ManagedRedisConfig {
+  maxmemoryPercent: number;
+  maxmemoryPolicy: ManagedRedisEvictionPolicy;
+  appendOnly: boolean;
+  appendFsync: "always" | "everysec" | "no";
+  rdbSnapshotsEnabled: boolean;
+  rdbSaveSeconds: number;
+  rdbSaveChanges: number;
+  autoAofRewritePercentage: number;
+  autoAofRewriteMinSizeMb: number;
+  maxclients: number;
+  timeoutSeconds: number;
+  tcpKeepaliveSeconds: number;
+  slowlogThresholdMicroseconds: number;
+  slowlogMaxLen: number;
+  activeDefrag: boolean;
+}
+
+export const DEFAULT_MANAGED_REDIS_CONFIG: ManagedRedisConfig = {
+  maxmemoryPercent: 75,
+  maxmemoryPolicy: "noeviction",
+  appendOnly: true,
+  appendFsync: "everysec",
+  rdbSnapshotsEnabled: true,
+  rdbSaveSeconds: 3600,
+  rdbSaveChanges: 1,
+  autoAofRewritePercentage: 100,
+  autoAofRewriteMinSizeMb: 64,
+  maxclients: 10_000,
+  timeoutSeconds: 0,
+  tcpKeepaliveSeconds: 300,
+  slowlogThresholdMicroseconds: 10_000,
+  slowlogMaxLen: 128,
+  activeDefrag: false,
+};
+
+export interface ManagedDatabaseCreateInput {
+  name: string;
+  type: DatabaseType;
+  version: string;
+  nodeId: string;
+  storageSizeGb: number;
+  cpuCores: number;
+  memoryMb: number;
+  swapMb: number;
+  tags?: string[];
+  publishTcp: boolean;
+  publishNativeTcp?: boolean;
+  publishedPort?: number;
+  publishedNativePort?: number;
+  tlsEnabled?: boolean;
+  clickhouseConfigXml?: string;
+  redisConfig?: ManagedRedisConfig;
+}
+
+export type ManagedDatabaseBindingTargetType = "container" | "deployment";
+
+export interface ManagedDatabaseBindingEnvironment {
+  connectionUri?: string;
+  host?: string;
+  port?: string;
+  database?: string;
+  username?: string;
+  password?: string;
+}
+
+export interface ManagedDatabaseBinding {
+  id: string;
+  managedDatabaseId: string;
+  targetNodeId: string;
+  targetType: ManagedDatabaseBindingTargetType;
+  targetResourceId: string;
+  environment: ManagedDatabaseBindingEnvironment;
+  status: "creating" | "ready" | "error" | "deleting";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManagedDatabaseBindingCreateInput {
+  targetNodeId: string;
+  targetType: ManagedDatabaseBindingTargetType;
+  targetResourceId: string;
+  environment: ManagedDatabaseBindingEnvironment;
+  /** Explicit acknowledgement that colliding ordinary env/secrets are replaced. */
+  replaceExistingEnvironment?: boolean;
+  /** Full ordinary environment draft saved with the binding update. */
+  targetEnvironment?: Record<string, string>;
+}
+
+export interface ManagedDatabaseBindingDeleteInput {
+  /** Full ordinary environment draft saved with the binding removal. */
+  targetEnvironment?: Record<string, string>;
+}
 
 export interface DatabaseHealthEntry {
   ts: string;
@@ -70,6 +207,24 @@ export interface DatabaseConnection {
   hasStoredPassword: boolean;
   config: PostgresDatabaseConfig | RedisDatabaseConfig | ClickHouseDatabaseConfig;
   capabilities?: DatabaseCapabilities;
+  managed?: {
+    id: string;
+    nodeId: string;
+    nodeAvailable?: boolean;
+    version: string;
+    storageSizeBytes: number;
+    runtimeConfig: { cpuCores: number; memoryMb: number; swapMb: number };
+    publishedPort: number | null;
+    publishedNativePort: number | null;
+    publishTcp?: boolean;
+    publishNativeTcp?: boolean;
+    tlsEnabled: boolean;
+    endpointHost: string | null;
+    status: ManagedDatabaseStatus;
+    lastError: string | null;
+    clickhouseConfigXml?: string;
+    redisConfig?: ManagedRedisConfig;
+  };
   createdById: string;
   updatedById: string | null;
   createdAt: string;
@@ -84,6 +239,13 @@ export interface DatabaseMetricSnapshot {
   status: DatabaseHealthStatus;
   responseMs: number;
   metrics: Record<string, number | null>;
+}
+
+export interface ManagedPostgresExtension {
+  name: string;
+  defaultVersion: string;
+  installedVersion: string | null;
+  comment: string | null;
 }
 
 export interface PostgresTableColumn {

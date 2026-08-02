@@ -1,5 +1,12 @@
 import type {
   DatabaseConnection,
+  ManagedDatabase,
+  ManagedDatabaseBinding,
+  ManagedDatabaseBindingCreateInput,
+  ManagedDatabaseBindingDeleteInput,
+  ManagedDatabaseCatalogEntry,
+  ManagedDatabaseCreateInput,
+  ManagedPostgresExtension,
   PaginatedResponse,
   PostgresTableMetadata,
   RedisKeyRecord,
@@ -54,12 +61,192 @@ export function withDatabaseApi<TBase extends ApiClientBaseConstructor>(Base: TB
       return this.unwrapData(this.request(`/databases/${id}/health-history`));
     }
 
+    async getManagedDatabaseLogs(
+      id: string,
+      params?: { tail?: number; timestamps?: boolean }
+    ): Promise<string[]> {
+      const query = new URLSearchParams();
+      if (params?.tail) query.set("tail", String(params.tail));
+      if (params?.timestamps !== undefined) query.set("timestamps", String(params.timestamps));
+      return this.unwrapData(
+        this.request<{ data: string[] }>(
+          `/databases/${encodeURIComponent(id)}/logs${query.size ? `?${query}` : ""}`
+        )
+      );
+    }
+
+    createManagedDatabaseLogStreamWebSocket(id: string, tail = 100): WebSocket {
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      return new WebSocket(
+        `${proto}//${window.location.host}${API_BASE}/databases/${encodeURIComponent(id)}/logs/stream?tail=${tail}`
+      );
+    }
+
     async createDatabase(data: Record<string, unknown>): Promise<DatabaseConnection> {
       return this.unwrapData(
         this.request<{ data: DatabaseConnection }>("/databases", {
           method: "POST",
           body: JSON.stringify(data),
         })
+      );
+    }
+
+    // ── Managed databases ──────────────────────────────────────────
+
+    async listManagedDatabaseCatalog(): Promise<ManagedDatabaseCatalogEntry[]> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabaseCatalogEntry[] }>("/databases/managed/catalog")
+      );
+    }
+
+    async listManagedDatabases(): Promise<ManagedDatabase[]> {
+      return this.unwrapData(this.request<{ data: ManagedDatabase[] }>("/databases/managed"));
+    }
+
+    async getManagedDatabase(id: string): Promise<ManagedDatabase> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabase }>(`/databases/managed/${encodeURIComponent(id)}`)
+      );
+    }
+
+    async createManagedDatabase(data: ManagedDatabaseCreateInput): Promise<ManagedDatabase> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabase }>("/databases/managed", {
+          method: "POST",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async updateManagedDatabase(
+      id: string,
+      data: Omit<Partial<ManagedDatabaseCreateInput>, "publishedPort" | "publishedNativePort"> & {
+        publishedPort?: number | null;
+        publishedNativePort?: number | null;
+        tags?: string[];
+      }
+    ): Promise<ManagedDatabase> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabase }>(`/databases/managed/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async deleteManagedDatabase(id: string): Promise<void> {
+      await this.request<void>(`/databases/managed/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+    }
+
+    async retryManagedDatabaseProvisioning(id: string): Promise<ManagedDatabase> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabase }>(
+          `/databases/managed/${encodeURIComponent(id)}/retry-provisioning`,
+          { method: "POST" }
+        )
+      );
+    }
+
+    async restartManagedDatabase(id: string): Promise<ManagedDatabase> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabase }>(
+          `/databases/managed/${encodeURIComponent(id)}/restart`,
+          {
+            method: "POST",
+          }
+        )
+      );
+    }
+
+    async pauseManagedDatabase(id: string): Promise<ManagedDatabase> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabase }>(
+          `/databases/managed/${encodeURIComponent(id)}/pause`,
+          {
+            method: "POST",
+          }
+        )
+      );
+    }
+
+    async unpauseManagedDatabase(id: string): Promise<ManagedDatabase> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabase }>(
+          `/databases/managed/${encodeURIComponent(id)}/unpause`,
+          {
+            method: "POST",
+          }
+        )
+      );
+    }
+
+    async revealManagedDatabaseCredentials(id: string): Promise<Record<string, unknown>> {
+      return this.unwrapData(
+        this.request<{ data: Record<string, unknown> }>(
+          `/databases/managed/${encodeURIComponent(id)}/reveal-credentials`
+        )
+      );
+    }
+
+    async rotateManagedDatabaseDirectCredentials(id: string): Promise<Record<string, unknown>> {
+      return this.unwrapData(
+        this.request<{ data: Record<string, unknown> }>(
+          `/databases/managed/${encodeURIComponent(id)}/rotate-direct-credentials`,
+          { method: "POST" }
+        )
+      );
+    }
+
+    async rotateManagedDatabaseCertificate(id: string): Promise<ManagedDatabase> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabase }>(
+          `/databases/managed/${encodeURIComponent(id)}/rotate-certificate`,
+          { method: "POST" }
+        )
+      );
+    }
+
+    async listManagedDatabaseBindings(id: string): Promise<ManagedDatabaseBinding[]> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabaseBinding[] }>(
+          `/databases/managed/${encodeURIComponent(id)}/bindings`
+        )
+      );
+    }
+
+    async createManagedDatabaseBinding(
+      id: string,
+      data: ManagedDatabaseBindingCreateInput
+    ): Promise<ManagedDatabaseBinding> {
+      return this.unwrapData(
+        this.request<{ data: ManagedDatabaseBinding }>(
+          `/databases/managed/${encodeURIComponent(id)}/bindings`,
+          { method: "POST", body: JSON.stringify(data) }
+        )
+      );
+    }
+
+    async deleteManagedDatabaseBinding(
+      id: string,
+      bindingId: string,
+      data?: ManagedDatabaseBindingDeleteInput
+    ): Promise<void> {
+      await this.request<void>(
+        `/databases/managed/${encodeURIComponent(id)}/bindings/${encodeURIComponent(bindingId)}`,
+        { method: "DELETE", ...(data ? { body: JSON.stringify(data) } : {}) }
+      );
+    }
+
+    async revealManagedDatabaseBindingCredentials(
+      id: string,
+      bindingId: string
+    ): Promise<Record<string, unknown>> {
+      return this.unwrapData(
+        this.request<{ data: Record<string, unknown> }>(
+          `/databases/managed/${encodeURIComponent(id)}/bindings/${encodeURIComponent(bindingId)}/reveal-credentials`
+        )
       );
     }
 
@@ -257,6 +444,36 @@ export function withDatabaseApi<TBase extends ApiClientBaseConstructor>(Base: TB
 
     async listPostgresSchemas(id: string): Promise<string[]> {
       return this.unwrapData(this.request<{ data: string[] }>(`/databases/${id}/postgres/schemas`));
+    }
+
+    async listManagedPostgresExtensions(id: string): Promise<ManagedPostgresExtension[]> {
+      return this.unwrapData(
+        this.request<{ data: ManagedPostgresExtension[] }>(`/databases/${id}/postgres/extensions`)
+      );
+    }
+
+    async enableManagedPostgresExtension(
+      id: string,
+      name: string
+    ): Promise<ManagedPostgresExtension[]> {
+      return this.unwrapData(
+        this.request<{ data: ManagedPostgresExtension[] }>(
+          `/databases/${id}/postgres/extensions/${encodeURIComponent(name)}`,
+          { method: "POST" }
+        )
+      );
+    }
+
+    async disableManagedPostgresExtension(
+      id: string,
+      name: string
+    ): Promise<ManagedPostgresExtension[]> {
+      return this.unwrapData(
+        this.request<{ data: ManagedPostgresExtension[] }>(
+          `/databases/${id}/postgres/extensions/${encodeURIComponent(name)}`,
+          { method: "DELETE" }
+        )
+      );
     }
 
     async listPostgresTables(

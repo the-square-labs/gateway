@@ -57,8 +57,10 @@ SelectScrollDownButton.displayName = SelectPrimitive.ScrollDownButton.displayNam
 
 const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
->(({ className, children, position = "popper", ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content> & {
+    overlayScrollControls?: boolean;
+  }
+>(({ className, children, position = "popper", overlayScrollControls = false, ...props }, ref) => (
   <SelectPrimitive.Portal>
     <SelectPrimitive.Content
       ref={ref}
@@ -71,7 +73,13 @@ const SelectContent = React.forwardRef<
       position={position}
       {...props}
     >
-      <SelectScrollUpButton />
+      <SelectScrollUpButton
+        className={
+          overlayScrollControls
+            ? "absolute inset-x-0 top-0 z-10 h-10 items-start bg-gradient-to-b from-popover via-popover to-transparent pt-1"
+            : undefined
+        }
+      />
       <SelectPrimitive.Viewport
         className={cn(
           "p-1",
@@ -80,7 +88,13 @@ const SelectContent = React.forwardRef<
       >
         {children}
       </SelectPrimitive.Viewport>
-      <SelectScrollDownButton />
+      <SelectScrollDownButton
+        className={
+          overlayScrollControls
+            ? "absolute inset-x-0 bottom-0 z-10 h-10 items-end bg-gradient-to-t from-popover via-popover to-transparent pb-1"
+            : undefined
+        }
+      />
     </SelectPrimitive.Content>
   </SelectPrimitive.Portal>
 ));
@@ -100,8 +114,10 @@ SelectLabel.displayName = SelectPrimitive.Label.displayName;
 
 const SelectItem = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Item>,
-  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>
->(({ className, children, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item> & {
+    description?: React.ReactNode;
+  }
+>(({ className, children, description, ...props }, ref) => (
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
@@ -115,7 +131,10 @@ const SelectItem = React.forwardRef<
         <Check className="h-4 w-4" />
       </SelectPrimitive.ItemIndicator>
     </span>
-    <SelectPrimitive.ItemText className="min-w-0 flex-1">{children}</SelectPrimitive.ItemText>
+    <div className="min-w-0 flex-1">
+      <SelectPrimitive.ItemText className="block truncate">{children}</SelectPrimitive.ItemText>
+      {description ? <p className="mt-0.5 text-xs text-muted-foreground">{description}</p> : null}
+    </div>
   </SelectPrimitive.Item>
 ));
 SelectItem.displayName = SelectPrimitive.Item.displayName;

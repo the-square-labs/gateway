@@ -1,0 +1,1 @@
+ALTER TYPE "public"."managed_database_status" ADD VALUE 'paused' BEFORE 'stopped';

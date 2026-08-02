@@ -1,4 +1,5 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { html } from "@codemirror/lang-html";
 import { json } from "@codemirror/lang-json";
 import {
   bracketMatching,
@@ -534,7 +535,7 @@ interface CodeEditorProps {
   /** Character ranges to highlight inline with an error background */
   errorRanges?: Array<{ from: number; to: number }>;
   /** Syntax highlighting language (default: "nginx") */
-  language?: "nginx" | "env" | "json" | "plain" | "sql";
+  language?: "nginx" | "env" | "json" | "plain" | "sql" | "xml";
   lineWrapping?: boolean;
   showLineNumbers?: boolean;
   showGutterBorder?: boolean;
@@ -587,7 +588,9 @@ export function CodeEditor({
                   ? envLang
                   : language === "sql"
                     ? sqlLang
-                    : nginxHandlebarsLang,
+                    : language === "xml"
+                      ? html()
+                      : nginxHandlebarsLang,
             ]),
         ...(language === "json" ? [foldGutter(), keymap.of(foldKeymap)] : []),
         editorTheme,

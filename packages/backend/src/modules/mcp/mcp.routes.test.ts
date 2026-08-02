@@ -821,4 +821,20 @@ describe('MCP resources and prompts', () => {
     expect(names).toContain('rollout-container-image');
     expect(names).not.toContain('provision-proxy-host');
   });
+
+  it('exposes the managed database access prompt without adding mutating tool calls', async () => {
+    registerToken(['databases:view']);
+
+    const { body } = await mcpRequest('prompts/list');
+    const prompt = body.result.prompts.find((entry: { name: string }) => entry.name === 'plan-managed-database-access');
+
+    expect(prompt).toMatchObject({
+      name: 'plan-managed-database-access',
+      title: 'Plan managed database access',
+    });
+
+    const result = await mcpRequest('prompts/get', { name: 'plan-managed-database-access', arguments: {} });
+    const text = result.body.result.messages[0].content.text;
+    expect(text).toContain('Do not invent database deployment, binding, publication, or secret-reveal tool calls.');
+  });
 });

@@ -7,6 +7,9 @@ function setRequiredEnv(overrides: NodeJS.ProcessEnv = {}) {
   if (!Object.hasOwn(overrides, 'GRPC_TLS_AUTO_DIR')) {
     delete inheritedEnv.GRPC_TLS_AUTO_DIR;
   }
+  if (!Object.hasOwn(overrides, 'DATABASE_CONNECTOR_IMAGE')) {
+    delete inheritedEnv.DATABASE_CONNECTOR_IMAGE;
+  }
 
   process.env = {
     ...inheritedEnv,
@@ -65,5 +68,13 @@ describe('getEnv gRPC TLS config', () => {
     const env = await loadEnv({ GRPC_TLS_AUTO_DIR: '/tmp/gateway-tls' });
 
     expect(env.GRPC_TLS_AUTO_DIR).toBe('/tmp/gateway-tls');
+  });
+
+  it('defaults the fixed local connector image only in development', async () => {
+    const development = await loadEnv({ NODE_ENV: 'development' });
+    const production = await loadEnv({ NODE_ENV: 'production' });
+
+    expect(development.DATABASE_CONNECTOR_IMAGE).toBe('gateway-database-connector:dev');
+    expect(production.DATABASE_CONNECTOR_IMAGE).toBe('');
   });
 });

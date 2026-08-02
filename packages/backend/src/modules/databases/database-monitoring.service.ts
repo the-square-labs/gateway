@@ -8,12 +8,42 @@ import type {
   DatabaseHealthStatus,
   DatabaseType,
 } from './databases.service.js';
+import type { ManagedDatabaseRuntimeStats, ManagedDatabaseService } from './managed-databases.service.js';
 
 const logger = createChildLogger('DatabaseMonitoringService');
 
 const HISTORY_PREFIX = 'database-monitoring:';
 const HISTORY_MAX = 60;
 const HISTORY_TTL_SECONDS = 600;
+const DATABASE_DEGRADED_THRESHOLD_MS = 1000;
+const ACTIVE_POLL_INTERVAL_MS = 3_000;
+const BACKGROUND_POLL_INTERVAL_MS = 10_000;
+
+export async function measureConfirmedDatabasePingLatency(
+  ping: () => Promise<unknown>,
+  now: () => number = Date.now
+): Promise<number> {
+  const measure = async () => {
+    const started = now();
+    await ping();
+    return now() - started;
+  };
+
+  const first = await measure();
+  // A managed connection may need to reopen an idle socket or secure daemon
+  // tunnel on its first request. Confirm a slow probe before changing the
+  // user-facing database health status.
+  return first >= DATABASE_DEGRADED_THRESHOLD_MS ? measure() : first;
+}
+
+// Kept as a descriptive export for existing ClickHouse-focused callers/tests.
+export const measureConfirmedClickHousePingLatency = measureConfirmedDatabasePingLatency;
+
+export function redisPersistedSizeBytes(info: Record<string, string>): number | null {
+  if (Number(info.aof_enabled ?? 0) !== 1) return null;
+  const size = Number(info.aof_current_size);
+  return Number.isFinite(size) && size >= 0 ? size : null;
+}
 
 export interface DatabaseMetricSnapshot {
   timestamp: string;
@@ -29,11 +59,17 @@ export class DatabaseMonitoringService extends EventEmitter {
   private evaluator?: NotificationEvaluatorService;
   private readonly clientCounts = new Map<string, number>();
   private readonly pollIntervals = new Map<string, ReturnType<typeof setInterval>>();
+  private readonly pollsInFlight = new Set<string>();
+  // Managed databases on one node share its single authenticated tunnel stream.
+  // Serialize monitoring collections per node so a concurrent full metric scrape
+  // cannot head-of-line block another database's lightweight health probe.
+  private readonly managedNodePollTails = new Map<string, Promise<void>>();
   private backgroundInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly databaseService: DatabaseConnectionService,
-    private readonly cacheService: CacheService | null
+    private readonly cacheService: CacheService | null,
+    private readonly managedDatabaseService?: ManagedDatabaseService
   ) {
     super();
     this.setMaxListeners(100);
@@ -88,7 +124,7 @@ export class DatabaseMonitoringService extends EventEmitter {
               error: error instanceof Error ? error.message : String(error),
             });
           });
-      }, 10_000);
+      }, BACKGROUND_POLL_INTERVAL_MS);
     }, 5000);
   }
 
@@ -97,7 +133,7 @@ export class DatabaseMonitoringService extends EventEmitter {
     void this.pollOnce(databaseId);
     this.pollIntervals.set(
       databaseId,
-      setInterval(() => void this.pollOnce(databaseId), 5000)
+      setInterval(() => void this.pollOnce(databaseId), ACTIVE_POLL_INTERVAL_MS)
     );
   }
 
@@ -109,34 +145,53 @@ export class DatabaseMonitoringService extends EventEmitter {
   }
 
   private async pollOnce(databaseId: string) {
+    // Opening a detail stream starts an immediate poll while a background or
+    // previous active poll may still be running. Never queue concurrent
+    // expensive metric collections through the same database connection.
+    if (this.pollsInFlight.has(databaseId)) return;
+    this.pollsInFlight.add(databaseId);
     try {
       const connection = await this.databaseService.get(databaseId);
-      const config = await this.databaseService.getDecryptedConfig(databaseId);
-      const snapshot =
-        config.type === 'postgres'
-          ? await this.collectPostgresSnapshot(databaseId, connection.name)
-          : config.type === 'clickhouse'
-            ? await this.collectClickHouseSnapshot(databaseId, connection.name, config.database)
-            : await this.collectRedisSnapshot(databaseId, connection.name, config);
+      if (connection.managed?.status === 'paused') return;
+      await this.queueManagedNodePoll(connection.managed?.nodeId, async () => {
+        const config = await this.databaseService.getDecryptedConfig(databaseId, 'monitoring');
+        const snapshot =
+          config.type === 'postgres'
+            ? await this.collectPostgresSnapshot(databaseId, connection.name)
+            : config.type === 'clickhouse'
+              ? await this.collectClickHouseSnapshot(databaseId, connection.name, config.database)
+              : await this.collectRedisSnapshot(databaseId, connection.name, config);
 
-      await this.pushHistory(snapshot);
-      await this.databaseService.updateHealth(databaseId, {
-        status: snapshot.status,
-        responseMs: snapshot.responseMs,
-        lastError: snapshot.status === 'offline' ? 'Database is unreachable' : null,
+        const managedRuntime = this.managedDatabaseService
+          ? await this.managedDatabaseService.getRuntimeStatsByDatabaseConnectionId(databaseId).catch((error) => {
+              logger.debug('Managed database runtime stats unavailable', {
+                databaseId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              return null;
+            })
+          : null;
+        if (managedRuntime) this.attachManagedRuntimeMetrics(snapshot, managedRuntime);
+
+        await this.pushHistory(snapshot);
+        await this.databaseService.updateHealth(databaseId, {
+          status: snapshot.status,
+          responseMs: snapshot.responseMs,
+          lastError: snapshot.status === 'offline' ? 'Database is unreachable' : null,
+        });
+        await this.evaluator?.evaluateDatabaseSnapshot(snapshot);
+        await this.evaluator?.observeStatefulEvent(
+          this.notificationCategory(snapshot.type),
+          snapshot.status === 'online'
+            ? 'health.online'
+            : snapshot.status === 'degraded'
+              ? 'health.degraded'
+              : 'health.offline',
+          { type: 'database', id: databaseId, name: connection.name },
+          { health_status: snapshot.status }
+        );
+        this.emit('snapshot', { databaseId, snapshot });
       });
-      await this.evaluator?.evaluateDatabaseSnapshot(snapshot);
-      await this.evaluator?.observeStatefulEvent(
-        this.notificationCategory(snapshot.type),
-        snapshot.status === 'online'
-          ? 'health.online'
-          : snapshot.status === 'degraded'
-            ? 'health.degraded'
-            : 'health.offline',
-        { type: 'database', id: databaseId, name: connection.name },
-        { health_status: snapshot.status }
-      );
-      this.emit('snapshot', { databaseId, snapshot });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Monitoring failed';
       logger.debug('Database monitoring poll failed', { databaseId, error: message });
@@ -154,7 +209,25 @@ export class DatabaseMonitoringService extends EventEmitter {
           { health_status: 'offline', error: message }
         );
       }
+    } finally {
+      this.pollsInFlight.delete(databaseId);
     }
+  }
+
+  private async queueManagedNodePoll<T>(nodeId: string | undefined, task: () => Promise<T>): Promise<T> {
+    if (!nodeId) return task();
+
+    const previous = this.managedNodePollTails.get(nodeId) ?? Promise.resolve();
+    const run = previous.catch(() => {}).then(task);
+    const tail = run.then(
+      () => undefined,
+      () => undefined
+    );
+    this.managedNodePollTails.set(nodeId, tail);
+    void tail.then(() => {
+      if (this.managedNodePollTails.get(nodeId) === tail) this.managedNodePollTails.delete(nodeId);
+    });
+    return run;
   }
 
   private async pushHistory(snapshot: DatabaseMetricSnapshot) {
@@ -166,17 +239,41 @@ export class DatabaseMonitoringService extends EventEmitter {
     await client.expire(key, HISTORY_TTL_SECONDS);
   }
 
+  private attachManagedRuntimeMetrics(snapshot: DatabaseMetricSnapshot, runtime: ManagedDatabaseRuntimeStats) {
+    snapshot.metrics.managed_cpu_percent = runtime.cpuPercent;
+    snapshot.metrics.managed_memory_usage_bytes = runtime.memoryUsageBytes;
+    snapshot.metrics.managed_memory_limit_bytes = runtime.memoryLimitBytes;
+    snapshot.metrics.managed_swap_usage_bytes = runtime.swapUsageBytes;
+    snapshot.metrics.managed_swap_limit_bytes = runtime.swapLimitBytes;
+    snapshot.metrics.managed_pids = runtime.pids;
+  }
+
   private async getLatestSnapshot(databaseId: string): Promise<DatabaseMetricSnapshot | null> {
     const history = await this.getHistory(databaseId);
     return history.at(-1) ?? null;
   }
 
   private async collectPostgresSnapshot(databaseId: string, name: string): Promise<DatabaseMetricSnapshot> {
-    const pool = await this.databaseService.getPostgresPool(databaseId);
-    const started = Date.now();
+    const pool = await this.databaseService.getPostgresPool(databaseId, 'monitoring');
+    // Health is the lightweight query on the already-cached pool. Dashboard
+    // statistics below may be slower without making a healthy database look
+    // degraded.
+    const responseMs = await measureConfirmedDatabasePingLatency(() => pool.query('select 1'));
     const previousSnapshot = await this.getLatestSnapshot(databaseId);
-    const [pingResult, statsResult, dbSizeResult, lockResult, bgwriterResult] = await Promise.all([
-      pool.query('select 1'),
+    const versionResult = await pool.query<{ server_version_num: string }>('show server_version_num');
+    const serverVersion = Number(versionResult.rows[0]?.server_version_num ?? 0);
+    // PostgreSQL 17 moved checkpoint counters out of pg_stat_bgwriter into
+    // pg_stat_checkpointer. Keep the total metric compatible with both view
+    // layouts so a successful connection is never marked offline just because
+    // a non-essential monitoring query changed between major versions.
+    const blocksWrittenQuery =
+      serverVersion >= 170_000
+        ? `select (bgwriter.buffers_clean + checkpointer.buffers_written)::text as blocks_written
+             from pg_stat_bgwriter bgwriter
+             cross join pg_stat_checkpointer checkpointer`
+        : `select (buffers_checkpoint + buffers_clean + buffers_backend)::text as blocks_written
+             from pg_stat_bgwriter`;
+    const [statsResult, dbSizeResult, lockResult, bgwriterResult] = await Promise.all([
       pool.query<{
         active_connections: string;
         total_connections: string;
@@ -215,13 +312,8 @@ export class DatabaseMonitoringService extends EventEmitter {
          join pg_database d on d.oid = l.database
         where d.datname = current_database()`
       ),
-      pool.query<{ blocks_written: string }>(
-        `select (buffers_checkpoint + buffers_clean + buffers_backend)::text as blocks_written
-         from pg_stat_bgwriter`
-      ),
+      pool.query<{ blocks_written: string }>(blocksWrittenQuery),
     ]);
-    void pingResult;
-    const responseMs = Date.now() - started;
     const activeConnections = Number(statsResult.rows[0]?.active_connections ?? 0);
     const idleConnections = Number(statsResult.rows[0]?.idle_connections ?? 0);
     const totalConnections = Number(statsResult.rows[0]?.total_connections ?? 0);
@@ -250,7 +342,7 @@ export class DatabaseMonitoringService extends EventEmitter {
       elapsedSeconds != null ? Math.max(0, (blocksReadTotal - previousBlocksReadTotal) / elapsedSeconds) : null;
     const writeBlocksPerSec =
       elapsedSeconds != null ? Math.max(0, (blocksWrittenTotal - previousBlocksWrittenTotal) / elapsedSeconds) : null;
-    const status: DatabaseHealthStatus = responseMs >= 1000 ? 'degraded' : 'online';
+    const status: DatabaseHealthStatus = responseMs >= DATABASE_DEGRADED_THRESHOLD_MS ? 'degraded' : 'online';
     return {
       timestamp: new Date().toISOString(),
       databaseId,
@@ -286,17 +378,33 @@ export class DatabaseMonitoringService extends EventEmitter {
     name: string,
     config: Extract<DatabaseConnectionConfig, { type: 'redis' }>
   ): Promise<DatabaseMetricSnapshot> {
-    const client = await this.databaseService.getRedisClient(databaseId);
-    const started = Date.now();
-    await client.ping();
-    const infoRaw = await client.info('memory');
-    const clientsRaw = await client.info('clients');
-    const statsRaw = await client.info('stats');
-    const dbSize = await client.dbsize();
-    const responseMs = Date.now() - started;
+    const client = await this.databaseService.getRedisClient(databaseId, 'monitoring');
+    // Health must reflect the actual Redis round-trip, not the work of
+    // collecting the dashboard's auxiliary metrics. A slow first request on
+    // an idle managed tunnel is confirmed before it can mark the database
+    // degraded, matching the ClickHouse probe behavior.
+    const responseMs = await measureConfirmedDatabasePingLatency(() => client.ping());
+
+    // INFO/DBSIZE are dashboard metrics rather than health checks. Send them
+    // in one pipeline to avoid five sequential secure-link round trips.
+    const results = await client
+      .pipeline()
+      .info('memory')
+      .info('clients')
+      .info('stats')
+      .info('persistence')
+      .dbsize()
+      .exec();
+    if (!results) throw new Error('Redis monitoring pipeline did not return results');
+    const values = results.map(([error, value]) => {
+      if (error) throw error;
+      return value;
+    });
+    const [infoRaw, clientsRaw, statsRaw, persistenceRaw, dbSize] = values as [string, string, string, string, number];
     const info = this.parseRedisInfo(infoRaw);
     const clients = this.parseRedisInfo(clientsRaw);
     const stats = this.parseRedisInfo(statsRaw);
+    const persistence = this.parseRedisInfo(persistenceRaw);
     const usedMemory = Number(info.used_memory ?? 0);
     const maxMemory = Number(info.maxmemory ?? 0);
     const memoryPct = maxMemory > 0 ? (usedMemory / maxMemory) * 100 : 0;
@@ -310,6 +418,7 @@ export class DatabaseMonitoringService extends EventEmitter {
       responseMs,
       metrics: {
         latency_ms: responseMs,
+        database_size_bytes: redisPersistedSizeBytes(persistence),
         used_memory_bytes: usedMemory,
         maxmemory_bytes: maxMemory,
         memory_pct: memoryPct,
@@ -326,12 +435,14 @@ export class DatabaseMonitoringService extends EventEmitter {
     name: string,
     database: string
   ): Promise<DatabaseMetricSnapshot> {
-    const client = await this.databaseService.getClickHouseClient(databaseId);
-    const started = Date.now();
-    const ping = await client.ping();
-    if (!ping.success) throw ping.error;
+    const client = await this.databaseService.getClickHouseClient(databaseId, 'monitoring');
+    const responseMs = await measureConfirmedClickHousePingLatency(async () => {
+      const ping = await client.ping();
+      if (!ping.success) throw ping.error;
+    });
     const previousSnapshot = await this.getLatestSnapshot(databaseId);
     const queryRows = async <T extends Record<string, unknown>>(
+      metricGroup: string,
       query: string,
       queryParams?: Record<string, unknown>
     ) => {
@@ -343,7 +454,12 @@ export class DatabaseMonitoringService extends EventEmitter {
           clickhouse_settings: { max_execution_time: 5, readonly: '1', log_queries: 0 },
         });
         return await result.json<T>();
-      } catch {
+      } catch (error) {
+        logger.debug('ClickHouse monitoring metric group unavailable', {
+          databaseId,
+          metricGroup,
+          error: error instanceof Error ? error.message : String(error),
+        });
         return [];
       }
     };
@@ -353,15 +469,18 @@ export class DatabaseMonitoringService extends EventEmitter {
         bytes: string;
         active_parts: string;
       }>(
+        'parts',
         `SELECT sum(rows) AS rows, sum(bytes_on_disk) AS bytes, count() AS active_parts
            FROM system.parts
           WHERE active AND database = {database: String}`,
         { database }
       ),
       queryRows<{ running_queries: string; memory_usage: string }>(
+        'processes',
         `SELECT count() AS running_queries, sum(memory_usage) AS memory_usage FROM system.processes`
       ),
       queryRows<{ merges: string; pending_mutations: string; query_total: string }>(
+        'activity',
         `SELECT
            (SELECT count() FROM system.merges WHERE database = {database: String}) AS merges,
            (SELECT count() FROM system.mutations WHERE database = {database: String} AND NOT is_done) AS pending_mutations,
@@ -369,6 +488,7 @@ export class DatabaseMonitoringService extends EventEmitter {
         { database }
       ),
       queryRows<{ disk_total: string; disk_free: string; disk_unreserved: string }>(
+        'disks',
         `SELECT
            sum(total_space) AS disk_total,
            sum(free_space) AS disk_free,
@@ -376,7 +496,6 @@ export class DatabaseMonitoringService extends EventEmitter {
          FROM system.disks`
       ),
     ]);
-    const responseMs = Date.now() - started;
     const parts = partsRows[0];
     const processes = processRows[0];
     const activity = activityRows[0];
@@ -390,7 +509,7 @@ export class DatabaseMonitoringService extends EventEmitter {
     const diskTotal = Number(disks?.disk_total ?? 0);
     const diskFree = Number(disks?.disk_free ?? 0);
     const diskUnreserved = Number(disks?.disk_unreserved ?? disks?.disk_free ?? 0);
-    const status: DatabaseHealthStatus = responseMs >= 1000 ? 'degraded' : 'online';
+    const status: DatabaseHealthStatus = responseMs >= DATABASE_DEGRADED_THRESHOLD_MS ? 'degraded' : 'online';
     return {
       timestamp: new Date().toISOString(),
       databaseId,

@@ -46,6 +46,8 @@ OS_VERSION_CODENAME=""
 DOCKER_USE_SUDO=0
 DOCKER_SYSTEMD_UNIT=""
 DOCKER_SOCKET="unix:///var/run/docker.sock"
+DOCKER_MODE="${GATEWAY_DOCKER_MODE:-}"
+DATABASE_STORAGE_ROOT="${GATEWAY_DATABASE_STORAGE_ROOT:-}"
 RESOLVED_DAEMON_VERSION=""
 EXISTING_INSTALL=0
 EXISTING_VERSION=""
@@ -836,6 +838,51 @@ install_daemon() {
     fi
 }
 
+write_database_profile_config() {
+    [[ "$DOCKER_MODE" == "databases" ]] || return 0
+    [[ "$RUN_USER" == "root" ]] || die "Database docker-daemon profile must run as root."
+    [[ -n "$DATABASE_STORAGE_ROOT" && "$DATABASE_STORAGE_ROOT" == /* && "$DATABASE_STORAGE_ROOT" != "/" ]] || die "Database storage root is invalid."
+    [[ "$DATABASE_STORAGE_ROOT" =~ ^[A-Za-z0-9._/@+-]+$ ]] || die "Database storage root contains unsupported characters."
+
+    local config_path="/etc/docker-daemon/config.yaml"
+    [[ -f "$config_path" ]] || die "docker-daemon config was not created by enrollment."
+    grep -q '^docker:$' "$config_path" || die "docker-daemon config has no docker section."
+
+    local has_mode=0
+    local has_storage_root=0
+    grep -q '^  mode:' "$config_path" && has_mode=1
+    grep -q '^    storage_root:' "$config_path" && has_storage_root=1
+    if [[ "$has_mode" -eq 1 || "$has_storage_root" -eq 1 ]]; then
+        grep -q '^  mode: "databases"$' "$config_path" || die "Refusing to overwrite an existing docker profile."
+        grep -q "^    storage_root: \"${DATABASE_STORAGE_ROOT}\"$" "$config_path" || die "Refusing to overwrite an existing database storage root."
+        chmod 600 "$config_path"
+        ok "Database docker profile already configured (root daemon, storage: ${DATABASE_STORAGE_ROOT})"
+        return 0
+    fi
+
+    if grep -q '^  database:$' "$config_path"; then
+        die "Database config section exists without a storage_root."
+    else
+        local tmp_config="${config_path}.tmp.$$"
+        awk -v root="$DATABASE_STORAGE_ROOT" '
+            $0 == "docker:" {
+                print
+                print "  mode: \"databases\""
+                print "  database:"
+                print "    storage_root: \"" root "\""
+                inserted = 1
+                next
+            }
+            { print }
+            END { if (!inserted) exit 1 }
+        ' "$config_path" > "$tmp_config" || { rm -f "$tmp_config"; die "Could not write database docker profile."; }
+        chmod 600 "$tmp_config"
+        mv -f "$tmp_config" "$config_path"
+    fi
+    chmod 600 "$config_path"
+    ok "Database docker profile written (root daemon, storage: ${DATABASE_STORAGE_ROOT})"
+}
+
 # ── Step 3: Install and enroll ───────────────────────────────────────
 enroll_daemon() {
     local target="/usr/local/bin/docker-daemon"
@@ -939,6 +986,7 @@ UNIT
 create_directories
 install_daemon
 enroll_daemon
+write_database_profile_config
 start_daemon
 
 echo ""

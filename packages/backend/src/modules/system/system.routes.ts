@@ -8,7 +8,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, requireScope, sessionOnly } from '@/modules/auth/auth.middleware.js';
 import { LoggingFeatureService } from '@/modules/logging/logging-feature.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
-import { DaemonUpdateService } from '@/services/daemon-update.service.js';
+import { DaemonUpdateService, daemonTypeForNodeType } from '@/services/daemon-update.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { UpdateService } from '@/services/update.service.js';
 import type { AppEnv } from '@/types.js';
@@ -177,7 +177,8 @@ systemRoutes.openapi({ ...updateDaemonRoute, middleware: sessionOnly }, async (c
   const [node] = await db.select().from(nodesTable).where(eq(nodesTable.id, nodeId)).limit(1);
   if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
 
-  const daemonType = node.type as 'nginx' | 'docker' | 'monitoring';
+  const daemonType = daemonTypeForNodeType(node.type);
+  if (!daemonType) throw new AppError(400, 'UNSUPPORTED_NODE_TYPE', 'This node does not run an updatable daemon');
   const release = await service.getLatestRelease(daemonType);
   if (!release) throw new AppError(404, 'RELEASE_NOT_FOUND', 'No release found for this daemon type');
 

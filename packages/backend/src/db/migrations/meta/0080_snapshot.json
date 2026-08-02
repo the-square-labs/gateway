@@ -1,5 +1,5 @@
 {
-  "id": "1d10f70b-8230-4e50-a9dd-c8018e770b94",
+  "id": "25abba7e-3efe-4277-9206-a5df0705241a",
   "prevId": "7d8cde90-70af-4a2f-a2d2-9327bc1a96d8",
   "version": "7",
   "dialect": "postgresql",
@@ -3420,6 +3420,423 @@
       "uniqueConstraints": {
         "database_connections_slug_unique": {
           "name": "database_connections_slug_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "slug"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.managed_database_bindings": {
+      "name": "managed_database_bindings",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "managed_database_id": {
+          "name": "managed_database_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_node_id": {
+          "name": "target_node_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_type": {
+          "name": "target_type",
+          "type": "database_binding_target_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_resource_id": {
+          "name": "target_resource_id",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "network_name": {
+          "name": "network_name",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "connector_name": {
+          "name": "connector_name",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "connector_alias": {
+          "name": "connector_alias",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "environment": {
+          "name": "environment",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "encrypted_credentials": {
+          "name": "encrypted_credentials",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "database_binding_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'creating'"
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by_id": {
+          "name": "created_by_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_by_id": {
+          "name": "updated_by_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "managed_database_bindings_database_idx": {
+          "name": "managed_database_bindings_database_idx",
+          "columns": [
+            {
+              "expression": "managed_database_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "managed_database_bindings_target_node_idx": {
+          "name": "managed_database_bindings_target_node_idx",
+          "columns": [
+            {
+              "expression": "target_node_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "managed_database_bindings_managed_database_id_managed_database_instances_id_fk": {
+          "name": "managed_database_bindings_managed_database_id_managed_database_instances_id_fk",
+          "tableFrom": "managed_database_bindings",
+          "tableTo": "managed_database_instances",
+          "columnsFrom": [
+            "managed_database_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "managed_database_bindings_target_node_id_nodes_id_fk": {
+          "name": "managed_database_bindings_target_node_id_nodes_id_fk",
+          "tableFrom": "managed_database_bindings",
+          "tableTo": "nodes",
+          "columnsFrom": [
+            "target_node_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "managed_database_bindings_created_by_id_users_id_fk": {
+          "name": "managed_database_bindings_created_by_id_users_id_fk",
+          "tableFrom": "managed_database_bindings",
+          "tableTo": "users",
+          "columnsFrom": [
+            "created_by_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "managed_database_bindings_updated_by_id_users_id_fk": {
+          "name": "managed_database_bindings_updated_by_id_users_id_fk",
+          "tableFrom": "managed_database_bindings",
+          "tableTo": "users",
+          "columnsFrom": [
+            "updated_by_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "managed_database_bindings_target_unique": {
+          "name": "managed_database_bindings_target_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "managed_database_id",
+            "target_node_id",
+            "target_type",
+            "target_resource_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.managed_database_instances": {
+      "name": "managed_database_instances",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "node_id": {
+          "name": "node_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slug": {
+          "name": "slug",
+          "type": "varchar(60)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "type": {
+          "name": "type",
+          "type": "database_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "image_ref": {
+          "name": "image_ref",
+          "type": "varchar(512)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "engine_config": {
+          "name": "engine_config",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "encrypted_owner_credentials": {
+          "name": "encrypted_owner_credentials",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "storage_size_bytes": {
+          "name": "storage_size_bytes",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "runtime_config": {
+          "name": "runtime_config",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "published_port": {
+          "name": "published_port",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "managed_database_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'creating'"
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by_id": {
+          "name": "created_by_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_by_id": {
+          "name": "updated_by_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "managed_database_instances_node_idx": {
+          "name": "managed_database_instances_node_idx",
+          "columns": [
+            {
+              "expression": "node_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "managed_database_instances_status_idx": {
+          "name": "managed_database_instances_status_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "managed_database_instances_node_id_nodes_id_fk": {
+          "name": "managed_database_instances_node_id_nodes_id_fk",
+          "tableFrom": "managed_database_instances",
+          "tableTo": "nodes",
+          "columnsFrom": [
+            "node_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "managed_database_instances_created_by_id_users_id_fk": {
+          "name": "managed_database_instances_created_by_id_users_id_fk",
+          "tableFrom": "managed_database_instances",
+          "tableTo": "users",
+          "columnsFrom": [
+            "created_by_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "managed_database_instances_updated_by_id_users_id_fk": {
+          "name": "managed_database_instances_updated_by_id_users_id_fk",
+          "tableFrom": "managed_database_instances",
+          "tableTo": "users",
+          "columnsFrom": [
+            "updated_by_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "managed_database_instances_slug_unique": {
+          "name": "managed_database_instances_slug_unique",
           "nullsNotDistinct": false,
           "columns": [
             "slug"
@@ -15591,24 +16008,6 @@
           "notNull": true,
           "default": false
         },
-        "deleted_at": {
-          "name": "deleted_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "deleted_by_user_id": {
-          "name": "deleted_by_user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "deleted_from_group_id": {
-          "name": "deleted_from_group_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
         "ai_approval_mode": {
           "name": "ai_approval_mode",
           "type": "varchar(32)",
@@ -15704,21 +16103,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "users_deleted_at_idx": {
-          "name": "users_deleted_at_idx",
-          "columns": [
-            {
-              "expression": "deleted_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -15733,19 +16117,6 @@
             "id"
           ],
           "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "users_deleted_by_user_id_users_id_fk": {
-          "name": "users_deleted_by_user_id_users_id_fk",
-          "tableFrom": "users",
-          "tableTo": "users",
-          "columnsFrom": [
-            "deleted_by_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         },
         "users_folder_id_admin_user_folders_id_fk": {
@@ -15826,6 +16197,24 @@
         "email"
       ]
     },
+    "public.database_binding_status": {
+      "name": "database_binding_status",
+      "schema": "public",
+      "values": [
+        "creating",
+        "ready",
+        "error",
+        "deleting"
+      ]
+    },
+    "public.database_binding_target_type": {
+      "name": "database_binding_target_type",
+      "schema": "public",
+      "values": [
+        "container",
+        "deployment"
+      ]
+    },
     "public.database_health_status": {
       "name": "database_health_status",
       "schema": "public",
@@ -15843,6 +16232,17 @@
         "postgres",
         "redis",
         "clickhouse"
+      ]
+    },
+    "public.managed_database_status": {
+      "name": "managed_database_status",
+      "schema": "public",
+      "values": [
+        "creating",
+        "ready",
+        "stopped",
+        "error",
+        "deleting"
       ]
     },
     "public.dns_status": {
@@ -15890,7 +16290,8 @@
         "nginx",
         "bastion",
         "monitoring",
-        "docker"
+        "docker",
+        "databases"
       ]
     },
     "public.forward_scheme": {

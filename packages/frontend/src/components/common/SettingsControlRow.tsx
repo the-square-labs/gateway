@@ -8,7 +8,7 @@ export function SettingsControlRow({
   className,
   controlsClassName = "",
 }: {
-  title: string;
+  title: ReactNode;
   description?: ReactNode;
   children: ReactNode;
   className?: string;
@@ -22,7 +22,7 @@ export function SettingsControlRow({
       )}
     >
       <div className="min-w-0">
-        <p className="text-sm font-medium">{title}</p>
+        <div className="text-sm font-medium">{title}</div>
         {description ? <p className="mt-0.5 text-xs text-muted-foreground">{description}</p> : null}
       </div>
       <div
