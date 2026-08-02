@@ -36,4 +36,33 @@ describe('AISandboxJobsService.listActiveWithEffectiveScopes', () => {
       },
     ]);
   });
+
+  it('revokes effective scopes for a soft-deleted owner during reconciliation', async () => {
+    const where = vi.fn().mockResolvedValue([
+      {
+        job: { id: 'job-deleted' },
+        user: {
+          id: 'user-deleted',
+          groupId: 'group-1',
+          additionalScopes: ['ai:sandbox:tier:high'],
+          isBlocked: false,
+          deletedAt: new Date(),
+        },
+      },
+    ]);
+    const service = new AISandboxJobsService({
+      query: {
+        permissionGroups: {
+          findMany: vi
+            .fn()
+            .mockResolvedValue([{ id: 'group-1', parentId: null, name: 'sandbox-users', scopes: ['ai:sandbox:use'] }]),
+        },
+      },
+      select: vi.fn(() => ({ from: vi.fn(() => ({ innerJoin: vi.fn(() => ({ where })) })) })),
+    } as never);
+
+    await expect(service.listActiveWithEffectiveScopes()).resolves.toEqual([
+      { job: { id: 'job-deleted' }, userId: 'user-deleted', currentScopes: [] },
+    ]);
+  });
 });

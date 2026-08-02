@@ -108,8 +108,24 @@ describe('InferenceGatewayExecutor helpers', () => {
     const rows = [firstAccount, secondAccount];
     const db = {
       query: {
-        users: { findFirst: vi.fn().mockResolvedValue({ id: 'user-1', groupId: 'group-1', additionalScopes: [] }) },
-        permissionGroups: { findFirst: vi.fn().mockResolvedValue({ name: 'Users', scopes: ['inference:use'] }) },
+        users: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'user-1',
+            oidcSubject: 'subject',
+            email: 'user@example.com',
+            name: 'User',
+            avatarUrl: null,
+            groupId: 'group-1',
+            additionalScopes: [],
+            isBlocked: false,
+            deletedAt: null,
+          }),
+        },
+        permissionGroups: {
+          findMany: vi
+            .fn()
+            .mockResolvedValue([{ id: 'group-1', parentId: null, name: 'Users', scopes: ['inference:use'] }]),
+        },
       },
       select: vi.fn(() => ({
         from: vi.fn(() => ({

@@ -10,6 +10,7 @@ import {
 } from '@/modules/resource-folders/resource-folder.schemas.js';
 import {
   CreateUserSchema,
+  RestoreUserSchema,
   UpdateAuthProvisioningSettingsSchema,
   UpdateBlockSchema,
   UpdateUserAdditionalPermissionsSchema,
@@ -21,6 +22,14 @@ export const listAdminUsersRoute = appRoute({
   path: '/users',
   tags: ['Admin'],
   summary: 'List users',
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const listDeletedAdminUsersRoute = appRoute({
+  method: 'get',
+  path: '/users/deleted',
+  tags: ['Admin'],
+  summary: 'List deleted users',
   responses: okJson(UnknownDataResponseSchema),
 });
 
@@ -155,4 +164,13 @@ export const deleteAdminUserRoute = appRoute({
   summary: 'Delete a user',
   request: { params: IdParamSchema },
   responses: okJson(z.object({ message: z.string() })),
+});
+
+export const restoreAdminUserRoute = appRoute({
+  method: 'post',
+  path: '/users/{id}/restore',
+  tags: ['Admin'],
+  summary: 'Restore a deleted user in blocked state',
+  request: { params: IdParamSchema, ...jsonBody(RestoreUserSchema) },
+  responses: okJson(UnknownDataResponseSchema),
 });

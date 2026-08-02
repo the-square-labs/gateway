@@ -191,6 +191,7 @@ export class AISandboxJobsService {
           groupId: users.groupId,
           additionalScopes: users.additionalScopes,
           isBlocked: users.isBlocked,
+          deletedAt: users.deletedAt,
         },
       })
       .from(sandboxJobs)
@@ -200,9 +201,10 @@ export class AISandboxJobsService {
     return rows.map((row) => ({
       job: row.job,
       userId: row.user.id,
-      currentScopes: row.user.isBlocked
-        ? []
-        : computeEffectiveUserAccess(row.user.groupId, groupMap, row.user.additionalScopes).scopes,
+      currentScopes:
+        row.user.isBlocked || row.user.deletedAt
+          ? []
+          : computeEffectiveUserAccess(row.user.groupId, groupMap, row.user.additionalScopes).scopes,
     }));
   }
 }

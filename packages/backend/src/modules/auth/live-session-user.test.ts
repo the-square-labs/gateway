@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeEffectiveUserAccess, type GroupScopeRecord } from './live-session-user.js';
+import { computeEffectiveUserAccess, type GroupScopeRecord, resolveLiveUser } from './live-session-user.js';
 
 function groupMap(...groups: GroupScopeRecord[]) {
   return new Map(groups.map((group) => [group.id, group]));
@@ -30,5 +30,35 @@ describe('computeEffectiveUserAccess', () => {
 
     expect(access.additionalScopes).toEqual(['nodes:console:node-1']);
     expect(access.scopes).toEqual(['nodes:console']);
+  });
+});
+
+describe('resolveLiveUser', () => {
+  it('treats a soft-deleted account as blocked with no effective scopes', async () => {
+    const user = await resolveLiveUser(
+      {
+        query: {
+          users: {
+            findFirst: async () => ({
+              id: 'user-1',
+              oidcSubject: 'subject',
+              email: 'user@example.com',
+              name: 'User',
+              avatarUrl: null,
+              groupId: 'group-1',
+              additionalScopes: ['nodes:console'],
+              isBlocked: false,
+              deletedAt: new Date(),
+            }),
+          },
+          permissionGroups: {
+            findMany: async () => [{ id: 'group-1', parentId: null, name: 'viewer', scopes: ['nodes:details'] }],
+          },
+        },
+      } as any,
+      'user-1'
+    );
+
+    expect(user).toMatchObject({ isBlocked: true, isDeleted: true, scopes: [] });
   });
 });

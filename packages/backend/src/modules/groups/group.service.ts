@@ -1,4 +1,4 @@
-import { count, eq, inArray, sql } from 'drizzle-orm';
+import { and, count, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
@@ -75,7 +75,7 @@ export class GroupService {
         isBlocked: users.isBlocked,
       })
       .from(users)
-      .where(inArray(users.groupId, affectedGroupIds));
+      .where(and(inArray(users.groupId, affectedGroupIds), isNull(users.deletedAt)));
 
     for (const u of affected) {
       const scopes = u.isBlocked ? [] : computeEffectiveUserAccess(u.groupId, groupMap, u.additionalScopes).scopes;
@@ -162,7 +162,7 @@ export class GroupService {
         scopes: permissionGroups.scopes,
         createdAt: permissionGroups.createdAt,
         updatedAt: permissionGroups.updatedAt,
-        memberCount: sql<number>`(SELECT count(*) FROM users WHERE users.group_id = "permission_groups"."id")::int`,
+        memberCount: sql<number>`(SELECT count(*) FROM users WHERE users.group_id = "permission_groups"."id" AND users.deleted_at IS NULL)::int`,
       })
       .from(permissionGroups)
       .orderBy(
@@ -191,7 +191,10 @@ export class GroupService {
       throw new AppError(404, 'GROUP_NOT_FOUND', 'Permission group not found');
     }
 
-    const [{ count: memberCount }] = await this.db.select({ count: count() }).from(users).where(eq(users.groupId, id));
+    const [{ count: memberCount }] = await this.db
+      .select({ count: count() })
+      .from(users)
+      .where(and(eq(users.groupId, id), isNull(users.deletedAt)));
 
     // Fetch all groups for inherited scope computation
     const allGroups = await this.db.select().from(permissionGroups);
@@ -358,7 +361,10 @@ export class GroupService {
       throw new AppError(403, 'BUILTIN_GROUP', 'Cannot delete a built-in group');
     }
 
-    const [{ count: memberCount }] = await this.db.select({ count: count() }).from(users).where(eq(users.groupId, id));
+    const [{ count: memberCount }] = await this.db
+      .select({ count: count() })
+      .from(users)
+      .where(and(eq(users.groupId, id), isNull(users.deletedAt)));
 
     if (Number(memberCount) > 0) {
       throw new AppError(
@@ -384,7 +390,10 @@ export class GroupService {
   }
 
   async getMemberIds(groupId: string): Promise<string[]> {
-    const rows = await this.db.select({ id: users.id }).from(users).where(eq(users.groupId, groupId));
+    const rows = await this.db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.groupId, groupId), isNull(users.deletedAt)));
     return rows.map((r) => r.id);
   }
 

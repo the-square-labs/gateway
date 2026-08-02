@@ -29,6 +29,10 @@ export const UpdateBlockSchema = z.object({
   blocked: z.boolean(),
 });
 
+export const RestoreUserSchema = z.object({
+  groupId: z.string().uuid().optional(),
+});
+
 export const UpdateAuthProvisioningSettingsSchema = z.object({
   oidcAutoCreateUsers: z.boolean().optional(),
   oidcDefaultGroupId: z.string().uuid().optional(),
@@ -91,5 +95,6 @@ export const UpdateAuthProvisioningSettingsSchema = z.object({
 export type UpdateUserGroupInput = z.infer<typeof UpdateUserGroupSchema>;
 export type UpdateUserAdditionalPermissionsInput = z.infer<typeof UpdateUserAdditionalPermissionsSchema>;
 export type UpdateBlockInput = z.infer<typeof UpdateBlockSchema>;
+export type RestoreUserInput = z.infer<typeof RestoreUserSchema>;
 export type CreateUserInput = z.infer<typeof CreateUserSchema>;
 export type UpdateAuthProvisioningSettingsInput = z.infer<typeof UpdateAuthProvisioningSettingsSchema>;
