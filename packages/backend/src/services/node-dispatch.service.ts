@@ -239,6 +239,34 @@ export class NodeDispatchService {
     );
   }
 
+  async sendManagedDatabaseLogsCommand(
+    nodeId: string,
+    managedDatabaseId: string,
+    options: {
+      tailLines?: number;
+      follow?: boolean;
+      timestamps?: boolean;
+      since?: string;
+      until?: string;
+    } = {}
+  ): Promise<CommandResult> {
+    await this.assertDatabaseNode(nodeId);
+    return this.registry.sendCommand(nodeId, {
+      dockerDatabase: {
+        action: 'logs',
+        managedDatabaseId,
+        configJson: JSON.stringify(options),
+      } as any,
+    });
+  }
+
+  async stopManagedDatabaseLogStream(nodeId: string, managedDatabaseId: string): Promise<CommandResult> {
+    await this.assertDatabaseNode(nodeId);
+    return this.registry.sendCommand(nodeId, {
+      dockerDatabase: { action: 'logs_stop', managedDatabaseId, configJson: '{}' } as any,
+    });
+  }
+
   async sendDockerDatabaseBindingCommand(
     nodeId: string,
     action: 'prepare' | 'remove',
@@ -246,13 +274,22 @@ export class NodeDispatchService {
     managedDatabaseId: string,
     timeoutMs?: number
   ): Promise<CommandResult> {
-    await this.assertGenericDockerNode(nodeId);
+    await this.assertDatabaseTunnelNode(nodeId);
     await this.assertNodeMutable(nodeId);
     return this.registry.sendCommand(
       nodeId,
       { dockerDatabaseBinding: { action, bindingId, managedDatabaseId } as any },
       timeoutMs
     );
+  }
+
+  /** Both application Docker nodes and databases nodes own one side of a managed database tunnel binding. */
+  private async assertDatabaseTunnelNode(nodeId: string) {
+    const [node] = await this.db.select({ type: nodes.type }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
+    if (node.type !== 'docker' && node.type !== 'databases') {
+      throw new AppError(409, 'NODE_TYPE_MISMATCH', 'Managed database tunnels require a Docker or databases node');
+    }
   }
 
   async sendDockerContainerCommand(

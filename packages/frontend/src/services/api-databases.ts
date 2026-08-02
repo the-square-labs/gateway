@@ -6,6 +6,7 @@ import type {
   ManagedDatabaseBindingDeleteInput,
   ManagedDatabaseCatalogEntry,
   ManagedDatabaseCreateInput,
+  ManagedPostgresExtension,
   PaginatedResponse,
   PostgresTableMetadata,
   RedisKeyRecord,
@@ -58,6 +59,27 @@ export function withDatabaseApi<TBase extends ApiClientBaseConstructor>(Base: TB
 
     async getDatabaseHealthHistory(id: string): Promise<DatabaseConnection["healthHistory"]> {
       return this.unwrapData(this.request(`/databases/${id}/health-history`));
+    }
+
+    async getManagedDatabaseLogs(
+      id: string,
+      params?: { tail?: number; timestamps?: boolean }
+    ): Promise<string[]> {
+      const query = new URLSearchParams();
+      if (params?.tail) query.set("tail", String(params.tail));
+      if (params?.timestamps !== undefined) query.set("timestamps", String(params.timestamps));
+      return this.unwrapData(
+        this.request<{ data: string[] }>(
+          `/databases/${encodeURIComponent(id)}/logs${query.size ? `?${query}` : ""}`
+        )
+      );
+    }
+
+    createManagedDatabaseLogStreamWebSocket(id: string, tail = 100): WebSocket {
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      return new WebSocket(
+        `${proto}//${window.location.host}${API_BASE}/databases/${encodeURIComponent(id)}/logs/stream?tail=${tail}`
+      );
     }
 
     async createDatabase(data: Record<string, unknown>): Promise<DatabaseConnection> {
@@ -129,9 +151,12 @@ export function withDatabaseApi<TBase extends ApiClientBaseConstructor>(Base: TB
 
     async restartManagedDatabase(id: string): Promise<ManagedDatabase> {
       return this.unwrapData(
-        this.request<{ data: ManagedDatabase }>(`/databases/managed/${encodeURIComponent(id)}/restart`, {
-          method: "POST",
-        })
+        this.request<{ data: ManagedDatabase }>(
+          `/databases/managed/${encodeURIComponent(id)}/restart`,
+          {
+            method: "POST",
+          }
+        )
       );
     }
 
@@ -419,6 +444,36 @@ export function withDatabaseApi<TBase extends ApiClientBaseConstructor>(Base: TB
 
     async listPostgresSchemas(id: string): Promise<string[]> {
       return this.unwrapData(this.request<{ data: string[] }>(`/databases/${id}/postgres/schemas`));
+    }
+
+    async listManagedPostgresExtensions(id: string): Promise<ManagedPostgresExtension[]> {
+      return this.unwrapData(
+        this.request<{ data: ManagedPostgresExtension[] }>(`/databases/${id}/postgres/extensions`)
+      );
+    }
+
+    async enableManagedPostgresExtension(
+      id: string,
+      name: string
+    ): Promise<ManagedPostgresExtension[]> {
+      return this.unwrapData(
+        this.request<{ data: ManagedPostgresExtension[] }>(
+          `/databases/${id}/postgres/extensions/${encodeURIComponent(name)}`,
+          { method: "POST" }
+        )
+      );
+    }
+
+    async disableManagedPostgresExtension(
+      id: string,
+      name: string
+    ): Promise<ManagedPostgresExtension[]> {
+      return this.unwrapData(
+        this.request<{ data: ManagedPostgresExtension[] }>(
+          `/databases/${id}/postgres/extensions/${encodeURIComponent(name)}`,
+          { method: "DELETE" }
+        )
+      );
     }
 
     async listPostgresTables(

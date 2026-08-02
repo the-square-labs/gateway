@@ -4,6 +4,7 @@ import Redis from 'ioredis';
 import pg from 'pg';
 import type { DrizzleClient } from '@/db/client.js';
 import { type DatabaseHealthEntry, databaseConnections, managedDatabaseInstances, nodes } from '@/db/schema/index.js';
+import type { ManagedDatabaseTunnelLane } from '@/grpc/services/database-tunnel.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
@@ -89,11 +90,66 @@ interface PostgresRowSearchFilter {
   value: string;
 }
 
+export interface ManagedPostgresExtension {
+  name: string;
+  defaultVersion: string;
+  installedVersion: string | null;
+  comment: string | null;
+}
+
+interface PostgresExtensionRow {
+  name: string;
+  default_version: string;
+  comment: string | null;
+}
+
+interface InstalledPostgresExtensionRow {
+  name: string;
+  installed_version: string;
+}
+
+type ManagedPostgresExtensionDefinition = Omit<ManagedPostgresExtension, 'installedVersion'>;
+
+interface ManagedPostgresExtensionContext {
+  imageRef: string;
+}
+
+interface ManagedPostgresExtensionStateCacheEntry {
+  expiresAt: number;
+  value: Promise<ManagedPostgresExtension[]>;
+}
+
+const POSTGRES_EXTENSION_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const POSTGRES_EXTENSIONS_EXCLUDED_FROM_MANAGER = new Set(['pg_stat_statements', 'plpgsql']);
+const MANAGED_POSTGRES_EXTENSION_STATE_CACHE_TTL_MS = 30_000;
+
+function normalizePostgresExtensionName(value: string): string {
+  const name = value.trim();
+  if (!POSTGRES_EXTENSION_NAME_PATTERN.test(name)) {
+    throw new AppError(400, 'INVALID_POSTGRES_EXTENSION', 'Invalid PostgreSQL extension name');
+  }
+  return name;
+}
+
+function quotePostgresExtensionName(name: string): string {
+  return `"${normalizePostgresExtensionName(name)}"`;
+}
+
+function toManagedPostgresExtensionDefinition(row: PostgresExtensionRow): ManagedPostgresExtensionDefinition {
+  return {
+    name: row.name,
+    defaultVersion: row.default_version,
+    comment: row.comment,
+  };
+}
+
 export { inferClickHouseIntent, inferPostgresIntent, inferRedisIntent } from './database-query-intent.js';
 
 export class DatabaseConnectionService {
   private eventBus?: EventBusService;
   private readonly postgresPools = new Map<string, pg.Pool>();
+  private readonly postgresExtensionCatalogs = new Map<string, Promise<ManagedPostgresExtensionDefinition[]>>();
+  private readonly postgresExtensionStates = new Map<string, ManagedPostgresExtensionStateCacheEntry>();
   private readonly redisClients = new Map<string, Redis>();
   private readonly clickHouseClients = new Map<string, ClickHouseClient>();
   private readonly sqlAdapters: Map<'postgres' | 'clickhouse', SqlDatabaseAdapter>;
@@ -602,6 +658,89 @@ export class DatabaseConnectionService {
     return listPostgresSchemasOperation(this.postgresSchemaOperationContext(), id);
   }
 
+  async listManagedPostgresExtensions(id: string): Promise<ManagedPostgresExtension[]> {
+    return this.loadManagedPostgresExtensionState(id);
+  }
+
+  async warmManagedPostgresExtensionCatalog(id: string): Promise<void> {
+    await this.loadManagedPostgresExtensionState(id);
+  }
+
+  async enableManagedPostgresExtension(
+    id: string,
+    rawName: string,
+    userId: string
+  ): Promise<ManagedPostgresExtension[]> {
+    const context = await this.getManagedPostgresExtensionContext(id);
+    const name = normalizePostgresExtensionName(rawName);
+    return this.withPostgresPool(id, 'query', async (pool) => {
+      const extension = await this.getManagedPostgresExtension(pool, context, name);
+      if (!extension) {
+        throw new AppError(
+          404,
+          'POSTGRES_EXTENSION_NOT_AVAILABLE',
+          'PostgreSQL extension is not available in this image'
+        );
+      }
+      if (!extension.installedVersion) {
+        await pool.query(`create extension if not exists ${quotePostgresExtensionName(name)}`);
+        await this.auditService.log({
+          userId,
+          action: 'database.postgres.extension.enable',
+          resourceType: 'database',
+          resourceId: id,
+          details: { name, version: extension.defaultVersion },
+        });
+        this.emitChange(id, 'extensions.updated', { provider: 'postgres', name, enabled: true });
+      }
+
+      return this.refreshManagedPostgresExtensionState(id, pool, context);
+    });
+  }
+
+  async disableManagedPostgresExtension(
+    id: string,
+    rawName: string,
+    userId: string
+  ): Promise<ManagedPostgresExtension[]> {
+    const context = await this.getManagedPostgresExtensionContext(id);
+    const name = normalizePostgresExtensionName(rawName);
+    return this.withPostgresPool(id, 'query', async (pool) => {
+      const extension = await this.getManagedPostgresExtension(pool, context, name);
+      if (!extension) {
+        throw new AppError(
+          404,
+          'POSTGRES_EXTENSION_NOT_AVAILABLE',
+          'PostgreSQL extension is not available in this image'
+        );
+      }
+      if (extension.installedVersion) {
+        try {
+          await pool.query(`drop extension ${quotePostgresExtensionName(name)}`);
+        } catch (error) {
+          if ((error as { code?: string }).code === '2BP01') {
+            throw new AppError(
+              409,
+              'POSTGRES_EXTENSION_HAS_DEPENDENCIES',
+              `Cannot disable ${name} while database objects depend on it`
+            );
+          }
+          throw error;
+        }
+        await this.auditService.log({
+          userId,
+          action: 'database.postgres.extension.disable',
+          resourceType: 'database',
+          resourceId: id,
+          details: { name, version: extension.installedVersion },
+        });
+        this.emitChange(id, 'extensions.updated', { provider: 'postgres', name, enabled: false });
+      }
+
+      return this.refreshManagedPostgresExtensionState(id, pool, context);
+    });
+  }
+
   async listPostgresTables(id: string, schema: string) {
     return listPostgresTablesOperation(this.postgresSchemaOperationContext(), id, schema);
   }
@@ -863,7 +1002,10 @@ export class DatabaseConnectionService {
     return executeRedisCommandOperation(this.queryExecutionContext(), id, commandText, userId);
   }
 
-  async getDecryptedConfig(id: string): Promise<DatabaseConnectionConfig> {
+  async getDecryptedConfig(
+    id: string,
+    lane: ManagedDatabaseTunnelLane = 'interactive'
+  ): Promise<DatabaseConnectionConfig> {
     const row = await this.getRow(id);
     const config = this.decryptConfig(row.encryptedConfig);
     const managed = await this.getManagedMetadata(id);
@@ -871,7 +1013,7 @@ export class DatabaseConnectionService {
     if (!this.managedTunnelProxy) {
       throw new AppError(503, 'MANAGED_DATABASE_TUNNEL_UNAVAILABLE', 'Managed database tunnel is unavailable');
     }
-    const endpoint = await this.managedTunnelProxy.getEndpoint(managed.id);
+    const endpoint = await this.managedTunnelProxy.getEndpoint(managed.id, lane);
     if (config.type === 'postgres') {
       return { ...config, host: endpoint.host, port: endpoint.port, sslEnabled: false };
     }
@@ -964,6 +1106,137 @@ export class DatabaseConnectionService {
     return row;
   }
 
+  private async getManagedPostgresExtensionContext(id: string): Promise<ManagedPostgresExtensionContext> {
+    const row = await this.getRow(id);
+    const config = this.decryptConfig(row.encryptedConfig);
+    if (config.type !== 'postgres') {
+      throw new AppError(400, 'INVALID_PROVIDER', 'PostgreSQL extensions are available only for PostgreSQL databases');
+    }
+    const [managed] = await this.db
+      .select({ imageRef: managedDatabaseInstances.imageRef })
+      .from(managedDatabaseInstances)
+      .where(eq(managedDatabaseInstances.databaseConnectionId, id))
+      .limit(1);
+    if (!managed) {
+      throw new AppError(
+        400,
+        'MANAGED_DATABASE_REQUIRED',
+        'PostgreSQL extensions are available only for managed databases'
+      );
+    }
+    return { imageRef: managed.imageRef };
+  }
+
+  private async readManagedPostgresExtensionsWithPool(
+    pool: pg.Pool,
+    context: ManagedPostgresExtensionContext
+  ): Promise<ManagedPostgresExtension[]> {
+    const [definitions, installed] = await Promise.all([
+      this.getManagedPostgresExtensionCatalog(pool, context.imageRef),
+      pool.query<InstalledPostgresExtensionRow>(
+        `select extname as name, extversion as installed_version
+           from pg_extension`
+      ),
+    ]);
+    const installedByName = new Map(installed.rows.map((extension) => [extension.name, extension.installed_version]));
+    return definitions.map((extension) => ({
+      ...extension,
+      installedVersion: installedByName.get(extension.name) ?? null,
+    }));
+  }
+
+  private async refreshManagedPostgresExtensionState(
+    id: string,
+    pool: pg.Pool,
+    context: ManagedPostgresExtensionContext
+  ): Promise<ManagedPostgresExtension[]> {
+    const value = this.readManagedPostgresExtensionsWithPool(pool, context);
+    const entry: ManagedPostgresExtensionStateCacheEntry = {
+      expiresAt: Date.now() + MANAGED_POSTGRES_EXTENSION_STATE_CACHE_TTL_MS,
+      value,
+    };
+    this.postgresExtensionStates.set(id, entry);
+    try {
+      return await value;
+    } catch (error) {
+      if (this.postgresExtensionStates.get(id) === entry) {
+        this.postgresExtensionStates.delete(id);
+      }
+      throw error;
+    }
+  }
+
+  private async loadManagedPostgresExtensionState(id: string): Promise<ManagedPostgresExtension[]> {
+    const cached = this.getCachedManagedPostgresExtensionState(id);
+    if (cached) return cached;
+
+    const value = (async () => {
+      const context = await this.getManagedPostgresExtensionContext(id);
+      return this.withPostgresPool(id, 'query', (pool) => this.readManagedPostgresExtensionsWithPool(pool, context));
+    })();
+    const entry: ManagedPostgresExtensionStateCacheEntry = {
+      expiresAt: Date.now() + MANAGED_POSTGRES_EXTENSION_STATE_CACHE_TTL_MS,
+      value,
+    };
+    this.postgresExtensionStates.set(id, entry);
+    try {
+      return await value;
+    } catch (error) {
+      if (this.postgresExtensionStates.get(id) === entry) {
+        this.postgresExtensionStates.delete(id);
+      }
+      throw error;
+    }
+  }
+
+  private getCachedManagedPostgresExtensionState(id: string): Promise<ManagedPostgresExtension[]> | null {
+    const cached = this.postgresExtensionStates.get(id);
+    if (!cached) return null;
+    if (cached.expiresAt <= Date.now()) {
+      this.postgresExtensionStates.delete(id);
+      return null;
+    }
+    return cached.value;
+  }
+
+  private async getManagedPostgresExtensionCatalog(
+    pool: pg.Pool,
+    imageRef: string
+  ): Promise<ManagedPostgresExtensionDefinition[]> {
+    const cached = this.postgresExtensionCatalogs.get(imageRef);
+    if (cached) return cached;
+
+    const catalog = pool
+      .query<PostgresExtensionRow>(
+        `select name, default_version, comment
+           from pg_available_extensions
+           order by name asc`
+      )
+      .then((result) =>
+        result.rows
+          .filter((extension) => !POSTGRES_EXTENSIONS_EXCLUDED_FROM_MANAGER.has(extension.name))
+          .map(toManagedPostgresExtensionDefinition)
+      );
+    this.postgresExtensionCatalogs.set(imageRef, catalog);
+    try {
+      return await catalog;
+    } catch (error) {
+      if (this.postgresExtensionCatalogs.get(imageRef) === catalog) {
+        this.postgresExtensionCatalogs.delete(imageRef);
+      }
+      throw error;
+    }
+  }
+
+  private async getManagedPostgresExtension(
+    pool: pg.Pool,
+    context: ManagedPostgresExtensionContext,
+    name: string
+  ): Promise<ManagedPostgresExtension | undefined> {
+    const extensions = await this.readManagedPostgresExtensionsWithPool(pool, context);
+    return extensions.find((extension) => extension.name === name);
+  }
+
   private async toView(
     row: typeof databaseConnections.$inferSelect,
     revealCredentials: boolean,
@@ -996,6 +1269,7 @@ export class DatabaseConnectionService {
         lastError: managedDatabaseInstances.lastError,
         serviceAddress: nodes.serviceAddress,
         lastHealthReport: nodes.lastHealthReport,
+        nodeStatus: nodes.status,
       })
       .from(managedDatabaseInstances)
       .leftJoin(nodes, eq(nodes.id, managedDatabaseInstances.nodeId))
@@ -1007,9 +1281,11 @@ export class DatabaseConnectionService {
     const swapBytes = Number(runtime.memorySwapBytes ?? 0);
     const engineConfig = managed.engineConfig as unknown as Record<string, unknown>;
     const clickhouseConfigXml = engineConfig.clickhouseConfigXml;
+    const redisConfig = engineConfig.redisConfig;
     return {
       id: managed.id,
       nodeId: managed.nodeId,
+      nodeAvailable: managed.nodeStatus === 'online',
       version: managed.version,
       storageSizeBytes: Number(managed.storageSizeBytes),
       runtimeConfig: {
@@ -1041,6 +1317,9 @@ export class DatabaseConnectionService {
       status: managed.status,
       lastError: managed.lastError,
       ...(typeof clickhouseConfigXml === 'string' ? { clickhouseConfigXml } : {}),
+      ...(redisConfig && typeof redisConfig === 'object'
+        ? { redisConfig: redisConfig as ManagedDatabaseConnectionMetadata['redisConfig'] }
+        : {}),
     };
   }
 
@@ -1274,10 +1553,11 @@ export class DatabaseConnectionService {
     return { status: responseMs >= 1_000 ? 'degraded' : 'online', responseMs };
   }
 
-  async getPostgresPool(id: string): Promise<pg.Pool> {
-    const existing = this.postgresPools.get(id);
+  async getPostgresPool(id: string, lane: ManagedDatabaseTunnelLane = 'interactive'): Promise<pg.Pool> {
+    const key = this.databaseClientKey(id, lane);
+    const existing = this.postgresPools.get(key);
     if (existing) return existing;
-    const config = await this.getDecryptedConfig(id);
+    const config = await this.getDecryptedConfig(id, lane);
     if (config.type !== 'postgres') throw new AppError(400, 'INVALID_PROVIDER', 'Database is not Postgres');
     const pool = new Pool({
       host: config.host,
@@ -1300,7 +1580,7 @@ export class DatabaseConnectionService {
         databaseId: id,
         error: error instanceof Error ? error.message : String(error),
       });
-      if (this.postgresPools.get(id) === pool) this.postgresPools.delete(id);
+      if (this.postgresPools.get(key) === pool) this.postgresPools.delete(key);
       void pool.end().catch(() => {});
     });
     try {
@@ -1309,14 +1589,15 @@ export class DatabaseConnectionService {
       await pool.end().catch(() => {});
       this.rethrowDatabaseError(error, 'postgres', 'connect');
     }
-    this.postgresPools.set(id, pool);
+    this.postgresPools.set(key, pool);
     return pool;
   }
 
-  async getRedisClient(id: string): Promise<Redis> {
-    const existing = this.redisClients.get(id);
+  async getRedisClient(id: string, lane: ManagedDatabaseTunnelLane = 'interactive'): Promise<Redis> {
+    const key = this.databaseClientKey(id, lane);
+    const existing = this.redisClients.get(key);
     if (existing) return existing;
-    const config = await this.getDecryptedConfig(id);
+    const config = await this.getDecryptedConfig(id, lane);
     if (config.type !== 'redis') throw new AppError(400, 'INVALID_PROVIDER', 'Database is not Redis');
     const client = new Redis({
       host: config.host,
@@ -1335,14 +1616,15 @@ export class DatabaseConnectionService {
       client.disconnect();
       this.rethrowDatabaseError(error, 'redis', 'connect');
     }
-    this.redisClients.set(id, client);
+    this.redisClients.set(key, client);
     return client;
   }
 
-  async getClickHouseClient(id: string): Promise<ClickHouseClient> {
-    const existing = this.clickHouseClients.get(id);
+  async getClickHouseClient(id: string, lane: ManagedDatabaseTunnelLane = 'interactive'): Promise<ClickHouseClient> {
+    const key = this.databaseClientKey(id, lane);
+    const existing = this.clickHouseClients.get(key);
     if (existing) return existing;
-    const config = await this.getDecryptedConfig(id);
+    const config = await this.getDecryptedConfig(id, lane);
     if (config.type !== 'clickhouse') throw new AppError(400, 'INVALID_PROVIDER', 'Database is not ClickHouse');
     const client = createClickHouseDatabaseClient(config, 10);
     try {
@@ -1352,26 +1634,40 @@ export class DatabaseConnectionService {
       await client.close().catch(() => {});
       this.rethrowDatabaseError(error, 'clickhouse', 'connect');
     }
-    this.clickHouseClients.set(id, client);
+    this.clickHouseClients.set(key, client);
     return client;
   }
 
   async disposeClient(id: string): Promise<void> {
-    const pool = this.postgresPools.get(id);
-    if (pool) {
-      this.postgresPools.delete(id);
+    if (this.managedTunnelProxy) {
+      const [managed] = await this.db
+        .select({ id: managedDatabaseInstances.id })
+        .from(managedDatabaseInstances)
+        .where(eq(managedDatabaseInstances.databaseConnectionId, id))
+        .limit(1);
+      if (managed) await this.managedTunnelProxy.disposeDatabase(managed.id);
+    }
+    this.postgresExtensionStates.delete(id);
+    const prefix = `${id}:`;
+    for (const [key, pool] of this.postgresPools) {
+      if (!key.startsWith(prefix)) continue;
+      this.postgresPools.delete(key);
       await pool.end().catch(() => {});
     }
-    const redisClient = this.redisClients.get(id);
-    if (redisClient) {
-      this.redisClients.delete(id);
+    for (const [key, redisClient] of this.redisClients) {
+      if (!key.startsWith(prefix)) continue;
+      this.redisClients.delete(key);
       await redisClient.quit().catch(() => redisClient.disconnect());
     }
-    const clickHouseClient = this.clickHouseClients.get(id);
-    if (clickHouseClient) {
-      this.clickHouseClients.delete(id);
+    for (const [key, clickHouseClient] of this.clickHouseClients) {
+      if (!key.startsWith(prefix)) continue;
+      this.clickHouseClients.delete(key);
       await clickHouseClient.close().catch(() => {});
     }
+  }
+
+  private databaseClientKey(id: string, lane: ManagedDatabaseTunnelLane): string {
+    return `${id}:${lane}`;
   }
 
   private async withPostgresPool<T>(

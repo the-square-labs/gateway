@@ -103,4 +103,31 @@ describe('NodeDispatchService', () => {
       15 * 60 * 1000
     );
   });
+
+  it('sends managed database logs through the restricted database command', async () => {
+    const { registry, service } = createService('databases');
+
+    await service.sendManagedDatabaseLogsCommand('node-1', 'database-1', {
+      tailLines: 200,
+      follow: true,
+      timestamps: true,
+    });
+
+    expect(registry.sendCommand).toHaveBeenCalledWith('node-1', {
+      dockerDatabase: {
+        action: 'logs',
+        managedDatabaseId: 'database-1',
+        configJson: JSON.stringify({ tailLines: 200, follow: true, timestamps: true }),
+      },
+    });
+
+    await service.stopManagedDatabaseLogStream('node-1', 'database-1');
+    expect(registry.sendCommand).toHaveBeenLastCalledWith('node-1', {
+      dockerDatabase: {
+        action: 'logs_stop',
+        managedDatabaseId: 'database-1',
+        configJson: '{}',
+      },
+    });
+  });
 });

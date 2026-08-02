@@ -475,6 +475,7 @@ describe('DatabaseConnectionService connection views', () => {
         lastError: null,
         serviceAddress: '127.0.0.1',
         lastHealthReport: null,
+        nodeStatus: 'online',
       }
     );
 

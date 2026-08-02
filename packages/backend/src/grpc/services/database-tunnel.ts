@@ -17,6 +17,10 @@ const MAX_TUNNEL_SESSIONS_FROM_GATEWAY = 64;
 export const DATABASE_TUNNEL_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const TUNNEL_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DATABASE_TUNNEL_CAPABILITY_V2_PREFIX = 'database_tunnel_v2:';
+
+export type ManagedDatabaseTunnelLane = 'interactive' | 'monitoring';
+type DatabaseTunnelLane = 'data' | ManagedDatabaseTunnelLane;
 
 interface DatabaseTunnelHello {
   nodeId: string;
@@ -68,6 +72,8 @@ interface RelayTunnelStream {
 interface TunnelConnection {
   nodeId: string;
   nodeType: 'docker' | 'databases' | 'gateway';
+  lane: DatabaseTunnelLane;
+  bindingId?: string;
   stream: RelayTunnelStream;
   maxChunkBytes: number;
 }
@@ -79,6 +85,17 @@ interface TunnelSession {
   source: TunnelConnection;
   target: TunnelConnection;
   idleTimer?: ReturnType<typeof setTimeout>;
+}
+
+function parseDatabaseTunnelCapability(
+  capability: string
+): Pick<TunnelConnection, 'lane' | 'bindingId'> | null {
+  if (!capability.startsWith(DATABASE_TUNNEL_CAPABILITY_V2_PREFIX)) return null;
+  const lane = capability.slice(DATABASE_TUNNEL_CAPABILITY_V2_PREFIX.length);
+  if (lane === 'interactive' || lane === 'monitoring') return { lane };
+  const dataBindingId = lane.startsWith('data:') ? lane.slice('data:'.length) : '';
+  if (UUID_RE.test(dataBindingId)) return { lane: 'data', bindingId: dataBindingId };
+  return null;
 }
 
 function safeProtocolMessage(message: string): string {
@@ -136,25 +153,33 @@ class GatewayTunnelDuplex extends Duplex {
 }
 
 export class DatabaseTunnelRelay {
-  private connections = new Map<string, TunnelConnection>();
+  private connections = new Map<string, Map<string, TunnelConnection>>();
   private sessions = new Map<string, TunnelSession>();
 
   constructor(private readonly deps: Pick<GrpcServerDeps, 'db'>) {}
 
   register(connection: TunnelConnection): void {
-    const previous = this.connections.get(connection.nodeId);
+    const connections = this.connections.get(connection.nodeId) ?? new Map<string, TunnelConnection>();
+    const key = this.connectionKey(connection);
+    const previous = connections.get(key);
     if (previous && previous.stream !== connection.stream) {
-      this.disconnect(connection.nodeId, previous.stream);
+      this.disconnect(previous);
       previous.stream.end?.();
     }
-    this.connections.set(connection.nodeId, connection);
+    connections.set(key, connection);
+    this.connections.set(connection.nodeId, connections);
   }
 
-  disconnect(nodeId: string, stream: RelayTunnelStream): void {
-    if (this.connections.get(nodeId)?.stream === stream) this.connections.delete(nodeId);
+  disconnect(connection: TunnelConnection): void {
+    const connections = this.connections.get(connection.nodeId);
+    const key = this.connectionKey(connection);
+    if (connections?.get(key)?.stream === connection.stream) {
+      connections.delete(key);
+      if (connections.size === 0) this.connections.delete(connection.nodeId);
+    }
     for (const session of [...this.sessions.values()]) {
-      if (session.source.stream !== stream && session.target.stream !== stream) continue;
-      const peer = session.source.stream === stream ? session.target : session.source;
+      if (session.source !== connection && session.target !== connection) continue;
+      const peer = session.source === connection ? session.target : session.source;
       this.removeSession(session);
       this.write(peer, {
         error: {
@@ -189,15 +214,20 @@ export class DatabaseTunnelRelay {
     }
   }
 
-  async handleOpen(sourceNodeId: string, open: DatabaseTunnelOpen): Promise<void> {
-    const source = this.connections.get(sourceNodeId);
-    if (!source || source.nodeType !== 'docker') return;
+  async handleOpen(source: TunnelConnection | string, open: DatabaseTunnelOpen): Promise<void> {
+    const sourceConnection = typeof source === 'string' ? this.getConnection(source, 'data', open.bindingId) : source;
+    if (!sourceConnection) return;
+    if (sourceConnection.nodeType !== 'docker' || sourceConnection.lane !== 'data') return;
+    if (sourceConnection.bindingId !== open.bindingId) {
+      this.writeError(sourceConnection, open, 'BINDING_NOT_AUTHORIZED', 'Database tunnel binding does not match this stream');
+      return;
+    }
     if (!TUNNEL_ID_RE.test(open.tunnelId) || !UUID_RE.test(open.bindingId) || !UUID_RE.test(open.managedDatabaseId)) {
-      this.writeError(source, open, 'INVALID_OPEN', 'Database tunnel identifiers are invalid');
+      this.writeError(sourceConnection, open, 'INVALID_OPEN', 'Database tunnel identifiers are invalid');
       return;
     }
     if (this.sessions.has(open.tunnelId)) {
-      this.writeError(source, open, 'TUNNEL_EXISTS', 'Database tunnel identifier is already active');
+      this.writeError(sourceConnection, open, 'TUNNEL_EXISTS', 'Database tunnel identifier is already active');
       return;
     }
 
@@ -222,35 +252,35 @@ export class DatabaseTunnelRelay {
 
     if (
       !authorized ||
-      authorized.targetNodeId !== sourceNodeId ||
+      authorized.targetNodeId !== sourceConnection.nodeId ||
       authorized.bindingStatus !== 'ready' ||
       authorized.databaseStatus !== 'ready'
     ) {
-      this.writeError(source, open, 'BINDING_NOT_AUTHORIZED', 'Database binding is not active for this node');
+      this.writeError(sourceConnection, open, 'BINDING_NOT_AUTHORIZED', 'Database binding is not active for this node');
       return;
     }
 
-    if (this.connections.get(sourceNodeId) !== source) return;
+    if (!this.isRegistered(sourceConnection)) return;
 
-    const target = this.connections.get(authorized.databaseNodeId);
+    const target = this.getConnection(authorized.databaseNodeId, 'data', authorized.bindingId);
     if (!target || target.nodeType !== 'databases') {
-      this.writeError(source, open, 'DATABASE_NODE_UNAVAILABLE', 'Managed database node is unavailable');
+      this.writeError(sourceConnection, open, 'DATABASE_NODE_UNAVAILABLE', 'Managed database node is unavailable');
       return;
     }
 
     if (this.sessionCount((session) => session.bindingId === authorized.bindingId) >= MAX_TUNNEL_SESSIONS_PER_BINDING) {
-      this.writeError(source, open, 'RESOURCE_EXHAUSTED', 'Database binding session limit reached');
+      this.writeError(sourceConnection, open, 'RESOURCE_EXHAUSTED', 'Database binding session limit reached');
       return;
     }
-    if (this.sessionCount((session) => session.source.nodeId === sourceNodeId) >= MAX_TUNNEL_SESSIONS_PER_SOURCE_NODE) {
-      this.writeError(source, open, 'RESOURCE_EXHAUSTED', 'Source node database tunnel session limit reached');
+    if (this.sessionCount((session) => session.source.nodeId === sourceConnection.nodeId) >= MAX_TUNNEL_SESSIONS_PER_SOURCE_NODE) {
+      this.writeError(sourceConnection, open, 'RESOURCE_EXHAUSTED', 'Source node database tunnel session limit reached');
       return;
     }
     if (
       this.sessionCount((session) => session.target.nodeId === authorized.databaseNodeId) >=
       MAX_TUNNEL_SESSIONS_PER_DATABASE_NODE
     ) {
-      this.writeError(source, open, 'RESOURCE_EXHAUSTED', 'Database node tunnel session limit reached');
+      this.writeError(sourceConnection, open, 'RESOURCE_EXHAUSTED', 'Database node tunnel session limit reached');
       return;
     }
 
@@ -258,25 +288,25 @@ export class DatabaseTunnelRelay {
       tunnelId: open.tunnelId,
       bindingId: authorized.bindingId,
       managedDatabaseId: authorized.managedDatabaseId,
-      source,
+      source: sourceConnection,
       target,
     };
     this.addSession(session);
     try {
       const accepted = target.stream.write({ open });
       if (!accepted) {
-        source.stream.pause();
+        sourceConnection.stream.pause();
         target.stream.once('drain', () => {
-          if (this.sessions.get(session.tunnelId) === session) source.stream.resume();
+          if (this.sessions.get(session.tunnelId) === session) sourceConnection.stream.resume();
         });
       }
     } catch {
       this.removeSession(session);
-      this.writeError(source, open, 'DATABASE_NODE_UNAVAILABLE', 'Managed database node is unavailable');
+      this.writeError(sourceConnection, open, 'DATABASE_NODE_UNAVAILABLE', 'Managed database node is unavailable');
     }
   }
 
-  async openGatewayTunnel(managedDatabaseId: string): Promise<Duplex> {
+  async openGatewayTunnel(managedDatabaseId: string, lane: ManagedDatabaseTunnelLane = 'interactive'): Promise<Duplex> {
     if (!UUID_RE.test(managedDatabaseId)) throw new Error('Managed database identifier is invalid');
     const [managed] = await this.deps.db
       .select({
@@ -289,7 +319,7 @@ export class DatabaseTunnelRelay {
       .limit(1);
     if (!managed || managed.status !== 'ready') throw new Error('Managed database is not ready');
 
-    const target = this.connections.get(managed.nodeId);
+    const target = this.getConnection(managed.nodeId, lane);
     if (!target || target.nodeType !== 'databases') throw new Error('Managed database node is unavailable');
     if (this.sessionCount((session) => session.source.nodeType === 'gateway') >= MAX_TUNNEL_SESSIONS_FROM_GATEWAY) {
       throw new Error('Gateway managed database tunnel capacity reached');
@@ -321,6 +351,7 @@ export class DatabaseTunnelRelay {
     const source: TunnelConnection = {
       nodeId: `gateway:${open.tunnelId}`,
       nodeType: 'gateway',
+      lane,
       stream: client.relayStream,
       maxChunkBytes: MAX_CHUNK_BYTES,
     };
@@ -333,23 +364,27 @@ export class DatabaseTunnelRelay {
     return client;
   }
 
-  handleData(nodeId: string, data: DatabaseTunnelData): void {
+  handleData(sender: TunnelConnection | string, data: DatabaseTunnelData): void {
     const session = this.sessions.get(data.tunnelId);
-    const sender = this.connections.get(nodeId);
-    if (!sender || !session || session.bindingId !== data.bindingId) {
-      if (sender) this.writeError(sender, data, 'TUNNEL_NOT_FOUND', 'Database tunnel is not active');
+    const senderConnection =
+      typeof sender === 'string'
+        ? this.sessionConnectionForNode(session, sender) ?? this.getConnection(sender, 'data', data.bindingId)
+        : sender;
+    if (!senderConnection) return;
+    if (!session || session.bindingId !== data.bindingId) {
+      this.writeError(senderConnection, data, 'TUNNEL_NOT_FOUND', 'Database tunnel is not active');
       return;
     }
     const recipient =
-      session.source.nodeId === nodeId ? session.target : session.target.nodeId === nodeId ? session.source : null;
+      session.source === senderConnection ? session.target : session.target === senderConnection ? session.source : null;
     if (!recipient) {
-      this.writeError(sender, data, 'TUNNEL_NOT_AUTHORIZED', 'Database tunnel is not authorized for this node');
+      this.writeError(senderConnection, data, 'TUNNEL_NOT_AUTHORIZED', 'Database tunnel is not authorized for this node');
       return;
     }
     this.refreshIdleTimer(session);
     const size = data.data?.byteLength ?? 0;
-    if (size <= 0 || size > sender.maxChunkBytes || size > recipient.maxChunkBytes || size > MAX_CHUNK_BYTES) {
-      this.terminate(session, sender, 'FRAME_TOO_LARGE', 'Database tunnel data frame exceeds the negotiated limit');
+    if (size <= 0 || size > senderConnection.maxChunkBytes || size > recipient.maxChunkBytes || size > MAX_CHUNK_BYTES) {
+      this.terminate(session, senderConnection, 'FRAME_TOO_LARGE', 'Database tunnel data frame exceeds the negotiated limit');
       return;
     }
 
@@ -357,32 +392,36 @@ export class DatabaseTunnelRelay {
     try {
       accepted = recipient.stream.write({ data });
     } catch {
-      this.terminate(session, sender, 'PEER_DISCONNECTED', 'Database tunnel peer disconnected');
+      this.terminate(session, senderConnection, 'PEER_DISCONNECTED', 'Database tunnel peer disconnected');
       return;
     }
     if (!accepted) {
-      sender.stream.pause();
+      senderConnection.stream.pause();
       recipient.stream.once('drain', () => {
-        if (this.sessions.get(session.tunnelId) === session) sender.stream.resume();
+        if (this.sessions.get(session.tunnelId) === session) senderConnection.stream.resume();
       });
     }
   }
 
-  handleClose(nodeId: string, close: DatabaseTunnelClose): void {
+  handleClose(sender: TunnelConnection | string, close: DatabaseTunnelClose): void {
     const session = this.sessions.get(close.tunnelId);
+    const senderConnection = typeof sender === 'string' ? this.sessionConnectionForNode(session, sender) : sender;
+    if (!senderConnection) return;
     if (!session || session.bindingId !== close.bindingId) return;
     const peer =
-      session.source.nodeId === nodeId ? session.target : session.target.nodeId === nodeId ? session.source : null;
+      session.source === senderConnection ? session.target : session.target === senderConnection ? session.source : null;
     if (!peer) return;
     this.removeSession(session);
     this.write(peer, { close });
   }
 
-  handleError(nodeId: string, error: DatabaseTunnelError): void {
+  handleError(sender: TunnelConnection | string, error: DatabaseTunnelError): void {
     const session = this.sessions.get(error.tunnelId);
+    const senderConnection = typeof sender === 'string' ? this.sessionConnectionForNode(session, sender) : sender;
+    if (!senderConnection) return;
     if (!session || session.bindingId !== error.bindingId) return;
     const peer =
-      session.source.nodeId === nodeId ? session.target : session.target.nodeId === nodeId ? session.source : null;
+      session.source === senderConnection ? session.target : session.target === senderConnection ? session.source : null;
     if (!peer) return;
     this.removeSession(session);
     this.write(peer, {
@@ -485,6 +524,25 @@ export class DatabaseTunnelRelay {
       return false;
     }
   }
+
+  private connectionKey(connection: Pick<TunnelConnection, 'lane' | 'bindingId'>): string {
+    return connection.lane === 'data' ? `data:${connection.bindingId ?? ''}` : connection.lane;
+  }
+
+  private getConnection(nodeId: string, lane: DatabaseTunnelLane, bindingId?: string): TunnelConnection | undefined {
+    return this.connections.get(nodeId)?.get(lane === 'data' ? `data:${bindingId ?? ''}` : lane);
+  }
+
+  private isRegistered(connection: TunnelConnection): boolean {
+    return this.connections.get(connection.nodeId)?.get(this.connectionKey(connection)) === connection;
+  }
+
+  private sessionConnectionForNode(session: TunnelSession | undefined, nodeId: string): TunnelConnection | undefined {
+    if (!session) return undefined;
+    if (session.source.nodeId === nodeId) return session.source;
+    if (session.target.nodeId === nodeId) return session.target;
+    return undefined;
+  }
 }
 
 let activeRelay: DatabaseTunnelRelay | null = null;
@@ -493,9 +551,12 @@ export function revokeDatabaseTunnelBinding(bindingId: string): void {
   activeRelay?.revokeBinding(bindingId);
 }
 
-export async function openGatewayManagedDatabaseTunnel(managedDatabaseId: string): Promise<Duplex> {
+export async function openGatewayManagedDatabaseTunnel(
+  managedDatabaseId: string,
+  lane: ManagedDatabaseTunnelLane = 'interactive'
+): Promise<Duplex> {
   if (!activeRelay) throw new Error('Managed database tunnel relay is unavailable');
-  return activeRelay.openGatewayTunnel(managedDatabaseId);
+  return activeRelay.openGatewayTunnel(managedDatabaseId, lane);
 }
 
 export function createDatabaseTunnelHandlers(deps: GrpcServerDeps) {
@@ -505,6 +566,7 @@ export function createDatabaseTunnelHandlers(deps: GrpcServerDeps) {
     Tunnel(stream: DatabaseTunnelStream) {
       let nodeId: string | null = null;
       let nodeType: 'docker' | 'databases' | null = null;
+      let connection: TunnelConnection | null = null;
       let authenticatedNodeId: string | null = null;
       let closed = false;
       let processing = Promise.resolve();
@@ -513,7 +575,7 @@ export function createDatabaseTunnelHandlers(deps: GrpcServerDeps) {
       const close = () => {
         if (closed) return;
         closed = true;
-        if (nodeId) relay.disconnect(nodeId, stream);
+        if (connection) relay.disconnect(connection);
       };
       stream.on('end', () => {
         close();
@@ -524,12 +586,13 @@ export function createDatabaseTunnelHandlers(deps: GrpcServerDeps) {
         if (closed) return;
         processing = processing
           .then(async () => {
-            if (!nodeId) {
+            if (!connection) {
               const hello = message.hello;
+              const lane = hello ? parseDatabaseTunnelCapability(hello.capability) : null;
               if (
                 !hello ||
                 hello.nodeId !== authenticatedNodeId ||
-                hello.capability !== 'database_tunnel_v1' ||
+                !lane ||
                 !Number.isInteger(hello.maxChunkBytes) ||
                 hello.maxChunkBytes <= 0
               ) {
@@ -544,15 +607,22 @@ export function createDatabaseTunnelHandlers(deps: GrpcServerDeps) {
               // the exact ready binding and target node.
               nodeId = hello.nodeId;
               const maxChunkBytes = Math.min(MAX_CHUNK_BYTES, hello.maxChunkBytes);
-              relay.register({ nodeId, nodeType, stream, maxChunkBytes });
+              if (
+                (lane.lane === 'data' && nodeType !== 'docker' && nodeType !== 'databases') ||
+                ((lane.lane === 'interactive' || lane.lane === 'monitoring') && nodeType !== 'databases')
+              ) {
+                throw new Error('database tunnel lane is not supported by this node type');
+              }
+              connection = { nodeId, nodeType, stream, maxChunkBytes, ...lane };
+              relay.register(connection);
               stream.write({ ready: { maxChunkBytes } });
-              logger.debug('Database tunnel stream opened', { nodeId, nodeType });
+              logger.debug('Database tunnel stream opened', { nodeId, nodeType, lane: connection.lane });
               return;
             }
-            if (message.open) await relay.handleOpen(nodeId, message.open);
-            else if (message.data) relay.handleData(nodeId, message.data);
-            else if (message.close) relay.handleClose(nodeId, message.close);
-            else if (message.error) relay.handleError(nodeId, message.error);
+            if (message.open) await relay.handleOpen(connection, message.open);
+            else if (message.data) relay.handleData(connection, message.data);
+            else if (message.close) relay.handleClose(connection, message.close);
+            else if (message.error) relay.handleError(connection, message.error);
             else throw new Error('unexpected database tunnel frame');
           })
           .catch((error) => {

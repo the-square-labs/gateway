@@ -25,6 +25,7 @@ import { AISandboxRunnerService } from '@/modules/ai/ai.sandbox-runner.service.j
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { LoggingClickHouseService } from '@/modules/logging/logging-clickhouse.service.js';
 import { LoggingMetadataService } from '@/modules/logging/logging-metadata.service.js';
+import { ManagedDatabaseTunnelProxy } from '@/modules/databases/managed-database-tunnel-proxy.js';
 import { CAService } from '@/modules/pki/ca.service.js';
 import type { RedisClient } from '@/services/cache.service.js';
 import { CryptoService } from '@/services/crypto.service.js';
@@ -114,6 +115,12 @@ async function main() {
         await stopGrpcServer();
       } catch (err) {
         logger.error('Failed to stop gRPC server', { err });
+      }
+
+      try {
+        await container.resolve(ManagedDatabaseTunnelProxy).shutdown();
+      } catch (err) {
+        logger.error('Failed to close managed database tunnel listeners', { err });
       }
 
       try {

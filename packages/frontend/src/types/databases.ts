@@ -35,6 +35,52 @@ export interface ManagedDatabaseCatalogEntry {
   versions: string[];
 }
 
+export type ManagedRedisEvictionPolicy =
+  | "noeviction"
+  | "allkeys-lru"
+  | "allkeys-lfu"
+  | "allkeys-random"
+  | "volatile-lru"
+  | "volatile-lfu"
+  | "volatile-random"
+  | "volatile-ttl";
+
+export interface ManagedRedisConfig {
+  maxmemoryPercent: number;
+  maxmemoryPolicy: ManagedRedisEvictionPolicy;
+  appendOnly: boolean;
+  appendFsync: "always" | "everysec" | "no";
+  rdbSnapshotsEnabled: boolean;
+  rdbSaveSeconds: number;
+  rdbSaveChanges: number;
+  autoAofRewritePercentage: number;
+  autoAofRewriteMinSizeMb: number;
+  maxclients: number;
+  timeoutSeconds: number;
+  tcpKeepaliveSeconds: number;
+  slowlogThresholdMicroseconds: number;
+  slowlogMaxLen: number;
+  activeDefrag: boolean;
+}
+
+export const DEFAULT_MANAGED_REDIS_CONFIG: ManagedRedisConfig = {
+  maxmemoryPercent: 75,
+  maxmemoryPolicy: "noeviction",
+  appendOnly: true,
+  appendFsync: "everysec",
+  rdbSnapshotsEnabled: true,
+  rdbSaveSeconds: 3600,
+  rdbSaveChanges: 1,
+  autoAofRewritePercentage: 100,
+  autoAofRewriteMinSizeMb: 64,
+  maxclients: 10_000,
+  timeoutSeconds: 0,
+  tcpKeepaliveSeconds: 300,
+  slowlogThresholdMicroseconds: 10_000,
+  slowlogMaxLen: 128,
+  activeDefrag: false,
+};
+
 export interface ManagedDatabaseCreateInput {
   name: string;
   type: DatabaseType;
@@ -51,6 +97,7 @@ export interface ManagedDatabaseCreateInput {
   publishedNativePort?: number;
   tlsEnabled?: boolean;
   clickhouseConfigXml?: string;
+  redisConfig?: ManagedRedisConfig;
 }
 
 export type ManagedDatabaseBindingTargetType = "container" | "deployment";
@@ -163,6 +210,7 @@ export interface DatabaseConnection {
   managed?: {
     id: string;
     nodeId: string;
+    nodeAvailable?: boolean;
     version: string;
     storageSizeBytes: number;
     runtimeConfig: { cpuCores: number; memoryMb: number; swapMb: number };
@@ -175,6 +223,7 @@ export interface DatabaseConnection {
     status: ManagedDatabaseStatus;
     lastError: string | null;
     clickhouseConfigXml?: string;
+    redisConfig?: ManagedRedisConfig;
   };
   createdById: string;
   updatedById: string | null;
@@ -190,6 +239,13 @@ export interface DatabaseMetricSnapshot {
   status: DatabaseHealthStatus;
   responseMs: number;
   metrics: Record<string, number | null>;
+}
+
+export interface ManagedPostgresExtension {
+  name: string;
+  defaultVersion: string;
+  installedVersion: string | null;
+  comment: string | null;
 }
 
 export interface PostgresTableColumn {

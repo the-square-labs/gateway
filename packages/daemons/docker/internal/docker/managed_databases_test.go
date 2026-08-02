@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"errors"
 	"github.com/moby/moby/api/types/container"
 	"os"
 	"path/filepath"
@@ -101,6 +102,26 @@ func TestManagedDatabaseRecreatesLegacyClickHouseForRuntimeProfile(t *testing.T)
 	}
 }
 
+func TestRedisUsesDedicatedDataDirectory(t *testing.T) {
+	mountPath := t.TempDir()
+	dataPath, err := prepareManagedDatabaseDataSource(
+		managedDatabaseRecord{Type: "redis", MountPath: mountPath},
+		"redis",
+	)
+	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			t.Skip("dedicated Redis ownership requires the root daemon account")
+		}
+		t.Fatalf("prepare dedicated Redis data source: %v", err)
+	}
+	if dataPath != filepath.Join(mountPath, "redis-data") {
+		t.Fatalf("expected dedicated Redis data path, got %q", dataPath)
+	}
+	if info, err := os.Stat(dataPath); err != nil || !info.IsDir() {
+		t.Fatalf("expected dedicated Redis data directory: %v", err)
+	}
+}
+
 func TestClickHouseRuntimeProfileDisablesInternalLogTables(t *testing.T) {
 	for _, setting := range []string{
 		`<logger replace="replace">`,
@@ -162,6 +183,65 @@ func TestValidateManagedDatabaseInputRequiresRedisDefaultOwner(t *testing.T) {
 	}
 }
 
+func TestManagedRedisConfigUsesSafeDefaults(t *testing.T) {
+	input := validManagedDatabaseInput()
+	input.Type = "redis"
+	input.OwnerUsername = "default"
+	input.MemoryBytes = 1024 * 1024 * 1024
+	config := managedRedisConfigText(input)
+	for _, expected := range []string{
+		"maxmemory 805306368",
+		"maxmemory-policy noeviction",
+		"appendonly yes",
+		"appendfsync everysec",
+		"save 3600 1",
+		"activedefrag no",
+	} {
+		if !strings.Contains(config, expected) {
+			t.Fatalf("expected generated Redis config to contain %q", expected)
+		}
+	}
+}
+
+func TestManagedRedisConfigChangeOrMemoryChangeRequiresRecreate(t *testing.T) {
+	input := validManagedDatabaseInput()
+	input.Type = "redis"
+	input.OwnerUsername = "default"
+	record := managedDatabaseRecord{Type: "redis", RedisConfigHash: managedRedisConfigHash(input)}
+	if managedDatabaseRequiresRecreate(record, input) {
+		t.Fatal("expected unchanged Redis config to keep the existing container")
+	}
+	input.MemoryBytes *= 2
+	if !managedDatabaseRequiresRecreate(record, input) {
+		t.Fatal("expected memory-derived maxmemory change to recreate Redis")
+	}
+	record.RedisConfigHash = managedRedisConfigHash(input)
+	config := defaultManagedRedisConfig()
+	config.MaxmemoryPolicy = "allkeys-lru"
+	input.RedisConfig = &config
+	if !managedDatabaseRequiresRecreate(record, input) {
+		t.Fatal("expected changed Redis settings to recreate Redis")
+	}
+}
+
+func TestValidateManagedRedisConfigRejectsInvalidValues(t *testing.T) {
+	input := validManagedDatabaseInput()
+	input.Type = "redis"
+	input.OwnerUsername = "default"
+	config := defaultManagedRedisConfig()
+	config.MaxmemoryPercent = 100
+	input.RedisConfig = &config
+	if err := validateManagedDatabaseInput(input); err == nil {
+		t.Fatal("expected invalid Redis maxmemory percentage to be rejected")
+	}
+	config = defaultManagedRedisConfig()
+	config.MaxmemoryPolicy = "unsafe-policy"
+	input.RedisConfig = &config
+	if err := validateManagedDatabaseInput(input); err == nil {
+		t.Fatal("expected invalid Redis eviction policy to be rejected")
+	}
+}
+
 func TestValidateManagedDatabaseInputRequiresNativeClickHousePublication(t *testing.T) {
 	input := validManagedDatabaseInput()
 	input.Type = "clickhouse"
@@ -190,6 +270,35 @@ func TestPostgresEngineEnvironmentUsesChildPGDATA(t *testing.T) {
 	env := engineEnvironment(validManagedDatabaseInput())
 	if !strings.Contains(strings.Join(env, "\n"), "PGDATA=/var/lib/postgresql/data/pgdata") {
 		t.Fatal("PostgreSQL must initialize below the ext4 mount root, not beside lost+found")
+	}
+}
+
+func TestManagedPostgresTLSHBARejectsPlainTCP(t *testing.T) {
+	config := managedPostgresTLSHBA
+	if strings.Contains(config, "\nhost ") {
+		t.Fatalf("PostgreSQL TLS HBA must not admit plaintext TCP: %q", config)
+	}
+	for _, rule := range []string{
+		"local all all trust",
+		"hostssl all all 0.0.0.0/0 scram-sha-256",
+		"hostssl all all ::0/0 scram-sha-256",
+	} {
+		if !strings.Contains(config, rule) {
+			t.Fatalf("PostgreSQL TLS HBA missing rule %q: %q", rule, config)
+		}
+	}
+
+	record := managedDatabaseRecord{MountPath: t.TempDir()}
+	path := managedPostgresTLSHBAPath(record)
+	if err := writeManagedPostgresTLSHBA(path); err != nil {
+		t.Fatalf("write PostgreSQL TLS HBA: %v", err)
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read PostgreSQL TLS HBA: %v", err)
+	}
+	if string(written) != config {
+		t.Fatalf("unexpected PostgreSQL TLS HBA content: %q", written)
 	}
 }
 

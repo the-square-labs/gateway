@@ -2,6 +2,7 @@ package docker
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -10,6 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/docker-daemon/internal/config"
 )
 
 type shortWriter struct {
@@ -58,6 +62,95 @@ func TestDatabaseTunnelHandshakeRejectsInvalidInput(t *testing.T) {
 	invalidLength := append([]byte(DatabaseTunnelHandshakeMagic), 0, 0)
 	if _, err := readDatabaseTunnelHandshake(bytes.NewReader(invalidLength)); err == nil {
 		t.Fatal("expected zero binding length to be rejected")
+	}
+}
+
+func TestDatabaseTunnelCapabilitiesUseSeparateV2Lanes(t *testing.T) {
+	bindingID := "33333333-3333-4333-8333-333333333333"
+	if got, want := databaseTunnelCapability("data", bindingID), databaseTunnelCapabilityPrefix+"data:"+bindingID; got != want {
+		t.Fatalf("unexpected data capability: got %q want %q", got, want)
+	}
+	if got, want := databaseTunnelCapability("interactive", ""), databaseTunnelCapabilityPrefix+"interactive"; got != want {
+		t.Fatalf("unexpected interactive capability: got %q want %q", got, want)
+	}
+	if got, want := databaseTunnelCapability("monitoring", ""), databaseTunnelCapabilityPrefix+"monitoring"; got != want {
+		t.Fatalf("unexpected monitoring capability: got %q want %q", got, want)
+	}
+}
+
+func TestDatabaseProfileDispatchesBindingPreparation(t *testing.T) {
+	bindingID := "33333333-3333-4333-8333-333333333333"
+	databaseID := "44444444-4444-4444-8444-444444444444"
+	registry, err := newDatabaseBindingRegistry(t.TempDir())
+	if err != nil {
+		t.Fatalf("create binding registry: %v", err)
+	}
+	plugin := &DockerPlugin{
+		cfg:              &config.Config{Docker: config.DockerConfig{Mode: "databases"}},
+		databaseBindings: registry,
+	}
+
+	result := plugin.HandleCommand(&pb.GatewayCommand{
+		Payload: &pb.GatewayCommand_DockerDatabaseBinding{DockerDatabaseBinding: &pb.DockerDatabaseBindingCommand{
+			Action:            "prepare",
+			BindingId:         bindingID,
+			ManagedDatabaseId: databaseID,
+		}},
+	})
+	if result.Success || result.Error != "database tunnel is not connected" {
+		t.Fatalf("binding preparation was not dispatched to its handler: success=%v error=%q", result.Success, result.Error)
+	}
+	if got, ok := registry.resolve(bindingID); !ok || got != databaseID {
+		t.Fatalf("binding registry was not prepared: got %q, ok=%v", got, ok)
+	}
+
+	capabilities := plugin.BuildRegisterMessage("node-id").Capabilities
+	advertisesBindings := false
+	for _, capability := range capabilities {
+		if capability == "docker_database_bindings_v1" {
+			advertisesBindings = true
+			break
+		}
+	}
+	if !advertisesBindings {
+		t.Fatalf("database-profile daemon did not advertise binding support: %v", capabilities)
+	}
+}
+
+func TestDatabaseTunnelRouterRevokesOnlyTheRemovedBindingLane(t *testing.T) {
+	firstBindingID := "33333333-3333-4333-8333-333333333333"
+	secondBindingID := "44444444-4444-4444-8444-444444444444"
+	firstContext, firstCancel := context.WithCancel(context.Background())
+	secondContext, secondCancel := context.WithCancel(context.Background())
+	defer firstCancel()
+	defer secondCancel()
+	router := &databaseTunnelRouter{slots: map[string]*databaseTunnelSlot{
+		databaseTunnelLaneKey("data", firstBindingID): {
+			cancel:    firstCancel,
+			transport: &databaseTunnelTransport{sessions: make(map[string]*databaseTunnelSession)},
+		},
+		databaseTunnelLaneKey("data", secondBindingID): {
+			cancel:    secondCancel,
+			transport: &databaseTunnelTransport{sessions: make(map[string]*databaseTunnelSession)},
+		},
+	}}
+
+	router.closeBinding(firstBindingID)
+	select {
+	case <-firstContext.Done():
+	default:
+		t.Fatal("expected removed binding lane to be cancelled")
+	}
+	select {
+	case <-secondContext.Done():
+		t.Fatal("unexpected cancellation of another binding lane")
+	default:
+	}
+	if router.transportForBinding(firstBindingID) != nil {
+		t.Fatal("expected removed binding lane to be unavailable")
+	}
+	if router.transportForBinding(secondBindingID) == nil {
+		t.Fatal("expected another binding lane to remain available")
 	}
 }
 

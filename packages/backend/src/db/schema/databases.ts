@@ -83,6 +83,33 @@ export interface ManagedDatabaseEngineConfig {
   publishTcp?: boolean;
   publishNativeTcp?: boolean;
   clickhouseConfigXml?: string;
+  redisConfig?: ManagedRedisConfig;
+}
+
+export interface ManagedRedisConfig {
+  maxmemoryPercent: number;
+  maxmemoryPolicy:
+    | 'noeviction'
+    | 'allkeys-lru'
+    | 'allkeys-lfu'
+    | 'allkeys-random'
+    | 'volatile-lru'
+    | 'volatile-lfu'
+    | 'volatile-random'
+    | 'volatile-ttl';
+  appendOnly: boolean;
+  appendFsync: 'always' | 'everysec' | 'no';
+  rdbSnapshotsEnabled: boolean;
+  rdbSaveSeconds: number;
+  rdbSaveChanges: number;
+  autoAofRewritePercentage: number;
+  autoAofRewriteMinSizeMb: number;
+  maxclients: number;
+  timeoutSeconds: number;
+  tcpKeepaliveSeconds: number;
+  slowlogThresholdMicroseconds: number;
+  slowlogMaxLen: number;
+  activeDefrag: boolean;
 }
 
 export interface ManagedDatabaseRuntimeConfig {

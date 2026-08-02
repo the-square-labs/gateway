@@ -48,4 +48,13 @@ describe('node service address', () => {
       })
     ).toBe('203.0.113.10');
   });
+
+  it('uses the first local address for an automatic published endpoint', () => {
+    expect(
+      getEffectivePublishedNodeIP({
+        serviceAddress: null,
+        lastHealthReport: { localIpAddresses: ['172.18.0.2'], publicIpAddresses: ['203.0.113.10'] } as never,
+      })
+    ).toBe('172.18.0.2');
+  });
 });

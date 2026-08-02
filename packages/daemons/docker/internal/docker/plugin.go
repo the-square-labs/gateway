@@ -41,7 +41,7 @@ type DockerPlugin struct {
 	databaseManager  *managedDatabaseManager
 	databaseBindings *databaseBindingRegistry
 	databaseTunnelMu sync.Mutex
-	databaseTunnel   *databaseTunnelTransport
+	databaseTunnel   *databaseTunnelRouter
 
 	// Log stream follow support
 	writer          *stream.Writer
@@ -124,6 +124,10 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		p.logger.Warn("stale migration artifact cleanup failed", "error", err)
 	}
 	p.archiveStreams = newArchiveLiveStore()
+	p.databaseBindings, err = newDatabaseBindingRegistry(p.cfg.StateDir)
+	if err != nil {
+		return fmt.Errorf("initialize managed database binding registry: %w", err)
+	}
 	if p.cfg.Docker.Mode == "databases" {
 		p.databaseManager, err = newManagedDatabaseManager(p.cfg, p.client, p.logger)
 		if err != nil {
@@ -131,11 +135,6 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		}
 		if err := p.databaseManager.reconcile(ctx); err != nil {
 			return fmt.Errorf("reconcile managed database storage: %w", err)
-		}
-	} else {
-		p.databaseBindings, err = newDatabaseBindingRegistry(p.cfg.StateDir)
-		if err != nil {
-			return fmt.Errorf("initialize managed database binding registry: %w", err)
 		}
 	}
 
@@ -166,9 +165,9 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		NginxVersion: p.version,
 		Capabilities: func() []string {
 			if p.cfg.Docker.Mode == "databases" {
-				return []string{"managed_databases_v1", "managed_database_storage_images_v1", "database_tunnel_v1"}
+				return []string{"managed_databases_v1", "managed_database_storage_images_v1", "database_tunnel_v2", "docker_database_bindings_v1"}
 			}
-			return []string{"docker_deployments_v1", "docker_migration_v1", "docker_archive_v1", "database_tunnel_v1", "docker_database_bindings_v1"}
+			return []string{"docker_deployments_v1", "docker_migration_v1", "docker_archive_v1", "database_tunnel_v2", "docker_database_bindings_v1"}
 		}(),
 	}
 }
@@ -177,12 +176,19 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 	result := &pb.CommandResult{CommandId: cmd.CommandId, Success: true}
 	if p.cfg.Docker.Mode == "databases" {
-		if payload, ok := cmd.Payload.(*pb.GatewayCommand_DockerDatabase); ok {
+		switch payload := cmd.Payload.(type) {
+		case *pb.GatewayCommand_DockerDatabase:
 			p.handleManagedDatabaseCommand(payload.DockerDatabase, result)
-			return result
+		case *pb.GatewayCommand_DockerDatabaseBinding:
+			// Binding preparation is intentionally supported by both Docker
+			// profiles: the database-profile daemon owns the remote end of a
+			// private database tunnel, while the general profile owns the local
+			// sidecar socket.
+			p.handleDatabaseBindingCommand(payload.DockerDatabaseBinding, result)
+		default:
+			result.Success = false
+			result.Error = "database-profile daemon accepts only docker_database and docker_database_binding commands"
 		}
-		result.Success = false
-		result.Error = "database-profile daemon accepts only docker_database commands"
 		return result
 	}
 

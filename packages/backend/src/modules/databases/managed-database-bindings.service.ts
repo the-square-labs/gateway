@@ -68,6 +68,11 @@ function encryptedPayload(value: string): { encryptedKey: string; encryptedDek: 
   throw new AppError(500, 'MANAGED_DATABASE_BINDING_CREDENTIALS_CORRUPT', 'Binding credentials are unavailable');
 }
 
+function isMissingContainerError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:no such container|container not found)/i.test(message);
+}
+
 export class ManagedDatabaseBindingService {
   private eventBus?: EventBusService;
 
@@ -107,7 +112,7 @@ export class ManagedDatabaseBindingService {
   }
 
   async create(managedDatabaseId: string, input: CreateManagedDatabaseBindingInput, userId: string) {
-    const database = await this.getReadyDatabase(managedDatabaseId);
+    const preflightDatabase = await this.getReadyDatabase(managedDatabaseId);
     await this.assertDockerNode(input.targetNodeId);
     this.assertConnectorImage();
     const targetResourceId = await this.resolveBindingTarget(input);
@@ -121,43 +126,58 @@ export class ManagedDatabaseBindingService {
     const id = crypto.randomUUID();
     const shortId = id.replaceAll('-', '').slice(0, 16);
     const credentials: BindingCredentials = {
-      username: `gw_${database.type}_${shortId.slice(0, 10)}`,
+      username: `gw_${preflightDatabase.type}_${shortId.slice(0, 10)}`,
       password: crypto.randomBytes(32).toString('base64url'),
-      ...(database.engineConfig.databaseName ? { databaseName: database.engineConfig.databaseName } : {}),
+      ...(preflightDatabase.engineConfig.databaseName ? { databaseName: preflightDatabase.engineConfig.databaseName } : {}),
     };
     const encryptedCredentials = JSON.stringify(this.cryptoService.encryptString(JSON.stringify(credentials)));
-    const [row] = await this.db
-      .insert(managedDatabaseBindings)
-      .values({
-        id,
-        managedDatabaseId,
-        targetNodeId: input.targetNodeId,
-        targetType: input.targetType,
-        targetResourceId,
-        networkName: `gateway-db-${shortId}`,
-        connectorName: `gateway-db-connector-${shortId}`,
-        connectorAlias: `db-${shortId}`,
-        environment: input.environment,
-        encryptedCredentials,
-        status: 'creating',
-        createdById: userId,
-        updatedById: userId,
-      })
-      .returning();
+    // Bindings provision external resources after this transaction. Lock the
+    // managed database row while inserting so lifecycle deletion cannot race
+    // past an empty binding list and cascade-delete an in-flight binding.
+    const { database, row } = await this.db.transaction(async (tx) => {
+      const [locked] = await tx
+        .select()
+        .from(managedDatabaseInstances)
+        .where(eq(managedDatabaseInstances.id, managedDatabaseId))
+        .for('update');
+      if (!locked) throw new AppError(404, 'MANAGED_DATABASE_NOT_FOUND', 'Managed database not found');
+      if (locked.status !== 'ready' || locked.pendingOperation) {
+        throw new AppError(409, 'MANAGED_DATABASE_NOT_READY', 'Managed database is not ready for bindings');
+      }
+      const [created] = await tx
+        .insert(managedDatabaseBindings)
+        .values({
+          id,
+          managedDatabaseId,
+          targetNodeId: input.targetNodeId,
+          targetType: input.targetType,
+          targetResourceId,
+          networkName: `gateway-db-${shortId}`,
+          connectorName: `gateway-db-connector-${shortId}`,
+          connectorAlias: `db-${shortId}`,
+          environment: input.environment,
+          encryptedCredentials,
+          status: 'creating',
+          createdById: userId,
+          updatedById: userId,
+        })
+        .returning();
+      return { database: locked, row: created! };
+    });
     await this.auditService.log({
       userId,
       action: 'database.managed.binding.create',
       resourceType: 'managed_database_binding',
-      resourceId: row!.id,
+      resourceId: row.id,
       details: {
         managedDatabaseId,
-        targetNodeId: row!.targetNodeId,
-        targetType: row!.targetType,
-        targetResourceId: row!.targetResourceId,
+        targetNodeId: row.targetNodeId,
+        targetType: row.targetType,
+        targetResourceId: row.targetResourceId,
       },
     });
-    this.emitBinding(database, row!, 'binding.created');
-    return this.provisionBinding(database, row!, userId, {
+    this.emitBinding(database, row, 'binding.created');
+    return this.provisionBinding(database, row, userId, {
       replaceExistingEnvironment: input.replaceExistingEnvironment === true,
       targetEnvironment: input.targetEnvironment,
     });
@@ -181,8 +201,8 @@ export class ManagedDatabaseBindingService {
     revokeDatabaseTunnelBinding(deleting!.id);
     try {
       await this.deprovisionBinding(database, deleting!, userId, options);
-    } catch {
-      return this.markBindingError(database, deleting!, 'delete');
+    } catch (error) {
+      return this.markBindingError(database, deleting!, 'delete', error);
     }
     await this.db.delete(managedDatabaseBindings).where(eq(managedDatabaseBindings.id, bindingId));
     await this.auditService.log({
@@ -250,6 +270,7 @@ export class ManagedDatabaseBindingService {
     options: { replaceExistingEnvironment?: boolean; targetEnvironment?: Record<string, string> } = {}
   ) {
     let principalCreated = false;
+    let databaseAdmissionPrepared = false;
     let admissionPrepared = false;
     let networkCreated = false;
     let connectorCreated = false;
@@ -273,6 +294,19 @@ export class ManagedDatabaseBindingService {
         )
       );
       principalCreated = true;
+
+      // A data lane is pre-registered on both nodes before the connector can
+      // accept workload traffic. Each binding therefore gets an isolated
+      // stream instead of competing with monitoring or other applications.
+      this.requireSuccess(
+        await this.nodeDispatch.sendDockerDatabaseBindingCommand(
+          database.nodeId,
+          'prepare',
+          binding.id,
+          binding.managedDatabaseId
+        )
+      );
+      databaseAdmissionPrepared = true;
 
       const prepared = await this.nodeDispatch.sendDockerDatabaseBindingCommand(
         binding.targetNodeId,
@@ -326,15 +360,16 @@ export class ManagedDatabaseBindingService {
       // value-aware, so it removes only values that this binding actually set.
       targetApplyAttempted = true;
       await this.applyTargetBinding(database, binding, credentials, userId, options);
-    } catch {
+    } catch (error) {
       await this.compensateProvisioning(database, binding, {
         principalCreated,
+        databaseAdmissionPrepared,
         admissionPrepared,
         networkCreated,
         connectorCreated,
         targetApplyAttempted,
       });
-      return this.markBindingError(database, binding, 'prepare');
+      return this.markBindingError(database, binding, 'prepare', error);
     }
 
     const [ready] = await this.db
@@ -359,6 +394,14 @@ export class ManagedDatabaseBindingService {
     this.requireSuccess(
       await this.nodeDispatch.sendDockerDatabaseBindingCommand(
         binding.targetNodeId,
+        'remove',
+        binding.id,
+        binding.managedDatabaseId
+      )
+    );
+    this.requireSuccess(
+      await this.nodeDispatch.sendDockerDatabaseBindingCommand(
+        database.nodeId,
         'remove',
         binding.id,
         binding.managedDatabaseId
@@ -491,27 +534,34 @@ export class ManagedDatabaseBindingService {
       return;
     }
 
-    const secrets = await this.dockerSecrets.list(binding.targetNodeId, binding.targetResourceId, true);
-    for (const secret of secrets) {
-      if (variableNames.includes(secret.key) && secret.value === expected[secret.key]) {
-        await this.dockerSecrets.delete(secret.id, binding.targetNodeId, userId, binding.targetResourceId);
+    try {
+      const secrets = await this.dockerSecrets.list(binding.targetNodeId, binding.targetResourceId, true);
+      for (const secret of secrets) {
+        if (variableNames.includes(secret.key) && secret.value === expected[secret.key]) {
+          await this.dockerSecrets.delete(secret.id, binding.targetNodeId, userId, binding.targetResourceId);
+        }
       }
+      const current = this.environmentMap(
+        await this.dockerManagement.getContainerEnv(binding.targetNodeId, binding.targetResourceId)
+      );
+      const ordinaryEnvironment = { ...(options.targetEnvironment ?? current) };
+      for (const name of variableNames) delete ordinaryEnvironment[name];
+      const removeEnv = Array.from(
+        new Set([...variableNames, ...Object.keys(current).filter((name) => !Object.hasOwn(ordinaryEnvironment, name))])
+      );
+      await this.dockerManagement.updateContainerEnv(
+        binding.targetNodeId,
+        binding.targetResourceId,
+        ordinaryEnvironment,
+        removeEnv,
+        userId
+      );
+    } catch (error) {
+      // The target may have been removed while a failed binding was being
+      // reconciled. Its sidecar, tunnel lane and database principal still
+      // need cleanup; only the no-longer-possible env update is optional.
+      if (!isMissingContainerError(error)) throw error;
     }
-    const current = this.environmentMap(
-      await this.dockerManagement.getContainerEnv(binding.targetNodeId, binding.targetResourceId)
-    );
-    const ordinaryEnvironment = { ...(options.targetEnvironment ?? current) };
-    for (const name of variableNames) delete ordinaryEnvironment[name];
-    const removeEnv = Array.from(
-      new Set([...variableNames, ...Object.keys(current).filter((name) => !Object.hasOwn(ordinaryEnvironment, name))])
-    );
-    await this.dockerManagement.updateContainerEnv(
-      binding.targetNodeId,
-      binding.targetResourceId,
-      ordinaryEnvironment,
-      removeEnv,
-      userId
-    );
     await this.nodeDispatch
       .sendDockerNetworkCommand(binding.targetNodeId, 'disconnect', {
         networkId: binding.networkName,
@@ -525,6 +575,7 @@ export class ManagedDatabaseBindingService {
     binding: ManagedDatabaseBindingRow,
     state: {
       principalCreated: boolean;
+      databaseAdmissionPrepared: boolean;
       admissionPrepared: boolean;
       networkCreated: boolean;
       connectorCreated: boolean;
@@ -545,6 +596,11 @@ export class ManagedDatabaseBindingService {
     if (state.admissionPrepared) {
       await this.nodeDispatch
         .sendDockerDatabaseBindingCommand(binding.targetNodeId, 'remove', binding.id, binding.managedDatabaseId)
+        .catch(() => undefined);
+    }
+    if (state.databaseAdmissionPrepared) {
+      await this.nodeDispatch
+        .sendDockerDatabaseBindingCommand(database.nodeId, 'remove', binding.id, binding.managedDatabaseId)
         .catch(() => undefined);
     }
     if (state.principalCreated) {
@@ -571,13 +627,16 @@ export class ManagedDatabaseBindingService {
   private async markBindingError(
     database: ManagedDatabaseRow,
     binding: ManagedDatabaseBindingRow,
-    operation: 'prepare' | 'delete'
+    operation: 'prepare' | 'delete',
+    error?: unknown
   ) {
+    const operationLabel = operation === 'prepare' ? 'Binding preparation failed' : 'Binding removal failed';
+    const detail = error instanceof Error ? error.message.replace(/\s+/g, ' ').trim() : '';
     const [failed] = await this.db
       .update(managedDatabaseBindings)
       .set({
         status: 'error',
-        lastError: operation === 'prepare' ? 'Binding preparation failed' : 'Binding removal failed',
+        lastError: detail ? `${operationLabel}: ${detail}`.slice(0, 1_000) : operationLabel,
         updatedAt: new Date(),
       })
       .where(eq(managedDatabaseBindings.id, binding.id))
@@ -604,14 +663,14 @@ export class ManagedDatabaseBindingService {
   }
 
   private requireSuccess(result: { success: boolean; detail?: string; error?: string }) {
-    if (!result.success) throw new Error('daemon operation failed');
+    if (!result.success) throw new Error(`daemon operation failed${result.error ? `: ${result.error}` : ''}`);
     return result;
   }
 
   private requireSuccessOrMissing(result: { success: boolean; detail?: string; error?: string }) {
     if (result.success) return result;
     if (/not found|no such/i.test(result.error ?? '')) return result;
-    throw new Error('daemon operation failed');
+    throw new Error(`daemon operation failed${result.error ? `: ${result.error}` : ''}`);
   }
 
   private tunnelSocketPath(detail: string | undefined) {

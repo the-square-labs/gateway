@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { isIP } from 'node:net';
 import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import type { ManagedDatabaseEngineConfig } from '@/db/schema/databases.js';
+import type { ManagedDatabaseEngineConfig, ManagedRedisConfig } from '@/db/schema/databases.js';
 import { databaseConnections, managedDatabaseBindings, managedDatabaseInstances, nodes } from '@/db/schema/index.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -17,9 +17,39 @@ import type {
   ManagedDatabaseListQuery,
   UpdateManagedDatabaseInput,
 } from './databases.schemas.js';
+import type { DatabaseConnectionService } from './databases.service.js';
 
 const MEBIBYTE = 1024 * 1024;
 const GIBIBYTE = 1024 * MEBIBYTE;
+
+function storageSizeBytesFromGb(storageSizeGb: number): number {
+  return Math.round(storageSizeGb * GIBIBYTE);
+}
+
+export const DEFAULT_MANAGED_REDIS_CONFIG: ManagedRedisConfig = {
+  maxmemoryPercent: 75,
+  maxmemoryPolicy: 'noeviction',
+  appendOnly: true,
+  appendFsync: 'everysec',
+  rdbSnapshotsEnabled: true,
+  rdbSaveSeconds: 3600,
+  rdbSaveChanges: 1,
+  autoAofRewritePercentage: 100,
+  autoAofRewriteMinSizeMb: 64,
+  maxclients: 10_000,
+  timeoutSeconds: 0,
+  tcpKeepaliveSeconds: 300,
+  slowlogThresholdMicroseconds: 10_000,
+  slowlogMaxLen: 128,
+  activeDefrag: false,
+};
+
+function managedRedisConfig(engineConfig: Record<string, unknown>): ManagedRedisConfig {
+  const stored = engineConfig.redisConfig;
+  return stored && typeof stored === 'object'
+    ? { ...DEFAULT_MANAGED_REDIS_CONFIG, ...(stored as Partial<ManagedRedisConfig>) }
+    : { ...DEFAULT_MANAGED_REDIS_CONFIG };
+}
 
 export const MANAGED_DATABASE_CATALOG = {
   postgres: {
@@ -103,6 +133,20 @@ export interface ManagedDatabaseRuntimeStats {
   pids: number;
 }
 
+export interface ManagedDatabaseLogTarget {
+  managedDatabaseId: string;
+  nodeId: string;
+  containerId: string;
+}
+
+export interface ManagedDatabaseLogOptions {
+  tailLines?: number;
+  follow?: boolean;
+  timestamps?: boolean;
+  since?: string;
+  until?: string;
+}
+
 function runtimeValues(runtimeConfig: Record<string, unknown>) {
   return {
     memoryBytes: Number(runtimeConfig.memoryLimitBytes ?? 0),
@@ -126,7 +170,7 @@ function managedDatabasePublishNativeTcp(row: ManagedDatabaseRow) {
     : row.publishedNativePort !== null;
 }
 
-async function daemonCreateConfig(
+export async function daemonCreateConfig(
   row: ManagedDatabaseRow,
   credentials: OwnerCredentials,
   publishTcp: boolean,
@@ -162,6 +206,7 @@ async function daemonCreateConfig(
         }
       : {}),
     clickhouseConfigXml: typeof engineConfig.clickhouseConfigXml === 'string' ? engineConfig.clickhouseConfigXml : '',
+    ...(row.type === 'redis' ? { redisConfig: managedRedisConfig(engineConfig) } : {}),
   };
 }
 
@@ -349,7 +394,8 @@ export class ManagedDatabaseService {
     private readonly auditService: AuditService,
     private readonly cryptoService: CryptoService,
     private readonly nodeDispatch: NodeDispatchService,
-    private readonly databaseCA?: DatabaseCAService
+    private readonly databaseCA?: DatabaseCAService,
+    private readonly databaseConnectionService?: DatabaseConnectionService
   ) {}
 
   setEventBus(bus: EventBusService) {
@@ -396,33 +442,76 @@ export class ManagedDatabaseService {
     return row ? safeManagedDatabaseView(row) : null;
   }
 
+  async getCanonicalScopeResourceId(id: string): Promise<string> {
+    const row = await this.getRow(id);
+    if (!row.databaseConnectionId) {
+      throw new AppError(
+        409,
+        'MANAGED_DATABASE_CONNECTION_UNAVAILABLE',
+        'Managed database is missing its canonical database connection'
+      );
+    }
+    return row.databaseConnectionId;
+  }
+
+  async resolveLogTarget(databaseConnectionId: string): Promise<ManagedDatabaseLogTarget> {
+    const row = await this.getRowByDatabaseConnectionId(databaseConnectionId);
+    const inspected = await this.nodeDispatch.sendDockerDatabaseCommand(row.nodeId, 'inspect', row.id, '', 10_000);
+    if (!inspected.success) {
+      throw new AppError(409, 'MANAGED_DATABASE_LOGS_UNAVAILABLE', inspected.error || 'Database logs are unavailable');
+    }
+    let detail: { containerId?: unknown } = {};
+    try {
+      detail = JSON.parse(inspected.detail || '{}') as { containerId?: unknown };
+    } catch {
+      throw new AppError(502, 'MANAGED_DATABASE_INVALID_RESPONSE', 'Database node returned an invalid log target');
+    }
+    const containerId = typeof detail.containerId === 'string' ? detail.containerId : '';
+    if (!containerId) {
+      throw new AppError(409, 'MANAGED_DATABASE_LOGS_UNAVAILABLE', 'Database container is not available');
+    }
+    return { managedDatabaseId: row.id, nodeId: row.nodeId, containerId };
+  }
+
+  async getLogs(databaseConnectionId: string, options: ManagedDatabaseLogOptions = {}): Promise<string[]> {
+    const row = await this.getRowByDatabaseConnectionId(databaseConnectionId);
+    const result = await this.nodeDispatch.sendManagedDatabaseLogsCommand(row.nodeId, row.id, options);
+    if (!result.success) {
+      throw new AppError(409, 'MANAGED_DATABASE_LOGS_UNAVAILABLE', result.error || 'Database logs are unavailable');
+    }
+    try {
+      const lines = JSON.parse(result.detail || '[]') as unknown;
+      return Array.isArray(lines) ? lines.filter((line): line is string => typeof line === 'string') : [];
+    } catch {
+      throw new AppError(502, 'MANAGED_DATABASE_INVALID_RESPONSE', 'Database node returned invalid logs');
+    }
+  }
+
   /**
-   * Older installations may already have lifecycle records. Backfill their
-   * canonical database resource without touching the running container or its
-   * storage volume.
+   * Backfill missing canonical database resources and restore their internal
+   * owner credentials. Direct-access accounts are intentionally restricted and
+   * must never be used by Gateway monitoring, Explorer, or Console.
    */
   async reconcileDatabaseConnections() {
-    const rows = await this.db
-      .select()
-      .from(managedDatabaseInstances)
-      .where(isNull(managedDatabaseInstances.databaseConnectionId));
+    const rows = await this.db.select().from(managedDatabaseInstances);
     for (const row of rows) {
-      if (row.databaseConnectionId) continue;
-      const credentials = JSON.parse(
-        this.cryptoService.decryptString(parseEncryptedCredentials(row.encryptedOwnerCredentials))
-      ) as OwnerCredentials;
-      const connection = await this.createCanonicalConnection(
-        row.name,
-        row.type,
-        credentials,
-        row.storageSizeBytes,
-        row.createdById
-      );
-      await this.db
-        .update(managedDatabaseInstances)
-        .set({ databaseConnectionId: connection.id, updatedAt: new Date() })
-        .where(eq(managedDatabaseInstances.id, row.id));
-      this.emit({ ...row, databaseConnectionId: connection.id }, 'connection.backfilled');
+      const ownerCredentials = this.ownerCredentials(row);
+      if (!row.databaseConnectionId) {
+        const connection = await this.createCanonicalConnection(
+          row.name,
+          row.type,
+          ownerCredentials,
+          row.storageSizeBytes,
+          row.createdById
+        );
+        await this.db
+          .update(managedDatabaseInstances)
+          .set({ databaseConnectionId: connection.id, updatedAt: new Date() })
+          .where(eq(managedDatabaseInstances.id, row.id));
+        this.emit({ ...row, databaseConnectionId: connection.id }, 'connection.backfilled');
+        continue;
+      }
+      await this.syncCanonicalConnectionCredentials(row, ownerCredentials, null);
     }
   }
 
@@ -448,6 +537,15 @@ export class ManagedDatabaseService {
         .update(managedDatabaseInstances)
         .set({ certificateId: issued.certificate.id, updatedAt: new Date() })
         .where(and(eq(managedDatabaseInstances.id, row.id), isNull(managedDatabaseInstances.certificateId)));
+    }
+  }
+
+  async warmReadyPostgresExtensionCatalogs() {
+    if (!this.databaseConnectionService) return;
+    const rows = await this.db.select().from(managedDatabaseInstances);
+    for (const row of rows) {
+      if (row.type !== 'postgres' || row.status !== 'ready' || !row.databaseConnectionId) continue;
+      await this.warmPostgresExtensionCatalog(row);
     }
   }
 
@@ -480,13 +578,14 @@ export class ManagedDatabaseService {
       ...(input.type === 'clickhouse' ? { publishNativeTcp } : {}),
       ...(credentials.databaseName ? { databaseName: credentials.databaseName } : {}),
       ...(input.clickhouseConfigXml ? { clickhouseConfigXml: input.clickhouseConfigXml } : {}),
+      ...(input.type === 'redis' ? { redisConfig: input.redisConfig ?? DEFAULT_MANAGED_REDIS_CONFIG } : {}),
     };
     const pendingOperation: ManagedDatabaseOperation = { id: crypto.randomUUID(), action: 'create' };
     const connection = await this.createCanonicalConnection(
       input.name,
       input.type,
-      input.publishTcp ? directCredentials : credentials,
-      input.storageSizeGb * GIBIBYTE,
+      credentials,
+      storageSizeBytesFromGb(input.storageSizeGb),
       userId,
       input.tags
     );
@@ -510,7 +609,7 @@ export class ManagedDatabaseService {
               engineConfig,
               encryptedOwnerCredentials,
               encryptedDirectCredentials,
-              storageSizeBytes: input.storageSizeGb * GIBIBYTE,
+              storageSizeBytes: storageSizeBytesFromGb(input.storageSizeGb),
               runtimeConfig,
               tlsEnabled: input.tlsEnabled,
               publishedPort: input.publishTcp ? (input.publishedPort ?? null) : null,
@@ -577,6 +676,13 @@ export class ManagedDatabaseService {
         'Only ClickHouse has a native TCP endpoint'
       );
     }
+    if (input.redisConfig !== undefined && existing.type !== 'redis') {
+      throw new AppError(
+        400,
+        'MANAGED_DATABASE_REDIS_CONFIG_UNSUPPORTED',
+        'Redis configuration is only available for Redis'
+      );
+    }
     if (input.publishNativeTcp && !nextPublishTcp) {
       throw new AppError(
         400,
@@ -607,6 +713,9 @@ export class ManagedDatabaseService {
     if (input.clickhouseConfigXml !== undefined) {
       if (input.clickhouseConfigXml) nextEngineConfig.clickhouseConfigXml = input.clickhouseConfigXml;
       else delete nextEngineConfig.clickhouseConfigXml;
+    }
+    if (input.redisConfig !== undefined) {
+      nextEngineConfig.redisConfig = input.redisConfig;
     }
     const next = {
       name: input.name ?? existing.name,
@@ -651,11 +760,12 @@ export class ManagedDatabaseService {
         pendingOperation,
         lastError: null,
       })
-      .where(eq(managedDatabaseInstances.id, id))
+      .where(and(eq(managedDatabaseInstances.id, id), isNull(managedDatabaseInstances.pendingOperation)))
       .returning();
-    await this.syncCanonicalConnectionName(updating!, existing.name);
-    await this.syncCanonicalConnectionTags(updating!, input.tags);
-    return this.dispatchUpdate(updating!, existingCredentials, nextPublishTcp, nextPublishNativeTcp, userId);
+    const claimed = this.requireOperationClaim(updating);
+    await this.syncCanonicalConnectionName(claimed, existing.name);
+    await this.syncCanonicalConnectionTags(claimed, input.tags);
+    return this.dispatchUpdate(claimed, existingCredentials, nextPublishTcp, nextPublishNativeTcp, userId);
   }
 
   async rotateCertificate(id: string, userId: string) {
@@ -701,8 +811,9 @@ export class ManagedDatabaseService {
         updatedById: userId,
         updatedAt: new Date(),
       })
-      .where(eq(managedDatabaseInstances.id, existing.id))
+      .where(and(eq(managedDatabaseInstances.id, existing.id), isNull(managedDatabaseInstances.pendingOperation)))
       .returning();
+    const claimed = this.requireOperationClaim(updating);
     await this.auditService.log({
       userId,
       action: 'database.managed.tls_certificate.rotate',
@@ -710,12 +821,12 @@ export class ManagedDatabaseService {
       resourceId: existing.id,
       details: { name: existing.name, type: existing.type, serviceAddresses },
     });
-    this.emit(updating!, 'tls_certificate.rotating');
+    this.emit(claimed, 'tls_certificate.rotating');
     return this.dispatchUpdate(
-      updating!,
+      claimed,
       credentials,
-      managedDatabasePublishTcp(updating!),
-      managedDatabasePublishNativeTcp(updating!),
+      managedDatabasePublishTcp(claimed),
+      managedDatabasePublishNativeTcp(claimed),
       userId
     );
   }
@@ -754,10 +865,11 @@ export class ManagedDatabaseService {
         updatedById: userId,
         updatedAt: new Date(),
       })
-      .where(eq(managedDatabaseInstances.id, id))
+      .where(and(eq(managedDatabaseInstances.id, id), isNull(managedDatabaseInstances.pendingOperation)))
       .returning();
-    this.emit(restarting!, 'restart.started');
-    return this.dispatchRestart(restarting!, credentials, userId);
+    const claimed = this.requireOperationClaim(restarting);
+    this.emit(claimed, 'restart.started');
+    return this.dispatchRestart(claimed, credentials, userId);
   }
 
   async delete(id: string, userId: string) {
@@ -770,30 +882,49 @@ export class ManagedDatabaseService {
       );
     }
     await this.assertDatabaseNode(row.nodeId);
-    const [binding] = await this.db
-      .select({ id: managedDatabaseBindings.id })
-      .from(managedDatabaseBindings)
-      .where(eq(managedDatabaseBindings.managedDatabaseId, id))
-      .limit(1);
-    if (binding) {
-      throw new AppError(
-        409,
-        'MANAGED_DATABASE_BINDINGS_EXIST',
-        'Delete managed database bindings before deleting the database'
-      );
-    }
-    const [deleting] = await this.db
-      .update(managedDatabaseInstances)
-      .set({
-        status: 'deleting',
-        pendingOperation: { id: crypto.randomUUID(), action: 'delete' },
-        lastError: null,
-        updatedById: userId,
-        updatedAt: new Date(),
-      })
-      .where(eq(managedDatabaseInstances.id, id))
-      .returning();
-    return this.dispatchDelete(deleting!, userId);
+    const deleting = await this.db.transaction(async (tx) => {
+      // This shares the same row lock as binding creation. The binding query
+      // must run after acquiring it: otherwise a concurrent insertion could
+      // be cascaded away while its connector and credentials are provisioning.
+      const [locked] = await tx
+        .select()
+        .from(managedDatabaseInstances)
+        .where(eq(managedDatabaseInstances.id, id))
+        .for('update');
+      if (!locked) throw new AppError(404, 'MANAGED_DATABASE_NOT_FOUND', 'Managed database not found');
+      if (locked.pendingOperation) {
+        throw new AppError(
+          409,
+          'MANAGED_DATABASE_OPERATION_PENDING',
+          'Managed database operation is still being reconciled'
+        );
+      }
+      const [binding] = await tx
+        .select({ id: managedDatabaseBindings.id })
+        .from(managedDatabaseBindings)
+        .where(eq(managedDatabaseBindings.managedDatabaseId, id))
+        .limit(1);
+      if (binding) {
+        throw new AppError(
+          409,
+          'MANAGED_DATABASE_BINDINGS_EXIST',
+          'Delete managed database bindings before deleting the database'
+        );
+      }
+      const [claimed] = await tx
+        .update(managedDatabaseInstances)
+        .set({
+          status: 'deleting',
+          pendingOperation: { id: crypto.randomUUID(), action: 'delete' },
+          lastError: null,
+          updatedById: userId,
+          updatedAt: new Date(),
+        })
+        .where(eq(managedDatabaseInstances.id, id))
+        .returning();
+      return this.requireOperationClaim(claimed);
+    });
+    return this.dispatchDelete(deleting, userId);
   }
 
   async retryProvisioning(id: string, userId: string) {
@@ -814,21 +945,28 @@ export class ManagedDatabaseService {
     const [retrying] = await this.db
       .update(managedDatabaseInstances)
       .set({ status: 'creating', pendingOperation, lastError: null, updatedById: userId, updatedAt: new Date() })
-      .where(eq(managedDatabaseInstances.id, id))
+      .where(
+        and(
+          eq(managedDatabaseInstances.id, id),
+          eq(managedDatabaseInstances.status, 'error'),
+          isNull(managedDatabaseInstances.pendingOperation)
+        )
+      )
       .returning();
+    const claimed = this.requireOperationClaim(retrying);
     await this.auditService.log({
       userId,
       action: 'database.managed.retry_provisioning',
       resourceType: 'managed_database',
       resourceId: id,
-      details: { name: retrying!.name, type: retrying!.type, nodeId: retrying!.nodeId },
+      details: { name: claimed.name, type: claimed.type, nodeId: claimed.nodeId },
     });
-    this.emit(retrying!, 'retrying');
+    this.emit(claimed, 'retrying');
     return this.dispatchCreate(
-      retrying!,
+      claimed,
       credentials,
-      managedDatabasePublishTcp(retrying!),
-      managedDatabasePublishNativeTcp(retrying!),
+      managedDatabasePublishTcp(claimed),
+      managedDatabasePublishNativeTcp(claimed),
       userId
     );
   }
@@ -893,7 +1031,7 @@ export class ManagedDatabaseService {
       })
       .where(eq(managedDatabaseInstances.id, id))
       .returning();
-    await this.syncCanonicalConnectionCredentials(updated!, credentials, userId);
+    await this.syncCanonicalConnectionCredentials(updated!, owner, userId);
     await this.auditService.log({
       userId,
       action: 'database.managed.direct_access.rotate',
@@ -966,12 +1104,8 @@ export class ManagedDatabaseService {
     }
     if (!result.success) return this.markError(row, 'create', result.error);
     try {
-      if (direct) {
-        await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
-        await this.syncCanonicalConnectionCredentials(direct.row, direct.credentials, userId);
-      } else {
-        await this.syncCanonicalConnectionCredentials(row, credentials, userId);
-      }
+      if (direct) await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
+      await this.syncCanonicalConnectionCredentials(direct?.row ?? row, credentials, userId);
       const current = direct?.row ?? row;
       const publishedPort = await this.resolvePublishedPort(current, publishTcp, result);
       const publishedNativePort = await this.resolvePublishedNativePort(current, publishNativeTcp, result);
@@ -1001,12 +1135,8 @@ export class ManagedDatabaseService {
     }
     if (!result.success) return this.markError(row, 'update', result.error);
     try {
-      if (direct) {
-        await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
-        await this.syncCanonicalConnectionCredentials(direct.row, direct.credentials, userId);
-      } else {
-        await this.syncCanonicalConnectionCredentials(row, credentials, userId);
-      }
+      if (direct) await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
+      await this.syncCanonicalConnectionCredentials(direct?.row ?? row, credentials, userId);
       const current = direct?.row ?? row;
       const publishedPort = await this.resolvePublishedPort(current, publishTcp, result);
       const publishedNativePort = await this.resolvePublishedNativePort(current, publishNativeTcp, result);
@@ -1024,6 +1154,7 @@ export class ManagedDatabaseService {
         .where(eq(managedDatabaseInstances.id, current.id))
         .returning();
       await this.syncCanonicalConnectionStorageLimit(ready!);
+      await this.warmPostgresExtensionCatalog(ready!);
       await this.auditService.log({
         userId,
         action: 'database.managed.update',
@@ -1093,10 +1224,10 @@ export class ManagedDatabaseService {
         return;
       }
       // A create/update may have reached Docker before the controller lost its
-      // response. Published databases use the scoped direct principal; private
-      // databases keep Gateway's canonical connection on the internal owner.
+      // response. Direct principals are for published client access only;
+      // Gateway's canonical connection always keeps the internal owner.
       const direct = managedDatabasePublishTcp(row) ? await this.ensureDirectAccessCredentials(row, null) : null;
-      if (!direct) await this.syncCanonicalConnectionCredentials(row, this.ownerCredentials(row), null);
+      await this.syncCanonicalConnectionCredentials(direct?.row ?? row, this.ownerCredentials(row), null);
       // Inspect is also the recovery source of truth for an auto-assigned
       // host port when the original create/update response was lost.
       await this.markReady(direct?.row ?? row, null, allocatedPublishedPort(result) ?? row.publishedPort, state.status);
@@ -1154,6 +1285,15 @@ export class ManagedDatabaseService {
     return row.pendingOperation;
   }
 
+  private requireOperationClaim(row: ManagedDatabaseRow | undefined): ManagedDatabaseRow {
+    if (row) return row;
+    throw new AppError(
+      409,
+      'MANAGED_DATABASE_OPERATION_PENDING',
+      'Managed database operation is still being reconciled'
+    );
+  }
+
   private async beginLifecycleTransition(
     id: string,
     userId: string,
@@ -1187,10 +1327,17 @@ export class ManagedDatabaseService {
         updatedById: userId,
         updatedAt: new Date(),
       })
-      .where(eq(managedDatabaseInstances.id, id))
+      .where(
+        and(
+          eq(managedDatabaseInstances.id, id),
+          eq(managedDatabaseInstances.status, requiredStatus),
+          isNull(managedDatabaseInstances.pendingOperation)
+        )
+      )
       .returning();
-    this.emit(pending!, `${action}.started`);
-    return this.dispatchLifecycleTransition(pending!, userId, action, targetStatus);
+    const claimed = this.requireOperationClaim(pending);
+    this.emit(claimed, `${action}.started`);
+    return this.dispatchLifecycleTransition(claimed, userId, action, targetStatus);
   }
 
   private async dispatchLifecycleTransition(
@@ -1244,6 +1391,7 @@ export class ManagedDatabaseService {
         details: { name: updated!.name, type: updated!.type },
       });
     }
+    await this.warmPostgresExtensionCatalog(updated!);
     this.emit(updated!, status);
     return safeManagedDatabaseView(updated!);
   }
@@ -1268,6 +1416,7 @@ export class ManagedDatabaseService {
       })
       .where(eq(managedDatabaseInstances.id, row.id))
       .returning();
+    await this.warmPostgresExtensionCatalog(ready!);
     this.emit(ready!, status);
     return safeManagedDatabaseView(ready!);
   }
@@ -1280,6 +1429,18 @@ export class ManagedDatabaseService {
       .returning();
     this.emit(pending!, 'reconciling');
     return safeManagedDatabaseView(pending!);
+  }
+
+  private async warmPostgresExtensionCatalog(row: ManagedDatabaseRow) {
+    if (
+      row.type !== 'postgres' ||
+      row.status !== 'ready' ||
+      !row.databaseConnectionId ||
+      !this.databaseConnectionService
+    ) {
+      return;
+    }
+    await this.databaseConnectionService.warmManagedPostgresExtensionCatalog(row.databaseConnectionId).catch(() => {});
   }
 
   private async dispatchRestart(row: ManagedDatabaseRow, credentials: OwnerCredentials, userId: string | null) {
@@ -1325,6 +1486,9 @@ export class ManagedDatabaseService {
   }
 
   private async completeDelete(row: ManagedDatabaseRow, userId: string | null) {
+    if (row.databaseConnectionId && this.databaseConnectionService) {
+      await this.databaseConnectionService.disposeClient(row.databaseConnectionId);
+    }
     await this.db.delete(managedDatabaseInstances).where(eq(managedDatabaseInstances.id, row.id));
     if (row.databaseConnectionId) {
       await this.db.delete(databaseConnections).where(eq(databaseConnections.id, row.databaseConnectionId));
@@ -1344,6 +1508,16 @@ export class ManagedDatabaseService {
       .select()
       .from(managedDatabaseInstances)
       .where(eq(managedDatabaseInstances.id, id))
+      .limit(1);
+    if (!row) throw new AppError(404, 'MANAGED_DATABASE_NOT_FOUND', 'Managed database not found');
+    return row;
+  }
+
+  private async getRowByDatabaseConnectionId(databaseConnectionId: string): Promise<ManagedDatabaseRow> {
+    const [row] = await this.db
+      .select()
+      .from(managedDatabaseInstances)
+      .where(eq(managedDatabaseInstances.databaseConnectionId, databaseConnectionId))
       .limit(1);
     if (!row) throw new AppError(404, 'MANAGED_DATABASE_NOT_FOUND', 'Managed database not found');
     return row;
@@ -1452,7 +1626,6 @@ export class ManagedDatabaseService {
     if (existing) {
       if (provision) {
         await this.provisionDirectAccessPrincipal(row, owner, existing);
-        await this.syncCanonicalConnectionCredentials(row, existing, userId);
       }
       return { row, credentials: existing };
     }
@@ -1467,7 +1640,6 @@ export class ManagedDatabaseService {
       })
       .where(eq(managedDatabaseInstances.id, row.id))
       .returning();
-    if (provision) await this.syncCanonicalConnectionCredentials(updated!, credentials, userId);
     return { row: updated!, credentials };
   }
 

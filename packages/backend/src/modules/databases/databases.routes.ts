@@ -1,4 +1,5 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
+import type { MiddlewareHandler } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
@@ -35,6 +36,8 @@ import {
   deletePostgresRowRoute,
   deleteRedisKeyRoute,
   deleteSqlRowRoute,
+  disableManagedPostgresExtensionRoute,
+  enableManagedPostgresExtensionRoute,
   executePostgresQueryRoute,
   executeRedisCommandRoute,
   executeSqlRoute,
@@ -51,6 +54,7 @@ import {
   listManagedDatabaseBindingsRoute,
   listManagedDatabaseCatalogRoute,
   listManagedDatabasesRoute,
+  listManagedPostgresExtensionsRoute,
   listPostgresSchemasRoute,
   listPostgresTablesRoute,
   listSqlNamespacesRoute,
@@ -130,6 +134,35 @@ function ensureAnyDatabaseScope(c: any, databaseId: string, scopeBases: string[]
   }
 }
 
+/**
+ * Managed-database routes use the instance ID in their URL, but scoped
+ * database permissions are issued for the canonical database connection that
+ * users see everywhere else. Resolve that mapping before checking a
+ * resource-scoped grant so the UI and API authorize the same resource.
+ */
+export function requireManagedDatabaseScopes(...scopeBases: string[]): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    const scopes = c.get('effectiveScopes') ?? [];
+    const missingBases = scopeBases.filter((scopeBase) => !hasScope(scopes, scopeBase));
+    if (missingBases.length > 0) {
+      const managedDatabaseId = c.req.param('id');
+      if (!managedDatabaseId) {
+        throw new AppError(400, 'MANAGED_DATABASE_ID_REQUIRED', 'Managed database id is required');
+      }
+      const canonicalDatabaseId = await container
+        .resolve(ManagedDatabaseService)
+        .getCanonicalScopeResourceId(managedDatabaseId);
+      const missingResources = missingBases.filter(
+        (scopeBase) => !hasScope(scopes, `${scopeBase}:${canonicalDatabaseId}`)
+      );
+      if (missingResources.length > 0) {
+        throw new AppError(403, 'FORBIDDEN', `Missing required scope: ${missingResources.join(', ')}`);
+      }
+    }
+    await next();
+  };
+}
+
 type ManagedDatabaseBindingTarget = {
   targetNodeId: string;
   targetType: 'container' | 'deployment';
@@ -141,20 +174,30 @@ type ManagedDatabaseBindingTarget = {
  * the two authorization domains explicit so a database editor cannot inject
  * credentials into someone else's application.
  */
-async function assertManagedDatabaseBindingTargetAccess(c: any, target: ManagedDatabaseBindingTarget) {
+export async function assertManagedDatabaseBindingTargetAccess(c: any, target: ManagedDatabaseBindingTarget) {
   const scopes = c.get('effectiveScopes') || [];
   if (target.targetType === 'deployment') {
     for (const scope of ['docker:containers:edit', 'docker:containers:manage', 'docker:containers:secrets']) {
       assertDockerResourceScope(scopes, scope, target.targetNodeId, target.targetResourceId);
     }
   } else {
-    const inspected = await container
-      .resolve(DockerManagementService)
-      .inspectContainer(target.targetNodeId, target.targetResourceId);
-    const resourceId = String(inspected?.scopeResourceId ?? '');
-    if (!resourceId) throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Binding target container not found');
-    for (const scope of ['docker:containers:environment', 'docker:containers:secrets']) {
-      assertDockerResourceScope(scopes, scope, target.targetNodeId, resourceId);
+    const targetScopes = ['docker:containers:environment', 'docker:containers:secrets'];
+    // A node- or globally-scoped token does not need to inspect the target
+    // first. This keeps binding cleanup possible after a workload has already
+    // been removed, while resource-scoped tokens retain the strict identity
+    // lookup below.
+    const canAccessNode = targetScopes.every(
+      (scope) => hasScope(scopes, scope) || hasScope(scopes, `${scope}:${target.targetNodeId}`)
+    );
+    if (!canAccessNode) {
+      const inspected = await container
+        .resolve(DockerManagementService)
+        .inspectContainer(target.targetNodeId, target.targetResourceId);
+      const resourceId = String(inspected?.scopeResourceId ?? '');
+      if (!resourceId) throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Binding target container not found');
+      for (const scope of targetScopes) {
+        assertDockerResourceScope(scopes, scope, target.targetNodeId, resourceId);
+      }
     }
   }
   for (const scope of ['docker:networks:create', 'docker:networks:edit', 'docker:networks:delete']) {
@@ -163,6 +206,17 @@ async function assertManagedDatabaseBindingTargetAccess(c: any, target: ManagedD
 }
 
 databaseRoutes.use('*', authMiddleware);
+
+databaseRoutes.get('/:id/logs', requireScopeForResource('databases:view', 'id'), async (c) => {
+  const requestedTail = Number(c.req.query('tail')) || 500;
+  const tailLines = Math.min(Math.max(Math.trunc(requestedTail), 1), 5_000);
+  const data = await container.resolve(ManagedDatabaseService).getLogs(c.req.param('id')!, {
+    tailLines,
+    follow: false,
+    timestamps: c.req.query('timestamps') !== 'false',
+  });
+  return c.json({ data });
+});
 
 databaseRoutes.openapi({ ...listManagedDatabaseCatalogRoute, middleware: requireScope('databases:view') }, async (c) =>
   c.json({ data: container.resolve(ManagedDatabaseService).listCatalog() })
@@ -180,12 +234,12 @@ databaseRoutes.openapi({ ...createManagedDatabaseRoute, middleware: requireScope
 });
 
 databaseRoutes.openapi(
-  { ...getManagedDatabaseRoute, middleware: requireScopeForResource('databases:view', 'id') },
+  { ...getManagedDatabaseRoute, middleware: requireManagedDatabaseScopes('databases:view') },
   async (c) => c.json({ data: await container.resolve(ManagedDatabaseService).get(c.req.param('id')!) })
 );
 
 databaseRoutes.openapi(
-  { ...updateManagedDatabaseRoute, middleware: requireScopeForResource('databases:edit', 'id') },
+  { ...updateManagedDatabaseRoute, middleware: requireManagedDatabaseScopes('databases:edit') },
   async (c) => {
     const user = c.get('user')!;
     const input = UpdateManagedDatabaseSchema.parse(await c.req.json());
@@ -195,7 +249,7 @@ databaseRoutes.openapi(
 );
 
 databaseRoutes.openapi(
-  { ...deleteManagedDatabaseRoute, middleware: requireScopeForResource('databases:delete', 'id') },
+  { ...deleteManagedDatabaseRoute, middleware: requireManagedDatabaseScopes('databases:delete') },
   async (c) => {
     const user = c.get('user')!;
     const data = await container.resolve(ManagedDatabaseService).delete(c.req.param('id')!, user.id);
@@ -204,7 +258,7 @@ databaseRoutes.openapi(
 );
 
 databaseRoutes.openapi(
-  { ...retryManagedDatabaseProvisioningRoute, middleware: requireScopeForResource('databases:edit', 'id') },
+  { ...retryManagedDatabaseProvisioningRoute, middleware: requireManagedDatabaseScopes('databases:edit') },
   async (c) => {
     const user = c.get('user')!;
     const data = await container.resolve(ManagedDatabaseService).retryProvisioning(c.req.param('id')!, user.id);
@@ -213,7 +267,7 @@ databaseRoutes.openapi(
 );
 
 databaseRoutes.openapi(
-  { ...restartManagedDatabaseRoute, middleware: requireScopeForResource('databases:edit', 'id') },
+  { ...restartManagedDatabaseRoute, middleware: requireManagedDatabaseScopes('databases:edit') },
   async (c) => {
     const user = c.get('user')!;
     return c.json({ data: await container.resolve(ManagedDatabaseService).restart(c.req.param('id')!, user.id) });
@@ -221,7 +275,7 @@ databaseRoutes.openapi(
 );
 
 databaseRoutes.openapi(
-  { ...pauseManagedDatabaseRoute, middleware: requireScopeForResource('databases:edit', 'id') },
+  { ...pauseManagedDatabaseRoute, middleware: requireManagedDatabaseScopes('databases:edit') },
   async (c) => {
     const user = c.get('user')!;
     return c.json({ data: await container.resolve(ManagedDatabaseService).pause(c.req.param('id')!, user.id) });
@@ -229,7 +283,7 @@ databaseRoutes.openapi(
 );
 
 databaseRoutes.openapi(
-  { ...unpauseManagedDatabaseRoute, middleware: requireScopeForResource('databases:edit', 'id') },
+  { ...unpauseManagedDatabaseRoute, middleware: requireManagedDatabaseScopes('databases:edit') },
   async (c) => {
     const user = c.get('user')!;
     return c.json({ data: await container.resolve(ManagedDatabaseService).unpause(c.req.param('id')!, user.id) });
@@ -239,13 +293,16 @@ databaseRoutes.openapi(
 databaseRoutes.openapi(
   {
     ...revealManagedDatabaseCredentialsRoute,
-    middleware: requireScopeForResource('databases:credentials:reveal', 'id'),
+    middleware: requireManagedDatabaseScopes('databases:credentials:reveal'),
   },
   async (c) => c.json({ data: await container.resolve(ManagedDatabaseService).revealCredentials(c.req.param('id')!) })
 );
 
 databaseRoutes.openapi(
-  { ...rotateManagedDatabaseDirectCredentialsRoute, middleware: requireScopeForResource('databases:edit', 'id') },
+  {
+    ...rotateManagedDatabaseDirectCredentialsRoute,
+    middleware: requireManagedDatabaseScopes('databases:edit', 'databases:credentials:reveal'),
+  },
   async (c) => {
     const user = c.get('user')!;
     return c.json({
@@ -255,7 +312,7 @@ databaseRoutes.openapi(
 );
 
 databaseRoutes.openapi(
-  { ...rotateManagedDatabaseCertificateRoute, middleware: requireScopeForResource('databases:edit', 'id') },
+  { ...rotateManagedDatabaseCertificateRoute, middleware: requireManagedDatabaseScopes('databases:edit') },
   async (c) => {
     const user = c.get('user')!;
     return c.json({
@@ -265,12 +322,12 @@ databaseRoutes.openapi(
 );
 
 databaseRoutes.openapi(
-  { ...listManagedDatabaseBindingsRoute, middleware: requireScopeForResource('databases:view', 'id') },
+  { ...listManagedDatabaseBindingsRoute, middleware: requireManagedDatabaseScopes('databases:view') },
   async (c) => c.json({ data: await container.resolve(ManagedDatabaseBindingService).list(c.req.param('id')!) })
 );
 
 databaseRoutes.openapi(
-  { ...createManagedDatabaseBindingRoute, middleware: requireScopeForResource('databases:edit', 'id') },
+  { ...createManagedDatabaseBindingRoute, middleware: requireManagedDatabaseScopes('databases:edit') },
   async (c) => {
     const user = c.get('user')!;
     const input = CreateManagedDatabaseBindingSchema.parse(await c.req.json());
@@ -281,7 +338,7 @@ databaseRoutes.openapi(
 );
 
 databaseRoutes.openapi(
-  { ...deleteManagedDatabaseBindingRoute, middleware: requireScopeForResource('databases:delete', 'id') },
+  { ...deleteManagedDatabaseBindingRoute, middleware: requireManagedDatabaseScopes('databases:delete') },
   async (c) => {
     const user = c.get('user')!;
     const bindings = container.resolve(ManagedDatabaseBindingService);
@@ -298,7 +355,7 @@ databaseRoutes.openapi(
 databaseRoutes.openapi(
   {
     ...revealManagedDatabaseBindingCredentialsRoute,
-    middleware: requireScopeForResource('databases:credentials:reveal', 'id'),
+    middleware: requireManagedDatabaseScopes('databases:credentials:reveal'),
   },
   async (c) =>
     c.json({
@@ -678,6 +735,42 @@ databaseRoutes.openapi(
 );
 
 // Postgres explorer
+databaseRoutes.openapi(
+  { ...listManagedPostgresExtensionsRoute, middleware: requireScopeForResource('databases:view', 'id') },
+  async (c) => {
+    ensureAnyDatabaseScope(c, c.req.param('id')!, [
+      'databases:query:read',
+      'databases:query:write',
+      'databases:query:admin',
+    ]);
+    const service = container.resolve(DatabaseConnectionService);
+    const data = await service.listManagedPostgresExtensions(c.req.param('id')!);
+    return c.json({ data });
+  }
+);
+
+databaseRoutes.openapi(
+  { ...enableManagedPostgresExtensionRoute, middleware: requireScopeForResource('databases:view', 'id') },
+  async (c) => {
+    ensureAnyDatabaseScope(c, c.req.param('id')!, ['databases:query:admin']);
+    const service = container.resolve(DatabaseConnectionService);
+    const user = c.get('user')!;
+    const data = await service.enableManagedPostgresExtension(c.req.param('id')!, c.req.param('name')!, user.id);
+    return c.json({ data });
+  }
+);
+
+databaseRoutes.openapi(
+  { ...disableManagedPostgresExtensionRoute, middleware: requireScopeForResource('databases:view', 'id') },
+  async (c) => {
+    ensureAnyDatabaseScope(c, c.req.param('id')!, ['databases:query:admin']);
+    const service = container.resolve(DatabaseConnectionService);
+    const user = c.get('user')!;
+    const data = await service.disableManagedPostgresExtension(c.req.param('id')!, c.req.param('name')!, user.id);
+    return c.json({ data });
+  }
+);
+
 databaseRoutes.openapi(
   { ...listPostgresSchemasRoute, middleware: requireScopeForResource('databases:view', 'id') },
   async (c) => {

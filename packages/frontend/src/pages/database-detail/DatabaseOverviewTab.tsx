@@ -118,6 +118,8 @@ export function DatabaseOverviewTab({
       const diskMetricKey =
         database.type === "clickhouse" ? "disk_used_pct" : "database_size_bytes";
       const diskMetric = metrics.find((metric) => metric.key === diskMetricKey);
+      const engineMetricKeysToHide =
+        database.type === "redis" ? new Set(["used_memory_bytes"]) : new Set<string>();
       const runtimeByKey = new Map(managedMetrics.map((metric) => [metric.key, metric]));
       const resourceMetrics = [
         runtimeByKey.get("managed_memory_usage_bytes"),
@@ -128,7 +130,9 @@ export function DatabaseOverviewTab({
       return [
         ...(diskMetric ? [diskMetric] : []),
         ...resourceMetrics,
-        ...metrics.filter((metric) => metric.key !== diskMetricKey),
+        ...metrics.filter(
+          (metric) => metric.key !== diskMetricKey && !engineMetricKeysToHide.has(metric.key)
+        ),
         ...managedMetrics.filter(
           (metric) =>
             metric.key !== "managed_memory_usage_bytes" &&
@@ -310,6 +314,14 @@ export function DatabaseOverviewTab({
     const usedMemory = latest.metrics.used_memory_bytes ?? null;
     const maxMemory = latest.metrics.maxmemory_bytes ?? null;
     const memoryPct = latest.metrics.memory_pct ?? null;
+    const databaseSizeBytes = latest.metrics.database_size_bytes ?? null;
+    const sizeLimitBytes =
+      database.managed?.storageSizeBytes ??
+      (database.manualSizeLimitMb != null ? database.manualSizeLimitMb * 1024 * 1024 : null);
+    const databaseSizePct =
+      databaseSizeBytes != null && sizeLimitBytes && sizeLimitBytes > 0
+        ? (databaseSizeBytes / sizeLimitBytes) * 100
+        : null;
 
     return appendManaged([
       {
@@ -317,6 +329,19 @@ export function DatabaseOverviewTab({
         label: "Latency",
         value: formatMetricValue("latency_ms", latest.metrics.latency_ms ?? null),
         history: history.map((item) => item.metrics.latency_ms ?? 0),
+      },
+      {
+        key: "database_size_bytes",
+        label: "Database Size",
+        value:
+          databaseSizeBytes == null
+            ? "-"
+            : sizeLimitBytes && sizeLimitBytes > 0
+              ? `${formatMetricValue("database_size_bytes", databaseSizeBytes)} / ${formatMetricValue("database_size_bytes", sizeLimitBytes)}`
+              : formatMetricValue("database_size_bytes", databaseSizeBytes),
+        history: history.map((item) => item.metrics.database_size_bytes ?? 0),
+        progress: databaseSizePct == null ? undefined : { percent: databaseSizePct },
+        subtitle: databaseSizePct == null ? undefined : `${databaseSizePct.toFixed(1)}% used`,
       },
       {
         key: "used_memory_bytes",

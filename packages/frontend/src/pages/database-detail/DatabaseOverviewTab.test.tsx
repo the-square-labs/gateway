@@ -99,6 +99,55 @@ describe("DatabaseOverviewTab", () => {
     expect(swapCard?.querySelector("svg.w-full")).toBeNull();
   });
 
+  it("shows managed Redis disk usage once and does not duplicate memory", () => {
+    const redisDatabase = {
+      ...database,
+      type: "redis",
+      managed: {
+        ...database.managed!,
+        version: "8.10.0",
+        publishedPort: null,
+      },
+    } as DatabaseConnection;
+    const redisHistory = [
+      {
+        ...history[0],
+        type: "redis",
+        metrics: {
+          database_size_bytes: 4 * 1024,
+          used_memory_bytes: 8 * 1024 ** 2,
+          maxmemory_bytes: 0,
+          memory_pct: 0,
+          managed_cpu_percent: 2,
+          managed_memory_usage_bytes: 32 * 1024 ** 2,
+          managed_memory_limit_bytes: 1024 * 1024 ** 2,
+          managed_swap_usage_bytes: 0,
+          managed_swap_limit_bytes: 0,
+          managed_pids: 6,
+        },
+      },
+    ] as DatabaseMetricSnapshot[];
+
+    const { container } = render(
+      <DatabaseOverviewTab
+        database={redisDatabase}
+        canViewMonitoring
+        healthStatus="online"
+        history={redisHistory}
+        monitoringLoading={false}
+      />
+    );
+
+    expect(screen.getByText("4.0 KB / 2.0 GB")).toBeInTheDocument();
+    expect(screen.getAllByText("Memory")).toHaveLength(1);
+    const metricsGrid = container.querySelector("div.grid.gap-3");
+    expect(
+      Array.from(metricsGrid!.children)
+        .slice(0, 4)
+        .map((card) => card.querySelector("p")?.textContent)
+    ).toEqual(["Database Size", "Memory", "CPU", "Swap"]);
+  });
+
   it("hides managed monitoring while the database is paused", () => {
     render(
       <DatabaseOverviewTab

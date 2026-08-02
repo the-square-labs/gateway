@@ -541,6 +541,7 @@ export async function initializeContainer(): Promise<void> {
   dockerRegistryService.setEventBus(eventBus);
 
   const managedDatabaseTunnelProxy = new ManagedDatabaseTunnelProxy();
+  container.registerInstance(ManagedDatabaseTunnelProxy, managedDatabaseTunnelProxy);
   const databaseConnectionService = new DatabaseConnectionService(
     db,
     auditService,
@@ -549,12 +550,28 @@ export async function initializeContainer(): Promise<void> {
   );
   container.registerInstance(DatabaseConnectionService, databaseConnectionService);
 
-  const managedDatabaseService = new ManagedDatabaseService(db, auditService, cryptoService, nodeDispatch, databaseCA);
+  const managedDatabaseService = new ManagedDatabaseService(
+    db,
+    auditService,
+    cryptoService,
+    nodeDispatch,
+    databaseCA,
+    databaseConnectionService
+  );
   managedDatabaseService.setEventBus(eventBus);
   container.registerInstance(ManagedDatabaseService, managedDatabaseService);
-  void managedDatabaseService.reconcileDatabaseConnections().catch((error) => {
-    logger.warn('Failed to backfill managed database connection records', { error });
-  });
+  void (async () => {
+    try {
+      await managedDatabaseService.reconcileDatabaseConnections();
+    } catch (error) {
+      logger.warn('Failed to backfill managed database connection records', { error });
+    }
+    try {
+      await managedDatabaseService.warmReadyPostgresExtensionCatalogs();
+    } catch (error) {
+      logger.warn('Failed to warm managed PostgreSQL extension catalogs', { error });
+    }
+  })();
   void managedDatabaseService.reconcileDatabaseCertificates().catch((error) => {
     logger.warn('Failed to backfill managed database TLS certificates', { error });
   });

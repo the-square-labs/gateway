@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DatabaseConnection } from "@/types";
-import { isPrivateManagedDatabase } from "./DatabaseDetail";
+import { isPrivateManagedDatabase, shouldRefreshDatabaseDetailForEvent } from "./DatabaseDetail";
 
 describe("isPrivateManagedDatabase", () => {
   it("does not classify an external database as a private managed database", () => {
@@ -11,5 +11,10 @@ describe("isPrivateManagedDatabase", () => {
     expect(
       isPrivateManagedDatabase({ managed: { publishedPort: null } } as DatabaseConnection)
     ).toBe(true);
+  });
+
+  it("does not reload the whole detail after an extension action updates its own tab state", () => {
+    expect(shouldRefreshDatabaseDetailForEvent("extensions.updated")).toBe(false);
+    expect(shouldRefreshDatabaseDetailForEvent("updated")).toBe(true);
   });
 });

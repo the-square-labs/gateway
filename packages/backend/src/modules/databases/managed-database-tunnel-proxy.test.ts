@@ -27,6 +27,24 @@ describe('ManagedDatabaseTunnelProxy', () => {
       });
     });
 
-    expect(openGatewayManagedDatabaseTunnel).toHaveBeenCalledWith(MANAGED_DATABASE_ID);
+    expect(openGatewayManagedDatabaseTunnel).toHaveBeenCalledWith(MANAGED_DATABASE_ID, 'interactive');
+    await proxy.shutdown();
+  });
+
+  it('closes all local listeners for a deleted managed database', async () => {
+    const proxy = new ManagedDatabaseTunnelProxy();
+    const endpoint = await proxy.getEndpoint(MANAGED_DATABASE_ID);
+
+    await proxy.disposeDatabase(MANAGED_DATABASE_ID);
+
+    await new Promise<void>((resolve, reject) => {
+      const socket = net.connect(endpoint.port, endpoint.host);
+      socket.once('connect', () => reject(new Error('Disposed managed database listener still accepted a connection')));
+      socket.once('error', () => resolve());
+    });
+
+    const replacement = await proxy.getEndpoint(MANAGED_DATABASE_ID);
+    expect(replacement.port).toBeGreaterThan(0);
+    await proxy.shutdown();
   });
 });

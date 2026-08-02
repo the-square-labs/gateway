@@ -15,10 +15,10 @@ import (
 )
 
 const (
-	databaseTunnelCapability     = "database_tunnel_v1"
-	databaseTunnelMaxChunkBytes  = 1024 * 1024
-	databaseTunnelQueueDepth     = 4
-	databaseTunnelHandshakeLimit = 128
+	databaseTunnelCapabilityPrefix = "database_tunnel_v2:"
+	databaseTunnelMaxChunkBytes    = 1024 * 1024
+	databaseTunnelQueueDepth       = 4
+	databaseTunnelHandshakeLimit   = 128
 
 	// DatabaseTunnelSocketFilename is the single daemon-owned socket mounted
 	// only into first-party connector sidecars on a general Docker node.
@@ -64,6 +64,16 @@ func (r *databaseBindingRegistry) resolve(bindingID string) (string, bool) {
 	defer r.mu.RUnlock()
 	databaseID, ok := r.bindings[bindingID]
 	return databaseID, ok
+}
+
+func (r *databaseBindingRegistry) list() map[string]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	bindings := make(map[string]string, len(r.bindings))
+	for bindingID, databaseID := range r.bindings {
+		bindings[bindingID] = databaseID
+	}
+	return bindings
 }
 
 func (r *databaseBindingRegistry) prepare(bindingID, databaseID string) error {
@@ -185,7 +195,7 @@ func readDatabaseTunnelHandshake(r io.Reader) (string, error) {
 func (p *DockerPlugin) handleDatabaseBindingCommand(cmd *pb.DockerDatabaseBindingCommand, result *pb.CommandResult) {
 	if p.databaseBindings == nil {
 		result.Success = false
-		result.Error = "database bindings are available only on general Docker nodes"
+		result.Error = "database bindings are available only on Docker nodes"
 		return
 	}
 	var err error
@@ -193,19 +203,24 @@ func (p *DockerPlugin) handleDatabaseBindingCommand(cmd *pb.DockerDatabaseBindin
 	case "prepare":
 		err = p.databaseBindings.prepare(cmd.GetBindingId(), cmd.GetManagedDatabaseId())
 		if err == nil {
-			detail, _ := json.Marshal(map[string]string{
-				"socketPath": filepath.Join(p.cfg.StateDir, DatabaseTunnelSocketFilename),
-			})
-			result.Detail = string(detail)
+			err = p.ensureDatabaseBindingTunnel(cmd.GetBindingId())
+		}
+		if err == nil {
+			if p.cfg.Docker.Mode != "databases" {
+				detail, _ := json.Marshal(map[string]string{
+					"socketPath": filepath.Join(p.cfg.StateDir, DatabaseTunnelSocketFilename),
+				})
+				result.Detail = string(detail)
+			}
 		}
 	case "remove":
 		err = p.databaseBindings.remove(cmd.GetBindingId(), cmd.GetManagedDatabaseId())
 		if err == nil {
 			p.databaseTunnelMu.Lock()
-			transport := p.databaseTunnel
+			router := p.databaseTunnel
 			p.databaseTunnelMu.Unlock()
-			if transport != nil {
-				transport.closeBinding(cmd.GetBindingId())
+			if router != nil {
+				router.closeBinding(cmd.GetBindingId())
 			}
 		}
 	default:

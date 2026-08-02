@@ -42,12 +42,23 @@ function registerPair(relay: DatabaseTunnelRelay, maxChunkBytes = 1024) {
   relay.register({
     nodeId: APP_NODE_ID,
     nodeType: 'docker',
+    lane: 'data',
+    bindingId: BINDING_ID,
     stream: source as never,
     maxChunkBytes,
   });
   relay.register({
     nodeId: DATABASE_NODE_ID,
     nodeType: 'databases',
+    lane: 'data',
+    bindingId: BINDING_ID,
+    stream: target as never,
+    maxChunkBytes,
+  });
+  relay.register({
+    nodeId: DATABASE_NODE_ID,
+    nodeType: 'databases',
+    lane: 'interactive',
     stream: target as never,
     maxChunkBytes,
   });
@@ -239,6 +250,77 @@ describe('DatabaseTunnelRelay', () => {
       tunnelId: openFrame!.tunnelId,
       bindingId: openFrame!.bindingId,
     });
+  });
+
+  it('keeps an application binding on its own data lane while monitoring uses a separate target stream', async () => {
+    const db = makeDb([
+      {
+        bindingId: BINDING_ID,
+        targetNodeId: APP_NODE_ID,
+        bindingStatus: 'ready',
+        managedDatabaseId: DATABASE_ID,
+        databaseNodeId: DATABASE_NODE_ID,
+        databaseStatus: 'ready',
+      },
+    ]);
+    const relay = new DatabaseTunnelRelay({ db: db as never });
+    const dataSource = new FakeStream();
+    const dataTarget = new FakeStream();
+    const monitoringTarget = new FakeStream();
+    const dataSourceConnection = {
+      nodeId: APP_NODE_ID,
+      nodeType: 'docker',
+      lane: 'data',
+      bindingId: BINDING_ID,
+      stream: dataSource as never,
+      maxChunkBytes: 1024,
+    } as const;
+    relay.register(dataSourceConnection);
+    relay.register({
+      nodeId: DATABASE_NODE_ID,
+      nodeType: 'databases',
+      lane: 'data',
+      bindingId: BINDING_ID,
+      stream: dataTarget as never,
+      maxChunkBytes: 1024,
+    });
+    relay.register({
+      nodeId: DATABASE_NODE_ID,
+      nodeType: 'databases',
+      lane: 'monitoring',
+      stream: monitoringTarget as never,
+      maxChunkBytes: 1024,
+    });
+
+    await relay.handleOpen(dataSourceConnection, open);
+    expect(dataTarget.writes).toEqual([{ open }]);
+    expect(monitoringTarget.writes).toEqual([]);
+  });
+
+  it('routes Gateway monitoring through the monitoring lane rather than interactive traffic', async () => {
+    const db = makeDb([{ id: DATABASE_ID, nodeId: DATABASE_NODE_ID, status: 'ready' }]);
+    const relay = new DatabaseTunnelRelay({ db: db as never });
+    const interactiveTarget = new FakeStream();
+    const monitoringTarget = new FakeStream();
+    relay.register({
+      nodeId: DATABASE_NODE_ID,
+      nodeType: 'databases',
+      lane: 'interactive',
+      stream: interactiveTarget as never,
+      maxChunkBytes: 1024,
+    });
+    relay.register({
+      nodeId: DATABASE_NODE_ID,
+      nodeType: 'databases',
+      lane: 'monitoring',
+      stream: monitoringTarget as never,
+      maxChunkBytes: 1024,
+    });
+
+    const tunnel = await relay.openGatewayTunnel(DATABASE_ID, 'monitoring');
+    expect(monitoringTarget.writes[0]?.open?.managedDatabaseId).toBe(DATABASE_ID);
+    expect(interactiveTarget.writes).toEqual([]);
+    tunnel.destroy();
   });
 
   it('closes idle tunnel sessions and frees their admission slot', async () => {

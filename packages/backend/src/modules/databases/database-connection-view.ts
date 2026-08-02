@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { ManagedRedisConfig } from '@/db/schema/databases.js';
 import type { DatabaseHealthEntry } from '@/db/schema/index.js';
 import type { DatabaseType } from './database-error-mapping.js';
 
@@ -51,6 +52,7 @@ export interface DatabaseCapabilities {
 export interface ManagedDatabaseConnectionMetadata {
   id: string;
   nodeId: string;
+  nodeAvailable: boolean;
   version: string;
   storageSizeBytes: number;
   runtimeConfig: {
@@ -68,6 +70,7 @@ export interface ManagedDatabaseConnectionMetadata {
   status: 'creating' | 'updating' | 'ready' | 'paused' | 'stopped' | 'error' | 'deleting';
   lastError: string | null;
   clickhouseConfigXml?: string;
+  redisConfig?: ManagedRedisConfig;
 }
 
 export interface DatabaseConnectionView {

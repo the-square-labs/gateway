@@ -53,6 +53,14 @@ const PostgresUpdateRowSchema = PostgresInsertRowSchema.extend({
 const PostgresDeleteRowSchema = PostgresTableQuerySchema.extend({
   primaryKey: PostgresObjectSchema,
 });
+const PostgresExtensionParamSchema = IdParamSchema.extend({
+  name: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/),
+});
 
 export const listDatabaseConnectionsRoute = appRoute({
   method: 'get',
@@ -447,6 +455,33 @@ export const listPostgresSchemasRoute = appRoute({
   tags: ['Databases'],
   summary: 'List PostgreSQL schemas',
   request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const listManagedPostgresExtensionsRoute = appRoute({
+  method: 'get',
+  path: '/{id}/postgres/extensions',
+  tags: ['Databases'],
+  summary: 'List extensions built into a managed PostgreSQL image',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const enableManagedPostgresExtensionRoute = appRoute({
+  method: 'post',
+  path: '/{id}/postgres/extensions/{name}',
+  tags: ['Databases'],
+  summary: 'Enable a built-in managed PostgreSQL extension',
+  request: { params: PostgresExtensionParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const disableManagedPostgresExtensionRoute = appRoute({
+  method: 'delete',
+  path: '/{id}/postgres/extensions/{name}',
+  tags: ['Databases'],
+  summary: 'Disable a managed PostgreSQL extension',
+  request: { params: PostgresExtensionParamSchema },
   responses: okJson(UnknownDataResponseSchema),
 });
 

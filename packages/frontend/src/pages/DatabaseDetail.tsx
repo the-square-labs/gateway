@@ -1,11 +1,10 @@
-import { Activity, Table2, Terminal } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { Activity, Puzzle, ScrollText, Table2, Terminal } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageTransition } from "@/components/common/PageTransition";
-import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { HealthBars } from "@/components/ui/health-bars";
 import { Switch } from "@/components/ui/switch";
@@ -26,11 +25,23 @@ import { DatabaseHeader } from "./database-detail/DatabaseHeader";
 import { DatabaseOverviewTab } from "./database-detail/DatabaseOverviewTab";
 import { DatabaseSettingsTab } from "./database-detail/DatabaseSettingsTab";
 import { ManagedDatabaseSettingsTab } from "./database-detail/ManagedDatabaseSettingsTab";
+import {
+  PostgresExtensionsTab,
+  postgresExtensionsCacheKey,
+} from "./database-detail/PostgresExtensionsTab";
+import { RedisConfigDialog } from "./database-detail/RedisConfigDialog";
 import { ResizeManagedDatabaseDialog } from "./database-detail/ResizeManagedDatabaseDialog";
 import { SqlExplorer } from "./database-detail/SqlExplorer";
+import { LogsTab, type LogsTabSource } from "./docker-detail/LogsTab";
 
 export function isPrivateManagedDatabase(database: DatabaseConnection) {
   return database.managed !== undefined && database.managed.publishedPort === null;
+}
+
+export function shouldRefreshDatabaseDetailForEvent(action?: string) {
+  return (
+    action !== "data.updated" && action !== "query.executed" && action !== "extensions.updated"
+  );
 }
 
 export function DatabaseDetail({
@@ -60,6 +71,7 @@ export function DatabaseDetail({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [resizeOpen, setResizeOpen] = useState(false);
   const [clickHouseConfigOpen, setClickHouseConfigOpen] = useState(false);
+  const [redisConfigOpen, setRedisConfigOpen] = useState(false);
   const [explorerFocused, setExplorerFocused] = useState(false);
   const [revealedCredentials, setRevealedCredentials] = useState<Record<string, unknown> | null>(
     null
@@ -98,7 +110,7 @@ export function DatabaseDetail({
   );
 
   const [activeTab, setActiveTab] = useUrlTab(
-    ["overview", "explorer", "console"],
+    ["overview", "explorer", "console", "logs", "extensions"],
     "overview",
     (tab) => databaseRoute(routeSlug, tab)
   );
@@ -148,6 +160,86 @@ export function DatabaseDetail({
       setActiveTab("overview");
     }
   }, [activeTab, isManagedPaused, liveHealthStatus, setActiveTab]);
+
+  const managedNodeAvailable = database?.managed?.nodeAvailable !== false;
+  const managedNodeId = database?.managed?.nodeId;
+  const managedInstanceId = database?.managed?.id;
+  const canObserveManagedNode = !!(
+    managedNodeId &&
+    (hasScope("nodes:details") || hasScope(`nodes:details:${managedNodeId}`))
+  );
+
+  useEffect(() => {
+    if (activeTab === "logs" && !managedNodeAvailable) setActiveTab("overview");
+  }, [activeTab, managedNodeAvailable, setActiveTab]);
+
+  useEffect(() => {
+    if (
+      !database ||
+      database.type !== "postgres" ||
+      !database.managed ||
+      database.managed.status !== "ready" ||
+      !managedNodeAvailable ||
+      !(canRead || canWrite || canAdmin)
+    ) {
+      return;
+    }
+    const cacheKey = postgresExtensionsCacheKey(database.id);
+    if (api.getCached(cacheKey)) return;
+    void api
+      .listManagedPostgresExtensions(database.id)
+      .then((extensions) => api.setCache(cacheKey, extensions))
+      .catch(() => undefined);
+  }, [canAdmin, canRead, canWrite, database, managedNodeAvailable]);
+
+  useEffect(() => {
+    if (
+      activeTab === "extensions" &&
+      (liveHealthStatus === "offline" || isManagedPaused || !managedNodeAvailable)
+    ) {
+      setActiveTab("overview");
+    }
+  }, [activeTab, isManagedPaused, liveHealthStatus, managedNodeAvailable, setActiveTab]);
+
+  useRealtime(canObserveManagedNode ? "node.changed" : null, (payload) => {
+    const event = payload as { id?: string; status?: string };
+    if (!event?.id || event.id !== managedNodeId || !event.status) return;
+    setDatabase((current) =>
+      current?.managed
+        ? {
+            ...current,
+            managed: { ...current.managed, nodeAvailable: event.status === "online" },
+          }
+        : current
+    );
+  });
+
+  useEffect(() => {
+    if (!id || !managedInstanceId) return;
+    let cancelled = false;
+    const refreshAvailability = () => {
+      void api
+        .getDatabase(id)
+        .then((next) => {
+          if (cancelled) return;
+          setDatabase((current) => {
+            if (!current?.managed || !next.managed) return current;
+            if (current.managed.nodeAvailable === next.managed.nodeAvailable) return current;
+            return {
+              ...current,
+              managed: { ...current.managed, nodeAvailable: next.managed.nodeAvailable },
+            };
+          });
+        })
+        .catch(() => undefined);
+    };
+    refreshAvailability();
+    const interval = setInterval(refreshAvailability, 5_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [id, managedInstanceId]);
 
   useEffect(() => {
     if (
@@ -232,9 +324,26 @@ export function DatabaseDetail({
       if (event.healthStatus) setLiveHealthStatus(event.healthStatus);
       return;
     }
-    if (event.action === "data.updated" || event.action === "query.executed") return;
+    if (!shouldRefreshDatabaseDetailForEvent(event.action)) return;
     void load();
   });
+
+  const managedLogSource = useMemo<LogsTabSource | null>(() => {
+    if (!database?.managed) return null;
+    const staticState =
+      database.managed.status === "paused" || database.managed.status === "stopped";
+    return {
+      channelId: `database:${database.id}`,
+      title: "Database Logs",
+      description: staticState
+        ? `Database is ${database.managed.status} — showing last logs`
+        : "stdout and stderr output from the database container",
+      state: staticState ? database.managed.status : "running",
+      downloadFileName: `${database.slug}-logs.txt`,
+      createWebSocket: (tail) => api.createManagedDatabaseLogStreamWebSocket(database.id, tail),
+      getLogs: (params) => api.getManagedDatabaseLogs(database.id, params),
+    };
+  }, [database]);
 
   const remove = async () => {
     if (!id || !database) return;
@@ -380,15 +489,22 @@ export function DatabaseDetail({
     );
   }
 
-  const isFullHeightTab = activeTab === "explorer" || activeTab === "console";
+  const isFullHeightTab =
+    activeTab === "explorer" ||
+    activeTab === "console" ||
+    activeTab === "logs" ||
+    activeTab === "extensions";
   const supportsExplorer = database.capabilities?.catalogExplorer ?? database.type !== "redis";
   const supportsConsole =
     (database.capabilities?.sqlConsole ?? database.type !== "redis") ||
     (database.capabilities?.commandConsole ?? database.type === "redis");
+  const supportsExtensions = database.type === "postgres" && !!database.managed;
   const hideDatabaseChrome = explorerFocused && activeTab === "explorer" && supportsExplorer;
   const displayHealthStatus = isManagedPaused ? "paused" : liveHealthStatus;
   const consoleDisabled = liveHealthStatus === "offline" || isManagedPaused;
   const explorerDisabled = liveHealthStatus === "offline" || isManagedPaused;
+  const extensionsDisabled =
+    liveHealthStatus === "offline" || isManagedPaused || !managedNodeAvailable;
 
   return (
     <PageTransition>
@@ -414,6 +530,9 @@ export function DatabaseDetail({
               canConfigureClickHouse={
                 canManageSettings && database.type === "clickhouse" && !!database.managed
               }
+              canConfigureRedis={
+                canManageSettings && database.type === "redis" && !!database.managed
+              }
               canReveal={canReveal}
               canRotateDirectCredentials={
                 canManageSettings && database.managed?.publishedPort != null
@@ -429,6 +548,7 @@ export function DatabaseDetail({
               onUnpause={() => void unpause()}
               onRestart={() => void restart()}
               onConfigureClickHouse={() => setClickHouseConfigOpen(true)}
+              onConfigureRedis={() => setRedisConfigOpen(true)}
               onRevealCredentials={() => void revealCredentials()}
               onRotateDirectCredentials={() => void rotateDirectCredentials()}
               onRotateCertificate={() => void rotateCertificate()}
@@ -452,25 +572,28 @@ export function DatabaseDetail({
                 <Activity className="h-3.5 w-3.5" />
                 Overview
               </TabsTrigger>
-              {canRead &&
-                (supportsExplorer ? (
-                  <TabsTrigger value="explorer" disabled={explorerDisabled} className="gap-1.5">
-                    <Table2 className="h-3.5 w-3.5" />
-                    Explorer
-                  </TabsTrigger>
-                ) : (
-                  <TabsTrigger value="explorer" disabled className="gap-1.5">
-                    <Table2 className="h-3.5 w-3.5" />
-                    <span className="flex items-center gap-2">
-                      Explorer
-                      <Badge variant="secondary">SOON</Badge>
-                    </span>
-                  </TabsTrigger>
-                ))}
+              {canRead && supportsExplorer && (
+                <TabsTrigger value="explorer" disabled={explorerDisabled} className="gap-1.5">
+                  <Table2 className="h-3.5 w-3.5" />
+                  Explorer
+                </TabsTrigger>
+              )}
               {(canRead || canWrite || canAdmin) && supportsConsole && (
                 <TabsTrigger value="console" disabled={consoleDisabled} className="gap-1.5">
                   <Terminal className="h-3.5 w-3.5" />
                   Console
+                </TabsTrigger>
+              )}
+              {(canRead || canWrite || canAdmin) && supportsExtensions && (
+                <TabsTrigger value="extensions" disabled={extensionsDisabled} className="gap-1.5">
+                  <Puzzle className="h-3.5 w-3.5" />
+                  Extensions
+                </TabsTrigger>
+              )}
+              {database.managed && canViewMonitoring && (
+                <TabsTrigger value="logs" disabled={!managedNodeAvailable} className="gap-1.5">
+                  <ScrollText className="h-3.5 w-3.5" />
+                  Logs
                 </TabsTrigger>
               )}
             </TabsList>
@@ -486,7 +609,7 @@ export function DatabaseDetail({
             />
           </TabsContent>
 
-          {canRead && (
+          {canRead && supportsExplorer && (
             <TabsContent
               value="explorer"
               className={cn("flex flex-col flex-1 min-h-0", hideDatabaseChrome && "mt-0")}
@@ -518,6 +641,18 @@ export function DatabaseDetail({
               className="space-y-4 flex flex-col flex-1 min-h-0 overflow-hidden"
             >
               <DatabaseConsoleTab database={database} />
+            </TabsContent>
+          )}
+
+          {(canRead || canWrite || canAdmin) && supportsExtensions && !extensionsDisabled && (
+            <TabsContent value="extensions" className="flex flex-1 min-h-0 overflow-hidden">
+              <PostgresExtensionsTab database={database} canManage={canAdmin} />
+            </TabsContent>
+          )}
+
+          {managedLogSource && canViewMonitoring && managedNodeAvailable && (
+            <TabsContent value="logs" className="flex flex-1 min-h-0 overflow-hidden">
+              <LogsTab source={managedLogSource} />
             </TabsContent>
           )}
         </Tabs>
@@ -620,6 +755,15 @@ export function DatabaseDetail({
           database={database}
           open={clickHouseConfigOpen}
           onOpenChange={setClickHouseConfigOpen}
+          onSaved={() => void load()}
+        />
+      )}
+
+      {canManageSettings && database.type === "redis" && database.managed && (
+        <RedisConfigDialog
+          database={database}
+          open={redisConfigOpen}
+          onOpenChange={setRedisConfigOpen}
           onSaved={() => void load()}
         />
       )}

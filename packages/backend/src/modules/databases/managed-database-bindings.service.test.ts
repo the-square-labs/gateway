@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DEVELOPMENT_DATABASE_CONNECTOR_IMAGE } from '@/config/env.js';
 import { ManagedDatabaseBindingService } from './managed-database-bindings.service.js';
 
@@ -45,5 +45,44 @@ describe('managed database binding provisioning guardrails', () => {
     expect(() => production.assertConnectorImage()).toThrow('immutable digest');
     expect(production.connectorImageAction()).toBe('ensure');
     expect(() => arbitrary.assertConnectorImage()).toThrow('immutable digest');
+  });
+
+  it('continues binding teardown when the target container was already removed', async () => {
+    const sendDockerNetworkCommand = vi.fn().mockResolvedValue({ success: true });
+    const getContainerEnv = vi.fn().mockRejectedValue(new Error('container inspect: No such container: deleted-target'));
+    const updateContainerEnv = vi.fn();
+    const instance = new ManagedDatabaseBindingService(
+      {} as never,
+      {} as never,
+      { decryptString: () => JSON.stringify({ username: 'app', password: 'secret', databaseName: 'app' }) } as never,
+      { sendDockerNetworkCommand } as never,
+      { getContainerEnv, updateContainerEnv } as never,
+      {} as never,
+      { list: vi.fn().mockResolvedValue([]) } as never,
+      DEVELOPMENT_DATABASE_CONNECTOR_IMAGE,
+      true
+    ) as any;
+
+    await expect(
+      instance.removeTargetBinding(
+        { type: 'postgres' },
+        {
+          targetType: 'container',
+          targetNodeId: 'node-1',
+          targetResourceId: 'deleted-target',
+          connectorAlias: 'db-link',
+          networkName: 'managed-db-network',
+          environment: { connectionUri: 'DATABASE_URL' },
+          encryptedCredentials: JSON.stringify({ encryptedKey: 'key', encryptedDek: 'dek' }),
+        },
+        'user-1'
+      )
+    ).resolves.toBeUndefined();
+
+    expect(updateContainerEnv).not.toHaveBeenCalled();
+    expect(sendDockerNetworkCommand).toHaveBeenCalledWith('node-1', 'disconnect', {
+      networkId: 'managed-db-network',
+      containerId: 'deleted-target',
+    });
   });
 });

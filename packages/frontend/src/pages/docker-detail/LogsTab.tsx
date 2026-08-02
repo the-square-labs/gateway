@@ -1,5 +1,5 @@
 import { Download, ExternalLink, ScrollText } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { AnsiText } from "@/components/ui/ansi-text";
@@ -28,17 +28,52 @@ function hasTimestamp(line: string): boolean {
   return /^\d{4}-\d{2}-\d{2}[T ]/.test(line) || /^\d{2}:\d{2}:\d{2}/.test(line);
 }
 
-export function LogsTab({
-  nodeId,
-  containerId,
-  containerState,
-  inspectData,
-}: {
-  nodeId: string;
-  containerId: string;
-  containerState?: string;
-  inspectData?: Record<string, any>;
-}) {
+export interface LogsTabSource {
+  channelId: string;
+  title: string;
+  description: string;
+  state?: string;
+  downloadFileName: string;
+  createWebSocket: (tail: number) => WebSocket;
+  getLogs: (params: { tail?: number; timestamps?: boolean }) => Promise<string[]>;
+  popoutUrl?: string;
+}
+
+type LogsTabProps =
+  | {
+      source: LogsTabSource;
+      nodeId?: never;
+      containerId?: never;
+      containerState?: never;
+      inspectData?: never;
+    }
+  | {
+      source?: never;
+      nodeId: string;
+      containerId: string;
+      containerState?: string;
+      inspectData?: Record<string, any>;
+    };
+
+export function LogsTab(props: LogsTabProps) {
+  const source = useMemo<LogsTabSource>(() => {
+    if (props.source) return props.source;
+    return {
+      channelId: props.containerId,
+      title: "Container Logs",
+      description:
+        props.containerState === "running"
+          ? "stdout and stderr output from the container"
+          : `Container is ${props.containerState ?? "stopped"} — showing last logs`,
+      state: props.containerState,
+      downloadFileName: `container-${props.containerId.slice(0, 12)}-logs.txt`,
+      createWebSocket: (tail) =>
+        api.createLogStreamWebSocket(props.nodeId, props.containerId, tail),
+      getLogs: (params) => api.getContainerLogs(props.nodeId, props.containerId, params),
+      popoutUrl: `/docker/logs/${props.nodeId}/${props.containerId}`,
+    };
+  }, [props.containerId, props.containerState, props.nodeId, props.source]);
+  const inspectData = props.source ? undefined : props.inspectData;
   const [lines, setLines] = useState<string[]>([]);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -57,7 +92,7 @@ export function LogsTab({
   const popoutAliveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const channel = new BroadcastChannel(CHANNEL_PREFIX + containerId);
+    const channel = new BroadcastChannel(CHANNEL_PREFIX + source.channelId);
     channelRef.current = channel;
 
     const markAlive = () => {
@@ -89,11 +124,15 @@ export function LogsTab({
       channelRef.current = null;
       if (popoutAliveTimer.current) clearTimeout(popoutAliveTimer.current);
     };
-  }, [containerId]);
+  }, [source.channelId]);
 
   const openPopout = useCallback(() => {
-    const url = `/docker/logs/${nodeId}/${containerId}`;
-    window.open(url, `logs-${containerId}`, "width=1000,height=600,menubar=no,toolbar=no");
+    if (!source.popoutUrl) return;
+    window.open(
+      source.popoutUrl,
+      `logs-${source.channelId.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+      "width=1000,height=600,menubar=no,toolbar=no"
+    );
 
     // Disconnect our WS
     if (wsRef.current) {
@@ -104,7 +143,7 @@ export function LogsTab({
 
     isPopoutRef.current = true;
     setIsPopout(true);
-  }, [nodeId, containerId]);
+  }, [source.channelId, source.popoutUrl]);
 
   const bringBack = useCallback(() => {
     channelRef.current?.postMessage({ type: "request-close" });
@@ -153,7 +192,7 @@ export function LogsTab({
     setLoadingMore(false);
     terminalErrorRef.current = false;
 
-    const ws = api.createLogStreamWebSocket(nodeId, containerId, 200);
+    const ws = source.createWebSocket(200);
     wsRef.current = ws;
 
     ws.onmessage = (evt) => {
@@ -217,22 +256,22 @@ export function LogsTab({
       setWsConnected(false);
       setIsConnecting(false);
     };
-  }, [nodeId, containerId, processLogs]);
+  }, [processLogs, source]);
 
-  const isRunning = containerState === "running";
+  const isRunning = source.state === "running";
 
   // Fetch static logs for stopped/exited containers
   const fetchStaticLogs = useCallback(async () => {
     setIsConnecting(true);
     try {
-      const data = await api.getContainerLogs(nodeId, containerId, { tail: 500, timestamps: true });
+      const data = await source.getLogs({ tail: 500, timestamps: true });
       setLines(capNewestLogs(processLogs(data ?? [])));
       setHasMore(false);
     } catch {
       /* */
     }
     setIsConnecting(false);
-  }, [nodeId, containerId, processLogs]);
+  }, [processLogs, source]);
 
   // Auto-connect on mount (skip if popout detected)
   // biome-ignore lint/correctness/useExhaustiveDependencies: connect once on mount
@@ -305,7 +344,7 @@ export function LogsTab({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `container-${containerId.slice(0, 12)}-logs.txt`;
+    a.download = source.downloadFileName;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -327,12 +366,8 @@ export function LogsTab({
 
   return (
     <PanelShell
-      title="Container Logs"
-      description={
-        isRunning
-          ? "stdout and stderr output from the container"
-          : `Container is ${containerState ?? "stopped"} — showing last logs`
-      }
+      title={source.title}
+      description={source.description}
       className="flex flex-1 flex-col min-h-0"
       bodyClassName="flex min-h-0 flex-1 flex-col"
       actions={
@@ -348,15 +383,17 @@ export function LogsTab({
               <Download className="h-3.5 w-3.5" />
             </Button>
           )}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={openPopout}
-            title="Open in separate window"
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-          </Button>
+          {source.popoutUrl && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={openPopout}
+              title="Open in separate window"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+            </Button>
+          )}
         </>
       }
     >

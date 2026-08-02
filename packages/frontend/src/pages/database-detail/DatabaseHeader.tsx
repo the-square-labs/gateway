@@ -8,6 +8,7 @@ import {
   Play,
   RefreshCw,
   Settings,
+  SlidersHorizontal,
   Trash2,
 } from "lucide-react";
 import { CommandPalettePageActions } from "@/components/common/CommandPalettePageActions";
@@ -33,6 +34,7 @@ interface DatabaseHeaderProps {
   canUnpause: boolean;
   canRestart: boolean;
   canConfigureClickHouse: boolean;
+  canConfigureRedis: boolean;
   canReveal: boolean;
   canRotateDirectCredentials: boolean;
   canRotateCertificate: boolean;
@@ -46,6 +48,7 @@ interface DatabaseHeaderProps {
   onUnpause: () => void;
   onRestart: () => void;
   onConfigureClickHouse: () => void;
+  onConfigureRedis: () => void;
   onRevealCredentials: () => void;
   onRotateDirectCredentials: () => void;
   onRotateCertificate: () => void;
@@ -61,6 +64,7 @@ export function DatabaseHeader({
   canUnpause,
   canRestart,
   canConfigureClickHouse,
+  canConfigureRedis,
   canReveal,
   canRotateDirectCredentials,
   canRotateCertificate,
@@ -74,6 +78,7 @@ export function DatabaseHeader({
   onUnpause,
   onRestart,
   onConfigureClickHouse,
+  onConfigureRedis,
   onRevealCredentials,
   onRotateDirectCredentials,
   onRotateCertificate,
@@ -99,6 +104,12 @@ export function DatabaseHeader({
           Configure ClickHouse
         </DropdownMenuItem>
       )}
+      {canConfigureRedis && (
+        <DropdownMenuItem onClick={onConfigureRedis}>
+          <SlidersHorizontal className="h-3.5 w-3.5 mr-2" />
+          Configure Redis
+        </DropdownMenuItem>
+      )}
       {(canPause || canUnpause) && (
         <DropdownMenuItem onClick={canPause ? onPause : onUnpause}>
           {canPause ? (
@@ -115,7 +126,7 @@ export function DatabaseHeader({
           Restart database
         </DropdownMenuItem>
       )}
-      {(canEdit || canPause || canUnpause || canConfigureClickHouse) &&
+      {(canEdit || canPause || canUnpause || canConfigureClickHouse || canConfigureRedis) &&
         (canReveal || canDelete) && <DropdownMenuSeparator />}
       {canReveal && (
         <DropdownMenuItem onClick={onRevealCredentials}>
@@ -190,6 +201,16 @@ export function DatabaseHeader({
                   label: "Configure ClickHouse",
                   icon: <FileCode2 className="h-4 w-4" />,
                   action: onConfigureClickHouse,
+                },
+              ]
+            : []),
+          ...(canConfigureRedis
+            ? [
+                {
+                  id: "database:configure-redis",
+                  label: "Configure Redis",
+                  icon: <SlidersHorizontal className="h-4 w-4" />,
+                  action: onConfigureRedis,
                 },
               ]
             : []),
@@ -294,6 +315,7 @@ export function DatabaseHeader({
           canUnpause ||
           canRestart ||
           canConfigureClickHouse ||
+          canConfigureRedis ||
           canReveal ||
           canRotateDirectCredentials ||
           canRotateCertificate ||
@@ -331,6 +353,7 @@ export function DatabaseHeader({
               canPause ||
               canUnpause ||
               canConfigureClickHouse ||
+              canConfigureRedis ||
               canReveal ||
               canRotateDirectCredentials ||
               canRotateCertificate ||

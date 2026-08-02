@@ -130,28 +130,47 @@ var (
 // managedDatabaseCommand is deliberately private to the database-profile
 // daemon. It must never become a generic Docker container payload.
 type managedDatabaseCommand struct {
-	Type                string `json:"type"`
-	Image               string `json:"image"`
-	StorageSizeBytes    int64  `json:"storageSizeBytes"`
-	MemoryBytes         int64  `json:"memoryBytes"`
-	MemorySwapBytes     int64  `json:"memorySwapBytes"`
-	NanoCPUs            int64  `json:"nanoCPUs"`
-	CPUShares           int64  `json:"cpuShares"`
-	PidsLimit           int64  `json:"pidsLimit"`
-	OperationID         string `json:"operationId"`
-	OwnerUsername       string `json:"ownerUsername"`
-	OwnerPassword       string `json:"ownerPassword"`
-	DatabaseName        string `json:"databaseName"`
-	PublishTCP          bool   `json:"publishTcp"`
-	PublishNativeTCP    bool   `json:"publishNativeTcp"`
-	PublishedPort       uint16 `json:"publishedPort"`
-	PublishedNativePort uint16 `json:"publishedNativePort"`
-	TLSEnabled          bool   `json:"tlsEnabled"`
-	TLSCertificatePEM   string `json:"tlsCertificatePem"`
-	TLSPrivateKeyPEM    string `json:"tlsPrivateKeyPem"`
-	TLSCACertificatePEM string `json:"tlsCaCertificatePem"`
-	TLSCertificateID    string `json:"tlsCertificateId"`
-	ClickhouseConfig    string `json:"clickhouseConfigXml"`
+	Type                string              `json:"type"`
+	Image               string              `json:"image"`
+	StorageSizeBytes    int64               `json:"storageSizeBytes"`
+	MemoryBytes         int64               `json:"memoryBytes"`
+	MemorySwapBytes     int64               `json:"memorySwapBytes"`
+	NanoCPUs            int64               `json:"nanoCPUs"`
+	CPUShares           int64               `json:"cpuShares"`
+	PidsLimit           int64               `json:"pidsLimit"`
+	OperationID         string              `json:"operationId"`
+	OwnerUsername       string              `json:"ownerUsername"`
+	OwnerPassword       string              `json:"ownerPassword"`
+	DatabaseName        string              `json:"databaseName"`
+	PublishTCP          bool                `json:"publishTcp"`
+	PublishNativeTCP    bool                `json:"publishNativeTcp"`
+	PublishedPort       uint16              `json:"publishedPort"`
+	PublishedNativePort uint16              `json:"publishedNativePort"`
+	TLSEnabled          bool                `json:"tlsEnabled"`
+	TLSCertificatePEM   string              `json:"tlsCertificatePem"`
+	TLSPrivateKeyPEM    string              `json:"tlsPrivateKeyPem"`
+	TLSCACertificatePEM string              `json:"tlsCaCertificatePem"`
+	TLSCertificateID    string              `json:"tlsCertificateId"`
+	ClickhouseConfig    string              `json:"clickhouseConfigXml"`
+	RedisConfig         *managedRedisConfig `json:"redisConfig,omitempty"`
+}
+
+type managedRedisConfig struct {
+	MaxmemoryPercent             int    `json:"maxmemoryPercent"`
+	MaxmemoryPolicy              string `json:"maxmemoryPolicy"`
+	AppendOnly                   bool   `json:"appendOnly"`
+	AppendFsync                  string `json:"appendFsync"`
+	RDBSnapshotsEnabled          bool   `json:"rdbSnapshotsEnabled"`
+	RDBSaveSeconds               int    `json:"rdbSaveSeconds"`
+	RDBSaveChanges               int    `json:"rdbSaveChanges"`
+	AutoAOFRewritePercentage     int    `json:"autoAofRewritePercentage"`
+	AutoAOFRewriteMinSizeMB      int    `json:"autoAofRewriteMinSizeMb"`
+	MaxClients                   int    `json:"maxclients"`
+	TimeoutSeconds               int    `json:"timeoutSeconds"`
+	TCPKeepaliveSeconds          int    `json:"tcpKeepaliveSeconds"`
+	SlowlogThresholdMicroseconds int64  `json:"slowlogThresholdMicroseconds"`
+	SlowlogMaxLen                int    `json:"slowlogMaxLen"`
+	ActiveDefrag                 bool   `json:"activeDefrag"`
 }
 
 // managedDatabaseBindingCommand is intentionally separate from the instance
@@ -189,6 +208,7 @@ type managedDatabaseRecord struct {
 	TLSEnabled                      bool   `json:"tlsEnabled"`
 	TLSCertificateID                string `json:"tlsCertificateId,omitempty"`
 	ClickhouseConfigHash            string `json:"clickhouseConfigHash,omitempty"`
+	RedisConfigHash                 string `json:"redisConfigHash,omitempty"`
 	ClickhouseRuntimeProfileVersion int    `json:"clickhouseRuntimeProfileVersion,omitempty"`
 	OperationID                     string `json:"operationId"`
 }
@@ -241,6 +261,48 @@ func (p *DockerPlugin) handleManagedDatabaseCommand(cmd *pb.DockerDatabaseComman
 		result.Error = "managed database storage is not initialized"
 		return
 	}
+	if cmd.Action == "logs" || cmd.Action == "logs_stop" {
+		ctx, cancel := context.WithTimeout(context.Background(), dockerLogsCommandTimeout)
+		defer cancel()
+		containerID, err := p.databaseManager.resolveOwnedContainer(ctx, cmd.ManagedDatabaseId)
+		if err != nil {
+			result.Success = false
+			result.Error = err.Error()
+			return
+		}
+		if cmd.Action == "logs_stop" {
+			p.logStreamMu.Lock()
+			stop := p.logStreamCancel[containerID]
+			delete(p.logStreamCancel, containerID)
+			p.logStreamMu.Unlock()
+			if stop != nil {
+				stop()
+			}
+			result.Detail = `{"streaming":false}`
+			return
+		}
+		var input struct {
+			TailLines  int32  `json:"tailLines"`
+			Follow     bool   `json:"follow"`
+			Timestamps bool   `json:"timestamps"`
+			Since      string `json:"since"`
+			Until      string `json:"until"`
+		}
+		if err := json.Unmarshal([]byte(cmd.ConfigJson), &input); err != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("parse managed database logs config: %v", err)
+			return
+		}
+		p.handleLogsCommand(&pb.DockerLogsCommand{
+			ContainerId: containerID,
+			TailLines:   input.TailLines,
+			Follow:      input.Follow,
+			Timestamps:  input.Timestamps,
+			Since:       input.Since,
+			Until:       input.Until,
+		}, result)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), managedDatabaseCommandTimeout)
 	defer cancel()
 	detail, err := p.databaseManager.handle(ctx, cmd.Action, cmd.ManagedDatabaseId, cmd.ConfigJson)
@@ -250,6 +312,29 @@ func (p *DockerPlugin) handleManagedDatabaseCommand(cmd *pb.DockerDatabaseComman
 		return
 	}
 	result.Detail = detail
+}
+
+// resolveOwnedContainer keeps the database-profile daemon from becoming a
+// generic Docker log reader: only the container recorded for this managed
+// database and carrying the matching ownership label may be inspected.
+func (m *managedDatabaseManager) resolveOwnedContainer(ctx context.Context, id string) (string, error) {
+	if !managedDatabaseIDPattern.MatchString(id) {
+		return "", errors.New("invalid managed database id")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	record, err := m.loadRecord(id)
+	if err != nil {
+		return "", err
+	}
+	inspect, err := m.client.cli.ContainerInspect(ctx, record.ContainerID, mobyclient.ContainerInspectOptions{})
+	if err != nil {
+		return "", fmt.Errorf("inspect managed database container: %w", err)
+	}
+	if inspect.Container.Config == nil || inspect.Container.Config.Labels[managedDatabaseLabel] != id {
+		return "", errors.New("managed database container ownership mismatch")
+	}
+	return record.ContainerID, nil
 }
 
 func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJSON string) (string, error) {
@@ -593,6 +678,64 @@ func clickHouseConfigHash(value string) string {
 	return fmt.Sprintf("%x", digest)
 }
 
+func defaultManagedRedisConfig() managedRedisConfig {
+	return managedRedisConfig{
+		MaxmemoryPercent: 75, MaxmemoryPolicy: "noeviction", AppendOnly: true, AppendFsync: "everysec",
+		RDBSnapshotsEnabled: true, RDBSaveSeconds: 3600, RDBSaveChanges: 1,
+		AutoAOFRewritePercentage: 100, AutoAOFRewriteMinSizeMB: 64, MaxClients: 10000,
+		TimeoutSeconds: 0, TCPKeepaliveSeconds: 300, SlowlogThresholdMicroseconds: 10000,
+		SlowlogMaxLen: 128, ActiveDefrag: false,
+	}
+}
+
+func normalizedManagedRedisConfig(input managedDatabaseCommand) managedRedisConfig {
+	if input.RedisConfig == nil {
+		return defaultManagedRedisConfig()
+	}
+	return *input.RedisConfig
+}
+
+func managedRedisConfigText(input managedDatabaseCommand) string {
+	config := normalizedManagedRedisConfig(input)
+	yesNo := func(value bool) string {
+		if value {
+			return "yes"
+		}
+		return "no"
+	}
+	save := `save ""`
+	if config.RDBSnapshotsEnabled {
+		save = fmt.Sprintf("save %d %d", config.RDBSaveSeconds, config.RDBSaveChanges)
+	}
+	return fmt.Sprintf("maxmemory %d\nmaxmemory-policy %s\nappendonly %s\nappendfsync %s\naof-use-rdb-preamble yes\nauto-aof-rewrite-percentage %d\nauto-aof-rewrite-min-size %dmb\n%s\nmaxclients %d\ntimeout %d\ntcp-keepalive %d\nslowlog-log-slower-than %d\nslowlog-max-len %d\nactivedefrag %s\n",
+		input.MemoryBytes*int64(config.MaxmemoryPercent)/100,
+		config.MaxmemoryPolicy,
+		yesNo(config.AppendOnly),
+		config.AppendFsync,
+		config.AutoAOFRewritePercentage,
+		config.AutoAOFRewriteMinSizeMB,
+		save,
+		config.MaxClients,
+		config.TimeoutSeconds,
+		config.TCPKeepaliveSeconds,
+		config.SlowlogThresholdMicroseconds,
+		config.SlowlogMaxLen,
+		yesNo(config.ActiveDefrag),
+	)
+}
+
+func managedRedisConfigHash(input managedDatabaseCommand) string {
+	if input.Type != "redis" {
+		return ""
+	}
+	digest := sha256.Sum256([]byte(managedRedisConfigText(input)))
+	return fmt.Sprintf("%x", digest)
+}
+
+func managedRedisConfigPath(record managedDatabaseRecord, input managedDatabaseCommand) string {
+	return filepath.Join(record.MountPath, "gateway-redis-"+managedRedisConfigHash(input)+".conf")
+}
+
 func managedDatabaseRequiresRecreate(record managedDatabaseRecord, input managedDatabaseCommand) bool {
 	return input.PublishedPort != record.PublishedPort ||
 		input.PublishedNativePort != record.PublishedNativePort ||
@@ -601,7 +744,8 @@ func managedDatabaseRequiresRecreate(record managedDatabaseRecord, input managed
 		input.TLSCertificateID != record.TLSCertificateID ||
 		(input.PublishTCP != (record.PublishedPort != 0)) ||
 		(record.Type == "clickhouse" && (clickHouseConfigHash(input.ClickhouseConfig) != record.ClickhouseConfigHash ||
-			record.ClickhouseRuntimeProfileVersion != clickHouseRuntimeProfileVersion))
+			record.ClickhouseRuntimeProfileVersion != clickHouseRuntimeProfileVersion)) ||
+		(record.Type == "redis" && managedRedisConfigHash(input) != record.RedisConfigHash)
 }
 
 func (m *managedDatabaseManager) restart(ctx context.Context, record *managedDatabaseRecord, input managedDatabaseCommand) error {
@@ -675,6 +819,7 @@ func (m *managedDatabaseManager) recreateContainer(ctx context.Context, record *
 	record.TLSEnabled = input.TLSEnabled
 	record.TLSCertificateID = input.TLSCertificateID
 	record.ClickhouseConfigHash = clickHouseConfigHash(input.ClickhouseConfig)
+	record.RedisConfigHash = managedRedisConfigHash(input)
 	if input.Type == "clickhouse" {
 		record.ClickhouseRuntimeProfileVersion = clickHouseRuntimeProfileVersion
 	}
@@ -688,6 +833,12 @@ func (m *managedDatabaseManager) recreateContainer(ctx context.Context, record *
 	if previousRenamed {
 		if err := m.client.RemoveContainer(ctx, previous.ContainerID, true); err != nil && !cerrdefs.IsNotFound(err) {
 			m.logger.Warn("remove preserved managed database container after recreate", "id", previous.ID, "error", err)
+		}
+	}
+	if record.Type == "redis" && previous.RedisConfigHash != "" && previous.RedisConfigHash != record.RedisConfigHash {
+		previousConfigPath := filepath.Join(record.MountPath, "gateway-redis-"+previous.RedisConfigHash+".conf")
+		if err := os.Remove(previousConfigPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			m.logger.Warn("remove superseded managed Redis config", "id", previous.ID, "error", err)
 		}
 	}
 	return nil
@@ -753,6 +904,7 @@ func (m *managedDatabaseManager) create(ctx context.Context, id string, input ma
 		TLSEnabled:           input.TLSEnabled,
 		TLSCertificateID:     input.TLSCertificateID,
 		ClickhouseConfigHash: clickHouseConfigHash(input.ClickhouseConfig),
+		RedisConfigHash:      managedRedisConfigHash(input),
 		OperationID:          input.OperationID,
 	}
 	if input.Type == "clickhouse" {
@@ -851,6 +1003,37 @@ func validateManagedDatabaseInput(input managedDatabaseCommand) error {
 	}
 	if input.Type != "clickhouse" && input.ClickhouseConfig != "" {
 		return errors.New("ClickHouse XML is supported only for ClickHouse")
+	}
+	if input.Type != "redis" && input.RedisConfig != nil {
+		return errors.New("Redis configuration is supported only for Redis")
+	}
+	if input.Type == "redis" {
+		config := normalizedManagedRedisConfig(input)
+		policies := map[string]struct{}{
+			"noeviction": {}, "allkeys-lru": {}, "allkeys-lfu": {}, "allkeys-random": {},
+			"volatile-lru": {}, "volatile-lfu": {}, "volatile-random": {}, "volatile-ttl": {},
+		}
+		if config.MaxmemoryPercent < 10 || config.MaxmemoryPercent > 95 {
+			return errors.New("Redis maxmemory percent must be between 10 and 95")
+		}
+		if _, ok := policies[config.MaxmemoryPolicy]; !ok {
+			return errors.New("Redis maxmemory policy is invalid")
+		}
+		if config.AppendFsync != "always" && config.AppendFsync != "everysec" && config.AppendFsync != "no" {
+			return errors.New("Redis append fsync policy is invalid")
+		}
+		if config.RDBSaveSeconds < 1 || config.RDBSaveSeconds > 31536000 || config.RDBSaveChanges < 1 || config.RDBSaveChanges > 1000000000 {
+			return errors.New("Redis snapshot settings are invalid")
+		}
+		if config.AutoAOFRewritePercentage < 0 || config.AutoAOFRewritePercentage > 10000 || config.AutoAOFRewriteMinSizeMB < 1 || config.AutoAOFRewriteMinSizeMB > 1048576 {
+			return errors.New("Redis AOF rewrite settings are invalid")
+		}
+		if config.MaxClients < 1 || config.MaxClients > 1000000 || config.TimeoutSeconds < 0 || config.TimeoutSeconds > 31536000 || config.TCPKeepaliveSeconds < 0 || config.TCPKeepaliveSeconds > 31536000 {
+			return errors.New("Redis connection settings are invalid")
+		}
+		if config.SlowlogThresholdMicroseconds < -1 || config.SlowlogThresholdMicroseconds > 2147483647 || config.SlowlogMaxLen < 0 || config.SlowlogMaxLen > 1000000 {
+			return errors.New("Redis slow log settings are invalid")
+		}
 	}
 	return validateClickHouseFragment(input.ClickhouseConfig)
 }
@@ -1103,6 +1286,10 @@ func (m *managedDatabaseManager) createNetwork(ctx context.Context, name string)
 
 func (m *managedDatabaseManager) createContainer(ctx context.Context, record *managedDatabaseRecord, input managedDatabaseCommand) (string, error) {
 	dataPath, port := engineDataPathAndPort(input.Type, input.TLSEnabled)
+	dataSource, err := prepareManagedDatabaseDataSource(*record, input.Type)
+	if err != nil {
+		return "", err
+	}
 	env := engineEnvironment(input)
 	containerCfg := &container.Config{
 		Image: input.Image,
@@ -1119,10 +1306,24 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 		}
 	}
 	if input.Type == "postgres" && input.TLSEnabled {
-		containerCfg.Cmd = []string{"postgres", "-c", "ssl=on", "-c", "ssl_cert_file=/run/gateway-tls/cert.pem", "-c", "ssl_key_file=/run/gateway-tls/key.pem"}
+		postgresHBAPath := managedPostgresTLSHBAPath(*record)
+		if err := writeManagedPostgresTLSHBA(postgresHBAPath); err != nil {
+			return "", fmt.Errorf("write PostgreSQL TLS authentication config: %w", err)
+		}
+		containerCfg.Cmd = []string{
+			"postgres",
+			"-c", "ssl=on",
+			"-c", "ssl_cert_file=/run/gateway-tls/cert.pem",
+			"-c", "ssl_key_file=/run/gateway-tls/key.pem",
+			"-c", "hba_file=/run/gateway-config/pg_hba.conf",
+		}
 	}
 	if input.Type == "redis" {
-		containerCfg.Cmd = []string{"redis-server", "--appendonly", "yes", "--requirepass", input.OwnerPassword}
+		redisConfigPath := managedRedisConfigPath(*record, input)
+		if err := writeManagedRedisConfig(redisConfigPath, managedRedisConfigText(input)); err != nil {
+			return "", fmt.Errorf("write Redis managed config: %w", err)
+		}
+		containerCfg.Cmd = []string{"redis-server", "/run/gateway-config/redis.conf", "--dir", "/data", "--requirepass", input.OwnerPassword}
 		if input.TLSEnabled {
 			containerCfg.Cmd = append(containerCfg.Cmd, "--port", "6379", "--tls-port", "6380", "--tls-cert-file", "/run/gateway-tls/cert.pem", "--tls-key-file", "/run/gateway-tls/key.pem", "--tls-ca-cert-file", "/run/gateway-tls/ca.pem", "--tls-auth-clients", "no")
 		}
@@ -1143,7 +1344,13 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 			return "", fmt.Errorf("write ClickHouse TLS config: %w", err)
 		}
 	}
-	binds := []string{record.MountPath + ":" + dataPath}
+	binds := []string{dataSource + ":" + dataPath}
+	if input.Type == "redis" {
+		binds = append(binds, managedRedisConfigPath(*record, input)+":/run/gateway-config/redis.conf:ro")
+	}
+	if input.Type == "postgres" && input.TLSEnabled {
+		binds = append(binds, managedPostgresTLSHBAPath(*record)+":/run/gateway-config/pg_hba.conf:ro")
+	}
 	if input.TLSEnabled {
 		binds = append(binds, tlsDir+":/run/gateway-tls:ro")
 	}
@@ -1266,6 +1473,30 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 	return created.ID, nil
 }
 
+// Redis cannot safely use the ext4 filesystem root as /data for new
+// curated image drops privileges before opening the AOF directory.
+func prepareManagedDatabaseDataSource(record managedDatabaseRecord, engine string) (string, error) {
+	if engine != "redis" {
+		return record.MountPath, nil
+	}
+
+	path := filepath.Join(record.MountPath, "redis-data")
+	if err := os.MkdirAll(path, 0750); err != nil {
+		return "", fmt.Errorf("create Redis data directory: %w", err)
+	}
+	uid, gid, err := managedDatabaseTLSOwner(engine)
+	if err != nil {
+		return "", err
+	}
+	if err := os.Chown(path, uid, gid); err != nil {
+		return "", fmt.Errorf("set Redis data directory ownership: %w", err)
+	}
+	if err := os.Chmod(path, 0750); err != nil {
+		return "", fmt.Errorf("set Redis data directory permissions: %w", err)
+	}
+	return path, nil
+}
+
 func (m *managedDatabaseManager) cleanupClickHouseSystemLogs(ctx context.Context, containerID string, input managedDatabaseCommand) error {
 	return m.runManagedDatabaseExec(
 		ctx,
@@ -1282,6 +1513,13 @@ func writeClickHouseConfig(path, contents string) error {
 	}
 	// WriteFile preserves the mode of an existing file. Explicitly converge it
 	// because ClickHouse reads config.d after dropping root privileges.
+	return os.Chmod(path, 0644)
+}
+
+func writeManagedRedisConfig(path, contents string) error {
+	if err := os.WriteFile(path, []byte(contents), 0644); err != nil {
+		return err
+	}
 	return os.Chmod(path, 0644)
 }
 
@@ -1381,6 +1619,20 @@ func writeManagedDatabaseTLS(dir string, input managedDatabaseCommand) error {
 		return fmt.Errorf("restrict managed database TLS key: %w", err)
 	}
 	return nil
+}
+
+const managedPostgresTLSHBA = `# Managed by Gateway. Direct TCP clients must negotiate TLS.
+local all all trust
+hostssl all all 0.0.0.0/0 scram-sha-256
+hostssl all all ::0/0 scram-sha-256
+`
+
+func managedPostgresTLSHBAPath(record managedDatabaseRecord) string {
+	return filepath.Join(record.MountPath, "gateway-pg_hba.conf")
+}
+
+func writeManagedPostgresTLSHBA(path string) error {
+	return os.WriteFile(path, []byte(managedPostgresTLSHBA), 0644)
 }
 
 // All accepted engine images are digest-pinned and use these service accounts.

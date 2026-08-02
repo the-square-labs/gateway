@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CreateManagedDatabaseBindingSchema, CreateManagedDatabaseSchema } from './databases.schemas.js';
-import { MANAGED_DATABASE_CATALOG, ManagedDatabaseService } from './managed-databases.service.js';
+import { daemonCreateConfig, MANAGED_DATABASE_CATALOG, ManagedDatabaseService } from './managed-databases.service.js';
 
 const managedRow = {
   id: '44444444-4444-4444-8444-444444444444',
@@ -77,6 +77,21 @@ describe('managed database catalog and input guardrails', () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it('accepts storage in one-tenth GB increments when creating a managed database', () => {
+    const input = {
+      name: 'small-cache',
+      type: 'redis',
+      version: '8.8.1',
+      nodeId: '44d553a4-8978-4ad1-8ca7-4d53c6e74a1d',
+      storageSizeGb: 0.1,
+      cpuCores: 1,
+      memoryMb: 128,
+    };
+
+    expect(CreateManagedDatabaseSchema.safeParse(input).success).toBe(true);
+    expect(CreateManagedDatabaseSchema.safeParse({ ...input, storageSizeGb: 0.11 }).success).toBe(false);
   });
 
   it('allows ClickHouse HTTP publication without its native endpoint', () => {
@@ -172,6 +187,89 @@ describe('managed database catalog and input guardrails', () => {
     expect(result.success).toBe(false);
   });
 
+  it('accepts a complete Redis configuration for Redis', () => {
+    const result = CreateManagedDatabaseSchema.safeParse({
+      name: 'cache',
+      type: 'redis',
+      version: '8.8.1',
+      nodeId: '44d553a4-8978-4ad1-8ca7-4d53c6e74a1d',
+      storageSizeGb: 10,
+      cpuCores: 1,
+      memoryMb: 1024,
+      redisConfig: {
+        maxmemoryPercent: 75,
+        maxmemoryPolicy: 'allkeys-lru',
+        appendOnly: true,
+        appendFsync: 'everysec',
+        rdbSnapshotsEnabled: true,
+        rdbSaveSeconds: 3600,
+        rdbSaveChanges: 1,
+        autoAofRewritePercentage: 100,
+        autoAofRewriteMinSizeMb: 64,
+        maxclients: 10_000,
+        timeoutSeconds: 0,
+        tcpKeepaliveSeconds: 300,
+        slowlogThresholdMicroseconds: 10_000,
+        slowlogMaxLen: 128,
+        activeDefrag: false,
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects Redis configuration for other engines', () => {
+    const result = CreateManagedDatabaseSchema.safeParse({
+      name: 'orders',
+      type: 'postgres',
+      version: '17.10',
+      nodeId: '44d553a4-8978-4ad1-8ca7-4d53c6e74a1d',
+      storageSizeGb: 10,
+      cpuCores: 1,
+      memoryMb: 1024,
+      redisConfig: {
+        maxmemoryPercent: 75,
+        maxmemoryPolicy: 'noeviction',
+        appendOnly: true,
+        appendFsync: 'everysec',
+        rdbSnapshotsEnabled: true,
+        rdbSaveSeconds: 3600,
+        rdbSaveChanges: 1,
+        autoAofRewritePercentage: 100,
+        autoAofRewriteMinSizeMb: 64,
+        maxclients: 10_000,
+        timeoutSeconds: 0,
+        tcpKeepaliveSeconds: 300,
+        slowlogThresholdMicroseconds: 10_000,
+        slowlogMaxLen: 128,
+        activeDefrag: false,
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('sends Redis configuration only to Redis daemons', async () => {
+    const credentials = { username: 'owner', password: 'secret-password-123', databaseName: 'app' };
+    const postgres = await daemonCreateConfig(managedRow as never, credentials, false, false, 'operation_postgres');
+    const redis = await daemonCreateConfig(
+      {
+        ...managedRow,
+        type: 'redis',
+        version: '8.8.1',
+        imageRef: MANAGED_DATABASE_CATALOG.redis['8.8.1'],
+        engineConfig: { redisConfig: { maxmemoryPercent: 60 } },
+      } as never,
+      credentials,
+      false,
+      false,
+      'operation_redis'
+    );
+
+    expect(postgres).not.toHaveProperty('redisConfig');
+    expect(redis).toMatchObject({ redisConfig: { maxmemoryPercent: 60, maxmemoryPolicy: 'noeviction' } });
+  });
+
   it('accepts a binding target without accepting credential input', () => {
     const result = CreateManagedDatabaseBindingSchema.safeParse({
       targetNodeId: '44d553a4-8978-4ad1-8ca7-4d53c6e74a1d',
@@ -202,6 +300,36 @@ describe('managed database catalog and input guardrails', () => {
         targetEnvironment: { LOG_LEVEL: 'info', DATABASE_URL: 'old-value' },
       },
     });
+  });
+
+  it('warms the PostgreSQL extension catalog when a database becomes ready', async () => {
+    const ready = {
+      ...managedRow,
+      databaseConnectionId: '55555555-5555-4555-8555-555555555555',
+      status: 'ready' as const,
+      pendingOperation: null,
+    };
+    const returning = vi.fn().mockResolvedValue([ready]);
+    const db = {
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(() => ({ returning })) })) })),
+    };
+    const warmManagedPostgresExtensionCatalog = vi.fn().mockResolvedValue(undefined);
+    const service = new ManagedDatabaseService(
+      db as never,
+      { log: vi.fn() } as never,
+      {} as never,
+      {} as never,
+      undefined,
+      { warmManagedPostgresExtensionCatalog } as never
+    );
+
+    await (
+      service as unknown as {
+        markReady: (row: typeof ready, userId: string | null, port: number | null) => Promise<unknown>;
+      }
+    ).markReady(ready, 'user-1', null);
+
+    expect(warmManagedPostgresExtensionCatalog).toHaveBeenCalledWith(ready.databaseConnectionId);
   });
 
   it('reconciles a delayed create response by matching its durable operation ID', async () => {
@@ -642,5 +770,37 @@ describe('managed database catalog and input guardrails', () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it('restores owner credentials for an existing published database connection', async () => {
+    const row = {
+      ...managedRow,
+      databaseConnectionId: '55555555-5555-4555-8555-555555555555',
+      encryptedOwnerCredentials: JSON.stringify({ encryptedKey: 'owner-key', encryptedDek: 'owner-dek' }),
+      encryptedDirectCredentials: JSON.stringify({ encryptedKey: 'direct-key', encryptedDek: 'direct-dek' }),
+      publishedPort: 32768,
+    };
+    const set = vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) }));
+    const db = {
+      select: vi.fn(() => ({ from: vi.fn().mockResolvedValue([row]) })),
+      update: vi.fn(() => ({ set })),
+    };
+    const crypto = {
+      decryptString: vi.fn(() => JSON.stringify({ username: 'default', password: 'owner-password' })),
+      encryptString: vi.fn((value: string) => ({ payload: value })),
+    };
+    const service = new ManagedDatabaseService(
+      db as never,
+      { log: vi.fn() } as never,
+      crypto as never,
+      { sendDockerDatabaseCommand: vi.fn() } as never
+    );
+
+    await service.reconcileDatabaseConnections();
+
+    const calls = set.mock.calls as unknown as Array<[{ encryptedConfig: string }]>;
+    const update = calls[0]![0];
+    const encrypted = JSON.parse(update.encryptedConfig) as { payload: string };
+    expect(JSON.parse(encrypted.payload)).toMatchObject({ username: 'default', password: 'owner-password' });
   });
 });

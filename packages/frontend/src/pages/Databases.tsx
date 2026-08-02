@@ -254,11 +254,6 @@ function DatabaseTagSummary({ tags, type }: { tags: string[]; type: DatabaseConn
 
   return (
     <div ref={containerRef} className="flex min-w-0 flex-1 items-center justify-end gap-2">
-      <span ref={typeRef} className="inline-flex shrink-0">
-        <Badge variant="secondary" className="uppercase">
-          {type}
-        </Badge>
-      </span>
       {visibleTags.map((tag, index) => (
         <Badge
           key={`${tag.raw}:${index}`}
@@ -291,6 +286,11 @@ function DatabaseTagSummary({ tags, type }: { tags: string[]; type: DatabaseConn
           </TooltipContent>
         </Tooltip>
       )}
+      <span ref={typeRef} className="inline-flex shrink-0">
+        <Badge variant="outline" className="uppercase">
+          {type}
+        </Badge>
+      </span>
     </div>
   );
 }
@@ -447,7 +447,8 @@ function ManagedDatabaseCreateForm({
               <Input
                 id="managed-db-storage"
                 type="number"
-                min="1"
+                min="0.1"
+                step="0.1"
                 max={capacity.storageSizeGb}
                 value={resourceInputs.storageSizeGb}
                 onChange={(event) => setResourceInput("storageSizeGb", event.target.value)}
@@ -688,9 +689,11 @@ export function Databases({
   const [databaseNodes, setDatabaseNodes] = useState<Node[]>([]);
   const [saving, setSaving] = useState(false);
   const [managedSaving, setManagedSaving] = useState(false);
-  const [managedProvisioning, setManagedProvisioning] = useState<
-    { phase: "waiting" } | { phase: "failed"; databaseConnectionId: string; error: string } | null
-  >(null);
+  const [managedProvisioning, setManagedProvisioning] = useState<{ phase: "waiting" } | null>(null);
+  const [managedProvisioningError, setManagedProvisioningError] = useState<{
+    databaseConnectionId: string;
+    error: string;
+  } | null>(null);
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
 
   const openManagedCreate = useCallback(() => {
@@ -707,6 +710,16 @@ export function Databases({
     setManagedCreateStep(1);
     setManagedProvisioning(null);
   }, [managedProvisioning]);
+
+  const showManagedProvisioningError = useCallback(
+    (failure: { databaseConnectionId: string; error: string }) => {
+      setManagedCreateOpen(false);
+      setManagedCreateStep(1);
+      setManagedProvisioning(null);
+      window.setTimeout(() => setManagedProvisioningError(failure), 250);
+    },
+    []
+  );
 
   useEffect(() => {
     if (!(location.state as { createManagedDatabase?: boolean } | null)?.createManagedDatabase) {
@@ -866,8 +879,7 @@ export function Databases({
       });
       const provisioned = await waitForManagedDatabaseReady(created.id);
       if (provisioned.status !== "ready") {
-        setManagedProvisioning({
-          phase: "failed",
+        showManagedProvisioningError({
           databaseConnectionId: provisioned.databaseConnectionId,
           error: provisioned.lastError ?? "Managed database provisioning failed",
         });
@@ -881,8 +893,7 @@ export function Databases({
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to create managed database";
       if (created) {
-        setManagedProvisioning({
-          phase: "failed",
+        showManagedProvisioningError({
           databaseConnectionId: created.databaseConnectionId,
           error: message,
         });
@@ -898,7 +909,7 @@ export function Databases({
   const openFailedManagedDatabase = async (databaseConnectionId: string) => {
     try {
       const database = await api.getDatabase(databaseConnectionId);
-      closeManagedCreate();
+      setManagedProvisioningError(null);
       navigate(databaseRoute(database.slug, "overview"));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to open managed database");
@@ -1157,61 +1168,22 @@ export function Databases({
             <DialogHeader>
               <DialogTitle>Deploy managed database</DialogTitle>
               <DialogDescription>
-                {managedProvisioning?.phase === "waiting"
-                  ? "Starting the database and waiting for its readiness check."
-                  : managedProvisioning?.phase === "failed"
-                    ? "Database provisioning did not complete."
-                    : `Step ${managedCreateStep} of ${managedCreateStepCount} — ${managedCreateStepLabel}`}
+                Step {managedCreateStep} of {managedCreateStepCount} — {managedCreateStepLabel}
               </DialogDescription>
             </DialogHeader>
             <AnimatedHeight>
-              {managedProvisioning?.phase === "waiting" ? (
-                <div className="flex min-h-48 flex-col items-center justify-center gap-3 text-center">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                  <p className="text-sm font-medium">Waiting for database readiness</p>
-                  <p className="max-w-sm text-sm text-muted-foreground">
-                    ClickHouse may need a little longer for its first start. This dialog will close
-                    only after the database is ready.
-                  </p>
-                </div>
-              ) : managedProvisioning?.phase === "failed" ? (
-                <div className="space-y-2 border border-destructive/50 bg-destructive/5 p-4">
-                  <p className="text-sm font-medium text-destructive">
-                    Database provisioning failed
-                  </p>
-                  <p className="text-sm text-muted-foreground">{managedProvisioning.error}</p>
-                </div>
-              ) : (
-                <ManagedDatabaseCreateForm
-                  key={managedCreateSession}
-                  draft={managedDraft}
-                  nodes={deployableDatabaseNodes}
-                  catalog={managedCatalog}
-                  capacity={managedCapacity}
-                  step={managedCreateStep}
-                  onChange={setManagedDraft}
-                />
-              )}
+              <ManagedDatabaseCreateForm
+                key={managedCreateSession}
+                draft={managedDraft}
+                nodes={deployableDatabaseNodes}
+                catalog={managedCatalog}
+                capacity={managedCapacity}
+                step={managedCreateStep}
+                onChange={setManagedDraft}
+              />
             </AnimatedHeight>
             <DialogFooter>
-              {managedProvisioning?.phase === "waiting" ? (
-                <Button disabled>
-                  <Loader2 className="h-4 w-4 animate-spin" /> Waiting for readiness
-                </Button>
-              ) : managedProvisioning?.phase === "failed" ? (
-                <div className="flex w-full justify-between">
-                  <Button variant="outline" onClick={closeManagedCreate}>
-                    Close
-                  </Button>
-                  <Button
-                    onClick={() =>
-                      void openFailedManagedDatabase(managedProvisioning.databaseConnectionId)
-                    }
-                  >
-                    Open database
-                  </Button>
-                </div>
-              ) : managedCreateStep === 1 ? (
+              {managedCreateStep === 1 ? (
                 <>
                   <Button variant="outline" onClick={closeManagedCreate} disabled={managedSaving}>
                     Cancel
@@ -1244,11 +1216,39 @@ export function Databases({
                       onClick={() => void saveManaged()}
                       disabled={managedSaving || !canDeployManaged}
                     >
+                      {managedSaving && <Loader2 className="h-4 w-4 animate-spin" />}
                       {managedSaving ? "Deploying..." : "Deploy database"}
                     </Button>
                   )}
                 </div>
               )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {!embedded && (
+        <Dialog
+          open={managedProvisioningError !== null}
+          onOpenChange={(open) => !open && setManagedProvisioningError(null)}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Database provisioning failed</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">{managedProvisioningError?.error}</p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setManagedProvisioningError(null)}>
+                Close
+              </Button>
+              <Button
+                onClick={() =>
+                  managedProvisioningError &&
+                  void openFailedManagedDatabase(managedProvisioningError.databaseConnectionId)
+                }
+              >
+                Open database
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

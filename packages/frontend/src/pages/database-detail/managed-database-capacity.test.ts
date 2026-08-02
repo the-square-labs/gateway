@@ -47,6 +47,13 @@ describe("managed database capacity", () => {
     expect(canDeployManagedDatabase(draft, ["17.5"], capacity)).toBe(true);
   });
 
+  it("allows storage in one-tenth GB increments", () => {
+    const capacity = managedDatabaseCapacity(node);
+
+    expect(canDeployManagedDatabase({ ...draft, storageSizeGb: 0.1 }, ["17.5"], capacity)).toBe(true);
+    expect(canDeployManagedDatabase({ ...draft, storageSizeGb: 0.11 }, ["17.5"], capacity)).toBe(false);
+  });
+
   it("requires explicit native ClickHouse publication for a native host port", () => {
     const capacity = managedDatabaseCapacity(node);
     const clickhouse = {

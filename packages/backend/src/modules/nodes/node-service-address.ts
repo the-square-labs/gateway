@@ -33,9 +33,13 @@ export function getEffectivePublishedNodeIP(node: {
 }): string | null {
   const configured = node.serviceAddress?.trim();
   if (configured && isIP(configured) !== 0) return configured;
-  const candidates = [
-    ...(node.lastHealthReport?.publicIpAddresses ?? []),
-    ...(node.lastHealthReport?.localIpAddresses ?? []),
-  ];
+  // Automatic service-address selection is local-first everywhere else in
+  // Gateway. Keep published TLS endpoints consistent with that choice; all
+  // reported IPs are included in the database certificate SANs. A configured
+  // hostname cannot be a TLS endpoint identity, so retain the public-first
+  // fallback for that explicit direct-access intent.
+  const localAddresses = node.lastHealthReport?.localIpAddresses ?? [];
+  const publicAddresses = node.lastHealthReport?.publicIpAddresses ?? [];
+  const candidates = configured ? [...publicAddresses, ...localAddresses] : [...localAddresses, ...publicAddresses];
   return candidates.find((address) => isIP(address.trim()) !== 0) ?? null;
 }

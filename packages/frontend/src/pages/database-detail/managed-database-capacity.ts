@@ -23,6 +23,15 @@ function wholeUnits(bytes: unknown, unit: number): number | undefined {
   return value === undefined || value < 0 ? undefined : Math.floor(value / unit);
 }
 
+function tenthsOfUnits(bytes: unknown, unit: number): number | undefined {
+  const value = finiteNumber(bytes);
+  return value === undefined || value < 0 ? undefined : Math.floor((value * 10) / unit) / 10;
+}
+
+function hasAtMostOneDecimalPlace(value: number): boolean {
+  return Math.abs(value * 10 - Math.round(value * 10)) < 1e-9;
+}
+
 export function managedDatabaseCapacity(node: Node | undefined): ManagedDatabaseCapacity {
   const health = node?.lastHealthReport;
   const diskFreeBytes = finiteNumber(health?.diskFreeBytes);
@@ -34,7 +43,7 @@ export function managedDatabaseCapacity(node: Node | undefined): ManagedDatabase
   const cpuCores = finiteNumber(node?.capabilities.cpuCores);
 
   return {
-    storageSizeGb: wholeUnits(diskFreeBytes ?? mountFreeBytes, GIBIBYTE),
+    storageSizeGb: tenthsOfUnits(diskFreeBytes ?? mountFreeBytes, GIBIBYTE),
     ...(cpuCores !== undefined && cpuCores > 0 ? { cpuCores } : {}),
     memoryMb: wholeUnits(health?.systemMemoryAvailableBytes, MEBIBYTE),
     swapMb:
@@ -57,8 +66,9 @@ export function canDeployManagedDatabase(
     draft.name.trim().length > 0 &&
     draft.nodeId.length > 0 &&
     versions.includes(draft.version) &&
-    Number.isInteger(draft.storageSizeGb) &&
-    draft.storageSizeGb >= 1 &&
+    Number.isFinite(draft.storageSizeGb) &&
+    hasAtMostOneDecimalPlace(draft.storageSizeGb) &&
+    draft.storageSizeGb >= 0.1 &&
     withinLimit(draft.storageSizeGb, capacity.storageSizeGb) &&
     Number.isFinite(draft.cpuCores) &&
     draft.cpuCores >= 0.1 &&

@@ -48,10 +48,46 @@ const managedDatabaseNameSchema = z.string().trim().min(1).max(255);
 const managedDatabaseVersionSchema = z.string().trim().min(1).max(128);
 const minimumClickHouseMemoryMb = 512;
 
+export const ManagedRedisConfigSchema = z.object({
+  maxmemoryPercent: z.number().int().min(10).max(95),
+  maxmemoryPolicy: z.enum([
+    'noeviction',
+    'allkeys-lru',
+    'allkeys-lfu',
+    'allkeys-random',
+    'volatile-lru',
+    'volatile-lfu',
+    'volatile-random',
+    'volatile-ttl',
+  ]),
+  appendOnly: z.boolean(),
+  appendFsync: z.enum(['always', 'everysec', 'no']),
+  rdbSnapshotsEnabled: z.boolean(),
+  rdbSaveSeconds: z.number().int().min(1).max(31_536_000),
+  rdbSaveChanges: z.number().int().min(1).max(1_000_000_000),
+  autoAofRewritePercentage: z.number().int().min(0).max(10_000),
+  autoAofRewriteMinSizeMb: z.number().int().min(1).max(1_048_576),
+  maxclients: z.number().int().min(1).max(1_000_000),
+  timeoutSeconds: z.number().int().min(0).max(31_536_000),
+  tcpKeepaliveSeconds: z.number().int().min(0).max(31_536_000),
+  slowlogThresholdMicroseconds: z.number().int().min(-1).max(2_147_483_647),
+  slowlogMaxLen: z.number().int().min(0).max(1_000_000),
+  activeDefrag: z.boolean(),
+});
+
 export const ManagedDatabaseListQuerySchema = z.object({
   nodeId: z.string().uuid().optional(),
   type: managedDatabaseTypeSchema.optional(),
 });
+
+const managedDatabaseCreateStorageSizeGbSchema = z
+  .number()
+  .finite()
+  .min(0.1)
+  .max(16_384)
+  .refine((value) => Math.abs(value * 10 - Math.round(value * 10)) < 1e-9, {
+    message: 'Storage size supports at most one decimal place',
+  });
 
 export const CreateManagedDatabaseSchema = z
   .object({
@@ -59,7 +95,7 @@ export const CreateManagedDatabaseSchema = z
     type: managedDatabaseTypeSchema,
     version: managedDatabaseVersionSchema,
     nodeId: z.string().uuid(),
-    storageSizeGb: z.number().int().min(1).max(16_384),
+    storageSizeGb: managedDatabaseCreateStorageSizeGbSchema,
     cpuCores: z.number().min(0.1).max(128),
     memoryMb: z.number().int().min(128).max(1_048_576),
     swapMb: z.number().int().min(0).max(1_048_576).default(0),
@@ -72,6 +108,7 @@ export const CreateManagedDatabaseSchema = z
     databaseName: z.string().trim().min(1).max(63).optional(),
     ownerUsername: z.string().trim().min(1).max(63).optional(),
     clickhouseConfigXml: z.string().trim().min(1).max(32_768).optional(),
+    redisConfig: ManagedRedisConfigSchema.optional(),
   })
   .superRefine((value, context) => {
     if (value.type === 'clickhouse' && value.memoryMb < minimumClickHouseMemoryMb) {
@@ -112,6 +149,13 @@ export const CreateManagedDatabaseSchema = z
         message: 'clickhouseConfigXml is only supported for ClickHouse',
       });
     }
+    if (value.redisConfig !== undefined && value.type !== 'redis') {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['redisConfig'],
+        message: 'redisConfig is only supported for Redis',
+      });
+    }
     if (value.type === 'redis' && value.ownerUsername !== undefined && value.ownerUsername !== 'default') {
       context.addIssue({
         code: z.ZodIssueCode.custom,
@@ -135,6 +179,7 @@ export const UpdateManagedDatabaseSchema = z
     publishedNativePort: z.number().int().min(1).max(65535).nullable().optional(),
     tlsEnabled: z.boolean().optional(),
     clickhouseConfigXml: z.string().trim().max(32_768).optional(),
+    redisConfig: ManagedRedisConfigSchema.optional(),
   })
   .refine((value) => Object.keys(value).length > 0, { message: 'At least one field must be provided' });
 
