@@ -632,7 +632,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
             <AnimatePresence mode="wait">
               <motion.div key={connectionMode} {...FORM_ANIMATION}>
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <label className="text-sm font-medium" htmlFor="managed-db-link-database">
                       Database
                     </label>
@@ -677,7 +677,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <label className="text-sm font-medium" htmlFor="managed-db-link-mode">
                       Inject as
                     </label>
@@ -701,7 +701,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
                   </div>
 
                   {connectionMode === "uri" ? (
-                    <div className="space-y-2 sm:col-span-2">
+                    <div className="space-y-1.5 sm:col-span-2">
                       <label className="text-sm font-medium" htmlFor="managed-db-link-uri">
                         Connection URI variable
                       </label>
@@ -720,7 +720,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
                     </div>
                   ) : (
                     credentialFields.map(({ field, label, value }) => (
-                      <div key={field} className="space-y-2">
+                      <div key={field} className="space-y-1.5">
                         <label
                           className="text-sm font-medium"
                           htmlFor={`managed-db-link-variable-${field}`}

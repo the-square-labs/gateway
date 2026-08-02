@@ -289,10 +289,7 @@ export function RedisConfigDialog({
                 <SelectTrigger aria-label="AOF fsync">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent
-                  align="end"
-                  className="w-[var(--radix-select-trigger-width)]"
-                >
+                <SelectContent align="end" className="w-[var(--radix-select-trigger-width)]">
                   <SelectItem
                     value="everysec"
                     description="Sync once per second; recommended durability and throughput balance."

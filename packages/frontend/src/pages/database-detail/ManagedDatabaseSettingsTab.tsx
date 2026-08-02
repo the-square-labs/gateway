@@ -179,7 +179,7 @@ export function ManagedDatabaseSettingsTab({
   return (
     <AnimatedHeight>
       <div className="space-y-4">
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           <label htmlFor="managed-database-name" className="text-sm font-medium">
             Name
           </label>
@@ -190,7 +190,7 @@ export function ManagedDatabaseSettingsTab({
           />
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           <label htmlFor="managed-database-tags" className="text-sm font-medium">
             Tags
           </label>
@@ -207,7 +207,7 @@ export function ManagedDatabaseSettingsTab({
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <label htmlFor="managed-database-cpu" className="text-sm font-medium">
               CPU cores
             </label>
@@ -220,7 +220,7 @@ export function ManagedDatabaseSettingsTab({
               onChange={(event) => setCpuCores(event.target.value)}
             />
           </div>
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <label htmlFor="managed-database-memory" className="text-sm font-medium">
               Memory, MB
             </label>
@@ -232,7 +232,7 @@ export function ManagedDatabaseSettingsTab({
               onChange={(event) => setMemoryMb(event.target.value)}
             />
           </div>
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <label htmlFor="managed-database-swap" className="text-sm font-medium">
               Swap, MB
             </label>

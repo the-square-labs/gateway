@@ -338,7 +338,7 @@ function ManagedDatabaseCreateForm({
           className="space-y-4"
         >
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium" htmlFor="managed-db-name">
                 Name
               </label>
@@ -349,7 +349,7 @@ function ManagedDatabaseCreateForm({
                 placeholder="Production database"
               />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Engine</label>
               <Select
                 value={draft.type}
@@ -382,7 +382,7 @@ function ManagedDatabaseCreateForm({
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium" htmlFor="managed-db-node">
                 Databases node
               </label>
@@ -399,7 +399,7 @@ function ManagedDatabaseCreateForm({
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Curated version</label>
               <Select value={draft.version} onValueChange={(value) => set("version", value)}>
                 <SelectTrigger>
@@ -415,7 +415,7 @@ function ManagedDatabaseCreateForm({
               </Select>
             </div>
           </div>
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <label className="text-sm font-medium" htmlFor="managed-db-tags">
               Tags
             </label>
@@ -440,7 +440,7 @@ function ManagedDatabaseCreateForm({
           className="space-y-4"
         >
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium" htmlFor="managed-db-storage">
                 Storage (GB)
               </label>
@@ -459,7 +459,7 @@ function ManagedDatabaseCreateForm({
                 </p>
               )}
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium" htmlFor="managed-db-cpu">
                 CPU cores
               </label>
@@ -478,7 +478,7 @@ function ManagedDatabaseCreateForm({
                 </p>
               )}
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium" htmlFor="managed-db-memory">
                 Memory (MB)
               </label>
@@ -498,7 +498,7 @@ function ManagedDatabaseCreateForm({
                 </p>
               )}
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-sm font-medium" htmlFor="managed-db-swap">
                 Swap (MB)
               </label>

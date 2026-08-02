@@ -86,7 +86,7 @@ export function ResizeManagedDatabaseDialog({
             Database storage can only be increased. This change expands the managed storage image
             without recreating the database.
           </DialogDescription>
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <label className="text-sm font-medium" htmlFor="managed-database-resize-storage">
               New storage size, GB
             </label>
