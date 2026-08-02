@@ -411,3 +411,56 @@ describe('admin user additional permissions', () => {
     );
   });
 });
+
+describe('deleted user administration', () => {
+  it('does not expose deleted users to a regular user administrator', async () => {
+    registerSession(['admin:users']);
+
+    const response = await createApp().request('/api/admin/users/deleted', { headers: sessionHeaders() });
+
+    expect(response.status).toBe(403);
+  });
+
+  it('allows only a system administrator to list and restore deleted users', async () => {
+    registerSession(['admin:system']);
+    const deletedUser = {
+      id: '22222222-2222-4222-8222-222222222222',
+      email: 'deleted@example.com',
+      name: 'Deleted User',
+      avatarUrl: null,
+      deletedAt: '2026-08-01T10:00:00.000Z',
+      deletedByUserId: USER.id,
+      deletedFromGroupId: '33333333-3333-4333-8333-333333333333',
+      originalGroupExists: false,
+    };
+    const restoredUser: User = {
+      ...USER,
+      id: deletedUser.id,
+      email: deletedUser.email,
+      name: deletedUser.name,
+      groupId: '44444444-4444-4444-8444-444444444444',
+      groupName: 'viewer',
+      isBlocked: true,
+    };
+    const listDeletedUsers = vi.fn().mockResolvedValue([deletedUser]);
+    const restoreUser = vi.fn().mockResolvedValue(restoredUser);
+    const auditLog = vi.fn().mockResolvedValue(undefined);
+    container.registerInstance(AuthService, { listDeletedUsers, restoreUser } as unknown as AuthService);
+    container.registerInstance(AuditService, { log: auditLog } as unknown as AuditService);
+
+    const listResponse = await createApp().request('/api/admin/users/deleted', { headers: sessionHeaders() });
+    expect(listResponse.status).toBe(200);
+    expect(await listResponse.json()).toEqual([deletedUser]);
+
+    const restoreResponse = await createApp().request(`/api/admin/users/${deletedUser.id}/restore`, {
+      method: 'POST',
+      headers: sessionHeaders(),
+      body: JSON.stringify({ groupId: restoredUser.groupId }),
+    });
+    expect(restoreResponse.status).toBe(200);
+    expect(restoreUser).toHaveBeenCalledWith(deletedUser.id, restoredUser.groupId);
+    expect(auditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'user.restore', details: expect.objectContaining({ remainsBlocked: true }) })
+    );
+  });
+});

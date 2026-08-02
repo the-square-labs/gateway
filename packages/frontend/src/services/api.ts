@@ -285,6 +285,17 @@ class ApiClient extends withInferenceApi(
     await this.request(`/admin/users/${userId}`, { method: "DELETE" });
   }
 
+  async listDeletedUsers(): Promise<import("@/types").DeletedUser[]> {
+    return this.request<import("@/types").DeletedUser[]>("/admin/users/deleted");
+  }
+
+  async restoreUser(userId: string, groupId?: string): Promise<User> {
+    return this.request<User>(`/admin/users/${userId}/restore`, {
+      method: "POST",
+      body: JSON.stringify(groupId ? { groupId } : {}),
+    });
+  }
+
   async listAdminUserFolders(): Promise<import("@/types").ResourceFolderTreeNode[]> {
     return this.unwrapData(
       this.request<{ data: import("@/types").ResourceFolderTreeNode[] }>("/admin/user-folders")

@@ -49,7 +49,9 @@ describe('managed database binding provisioning guardrails', () => {
 
   it('continues binding teardown when the target container was already removed', async () => {
     const sendDockerNetworkCommand = vi.fn().mockResolvedValue({ success: true });
-    const getContainerEnv = vi.fn().mockRejectedValue(new Error('container inspect: No such container: deleted-target'));
+    const getContainerEnv = vi
+      .fn()
+      .mockRejectedValue(new Error('container inspect: No such container: deleted-target'));
     const updateContainerEnv = vi.fn();
     const instance = new ManagedDatabaseBindingService(
       {} as never,

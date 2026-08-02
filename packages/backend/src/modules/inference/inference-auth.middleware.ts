@@ -33,7 +33,8 @@ export const inferenceAuthMiddleware: MiddlewareHandler<AppEnv> = async (c, next
   c.set('effectiveScopes', result.user.scopes);
   c.set('isTokenAuth', true);
   c.set('authType', 'inference-token');
-  c.set('inferenceAuth', { tokenId: result.tokenId, tokenPrefix: result.tokenPrefix });
+  // Kept only in request-local state so WebSocket response.create events can revalidate it.
+  c.set('inferenceAuth', { tokenId: result.tokenId, tokenPrefix: result.tokenPrefix, rawToken });
   await next();
 };
 

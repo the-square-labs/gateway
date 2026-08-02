@@ -1,4 +1,13 @@
-import { Ban, FolderPlus, Lock, Plus, ShieldPlus, Trash2, Unlock } from "lucide-react";
+import {
+  ArchiveRestore,
+  Ban,
+  FolderPlus,
+  Lock,
+  Plus,
+  ShieldPlus,
+  Trash2,
+  Unlock,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -33,7 +42,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { scopeMatches } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
-import type { PermissionGroup, User } from "@/types";
+import type { DeletedUser, PermissionGroup, User } from "@/types";
 
 function getInitials(name: string | null, email: string): string {
   if (name) {
@@ -75,6 +84,11 @@ export function AdminUsers({
   const [createGroupId, setCreateGroupId] = useState("");
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
   const [permissionsUser, setPermissionsUser] = useState<User | null>(null);
+  const [deletedUsers, setDeletedUsers] = useState<DeletedUser[]>([]);
+  const [deletedUsersOpen, setDeletedUsersOpen] = useState(false);
+  const [restoreUser, setRestoreUser] = useState<DeletedUser | null>(null);
+  const [restoreGroupId, setRestoreGroupId] = useState("");
+  const [restoring, setRestoring] = useState(false);
   const [search, setSearch] = useState("");
   const lastCreateRequest = useRef(createRequest);
 
@@ -97,9 +111,24 @@ export function AdminUsers({
     }
   }, []);
 
+  const loadDeletedUsers = useCallback(async () => {
+    try {
+      const data = await api.listDeletedUsers();
+      setDeletedUsers(data ?? []);
+    } catch {
+      toast.error("Failed to load deleted users");
+    }
+  }, []);
+
   useEffect(() => {
     loadUsers();
   }, [loadUsers]);
+
+  const canManageDeletedUsers = hasScope("admin:system");
+
+  useEffect(() => {
+    if (canManageDeletedUsers) void loadDeletedUsers();
+  }, [canManageDeletedUsers, loadDeletedUsers]);
 
   useEffect(() => {
     api
@@ -174,16 +203,43 @@ export function AdminUsers({
   const handleDelete = async (user: User) => {
     const ok = await confirm({
       title: "Delete User",
-      description: `Delete "${user.name || user.email}"? They will be recreated with default group on next login.`,
+      description: `Delete "${user.name || user.email}"? Their access and tokens will be revoked. Only a system administrator can restore them.`,
       confirmLabel: "Delete",
     });
     if (!ok) return;
     try {
       await api.deleteUser(user.id);
       toast.success("User deleted");
-      reloadUsers();
+      await Promise.all([reloadUsers(), ...(canManageDeletedUsers ? [loadDeletedUsers()] : [])]);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to delete user");
+    }
+  };
+
+  const openRestore = (user: DeletedUser) => {
+    setRestoreUser(user);
+    setRestoreGroupId("");
+  };
+
+  const handleRestore = async () => {
+    if (!restoreUser) return;
+    if (!restoreUser.originalGroupExists && !restoreGroupId) {
+      toast.error("Select a group to restore this user");
+      return;
+    }
+    setRestoring(true);
+    try {
+      await api.restoreUser(
+        restoreUser.id,
+        restoreUser.originalGroupExists ? undefined : restoreGroupId
+      );
+      toast.success("User restored in blocked state. Unblock them separately to grant access.");
+      setRestoreUser(null);
+      await Promise.all([loadDeletedUsers(), reloadUsers()]);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to restore user");
+    } finally {
+      setRestoring(false);
     }
   };
 
@@ -408,6 +464,15 @@ export function AdminUsers({
                     },
                   ]
                 : []),
+              ...(canManageDeletedUsers
+                ? [
+                    {
+                      label: "Deleted Users",
+                      icon: <ArchiveRestore className="h-4 w-4" />,
+                      onClick: () => setDeletedUsersOpen(true),
+                    },
+                  ]
+                : []),
               {
                 label: "Create User",
                 icon: <Plus className="h-4 w-4" />,
@@ -421,11 +486,26 @@ export function AdminUsers({
                 Add Folder
               </Button>
             )}
+            {canManageDeletedUsers && (
+              <Button variant="outline" onClick={() => setDeletedUsersOpen(true)}>
+                <ArchiveRestore className="h-4 w-4" />
+                Deleted Users
+              </Button>
+            )}
             <Button onClick={() => setCreateOpen(true)}>
               <Plus className="h-4 w-4" />
               Create User
             </Button>
           </ResponsiveHeaderActions>
+        </div>
+      )}
+
+      {embedded && canManageDeletedUsers && (
+        <div className="flex justify-end">
+          <Button variant="outline" onClick={() => setDeletedUsersOpen(true)}>
+            <ArchiveRestore className="h-4 w-4" />
+            Deleted Users
+          </Button>
         </div>
       )}
 
@@ -537,6 +617,92 @@ export function AdminUsers({
           void reloadUsers();
         }}
       />
+
+      <Dialog open={deletedUsersOpen} onOpenChange={setDeletedUsersOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Deleted Users</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Restoring an account keeps it blocked. Its old sessions and tokens are not restored.
+          </p>
+          {deletedUsers.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">No deleted users.</p>
+          ) : (
+            <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
+              {deletedUsers.map((user) => (
+                <div
+                  key={user.id}
+                  className="flex items-center justify-between gap-3 rounded-md border p-3"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{user.name || user.email}</p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {user.email} · deleted {new Date(user.deletedAt).toLocaleString()}
+                    </p>
+                    {!user.originalGroupExists && (
+                      <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                        Original group was deleted
+                      </p>
+                    )}
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => openRestore(user)}>
+                    <ArchiveRestore className="h-4 w-4" />
+                    Restore
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={restoreUser !== null}
+        onOpenChange={(open) => {
+          if (!restoring && !open) setRestoreUser(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Restore User</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Restore {restoreUser?.name || restoreUser?.email}? The account will remain blocked
+              until explicitly unblocked.
+            </p>
+            {restoreUser && !restoreUser.originalGroupExists && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">New group</label>
+                <Select value={restoreGroupId} onValueChange={setRestoreGroupId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select group" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {groups.map((group) => (
+                      <SelectItem key={group.id} value={group.id}>
+                        {group.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRestoreUser(null)} disabled={restoring}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleRestore}
+              disabled={restoring || (!restoreUser?.originalGroupExists && !restoreGroupId)}
+            >
+              Restore blocked user
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 

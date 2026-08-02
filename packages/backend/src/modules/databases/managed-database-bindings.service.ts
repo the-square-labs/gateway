@@ -128,7 +128,9 @@ export class ManagedDatabaseBindingService {
     const credentials: BindingCredentials = {
       username: `gw_${preflightDatabase.type}_${shortId.slice(0, 10)}`,
       password: crypto.randomBytes(32).toString('base64url'),
-      ...(preflightDatabase.engineConfig.databaseName ? { databaseName: preflightDatabase.engineConfig.databaseName } : {}),
+      ...(preflightDatabase.engineConfig.databaseName
+        ? { databaseName: preflightDatabase.engineConfig.databaseName }
+        : {}),
     };
     const encryptedCredentials = JSON.stringify(this.cryptoService.encryptString(JSON.stringify(credentials)));
     // Bindings provision external resources after this transaction. Lock the

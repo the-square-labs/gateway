@@ -342,8 +342,7 @@ export class DatabaseMonitoringService extends EventEmitter {
       elapsedSeconds != null ? Math.max(0, (blocksReadTotal - previousBlocksReadTotal) / elapsedSeconds) : null;
     const writeBlocksPerSec =
       elapsedSeconds != null ? Math.max(0, (blocksWrittenTotal - previousBlocksWrittenTotal) / elapsedSeconds) : null;
-    const status: DatabaseHealthStatus =
-      responseMs >= DATABASE_DEGRADED_THRESHOLD_MS ? 'degraded' : 'online';
+    const status: DatabaseHealthStatus = responseMs >= DATABASE_DEGRADED_THRESHOLD_MS ? 'degraded' : 'online';
     return {
       timestamp: new Date().toISOString(),
       databaseId,
@@ -401,13 +400,7 @@ export class DatabaseMonitoringService extends EventEmitter {
       if (error) throw error;
       return value;
     });
-    const [infoRaw, clientsRaw, statsRaw, persistenceRaw, dbSize] = values as [
-      string,
-      string,
-      string,
-      string,
-      number,
-    ];
+    const [infoRaw, clientsRaw, statsRaw, persistenceRaw, dbSize] = values as [string, string, string, string, number];
     const info = this.parseRedisInfo(infoRaw);
     const clients = this.parseRedisInfo(clientsRaw);
     const stats = this.parseRedisInfo(statsRaw);

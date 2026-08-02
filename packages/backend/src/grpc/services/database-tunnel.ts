@@ -87,9 +87,7 @@ interface TunnelSession {
   idleTimer?: ReturnType<typeof setTimeout>;
 }
 
-function parseDatabaseTunnelCapability(
-  capability: string
-): Pick<TunnelConnection, 'lane' | 'bindingId'> | null {
+function parseDatabaseTunnelCapability(capability: string): Pick<TunnelConnection, 'lane' | 'bindingId'> | null {
   if (!capability.startsWith(DATABASE_TUNNEL_CAPABILITY_V2_PREFIX)) return null;
   const lane = capability.slice(DATABASE_TUNNEL_CAPABILITY_V2_PREFIX.length);
   if (lane === 'interactive' || lane === 'monitoring') return { lane };
@@ -219,7 +217,12 @@ export class DatabaseTunnelRelay {
     if (!sourceConnection) return;
     if (sourceConnection.nodeType !== 'docker' || sourceConnection.lane !== 'data') return;
     if (sourceConnection.bindingId !== open.bindingId) {
-      this.writeError(sourceConnection, open, 'BINDING_NOT_AUTHORIZED', 'Database tunnel binding does not match this stream');
+      this.writeError(
+        sourceConnection,
+        open,
+        'BINDING_NOT_AUTHORIZED',
+        'Database tunnel binding does not match this stream'
+      );
       return;
     }
     if (!TUNNEL_ID_RE.test(open.tunnelId) || !UUID_RE.test(open.bindingId) || !UUID_RE.test(open.managedDatabaseId)) {
@@ -272,8 +275,16 @@ export class DatabaseTunnelRelay {
       this.writeError(sourceConnection, open, 'RESOURCE_EXHAUSTED', 'Database binding session limit reached');
       return;
     }
-    if (this.sessionCount((session) => session.source.nodeId === sourceConnection.nodeId) >= MAX_TUNNEL_SESSIONS_PER_SOURCE_NODE) {
-      this.writeError(sourceConnection, open, 'RESOURCE_EXHAUSTED', 'Source node database tunnel session limit reached');
+    if (
+      this.sessionCount((session) => session.source.nodeId === sourceConnection.nodeId) >=
+      MAX_TUNNEL_SESSIONS_PER_SOURCE_NODE
+    ) {
+      this.writeError(
+        sourceConnection,
+        open,
+        'RESOURCE_EXHAUSTED',
+        'Source node database tunnel session limit reached'
+      );
       return;
     }
     if (
@@ -368,7 +379,7 @@ export class DatabaseTunnelRelay {
     const session = this.sessions.get(data.tunnelId);
     const senderConnection =
       typeof sender === 'string'
-        ? this.sessionConnectionForNode(session, sender) ?? this.getConnection(sender, 'data', data.bindingId)
+        ? (this.sessionConnectionForNode(session, sender) ?? this.getConnection(sender, 'data', data.bindingId))
         : sender;
     if (!senderConnection) return;
     if (!session || session.bindingId !== data.bindingId) {
@@ -376,15 +387,34 @@ export class DatabaseTunnelRelay {
       return;
     }
     const recipient =
-      session.source === senderConnection ? session.target : session.target === senderConnection ? session.source : null;
+      session.source === senderConnection
+        ? session.target
+        : session.target === senderConnection
+          ? session.source
+          : null;
     if (!recipient) {
-      this.writeError(senderConnection, data, 'TUNNEL_NOT_AUTHORIZED', 'Database tunnel is not authorized for this node');
+      this.writeError(
+        senderConnection,
+        data,
+        'TUNNEL_NOT_AUTHORIZED',
+        'Database tunnel is not authorized for this node'
+      );
       return;
     }
     this.refreshIdleTimer(session);
     const size = data.data?.byteLength ?? 0;
-    if (size <= 0 || size > senderConnection.maxChunkBytes || size > recipient.maxChunkBytes || size > MAX_CHUNK_BYTES) {
-      this.terminate(session, senderConnection, 'FRAME_TOO_LARGE', 'Database tunnel data frame exceeds the negotiated limit');
+    if (
+      size <= 0 ||
+      size > senderConnection.maxChunkBytes ||
+      size > recipient.maxChunkBytes ||
+      size > MAX_CHUNK_BYTES
+    ) {
+      this.terminate(
+        session,
+        senderConnection,
+        'FRAME_TOO_LARGE',
+        'Database tunnel data frame exceeds the negotiated limit'
+      );
       return;
     }
 
@@ -409,7 +439,11 @@ export class DatabaseTunnelRelay {
     if (!senderConnection) return;
     if (!session || session.bindingId !== close.bindingId) return;
     const peer =
-      session.source === senderConnection ? session.target : session.target === senderConnection ? session.source : null;
+      session.source === senderConnection
+        ? session.target
+        : session.target === senderConnection
+          ? session.source
+          : null;
     if (!peer) return;
     this.removeSession(session);
     this.write(peer, { close });
@@ -421,7 +455,11 @@ export class DatabaseTunnelRelay {
     if (!senderConnection) return;
     if (!session || session.bindingId !== error.bindingId) return;
     const peer =
-      session.source === senderConnection ? session.target : session.target === senderConnection ? session.source : null;
+      session.source === senderConnection
+        ? session.target
+        : session.target === senderConnection
+          ? session.source
+          : null;
     if (!peer) return;
     this.removeSession(session);
     this.write(peer, {

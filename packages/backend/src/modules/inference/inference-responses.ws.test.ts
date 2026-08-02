@@ -1,11 +1,13 @@
 import 'reflect-metadata';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
+import { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
 import { consumeInferenceRateLimit } from './inference-limit.middleware.js';
 import { InferenceProtocolService } from './inference-protocol.service.js';
 import { createInferenceResponsesWSHandlers } from './inference-responses.ws.js';
 import { InferenceRuntimeService } from './inference-runtime.service.js';
+import { InferenceTokenService } from './inference-token.service.js';
 
 vi.mock('./inference-limit.middleware.js', () => ({
   consumeInferenceRateLimit: vi.fn().mockResolvedValue({ limit: 100, remaining: 99 }),
@@ -24,6 +26,12 @@ const USER = {
   isBlocked: false,
 } satisfies User;
 
+beforeEach(() => {
+  container.registerInstance(InferenceTokenService, {
+    validateToken: vi.fn().mockResolvedValue({ user: USER, tokenId: 'token-1', tokenPrefix: 'gwi_12345678' }),
+  } as unknown as InferenceTokenService);
+});
+
 afterEach(() => container.reset());
 
 function websocket() {
@@ -37,6 +45,7 @@ describe('Responses WebSocket', () => {
       user: USER,
       tokenId: 'token-1',
       tokenPrefix: 'gwi_12345678',
+      rawToken: 'gwi_test',
     });
 
     await handlers.onOpen?.({} as never, ws as never);
@@ -101,6 +110,7 @@ describe('Responses WebSocket', () => {
       user: USER,
       tokenId: 'token-1',
       tokenPrefix: 'gwi_12345678',
+      rawToken: 'gwi_test',
     });
     await handlers.onOpen?.({} as never, ws as never);
     await handlers.onMessage?.(
@@ -162,6 +172,7 @@ describe('Responses WebSocket', () => {
       user: USER,
       tokenId: 'token-1',
       tokenPrefix: 'gwi_12345678',
+      rawToken: 'gwi_test',
     });
 
     await handlers.onMessage?.(
@@ -197,6 +208,7 @@ describe('Responses WebSocket', () => {
       user: USER,
       tokenId: 'token-1',
       tokenPrefix: 'gwi_12345678',
+      rawToken: 'gwi_test',
     });
 
     const creating = handlers.onMessage?.(
@@ -250,6 +262,7 @@ describe('Responses WebSocket', () => {
       user: USER,
       tokenId: 'token-1',
       tokenPrefix: 'gwi_12345678',
+      rawToken: 'gwi_test',
     });
 
     await handlers.onMessage?.(
@@ -301,6 +314,7 @@ describe('Responses WebSocket', () => {
       user: USER,
       tokenId: 'token-1',
       tokenPrefix: 'gwi_12345678',
+      rawToken: 'gwi_test',
     });
 
     await handlers.onMessage?.({ data: JSON.stringify({ type: 'unsupported' }) } as never, ws as never);
@@ -322,6 +336,7 @@ describe('Responses WebSocket', () => {
       user: USER,
       tokenId: 'token-1',
       tokenPrefix: 'gwi_12345678',
+      rawToken: 'gwi_test',
     });
 
     await handlers.onMessage?.({ data: '{' } as never, ws as never);
@@ -339,6 +354,7 @@ describe('Responses WebSocket', () => {
         user: USER,
         tokenId: 'token-1',
         tokenPrefix: 'gwi_12345678',
+        rawToken: 'gwi_test',
       },
       8
     );
@@ -346,6 +362,67 @@ describe('Responses WebSocket', () => {
     await handlers.onMessage?.({ data: '123456789' } as never, ws as never);
 
     expect(ws.close).toHaveBeenCalledWith(1009, 'Message too large');
+  });
+
+  it('revalidates the inference token before every new response', async () => {
+    const validateToken = vi.fn().mockResolvedValue(null);
+    container.registerInstance(InferenceTokenService, { validateToken } as unknown as InferenceTokenService);
+    const ws = websocket();
+    const handlers = createInferenceResponsesWSHandlers({
+      user: USER,
+      tokenId: 'token-1',
+      tokenPrefix: 'gwi_12345678',
+      rawToken: 'gwi_revoked',
+    });
+
+    await handlers.onMessage?.(
+      { data: JSON.stringify({ type: 'response.create', response: { model: 'gateway-model', input: 'Hi' } }) } as never,
+      ws as never
+    );
+
+    expect(validateToken).toHaveBeenCalledWith('gwi_revoked');
+    expect(ws.close).toHaveBeenCalledWith(1008, 'Unauthorized');
+    expect(JSON.parse(String(ws.send.mock.calls.at(-1)?.[0]))).toMatchObject({ error: { code: 'invalid_api_key' } });
+  });
+
+  it('cancels an active response and closes when the account is deleted', async () => {
+    const runtime = new InferenceRuntimeService();
+    runtime.setExecutor({
+      execute: vi.fn().mockImplementation(async (_request, context) => ({
+        responseId: 'resp_deleted',
+        resolvedModel: 'gateway-model',
+        events: (async function* () {
+          await new Promise<never>((_resolve, reject) => {
+            if (context.signal.aborted) reject(context.signal.reason);
+            else context.signal.addEventListener('abort', () => reject(context.signal.reason), { once: true });
+          });
+        })(),
+      })),
+    });
+    const eventBus = new EventBusService();
+    container.registerInstance(InferenceRuntimeService, runtime);
+    container.registerInstance(InferenceProtocolService, protocolServiceStub());
+    container.registerInstance(EventBusService, eventBus);
+    const ws = websocket();
+    const handlers = createInferenceResponsesWSHandlers({
+      user: USER,
+      tokenId: 'token-1',
+      tokenPrefix: 'gwi_12345678',
+      rawToken: 'gwi_test',
+    });
+    await handlers.onOpen?.({} as never, ws as never);
+
+    const creating = handlers.onMessage?.(
+      { data: JSON.stringify({ type: 'response.create', response: { model: 'gateway-model', input: 'Hi' } }) } as never,
+      ws as never
+    );
+    await vi.waitFor(() => expect(ws.send).toHaveBeenCalled());
+    eventBus.publish(`permissions.changed.${USER.id}`, { reason: 'user_deleted', scopes: [], groupId: null });
+    await creating;
+
+    expect(ws.close).toHaveBeenCalledWith(1008, 'Access revoked');
+    const messages = ws.send.mock.calls.map(([payload]) => JSON.parse(String(payload)) as { type: string });
+    expect(messages.filter((message) => message.type === 'response.cancelled')).toHaveLength(1);
   });
 });
 

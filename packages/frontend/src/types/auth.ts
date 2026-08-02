@@ -13,9 +13,21 @@ export interface User {
   additionalScopes?: string[];
   scopes: string[];
   isBlocked: boolean;
+  isDeleted?: boolean;
   aiApprovalMode?: AIApprovalMode;
   folderId?: string | null;
   sortOrder?: number;
+}
+
+export interface DeletedUser {
+  id: string;
+  email: string;
+  name: string | null;
+  avatarUrl: string | null;
+  deletedAt: string;
+  deletedByUserId: string | null;
+  deletedFromGroupId: string | null;
+  originalGroupExists: boolean;
 }
 
 // Permission Group

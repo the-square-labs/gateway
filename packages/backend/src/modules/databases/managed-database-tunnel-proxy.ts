@@ -1,8 +1,5 @@
 import net from 'node:net';
-import {
-  openGatewayManagedDatabaseTunnel,
-  type ManagedDatabaseTunnelLane,
-} from '@/grpc/services/database-tunnel.js';
+import { type ManagedDatabaseTunnelLane, openGatewayManagedDatabaseTunnel } from '@/grpc/services/database-tunnel.js';
 
 export interface ManagedDatabaseTunnelEndpoint {
   host: '127.0.0.1';

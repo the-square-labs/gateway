@@ -5,6 +5,7 @@ import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { inferenceDiscoveredModels, inferenceModelSources, inferenceProviderConnections } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
 import type { InferenceAccountingService, InferenceAdmission } from './accounting/inference-accounting.service.js';
 import type { InferenceModelService } from './models/inference-model.service.js';
 import { mapReasoningEffort } from './models/inference-reasoning.service.js';
@@ -247,17 +248,11 @@ export class InferenceGatewayExecutor implements InferenceExecutor {
   }
 
   private async requireUser(userId: string) {
-    const user = await this.db.query.users.findFirst({ where: (users, { eq }) => eq(users.id, userId) });
-    if (!user) throw new InferenceProtocolError(401, 'invalid_api_key', 'Inference user is unavailable');
-    const group = await this.db.query.permissionGroups.findFirst({
-      where: (groups, { eq }) => eq(groups.id, user.groupId),
-    });
-    return {
-      ...user,
-      groupName: group?.name ?? '',
-      groupScopes: group?.scopes ?? [],
-      scopes: [...new Set([...(group?.scopes ?? []), ...(user.additionalScopes ?? [])])],
-    };
+    const user = await resolveLiveUser(this.db, userId);
+    if (!user || user.isBlocked) {
+      throw new InferenceProtocolError(401, 'invalid_api_key', 'Inference user is unavailable');
+    }
+    return user;
   }
 }
 

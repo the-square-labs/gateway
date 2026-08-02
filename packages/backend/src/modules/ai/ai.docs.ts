@@ -307,11 +307,11 @@ Users authenticate via OIDC (OpenID Connect). Gateway acts as a relying party â€
 - View all users: list_users
 - Change a user's group: update_user_role(userId, groupId) â€” changes their permissions immediately
 - The Administration UI can assign additional per-user scopes on top of the user's group, but only from scopes the acting administrator already has. The current AI user tool does not expose this override mutation.
-- Block/unblock users from the Administration UI/API; there is no current AI tool for blocking users.
-- Users cannot be deleted (they're linked to audit logs), only blocked
+- Block/unblock users from the Administration UI/API or AI assistant.
+- Deleting a user is a soft-delete: their access and tokens are revoked, they are hidden from operational user lists, and historical audit/usage data remains intact. Only a system administrator can restore a deleted user, and restore leaves them blocked until explicitly unblocked.
 
 ## User Fields
-- id, email, name, avatarUrl, groupId, groupName, groupScopes, additionalScopes, scopes, isBlocked
+- id, email, name, avatarUrl, groupId, groupName, groupScopes, additionalScopes, scopes, isBlocked, isDeleted
 - lastLoginAt, loginCount, createdAt`,
 
   audit: `# Audit Log

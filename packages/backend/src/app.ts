@@ -486,7 +486,7 @@ export function createApp() {
         const user = c.get('user');
         const auth = c.get('inferenceAuth');
         return createInferenceResponsesWSHandlers(
-          user && auth ? { user, tokenId: auth.tokenId, tokenPrefix: auth.tokenPrefix } : null,
+          user && auth ? { user, tokenId: auth.tokenId, tokenPrefix: auth.tokenPrefix, rawToken: auth.rawToken } : null,
           env.INFERENCE_BODY_MAX_BYTES
         );
       })
