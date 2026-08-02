@@ -365,6 +365,7 @@ export class DatabaseMonitoringService extends EventEmitter {
     if (!ping.success) throw ping.error;
     const previousSnapshot = await this.getLatestSnapshot(databaseId);
     const queryRows = async <T extends Record<string, unknown>>(
+      metricGroup: string,
       query: string,
       queryParams?: Record<string, unknown>
     ) => {
@@ -376,7 +377,12 @@ export class DatabaseMonitoringService extends EventEmitter {
           clickhouse_settings: { max_execution_time: 5, readonly: '1', log_queries: 0 },
         });
         return await result.json<T>();
-      } catch {
+      } catch (error) {
+        logger.debug('ClickHouse monitoring metric group unavailable', {
+          databaseId,
+          metricGroup,
+          error: error instanceof Error ? error.message : String(error),
+        });
         return [];
       }
     };
@@ -386,15 +392,18 @@ export class DatabaseMonitoringService extends EventEmitter {
         bytes: string;
         active_parts: string;
       }>(
+        'parts',
         `SELECT sum(rows) AS rows, sum(bytes_on_disk) AS bytes, count() AS active_parts
            FROM system.parts
           WHERE active AND database = {database: String}`,
         { database }
       ),
       queryRows<{ running_queries: string; memory_usage: string }>(
+        'processes',
         `SELECT count() AS running_queries, sum(memory_usage) AS memory_usage FROM system.processes`
       ),
       queryRows<{ merges: string; pending_mutations: string; query_total: string }>(
+        'activity',
         `SELECT
            (SELECT count() FROM system.merges WHERE database = {database: String}) AS merges,
            (SELECT count() FROM system.mutations WHERE database = {database: String} AND NOT is_done) AS pending_mutations,
@@ -402,6 +411,7 @@ export class DatabaseMonitoringService extends EventEmitter {
         { database }
       ),
       queryRows<{ disk_total: string; disk_free: string; disk_unreserved: string }>(
+        'disks',
         `SELECT
            sum(total_space) AS disk_total,
            sum(free_space) AS disk_free,

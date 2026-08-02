@@ -76,8 +76,9 @@ func TestManagedDatabaseRequiresRecreateWhenClickHouseConfigChanges(t *testing.T
 	input.Type = "clickhouse"
 	input.ClickhouseConfig = "<clickhouse><max_threads>4</max_threads></clickhouse>"
 	record := managedDatabaseRecord{
-		Type:                 "clickhouse",
-		ClickhouseConfigHash: clickHouseConfigHash(input.ClickhouseConfig),
+		Type:                            "clickhouse",
+		ClickhouseConfigHash:            clickHouseConfigHash(input.ClickhouseConfig),
+		ClickhouseRuntimeProfileVersion: clickHouseRuntimeProfileVersion,
 	}
 
 	if managedDatabaseRequiresRecreate(record, input) {
@@ -86,6 +87,51 @@ func TestManagedDatabaseRequiresRecreateWhenClickHouseConfigChanges(t *testing.T
 	input.ClickhouseConfig = "<clickhouse><max_threads>8</max_threads></clickhouse>"
 	if !managedDatabaseRequiresRecreate(record, input) {
 		t.Fatal("expected changed ClickHouse config to recreate the container")
+	}
+}
+
+func TestManagedDatabaseRecreatesLegacyClickHouseForRuntimeProfile(t *testing.T) {
+	input := validManagedDatabaseInput()
+	input.Type = "clickhouse"
+	input.Image = "docker.io/clickhouse/clickhouse-server@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5"
+	record := managedDatabaseRecord{Type: "clickhouse"}
+
+	if !managedDatabaseRequiresRecreate(record, input) {
+		t.Fatal("expected legacy ClickHouse container to receive the managed runtime profile")
+	}
+}
+
+func TestClickHouseRuntimeProfileDisablesInternalLogTables(t *testing.T) {
+	for _, setting := range []string{
+		`<logger replace="replace">`,
+		`<background_pool_size>16</background_pool_size>`,
+		`<background_schedule_pool_size>8</background_schedule_pool_size>`,
+		`<trace_log remove="remove"/>`,
+		`<metric_log remove="remove"/>`,
+		`<asynchronous_metric_log remove="remove"/>`,
+		`<background_schedule_pool_log remove="remove"/>`,
+		`<error_log remove="remove"/>`,
+	} {
+		if !strings.Contains(clickHouseRuntimeConfig, setting) {
+			t.Fatalf("expected managed ClickHouse runtime config to contain %q", setting)
+		}
+	}
+}
+
+func TestWriteClickHouseConfigConvergesReadableMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime.xml")
+	if err := os.WriteFile(path, []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeClickHouseConfig(path, "new"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0644 {
+		t.Fatalf("expected ClickHouse config mode 0644, got %o", info.Mode().Perm())
 	}
 }
 
@@ -348,6 +394,23 @@ func TestClickHouseBindingPrincipalUpdatesExistingPassword(t *testing.T) {
 	})
 	if !strings.Contains(sql, `ALTER USER "app_user" IDENTIFIED WITH sha256_password BY 'replacement-long-random-secret'`) {
 		t.Fatalf("ClickHouse binding SQL must update the password of an existing principal: %q", sql)
+	}
+}
+
+func TestClickHouseBindingPrincipalGrantsMonitoringViews(t *testing.T) {
+	sql := clickHouseBindingCreateSQL(managedDatabaseBindingCommand{
+		BindingID:     "binding_123",
+		Username:      "app_user",
+		Password:      "replacement-long-random-secret",
+		DatabaseName:  "app_database",
+		OwnerUsername: "app_owner",
+		OwnerPassword: "owner-secret",
+	})
+	for _, table := range []string{"parts", "processes", "merges", "mutations", "events", "disks"} {
+		grant := `GRANT SELECT ON system.` + table + ` TO "app_user"`
+		if !strings.Contains(sql, grant) {
+			t.Fatalf("ClickHouse binding SQL must grant monitoring view %s: %q", table, sql)
+		}
 	}
 }
 

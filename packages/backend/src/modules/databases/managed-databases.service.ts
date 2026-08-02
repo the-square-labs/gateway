@@ -485,7 +485,7 @@ export class ManagedDatabaseService {
     const connection = await this.createCanonicalConnection(
       input.name,
       input.type,
-      directCredentials,
+      input.publishTcp ? directCredentials : credentials,
       input.storageSizeGb * GIBIBYTE,
       userId,
       input.tags
@@ -966,8 +966,12 @@ export class ManagedDatabaseService {
     }
     if (!result.success) return this.markError(row, 'create', result.error);
     try {
-      if (direct) await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
-      if (direct) await this.syncCanonicalConnectionCredentials(direct.row, direct.credentials, userId);
+      if (direct) {
+        await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
+        await this.syncCanonicalConnectionCredentials(direct.row, direct.credentials, userId);
+      } else {
+        await this.syncCanonicalConnectionCredentials(row, credentials, userId);
+      }
       const current = direct?.row ?? row;
       const publishedPort = await this.resolvePublishedPort(current, publishTcp, result);
       const publishedNativePort = await this.resolvePublishedNativePort(current, publishNativeTcp, result);
@@ -997,8 +1001,12 @@ export class ManagedDatabaseService {
     }
     if (!result.success) return this.markError(row, 'update', result.error);
     try {
-      if (direct) await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
-      if (direct) await this.syncCanonicalConnectionCredentials(direct.row, direct.credentials, userId);
+      if (direct) {
+        await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
+        await this.syncCanonicalConnectionCredentials(direct.row, direct.credentials, userId);
+      } else {
+        await this.syncCanonicalConnectionCredentials(row, credentials, userId);
+      }
       const current = direct?.row ?? row;
       const publishedPort = await this.resolvePublishedPort(current, publishTcp, result);
       const publishedNativePort = await this.resolvePublishedNativePort(current, publishNativeTcp, result);
@@ -1085,9 +1093,10 @@ export class ManagedDatabaseService {
         return;
       }
       // A create/update may have reached Docker before the controller lost its
-      // response. A direct principal exists only for published databases;
-      // private managed links use per-binding accounts instead.
+      // response. Published databases use the scoped direct principal; private
+      // databases keep Gateway's canonical connection on the internal owner.
       const direct = managedDatabasePublishTcp(row) ? await this.ensureDirectAccessCredentials(row, null) : null;
+      if (!direct) await this.syncCanonicalConnectionCredentials(row, this.ownerCredentials(row), null);
       // Inspect is also the recovery source of truth for an auto-assigned
       // host port when the original create/update response was lost.
       await this.markReady(direct?.row ?? row, null, allocatedPublishedPort(result) ?? row.publishedPort, state.status);

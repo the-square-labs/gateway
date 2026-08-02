@@ -44,6 +44,83 @@ const (
 	managedDatabaseReadinessInterval = 500 * time.Millisecond
 )
 
+const clickHouseRuntimeProfileVersion = 2
+
+// ClickHouse's upstream defaults are sized for dedicated analytics servers:
+// they create large background pools and several MergeTree-backed system log
+// tables. In a small managed container those logs can continuously merge until
+// they consume the whole cgroup allowance, starving both user traffic and the
+// monitoring queries. Keep the managed baseline intentionally small; a user's
+// later gateway-managed.xml may still override these defaults when needed.
+const clickHouseRuntimeConfig = `<clickhouse>
+    <logger replace="replace">
+        <level>warning</level>
+        <console>1</console>
+    </logger>
+    <max_server_memory_usage_to_ram_ratio>0.75</max_server_memory_usage_to_ram_ratio>
+    <background_buffer_flush_schedule_pool_size>2</background_buffer_flush_schedule_pool_size>
+    <background_pool_size>16</background_pool_size>
+    <background_move_pool_size>1</background_move_pool_size>
+    <background_fetches_pool_size>1</background_fetches_pool_size>
+    <background_common_pool_size>2</background_common_pool_size>
+    <background_schedule_pool_size>8</background_schedule_pool_size>
+    <background_message_broker_schedule_pool_size>2</background_message_broker_schedule_pool_size>
+    <background_distributed_schedule_pool_size>2</background_distributed_schedule_pool_size>
+    <query_log remove="remove"/>
+    <query_thread_log remove="remove"/>
+    <query_views_log remove="remove"/>
+    <query_metric_log remove="remove"/>
+    <trace_log remove="remove"/>
+    <instrumentation_trace_log remove="remove"/>
+    <part_log remove="remove"/>
+    <text_log remove="remove"/>
+    <error_log remove="remove"/>
+    <metric_log remove="remove"/>
+    <asynchronous_metric_log remove="remove"/>
+    <processors_profile_log remove="remove"/>
+    <session_log remove="remove"/>
+    <crash_log remove="remove"/>
+    <background_schedule_pool_log remove="remove"/>
+    <asynchronous_insert_log remove="remove"/>
+    <backup_log remove="remove"/>
+    <blob_storage_log remove="remove"/>
+    <s3queue_log remove="remove"/>
+    <opentelemetry_span_log remove="remove"/>
+    <zookeeper_log remove="remove"/>
+    <zookeeper_connection_log remove="remove"/>
+    <aggregated_zookeeper_log remove="remove"/>
+    <delta_lake_metadata_log remove="remove"/>
+    <iceberg_metadata_log remove="remove"/>
+</clickhouse>`
+
+const clickHouseSystemLogCleanupSQL = `
+TRUNCATE TABLE IF EXISTS system.query_log;
+TRUNCATE TABLE IF EXISTS system.query_thread_log;
+TRUNCATE TABLE IF EXISTS system.query_views_log;
+TRUNCATE TABLE IF EXISTS system.query_metric_log;
+TRUNCATE TABLE IF EXISTS system.trace_log;
+TRUNCATE TABLE IF EXISTS system.instrumentation_trace_log;
+TRUNCATE TABLE IF EXISTS system.part_log;
+TRUNCATE TABLE IF EXISTS system.text_log;
+TRUNCATE TABLE IF EXISTS system.error_log;
+TRUNCATE TABLE IF EXISTS system.metric_log;
+TRUNCATE TABLE IF EXISTS system.asynchronous_metric_log;
+TRUNCATE TABLE IF EXISTS system.processors_profile_log;
+TRUNCATE TABLE IF EXISTS system.session_log;
+TRUNCATE TABLE IF EXISTS system.crash_log;
+TRUNCATE TABLE IF EXISTS system.background_schedule_pool_log;
+TRUNCATE TABLE IF EXISTS system.asynchronous_insert_log;
+TRUNCATE TABLE IF EXISTS system.backup_log;
+TRUNCATE TABLE IF EXISTS system.blob_storage_log;
+TRUNCATE TABLE IF EXISTS system.s3queue_log;
+TRUNCATE TABLE IF EXISTS system.opentelemetry_span_log;
+TRUNCATE TABLE IF EXISTS system.zookeeper_log;
+TRUNCATE TABLE IF EXISTS system.zookeeper_connection_log;
+TRUNCATE TABLE IF EXISTS system.aggregated_zookeeper_log;
+TRUNCATE TABLE IF EXISTS system.delta_lake_metadata_log;
+TRUNCATE TABLE IF EXISTS system.iceberg_metadata_log;
+`
+
 var (
 	managedDatabaseIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 	managedDatabaseName      = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,62}$`)
@@ -97,22 +174,23 @@ type managedDatabaseOperationCommand struct {
 // database container is started after a daemon or host restart. It contains
 // neither owner credentials nor arbitrary configuration.
 type managedDatabaseRecord struct {
-	ID                   string `json:"id"`
-	Type                 string `json:"type"`
-	ContainerID          string `json:"containerId"`
-	ContainerName        string `json:"containerName"`
-	NetworkName          string `json:"networkName"`
-	ImagePath            string `json:"imagePath"`
-	MountPath            string `json:"mountPath"`
-	LoopDevice           string `json:"loopDevice,omitempty"`
-	StorageSize          int64  `json:"storageSizeBytes"`
-	DesiredRunning       bool   `json:"desiredRunning"`
-	PublishedPort        uint16 `json:"publishedPort,omitempty"`
-	PublishedNativePort  uint16 `json:"publishedNativePort,omitempty"`
-	TLSEnabled           bool   `json:"tlsEnabled"`
-	TLSCertificateID     string `json:"tlsCertificateId,omitempty"`
-	ClickhouseConfigHash string `json:"clickhouseConfigHash,omitempty"`
-	OperationID          string `json:"operationId"`
+	ID                              string `json:"id"`
+	Type                            string `json:"type"`
+	ContainerID                     string `json:"containerId"`
+	ContainerName                   string `json:"containerName"`
+	NetworkName                     string `json:"networkName"`
+	ImagePath                       string `json:"imagePath"`
+	MountPath                       string `json:"mountPath"`
+	LoopDevice                      string `json:"loopDevice,omitempty"`
+	StorageSize                     int64  `json:"storageSizeBytes"`
+	DesiredRunning                  bool   `json:"desiredRunning"`
+	PublishedPort                   uint16 `json:"publishedPort,omitempty"`
+	PublishedNativePort             uint16 `json:"publishedNativePort,omitempty"`
+	TLSEnabled                      bool   `json:"tlsEnabled"`
+	TLSCertificateID                string `json:"tlsCertificateId,omitempty"`
+	ClickhouseConfigHash            string `json:"clickhouseConfigHash,omitempty"`
+	ClickhouseRuntimeProfileVersion int    `json:"clickhouseRuntimeProfileVersion,omitempty"`
+	OperationID                     string `json:"operationId"`
 }
 
 // managedDatabaseRuntimeStats is intentionally a narrow managed-database
@@ -432,8 +510,8 @@ func postgresBindingRemoveSQL(input managedDatabaseBindingCommand) string {
 
 func clickHouseBindingCreateSQL(input managedDatabaseBindingCommand) string {
 	return fmt.Sprintf(
-		"CREATE USER IF NOT EXISTS %s IDENTIFIED WITH sha256_password BY %s; ALTER USER %s IDENTIFIED WITH sha256_password BY %s; GRANT ALL ON %s.* TO %s;\n",
-		quoteSQLIdentifier(input.Username), quoteSQLLiteral(input.Password), quoteSQLIdentifier(input.Username), quoteSQLLiteral(input.Password), quoteSQLIdentifier(input.DatabaseName), quoteSQLIdentifier(input.Username),
+		"CREATE USER IF NOT EXISTS %s IDENTIFIED WITH sha256_password BY %s; ALTER USER %s IDENTIFIED WITH sha256_password BY %s; GRANT ALL ON %s.* TO %s; GRANT SELECT ON system.parts TO %s; GRANT SELECT ON system.processes TO %s; GRANT SELECT ON system.merges TO %s; GRANT SELECT ON system.mutations TO %s; GRANT SELECT ON system.events TO %s; GRANT SELECT ON system.disks TO %s;\n",
+		quoteSQLIdentifier(input.Username), quoteSQLLiteral(input.Password), quoteSQLIdentifier(input.Username), quoteSQLLiteral(input.Password), quoteSQLIdentifier(input.DatabaseName), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username),
 	)
 }
 
@@ -522,7 +600,8 @@ func managedDatabaseRequiresRecreate(record managedDatabaseRecord, input managed
 		input.TLSEnabled != record.TLSEnabled ||
 		input.TLSCertificateID != record.TLSCertificateID ||
 		(input.PublishTCP != (record.PublishedPort != 0)) ||
-		(record.Type == "clickhouse" && clickHouseConfigHash(input.ClickhouseConfig) != record.ClickhouseConfigHash)
+		(record.Type == "clickhouse" && (clickHouseConfigHash(input.ClickhouseConfig) != record.ClickhouseConfigHash ||
+			record.ClickhouseRuntimeProfileVersion != clickHouseRuntimeProfileVersion))
 }
 
 func (m *managedDatabaseManager) restart(ctx context.Context, record *managedDatabaseRecord, input managedDatabaseCommand) error {
@@ -596,6 +675,9 @@ func (m *managedDatabaseManager) recreateContainer(ctx context.Context, record *
 	record.TLSEnabled = input.TLSEnabled
 	record.TLSCertificateID = input.TLSCertificateID
 	record.ClickhouseConfigHash = clickHouseConfigHash(input.ClickhouseConfig)
+	if input.Type == "clickhouse" {
+		record.ClickhouseRuntimeProfileVersion = clickHouseRuntimeProfileVersion
+	}
 	containerID, err := m.createContainer(ctx, record, input)
 	if err != nil {
 		rollback()
@@ -672,6 +754,9 @@ func (m *managedDatabaseManager) create(ctx context.Context, id string, input ma
 		TLSCertificateID:     input.TLSCertificateID,
 		ClickhouseConfigHash: clickHouseConfigHash(input.ClickhouseConfig),
 		OperationID:          input.OperationID,
+	}
+	if input.Type == "clickhouse" {
+		record.ClickhouseRuntimeProfileVersion = clickHouseRuntimeProfileVersion
 	}
 
 	if err := m.createImage(ctx, record); err != nil {
@@ -1043,13 +1128,18 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 		}
 	}
 	if input.Type == "clickhouse" && input.ClickhouseConfig != "" {
-		if err := os.WriteFile(filepath.Join(record.MountPath, "gateway-managed.xml"), []byte(input.ClickhouseConfig), 0600); err != nil {
+		if err := writeClickHouseConfig(filepath.Join(record.MountPath, "gateway-managed.xml"), input.ClickhouseConfig); err != nil {
 			return "", fmt.Errorf("write ClickHouse managed config: %w", err)
+		}
+	}
+	if input.Type == "clickhouse" {
+		if err := writeClickHouseConfig(filepath.Join(record.MountPath, "00-gateway-runtime.xml"), clickHouseRuntimeConfig); err != nil {
+			return "", fmt.Errorf("write ClickHouse runtime config: %w", err)
 		}
 	}
 	if input.Type == "clickhouse" && input.TLSEnabled {
 		config := `<clickhouse><https_port>8443</https_port><tcp_port_secure>9440</tcp_port_secure><openSSL><server><certificateFile>/run/gateway-tls/cert.pem</certificateFile><privateKeyFile>/run/gateway-tls/key.pem</privateKeyFile></server></openSSL></clickhouse>`
-		if err := os.WriteFile(filepath.Join(record.MountPath, "gateway-tls.xml"), []byte(config), 0600); err != nil {
+		if err := writeClickHouseConfig(filepath.Join(record.MountPath, "gateway-tls.xml"), config); err != nil {
 			return "", fmt.Errorf("write ClickHouse TLS config: %w", err)
 		}
 	}
@@ -1060,11 +1150,21 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 	if input.Type == "clickhouse" && input.ClickhouseConfig != "" {
 		binds = append(binds, filepath.Join(record.MountPath, "gateway-managed.xml")+":/etc/clickhouse-server/config.d/gateway-managed.xml:ro")
 	}
+	if input.Type == "clickhouse" {
+		binds = append(binds, filepath.Join(record.MountPath, "00-gateway-runtime.xml")+":/etc/clickhouse-server/config.d/00-gateway-runtime.xml:ro")
+	}
 	if input.Type == "clickhouse" && input.TLSEnabled {
 		binds = append(binds, filepath.Join(record.MountPath, "gateway-tls.xml")+":/etc/clickhouse-server/config.d/gateway-tls.xml:ro")
 	}
 	hostCfg := &container.HostConfig{
 		Binds: binds,
+		LogConfig: container.LogConfig{
+			Type: "json-file",
+			Config: map[string]string{
+				"max-size": "10m",
+				"max-file": "3",
+			},
+		},
 		Resources: container.Resources{
 			Memory:     input.MemoryBytes,
 			MemorySwap: input.MemorySwapBytes,
@@ -1119,6 +1219,11 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 		_ = m.client.RemoveContainer(ctx, created.ID, true)
 		return "", err
 	}
+	if input.Type == "clickhouse" {
+		if err := m.cleanupClickHouseSystemLogs(ctx, created.ID, input); err != nil {
+			m.logger.Warn("cleanup legacy ClickHouse system logs", "id", record.ID, "error", err)
+		}
+	}
 	if input.PublishTCP && (input.PublishedPort == 0 || (input.Type == "clickhouse" && input.PublishNativeTCP && input.PublishedNativePort == 0)) {
 		inspect, err := m.client.cli.ContainerInspect(ctx, created.ID, mobyclient.ContainerInspectOptions{})
 		if err != nil {
@@ -1159,6 +1264,25 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 		}
 	}
 	return created.ID, nil
+}
+
+func (m *managedDatabaseManager) cleanupClickHouseSystemLogs(ctx context.Context, containerID string, input managedDatabaseCommand) error {
+	return m.runManagedDatabaseExec(
+		ctx,
+		containerID,
+		[]string{"clickhouse-client", "--user", input.OwnerUsername, "--database", "system", "--multiquery"},
+		clickHouseSystemLogCleanupSQL,
+		[]string{"CLICKHOUSE_PASSWORD=" + input.OwnerPassword},
+	)
+}
+
+func writeClickHouseConfig(path, contents string) error {
+	if err := os.WriteFile(path, []byte(contents), 0644); err != nil {
+		return err
+	}
+	// WriteFile preserves the mode of an existing file. Explicitly converge it
+	// because ClickHouse reads config.d after dropping root privileges.
+	return os.Chmod(path, 0644)
 }
 
 // waitForDatabaseReady keeps lifecycle completion aligned with actual engine
