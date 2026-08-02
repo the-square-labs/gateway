@@ -147,6 +147,15 @@ func TestPostgresEngineEnvironmentUsesChildPGDATA(t *testing.T) {
 	}
 }
 
+func TestClickHouseOwnerCanManageBindingPrincipals(t *testing.T) {
+	input := validManagedDatabaseInput()
+	input.Type = "clickhouse"
+	env := strings.Join(engineEnvironment(input), "\n")
+	if !strings.Contains(env, "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1") {
+		t.Fatal("ClickHouse owner must be allowed to create and revoke managed binding principals")
+	}
+}
+
 func TestManagedDatabaseTLSPortsMatchEngineProtocols(t *testing.T) {
 	if _, port := engineDataPathAndPort("postgres", true); port != "5432/tcp" {
 		t.Fatalf("unexpected PostgreSQL TLS port: %s", port)

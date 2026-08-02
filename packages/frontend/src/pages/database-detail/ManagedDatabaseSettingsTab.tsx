@@ -50,14 +50,18 @@ export function ManagedDatabaseSettingsTab({
     String(Math.max(minimumMemoryMb(database.type), managed.runtimeConfig.memoryMb))
   );
   const [swapMb, setSwapMb] = useState(String(Math.max(0, managed.runtimeConfig.swapMb)));
-  const [publishTcp, setPublishTcp] = useState(managed.publishedPort !== null);
+  const [publishTcp, setPublishTcp] = useState(
+    managed.publishTcp ?? managed.publishedPort !== null
+  );
   const [publishedPort, setPublishedPort] = useState(
     managed.publishedPort == null ? "" : String(managed.publishedPort)
   );
   const [publishedNativePort, setPublishedNativePort] = useState(
     managed.publishedNativePort == null ? "" : String(managed.publishedNativePort)
   );
-  const [publishNativeTcp, setPublishNativeTcp] = useState(managed.publishedNativePort !== null);
+  const [publishNativeTcp, setPublishNativeTcp] = useState(
+    managed.publishNativeTcp ?? managed.publishedNativePort !== null
+  );
   const [tlsEnabled, setTlsEnabled] = useState(managed.tlsEnabled ?? true);
   const [saving, setSaving] = useState(false);
   const [confirmingRecreate, setConfirmingRecreate] = useState(false);
@@ -68,12 +72,12 @@ export function ManagedDatabaseSettingsTab({
     setCpuCores(String(managed.runtimeConfig.cpuCores || 1));
     setMemoryMb(String(Math.max(minimumMemoryMb(database.type), managed.runtimeConfig.memoryMb)));
     setSwapMb(String(Math.max(0, managed.runtimeConfig.swapMb)));
-    setPublishTcp(managed.publishedPort !== null);
+    setPublishTcp(managed.publishTcp ?? managed.publishedPort !== null);
     setPublishedPort(managed.publishedPort == null ? "" : String(managed.publishedPort));
     setPublishedNativePort(
       managed.publishedNativePort == null ? "" : String(managed.publishedNativePort)
     );
-    setPublishNativeTcp(managed.publishedNativePort !== null);
+    setPublishNativeTcp(managed.publishNativeTcp ?? managed.publishedNativePort !== null);
     setTlsEnabled(managed.tlsEnabled ?? true);
   }, [database.name, database.tags, database.type, managed]);
 
@@ -102,11 +106,11 @@ export function ManagedDatabaseSettingsTab({
       requestedNativePort >= 1 &&
       requestedNativePort <= 65535);
   const publicationChanged =
-    publishTcp !== (managed.publishedPort !== null) ||
+    publishTcp !== (managed.publishTcp ?? managed.publishedPort !== null) ||
     (publishTcp ? requestedPort : null) !== managed.publishedPort ||
     (database.type === "clickhouse" &&
       publishTcp &&
-      publishNativeTcp !== (managed.publishedNativePort !== null)) ||
+      publishNativeTcp !== (managed.publishNativeTcp ?? managed.publishedNativePort !== null)) ||
     (publishTcp && database.type === "clickhouse" && publishNativeTcp
       ? requestedNativePort
       : null) !== (managed.publishedNativePort ?? null) ||

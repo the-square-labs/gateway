@@ -1287,7 +1287,15 @@ func engineEnvironment(input managedDatabaseCommand) []string {
 			"PGDATA=/var/lib/postgresql/data/pgdata",
 		}
 	case "clickhouse":
-		return []string{"CLICKHOUSE_USER=" + input.OwnerUsername, "CLICKHOUSE_PASSWORD=" + input.OwnerPassword, "CLICKHOUSE_DB=" + input.DatabaseName}
+		return []string{
+			"CLICKHOUSE_USER=" + input.OwnerUsername,
+			"CLICKHOUSE_PASSWORD=" + input.OwnerPassword,
+			"CLICKHOUSE_DB=" + input.DatabaseName,
+			// Gateway's internal owner creates and revokes the isolated users used
+			// by direct publication and secure bindings. The official image keeps
+			// SQL access management disabled unless this flag is explicit.
+			"CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
+		}
 	default:
 		return nil
 	}

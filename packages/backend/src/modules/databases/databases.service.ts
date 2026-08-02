@@ -1005,7 +1005,8 @@ export class DatabaseConnectionService {
     const runtime = managed.runtimeConfig as Record<string, unknown>;
     const memoryBytes = Number(runtime.memoryLimitBytes ?? 0);
     const swapBytes = Number(runtime.memorySwapBytes ?? 0);
-    const clickhouseConfigXml = (managed.engineConfig as unknown as Record<string, unknown>).clickhouseConfigXml;
+    const engineConfig = managed.engineConfig as unknown as Record<string, unknown>;
+    const clickhouseConfigXml = engineConfig.clickhouseConfigXml;
     return {
       id: managed.id,
       nodeId: managed.nodeId,
@@ -1018,6 +1019,12 @@ export class DatabaseConnectionService {
       },
       publishedPort: managed.publishedPort,
       publishedNativePort: managed.publishedNativePort,
+      publishTcp:
+        typeof engineConfig.publishTcp === 'boolean' ? engineConfig.publishTcp : managed.publishedPort !== null,
+      publishNativeTcp:
+        typeof engineConfig.publishNativeTcp === 'boolean'
+          ? engineConfig.publishNativeTcp
+          : managed.publishedNativePort !== null,
       tlsEnabled: managed.tlsEnabled,
       endpointHost:
         managed.publishedPort === null

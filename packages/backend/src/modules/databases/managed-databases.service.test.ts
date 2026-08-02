@@ -233,6 +233,78 @@ describe('managed database catalog and input guardrails', () => {
     expect(set).toHaveBeenCalledWith(expect.objectContaining({ publishedPort: 32772, pendingOperation: null }));
   });
 
+  it('does not leave a completed recreate in reconciliation when direct-user provisioning fails', async () => {
+    const row = {
+      ...managedRow,
+      type: 'clickhouse' as const,
+      status: 'updating' as const,
+      engineConfig: { ...managedRow.engineConfig, publishTcp: true },
+      pendingOperation: { id: 'operation_direct_user', action: 'update' as const },
+    };
+    const set = vi.fn((values: Record<string, unknown>) => ({
+      where: vi.fn(() => ({ returning: vi.fn(async () => [{ ...row, ...values }]) })),
+    }));
+    const db = { update: vi.fn(() => ({ set })) };
+    const dispatch = {
+      sendDockerDatabaseCommand: vi.fn(async (_nodeId, action) =>
+        action === 'update'
+          ? {
+              success: true,
+              detail: JSON.stringify({
+                status: 'ready',
+                operationId: 'operation_direct_user',
+                publishedPort: 32775,
+              }),
+            }
+          : { success: false, error: 'owner cannot create users' }
+      ),
+    };
+    const crypto = {
+      decryptString: vi.fn((encrypted: { encryptedKey: string }) =>
+        JSON.stringify(
+          encrypted.encryptedKey === 'direct-key'
+            ? { username: 'gw_clickhouse_direct_123', password: 'direct-password', databaseName: 'app' }
+            : { username: 'clickhouse_owner', password: 'owner-password', databaseName: 'app' }
+        )
+      ),
+    };
+    const service = new ManagedDatabaseService(
+      db as never,
+      { log: vi.fn() } as never,
+      crypto as never,
+      dispatch as never
+    );
+
+    await (
+      service as unknown as {
+        dispatchUpdate: (
+          value: typeof row,
+          owner: { username: string; password: string; databaseName: string },
+          publishTcp: boolean,
+          publishNativeTcp: boolean,
+          userId: string | null
+        ) => Promise<unknown>;
+      }
+    ).dispatchUpdate(
+      row,
+      { username: 'clickhouse_owner', password: 'owner-password', databaseName: 'app' },
+      true,
+      false,
+      null
+    );
+
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'error',
+        pendingOperation: null,
+        lastError: expect.stringContaining('Direct-access credentials could not be configured'),
+      })
+    );
+    expect(set).not.toHaveBeenCalledWith(
+      expect.objectContaining({ lastError: 'Managed database operation outcome is being reconciled' })
+    );
+  });
+
   it('converges a delayed delete after daemon reports the record missing', async () => {
     const row = {
       ...managedRow,

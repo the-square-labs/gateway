@@ -958,16 +958,22 @@ export class ManagedDatabaseService {
     const configJson = JSON.stringify(
       await daemonCreateConfig(row, credentials, publishTcp, publishNativeTcp, operation.id, this.databaseCA)
     );
+    let result: Awaited<ReturnType<NodeDispatchService['sendDockerDatabaseCommand']>>;
     try {
-      const result = await this.nodeDispatch.sendDockerDatabaseCommand(row.nodeId, 'create', row.id, configJson);
-      if (!result.success) return this.markError(row, 'create', result.error);
+      result = await this.nodeDispatch.sendDockerDatabaseCommand(row.nodeId, 'create', row.id, configJson);
+    } catch {
+      return this.markOutcomeUnknown(row);
+    }
+    if (!result.success) return this.markError(row, 'create', result.error);
+    try {
       if (direct) await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
+      if (direct) await this.syncCanonicalConnectionCredentials(direct.row, direct.credentials, userId);
       const current = direct?.row ?? row;
       const publishedPort = await this.resolvePublishedPort(current, publishTcp, result);
       const publishedNativePort = await this.resolvePublishedNativePort(current, publishNativeTcp, result);
       return this.markReady(current, userId, publishedPort, 'ready', publishedNativePort);
-    } catch {
-      return this.markOutcomeUnknown(row);
+    } catch (error) {
+      return this.markError(row, 'create', error instanceof Error ? error.message : undefined);
     }
   }
 
@@ -983,10 +989,16 @@ export class ManagedDatabaseService {
     const configJson = JSON.stringify(
       await daemonCreateConfig(row, credentials, publishTcp, publishNativeTcp, operation.id, this.databaseCA)
     );
+    let result: Awaited<ReturnType<NodeDispatchService['sendDockerDatabaseCommand']>>;
     try {
-      const result = await this.nodeDispatch.sendDockerDatabaseCommand(row.nodeId, 'update', row.id, configJson);
-      if (!result.success) return this.markError(row, 'update', result.error);
+      result = await this.nodeDispatch.sendDockerDatabaseCommand(row.nodeId, 'update', row.id, configJson);
+    } catch {
+      return this.markOutcomeUnknown(row);
+    }
+    if (!result.success) return this.markError(row, 'update', result.error);
+    try {
       if (direct) await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
+      if (direct) await this.syncCanonicalConnectionCredentials(direct.row, direct.credentials, userId);
       const current = direct?.row ?? row;
       const publishedPort = await this.resolvePublishedPort(current, publishTcp, result);
       const publishedNativePort = await this.resolvePublishedNativePort(current, publishNativeTcp, result);
@@ -1013,8 +1025,8 @@ export class ManagedDatabaseService {
       });
       this.emit(ready!, 'ready');
       return safeManagedDatabaseView(ready!);
-    } catch {
-      return this.markOutcomeUnknown(row);
+    } catch (error) {
+      return this.markError(row, 'update', error instanceof Error ? error.message : undefined);
     }
   }
 
@@ -1429,7 +1441,10 @@ export class ManagedDatabaseService {
     const owner = this.ownerCredentials(row);
     const existing = this.directAccessCredentials(row);
     if (existing) {
-      if (provision) await this.provisionDirectAccessPrincipal(row, owner, existing);
+      if (provision) {
+        await this.provisionDirectAccessPrincipal(row, owner, existing);
+        await this.syncCanonicalConnectionCredentials(row, existing, userId);
+      }
       return { row, credentials: existing };
     }
     const credentials = newDirectAccessCredentials(row.type, owner.databaseName);
@@ -1443,7 +1458,7 @@ export class ManagedDatabaseService {
       })
       .where(eq(managedDatabaseInstances.id, row.id))
       .returning();
-    await this.syncCanonicalConnectionCredentials(updated!, credentials, userId);
+    if (provision) await this.syncCanonicalConnectionCredentials(updated!, credentials, userId);
     return { row: updated!, credentials };
   }
 

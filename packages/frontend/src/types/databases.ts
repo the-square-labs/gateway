@@ -168,6 +168,8 @@ export interface DatabaseConnection {
     runtimeConfig: { cpuCores: number; memoryMb: number; swapMb: number };
     publishedPort: number | null;
     publishedNativePort: number | null;
+    publishTcp?: boolean;
+    publishNativeTcp?: boolean;
     tlsEnabled: boolean;
     endpointHost: string | null;
     status: ManagedDatabaseStatus;

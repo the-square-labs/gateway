@@ -60,6 +60,8 @@ export interface ManagedDatabaseConnectionMetadata {
   };
   publishedPort: number | null;
   publishedNativePort: number | null;
+  publishTcp: boolean;
+  publishNativeTcp: boolean;
   tlsEnabled: boolean;
   /** Selected database-node address, available only for a published TCP endpoint. */
   endpointHost: string | null;
