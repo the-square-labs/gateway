@@ -10,6 +10,10 @@ export interface ManagedDatabaseCapacity {
   swapMb?: number;
 }
 
+export function minimumManagedDatabaseMemoryMb(type: ManagedDatabaseCreateInput["type"]) {
+  return type === "clickhouse" ? 512 : 128;
+}
+
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -60,7 +64,7 @@ export function canDeployManagedDatabase(
     draft.cpuCores >= 0.1 &&
     withinLimit(draft.cpuCores, capacity.cpuCores) &&
     Number.isInteger(draft.memoryMb) &&
-    draft.memoryMb >= 128 &&
+    draft.memoryMb >= minimumManagedDatabaseMemoryMb(draft.type) &&
     withinLimit(draft.memoryMb, capacity.memoryMb) &&
     Number.isInteger(draft.swapMb) &&
     draft.swapMb >= 0 &&

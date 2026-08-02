@@ -111,6 +111,20 @@ describe('managed database catalog and input guardrails', () => {
     expect(result.success).toBe(true);
   });
 
+  it('rejects ClickHouse below its minimum memory requirement', () => {
+    const result = CreateManagedDatabaseSchema.safeParse({
+      name: 'analytics',
+      type: 'clickhouse',
+      version: '26.7.1.1315',
+      nodeId: '44d553a4-8978-4ad1-8ca7-4d53c6e74a1d',
+      storageSizeGb: 10,
+      cpuCores: 1,
+      memoryMb: 128,
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it('accepts tags when creating a managed database', () => {
     const result = CreateManagedDatabaseSchema.safeParse({
       name: 'orders',

@@ -30,6 +30,7 @@ interface DatabaseHeaderProps {
   canResize: boolean;
   canPause: boolean;
   canUnpause: boolean;
+  canRestart: boolean;
   canReveal: boolean;
   canRotateDirectCredentials: boolean;
   canRotateCertificate: boolean;
@@ -41,6 +42,7 @@ interface DatabaseHeaderProps {
   onOpenResize: () => void;
   onPause: () => void;
   onUnpause: () => void;
+  onRestart: () => void;
   onRevealCredentials: () => void;
   onRotateDirectCredentials: () => void;
   onRotateCertificate: () => void;
@@ -54,6 +56,7 @@ export function DatabaseHeader({
   canResize,
   canPause,
   canUnpause,
+  canRestart,
   canReveal,
   canRotateDirectCredentials,
   canRotateCertificate,
@@ -65,6 +68,7 @@ export function DatabaseHeader({
   onOpenResize,
   onPause,
   onUnpause,
+  onRestart,
   onRevealCredentials,
   onRotateDirectCredentials,
   onRotateCertificate,
@@ -92,6 +96,12 @@ export function DatabaseHeader({
             <Play className="h-3.5 w-3.5 mr-2" />
           )}
           {canPause ? "Pause database" : "Unpause database"}
+        </DropdownMenuItem>
+      )}
+      {canRestart && (
+        <DropdownMenuItem onClick={onRestart}>
+          <RefreshCw className="h-3.5 w-3.5 mr-2" />
+          Restart database
         </DropdownMenuItem>
       )}
       {(canEdit || canPause || canUnpause) && (canReveal || canDelete) && <DropdownMenuSeparator />}
@@ -168,6 +178,16 @@ export function DatabaseHeader({
                   label: "Unpause database",
                   icon: <Play className="h-4 w-4" />,
                   action: onUnpause,
+                },
+              ]
+            : []),
+          ...(canRestart
+            ? [
+                {
+                  id: "database:restart",
+                  label: "Restart database",
+                  icon: <RefreshCw className="h-4 w-4" />,
+                  action: onRestart,
                 },
               ]
             : []),
@@ -250,6 +270,7 @@ export function DatabaseHeader({
         {(canEdit ||
           canPause ||
           canUnpause ||
+          canRestart ||
           canReveal ||
           canRotateDirectCredentials ||
           canRotateCertificate ||

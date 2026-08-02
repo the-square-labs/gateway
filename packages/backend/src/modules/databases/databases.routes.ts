@@ -61,6 +61,7 @@ import {
   postgresTableMetadataRoute,
   reorderDatabaseFoldersRoute,
   reorderDatabasesRoute,
+  restartManagedDatabaseRoute,
   retryManagedDatabaseProvisioningRoute,
   revealDatabaseCredentialsRoute,
   revealManagedDatabaseBindingCredentialsRoute,
@@ -208,6 +209,14 @@ databaseRoutes.openapi(
     const user = c.get('user')!;
     const data = await container.resolve(ManagedDatabaseService).retryProvisioning(c.req.param('id')!, user.id);
     return c.json({ data });
+  }
+);
+
+databaseRoutes.openapi(
+  { ...restartManagedDatabaseRoute, middleware: requireScopeForResource('databases:edit', 'id') },
+  async (c) => {
+    const user = c.get('user')!;
+    return c.json({ data: await container.resolve(ManagedDatabaseService).restart(c.req.param('id')!, user.id) });
   }
 );
 

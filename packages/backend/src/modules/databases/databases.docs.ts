@@ -124,6 +124,15 @@ export const retryManagedDatabaseProvisioningRoute = appRoute({
   responses: okJson(UnknownDataResponseSchema),
 });
 
+export const restartManagedDatabaseRoute = appRoute({
+  method: 'post',
+  path: '/managed/{id}/restart',
+  tags: ['Databases'],
+  summary: 'Restart a managed database container',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const pauseManagedDatabaseRoute = appRoute({
   method: 'post',
   path: '/managed/{id}/pause',

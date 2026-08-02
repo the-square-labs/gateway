@@ -68,10 +68,11 @@ export function DatabaseDetail({
   const isManagedPaused = database?.managed?.status === "paused";
 
   const canEdit = !!(id && (hasScope("databases:edit") || hasScope(`databases:edit:${id}`)));
-  const canManageSettings = canEdit && (!database?.managed || database.managed.status === "ready");
+  const canManageSettings = canEdit && (!database?.managed || database.managed.status !== "paused");
   const canResize = canManageSettings && database?.managed?.status === "ready";
   const canPause = canEdit && database?.managed?.status === "ready";
   const canUnpause = canEdit && database?.managed?.status === "paused";
+  const canRestart = canEdit && !!database?.managed && database.managed.status !== "paused";
   const canDelete = !!(id && (hasScope("databases:delete") || hasScope(`databases:delete:${id}`)));
   const canRead = !!(
     id &&
@@ -358,6 +359,17 @@ export function DatabaseDetail({
     }
   };
 
+  const restart = async () => {
+    if (!database?.managed || !canRestart) return;
+    try {
+      await api.restartManagedDatabase(database.managed.id);
+      toast.success("Database restart requested");
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to restart database");
+    }
+  };
+
   if (loading || !database) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -396,6 +408,7 @@ export function DatabaseDetail({
               canResize={canResize}
               canPause={canPause}
               canUnpause={canUnpause}
+              canRestart={canRestart}
               canReveal={canReveal}
               canRotateDirectCredentials={
                 canManageSettings && database.managed?.publishedPort != null
@@ -409,6 +422,7 @@ export function DatabaseDetail({
               onOpenResize={() => setResizeOpen(true)}
               onPause={() => void pause()}
               onUnpause={() => void unpause()}
+              onRestart={() => void restart()}
               onRevealCredentials={() => void revealCredentials()}
               onRotateDirectCredentials={() => void rotateDirectCredentials()}
               onRotateCertificate={() => void rotateCertificate()}

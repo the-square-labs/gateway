@@ -5,6 +5,7 @@ import {
   Database as DatabaseIcon,
   DatabaseZap,
   FolderPlus,
+  Loader2,
   Plus,
   RefreshCw,
 } from "lucide-react";
@@ -50,6 +51,7 @@ import { useAuthStore } from "@/stores/auth";
 import type {
   DatabaseConnection,
   DatabaseType,
+  ManagedDatabase,
   ManagedDatabaseCatalogEntry,
   ManagedDatabaseCreateInput,
   Node,
@@ -65,6 +67,7 @@ import {
   canDeployManagedDatabase,
   type ManagedDatabaseCapacity,
   managedDatabaseCapacity,
+  minimumManagedDatabaseMemoryMb,
 } from "./database-detail/managed-database-capacity";
 
 const HEALTH_BADGE: Record<string, "success" | "secondary" | "warning" | "destructive"> = {
@@ -73,6 +76,24 @@ const HEALTH_BADGE: Record<string, "success" | "secondary" | "warning" | "destru
   offline: "destructive",
   unknown: "secondary",
 };
+
+const MANAGED_DATABASE_PROVISION_TIMEOUT_MS = 120_000;
+const MANAGED_DATABASE_PROVISION_INTERVAL_MS = 750;
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function waitForManagedDatabaseReady(id: string): Promise<ManagedDatabase> {
+  const deadline = Date.now() + MANAGED_DATABASE_PROVISION_TIMEOUT_MS;
+  let current = await api.getManagedDatabase(id);
+  while (current.status !== "ready" && current.status !== "error" && Date.now() < deadline) {
+    await delay(MANAGED_DATABASE_PROVISION_INTERVAL_MS);
+    current = await api.getManagedDatabase(id);
+  }
+  if (current.status === "ready" || current.status === "error") return current;
+  throw new Error("Managed database is still starting. Check its status from the databases list.");
+}
 
 const DEFAULT_MANAGED_DATABASE_VERSIONS: Record<DatabaseType, string[]> = {
   postgres: ["18.4", "18.3", "17.10", "17.8", "16.14", "16.10", "15.18", "15.14", "14.23", "14.19"],
@@ -334,10 +355,13 @@ function ManagedDatabaseCreateForm({
                 value={draft.type}
                 onValueChange={(value) => {
                   const type = value as DatabaseType;
+                  const memoryMb = Math.max(draft.memoryMb, minimumManagedDatabaseMemoryMb(type));
+                  setResourceInputs((current) => ({ ...current, memoryMb: String(memoryMb) }));
                   onChange({
                     ...draft,
                     type,
                     version: catalogVersions(catalog, type)[0]!,
+                    memoryMb,
                     ...(type === "clickhouse"
                       ? {
                           publishNativeTcp: draft.publishTcp
@@ -460,7 +484,7 @@ function ManagedDatabaseCreateForm({
               <Input
                 id="managed-db-memory"
                 type="number"
-                min="128"
+                min={minimumManagedDatabaseMemoryMb(draft.type)}
                 step="128"
                 max={capacity.memoryMb}
                 value={resourceInputs.memoryMb}
@@ -468,6 +492,7 @@ function ManagedDatabaseCreateForm({
               />
               {capacity.memoryMb !== undefined && (
                 <p className="text-xs text-muted-foreground">
+                  {draft.type === "clickhouse" ? "ClickHouse requires at least 512 MB. " : ""}
                   Maximum available now: {capacity.memoryMb} MB
                 </p>
               )}
@@ -661,19 +686,25 @@ export function Databases({
   const [databaseNodes, setDatabaseNodes] = useState<Node[]>([]);
   const [saving, setSaving] = useState(false);
   const [managedSaving, setManagedSaving] = useState(false);
+  const [managedProvisioning, setManagedProvisioning] = useState<
+    { phase: "waiting" } | { phase: "failed"; databaseConnectionId: string; error: string } | null
+  >(null);
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
 
   const openManagedCreate = useCallback(() => {
     setManagedDraft(defaultManagedDraft(managedCatalog));
     setManagedCreateStep(1);
     setManagedCreateSession((session) => session + 1);
+    setManagedProvisioning(null);
     setManagedCreateOpen(true);
   }, [managedCatalog]);
 
   const closeManagedCreate = useCallback(() => {
+    if (managedProvisioning?.phase === "waiting") return;
     setManagedCreateOpen(false);
     setManagedCreateStep(1);
-  }, []);
+    setManagedProvisioning(null);
+  }, [managedProvisioning]);
 
   useEffect(() => {
     if (!(location.state as { createManagedDatabase?: boolean } | null)?.createManagedDatabase) {
@@ -823,21 +854,52 @@ export function Databases({
       return;
     }
     setManagedSaving(true);
+    setManagedProvisioning({ phase: "waiting" });
+    let created: ManagedDatabase | null = null;
     try {
-      const created = await api.createManagedDatabase({
+      created = await api.createManagedDatabase({
         ...managedDraft,
         publishNativeTcp: managedDraft.publishTcp ? managedDraft.publishNativeTcp : false,
         publishedNativePort: managedDraft.publishTcp ? managedDraft.publishedNativePort : undefined,
       });
-      toast.success("Managed database provisioning started");
+      const provisioned = await waitForManagedDatabaseReady(created.id);
+      if (provisioned.status !== "ready") {
+        setManagedProvisioning({
+          phase: "failed",
+          databaseConnectionId: provisioned.databaseConnectionId,
+          error: provisioned.lastError ?? "Managed database provisioning failed",
+        });
+        return;
+      }
+      toast.success("Managed database is ready");
       closeManagedCreate();
       setManagedDraft(defaultManagedDraft(managedCatalog));
       const database = await api.getDatabase(created.databaseConnectionId);
       navigate(databaseRoute(database.slug, "overview"));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to create managed database");
+      const message = error instanceof Error ? error.message : "Failed to create managed database";
+      if (created) {
+        setManagedProvisioning({
+          phase: "failed",
+          databaseConnectionId: created.databaseConnectionId,
+          error: message,
+        });
+      } else {
+        setManagedProvisioning(null);
+        toast.error(message);
+      }
     } finally {
       setManagedSaving(false);
+    }
+  };
+
+  const openFailedManagedDatabase = async (databaseConnectionId: string) => {
+    try {
+      const database = await api.getDatabase(databaseConnectionId);
+      closeManagedCreate();
+      navigate(databaseRoute(database.slug, "overview"));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to open managed database");
     }
   };
 
@@ -1076,28 +1138,78 @@ export function Databases({
       {!embedded && (
         <Dialog
           open={managedCreateOpen}
-          onOpenChange={(open) => (open ? openManagedCreate() : closeManagedCreate())}
+          onOpenChange={(open) => {
+            if (open) openManagedCreate();
+            else closeManagedCreate();
+          }}
         >
-          <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
+          <DialogContent
+            className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl"
+            onEscapeKeyDown={(event) => {
+              if (managedProvisioning?.phase === "waiting") event.preventDefault();
+            }}
+            onPointerDownOutside={(event) => {
+              if (managedProvisioning?.phase === "waiting") event.preventDefault();
+            }}
+          >
             <DialogHeader>
               <DialogTitle>Deploy managed database</DialogTitle>
               <DialogDescription>
-                Step {managedCreateStep} of {managedCreateStepCount} — {managedCreateStepLabel}
+                {managedProvisioning?.phase === "waiting"
+                  ? "Starting the database and waiting for its readiness check."
+                  : managedProvisioning?.phase === "failed"
+                    ? "Database provisioning did not complete."
+                    : `Step ${managedCreateStep} of ${managedCreateStepCount} — ${managedCreateStepLabel}`}
               </DialogDescription>
             </DialogHeader>
             <AnimatedHeight>
-              <ManagedDatabaseCreateForm
-                key={managedCreateSession}
-                draft={managedDraft}
-                nodes={deployableDatabaseNodes}
-                catalog={managedCatalog}
-                capacity={managedCapacity}
-                step={managedCreateStep}
-                onChange={setManagedDraft}
-              />
+              {managedProvisioning?.phase === "waiting" ? (
+                <div className="flex min-h-48 flex-col items-center justify-center gap-3 text-center">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  <p className="text-sm font-medium">Waiting for database readiness</p>
+                  <p className="max-w-sm text-sm text-muted-foreground">
+                    ClickHouse may need a little longer for its first start. This dialog will close
+                    only after the database is ready.
+                  </p>
+                </div>
+              ) : managedProvisioning?.phase === "failed" ? (
+                <div className="space-y-2 border border-destructive/50 bg-destructive/5 p-4">
+                  <p className="text-sm font-medium text-destructive">
+                    Database provisioning failed
+                  </p>
+                  <p className="text-sm text-muted-foreground">{managedProvisioning.error}</p>
+                </div>
+              ) : (
+                <ManagedDatabaseCreateForm
+                  key={managedCreateSession}
+                  draft={managedDraft}
+                  nodes={deployableDatabaseNodes}
+                  catalog={managedCatalog}
+                  capacity={managedCapacity}
+                  step={managedCreateStep}
+                  onChange={setManagedDraft}
+                />
+              )}
             </AnimatedHeight>
             <DialogFooter>
-              {managedCreateStep === 1 ? (
+              {managedProvisioning?.phase === "waiting" ? (
+                <Button disabled>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Waiting for readiness
+                </Button>
+              ) : managedProvisioning?.phase === "failed" ? (
+                <div className="flex w-full justify-between">
+                  <Button variant="outline" onClick={closeManagedCreate}>
+                    Close
+                  </Button>
+                  <Button
+                    onClick={() =>
+                      void openFailedManagedDatabase(managedProvisioning.databaseConnectionId)
+                    }
+                  >
+                    Open database
+                  </Button>
+                </div>
+              ) : managedCreateStep === 1 ? (
                 <>
                   <Button variant="outline" onClick={closeManagedCreate} disabled={managedSaving}>
                     Cancel

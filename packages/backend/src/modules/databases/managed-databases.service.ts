@@ -375,7 +375,15 @@ export class ManagedDatabaseService {
   }
 
   async get(id: string) {
-    return safeManagedDatabaseView(await this.getRow(id));
+    let row = await this.getRow(id);
+    // The deploy wizard polls this endpoint while its loader is visible. Use
+    // that poll to converge a response lost during daemon reconnect, instead
+    // of making the user wait for the background reconciliation interval.
+    if (row.pendingOperation) {
+      await this.reconcilePendingRow(row);
+      row = await this.getRow(id);
+    }
+    return safeManagedDatabaseView(row);
   }
 
   async getByDatabaseConnectionId(databaseConnectionId: string) {
@@ -715,6 +723,38 @@ export class ManagedDatabaseService {
     return this.beginLifecycleTransition(id, userId, 'unpause', 'paused', 'ready');
   }
 
+  async restart(id: string, userId: string) {
+    const row = await this.getRow(id);
+    if (row.pendingOperation) {
+      throw new AppError(
+        409,
+        'MANAGED_DATABASE_OPERATION_PENDING',
+        'Managed database operation is still being reconciled'
+      );
+    }
+    if (row.status === 'paused') {
+      throw new AppError(409, 'MANAGED_DATABASE_PAUSED', 'Unpause the managed database before restarting it');
+    }
+    await this.assertDatabaseNode(row.nodeId);
+    const credentials = JSON.parse(
+      this.cryptoService.decryptString(parseEncryptedCredentials(row.encryptedOwnerCredentials))
+    ) as OwnerCredentials;
+    const pendingOperation: ManagedDatabaseOperation = { id: crypto.randomUUID(), action: 'restart' };
+    const [restarting] = await this.db
+      .update(managedDatabaseInstances)
+      .set({
+        status: 'updating',
+        pendingOperation,
+        lastError: null,
+        updatedById: userId,
+        updatedAt: new Date(),
+      })
+      .where(eq(managedDatabaseInstances.id, id))
+      .returning();
+    this.emit(restarting!, 'restart.started');
+    return this.dispatchRestart(restarting!, credentials, userId);
+  }
+
   async delete(id: string, userId: string) {
     const row = await this.getRow(id);
     if (row.pendingOperation) {
@@ -753,7 +793,7 @@ export class ManagedDatabaseService {
 
   async retryProvisioning(id: string, userId: string) {
     let row = await this.getRow(id);
-    if (row.status !== 'error' || row.lastError !== 'Managed database create failed') {
+    if (row.status !== 'error' || !row.lastError?.startsWith('Managed database create failed')) {
       throw new AppError(
         409,
         'MANAGED_DATABASE_NOT_RETRYABLE',
@@ -909,17 +949,18 @@ export class ManagedDatabaseService {
     userId: string | null
   ) {
     const operation = this.pendingOperation(row, 'create');
-    const direct = await this.ensureDirectAccessCredentials(row, userId, false);
+    const direct = publishTcp ? await this.ensureDirectAccessCredentials(row, userId, false) : null;
     const configJson = JSON.stringify(
       await daemonCreateConfig(row, credentials, publishTcp, publishNativeTcp, operation.id, this.databaseCA)
     );
     try {
       const result = await this.nodeDispatch.sendDockerDatabaseCommand(row.nodeId, 'create', row.id, configJson);
-      if (!result.success) return this.markError(row, 'create');
-      await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
-      const publishedPort = await this.resolvePublishedPort(direct.row, publishTcp, result);
-      const publishedNativePort = await this.resolvePublishedNativePort(direct.row, publishNativeTcp, result);
-      return this.markReady(direct.row, userId, publishedPort, 'ready', publishedNativePort);
+      if (!result.success) return this.markError(row, 'create', result.error);
+      if (direct) await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
+      const current = direct?.row ?? row;
+      const publishedPort = await this.resolvePublishedPort(current, publishTcp, result);
+      const publishedNativePort = await this.resolvePublishedNativePort(current, publishNativeTcp, result);
+      return this.markReady(current, userId, publishedPort, 'ready', publishedNativePort);
     } catch {
       return this.markOutcomeUnknown(row);
     }
@@ -933,16 +974,17 @@ export class ManagedDatabaseService {
     userId: string | null
   ) {
     const operation = this.pendingOperation(row, 'update');
-    const direct = await this.ensureDirectAccessCredentials(row, userId, false);
+    const direct = publishTcp ? await this.ensureDirectAccessCredentials(row, userId, false) : null;
     const configJson = JSON.stringify(
       await daemonCreateConfig(row, credentials, publishTcp, publishNativeTcp, operation.id, this.databaseCA)
     );
     try {
       const result = await this.nodeDispatch.sendDockerDatabaseCommand(row.nodeId, 'update', row.id, configJson);
-      if (!result.success) return this.markError(row, 'update');
-      await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
-      const publishedPort = await this.resolvePublishedPort(direct.row, publishTcp, result);
-      const publishedNativePort = await this.resolvePublishedNativePort(direct.row, publishNativeTcp, result);
+      if (!result.success) return this.markError(row, 'update', result.error);
+      if (direct) await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
+      const current = direct?.row ?? row;
+      const publishedPort = await this.resolvePublishedPort(current, publishTcp, result);
+      const publishedNativePort = await this.resolvePublishedNativePort(current, publishNativeTcp, result);
       const [ready] = await this.db
         .update(managedDatabaseInstances)
         .set({
@@ -954,7 +996,7 @@ export class ManagedDatabaseService {
           updatedById: userId,
           updatedAt: new Date(),
         })
-        .where(eq(managedDatabaseInstances.id, direct.row.id))
+        .where(eq(managedDatabaseInstances.id, current.id))
         .returning();
       await this.syncCanonicalConnectionStorageLimit(ready!);
       await this.auditService.log({
@@ -980,7 +1022,7 @@ export class ManagedDatabaseService {
         row.id,
         JSON.stringify({ operationId: row.pendingOperation!.id })
       );
-      if (!result.success) return this.markError(row, 'delete');
+      if (!result.success) return this.markError(row, 'delete', result.error);
     } catch {
       return this.markOutcomeUnknown(row);
     }
@@ -1026,13 +1068,19 @@ export class ManagedDatabaseService {
         return;
       }
       // A create/update may have reached Docker before the controller lost its
-      // response. Re-apply the direct principal before clearing the durable
-      // operation so the database never becomes "ready" without its
-      // published-TCP credentials being usable.
-      const direct = await this.ensureDirectAccessCredentials(row, null);
+      // response. A direct principal exists only for published databases;
+      // private managed links use per-binding accounts instead.
+      const direct = managedDatabasePublishTcp(row)
+        ? await this.ensureDirectAccessCredentials(row, null)
+        : null;
       // Inspect is also the recovery source of truth for an auto-assigned
       // host port when the original create/update response was lost.
-      await this.markReady(direct.row, null, allocatedPublishedPort(result) ?? row.publishedPort, state.status);
+      await this.markReady(
+        direct?.row ?? row,
+        null,
+        allocatedPublishedPort(result) ?? row.publishedPort,
+        state.status
+      );
     } catch {
       // The node is offline or the inspect response is still unavailable.
       // Keep the durable pending operation for the next scheduled pass.
@@ -1066,6 +1114,7 @@ export class ManagedDatabaseService {
         null
       );
     }
+    if (operation.action === 'restart') return this.dispatchRestart(row, credentials, null);
     return this.dispatchUpdate(
       row,
       credentials,
@@ -1139,7 +1188,7 @@ export class ManagedDatabaseService {
         row.id,
         JSON.stringify({ operationId: operation.id })
       );
-      if (!result.success) return this.markError(row, action);
+      if (!result.success) return this.markError(row, action, result.error);
       const state = daemonState(result);
       if (!state || state.status !== targetStatus || state.operationId !== operation.id) {
         return this.markOutcomeUnknown(row);
@@ -1214,13 +1263,41 @@ export class ManagedDatabaseService {
     return safeManagedDatabaseView(pending!);
   }
 
-  private async markError(row: ManagedDatabaseRow, operation: ManagedDatabaseOperation['action']) {
+  private async dispatchRestart(row: ManagedDatabaseRow, credentials: OwnerCredentials, userId: string | null) {
+    const operation = this.pendingOperation(row, 'restart');
+    const configJson = JSON.stringify(
+      await daemonCreateConfig(
+        row,
+        credentials,
+        managedDatabasePublishTcp(row),
+        managedDatabasePublishNativeTcp(row),
+        operation.id,
+        this.databaseCA
+      )
+    );
+    try {
+      const result = await this.nodeDispatch.sendDockerDatabaseCommand(row.nodeId, 'restart', row.id, configJson);
+      if (!result.success) return this.markError(row, 'restart', result.error);
+      return this.markReady(row, userId, row.publishedPort, 'ready', row.publishedNativePort);
+    } catch {
+      return this.markOutcomeUnknown(row);
+    }
+  }
+
+  private async markError(
+    row: ManagedDatabaseRow,
+    operation: ManagedDatabaseOperation['action'],
+    detail?: string
+  ) {
+    const sanitizedDetail = detail?.replace(/[\r\n\t]+/g, ' ').trim().slice(0, 480);
     const [failed] = await this.db
       .update(managedDatabaseInstances)
       .set({
         status: 'error',
         pendingOperation: null,
-        lastError: `Managed database ${operation} failed`,
+        lastError: sanitizedDetail
+          ? `Managed database ${operation} failed: ${sanitizedDetail}`
+          : `Managed database ${operation} failed`,
         updatedAt: new Date(),
       })
       .where(eq(managedDatabaseInstances.id, row.id))

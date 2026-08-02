@@ -13,6 +13,7 @@ func validManagedDatabaseInput() managedDatabaseCommand {
 		Type:             "postgres",
 		Image:            "docker.io/library/postgres@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d",
 		StorageSizeBytes: minimumDatabaseBytes,
+		MemoryBytes:      1024 * 1024 * 1024,
 		OperationID:      "operation_123",
 		OwnerUsername:    "app_owner",
 		OwnerPassword:    "a-long-random-secret-password",
@@ -67,6 +68,20 @@ func TestValidateManagedDatabaseInputAcceptsSafeClickHouseFragment(t *testing.T)
 	input.ClickhouseConfig = "<clickhouse><max_server_memory_usage>1024</max_server_memory_usage></clickhouse>"
 	if err := validateManagedDatabaseInput(input); err != nil {
 		t.Fatalf("expected safe config to be accepted: %v", err)
+	}
+}
+
+func TestValidateManagedDatabaseInputRequiresClickHouseMemoryFloor(t *testing.T) {
+	input := validManagedDatabaseInput()
+	input.Type = "clickhouse"
+	input.Image = "docker.io/clickhouse/clickhouse-server@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5"
+	input.MemoryBytes = minimumClickHouseBytes - 1
+	if err := validateManagedDatabaseInput(input); err == nil {
+		t.Fatal("expected ClickHouse memory floor to be enforced")
+	}
+	input.MemoryBytes = minimumClickHouseBytes
+	if err := validateManagedDatabaseInput(input); err != nil {
+		t.Fatalf("expected ClickHouse memory floor to be accepted: %v", err)
 	}
 }
 

@@ -21,6 +21,10 @@ const FORM_ANIMATION = {
   transition: { duration: 0.16 },
 };
 
+function minimumMemoryMb(type: DatabaseConnection["type"]) {
+  return type === "clickhouse" ? 512 : 128;
+}
+
 function parseTags(value: string) {
   return Array.from(
     new Set(
@@ -43,7 +47,9 @@ export function ManagedDatabaseSettingsTab({
   const [name, setName] = useState(database.name);
   const [tags, setTags] = useState(database.tags.join(", "));
   const [cpuCores, setCpuCores] = useState(String(managed.runtimeConfig.cpuCores || 1));
-  const [memoryMb, setMemoryMb] = useState(String(Math.max(128, managed.runtimeConfig.memoryMb)));
+  const [memoryMb, setMemoryMb] = useState(
+    String(Math.max(minimumMemoryMb(database.type), managed.runtimeConfig.memoryMb))
+  );
   const [swapMb, setSwapMb] = useState(String(Math.max(0, managed.runtimeConfig.swapMb)));
   const [publishTcp, setPublishTcp] = useState(managed.publishedPort !== null);
   const [publishedPort, setPublishedPort] = useState(
@@ -62,7 +68,7 @@ export function ManagedDatabaseSettingsTab({
     setName(database.name);
     setTags(database.tags.join(", "));
     setCpuCores(String(managed.runtimeConfig.cpuCores || 1));
-    setMemoryMb(String(Math.max(128, managed.runtimeConfig.memoryMb)));
+    setMemoryMb(String(Math.max(minimumMemoryMb(database.type), managed.runtimeConfig.memoryMb)));
     setSwapMb(String(Math.max(0, managed.runtimeConfig.swapMb)));
     setPublishTcp(managed.publishedPort !== null);
     setPublishedPort(managed.publishedPort == null ? "" : String(managed.publishedPort));
@@ -117,7 +123,7 @@ export function ManagedDatabaseSettingsTab({
       !name.trim() ||
       cpu <= 0 ||
       !Number.isInteger(memory) ||
-      memory < 128 ||
+      memory < minimumMemoryMb(database.type) ||
       !Number.isInteger(swap) ||
       swap < 0 ||
       !portIsValid ||
@@ -223,7 +229,7 @@ export function ManagedDatabaseSettingsTab({
             <Input
               id="managed-database-memory"
               type="number"
-              min={128}
+              min={minimumMemoryMb(database.type)}
               value={memoryMb}
               onChange={(event) => setMemoryMb(event.target.value)}
             />
@@ -253,7 +259,7 @@ export function ManagedDatabaseSettingsTab({
                 setPublishTcp(checked);
                 if (!checked) setPublishNativeTcp(false);
               }}
-              disabled={saving || confirmingRecreate || managed.status !== "ready"}
+              disabled={saving || confirmingRecreate || managed.status === "paused"}
               ariaLabel="Publish TCP port"
             />
           }
@@ -274,7 +280,7 @@ export function ManagedDatabaseSettingsTab({
                     value={publishedPort}
                     onChange={(event) => setPublishedPort(event.target.value)}
                     placeholder="Automatic"
-                    disabled={saving || confirmingRecreate || managed.status !== "ready"}
+                    disabled={saving || confirmingRecreate || managed.status === "paused"}
                   />
                 </SettingsControlRow>
                 {database.type === "clickhouse" && (
@@ -289,7 +295,7 @@ export function ManagedDatabaseSettingsTab({
                           setPublishNativeTcp(checked);
                           if (!checked) setPublishedNativePort("");
                         }}
-                        disabled={saving || confirmingRecreate || managed.status !== "ready"}
+                        disabled={saving || confirmingRecreate || managed.status === "paused"}
                         ariaLabel="Publish native TCP port"
                       />
                     </SettingsControlRow>
@@ -306,7 +312,7 @@ export function ManagedDatabaseSettingsTab({
                           value={publishedNativePort}
                           onChange={(event) => setPublishedNativePort(event.target.value)}
                           placeholder="Automatic"
-                          disabled={saving || confirmingRecreate || managed.status !== "ready"}
+                          disabled={saving || confirmingRecreate || managed.status === "paused"}
                         />
                       </SettingsControlRow>
                     )}
@@ -319,7 +325,7 @@ export function ManagedDatabaseSettingsTab({
                   <Switch
                     checked={tlsEnabled}
                     onChange={setTlsEnabled}
-                    disabled={saving || confirmingRecreate || managed.status !== "ready"}
+                    disabled={saving || confirmingRecreate || managed.status === "paused"}
                     ariaLabel="Enable TLS"
                   />
                 </SettingsControlRow>
@@ -342,7 +348,7 @@ export function ManagedDatabaseSettingsTab({
               height="min(42dvh, 440px)"
               bordered={false}
               showGutterBorder={false}
-              readOnly={saving || confirmingRecreate || managed.status !== "ready"}
+              readOnly={saving || confirmingRecreate || managed.status === "paused"}
             />
           </PanelShell>
         )}
@@ -353,7 +359,7 @@ export function ManagedDatabaseSettingsTab({
             disabled={
               saving ||
               confirmingRecreate ||
-              managed.status !== "ready" ||
+              managed.status === "paused" ||
               !portIsValid ||
               !nativePortIsValid
             }

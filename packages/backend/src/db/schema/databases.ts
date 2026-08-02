@@ -93,7 +93,7 @@ export interface ManagedDatabaseRuntimeConfig {
 
 export interface ManagedDatabasePendingOperation {
   id: string;
-  action: 'create' | 'update' | 'pause' | 'unpause' | 'delete';
+  action: 'create' | 'update' | 'restart' | 'pause' | 'unpause' | 'delete';
 }
 
 export interface DatabaseBindingEnvironment {

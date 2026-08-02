@@ -46,6 +46,7 @@ export const DatabaseListQuerySchema = z.object({
 const managedDatabaseTypeSchema = z.enum(['postgres', 'redis', 'clickhouse']);
 const managedDatabaseNameSchema = z.string().trim().min(1).max(255);
 const managedDatabaseVersionSchema = z.string().trim().min(1).max(128);
+const minimumClickHouseMemoryMb = 512;
 
 export const ManagedDatabaseListQuerySchema = z.object({
   nodeId: z.string().uuid().optional(),
@@ -73,6 +74,13 @@ export const CreateManagedDatabaseSchema = z
     clickhouseConfigXml: z.string().trim().min(1).max(32_768).optional(),
   })
   .superRefine((value, context) => {
+    if (value.type === 'clickhouse' && value.memoryMb < minimumClickHouseMemoryMb) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['memoryMb'],
+        message: `ClickHouse requires at least ${minimumClickHouseMemoryMb} MB of memory`,
+      });
+    }
     if (value.publishedPort !== undefined && !value.publishTcp) {
       context.addIssue({
         code: z.ZodIssueCode.custom,

@@ -33,6 +33,7 @@ const (
 	managedDatabaseLabel   = "wiolett.gateway.managed-database.id"
 	managedDatabaseTypeTag = "wiolett.gateway.managed-database.type"
 	minimumDatabaseBytes   = 64 * 1024 * 1024
+	minimumClickHouseBytes = 512 * 1024 * 1024
 	// Keep the daemon's bounded lifecycle operation and rollback shorter than
 	// the controller-side command timeout. This prevents an operation from
 	// continuing after the Gateway has already declared it failed.
@@ -201,6 +202,22 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 			return "", err
 		}
 		record.DesiredRunning = true
+		if err := m.saveRecord(record); err != nil {
+			return "", err
+		}
+		return marshalManagedDatabaseDetail(record, "ready")
+	case "restart":
+		var input managedDatabaseCommand
+		if err := json.Unmarshal([]byte(configJSON), &input); err != nil {
+			return "", fmt.Errorf("parse managed database config: %w", err)
+		}
+		record, err := m.loadRecord(id)
+		if err != nil {
+			return "", err
+		}
+		if err := m.restart(ctx, &record, input); err != nil {
+			return "", err
+		}
 		if err := m.saveRecord(record); err != nil {
 			return "", err
 		}
@@ -494,6 +511,38 @@ func (m *managedDatabaseManager) update(ctx context.Context, record *managedData
 	return nil
 }
 
+func (m *managedDatabaseManager) restart(ctx context.Context, record *managedDatabaseRecord, input managedDatabaseCommand) error {
+	if err := validateManagedDatabaseInput(input); err != nil {
+		return err
+	}
+	if input.Type != record.Type {
+		return errors.New("managed database engine cannot be changed")
+	}
+	if record.OperationID == input.OperationID {
+		return nil
+	}
+	if err := m.ensureMounted(ctx, record); err != nil {
+		return err
+	}
+	inspect, err := m.client.cli.ContainerInspect(ctx, record.ContainerID, mobyclient.ContainerInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("inspect managed database container: %w", err)
+	}
+	if inspect.Container.State != nil && inspect.Container.State.Running {
+		if err := m.client.RestartContainer(ctx, record.ContainerID, 30); err != nil {
+			return fmt.Errorf("restart managed database container: %w", err)
+		}
+	} else if err := m.startContainer(ctx, record.ContainerID); err != nil {
+		return err
+	}
+	if err := m.waitForDatabaseReady(ctx, record.ContainerID, input); err != nil {
+		return err
+	}
+	record.DesiredRunning = true
+	record.OperationID = input.OperationID
+	return nil
+}
+
 // recreateContainer applies the only Docker setting that cannot be changed
 // live (port bindings) while deliberately retaining the mounted managed data
 // image and its isolated network.
@@ -660,6 +709,9 @@ func validateManagedDatabaseInput(input managedDatabaseCommand) error {
 	}
 	if input.MemoryBytes < 0 || input.NanoCPUs < 0 || input.CPUShares < 0 || input.PidsLimit < 0 {
 		return errors.New("runtime limits cannot be negative")
+	}
+	if input.Type == "clickhouse" && input.MemoryBytes < minimumClickHouseBytes {
+		return fmt.Errorf("ClickHouse requires at least %d bytes of memory", minimumClickHouseBytes)
 	}
 	if input.MemorySwapBytes != 0 && input.MemorySwapBytes != -1 && input.MemorySwapBytes < input.MemoryBytes {
 		return errors.New("memory swap limit must be unlimited or at least the memory limit")

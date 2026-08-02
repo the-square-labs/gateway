@@ -66,4 +66,16 @@ describe("managed database capacity", () => {
       )
     ).toBe(false);
   });
+
+  it("requires at least 512 MB for ClickHouse", () => {
+    const capacity = managedDatabaseCapacity(node);
+    const clickhouse = { ...draft, type: "clickhouse" as const, version: "26.7.1.1315" };
+
+    expect(
+      canDeployManagedDatabase({ ...clickhouse, memoryMb: 128 }, ["26.7.1.1315"], capacity)
+    ).toBe(false);
+    expect(
+      canDeployManagedDatabase({ ...clickhouse, memoryMb: 512 }, ["26.7.1.1315"], capacity)
+    ).toBe(true);
+  });
 });
