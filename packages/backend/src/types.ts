@@ -1,8 +1,11 @@
 import type { Context } from 'hono';
 
+export type AuthMethod = 'oidc' | 'password' | 'email_otp';
+
 export interface User {
   id: string;
-  oidcSubject: string;
+  oidcSubject: string | null;
+  authMethod?: AuthMethod;
   email: string;
   name: string | null;
   avatarUrl: string | null;
@@ -21,11 +24,29 @@ export interface User {
 export interface SessionData {
   userId: string;
   user: User;
-  accessToken: string;
+  publicId?: string;
+  authMethod?: AuthMethod;
+  accessToken?: string;
   refreshToken?: string;
   csrfToken?: string;
   createdAt: number;
+  lastSeenAt?: number;
+  ipAddress?: string;
+  userAgent?: string;
+  mfaSatisfiedAt?: number;
   expiresAt: number;
+}
+
+export interface PublicSession {
+  id: string;
+  authMethod: AuthMethod;
+  createdAt: number;
+  lastSeenAt: number;
+  expiresAt: number;
+  ipAddress: string | null;
+  userAgent: string | null;
+  mfaSatisfiedAt: number | null;
+  isCurrent: boolean;
 }
 
 export interface AppEnv {

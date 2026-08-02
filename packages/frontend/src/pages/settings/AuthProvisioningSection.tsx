@@ -1,9 +1,17 @@
-import { Save } from "lucide-react";
+import { Loader2, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
+import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -41,6 +49,114 @@ const DEFAULT_GENERAL_SETTINGS = {
   gatewayGrpcLocalIp: null as string | null,
   features: DEFAULT_GENERAL_FEATURES,
 };
+const DEFAULT_AUTH_METHODS = { oidc: true, password: false, emailOtp: false, passkeyLogin: false };
+const DEFAULT_PASSWORD_POLICY = {
+  minLength: 12,
+  maxLength: 72,
+  requireUppercase: false,
+  requireLowercase: false,
+  requireDigit: false,
+  requireSymbol: false,
+};
+
+const SMTP_PRESETS = {
+  generic: {
+    label: "Generic SMTP",
+    description: "Configure any standards-compliant SMTP relay manually.",
+  },
+  resend: {
+    label: "Resend",
+    description: "smtp.resend.com · STARTTLS · API key as the password",
+    host: "smtp.resend.com",
+    port: "587",
+    tlsMode: "starttls" as const,
+    username: "resend",
+  },
+  postmark: {
+    label: "Postmark",
+    description: "smtp.postmarkapp.com · STARTTLS · SMTP or Server API token",
+    host: "smtp.postmarkapp.com",
+    port: "587",
+    tlsMode: "starttls" as const,
+    username: "",
+  },
+  sendgrid: {
+    label: "Twilio SendGrid",
+    description: "smtp.sendgrid.net · STARTTLS · API key as the password",
+    host: "smtp.sendgrid.net",
+    port: "587",
+    tlsMode: "starttls" as const,
+    username: "apikey",
+  },
+} as const;
+
+export type SmtpPresetId = keyof typeof SMTP_PRESETS;
+type SmtpTestEmailKind = "smtp_configuration" | "password_setup" | "password_reset" | "email_otp";
+
+const SMTP_TEST_EMAIL_OPTIONS: Array<{
+  value: SmtpTestEmailKind;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "smtp_configuration",
+    label: "SMTP configuration",
+    description: "Basic delivery check.",
+  },
+  {
+    value: "password_setup",
+    label: "Set password link",
+    description: "Invitation email for a new password account.",
+  },
+  {
+    value: "password_reset",
+    label: "Reset password link",
+    description: "Recovery email for an existing password account.",
+  },
+  {
+    value: "email_otp",
+    label: "Email sign-in code",
+    description: "One-time code used by email OTP sign-in.",
+  },
+];
+
+export interface SmtpDraft {
+  host: string;
+  port: string;
+  tlsMode: "starttls" | "tls";
+  username: string;
+  password: string;
+  senderName: string;
+  senderEmail: string;
+}
+
+const DEFAULT_SMTP_DRAFT: SmtpDraft = {
+  host: SMTP_PRESETS.resend.host,
+  port: SMTP_PRESETS.resend.port,
+  tlsMode: SMTP_PRESETS.resend.tlsMode,
+  username: SMTP_PRESETS.resend.username,
+  password: "",
+  senderName: "Gateway",
+  senderEmail: "",
+};
+
+function getSmtpPresetId(host: string | null | undefined): SmtpPresetId {
+  return (Object.entries(SMTP_PRESETS).find(
+    ([, preset]) => "host" in preset && preset.host === host
+  )?.[0] ?? "generic") as SmtpPresetId;
+}
+
+export function applySmtpPreset(draft: SmtpDraft, presetId: SmtpPresetId): SmtpDraft {
+  const preset = SMTP_PRESETS[presetId];
+  if (!("host" in preset)) return draft;
+  return {
+    ...draft,
+    host: preset.host,
+    port: preset.port,
+    tlsMode: preset.tlsMode,
+    username: preset.username,
+  };
+}
 
 function bytesToMegabytes(bytes: number) {
   return Math.round(bytes / BYTES_PER_MEGABYTE);
@@ -50,6 +166,8 @@ function withDefaultGeneralSettings(settings: AuthProvisioningSettings | null) {
   if (!settings) return null;
   return {
     ...settings,
+    methods: { ...DEFAULT_AUTH_METHODS, ...settings.methods },
+    passwordPolicy: { ...DEFAULT_PASSWORD_POLICY, ...settings.passwordPolicy },
     mcpExtendedCompatibility: settings.mcpExtendedCompatibility ?? false,
     generalSettings: {
       ...DEFAULT_GENERAL_SETTINGS,
@@ -77,6 +195,14 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
   const [isSavingOAuthCompatibility, setIsSavingOAuthCompatibility] = useState(false);
   const [isSavingNetwork, setIsSavingNetwork] = useState(false);
   const [isSavingWebhookPolicy, setIsSavingWebhookPolicy] = useState(false);
+  const [isSavingLocalAuth, setIsSavingLocalAuth] = useState(false);
+  const [smtpDraft, setSmtpDraft] = useState<SmtpDraft>(DEFAULT_SMTP_DRAFT);
+  const [smtpPreset, setSmtpPreset] = useState<SmtpPresetId>("resend");
+  const [smtpTestOpen, setSmtpTestOpen] = useState(false);
+  const [smtpTestRecipient, setSmtpTestRecipient] = useState("");
+  const [smtpTestEmailKind, setSmtpTestEmailKind] =
+    useState<SmtpTestEmailKind>("smtp_configuration");
+  const [isSendingSmtpTest, setIsSendingSmtpTest] = useState(false);
   const [trustedProxyCidrs, setTrustedProxyCidrs] = useState(
     () =>
       api
@@ -139,6 +265,19 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       const settingsData = await api.getAuthProvisioningSettings();
       api.setCache("settings:auth-provisioning", settingsData);
       setSettings(withDefaultGeneralSettings(settingsData));
+      const smtpPresetId = settingsData.smtp?.host
+        ? getSmtpPresetId(settingsData.smtp.host)
+        : "resend";
+      setSmtpDraft((current) => ({
+        ...current,
+        host: settingsData.smtp?.host ?? DEFAULT_SMTP_DRAFT.host,
+        port: String(settingsData.smtp?.port ?? DEFAULT_SMTP_DRAFT.port),
+        tlsMode: settingsData.smtp?.tlsMode ?? DEFAULT_SMTP_DRAFT.tlsMode,
+        username: settingsData.smtp?.username ?? DEFAULT_SMTP_DRAFT.username,
+        senderName: settingsData.smtp?.senderName ?? "Gateway",
+        senderEmail: settingsData.smtp?.senderEmail ?? "",
+      }));
+      setSmtpPreset(smtpPresetId);
       setTrustedProxyCidrs(settingsData.networkSecurity.trustedProxyCidrs.join(", "));
       setWebhookPrivateCidrs(settingsData.outboundWebhookPolicy.allowedPrivateCidrs.join(", "));
       setFileUploadLimitMb(
@@ -493,6 +632,84 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
     updateOutboundWebhookPolicy({ allowedPrivateCidrs: cidrs });
   };
 
+  const updateLocalAuth = async (
+    patch: Parameters<typeof api.updateAuthProvisioningSettings>[0],
+    successMessage = "Authentication settings updated"
+  ): Promise<boolean> => {
+    if (!settings || !canEdit) return false;
+    setIsSavingLocalAuth(true);
+    try {
+      const updated = await api.updateAuthProvisioningSettings(patch);
+      applySettings(withDefaultGeneralSettings(updated)!);
+      toast.success(successMessage);
+      return true;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update authentication settings");
+      return false;
+    } finally {
+      setIsSavingLocalAuth(false);
+    }
+  };
+
+  const saveSmtp = async (testRecipient?: string) => {
+    const port = Number(smtpDraft.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      toast.error("SMTP port must be between 1 and 65535");
+      return;
+    }
+    if (testRecipient) setIsSendingSmtpTest(true);
+    try {
+      const saved = await updateLocalAuth(
+        {
+          smtp: {
+            host: smtpDraft.host,
+            port,
+            tlsMode: smtpDraft.tlsMode,
+            username: smtpDraft.username,
+            ...(smtpDraft.password ? { password: smtpDraft.password } : {}),
+            senderName: smtpDraft.senderName,
+            senderEmail: smtpDraft.senderEmail,
+            ...(testRecipient ? { testRecipient, testEmailKind: smtpTestEmailKind } : {}),
+          },
+        },
+        testRecipient ? "Test email sent" : "SMTP settings saved"
+      );
+      if (!saved) return;
+      setSmtpDraft((current) => ({ ...current, password: "" }));
+      if (testRecipient) {
+        setSmtpTestRecipient("");
+        setSmtpTestOpen(false);
+      }
+    } finally {
+      if (testRecipient) setIsSendingSmtpTest(false);
+    }
+  };
+
+  const handleSmtpPresetChange = (presetId: SmtpPresetId) => {
+    setSmtpPreset(presetId);
+    setSmtpDraft((current) => applySmtpPreset(current, presetId));
+  };
+
+  const selectedSmtpPreset = SMTP_PRESETS[smtpPreset];
+  const usesProviderPreset = smtpPreset !== "generic";
+  const showsSmtpUsername = !usesProviderPreset || smtpPreset === "postmark";
+  const smtpUsernameDescription =
+    smtpPreset === "resend"
+      ? "Resend uses the fixed username resend."
+      : smtpPreset === "postmark"
+        ? "Use the SMTP access key or Server API token from Postmark."
+        : smtpPreset === "sendgrid"
+          ? "Twilio SendGrid uses the fixed username apikey."
+          : "Username used by your SMTP relay for authentication.";
+  const smtpPasswordDescription =
+    smtpPreset === "resend"
+      ? "Paste a Resend API key."
+      : smtpPreset === "postmark"
+        ? "Paste the SMTP secret key or Server API token."
+        : smtpPreset === "sendgrid"
+          ? "Paste a Twilio SendGrid API key."
+          : "Password or API key used by your SMTP relay.";
+
   if (!settings) return null;
 
   return (
@@ -709,6 +926,279 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
           </div>
         </div>
       </PanelShell>
+
+      <PanelShell
+        title="Sign-in methods"
+        description="Enable the primary methods available to Gateway accounts"
+      >
+        <div className="divide-y divide-border">
+          {[
+            ["oidc", "OIDC", "Redirect users to the configured identity provider"],
+            [
+              "password",
+              "Email and password",
+              "Password setup and recovery links are sent over verified SMTP",
+            ],
+            ["emailOtp", "Email sign-in code", "A one-time code is sent over verified SMTP"],
+            [
+              "passkeyLogin",
+              "Passkey",
+              "Optional local-account passkeys can sign users in directly",
+            ],
+          ].map(([key, title, description]) => (
+            <div key={key} className="flex items-center justify-between gap-4 px-4 py-3">
+              <div>
+                <p className="text-sm font-medium">{title}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+              </div>
+              <Switch
+                checked={settings.methods?.[key as keyof typeof DEFAULT_AUTH_METHODS] ?? false}
+                disabled={!canEdit || isSavingLocalAuth}
+                onChange={(checked) =>
+                  updateLocalAuth({
+                    methods: { [key]: checked } as Partial<
+                      NonNullable<AuthProvisioningSettings["methods"]>
+                    >,
+                  })
+                }
+              />
+            </div>
+          ))}
+        </div>
+      </PanelShell>
+
+      <PanelShell
+        title="Authentication email (SMTP)"
+        description={
+          settings.smtp?.verifiedAt
+            ? `Verified ${new Date(settings.smtp.verifiedAt).toLocaleString()}`
+            : "Configure and send a test before enabling email-based sign-in"
+        }
+        actions={
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setSmtpTestOpen(true)}
+              disabled={!canEdit || isSavingLocalAuth}
+            >
+              Send test
+            </Button>
+            <Button onClick={() => saveSmtp()} disabled={!canEdit || isSavingLocalAuth}>
+              Save
+            </Button>
+          </div>
+        }
+      >
+        <div className="divide-y divide-border">
+          <SettingsControlRow title="Email provider" description={selectedSmtpPreset.description}>
+            <Select
+              value={smtpPreset}
+              disabled={!canEdit || isSavingLocalAuth}
+              onValueChange={(value) => handleSmtpPresetChange(value as SmtpPresetId)}
+            >
+              <SelectTrigger aria-label="SMTP provider" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(SMTP_PRESETS).map(([id, preset]) => (
+                  <SelectItem key={id} value={id}>
+                    {preset.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </SettingsControlRow>
+          {!usesProviderPreset && (
+            <>
+              <SettingsControlRow
+                title="SMTP host"
+                description="Hostname of the outgoing mail relay."
+              >
+                <Input
+                  aria-label="SMTP host"
+                  value={smtpDraft.host}
+                  placeholder="smtp.example.com"
+                  disabled={!canEdit || isSavingLocalAuth}
+                  onChange={(event) =>
+                    setSmtpDraft((current) => ({ ...current, host: event.target.value }))
+                  }
+                />
+              </SettingsControlRow>
+              <SettingsControlRow title="Port" description="TCP port used to connect to the relay.">
+                <Input
+                  aria-label="SMTP port"
+                  value={smtpDraft.port}
+                  type="number"
+                  min={1}
+                  max={65535}
+                  placeholder="587"
+                  disabled={!canEdit || isSavingLocalAuth}
+                  onChange={(event) =>
+                    setSmtpDraft((current) => ({ ...current, port: event.target.value }))
+                  }
+                />
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="Transport security"
+                description="Use STARTTLS for explicit TLS or TLS for implicit TLS."
+              >
+                <Select
+                  value={smtpDraft.tlsMode}
+                  disabled={!canEdit || isSavingLocalAuth}
+                  onValueChange={(tlsMode: "starttls" | "tls") =>
+                    setSmtpDraft((current) => ({ ...current, tlsMode }))
+                  }
+                >
+                  <SelectTrigger aria-label="SMTP transport security" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="starttls">STARTTLS</SelectItem>
+                    <SelectItem value="tls">TLS</SelectItem>
+                  </SelectContent>
+                </Select>
+              </SettingsControlRow>
+            </>
+          )}
+          {showsSmtpUsername && (
+            <SettingsControlRow title="SMTP username" description={smtpUsernameDescription}>
+              <Input
+                aria-label="SMTP username"
+                value={smtpDraft.username}
+                placeholder="SMTP username"
+                disabled={!canEdit || isSavingLocalAuth}
+                onChange={(event) =>
+                  setSmtpDraft((current) => ({ ...current, username: event.target.value }))
+                }
+              />
+            </SettingsControlRow>
+          )}
+          <SettingsControlRow
+            title="SMTP password"
+            description={`${smtpPasswordDescription} ${settings.smtp?.configured ? "Leave blank to keep the saved password." : ""}`}
+          >
+            <Input
+              aria-label="SMTP password"
+              value={smtpDraft.password}
+              type="password"
+              placeholder={
+                settings.smtp?.configured
+                  ? settings.smtp.passwordLast4
+                    ? `****${settings.smtp.passwordLast4}`
+                    : "Configured — enter new to replace"
+                  : "SMTP password or API key"
+              }
+              disabled={!canEdit || isSavingLocalAuth}
+              onChange={(event) =>
+                setSmtpDraft((current) => ({ ...current, password: event.target.value }))
+              }
+            />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Sender name"
+            description="Display name recipients see in their inbox."
+          >
+            <Input
+              aria-label="Sender name"
+              value={smtpDraft.senderName}
+              placeholder="Gateway"
+              disabled={!canEdit || isSavingLocalAuth}
+              onChange={(event) =>
+                setSmtpDraft((current) => ({ ...current, senderName: event.target.value }))
+              }
+            />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Sender email"
+            description="Use an address verified by your email provider."
+          >
+            <Input
+              aria-label="Sender email"
+              value={smtpDraft.senderEmail}
+              type="email"
+              placeholder="security@example.com"
+              disabled={!canEdit || isSavingLocalAuth}
+              onChange={(event) =>
+                setSmtpDraft((current) => ({ ...current, senderEmail: event.target.value }))
+              }
+            />
+          </SettingsControlRow>
+        </div>
+      </PanelShell>
+
+      <Dialog open={smtpTestOpen} onOpenChange={setSmtpTestOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Send SMTP test</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Save the current SMTP configuration and send a test message to this address.
+            </p>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="smtp-test-email-kind">
+                Email type
+              </label>
+              <Select
+                value={smtpTestEmailKind}
+                disabled={isSavingLocalAuth}
+                onValueChange={(value) => setSmtpTestEmailKind(value as SmtpTestEmailKind)}
+              >
+                <SelectTrigger
+                  id="smtp-test-email-kind"
+                  aria-label="SMTP test email type"
+                  className="w-full"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {SMTP_TEST_EMAIL_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {
+                  SMTP_TEST_EMAIL_OPTIONS.find((option) => option.value === smtpTestEmailKind)
+                    ?.description
+                }
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="smtp-test-recipient">
+                Recipient
+              </label>
+              <Input
+                id="smtp-test-recipient"
+                aria-label="Test recipient"
+                value={smtpTestRecipient}
+                type="email"
+                placeholder="you@example.com"
+                disabled={isSavingLocalAuth}
+                onChange={(event) => setSmtpTestRecipient(event.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setSmtpTestOpen(false)}
+              disabled={isSavingLocalAuth}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => saveSmtp(smtpTestRecipient)}
+              disabled={isSavingLocalAuth || isSendingSmtpTest || !smtpTestRecipient}
+            >
+              {isSendingSmtpTest && <Loader2 className="h-4 w-4 animate-spin" />}
+              {isSendingSmtpTest ? "Sending…" : "Send test"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <PanelShell
         title="OAuth and MCP access"

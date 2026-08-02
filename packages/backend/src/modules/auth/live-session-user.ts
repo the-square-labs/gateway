@@ -86,6 +86,7 @@ export async function resolveLiveUser(db: DrizzleClient, userId: string): Promis
   return {
     id: dbUser.id,
     oidcSubject: dbUser.oidcSubject,
+    authMethod: dbUser.authMethod,
     email: dbUser.email,
     name: dbUser.name,
     avatarUrl: dbUser.avatarUrl,
@@ -105,10 +106,11 @@ export async function resolveLiveSessionUser(token: string): Promise<{ user: Use
 
   const sessionService = container.resolve(SessionService);
   const session = await sessionService.getSession(token);
-  if (!session?.user) return null;
+  const sessionUserId = session?.userId ?? session?.user?.id;
+  if (!sessionUserId) return null;
 
   const db = container.resolve<DrizzleClient>(TOKENS.DrizzleClient);
-  const user = await resolveLiveUser(db, session.user.id);
+  const user = await resolveLiveUser(db, sessionUserId);
   if (!user) return null;
 
   return { user, effectiveScopes: user.scopes };

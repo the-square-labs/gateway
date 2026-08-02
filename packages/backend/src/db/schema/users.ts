@@ -14,13 +14,17 @@ import {
 import { adminUserFolders } from './admin-user-folders.js';
 import { permissionGroups } from './permission-groups.js';
 
+export const USER_AUTH_METHODS = ['oidc', 'password', 'email_otp'] as const;
+export type UserAuthMethod = (typeof USER_AUTH_METHODS)[number];
+
 export const users = pgTable(
   'users',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    oidcSubject: varchar('oidc_subject', { length: 255 }).notNull(),
+    oidcSubject: varchar('oidc_subject', { length: 255 }),
+    authMethod: varchar('auth_method', { length: 32 }).$type<UserAuthMethod>().notNull().default('oidc'),
     email: varchar('email', { length: 255 }).notNull(),
-    name: varchar('name', { length: 255 }),
+    name: varchar('name', { length: 255 }).notNull(),
     avatarUrl: text('avatar_url'),
     groupId: uuid('group_id')
       .notNull()
@@ -37,6 +41,7 @@ export const users = pgTable(
       .default('normal'),
     folderId: uuid('folder_id').references((): AnyPgColumn => adminUserFolders.id, { onDelete: 'set null' }),
     sortOrder: integer('sort_order').notNull().default(0),
+    lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

@@ -393,9 +393,19 @@ export function createApp() {
     }
     await rateLimitMiddleware(c, next);
   });
+  // Public local-auth and passkey endpoints parse JSON before their route
+  // schemas run, so give them the same conservative bound as OAuth bodies.
+  app.use('/auth/*', requestBodyLimit(env.OAUTH_BODY_MAX_BYTES));
   app.use('/pki/*', rateLimitMiddleware);
   app.use('/auth/*', authRateLimitMiddleware);
   app.use('/auth/login', authLoginRateLimitMiddleware);
+  app.use('/auth/password/login', authLoginRateLimitMiddleware);
+  app.use('/auth/password/reset/request', authLoginRateLimitMiddleware);
+  app.use('/auth/email-otp/request', authLoginRateLimitMiddleware);
+  app.use('/auth/email-otp/verify', authLoginRateLimitMiddleware);
+  app.use('/auth/password/reset/complete', authLoginRateLimitMiddleware);
+  app.use('/auth/mfa/*', authLoginRateLimitMiddleware);
+  app.use('/auth/passkeys/*', authLoginRateLimitMiddleware);
   app.use('/auth/callback', authCallbackRateLimitMiddleware);
   app.use('/api/oauth/*', authRateLimitMiddleware);
   app.use('/pki/*', pkiRateLimitMiddleware);

@@ -617,6 +617,20 @@
       "when": 1785678404100,
       "tag": "0087_soft_deleted_users_catch_up",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1785679698891,
+      "tag": "0088_dashing_virginia_dare",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1785697492473,
+      "tag": "0089_black_boomerang",
+      "breakpoints": true
     }
   ]
 }

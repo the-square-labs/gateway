@@ -848,6 +848,7 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/reset-password" element={<LoginPage />} />
             <Route path="/callback" element={<AuthCallback />} />
             <Route path="/oauth/consent" element={<OAuthConsent />} />
             <Route path="/oauth/error" element={<OAuthError />} />

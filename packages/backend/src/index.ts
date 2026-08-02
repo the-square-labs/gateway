@@ -23,6 +23,7 @@ import { logger } from '@/lib/logger.js';
 import { AISandboxService } from '@/modules/ai/ai.sandbox.service.js';
 import { AISandboxRunnerService } from '@/modules/ai/ai.sandbox-runner.service.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
+import { AuthEmailQueueService } from '@/modules/auth/auth-email-queue.service.js';
 import { ManagedDatabaseTunnelProxy } from '@/modules/databases/managed-database-tunnel-proxy.js';
 import { LoggingClickHouseService } from '@/modules/logging/logging-clickhouse.service.js';
 import { LoggingMetadataService } from '@/modules/logging/logging-metadata.service.js';
@@ -146,6 +147,13 @@ async function main() {
         logger.info('ClickHouse connection closed');
       } catch (err) {
         logger.error('Failed to close ClickHouse', { err });
+      }
+
+      try {
+        await container.resolve(AuthEmailQueueService).close();
+        logger.info('Auth email queue stopped');
+      } catch (err) {
+        logger.error('Failed to stop auth email queue', { err });
       }
 
       try {

@@ -1,6 +1,6 @@
 import type { AIApprovalMode } from "@/lib/ai-approval-mode";
 import { useAuthStore } from "@/stores/auth";
-import type { OAuthAuthorization, OAuthConsentPreview, User } from "@/types";
+import type { BrowserSession, OAuthAuthorization, OAuthConsentPreview, User } from "@/types";
 import type { ApiClientBaseConstructor } from "./api-mixins";
 
 const AUTH_BASE = "/auth";
@@ -31,6 +31,74 @@ export function withAuthApi<TBase extends ApiClientBaseConstructor>(Base: TBase)
       );
       this.setCache("auth:me:preferences", preferences);
       return preferences;
+    }
+
+    async listCurrentUserSessions(): Promise<BrowserSession[]> {
+      return this.request<BrowserSession[]>("/auth/me/sessions");
+    }
+
+    async revokeCurrentUserSession(id: string): Promise<void> {
+      await this.request(`/auth/me/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+    }
+
+    async revokeOtherCurrentUserSessions(): Promise<number> {
+      const response = await this.request<{ revoked: number }>("/auth/me/sessions/revoke-others", {
+        method: "POST",
+      });
+      return response.revoked;
+    }
+
+    async getCurrentUserMfaStatus(): Promise<{
+      totpConfigured: boolean;
+      passkeyCount: number;
+      recoveryCodeCount: number;
+    }> {
+      return this.request("/auth/me/mfa");
+    }
+
+    async beginCurrentUserTotpSetup(): Promise<{ secret: string; uri: string }> {
+      return this.request("/auth/me/mfa/totp/setup", { method: "POST" });
+    }
+
+    async resetCurrentUserTotp(): Promise<void> {
+      await this.request("/auth/me/mfa/totp/reset", { method: "POST" });
+    }
+
+    async confirmCurrentUserTotpSetup(code: string): Promise<string[]> {
+      const response = await this.request<{ recoveryCodes: string[] }>(
+        "/auth/me/mfa/totp/confirm",
+        { method: "POST", body: JSON.stringify({ code }) }
+      );
+      return response.recoveryCodes;
+    }
+
+    async regenerateCurrentUserRecoveryCodes(code: string): Promise<string[]> {
+      const response = await this.request<{ recoveryCodes: string[] }>(
+        "/auth/me/mfa/recovery-codes",
+        { method: "POST", body: JSON.stringify({ code }) }
+      );
+      return response.recoveryCodes;
+    }
+
+    async listCurrentUserPasskeys(): Promise<
+      Array<{ id: string; name: string; lastUsedAt: string | null; createdAt: string }>
+    > {
+      return this.request("/auth/me/passkeys");
+    }
+
+    async beginCurrentUserPasskeyRegistration(): Promise<Record<string, unknown>> {
+      return this.request("/auth/me/passkeys/options", { method: "POST" });
+    }
+
+    async finishCurrentUserPasskeyRegistration(response: unknown, name?: string): Promise<void> {
+      await this.request("/auth/me/passkeys", {
+        method: "POST",
+        body: JSON.stringify({ response, name }),
+      });
+    }
+
+    async removeCurrentUserPasskey(id: string): Promise<void> {
+      await this.request(`/auth/me/passkeys/${encodeURIComponent(id)}`, { method: "DELETE" });
     }
 
     async logout(): Promise<void> {

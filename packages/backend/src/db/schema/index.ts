@@ -53,4 +53,5 @@ export * from './sandbox-jobs.js';
 export * from './settings.js';
 export * from './ssl-certificates.js';
 export * from './status-page.js';
+export * from './user-auth.js';
 export * from './users.js';

@@ -14,8 +14,26 @@ import {
   UpdateAuthProvisioningSettingsSchema,
   UpdateBlockSchema,
   UpdateUserAdditionalPermissionsSchema,
+  UpdateUserAuthMethodSchema,
   UpdateUserGroupSchema,
+  UpdateUserNameSchema,
 } from './admin.schemas.js';
+
+const PublicSessionSchema = z.object({
+  id: z.string(),
+  authMethod: z.enum(['oidc', 'password', 'email_otp']),
+  createdAt: z.number().int(),
+  lastSeenAt: z.number().int(),
+  expiresAt: z.number().int(),
+  ipAddress: z.string().nullable(),
+  userAgent: z.string().nullable(),
+  mfaSatisfiedAt: z.number().int().nullable(),
+  isCurrent: z.boolean(),
+});
+
+const UserSessionParamSchema = IdParamSchema.extend({
+  sessionId: z.string().min(1).max(64),
+});
 
 export const listAdminUsersRoute = appRoute({
   method: 'get',
@@ -139,6 +157,33 @@ export const updateUserGroupRoute = appRoute({
   responses: okJson(UnknownDataResponseSchema),
 });
 
+export const updateUserAuthMethodRoute = appRoute({
+  method: 'patch',
+  path: '/users/{id}/auth-method',
+  tags: ['Admin'],
+  summary: "Change a user's primary sign-in method",
+  request: { params: IdParamSchema, ...jsonBody(UpdateUserAuthMethodSchema) },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const updateUserNameRoute = appRoute({
+  method: 'patch',
+  path: '/users/{id}/name',
+  tags: ['Admin'],
+  summary: "Rename a local user's account",
+  request: { params: IdParamSchema, ...jsonBody(UpdateUserNameSchema) },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const sendAdminUserPasswordSetupRoute = appRoute({
+  method: 'post',
+  path: '/users/{id}/password-setup',
+  tags: ['Admin'],
+  summary: 'Email a password setup or reset link to a local password user',
+  request: { params: IdParamSchema },
+  responses: okJson(z.object({ message: z.string(), purpose: z.enum(['password_setup', 'password_reset']) })),
+});
+
 export const updateUserAdditionalPermissionsRoute = appRoute({
   method: 'put',
   path: '/users/{id}/additional-permissions',
@@ -173,4 +218,40 @@ export const restoreAdminUserRoute = appRoute({
   summary: 'Restore a deleted user in blocked state',
   request: { params: IdParamSchema, ...jsonBody(RestoreUserSchema) },
   responses: okJson(UnknownDataResponseSchema),
+});
+
+export const listAdminUserSessionsRoute = appRoute({
+  method: 'get',
+  path: '/users/{id}/sessions',
+  tags: ['Admin'],
+  summary: "List a user's active browser sessions",
+  request: { params: IdParamSchema },
+  responses: okJson(z.array(PublicSessionSchema)),
+});
+
+export const revokeAdminUserSessionRoute = appRoute({
+  method: 'delete',
+  path: '/users/{id}/sessions/{sessionId}',
+  tags: ['Admin'],
+  summary: "Revoke a user's active browser session",
+  request: { params: UserSessionParamSchema },
+  responses: okJson(z.object({ message: z.string() })),
+});
+
+export const revokeAllAdminUserSessionsRoute = appRoute({
+  method: 'delete',
+  path: '/users/{id}/sessions',
+  tags: ['Admin'],
+  summary: "Revoke all of a user's active browser sessions",
+  request: { params: IdParamSchema },
+  responses: okJson(z.object({ message: z.string() })),
+});
+
+export const resetAdminUserMfaRoute = appRoute({
+  method: 'post',
+  path: '/users/{id}/mfa/reset',
+  tags: ['Admin'],
+  summary: "Reset a user's Gateway MFA factors",
+  request: { params: IdParamSchema },
+  responses: okJson(z.object({ message: z.string() })),
 });

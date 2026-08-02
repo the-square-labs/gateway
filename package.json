@@ -40,11 +40,11 @@
   "pnpm": {
     "overrides": {
       "@hono/node-server": "1.19.13",
-      "axios": "1.16.0",
+      "axios": "1.18.0",
       "follow-redirects": "1.16.0",
-      "fast-uri": "3.1.2",
+      "fast-uri": "3.1.4",
       "hono": "4.12.25",
-      "postcss": "8.5.10",
+      "postcss": "8.5.18",
       "protobufjs": "7.6.3",
       "esbuild": "0.25.12",
       "vite": "7.3.5",

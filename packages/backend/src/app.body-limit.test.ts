@@ -56,6 +56,12 @@ describe('request body limits', () => {
     await expectPayloadTooLarge('/api/logging/ingest', 'POST', 'x'.repeat(1_100_000));
   });
 
+  it('rejects oversized local-auth and passkey JSON before route parsing', async () => {
+    const body = JSON.stringify({ response: 'x'.repeat(40_000) });
+    await expectPayloadTooLarge('/auth/password/login', 'POST', body);
+    await expectPayloadTooLarge('/auth/passkeys/verify', 'POST', body);
+  });
+
   it('does not apply the global API body limit to Docker file write bodies', async () => {
     await expectNotPayloadTooLarge(
       '/api/docker/nodes/node-1/containers/container-1/files/write',

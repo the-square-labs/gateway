@@ -115,8 +115,13 @@ export const authMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     ) {
       throw new HTTPException(403, { message: 'Invalid CSRF token' });
     }
+    const sessionUserId = session.userId ?? session.user?.id;
+    if (!sessionUserId) {
+      await sessionService.destroySession(credential.value);
+      throw new HTTPException(401, { message: 'Invalid or expired session' });
+    }
     const db = container.resolve<DrizzleClient>(TOKENS.DrizzleClient);
-    const user = await resolveLiveUser(db, session.user.id);
+    const user = await resolveLiveUser(db, sessionUserId);
     if (!user) {
       throw new HTTPException(401, { message: 'User no longer exists' });
     }
@@ -130,6 +135,7 @@ export const authMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     c.set('isTokenAuth', false);
     c.set('authType', 'session');
     sessionService.updateSession(credential.value, { user }).catch(() => {});
+    sessionService.touchSession?.(credential.value, session).catch(() => {});
     sessionService.refreshSession(credential.value, session).catch(() => {});
   }
 
@@ -149,8 +155,14 @@ export const optionalAuthMiddleware: MiddlewareHandler<AppEnv> = async (c, next)
       const sessionService = container.resolve(SessionService);
       const session = await sessionService.getSession(credential.value);
       if (session) {
+        const sessionUserId = session.userId ?? session.user?.id;
+        if (!sessionUserId) {
+          await sessionService.destroySession(credential.value);
+          await next();
+          return;
+        }
         const db2 = container.resolve<DrizzleClient>(TOKENS.DrizzleClient);
-        const user = await resolveLiveUser(db2, session.user.id);
+        const user = await resolveLiveUser(db2, sessionUserId);
         if (!user) {
           await sessionService.destroySession(credential.value);
         } else {
@@ -160,6 +172,7 @@ export const optionalAuthMiddleware: MiddlewareHandler<AppEnv> = async (c, next)
           c.set('isTokenAuth', false);
           c.set('authType', 'session');
           sessionService.updateSession(credential.value, { user }).catch(() => {});
+          sessionService.touchSession?.(credential.value, session).catch(() => {});
           sessionService.refreshSession(credential.value, session).catch(() => {});
         }
       }

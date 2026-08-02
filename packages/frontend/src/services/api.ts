@@ -6,6 +6,7 @@ import type {
   ApiToken,
   AuditLogEntry,
   AuthProvisioningSettings,
+  BrowserSession,
   CreateAccessListRequest,
   CreateDomainRequest,
   DashboardStats,
@@ -253,7 +254,12 @@ class ApiClient extends withInferenceApi(
     return this.request<User[]>("/admin/users");
   }
 
-  async createUser(data: { email: string; name?: string; groupId: string }): Promise<User> {
+  async createUser(data: {
+    email: string;
+    name: string;
+    groupId: string;
+    authMethod?: "oidc" | "password" | "email_otp";
+  }): Promise<User> {
     return this.request<User>("/admin/users", {
       method: "POST",
       body: JSON.stringify(data),
@@ -265,6 +271,47 @@ class ApiClient extends withInferenceApi(
       method: "PATCH",
       body: JSON.stringify({ groupId }),
     });
+  }
+
+  async updateUserAuthMethod(
+    userId: string,
+    authMethod: "oidc" | "password" | "email_otp"
+  ): Promise<User> {
+    return this.request<User>(`/admin/users/${userId}/auth-method`, {
+      method: "PATCH",
+      body: JSON.stringify({ authMethod }),
+    });
+  }
+
+  async updateUserName(userId: string, name: string): Promise<User> {
+    return this.request<User>(`/admin/users/${userId}/name`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  async sendUserPasswordLink(
+    userId: string
+  ): Promise<{ message: string; purpose: "password_setup" | "password_reset" }> {
+    return this.request(`/admin/users/${userId}/password-setup`, { method: "POST" });
+  }
+
+  async listAdminUserSessions(userId: string): Promise<BrowserSession[]> {
+    return this.request<BrowserSession[]>(`/admin/users/${userId}/sessions`);
+  }
+
+  async revokeAdminUserSession(userId: string, sessionId: string): Promise<void> {
+    await this.request(`/admin/users/${userId}/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "DELETE",
+    });
+  }
+
+  async revokeAllAdminUserSessions(userId: string): Promise<void> {
+    await this.request(`/admin/users/${userId}/sessions`, { method: "DELETE" });
+  }
+
+  async resetAdminUserMfa(userId: string): Promise<void> {
+    await this.request(`/admin/users/${userId}/mfa/reset`, { method: "POST" });
   }
 
   async updateUserAdditionalPermissions(userId: string, additionalScopes: string[]): Promise<User> {
@@ -360,6 +407,19 @@ class ApiClient extends withInferenceApi(
     oidcDefaultGroupId?: string;
     oidcRequireVerifiedEmail?: boolean;
     oauthExtendedCallbackCompatibility?: boolean;
+    methods?: Partial<NonNullable<AuthProvisioningSettings["methods"]>>;
+    passwordPolicy?: Partial<NonNullable<AuthProvisioningSettings["passwordPolicy"]>>;
+    smtp?: {
+      host: string;
+      port: number;
+      tlsMode: "starttls" | "tls";
+      username: string;
+      password?: string;
+      senderName: string;
+      senderEmail: string;
+      testRecipient?: string;
+      testEmailKind?: "smtp_configuration" | "password_setup" | "password_reset" | "email_otp";
+    };
     mcpServerEnabled?: boolean;
     mcpExtendedCompatibility?: boolean;
     generalSettings?: Partial<AuthProvisioningSettings["generalSettings"]>;
@@ -387,6 +447,7 @@ class ApiClient extends withInferenceApi(
     description?: string;
     scopes: string[];
     parentId?: string | null;
+    requireGateway2fa?: boolean;
   }): Promise<PermissionGroup> {
     return this.request<PermissionGroup>("/admin/groups", {
       method: "POST",
@@ -401,6 +462,7 @@ class ApiClient extends withInferenceApi(
       description?: string | null;
       scopes?: string[];
       parentId?: string | null;
+      requireGateway2fa?: boolean;
     }
   ): Promise<PermissionGroup> {
     return this.request<PermissionGroup>(`/admin/groups/${id}`, {

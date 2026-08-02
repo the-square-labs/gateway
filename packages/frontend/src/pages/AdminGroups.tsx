@@ -45,6 +45,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
   buildFinalScopes,
@@ -134,6 +135,7 @@ export function AdminGroups({
   const [formParentId, setFormParentId] = useState<string | null>(null);
   const [formBaseScopes, setFormBaseScopes] = useState<string[]>([]);
   const [formResources, setFormResources] = useState<Record<string, string[]>>({});
+  const [formRequireGateway2fa, setFormRequireGateway2fa] = useState(false);
   const [initialResourceLimitedScopes, setInitialResourceLimitedScopes] = useState<string[]>([]);
   const [scopeSearch, setScopeSearch] = useState("");
   const [listSearch, setListSearch] = useState("");
@@ -275,6 +277,7 @@ export function AdminGroups({
     setFormParentId(null);
     setFormBaseScopes([]);
     setFormResources({});
+    setFormRequireGateway2fa(false);
     setInitialResourceLimitedScopes([]);
     setScopeSearch("");
     setDialogOpen(true);
@@ -288,19 +291,34 @@ export function AdminGroups({
 
   const openEditDialog = (group: PermissionGroup) => {
     setEditingGroup(group);
-    setGroupDialogMode(group.isBuiltin ? "readonly" : "edit");
+    setGroupDialogMode(group.isBuiltin && !hasScope("admin:system") ? "readonly" : "edit");
     setFormName(group.name);
     setFormDescription(group.description ?? "");
     setFormParentId(group.parentId);
     const { baseScopes, resources } = parseScopesForForm(group.scopes);
     setFormBaseScopes(baseScopes);
     setFormResources(resources);
+    setFormRequireGateway2fa(group.requireGateway2fa ?? false);
     setInitialResourceLimitedScopes(Object.keys(resources));
     setScopeSearch("");
     setDialogOpen(true);
   };
 
   const handleSave = async () => {
+    if (editingGroup?.isBuiltin) {
+      setSaving(true);
+      try {
+        await api.updateGroup(editingGroup.id, { requireGateway2fa: formRequireGateway2fa });
+        toast.success("MFA policy updated");
+        setDialogOpen(false);
+        fetchGroups();
+      } catch (err: any) {
+        toast.error(err?.message ?? "Failed to update MFA policy");
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     const missingResourceScope = findMissingRequiredResourceSelection(
       formBaseScopes,
       formResources,
@@ -327,6 +345,7 @@ export function AdminGroups({
           description: formDescription.trim() || null,
           scopes: finalScopes,
           parentId: formParentId,
+          requireGateway2fa: formRequireGateway2fa,
         });
         toast.success("Group updated");
       } else {
@@ -335,6 +354,7 @@ export function AdminGroups({
           description: formDescription.trim() || undefined,
           scopes: finalScopes,
           parentId: formParentId,
+          requireGateway2fa: formRequireGateway2fa,
         });
         toast.success("Group created");
       }
@@ -394,6 +414,7 @@ export function AdminGroups({
 
   const ownCount = buildFinalScopes(formBaseScopes, formResources).length;
   const groupDialogReadOnly = groupDialogMode === "readonly";
+  const securityOnly = Boolean(editingGroup?.isBuiltin);
   const inheritedScopes = formParentId
     ? [
         ...new Set([
@@ -459,6 +480,11 @@ export function AdminGroups({
                 {group.isBuiltin && (
                   <Badge variant="secondary" size="inline">
                     Built-in
+                  </Badge>
+                )}
+                {group.requireGateway2fa && (
+                  <Badge variant="outline" size="inline">
+                    MFA required
                   </Badge>
                 )}
                 {parent && (
@@ -663,7 +689,7 @@ export function AdminGroups({
                 value={formName}
                 onChange={(e) => setFormName(formatGroupNameInput(e.target.value))}
                 placeholder="e.g. cert-operator"
-                disabled={groupDialogReadOnly}
+                disabled={groupDialogReadOnly || securityOnly}
               />
             </div>
             <div className="space-y-1.5">
@@ -672,7 +698,7 @@ export function AdminGroups({
                 value={formDescription}
                 onChange={(e) => setFormDescription(e.target.value)}
                 placeholder="Optional description"
-                disabled={groupDialogReadOnly}
+                disabled={groupDialogReadOnly || securityOnly}
               />
             </div>
             <div className="space-y-1.5">
@@ -689,7 +715,7 @@ export function AdminGroups({
                   <Select
                     value={formParentId ?? "__none__"}
                     onValueChange={(v) => setFormParentId(v === "__none__" ? null : v)}
-                    disabled={groupDialogReadOnly}
+                    disabled={groupDialogReadOnly || securityOnly}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="None" />
@@ -734,7 +760,7 @@ export function AdminGroups({
                 allowedResourceIds={allowedResourceIdsByScope}
                 inheritedScopes={inheritedScopes}
                 inheritedFromName={groups.find((g) => g.id === formParentId)?.name}
-                readOnly={groupDialogReadOnly}
+                readOnly={groupDialogReadOnly || securityOnly}
                 viewportClassName="max-h-[min(20rem,40dvh)] overflow-y-auto overscroll-contain"
               />
               <div className="border-t border-border px-3 py-2">
@@ -743,6 +769,20 @@ export function AdminGroups({
                   {inheritedCount > 0 && ` (${ownCount} own + ${inheritedCount} inherited)`}
                 </p>
               </div>
+            </div>
+            <div className="flex items-center justify-between gap-4 rounded border border-border px-3 py-3">
+              <div>
+                <p className="text-sm font-medium">Require two-factor authentication</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Applies only to Gateway email-based sign-in. OIDC MFA stays managed by the
+                  identity provider.
+                </p>
+              </div>
+              <Switch
+                checked={formRequireGateway2fa}
+                disabled={groupDialogReadOnly}
+                onChange={setFormRequireGateway2fa}
+              />
             </div>
           </div>
           <DialogFooter>

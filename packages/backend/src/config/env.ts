@@ -62,10 +62,14 @@ const envSchema = z.object({
   LOGGING_TOKEN_EVENTS_PER_WINDOW: z.coerce.number().int().positive().default(10_000),
 
   // OIDC
-  OIDC_ISSUER: z.string().url(),
-  OIDC_CLIENT_ID: z.string(),
-  OIDC_CLIENT_SECRET: z.string(),
-  OIDC_REDIRECT_URI: z.string().url(),
+  OIDC_ISSUER: optionalNonEmptyString.refine((value) => !value || z.string().url().safeParse(value).success, {
+    message: 'OIDC_ISSUER must be a URL when provided',
+  }),
+  OIDC_CLIENT_ID: optionalNonEmptyString,
+  OIDC_CLIENT_SECRET: optionalNonEmptyString,
+  OIDC_REDIRECT_URI: optionalNonEmptyString.refine((value) => !value || z.string().url().safeParse(value).success, {
+    message: 'OIDC_REDIRECT_URI must be a URL when provided',
+  }),
   OIDC_SCOPES: z.string().default('openid email profile'),
 
   // Rate limiting

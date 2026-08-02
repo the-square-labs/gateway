@@ -223,7 +223,7 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 
 ## OIDC Setup
 
-Gateway uses OIDC for user login.
+Gateway can use OIDC for user login. It is optional when at least one Gateway-managed email sign-in method is enabled in **Settings → Gateway**.
 
 Configure your identity provider with:
 
@@ -242,6 +242,14 @@ OIDC_SCOPES=openid email profile
 ```
 
 The exact OIDC provider UI differs, but Gateway expects a normal OIDC issuer with discovery metadata and a callback that returns an authenticated user with an email address.
+
+## Gateway-managed email sign-in
+
+In **Settings → Gateway**, configure and send a test through SMTP before enabling **Email and password** or **Email sign-in code**. SMTP credentials are encrypted with `PKI_MASTER_KEY`; the plaintext password is never returned by the API.
+
+Each user has exactly one primary method: OIDC, email/password, or email OTP. Administrators can change it; a switch to password sends a fresh setup link and revokes browser sessions. Passkeys are an optional local-account credential for direct sign-in and MFA; they never bypass an OIDC identity provider.
+
+Groups can require Gateway MFA for local methods. Users can enroll TOTP or a passkey, receive ten one-use recovery codes, and manage their browser sessions from Profile. OIDC MFA remains the responsibility of the identity provider. Only a system administrator can reset a user's Gateway MFA factors.
 
 ## SSL Modes
 

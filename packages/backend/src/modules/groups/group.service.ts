@@ -33,11 +33,15 @@ export class GroupService {
 
   private eventBus?: import('@/services/event-bus.service.js').EventBusService;
   private sandboxService?: AISandboxService;
+  private sessionService?: import('@/services/session.service.js').SessionService;
   setEventBus(bus: import('@/services/event-bus.service.js').EventBusService) {
     this.eventBus = bus;
   }
   setSandboxService(service: AISandboxService) {
     this.sandboxService = service;
+  }
+  setSessionService(service: import('@/services/session.service.js').SessionService) {
+    this.sessionService = service;
   }
   private emitGroup(id: string, action: 'created' | 'updated' | 'deleted') {
     this.eventBus?.publish('group.changed', { id, action });
@@ -112,9 +116,25 @@ export class GroupService {
   }
 
   async assertCanUpdateGroup(id: string, input: UpdateGroupInput, actorScopes: string[]): Promise<void> {
+    const existingGroup = await this.getGroup(id);
+    if (existingGroup.isBuiltin) {
+      const nonSecurityChanges =
+        input.name !== undefined ||
+        input.description !== undefined ||
+        input.scopes !== undefined ||
+        input.parentId !== undefined;
+      if (nonSecurityChanges || input.requireGateway2fa === undefined || !actorScopes.includes('admin:system')) {
+        throw new AppError(
+          403,
+          'BUILTIN_GROUP',
+          'Only system administrators can update MFA policy on a built-in group'
+        );
+      }
+      return;
+    }
+
     if (input.scopes === undefined && input.parentId === undefined) return;
 
-    const existingGroup = await this.getGroup(id);
     const nextScopes = input.scopes ?? existingGroup.scopes;
     const nextParentId = input.parentId !== undefined ? input.parentId : existingGroup.parentId;
     const effectiveScopes = await this.buildEffectiveScopes(nextScopes, nextParentId);
@@ -160,6 +180,7 @@ export class GroupService {
         folderId: permissionGroups.folderId,
         sortOrder: permissionGroups.sortOrder,
         scopes: permissionGroups.scopes,
+        requireGateway2fa: permissionGroups.requireGateway2fa,
         createdAt: permissionGroups.createdAt,
         updatedAt: permissionGroups.updatedAt,
         memberCount: sql<number>`(SELECT count(*) FROM users WHERE users.group_id = "permission_groups"."id" AND users.deleted_at IS NULL)::int`,
@@ -246,6 +267,7 @@ export class GroupService {
         isBuiltin: false,
         parentId: input.parentId ?? null,
         scopes,
+        requireGateway2fa: input.requireGateway2fa ?? false,
       })
       .returning();
 
@@ -270,7 +292,14 @@ export class GroupService {
       throw new AppError(404, 'GROUP_NOT_FOUND', 'Permission group not found');
     }
 
-    if (group.isBuiltin) {
+    const builtinMfaOnly =
+      group.isBuiltin &&
+      input.requireGateway2fa !== undefined &&
+      input.name === undefined &&
+      input.description === undefined &&
+      input.scopes === undefined &&
+      input.parentId === undefined;
+    if (group.isBuiltin && !builtinMfaOnly) {
       throw new AppError(403, 'BUILTIN_GROUP', 'Cannot modify a built-in group');
     }
 
@@ -330,6 +359,7 @@ export class GroupService {
         ...(input.description !== undefined && { description: input.description }),
         ...(input.scopes !== undefined && { scopes: canonicalizeScopes(input.scopes) }),
         ...(input.parentId !== undefined && { parentId: input.parentId }),
+        ...(input.requireGateway2fa !== undefined && { requireGateway2fa: input.requireGateway2fa }),
         updatedAt: new Date(),
       })
       .where(eq(permissionGroups.id, id))
@@ -337,6 +367,10 @@ export class GroupService {
 
     logger.info('Updated permission group', { groupId: id, name: updated.name });
     this.emitGroup(id, 'updated');
+    if (input.requireGateway2fa !== undefined && input.requireGateway2fa !== group.requireGateway2fa) {
+      const members = await this.db.select({ id: users.id }).from(users).where(eq(users.groupId, id));
+      await Promise.all(members.map((member) => this.sessionService?.destroyAllUserSessions(member.id)));
+    }
     if (input.scopes !== undefined || input.parentId !== undefined) {
       await this.cascadePermissions(id);
     }

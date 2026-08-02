@@ -116,6 +116,29 @@ describe('authMiddleware browser session credentials', () => {
     expect(await response.json()).toEqual({ message: 'Invalid CSRF token' });
   });
 
+  it('uses userId from a legacy session that does not contain a cached user object', async () => {
+    const legacySession = { ...SESSION, user: undefined } as unknown as SessionData;
+    container.registerInstance(SessionService, {
+      getSession: vi.fn().mockResolvedValue(legacySession),
+      validateCsrfToken: vi.fn().mockResolvedValue(true),
+      updateSession: vi.fn().mockResolvedValue(undefined),
+      refreshSession: vi.fn().mockResolvedValue(false),
+      destroySession: vi.fn().mockResolvedValue(undefined),
+    } as unknown as SessionService);
+    container.registerInstance(TOKENS.DrizzleClient, createDb());
+
+    const response = await createApp().request('/mutate', {
+      method: 'POST',
+      headers: {
+        Cookie: 'session_id=legacy-session',
+        'X-CSRF-Token': 'csrf-token',
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ userId: USER.id });
+  });
+
   it('rejects long-lived session ids sent as bearer or query credentials', async () => {
     registerSession();
 

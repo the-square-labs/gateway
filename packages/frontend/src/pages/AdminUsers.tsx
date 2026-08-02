@@ -1,16 +1,17 @@
 import {
   ArchiveRestore,
   Ban,
+  EllipsisVertical,
   FolderPlus,
-  Lock,
   Plus,
+  Settings,
   ShieldPlus,
   Trash2,
-  Unlock,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { AdminUserConfigDialog } from "@/components/admin/AdminUserConfigDialog";
 import { UserAdditionalPermissionsDialog } from "@/components/admin/UserAdditionalPermissionsDialog";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -30,6 +31,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -65,10 +73,12 @@ export function AdminUsers({
   embedded = false,
   createRequest = 0,
   onCreateFolderRef,
+  onOpenDeletedUsersRef,
 }: {
   embedded?: boolean;
   createRequest?: number;
   onCreateFolderRef?: (fn: () => void) => void;
+  onOpenDeletedUsersRef?: (fn: () => void) => void;
 }) {
   const navigate = useNavigate();
   const { user: currentUser, hasAnyScope, hasScope } = useAuthStore();
@@ -82,10 +92,16 @@ export function AdminUsers({
   const [createEmail, setCreateEmail] = useState("");
   const [createName, setCreateName] = useState("");
   const [createGroupId, setCreateGroupId] = useState("");
+  const [createAuthMethod, setCreateAuthMethod] = useState<"oidc" | "password" | "email_otp">(
+    "oidc"
+  );
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
   const [permissionsUser, setPermissionsUser] = useState<User | null>(null);
+  const [configureUser, setConfigureUser] = useState<User | null>(null);
+  const [configureOpen, setConfigureOpen] = useState(false);
   const [deletedUsers, setDeletedUsers] = useState<DeletedUser[]>([]);
   const [deletedUsersOpen, setDeletedUsersOpen] = useState(false);
+  const [deletedUsersSearch, setDeletedUsersSearch] = useState("");
   const [restoreUser, setRestoreUser] = useState<DeletedUser | null>(null);
   const [restoreGroupId, setRestoreGroupId] = useState("");
   const [restoring, setRestoring] = useState(false);
@@ -125,6 +141,15 @@ export function AdminUsers({
   }, [loadUsers]);
 
   const canManageDeletedUsers = hasScope("admin:system");
+
+  const openDeletedUsers = useCallback(() => {
+    setDeletedUsersSearch("");
+    setDeletedUsersOpen(true);
+  }, []);
+
+  useEffect(() => {
+    if (embedded && canManageDeletedUsers) onOpenDeletedUsersRef?.(openDeletedUsers);
+  }, [canManageDeletedUsers, embedded, onOpenDeletedUsersRef, openDeletedUsers]);
 
   useEffect(() => {
     if (canManageDeletedUsers) void loadDeletedUsers();
@@ -189,17 +214,6 @@ export function AdminUsers({
     }
   };
 
-  const handleBlockToggle = async (user: User) => {
-    const newBlocked = !user.isBlocked;
-    try {
-      await api.blockUser(user.id, newBlocked);
-      toast.success(newBlocked ? "User blocked" : "User unblocked");
-      reloadUsers();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update user");
-    }
-  };
-
   const handleDelete = async (user: User) => {
     const ok = await confirm({
       title: "Delete User",
@@ -247,6 +261,7 @@ export function AdminUsers({
     setCreateOpen(false);
     setCreateEmail("");
     setCreateName("");
+    setCreateAuthMethod("oidc");
     const preferred =
       groups.find((group) => group.name === "viewer") ??
       groups.find((group) => !group.isBuiltin) ??
@@ -255,8 +270,8 @@ export function AdminUsers({
   };
 
   const handleCreateUser = async () => {
-    if (!createEmail.trim() || !createGroupId) {
-      toast.error("Email and group are required");
+    if (!createEmail.trim() || !createName.trim() || !createGroupId) {
+      toast.error("Name, email, and group are required");
       return;
     }
 
@@ -264,8 +279,9 @@ export function AdminUsers({
     try {
       await api.createUser({
         email: createEmail.trim(),
-        name: createName.trim() || undefined,
+        name: createName.trim(),
         groupId: createGroupId,
+        authMethod: createAuthMethod,
       });
       toast.success("User created");
       resetCreateDialog();
@@ -292,6 +308,13 @@ export function AdminUsers({
       [user.name, user.email, user.groupName].some((value) => value?.toLowerCase().includes(query))
     );
   }, [search, users]);
+  const filteredDeletedUsers = useMemo(() => {
+    const query = deletedUsersSearch.trim().toLowerCase();
+    if (!query) return deletedUsers;
+    return deletedUsers.filter((user) =>
+      [user.name, user.email].some((value) => value?.toLowerCase().includes(query))
+    );
+  }, [deletedUsers, deletedUsersSearch]);
   const userColumns: ResourceListColumn<User>[] = [
     {
       id: "user",
@@ -343,6 +366,7 @@ export function AdminUsers({
       id: "group",
       label: "Group",
       width: "14rem",
+      align: "right",
       renderCell: (user) => {
         const isSelf = currentUser?.id === user.id;
         const isSystemUser = user.oidcSubject?.startsWith("system:");
@@ -371,6 +395,21 @@ export function AdminUsers({
       },
     },
     {
+      id: "sign-in",
+      label: "Sign-in",
+      width: "12rem",
+      align: "right",
+      renderCell: (user) => (
+        <Badge variant="secondary">
+          {user.authMethod === "password"
+            ? "Email and password"
+            : user.authMethod === "email_otp"
+              ? "Email code"
+              : "OIDC"}
+        </Badge>
+      ),
+    },
+    {
       id: "actions",
       label: "Actions",
       width: "8.5rem",
@@ -383,37 +422,42 @@ export function AdminUsers({
         const canManagePermissions = isScopeSubset(user.scopes, currentUser?.scopes ?? []);
         return (
           <div
-            className="flex items-center justify-end gap-1"
             onClick={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
           >
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-primary"
-              onClick={() => setPermissionsUser(user)}
-              title="Additional permissions"
-              disabled={!canManagePermissions}
-            >
-              <ShieldPlus className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className={`h-8 w-8 shrink-0 text-muted-foreground ${user.isBlocked ? "hover:text-green-600" : "hover:text-orange-600"}`}
-              onClick={() => handleBlockToggle(user)}
-              title={user.isBlocked ? "Unblock user" : "Block user"}
-            >
-              {user.isBlocked ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
-              onClick={() => handleDelete(user)}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="User actions">
+                  <EllipsisVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onClick={() => {
+                    setConfigureUser(user);
+                    setConfigureOpen(true);
+                  }}
+                >
+                  <Settings className="h-4 w-4" />
+                  Configure user
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => setPermissionsUser(user)}
+                  disabled={!canManagePermissions}
+                >
+                  <ShieldPlus className="h-4 w-4" />
+                  Assign permissions
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => void handleDelete(user)}
+                  className="text-destructive"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         );
       },
@@ -469,7 +513,7 @@ export function AdminUsers({
                     {
                       label: "Deleted Users",
                       icon: <ArchiveRestore className="h-4 w-4" />,
-                      onClick: () => setDeletedUsersOpen(true),
+                      onClick: openDeletedUsers,
                     },
                   ]
                 : []),
@@ -487,7 +531,7 @@ export function AdminUsers({
               </Button>
             )}
             {canManageDeletedUsers && (
-              <Button variant="outline" onClick={() => setDeletedUsersOpen(true)}>
+              <Button variant="outline" onClick={openDeletedUsers}>
                 <ArchiveRestore className="h-4 w-4" />
                 Deleted Users
               </Button>
@@ -497,15 +541,6 @@ export function AdminUsers({
               Create User
             </Button>
           </ResponsiveHeaderActions>
-        </div>
-      )}
-
-      {embedded && canManageDeletedUsers && (
-        <div className="flex justify-end">
-          <Button variant="outline" onClick={() => setDeletedUsersOpen(true)}>
-            <ArchiveRestore className="h-4 w-4" />
-            Deleted Users
-          </Button>
         </div>
       )}
 
@@ -560,6 +595,24 @@ export function AdminUsers({
               />
             </div>
             <div className="space-y-1.5">
+              <label className="text-sm font-medium">Sign-in method</label>
+              <Select
+                value={createAuthMethod}
+                onValueChange={(value) =>
+                  setCreateAuthMethod(value as "oidc" | "password" | "email_otp")
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="oidc">OIDC</SelectItem>
+                  <SelectItem value="password">Email and password</SelectItem>
+                  <SelectItem value="email_otp">Email code</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
               <label htmlFor="create-user-name" className="text-sm font-medium">
                 Name
               </label>
@@ -568,6 +621,7 @@ export function AdminUsers({
                 placeholder="Jane Doe"
                 value={createName}
                 onChange={(e) => setCreateName(e.target.value)}
+                required
               />
             </div>
             <div className="space-y-1.5">
@@ -586,8 +640,8 @@ export function AdminUsers({
               </Select>
             </div>
             <p className="text-xs text-muted-foreground">
-              This creates a placeholder account so you can assign permissions before the user logs
-              in for the first time.
+              Password users receive a setup link by email. OIDC users are pre-created for their
+              first identity-provider sign-in.
             </p>
           </div>
           <DialogFooter>
@@ -596,7 +650,7 @@ export function AdminUsers({
             </Button>
             <Button
               onClick={handleCreateUser}
-              disabled={creating || !createEmail || !createGroupId}
+              disabled={creating || !createEmail.trim() || !createName.trim() || !createGroupId}
             >
               Create
             </Button>
@@ -618,7 +672,31 @@ export function AdminUsers({
         }}
       />
 
-      <Dialog open={deletedUsersOpen} onOpenChange={setDeletedUsersOpen}>
+      <AdminUserConfigDialog
+        open={configureOpen}
+        user={configureUser}
+        canResetMfa={hasScope("admin:system")}
+        onOpenChange={setConfigureOpen}
+        onUserUpdated={(updatedUser) => {
+          setUsers((current) =>
+            current.map((user) => (user.id === updatedUser.id ? updatedUser : user))
+          );
+          setConfigureUser(updatedUser);
+          void reloadUsers();
+        }}
+        onUserDeleted={() => {
+          setConfigureOpen(false);
+          void Promise.all([reloadUsers(), ...(canManageDeletedUsers ? [loadDeletedUsers()] : [])]);
+        }}
+      />
+
+      <Dialog
+        open={deletedUsersOpen}
+        onOpenChange={(open) => {
+          setDeletedUsersOpen(open);
+          if (!open) setDeletedUsersSearch("");
+        }}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Deleted Users</DialogTitle>
@@ -626,34 +704,47 @@ export function AdminUsers({
           <p className="text-sm text-muted-foreground">
             Restoring an account keeps it blocked. Its old sessions and tokens are not restored.
           </p>
-          {deletedUsers.length === 0 ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">No deleted users.</p>
-          ) : (
-            <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
-              {deletedUsers.map((user) => (
-                <div
-                  key={user.id}
-                  className="flex items-center justify-between gap-3 rounded-md border p-3"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{user.name || user.email}</p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {user.email} · deleted {new Date(user.deletedAt).toLocaleString()}
-                    </p>
-                    {!user.originalGroupExists && (
-                      <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                        Original group was deleted
+          <div className="border border-border">
+            <Input
+              value={deletedUsersSearch}
+              onChange={(event) => setDeletedUsersSearch(event.target.value)}
+              placeholder="Search deleted users..."
+              className="h-9 rounded-none border-0 border-b border-border text-sm focus-visible:ring-0"
+            />
+            {filteredDeletedUsers.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                {deletedUsersSearch ? "No deleted users found." : "No deleted users."}
+              </p>
+            ) : (
+              <div className="max-h-[min(25rem,48dvh)] divide-y divide-border overflow-y-auto overscroll-contain">
+                {filteredDeletedUsers.map((user) => (
+                  <div key={user.id} className="flex items-center justify-between gap-3 p-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{user.name || user.email}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {user.email} · deleted {new Date(user.deletedAt).toLocaleString()}
                       </p>
-                    )}
+                      {!user.originalGroupExists && (
+                        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                          Original group was deleted
+                        </p>
+                      )}
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 shrink-0"
+                      onClick={() => openRestore(user)}
+                      aria-label={`Restore ${user.name || user.email}`}
+                      title="Restore user"
+                    >
+                      <ArchiveRestore className="h-4 w-4" />
+                    </Button>
                   </div>
-                  <Button variant="outline" size="sm" onClick={() => openRestore(user)}>
-                    <ArchiveRestore className="h-4 w-4" />
-                    Restore
-                  </Button>
-                </div>
-              ))}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
 

@@ -13,6 +13,8 @@ import {
   oauthAuthorizationCodes,
   oauthRefreshTokens,
   permissionGroups,
+  type UserAuthMethod,
+  userPasswordCredentials,
   users,
 } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -75,9 +77,13 @@ export function normalizeOidcClaims(claims: Record<string, unknown> | undefined 
     oidcSubject: subject,
     email: email || null,
     emailVerified: claims?.email_verified === true,
-    name: typeof claims?.name === 'string' && claims.name.trim() ? claims.name : null,
+    name: typeof claims?.name === 'string' && claims.name.trim() ? claims.name.trim() : null,
     avatarUrl: typeof claims?.picture === 'string' && claims.picture.trim() ? claims.picture : null,
   };
+}
+
+function normalizeDisplayName(name: string | null | undefined, fallbackEmail: string): string {
+  return name?.trim() || fallbackEmail;
 }
 
 interface OIDCState {
@@ -122,6 +128,9 @@ export class AuthService {
     }
 
     const env = getEnv();
+    if (!env.OIDC_ISSUER || !env.OIDC_CLIENT_ID || !env.OIDC_CLIENT_SECRET) {
+      throw new AppError(503, 'OIDC_NOT_CONFIGURED', 'OIDC is not configured');
+    }
 
     try {
       this.oidcConfig = await client.discovery(new URL(env.OIDC_ISSUER), env.OIDC_CLIENT_ID, env.OIDC_CLIENT_SECRET);
@@ -138,8 +147,11 @@ export class AuthService {
   }
 
   async getAuthorizationUrl(returnTo?: string): Promise<string> {
+    await this.assertAuthMethodEnabled('oidc');
     const env = getEnv();
     const config = await this.getOIDCConfig();
+    const redirectUri = env.OIDC_REDIRECT_URI;
+    if (!redirectUri) throw new AppError(503, 'OIDC_NOT_CONFIGURED', 'OIDC is not configured');
 
     const codeVerifier = client.randomPKCECodeVerifier();
     const codeChallenge = await client.calculatePKCECodeChallenge(codeVerifier);
@@ -154,7 +166,7 @@ export class AuthService {
     await this.cacheService.set(`${PKCE_STATE_PREFIX}${state}`, oidcState, 300);
 
     const parameters: Record<string, string> = {
-      redirect_uri: env.OIDC_REDIRECT_URI,
+      redirect_uri: redirectUri,
       scope: env.OIDC_SCOPES,
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
@@ -170,6 +182,9 @@ export class AuthService {
     callbackUrl: string,
     state: string
   ): Promise<{ sessionId: string; user: User; returnTo?: string }> {
+    // Settings can change while the user is at the identity provider. Do not
+    // accept a callback for a method that has been disabled in the meantime.
+    await this.assertAuthMethodEnabled('oidc');
     const config = await this.getOIDCConfig();
 
     const oidcState = await this.cacheService.get<OIDCState>(`${PKCE_STATE_PREFIX}${state}`);
@@ -194,6 +209,7 @@ export class AuthService {
       const user = await this.findOrCreateUser(normalizedClaims);
 
       const { sessionId } = await this.sessionService.createSession(user, tokens.access_token, tokens.refresh_token);
+      await this.recordSuccessfulSignIn(user.id);
 
       logger.info('User logged in', { userId: user.id, email: user.email });
 
@@ -228,17 +244,18 @@ export class AuthService {
         normalizedEmail !== null &&
         (!authSettings.oidcRequireVerifiedEmail || data.emailVerified || existingUser.email === normalizedEmail);
       const nextEmail = canSyncEmail ? normalizedEmail : existingUser.email;
+      const nextName = normalizeDisplayName(data.name, existingUser.name?.trim() || nextEmail);
 
       if (
         existingUser.email !== nextEmail ||
-        existingUser.name !== data.name ||
+        existingUser.name !== nextName ||
         existingUser.avatarUrl !== data.avatarUrl
       ) {
         const [updatedUser] = await this.db
           .update(users)
           .set({
             email: nextEmail,
-            name: data.name,
+            name: nextName,
             avatarUrl: data.avatarUrl,
             updatedAt: new Date(),
           })
@@ -257,7 +274,7 @@ export class AuthService {
               normalizedEmail !== null && existingUser.email !== normalizedEmail && nextEmail === existingUser.email,
             emailClaimMissing: normalizedEmail === null,
             emailVerified: data.emailVerified,
-            nameChanged: existingUser.name !== data.name,
+            nameChanged: existingUser.name !== nextName,
             avatarChanged: existingUser.avatarUrl !== data.avatarUrl,
           },
         });
@@ -276,7 +293,7 @@ export class AuthService {
       where: eq(users.email, normalizedEmail),
     });
 
-    if (precreatedUser?.oidcSubject.startsWith(PRECREATED_SUBJECT_PREFIX)) {
+    if (precreatedUser?.oidcSubject?.startsWith(PRECREATED_SUBJECT_PREFIX)) {
       await this.requireVerifiedEmailForNonBootstrap(data);
       const previousSubject = precreatedUser.oidcSubject;
       const [claimedUser] = await this.db
@@ -284,7 +301,7 @@ export class AuthService {
         .set({
           oidcSubject: data.oidcSubject,
           email: normalizedEmail,
-          name: data.name,
+          name: normalizeDisplayName(data.name, precreatedUser.name?.trim() || normalizedEmail),
           avatarUrl: data.avatarUrl,
           updatedAt: new Date(),
         })
@@ -342,7 +359,7 @@ export class AuthService {
       .values({
         oidcSubject: data.oidcSubject,
         email: normalizedEmail,
-        name: data.name,
+        name: normalizeDisplayName(data.name, normalizedEmail),
         avatarUrl: data.avatarUrl,
         groupId: group.id,
       })
@@ -391,8 +408,17 @@ export class AuthService {
     return group ?? null;
   }
 
-  async createUser(data: { email: string; name?: string | null; groupId: string }): Promise<User> {
+  async createUser(data: {
+    email: string;
+    name?: string | null;
+    groupId: string;
+    authMethod?: UserAuthMethod;
+  }): Promise<User> {
     const normalizedEmail = data.email.trim().toLowerCase();
+    const normalizedName = data.name?.trim();
+    if (!normalizedName) throw new AppError(400, 'USER_NAME_REQUIRED', 'Name is required');
+    const authMethod = data.authMethod ?? 'oidc';
+    await this.assertAuthMethodEnabled(authMethod);
 
     const group = await this.db.query.permissionGroups.findFirst({
       where: eq(permissionGroups.id, data.groupId),
@@ -411,9 +437,10 @@ export class AuthService {
     const [createdUser] = await this.db
       .insert(users)
       .values({
-        oidcSubject: `${PRECREATED_SUBJECT_PREFIX}${normalizedEmail}`,
+        oidcSubject: authMethod === 'oidc' ? `${PRECREATED_SUBJECT_PREFIX}${normalizedEmail}` : null,
+        authMethod,
         email: normalizedEmail,
-        name: data.name?.trim() || null,
+        name: normalizedName,
         avatarUrl: null,
         groupId: data.groupId,
       })
@@ -431,6 +458,73 @@ export class AuthService {
     return mapped;
   }
 
+  async updateUserAuthMethod(userId: string, authMethod: UserAuthMethod): Promise<User> {
+    await this.assertAuthMethodEnabled(authMethod);
+    const target = await this.db.query.users.findFirst({ where: eq(users.id, userId) });
+    if (!target) throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
+    if (target.deletedAt) {
+      throw new AppError(409, 'USER_DELETED', 'Deleted users must be restored before they can be changed');
+    }
+    if (target.oidcSubject?.startsWith(SYSTEM_SUBJECT_PREFIX)) {
+      throw new AppError(403, 'SYSTEM_USER', 'Cannot change the Gateway system user authentication method');
+    }
+    if (target.authMethod === authMethod) return this.mapDbUserToUser(target);
+
+    const [updated] = await this.db
+      .update(users)
+      .set({
+        authMethod,
+        oidcSubject: authMethod === 'oidc' ? `${PRECREATED_SUBJECT_PREFIX}${target.email}` : null,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId))
+      .returning();
+    // Never carry a previous password across a primary-method transition.
+    // Switching to password is activated by a fresh, emailed setup link.
+    await this.db.delete(userPasswordCredentials).where(eq(userPasswordCredentials.userId, userId));
+    await this.sessionService.destroyAllUserSessions(userId);
+    this.emitUser(userId, 'updated');
+    const mapped = await this.mapDbUserToUser(updated);
+    this.emitPermissions(mapped.id, mapped.scopes, mapped.groupId);
+    return mapped;
+  }
+
+  async updateLocalUserName(userId: string, name: string): Promise<User> {
+    const target = await this.db.query.users.findFirst({ where: eq(users.id, userId) });
+    if (!target) throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
+    if (target.authMethod === 'oidc') {
+      throw new AppError(409, 'OIDC_NAME_MANAGED', 'OIDC user names are managed by the identity provider');
+    }
+    const [updated] = await this.db
+      .update(users)
+      .set({ name: name.trim(), updatedAt: new Date() })
+      .where(eq(users.id, userId))
+      .returning();
+    this.emitUser(userId, 'updated');
+    return this.mapDbUserToUser(updated);
+  }
+
+  async hasCompletedSignIn(userId: string): Promise<boolean> {
+    const user = await this.db.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: { lastLoginAt: true },
+    });
+    return Boolean(user?.lastLoginAt);
+  }
+
+  async recordSuccessfulSignIn(userId: string): Promise<void> {
+    await this.db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, userId));
+  }
+
+  private async assertAuthMethodEnabled(authMethod: UserAuthMethod): Promise<void> {
+    const methods = (await this.authSettingsService.getConfig()).methods;
+    const enabled =
+      authMethod === 'oidc' ? methods?.oidc : authMethod === 'password' ? methods?.password : methods?.emailOtp;
+    // Older test/config fixtures may not yet contain the methods object; a
+    // persisted production configuration is normalized by AuthSettingsService.
+    if (enabled === false) throw new AppError(409, 'AUTH_METHOD_DISABLED', 'This sign-in method is disabled');
+  }
+
   private async mapDbUserToUser(dbUser: typeof users.$inferSelect): Promise<User> {
     const effective = await resolveEffectiveUserAccess(this.db, dbUser.groupId, dbUser.additionalScopes);
     const isDeleted = Boolean(dbUser.deletedAt);
@@ -438,6 +532,7 @@ export class AuthService {
     return {
       id: dbUser.id,
       oidcSubject: dbUser.oidcSubject,
+      authMethod: dbUser.authMethod,
       email: dbUser.email,
       name: dbUser.name,
       avatarUrl: dbUser.avatarUrl,
@@ -523,6 +618,7 @@ export class AuthService {
       return {
         id: u.id,
         oidcSubject: u.oidcSubject,
+        authMethod: u.authMethod,
         email: u.email,
         name: u.name,
         avatarUrl: u.avatarUrl,
@@ -582,7 +678,7 @@ export class AuthService {
     if (targetUser.isDeleted) {
       throw new AppError(409, 'USER_DELETED', 'Deleted users must be restored before they can be changed');
     }
-    if (targetUser.oidcSubject.startsWith(SYSTEM_SUBJECT_PREFIX)) {
+    if (targetUser.oidcSubject?.startsWith(SYSTEM_SUBJECT_PREFIX)) {
       throw new AppError(403, 'SYSTEM_USER', 'Cannot modify the system user');
     }
 
@@ -653,7 +749,7 @@ export class AuthService {
       throw new AppError(409, 'USER_DELETED', 'Deleted users must be restored before they can be changed');
     }
 
-    if (targetUser.oidcSubject.startsWith('system:')) {
+    if (targetUser.oidcSubject?.startsWith('system:')) {
       throw new AppError(403, 'SYSTEM_USER', 'Cannot modify the system user');
     }
 

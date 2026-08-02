@@ -8,16 +8,22 @@ import { getRemoteAddress, resolveClientIp } from '@/lib/request-ip.js';
 import {
   CreateUserSchema,
   RestoreUserSchema,
+  type UpdateAuthProvisioningSettingsInput,
   UpdateAuthProvisioningSettingsSchema,
   UpdateBlockSchema,
   UpdateUserAdditionalPermissionsSchema,
+  UpdateUserAuthMethodSchema,
   UpdateUserGroupSchema,
+  UpdateUserNameSchema,
 } from '@/modules/admin/admin.schemas.js';
 import { AdminUserFolderService } from '@/modules/admin/admin-user-folders.service.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { authMiddleware, requireScope, sessionOnly } from '@/modules/auth/auth.middleware.js';
 import { AuthService } from '@/modules/auth/auth.service.js';
 import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
+import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
+import { LocalAuthService } from '@/modules/auth/local-auth.service.js';
+import { MfaService } from '@/modules/auth/mfa.service.js';
 import { GroupService } from '@/modules/groups/group.service.js';
 import { McpSettingsService } from '@/modules/mcp/mcp-settings.service.js';
 import {
@@ -32,6 +38,7 @@ import { GeneralSettingsService } from '@/modules/settings/general-settings.serv
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { OutboundWebhookPolicyService } from '@/modules/settings/outbound-webhook-policy.service.js';
 import { GrpcIdentityService } from '@/services/grpc-identity.service.js';
+import { SessionService } from '@/services/session.service.js';
 import { SystemCAService } from '@/services/system-ca.service.js';
 import type { AppEnv } from '@/types.js';
 import {
@@ -41,18 +48,25 @@ import {
   deleteAdminUserRoute,
   getAuthSettingsRoute,
   listAdminUserFoldersRoute,
+  listAdminUserSessionsRoute,
   listAdminUsersRoute,
   listDeletedAdminUsersRoute,
   moveAdminUserFolderRoute,
   moveAdminUsersToFolderRoute,
   reorderAdminUserFoldersRoute,
   reorderAdminUsersRoute,
+  resetAdminUserMfaRoute,
   restoreAdminUserRoute,
+  revokeAdminUserSessionRoute,
+  revokeAllAdminUserSessionsRoute,
+  sendAdminUserPasswordSetupRoute,
   updateAdminUserFolderRoute,
   updateAuthSettingsRoute,
   updateUserAdditionalPermissionsRoute,
+  updateUserAuthMethodRoute,
   updateUserBlockRoute,
   updateUserGroupRoute,
+  updateUserNameRoute,
 } from './admin.docs.js';
 
 export const adminRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
@@ -180,6 +194,7 @@ adminRoutes.openapi(
 
 adminRoutes.openapi({ ...getAuthSettingsRoute, middleware: requireScope('settings:gateway:view') }, async (c) => {
   const authSettingsService = container.resolve(AuthSettingsService);
+  const authMailService = container.resolve(AuthMailService);
   const mcpSettingsService = container.resolve(McpSettingsService);
   const generalSettingsService = container.resolve(GeneralSettingsService);
   const networkSettingsService = container.resolve(NetworkSettingsService);
@@ -187,18 +202,21 @@ adminRoutes.openapi({ ...getAuthSettingsRoute, middleware: requireScope('setting
   const groupService = container.resolve(GroupService);
   const actorScopes = c.get('effectiveScopes') || [];
 
-  const [settings, mcpSettings, generalSettings, networkSecurity, outboundWebhookPolicy, groups] = await Promise.all([
-    authSettingsService.getConfig(),
-    mcpSettingsService.getConfig(),
-    generalSettingsService.getConfig(),
-    networkSettingsService.getConfig(),
-    outboundWebhookPolicyService.getConfig(),
-    groupService.listGroups(),
-  ]);
+  const [settings, smtp, mcpSettings, generalSettings, networkSecurity, outboundWebhookPolicy, groups] =
+    await Promise.all([
+      authSettingsService.getConfig(),
+      authMailService.getPublicConfig(),
+      mcpSettingsService.getConfig(),
+      generalSettingsService.getConfig(),
+      networkSettingsService.getConfig(),
+      outboundWebhookPolicyService.getConfig(),
+      groupService.listGroups(),
+    ]);
   const assignableGroups = groups.filter((group) => isScopeSubset(getEffectiveGroupScopes(group), actorScopes));
 
   return c.json({
     ...settings,
+    smtp,
     mcpServerEnabled: mcpSettings.serverEnabled,
     mcpExtendedCompatibility: mcpSettings.extendedCompatibility,
     generalSettings,
@@ -215,6 +233,7 @@ adminRoutes.openapi({ ...getAuthSettingsRoute, middleware: requireScope('setting
 
 adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('settings:gateway:edit') }, async (c) => {
   const authSettingsService = container.resolve(AuthSettingsService);
+  const authMailService = container.resolve(AuthMailService);
   const mcpSettingsService = container.resolve(McpSettingsService);
   const generalSettingsService = container.resolve(GeneralSettingsService);
   const networkSettingsService = container.resolve(NetworkSettingsService);
@@ -237,10 +256,20 @@ adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('sett
   }
 
   try {
+    if (input.smtp) {
+      await authMailService.saveConfig(input.smtp);
+      if (input.smtp.testRecipient)
+        await authMailService.sendTestEmail(input.smtp.testRecipient, input.smtp.testEmailKind);
+    }
+    if (input.methods && (input.methods.password === true || input.methods.emailOtp === true)) {
+      const smtp = await authMailService.getPublicConfig();
+      if (!smtp.verifiedAt) throw new Error('SMTP must be configured and verified before enabling email-based sign-in');
+    }
     const shouldRefreshGrpcIdentity = touchesGrpcEndpointSettings(input.generalSettings);
     const previousGeneralSettings = shouldRefreshGrpcIdentity ? await generalSettingsService.getConfig() : null;
-    const [updated, mcpSettings, generalSettings, networkSecurity, outboundWebhookPolicy] = await Promise.all([
+    const [updated, smtp, mcpSettings, generalSettings, networkSecurity, outboundWebhookPolicy] = await Promise.all([
       authSettingsService.updateConfig(input),
+      authMailService.getPublicConfig(),
       mcpSettingsService.updateConfig({
         serverEnabled: input.mcpServerEnabled,
         extendedCompatibility: input.mcpExtendedCompatibility,
@@ -286,12 +315,13 @@ adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('sett
       action: 'auth.settings_update',
       resourceType: 'settings',
       resourceId: 'auth',
-      details: input,
+      details: toAuthSettingsAuditDetails(input),
       userAgent: c.req.header('user-agent'),
     });
 
     return c.json({
       ...updated,
+      smtp,
       mcpServerEnabled: mcpSettings.serverEnabled,
       mcpExtendedCompatibility: mcpSettings.extendedCompatibility,
       generalSettings,
@@ -313,6 +343,19 @@ adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('sett
   }
 });
 
+function toAuthSettingsAuditDetails(input: UpdateAuthProvisioningSettingsInput) {
+  if (!input.smtp) return input;
+
+  const { password: _password, ...smtp } = input.smtp;
+  return {
+    ...input,
+    smtp: {
+      ...smtp,
+      ...(input.smtp.password ? { passwordChanged: true } : {}),
+    },
+  };
+}
+
 // Create user before first login
 adminRoutes.openapi({ ...createAdminUserRoute, middleware: requireScope('admin:users') }, async (c) => {
   const authService = container.resolve(AuthService);
@@ -332,7 +375,16 @@ adminRoutes.openapi({ ...createAdminUserRoute, middleware: requireScope('admin:u
   }
 
   try {
+    if (input.authMethod === 'password' && !(await container.resolve(AuthMailService).getPublicConfig()).verifiedAt) {
+      return c.json(
+        { code: 'SMTP_NOT_VERIFIED', message: 'SMTP must be verified before creating a password account' },
+        409
+      );
+    }
     const createdUser = await authService.createUser(input);
+    if (input.authMethod === 'password') {
+      await container.resolve(LocalAuthService).requestPasswordLink(input.email, 'password_setup');
+    }
 
     await auditService.log({
       userId: currentUser.id,
@@ -360,6 +412,120 @@ adminRoutes.openapi({ ...createAdminUserRoute, middleware: requireScope('admin:u
     }
     throw err;
   }
+});
+
+adminRoutes.openapi({ ...updateUserAuthMethodRoute, middleware: requireScope('admin:users') }, async (c) => {
+  const authService = container.resolve(AuthService);
+  const auditService = container.resolve(AuditService);
+  const currentUser = c.get('user')!;
+  const actorScopes = c.get('effectiveScopes') || [];
+  const userId = c.req.param('id')!;
+  const { authMethod } = UpdateUserAuthMethodSchema.parse(await c.req.json());
+  const targetUser = await authService.getUserById(userId);
+  if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
+  const denyReason = canManageUser(actorScopes, targetUser.scopes);
+  if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
+  if (authMethod === 'password' && !(await container.resolve(AuthMailService).getPublicConfig()).verifiedAt) {
+    return c.json(
+      { code: 'SMTP_NOT_VERIFIED', message: 'SMTP must be verified before switching to password sign-in' },
+      409
+    );
+  }
+  const updated = await authService.updateUserAuthMethod(userId, authMethod);
+  if (authMethod === 'password') {
+    await container.resolve(LocalAuthService).requestPasswordLink(updated.email, 'password_setup');
+  }
+  await auditService.log({
+    userId: currentUser.id,
+    action: 'user.auth_method_change',
+    resourceType: 'user',
+    resourceId: updated.id,
+    details: { targetUserId: updated.id, previousAuthMethod: targetUser.authMethod, authMethod },
+    userAgent: c.req.header('user-agent'),
+  });
+  return c.json(updated);
+});
+
+adminRoutes.openapi({ ...updateUserNameRoute, middleware: requireScope('admin:users') }, async (c) => {
+  const authService = container.resolve(AuthService);
+  const auditService = container.resolve(AuditService);
+  const currentUser = c.get('user')!;
+  const actorScopes = c.get('effectiveScopes') || [];
+  const userId = c.req.param('id')!;
+  const { name } = UpdateUserNameSchema.parse(await c.req.json());
+  const targetUser = await authService.getUserById(userId);
+  if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
+  if (targetUser.authMethod === 'oidc') {
+    return c.json({ code: 'OIDC_NAME_MANAGED', message: 'OIDC user names are managed by the identity provider' }, 409);
+  }
+  const denyReason = canManageUser(actorScopes, targetUser.scopes);
+  if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
+  const updated = await authService.updateLocalUserName(userId, name);
+  await auditService.log({
+    userId: currentUser.id,
+    action: 'user.rename',
+    resourceType: 'user',
+    resourceId: updated.id,
+    details: { targetUserId: updated.id, previousName: targetUser.name, name: updated.name },
+    userAgent: c.req.header('user-agent'),
+  });
+  return c.json(updated);
+});
+
+adminRoutes.openapi({ ...sendAdminUserPasswordSetupRoute, middleware: requireScope('admin:users') }, async (c) => {
+  const authService = container.resolve(AuthService);
+  const auditService = container.resolve(AuditService);
+  const currentUser = c.get('user')!;
+  const actorScopes = c.get('effectiveScopes') || [];
+  const targetUser = await authService.getUserById(c.req.param('id')!);
+  if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
+  const denyReason = canManageUser(actorScopes, targetUser.scopes);
+  if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
+  if (targetUser.authMethod !== 'password') {
+    return c.json({ code: 'PASSWORD_AUTH_REQUIRED', message: 'User does not use password sign-in' }, 409);
+  }
+  if (!(await container.resolve(AuthMailService).getPublicConfig()).verifiedAt) {
+    return c.json(
+      { code: 'SMTP_NOT_VERIFIED', message: 'SMTP must be verified before sending a password setup link' },
+      409
+    );
+  }
+  const purpose = (await authService.hasCompletedSignIn(targetUser.id)) ? 'password_reset' : 'password_setup';
+  await container.resolve(LocalAuthService).requestPasswordLink(targetUser.email, purpose);
+  await auditService.log({
+    userId: currentUser.id,
+    action: 'user.password_link_sent',
+    resourceType: 'user',
+    resourceId: targetUser.id,
+    details: { targetUserId: targetUser.id, purpose },
+    userAgent: c.req.header('user-agent'),
+  });
+  return c.json({
+    message: purpose === 'password_setup' ? 'Password setup link sent' : 'Password reset link sent',
+    purpose,
+  });
+});
+
+adminRoutes.openapi({ ...resetAdminUserMfaRoute, middleware: requireScope('admin:system') }, async (c) => {
+  const authService = container.resolve(AuthService);
+  const auditService = container.resolve(AuditService);
+  const currentUser = c.get('user')!;
+  const actorScopes = c.get('effectiveScopes') || [];
+  const targetUser = await authService.getUserById(c.req.param('id')!);
+  if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
+  const denyReason = canManageUser(actorScopes, targetUser.scopes);
+  if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
+  await container.resolve(MfaService).resetMfa(targetUser.id);
+  await container.resolve(SessionService).destroyAllUserSessions(targetUser.id);
+  await auditService.log({
+    userId: currentUser.id,
+    action: 'user.mfa_reset',
+    resourceType: 'user',
+    resourceId: targetUser.id,
+    details: { targetUserId: targetUser.id },
+    userAgent: c.req.header('user-agent'),
+  });
+  return c.json({ message: 'MFA reset and browser sessions revoked' });
 });
 
 // Update user group
@@ -461,7 +627,7 @@ adminRoutes.openapi({ ...updateUserBlockRoute, middleware: requireScope('admin:u
   if (targetUser.isDeleted) {
     return c.json({ code: 'USER_DELETED', message: 'Deleted users must be restored before they can be changed' }, 409);
   }
-  if (targetUser.oidcSubject.startsWith('system:')) {
+  if (targetUser.oidcSubject?.startsWith('system:')) {
     return c.json({ code: 'SYSTEM_USER', message: 'Cannot modify the system user' }, 403);
   }
   const denyReason = canManageUser(actorScopes, targetUser.scopes);
@@ -512,7 +678,7 @@ adminRoutes.openapi({ ...deleteAdminUserRoute, middleware: requireScope('admin:u
   if (targetUser.isDeleted) {
     return c.json({ code: 'USER_DELETED', message: 'User is already deleted' }, 409);
   }
-  if (targetUser.oidcSubject.startsWith('system:')) {
+  if (targetUser.oidcSubject?.startsWith('system:')) {
     return c.json({ code: 'SYSTEM_USER', message: 'Cannot delete the system user' }, 403);
   }
   const denyReason = canManageUser(actorScopes, targetUser.scopes);
@@ -566,4 +732,84 @@ adminRoutes.openapi({ ...restoreAdminUserRoute, middleware: requireScope('admin:
   });
 
   return c.json(restoredUser);
+});
+
+adminRoutes.openapi({ ...listAdminUserSessionsRoute, middleware: requireScope('admin:users') }, async (c) => {
+  const authService = container.resolve(AuthService);
+  const sessionService = container.resolve(SessionService);
+  const actorScopes = c.get('effectiveScopes') || [];
+  const userId = c.req.param('id')!;
+  const targetUser = await authService.getUserById(userId);
+
+  if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
+
+  const denyReason = canManageUser(actorScopes, targetUser.scopes);
+  if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
+
+  return c.json(await sessionService.listPublicUserSessions(userId, c.get('sessionId')!));
+});
+
+adminRoutes.openapi({ ...revokeAdminUserSessionRoute, middleware: requireScope('admin:users') }, async (c) => {
+  const authService = container.resolve(AuthService);
+  const sessionService = container.resolve(SessionService);
+  const auditService = container.resolve(AuditService);
+  const currentUser = c.get('user')!;
+  const actorScopes = c.get('effectiveScopes') || [];
+  const userId = c.req.param('id')!;
+  const targetUser = await authService.getUserById(userId);
+
+  if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
+
+  const denyReason = canManageUser(actorScopes, targetUser.scopes);
+  if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
+
+  const sessionId = c.req.param('sessionId')!;
+  const revoked = await sessionService.revokeUserSessionByPublicId(userId, sessionId);
+  if (!revoked) return c.json({ code: 'SESSION_NOT_FOUND', message: 'Session not found' }, 404);
+
+  await auditService.log({
+    userId: currentUser.id,
+    action: 'user.session_revoke',
+    resourceType: 'session',
+    resourceId: sessionId,
+    details: {
+      targetUserId: targetUser.id,
+      targetUserEmail: targetUser.email,
+      targetUserName: targetUser.name,
+    },
+    userAgent: c.req.header('user-agent'),
+  });
+
+  return c.json({ message: 'Session revoked' });
+});
+
+adminRoutes.openapi({ ...revokeAllAdminUserSessionsRoute, middleware: requireScope('admin:users') }, async (c) => {
+  const authService = container.resolve(AuthService);
+  const sessionService = container.resolve(SessionService);
+  const auditService = container.resolve(AuditService);
+  const currentUser = c.get('user')!;
+  const actorScopes = c.get('effectiveScopes') || [];
+  const userId = c.req.param('id')!;
+  const targetUser = await authService.getUserById(userId);
+
+  if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
+
+  const denyReason = canManageUser(actorScopes, targetUser.scopes);
+  if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
+
+  await sessionService.destroyAllUserSessions(userId);
+  await auditService.log({
+    userId: currentUser.id,
+    action: 'user.sessions_revoke_all',
+    resourceType: 'user',
+    resourceId: userId,
+    details: {
+      targetUserId: targetUser.id,
+      targetUserEmail: targetUser.email,
+      targetUserName: targetUser.name,
+    },
+    userAgent: c.req.header('user-agent'),
+  });
+
+  return c.json({ message: 'All sessions revoked' });
 });

@@ -3,7 +3,8 @@ import type { AIApprovalMode } from "@/lib/ai-approval-mode";
 // User
 export interface User {
   id: string;
-  oidcSubject: string;
+  oidcSubject: string | null;
+  authMethod?: "oidc" | "password" | "email_otp";
   email: string;
   name: string | null;
   avatarUrl: string | null;
@@ -30,6 +31,18 @@ export interface DeletedUser {
   originalGroupExists: boolean;
 }
 
+export interface BrowserSession {
+  id: string;
+  authMethod: "oidc" | "password" | "email_otp";
+  createdAt: number;
+  lastSeenAt: number;
+  expiresAt: number;
+  ipAddress: string | null;
+  userAgent: string | null;
+  mfaSatisfiedAt: number | null;
+  isCurrent: boolean;
+}
+
 // Permission Group
 export interface PermissionGroup {
   id: string;
@@ -40,6 +53,7 @@ export interface PermissionGroup {
   folderId?: string | null;
   sortOrder?: number;
   scopes: string[];
+  requireGateway2fa?: boolean;
   inheritedScopes?: string[];
   memberCount?: number;
   createdAt: string;
@@ -57,6 +71,31 @@ export interface AuthProvisioningSettings {
   oidcDefaultGroupId: string;
   oidcRequireVerifiedEmail: boolean;
   oauthExtendedCallbackCompatibility: boolean;
+  methods?: {
+    oidc: boolean;
+    password: boolean;
+    emailOtp: boolean;
+    passkeyLogin: boolean;
+  };
+  passwordPolicy?: {
+    minLength: number;
+    maxLength: number;
+    requireUppercase: boolean;
+    requireLowercase: boolean;
+    requireDigit: boolean;
+    requireSymbol: boolean;
+  };
+  smtp?: {
+    configured: boolean;
+    host: string | null;
+    port: number | null;
+    tlsMode: "starttls" | "tls" | null;
+    username: string | null;
+    passwordLast4: string | null;
+    senderName: string | null;
+    senderEmail: string | null;
+    verifiedAt: string | null;
+  };
   mcpServerEnabled: boolean;
   mcpExtendedCompatibility: boolean;
   generalSettings: {

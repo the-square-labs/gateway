@@ -82,6 +82,12 @@ Redis is required infrastructure. Gateway uses it for sessions, cache, and rate 
 
 `OIDC_SCOPES` should normally include `openid email profile`. The `email` scope requests `email` and `email_verified`, but providers differ in whether `email_verified` is present in the ID token and whether it is true by default. Authentik, for example, may require explicit mapping/configuration before `email_verified=true` is emitted. Leave **Require verified OIDC email** disabled unless your IdP emits reliable verified-email claims.
 
+## Local authentication operations
+
+Email/password and email-OTP sign-in require a verified SMTP configuration in **Settings → Gateway**. Do not enable either method until a test message succeeds. Gateway encrypts SMTP credentials using `PKI_MASTER_KEY`; losing or rotating that key without re-entering the SMTP password prevents delivery.
+
+For local accounts, group MFA policy is enforced after the primary credential. TOTP recovery codes are one-use. If an account loses all MFA factors, a system administrator must reset MFA from the user administration screen; that action also revokes its browser sessions. Users and administrators can independently view and revoke browser sessions, but session cookies themselves are never exposed.
+
 ## Update Signing Operations
 
 Gateway and daemon automatic updates require signed release manifests. Release CI must have `UPDATE_SIGNING_PRIVATE_KEY_PEM_B64` set to a base64-encoded Ed25519 private key PEM. The corresponding public key is compiled into Gateway and daemon binaries.

@@ -1076,7 +1076,7 @@ export class AIService {
         const targetUser = await this.authService.getUserById(a.userId);
         if (!targetUser) throw new Error('User not found');
         if (targetUser.isDeleted) throw new Error('Deleted users must be restored before they can be changed');
-        if (targetUser.oidcSubject.startsWith('system:')) {
+        if (targetUser.oidcSubject?.startsWith('system:')) {
           throw new Error('Cannot modify the system user');
         }
         await this.authService.assertCanUpdateUserGroup(user.id, user.scopes, a.userId, a.groupId);
@@ -1091,7 +1091,7 @@ export class AIService {
         const targetUser = await this.authService.getUserById(a.userId);
         if (!targetUser) throw new Error('User not found');
         if (targetUser.isDeleted) throw new Error('Deleted users must be restored before they can be changed');
-        if (targetUser.oidcSubject.startsWith('system:')) {
+        if (targetUser.oidcSubject?.startsWith('system:')) {
           throw new Error('Cannot modify the system user');
         }
         const denyReason = canManageUser(user.scopes, targetUser.scopes);
@@ -1105,7 +1105,7 @@ export class AIService {
         const targetUser = await this.authService.getUserById(a.userId);
         if (!targetUser) throw new Error('User not found');
         if (targetUser.isDeleted) throw new Error('User is already deleted');
-        if (targetUser.oidcSubject.startsWith('system:')) {
+        if (targetUser.oidcSubject?.startsWith('system:')) {
           throw new Error('Cannot delete the system user');
         }
         const denyReason = canManageUser(user.scopes, targetUser.scopes);

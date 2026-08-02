@@ -5,7 +5,7 @@ import { ConfirmDialog, useConfirmDialog } from "@/components/common/ConfirmDial
 import { api } from "@/services/api";
 import { useSystemConfigStore } from "@/stores/system-config";
 import type { AuthProvisioningSettings } from "@/types";
-import { AuthProvisioningSection } from "./AuthProvisioningSection";
+import { AuthProvisioningSection, applySmtpPreset } from "./AuthProvisioningSection";
 
 const SETTINGS: AuthProvisioningSettings = {
   oidcAutoCreateUsers: true,
@@ -125,5 +125,59 @@ describe("AuthProvisioningSection inference setting", () => {
         mcpExtendedCompatibility: true,
       })
     );
+  });
+
+  it("applies the Resend SMTP preset without adding a credential", () => {
+    const draft = applySmtpPreset(
+      {
+        host: "smtp.example.com",
+        port: "2525",
+        tlsMode: "tls",
+        username: "old-user",
+        password: "secret",
+        senderName: "Gateway",
+        senderEmail: "security@example.com",
+      },
+      "resend"
+    );
+
+    expect(draft).toMatchObject({
+      host: "smtp.resend.com",
+      port: "587",
+      tlsMode: "starttls",
+      username: "resend",
+      password: "secret",
+    });
+  });
+
+  it("defaults unconfigured SMTP to Resend and hides its fixed connection fields", async () => {
+    api.setCache("settings:auth-provisioning", SETTINGS);
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(SETTINGS);
+
+    render(<AuthProvisioningSection canEdit />);
+
+    expect(await screen.findByRole("combobox", { name: "SMTP provider" })).toHaveTextContent(
+      "Resend"
+    );
+    expect(screen.queryByRole("textbox", { name: "SMTP host" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "SMTP port" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "SMTP username" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("SMTP password")).toBeInTheDocument();
+  });
+
+  it("asks for a recipient only when sending an SMTP test", async () => {
+    api.setCache("settings:auth-provisioning", SETTINGS);
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(SETTINGS);
+    const user = userEvent.setup();
+
+    render(<AuthProvisioningSection canEdit />);
+
+    expect(screen.queryByLabelText("Test recipient")).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Send test" }));
+    expect(screen.getByRole("heading", { name: "Send SMTP test" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "SMTP test email type" })).toHaveTextContent(
+      "SMTP configuration"
+    );
+    expect(screen.getByLabelText("Test recipient")).toBeInTheDocument();
   });
 });

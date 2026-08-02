@@ -193,12 +193,13 @@ function unsubscribeFromUserRuntime(state: WSConnectionState): void {
 async function authenticateFromSession(sessionId: string): Promise<User | null> {
   const sessionService = container.resolve(SessionService);
   const session = await sessionService.getSession(sessionId);
-  if (!session?.user) return null;
+  const sessionUserId = session?.userId ?? session?.user?.id;
+  if (!sessionUserId) return null;
 
   // Always resolve live scopes from the group (not stale session cache)
   const { AuthService } = await import('@/modules/auth/auth.service.js');
   const authService = container.resolve(AuthService);
-  const freshUser = await authService.getUserById(session.user.id);
+  const freshUser = await authService.getUserById(sessionUserId);
   return freshUser;
 }
 

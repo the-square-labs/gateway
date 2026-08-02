@@ -1,0 +1,132 @@
+export const GATEWAY_EMAIL_LOGO_URL = 'https://s3.wiolett.net/static/net/wiolett/gateway/wiolett-gateway-256c.png';
+
+export type AuthEmailKind = 'smtp_configuration' | 'password_setup' | 'password_reset' | 'email_otp';
+
+export type AuthEmailInput =
+  | { kind: 'smtp_configuration' }
+  | { kind: 'password_setup'; actionUrl: string }
+  | { kind: 'password_reset'; actionUrl: string }
+  | { kind: 'email_otp'; code: string };
+
+export interface AuthEmailMessage {
+  subject: string;
+  text: string;
+  html: string;
+}
+
+interface EmailContent {
+  subject: string;
+  title: string;
+  body: string;
+  text: string;
+  securityNote: string;
+  action?: { label: string; url: string };
+  code?: string;
+  badge?: string;
+}
+
+export function createAuthEmail(input: AuthEmailInput): AuthEmailMessage {
+  const content = getEmailContent(input);
+  return {
+    subject: content.subject,
+    text: content.text,
+    html: renderAuthEmail(content),
+  };
+}
+
+function getEmailContent(input: AuthEmailInput): EmailContent {
+  switch (input.kind) {
+    case 'password_setup':
+      return {
+        subject: 'Gateway: set your password',
+        title: 'Create a password for your Gateway account',
+        body: 'An administrator enabled password sign-in for your account. Set a password to use this account directly in Gateway.',
+        text: `Set your Gateway password: ${input.actionUrl}\n\nThis link expires in 30 minutes and can be used once.`,
+        securityNote:
+          'This link is valid for 30 minutes and can be used once. If you were not expecting this email, you can safely ignore it.',
+        action: { label: 'Set password', url: input.actionUrl },
+      };
+    case 'password_reset':
+      return {
+        subject: 'Gateway: reset your password',
+        title: 'Reset your Gateway password',
+        body: 'We received a request to reset the password for your Gateway account.',
+        text: `Reset your Gateway password: ${input.actionUrl}\n\nThis link expires in 30 minutes and can be used once.`,
+        securityNote:
+          'This link is valid for 30 minutes and can be used once. If you did not request a password reset, no action is required.',
+        action: { label: 'Reset password', url: input.actionUrl },
+      };
+    case 'email_otp':
+      return {
+        subject: 'Your Gateway sign-in code',
+        title: 'Your Gateway sign-in code',
+        body: 'Enter this code to continue signing in to Gateway.',
+        text: `Your Gateway sign-in code is ${input.code}. It expires in 10 minutes.`,
+        securityNote:
+          'This code expires in 10 minutes. We will never ask for it by phone, chat, or email. If you did not start this sign-in, no action is required.',
+        code: input.code,
+      };
+    case 'smtp_configuration':
+      return {
+        subject: 'Gateway SMTP test',
+        title: 'Your Gateway email delivery is working',
+        body: 'This test message confirms that Gateway can deliver authentication email through the SMTP configuration you just saved.',
+        text: 'Gateway SMTP configuration is working. No action is required.',
+        securityNote: 'No action is required. This message does not grant access or change any account settings.',
+        badge: 'SMTP test',
+      };
+  }
+}
+
+function renderAuthEmail(content: EmailContent): string {
+  const action = content.action
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:28px"><tr><td style="border:1px solid #f4f4f5;background:#f4f4f5"><a href="${escapeHtml(content.action.url)}" style="display:inline-block;padding:13px 19px;color:#111113;font-family:Arial,sans-serif;font-size:14px;font-weight:600;line-height:1;text-decoration:none">${escapeHtml(content.action.label)}</a></td></tr></table><p style="margin:24px 0 0;overflow-wrap:anywhere;color:#aea4d1;font-family:Arial,sans-serif;font-size:13px;line-height:1.5"><a href="${escapeHtml(content.action.url)}" style="color:#aea4d1;text-decoration:underline">${escapeHtml(content.action.url)}</a></p>`
+    : '';
+  const code = content.code
+    ? `<div style="margin-top:26px;border:1px solid #4b4b51;background:#0e0e10;color:#f4f4f5;padding:18px;font-family:Consolas,'Liberation Mono',monospace;font-size:32px;font-weight:700;letter-spacing:0.22em;line-height:1;text-align:center">${escapeHtml(content.code)}</div>`
+    : '';
+  const badge = content.badge
+    ? `<span style="display:inline-block;margin-bottom:19px;border:1px solid #4f4f56;background:#202024;color:#ceced3;padding:5px 9px;font-family:Arial,sans-serif;font-size:10px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase">${escapeHtml(content.badge)}</span>`
+    : '';
+
+  return `<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+  <body style="margin:0;padding:0;background:#111113;color:#f4f4f5">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background:#111113">
+      <tr><td align="center" style="padding:20px">
+        <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:560px;border:1px solid #313136;background:#171719">
+          <tr><td style="height:1px;background:#7161a8;font-size:1px;line-height:1px">&nbsp;</td></tr>
+          <tr><td style="padding:40px 42px 38px">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+              <td style="padding-right:9px"><img src="${GATEWAY_EMAIL_LOGO_URL}" width="27" height="27" alt="Wiolett Gateway" style="display:block;border:0;outline:none;text-decoration:none"></td>
+              <td style="color:#f4f4f5;font-family:Arial,sans-serif;font-size:16px;font-weight:600;letter-spacing:-0.3px">Wiolett Gateway</td>
+            </tr></table>
+            <div style="height:1px;margin:29px 0;background:#303034;font-size:1px;line-height:1px">&nbsp;</div>
+            ${badge}
+            <h1 style="margin:0;color:#f4f4f5;font-family:Arial,sans-serif;font-size:27px;font-weight:600;letter-spacing:-1px;line-height:1.16">${escapeHtml(content.title)}</h1>
+            <p style="margin:18px 0 0;color:#afafb5;font-family:Arial,sans-serif;font-size:15px;line-height:1.6">${escapeHtml(content.body)}</p>
+            ${code}
+            ${action}
+            <p style="margin:28px 0 0;border-left:2px solid #7161a8;background:#1d1d21;color:#b6b4be;padding:12px 14px;font-family:Arial,sans-serif;font-size:13px;line-height:1.5">${escapeHtml(content.securityNote)}</p>
+          </td></tr>
+          <tr><td style="border-top:1px solid #303034;padding:23px 42px 28px;color:#85858c;font-family:Arial,sans-serif;font-size:12px;line-height:1.55">Gateway — Self-hosted infrastructure control plane.<br><a href="https://wiolett.net" style="color:#f4f4f5;font-weight:400;opacity:0.65;text-decoration:underline">Powered by Wiolett Industries</a></td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>'"]/g, (character) => {
+    const entities: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      "'": '&#39;',
+      '"': '&quot;',
+    };
+    return entities[character];
+  });
+}

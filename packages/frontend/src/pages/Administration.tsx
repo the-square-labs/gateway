@@ -1,4 +1,4 @@
-import { FolderPlus, Plus, ScrollText, Shield, Users } from "lucide-react";
+import { ArchiveRestore, FolderPlus, Plus, ScrollText, Shield, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
@@ -21,12 +21,14 @@ export function Administration() {
   const [groupsCreateRequest, setGroupsCreateRequest] = useState(0);
   const [createUserFolderAction, setCreateUserFolderAction] = useState<(() => void) | null>(null);
   const [createGroupFolderAction, setCreateGroupFolderAction] = useState<(() => void) | null>(null);
+  const [openDeletedUsersAction, setOpenDeletedUsersAction] = useState<(() => void) | null>(null);
   const [auditHeaderActionsEl, setAuditHeaderActionsEl] = useState<HTMLDivElement | null>(null);
   const canUsers = hasScope("admin:users");
   const canGroups = hasScope("admin:groups");
   const canAudit = hasScope("admin:audit");
   const canManageUserFolders = hasScope("admin:users:folders:manage");
   const canManageGroupFolders = hasScope("admin:groups:folders:manage");
+  const canManageDeletedUsers = hasScope("admin:system");
 
   const availableTabs = useMemo<AdministrationTab[]>(() => {
     const tabs: AdministrationTab[] = [];
@@ -149,6 +151,15 @@ export function Administration() {
                       },
                     ]
                   : []),
+                ...(currentTab === "users" && canManageDeletedUsers && openDeletedUsersAction
+                  ? [
+                      {
+                        label: "Deleted Users",
+                        icon: <ArchiveRestore className="h-4 w-4" />,
+                        onClick: openDeletedUsersAction,
+                      },
+                    ]
+                  : []),
                 ...(currentTab === "groups" && canManageGroupFolders && createGroupFolderAction
                   ? [
                       {
@@ -169,6 +180,12 @@ export function Administration() {
                 <Button variant="outline" onClick={() => createUserFolderAction?.()}>
                   <FolderPlus className="h-4 w-4" />
                   Add Folder
+                </Button>
+              )}
+              {currentTab === "users" && canManageDeletedUsers && openDeletedUsersAction && (
+                <Button variant="outline" onClick={openDeletedUsersAction}>
+                  <ArchiveRestore className="h-4 w-4" />
+                  Deleted Users
                 </Button>
               )}
               {currentTab === "groups" && canManageGroupFolders && (
@@ -219,6 +236,7 @@ export function Administration() {
                 embedded
                 createRequest={usersCreateRequest}
                 onCreateFolderRef={(fn) => setCreateUserFolderAction(() => fn)}
+                onOpenDeletedUsersRef={(fn) => setOpenDeletedUsersAction(() => fn)}
               />
             </TabsContent>
           )}

@@ -28,6 +28,11 @@ import { AlertService } from '@/modules/audit/alert.service.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { AuthService } from '@/modules/auth/auth.service.js';
 import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
+import { AuthEmailQueueService } from '@/modules/auth/auth-email-queue.service.js';
+import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
+import { LocalAuthService } from '@/modules/auth/local-auth.service.js';
+import { MfaService } from '@/modules/auth/mfa.service.js';
+import { PasskeyService } from '@/modules/auth/passkey.service.js';
 import { DatabaseFolderService } from '@/modules/databases/database-folders.service.js';
 import { DatabaseMonitoringService } from '@/modules/databases/database-monitoring.service.js';
 import { DatabaseConnectionService } from '@/modules/databases/databases.service.js';
@@ -185,6 +190,11 @@ export async function initializeContainer(): Promise<void> {
 
   const authSettingsService = new AuthSettingsService(db);
   container.registerInstance(AuthSettingsService, authSettingsService);
+  const authEmailQueue = new AuthEmailQueueService(redis, cryptoService);
+  const authMailService = new AuthMailService(db, cryptoService, authEmailQueue);
+  authEmailQueue.start((delivery) => authMailService.deliverSecurityEmail(delivery.recipient, delivery.input));
+  container.registerInstance(AuthEmailQueueService, authEmailQueue);
+  container.registerInstance(AuthMailService, authMailService);
 
   const mcpSettingsService = new McpSettingsService(db);
   container.registerInstance(McpSettingsService, mcpSettingsService);
@@ -203,6 +213,19 @@ export async function initializeContainer(): Promise<void> {
 
   const authService = new AuthService(db, sessionService, cacheService, authSettingsService, auditService);
   container.registerInstance(AuthService, authService);
+  container.registerInstance(
+    LocalAuthService,
+    new LocalAuthService(
+      db,
+      cacheService,
+      sessionService,
+      authSettingsService,
+      container.resolve(AuthMailService),
+      auditService
+    )
+  );
+  container.registerInstance(MfaService, new MfaService(db, cacheService, cryptoService));
+  container.registerInstance(PasskeyService, new PasskeyService(db, cacheService, authSettingsService));
   const adminUserFolderService = new AdminUserFolderService(db, auditService);
   adminUserFolderService.setEventBus(eventBus);
   container.registerInstance(AdminUserFolderService, adminUserFolderService);
@@ -873,6 +896,7 @@ export async function initializeContainer(): Promise<void> {
   const groupService = container.resolve(GroupService);
   groupService.setEventBus(eventBus);
   groupService.setSandboxService(aiSandboxService);
+  groupService.setSessionService(sessionService);
   const permissionGroupFolderService = new PermissionGroupFolderService(db, auditService);
   permissionGroupFolderService.setEventBus(eventBus);
   container.registerInstance(PermissionGroupFolderService, permissionGroupFolderService);

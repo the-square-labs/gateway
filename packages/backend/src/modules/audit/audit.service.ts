@@ -94,7 +94,12 @@ export class AuditService {
       }
       return true;
     } catch (error) {
-      logger.error('Failed to write audit log', { error, entry });
+      logger.error('Failed to write audit log', {
+        error,
+        action: entry.action,
+        resourceType: entry.resourceType,
+        resourceId: entry.resourceId,
+      });
       return false;
     }
   }

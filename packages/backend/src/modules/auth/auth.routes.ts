@@ -3,19 +3,32 @@ import { deleteCookie, setCookie } from 'hono/cookie';
 import { getEnv, isDevelopment } from '@/config/env.js';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
+import { getClientIpForContext } from '@/lib/request-ip.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { AppEnv } from '@/types.js';
 import {
+  beginCurrentUserTotpSetupRoute,
+  confirmCurrentUserTotpSetupRoute,
   csrfTokenRoute,
   currentUserPreferencesRoute,
   currentUserRoute,
+  getCurrentUserMfaRoute,
+  listCurrentUserSessionsRoute,
   logoutRoute,
+  regenerateCurrentUserRecoveryCodesRoute,
+  resetCurrentUserTotpRoute,
+  revokeCurrentUserSessionRoute,
+  revokeOtherCurrentUserSessionsRoute,
   updateCurrentUserPreferencesRoute,
 } from './auth.docs.js';
 import { authMiddleware, SESSION_COOKIE_NAME, sessionOnly } from './auth.middleware.js';
 import { AuthService } from './auth.service.js';
+import { AuthSettingsService } from './auth.settings.service.js';
+import { LocalAuthService } from './local-auth.service.js';
+import { MfaService } from './mfa.service.js';
+import { PasskeyService } from './passkey.service.js';
 
 export const authRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
@@ -23,6 +36,93 @@ const ErrorSchema = z.object({
   code: z.string(),
   message: z.string(),
 });
+
+const LocalPasswordLoginSchema = z.object({ email: z.string().email().max(255), password: z.string().min(1).max(72) });
+const EmailSchema = z.object({ email: z.string().email().max(255) });
+const EmailCodeSchema = z.object({ challengeId: z.string().min(1).max(64), code: z.string().regex(/^\d{6}$/) });
+const PasswordResetTokenSchema = z.object({ token: z.string().min(1).max(256) });
+const PasswordCompleteSchema = z.object({ token: z.string().min(1).max(256), password: z.string().min(1).max(72) });
+const MfaVerifySchema = z
+  .object({
+    challengeId: z.string().min(1).max(64),
+    totpCode: z
+      .string()
+      .regex(/^\d{6}$/)
+      .optional(),
+    recoveryCode: z.string().min(6).max(64).optional(),
+  })
+  .refine((value) => Number(Boolean(value.totpCode)) + Number(Boolean(value.recoveryCode)) === 1, {
+    message: 'Provide exactly one verification method',
+  });
+const MfaEnrollmentTokenSchema = z.object({ token: z.string().min(16).max(128) });
+const MfaEnrollmentConfirmSchema = MfaEnrollmentTokenSchema.extend({ code: z.string().regex(/^\d{6}$/) });
+const PasskeyResponseSchema = z.object({ response: z.any() });
+const PasskeyRegistrationSchema = PasskeyResponseSchema.extend({ name: z.string().trim().max(100).optional() });
+const MfaEnrollmentPasskeyConfirmSchema = MfaEnrollmentTokenSchema.merge(PasskeyRegistrationSchema);
+const PasskeyAuthenticationSchema = PasskeyResponseSchema.extend({ challenge: z.string().min(16).max(256) });
+const MfaPasskeyOptionsSchema = z.object({ challengeId: z.string().min(16).max(64) });
+const MfaPasskeyVerifySchema = PasskeyResponseSchema.extend({
+  challengeId: z.string().min(16).max(64),
+  passkeyChallenge: z.string().min(16).max(256),
+});
+
+async function setLocalSession(
+  c: any,
+  user: import('@/types.js').User,
+  authMethod: 'password' | 'email_otp',
+  mfaSatisfied = false
+) {
+  const sessionService = container.resolve(SessionService);
+  const { sessionId } = await sessionService.createSession(user, undefined, undefined, {
+    authMethod,
+    ipAddress: await getClientIpForContext(c),
+    userAgent: c.req.header('user-agent'),
+    ...(mfaSatisfied ? { mfaSatisfiedAt: Date.now() } : {}),
+  });
+  await container.resolve(AuthService).recordSuccessfulSignIn(user.id);
+  const env = getEnv();
+  setCookie(c, SESSION_COOKIE_NAME, sessionId, {
+    httpOnly: true,
+    secure: !isDevelopment(),
+    sameSite: 'Lax',
+    maxAge: env.SESSION_EXPIRY,
+    path: '/',
+  });
+}
+
+async function finishLocalPrimaryAuth(c: any, user: import('@/types.js').User, authMethod: 'password' | 'email_otp') {
+  const mfa = container.resolve(MfaService);
+  const [mfaStatus, gatewayMfaRequired] = await Promise.all([
+    mfa.getStatus(user.id),
+    mfa.isGatewayMfaRequired(user.id),
+  ]);
+
+  if (mfaStatus.totpConfigured || mfaStatus.passkeyCount > 0) {
+    return c.json({
+      ok: true,
+      mfaRequired: true,
+      mfaPasskeyAvailable: mfaStatus.passkeyCount > 0,
+      challengeId: await mfa.beginLoginChallenge(user.id, authMethod),
+    });
+  }
+
+  if (gatewayMfaRequired) {
+    return c.json({
+      ok: true,
+      mfaEnrollmentRequired: true,
+      enrollmentToken: await mfa.beginEnrollmentChallenge(user.id, authMethod),
+    });
+  }
+
+  await setLocalSession(c, user, authMethod);
+  return c.json({ ok: true });
+}
+
+function assertLocalMfaAccount(user: import('@/types.js').User) {
+  if (user.authMethod === 'oidc') {
+    throw new AppError(409, 'MFA_MANAGED_BY_IDP', 'MFA for OIDC accounts is managed by the identity provider');
+  }
+}
 
 // Login route
 const loginRoute = createRoute({
@@ -86,6 +186,9 @@ authRoutes.openapi(callbackRoute, async (c) => {
 
   try {
     const requestUrl = new URL(c.req.url);
+    if (!env.OIDC_REDIRECT_URI) {
+      return c.json({ code: 'OIDC_NOT_CONFIGURED', message: 'OIDC is not configured' }, 503);
+    }
     const callbackUrl = new URL(env.OIDC_REDIRECT_URI);
     callbackUrl.search = requestUrl.search;
 
@@ -135,6 +238,165 @@ authRoutes.openapi(callbackRoute, async (c) => {
     });
     return c.json({ code: 'AUTH_ERROR', message }, 400);
   }
+});
+
+authRoutes.get('/methods', async (c) => {
+  const { methods } = await container.resolve(AuthSettingsService).getConfig();
+  const env = getEnv();
+  return c.json({
+    ...methods,
+    oidc: Boolean(
+      methods.oidc && env.OIDC_ISSUER && env.OIDC_CLIENT_ID && env.OIDC_CLIENT_SECRET && env.OIDC_REDIRECT_URI
+    ),
+  });
+});
+
+authRoutes.post('/password/login', async (c) => {
+  const input = LocalPasswordLoginSchema.parse(await c.req.json());
+  const localAuth = container.resolve(LocalAuthService);
+  const user = await localAuth.authenticatePassword(input.email, input.password);
+  if (!user) return c.json({ code: 'INVALID_CREDENTIALS', message: 'Invalid email or password' }, 401);
+  return finishLocalPrimaryAuth(c, user, 'password');
+});
+
+authRoutes.post('/email/continue', async (c) => {
+  const input = EmailSchema.parse(await c.req.json());
+  return c.json(await container.resolve(LocalAuthService).beginEmailSignIn(input.email));
+});
+
+authRoutes.post('/email-otp/request', async (c) => {
+  const input = EmailSchema.parse(await c.req.json());
+  const localAuth = container.resolve(LocalAuthService);
+  const challengeId = await localAuth.requestEmailOtp(input.email).catch(() => null);
+  return c.json({ ok: true, challengeId: challengeId ?? crypto.randomUUID() });
+});
+
+authRoutes.post('/email-otp/verify', async (c) => {
+  const input = EmailCodeSchema.parse(await c.req.json());
+  const localAuth = container.resolve(LocalAuthService);
+  const user = await localAuth.verifyEmailOtp(input.challengeId, input.code);
+  if (!user) return c.json({ code: 'INVALID_CODE', message: 'Invalid or expired sign-in code' }, 401);
+  return finishLocalPrimaryAuth(c, user, 'email_otp');
+});
+
+authRoutes.post('/mfa/verify', async (c) => {
+  const input = MfaVerifySchema.parse(await c.req.json());
+  const mfa = container.resolve(MfaService);
+  const completed = await mfa.verifyLoginChallenge(input.challengeId, input);
+  if (!completed) return c.json({ code: 'INVALID_MFA_CODE', message: 'Invalid or expired authentication code' }, 401);
+  const user = await container.resolve(AuthService).getUserById(completed.userId);
+  if (!user || user.isBlocked)
+    return c.json({ code: 'INVALID_MFA_CODE', message: 'Invalid or expired authentication code' }, 401);
+  await setLocalSession(c, user, completed.authMethod, true);
+  return c.json({ ok: true });
+});
+
+authRoutes.post('/mfa/enrollment/totp/setup', async (c) => {
+  const { token } = MfaEnrollmentTokenSchema.parse(await c.req.json());
+  const mfa = container.resolve(MfaService);
+  const pending = await mfa.getEnrollmentChallenge(token);
+  if (!pending) return c.json({ code: 'MFA_ENROLLMENT_EXPIRED', message: 'MFA enrollment has expired' }, 400);
+  const user = await container.resolve(AuthService).getUserById(pending.userId);
+  if (!user || user.isBlocked)
+    return c.json({ code: 'MFA_ENROLLMENT_EXPIRED', message: 'MFA enrollment has expired' }, 400);
+  return c.json(await mfa.beginTotpSetup(user.id, user.email));
+});
+
+authRoutes.post('/mfa/enrollment/totp/confirm', async (c) => {
+  const { token, code } = MfaEnrollmentConfirmSchema.parse(await c.req.json());
+  const mfa = container.resolve(MfaService);
+  const pending = await mfa.getEnrollmentChallenge(token);
+  if (!pending) return c.json({ code: 'MFA_ENROLLMENT_EXPIRED', message: 'MFA enrollment has expired' }, 400);
+  const recoveryCodes = await mfa.confirmTotpSetup(pending.userId, code);
+  const completed = await mfa.completeEnrollmentChallenge(token);
+  const user = completed ? await container.resolve(AuthService).getUserById(completed.userId) : null;
+  if (!completed || !user || user.isBlocked)
+    return c.json({ code: 'MFA_ENROLLMENT_EXPIRED', message: 'MFA enrollment has expired' }, 400);
+  await setLocalSession(c, user, completed.authMethod, true);
+  return c.json({ ok: true, recoveryCodes });
+});
+
+authRoutes.post('/mfa/enrollment/passkey/options', async (c) => {
+  const { token } = MfaEnrollmentTokenSchema.parse(await c.req.json());
+  const mfa = container.resolve(MfaService);
+  const pending = await mfa.getEnrollmentChallenge(token);
+  if (!pending) return c.json({ code: 'MFA_ENROLLMENT_EXPIRED', message: 'MFA enrollment has expired' }, 400);
+  const user = await container.resolve(AuthService).getUserById(pending.userId);
+  if (!user || user.isBlocked)
+    return c.json({ code: 'MFA_ENROLLMENT_EXPIRED', message: 'MFA enrollment has expired' }, 400);
+  return c.json(await container.resolve(PasskeyService).beginRegistration(user));
+});
+
+authRoutes.post('/mfa/enrollment/passkey/confirm', async (c) => {
+  const { token, response, name } = MfaEnrollmentPasskeyConfirmSchema.parse(await c.req.json());
+  const mfa = container.resolve(MfaService);
+  const pending = await mfa.getEnrollmentChallenge(token);
+  if (!pending) return c.json({ code: 'MFA_ENROLLMENT_EXPIRED', message: 'MFA enrollment has expired' }, 400);
+  const user = await container.resolve(AuthService).getUserById(pending.userId);
+  if (!user || user.isBlocked)
+    return c.json({ code: 'MFA_ENROLLMENT_EXPIRED', message: 'MFA enrollment has expired' }, 400);
+  await container.resolve(PasskeyService).finishRegistration(user, response, name ?? 'Passkey');
+  const completed = await mfa.completeEnrollmentChallenge(token);
+  if (!completed) return c.json({ code: 'MFA_ENROLLMENT_EXPIRED', message: 'MFA enrollment has expired' }, 400);
+  await setLocalSession(c, user, completed.authMethod, true);
+  return c.json({ ok: true });
+});
+
+authRoutes.post('/passkeys/options', async (c) => {
+  const options = await container.resolve(PasskeyService).beginDiscoverableAuthentication();
+  return c.json(options);
+});
+
+authRoutes.post('/passkeys/verify', async (c) => {
+  const { challenge, response } = PasskeyAuthenticationSchema.parse(await c.req.json());
+  const user = await container.resolve(PasskeyService).verifyAuthentication(challenge, response);
+  if (!user) return c.json({ code: 'INVALID_PASSKEY', message: 'Passkey sign-in could not be verified' }, 401);
+  await setLocalSession(c, user, user.authMethod as 'password' | 'email_otp', true);
+  return c.json({ ok: true });
+});
+
+authRoutes.post('/mfa/passkey/options', async (c) => {
+  const { challengeId } = MfaPasskeyOptionsSchema.parse(await c.req.json());
+  const pending = await container.resolve(MfaService).getLoginChallenge(challengeId);
+  if (!pending) return c.json({ code: 'MFA_CHALLENGE_EXPIRED', message: 'MFA sign-in has expired' }, 400);
+  return c.json(await container.resolve(PasskeyService).beginAuthenticationForUser(pending.userId));
+});
+
+authRoutes.post('/mfa/passkey/verify', async (c) => {
+  const { challengeId, passkeyChallenge, response } = MfaPasskeyVerifySchema.parse(await c.req.json());
+  const mfa = container.resolve(MfaService);
+  const pending = await mfa.getLoginChallenge(challengeId);
+  if (!pending) return c.json({ code: 'INVALID_MFA_PASSKEY', message: 'Passkey sign-in could not be verified' }, 401);
+  const user = await container
+    .resolve(PasskeyService)
+    .verifyAuthentication(passkeyChallenge, response, pending.userId, false);
+  const completed = user ? await mfa.completeVerifiedLoginChallenge(challengeId) : null;
+  if (!user || !completed)
+    return c.json({ code: 'INVALID_MFA_PASSKEY', message: 'Passkey sign-in could not be verified' }, 401);
+  await setLocalSession(c, user, completed.authMethod, true);
+  return c.json({ ok: true });
+});
+
+authRoutes.post('/password/reset/request', async (c) => {
+  const input = EmailSchema.parse(await c.req.json());
+  await container
+    .resolve(LocalAuthService)
+    .requestPasswordLink(input.email, 'password_reset')
+    .catch(() => {});
+  return c.json({ ok: true });
+});
+
+authRoutes.post('/password/reset/profile', async (c) => {
+  const { token } = PasswordResetTokenSchema.parse(await c.req.json());
+  const profile = await container.resolve(LocalAuthService).getPasswordLinkProfile(token);
+  if (!profile) return c.json({ code: 'INVALID_RESET_TOKEN', message: 'Invalid or expired password link' }, 400);
+  return c.json(profile);
+});
+
+authRoutes.post('/password/reset/complete', async (c) => {
+  const input = PasswordCompleteSchema.parse(await c.req.json());
+  await container.resolve(LocalAuthService).completePasswordLink(input.token, input.password);
+  return c.json({ ok: true });
 });
 
 // CSRF token for cookie-authenticated browser mutations
@@ -191,6 +453,7 @@ authRoutes.openapi(currentUserRoute, async (c) => {
   return c.json({
     id: user.id,
     email: user.email,
+    authMethod: user.authMethod,
     name: user.name,
     avatarUrl: user.avatarUrl,
     groupId: user.groupId,
@@ -220,4 +483,148 @@ authRoutes.openapi(updateCurrentUserPreferencesRoute, async (c) => {
   const authService = container.resolve(AuthService);
   const preferences = await authService.updateUserPreferences(sessionUser.id, c.req.valid('json'));
   return c.json(preferences);
+});
+
+authRoutes.use('/me/mfa', authMiddleware);
+authRoutes.use('/me/mfa', sessionOnly);
+authRoutes.openapi(getCurrentUserMfaRoute, async (c) => {
+  const user = c.get('user')!;
+  assertLocalMfaAccount(user);
+  return c.json(await container.resolve(MfaService).getStatus(user.id));
+});
+
+authRoutes.use('/me/mfa/totp/setup', authMiddleware);
+authRoutes.use('/me/mfa/totp/setup', sessionOnly);
+authRoutes.openapi(beginCurrentUserTotpSetupRoute, async (c) => {
+  const user = c.get('user')!;
+  assertLocalMfaAccount(user);
+  return c.json(await container.resolve(MfaService).beginTotpSetup(user.id, user.email));
+});
+
+authRoutes.use('/me/mfa/totp/reset', authMiddleware);
+authRoutes.use('/me/mfa/totp/reset', sessionOnly);
+authRoutes.openapi(resetCurrentUserTotpRoute, async (c) => {
+  const user = c.get('user')!;
+  assertLocalMfaAccount(user);
+  await container.resolve(MfaService).resetTotp(user.id);
+  return c.json({ ok: true });
+});
+
+authRoutes.use('/me/mfa/totp/confirm', authMiddleware);
+authRoutes.use('/me/mfa/totp/confirm', sessionOnly);
+authRoutes.openapi(confirmCurrentUserTotpSetupRoute, async (c) => {
+  const user = c.get('user')!;
+  assertLocalMfaAccount(user);
+  const { code } = c.req.valid('json');
+  return c.json({ recoveryCodes: await container.resolve(MfaService).confirmTotpSetup(user.id, code) });
+});
+
+authRoutes.use('/me/mfa/recovery-codes', authMiddleware);
+authRoutes.use('/me/mfa/recovery-codes', sessionOnly);
+authRoutes.openapi(regenerateCurrentUserRecoveryCodesRoute, async (c) => {
+  const user = c.get('user')!;
+  assertLocalMfaAccount(user);
+  const { code } = c.req.valid('json');
+  const mfa = container.resolve(MfaService);
+  if (!(await mfa.verifyTotp(user.id, code)))
+    throw new AppError(401, 'INVALID_TOTP_CODE', 'Invalid authentication code');
+  return c.json({ recoveryCodes: await mfa.regenerateRecoveryCodes(user.id) });
+});
+
+authRoutes.use('/me/mfa/recovery-codes/passkey/*', authMiddleware);
+authRoutes.use('/me/mfa/recovery-codes/passkey/*', sessionOnly);
+authRoutes.post('/me/mfa/recovery-codes/passkey/options', async (c) => {
+  const user = c.get('user')!;
+  assertLocalMfaAccount(user);
+  return c.json(await container.resolve(PasskeyService).beginAuthenticationForUser(user.id));
+});
+
+authRoutes.post('/me/mfa/recovery-codes/passkey/verify', async (c) => {
+  const user = c.get('user')!;
+  assertLocalMfaAccount(user);
+  const { challenge, response } = PasskeyAuthenticationSchema.parse(await c.req.json());
+  const verifiedUser = await container
+    .resolve(PasskeyService)
+    .verifyAuthentication(challenge, response, user.id, false);
+  if (!verifiedUser) throw new AppError(401, 'INVALID_PASSKEY', 'Passkey verification failed');
+  return c.json({ recoveryCodes: await container.resolve(MfaService).regenerateRecoveryCodes(user.id) });
+});
+
+authRoutes.use('/me/passkeys', authMiddleware);
+authRoutes.use('/me/passkeys', sessionOnly);
+authRoutes.use('/me/passkeys/*', authMiddleware);
+authRoutes.use('/me/passkeys/*', sessionOnly);
+authRoutes.get('/me/passkeys', async (c) => {
+  const user = c.get('user')!;
+  return c.json(await container.resolve(PasskeyService).listPasskeys(user.id));
+});
+
+authRoutes.post('/me/passkeys/options', async (c) => {
+  const user = c.get('user')!;
+  return c.json(await container.resolve(PasskeyService).beginRegistration(user));
+});
+
+authRoutes.post('/me/passkeys', async (c) => {
+  const user = c.get('user')!;
+  const { response, name } = PasskeyRegistrationSchema.parse(await c.req.json());
+  await container.resolve(PasskeyService).finishRegistration(user, response, name ?? 'Passkey');
+  return c.json({ ok: true });
+});
+
+authRoutes.delete('/me/passkeys/:id', async (c) => {
+  const user = c.get('user')!;
+  if (!(await container.resolve(PasskeyService).removePasskey(user.id, c.req.param('id')!))) {
+    throw new AppError(404, 'PASSKEY_NOT_FOUND', 'Passkey not found');
+  }
+  return c.json({ ok: true });
+});
+
+authRoutes.use('/me/sessions', authMiddleware);
+authRoutes.use('/me/sessions', sessionOnly);
+authRoutes.openapi(listCurrentUserSessionsRoute, async (c) => {
+  const sessionId = c.get('sessionId')!;
+  const user = c.get('user')!;
+  const sessionService = container.resolve(SessionService);
+  return c.json(await sessionService.listPublicUserSessions(user.id, sessionId));
+});
+
+// OpenAPI routes use `{id}`, while Hono middleware matchers require `:id`.
+// Keeping these syntaxes separate ensures revoke requests receive the session
+// authentication context before the route handler accesses `user.id`.
+authRoutes.use('/me/sessions/:id', authMiddleware);
+authRoutes.use('/me/sessions/:id', sessionOnly);
+authRoutes.openapi(revokeCurrentUserSessionRoute, async (c) => {
+  const sessionId = c.get('sessionId')!;
+  const user = c.get('user')!;
+  const sessionService = container.resolve(SessionService);
+  const revoked = await sessionService.revokeUserSessionByPublicId(user.id, c.req.param('id')!, {
+    excludeSessionId: sessionId,
+  });
+  if (!revoked) throw new AppError(404, 'SESSION_NOT_FOUND', 'Session not found');
+  await container.resolve(AuditService).log({
+    userId: user.id,
+    action: 'auth.session_revoke',
+    resourceType: 'session',
+    resourceId: c.req.param('id')!,
+    details: { selfService: true },
+    userAgent: c.req.header('user-agent'),
+  });
+  return c.json({ message: 'Session revoked' });
+});
+
+authRoutes.use('/me/sessions/revoke-others', authMiddleware);
+authRoutes.use('/me/sessions/revoke-others', sessionOnly);
+authRoutes.openapi(revokeOtherCurrentUserSessionsRoute, async (c) => {
+  const sessionId = c.get('sessionId')!;
+  const user = c.get('user')!;
+  const sessionService = container.resolve(SessionService);
+  const revoked = await sessionService.revokeOtherUserSessions(user.id, sessionId);
+  await container.resolve(AuditService).log({
+    userId: user.id,
+    action: 'auth.session_revoke_others',
+    resourceType: 'session',
+    details: { selfService: true, revoked },
+    userAgent: c.req.header('user-agent'),
+  });
+  return c.json({ revoked });
 });

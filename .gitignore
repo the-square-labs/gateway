@@ -34,6 +34,7 @@ update-signing-private.pem.b64
 .memory/embeddings/
 .memory/index/
 .memory/graph/
+.workflow/
 .codex
 .claude
 .nx

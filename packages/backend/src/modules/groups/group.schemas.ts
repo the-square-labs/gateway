@@ -17,6 +17,7 @@ export const CreateGroupSchema = z.object({
   description: z.string().max(500).optional(),
   scopes: z.array(scopeString).min(1, 'At least one scope is required'),
   parentId: z.string().uuid().nullable().optional(),
+  requireGateway2fa: z.boolean().optional(),
 });
 
 export const UpdateGroupSchema = z.object({
@@ -30,6 +31,7 @@ export const UpdateGroupSchema = z.object({
   description: z.string().max(500).nullable().optional(),
   scopes: z.array(scopeString).min(1, 'At least one scope is required').optional(),
   parentId: z.string().uuid().nullable().optional(),
+  requireGateway2fa: z.boolean().optional(),
 });
 
 export const AssignGroupSchema = z.object({
@@ -42,6 +44,7 @@ export const GroupResponseSchema = z.object({
   description: z.string().nullable(),
   isBuiltin: z.boolean(),
   scopes: z.array(z.string()),
+  requireGateway2fa: z.boolean(),
   memberCount: z.number().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),

@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { describe, expect, it, vi } from 'vitest';
 import { inferenceProviderConnections, users } from '@/db/schema/index.js';
 import { AuthService, type NormalizedOidcClaims, normalizeOidcClaims } from './auth.service.js';
+import { computeEffectiveUserAccess, fetchGroupScopeMap } from './live-session-user.js';
 
 const authorizationCodeGrantMock = vi.hoisted(() => vi.fn());
 
@@ -176,6 +177,43 @@ describe('AuthService user preferences', () => {
       id: 'user-1',
       action: 'updated',
     });
+  });
+});
+
+describe('AuthService.listUsers', () => {
+  it('returns the persisted sign-in method for an admin reload', async () => {
+    vi.mocked(fetchGroupScopeMap).mockResolvedValue(new Map());
+    vi.mocked(computeEffectiveUserAccess).mockReturnValue({
+      groupName: 'viewer',
+      groupScopes: ['nodes:details'],
+      additionalScopes: [],
+      scopes: ['nodes:details'],
+    });
+    const service = new AuthService(
+      {
+        query: {
+          users: {
+            findMany: vi.fn().mockResolvedValue([
+              {
+                ...dbUser({ authMethod: 'password' }),
+                additionalScopes: [],
+                aiApprovalMode: 'normal',
+                folderId: null,
+                sortOrder: 0,
+              },
+            ]),
+          },
+        },
+      } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any
+    );
+
+    await expect(service.listUsers()).resolves.toEqual([
+      expect.objectContaining({ email: 'user@example.com', authMethod: 'password' }),
+    ]);
   });
 });
 
@@ -361,6 +399,27 @@ describe('AuthService OIDC identity binding', () => {
     expect(sessionService.createSession).not.toHaveBeenCalled();
   });
 
+  it('rejects an OIDC callback when OIDC was disabled after the redirect began', async () => {
+    authorizationCodeGrantMock.mockClear();
+    const harness = createAuthServiceHarness({
+      authSettings: {
+        oidcAutoCreateUsers: true,
+        oidcDefaultGroupId: 'viewer-group',
+        oidcRequireVerifiedEmail: true,
+        methods: { oidc: false },
+      },
+    });
+
+    await expect(harness.service.getAuthorizationUrl()).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'AUTH_METHOD_DISABLED',
+    });
+    await expect(
+      harness.service.handleCallback('https://gateway.example.com/callback?code=code&state=state', 'state')
+    ).rejects.toMatchObject({ statusCode: 409, code: 'AUTH_METHOD_DISABLED' });
+    expect(authorizationCodeGrantMock).not.toHaveBeenCalled();
+  });
+
   it('allows an existing subject-bound user when the provider omits email', async () => {
     const existingUser = dbUser({
       oidcSubject: 'real-sub',
@@ -404,6 +463,29 @@ describe('AuthService OIDC identity binding', () => {
         }),
       })
     );
+  });
+
+  it('normalizes a missing OIDC name to the account email', async () => {
+    const existingUser = dbUser({ oidcSubject: 'real-sub', name: null });
+    const harness = createAuthServiceHarness({
+      authSettings: {
+        oidcAutoCreateUsers: true,
+        oidcDefaultGroupId: 'viewer-group',
+        oidcRequireVerifiedEmail: false,
+      },
+      existingBySubject: existingUser,
+      updateReturning: { ...existingUser, name: existingUser.email },
+    });
+
+    await harness.loginWithClaims({
+      oidcSubject: 'real-sub',
+      email: existingUser.email,
+      emailVerified: true,
+      name: null,
+      avatarUrl: null,
+    });
+
+    expect(harness.updateSet).toHaveBeenCalledWith(expect.objectContaining({ name: existingUser.email }));
   });
 
   it('allows an existing subject-bound user with unverified email and does not sync a changed email', async () => {
@@ -595,6 +677,7 @@ function dbUser(overrides: Partial<DbUser> = {}): DbUser {
   return {
     id: 'user-1',
     oidcSubject: 'real-sub',
+    authMethod: 'oidc',
     email: 'user@example.com',
     name: null,
     avatarUrl: null,
@@ -607,6 +690,7 @@ function dbUser(overrides: Partial<DbUser> = {}): DbUser {
 interface DbUser {
   id: string;
   oidcSubject: string;
+  authMethod: 'oidc' | 'password' | 'email_otp';
   email: string;
   name: string | null;
   avatarUrl: string | null;
@@ -620,6 +704,7 @@ function createAuthServiceHarness(options: {
     oidcAutoCreateUsers: boolean;
     oidcDefaultGroupId: string;
     oidcRequireVerifiedEmail: boolean;
+    methods?: { oidc?: boolean };
   };
   existingBySubject?: DbUser | null;
   existingByEmail?: DbUser | null;
@@ -689,6 +774,7 @@ function createAuthServiceHarness(options: {
   return {
     auditService,
     sessionService,
+    service,
     updateSet,
     async loginWithClaims(claims: NormalizedOidcClaims) {
       authorizationCodeGrantMock.mockResolvedValueOnce({
