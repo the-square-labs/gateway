@@ -70,7 +70,7 @@ BASE_URL="${PACKAGE_API}/${INSTALLER_TAG}"
 TMP_DIR="$(mktemp -d /tmp/gateway-installer.XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 download_file "${BASE_URL}/checksums.txt" "$TMP_DIR/checksums.txt" || die "could not download installer checksums"
-EXPECTED="$(awk -v asset="$ASSET" '$2 == asset || $2 == "*" asset { print $1; exit }' "$TMP_DIR/checksums.txt")"
+EXPECTED="$(awk -v asset="$ASSET" '{ filename = $2; sub(/^\*/, "", filename); sub(/^.*\//, "", filename); if (filename == asset) { print $1; exit } }' "$TMP_DIR/checksums.txt")"
 [[ "$EXPECTED" =~ ^[a-fA-F0-9]{64}$ ]] || die "checksum for ${ASSET} is missing"
 download_file "${BASE_URL}/${ASSET}" "$TMP_DIR/$ASSET" || die "could not download ${ASSET}"
 ACTUAL="$(sha256sum "$TMP_DIR/$ASSET" | awk '{print $1}')"

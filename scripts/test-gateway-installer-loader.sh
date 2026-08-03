@@ -35,7 +35,7 @@ case "$url" in
     cp "$TEST_LOADER" "$output"
     ;;
   */checksums.txt)
-    printf '%s  gateway-installer-linux-amd64.tar.gz\n%s  gateway-installer-linux-arm64.tar.gz\n' "$TEST_CHECKSUM" "$TEST_CHECKSUM" > "$output"
+    printf '%s  ../../gateway-installer-linux-amd64.tar.gz\n%s  *gateway-installer-linux-arm64.tar.gz\n' "$TEST_CHECKSUM" "$TEST_CHECKSUM" > "$output"
     ;;
   */gateway-installer-linux-amd64.tar.gz|*/gateway-installer-linux-arm64.tar.gz)
     cp "$TEST_ARCHIVE" "$output"
@@ -67,7 +67,7 @@ case "$url" in
     printf '[{"version":"v3.0.0-rc.2"},{"version":"v3.0.0-rc.10"},{"version":"v2.9.0-installer"}]\n'
     ;;
   */checksums.txt)
-    printf '%s  gateway-installer-linux-amd64.tar.gz\n%s  gateway-installer-linux-arm64.tar.gz\n' "$TEST_CHECKSUM" "$TEST_CHECKSUM" > "$output"
+    printf '%s  ../../gateway-installer-linux-amd64.tar.gz\n%s  *gateway-installer-linux-arm64.tar.gz\n' "$TEST_CHECKSUM" "$TEST_CHECKSUM" > "$output"
     ;;
   */gateway-installer-linux-amd64.tar.gz|*/gateway-installer-linux-arm64.tar.gz)
     cp "$TEST_ARCHIVE" "$output"
