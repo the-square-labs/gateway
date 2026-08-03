@@ -25,6 +25,8 @@ esac
 
 ENCODED_PROJECT="${GITLAB_PROJECT//\//%2F}"
 API="${GITLAB_URL%/}/api/v4/projects/${ENCODED_PROJECT}"
+PACKAGE_API="${API}/packages/generic/gateway-installer"
+PACKAGE_VERSIONS_URL="${API}/packages?package_type=generic&package_name=gateway-installer&per_page=100"
 NIGHTLY=false
 INSTALLER_ARGS=()
 for arg in "$@"; do
@@ -37,7 +39,7 @@ done
 
 if [[ "$NIGHTLY" == true ]]; then
   if [[ "$TARGET" == "node" || "$REQUESTED_VERSION" == "latest" ]]; then
-    INSTALLER_TAG="$(download_stdout "${API}/releases" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+"' | sed -E 's/.*"([^"]+)"$/\1/' | sort -V | tail -1)"
+    INSTALLER_TAG="$(download_stdout "$PACKAGE_VERSIONS_URL" | grep -oE '"version"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+"' | sed -E 's/.*"([^"]+)"$/\1/' | sort -V | tail -1)"
     [[ -n "$INSTALLER_TAG" ]] || die "could not resolve a release-candidate installer; publish vX.Y.Z-rc.N first"
   else
     BASE_VERSION="${REQUESTED_VERSION%-nginx}"
@@ -50,7 +52,7 @@ if [[ "$NIGHTLY" == true ]]; then
   fi
 else
   if [[ "$REQUESTED_VERSION" == "latest" ]]; then
-    INSTALLER_TAG="$(download_stdout "${API}/releases" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+-installer"' | sed -E 's/.*"([^"]+)"$/\1/' | head -1)"
+    INSTALLER_TAG="$(download_stdout "$PACKAGE_VERSIONS_URL" | grep -oE '"version"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+-installer"' | sed -E 's/.*"([^"]+)"$/\1/' | sort -V | tail -1)"
     [[ -n "$INSTALLER_TAG" ]] || die "could not resolve latest installer release"
   else
     BASE_VERSION="${REQUESTED_VERSION%-nginx}"
@@ -64,7 +66,7 @@ else
 fi
 
 ASSET="gateway-installer-linux-${ARCH}.tar.gz"
-BASE_URL="${API}/releases/${INSTALLER_TAG}/downloads"
+BASE_URL="${PACKAGE_API}/${INSTALLER_TAG}"
 TMP_DIR="$(mktemp -d /tmp/gateway-installer.XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 download_file "${BASE_URL}/checksums.txt" "$TMP_DIR/checksums.txt" || die "could not download installer checksums"

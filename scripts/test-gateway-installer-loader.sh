@@ -28,8 +28,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 case "$url" in
-  */releases)
-    printf '[{"tag_name":"v3.0.0-rc.2"},{"tag_name":"v3.0.0-rc.10"},{"tag_name":"v2.9.0-installer"}]\n'
+  */packages\?package_type=generic\&package_name=gateway-installer\&per_page=100)
+    printf '[{"version":"v3.0.0-rc.2"},{"version":"v3.0.0-rc.10"},{"version":"v2.9.0-installer"}]\n'
     ;;
   */gateway-installer-loader.sh)
     cp "$TEST_LOADER" "$output"
@@ -63,8 +63,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 case "$url" in
-  */releases)
-    printf '[{"tag_name":"v3.0.0-rc.2"},{"tag_name":"v3.0.0-rc.10"},{"tag_name":"v2.9.0-installer"}]\n'
+  */packages\?package_type=generic\&package_name=gateway-installer\&per_page=100)
+    printf '[{"version":"v3.0.0-rc.2"},{"version":"v3.0.0-rc.10"},{"version":"v2.9.0-installer"}]\n'
     ;;
   */checksums.txt)
     printf '%s  gateway-installer-linux-amd64.tar.gz\n%s  gateway-installer-linux-arm64.tar.gz\n' "$TEST_CHECKSUM" "$TEST_CHECKSUM" > "$output"
