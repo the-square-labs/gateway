@@ -104,6 +104,10 @@ status "Starting interactive setup"
 tar -xzf "$TMP_DIR/$ASSET" -C "$TMP_DIR" || die "installer archive could not be extracted"
 INSTALLER="$TMP_DIR/gateway-installer/gateway-installer"
 [[ -x "$INSTALLER" ]] || die "installer archive has an invalid layout"
+if [[ "$SHOW_UI" == true && ! -t 0 ]]; then
+  [[ -r /dev/tty ]] || die "interactive setup requires a terminal; save the script locally or use --yes"
+  exec < /dev/tty
+fi
 has_version=false
 version_value_index=-1
 for ((index = 0; index < ${#INSTALLER_ARGS[@]}; index++)); do
