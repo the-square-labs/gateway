@@ -183,6 +183,15 @@ export class LocalAuthService {
     });
   }
 
+  async setInitialPassword(userId: string, password: string): Promise<void> {
+    await this.validatePassword(password);
+    const passwordHash = await bcrypt.hash(password, 12);
+    await this.db
+      .insert(userPasswordCredentials)
+      .values({ userId, passwordHash, changedAt: new Date() })
+      .onConflictDoUpdate({ target: userPasswordCredentials.userId, set: { passwordHash, changedAt: new Date() } });
+  }
+
   private async validatePassword(password: string): Promise<void> {
     const policy = (await this.authSettingsService.getConfig()).passwordPolicy;
     const byteLength = Buffer.byteLength(password, 'utf8');

@@ -4,7 +4,14 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { nodes } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { parseNodeEnrollmentToken } from '@/modules/nodes/node-enrollment-token.js';
-import type { EnrollRequest, EnrollResponse, RenewCertRequest, RenewCertResponse } from '../generated/types.js';
+import type {
+  EnrollRequest,
+  EnrollResponse,
+  RenewCertRequest,
+  RenewCertResponse,
+  ValidateEnrollmentRequest,
+  ValidateEnrollmentResponse,
+} from '../generated/types.js';
 import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
 import type { GrpcServerDeps } from '../server.js';
 
@@ -52,6 +59,29 @@ async function findPendingNodeByEnrollmentToken(deps: GrpcServerDeps, token: str
 
 export function createEnrollmentHandlers(deps: GrpcServerDeps) {
   return {
+    async ValidateEnrollment(
+      call: ServerUnaryCall<ValidateEnrollmentRequest, ValidateEnrollmentResponse>,
+      callback: sendUnaryData<ValidateEnrollmentResponse>
+    ) {
+      try {
+        const token = call.request.token.trim();
+        const matchedNode = await findPendingNodeByEnrollmentToken(deps, token);
+        if (!matchedNode) {
+          callback({ code: 16, message: 'Invalid enrollment token' });
+          return;
+        }
+        const requestedNodeType = call.request.nodeType.trim();
+        if (requestedNodeType && matchedNode.type !== requestedNodeType) {
+          callback({ code: 3, message: 'Enrollment token does not match the requested node type' });
+          return;
+        }
+        callback(null, { nodeType: matchedNode.type });
+      } catch (err) {
+        logger.error('Enrollment validation failed', { error: (err as Error).message });
+        callback({ code: 13, message: 'Enrollment validation failed' });
+      }
+    },
+
     async Enroll(call: ServerUnaryCall<EnrollRequest, EnrollResponse>, callback: sendUnaryData<EnrollResponse>) {
       try {
         const req = call.request;

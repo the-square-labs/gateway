@@ -50,7 +50,7 @@ variables:
 
 .gateway-frontend-rules: &gateway-frontend-rules
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(-rc\.\d+)?$/
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
         - package.json
@@ -62,7 +62,7 @@ variables:
 
 .gateway-backend-rules: &gateway-backend-rules
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(-rc\.\d+)?$/
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
         - package.json
@@ -95,7 +95,7 @@ variables:
 
 .daemon-nginx-rules: &daemon-nginx-rules
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-nginx$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-nginx(-rc\.\d+)?$/
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
         - proto/**/*
@@ -107,7 +107,7 @@ variables:
 
 .daemon-docker-rules: &daemon-docker-rules
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-docker$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-docker(-rc\.\d+)?$/
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
         - proto/**/*
@@ -119,7 +119,7 @@ variables:
 
 .daemon-monitoring-rules: &daemon-monitoring-rules
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-monitoring$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-monitoring(-rc\.\d+)?$/
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
         - proto/**/*
@@ -139,6 +139,19 @@ variables:
         - packages/daemons/shared/**/*
         - config/update-trust/**/*
         - scripts/sync-update-trust-anchor.sh
+
+.installer-rules: &installer-rules
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-installer$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-rc\.\d+$/
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - packages/installer/**/*
+        - packages/daemons/go.work
+        - scripts/gateway-installer-loader.sh
+        - scripts/install.sh
+        - scripts/setup-*.sh
+        - scripts/test-gateway-installer-loader.sh
 
 # ── Tests ─────────────────────────────────────────────────────────
 
@@ -192,8 +205,39 @@ test-database-connector:
     - go test ./database-connector/... ./shared/...
   <<: *daemon-database-connector-rules
 
+test-installer:
+  stage: test
+  image: ${GOLANG_CI_IMAGE}
+  before_script:
+    - mkdir -p ${GOCACHE} ${GOMODCACHE}
+  script:
+    - cd packages/installer
+    - go test ./...
+    - bash ../../scripts/test-gateway-installer-loader.sh
+  cache:
+    key:
+      files:
+        - packages/installer/go.sum
+    paths:
+      - .cache/go-build
+      - .cache/go-mod
+  <<: *installer-rules
+
+test-installer-ui:
+  stage: test
+  extends: .pnpm-job
+  script:
+    - pnpm --filter @wiolett/gateway-installer typecheck
+    - pnpm --filter @wiolett/gateway-installer test
+    - pnpm --filter @wiolett/gateway-installer build
+  artifacts:
+    paths:
+      - packages/installer/dist/cli.js
+    expire_in: 1 hour
+  <<: *installer-rules
+
 # ── Gateway (backend + frontend Docker image) ─────────────────────
-# Triggered by tags like: v1.3.0
+# Triggered by stable tags like v1.3.0 and test-only tags like v1.3.0-rc.1.
 
 build:
   stage: build
@@ -223,7 +267,7 @@ build:
       - gateway-image.digest
     expire_in: 1 hour
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(-rc\.\d+)?$/
 
 sign-gateway-update:
   stage: sign
@@ -250,7 +294,7 @@ sign-gateway-update:
       - gateway-image.update.json
     expire_in: 1 hour
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(-rc\.\d+)?$/
 
 upload-gateway-update:
   stage: publish
@@ -267,7 +311,7 @@ upload-gateway-update:
         --upload-file gateway-image.update.json \
         "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/gateway/${CI_COMMIT_TAG}/gateway-image.update.json"
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(-rc\.\d+)?$/
 
 publish-gateway-aliases:
   stage: publish
@@ -334,6 +378,39 @@ release:
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
+release-rc:
+  stage: release
+  image: ${RELEASE_CLI_IMAGE}
+  needs:
+    - upload-gateway-update
+    - build-installer
+  script:
+    - printf 'Release candidate %s\n' "${CI_COMMIT_TAG}" > release-notes.md
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: "Gateway Release Candidate ${CI_COMMIT_TAG}"
+    description: ./release-notes.md
+    assets:
+      links:
+        - name: gateway-image.update.json
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/gateway/${CI_COMMIT_TAG}/gateway-image.update.json"
+          filepath: /gateway-image.update.json
+          link_type: other
+        - name: gateway-installer-linux-amd64.tar.gz
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/gateway-installer/${CI_COMMIT_TAG}/gateway-installer-linux-amd64.tar.gz"
+          filepath: /gateway-installer-linux-amd64.tar.gz
+          link_type: package
+        - name: gateway-installer-linux-arm64.tar.gz
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/gateway-installer/${CI_COMMIT_TAG}/gateway-installer-linux-arm64.tar.gz"
+          filepath: /gateway-installer-linux-arm64.tar.gz
+          link_type: package
+        - name: checksums.txt
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/gateway-installer/${CI_COMMIT_TAG}/checksums.txt"
+          filepath: /checksums.txt
+          link_type: other
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-rc\.\d+$/
+
 # ── Logging SDK npm package ───────────────────────────────────────
 
 publish-logging-sdk:
@@ -352,7 +429,7 @@ publish-logging-sdk:
         - packages/logging-sdk/**/*
 
 # ── Daemon builds (shared template) ───────────────────────────────
-# Triggered by tags like: v1.3.0-nginx, v1.3.0-docker, v1.3.0-monitoring
+# Triggered by stable tags like v1.3.0-nginx and test-only tags like v1.3.0-nginx-rc.1.
 
 .build-daemon:
   stage: build
@@ -363,7 +440,7 @@ publish-logging-sdk:
     - ./scripts/sync-update-trust-anchor.sh
     - cd packages/daemons/${DAEMON_DIR}
     - |
-      VERSION=$(echo "${CI_COMMIT_TAG}" | sed "s/-${DAEMON_SUFFIX}$//")
+      VERSION=$(echo "${CI_COMMIT_TAG}" | sed -E "s/-${DAEMON_SUFFIX}(-rc\\.[0-9]+)?$/\\1/")
       echo "Building ${DAEMON_NAME} ${VERSION} (tag: ${CI_COMMIT_TAG})..."
       for GOARCH in amd64 arm64; do
         echo "  → linux/${GOARCH}"
@@ -388,7 +465,7 @@ publish-logging-sdk:
       for GOARCH in amd64 arm64; do
         sha256sum "${DAEMON_NAME}-linux-${GOARCH}" >> checksums.txt
       done
-      VERSION=$(echo "${CI_COMMIT_TAG}" | sed "s/-${DAEMON_SUFFIX}$//")
+      VERSION=$(echo "${CI_COMMIT_TAG}" | sed -E "s/-${DAEMON_SUFFIX}(-rc\\.[0-9]+)?$/\\1/")
       ENCODED_PROJECT_PATH=$(printf '%s' "$CI_PROJECT_PATH" | sed 's#/#%2F#g')
       for GOARCH in amd64 arm64; do
         ARTIFACT="${DAEMON_NAME}-linux-${GOARCH}"
@@ -479,6 +556,77 @@ publish-logging-sdk:
 
 # ── nginx-daemon ──────────────────────────────────────────────────
 
+# ── gateway-installer ──────────────────────────────────────────────
+
+build-installer:
+  stage: build
+  image: ${GOLANG_CI_IMAGE}
+  needs:
+    - test-installer
+    - test-installer-ui
+  before_script:
+    - mkdir -p ${GOCACHE} ${GOMODCACHE}
+  script:
+    - cd packages/installer
+    - |
+      VERSION=$(echo "${CI_COMMIT_TAG}" | sed 's/-installer$//')
+      NODE_RUNTIME_VERSION=24.18.0
+      for GOARCH in amd64 arm64; do
+        CGO_ENABLED=0 GOOS=linux GOARCH=${GOARCH} go build \
+          -ldflags "-s -w -X main.Version=${VERSION}" \
+          -o "gateway-installer-engine-${GOARCH}" ./cmd/gateway-installer
+        if [ "${GOARCH}" = "amd64" ]; then NODE_ARCH=x64; else NODE_ARCH=arm64; fi
+        NODE_ARCHIVE="node-v${NODE_RUNTIME_VERSION}-linux-${NODE_ARCH}.tar.gz"
+        curl -fsSLO "https://nodejs.org/dist/v${NODE_RUNTIME_VERSION}/${NODE_ARCHIVE}"
+        ./scripts/package-archive.sh "${NODE_ARCHIVE}" "${GOARCH}" "../../gateway-installer-linux-${GOARCH}.tar.gz"
+        sha256sum "../../gateway-installer-linux-${GOARCH}.tar.gz" >> ../../checksums.txt
+      done
+    - cd ../..
+    - |
+      for GOARCH in amd64 arm64; do
+        curl --fail --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          --upload-file "gateway-installer-linux-${GOARCH}.tar.gz" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/gateway-installer/${CI_COMMIT_TAG}/gateway-installer-linux-${GOARCH}.tar.gz"
+      done
+      curl --fail --show-error --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+        --upload-file checksums.txt \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/gateway-installer/${CI_COMMIT_TAG}/checksums.txt"
+  artifacts:
+    paths:
+      - gateway-installer-linux-amd64.tar.gz
+      - gateway-installer-linux-arm64.tar.gz
+      - checksums.txt
+    expire_in: 1 hour
+  <<: *installer-rules
+
+release-installer:
+  stage: release
+  image: ${RELEASE_CLI_IMAGE}
+  needs:
+    - build-installer
+  script:
+    - printf 'Gateway installer %s\n' "${CI_COMMIT_TAG}" > release-notes.md
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: "Gateway Installer ${CI_COMMIT_TAG}"
+    description: ./release-notes.md
+    assets:
+      links:
+        - name: gateway-installer-linux-amd64.tar.gz
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/gateway-installer/${CI_COMMIT_TAG}/gateway-installer-linux-amd64.tar.gz"
+          filepath: /gateway-installer-linux-amd64.tar.gz
+          link_type: package
+        - name: gateway-installer-linux-arm64.tar.gz
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/gateway-installer/${CI_COMMIT_TAG}/gateway-installer-linux-arm64.tar.gz"
+          filepath: /gateway-installer-linux-arm64.tar.gz
+          link_type: package
+        - name: checksums.txt
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/gateway-installer/${CI_COMMIT_TAG}/checksums.txt"
+          filepath: /checksums.txt
+          link_type: other
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-installer$/
+
 build-nginx-daemon:
   extends: .build-daemon
   needs:
@@ -489,7 +637,7 @@ build-nginx-daemon:
     DAEMON_SUFFIX: nginx
     LDFLAGS_VERSION_PKG: github.com/wiolett-industries/gateway/nginx-daemon/internal/daemon
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-nginx$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-nginx(-rc\.\d+)?$/
 
 release-nginx-daemon:
   extends: .release-daemon
@@ -499,7 +647,7 @@ release-nginx-daemon:
     DAEMON_NAME: nginx-daemon
     DAEMON_LABEL: "Nginx Daemon"
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-nginx$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-nginx(-rc\.\d+)?$/
 
 # ── docker-daemon ─────────────────────────────────────────────────
 
@@ -513,7 +661,7 @@ build-docker-daemon:
     DAEMON_SUFFIX: docker
     LDFLAGS_VERSION_PKG: main
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-docker$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-docker(-rc\.\d+)?$/
 
 release-docker-daemon:
   extends: .release-daemon
@@ -523,7 +671,7 @@ release-docker-daemon:
     DAEMON_NAME: docker-daemon
     DAEMON_LABEL: "Docker Daemon"
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-docker$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-docker(-rc\.\d+)?$/
 
 # ── monitoring-daemon ─────────────────────────────────────────────
 
@@ -537,7 +685,7 @@ build-monitoring-daemon:
     DAEMON_SUFFIX: monitoring
     LDFLAGS_VERSION_PKG: main
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-monitoring$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-monitoring(-rc\.\d+)?$/
 
 release-monitoring-daemon:
   extends: .release-daemon
@@ -547,4 +695,4 @@ release-monitoring-daemon:
     DAEMON_NAME: monitoring-daemon
     DAEMON_LABEL: "Monitoring Daemon"
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-monitoring$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-monitoring(-rc\.\d+)?$/

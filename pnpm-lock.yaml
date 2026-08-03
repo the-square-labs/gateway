@@ -413,6 +413,25 @@ importers:
         specifier: ^4.1.5
         version: 4.1.5(@types/node@22.19.15)(jsdom@26.1.0)(msw@2.12.14(@types/node@22.19.15)(typescript@5.9.3))(vite@7.3.5(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3))
 
+  packages/installer:
+    dependencies:
+      '@clack/prompts':
+        specifier: 1.7.0
+        version: 1.7.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.15
+      esbuild:
+        specifier: 0.25.12
+        version: 0.25.12
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.5
+        version: 4.1.5(@types/node@22.19.15)(jsdom@26.1.0)(msw@2.12.14(@types/node@22.19.15)(typescript@5.9.3))(vite@7.3.5(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3))
+
   packages/logging-sdk:
     devDependencies:
       '@biomejs/biome':

@@ -22,6 +22,7 @@ packages/daemons/docker/bin/
 packages/daemons/nginx/bin/
 packages/daemons/nginx/nginx-daemon
 packages/daemons/shared/updateauth/update-signing-public-key.pem
+packages/installer/gateway-installer-engine-*
 
 # Update signing keygen outputs
 private.pem

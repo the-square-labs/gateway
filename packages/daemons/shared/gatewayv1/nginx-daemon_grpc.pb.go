@@ -19,14 +19,18 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NodeEnrollment_Enroll_FullMethodName           = "/gateway.v1.NodeEnrollment/Enroll"
-	NodeEnrollment_RenewCertificate_FullMethodName = "/gateway.v1.NodeEnrollment/RenewCertificate"
+	NodeEnrollment_ValidateEnrollment_FullMethodName = "/gateway.v1.NodeEnrollment/ValidateEnrollment"
+	NodeEnrollment_Enroll_FullMethodName             = "/gateway.v1.NodeEnrollment/Enroll"
+	NodeEnrollment_RenewCertificate_FullMethodName   = "/gateway.v1.NodeEnrollment/RenewCertificate"
 )
 
 // NodeEnrollmentClient is the client API for NodeEnrollment service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type NodeEnrollmentClient interface {
+	// Read-only preflight: validates an unused enrollment token before an
+	// installer changes the host. It never issues a certificate or consumes the token.
+	ValidateEnrollment(ctx context.Context, in *ValidateEnrollmentRequest, opts ...grpc.CallOption) (*ValidateEnrollmentResponse, error)
 	// Initial enrollment: daemon presents PSK token, receives mTLS certs
 	Enroll(ctx context.Context, in *EnrollRequest, opts ...grpc.CallOption) (*EnrollResponse, error)
 	// Certificate renewal: daemon presents current cert, gets new one
@@ -39,6 +43,16 @@ type nodeEnrollmentClient struct {
 
 func NewNodeEnrollmentClient(cc grpc.ClientConnInterface) NodeEnrollmentClient {
 	return &nodeEnrollmentClient{cc}
+}
+
+func (c *nodeEnrollmentClient) ValidateEnrollment(ctx context.Context, in *ValidateEnrollmentRequest, opts ...grpc.CallOption) (*ValidateEnrollmentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ValidateEnrollmentResponse)
+	err := c.cc.Invoke(ctx, NodeEnrollment_ValidateEnrollment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *nodeEnrollmentClient) Enroll(ctx context.Context, in *EnrollRequest, opts ...grpc.CallOption) (*EnrollResponse, error) {
@@ -65,6 +79,9 @@ func (c *nodeEnrollmentClient) RenewCertificate(ctx context.Context, in *RenewCe
 // All implementations must embed UnimplementedNodeEnrollmentServer
 // for forward compatibility.
 type NodeEnrollmentServer interface {
+	// Read-only preflight: validates an unused enrollment token before an
+	// installer changes the host. It never issues a certificate or consumes the token.
+	ValidateEnrollment(context.Context, *ValidateEnrollmentRequest) (*ValidateEnrollmentResponse, error)
 	// Initial enrollment: daemon presents PSK token, receives mTLS certs
 	Enroll(context.Context, *EnrollRequest) (*EnrollResponse, error)
 	// Certificate renewal: daemon presents current cert, gets new one
@@ -79,6 +96,9 @@ type NodeEnrollmentServer interface {
 // pointer dereference when methods are called.
 type UnimplementedNodeEnrollmentServer struct{}
 
+func (UnimplementedNodeEnrollmentServer) ValidateEnrollment(context.Context, *ValidateEnrollmentRequest) (*ValidateEnrollmentResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ValidateEnrollment not implemented")
+}
 func (UnimplementedNodeEnrollmentServer) Enroll(context.Context, *EnrollRequest) (*EnrollResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Enroll not implemented")
 }
@@ -104,6 +124,24 @@ func RegisterNodeEnrollmentServer(s grpc.ServiceRegistrar, srv NodeEnrollmentSer
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&NodeEnrollment_ServiceDesc, srv)
+}
+
+func _NodeEnrollment_ValidateEnrollment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateEnrollmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeEnrollmentServer).ValidateEnrollment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeEnrollment_ValidateEnrollment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeEnrollmentServer).ValidateEnrollment(ctx, req.(*ValidateEnrollmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _NodeEnrollment_Enroll_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -149,6 +187,10 @@ var NodeEnrollment_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "gateway.v1.NodeEnrollment",
 	HandlerType: (*NodeEnrollmentServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ValidateEnrollment",
+			Handler:    _NodeEnrollment_ValidateEnrollment_Handler,
+		},
 		{
 			MethodName: "Enroll",
 			Handler:    _NodeEnrollment_Enroll_Handler,

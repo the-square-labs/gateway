@@ -71,6 +71,13 @@ export interface AuthProvisioningSettings {
   oidcDefaultGroupId: string;
   oidcRequireVerifiedEmail: boolean;
   oauthExtendedCallbackCompatibility: boolean;
+  oidc?: {
+    configured: boolean;
+    issuer: string | null;
+    clientId: string | null;
+    redirectUri: string | null;
+    scopes: string | null;
+  };
   methods?: {
     oidc: boolean;
     password: boolean;

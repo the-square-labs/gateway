@@ -1,0 +1,236 @@
+package install
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+
+	"github.com/wiolett-industries/gateway/installer/internal/config"
+)
+
+type GatewayInstaller struct {
+	stdout, stderr io.Writer
+	exec           Executor
+}
+
+func NewGateway(stdout, stderr io.Writer) *GatewayInstaller {
+	return &GatewayInstaller{stdout: stdout, stderr: stderr, exec: systemExecutor{stdout: stdout, stderr: stderr}}
+}
+
+func (i *GatewayInstaller) Run(ctx context.Context, gateway config.Gateway) error {
+	gateway.Normalize()
+	if err := validateGateway(gateway); err != nil {
+		return err
+	}
+	if err := i.ensureCompose(ctx); err != nil {
+		return err
+	}
+	if _, err := os.Stat(".env"); err == nil {
+		fmt.Fprintln(i.stdout, "Existing .env detected; preserving it and regenerating docker-compose.yml.")
+	} else {
+		if err := writeGatewayEnv(gateway); err != nil {
+			return err
+		}
+	}
+	if err := writeGatewayCompose(gateway); err != nil {
+		return err
+	}
+	if gateway.LoggingMode == "local" {
+		if err := writeClickHouseSafety(); err != nil {
+			return err
+		}
+	}
+	if gateway.SkipStart {
+		fmt.Fprintln(i.stdout, "Gateway files written; service start skipped.")
+		return nil
+	}
+	if err := i.exec.Run(ctx, "docker", "compose", "pull"); err != nil {
+		return err
+	}
+	if err := i.exec.Run(ctx, "docker", "compose", "up", "-d"); err != nil {
+		return err
+	}
+	if err := i.bootstrap(ctx, gateway); err != nil {
+		return err
+	}
+	fmt.Fprintln(i.stdout, "Gateway installation complete. Check: docker compose ps")
+	return nil
+}
+
+func validateGateway(g config.Gateway) error {
+	if g.DatabaseMode != "local" && g.DatabaseMode != "remote" {
+		return fmt.Errorf("database mode must be local or remote")
+	}
+	if g.DatabaseMode == "remote" && !strings.HasPrefix(g.DatabaseURL, "postgres") {
+		return fmt.Errorf("remote database mode requires a postgres:// or postgresql:// --database-url")
+	}
+	if g.LoggingMode != "local" && g.LoggingMode != "remote" && g.LoggingMode != "disabled" {
+		return fmt.Errorf("logging mode must be local, remote, or disabled")
+	}
+	if g.LoggingMode == "remote" && !strings.HasPrefix(g.ClickHouseURL, "http") {
+		return fmt.Errorf("remote logging mode requires an HTTP(S) --clickhouse-url")
+	}
+	if g.ResourceProfile != "small" && g.ResourceProfile != "medium" && g.ResourceProfile != "large" && g.ResourceProfile != "custom" {
+		return fmt.Errorf("resource profile must be small, medium, large, or custom")
+	}
+	methods := parseAuthMethods(g.AuthMethods)
+	if len(methods) == 0 {
+		return fmt.Errorf("--auth-methods must select at least one of oidc,password,emailOtp")
+	}
+	if !methods[g.InitialAdminMethod] || g.InitialAdminEmail == "" || g.InitialAdminName == "" {
+		return fmt.Errorf("initial administrator email, name, and an enabled --initial-admin-method are required")
+	}
+	if methods["oidc"] && (g.OIDCIssuer == "" || g.OIDCClientID == "" || g.OIDCClientSecret == "" || g.OIDCRedirectURI == "") {
+		return fmt.Errorf("OIDC requires issuer, client ID, client secret, and redirect URI")
+	}
+	if methods["password"] || methods["emailOtp"] {
+		if g.SMTPHost == "" || g.SMTPPort == "" || g.SMTPTLSMode == "" || g.SMTPPassword == "" || g.SMTPSenderName == "" || g.SMTPSenderEmail == "" {
+			return fmt.Errorf("email sign-in requires complete SMTP configuration")
+		}
+	}
+	return nil
+}
+
+func parseAuthMethods(value string) map[string]bool {
+	result := map[string]bool{}
+	for _, method := range strings.Split(value, ",") {
+		method = strings.TrimSpace(method)
+		if method == "oidc" || method == "password" || method == "emailOtp" {
+			result[method] = true
+		}
+	}
+	return result
+}
+
+func (i *GatewayInstaller) ensureCompose(ctx context.Context) error {
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("Gateway installation must run as root (or with sudo)")
+	}
+	if installErr := NewNode(i.stdout, i.stderr).ensureDocker(ctx); installErr != nil {
+		return fmt.Errorf("Docker is required: %w", installErr)
+	}
+	if _, err := os.Stat("/var/run/docker.sock"); err != nil {
+		return fmt.Errorf("Docker socket is unavailable: %w", err)
+	}
+	return i.exec.Run(ctx, "docker", "compose", "version")
+}
+
+func writeGatewayEnv(g config.Gateway) error {
+	dbPassword, err := randomHex(16)
+	if err != nil {
+		return err
+	}
+	pkiKey, err := randomHex(32)
+	if err != nil {
+		return err
+	}
+	setupToken, err := randomHex(32)
+	if err != nil {
+		return err
+	}
+	clickhousePassword, err := randomHex(16)
+	if err != nil {
+		return err
+	}
+	databaseURL := g.DatabaseURL
+	if g.DatabaseMode == "local" {
+		databaseURL = "postgres://gateway:" + dbPassword + "@postgres:5432/gateway"
+	}
+	clickhouseURL := g.ClickHouseURL
+	if g.LoggingMode == "local" {
+		clickhouseURL = "http://clickhouse:8123"
+	}
+	if g.LoggingMode == "disabled" {
+		clickhouseURL = ""
+	}
+	appURL := "http://localhost:3000"
+	if g.Domain != "" {
+		appURL = "https://" + g.Domain
+	}
+	content := fmt.Sprintf("# Generated by gateway-installer\nGATEWAY_IMAGE=%s\nGATEWAY_VERSION=%s\nGATEWAY_IMAGE_REF=%s:%s\nCOMPOSE_PROJECT_DIR=%s\nPORT=3000\nNODE_ENV=production\nAPP_URL=%s\nBIND_HOST=0.0.0.0\nDB_PASSWORD=%s\nDATABASE_URL=%s\nREDIS_URL=redis://redis:6379\nCLICKHOUSE_URL=%s\nCLICKHOUSE_USERNAME=%s\nCLICKHOUSE_PASSWORD=%s\nCLICKHOUSE_DATABASE=%s\nCLICKHOUSE_LOGS_TABLE=%s\nCLICKHOUSE_MANAGED_INTERNAL_LOGS=%t\nPKI_MASTER_KEY=%s\nACME_EMAIL=%s\nACME_STAGING=%t\nGRPC_PORT=9443\nSETUP_TOKEN=%s\nSETUP_BOOTSTRAP=true\nAPP_VERSION=${GATEWAY_VERSION}\nSANDBOX_RUNNER_WORKSPACE_DIR=/var/lib/gateway/sandbox-workspaces\n", g.Image, g.Version, g.Image, g.Version, mustGetwd(), appURL, dbPassword, databaseURL, clickhouseURL, g.ClickHouseUsername, clickhousePassword, g.ClickHouseDatabase, g.ClickHouseTable, g.LoggingMode == "local", pkiKey, g.ACMEEmail, g.ACMEStaging, setupToken)
+	mode := os.FileMode(0644)
+	if g.RestrictEnv {
+		mode = 0600
+	}
+	return os.WriteFile(".env", []byte(content), mode)
+}
+
+func writeGatewayCompose(g config.Gateway) error {
+	profile := resourceProfile(g.ResourceProfile)
+	appPort := "      - \"${BIND_HOST:-0.0.0.0}:3000:3000\""
+	if g.Domain != "" {
+		appPort = "      - \"127.0.0.1:3000:3000\""
+	}
+	logging := ""
+	if g.LogRotation {
+		logging = fmt.Sprintf("    logging:\n      driver: json-file\n      options:\n        max-size: \"%s\"\n        max-file: \"%s\"\n", g.LogMaxSize, g.LogMaxFile)
+	}
+	depends := "      redis:\n        condition: service_healthy\n"
+	services := ""
+	volumes := "  redis_data:\n"
+	if g.DatabaseMode == "local" {
+		depends = "      postgres:\n        condition: service_healthy\n" + depends
+		services += postgresCompose(profile.Postgres, logging)
+		volumes = "  postgres_data:\n" + volumes
+	}
+	if g.LoggingMode == "local" {
+		depends += "      clickhouse:\n        condition: service_healthy\n"
+		services += clickhouseCompose(profile.ClickHouse, logging)
+		volumes += "  clickhouse_data:\n"
+	}
+	content := fmt.Sprintf("services:\n  app:\n    image: ${GATEWAY_IMAGE_REF}\n    restart: unless-stopped\n    ports:\n%s\n      - \"${BIND_HOST:-0.0.0.0}:9443:9443\"\n    env_file: .env\n    mem_limit: %s\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock:ro\n      - ${SANDBOX_RUNNER_WORKSPACE_DIR:-/var/lib/gateway/sandbox-workspaces}:${SANDBOX_RUNNER_WORKSPACE_DIR:-/var/lib/gateway/sandbox-workspaces}\n      - ./docker-compose.yml:/app/docker-compose.yml:ro\n    depends_on:\n%s    healthcheck:\n      test: [\"CMD-SHELL\", \"wget -qO- http://127.0.0.1:3000/health || exit 1\"]\n      interval: 10s\n      timeout: 5s\n      retries: 10\n      start_period: 30s\n%s%s\nvolumes:\n%s", appPort, profile.App, depends, logging, services, volumes)
+	if _, err := os.Stat("docker-compose.yml"); err == nil {
+		if err := copyFile("docker-compose.yml", "docker-compose.yml.backup"); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile("docker-compose.yml", []byte(content), 0644)
+}
+
+type profile struct{ App, Postgres, ClickHouse string }
+
+func resourceProfile(value string) profile {
+	switch value {
+	case "small":
+		return profile{"512m", "512m", "512m"}
+	case "large":
+		return profile{"4g", "2g", "4g"}
+	case "custom":
+		// Docker Compose rejects an empty mem_limit. Custom means the operator
+		// accepts the conservative default limits and can tune compose afterwards.
+		return profile{"1g", "1g", "1g"}
+	default:
+		return profile{"1g", "1g", "1g"}
+	}
+}
+func postgresCompose(limit, logging string) string {
+	return fmt.Sprintf("\n  postgres:\n    image: postgres:16-alpine\n    restart: unless-stopped\n    environment:\n      POSTGRES_DB: gateway\n      POSTGRES_USER: gateway\n      POSTGRES_PASSWORD: ${DB_PASSWORD}\n    volumes:\n      - postgres_data:/var/lib/postgresql/data\n    mem_limit: %s\n    healthcheck:\n      test: [\"CMD-SHELL\", \"pg_isready -U gateway -d gateway\"]\n      interval: 5s\n      timeout: 5s\n      retries: 5\n%s", limit, logging)
+}
+func clickhouseCompose(limit, logging string) string {
+	return fmt.Sprintf("\n  clickhouse:\n    image: clickhouse/clickhouse-server:26.2.10.10\n    restart: unless-stopped\n    environment:\n      CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE:-gateway_logs}\n      CLICKHOUSE_USER: ${CLICKHOUSE_USERNAME:-gateway}\n      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-gateway}\n    volumes:\n      - clickhouse_data:/var/lib/clickhouse\n      - ./clickhouse-config/gateway-safety.xml:/etc/clickhouse-server/config.d/gateway-safety.xml:ro\n    mem_limit: %s\n    healthcheck:\n      test: [\"CMD-SHELL\", \"clickhouse-client --query 'SELECT 1'\"]\n      interval: 10s\n      timeout: 5s\n      retries: 10\n%s", limit, logging)
+}
+func writeClickHouseSafety() error {
+	if err := os.MkdirAll("clickhouse-config", 0755); err != nil {
+		return err
+	}
+	return os.WriteFile("clickhouse-config/gateway-safety.xml", []byte("<clickhouse><logger><level>information</level></logger><trace_log remove=\"1\" /><text_log remove=\"1\" /></clickhouse>\n"), 0644)
+}
+func randomHex(bytes int) (string, error) {
+	data := make([]byte, bytes)
+	if _, err := rand.Read(data); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(data), nil
+}
+func mustGetwd() string { cwd, _ := os.Getwd(); return cwd }
+func copyFile(source, target string) error {
+	data, err := os.ReadFile(source)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(target, data, 0644)
+}

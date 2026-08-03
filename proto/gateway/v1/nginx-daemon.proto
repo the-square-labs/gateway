@@ -6,11 +6,24 @@ option go_package = "github.com/wiolett-industries/gateway/daemon-shared/gateway
 // ─── Node Enrollment ────────────────────────────────────────────────
 
 service NodeEnrollment {
+  // Read-only preflight: validates an unused enrollment token before an
+  // installer changes the host. It never issues a certificate or consumes the token.
+  rpc ValidateEnrollment(ValidateEnrollmentRequest) returns (ValidateEnrollmentResponse);
+
   // Initial enrollment: daemon presents PSK token, receives mTLS certs
   rpc Enroll(EnrollRequest) returns (EnrollResponse);
 
   // Certificate renewal: daemon presents current cert, gets new one
   rpc RenewCertificate(RenewCertRequest) returns (RenewCertResponse);
+}
+
+message ValidateEnrollmentRequest {
+  string token = 1;
+  string node_type = 2; // Expected Gateway node type: nginx, docker, databases, monitoring.
+}
+
+message ValidateEnrollmentResponse {
+  string node_type = 1;
 }
 
 message EnrollRequest {

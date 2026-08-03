@@ -41,6 +41,57 @@ const ManagementSslUploadSchema = z.object({
   chainPem: z.string().optional(),
 });
 
+export const SetupAuthBootstrapSchema = z
+  .object({
+    methods: z.object({
+      oidc: z.boolean(),
+      password: z.boolean(),
+      emailOtp: z.boolean(),
+    }),
+    smtp: z
+      .object({
+        host: z.string().min(1),
+        port: z.number().int().min(1).max(65535),
+        tlsMode: z.enum(['starttls', 'tls']),
+        username: z.string(),
+        password: z.string().min(1),
+        senderName: z.string(),
+        senderEmail: z.string().email(),
+        testRecipient: z.string().email(),
+      })
+      .optional(),
+    oidc: z
+      .object({
+        issuer: z.string().url(),
+        clientId: z.string().min(1),
+        clientSecret: z.string().min(1),
+        redirectUri: z.string().url(),
+        scopes: z.string().min(1).optional(),
+      })
+      .optional(),
+    initialAdmin: z.object({
+      email: z.string().email(),
+      name: z.string().trim().min(1),
+      authMethod: z.enum(['oidc', 'password', 'email_otp']),
+      password: z.string().min(8).max(72).optional(),
+    }),
+  })
+  .superRefine((input, ctx) => {
+    if (!input.methods.oidc && !input.methods.password && !input.methods.emailOtp) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Select at least one authentication method', path: ['methods'] });
+    }
+    if ((input.methods.password || input.methods.emailOtp) && !input.smtp) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'SMTP is required for email authentication', path: ['smtp'] });
+    }
+    if (input.methods.oidc && !input.oidc) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'OIDC configuration is required', path: ['oidc'] });
+    }
+    const selected = input.initialAdmin.authMethod === 'email_otp' ? input.methods.emailOtp : input.methods[input.initialAdmin.authMethod];
+    if (!selected) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Initial administrator method must be enabled', path: ['initialAdmin', 'authMethod'] });
+    }
+  });
+
 export const setupManagementSslRoute = appRoute({
   method: 'post',
   path: '/management-ssl',
@@ -86,4 +137,15 @@ export const setupCompleteRoute = appRoute({
     'Bootstrap-only endpoint. The installer calls this after the setup flow finishes so setup-token endpoints close without racing the first user login. New installer-created setup windows also expire automatically one hour after first start.',
   security: [{ bearerAuth: [] }],
   responses: okJson(UnknownDataResponseSchema),
+});
+
+export const setupAuthBootstrapRoute = appRoute({
+  method: 'post',
+  path: '/auth-bootstrap',
+  tags: ['Setup'],
+  summary: 'Configure authentication and create the initial administrator',
+  description: 'Bootstrap-only endpoint protected by SETUP_TOKEN. It stores the selected authentication configuration and creates one explicit system administrator before setup is locked.',
+  security: [{ bearerAuth: [] }],
+  request: jsonBody(SetupAuthBootstrapSchema),
+  responses: okJson(dataResponseSchema(z.object({ userId: z.string().uuid(), passwordSet: z.boolean() }))),
 });

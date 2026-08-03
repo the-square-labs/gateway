@@ -32,6 +32,11 @@ const DAEMON_NAME_MAP: Record<DaemonType, string> = {
   monitoring: 'monitoring-daemon',
 };
 
+export function isStableDaemonReleaseTag(tag: string, daemonType: DaemonType): boolean {
+  const suffix = TAG_SUFFIX_MAP[daemonType].replace('-', '\\-');
+  return new RegExp(`^v?\\d+\\.\\d+\\.\\d+${suffix}$`).test(tag);
+}
+
 /** Maps node.type values to daemon types */
 export const NODE_TYPE_MAP: Record<string, DaemonType> = {
   nginx: 'nginx',
@@ -49,6 +54,18 @@ interface GitLabRelease {
   tag_name: string;
   description: string;
   _links: { self: string };
+}
+
+export function selectLatestStableDaemonRelease(
+  releases: GitLabRelease[],
+  daemonType: DaemonType
+): (GitLabRelease & { version: string }) | null {
+  const suffix = TAG_SUFFIX_MAP[daemonType];
+  const matching = releases
+    .filter((release) => isStableDaemonReleaseTag(release.tag_name, daemonType))
+    .map((release) => ({ ...release, version: release.tag_name.slice(0, -suffix.length) }))
+    .sort((left, right) => compareSemver(right.version, left.version));
+  return matching[0] ?? null;
 }
 
 export interface DaemonRelease {
@@ -113,16 +130,7 @@ export class DaemonUpdateService {
 
       // Find latest release per daemon type
       for (const type of DAEMON_TYPES) {
-        const suffix = TAG_SUFFIX_MAP[type];
-        const matching = releases
-          .filter((r) => r.tag_name.endsWith(suffix))
-          .map((r) => ({
-            ...r,
-            version: r.tag_name.replace(suffix, ''),
-          }))
-          .sort((a, b) => compareSemver(b.version, a.version));
-
-        const latest = matching[0];
+        const latest = selectLatestStableDaemonRelease(releases, type);
         if (latest) {
           await this.upsertSetting(`daemon-update:${type}:latest_version`, latest.version);
           await this.upsertSetting(`daemon-update:${type}:latest_tag`, latest.tag_name);

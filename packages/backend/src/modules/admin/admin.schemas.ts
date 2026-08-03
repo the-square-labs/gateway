@@ -70,6 +70,14 @@ const SmtpConfigSchema = z.object({
   testEmailKind: z.enum(['smtp_configuration', 'password_setup', 'password_reset', 'email_otp']).optional(),
 });
 
+const OidcConfigSchema = z.object({
+  issuer: z.string().url().max(2048),
+  clientId: z.string().trim().min(1).max(1024),
+  clientSecret: z.string().min(1).max(4096).optional(),
+  redirectUri: z.string().url().max(2048),
+  scopes: z.string().trim().min(1).max(1024).optional(),
+});
+
 export const UpdateAuthProvisioningSettingsSchema = z.object({
   oidcAutoCreateUsers: z.boolean().optional(),
   oidcDefaultGroupId: z.string().uuid().optional(),
@@ -77,6 +85,7 @@ export const UpdateAuthProvisioningSettingsSchema = z.object({
   oauthExtendedCallbackCompatibility: z.boolean().optional(),
   methods: AuthMethodsSchema.optional(),
   passwordPolicy: PasswordPolicySchema.optional(),
+  oidc: OidcConfigSchema.optional(),
   smtp: SmtpConfigSchema.optional(),
   mcpServerEnabled: z.boolean().optional(),
   mcpExtendedCompatibility: z.boolean().optional(),

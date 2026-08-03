@@ -76,6 +76,10 @@ function makeEnrollCall(token: string) {
   } as any;
 }
 
+function makeValidateCall(token: string, nodeType = 'docker') {
+  return { request: { token, nodeType } } as any;
+}
+
 function makePendingNode(enrollmentTokenHash: string, enrollmentTokenSelector: string | null = null) {
   return {
     id: nodeId,
@@ -164,6 +168,32 @@ function makeDeps(db: any, connected = true) {
 }
 
 describe('Enroll token lookup', () => {
+  it('validates a matching pending token without issuing a certificate or consuming it', async () => {
+    const enrollmentToken = createNodeEnrollmentToken();
+    const tokenHash = await bcrypt.hash(enrollmentToken.token, 4);
+    const updateSet = vi.fn();
+    const deps = makeDeps(makeEnrollDb([makePendingNode(tokenHash, enrollmentToken.selector)], updateSet));
+    const callback = vi.fn();
+
+    await createEnrollmentHandlers(deps).ValidateEnrollment(makeValidateCall(enrollmentToken.token), callback);
+
+    expect(deps.systemCA.issueNodeCert).not.toHaveBeenCalled();
+    expect(updateSet).not.toHaveBeenCalled();
+    expect(callback).toHaveBeenCalledWith(null, { nodeType: 'docker' });
+  });
+
+  it('rejects a token when the requested node type does not match', async () => {
+    const enrollmentToken = createNodeEnrollmentToken();
+    const tokenHash = await bcrypt.hash(enrollmentToken.token, 4);
+    const deps = makeDeps(makeEnrollDb([makePendingNode(tokenHash, enrollmentToken.selector)]));
+    const callback = vi.fn();
+
+    await createEnrollmentHandlers(deps).ValidateEnrollment(makeValidateCall(enrollmentToken.token, 'nginx'), callback);
+
+    expect(deps.systemCA.issueNodeCert).not.toHaveBeenCalled();
+    expect(callback.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ code: 3 }));
+  });
+
   it('enrolls a v2 token with a selector lookup and one bcrypt comparison', async () => {
     const enrollmentToken = createNodeEnrollmentToken();
     const tokenHash = await bcrypt.hash(enrollmentToken.token, 4);

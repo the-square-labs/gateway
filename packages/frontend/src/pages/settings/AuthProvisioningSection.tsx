@@ -58,6 +58,13 @@ const DEFAULT_PASSWORD_POLICY = {
   requireDigit: false,
   requireSymbol: false,
 };
+const DEFAULT_OIDC_DRAFT = {
+  issuer: "",
+  clientId: "gateway",
+  clientSecret: "",
+  redirectUri: "",
+  scopes: "openid email profile",
+};
 
 const SMTP_PRESETS = {
   generic: {
@@ -196,6 +203,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
   const [isSavingNetwork, setIsSavingNetwork] = useState(false);
   const [isSavingWebhookPolicy, setIsSavingWebhookPolicy] = useState(false);
   const [isSavingLocalAuth, setIsSavingLocalAuth] = useState(false);
+  const [oidcDraft, setOidcDraft] = useState(DEFAULT_OIDC_DRAFT);
   const [smtpDraft, setSmtpDraft] = useState<SmtpDraft>(DEFAULT_SMTP_DRAFT);
   const [smtpPreset, setSmtpPreset] = useState<SmtpPresetId>("resend");
   const [smtpTestOpen, setSmtpTestOpen] = useState(false);
@@ -278,6 +286,13 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
         senderEmail: settingsData.smtp?.senderEmail ?? "",
       }));
       setSmtpPreset(smtpPresetId);
+      setOidcDraft({
+        issuer: settingsData.oidc?.issuer ?? "",
+        clientId: settingsData.oidc?.clientId ?? "gateway",
+        clientSecret: "",
+        redirectUri: settingsData.oidc?.redirectUri ?? "",
+        scopes: settingsData.oidc?.scopes ?? "openid email profile",
+      });
       setTrustedProxyCidrs(settingsData.networkSecurity.trustedProxyCidrs.join(", "));
       setWebhookPrivateCidrs(settingsData.outboundWebhookPolicy.allowedPrivateCidrs.join(", "));
       setFileUploadLimitMb(
@@ -685,6 +700,30 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
     }
   };
 
+  const saveOidc = async () => {
+    if (!oidcDraft.issuer || !oidcDraft.clientId || !oidcDraft.redirectUri) {
+      toast.error("OIDC issuer, client ID, and redirect URI are required");
+      return;
+    }
+    if (!settings?.oidc?.configured && !oidcDraft.clientSecret) {
+      toast.error("OIDC client secret is required for the first configuration");
+      return;
+    }
+    const saved = await updateLocalAuth(
+      {
+        oidc: {
+          issuer: oidcDraft.issuer,
+          clientId: oidcDraft.clientId,
+          redirectUri: oidcDraft.redirectUri,
+          scopes: oidcDraft.scopes,
+          ...(oidcDraft.clientSecret ? { clientSecret: oidcDraft.clientSecret } : {}),
+        },
+      },
+      "OIDC configuration saved"
+    );
+    if (saved) setOidcDraft((current) => ({ ...current, clientSecret: "" }));
+  };
+
   const handleSmtpPresetChange = (presetId: SmtpPresetId) => {
     setSmtpPreset(presetId);
     setSmtpDraft((current) => applySmtpPreset(current, presetId));
@@ -924,6 +963,30 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
               </Select>
             </div>
           </div>
+        </div>
+      </PanelShell>
+
+      <PanelShell
+        title="OIDC provider"
+        description={settings.oidc?.configured ? "Configured in Gateway settings" : "Configure the identity provider before enabling OIDC"}
+        actions={<Button onClick={saveOidc} disabled={!canEdit || isSavingLocalAuth}>Save</Button>}
+      >
+        <div className="grid gap-4 px-4 py-3 sm:grid-cols-2">
+          <SettingsControlRow title="Issuer URL" description="OpenID Connect issuer URL.">
+            <Input value={oidcDraft.issuer} placeholder="https://id.example.com" disabled={!canEdit || isSavingLocalAuth} onChange={(event) => setOidcDraft((current) => ({ ...current, issuer: event.target.value }))} />
+          </SettingsControlRow>
+          <SettingsControlRow title="Client ID" description="Client registered with the identity provider.">
+            <Input value={oidcDraft.clientId} placeholder="gateway" disabled={!canEdit || isSavingLocalAuth} onChange={(event) => setOidcDraft((current) => ({ ...current, clientId: event.target.value }))} />
+          </SettingsControlRow>
+          <SettingsControlRow title="Redirect URI" description="Callback URL registered with the identity provider.">
+            <Input value={oidcDraft.redirectUri} placeholder="https://gateway.example.com/auth/callback" disabled={!canEdit || isSavingLocalAuth} onChange={(event) => setOidcDraft((current) => ({ ...current, redirectUri: event.target.value }))} />
+          </SettingsControlRow>
+          <SettingsControlRow title="Client secret" description={settings.oidc?.configured ? "Leave blank to keep the current secret." : "Stored encrypted in Gateway settings."}>
+            <Input type="password" value={oidcDraft.clientSecret} placeholder={settings.oidc?.configured ? "Unchanged" : "Client secret"} disabled={!canEdit || isSavingLocalAuth} onChange={(event) => setOidcDraft((current) => ({ ...current, clientSecret: event.target.value }))} />
+          </SettingsControlRow>
+          <SettingsControlRow title="Scopes" description="Scopes requested during sign-in.">
+            <Input value={oidcDraft.scopes} placeholder="openid email profile" disabled={!canEdit || isSavingLocalAuth} onChange={(event) => setOidcDraft((current) => ({ ...current, scopes: event.target.value }))} />
+          </SettingsControlRow>
         </div>
       </PanelShell>
 

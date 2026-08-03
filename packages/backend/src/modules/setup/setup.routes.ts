@@ -7,9 +7,17 @@ import { createChildLogger } from '@/lib/logger.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { NodesService } from '@/modules/nodes/nodes.service.js';
+import { AuditService } from '@/modules/audit/audit.service.js';
+import { AuthService } from '@/modules/auth/auth.service.js';
+import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
+import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
+import { LocalAuthService } from '@/modules/auth/local-auth.service.js';
+import { GroupService } from '@/modules/groups/group.service.js';
 import type { AppEnv } from '@/types.js';
 import {
   setupCompleteRoute,
+  setupAuthBootstrapRoute,
+  SetupAuthBootstrapSchema,
   setupEnrollNodeRoute,
   setupManagementSslRoute,
   setupManagementSslUploadRoute,
@@ -120,6 +128,61 @@ setupRoutes.openapi(setupEnrollNodeRoute, async (c) => {
     logger.error('Node enrollment via setup token failed', { error: message });
     throw new AppError(500, 'SETUP_ENROLL_NODE_FAILED', message);
   }
+});
+
+setupRoutes.openapi(setupAuthBootstrapRoute, async (c) => {
+  if (!verifySetupToken(c.req.header('Authorization'))) {
+    throw new AppError(401, 'SETUP_TOKEN_INVALID', 'Invalid or missing setup token');
+  }
+
+  const input = SetupAuthBootstrapSchema.parse(await c.req.json());
+
+  const enabled = input.methods;
+  if (!enabled.oidc && !enabled.password && !enabled.emailOtp) {
+    throw new AppError(400, 'AUTH_METHOD_REQUIRED', 'Select at least one authentication method');
+  }
+  const adminMethodEnabled = input.initialAdmin.authMethod === 'email_otp' ? enabled.emailOtp : enabled[input.initialAdmin.authMethod];
+  if (!adminMethodEnabled) {
+    throw new AppError(400, 'INITIAL_ADMIN_METHOD_DISABLED', 'Initial administrator method must be enabled');
+  }
+  if ((enabled.password || enabled.emailOtp) && !input.smtp) {
+    throw new AppError(400, 'SMTP_REQUIRED', 'SMTP is required for email authentication');
+  }
+  if (enabled.oidc && !input.oidc) {
+    throw new AppError(400, 'OIDC_REQUIRED', 'OIDC configuration is required');
+  }
+
+  const authSettings = container.resolve(AuthSettingsService);
+  const authMail = container.resolve(AuthMailService);
+  if (input.oidc) await authSettings.updateConfig({ oidc: input.oidc });
+  if (input.smtp) {
+    await authMail.saveConfig(input.smtp);
+    await authMail.sendTestEmail(input.smtp.testRecipient, 'smtp_configuration');
+  }
+  await authSettings.updateConfig({ methods: enabled });
+
+  const groups = container.resolve(GroupService);
+  const systemAdmin = await groups.getGroupByName('system-admin');
+  if (!systemAdmin) throw new AppError(500, 'SYSTEM_ADMIN_GROUP_MISSING', 'Built-in system-admin group is missing');
+
+  const authService = container.resolve(AuthService);
+  const user = await authService.createUser({
+    email: input.initialAdmin.email,
+    name: input.initialAdmin.name,
+    groupId: systemAdmin.id,
+    authMethod: input.initialAdmin.authMethod,
+  });
+  if (input.initialAdmin.authMethod === 'password' && input.initialAdmin.password) {
+    await container.resolve(LocalAuthService).setInitialPassword(user.id, input.initialAdmin.password);
+  }
+  await container.resolve(AuditService).log({
+    userId: user.id,
+    action: 'setup.auth_bootstrap',
+    resourceType: 'user',
+    resourceId: user.id,
+    details: { methods: enabled, authMethod: input.initialAdmin.authMethod, passwordSet: Boolean(input.initialAdmin.password) },
+  });
+  return c.json({ data: { userId: user.id, passwordSet: Boolean(input.initialAdmin.password) } });
 });
 
 /**

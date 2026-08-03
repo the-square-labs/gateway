@@ -409,6 +409,13 @@ class ApiClient extends withInferenceApi(
     oauthExtendedCallbackCompatibility?: boolean;
     methods?: Partial<NonNullable<AuthProvisioningSettings["methods"]>>;
     passwordPolicy?: Partial<NonNullable<AuthProvisioningSettings["passwordPolicy"]>>;
+    oidc?: {
+      issuer: string;
+      clientId: string;
+      clientSecret?: string;
+      redirectUri: string;
+      scopes?: string;
+    };
     smtp?: {
       host: string;
       port: number;

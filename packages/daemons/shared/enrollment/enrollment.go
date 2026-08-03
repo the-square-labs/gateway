@@ -19,27 +19,11 @@ import (
 // The enrollment token is only sent after the Gateway TLS leaf certificate
 // matches the expected SHA-256 fingerprint.
 func Enroll(address, token, expectedGatewayCertSHA256, hostname, nginxVersion, osInfo, daemonVersion, daemonType string) (*pb.EnrollResponse, error) {
-	expectedFingerprint, err := normalizeExpectedFingerprint(expectedGatewayCertSHA256)
+	client, conn, err := enrollmentClient(address, expectedGatewayCertSHA256)
 	if err != nil {
 		return nil, err
 	}
-
-	tlsCfg := &tls.Config{
-		InsecureSkipVerify: true,
-		VerifyConnection: func(state tls.ConnectionState) error {
-			return verifyGatewayFingerprint(expectedFingerprint, state.PeerCertificates)
-		},
-	}
-
-	conn, err := grpc.NewClient(address,
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("dial gateway: %w", err)
-	}
 	defer conn.Close()
-
-	client := pb.NewNodeEnrollmentClient(conn)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -57,6 +41,47 @@ func Enroll(address, token, expectedGatewayCertSHA256, hostname, nginxVersion, o
 	}
 
 	return resp, nil
+}
+
+// ValidateEnrollment checks a pending enrollment token without consuming it.
+// Call this before downloading or configuring the daemon on the host.
+func ValidateEnrollment(address, token, expectedGatewayCertSHA256, nodeType string) (string, error) {
+	client, conn, err := enrollmentClient(address, expectedGatewayCertSHA256)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	resp, err := client.ValidateEnrollment(ctx, &pb.ValidateEnrollmentRequest{Token: token, NodeType: nodeType})
+	if err != nil {
+		return "", fmt.Errorf("enrollment validation failed: %w", err)
+	}
+	return resp.NodeType, nil
+}
+
+func enrollmentClient(address, expectedGatewayCertSHA256 string) (pb.NodeEnrollmentClient, *grpc.ClientConn, error) {
+	expectedFingerprint, err := normalizeExpectedFingerprint(expectedGatewayCertSHA256)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tlsCfg := &tls.Config{
+		InsecureSkipVerify: true,
+		VerifyConnection: func(state tls.ConnectionState) error {
+			return verifyGatewayFingerprint(expectedFingerprint, state.PeerCertificates)
+		},
+	}
+
+	conn, err := grpc.NewClient(address,
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("dial gateway: %w", err)
+	}
+	return pb.NewNodeEnrollmentClient(conn), conn, nil
 }
 
 func normalizeExpectedFingerprint(fingerprint string) (string, error) {

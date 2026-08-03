@@ -13,7 +13,7 @@ Production server:
 - OpenSSL.
 - Network access to pull Gateway images and installer assets.
 - A domain name if you want production HTTPS and ACME automation.
-- An OIDC provider such as Keycloak, Authentik, Auth0, Zitadel, or another OpenID Connect provider.
+- An OIDC provider only when you choose OIDC sign-in. Gateway can instead use email/password, email one-time codes, or several methods together.
 
 > [!IMPORTANT]
 > **Recommended isolation:** Run Gateway inside an isolated VM or on a dedicated host. Gateway is a privileged control plane and mounts the host Docker socket for internal operations such as self-updates and local housekeeping. Do not run unrelated workloads on the same Docker host.
@@ -39,10 +39,19 @@ Run this on the Gateway server:
 curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.sh | bash
 ```
 
+`install.sh` is a small compatibility loader. It downloads a matching,
+checksum-verified `gateway-installer` archive and starts its interactive setup.
+The archive contains a pinned Node runtime and the installer application, so
+Node.js does not need to be installed on the server. You can also unpack the
+archive and run `gateway-installer install gateway` directly.
+
 The installer walks through:
 
 - Deployment domain.
-- OIDC issuer and client settings.
+- Sign-in methods: OIDC, email/password, email one-time code, or a combination.
+- SMTP configuration and a delivery test when an email method is selected.
+- OIDC issuer and client settings when OIDC is selected.
+- One explicit initial system administrator and its primary sign-in method.
 - PostgreSQL location: local container or remote PostgreSQL URL.
 - Structured logging mode: local ClickHouse, remote ClickHouse, or disabled.
 - SSL mode.
@@ -55,8 +64,8 @@ The installer walks through:
 After the installer completes:
 
 1. Open the printed Gateway URL.
-2. Sign in with your OIDC provider.
-3. Complete any first-run setup steps.
+2. Sign in using the method selected for the initial administrator.
+3. If its password was intentionally skipped, select **Forgot password** on the Gateway login screen.
 4. Add a node from **Nodes > Add Node**.
 
 The installer uses `SETUP_TOKEN` only as a local bridge into the freshly started backend during first-run setup. New installs also write `SETUP_BOOTSTRAP=true`, which lets the backend open a one-hour setup window on first start. The setup API stays available until the installer marks setup complete, or until that window expires if setup is abandoned. After that, `/api/setup/*` returns 404 and later node enrollment or SSL changes must use authenticated Gateway UI/API flows.
@@ -68,9 +77,21 @@ Use `-y` with flags for CI or repeatable server setup:
 ```bash
 curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.sh | bash -s -- -y \
   --domain gw.example.com \
+  --auth-methods oidc,password \
   --oidc-issuer https://id.example.com \
   --oidc-client-id gateway \
   --oidc-client-secret your-secret \
+  --oidc-redirect-uri https://gw.example.com/auth/callback \
+  --smtp-host smtp.example.com \
+  --smtp-port 587 \
+  --smtp-tls-mode starttls \
+  --smtp-username gateway \
+  --smtp-password your-smtp-secret \
+  --smtp-sender-name Gateway \
+  --smtp-sender-email gateway@example.com \
+  --initial-admin-email admin@example.com \
+  --initial-admin-name "Gateway Admin" \
+  --initial-admin-method oidc \
   --acme-email admin@example.com
 ```
 
@@ -80,9 +101,17 @@ Common flags:
 |------|----------------------|---------|
 | `--domain` | `GATEWAY_DOMAIN` | Public Gateway domain. |
 | `--acme-email` | `GATEWAY_ACME_EMAIL` | Let's Encrypt account email. |
-| `--oidc-issuer` | `GATEWAY_OIDC_ISSUER` | OIDC issuer URL. |
-| `--oidc-client-id` | `GATEWAY_OIDC_CLIENT_ID` | OIDC client ID. |
-| `--oidc-client-secret` | `GATEWAY_OIDC_CLIENT_SECRET` | OIDC client secret. |
+| `--auth-methods` | `GATEWAY_AUTH_METHODS` | Comma-separated `oidc,password,emailOtp`; at least one is required with `--yes`. |
+| `--oidc-issuer` | `GATEWAY_OIDC_ISSUER` | OIDC issuer URL when OIDC is selected. |
+| `--oidc-client-id` | `GATEWAY_OIDC_CLIENT_ID` | OIDC client ID when OIDC is selected. |
+| `--oidc-client-secret` | `GATEWAY_OIDC_CLIENT_SECRET` | OIDC client secret when OIDC is selected. |
+| `--oidc-redirect-uri` | `GATEWAY_OIDC_REDIRECT_URI` | OIDC callback URL when OIDC is selected. |
+| `--smtp-host` / `--smtp-port` / `--smtp-tls-mode` | `GATEWAY_SMTP_*` | SMTP connection when password or email OTP is selected. |
+| `--smtp-password` | `GATEWAY_SMTP_PASSWORD` | SMTP credential; it is never displayed by dry-run. |
+| `--smtp-sender-name` / `--smtp-sender-email` | `GATEWAY_SMTP_SENDER_*` | Sender identity for authentication email. |
+| `--initial-admin-email` / `--initial-admin-name` | `GATEWAY_INITIAL_ADMIN_*` | Explicit first system administrator. |
+| `--initial-admin-method` | `GATEWAY_INITIAL_ADMIN_METHOD` | One enabled primary method for the initial administrator. |
+| `--initial-admin-password` | `GATEWAY_INITIAL_ADMIN_PASSWORD` | Optional password for a password administrator; omit it to use Forgot password later. |
 | `--acme-staging` | `GATEWAY_ACME_STAGING` | Use Let's Encrypt staging. |
 | `--resource-profile` | `GATEWAY_RESOURCE_PROFILE` | Docker resource profile. |
 | `--remote-database` | `GATEWAY_DATABASE_MODE=remote` | Use an existing remote PostgreSQL database. |
@@ -100,6 +129,41 @@ Common flags:
 | `--version` | `GATEWAY_VERSION` | Gateway version tag. |
 
 Run the installer with `--help` for the full list.
+
+## Release candidates for test machines
+
+Stable customers only see plain `vX.Y.Z` Gateway updates. A test-only release
+uses one tag such as `v2.4.0-rc.1`; it publishes the matching Gateway image,
+signed manifest, and installer archive without updating mutable image aliases.
+
+On a test Gateway host, explicitly opt in:
+
+```bash
+curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.sh | bash -s -- --nightly
+```
+
+`--nightly` resolves the latest RC installer and pins the Gateway installation
+to that same RC image. It is consumed by the loader and is never forwarded as a
+Gateway runtime setting. To install a specific candidate, use both flags:
+
+```bash
+curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.sh | bash -s -- --nightly --version v2.4.0-rc.1
+```
+
+The node wrapper also accepts `--nightly`. It downloads the latest candidate
+installer and resolves the latest RC for that node's daemon type; use
+`--version vX.Y.Z-<daemon>-rc.N` to select an exact daemon candidate. Do not
+use `--nightly` on customer Gateways or production nodes.
+
+Flags supplied in the copied command or environment are retained as editable
+defaults in the interactive form; the installer asks only for values that are
+still missing.
+
+`--yes` must include the authentication block above. The installer stores OIDC
+and SMTP credentials encrypted in Gateway settings; it no longer writes OIDC
+credentials into the generated `.env`. Existing complete `OIDC_*` environment
+configuration is imported once on upgrade so an established Gateway does not
+lose sign-in access.
 
 ## Database And Logging Storage
 
@@ -231,15 +295,11 @@ Configure your identity provider with:
 - Redirect URI: `https://<gateway-domain>/auth/callback`
 - Scopes: `openid email profile`
 
-Gateway settings:
-
-```env
-OIDC_ISSUER=https://id.example.com
-OIDC_CLIENT_ID=gateway
-OIDC_CLIENT_SECRET=<secret>
-OIDC_REDIRECT_URI=https://gw.example.com/auth/callback
-OIDC_SCOPES=openid email profile
-```
+Gateway stores issuer, client ID, callback URL, scopes, and encrypted client
+secret in **Settings → Gateway → OIDC provider**. The installer collects the
+same values during first setup. Do not add new OIDC credentials to `.env`.
+For compatibility, a pre-existing complete `OIDC_*` environment configuration
+is imported into Gateway settings once after upgrade.
 
 The exact OIDC provider UI differs, but Gateway expects a normal OIDC issuer with discovery metadata and a callback that returns an authenticated user with an email address.
 
@@ -277,10 +337,6 @@ The installer writes `.env`. Important variables:
 | `CLICKHOUSE_PASSWORD` | ClickHouse password. |
 | `CLICKHOUSE_DATABASE` | ClickHouse database. |
 | `CLICKHOUSE_LOGS_TABLE` | ClickHouse logs table. |
-| `OIDC_ISSUER` | OIDC issuer URL. |
-| `OIDC_CLIENT_ID` | OIDC client ID. |
-| `OIDC_CLIENT_SECRET` | OIDC client secret. |
-| `OIDC_REDIRECT_URI` | OIDC callback URL. |
 | `SESSION_EXPIRY` | Browser session lifetime in seconds. Browser sessions are opaque Redis-backed session IDs. |
 | `PKI_MASTER_KEY` | 64-character hex key used to encrypt PKI material. |
 | `GRPC_PORT` | Gateway gRPC port for daemon connections. |

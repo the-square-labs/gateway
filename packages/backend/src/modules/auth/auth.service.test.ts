@@ -632,14 +632,7 @@ describe('AuthService OIDC identity binding', () => {
     });
   });
 
-  it('allows first-user bootstrap when email is unverified', async () => {
-    const createdUser = dbUser({
-      id: 'user-1',
-      oidcSubject: 'real-sub',
-      email: 'user@example.com',
-      name: 'User',
-      groupId: 'admin-group',
-    });
+  it('does not grant system-admin to the first unverified OIDC user', async () => {
     const harness = createAuthServiceHarness({
       authSettings: {
         oidcAutoCreateUsers: true,
@@ -647,29 +640,18 @@ describe('AuthService OIDC identity binding', () => {
         oidcRequireVerifiedEmail: true,
       },
       userCount: 0,
-      provisioningGroup: { id: 'admin-group', name: 'system-admin' },
-      insertReturning: createdUser,
+      provisioningGroup: { id: 'viewer-group', name: 'viewer' },
     });
 
-    const result = await harness.loginWithClaims({
-      oidcSubject: 'real-sub',
-      email: 'user@example.com',
-      emailVerified: false,
-      name: 'User',
-      avatarUrl: null,
-    });
-
-    expect(result.user.id).toBe('user-1');
-    expect(harness.auditService.log).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: 'auth.user_provisioned',
-        details: expect.objectContaining({
-          oidcSubject: 'real-sub',
-          emailVerified: false,
-          bootstrap: true,
-        }),
+    await expect(
+      harness.loginWithClaims({
+        oidcSubject: 'real-sub',
+        email: 'user@example.com',
+        emailVerified: false,
+        name: 'User',
+        avatarUrl: null,
       })
-    );
+    ).rejects.toMatchObject({ statusCode: 403, code: 'OIDC_EMAIL_NOT_VERIFIED' });
   });
 });
 
@@ -758,6 +740,13 @@ function createAuthServiceHarness(options: {
   };
   const authSettingsService = {
     getConfig: vi.fn().mockResolvedValue(options.authSettings),
+    getOidcConfig: vi.fn().mockResolvedValue({
+      issuer: 'https://id.example.com',
+      clientId: 'gateway',
+      clientSecret: 'secret',
+      redirectUri: 'https://gateway.example.com/auth/callback',
+      scopes: 'openid email profile',
+    }),
   };
   const auditService = {
     log: vi.fn().mockResolvedValue(undefined),
@@ -770,6 +759,7 @@ function createAuthServiceHarness(options: {
     auditService as any
   );
   (service as any).oidcConfig = {};
+  (service as any).oidcConfigFingerprint = 'https://id.example.com\u0000gateway\u0000secret';
 
   return {
     auditService,

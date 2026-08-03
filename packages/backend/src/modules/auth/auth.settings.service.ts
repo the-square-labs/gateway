@@ -1,6 +1,7 @@
 import { count, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { permissionGroups, settings, type UserAuthMethod, userPasskeys, users } from '@/db/schema/index.js';
+import type { CryptoService } from '@/services/crypto.service.js';
 
 const AUTH_SETTINGS_DEFAULTS = {
   'auth:oidc_auto_create_users': true,
@@ -33,6 +34,36 @@ export interface PasswordPolicy {
   requireSymbol: boolean;
 }
 
+export interface OidcPublicConfig {
+  configured: boolean;
+  issuer: string | null;
+  clientId: string | null;
+  redirectUri: string | null;
+  scopes: string | null;
+}
+
+export interface OidcConfigInput {
+  issuer: string;
+  clientId: string;
+  clientSecret?: string;
+  redirectUri: string;
+  scopes?: string;
+}
+
+export interface OidcConfig {
+  issuer: string;
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+  scopes: string;
+}
+
+interface StoredOidcConfig extends Omit<OidcConfig, 'clientSecret'> {
+  clientSecret: { encryptedKey: string; encryptedDek: string };
+}
+
+const OIDC_SETTING_KEY = 'auth:oidc';
+
 export interface AuthProvisioningSettings {
   oidcAutoCreateUsers: boolean;
   oidcDefaultGroupId: string;
@@ -40,10 +71,14 @@ export interface AuthProvisioningSettings {
   oauthExtendedCallbackCompatibility: boolean;
   methods: LocalAuthMethods;
   passwordPolicy: PasswordPolicy;
+  oidc: OidcPublicConfig;
 }
 
 export class AuthSettingsService {
-  constructor(private readonly db: DrizzleClient) {}
+  constructor(
+    private readonly db: DrizzleClient,
+    private readonly cryptoService?: CryptoService
+  ) {}
 
   async getConfig(): Promise<AuthProvisioningSettings> {
     const autoCreateUsers = await this.getSetting<boolean>(
@@ -61,10 +96,10 @@ export class AuthSettingsService {
       AUTH_SETTINGS_DEFAULTS['auth:oauth_extended_callback_compatibility']
     );
     const methods = await this.getSetting<LocalAuthMethods>('auth:methods', AUTH_SETTINGS_DEFAULTS['auth:methods']);
-    const passwordPolicy = await this.getSetting<PasswordPolicy>(
-      'auth:password_policy',
-      AUTH_SETTINGS_DEFAULTS['auth:password_policy']
-    );
+    const [passwordPolicy, oidc] = await Promise.all([
+      this.getSetting<PasswordPolicy>('auth:password_policy', AUTH_SETTINGS_DEFAULTS['auth:password_policy']),
+      this.getOidcPublicConfig(),
+    ]);
 
     return {
       oidcAutoCreateUsers: autoCreateUsers,
@@ -73,6 +108,7 @@ export class AuthSettingsService {
       oauthExtendedCallbackCompatibility,
       methods,
       passwordPolicy,
+      oidc,
     };
   }
 
@@ -83,6 +119,7 @@ export class AuthSettingsService {
     oauthExtendedCallbackCompatibility?: boolean;
     methods?: Partial<LocalAuthMethods>;
     passwordPolicy?: Partial<PasswordPolicy>;
+    oidc?: OidcConfigInput;
   }): Promise<AuthProvisioningSettings> {
     if (updates.oidcAutoCreateUsers !== undefined) {
       await this.setSetting('auth:oidc_auto_create_users', updates.oidcAutoCreateUsers);
@@ -137,6 +174,10 @@ export class AuthSettingsService {
       await this.setSetting('auth:password_policy', next);
     }
 
+    if (updates.oidc !== undefined) {
+      await this.saveOidcConfig(updates.oidc);
+    }
+
     if (updates.oidcDefaultGroupId !== undefined) {
       const group = await this.db.query.permissionGroups.findFirst({
         where: eq(permissionGroups.id, updates.oidcDefaultGroupId),
@@ -155,6 +196,79 @@ export class AuthSettingsService {
       'auth:oauth_extended_callback_compatibility',
       AUTH_SETTINGS_DEFAULTS['auth:oauth_extended_callback_compatibility']
     );
+  }
+
+  async getOidcPublicConfig(): Promise<OidcPublicConfig> {
+    const config = await this.getStoredOidcConfigWithLegacyMigration();
+    if (!config) {
+      return { configured: false, issuer: null, clientId: null, redirectUri: null, scopes: null };
+    }
+    return {
+      configured: true,
+      issuer: config.issuer,
+      clientId: config.clientId,
+      redirectUri: config.redirectUri,
+      scopes: config.scopes,
+    };
+  }
+
+  async getOidcConfig(): Promise<OidcConfig | null> {
+    const config = await this.getStoredOidcConfigWithLegacyMigration();
+    if (!config) return null;
+    return {
+      issuer: config.issuer,
+      clientId: config.clientId,
+      clientSecret: this.requireCrypto().decryptString(config.clientSecret),
+      redirectUri: config.redirectUri,
+      scopes: config.scopes,
+    };
+  }
+
+  async saveOidcConfig(input: OidcConfigInput): Promise<OidcPublicConfig> {
+    const issuer = input.issuer.trim();
+    const clientId = input.clientId.trim();
+    const redirectUri = input.redirectUri.trim();
+    const scopes = input.scopes?.trim() || 'openid email profile';
+    if (!isHttpUrl(issuer) || !isHttpUrl(redirectUri) || !clientId) {
+      throw new Error('OIDC issuer, client ID, and redirect URI are required');
+    }
+
+    const existing = await this.getStoredOidcConfig();
+    const clientSecret = input.clientSecret?.trim()
+      ? this.requireCrypto().encryptString(input.clientSecret)
+      : existing?.clientSecret;
+    if (!clientSecret) throw new Error('OIDC client secret is required');
+
+    await this.setSetting(OIDC_SETTING_KEY, { issuer, clientId, redirectUri, scopes, clientSecret } satisfies StoredOidcConfig);
+    return this.getOidcPublicConfig();
+  }
+
+  private async getStoredOidcConfigWithLegacyMigration(): Promise<StoredOidcConfig | null> {
+    const stored = await this.getStoredOidcConfig();
+    if (stored) return stored;
+
+    const issuer = process.env.OIDC_ISSUER?.trim();
+    const clientId = process.env.OIDC_CLIENT_ID?.trim();
+    const clientSecret = process.env.OIDC_CLIENT_SECRET?.trim();
+    const redirectUri = process.env.OIDC_REDIRECT_URI?.trim();
+    if (!issuer || !clientId || !clientSecret || !redirectUri) return null;
+    await this.saveOidcConfig({
+      issuer,
+      clientId,
+      clientSecret,
+      redirectUri,
+      scopes: process.env.OIDC_SCOPES,
+    });
+    return this.getStoredOidcConfig();
+  }
+
+  private async getStoredOidcConfig(): Promise<StoredOidcConfig | null> {
+    return this.getSetting<StoredOidcConfig | null>(OIDC_SETTING_KEY, null);
+  }
+
+  private requireCrypto(): CryptoService {
+    if (!this.cryptoService) throw new Error('Crypto service is required for OIDC configuration');
+    return this.cryptoService;
   }
 
   async resolveDefaultGroupId(): Promise<string> {
@@ -190,5 +304,14 @@ export class AuthSettingsService {
         target: settings.key,
         set: { value, updatedAt: new Date() },
       });
+  }
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
   }
 }

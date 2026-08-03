@@ -344,15 +344,23 @@ adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('sett
 });
 
 function toAuthSettingsAuditDetails(input: UpdateAuthProvisioningSettingsInput) {
-  if (!input.smtp) return input;
-
-  const { password: _password, ...smtp } = input.smtp;
+  const { smtp: smtpInput, oidc: oidcInput, ...rest } = input;
+  const smtp = smtpInput
+    ? (() => {
+        const { password: _password, ...value } = smtpInput;
+        return { ...value, ...(smtpInput.password ? { passwordChanged: true } : {}) };
+      })()
+    : undefined;
+  const oidc = oidcInput
+    ? (() => {
+        const { clientSecret: _clientSecret, ...value } = oidcInput;
+        return { ...value, ...(oidcInput.clientSecret ? { clientSecretChanged: true } : {}) };
+      })()
+    : undefined;
   return {
-    ...input,
-    smtp: {
-      ...smtp,
-      ...(input.smtp.password ? { passwordChanged: true } : {}),
-    },
+    ...rest,
+    ...(smtp ? { smtp } : {}),
+    ...(oidc ? { oidc } : {}),
   };
 }
 

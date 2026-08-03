@@ -9,6 +9,15 @@ export type * from './migration-types.js';
 
 // ─── Enrollment ─────────────────────────────────────────────────────
 
+export interface ValidateEnrollmentRequest {
+  token: string;
+  nodeType: string;
+}
+
+export interface ValidateEnrollmentResponse {
+  nodeType: string;
+}
+
 export interface EnrollRequest {
   token: string;
   hostname: string;

@@ -19,6 +19,11 @@ describe('UpdateService release selection', () => {
       expect(isGatewayReleaseTag('v2.1.1-nginx')).toBe(false);
       expect(isGatewayReleaseTag('v2.1.1-monitoring')).toBe(false);
     });
+
+    it('rejects release candidates', () => {
+      expect(isGatewayReleaseTag('v2.1.2-rc.1')).toBe(false);
+      expect(isGatewayReleaseTag('2.1.2-rc.12')).toBe(false);
+    });
   });
 
   describe('selectLatestGatewayRelease', () => {
@@ -59,6 +64,15 @@ describe('UpdateService release selection', () => {
       ]);
 
       expect(latest).toBeNull();
+    });
+
+    it('ignores newer release candidates', () => {
+      const latest = selectLatestGatewayRelease([
+        { tag_name: 'v3.0.0-rc.2', description: 'candidate', _links: { self: 'candidate' } },
+        { tag_name: 'v2.9.0', description: 'stable', _links: { self: 'stable' } },
+      ]);
+
+      expect(latest?.tag_name).toBe('v2.9.0');
     });
   });
 });

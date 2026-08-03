@@ -188,7 +188,7 @@ export async function initializeContainer(): Promise<void> {
   const cryptoService = new CryptoService(env.PKI_MASTER_KEY);
   container.registerInstance(CryptoService, cryptoService);
 
-  const authSettingsService = new AuthSettingsService(db);
+  const authSettingsService = new AuthSettingsService(db, cryptoService);
   container.registerInstance(AuthSettingsService, authSettingsService);
   const authEmailQueue = new AuthEmailQueueService(redis, cryptoService);
   const authMailService = new AuthMailService(db, cryptoService, authEmailQueue);

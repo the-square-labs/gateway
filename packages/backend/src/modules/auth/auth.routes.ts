@@ -186,10 +186,7 @@ authRoutes.openapi(callbackRoute, async (c) => {
 
   try {
     const requestUrl = new URL(c.req.url);
-    if (!env.OIDC_REDIRECT_URI) {
-      return c.json({ code: 'OIDC_NOT_CONFIGURED', message: 'OIDC is not configured' }, 503);
-    }
-    const callbackUrl = new URL(env.OIDC_REDIRECT_URI);
+    const callbackUrl = new URL(await authService.getOidcRedirectUri());
     callbackUrl.search = requestUrl.search;
 
     const result = await authService.handleCallback(callbackUrl.toString(), state);
@@ -241,13 +238,10 @@ authRoutes.openapi(callbackRoute, async (c) => {
 });
 
 authRoutes.get('/methods', async (c) => {
-  const { methods } = await container.resolve(AuthSettingsService).getConfig();
-  const env = getEnv();
+  const { methods, oidc } = await container.resolve(AuthSettingsService).getConfig();
   return c.json({
     ...methods,
-    oidc: Boolean(
-      methods.oidc && env.OIDC_ISSUER && env.OIDC_CLIENT_ID && env.OIDC_CLIENT_SECRET && env.OIDC_REDIRECT_URI
-    ),
+    oidc: Boolean(methods.oidc && oidc.configured),
   });
 });
 
