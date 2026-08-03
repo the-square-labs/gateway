@@ -25,6 +25,31 @@ vi.mock("@/components/ui/popover", async () => {
 });
 
 describe("Combobox", () => {
+  it("can show every option on focus while retaining free-text input", async () => {
+    const user = userEvent.setup();
+    render(
+      <Combobox
+        freeText
+        showAllOptionsOnFocus
+        value="alpha"
+        options={[
+          { value: "alpha", label: "Alpha" },
+          { value: "beta", label: "Beta" },
+        ]}
+        onValueChange={vi.fn()}
+        ariaLabel="Target"
+      />
+    );
+
+    const input = screen.getByRole("combobox", { name: "Target" });
+    expect(input).toHaveValue("alpha");
+    await user.click(input);
+
+    expect(input).toHaveValue("alpha");
+    expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Beta" })).toBeInTheDocument();
+  });
+
   it("keeps the filtered options until the close animation finishes", async () => {
     const user = userEvent.setup();
     render(

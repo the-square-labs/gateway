@@ -20,7 +20,6 @@ Manual update:
 
 ```bash
 # Edit .env first, for example:
-# GATEWAY_VERSION=v2.0.0
 # GATEWAY_IMAGE_REF=registry.gitlab.wiolett.net/wiolett/gateway:v2.0.0
 docker compose pull
 docker compose up -d
@@ -42,32 +41,24 @@ Existing daemons from before signed-manifest support can perform one transition 
 
 ## Configuration Reference
 
-The installer writes `.env`. Important settings:
+The installer writes infrastructure/bootstrap values to `.env`. Product settings such as canonical public URL, OIDC, SMTP, authentication methods, internal web TLS, and ClickHouse are stored in Gateway and edited in **Settings → Gateway**.
 
 | Variable | Purpose |
 |----------|---------|
-| `APP_URL` | Public Gateway URL. |
 | `PORT` | HTTP port inside the app container. |
 | `DATABASE_URL` | PostgreSQL connection URL. |
 | `REDIS_URL` | Redis connection URL. |
-| `CLICKHOUSE_URL` | Enables structured logging when set. |
-| `GATEWAY_IMAGE_REF` | Gateway image reference used by Compose. Installer defaults this to `${GATEWAY_IMAGE}:${GATEWAY_VERSION}`; signed self-updates replace it with `image@sha256:<digest>`. |
-| `CLICKHOUSE_USERNAME` | ClickHouse username. |
-| `CLICKHOUSE_PASSWORD` | ClickHouse password. |
-| `CLICKHOUSE_DATABASE` | ClickHouse database. |
-| `CLICKHOUSE_LOGS_TABLE` | ClickHouse logs table. |
-| `OIDC_ISSUER` | OIDC issuer URL. |
-| `OIDC_CLIENT_ID` | OIDC client ID. |
-| `OIDC_CLIENT_SECRET` | OIDC client secret. |
-| `OIDC_REDIRECT_URI` | OIDC callback URL. |
-| `OIDC_SCOPES` | OIDC scopes, usually `openid email profile`. |
+| `GATEWAY_IMAGE_REF` | Gateway image reference used by Compose. The installer writes the selected release tag; signed self-updates replace it with `image@sha256:<digest>`. |
+| `SETUP_BOOTSTRAP` | Installer-only flag that permits a fresh empty database to enter first-run setup. |
+| `WEB_TLS_BOOTSTRAP_MODE` | Seeds `http` or `https` only when no persisted web-transport choice exists. |
+| `WEB_TLS_AUTO_DIR` | Persistent directory for the native web TLS leaf and private key. |
 | `SESSION_EXPIRY` | Browser session lifetime in seconds. Browser sessions are opaque Redis-backed session IDs. |
 | `PKI_MASTER_KEY` | 64-character hex key for encrypted PKI material. |
 | `RATE_LIMIT_WINDOW_MS` | Default rate-limit window. |
 | `RATE_LIMIT_MAX_REQUESTS` | Default request limit. |
 | `GRPC_PORT` | TLS-only gRPC port for daemon connections. |
 | `GRPC_TLS_AUTO_DIR` | Directory for Gateway's auto-issued internal gRPC TLS certificate and key. |
-| `GRPC_TLS_EXTRA_SANS` | Extra comma-separated DNS names or IP addresses for the auto-issued gRPC server certificate. Gateway also includes `APP_URL` host and configured public IPs automatically. |
+| `GRPC_TLS_EXTRA_SANS` | Extra comma-separated DNS names or IP addresses for the auto-issued gRPC server certificate. Gateway also includes the persisted canonical public host and configured public IPs automatically. |
 | `GRPC_TLS_CERT` | Optional custom gRPC TLS certificate issued by Gateway's system CA. |
 | `GRPC_TLS_KEY` | Optional custom gRPC TLS private key paired with `GRPC_TLS_CERT`. |
 | `ACME_EMAIL` | Let's Encrypt account email. |
@@ -80,7 +71,7 @@ See [.env.example](../.env.example) for the full development reference.
 
 Redis is required infrastructure. Gateway uses it for sessions, cache, and rate limiting; if Redis is unavailable, `/health` returns `503` and Redis-backed rate-limited API/auth/public surfaces fail closed with `RATE_LIMIT_UNAVAILABLE`.
 
-`OIDC_SCOPES` should normally include `openid email profile`. The `email` scope requests `email` and `email_verified`, but providers differ in whether `email_verified` is present in the ID token and whether it is true by default. Authentik, for example, may require explicit mapping/configuration before `email_verified=true` is emitted. Leave **Require verified OIDC email** disabled unless your IdP emits reliable verified-email claims.
+OIDC scopes should normally include `openid email profile`. The `email` scope requests `email` and `email_verified`, but providers differ in whether `email_verified` is present in the ID token and whether it is true by default. Leave **Require verified OIDC email** disabled unless your IdP emits reliable verified-email claims.
 
 ## Local authentication operations
 
@@ -93,30 +84,6 @@ For local accounts, group MFA policy is enforced after the primary credential. T
 Gateway and daemon automatic updates require signed release manifests. Release CI must have `UPDATE_SIGNING_PRIVATE_KEY_PEM_B64` set to a base64-encoded Ed25519 private key PEM. The corresponding public key is compiled into Gateway and daemon binaries.
 
 If `UPDATE_SIGNING_PRIVATE_KEY_PEM_B64` is missing, gateway and daemon release jobs fail instead of publishing unsigned automatic-update artifacts. To rotate the update signing key, generate a new key pair, update `config/update-trust/update-signing-public-key.pem`, deploy that release, then switch CI to the new private key.
-
-## Container Log Rotation
-
-The installer can add Docker Compose logging limits for Gateway services. This is separate from the optional ClickHouse structured logging feature.
-
-Installer defaults:
-
-| Setting | Default | Meaning |
-|---------|---------|---------|
-| `GATEWAY_LOG_ROTATION` | `Y` | Add Docker logging options to generated Compose services. |
-| `GATEWAY_LOG_MAX_SIZE` | `50m` | Rotate each container log file after this size. |
-| `GATEWAY_LOG_MAX_FILE` | `3` | Keep this many rotated log files per service. |
-
-The generated Compose block looks like:
-
-```yaml
-logging:
-  driver: "json-file"
-  options:
-    max-size: "50m"
-    max-file: "3"
-```
-
-For install-time flags, see [Docker log rotation](installation.md#docker-log-rotation).
 
 ## Programmatic Access
 
@@ -194,24 +161,13 @@ For the complete scope list, implication behavior, delegability, and manual OAut
 
 ## Structured Logging
 
-Logging is optional and enabled when `CLICKHOUSE_URL` is configured.
-
-Required ClickHouse settings:
-
-```env
-CLICKHOUSE_URL=http://clickhouse:8123
-CLICKHOUSE_USERNAME=gateway
-CLICKHOUSE_PASSWORD=<strong-password>
-CLICKHOUSE_DATABASE=gateway_logs
-CLICKHOUSE_LOGS_TABLE=logs
-CLICKHOUSE_REQUEST_TIMEOUT_MS=5000
-```
+Logging is optional and is configured in **Settings → Gateway** as disabled, managed local, or external. Connection secrets are encrypted in Gateway settings. Legacy `CLICKHOUSE_*` env values are accepted only for migration and are removed by managed updates after a successful import.
 
 ### ClickHouse Image Upgrades
 
-Gateway pins the bundled ClickHouse container to an explicit `clickhouse/clickhouse-server` release tag instead of using `latest`. Upgrade ClickHouse intentionally by changing the pinned tag in `docker-compose.yml`, `docker-compose.dev.yml`, and `scripts/install.sh`, then test startup and log search against existing ClickHouse data before rolling the change into production. When generating a new compose file with the installer, `CLICKHOUSE_IMAGE_REF` must include an explicit non-`latest` tag or a digest; the installer rejects empty, whitespace-containing, or unsupported image references before it writes `docker-compose.yml`.
+Gateway pins its managed local ClickHouse container to an explicit `clickhouse/clickhouse-server` release tag instead of using `latest`. Upgrade the pinned runtime intentionally and verify it against a copy of existing ClickHouse data.
 
-The bundled service also mounts `clickhouse-config/gateway-safety.xml`. It limits ClickHouse file logs to three 50 MB files, disables high-volume diagnostic system tables, and keeps one day of `system.query_log`. An always-on five-minute guard monitors disk, structured logs, and ClickHouse internal logs. Internal logs warn at 80% of their 256 MiB budget. Destructive internal-table cleanup is enabled only when `CLICKHOUSE_MANAGED_INTERNAL_LOGS=true`; the installer sets it for its bundled local ClickHouse and leaves remote ClickHouse monitor-only by default. Set it manually only when the entire ClickHouse instance is dedicated to and managed by Gateway.
+An always-on guard monitors disk, structured logs, and ClickHouse internal logs. Internal-table cleanup is an explicit persisted setting and should be enabled only when the entire ClickHouse instance is dedicated to Gateway.
 
 Settings > Housekeeping can additionally cap the shared structured-log table by row count and approximate on-disk size. Cleanup drops only complete oldest daily partitions and preserves the current partition. Per-environment `retentionDays` TTL remains active independently. Remote ClickHouse instances are monitored when their account can read storage metadata; internal cleanup is best effort and does not make ingest unavailable merely because maintenance privileges are absent.
 
@@ -393,6 +349,6 @@ If a node does not connect:
 If OAuth or OIDC fails:
 
 - Verify redirect URI exact match.
-- Verify `APP_URL` and `OIDC_REDIRECT_URI`.
+- Verify the canonical public URL and OIDC redirect URI in **Settings → Gateway**.
 - Verify the provider exposes discovery metadata.
 - Check Gateway app logs for callback errors.

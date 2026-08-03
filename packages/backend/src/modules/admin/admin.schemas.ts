@@ -8,6 +8,7 @@ import {
   isValidGatewayHostPortTarget,
   isValidGatewayIp,
   isValidGatewayIpPortTarget,
+  normalizePublicUrl,
 } from '@/modules/settings/general-settings.service.js';
 import { CLIENT_IP_SOURCE_VALUES } from '@/modules/settings/network-settings.service.js';
 
@@ -78,10 +79,44 @@ export const UpdateAuthProvisioningSettingsSchema = z.object({
   methods: AuthMethodsSchema.optional(),
   passwordPolicy: PasswordPolicySchema.optional(),
   smtp: SmtpConfigSchema.optional(),
+  oidc: z
+    .object({
+      issuer: z.string().trim().url().max(2048),
+      clientId: z.string().trim().min(1).max(512),
+      clientSecret: z.string().min(1).max(4096).optional(),
+      redirectUri: z.string().trim().url().max(2048),
+      scopes: z.string().trim().min(1).max(1024).optional(),
+    })
+    .optional(),
   mcpServerEnabled: z.boolean().optional(),
   mcpExtendedCompatibility: z.boolean().optional(),
+  webTlsEnabled: z.boolean().optional(),
+  logging: z
+    .object({
+      mode: z.enum(['disabled', 'local', 'external']),
+      url: z.string().trim().url().max(2048).optional(),
+      username: z.string().trim().min(1).max(255).optional(),
+      password: z.string().min(1).max(4096).optional(),
+      database: z.string().trim().min(1).max(255).optional(),
+      table: z.string().trim().min(1).max(255).optional(),
+      requestTimeoutMs: z.number().int().positive().max(120_000).optional(),
+      managedInternalLogs: z.boolean().optional(),
+    })
+    .optional(),
   generalSettings: z
     .object({
+      publicUrl: z
+        .string()
+        .trim()
+        .max(2048)
+        .refine((value) => {
+          try {
+            return normalizePublicUrl(value) !== null;
+          } catch {
+            return false;
+          }
+        }, 'Must be an http(s) origin without a path')
+        .optional(),
       fileUploadMaxBytes: z.number().int().min(FILE_UPLOAD_MIN_BYTES).max(FILE_UPLOAD_MAX_BYTES).optional(),
       fileOpenMaxBytes: z.number().int().min(FILE_OPEN_MIN_BYTES).max(FILE_OPEN_MAX_BYTES).optional(),
       gatewayPublicIps: z

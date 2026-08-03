@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { isIP } from 'node:net';
+import { networkInterfaces } from 'node:os';
 import { resolve } from 'node:path';
 import { domainToASCII } from 'node:url';
 import { serveStatic } from '@hono/node-server/serve-static';
@@ -83,6 +84,7 @@ import { proxyRoutes } from '@/modules/proxy/proxy.routes.js';
 import { resourceSearchRoutes } from '@/modules/resource-search/resource-search.routes.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { setupApiDisabledMiddleware, setupRoutes } from '@/modules/setup/setup.routes.js';
+import { SetupTokenPolicyService } from '@/modules/setup/setup-token-policy.js';
 import { sslRoutes } from '@/modules/ssl/ssl.routes.js';
 import { publicStatusPageRoutes, statusPageRoutes } from '@/modules/status-page/status-page.routes.js';
 import { StatusPageService } from '@/modules/status-page/status-page.service.js';
@@ -175,14 +177,25 @@ const requireAnyEffectiveScope: MiddlewareHandler<AppEnv> = async (c, next) => {
 function isAllowedWebSocketOrigin(origin: string | undefined): boolean {
   if (!origin) return false;
   try {
-    const requestOrigin = new URL(origin).origin;
-    const appOrigin = new URL(getEnv().APP_URL).origin;
+    const url = new URL(origin);
+    const requestOrigin = url.origin;
+    const appOrigin = getCanonicalPublicUrlSync();
     if (requestOrigin === appOrigin) return true;
+    const requestHost = normalizeRequestHost(url.host);
+    if (requestHost && isLocalMachineHost(requestHost)) return true;
     return (
       isDevelopment() && (requestOrigin.startsWith('http://localhost') || requestOrigin.startsWith('http://127.0.0.1'))
     );
   } catch {
     return false;
+  }
+}
+
+function getCanonicalPublicUrlSync(): string {
+  try {
+    return container.resolve(GeneralSettingsService).getCachedPublicUrl() ?? new URL(getEnv().APP_URL).origin;
+  } catch {
+    return new URL(getEnv().APP_URL).origin;
   }
 }
 
@@ -196,6 +209,24 @@ async function isStatusHostRequest(hostHeader: string | undefined): Promise<bool
     return await container.resolve(StatusPageService).isStatusHost(hostHeader);
   } catch {
     return false;
+  }
+}
+
+async function getCanonicalPublicUrl(): Promise<string | null> {
+  try {
+    return await container.resolve(GeneralSettingsService).getPublicUrl();
+  } catch {
+    return getEnv().APP_URL;
+  }
+}
+
+async function isSetupComplete(): Promise<boolean> {
+  try {
+    return await container.resolve(SetupTokenPolicyService).isSetupComplete();
+  } catch {
+    // Isolated route tests do not initialize the bootstrap container and
+    // represent already configured installations.
+    return true;
   }
 }
 
@@ -240,6 +271,45 @@ function isLoopbackHost(hostname: string): boolean {
   return hostname === 'localhost' || hostname === '::1' || (isIP(hostname) === 4 && hostname.startsWith('127.'));
 }
 
+function isPrivateOrLinkLocalIp(address: string): boolean {
+  const family = isIP(address);
+  if (family === 4) {
+    const [first = 0, second = 0] = address.split('.').map(Number);
+    return (
+      first === 10 ||
+      (first === 172 && second >= 16 && second <= 31) ||
+      (first === 192 && second === 168) ||
+      (first === 169 && second === 254)
+    );
+  }
+  if (family === 6) {
+    const normalized = address.toLowerCase();
+    return normalized.startsWith('fc') || normalized.startsWith('fd') || /^fe[89ab]/.test(normalized);
+  }
+  return false;
+}
+
+function getLocalInterfaceAddresses(): Set<string> {
+  const addresses = Object.values(networkInterfaces())
+    .flatMap((entries) => entries ?? [])
+    .map((entry) => entry.address.toLowerCase());
+  addresses.push(
+    ...(process.env.GATEWAY_LOCAL_HOSTS?.split(',')
+      .map((address) => address.trim().toLowerCase())
+      .filter(Boolean) ?? [])
+  );
+  return new Set(addresses);
+}
+
+export function isLocalMachineHost(
+  hostname: string,
+  localAddresses: ReadonlySet<string> = getLocalInterfaceAddresses()
+): boolean {
+  if (isLoopbackHost(hostname)) return true;
+  const normalized = hostname.toLowerCase();
+  return isPrivateOrLinkLocalIp(normalized) && localAddresses.has(normalized);
+}
+
 async function getRedisHealth(): Promise<'ok' | 'unavailable'> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -271,13 +341,12 @@ export function createApp() {
   app.use('*', securityHeadersMiddleware);
   app.use('*', async (c, next) => {
     const requestHost = normalizeRequestHost(c.req.header('host'));
-    const appHost = normalizeRequestHost(new URL(env.APP_URL).host);
-    const path = new URL(c.req.url).pathname;
-    const loopbackAllowed = requestHost
-      ? isLoopbackHost(requestHost) && (isDevelopment() || path === '/health')
-      : false;
+    const publicUrl = await getCanonicalPublicUrl();
+    const appHost = publicUrl ? normalizeRequestHost(new URL(publicUrl).host) : null;
+    const setupComplete = await isSetupComplete();
+    const localHostAllowed = requestHost ? isLocalMachineHost(requestHost) : false;
 
-    if (requestHost && (requestHost === appHost || loopbackAllowed)) {
+    if (requestHost && (!setupComplete || (appHost && requestHost === appHost) || localHostAllowed)) {
       await next();
       return;
     }
@@ -293,7 +362,7 @@ export function createApp() {
     '*',
     cors({
       origin: (origin) => {
-        const appOrigin = new URL(env.APP_URL).origin;
+        const appOrigin = getCanonicalPublicUrlSync();
         if (origin === appOrigin) return origin;
         if (
           isDevelopment() &&
@@ -323,6 +392,30 @@ export function createApp() {
       maxAge: 86400,
     })
   );
+
+  app.use('*', async (c, next) => {
+    if (await isSetupComplete()) {
+      await next();
+      return;
+    }
+
+    const path = new URL(c.req.url).pathname;
+    if (path === '/health' || path === '/api/setup' || path.startsWith('/api/setup/')) {
+      await next();
+      return;
+    }
+    if (
+      path.startsWith('/api/') ||
+      path.startsWith('/auth/') ||
+      path.startsWith('/pki/') ||
+      path.startsWith('/.well-known/') ||
+      path.startsWith('/docs') ||
+      path === '/openapi.json'
+    ) {
+      return c.json({ code: 'SETUP_REQUIRED', message: 'Gateway setup must be completed first' }, 423);
+    }
+    await next();
+  });
 
   app.use('/api/oauth/token', requestBodyLimit(env.OAUTH_BODY_MAX_BYTES));
   app.use('/api/oauth/revoke', requestBodyLimit(env.OAUTH_BODY_MAX_BYTES));

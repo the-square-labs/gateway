@@ -1,47 +1,43 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
-import { OpenAPIHono } from '@hono/zod-openapi';
+import { OpenAPIHono, z } from '@hono/zod-openapi';
 import type { Context, MiddlewareHandler } from 'hono';
-import { getEnv } from '@/config/env.js';
+import { getCookie, setCookie } from 'hono/cookie';
 import { container } from '@/container.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { NodesService } from '@/modules/nodes/nodes.service.js';
-import type { AppEnv } from '@/types.js';
+import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
+import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
+import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
+import { LoggingRuntimeService } from '@/modules/logging/logging-runtime.service.js';
+import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
 import {
-  setupCompleteRoute,
-  setupEnrollNodeRoute,
-  setupManagementSslRoute,
-  setupManagementSslUploadRoute,
-} from './setup.docs.js';
-import { SetupService } from './setup.service.js';
+  GeneralSettingsService,
+  isValidGatewayHostPortTarget,
+  isValidGatewayIp,
+  isValidGatewayIpPortTarget,
+} from '@/modules/settings/general-settings.service.js';
+import { RuntimeRestartService } from '@/services/runtime-restart.service.js';
+import { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
+import type { AppEnv } from '@/types.js';
+import { SetupAccessService, SetupAlreadyInProgressError, SetupApplyInProgressError } from './setup-access.service.js';
+import { getSetupNetworkSuggestions } from './setup-network-suggestions.js';
 import { SetupTokenPolicyService } from './setup-token-policy.js';
+import { SetupWizardService } from './setup-wizard.service.js';
 
 const logger = createChildLogger('SetupRoutes');
 
 export const setupRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
-
-function verifySetupToken(authHeader: string | undefined): boolean {
-  const env = getEnv();
-  if (!env.SETUP_TOKEN) return false;
-  if (!authHeader?.startsWith('Bearer ')) return false;
-  const token = authHeader.slice(7);
-  if (!token) return false;
-  try {
-    const a = createHmac('sha256', 'setup-token-verify').update(token).digest();
-    const b = createHmac('sha256', 'setup-token-verify').update(env.SETUP_TOKEN).digest();
-    return timingSafeEqual(a, b);
-  } catch {
-    return false;
-  }
-}
+export const SETUP_SESSION_COOKIE = 'setup_session';
+export const SETUP_CSRF_HEADER = 'X-CSRF-Token';
 
 async function setupApiDisabledResponse(c: Context<AppEnv>): Promise<Response | null> {
+  const path = new URL(c.req.url).pathname;
+  if (path === '/api/setup/status') return null;
+
   const policy = container.resolve(SetupTokenPolicyService);
   const enabled = await policy.isSetupApiEnabled();
   if (enabled) return null;
 
-  const path = new URL(c.req.url).pathname;
   logger.warn('Disabled setup API endpoint requested after setup lockout', {
     path,
     method: c.req.method,
@@ -57,127 +53,196 @@ export const setupApiDisabledMiddleware: MiddlewareHandler<AppEnv> = async (c, n
 
 setupRoutes.use('*', setupApiDisabledMiddleware);
 
-/**
- * POST /api/setup/management-ssl
- *
- * Bootstrap the management domain with ACME SSL.
- * Protected by SETUP_TOKEN (not session auth).
- * Idempotent — safe to call multiple times.
- */
-setupRoutes.openapi(setupManagementSslRoute, async (c) => {
-  if (!verifySetupToken(c.req.header('Authorization'))) {
-    throw new AppError(401, 'SETUP_TOKEN_INVALID', 'Invalid or missing setup token');
-  }
-
-  const body = await c.req.json<{ domain: string }>();
-  if (!body.domain || typeof body.domain !== 'string') {
-    throw new AppError(400, 'DOMAIN_REQUIRED', 'Missing domain');
-  }
-
-  const domain = body.domain.toLowerCase().trim();
-  if (domain === 'localhost' || !domain.includes('.')) {
-    throw new AppError(400, 'INVALID_DOMAIN', 'Must be a fully qualified domain name');
-  }
-
-  const env = getEnv();
-  const provider = env.ACME_STAGING ? 'letsencrypt-staging' : 'letsencrypt';
-
-  try {
-    const setupService = container.resolve(SetupService);
-    const result = await setupService.bootstrapManagementSSL(domain, provider);
-    logger.info('Management SSL bootstrap successful', result);
-    return c.json(result);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    logger.error('Management SSL bootstrap failed', { domain, error: message });
-    throw new AppError(500, 'SETUP_MANAGEMENT_SSL_FAILED', message);
-  }
-});
-
-/**
- * POST /api/setup/enroll-node
- *
- * Create a node and return an enrollment token plus Gateway gRPC TLS fingerprint during initial setup.
- * Protected by SETUP_TOKEN (not session auth).
- * Used by install.sh to auto-enroll the local daemon.
- */
-setupRoutes.openapi(setupEnrollNodeRoute, async (c) => {
-  if (!verifySetupToken(c.req.header('Authorization'))) {
-    throw new AppError(401, 'SETUP_TOKEN_INVALID', 'Invalid or missing setup token');
-  }
-
-  const body = await c.req.json<{ type?: string; hostname?: string }>();
-  const validTypes = ['nginx', 'bastion', 'monitoring', 'docker', 'databases'] as const;
-  const type = validTypes.includes(body.type as any) ? (body.type as (typeof validTypes)[number]) : 'nginx';
-  const hostname = body.hostname || 'localhost';
-
-  try {
-    const nodesService = container.resolve(NodesService);
-    const result = await nodesService.create({ type, hostname }, '00000000-0000-0000-0000-000000000000');
-    return c.json({ data: result });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    logger.error('Node enrollment via setup token failed', { error: message });
-    throw new AppError(500, 'SETUP_ENROLL_NODE_FAILED', message);
-  }
-});
-
-/**
- * POST /api/setup/management-ssl-upload
- *
- * Bootstrap with a BYO (bring-your-own) certificate.
- * Accepts PEM cert + key directly.
- */
-setupRoutes.openapi(setupManagementSslUploadRoute, async (c) => {
-  if (!verifySetupToken(c.req.header('Authorization'))) {
-    throw new AppError(401, 'SETUP_TOKEN_INVALID', 'Invalid or missing setup token');
-  }
-
-  const body = await c.req.json<{
-    domain: string;
-    certificatePem: string;
-    privateKeyPem: string;
-    chainPem?: string;
-  }>();
-
-  if (!body.domain || !body.certificatePem || !body.privateKeyPem) {
-    throw new AppError(400, 'SETUP_CERT_INPUT_REQUIRED', 'Missing domain, certificatePem, or privateKeyPem');
-  }
-
-  const domain = body.domain.toLowerCase().trim();
-  if (domain === 'localhost' || !domain.includes('.')) {
-    throw new AppError(400, 'INVALID_DOMAIN', 'Must be a fully qualified domain name');
-  }
-
-  try {
-    const setupService = container.resolve(SetupService);
-    const result = await setupService.bootstrapManagementSSLUpload(
-      domain,
-      body.certificatePem,
-      body.privateKeyPem,
-      body.chainPem
-    );
-    logger.info('Management SSL (BYO cert) bootstrap successful', result);
-    return c.json(result);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    logger.error('Management SSL (BYO cert) bootstrap failed', { domain, error: message });
-    throw new AppError(500, 'SETUP_MANAGEMENT_SSL_UPLOAD_FAILED', message);
-  }
-});
-
-/**
- * POST /api/setup/complete
- *
- * Mark setup complete once the installer finishes its bootstrap work.
- * Protected by SETUP_TOKEN (not session auth).
- */
-setupRoutes.openapi(setupCompleteRoute, async (c) => {
-  if (!verifySetupToken(c.req.header('Authorization'))) {
-    throw new AppError(401, 'SETUP_TOKEN_INVALID', 'Invalid or missing setup token');
-  }
-
+setupRoutes.get('/status', async (c) => {
   const policy = container.resolve(SetupTokenPolicyService);
-  await policy.markSetupComplete();
-  return c.json({ data: { status: 'completed' } });
+  const access = container.resolve(SetupAccessService);
+  const [complete, code, publicUrl, transport, progress] = await Promise.all([
+    policy.isSetupComplete(),
+    access.getCodeMetadata(),
+    container.resolve(GeneralSettingsService).getPublicUrl(),
+    container.resolve(WebTransportSettingsService).getConfig(),
+    access.getProgress(getCookie(c, SETUP_SESSION_COOKIE)),
+  ]);
+  return c.json({
+    data: {
+      state: complete ? 'complete' : 'pending',
+      code,
+      publicUrl,
+      tlsEnabled: transport.tlsEnabled,
+      setupInProgress: progress.inProgress,
+      currentSession: progress.currentSession,
+    },
+  });
+});
+
+setupRoutes.post('/unlock', async (c) => {
+  const body = await c.req.json<{ code?: string }>();
+  let session: { sessionId: string; codeId: string; csrfToken: string; expiresAt: string };
+  try {
+    session = await container.resolve(SetupAccessService).createSession(body.code?.trim() ?? '');
+  } catch (error) {
+    if (error instanceof SetupAlreadyInProgressError) {
+      throw new AppError(409, 'SETUP_IN_PROGRESS', 'Gateway setup is already in progress');
+    }
+    throw new AppError(401, 'SETUP_CODE_INVALID', 'Invalid or expired setup code');
+  }
+  const forwardedProto = c.req.header('x-forwarded-proto')?.split(',')[0]?.trim();
+  const secure = forwardedProto ? forwardedProto === 'https' : new URL(c.req.url).protocol === 'https:';
+  setCookie(c, SETUP_SESSION_COOKIE, session.sessionId, {
+    httpOnly: true,
+    secure,
+    sameSite: 'Lax',
+    maxAge: Math.max(1, Math.floor((Date.parse(session.expiresAt) - Date.now()) / 1000)),
+    path: '/api/setup',
+  });
+  return c.json({
+    data: {
+      unlocked: true,
+      codeId: session.codeId,
+      csrfToken: session.csrfToken,
+      expiresAt: session.expiresAt,
+    },
+  });
+});
+
+export const requireSetupSession: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const valid = await container.resolve(SetupAccessService).validateSession(getCookie(c, SETUP_SESSION_COOKIE));
+  if (!valid) throw new AppError(401, 'SETUP_SESSION_REQUIRED', 'A valid setup session is required');
+  await next();
+};
+
+const SetupAuthSchema = z.object({
+  methods: z.object({ oidc: z.boolean(), password: z.boolean(), emailOtp: z.boolean() }),
+  oidc: z
+    .object({
+      issuer: z.string().url(),
+      clientId: z.string().trim().min(1),
+      clientSecret: z.string().min(1).optional(),
+      redirectUri: z.string().url(),
+      scopes: z.string().trim().min(1).optional(),
+    })
+    .optional(),
+  smtp: z
+    .object({
+      host: z.string().trim().min(1),
+      port: z.number().int().min(1).max(65535),
+      tlsMode: z.enum(['starttls', 'tls']),
+      username: z.string().trim(),
+      password: z.string().min(1).optional(),
+      senderName: z.string().trim(),
+      senderEmail: z.string().email(),
+    })
+    .optional(),
+  passwordPolicy: z
+    .object({
+      minLength: z.number().int().min(8).max(72).optional(),
+      maxLength: z.number().int().min(8).max(72).optional(),
+      requireUppercase: z.boolean().optional(),
+      requireLowercase: z.boolean().optional(),
+      requireDigit: z.boolean().optional(),
+      requireSymbol: z.boolean().optional(),
+    })
+    .optional(),
+});
+
+const SetupAdminSchema = z.object({
+  name: z.string().trim().min(1).max(255),
+  email: z.string().email().max(255),
+  authMethod: z.enum(['oidc', 'password', 'email_otp']),
+  password: z.string().min(1).max(72).optional(),
+});
+
+const SetupLoggingSchema = z.object({
+  mode: z.enum(['disabled', 'local', 'external']),
+  url: z.string().url().optional(),
+  username: z.string().trim().min(1).optional(),
+  password: z.string().min(1).optional(),
+  database: z.string().trim().min(1).optional(),
+  table: z.string().trim().min(1).optional(),
+  requestTimeoutMs: z.number().int().positive().optional(),
+  managedInternalLogs: z.boolean().optional(),
+});
+
+const SetupApplySchema = z.object({
+  publicUrl: z.string().trim().min(1).max(2048),
+  network: z.object({
+    publicIps: z
+      .array(z.string().trim().min(1).max(64).refine(isValidGatewayIp, 'Must be an IPv4 or IPv6 address'))
+      .length(1, 'Select exactly one public IP address'),
+    grpcPublicTarget: z
+      .string()
+      .trim()
+      .min(1)
+      .max(255)
+      .refine(isValidGatewayHostPortTarget, 'Must be a hostname or IP address, optionally with a port'),
+    grpcLocalIp: z
+      .string()
+      .trim()
+      .max(255)
+      .refine((value) => value === '' || isValidGatewayIpPortTarget(value), {
+        message: 'Must be an IPv4 or IPv6 address, optionally with a port',
+      }),
+  }),
+  auth: SetupAuthSchema,
+  administrator: SetupAdminSchema.optional(),
+  logging: SetupLoggingSchema,
+});
+
+setupRoutes.use('/wizard/*', requireSetupSession);
+
+setupRoutes.get('/wizard/csrf', async (c) => {
+  const csrfToken = await container.resolve(SetupAccessService).getCsrfToken(getCookie(c, SETUP_SESSION_COOKIE));
+  if (!csrfToken) throw new AppError(401, 'SETUP_SESSION_REQUIRED', 'A valid setup session is required');
+  return c.json({ data: { csrfToken } });
+});
+
+setupRoutes.use('/wizard/apply', async (c, next) => {
+  const valid = await container
+    .resolve(SetupAccessService)
+    .validateCsrfToken(getCookie(c, SETUP_SESSION_COOKIE), c.req.header(SETUP_CSRF_HEADER));
+  if (!valid) throw new AppError(403, 'SETUP_CSRF_INVALID', 'Invalid setup CSRF token');
+  await next();
+});
+
+setupRoutes.get('/wizard/config', async (c) => {
+  const [general, auth, smtp, oidc, logging, transport, administratorCreated] = await Promise.all([
+    container.resolve(GeneralSettingsService).getConfig(),
+    container.resolve(AuthSettingsService).getConfig(),
+    container.resolve(AuthMailService).getPublicConfig(),
+    container.resolve(OidcSettingsService).getPublicConfig(),
+    container.resolve(LoggingSettingsService).getPublicConfig(),
+    container.resolve(WebTransportSettingsService).getConfig(),
+    container.resolve(SetupTokenPolicyService).isGatewayConfigured(),
+  ]);
+  return c.json({
+    data: {
+      general,
+      auth,
+      smtp,
+      oidc,
+      logging,
+      transport,
+      administratorCreated,
+      networkSuggestions: getSetupNetworkSuggestions(),
+    },
+  });
+});
+
+setupRoutes.post('/wizard/apply', async (c) => {
+  const access = container.resolve(SetupAccessService);
+  const input = SetupApplySchema.parse(await c.req.json());
+  let result: { status: 'completed' };
+  try {
+    result = await access.withApplyLock(getCookie(c, SETUP_SESSION_COOKIE), () =>
+      container.resolve(SetupWizardService).apply(input, container.resolve(LoggingRuntimeService))
+    );
+  } catch (error) {
+    if (error instanceof SetupApplyInProgressError) {
+      throw new AppError(409, 'SETUP_APPLY_IN_PROGRESS', 'Gateway setup is already being applied');
+    }
+    throw error;
+  }
+  const transport = await container.resolve(WebTransportSettingsService).getConfig();
+  if (transport.tlsEnabled) container.resolve(RuntimeRestartService).request('first-run web identity updated', 1_000);
+  return c.json({ data: { ...result, restartRequired: transport.tlsEnabled } });
 });

@@ -16,6 +16,7 @@ interface ComboboxProps {
   options: ComboboxOption[];
   onValueChange: (value: string) => void;
   freeText?: boolean;
+  showAllOptionsOnFocus?: boolean;
   placeholder?: string;
   searchPlaceholder?: string;
   emptyMessage?: string;
@@ -32,6 +33,7 @@ export function Combobox({
   options,
   onValueChange,
   freeText = false,
+  showAllOptionsOnFocus = false,
   placeholder = "Select...",
   searchPlaceholder = "Search...",
   emptyMessage = "No results found.",
@@ -44,6 +46,7 @@ export function Combobox({
 }: ComboboxProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [showAllOptions, setShowAllOptions] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const rootRef = useRef<HTMLDivElement>(null);
   const selected = useMemo(
@@ -51,6 +54,7 @@ export function Combobox({
     [options, value]
   );
   const filteredOptions = useMemo(() => {
+    if (showAllOptions) return options;
     const normalizedQuery = query.trim().toLocaleLowerCase();
     if (!normalizedQuery) return options;
     return options.filter((option) =>
@@ -60,7 +64,7 @@ export function Combobox({
         .toLocaleLowerCase()
         .includes(normalizedQuery)
     );
-  }, [options, query]);
+  }, [options, query, showAllOptions]);
 
   useEffect(() => {
     setActiveIndex(filteredOptions.length > 0 ? 0 : -1);
@@ -73,6 +77,7 @@ export function Combobox({
   const finishClose = () => {
     setQuery("");
     setActiveIndex(-1);
+    setShowAllOptions(false);
   };
 
   const selectOption = (option: ComboboxOption) => {
@@ -106,11 +111,13 @@ export function Combobox({
             value={open ? query : freeText ? value : (selected?.label ?? "")}
             onFocus={() => {
               setQuery(freeText ? value : "");
+              setShowAllOptions(showAllOptionsOnFocus);
               setOpen(true);
             }}
             onChange={(event) => {
               const nextValue = event.target.value;
               setQuery(nextValue);
+              setShowAllOptions(false);
               setOpen(true);
               if (freeText) onValueChange(nextValue);
             }}

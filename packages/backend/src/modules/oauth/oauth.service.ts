@@ -18,6 +18,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
+import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CacheService } from '@/services/cache.service.js';
 import type { User } from '@/types.js';
 import type { OAuthAuthorizeQuery, OAuthClientRegistrationInput, OAuthTokenRequest } from './oauth.schemas.js';
@@ -120,7 +121,8 @@ export class OAuthService {
     @inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient,
     private readonly cacheService: CacheService,
     private readonly auditService: AuditService,
-    private readonly authSettingsService: AuthSettingsService
+    private readonly authSettingsService: AuthSettingsService,
+    private readonly generalSettingsService?: GeneralSettingsService
   ) {
     this.tokenLifecycle = new OAuthTokenLifecycle({
       db: this.db,
@@ -135,23 +137,27 @@ export class OAuthService {
   }
 
   getIssuerUrl(): string {
-    return new URL(getEnv().APP_URL).origin;
+    return new URL(this.publicUrl()).origin;
   }
 
   getMcpResourceUrl(): string {
-    return new URL('/api/mcp', getEnv().APP_URL).href;
+    return new URL('/api/mcp', this.publicUrl()).href;
   }
 
   getApiResourceUrl(): string {
-    return new URL('/api', getEnv().APP_URL).href;
+    return new URL('/api', this.publicUrl()).href;
   }
 
   getInferenceSetupResourceUrl(): string {
-    return new URL('/api/inference/setup', getEnv().APP_URL).href;
+    return new URL('/api/inference/setup', this.publicUrl()).href;
   }
 
   getProtectedResourceMetadataUrl(): string {
-    return new URL('/.well-known/oauth-protected-resource/api/mcp', getEnv().APP_URL).href;
+    return new URL('/.well-known/oauth-protected-resource/api/mcp', this.publicUrl()).href;
+  }
+
+  private publicUrl(): string {
+    return this.generalSettingsService?.getCachedPublicUrl() ?? getEnv().APP_URL;
   }
 
   isSupportedResource(resource: string): boolean {

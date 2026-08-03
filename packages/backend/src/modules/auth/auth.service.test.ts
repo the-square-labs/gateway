@@ -632,13 +632,13 @@ describe('AuthService OIDC identity binding', () => {
     });
   });
 
-  it('allows first-user bootstrap when email is unverified', async () => {
+  it('never grants the first arbitrary OIDC user the system-admin group', async () => {
     const createdUser = dbUser({
       id: 'user-1',
       oidcSubject: 'real-sub',
       email: 'user@example.com',
       name: 'User',
-      groupId: 'admin-group',
+      groupId: 'viewer-group',
     });
     const harness = createAuthServiceHarness({
       authSettings: {
@@ -647,14 +647,14 @@ describe('AuthService OIDC identity binding', () => {
         oidcRequireVerifiedEmail: true,
       },
       userCount: 0,
-      provisioningGroup: { id: 'admin-group', name: 'system-admin' },
+      provisioningGroup: { id: 'viewer-group', name: 'viewer' },
       insertReturning: createdUser,
     });
 
     const result = await harness.loginWithClaims({
       oidcSubject: 'real-sub',
       email: 'user@example.com',
-      emailVerified: false,
+      emailVerified: true,
       name: 'User',
       avatarUrl: null,
     });
@@ -665,8 +665,8 @@ describe('AuthService OIDC identity binding', () => {
         action: 'auth.user_provisioned',
         details: expect.objectContaining({
           oidcSubject: 'real-sub',
-          emailVerified: false,
-          bootstrap: true,
+          emailVerified: true,
+          bootstrap: false,
         }),
       })
     );

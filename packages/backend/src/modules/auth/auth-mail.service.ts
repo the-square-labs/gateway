@@ -83,21 +83,20 @@ export class AuthMailService {
   }
 
   async saveConfig(input: SmtpConfigInput): Promise<SmtpPublicConfig> {
-    const previous = await this.getStoredConfig();
-    const password = input.password?.trim() ? this.cryptoService.encryptString(input.password) : previous?.password;
-    if (!password) throw new AppError(400, 'SMTP_PASSWORD_REQUIRED', 'SMTP password is required');
-
-    const config: StoredSmtpConfig = {
-      host: input.host.trim(),
-      port: input.port,
-      tlsMode: input.tlsMode,
-      username: input.username.trim(),
-      password,
-      senderName: input.senderName.trim(),
-      senderEmail: input.senderEmail.trim().toLowerCase(),
-      verifiedAt: null,
-    };
+    const config = await this.buildConfig(input);
     await this.setStoredConfig(config);
+    return this.getPublicConfig();
+  }
+
+  async verifyAndSaveConfig(input: SmtpConfigInput): Promise<SmtpPublicConfig> {
+    const config = await this.buildConfig(input);
+    const transport = this.createTransport(config);
+    try {
+      await transport.verify();
+    } catch {
+      throw new AppError(502, 'SMTP_CONNECTION_FAILED', 'Unable to connect to the SMTP server');
+    }
+    await this.setStoredConfig({ ...config, verifiedAt: new Date().toISOString() });
     return this.getPublicConfig();
   }
 
@@ -121,17 +120,20 @@ export class AuthMailService {
     await this.sendWithConfig(config, recipient, createAuthEmail(input));
   }
 
+  async snapshotConfig(): Promise<StoredSmtpConfig | null> {
+    return this.getStoredConfig();
+  }
+
+  async restoreConfig(snapshot: StoredSmtpConfig | null): Promise<void> {
+    if (snapshot) {
+      await this.setStoredConfig(snapshot);
+      return;
+    }
+    await this.db.delete(settings).where(eq(settings.key, SMTP_SETTING_KEY));
+  }
+
   private async sendWithConfig(config: StoredSmtpConfig, recipient: string, message: AuthEmailMessage): Promise<void> {
-    const password = this.cryptoService.decryptString(config.password);
-    const transport = nodemailer.createTransport(
-      new SMTPTransport({
-        host: config.host,
-        port: config.port,
-        secure: config.tlsMode === 'tls',
-        requireTLS: config.tlsMode === 'starttls',
-        auth: { user: config.username, pass: password },
-      })
-    );
+    const transport = this.createTransport(config);
     try {
       await transport.sendMail({
         from: config.senderName ? `${config.senderName} <${config.senderEmail}>` : config.senderEmail,
@@ -143,6 +145,34 @@ export class AuthMailService {
     } catch {
       throw new AppError(502, 'SMTP_DELIVERY_FAILED', 'Unable to deliver authentication email');
     }
+  }
+
+  private createTransport(config: StoredSmtpConfig) {
+    return nodemailer.createTransport(
+      new SMTPTransport({
+        host: config.host,
+        port: config.port,
+        secure: config.tlsMode === 'tls',
+        requireTLS: config.tlsMode === 'starttls',
+        auth: { user: config.username, pass: this.cryptoService.decryptString(config.password) },
+      })
+    );
+  }
+
+  private async buildConfig(input: SmtpConfigInput): Promise<StoredSmtpConfig> {
+    const previous = await this.getStoredConfig();
+    const password = input.password?.trim() ? this.cryptoService.encryptString(input.password) : previous?.password;
+    if (!password) throw new AppError(400, 'SMTP_PASSWORD_REQUIRED', 'SMTP password is required');
+    return {
+      host: input.host.trim(),
+      port: input.port,
+      tlsMode: input.tlsMode,
+      username: input.username.trim(),
+      password,
+      senderName: input.senderName.trim(),
+      senderEmail: input.senderEmail.trim().toLowerCase(),
+      verifiedAt: null,
+    };
   }
 
   private async requireStoredConfig(): Promise<StoredSmtpConfig> {

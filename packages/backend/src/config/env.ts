@@ -103,6 +103,9 @@ const envSchema = z.object({
   APP_URL: z.string().url().default('http://localhost:3000'),
   APP_VERSION: z.string().default('dev'),
   BIND_HOST: z.string().default('0.0.0.0'),
+  GATEWAY_LOCAL_HOSTS: z.string().optional(),
+  WEB_TLS_BOOTSTRAP_MODE: z.enum(['http', 'https']).optional(),
+  WEB_TLS_AUTO_DIR: nonEmptyStringWithDefault('/var/lib/gateway/tls'),
 
   // First-party TCP connector for managed database bindings. Production must
   // provide an immutable release reference; development receives the fixed
@@ -147,8 +150,6 @@ const envSchema = z.object({
   ACME_RENEWAL_CRON: z.string().default('0 3 * * *'), // 3 AM daily
   EXPIRY_CHECK_CRON: z.string().default('0 6 * * *'), // 6 AM daily
 
-  // Setup token for bootstrap API (management SSL provisioning)
-  SETUP_TOKEN: z.string().optional(),
   SETUP_BOOTSTRAP: z
     .string()
     .default('false')

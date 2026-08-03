@@ -60,6 +60,7 @@ import { Profile } from "@/pages/Profile";
 import { ProxyHostDetail } from "@/pages/ProxyHostDetail";
 import { ProxyHosts } from "@/pages/ProxyHosts";
 import { Settings } from "@/pages/Settings";
+import { SetupWizardPage } from "@/pages/SetupWizard";
 import { SSLCertificates } from "@/pages/SSLCertificates";
 import { StatusPage } from "@/pages/StatusPage";
 import { TemplatesPage } from "@/pages/TemplatesPage";
@@ -751,6 +752,7 @@ function RealtimeBridge() {
 
 export default function App() {
   const [startupChecked, setStartupChecked] = useState(false);
+  const [setupPending, setSetupPending] = useState(false);
   const user = useAuthStore((s) => s.user);
   const maintenanceActive = useAppStatusStore((s) => s.maintenanceActive);
   const setMaintenanceActive = useAppStatusStore((s) => s.setMaintenanceActive);
@@ -767,9 +769,16 @@ export default function App() {
 
     const checkHealth = async () => {
       try {
-        const response = await fetch("/health", { cache: "no-store" });
+        const [response, setupResponse] = await Promise.all([
+          fetch("/health", { cache: "no-store" }),
+          fetch("/api/setup/status", { cache: "no-store", credentials: "include" }),
+        ]);
+        const setup = setupResponse.ok
+          ? ((await setupResponse.json()) as { data?: { state?: string } })
+          : null;
         if (!cancelled) {
           setMaintenanceActive(!response.ok);
+          setSetupPending(setup?.data?.state === "pending");
           setStartupChecked(true);
         }
       } catch {
@@ -835,6 +844,16 @@ export default function App() {
       <ErrorBoundary>
         <ThemeProvider>
           <AppStatusGate />
+        </ThemeProvider>
+      </ErrorBoundary>
+    );
+  }
+
+  if (setupPending) {
+    return (
+      <ErrorBoundary>
+        <ThemeProvider>
+          <SetupWizardPage />
         </ThemeProvider>
       </ErrorBoundary>
     );

@@ -8,7 +8,8 @@ Gateway is a privileged infrastructure control plane, so its security model is b
 
 Gateway defaults to security controls that reduce the most common self-hosted control-plane risks:
 
-- No internal password database. User login currently requires OIDC SSO, so MFA, account lifecycle, password policy, and device controls stay with the identity provider.
+- First-run access is protected by a one-time, 24-hour setup code. Gateway stores only its identifier, expiry, and SHA-256 hash.
+- OIDC, password, and email one-time-code sign-in are explicit administrator choices. Password hashes use the local credential store; SMTP and OIDC secrets are envelope-encrypted with `PKI_MASTER_KEY`.
 - No inbound management ports on managed nodes. Daemons initiate outbound connections to Gateway.
 - No long-lived daemon shared secret. First enrollment uses a one-time token plus a pinned Gateway gRPC TLS leaf fingerprint, then replaces the token with an mTLS client certificate.
 - No global trust for programmatic tokens. API/OAuth scopes are bounded by the owning user's current effective permissions.
@@ -24,18 +25,11 @@ Gateway still needs to be treated as sensitive infrastructure. Run it in an isol
 
 ## Identity And Login
 
-Gateway uses OpenID Connect for user login. There is no built-in username/password authentication today.
+Gateway can enable OIDC, password, and email one-time-code sign-in independently. Email-based methods require a verified SMTP configuration. Users may add passkeys after setup; passkeys are not a first-run primary method.
 
-This is intentional:
+The browser wizard creates exactly one deliberate first administrator in the built-in `system-admin` group. No arbitrary first OIDC login is promoted. Later OIDC users follow the configured auto-provisioning and default-group policy.
 
-- Gateway does not need to store password hashes or implement password reset flows.
-- MFA and conditional access can be enforced centrally in the OIDC provider.
-- Offboarding happens by removing or disabling the user in the identity provider or changing their Gateway group assignment.
-- Gateway can focus on authorization: which infrastructure actions an authenticated identity may perform.
-
-The first-run setup creates Gateway groups and maps users to permissions. OIDC identities then receive Gateway capabilities through those groups.
-
-`SETUP_TOKEN` is only accepted by `/api/setup/*` during the bootstrap window opened by the installer-written `SETUP_BOOTSTRAP=true` flag. The installer marks setup complete when it finishes; if setup is abandoned, the bootstrap window closes automatically one hour after first start. After that, the setup API returns 404 and bootstrap actions must use the authenticated UI/API. Keep the token out of tickets and chat because it is privileged during that bootstrap window.
+The installer prints a random one-time setup code and never writes its plaintext to `.env` or the database. A successful code exchange creates an HTTP-only setup session bounded by the same 24-hour expiry. Product APIs stay locked until the wizard has an explicit public URL, at least one sign-in method, and the first administrator. Completing setup removes the code and setup sessions. The printed reset command reopens setup, invalidates browser/setup sessions, and issues a new code.
 
 Gateway binds OIDC users by the provider subject (`sub`) after first login. Manually pre-created users are initially claimed by matching the email asserted by the configured OIDC provider, so this flow assumes the provider is enterprise-controlled and authoritative for email assignment. Administrators can enable **Require verified OIDC email** to require `email_verified=true` for future auto-created users and pre-created user claims. Existing subject-bound users continue to authenticate by `sub`; when verified-email mode is enabled, Gateway does not replace a stored email with a changed unverified email claim.
 
@@ -57,7 +51,7 @@ Long-term daemon trust is based on Gateway's internal node PKI:
 
 After enrollment, the token is not the node's identity. The certificate is.
 
-Gateway normally auto-issues its gRPC server certificate from the internal system CA and stores it under `GRPC_TLS_AUTO_DIR` (`/var/lib/gateway/tls` by default). The auto-issued certificate includes localhost, the Gateway host name, `APP_URL` host, configured public IPs, and `GRPC_TLS_EXTRA_SANS`. Custom `GRPC_TLS_CERT` and `GRPC_TLS_KEY` paths are advanced configuration and must point to a server certificate issued by the Gateway system CA, because enrolled daemons trust that CA for ongoing mTLS connections.
+Gateway normally auto-issues its gRPC server certificate from the internal system CA and stores it under `GRPC_TLS_AUTO_DIR` (`/var/lib/gateway/tls` by default). The auto-issued certificate includes localhost, the Gateway host name, the persisted canonical public host, configured public IPs, and `GRPC_TLS_EXTRA_SANS`. The optional native HTTPS listener receives a separate `gateway-web` leaf from this same CA. Custom `GRPC_TLS_CERT` and `GRPC_TLS_KEY` paths are advanced configuration and must point to a server certificate issued by the Gateway system CA, because enrolled daemons trust that CA for ongoing mTLS connections.
 
 ## Why This Prevents Node Hijacking
 

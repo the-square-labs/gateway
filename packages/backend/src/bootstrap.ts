@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { getEnv } from '@/config/env.js';
 import { container, TOKENS } from '@/container.js';
 import { createDrizzleClient } from '@/db/client.js';
+import { refreshGrpcServerCredentials } from '@/grpc/server.js';
 import { ACMERenewalJob } from '@/jobs/acme-renewal.job.js';
 import { DaemonUpdateCheckJob } from '@/jobs/daemon-update-check.job.js';
 import { DnsCheckJob } from '@/jobs/dns-check.job.js';
@@ -32,6 +33,7 @@ import { AuthEmailQueueService } from '@/modules/auth/auth-email-queue.service.j
 import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
 import { LocalAuthService } from '@/modules/auth/local-auth.service.js';
 import { MfaService } from '@/modules/auth/mfa.service.js';
+import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
 import { PasskeyService } from '@/modules/auth/passkey.service.js';
 import { DatabaseFolderService } from '@/modules/databases/database-folders.service.js';
 import { DatabaseMonitoringService } from '@/modules/databases/database-monitoring.service.js';
@@ -91,6 +93,7 @@ import { GitLabProvider } from '@/modules/integrations/gitlab-provider.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { LicenseService } from '@/modules/license/license.service.js';
 import { LICENSE_HEARTBEAT_INTERVAL_MS } from '@/modules/license/license.types.js';
+import { LocalClickHouseService } from '@/modules/logging/local-clickhouse.service.js';
 import { LoggingClickHouseService } from '@/modules/logging/logging-clickhouse.service.js';
 import { LoggingEnvironmentService } from '@/modules/logging/logging-environment.service.js';
 import { LoggingEnvironmentFolderService } from '@/modules/logging/logging-environment-folders.service.js';
@@ -99,9 +102,11 @@ import { LoggingIngestService } from '@/modules/logging/logging-ingest.service.j
 import { LoggingMaintenanceService } from '@/modules/logging/logging-maintenance.service.js';
 import { LoggingMetadataService } from '@/modules/logging/logging-metadata.service.js';
 import { LoggingRateLimitService } from '@/modules/logging/logging-rate-limit.service.js';
+import { LoggingRuntimeService } from '@/modules/logging/logging-runtime.service.js';
 import { LoggingSchemaService } from '@/modules/logging/logging-schema.service.js';
 import { LoggingSchemaFolderService } from '@/modules/logging/logging-schema-folders.service.js';
 import { LoggingSearchService } from '@/modules/logging/logging-search.service.js';
+import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
 import { LoggingTokenService } from '@/modules/logging/logging-token.service.js';
 import { LoggingValidationService } from '@/modules/logging/logging-validation.service.js';
 import { McpSettingsService } from '@/modules/mcp/mcp-settings.service.js';
@@ -128,8 +133,9 @@ import { ProxyDockerUpstreamService } from '@/modules/proxy/proxy-docker-upstrea
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { OutboundWebhookPolicyService } from '@/modules/settings/outbound-webhook-policy.service.js';
-import { SetupService } from '@/modules/setup/setup.service.js';
+import { SetupAccessService } from '@/modules/setup/setup-access.service.js';
 import { SetupTokenPolicyService } from '@/modules/setup/setup-token-policy.js';
+import { SetupWizardService } from '@/modules/setup/setup-wizard.service.js';
 import { ACMEService } from '@/modules/ssl/acme.service.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
 import { StatusIncidentEvaluatorService } from '@/modules/status-page/status-incident-evaluator.service.js';
@@ -147,10 +153,13 @@ import { HousekeepingService } from '@/services/housekeeping.service.js';
 import { NginxConfigGenerator } from '@/services/nginx-config-generator.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
+import { RuntimeRestartService } from '@/services/runtime-restart.service.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
 import { SessionService } from '@/services/session.service.js';
 import { SystemCAService } from '@/services/system-ca.service.js';
 import { UpdateService } from '@/services/update.service.js';
+import { WebIdentityService } from '@/services/web-identity.service.js';
+import { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
 
 export { container };
 
@@ -184,9 +193,14 @@ export async function initializeContainer(): Promise<void> {
 
   const sessionService = new SessionService(cacheService);
   container.registerInstance(SessionService, sessionService);
+  container.registerInstance(RuntimeRestartService, new RuntimeRestartService());
 
   const cryptoService = new CryptoService(env.PKI_MASTER_KEY);
   container.registerInstance(CryptoService, cryptoService);
+
+  const oidcSettingsService = new OidcSettingsService(db, cryptoService);
+  await oidcSettingsService.importLegacyEnv(env);
+  container.registerInstance(OidcSettingsService, oidcSettingsService);
 
   const authSettingsService = new AuthSettingsService(db);
   container.registerInstance(AuthSettingsService, authSettingsService);
@@ -201,6 +215,11 @@ export async function initializeContainer(): Promise<void> {
 
   const generalSettingsService = new GeneralSettingsService(db, inferenceSetupEvents);
   container.registerInstance(GeneralSettingsService, generalSettingsService);
+  await generalSettingsService.importLegacyPublicUrl(process.env.APP_URL);
+
+  const webTransportSettingsService = new WebTransportSettingsService(db, env.WEB_TLS_BOOTSTRAP_MODE);
+  await webTransportSettingsService.initialize();
+  container.registerInstance(WebTransportSettingsService, webTransportSettingsService);
 
   const networkSettingsService = new NetworkSettingsService(db);
   container.registerInstance(NetworkSettingsService, networkSettingsService);
@@ -211,7 +230,15 @@ export async function initializeContainer(): Promise<void> {
   const auditService = new AuditService(db);
   container.registerInstance(AuditService, auditService);
 
-  const authService = new AuthService(db, sessionService, cacheService, authSettingsService, auditService);
+  const authService = new AuthService(
+    db,
+    sessionService,
+    cacheService,
+    authSettingsService,
+    auditService,
+    oidcSettingsService,
+    generalSettingsService
+  );
   container.registerInstance(AuthService, authService);
   container.registerInstance(
     LocalAuthService,
@@ -221,16 +248,20 @@ export async function initializeContainer(): Promise<void> {
       sessionService,
       authSettingsService,
       container.resolve(AuthMailService),
-      auditService
+      auditService,
+      generalSettingsService
     )
   );
   container.registerInstance(MfaService, new MfaService(db, cacheService, cryptoService));
-  container.registerInstance(PasskeyService, new PasskeyService(db, cacheService, authSettingsService));
+  container.registerInstance(
+    PasskeyService,
+    new PasskeyService(db, cacheService, authSettingsService, generalSettingsService)
+  );
   const adminUserFolderService = new AdminUserFolderService(db, auditService);
   adminUserFolderService.setEventBus(eventBus);
   container.registerInstance(AdminUserFolderService, adminUserFolderService);
 
-  const oauthService = new OAuthService(db, cacheService, auditService, authSettingsService);
+  const oauthService = new OAuthService(db, cacheService, auditService, authSettingsService, generalSettingsService);
   container.registerInstance(OAuthService, oauthService);
 
   const templatesService = new TemplatesService(db);
@@ -433,6 +464,9 @@ export async function initializeContainer(): Promise<void> {
   const grpcIdentityService = new GrpcIdentityService(env, systemCA);
   container.registerInstance(GrpcIdentityService, grpcIdentityService);
   await grpcIdentityService.resolve();
+
+  const webIdentityService = new WebIdentityService(env, systemCA);
+  container.registerInstance(WebIdentityService, webIdentityService);
 
   // Nginx config generator (pure config generation, no I/O)
   const configValidator = new ConfigValidatorService();
@@ -796,13 +830,35 @@ export async function initializeContainer(): Promise<void> {
   domainFolderService.setEventBus(eventBus);
   container.registerInstance(DomainFolderService, domainFolderService);
 
-  // Setup service (bootstrap management SSL)
+  // Browser-based first-run setup.
   const setupTokenPolicyService = new SetupTokenPolicyService(db, env.SETUP_BOOTSTRAP);
   await setupTokenPolicyService.ensureSetupStarted();
   container.registerInstance(SetupTokenPolicyService, setupTokenPolicyService);
+  const setupAccessService = new SetupAccessService(db, cacheService, setupTokenPolicyService);
+  container.registerInstance(SetupAccessService, setupAccessService);
 
-  const setupService = new SetupService(db, sslService, proxyService, domainsService);
-  container.registerInstance(SetupService, setupService);
+  container.registerInstance(
+    SetupWizardService,
+    new SetupWizardService(
+      db,
+      setupTokenPolicyService,
+      setupAccessService,
+      generalSettingsService,
+      authSettingsService,
+      oidcSettingsService,
+      authMailService,
+      authService,
+      container.resolve(LocalAuthService),
+      async () => {
+        const identity = await grpcIdentityService.refresh();
+        await refreshGrpcServerCredentials(identity.certPath, identity.keyPath, systemCA);
+      },
+      async () => {
+        const transport = await webTransportSettingsService.getConfig();
+        if (transport.tlsEnabled) await webIdentityService.refresh();
+      }
+    )
+  );
 
   // Docker service (kept for self-update and image pruning only)
   const dockerService = new DockerService('/var/run/docker.sock', '');
@@ -812,34 +868,38 @@ export async function initializeContainer(): Promise<void> {
   const updateService = new UpdateService(db, dockerService, env);
   container.registerInstance(UpdateService, updateService);
 
-  const licenseService = new LicenseService(db, cryptoService, env);
+  const licenseService = new LicenseService(db, cryptoService, env, fetch, generalSettingsService);
   container.registerInstance(LicenseService, licenseService);
 
-  const loggingFeatureService = new LoggingFeatureService(env);
-  container.registerInstance(LoggingFeatureService, loggingFeatureService);
+  const loggingSettingsService = new LoggingSettingsService(db, cryptoService);
+  await loggingSettingsService.importLegacyEnv(env);
+  container.registerInstance(LoggingSettingsService, loggingSettingsService);
   const loggingClickHouseService = new LoggingClickHouseService(env);
   container.registerInstance(LoggingClickHouseService, loggingClickHouseService);
+  const loggingFeatureService = new LoggingFeatureService(loggingClickHouseService);
+  container.registerInstance(LoggingFeatureService, loggingFeatureService);
+  const localClickHouseService = new LocalClickHouseService(dockerService);
+  container.registerInstance(LocalClickHouseService, localClickHouseService);
+  const loggingRuntimeService = new LoggingRuntimeService(
+    loggingSettingsService,
+    localClickHouseService,
+    loggingClickHouseService,
+    loggingFeatureService
+  );
+  container.registerInstance(LoggingRuntimeService, loggingRuntimeService);
+  const loggingRuntimeConfig = await loggingSettingsService.getRuntimeConfig();
   const loggingMaintenanceService = new LoggingMaintenanceService(
     loggingClickHouseService,
     loggingFeatureService,
-    env.CLICKHOUSE_MANAGED_INTERNAL_LOGS
+    loggingRuntimeConfig.managedInternalLogs
   );
+  loggingRuntimeService.setMaintenanceService(loggingMaintenanceService);
   container.registerInstance(LoggingMaintenanceService, loggingMaintenanceService);
-  if (loggingClickHouseService.isConfigured()) {
-    try {
-      await loggingClickHouseService.ensureSchema();
-      const available = await loggingClickHouseService.ping();
-      if (available) {
-        loggingFeatureService.markAvailable();
-      } else {
-        loggingFeatureService.markUnavailable('ClickHouse ping failed');
-      }
-    } catch (error) {
-      loggingFeatureService.markUnavailable(
-        error instanceof Error ? error.message : 'ClickHouse initialization failed'
-      );
-      logger.warn('External logging ClickHouse initialization failed', { error });
-    }
+  try {
+    await loggingRuntimeService.initialize();
+  } catch (error) {
+    loggingFeatureService.markUnavailable(error instanceof Error ? error.message : 'ClickHouse initialization failed');
+    logger.warn('External logging ClickHouse initialization failed', { error });
   }
   const loggingEnvironmentService = new LoggingEnvironmentService(
     db,
@@ -917,7 +977,8 @@ export async function initializeContainer(): Promise<void> {
     db,
     notifWebhookService,
     env,
-    outboundWebhookPolicyService
+    outboundWebhookPolicyService,
+    generalSettingsService
   );
   container.registerInstance(NotificationDispatcherService, notifDispatcherService);
 

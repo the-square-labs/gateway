@@ -318,8 +318,9 @@ export class DockerService {
   /**
    * Create a container. Returns the container ID.
    */
-  async createContainer(config: DockerCreateContainerConfig): Promise<string> {
-    const res = await this.request('POST', `${API_VERSION}/containers/create`, config);
+  async createContainer(config: DockerCreateContainerConfig, name?: string): Promise<string> {
+    const query = name ? `?name=${encodeURIComponent(name)}` : '';
+    const res = await this.request('POST', `${API_VERSION}/containers/create${query}`, config);
     if (res.statusCode !== 201) {
       throw new Error(`Docker container create failed (${res.statusCode}): ${res.body}`);
     }
@@ -336,6 +337,16 @@ export class DockerService {
     if (res.statusCode !== 204 && res.statusCode !== 304) {
       throw new Error(`Docker container start failed (${res.statusCode}): ${res.body}`);
     }
+  }
+
+  async connectContainerToNetwork(id: string, network: string, aliases: string[] = []): Promise<void> {
+    const res = await this.request('POST', `${API_VERSION}/networks/${encodeURIComponent(network)}/connect`, {
+      Container: id,
+      EndpointConfig: aliases.length > 0 ? { Aliases: aliases } : {},
+    });
+    if (res.statusCode === 200) return;
+    if (res.statusCode === 403 && /already exists|already connected/i.test(res.body)) return;
+    throw new Error(`Docker network connect failed (${res.statusCode}): ${res.body}`);
   }
 
   /**
@@ -492,6 +503,9 @@ export interface DockerContainerFullInspect extends DockerContainerInspect {
     Labels: Record<string, string>;
     Env: string[];
   };
+  HostConfig?: {
+    NetworkMode?: string;
+  };
 }
 
 export interface DockerCreateContainerConfig {
@@ -508,6 +522,9 @@ export interface DockerCreateContainerConfig {
   OpenStdin?: boolean;
   StdinOnce?: boolean;
   Tty?: boolean;
+  NetworkingConfig?: {
+    EndpointsConfig: Record<string, { Aliases?: string[] }>;
+  };
   HostConfig?: {
     Binds?: string[];
     AutoRemove?: boolean;
@@ -524,6 +541,10 @@ export interface DockerCreateContainerConfig {
     LogConfig?: {
       Type: string;
       Config?: Record<string, string>;
+    };
+    RestartPolicy?: {
+      Name: 'no' | 'always' | 'unless-stopped' | 'on-failure';
+      MaximumRetryCount?: number;
     };
   };
 }

@@ -73,9 +73,13 @@ export class LoggingMaintenanceService {
   constructor(
     private readonly storage: LoggingClickHouseService,
     private readonly feature: LoggingFeatureService,
-    private readonly managedInternalLogs = false
+    private managedInternalLogs = false
   ) {
     this.snapshot = emptySnapshot(storage.isConfigured());
+  }
+
+  setManagedInternalLogs(enabled: boolean): void {
+    this.managedInternalLogs = enabled;
   }
 
   getSnapshot(): LoggingMaintenanceSnapshot {

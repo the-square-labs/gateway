@@ -1,8 +1,9 @@
 import 'reflect-metadata';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { GATEWAY_NOT_FOUND_HTML } from '@/lib/gateway-error-pages.js';
+import { SetupTokenPolicyService } from '@/modules/setup/setup-token-policy.js';
 import { StatusPageService } from '@/modules/status-page/status-page.service.js';
-import { createApp, normalizeRequestHost } from './app.js';
+import { createApp, isLocalMachineHost, normalizeRequestHost } from './app.js';
 import { container, TOKENS } from './container.js';
 
 beforeAll(() => {
@@ -40,11 +41,52 @@ describe('normalizeRequestHost', () => {
   ])('rejects malformed Host %s', (input) => expect(normalizeRequestHost(input)).toBeNull());
 });
 
+describe('isLocalMachineHost', () => {
+  const localAddresses = new Set(['172.20.0.131', '192.168.50.10', 'fd00::10', 'fe80::20', '217.19.208.197']);
+
+  it.each([
+    'localhost',
+    '127.0.0.1',
+    '::1',
+    '172.20.0.131',
+    '192.168.50.10',
+    'fd00::10',
+    'fe80::20',
+  ])('allows local machine address %s', (host) => expect(isLocalMachineHost(host, localAddresses)).toBe(true));
+
+  it.each([
+    '172.20.0.132',
+    '10.0.0.8',
+    'fd00::11',
+    '217.19.208.197',
+    '8.8.8.8',
+    'gateway.example.com',
+  ])('rejects non-local or public address %s', (host) => expect(isLocalMachineHost(host, localAddresses)).toBe(false));
+});
+
 describe('Gateway Host guard', () => {
   it('allows the canonical APP_URL host', async () => {
     container.registerInstance(TOKENS.RedisClient, { ping: vi.fn().mockResolvedValue('PONG') } as any);
     const response = await createApp().app.request('/health', { headers: { host: 'Gateway.Example.com:443' } });
     expect(response.status).toBe(200);
+  });
+
+  it('keeps the original IP host available until setup is completed', async () => {
+    container.registerInstance(TOKENS.RedisClient, { ping: vi.fn().mockResolvedValue('PONG') } as any);
+    container.registerInstance(SetupTokenPolicyService, { isSetupComplete: vi.fn().mockResolvedValue(false) } as any);
+
+    const response = await createApp().app.request('/health', {
+      headers: { host: '172.20.0.131:3000' },
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it('allows the loopback UI host after setup is completed', async () => {
+    const response = await createApp().app.request('/', { headers: { host: '127.0.0.1:3000' } });
+
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toBe(GATEWAY_NOT_FOUND_HTML);
   });
 
   it.each([

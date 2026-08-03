@@ -5,7 +5,8 @@ import { ConfirmDialog, useConfirmDialog } from "@/components/common/ConfirmDial
 import { api } from "@/services/api";
 import { useSystemConfigStore } from "@/stores/system-config";
 import type { AuthProvisioningSettings } from "@/types";
-import { AuthProvisioningSection, applySmtpPreset } from "./AuthProvisioningSection";
+import { AuthProvisioningSection } from "./AuthProvisioningSection";
+import { applySmtpPreset } from "./smtp-presets";
 
 const SETTINGS: AuthProvisioningSettings = {
   oidcAutoCreateUsers: true,
@@ -15,6 +16,7 @@ const SETTINGS: AuthProvisioningSettings = {
   mcpServerEnabled: true,
   mcpExtendedCompatibility: false,
   generalSettings: {
+    publicUrl: "https://gateway.example.com",
     fileUploadMaxBytes: 100 * 1024 * 1024,
     fileOpenMaxBytes: 10 * 1024 * 1024,
     gatewayPublicIps: [],

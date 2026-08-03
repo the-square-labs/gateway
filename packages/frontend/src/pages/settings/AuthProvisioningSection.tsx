@@ -28,6 +28,14 @@ import {
   withDefaultSystemConfig,
 } from "@/stores/system-config";
 import type { AuthProvisioningSettings } from "@/types";
+import {
+  applySmtpPreset,
+  DEFAULT_SMTP_DRAFT,
+  getSmtpPresetId,
+  SMTP_PRESETS,
+  type SmtpDraft,
+  type SmtpPresetId,
+} from "./smtp-presets";
 
 interface AuthProvisioningSectionProps {
   canEdit: boolean;
@@ -42,6 +50,7 @@ const DEFAULT_GENERAL_FEATURES = {
   inferenceEnabled: DEFAULT_GATEWAY_FEATURES.inferenceEnabled,
 };
 const DEFAULT_GENERAL_SETTINGS = {
+  publicUrl: null as string | null,
   fileUploadMaxBytes: DEFAULT_FILE_UPLOAD_MAX_BYTES,
   fileOpenMaxBytes: DEFAULT_FILE_OPEN_MAX_BYTES,
   gatewayPublicIps: [] as string[],
@@ -59,38 +68,6 @@ const DEFAULT_PASSWORD_POLICY = {
   requireSymbol: false,
 };
 
-const SMTP_PRESETS = {
-  generic: {
-    label: "Generic SMTP",
-    description: "Configure any standards-compliant SMTP relay manually.",
-  },
-  resend: {
-    label: "Resend",
-    description: "smtp.resend.com · STARTTLS · API key as the password",
-    host: "smtp.resend.com",
-    port: "587",
-    tlsMode: "starttls" as const,
-    username: "resend",
-  },
-  postmark: {
-    label: "Postmark",
-    description: "smtp.postmarkapp.com · STARTTLS · SMTP or Server API token",
-    host: "smtp.postmarkapp.com",
-    port: "587",
-    tlsMode: "starttls" as const,
-    username: "",
-  },
-  sendgrid: {
-    label: "Twilio SendGrid",
-    description: "smtp.sendgrid.net · STARTTLS · API key as the password",
-    host: "smtp.sendgrid.net",
-    port: "587",
-    tlsMode: "starttls" as const,
-    username: "apikey",
-  },
-} as const;
-
-export type SmtpPresetId = keyof typeof SMTP_PRESETS;
 type SmtpTestEmailKind = "smtp_configuration" | "password_setup" | "password_reset" | "email_otp";
 
 const SMTP_TEST_EMAIL_OPTIONS: Array<{
@@ -120,43 +97,23 @@ const SMTP_TEST_EMAIL_OPTIONS: Array<{
   },
 ];
 
-export interface SmtpDraft {
-  host: string;
-  port: string;
-  tlsMode: "starttls" | "tls";
-  username: string;
-  password: string;
-  senderName: string;
-  senderEmail: string;
-}
-
-const DEFAULT_SMTP_DRAFT: SmtpDraft = {
-  host: SMTP_PRESETS.resend.host,
-  port: SMTP_PRESETS.resend.port,
-  tlsMode: SMTP_PRESETS.resend.tlsMode,
-  username: SMTP_PRESETS.resend.username,
-  password: "",
-  senderName: "Gateway",
-  senderEmail: "",
+const DEFAULT_OIDC_DRAFT = {
+  issuer: "",
+  clientId: "",
+  clientSecret: "",
+  redirectUri: "",
+  scopes: "openid email profile",
 };
-
-function getSmtpPresetId(host: string | null | undefined): SmtpPresetId {
-  return (Object.entries(SMTP_PRESETS).find(
-    ([, preset]) => "host" in preset && preset.host === host
-  )?.[0] ?? "generic") as SmtpPresetId;
-}
-
-export function applySmtpPreset(draft: SmtpDraft, presetId: SmtpPresetId): SmtpDraft {
-  const preset = SMTP_PRESETS[presetId];
-  if (!("host" in preset)) return draft;
-  return {
-    ...draft,
-    host: preset.host,
-    port: preset.port,
-    tlsMode: preset.tlsMode,
-    username: preset.username,
-  };
-}
+const DEFAULT_LOGGING_DRAFT = {
+  mode: "disabled" as "disabled" | "local" | "external",
+  url: "",
+  username: "",
+  password: "",
+  database: "gateway_logs",
+  table: "logs",
+  requestTimeoutMs: "5000",
+  managedInternalLogs: false,
+};
 
 function bytesToMegabytes(bytes: number) {
   return Math.round(bytes / BYTES_PER_MEGABYTE);
@@ -169,6 +126,12 @@ function withDefaultGeneralSettings(settings: AuthProvisioningSettings | null) {
     methods: { ...DEFAULT_AUTH_METHODS, ...settings.methods },
     passwordPolicy: { ...DEFAULT_PASSWORD_POLICY, ...settings.passwordPolicy },
     mcpExtendedCompatibility: settings.mcpExtendedCompatibility ?? false,
+    webTransport: settings.webTransport ?? {
+      tlsEnabled: false,
+      restartRequired: false,
+      directAccess: false,
+      targetUrl: null,
+    },
     generalSettings: {
       ...DEFAULT_GENERAL_SETTINGS,
       ...settings.generalSettings,
@@ -190,12 +153,22 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
   const [isSavingVerifiedEmail, setIsSavingVerifiedEmail] = useState(false);
   const [isSavingGroup, setIsSavingGroup] = useState(false);
   const [isSavingGeneral, setIsSavingGeneral] = useState(false);
+  const [isSavingWebTls, setIsSavingWebTls] = useState(false);
   const [isSavingMcp, setIsSavingMcp] = useState(false);
   const [isSavingMcpCompatibility, setIsSavingMcpCompatibility] = useState(false);
   const [isSavingOAuthCompatibility, setIsSavingOAuthCompatibility] = useState(false);
   const [isSavingNetwork, setIsSavingNetwork] = useState(false);
   const [isSavingWebhookPolicy, setIsSavingWebhookPolicy] = useState(false);
   const [isSavingLocalAuth, setIsSavingLocalAuth] = useState(false);
+  const [isSavingOidc, setIsSavingOidc] = useState(false);
+  const [oidcDraft, setOidcDraft] = useState(DEFAULT_OIDC_DRAFT);
+  const [isSavingLogging, setIsSavingLogging] = useState(false);
+  const [loggingDraft, setLoggingDraft] = useState(DEFAULT_LOGGING_DRAFT);
+  const [publicUrl, setPublicUrl] = useState(
+    () =>
+      api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
+        ?.publicUrl ?? ""
+  );
   const [smtpDraft, setSmtpDraft] = useState<SmtpDraft>(DEFAULT_SMTP_DRAFT);
   const [smtpPreset, setSmtpPreset] = useState<SmtpPresetId>("resend");
   const [smtpTestOpen, setSmtpTestOpen] = useState(false);
@@ -278,6 +251,24 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
         senderEmail: settingsData.smtp?.senderEmail ?? "",
       }));
       setSmtpPreset(smtpPresetId);
+      setOidcDraft({
+        issuer: settingsData.oidc?.issuer ?? "",
+        clientId: settingsData.oidc?.clientId ?? "",
+        clientSecret: "",
+        redirectUri: settingsData.oidc?.redirectUri ?? "",
+        scopes: settingsData.oidc?.scopes ?? "openid email profile",
+      });
+      setLoggingDraft({
+        mode: settingsData.logging?.mode ?? "disabled",
+        url: settingsData.logging?.url ?? "",
+        username: settingsData.logging?.username ?? "",
+        password: "",
+        database: settingsData.logging?.database ?? "gateway_logs",
+        table: settingsData.logging?.table ?? "logs",
+        requestTimeoutMs: String(settingsData.logging?.requestTimeoutMs ?? 5000),
+        managedInternalLogs: settingsData.logging?.managedInternalLogs ?? false,
+      });
+      setPublicUrl(settingsData.generalSettings.publicUrl ?? "");
       setTrustedProxyCidrs(settingsData.networkSecurity.trustedProxyCidrs.join(", "));
       setWebhookPrivateCidrs(settingsData.outboundWebhookPolicy.allowedPrivateCidrs.join(", "));
       setFileUploadLimitMb(
@@ -318,6 +309,10 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       const updated = await api.updateAuthProvisioningSettings({ oidcAutoCreateUsers: checked });
       applySettings(updated);
       toast.success("Gateway settings updated");
+      if (updated.webTransport?.restartRequired) {
+        toast.success("Gateway is restarting with the refreshed web certificate");
+        window.setTimeout(() => window.location.reload(), 1500);
+      }
     } catch (err) {
       setSettings(previous);
       toast.error(err instanceof Error ? err.message : "Failed to update Gateway settings");
@@ -364,6 +359,87 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
     }
   };
 
+  const handleToggleWebTls = async (checked: boolean) => {
+    if (!settings || !canEdit) return;
+    setIsSavingWebTls(true);
+    try {
+      const updated = await api.updateAuthProvisioningSettings({ webTlsEnabled: checked });
+      applySettings(withDefaultGeneralSettings(updated)!);
+      if (updated.webTransport?.restartRequired) {
+        toast.success("Gateway is restarting with the new internal protocol");
+        window.setTimeout(() => {
+          if (updated.webTransport?.directAccess && updated.webTransport.targetUrl) {
+            window.location.assign(updated.webTransport.targetUrl);
+          } else {
+            window.location.reload();
+          }
+        }, 1500);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update internal HTTPS");
+    } finally {
+      setIsSavingWebTls(false);
+    }
+  };
+
+  const saveOidc = async () => {
+    if (!settings || !canEdit) return;
+    setIsSavingOidc(true);
+    try {
+      const updated = await api.updateAuthProvisioningSettings({
+        oidc: {
+          issuer: oidcDraft.issuer.trim(),
+          clientId: oidcDraft.clientId.trim(),
+          ...(oidcDraft.clientSecret ? { clientSecret: oidcDraft.clientSecret } : {}),
+          redirectUri: oidcDraft.redirectUri.trim(),
+          scopes: oidcDraft.scopes.trim(),
+        },
+      });
+      applySettings(withDefaultGeneralSettings(updated)!);
+      setOidcDraft((current) => ({ ...current, clientSecret: "" }));
+      toast.success("OIDC provider updated");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update OIDC provider");
+    } finally {
+      setIsSavingOidc(false);
+    }
+  };
+
+  const saveLogging = async () => {
+    if (!settings || !canEdit) return;
+    setIsSavingLogging(true);
+    try {
+      const external = loggingDraft.mode === "external";
+      const updated = await api.updateAuthProvisioningSettings({
+        logging: {
+          mode: loggingDraft.mode,
+          ...(external
+            ? {
+                url: loggingDraft.url.trim(),
+                username: loggingDraft.username.trim(),
+                ...(loggingDraft.password ? { password: loggingDraft.password } : {}),
+                database: loggingDraft.database.trim(),
+                table: loggingDraft.table.trim(),
+                requestTimeoutMs: Number(loggingDraft.requestTimeoutMs),
+                managedInternalLogs: loggingDraft.managedInternalLogs,
+              }
+            : {}),
+        },
+      });
+      applySettings(withDefaultGeneralSettings(updated)!);
+      setLoggingDraft((current) => ({ ...current, password: "" }));
+      toast.success(
+        loggingDraft.mode === "disabled"
+          ? "Structured logging disabled; local data was preserved"
+          : "Structured logging updated"
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update structured logging");
+    } finally {
+      setIsSavingLogging(false);
+    }
+  };
+
   const updateGeneralSettings = async (
     patch: Partial<AuthProvisioningSettings["generalSettings"]>
   ) => {
@@ -390,6 +466,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       setGatewayPublicIps(updated.generalSettings.gatewayPublicIps.join(", "));
       setGatewayGrpcPublicTarget(updated.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(updated.generalSettings.gatewayGrpcLocalIp ?? "");
+      setPublicUrl(updated.generalSettings.publicUrl ?? "");
       setPkiEnabled(nextSettings.generalSettings.features.pkiEnabled);
       setInferenceEnabled(nextSettings.generalSettings.features.inferenceEnabled);
       const currentFeatures = useSystemConfigStore.getState().config.features;
@@ -411,6 +488,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       setGatewayPublicIps(previous.generalSettings.gatewayPublicIps.join(", "));
       setGatewayGrpcPublicTarget(previous.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(previous.generalSettings.gatewayGrpcLocalIp ?? "");
+      setPublicUrl(previous.generalSettings.publicUrl ?? "");
       setPkiEnabled(previous.generalSettings.features.pkiEnabled);
       setInferenceEnabled(previous.generalSettings.features.inferenceEnabled);
       toast.error(err instanceof Error ? err.message : "Failed to update Gateway settings");
@@ -441,7 +519,9 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
     .filter(Boolean);
   const draftGatewayGrpcPublicTarget = gatewayGrpcPublicTarget.trim() || null;
   const draftGatewayGrpcLocalIp = gatewayGrpcLocalIp.trim() || null;
+  const draftPublicUrl = publicUrl.trim().replace(/\/$/, "");
   const generalHasChanges =
+    draftPublicUrl !== (settings?.generalSettings.publicUrl ?? "") ||
     (draftFileUploadLimitBytes != null &&
       draftFileUploadLimitBytes !== settings?.generalSettings.fileUploadMaxBytes) ||
     (draftFileOpenLimitBytes != null &&
@@ -472,7 +552,12 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       toast.error("File open limit must be between 1 MB and 100 MB");
       return;
     }
+    if (!/^https?:\/\/[^/]+$/i.test(draftPublicUrl)) {
+      toast.error("Public URL must be an HTTP(S) origin without a path");
+      return;
+    }
     if (
+      draftPublicUrl === settings.generalSettings.publicUrl &&
       nextBytes === settings.generalSettings.fileUploadMaxBytes &&
       nextOpenBytes === settings.generalSettings.fileOpenMaxBytes &&
       draftGatewayPublicIps.join(",") === settings.generalSettings.gatewayPublicIps.join(",") &&
@@ -484,6 +569,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       return;
     }
     updateGeneralSettings({
+      publicUrl: draftPublicUrl,
       fileUploadMaxBytes: nextBytes,
       fileOpenMaxBytes: nextOpenBytes,
       gatewayPublicIps: draftGatewayPublicIps,
@@ -729,6 +815,36 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
         dirty={generalHasChanges}
       >
         <div className="divide-y divide-border">
+          <SettingsControlRow
+            title="Public URL"
+            description="Canonical browser-facing origin used for redirects and links. It is never inferred from the current browser."
+          >
+            <Input
+              type="url"
+              value={publicUrl}
+              placeholder="https://gateway.example.com"
+              disabled={!canEdit || isSavingGeneral}
+              onChange={(event) => setPublicUrl(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") saveGeneralSettings();
+              }}
+            />
+          </SettingsControlRow>
+          <div className="flex items-center justify-between gap-4 px-4 py-3">
+            <div>
+              <p className="text-sm font-medium">Internal HTTPS on port 3000</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Uses a dedicated certificate issued by the existing Gateway System CA. Changing it
+                restarts Gateway.
+              </p>
+            </div>
+            <Switch
+              checked={settings.webTransport?.tlsEnabled ?? false}
+              disabled={!canEdit || isSavingWebTls}
+              ariaLabel="Enable internal HTTPS"
+              onChange={handleToggleWebTls}
+            />
+          </div>
           <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
             <div>
               <p className="text-sm font-medium">File upload limit</p>
@@ -863,6 +979,247 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
               onChange={handleToggleInference}
             />
           </div>
+        </div>
+      </PanelShell>
+
+      <PanelShell
+        title="OIDC provider"
+        description={
+          settings.oidc?.configured
+            ? "Client secret is stored encrypted"
+            : "Configure the identity provider used for OIDC sign-in"
+        }
+        actions={
+          <Button onClick={saveOidc} disabled={!canEdit || isSavingOidc}>
+            <Save className="h-4 w-4" />
+            Save
+          </Button>
+        }
+      >
+        <div className="divide-y divide-border">
+          <SettingsControlRow
+            title="Issuer URL"
+            description="OpenID Connect issuer used for discovery."
+          >
+            <Input
+              type="url"
+              value={oidcDraft.issuer}
+              placeholder="https://id.example.com/application/o/gateway/"
+              disabled={!canEdit || isSavingOidc}
+              onChange={(event) =>
+                setOidcDraft((current) => ({ ...current, issuer: event.target.value }))
+              }
+            />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Client ID"
+            description="OAuth client identifier registered at the provider."
+          >
+            <Input
+              value={oidcDraft.clientId}
+              placeholder="gateway"
+              disabled={!canEdit || isSavingOidc}
+              onChange={(event) =>
+                setOidcDraft((current) => ({ ...current, clientId: event.target.value }))
+              }
+            />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Client secret"
+            description={
+              settings.oidc?.clientSecretLast4
+                ? `Stored secret ends in ${settings.oidc.clientSecretLast4}`
+                : "Required for the initial configuration."
+            }
+          >
+            <Input
+              type="password"
+              value={oidcDraft.clientSecret}
+              placeholder={
+                settings.oidc?.configured ? "Leave blank to keep current secret" : "Client secret"
+              }
+              disabled={!canEdit || isSavingOidc}
+              onChange={(event) =>
+                setOidcDraft((current) => ({ ...current, clientSecret: event.target.value }))
+              }
+            />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Redirect URI"
+            description="Must exactly match the callback registered at the provider."
+          >
+            <Input
+              type="url"
+              value={oidcDraft.redirectUri}
+              placeholder="https://gateway.example.com/auth/callback"
+              disabled={!canEdit || isSavingOidc}
+              onChange={(event) =>
+                setOidcDraft((current) => ({ ...current, redirectUri: event.target.value }))
+              }
+            />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Scopes"
+            description="Space-separated scopes; openid is required."
+          >
+            <Input
+              value={oidcDraft.scopes}
+              disabled={!canEdit || isSavingOidc}
+              onChange={(event) =>
+                setOidcDraft((current) => ({ ...current, scopes: event.target.value }))
+              }
+            />
+          </SettingsControlRow>
+        </div>
+      </PanelShell>
+
+      <PanelShell
+        title="Structured logging storage"
+        description="Keep logging disabled, let Gateway manage a local ClickHouse, or use an external ClickHouse"
+        actions={
+          <Button onClick={saveLogging} disabled={!canEdit || isSavingLogging}>
+            <Save className="h-4 w-4" />
+            Save
+          </Button>
+        }
+      >
+        <div className="divide-y divide-border">
+          <SettingsControlRow
+            title="Storage mode"
+            description="Disabling managed local storage stops its container but preserves the Docker volume."
+          >
+            <Select
+              value={loggingDraft.mode}
+              disabled={!canEdit || isSavingLogging}
+              onValueChange={(mode: "disabled" | "local" | "external") =>
+                setLoggingDraft((current) => ({ ...current, mode }))
+              }
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="disabled">Disabled</SelectItem>
+                <SelectItem value="local">Managed local</SelectItem>
+                <SelectItem value="external">External</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingsControlRow>
+          {loggingDraft.mode === "local" && (
+            <div className="px-4 py-3 text-sm text-muted-foreground">
+              Gateway uses the mounted Docker socket to run a pinned ClickHouse image on the current
+              network.
+            </div>
+          )}
+          {loggingDraft.mode === "external" && (
+            <>
+              <SettingsControlRow
+                title="ClickHouse URL"
+                description="HTTP(S) endpoint for the external ClickHouse instance."
+              >
+                <Input
+                  type="url"
+                  value={loggingDraft.url}
+                  placeholder="https://clickhouse.example.com:8443"
+                  disabled={!canEdit || isSavingLogging}
+                  onChange={(event) =>
+                    setLoggingDraft((current) => ({ ...current, url: event.target.value }))
+                  }
+                />
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="Username"
+                description="ClickHouse account used by Gateway."
+              >
+                <Input
+                  value={loggingDraft.username}
+                  disabled={!canEdit || isSavingLogging}
+                  onChange={(event) =>
+                    setLoggingDraft((current) => ({ ...current, username: event.target.value }))
+                  }
+                />
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="Password"
+                description={
+                  settings.logging?.passwordLast4
+                    ? `Stored password ends in ${settings.logging.passwordLast4}`
+                    : "Required for the initial external connection."
+                }
+              >
+                <Input
+                  type="password"
+                  value={loggingDraft.password}
+                  placeholder={
+                    settings.logging?.passwordLast4
+                      ? "Leave blank to keep current password"
+                      : "Password"
+                  }
+                  disabled={!canEdit || isSavingLogging}
+                  onChange={(event) =>
+                    setLoggingDraft((current) => ({ ...current, password: event.target.value }))
+                  }
+                />
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="Database"
+                description="Database that stores structured Gateway logs."
+              >
+                <Input
+                  value={loggingDraft.database}
+                  disabled={!canEdit || isSavingLogging}
+                  onChange={(event) =>
+                    setLoggingDraft((current) => ({ ...current, database: event.target.value }))
+                  }
+                />
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="Table"
+                description="MergeTree table used for structured logs."
+              >
+                <Input
+                  value={loggingDraft.table}
+                  disabled={!canEdit || isSavingLogging}
+                  onChange={(event) =>
+                    setLoggingDraft((current) => ({ ...current, table: event.target.value }))
+                  }
+                />
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="Request timeout"
+                description="ClickHouse request timeout in milliseconds."
+              >
+                <Input
+                  type="number"
+                  min={1}
+                  max={120000}
+                  value={loggingDraft.requestTimeoutMs}
+                  disabled={!canEdit || isSavingLogging}
+                  onChange={(event) =>
+                    setLoggingDraft((current) => ({
+                      ...current,
+                      requestTimeoutMs: event.target.value,
+                    }))
+                  }
+                />
+              </SettingsControlRow>
+              <div className="flex items-center justify-between gap-4 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium">Manage ClickHouse internal logs</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Allow Gateway maintenance jobs to manage supported ClickHouse system log tables.
+                  </p>
+                </div>
+                <Switch
+                  checked={loggingDraft.managedInternalLogs}
+                  disabled={!canEdit || isSavingLogging}
+                  onChange={(managedInternalLogs) =>
+                    setLoggingDraft((current) => ({ ...current, managedInternalLogs }))
+                  }
+                />
+              </div>
+            </>
+          )}
         </div>
       </PanelShell>
 

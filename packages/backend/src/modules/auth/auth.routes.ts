@@ -1,11 +1,12 @@
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi';
 import { deleteCookie, setCookie } from 'hono/cookie';
-import { getEnv, isDevelopment } from '@/config/env.js';
+import { getEnv } from '@/config/env.js';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { getClientIpForContext } from '@/lib/request-ip.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
+import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { AppEnv } from '@/types.js';
 import {
@@ -28,6 +29,7 @@ import { AuthService } from './auth.service.js';
 import { AuthSettingsService } from './auth.settings.service.js';
 import { LocalAuthService } from './local-auth.service.js';
 import { MfaService } from './mfa.service.js';
+import { OidcSettingsService } from './oidc-settings.service.js';
 import { PasskeyService } from './passkey.service.js';
 
 export const authRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
@@ -81,13 +83,23 @@ async function setLocalSession(
   });
   await container.resolve(AuthService).recordSuccessfulSignIn(user.id);
   const env = getEnv();
+  const publicUrl = await getPublicUrl();
   setCookie(c, SESSION_COOKIE_NAME, sessionId, {
     httpOnly: true,
-    secure: !isDevelopment(),
+    secure: new URL(publicUrl).protocol === 'https:',
     sameSite: 'Lax',
     maxAge: env.SESSION_EXPIRY,
     path: '/',
   });
+}
+
+async function getPublicUrl(): Promise<string> {
+  try {
+    return await container.resolve(GeneralSettingsService).requirePublicUrl();
+  } catch {
+    // Isolated tests and pre-migration fixtures still provide APP_URL.
+    return getEnv().APP_URL;
+  }
 }
 
 async function finishLocalPrimaryAuth(c: any, user: import('@/types.js').User, authMethod: 'password' | 'email_otp') {
@@ -186,10 +198,11 @@ authRoutes.openapi(callbackRoute, async (c) => {
 
   try {
     const requestUrl = new URL(c.req.url);
-    if (!env.OIDC_REDIRECT_URI) {
+    const oidc = await container.resolve(OidcSettingsService).getRuntimeConfig();
+    if (!oidc) {
       return c.json({ code: 'OIDC_NOT_CONFIGURED', message: 'OIDC is not configured' }, 503);
     }
-    const callbackUrl = new URL(env.OIDC_REDIRECT_URI);
+    const callbackUrl = new URL(oidc.redirectUri);
     callbackUrl.search = requestUrl.search;
 
     const result = await authService.handleCallback(callbackUrl.toString(), state);
@@ -200,19 +213,20 @@ authRoutes.openapi(callbackRoute, async (c) => {
       details: { returnTo: result.returnTo ?? null },
     });
 
+    const publicUrl = await getPublicUrl();
     setCookie(c, SESSION_COOKIE_NAME, result.sessionId, {
       httpOnly: true,
-      secure: !isDevelopment(),
+      secure: new URL(publicUrl).protocol === 'https:',
       sameSite: 'Lax',
       maxAge: env.SESSION_EXPIRY,
       path: '/',
     });
 
-    let baseUrl = env.APP_URL;
+    let baseUrl = publicUrl;
     let directReturnTo: string | null = null;
     if (result.returnTo) {
       try {
-        if (new URL(result.returnTo).origin === new URL(env.APP_URL).origin) {
+        if (new URL(result.returnTo).origin === new URL(publicUrl).origin) {
           baseUrl = result.returnTo;
           const returnPath = new URL(result.returnTo).pathname;
           if (returnPath.startsWith('/api/oauth/authorize') || returnPath === '/oauth/consent') {
@@ -242,12 +256,10 @@ authRoutes.openapi(callbackRoute, async (c) => {
 
 authRoutes.get('/methods', async (c) => {
   const { methods } = await container.resolve(AuthSettingsService).getConfig();
-  const env = getEnv();
+  const oidc = await container.resolve(OidcSettingsService).getPublicConfig();
   return c.json({
     ...methods,
-    oidc: Boolean(
-      methods.oidc && env.OIDC_ISSUER && env.OIDC_CLIENT_ID && env.OIDC_CLIENT_SECRET && env.OIDC_REDIRECT_URI
-    ),
+    oidc: methods.oidc && oidc.configured,
   });
 });
 

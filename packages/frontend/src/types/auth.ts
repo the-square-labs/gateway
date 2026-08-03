@@ -96,9 +96,34 @@ export interface AuthProvisioningSettings {
     senderEmail: string | null;
     verifiedAt: string | null;
   };
+  oidc?: {
+    configured: boolean;
+    issuer: string | null;
+    clientId: string | null;
+    clientSecretLast4: string | null;
+    redirectUri: string | null;
+    scopes: string;
+  };
+  logging?: {
+    mode: "disabled" | "local" | "external";
+    url: string;
+    username: string;
+    passwordLast4: string | null;
+    database: string;
+    table: string;
+    requestTimeoutMs: number;
+    managedInternalLogs: boolean;
+  };
   mcpServerEnabled: boolean;
   mcpExtendedCompatibility: boolean;
+  webTransport?: {
+    tlsEnabled: boolean;
+    restartRequired: boolean;
+    directAccess: boolean;
+    targetUrl: string | null;
+  };
   generalSettings: {
+    publicUrl: string | null;
     fileUploadMaxBytes: number;
     fileOpenMaxBytes: number;
     gatewayPublicIps: string[];

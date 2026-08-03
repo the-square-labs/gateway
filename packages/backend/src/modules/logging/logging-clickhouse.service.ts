@@ -8,6 +8,7 @@ import {
   quoteClickHouseIdentifier,
   validateClickHouseIdentifier,
 } from './logging-query-builder.js';
+import type { LoggingRuntimeSettings } from './logging-settings.service.js';
 import type {
   LoggingClickHouseRow,
   LoggingFacets,
@@ -51,25 +52,27 @@ const MANAGED_INTERNAL_LOG_TABLES = new Set([
 ]);
 
 export class LoggingClickHouseService {
-  private readonly client: ClickHouseClient | null;
-  private readonly database: string;
-  private readonly table: string;
+  private client: ClickHouseClient | null = null;
+  private database = 'gateway_logs';
+  private table = 'logs';
 
   constructor(env: Env) {
-    this.database = validateClickHouseIdentifier(env.CLICKHOUSE_DATABASE);
-    this.table = validateClickHouseIdentifier(env.CLICKHOUSE_LOGS_TABLE);
-    this.client = env.CLICKHOUSE_URL
-      ? createClient({
-          url: env.CLICKHOUSE_URL,
-          username: env.CLICKHOUSE_USERNAME,
-          password: env.CLICKHOUSE_PASSWORD,
-          request_timeout: env.CLICKHOUSE_REQUEST_TIMEOUT_MS,
-          clickhouse_settings: {
-            async_insert: 1,
-            wait_for_async_insert: 1,
-          },
-        })
-      : null;
+    this.applyConfig({
+      mode: env.CLICKHOUSE_URL ? 'external' : 'disabled',
+      url: env.CLICKHOUSE_URL,
+      username: env.CLICKHOUSE_USERNAME,
+      password: env.CLICKHOUSE_PASSWORD,
+      database: env.CLICKHOUSE_DATABASE,
+      table: env.CLICKHOUSE_LOGS_TABLE,
+      requestTimeoutMs: env.CLICKHOUSE_REQUEST_TIMEOUT_MS,
+      managedInternalLogs: env.CLICKHOUSE_MANAGED_INTERNAL_LOGS,
+    });
+  }
+
+  async configure(config: LoggingRuntimeSettings): Promise<void> {
+    await this.client?.close();
+    this.client = null;
+    this.applyConfig(config);
   }
 
   isConfigured(): boolean {
@@ -381,6 +384,25 @@ export class LoggingClickHouseService {
 
   async close(): Promise<void> {
     await this.client?.close();
+    this.client = null;
+  }
+
+  private applyConfig(config: LoggingRuntimeSettings): void {
+    this.database = validateClickHouseIdentifier(config.database);
+    this.table = validateClickHouseIdentifier(config.table);
+    this.client =
+      config.mode === 'disabled'
+        ? null
+        : createClient({
+            url: config.url,
+            username: config.username,
+            password: config.password,
+            request_timeout: config.requestTimeoutMs,
+            clickhouse_settings: {
+              async_insert: 1,
+              wait_for_async_insert: 1,
+            },
+          });
   }
 }
 

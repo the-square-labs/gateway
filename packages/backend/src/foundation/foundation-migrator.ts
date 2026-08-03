@@ -136,7 +136,83 @@ export function patchCompose(content: string): string {
 
   const imagePatched = patchAppImage(lines, appBlock);
   const volumesPatched = patchAppSandboxVolume(imagePatched, findServiceBlock(imagePatched, 'app') ?? appBlock);
-  return `${volumesPatched.join('\n')}${hadTrailingNewline ? '\n' : ''}`;
+  const runtimePatched = patchAppRuntimeStorageAndSocket(volumesPatched);
+  const healthcheckPatched = patchAppHealthcheck(runtimePatched);
+  const environmentPatched = removeLegacyAppEnvironment(healthcheckPatched);
+  const clickHousePatched = removeLegacyClickHouseService(environmentPatched);
+  return `${clickHousePatched.join('\n')}${hadTrailingNewline ? '\n' : ''}`;
+}
+
+function patchAppRuntimeStorageAndSocket(lines: string[]): string[] {
+  const app = findServiceBlock(lines, 'app');
+  if (!app) return lines;
+  const volumes = findNestedBlock(lines, app, 'volumes');
+  if (!volumes) return lines;
+
+  let next = lines.map((line, index) => {
+    if (index <= volumes.start || index >= volumes.end) return line;
+    return line.replace(/^(\s*-\s*\/var\/run\/docker\.sock:\/var\/run\/docker\.sock):ro(?:\s*)$/, '$1');
+  });
+
+  const refreshedApp = findServiceBlock(next, 'app');
+  const refreshedVolumes = refreshedApp ? findNestedBlock(next, refreshedApp, 'volumes') : null;
+  if (!refreshedVolumes) return next;
+
+  const hasRuntimeStorage = next
+    .slice(refreshedVolumes.start + 1, refreshedVolumes.end)
+    .some((line) => /^\s*-\s*[^#]+:\/var\/lib\/gateway(?::(?:ro|rw))?\s*$/.test(line));
+  if (hasRuntimeStorage) return next;
+
+  const indent = ' '.repeat(refreshedVolumes.indent + 2);
+  const socketLine = findDockerSocketVolume(next, refreshedVolumes.start + 1, refreshedVolumes.end);
+  const insertAt = socketLine >= 0 ? socketLine + 1 : refreshedVolumes.end;
+  next = [...next.slice(0, insertAt), `${indent}- gateway_data:/var/lib/gateway`, ...next.slice(insertAt)];
+  return ensureTopLevelVolume(next, 'gateway_data');
+}
+
+function patchAppHealthcheck(lines: string[]): string[] {
+  const app = findServiceBlock(lines, 'app');
+  if (!app) return lines;
+  const healthcheck = findNestedBlock(lines, app, 'healthcheck');
+  if (!healthcheck) return lines;
+
+  const next = [...lines];
+  for (let index = healthcheck.start + 1; index < healthcheck.end; index += 1) {
+    if (!/^\s*test\s*:/.test(next[index]) || !next[index].includes('/health')) continue;
+    const indent = next[index].match(/^\s*/)?.[0] ?? '';
+    next[index] =
+      `${indent}test: ["CMD-SHELL", ` +
+      `"wget --no-check-certificate -qO- https://127.0.0.1:3000/health || wget -qO- http://127.0.0.1:3000/health"]`;
+    break;
+  }
+  return next;
+}
+
+function removeLegacyAppEnvironment(lines: string[]): string[] {
+  const app = findServiceBlock(lines, 'app');
+  if (!app) return lines;
+  const environment = findNestedBlock(lines, app, 'environment');
+  if (!environment) return lines;
+  return lines.filter((line, index) => {
+    if (index <= environment.start || index >= environment.end) return true;
+    return !/^\s*(?:-\s*)?(?:OIDC_|CLICKHOUSE_|APP_URL\s*[:=]|SETUP_TOKEN\s*[:=])/.test(line);
+  });
+}
+
+function removeLegacyClickHouseService(lines: string[]): string[] {
+  const service = findServiceBlock(lines, 'clickhouse');
+  let next = service ? [...lines.slice(0, service.start), ...lines.slice(service.end)] : lines;
+  const app = findServiceBlock(next, 'app');
+  const dependsOn = app ? findNestedBlock(next, app, 'depends_on') : null;
+  const dependency = dependsOn ? findDirectNestedBlock(next, dependsOn, 'clickhouse') : null;
+  if (dependency) next = [...next.slice(0, dependency.start), ...next.slice(dependency.end)];
+
+  const volumes = findTopLevelBlock(next, 'volumes');
+  if (volumes) {
+    const clickHouseVolume = findDirectNestedBlock(next, volumes, 'clickhouse_data');
+    if (clickHouseVolume) next = [...next.slice(0, clickHouseVolume.start), ...next.slice(clickHouseVolume.end)];
+  }
+  return next;
 }
 
 function patchAppImage(lines: string[], appBlock: { start: number; end: number; indent: number }): string[] {
@@ -277,6 +353,18 @@ function findDockerSocketVolume(lines: string[], start: number, end: number): nu
     if (/^\s*-\s+\/var\/run\/docker\.sock:/.test(lines[index])) return index;
   }
   return -1;
+}
+
+function ensureTopLevelVolume(lines: string[], volumeName: string): string[] {
+  const volumes = findTopLevelBlock(lines, 'volumes');
+  if (!volumes) {
+    const separator = lines.length > 0 && lines.at(-1)?.trim() ? [''] : [];
+    return [...lines, ...separator, 'volumes:', `  ${volumeName}:`];
+  }
+
+  const pattern = new RegExp(`^\\s+${escapeRegExp(volumeName)}\\s*:`);
+  if (lines.slice(volumes.start + 1, volumes.end).some((line) => pattern.test(line))) return lines;
+  return [...lines.slice(0, volumes.end), `  ${volumeName}:`, ...lines.slice(volumes.end)];
 }
 
 function envValue(content: string, key: string): string | null {

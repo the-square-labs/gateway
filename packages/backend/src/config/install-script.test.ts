@@ -1,51 +1,39 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 const installer = fileURLToPath(new URL('../../../../scripts/install.sh', import.meta.url));
-const temporaryDirectories: string[] = [];
 
-afterEach(() => {
-  for (const directory of temporaryDirectories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
+describe('install.sh managed browser bootstrap', () => {
+  it('is valid shell and still works when piped to bash', () => {
+    const syntax = spawnSync('bash', ['-n', installer], { encoding: 'utf8' });
+    expect(syntax.status, syntax.stderr).toBe(0);
 
-describe('install.sh ClickHouse ownership reconciliation', () => {
-  it('disables managed internal-log cleanup when an existing installation uses remote ClickHouse', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'gateway-installer-'));
-    temporaryDirectories.push(directory);
-    writeFileSync(
-      join(directory, '.env'),
-      'CLICKHOUSE_URL=https://clickhouse.example.com\nCLICKHOUSE_MANAGED_INTERNAL_LOGS=true\n'
-    );
-
-    const result = spawnSync(
-      'bash',
-      [
-        '-c',
-        'GATEWAY_INSTALLER_LIBRARY_MODE=1; source "$1"; cd "$2"; LOGGING_MODE=remote; ensure_clickhouse_env',
-        '_',
-        installer,
-        directory,
-      ],
-      { encoding: 'utf8' }
-    );
-
-    expect(result.status, result.stderr || result.stdout).toBe(0);
-    expect(readFileSync(join(directory, '.env'), 'utf8')).toContain('CLICKHOUSE_MANAGED_INTERNAL_LOGS=false');
-  });
-
-  it('still executes when piped into bash stdin', () => {
     const result = spawnSync('bash', ['-s', '--', '--help'], {
       encoding: 'utf8',
       input: readFileSync(installer, 'utf8'),
     });
-
     expect(result.status, result.stderr || result.stdout).toBe(0);
-    expect(result.stdout).toContain('Usage: install.sh [OPTIONS]');
+    expect(result.stdout).toContain('Usage: install.sh');
+  });
+
+  it('keeps transport as the only product choice and delegates setup to the browser', () => {
+    const source = readFileSync(installer, 'utf8');
+    expect(source).toContain('Use native HTTPS now?');
+    expect(source).toContain('Finish configuration in the browser');
+    expect(source).not.toMatch(/^OIDC_ISSUER=/m);
+    expect(source).not.toMatch(/^CLICKHOUSE_URL=/m);
+    expect(source).not.toMatch(/^SETUP_TOKEN=/m);
+    expect(source).not.toContain('nginx');
+    expect(source).not.toContain('cloudflare');
+  });
+
+  it('does not advertise Docker or CNI interface addresses as host-local targets', () => {
+    const source = readFileSync(installer, 'utf8');
+    expect(source).toContain('interface ~ /^docker/');
+    expect(source).toContain('interface ~ /^br-/');
+    expect(source).toContain('interface ~ /^veth/');
+    expect(source).toContain('interface ~ /^cni/');
   });
 });

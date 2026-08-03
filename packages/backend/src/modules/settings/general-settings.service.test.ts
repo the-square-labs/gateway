@@ -1,5 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GeneralSettingsService } from './general-settings.service.js';
+import { GeneralSettingsService, normalizePublicUrl } from './general-settings.service.js';
+
+describe('normalizePublicUrl', () => {
+  it('stores only a canonical http(s) origin', () => {
+    expect(normalizePublicUrl(' HTTPS://Gateway.Example.com:443/ ')).toBe('https://gateway.example.com');
+    expect(normalizePublicUrl('http://[2001:db8::1]:3000')).toBe('http://[2001:db8::1]:3000');
+  });
+
+  it.each([
+    'ftp://gateway.example.com',
+    'https://user:pass@gateway.example.com',
+    'https://gateway.example.com/app',
+  ])('rejects a non-origin public URL: %s', (value) => expect(() => normalizePublicUrl(value)).toThrow());
+
+  it('does not infer a public URL when it is blank', () => {
+    expect(normalizePublicUrl('')).toBeNull();
+  });
+});
 
 describe('GeneralSettingsService inference feature', () => {
   it('backfills disabled and applies persisted updates without a restart', async () => {

@@ -16,6 +16,7 @@ export const FILE_OPEN_DEFAULT_BYTES = 10 * 1024 * 1024;
 export const FILE_OPEN_MAX_BYTES = 100 * 1024 * 1024;
 
 export interface GeneralSettings {
+  publicUrl: string | null;
   fileUploadMaxBytes: number;
   fileOpenMaxBytes: number;
   gatewayPublicIps: string[];
@@ -36,6 +37,7 @@ export interface GeneralInferenceSettings {
 }
 
 export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
+  publicUrl: null,
   fileUploadMaxBytes: FILE_UPLOAD_DEFAULT_BYTES,
   fileOpenMaxBytes: FILE_OPEN_DEFAULT_BYTES,
   gatewayPublicIps: [],
@@ -55,6 +57,25 @@ export type GeneralSettingsUpdate = Omit<Partial<GeneralSettings>, 'features' | 
   features?: Partial<GeneralFeatureSettings>;
   inference?: Partial<GeneralInferenceSettings>;
 };
+
+export function normalizePublicUrl(value: string | null | undefined): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return null;
+
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error('Gateway public URL must be a valid absolute URL');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('Gateway public URL must use http or https');
+  }
+  if (url.username || url.password || url.search || url.hash || (url.pathname && url.pathname !== '/')) {
+    throw new Error('Gateway public URL must be an origin without credentials, path, query, or fragment');
+  }
+  return url.origin;
+}
 
 export function fileUploadBodyLimitBytes(fileUploadMaxBytes: number): number {
   return Math.ceil(fileUploadMaxBytes * BODY_LIMIT_OVERHEAD_RATIO) + BODY_LIMIT_OVERHEAD_BYTES;
@@ -221,6 +242,27 @@ export class GeneralSettingsService {
     return fileUploadBodyLimitBytes(config.fileUploadMaxBytes);
   }
 
+  async getPublicUrl(): Promise<string | null> {
+    return (await this.getConfig()).publicUrl;
+  }
+
+  getCachedPublicUrl(): string | null {
+    return this.cached?.publicUrl ?? null;
+  }
+
+  async requirePublicUrl(): Promise<string> {
+    const publicUrl = await this.getPublicUrl();
+    if (!publicUrl) throw new Error('Gateway public URL has not been configured');
+    return publicUrl;
+  }
+
+  async importLegacyPublicUrl(value: string | null | undefined): Promise<GeneralSettings> {
+    const current = await this.getConfig();
+    if (current.publicUrl) return current;
+    const publicUrl = normalizePublicUrl(value);
+    return publicUrl ? this.updateConfig({ publicUrl }) : current;
+  }
+
   async getFileOpenMaxBytes(): Promise<number> {
     const config = await this.getConfig();
     return config.fileOpenMaxBytes;
@@ -284,6 +326,7 @@ export class GeneralSettingsService {
         : {};
 
     return {
+      publicUrl: normalizePublicUrl(record.publicUrl as string | null | undefined),
       fileUploadMaxBytes,
       fileOpenMaxBytes,
       gatewayPublicIps,

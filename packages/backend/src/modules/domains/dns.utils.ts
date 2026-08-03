@@ -1,6 +1,7 @@
 import { Resolver } from 'node:dns/promises';
 import type { DnsRecords } from '@/db/schema/domains.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { discoverPublicIpAddresses } from './public-ip-detector.js';
 
 const logger = createChildLogger('DnsUtils');
 
@@ -34,33 +35,27 @@ let cachedPublicIPv4: string[] = [];
 let cachedPublicIPv6: string[] = [];
 
 export async function detectPublicIP(envIPv4?: string, envIPv6?: string): Promise<void> {
-  cachedPublicIPv4 = parseConfiguredIPs(envIPv4);
-  cachedPublicIPv6 = parseConfiguredIPs(envIPv6);
-
-  if (cachedPublicIPv4.length === 0) {
-    try {
-      const resp = await fetch('https://api.ipify.org?format=text');
-      const ip = (await resp.text()).trim();
-      if (ip) {
-        cachedPublicIPv4 = [ip];
-        logger.info(`Detected public IPv4: ${ip}`);
-      }
-    } catch {
-      logger.warn('Failed to detect public IPv4');
-    }
+  const configuredIPv4 = parseConfiguredIPs(envIPv4);
+  const configuredIPv6 = parseConfiguredIPs(envIPv6);
+  if (configuredIPv4.length > 0 && configuredIPv6.length > 0) {
+    cachedPublicIPv4 = configuredIPv4;
+    cachedPublicIPv6 = configuredIPv6;
+    return;
   }
 
-  if (cachedPublicIPv6.length === 0) {
-    try {
-      const resp = await fetch('https://api64.ipify.org?format=text');
-      const ip = (await resp.text()).trim();
-      if (ip.includes(':')) {
-        cachedPublicIPv6 = [ip];
-        logger.info(`Detected public IPv6: ${ip}`);
-      }
-    } catch {
-      logger.warn('Failed to detect public IPv6');
-    }
+  const discovered = await discoverPublicIpAddresses();
+  const discoveredIPv4 = discovered.filter((address) => !address.includes(':'));
+  const discoveredIPv6 = discovered.filter((address) => address.includes(':'));
+
+  cachedPublicIPv4 =
+    configuredIPv4.length > 0 ? configuredIPv4 : discoveredIPv4.length > 0 ? discoveredIPv4 : cachedPublicIPv4;
+  cachedPublicIPv6 =
+    configuredIPv6.length > 0 ? configuredIPv6 : discoveredIPv6.length > 0 ? discoveredIPv6 : cachedPublicIPv6;
+
+  if (discovered.length > 0) {
+    logger.info(`Detected public IP addresses: ${discovered.join(', ')}`);
+  } else {
+    logger.warn('Failed to detect public IP addresses');
   }
 }
 

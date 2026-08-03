@@ -116,7 +116,7 @@ Data sent to the license server:
 - Installation name.
 - Gateway version.
 
-The installation name is derived from `APP_URL` when possible, otherwise from the host name.
+The installation name is derived from Gateway's persisted canonical public URL when possible, otherwise from the host name.
 
 ## License Statuses
 

@@ -3,13 +3,19 @@ import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import forge from 'node-forge';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getPublicIPs } from '@/modules/domains/dns.utils.js';
 import { SystemCAService } from './system-ca.service.js';
+
+vi.mock('@/modules/domains/dns.utils.js', () => ({
+  getPublicIPs: vi.fn(() => ({ ipv4: [], ipv6: [] })),
+}));
 
 const originalGrpcSanEnv = {
   APP_URL: process.env.APP_URL,
   PUBLIC_IPV4: process.env.PUBLIC_IPV4,
   PUBLIC_IPV6: process.env.PUBLIC_IPV6,
   GRPC_TLS_EXTRA_SANS: process.env.GRPC_TLS_EXTRA_SANS,
+  GATEWAY_LOCAL_HOSTS: process.env.GATEWAY_LOCAL_HOSTS,
 };
 
 function createCertificatePair(
@@ -87,6 +93,8 @@ describe('SystemCAService.ensureGrpcServerCert', () => {
     delete process.env.PUBLIC_IPV4;
     delete process.env.PUBLIC_IPV6;
     delete process.env.GRPC_TLS_EXTRA_SANS;
+    delete process.env.GATEWAY_LOCAL_HOSTS;
+    vi.mocked(getPublicIPs).mockReturnValue({ ipv4: [], ipv6: [] });
   });
 
   afterEach(() => {
@@ -192,6 +200,40 @@ describe('SystemCAService.ensureGrpcServerCert', () => {
           '10.1.2.3',
         ]),
       }),
+      expect.any(String),
+      { allowSystem: true }
+    );
+  });
+
+  it('includes installer-discovered host addresses in the initial web certificate', async () => {
+    process.env.GATEWAY_LOCAL_HOSTS = '192.168.1.10,fd00::10';
+    const dir = mkdtempSync(join(tmpdir(), 'gateway-system-ca-test-'));
+    tempDirs.push(dir);
+    const certPath = join(dir, 'web-server.crt');
+    const keyPath = join(dir, 'web-server.key');
+    const { service, certService } = createService([[{ id: 'system-ca-id' }]]);
+
+    await service.ensureWebServerCert(certPath, keyPath);
+
+    expect(certService.issueCertificate).toHaveBeenCalledWith(
+      expect.objectContaining({ sans: expect.arrayContaining(['192.168.1.10', 'fd00::10']) }),
+      expect.any(String),
+      { allowSystem: true }
+    );
+  });
+
+  it('includes bootstrap-discovered public NAT addresses in the initial web certificate', async () => {
+    vi.mocked(getPublicIPs).mockReturnValue({ ipv4: ['8.8.8.8'], ipv6: ['2001:4860:4860::8888'] });
+    const dir = mkdtempSync(join(tmpdir(), 'gateway-system-ca-test-'));
+    tempDirs.push(dir);
+    const certPath = join(dir, 'web-server.crt');
+    const keyPath = join(dir, 'web-server.key');
+    const { service, certService } = createService([[{ id: 'system-ca-id' }]]);
+
+    await service.ensureWebServerCert(certPath, keyPath);
+
+    expect(certService.issueCertificate).toHaveBeenCalledWith(
+      expect.objectContaining({ sans: expect.arrayContaining(['8.8.8.8', '2001:4860:4860::8888']) }),
       expect.any(String),
       { allowSystem: true }
     );

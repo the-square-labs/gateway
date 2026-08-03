@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { refreshGrpcServerCredentials } from '@/grpc/server.js';
@@ -5,6 +6,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { canManageUser, isScopeSubset } from '@/lib/permissions.js';
 import { getRemoteAddress, resolveClientIp } from '@/lib/request-ip.js';
+import { AppError } from '@/middleware/error-handler.js';
 import {
   CreateUserSchema,
   RestoreUserSchema,
@@ -24,7 +26,10 @@ import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
 import { LocalAuthService } from '@/modules/auth/local-auth.service.js';
 import { MfaService } from '@/modules/auth/mfa.service.js';
+import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
 import { GroupService } from '@/modules/groups/group.service.js';
+import { LoggingRuntimeService } from '@/modules/logging/logging-runtime.service.js';
+import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
 import { McpSettingsService } from '@/modules/mcp/mcp-settings.service.js';
 import {
   CreateResourceFolderSchema,
@@ -38,8 +43,11 @@ import { GeneralSettingsService } from '@/modules/settings/general-settings.serv
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { OutboundWebhookPolicyService } from '@/modules/settings/outbound-webhook-policy.service.js';
 import { GrpcIdentityService } from '@/services/grpc-identity.service.js';
+import { RuntimeRestartService } from '@/services/runtime-restart.service.js';
 import { SessionService } from '@/services/session.service.js';
 import { SystemCAService } from '@/services/system-ca.service.js';
+import { WebIdentityService } from '@/services/web-identity.service.js';
+import { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
 import type { AppEnv } from '@/types.js';
 import {
   createAdminUserFolderRoute,
@@ -202,24 +210,40 @@ adminRoutes.openapi({ ...getAuthSettingsRoute, middleware: requireScope('setting
   const groupService = container.resolve(GroupService);
   const actorScopes = c.get('effectiveScopes') || [];
 
-  const [settings, smtp, mcpSettings, generalSettings, networkSecurity, outboundWebhookPolicy, groups] =
-    await Promise.all([
-      authSettingsService.getConfig(),
-      authMailService.getPublicConfig(),
-      mcpSettingsService.getConfig(),
-      generalSettingsService.getConfig(),
-      networkSettingsService.getConfig(),
-      outboundWebhookPolicyService.getConfig(),
-      groupService.listGroups(),
-    ]);
+  const [
+    settings,
+    smtp,
+    oidc,
+    logging,
+    mcpSettings,
+    generalSettings,
+    webTransport,
+    networkSecurity,
+    outboundWebhookPolicy,
+    groups,
+  ] = await Promise.all([
+    authSettingsService.getConfig(),
+    authMailService.getPublicConfig(),
+    container.resolve(OidcSettingsService).getPublicConfig(),
+    container.resolve(LoggingSettingsService).getPublicConfig(),
+    mcpSettingsService.getConfig(),
+    generalSettingsService.getConfig(),
+    container.resolve(WebTransportSettingsService).getConfig(),
+    networkSettingsService.getConfig(),
+    outboundWebhookPolicyService.getConfig(),
+    groupService.listGroups(),
+  ]);
   const assignableGroups = groups.filter((group) => isScopeSubset(getEffectiveGroupScopes(group), actorScopes));
 
   return c.json({
     ...settings,
     smtp,
+    oidc,
+    logging,
     mcpServerEnabled: mcpSettings.serverEnabled,
     mcpExtendedCompatibility: mcpSettings.extendedCompatibility,
     generalSettings,
+    webTransport: { ...webTransport, restartRequired: false, directAccess: false, targetUrl: null },
     networkSecurity,
     outboundWebhookPolicy,
     currentRequestIp: resolveClientIp(c.req.raw.headers, getRemoteAddress(c), networkSecurity),
@@ -234,10 +258,13 @@ adminRoutes.openapi({ ...getAuthSettingsRoute, middleware: requireScope('setting
 adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('settings:gateway:edit') }, async (c) => {
   const authSettingsService = container.resolve(AuthSettingsService);
   const authMailService = container.resolve(AuthMailService);
+  const oidcSettingsService = container.resolve(OidcSettingsService);
   const mcpSettingsService = container.resolve(McpSettingsService);
   const generalSettingsService = container.resolve(GeneralSettingsService);
   const networkSettingsService = container.resolve(NetworkSettingsService);
   const outboundWebhookPolicyService = container.resolve(OutboundWebhookPolicyService);
+  const webTransportSettingsService = container.resolve(WebTransportSettingsService);
+  const loggingSettingsService = container.resolve(LoggingSettingsService);
   const groupService = container.resolve(GroupService);
   const auditService = container.resolve(AuditService);
   const currentUser = c.get('user')!;
@@ -256,47 +283,76 @@ adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('sett
   }
 
   try {
+    const previousWebTransport = await webTransportSettingsService.getConfig();
     if (input.smtp) {
       await authMailService.saveConfig(input.smtp);
       if (input.smtp.testRecipient)
         await authMailService.sendTestEmail(input.smtp.testRecipient, input.smtp.testEmailKind);
     }
+    if (input.oidc) {
+      await oidcSettingsService.saveConfig(input.oidc);
+      container.resolve(AuthService).invalidateOidcConfiguration();
+    }
     if (input.methods && (input.methods.password === true || input.methods.emailOtp === true)) {
       const smtp = await authMailService.getPublicConfig();
-      if (!smtp.verifiedAt) throw new Error('SMTP must be configured and verified before enabling email-based sign-in');
+      if (!smtp.verifiedAt) {
+        throw new AppError(
+          409,
+          'SMTP_NOT_VERIFIED',
+          'Configure and verify SMTP before enabling password or email-code sign-in'
+        );
+      }
     }
+    if (input.methods?.oidc === true && !(await oidcSettingsService.getPublicConfig()).configured) {
+      throw new AppError(409, 'OIDC_NOT_CONFIGURED', 'Configure OIDC before enabling OIDC sign-in');
+    }
+    const logging = input.logging
+      ? await container.resolve(LoggingRuntimeService).update(input.logging)
+      : await loggingSettingsService.getPublicConfig();
     const shouldRefreshGrpcIdentity = touchesGrpcEndpointSettings(input.generalSettings);
-    const previousGeneralSettings = shouldRefreshGrpcIdentity ? await generalSettingsService.getConfig() : null;
-    const [updated, smtp, mcpSettings, generalSettings, networkSecurity, outboundWebhookPolicy] = await Promise.all([
-      authSettingsService.updateConfig(input),
-      authMailService.getPublicConfig(),
-      mcpSettingsService.updateConfig({
-        serverEnabled: input.mcpServerEnabled,
-        extendedCompatibility: input.mcpExtendedCompatibility,
-      }),
-      input.generalSettings
-        ? generalSettingsService.updateConfig(input.generalSettings)
-        : generalSettingsService.getConfig(),
-      input.networkSecurity
-        ? networkSettingsService.updateConfig(input.networkSecurity)
-        : networkSettingsService.getConfig(),
-      input.outboundWebhookPolicy
-        ? outboundWebhookPolicyService.updateConfig(input.outboundWebhookPolicy)
-        : outboundWebhookPolicyService.getConfig(),
-    ]);
+    const shouldRefreshWebIdentity = input.generalSettings?.publicUrl !== undefined;
+    const nextTlsEnabled = input.webTlsEnabled ?? previousWebTransport.tlsEnabled;
+    const previousGeneralSettings =
+      shouldRefreshGrpcIdentity || shouldRefreshWebIdentity ? await generalSettingsService.getConfig() : null;
+    const [updated, smtp, oidc, mcpSettings, generalSettings, networkSecurity, outboundWebhookPolicy] =
+      await Promise.all([
+        authSettingsService.updateConfig(input),
+        authMailService.getPublicConfig(),
+        oidcSettingsService.getPublicConfig(),
+        mcpSettingsService.updateConfig({
+          serverEnabled: input.mcpServerEnabled,
+          extendedCompatibility: input.mcpExtendedCompatibility,
+        }),
+        input.generalSettings
+          ? generalSettingsService.updateConfig(input.generalSettings)
+          : generalSettingsService.getConfig(),
+        input.networkSecurity
+          ? networkSettingsService.updateConfig(input.networkSecurity)
+          : networkSettingsService.getConfig(),
+        input.outboundWebhookPolicy
+          ? outboundWebhookPolicyService.updateConfig(input.outboundWebhookPolicy)
+          : outboundWebhookPolicyService.getConfig(),
+      ]);
 
-    if (shouldRefreshGrpcIdentity) {
+    if (shouldRefreshGrpcIdentity || (shouldRefreshWebIdentity && nextTlsEnabled)) {
       const grpcIdentityService = container.resolve(GrpcIdentityService);
       const systemCA = container.resolve(SystemCAService);
+      const webIdentityService = container.resolve(WebIdentityService);
       try {
-        const grpcIdentity = await grpcIdentityService.refresh();
-        await refreshGrpcServerCredentials(grpcIdentity.certPath, grpcIdentity.keyPath, systemCA);
+        if (shouldRefreshGrpcIdentity) {
+          const grpcIdentity = await grpcIdentityService.refresh();
+          await refreshGrpcServerCredentials(grpcIdentity.certPath, grpcIdentity.keyPath, systemCA);
+        }
+        if (shouldRefreshWebIdentity && nextTlsEnabled) await webIdentityService.refresh();
       } catch (error) {
         if (previousGeneralSettings) {
           try {
             await generalSettingsService.updateConfig(previousGeneralSettings);
-            const rollbackIdentity = await grpcIdentityService.refresh();
-            await refreshGrpcServerCredentials(rollbackIdentity.certPath, rollbackIdentity.keyPath, systemCA);
+            if (shouldRefreshGrpcIdentity) {
+              const rollbackIdentity = await grpcIdentityService.refresh();
+              await refreshGrpcServerCredentials(rollbackIdentity.certPath, rollbackIdentity.keyPath, systemCA);
+            }
+            if (shouldRefreshWebIdentity && nextTlsEnabled) await webIdentityService.refresh();
           } catch (rollbackError) {
             logger.error('Failed to rollback gRPC endpoint settings after identity refresh failure', {
               error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
@@ -319,12 +375,42 @@ adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('sett
       userAgent: c.req.header('user-agent'),
     });
 
+    let webTransport = {
+      ...previousWebTransport,
+      restartRequired: shouldRefreshWebIdentity && nextTlsEnabled,
+      directAccess: false,
+      targetUrl: null as string | null,
+    };
+    if (input.webTlsEnabled !== undefined && input.webTlsEnabled !== previousWebTransport.tlsEnabled) {
+      const next = await webTransportSettingsService.updateConfig({ tlsEnabled: input.webTlsEnabled });
+      const host = c.req.header('host') ?? '';
+      let hostname = '';
+      try {
+        hostname = new URL(`http://${host}`).hostname.replace(/^\[|\]$/g, '');
+      } catch {
+        // Global host validation already rejected malformed values.
+      }
+      const directAccess = isIP(hostname) !== 0 && !c.req.header('x-forwarded-host');
+      webTransport = {
+        ...next,
+        restartRequired: true,
+        directAccess,
+        targetUrl: directAccess ? `${next.tlsEnabled ? 'https' : 'http'}://${host}` : null,
+      };
+    }
+    if (webTransport.restartRequired) {
+      container.resolve(RuntimeRestartService).request('web identity or transport changed');
+    }
+
     return c.json({
       ...updated,
       smtp,
+      oidc,
+      logging,
       mcpServerEnabled: mcpSettings.serverEnabled,
       mcpExtendedCompatibility: mcpSettings.extendedCompatibility,
       generalSettings,
+      webTransport,
       networkSecurity,
       outboundWebhookPolicy,
       currentRequestIp: resolveClientIp(c.req.raw.headers, getRemoteAddress(c), networkSecurity),
@@ -344,15 +430,15 @@ adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('sett
 });
 
 function toAuthSettingsAuditDetails(input: UpdateAuthProvisioningSettingsInput) {
-  if (!input.smtp) return input;
-
-  const { password: _password, ...smtp } = input.smtp;
+  const { smtp: smtpInput, oidc: oidcInput, logging: loggingInput, ...rest } = input;
+  const smtp = smtpInput ? (({ password: _password, ...safe }) => safe)(smtpInput) : undefined;
+  const oidc = oidcInput ? (({ clientSecret: _clientSecret, ...safe }) => safe)(oidcInput) : undefined;
+  const logging = loggingInput ? (({ password: _password, ...safe }) => safe)(loggingInput) : undefined;
   return {
-    ...input,
-    smtp: {
-      ...smtp,
-      ...(input.smtp.password ? { passwordChanged: true } : {}),
-    },
+    ...rest,
+    ...(smtp ? { smtp: { ...smtp, ...(smtpInput?.password ? { passwordChanged: true } : {}) } } : {}),
+    ...(oidc ? { oidc: { ...oidc, ...(oidcInput?.clientSecret ? { clientSecretChanged: true } : {}) } } : {}),
+    ...(logging ? { logging: { ...logging, ...(loggingInput?.password ? { passwordChanged: true } : {}) } } : {}),
   };
 }
 

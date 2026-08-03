@@ -65,6 +65,12 @@ export class CacheService {
     }
   }
 
+  async setIfAbsent<T>(key: string, value: T, ttlSeconds: number): Promise<boolean> {
+    const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+    const result = await this.redis.set(key, serialized, 'EX', ttlSeconds, 'NX');
+    return result === 'OK';
+  }
+
   async delete(key: string): Promise<void> {
     await this.redis.del(key);
   }

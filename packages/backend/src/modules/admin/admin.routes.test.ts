@@ -9,12 +9,15 @@ import { AuthService } from '@/modules/auth/auth.service.js';
 import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
 import { LocalAuthService } from '@/modules/auth/local-auth.service.js';
+import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
 import { GroupService } from '@/modules/groups/group.service.js';
+import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
 import { McpSettingsService } from '@/modules/mcp/mcp-settings.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { OutboundWebhookPolicyService } from '@/modules/settings/outbound-webhook-policy.service.js';
 import { SessionService } from '@/services/session.service.js';
+import { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
 import type { AppEnv, SessionData, User } from '@/types.js';
 import { adminRoutes } from './admin.routes.js';
 
@@ -95,6 +98,33 @@ function registerSession(scopes: string[]) {
       verifiedAt: null,
     }),
   } as unknown as AuthMailService);
+  container.registerInstance(OidcSettingsService, {
+    getPublicConfig: vi.fn().mockResolvedValue({
+      configured: false,
+      issuer: null,
+      clientId: null,
+      clientSecretLast4: null,
+      redirectUri: null,
+      scopes: 'openid email profile',
+    }),
+    saveConfig: vi.fn(),
+  } as unknown as OidcSettingsService);
+  container.registerInstance(LoggingSettingsService, {
+    getPublicConfig: vi.fn().mockResolvedValue({
+      mode: 'disabled',
+      url: '',
+      username: '',
+      passwordLast4: null,
+      database: 'gateway_logs',
+      table: 'logs',
+      requestTimeoutMs: 5000,
+      managedInternalLogs: false,
+    }),
+  } as unknown as LoggingSettingsService);
+  container.registerInstance(WebTransportSettingsService, {
+    getConfig: vi.fn().mockResolvedValue({ tlsEnabled: false }),
+    updateConfig: vi.fn(),
+  } as unknown as WebTransportSettingsService);
 }
 
 function sessionHeaders() {
@@ -186,12 +216,36 @@ describe('admin Gateway settings route permissions', () => {
         senderEmail: null,
         verifiedAt: null,
       },
+      oidc: {
+        configured: false,
+        issuer: null,
+        clientId: null,
+        clientSecretLast4: null,
+        redirectUri: null,
+        scopes: 'openid email profile',
+      },
+      logging: {
+        mode: 'disabled',
+        url: '',
+        username: '',
+        passwordLast4: null,
+        database: 'gateway_logs',
+        table: 'logs',
+        requestTimeoutMs: 5000,
+        managedInternalLogs: false,
+      },
       mcpServerEnabled: true,
       mcpExtendedCompatibility: false,
       generalSettings: {
         fileUploadMaxBytes: 100 * 1024 * 1024,
         fileOpenMaxBytes: 10 * 1024 * 1024,
         features: { pkiEnabled: true, domainsEnabled: true },
+      },
+      webTransport: {
+        tlsEnabled: false,
+        restartRequired: false,
+        directAccess: false,
+        targetUrl: null,
       },
       networkSecurity: {
         clientIpSource: 'auto',
@@ -219,6 +273,56 @@ describe('admin Gateway settings route permissions', () => {
     });
 
     expect(response.status).toBe(403);
+  });
+
+  it('returns a human-readable conflict when OIDC is enabled before it is configured', async () => {
+    registerSession(['settings:gateway:edit']);
+    const updateConfig = vi.fn();
+    container.registerInstance(AuthSettingsService, { updateConfig } as unknown as AuthSettingsService);
+    container.registerInstance(McpSettingsService, {} as McpSettingsService);
+    container.registerInstance(GeneralSettingsService, {} as GeneralSettingsService);
+    container.registerInstance(NetworkSettingsService, {} as NetworkSettingsService);
+    container.registerInstance(OutboundWebhookPolicyService, {} as OutboundWebhookPolicyService);
+    container.registerInstance(GroupService, {} as GroupService);
+    container.registerInstance(AuditService, {} as AuditService);
+
+    const response = await createApp().request('/api/admin/auth-settings', {
+      method: 'PUT',
+      headers: sessionHeaders(),
+      body: JSON.stringify({ methods: { oidc: true } }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      code: 'OIDC_NOT_CONFIGURED',
+      message: 'Configure OIDC before enabling OIDC sign-in',
+    });
+    expect(updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('returns a human-readable conflict when email sign-in is enabled before SMTP is verified', async () => {
+    registerSession(['settings:gateway:edit']);
+    const updateConfig = vi.fn();
+    container.registerInstance(AuthSettingsService, { updateConfig } as unknown as AuthSettingsService);
+    container.registerInstance(McpSettingsService, {} as McpSettingsService);
+    container.registerInstance(GeneralSettingsService, {} as GeneralSettingsService);
+    container.registerInstance(NetworkSettingsService, {} as NetworkSettingsService);
+    container.registerInstance(OutboundWebhookPolicyService, {} as OutboundWebhookPolicyService);
+    container.registerInstance(GroupService, {} as GroupService);
+    container.registerInstance(AuditService, {} as AuditService);
+
+    const response = await createApp().request('/api/admin/auth-settings', {
+      method: 'PUT',
+      headers: sessionHeaders(),
+      body: JSON.stringify({ methods: { password: true } }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      code: 'SMTP_NOT_VERIFIED',
+      message: 'Configure and verify SMTP before enabling password or email-code sign-in',
+    });
+    expect(updateConfig).not.toHaveBeenCalled();
   });
 
   it('allows editing verified OIDC email requirement with settings:gateway:edit', async () => {

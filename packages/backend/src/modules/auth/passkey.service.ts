@@ -15,6 +15,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import { permissionGroups, userPasskeys, users, userTotpFactors } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
+import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CacheService } from '@/services/cache.service.js';
 import type { User } from '@/types.js';
 import type { AuthSettingsService } from './auth.settings.service.js';
@@ -31,7 +32,8 @@ export class PasskeyService {
   constructor(
     @inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient,
     private readonly cacheService: CacheService,
-    private readonly authSettingsService: AuthSettingsService
+    private readonly authSettingsService: AuthSettingsService,
+    private readonly generalSettingsService?: GeneralSettingsService
   ) {}
 
   async listPasskeys(userId: string) {
@@ -79,7 +81,7 @@ export class PasskeyService {
     const verification = await verifyRegistrationResponse({
       response,
       expectedChallenge: pending.challenge,
-      expectedOrigin: getEnv().APP_URL,
+      expectedOrigin: this.publicUrl(),
       expectedRPID: this.rpId(),
       requireUserVerification: true,
     }).catch(() => ({ verified: false as const }));
@@ -161,7 +163,7 @@ export class PasskeyService {
       verification = await verifyAuthenticationResponse({
         response,
         expectedChallenge: pending.challenge,
-        expectedOrigin: getEnv().APP_URL,
+        expectedOrigin: this.publicUrl(),
         expectedRPID: this.rpId(),
         credential: {
           id: credential.credentialId,
@@ -218,7 +220,11 @@ export class PasskeyService {
   }
 
   private rpId(): string {
-    return new URL(getEnv().APP_URL).hostname;
+    return new URL(this.publicUrl()).hostname;
+  }
+
+  private publicUrl(): string {
+    return this.generalSettingsService?.getCachedPublicUrl() ?? getEnv().APP_URL;
   }
 }
 

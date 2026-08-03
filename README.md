@@ -30,21 +30,20 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 > [!IMPORTANT]
 > **Production deployment note:** Gateway is a privileged infrastructure control plane. For internal operations such as self-updates and local housekeeping, the Gateway app mounts the host Docker socket. Run Gateway in an isolated VM or dedicated host, and do not place unrelated workloads on the same Docker host.
 
-> [!WARNING]
-> **OIDC required:** For security reasons, Gateway currently supports only SSO login through an OpenID Connect provider. There is no built-in username/password authentication, so you need an OIDC provider configured before users can sign in.
+The installer starts Gateway and prints a one-time setup code. The browser wizard then configures the canonical URL, node-network endpoints, one or more sign-in methods (OIDC, password, or email code), the first system administrator, and optional structured logging.
 
 Expose the ports that match your deployment:
 
 | Port | Purpose |
 |------|---------|
 | `3000/tcp` | Gateway app UI/API port. For behind-NAT installs, expose this on the local network and point your external reverse proxy to it. |
-| `443/tcp` | Public HTTPS UI/API access when Gateway's installer configures nginx alongside Gateway and sets up the domain. |
+| `443/tcp` | Optional public HTTPS endpoint supplied by your own reverse proxy. Gateway itself listens on `3000/tcp`. |
 | `80/tcp` | HTTP and ACME HTTP-01 challenge, only if that challenge mode is used. |
 | `9443/tcp` | gRPC control plane for managed daemon connections. |
 
-Behind NAT or an existing external reverse proxy, publish `3000/tcp` only on the local network and configure the external proxy to forward the public Gateway domain to `http://<gateway-lan-ip>:3000`. If you let the installer configure nginx alongside Gateway for the Gateway domain, only `443/tcp` is required for UI/API access. Managed nodes still connect outbound to Gateway on `9443/tcp`; they do not need inbound management ports.
+Behind NAT or an existing external reverse proxy, publish `3000/tcp` only on the local network and configure the external proxy to forward the public Gateway domain to the selected native HTTP or HTTPS transport on `<gateway-lan-ip>:3000`. Managed nodes still connect outbound to Gateway on `9443/tcp`; they do not need inbound management ports.
 
-The installer asks for your domain, OIDC provider, PostgreSQL location, structured logging mode, SSL mode, resource profile, and log rotation settings. When it finishes, open Gateway, sign in, and add your first node.
+On a fresh interactive install, the only shell prompt selects native HTTPS or HTTP for port `3000`. All product configuration happens in the browser wizard; updates are non-interactive and preserve persisted settings.
 
 For flags, non-interactive installs, custom SSL, OIDC details, updates, and node setup, read the [installation guide](docs/installation.md).
 
@@ -108,7 +107,7 @@ The CLI asks for the Gateway URL and completes OAuth when no active connection e
 | Logging | Optional ClickHouse-backed structured log ingestion with schemas, retention, ingest tokens, rate limits, search, storage caps, and health safeguards. |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages, and optional AI assistant. |
 | Inference | Optional multi-provider model gateway with dedicated tokens, usage controls, OpenAI-compatible APIs, and managed Codex or Claude Code setup through `@wiolett/gateway-inference`. |
-| Administration | OIDC login, group-based and per-user additional permissions, scoped programmatic access, audit logs, setup state, updates, and license controls. |
+| Administration | OIDC, password, email-code and passkey login, group-based and per-user additional permissions, scoped programmatic access, audit logs, setup state, updates, and license controls. |
 
 ## How It Works
 
@@ -137,7 +136,7 @@ Nodes do not need inbound management ports. Public traffic ports, such as `80` a
 
 Gateway is designed to be secure by default for a self-hosted infrastructure control plane:
 
-- User login is SSO-only through OIDC, so password policy, MFA, device posture, and identity lifecycle stay with your identity provider.
+- User login supports OIDC, password, email codes, and passkeys. Local authentication requires verified SMTP delivery, and group MFA policy is enforced after the primary credential.
 - Managed nodes connect outbound to Gateway over gRPC with mTLS. First enrollment requires a one-time token plus the generated Gateway gRPC certificate fingerprint, and the daemon verifies the Gateway TLS leaf before sending the token. After enrollment, daemon commands require a client certificate issued by Gateway's internal node CA.
 - Each node certificate is bound to a node identity. Gateway checks the mTLS certificate identity before accepting control streams, log streams, and certificate renewal requests.
 - Nodes do not need inbound management ports. Losing Gateway access does not stop existing nginx configs or Docker containers; it only pauses centralized control.
@@ -198,7 +197,7 @@ Yes. Install the nginx daemon in `integrate` mode. Gateway keeps your existing `
 <details>
 <summary><strong>Can Gateway run without ClickHouse?</strong></summary>
 
-Yes. If `CLICKHOUSE_URL` is empty, the structured logging UI and ingest API are disabled. The rest of Gateway continues to work.
+Yes. Choose **Disabled** for structured logging in the first-run wizard or **Settings → Gateway**. The rest of Gateway continues to work. Managed local ClickHouse can be disabled without deleting its data volume.
 </details>
 
 <details>

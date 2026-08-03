@@ -16,6 +16,8 @@ const OLD_COMPOSE = `services:
     depends_on:
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health"]
 
   redis:
     image: redis:7-alpine
@@ -34,7 +36,60 @@ describe('foundation migrator patches', () => {
     expect(patched).toContain('      # gateway-managed:start sandbox-workspace');
     expect(patched).toContain(EXPECTED_SANDBOX_VOLUME);
     expect(patched).toContain('      # gateway-managed:end sandbox-workspace');
+    expect(patched).toContain('      - /var/run/docker.sock:/var/run/docker.sock\n');
+    expect(patched).toContain('      - gateway_data:/var/lib/gateway');
+    expect(patched).toContain('wget --no-check-certificate -qO- https://127.0.0.1:3000/health');
+    expect(patched).toContain('\nvolumes:\n  gateway_data:');
     expect(patchCompose(patched)).toBe(patched);
+  });
+
+  it('removes legacy OIDC and ClickHouse wiring without disturbing unrelated configuration', () => {
+    const compose = `${OLD_COMPOSE.replace(
+      '    env_file: .env',
+      `    env_file: .env
+    environment:
+      OIDC_ISSUER_URL: \${OIDC_ISSUER_URL}
+      - OIDC_CLIENT_SECRET=\${OIDC_CLIENT_SECRET}
+      CLICKHOUSE_URL: http://clickhouse:8123
+      APP_URL: \${APP_URL}
+      SETUP_TOKEN: \${SETUP_TOKEN}
+      OTHER_SETTING: keep-me`
+    ).replace(
+      '      redis:\n        condition: service_healthy',
+      '      redis:\n        condition: service_healthy\n      clickhouse:\n        condition: service_healthy'
+    )}
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+
+volumes:
+  clickhouse_data:
+  redis_data:
+`;
+
+    const patched = patchCompose(compose);
+
+    expect(patched).not.toMatch(/OIDC_|CLICKHOUSE_|APP_URL|SETUP_TOKEN/);
+    expect(patched).not.toContain('\n  clickhouse:');
+    expect(patched).not.toContain('clickhouse_data:');
+    expect(patched).toContain('OTHER_SETTING: keep-me');
+    expect(patched).toContain('\n  redis:\n');
+    expect(patched).toContain('  redis_data:');
+    expect(patched).toContain('  gateway_data:');
+  });
+
+  it('keeps an existing runtime storage mount instead of adding a managed volume', () => {
+    const compose = OLD_COMPOSE.replace(
+      '      - ./docker-compose.yml:/app/docker-compose.yml:ro',
+      '      - /srv/gateway-state:/var/lib/gateway\n      - ./docker-compose.yml:/app/docker-compose.yml:ro'
+    );
+
+    const patched = patchCompose(compose);
+
+    expect(patched).toContain('/srv/gateway-state:/var/lib/gateway');
+    expect(patched).not.toContain('gateway_data:/var/lib/gateway');
   });
 
   it('replaces an existing unmarked sandbox volume instead of duplicating it', () => {

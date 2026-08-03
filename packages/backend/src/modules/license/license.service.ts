@@ -5,6 +5,7 @@ import type { Env } from '@/config/env.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { settings } from '@/db/schema/settings.js';
 import { createChildLogger } from '@/lib/logger.js';
+import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import {
   type CachedLicenseState,
@@ -32,7 +33,8 @@ export class LicenseService {
     private readonly db: DrizzleClient,
     private readonly cryptoService: CryptoService,
     private readonly env: Env,
-    private readonly fetcher: Fetcher = fetch
+    private readonly fetcher: Fetcher = fetch,
+    private readonly generalSettingsService?: GeneralSettingsService
   ) {}
 
   async getStatus(): Promise<LicenseStatusView> {
@@ -263,7 +265,8 @@ export class LicenseService {
 
   private getInstallationName(): string {
     try {
-      return new URL(this.env.APP_URL).hostname || os.hostname();
+      const publicUrl = this.generalSettingsService?.getCachedPublicUrl() ?? this.env.APP_URL;
+      return new URL(publicUrl).hostname || os.hostname();
     } catch {
       return os.hostname();
     }

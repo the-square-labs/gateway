@@ -1,3 +1,4 @@
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
 import { AuthSettingsService } from './auth.settings.service.js';
 
@@ -57,5 +58,47 @@ describe('AuthSettingsService', () => {
       oauthExtendedCallbackCompatibility: true,
     });
     await expect(service.getOAuthExtendedCallbackCompatibility()).resolves.toBe(true);
+  });
+
+  it('does not count the reserved Gateway system user when disabling OIDC', async () => {
+    const { db } = createDb({
+      'auth:methods': { oidc: true, password: false, emailOtp: false, passkeyLogin: false },
+    });
+    let assignedUserCondition: unknown;
+    db.select.mockImplementation((selection?: { count?: unknown }) => {
+      if (selection?.count) {
+        return {
+          from: vi.fn(() => ({
+            where: vi.fn(async (condition: unknown) => {
+              assignedUserCondition = condition;
+              return [{ count: 0 }];
+            }),
+          })),
+        };
+      }
+      return {
+        from: vi.fn(() => ({
+          where: vi.fn((condition: { queryChunks?: Array<{ value?: unknown }> }) => {
+            db.currentKey =
+              condition?.queryChunks?.find((chunk) => typeof chunk.value === 'string')?.value?.toString() ?? null;
+            return {
+              limit: vi.fn(async () => [
+                {
+                  key: 'auth:methods',
+                  value: { oidc: true, password: false, emailOtp: false, passkeyLogin: false },
+                },
+              ]),
+            };
+          }),
+        })),
+      };
+    });
+
+    const service = new AuthSettingsService(db);
+    await service.updateConfig({ methods: { oidc: false, password: true } });
+
+    const query = new PgDialect().sqlToQuery(assignedUserCondition as never);
+    expect(query.sql).toContain('"users"."oidc_subject"');
+    expect(query.params).toEqual(['oidc', 'system:gateway-setup']);
   });
 });

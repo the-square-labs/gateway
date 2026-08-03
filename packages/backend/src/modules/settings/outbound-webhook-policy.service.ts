@@ -83,7 +83,8 @@ export class OutboundWebhookPolicyService {
 export async function checkOutboundWebhookTarget(
   rawUrl: string,
   policy: OutboundWebhookPolicy,
-  env: Env
+  env: Env,
+  publicUrl?: string | null
 ): Promise<OutboundWebhookTargetCheck> {
   let url: URL;
   try {
@@ -123,7 +124,7 @@ export async function checkOutboundWebhookTarget(
     };
   }
 
-  const selfAddresses = await getSelfAddresses(env);
+  const selfAddresses = await getSelfAddresses(env, publicUrl);
   for (const ip of resolvedAddresses) {
     if (isAlwaysBlockedOutboundIp(ip)) {
       return {
@@ -161,7 +162,7 @@ async function resolveTargetAddresses(hostname: string): Promise<string[]> {
   return [...new Set(records.map((record) => normalizeIp(record.address)).filter((ip): ip is string => !!ip))];
 }
 
-async function getSelfAddresses(env: Env): Promise<Set<string>> {
+async function getSelfAddresses(env: Env, publicUrl?: string | null): Promise<Set<string>> {
   const addresses = new Set<string>();
   for (const iface of Object.values(networkInterfaces())) {
     for (const address of iface ?? []) {
@@ -180,7 +181,7 @@ async function getSelfAddresses(env: Env): Promise<Set<string>> {
     addresses.add(bindHost);
   }
 
-  const appHostname = getUrlHostname(env.APP_URL);
+  const appHostname = getUrlHostname(publicUrl ?? env.APP_URL);
   if (appHostname) {
     for (const ip of await resolveTargetAddressesSafe(appHostname)) {
       if (isAlwaysBlockedOutboundIp(ip) || isPrivateIp(ip)) addresses.add(ip);

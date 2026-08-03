@@ -49,17 +49,13 @@ Use [.env.example](../.env.example) as the local development reference.
 Important local defaults:
 
 ```env
-APP_URL=http://localhost:3000
 DATABASE_URL=postgres://dev:dev@localhost:5432/gateway
 REDIS_URL=redis://localhost:6379
-CLICKHOUSE_URL=http://localhost:8123
-CLICKHOUSE_USERNAME=gateway
-CLICKHOUSE_PASSWORD=dev
-CLICKHOUSE_DATABASE=gateway_logs
-OIDC_REDIRECT_URI=http://localhost:3000/auth/callback
+SETUP_BOOTSTRAP=true
+WEB_TLS_BOOTSTRAP_MODE=http
 ```
 
-The logging UI and ingest API are disabled when `CLICKHOUSE_URL` is empty.
+Configure the canonical URL, authentication, and structured logging through the first-run wizard. For `pnpm dev:infra`, the bundled development ClickHouse can be selected as an external connection at `http://localhost:8123`; leaving structured logging disabled hides its product surfaces.
 
 ## Common Commands
 

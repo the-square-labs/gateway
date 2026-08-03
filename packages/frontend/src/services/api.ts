@@ -420,8 +420,26 @@ class ApiClient extends withInferenceApi(
       testRecipient?: string;
       testEmailKind?: "smtp_configuration" | "password_setup" | "password_reset" | "email_otp";
     };
+    oidc?: {
+      issuer: string;
+      clientId: string;
+      clientSecret?: string;
+      redirectUri: string;
+      scopes?: string;
+    };
+    logging?: {
+      mode: "disabled" | "local" | "external";
+      url?: string;
+      username?: string;
+      password?: string;
+      database?: string;
+      table?: string;
+      requestTimeoutMs?: number;
+      managedInternalLogs?: boolean;
+    };
     mcpServerEnabled?: boolean;
     mcpExtendedCompatibility?: boolean;
+    webTlsEnabled?: boolean;
     generalSettings?: Partial<AuthProvisioningSettings["generalSettings"]>;
     networkSecurity?: Partial<AuthProvisioningSettings["networkSecurity"]>;
     outboundWebhookPolicy?: Partial<AuthProvisioningSettings["outboundWebhookPolicy"]>;

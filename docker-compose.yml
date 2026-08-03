@@ -13,13 +13,6 @@ services:
       - DATABASE_CONNECTOR_IMAGE=${DATABASE_CONNECTOR_IMAGE:-}
       - DATABASE_URL=postgres://gateway:${DB_PASSWORD}@postgres:5432/gateway
       - REDIS_URL=redis://redis:6379
-      - CLICKHOUSE_URL=${CLICKHOUSE_URL-http://clickhouse:8123}
-      - CLICKHOUSE_USERNAME=${CLICKHOUSE_USERNAME:-gateway}
-      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-gateway}
-      - CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE:-gateway_logs}
-      - CLICKHOUSE_LOGS_TABLE=${CLICKHOUSE_LOGS_TABLE:-logs}
-      - CLICKHOUSE_REQUEST_TIMEOUT_MS=${CLICKHOUSE_REQUEST_TIMEOUT_MS:-5000}
-      - CLICKHOUSE_MANAGED_INTERNAL_LOGS=${CLICKHOUSE_MANAGED_INTERNAL_LOGS:-false}
       - LOGGING_INGEST_MAX_BODY_BYTES=${LOGGING_INGEST_MAX_BODY_BYTES:-1048576}
       - LOGGING_INGEST_MAX_BATCH_SIZE=${LOGGING_INGEST_MAX_BATCH_SIZE:-500}
       - LOGGING_INGEST_MAX_MESSAGE_BYTES=${LOGGING_INGEST_MAX_MESSAGE_BYTES:-16384}
@@ -33,13 +26,10 @@ services:
       - LOGGING_GLOBAL_EVENTS_PER_WINDOW=${LOGGING_GLOBAL_EVENTS_PER_WINDOW:-60000}
       - LOGGING_TOKEN_REQUESTS_PER_WINDOW=${LOGGING_TOKEN_REQUESTS_PER_WINDOW:-300}
       - LOGGING_TOKEN_EVENTS_PER_WINDOW=${LOGGING_TOKEN_EVENTS_PER_WINDOW:-10000}
-      - OIDC_ISSUER=${OIDC_ISSUER}
-      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID}
-      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
-      - OIDC_REDIRECT_URI=${OIDC_REDIRECT_URI}
-      - OIDC_SCOPES=${OIDC_SCOPES:-openid email profile}
       - SESSION_EXPIRY=${SESSION_EXPIRY:-2592000}
-      - APP_URL=${APP_URL}
+      - SETUP_BOOTSTRAP=${SETUP_BOOTSTRAP:-false}
+      - WEB_TLS_BOOTSTRAP_MODE=${WEB_TLS_BOOTSTRAP_MODE:-http}
+      - WEB_TLS_AUTO_DIR=${WEB_TLS_AUTO_DIR:-/var/lib/gateway/tls}
       - PKI_MASTER_KEY=${PKI_MASTER_KEY}
       - RATE_LIMIT_WINDOW_MS=${RATE_LIMIT_WINDOW_MS:-60000}
       - RATE_LIMIT_MAX_REQUESTS=${RATE_LIMIT_MAX_REQUESTS:-1200}
@@ -72,6 +62,7 @@ services:
       - APP_VERSION=${GATEWAY_VERSION:-dev}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - gateway_data:/var/lib/gateway
       # gateway-managed:start sandbox-workspace
       - ${SANDBOX_RUNNER_WORKSPACE_DIR:-/var/lib/gateway/sandbox-workspaces}:${SANDBOX_RUNNER_WORKSPACE_DIR:-/var/lib/gateway/sandbox-workspaces}
       # gateway-managed:end sandbox-workspace
@@ -80,10 +71,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      clickhouse:
-        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      test: ["CMD-SHELL", "wget --no-check-certificate -qO- https://localhost:3000/health || wget -qO- http://localhost:3000/health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -116,28 +105,7 @@ services:
       timeout: 5s
       retries: 5
 
-  clickhouse:
-    image: clickhouse/clickhouse-server:26.2.10.10
-    restart: unless-stopped
-    environment:
-      CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE:-gateway_logs}
-      CLICKHOUSE_USER: ${CLICKHOUSE_USERNAME:-gateway}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-gateway}
-    volumes:
-      - clickhouse_data:/var/lib/clickhouse
-      - ./clickhouse-config/gateway-safety.xml:/etc/clickhouse-server/config.d/gateway-safety.xml:ro
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "clickhouse-client --user \"$${CLICKHOUSE_USER:-gateway}\" --password \"$${CLICKHOUSE_PASSWORD:-gateway}\" --query 'SELECT 1'",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
-
 volumes:
+  gateway_data:
   postgres_data:
   redis_data:
-  clickhouse_data:

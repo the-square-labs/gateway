@@ -1,4 +1,4 @@
-import { and, count, eq, isNotNull, isNull, not } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull } from 'drizzle-orm';
 import * as client from 'openid-client';
 import { inject, injectable } from 'tsyringe';
 import { getEnv } from '@/config/env.js';
@@ -23,6 +23,7 @@ import { canonicalizeScopes, isValidBaseScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AISandboxService } from '@/modules/ai/ai.sandbox.service.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CacheService } from '@/services/cache.service.js';
 import type { SessionService } from '@/services/session.service.js';
 import type { User } from '@/types.js';
@@ -33,13 +34,13 @@ import {
   fetchGroupScopeMap,
   resolveEffectiveUserAccess,
 } from './live-session-user.js';
+import type { OidcRuntimeConfig, OidcSettingsService } from './oidc-settings.service.js';
 
 const logger = createChildLogger('AuthService');
 
 const PKCE_STATE_PREFIX = 'oidc:pkce:';
 const PRECREATED_SUBJECT_PREFIX = 'manual:';
 const SYSTEM_SUBJECT_PREFIX = 'system:';
-const GATEWAY_SYSTEM_OIDC_SUBJECT = 'system:gateway-setup';
 export const AI_APPROVAL_MODES = ['always-ask', 'normal', 'bypass-non-destructive', 'bypass-everything'] as const;
 export type AIApprovalMode = (typeof AI_APPROVAL_MODES)[number];
 
@@ -86,6 +87,18 @@ function normalizeDisplayName(name: string | null | undefined, fallbackEmail: st
   return name?.trim() || fallbackEmail;
 }
 
+function legacyOidcRuntimeConfig(): OidcRuntimeConfig | null {
+  const env = getEnv();
+  if (!env.OIDC_ISSUER || !env.OIDC_CLIENT_ID || !env.OIDC_CLIENT_SECRET || !env.OIDC_REDIRECT_URI) return null;
+  return {
+    issuer: env.OIDC_ISSUER,
+    clientId: env.OIDC_CLIENT_ID,
+    clientSecret: env.OIDC_CLIENT_SECRET,
+    redirectUri: env.OIDC_REDIRECT_URI,
+    scopes: env.OIDC_SCOPES,
+  };
+}
+
 interface OIDCState {
   codeVerifier: string;
   state: string;
@@ -101,7 +114,9 @@ export class AuthService {
     private readonly sessionService: SessionService,
     private readonly cacheService: CacheService,
     private readonly authSettingsService: AuthSettingsService,
-    private readonly auditService: AuditService
+    private readonly auditService: AuditService,
+    private readonly oidcSettingsService?: OidcSettingsService,
+    private readonly generalSettingsService?: GeneralSettingsService
   ) {}
 
   private eventBus?: import('@/services/event-bus.service.js').EventBusService;
@@ -127,16 +142,18 @@ export class AuthService {
       return this.oidcConfig;
     }
 
-    const env = getEnv();
-    if (!env.OIDC_ISSUER || !env.OIDC_CLIENT_ID || !env.OIDC_CLIENT_SECRET) {
+    const runtime = this.oidcSettingsService
+      ? await this.oidcSettingsService.getRuntimeConfig()
+      : legacyOidcRuntimeConfig();
+    if (!runtime) {
       throw new AppError(503, 'OIDC_NOT_CONFIGURED', 'OIDC is not configured');
     }
 
     try {
-      this.oidcConfig = await client.discovery(new URL(env.OIDC_ISSUER), env.OIDC_CLIENT_ID, env.OIDC_CLIENT_SECRET);
+      this.oidcConfig = await client.discovery(new URL(runtime.issuer), runtime.clientId, runtime.clientSecret);
 
       logger.info('OIDC configuration discovered', {
-        issuer: env.OIDC_ISSUER,
+        issuer: runtime.issuer,
       });
 
       return this.oidcConfig;
@@ -148,10 +165,11 @@ export class AuthService {
 
   async getAuthorizationUrl(returnTo?: string): Promise<string> {
     await this.assertAuthMethodEnabled('oidc');
-    const env = getEnv();
+    const runtime = this.oidcSettingsService
+      ? await this.oidcSettingsService.getRuntimeConfig()
+      : legacyOidcRuntimeConfig();
     const config = await this.getOIDCConfig();
-    const redirectUri = env.OIDC_REDIRECT_URI;
-    if (!redirectUri) throw new AppError(503, 'OIDC_NOT_CONFIGURED', 'OIDC is not configured');
+    if (!runtime) throw new AppError(503, 'OIDC_NOT_CONFIGURED', 'OIDC is not configured');
 
     const codeVerifier = client.randomPKCECodeVerifier();
     const codeChallenge = await client.calculatePKCECodeChallenge(codeVerifier);
@@ -166,8 +184,8 @@ export class AuthService {
     await this.cacheService.set(`${PKCE_STATE_PREFIX}${state}`, oidcState, 300);
 
     const parameters: Record<string, string> = {
-      redirect_uri: redirectUri,
-      scope: env.OIDC_SCOPES,
+      redirect_uri: runtime.redirectUri,
+      scope: runtime.scopes,
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
       state,
@@ -332,23 +350,8 @@ export class AuthService {
       return mapped;
     }
 
-    // Check if this is the first real user — assign system-admin group.
-    // Exclude only Gateway's own deterministic system user from the count.
-    const [{ count: userCount }] = await this.db
-      .select({ count: count() })
-      .from(users)
-      .where(not(eq(users.oidcSubject, GATEWAY_SYSTEM_OIDC_SUBJECT)));
-
-    const isBootstrapUser = userCount === 0;
-    if (!isBootstrapUser) {
-      await this.requireVerifiedEmailForNonBootstrap(data);
-    }
-
-    const group = isBootstrapUser
-      ? await this.db.query.permissionGroups.findFirst({
-          where: eq(permissionGroups.name, 'system-admin'),
-        })
-      : await this.resolveOidcProvisioningGroup();
+    await this.requireVerifiedEmailForNonBootstrap(data);
+    const group = await this.resolveOidcProvisioningGroup();
 
     if (!group) {
       throw new Error('Default OIDC group not found. Has the migration been run?');
@@ -376,13 +379,17 @@ export class AuthService {
         group: group.name,
         oidcSubject: data.oidcSubject,
         emailVerified: data.emailVerified,
-        bootstrap: isBootstrapUser,
+        bootstrap: false,
       },
     });
     this.emitUser(createdUser.id, 'created');
     const mapped = await this.mapDbUserToUser(createdUser);
     this.emitPermissions(mapped.id, mapped.scopes, mapped.groupId);
     return mapped;
+  }
+
+  invalidateOidcConfiguration(): void {
+    this.oidcConfig = null;
   }
 
   private async requireVerifiedEmailForNonBootstrap(data: NormalizedOidcClaims): Promise<void> {
@@ -552,12 +559,13 @@ export class AuthService {
 
     const config = await this.getOIDCConfig();
     const env = getEnv();
+    const publicUrl = this.generalSettingsService ? await this.generalSettingsService.requirePublicUrl() : env.APP_URL;
 
     try {
       const metadata = config.serverMetadata();
       if (metadata.end_session_endpoint) {
         const logoutUrl = new URL(metadata.end_session_endpoint);
-        logoutUrl.searchParams.set('post_logout_redirect_uri', env.APP_URL);
+        logoutUrl.searchParams.set('post_logout_redirect_uri', publicUrl);
         return logoutUrl.href;
       }
     } catch {

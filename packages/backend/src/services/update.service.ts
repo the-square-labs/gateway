@@ -297,6 +297,20 @@ export class UpdateService {
 
     await this.dockerService.pullImageRef(DOCKER_COMPOSE_CLI_IMAGE_REF);
 
+    logger.info('Migrating legacy environment-owned Gateway settings');
+    const settingsMigration = await this.dockerService.runOneShot({
+      Image: artifact.imageRef,
+      Cmd: ['node', 'dist/cli/migrate-legacy-settings.js', '/host'],
+      Env: legacySettingsMigrationEnv(this.env),
+      HostConfig: {
+        Binds: [`${composeDir}:/host`],
+        ...(selfInfo.HostConfig?.NetworkMode ? { NetworkMode: selfInfo.HostConfig.NetworkMode } : {}),
+      },
+    });
+    if (settingsMigration.exitCode !== 0) {
+      throw new Error(`Legacy settings migration failed: ${settingsMigration.output}`);
+    }
+
     logger.info('Running foundation migrations from target image', {
       composeDir,
       envTag: tag,
@@ -450,6 +464,31 @@ backup="$FOUNDATION_BACKUP_DIR"
         set: { value, updatedAt: new Date() },
       });
   }
+}
+
+function legacySettingsMigrationEnv(env: Env): string[] {
+  const values: Record<string, string | number | boolean | undefined> = {
+    NODE_ENV: env.NODE_ENV,
+    DATABASE_URL: env.DATABASE_URL,
+    REDIS_URL: env.REDIS_URL,
+    PKI_MASTER_KEY: env.PKI_MASTER_KEY,
+    APP_URL: process.env.APP_URL,
+    OIDC_ISSUER: env.OIDC_ISSUER,
+    OIDC_CLIENT_ID: env.OIDC_CLIENT_ID,
+    OIDC_CLIENT_SECRET: env.OIDC_CLIENT_SECRET,
+    OIDC_REDIRECT_URI: env.OIDC_REDIRECT_URI,
+    OIDC_SCOPES: env.OIDC_SCOPES,
+    CLICKHOUSE_URL: env.CLICKHOUSE_URL,
+    CLICKHOUSE_USERNAME: env.CLICKHOUSE_USERNAME,
+    CLICKHOUSE_PASSWORD: env.CLICKHOUSE_PASSWORD,
+    CLICKHOUSE_DATABASE: env.CLICKHOUSE_DATABASE,
+    CLICKHOUSE_LOGS_TABLE: env.CLICKHOUSE_LOGS_TABLE,
+    CLICKHOUSE_REQUEST_TIMEOUT_MS: env.CLICKHOUSE_REQUEST_TIMEOUT_MS,
+    CLICKHOUSE_MANAGED_INTERNAL_LOGS: env.CLICKHOUSE_MANAGED_INTERNAL_LOGS,
+  };
+  return Object.entries(values)
+    .filter((entry): entry is [string, string | number | boolean] => entry[1] !== undefined)
+    .map(([key, value]) => `${key}=${String(value)}`);
 }
 
 function parseFoundationMigrationOutput(output: string): FoundationMigrationOutput {

@@ -1,11 +1,10 @@
-import { getEnv } from '@/config/env.js';
 import type { OAuthService } from '@/modules/oauth/oauth.service.js';
 
 export const INFERENCE_SETUP_SCHEMA_VERSION = 1;
 export const INFERENCE_SETUP_MINIMUM_CLI_VERSION = '0.1.0';
 
 export function inferenceAdapterDiscovery(oauth: OAuthService, harnessSpecificEndpointsEnabled: boolean) {
-  const baseUrl = getEnv().APP_URL;
+  const baseUrl = oauth.getIssuerUrl();
   return {
     schemaVersion: INFERENCE_SETUP_SCHEMA_VERSION,
     minimumCliVersion: INFERENCE_SETUP_MINIMUM_CLI_VERSION,

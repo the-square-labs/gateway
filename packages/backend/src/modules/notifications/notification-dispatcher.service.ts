@@ -7,6 +7,7 @@ import type { Env } from '@/config/env.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { notificationDeliveryLog, notificationWebhooks } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
+import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import {
   checkOutboundWebhookTarget,
   type OutboundWebhookPolicyService,
@@ -38,11 +39,17 @@ export class NotificationDispatcherService {
     private db: DrizzleClient,
     private webhookService: NotificationWebhookService,
     private env: Env,
-    private outboundWebhookPolicyService: OutboundWebhookPolicyService
+    private outboundWebhookPolicyService: OutboundWebhookPolicyService,
+    private generalSettingsService?: GeneralSettingsService
   ) {}
 
   getGatewayUrl(): string {
-    return (this.env as any).PUBLIC_URL || (this.env as any).MANAGEMENT_DOMAIN || '';
+    return (
+      this.generalSettingsService?.getCachedPublicUrl() ??
+      (this.env as Env & { PUBLIC_URL?: string }).PUBLIC_URL ??
+      (this.env as Env & { MANAGEMENT_DOMAIN?: string }).MANAGEMENT_DOMAIN ??
+      ''
+    );
   }
 
   /**
@@ -273,7 +280,12 @@ export class NotificationDispatcherService {
 
   private async fetchAllowedWebhookTarget(url: string, options: WebhookFetchOptions): Promise<WebhookFetchResponse> {
     const policy = await this.outboundWebhookPolicyService.getConfig();
-    const result = await checkOutboundWebhookTarget(url, policy, this.env);
+    const result = await checkOutboundWebhookTarget(
+      url,
+      policy,
+      this.env,
+      this.generalSettingsService?.getCachedPublicUrl()
+    );
     if (!result.allowed) {
       throw new Error(`Webhook target blocked by outbound network policy: ${result.reason ?? 'target is not allowed'}`);
     }

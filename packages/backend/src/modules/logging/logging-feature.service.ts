@@ -7,10 +7,10 @@ export class LoggingFeatureService {
   private capacityExhausted = false;
   private capacityReason: string | null = null;
 
-  constructor(private readonly env: Env) {}
+  constructor(private readonly source: Pick<Env, 'CLICKHOUSE_URL'> | { isConfigured(): boolean }) {}
 
   isEnabled(): boolean {
-    return this.env.CLICKHOUSE_URL.trim().length > 0;
+    return 'isConfigured' in this.source ? this.source.isConfigured() : this.source.CLICKHOUSE_URL.trim().length > 0;
   }
 
   isAvailable(): boolean {

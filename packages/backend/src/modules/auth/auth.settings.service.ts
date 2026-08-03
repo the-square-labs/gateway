@@ -1,6 +1,9 @@
-import { count, eq } from 'drizzle-orm';
+import { and, count, eq, isNull, not, or } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { permissionGroups, settings, type UserAuthMethod, userPasskeys, users } from '@/db/schema/index.js';
+import { AppError } from '@/middleware/error-handler.js';
+
+const GATEWAY_SYSTEM_OIDC_SUBJECT = 'system:gateway-setup';
 
 const AUTH_SETTINGS_DEFAULTS = {
   'auth:oidc_auto_create_users': true,
@@ -100,21 +103,34 @@ export class AuthSettingsService {
       const current = await this.getSetting<LocalAuthMethods>('auth:methods', AUTH_SETTINGS_DEFAULTS['auth:methods']);
       const next = { ...current, ...updates.methods };
       if (!next.oidc && !next.password && !next.emailOtp) {
-        throw new Error('At least one primary authentication method must remain enabled');
+        throw new AppError(
+          409,
+          'AUTH_METHOD_REQUIRED',
+          'At least one primary authentication method must remain enabled'
+        );
       }
       for (const [method, enabled] of Object.entries(updates.methods)) {
         if (enabled !== false) continue;
         if (method === 'passkeyLogin') {
           const [{ count: passkeyCount }] = await this.db.select({ count: count() }).from(userPasskeys);
-          if (Number(passkeyCount) > 0) throw new Error('Cannot disable passkey login while users exist');
+          if (Number(passkeyCount) > 0)
+            throw new AppError(409, 'AUTH_METHOD_IN_USE', 'Cannot disable passkey login while users exist');
           continue;
         }
         const authMethod: UserAuthMethod = method === 'emailOtp' ? 'email_otp' : (method as UserAuthMethod);
+        const assignedUserCondition =
+          authMethod === 'oidc'
+            ? and(
+                eq(users.authMethod, authMethod),
+                or(isNull(users.oidcSubject), not(eq(users.oidcSubject, GATEWAY_SYSTEM_OIDC_SUBJECT)))
+              )
+            : eq(users.authMethod, authMethod);
         const [{ count: userCount }] = await this.db
           .select({ count: count() })
           .from(users)
-          .where(eq(users.authMethod, authMethod));
-        if (Number(userCount) > 0) throw new Error(`Cannot disable ${method} while users are assigned to it`);
+          .where(assignedUserCondition);
+        if (Number(userCount) > 0)
+          throw new AppError(409, 'AUTH_METHOD_IN_USE', `Cannot disable ${method} while users are assigned to it`);
       }
       await this.setSetting('auth:methods', next);
     }

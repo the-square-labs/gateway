@@ -10,6 +10,7 @@ import { userPasswordCredentials, users } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
+import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CacheService } from '@/services/cache.service.js';
 import type { SessionService } from '@/services/session.service.js';
 import type { User } from '@/types.js';
@@ -71,7 +72,8 @@ export class LocalAuthService {
     private readonly sessionService: SessionService,
     private readonly authSettingsService: AuthSettingsService,
     private readonly authMailService: AuthMailService,
-    private readonly auditService: AuditService
+    private readonly auditService: AuditService,
+    private readonly generalSettingsService?: GeneralSettingsService
   ) {}
 
   async authenticatePassword(email: string, password: string): Promise<User | null> {
@@ -140,10 +142,12 @@ export class LocalAuthService {
     const secret = nanoid(32);
     const challengeId = await this.createChallenge(user.id, purpose, secret, PASSWORD_LINK_TTL_SECONDS);
     const token = `${challengeId}.${secret}`;
-    const env = getEnv();
+    const baseUrl = this.generalSettingsService
+      ? await this.generalSettingsService.requirePublicUrl()
+      : getEnv().APP_URL;
     await this.authMailService.sendSecurityEmail(user.email, {
       kind: purpose,
-      actionUrl: new URL(`/reset-password?token=${encodeURIComponent(token)}`, env.APP_URL).toString(),
+      actionUrl: new URL(`/reset-password?token=${encodeURIComponent(token)}`, baseUrl).toString(),
     });
   }
 
@@ -181,6 +185,25 @@ export class LocalAuthService {
       resourceId: challenge,
       details: {},
     });
+  }
+
+  async setInitialPasswordForSetup(userId: string, password: string): Promise<void> {
+    const user = await this.db.query.users.findFirst({ where: eq(users.id, userId) });
+    if (!user || user.authMethod !== 'password') {
+      throw new AppError(409, 'PASSWORD_AUTH_REQUIRED', 'Setup account must use password authentication');
+    }
+    const existing = await this.db.query.userPasswordCredentials.findFirst({
+      where: eq(userPasswordCredentials.userId, userId),
+    });
+    if (existing) throw new AppError(409, 'PASSWORD_ALREADY_SET', 'The setup password has already been created');
+
+    await this.validatePassword(password);
+    const passwordHash = await bcrypt.hash(password, 12);
+    await this.db.insert(userPasswordCredentials).values({ userId, passwordHash, changedAt: new Date() });
+  }
+
+  async validateInitialPasswordForSetup(password: string): Promise<void> {
+    await this.validatePassword(password);
   }
 
   private async validatePassword(password: string): Promise<void> {

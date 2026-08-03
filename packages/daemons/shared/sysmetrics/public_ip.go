@@ -20,7 +20,6 @@ const (
 	publicIPVerifyInterval       = 15 * time.Minute
 	publicIPFullRefreshInterval  = 6 * time.Hour
 	publicIPFullRefreshJitter    = 30 * time.Minute
-	publicIPInitialSamples       = 3
 	publicIPMaxSamples           = 10
 	publicIPMaxResponseBodyBytes = 128
 )
@@ -110,11 +109,7 @@ func (d *PublicIPDetector) verify(ctx context.Context) {
 }
 
 func (d *PublicIPDetector) refresh(ctx context.Context) {
-	addresses := d.sample(ctx, publicIPInitialSamples)
-	if len(addresses) > 1 {
-		additional := d.sample(ctx, publicIPMaxSamples-publicIPInitialSamples)
-		addresses = mergePublicIPAddresses(addresses, additional)
-	}
+	addresses := d.sample(ctx, publicIPMaxSamples)
 	if len(addresses) == 0 {
 		return
 	}

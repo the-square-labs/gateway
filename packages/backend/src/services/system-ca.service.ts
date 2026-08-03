@@ -7,6 +7,7 @@ import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { certificateAuthorities } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { getPublicIPs } from '@/modules/domains/dns.utils.js';
 import type { CAService } from '@/modules/pki/ca.service.js';
 import type { CertService } from '@/modules/pki/cert.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
@@ -170,6 +171,22 @@ export class SystemCAService {
    */
   async ensureGrpcServerCert(certPath: string, keyPath: string): Promise<{ certPath: string; keyPath: string }> {
     const expectedSans = await this.collectGrpcServerSans();
+    return this.ensureServerCert(certPath, keyPath, 'gateway-grpc', expectedSans, 'gRPC');
+  }
+
+  /** Ensure the native web listener has its own leaf issued by the existing system CA. */
+  async ensureWebServerCert(certPath: string, keyPath: string): Promise<{ certPath: string; keyPath: string }> {
+    const expectedSans = await this.collectWebServerSans();
+    return this.ensureServerCert(certPath, keyPath, 'gateway-web', expectedSans, 'web');
+  }
+
+  private async ensureServerCert(
+    certPath: string,
+    keyPath: string,
+    commonName: string,
+    expectedSans: string[],
+    listener: 'gRPC' | 'web'
+  ): Promise<{ certPath: string; keyPath: string }> {
     // Reuse if files exist and cert is still valid (> 7 days remaining)
     if (existsSync(certPath) && existsSync(keyPath)) {
       try {
@@ -179,26 +196,28 @@ export class SystemCAService {
           const cert = new x509.X509Certificate(certPem);
           validateGrpcServerCertificate(certPem, keyPem, await this.getSystemCACertPem());
           if (!certificateHasExpectedSans(certPem, expectedSans)) {
-            logger.info('Existing gRPC server cert is missing required SANs, regenerating', { expectedSans });
+            logger.info(`Existing ${listener} server cert is missing required SANs, regenerating`, { expectedSans });
           } else {
             const remaining = cert.notAfter.getTime() - Date.now();
             if (remaining > 7 * 24 * 60 * 60 * 1000) {
-              logger.debug('Reusing existing gRPC server cert', {
+              logger.debug(`Reusing existing ${listener} server cert`, {
                 expiresAt: cert.notAfter.toISOString(),
               });
               return { certPath, keyPath };
             }
-            logger.info('gRPC server cert expiring soon, regenerating', {
+            logger.info(`${listener} server cert expiring soon, regenerating`, {
               remaining: `${Math.round(remaining / 3600000)}h`,
             });
           }
         }
       } catch (err) {
-        logger.warn('Existing gRPC server TLS material is invalid; regenerating', { error: (err as Error).message });
+        logger.warn(`Existing ${listener} server TLS material is invalid; regenerating`, {
+          error: (err as Error).message,
+        });
       }
     }
 
-    logger.info('Issuing gRPC server TLS certificate from system CA...');
+    logger.info(`Issuing ${listener} server TLS certificate from system CA...`);
 
     const caId = await this.getSystemCAId();
 
@@ -206,7 +225,7 @@ export class SystemCAService {
       {
         caId,
         type: 'tls-server',
-        commonName: 'gateway-grpc',
+        commonName,
         sans: expectedSans,
         keyAlgorithm: 'ecdsa-p256',
         validityDays: 365,
@@ -221,7 +240,7 @@ export class SystemCAService {
     writeFileSync(certPath, result.certificate.certificatePem, { mode: 0o644 });
     writeFileSync(keyPath, result.privateKeyPem, { mode: 0o600 });
 
-    logger.info('gRPC server cert issued', { serial: result.certificate.serialNumber, certPath });
+    logger.info(`${listener} server cert issued`, { serial: result.certificate.serialNumber, certPath });
     return { certPath, keyPath };
   }
 
@@ -232,6 +251,25 @@ export class SystemCAService {
     const localHost = extractGrpcTargetHost(settings?.gatewayGrpcLocalIp);
     if (publicHost) values.push(publicHost);
     if (localHost) values.push(localHost);
+    return [...new Set(values.map(normalizeGrpcServerSan).filter(Boolean))];
+  }
+
+  private async collectWebServerSans(): Promise<string[]> {
+    const values = ['localhost', hostname(), '127.0.0.1'];
+    if (process.env.PUBLIC_IPV4) values.push(process.env.PUBLIC_IPV4);
+    if (process.env.PUBLIC_IPV6) values.push(process.env.PUBLIC_IPV6);
+    values.push(
+      ...(process.env.GATEWAY_LOCAL_HOSTS?.split(',')
+        .map((value) => value.trim())
+        .filter(Boolean) ?? [])
+    );
+    const discoveredPublicIps = getPublicIPs();
+    values.push(...discoveredPublicIps.ipv4, ...discoveredPublicIps.ipv6);
+
+    const general = await this.generalSettingsService?.getConfig();
+    values.push(...(general?.gatewayPublicIps ?? []));
+    if (general?.publicUrl) values.push(new URL(general.publicUrl).hostname);
+
     return [...new Set(values.map(normalizeGrpcServerSan).filter(Boolean))];
   }
 

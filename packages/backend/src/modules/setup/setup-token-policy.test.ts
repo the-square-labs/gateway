@@ -12,7 +12,9 @@ function makeUserCountDb(realUserCount: number) {
 }
 
 function makeService() {
-  return new SetupTokenPolicyService({} as any) as any;
+  const service = new SetupTokenPolicyService({} as any) as any;
+  vi.spyOn(service, 'isForcedOpen').mockResolvedValue(false);
+  return service;
 }
 
 describe('SetupTokenPolicyService', () => {
@@ -21,13 +23,23 @@ describe('SetupTokenPolicyService', () => {
     await expect(new SetupTokenPolicyService(makeUserCountDb(1)).isGatewayConfigured()).resolves.toBe(true);
   });
 
-  it('allows setup API during the first-start bootstrap window', async () => {
+  it('keeps setup API enabled until setup is explicitly completed', async () => {
     const service = makeService();
-    vi.spyOn(service, 'getTimestampSetting').mockImplementation(async (key: unknown) =>
-      key === 'setup:started_at' ? new Date() : null
-    );
+    vi.spyOn(service, 'getTimestampSetting').mockResolvedValue(null);
 
     await expect(service.isSetupApiEnabled()).resolves.toBe(true);
+  });
+
+  it('recognizes the JSONB boolean written by the forced-open marker', async () => {
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([{ value: true }]) })),
+        })),
+      })),
+    };
+
+    await expect(new SetupTokenPolicyService(db as any).isSetupComplete()).resolves.toBe(false);
   });
 
   it('disables setup API after setup is completed', async () => {
@@ -39,38 +51,45 @@ describe('SetupTokenPolicyService', () => {
     await expect(service.isSetupApiEnabled()).resolves.toBe(false);
   });
 
-  it('disables setup API one hour after first start', async () => {
-    const service = makeService();
-    const expired = new Date(Date.now() - 61 * 60 * 1000);
-    vi.spyOn(service, 'getTimestampSetting').mockImplementation(async (key: unknown) =>
-      key === 'setup:started_at' ? expired : null
-    );
+  it('commits the completion marker and forced-open removal atomically', async () => {
+    const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
+    const values = vi.fn(() => ({ onConflictDoUpdate }));
+    const insert = vi.fn(() => ({ values }));
+    const where = vi.fn().mockResolvedValue(undefined);
+    const remove = vi.fn(() => ({ where }));
+    const transaction = vi.fn(async (callback) => callback({ insert, delete: remove }));
 
-    await expect(service.isSetupApiEnabled()).resolves.toBe(false);
+    await new SetupTokenPolicyService({ transaction } as any).markSetupComplete();
+
+    expect(transaction).toHaveBeenCalledOnce();
+    expect(insert).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledOnce();
   });
 
-  it('records setup start for fresh installer-created setup windows', async () => {
+  it('leaves a fresh installer-created Gateway pending', async () => {
     const service = new SetupTokenPolicyService({} as any, true) as any;
+    vi.spyOn(service, 'isForcedOpen').mockResolvedValue(false);
     vi.spyOn(service, 'getTimestampSetting').mockResolvedValue(null);
     vi.spyOn(service, 'isGatewayConfigured').mockResolvedValue(false);
-    const upsert = vi.spyOn(service, 'upsertSetting').mockResolvedValue(undefined);
+    const markComplete = vi.spyOn(service, 'markSetupComplete').mockResolvedValue(undefined);
+    const upsertSetting = vi.spyOn(service, 'upsertSetting').mockResolvedValue(undefined);
 
     await service.ensureSetupStarted();
 
-    expect(upsert).toHaveBeenCalledWith('setup:started_at', expect.any(String));
+    expect(markComplete).not.toHaveBeenCalled();
+    expect(upsertSetting).toHaveBeenCalledWith('setup:forced_open', 'true');
   });
 
   it('marks configured installs complete instead of honoring a new installer bootstrap flag', async () => {
     const service = new SetupTokenPolicyService({} as any, true) as any;
+    vi.spyOn(service, 'isForcedOpen').mockResolvedValue(false);
     vi.spyOn(service, 'getTimestampSetting').mockResolvedValue(null);
     vi.spyOn(service, 'isGatewayConfigured').mockResolvedValue(true);
     const markComplete = vi.spyOn(service, 'markSetupComplete').mockResolvedValue(undefined);
-    const upsert = vi.spyOn(service, 'upsertSetting').mockResolvedValue(undefined);
 
     await service.ensureSetupStarted();
 
     expect(markComplete).toHaveBeenCalledOnce();
-    expect(upsert).not.toHaveBeenCalledWith('setup:started_at', expect.any(String));
   });
 
   it('marks legacy installs without setup markers complete instead of reopening setup', async () => {

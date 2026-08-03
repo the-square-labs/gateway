@@ -18,6 +18,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { AuthShell } from "@/components/auth/AuthShell";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { CopyValueField } from "@/components/common/CopyValueField";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -32,7 +33,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Toaster } from "@/components/ui/sonner";
 import { getInitials } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth";
 
@@ -358,7 +358,7 @@ export function LoginPage() {
 
   if (resetToken) {
     return (
-      <LoginShell>
+      <AuthShell>
         <AnimatedHeight>
           <section className="space-y-3">
             <h2 className="text-center text-lg font-semibold">Set a new password</h2>
@@ -431,12 +431,12 @@ export function LoginPage() {
             )}
           </section>
         </AnimatedHeight>
-      </LoginShell>
+      </AuthShell>
     );
   }
 
   return (
-    <LoginShell
+    <AuthShell
       footerLeading={
         activeLoginStep === "password" ? (
           <Button
@@ -888,7 +888,7 @@ export function LoginPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </LoginShell>
+    </AuthShell>
   );
 }
 
@@ -901,42 +901,4 @@ function derivePasskeyName(response: unknown): string {
   if (/Windows/i.test(userAgent)) return "Windows Hello";
   if (/Android/i.test(userAgent)) return "Android passkey";
   return "This device's passkey";
-}
-
-function LoginShell({
-  children,
-  footerLeading,
-}: {
-  children: React.ReactNode;
-  footerLeading?: React.ReactNode;
-}) {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-sm space-y-6 text-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="flex items-center gap-3">
-            <img src="/android-chrome-192x192.png" alt="Gateway" className="h-10 w-10" />
-            <h1 className="text-3xl font-bold tracking-tight text-foreground">Gateway</h1>
-          </div>
-          <p className="text-sm text-muted-foreground">Self-hosted infrastructure control plane</p>
-        </div>
-        {children}
-        <div className="flex flex-col items-center gap-2 pt-3 text-xs text-muted-foreground">
-          {footerLeading}
-          <p>
-            Powered by{" "}
-            <a
-              href="https://wiolett.net"
-              target="_blank"
-              rel="noreferrer"
-              className="text-foreground hover:underline"
-            >
-              Wiolett Industries
-            </a>
-          </p>
-        </div>
-      </div>
-      <Toaster position="bottom-center" />
-    </div>
-  );
 }

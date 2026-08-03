@@ -94,6 +94,14 @@ describe('UpdateService foundation migration', () => {
       1,
       expect.objectContaining({
         Image: artifact.imageRef,
+        Cmd: ['node', 'dist/cli/migrate-legacy-settings.js', '/host'],
+        HostConfig: expect.objectContaining({ Binds: ['/srv/gateway:/host'] }),
+      })
+    );
+    expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        Image: artifact.imageRef,
         Cmd: [
           'node',
           'dist/foundation-migrator.js',
@@ -113,7 +121,7 @@ describe('UpdateService foundation migration', () => {
       })
     );
     expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.objectContaining({
         Image: artifact.imageRef,
         Cmd: ['sh', '-c', 'set -eu\nmkdir -p "$SANDBOX_WORKSPACE_DIR"\nchmod 700 "$SANDBOX_WORKSPACE_DIR"'],
@@ -124,7 +132,7 @@ describe('UpdateService foundation migration', () => {
       })
     );
     expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
-      3,
+      4,
       expect.objectContaining({
         Cmd: [
           'docker',
@@ -152,13 +160,15 @@ describe('UpdateService foundation migration', () => {
   it('does not recreate the app when migrated compose validation fails', async () => {
     const dockerService = makeDockerService();
     dockerService.runOneShot
+      .mockResolvedValueOnce({ exitCode: 0, output: '{"ok":true}' })
       .mockResolvedValueOnce({
         exitCode: 0,
         output:
           '{"ok":true,"changedFiles":["docker-compose.yml"],"backupDir":"/host/.gateway-foundation-backups/test","sandboxWorkspaceDir":"/var/lib/gateway/sandbox-workspaces"}',
       })
       .mockResolvedValueOnce({ exitCode: 0, output: '' })
-      .mockResolvedValueOnce({ exitCode: 1, output: 'bad compose' });
+      .mockResolvedValueOnce({ exitCode: 1, output: 'bad compose' })
+      .mockResolvedValueOnce({ exitCode: 0, output: '' });
     const service = makeUpdateService(dockerService);
 
     await expect(
@@ -166,7 +176,7 @@ describe('UpdateService foundation migration', () => {
     ).rejects.toThrow('Migrated docker-compose.yml failed validation');
 
     expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
-      4,
+      5,
       expect.objectContaining({
         Image: 'registry.example.com/wiolett/gateway:v2.4.3',
         Env: ['FOUNDATION_BACKUP_DIR=/host/.gateway-foundation-backups/test'],
@@ -177,7 +187,7 @@ describe('UpdateService foundation migration', () => {
 
   it('prepares a custom sandbox workspace directory from the migrator output', async () => {
     const dockerService = makeDockerService();
-    dockerService.runOneShot.mockResolvedValueOnce({
+    dockerService.runOneShot.mockResolvedValueOnce({ exitCode: 0, output: '{"ok":true}' }).mockResolvedValueOnce({
       exitCode: 0,
       output:
         '{"ok":true,"changedFiles":[".env","docker-compose.yml"],"backupDir":"/host/.gateway-foundation-backups/test","sandboxWorkspaceDir":"/srv/gateway-workspaces"}',
@@ -188,7 +198,7 @@ describe('UpdateService foundation migration', () => {
     await service.performUpdate('v2.4.3', artifact);
 
     expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.objectContaining({
         Env: ['SANDBOX_WORKSPACE_DIR=/srv/gateway-workspaces'],
         HostConfig: { Binds: ['/srv/gateway-workspaces:/srv/gateway-workspaces'] },

@@ -35,7 +35,7 @@ func TestPublicIPDetectorRefreshCollectsBalancedEgressAddresses(t *testing.T) {
 	}
 }
 
-func TestPublicIPDetectorRefreshStopsAfterStableInitialSample(t *testing.T) {
+func TestPublicIPDetectorRefreshUsesFullWindowForStableInitialSample(t *testing.T) {
 	var calls atomic.Int32
 	detector := &PublicIPDetector{
 		providers: []string{"one", "two", "three"},
@@ -50,8 +50,8 @@ func TestPublicIPDetectorRefreshStopsAfterStableInitialSample(t *testing.T) {
 	if got := detector.Addresses(); !slicesEqual(got, []string{"8.8.8.8"}) {
 		t.Fatalf("expected stable address, got %v", got)
 	}
-	if int(calls.Load()) != publicIPInitialSamples*len(detector.providers) {
-		t.Fatalf("expected initial sampling only, got %d calls", calls.Load())
+	if int(calls.Load()) != publicIPMaxSamples*len(detector.providers) {
+		t.Fatalf("expected full sampling window, got %d calls", calls.Load())
 	}
 }
 

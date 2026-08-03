@@ -9,6 +9,8 @@ import '@/services/cache.service.js';
 import '@/services/session.service.js';
 import '@/modules/auth/auth.service.js';
 
+import { readFile } from 'node:fs/promises';
+import { createServer as createHttpsServer } from 'node:https';
 import { resolve } from 'node:path';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
@@ -35,6 +37,8 @@ import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
 import { SystemCAService } from '@/services/system-ca.service.js';
+import { WebIdentityService } from '@/services/web-identity.service.js';
+import { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
 
 async function runMigrations(databaseUrl: string) {
   logger.info('Running database migrations...');
@@ -63,18 +67,35 @@ async function main() {
     // Create the Hono app
     const { app, injectWebSocket } = createApp();
 
-    // Start the server
-    const server = serve({
-      fetch: app.fetch,
-      port: env.PORT,
-      hostname: env.BIND_HOST,
-    });
+    // Start exactly one web protocol on the public port. Native HTTPS uses a
+    // dedicated leaf issued by the existing Gateway system CA.
+    const webTransport = await container.resolve(WebTransportSettingsService).getConfig();
+    const server = webTransport.tlsEnabled
+      ? await (async () => {
+          const identity = await container.resolve(WebIdentityService).resolve();
+          return serve({
+            fetch: app.fetch,
+            port: env.PORT,
+            hostname: env.BIND_HOST,
+            createServer: createHttpsServer,
+            serverOptions: {
+              cert: await readFile(identity.certPath),
+              key: await readFile(identity.keyPath),
+            },
+          });
+        })()
+      : serve({
+          fetch: app.fetch,
+          port: env.PORT,
+          hostname: env.BIND_HOST,
+        });
 
     // Inject WebSocket support into the HTTP server
     injectWebSocket(server);
 
-    logger.info(`Server running at http://${env.BIND_HOST}:${env.PORT}`);
-    logger.info(`API Documentation at http://localhost:${env.PORT}/docs`);
+    const webScheme = webTransport.tlsEnabled ? 'https' : 'http';
+    logger.info(`Server running at ${webScheme}://${env.BIND_HOST}:${env.PORT}`);
+    logger.info(`API Documentation at ${webScheme}://localhost:${env.PORT}/docs`);
 
     // Start gRPC server for daemon communication
     const registry = container.resolve(NodeRegistryService);
