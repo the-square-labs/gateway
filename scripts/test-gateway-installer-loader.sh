@@ -80,7 +80,7 @@ case "$url" in
 esac
 WGET
 chmod 0755 "$TMP_DIR/wget-bin/wget"
-for command in bash uname grep sed sort tail head mktemp awk sha256sum tar cp rm; do
+for command in bash uname grep sed sort tail head mktemp awk sha256sum tar gzip cp rm; do
   ln -s "$(command -v "$command")" "$TMP_DIR/wget-bin/$command"
 done
 
