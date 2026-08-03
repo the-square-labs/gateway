@@ -31,6 +31,9 @@ case "$url" in
   */releases)
     printf '[{"tag_name":"v3.0.0-rc.2"},{"tag_name":"v3.0.0-rc.10"},{"tag_name":"v2.9.0-installer"}]\n'
     ;;
+  */gateway-installer-loader.sh)
+    cp "$TEST_LOADER" "$output"
+    ;;
   */checksums.txt)
     printf '%s  gateway-installer-linux-amd64.tar.gz\n%s  gateway-installer-linux-arm64.tar.gz\n' "$TEST_CHECKSUM" "$TEST_CHECKSUM" > "$output"
     ;;
@@ -110,6 +113,20 @@ run_node_wrapper() {
   tr '\n' ' ' < "$TMP_DIR/captured-args"
 }
 
+run_gateway_wrapper_from_stdin() {
+  : > "$TMP_DIR/captured-args"
+  PATH="$TMP_DIR/bin:$PATH" TEST_LOADER="$ROOT/scripts/gateway-installer-loader.sh" TEST_ARCHIVE="$TMP_DIR/gateway-installer-linux-amd64.tar.gz" TEST_CHECKSUM="$CHECKSUM" CAPTURED_ARGS="$TMP_DIR/captured-args" \
+    bash -s -- "$@" < "$ROOT/scripts/install.sh"
+  tr '\n' ' ' < "$TMP_DIR/captured-args"
+}
+
+run_node_wrapper_from_stdin() {
+  : > "$TMP_DIR/captured-args"
+  PATH="$TMP_DIR/bin:$PATH" TEST_LOADER="$ROOT/scripts/gateway-installer-loader.sh" TEST_ARCHIVE="$TMP_DIR/gateway-installer-linux-amd64.tar.gz" TEST_CHECKSUM="$CHECKSUM" CAPTURED_ARGS="$TMP_DIR/captured-args" \
+    bash -s -- "$@" < "$ROOT/scripts/setup-daemon.sh"
+  tr '\n' ' ' < "$TMP_DIR/captured-args"
+}
+
 stable="$(run_loader node latest https://gitlab.example.com group/project --dry-run)"
 [[ "$stable" == "install node --dry-run " ]] || { echo "stable loader forwarding failed: $stable" >&2; exit 1; }
 
@@ -139,3 +156,9 @@ gateway_wrapper="$(run_gateway_wrapper --nightly --dry-run)"
 
 node_wrapper="$(run_node_wrapper --type nginx --nightly --dry-run)"
 [[ "$node_wrapper" == "install node --type nginx --dry-run --version nightly " ]] || { echo "node wrapper forwarding failed: $node_wrapper" >&2; exit 1; }
+
+gateway_wrapper_from_stdin="$(run_gateway_wrapper_from_stdin --nightly --dry-run)"
+[[ "$gateway_wrapper_from_stdin" == "install gateway --dry-run --version v3.0.0-rc.10 " ]] || { echo "stdin gateway wrapper forwarding failed: $gateway_wrapper_from_stdin" >&2; exit 1; }
+
+node_wrapper_from_stdin="$(run_node_wrapper_from_stdin --type nginx --nightly --dry-run)"
+[[ "$node_wrapper_from_stdin" == "install node --type nginx --dry-run --version nightly " ]] || { echo "stdin node wrapper forwarding failed: $node_wrapper_from_stdin" >&2; exit 1; }

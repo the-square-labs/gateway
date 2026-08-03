@@ -15,7 +15,11 @@ while [[ $# -gt 0 ]]; do
     *) shift ;;
   esac
 done
-LOADER="$(dirname "${BASH_SOURCE[0]}")/gateway-installer-loader.sh"
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
+LOADER=""
+if [[ -n "$SCRIPT_SOURCE" ]]; then
+  LOADER="$(dirname "$SCRIPT_SOURCE")/gateway-installer-loader.sh"
+fi
 if [[ ! -x "$LOADER" ]]; then
   LOADER="$(mktemp /tmp/gateway-installer-loader.XXXXXX)"
   trap 'rm -f "$LOADER"' EXIT
