@@ -27,13 +27,16 @@ func (i *GatewayInstaller) bootstrap(ctx context.Context, gateway config.Gateway
 		}
 		return fmt.Errorf("setup token unavailable")
 	}
+	reportStep(i.stdout, "Waiting for Gateway to become healthy")
 	if err := waitGatewayHealth(ctx); err != nil {
 		return fmt.Errorf("Gateway health check: %w", err)
 	}
+	reportStep(i.stdout, "Configuring sign-in and administrator access")
 	if err := bootstrapAuth(ctx, gateway, token); err != nil {
 		return fmt.Errorf("authentication bootstrap: %w", err)
 	}
 	if gateway.Domain != "" {
+		reportStep(i.stdout, "Configuring Gateway domain")
 		if err := i.configureGatewayNginx(ctx, gateway.Domain); err != nil {
 			fmt.Fprintln(i.stderr, "Warning: configure nginx: "+err.Error())
 		}
@@ -44,6 +47,7 @@ func (i *GatewayInstaller) bootstrap(ctx context.Context, gateway config.Gateway
 			fmt.Fprintln(i.stderr, "Warning: management SSL: "+err.Error())
 		}
 	}
+	reportStep(i.stdout, "Finalizing Gateway setup")
 	if err := setupPost(ctx, "/api/setup/complete", token, nil, 15*time.Second); err != nil {
 		return fmt.Errorf("setup API lock: %w", err)
 	}

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import * as p from '@clack/prompts';
 import { existsSync } from 'node:fs';
-import { stat, statfs } from 'node:fs/promises';
+import { stat, statfs, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -353,13 +353,48 @@ function enginePath(): string {
   return resolve(here, '../gateway-installer-engine');
 }
 
-async function runEngine(target: InstallerTarget, flags: Map<string, string | boolean>): Promise<void> {
+const ENGINE_STEP_PREFIX = '@@wiolett-step:';
+
+class EngineRunError extends Error {
+  constructor(logPath: string) {
+    super(`Installation failed. Technical details were saved to ${logPath}.`);
+  }
+}
+
+async function runEngine(target: InstallerTarget, flags: Map<string, string | boolean>, spinner: { message(message: string): void }): Promise<void> {
   const binary = enginePath();
   if (!existsSync(binary)) throw new Error(`installer engine not found: ${binary}`);
+  const logPath = `/tmp/wiolett-installer-${new Date().toISOString().replace(/[:.]/g, '-')}.log`;
   await new Promise<void>((resolvePromise, reject) => {
-    const child = spawn(binary, engineArgs(target, flags), { stdio: 'inherit' });
+    const child = spawn(binary, engineArgs(target, flags), {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, GATEWAY_INSTALLER_UI: '1' },
+    });
+    let output = '';
+    let pending = '';
+    const receive = (chunk: Buffer) => {
+      const text = chunk.toString('utf8');
+      output += text;
+      pending += text;
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? '';
+      for (const line of lines) {
+        if (line.startsWith(ENGINE_STEP_PREFIX)) spinner.message(line.slice(ENGINE_STEP_PREFIX.length));
+      }
+    };
+    child.stdout?.on('data', receive);
+    child.stderr?.on('data', receive);
     child.once('error', reject);
-    child.once('exit', (code) => code === 0 ? resolvePromise() : reject(new Error(`installer engine exited with code ${code ?? 'unknown'}`)));
+    child.once('close', (code) => {
+      if (code === 0) {
+        resolvePromise();
+        return;
+      }
+      void writeFile(logPath, output, { mode: 0o600 }).then(
+        () => reject(new EngineRunError(logPath)),
+        () => reject(new Error(`Installation failed (engine exit code ${code ?? 'unknown'}).`)),
+      );
+    });
   });
 }
 
@@ -381,9 +416,14 @@ async function main(): Promise<void> {
     return;
   }
   const spinner = p.spinner();
-  spinner.start('Preparing installation engine');
-  spinner.stop('Configuration complete');
-  await runEngine(target, command.flags);
+  spinner.start('Checking server requirements');
+  try {
+    await runEngine(target, command.flags, spinner);
+    spinner.stop(target === 'gateway' ? 'Gateway installation complete' : 'Node installation complete');
+  } catch (error) {
+    spinner.stop('Installation failed');
+    throw error;
+  }
   p.outro(target === 'gateway' ? 'Gateway installation completed.' : 'Node installation completed.');
 }
 

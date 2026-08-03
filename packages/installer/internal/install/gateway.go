@@ -26,9 +26,11 @@ func (i *GatewayInstaller) Run(ctx context.Context, gateway config.Gateway) erro
 	if err := validateGateway(gateway); err != nil {
 		return err
 	}
+	reportStep(i.stdout, "Checking Docker Engine")
 	if err := i.ensureCompose(ctx); err != nil {
 		return err
 	}
+	reportStep(i.stdout, "Writing Gateway configuration")
 	if _, err := os.Stat(".env"); err == nil {
 		fmt.Fprintln(i.stdout, "Existing .env detected; preserving it and regenerating docker-compose.yml.")
 	} else {
@@ -48,9 +50,11 @@ func (i *GatewayInstaller) Run(ctx context.Context, gateway config.Gateway) erro
 		fmt.Fprintln(i.stdout, "Gateway files written; service start skipped.")
 		return nil
 	}
+	reportStep(i.stdout, "Downloading Gateway images")
 	if err := i.exec.Run(ctx, "docker", "compose", "pull"); err != nil {
 		return err
 	}
+	reportStep(i.stdout, "Starting Gateway services")
 	if err := i.exec.Run(ctx, "docker", "compose", "up", "-d"); err != nil {
 		return err
 	}
@@ -170,7 +174,7 @@ func writeGatewayCompose(g config.Gateway) error {
 		logging = fmt.Sprintf("    logging:\n      driver: json-file\n      options:\n        max-size: \"%s\"\n        max-file: \"%s\"\n", g.LogMaxSize, g.LogMaxFile)
 	}
 	depends := "      redis:\n        condition: service_healthy\n"
-	services := ""
+	services := redisCompose(profile.Redis, logging)
 	volumes := "  redis_data:\n"
 	if g.DatabaseMode == "local" {
 		depends = "      postgres:\n        condition: service_healthy\n" + depends
@@ -191,21 +195,24 @@ func writeGatewayCompose(g config.Gateway) error {
 	return os.WriteFile("docker-compose.yml", []byte(content), 0644)
 }
 
-type profile struct{ App, Postgres, ClickHouse string }
+type profile struct{ App, Postgres, Redis, ClickHouse string }
 
 func resourceProfile(value string) profile {
 	switch value {
 	case "small":
-		return profile{"512m", "512m", "512m"}
+		return profile{"1g", "512m", "256m", "512m"}
 	case "large":
-		return profile{"4g", "2g", "4g"}
+		return profile{"4g", "2g", "1g", "4g"}
 	case "custom":
 		// Docker Compose rejects an empty mem_limit. Custom means the operator
 		// accepts the conservative default limits and can tune compose afterwards.
-		return profile{"1g", "1g", "1g"}
+		return profile{"2g", "1g", "512m", "1g"}
 	default:
-		return profile{"1g", "1g", "1g"}
+		return profile{"2g", "1g", "512m", "1g"}
 	}
+}
+func redisCompose(limit, logging string) string {
+	return fmt.Sprintf("\n  redis:\n    image: redis:7-alpine\n    restart: unless-stopped\n    command: redis-server --appendonly yes\n    volumes:\n      - redis_data:/data\n    mem_limit: %s\n    healthcheck:\n      test: [\"CMD\", \"redis-cli\", \"ping\"]\n      interval: 5s\n      timeout: 5s\n      retries: 5\n%s", limit, logging)
 }
 func postgresCompose(limit, logging string) string {
 	return fmt.Sprintf("\n  postgres:\n    image: postgres:16-alpine\n    restart: unless-stopped\n    environment:\n      POSTGRES_DB: gateway\n      POSTGRES_USER: gateway\n      POSTGRES_PASSWORD: ${DB_PASSWORD}\n    volumes:\n      - postgres_data:/var/lib/postgresql/data\n    mem_limit: %s\n    healthcheck:\n      test: [\"CMD-SHELL\", \"pg_isready -U gateway -d gateway\"]\n      interval: 5s\n      timeout: 5s\n      retries: 5\n%s", limit, logging)

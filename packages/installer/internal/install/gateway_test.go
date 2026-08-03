@@ -37,7 +37,7 @@ func TestWriteGatewayFilesForLocalStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"postgres:", "redis:", "clickhouse:", "GATEWAY_IMAGE_REF"} {
+	for _, expected := range []string{"postgres:", "redis:", "clickhouse:", "GATEWAY_IMAGE_REF", "redis_data:/data", "condition: service_healthy"} {
 		if !strings.Contains(string(compose), expected) {
 			t.Fatalf("compose missing %q", expected)
 		}

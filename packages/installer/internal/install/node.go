@@ -37,7 +37,7 @@ func (i *NodeInstaller) Run(ctx context.Context, node config.Node) error {
 	if err := node.ValidateEnrollment(); err != nil {
 		return err
 	}
-	fmt.Fprintln(i.stdout, "Validating enrollment token with Gateway...")
+	reportStep(i.stdout, "Validating enrollment token with Gateway")
 	validatedType, err := enrollment.ValidateEnrollment(node.Gateway, node.Token, node.GatewayCertSHA256, string(node.Type))
 	if err != nil {
 		return fmt.Errorf("validate enrollment before installation: %w", err)
@@ -47,6 +47,7 @@ func (i *NodeInstaller) Run(ctx context.Context, node config.Node) error {
 	}
 	fmt.Fprintln(i.stdout, "Enrollment token accepted.")
 	if node.Type == config.NodeDatabases {
+		reportStep(i.stdout, "Preparing database storage")
 		if err := validateStorageRoot(node.DatabaseStorageRoot); err != nil {
 			return err
 		}
@@ -55,11 +56,13 @@ func (i *NodeInstaller) Run(ctx context.Context, node config.Node) error {
 		}
 	}
 	if node.Type == config.NodeDocker || node.Type == config.NodeDatabases {
+		reportStep(i.stdout, "Checking Docker Engine")
 		if err := i.ensureDocker(ctx); err != nil {
 			return err
 		}
 	}
 	if node.Type == config.NodeNginx && !node.SkipNginx {
+		reportStep(i.stdout, "Checking Nginx")
 		if err := i.ensureNginx(ctx, node.NginxRepository); err != nil {
 			return err
 		}
@@ -68,7 +71,7 @@ func (i *NodeInstaller) Run(ctx context.Context, node config.Node) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(i.stdout, "Resolving daemon release...")
+	reportStep(i.stdout, "Resolving node daemon release")
 	tag, err := resolveDaemonTag(i.client, node)
 	if err != nil {
 		return err
@@ -84,9 +87,11 @@ func (i *NodeInstaller) Run(ctx context.Context, node config.Node) error {
 	if err := backupIfChanged(target, node.Version); err != nil {
 		return err
 	}
+	reportStep(i.stdout, "Downloading and verifying node daemon")
 	if err := downloadAndVerify(i.client, base, asset, target, i.stdout); err != nil {
 		return err
 	}
+	reportStep(i.stdout, "Enrolling node with Gateway")
 	if err := i.enroll(ctx, node, target); err != nil {
 		return err
 	}
@@ -95,6 +100,7 @@ func (i *NodeInstaller) Run(ctx context.Context, node config.Node) error {
 			return err
 		}
 	}
+	reportStep(i.stdout, "Starting node service")
 	if err := i.writeService(ctx, node, name); err != nil {
 		return err
 	}
@@ -162,7 +168,7 @@ func backupIfChanged(target, version string) error {
 func (i *NodeInstaller) ensureDocker(ctx context.Context) error {
 	_, dockerErr := exec.LookPath("docker")
 	if dockerErr != nil || !dockerComposeAvailable(ctx) {
-		fmt.Fprintln(i.stdout, "Installing Docker Engine from Docker's official repository...")
+		reportStep(i.stdout, "Installing Docker Engine from Docker's official repository")
 		if err := i.installDockerFromOfficialRepository(ctx); err != nil {
 			return fmt.Errorf("install Docker Engine: %w", err)
 		}
@@ -192,6 +198,7 @@ func (i *NodeInstaller) installDockerFromOfficialRepository(ctx context.Context)
 	if err := i.installPackages(ctx, "ca-certificates", "curl"); err != nil {
 		return fmt.Errorf("install Docker repository prerequisites: %w", err)
 	}
+	reportStep(i.stdout, "Adding Docker package repository")
 	if err := i.exec.Run(ctx, "install", "-m", "0755", "-d", "/etc/apt/keyrings"); err != nil {
 		return err
 	}
@@ -209,6 +216,7 @@ func (i *NodeInstaller) installDockerFromOfficialRepository(ctx context.Context)
 	if err := i.exec.Run(ctx, "apt-get", "update", "-qq"); err != nil {
 		return err
 	}
+	reportStep(i.stdout, "Installing Docker Engine packages")
 	return i.exec.Run(ctx, "apt-get", "install", "-y", "-qq", "docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin")
 }
 
@@ -251,7 +259,7 @@ func (i *NodeInstaller) ensureDockerService(ctx context.Context) error {
 		return nil
 	}
 	if _, err := exec.LookPath("systemctl"); err == nil {
-		fmt.Fprintln(i.stdout, "Starting Docker service...")
+		reportStep(i.stdout, "Starting Docker service")
 		if err := i.exec.Run(ctx, "systemctl", "enable", "--now", "docker"); err != nil {
 			return fmt.Errorf("start Docker service: %w", err)
 		}
