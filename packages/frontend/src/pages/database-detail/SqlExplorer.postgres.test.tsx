@@ -239,7 +239,7 @@ describe("SqlExplorer (PostgreSQL)", () => {
     );
 
     await screen.findByText("public.users");
-    await user.click(screen.getByTitle("Column types"));
+    await user.click(await screen.findByTitle("Column types"));
     await screen.findByRole("heading", { name: "Column Types" });
 
     const typeSelects = screen.getAllByRole("combobox");
