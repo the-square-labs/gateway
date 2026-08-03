@@ -4,6 +4,18 @@ import { afterAll, afterEach, beforeAll, vi } from "vitest";
 import { server } from "./msw/server";
 import { resetTestStores } from "./reset-stores";
 
+Object.defineProperty(globalThis, "Event", {
+  configurable: true,
+  writable: true,
+  value: window.Event,
+});
+
+Object.defineProperty(globalThis, "CustomEvent", {
+  configurable: true,
+  writable: true,
+  value: window.CustomEvent,
+});
+
 class MockResizeObserver {
   observe() {}
   unobserve() {}
@@ -115,6 +127,7 @@ afterEach(() => {
   server.resetHandlers();
   resetTestStores();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 afterAll(() => {

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfirmDialog, useConfirmDialog } from "@/components/common/ConfirmDialog";
 import { api } from "@/services/api";
@@ -30,7 +30,7 @@ const XAI: InferenceProviderCatalogItem = {
 };
 
 describe("InferenceProviderConnectDialog", () => {
-  afterEach(() => useConfirmDialog.getState().close());
+  afterEach(() => act(() => useConfirmDialog.getState().close()));
 
   it("polls a device flow automatically and completes without a manual check button", async () => {
     const onOpenChange = vi.fn<(open: boolean) => void>();
