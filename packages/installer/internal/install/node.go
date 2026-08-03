@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -159,13 +160,104 @@ func backupIfChanged(target, version string) error {
 }
 
 func (i *NodeInstaller) ensureDocker(ctx context.Context) error {
-	if _, err := exec.LookPath("docker"); err != nil {
-		if err := i.installPackages(ctx, "docker.io", "docker-compose-plugin"); err != nil {
+	_, dockerErr := exec.LookPath("docker")
+	if dockerErr != nil || !dockerComposeAvailable(ctx) {
+		fmt.Fprintln(i.stdout, "Installing Docker Engine from Docker's official repository...")
+		if err := i.installDockerFromOfficialRepository(ctx); err != nil {
 			return fmt.Errorf("install Docker Engine: %w", err)
 		}
 	}
-	if err := i.exec.Run(ctx, "docker", "info"); err != nil {
-		return fmt.Errorf("Docker Engine is not available: %w", err)
+	if err := i.ensureDockerService(ctx); err != nil {
+		return err
+	}
+	if !dockerComposeAvailable(ctx) {
+		return fmt.Errorf("Docker Compose plugin is unavailable after Docker installation")
+	}
+	return nil
+}
+
+func dockerComposeAvailable(ctx context.Context) bool {
+	return exec.CommandContext(ctx, "docker", "compose", "version").Run() == nil
+}
+
+func dockerInfoAvailable(ctx context.Context) bool {
+	return exec.CommandContext(ctx, "docker", "info").Run() == nil
+}
+
+func (i *NodeInstaller) installDockerFromOfficialRepository(ctx context.Context) error {
+	distro, codename, err := dockerAptDistribution()
+	if err != nil {
+		return err
+	}
+	if err := i.installPackages(ctx, "ca-certificates", "curl"); err != nil {
+		return fmt.Errorf("install Docker repository prerequisites: %w", err)
+	}
+	if err := i.exec.Run(ctx, "install", "-m", "0755", "-d", "/etc/apt/keyrings"); err != nil {
+		return err
+	}
+	keyPath := "/etc/apt/keyrings/docker.asc"
+	if err := i.exec.Run(ctx, "curl", "-fsSL", "https://download.docker.com/linux/"+distro+"/gpg", "-o", keyPath); err != nil {
+		return fmt.Errorf("download Docker signing key: %w", err)
+	}
+	if err := i.exec.Run(ctx, "chmod", "a+r", keyPath); err != nil {
+		return err
+	}
+	contents := fmt.Sprintf("Types: deb\nURIs: https://download.docker.com/linux/%s\nSuites: %s\nComponents: stable\nArchitectures: %s\nSigned-By: %s\n", distro, codename, dockerAptArchitecture(), keyPath)
+	if err := os.WriteFile("/etc/apt/sources.list.d/docker.sources", []byte(contents), 0644); err != nil {
+		return fmt.Errorf("write Docker apt source: %w", err)
+	}
+	if err := i.exec.Run(ctx, "apt-get", "update", "-qq"); err != nil {
+		return err
+	}
+	return i.exec.Run(ctx, "apt-get", "install", "-y", "-qq", "docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin")
+}
+
+func dockerAptDistribution() (string, string, error) {
+	contents, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return "", "", fmt.Errorf("read /etc/os-release for Docker repository: %w", err)
+	}
+	values := map[string]string{}
+	for _, line := range strings.Split(string(contents), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		values[key] = strings.Trim(value, "\"")
+	}
+	distro := values["ID"]
+	if distro != "ubuntu" && distro != "debian" {
+		return "", "", fmt.Errorf("automatic Docker installation is supported on Ubuntu and Debian only; install Docker Engine from https://docs.docker.com/engine/install/")
+	}
+	codename := values["VERSION_CODENAME"]
+	if codename == "" {
+		codename = values["UBUNTU_CODENAME"]
+	}
+	if codename == "" {
+		return "", "", fmt.Errorf("could not determine the OS codename for Docker's apt repository")
+	}
+	return distro, codename, nil
+}
+
+func dockerAptArchitecture() string {
+	if runtime.GOARCH == "arm64" {
+		return "arm64"
+	}
+	return "amd64"
+}
+
+func (i *NodeInstaller) ensureDockerService(ctx context.Context) error {
+	if dockerInfoAvailable(ctx) {
+		return nil
+	}
+	if _, err := exec.LookPath("systemctl"); err == nil {
+		fmt.Fprintln(i.stdout, "Starting Docker service...")
+		if err := i.exec.Run(ctx, "systemctl", "enable", "--now", "docker"); err != nil {
+			return fmt.Errorf("start Docker service: %w", err)
+		}
+	}
+	if !dockerInfoAvailable(ctx) {
+		return fmt.Errorf("Docker Engine is installed but the daemon is not running")
 	}
 	return nil
 }
@@ -182,10 +274,10 @@ func (i *NodeInstaller) ensureNginx(ctx context.Context, _ string) error {
 
 func (i *NodeInstaller) installPackages(ctx context.Context, packages ...string) error {
 	if _, err := exec.LookPath("apt-get"); err == nil {
-		if err := i.exec.Run(ctx, "apt-get", "update"); err != nil {
+		if err := i.exec.Run(ctx, "apt-get", "update", "-qq"); err != nil {
 			return err
 		}
-		return i.exec.Run(ctx, "apt-get", append([]string{"install", "-y"}, packages...)...)
+		return i.exec.Run(ctx, "apt-get", append([]string{"install", "-y", "-qq"}, packages...)...)
 	}
 	if _, err := exec.LookPath("dnf"); err == nil {
 		return i.exec.Run(ctx, "dnf", append([]string{"install", "-y"}, packages...)...)
