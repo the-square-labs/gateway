@@ -7,7 +7,15 @@ GITLAB_URL="${1:?GitLab URL is required}"; shift
 GITLAB_PROJECT="${1:?GitLab project is required}"; shift
 
 die() { printf 'gateway installer loader: %s\n' "$*" >&2; exit 1; }
-command -v curl >/dev/null 2>&1 || die "curl is required to download gateway-installer"
+if command -v curl >/dev/null 2>&1; then
+  download_stdout() { curl -fsSL "$1"; }
+  download_file() { curl -fsSL "$1" -o "$2"; }
+elif command -v wget >/dev/null 2>&1; then
+  download_stdout() { wget -qO- "$1"; }
+  download_file() { wget -qO "$2" "$1"; }
+else
+  die "curl or wget is required to download gateway-installer"
+fi
 
 case "$(uname -m)" in
   x86_64|amd64) ARCH=amd64 ;;
@@ -29,7 +37,7 @@ done
 
 if [[ "$NIGHTLY" == true ]]; then
   if [[ "$TARGET" == "node" || "$REQUESTED_VERSION" == "latest" ]]; then
-    INSTALLER_TAG="$(curl -fsSL "${API}/releases" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+"' | sed -E 's/.*"([^"]+)"$/\1/' | sort -V | tail -1)"
+    INSTALLER_TAG="$(download_stdout "${API}/releases" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+"' | sed -E 's/.*"([^"]+)"$/\1/' | sort -V | tail -1)"
     [[ -n "$INSTALLER_TAG" ]] || die "could not resolve a release-candidate installer; publish vX.Y.Z-rc.N first"
   else
     BASE_VERSION="${REQUESTED_VERSION%-nginx}"
@@ -42,7 +50,7 @@ if [[ "$NIGHTLY" == true ]]; then
   fi
 else
   if [[ "$REQUESTED_VERSION" == "latest" ]]; then
-    INSTALLER_TAG="$(curl -fsSL "${API}/releases" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+-installer"' | sed -E 's/.*"([^"]+)"$/\1/' | head -1)"
+    INSTALLER_TAG="$(download_stdout "${API}/releases" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+-installer"' | sed -E 's/.*"([^"]+)"$/\1/' | head -1)"
     [[ -n "$INSTALLER_TAG" ]] || die "could not resolve latest installer release"
   else
     BASE_VERSION="${REQUESTED_VERSION%-nginx}"
@@ -59,10 +67,10 @@ ASSET="gateway-installer-linux-${ARCH}.tar.gz"
 BASE_URL="${API}/releases/${INSTALLER_TAG}/downloads"
 TMP_DIR="$(mktemp -d /tmp/gateway-installer.XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
-curl -fsSL "${BASE_URL}/checksums.txt" -o "$TMP_DIR/checksums.txt" || die "could not download installer checksums"
+download_file "${BASE_URL}/checksums.txt" "$TMP_DIR/checksums.txt" || die "could not download installer checksums"
 EXPECTED="$(awk -v asset="$ASSET" '$2 == asset || $2 == "*" asset { print $1; exit }' "$TMP_DIR/checksums.txt")"
 [[ "$EXPECTED" =~ ^[a-fA-F0-9]{64}$ ]] || die "checksum for ${ASSET} is missing"
-curl -fsSL "${BASE_URL}/${ASSET}" -o "$TMP_DIR/$ASSET" || die "could not download ${ASSET}"
+download_file "${BASE_URL}/${ASSET}" "$TMP_DIR/$ASSET" || die "could not download ${ASSET}"
 ACTUAL="$(sha256sum "$TMP_DIR/$ASSET" | awk '{print $1}')"
 [[ "$ACTUAL" == "$EXPECTED" ]] || die "checksum verification failed"
 tar -xzf "$TMP_DIR/$ASSET" -C "$TMP_DIR" || die "installer archive could not be extracted"

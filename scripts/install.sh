@@ -18,10 +18,17 @@ done
 
 LOADER="$(dirname "${BASH_SOURCE[0]}")/gateway-installer-loader.sh"
 if [[ ! -x "$LOADER" ]]; then
-  command -v curl >/dev/null 2>&1 || { echo "gateway installer loader: curl is required" >&2; exit 1; }
   LOADER="$(mktemp /tmp/gateway-installer-loader.XXXXXX)"
   trap 'rm -f "$LOADER"' EXIT
-  curl -fsSL "${GITLAB_URL%/}/${GITLAB_PROJECT}/-/raw/main/scripts/gateway-installer-loader.sh" -o "$LOADER"
+  LOADER_URL="${GITLAB_URL%/}/${GITLAB_PROJECT}/-/raw/main/scripts/gateway-installer-loader.sh"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$LOADER_URL" -o "$LOADER"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$LOADER" "$LOADER_URL"
+  else
+    echo "gateway installer loader: curl or wget is required" >&2
+    exit 1
+  fi
   chmod 0700 "$LOADER"
 fi
 exec "$LOADER" gateway "$REQUESTED_VERSION" "$GITLAB_URL" "$GITLAB_PROJECT" "${ARGS[@]}"

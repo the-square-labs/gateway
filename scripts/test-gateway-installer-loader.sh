@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
-mkdir -p "$TMP_DIR/payload/gateway-installer" "$TMP_DIR/bin"
+mkdir -p "$TMP_DIR/payload/gateway-installer" "$TMP_DIR/bin" "$TMP_DIR/wget-bin"
 
 cat > "$TMP_DIR/payload/gateway-installer/gateway-installer" <<'INSTALLER'
 #!/usr/bin/env bash
@@ -45,9 +45,51 @@ esac
 CURL
 chmod 0755 "$TMP_DIR/bin/curl"
 
+cat > "$TMP_DIR/wget-bin/wget" <<'WGET'
+#!/usr/bin/env bash
+set -euo pipefail
+url=""
+output=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -q) shift ;;
+    -qO-) output="-"; shift ;;
+    -qO|-O) output="$2"; shift 2 ;;
+    http://*|https://*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+case "$url" in
+  */releases)
+    printf '[{"tag_name":"v3.0.0-rc.2"},{"tag_name":"v3.0.0-rc.10"},{"tag_name":"v2.9.0-installer"}]\n'
+    ;;
+  */checksums.txt)
+    printf '%s  gateway-installer-linux-amd64.tar.gz\n%s  gateway-installer-linux-arm64.tar.gz\n' "$TEST_CHECKSUM" "$TEST_CHECKSUM" > "$output"
+    ;;
+  */gateway-installer-linux-amd64.tar.gz|*/gateway-installer-linux-arm64.tar.gz)
+    cp "$TEST_ARCHIVE" "$output"
+    ;;
+  *)
+    printf 'unexpected wget URL: %s\n' "$url" >&2
+    exit 1
+    ;;
+esac
+WGET
+chmod 0755 "$TMP_DIR/wget-bin/wget"
+for command in bash uname grep sed sort tail head mktemp awk sha256sum tar cp rm; do
+  ln -s "$(command -v "$command")" "$TMP_DIR/wget-bin/$command"
+done
+
 run_loader() {
   : > "$TMP_DIR/captured-args"
   PATH="$TMP_DIR/bin:$PATH" TEST_ARCHIVE="$TMP_DIR/gateway-installer-linux-amd64.tar.gz" TEST_CHECKSUM="$CHECKSUM" CAPTURED_ARGS="$TMP_DIR/captured-args" \
+    "$ROOT/scripts/gateway-installer-loader.sh" "$@"
+  tr '\n' ' ' < "$TMP_DIR/captured-args"
+}
+
+run_loader_with_wget() {
+  : > "$TMP_DIR/captured-args"
+  PATH="$TMP_DIR/wget-bin" TEST_ARCHIVE="$TMP_DIR/gateway-installer-linux-amd64.tar.gz" TEST_CHECKSUM="$CHECKSUM" CAPTURED_ARGS="$TMP_DIR/captured-args" \
     "$ROOT/scripts/gateway-installer-loader.sh" "$@"
   tr '\n' ' ' < "$TMP_DIR/captured-args"
 }
@@ -73,6 +115,9 @@ stable="$(run_loader node latest https://gitlab.example.com group/project --dry-
 
 nightly_node="$(run_loader node latest https://gitlab.example.com group/project --nightly --type nginx --dry-run)"
 [[ "$nightly_node" == "install node --type nginx --dry-run --version nightly " ]] || { echo "nightly node loader forwarding failed: $nightly_node" >&2; exit 1; }
+
+wget_nightly_node="$(run_loader_with_wget node latest https://gitlab.example.com group/project --nightly --type nginx --dry-run)"
+[[ "$wget_nightly_node" == "install node --type nginx --dry-run --version nightly " ]] || { echo "wget nightly node forwarding failed: $wget_nightly_node" >&2; exit 1; }
 
 explicit_nightly_node="$(run_loader node v3.0.0-nginx-rc.2 https://gitlab.example.com group/project --nightly --type nginx --version v3.0.0-nginx-rc.2 --dry-run)"
 [[ "$explicit_nightly_node" == "install node --type nginx --version v3.0.0-nginx-rc.2 --dry-run " ]] || { echo "explicit nightly node forwarding failed: $explicit_nightly_node" >&2; exit 1; }
