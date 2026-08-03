@@ -77,6 +77,28 @@ async function text(message: string, initialValue: string, placeholder: string, 
   return result.trim();
 }
 
+function info(message: string): void {
+  // Clack's log renderer preserves the guide on explicit newlines, but not on
+  // terminal-driven wrapping. Wrap before rendering so continuation lines keep
+  // the same left guide and never start at column zero.
+  const width = Math.max(20, (process.stdout.columns ?? 80) - 4);
+  const lines: string[] = [];
+  for (const paragraph of message.split('\n')) {
+    let line = '';
+    for (const word of paragraph.split(/\s+/)) {
+      if (!word) continue;
+      if (line && line.length + 1 + word.length > width) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = line ? `${line} ${word}` : word;
+      }
+    }
+    if (line) lines.push(line);
+  }
+  p.log.info(lines.join('\n'));
+}
+
 function required(label: string): (value: string) => string | undefined {
   return (value) => value.trim() ? undefined : `${label} is required.`;
 }
@@ -249,7 +271,7 @@ async function promptGateway(flags: Map<string, string | boolean>): Promise<void
     '',
     'Press Ctrl+C at any time to cancel safely.',
   ].join('\n'), 'Welcome to Wiolett Gateway');
-  p.log.info('The Gateway domain is the address users open in their browser. Leave it blank if you want to configure DNS later.');
+  info('The Gateway domain is the address users open in their browser. Leave it blank if you want to configure DNS later.');
   const configuredDomain = flagString(flags, 'domain');
   if (configuredDomain) {
     const domainChoice = await p.select({
@@ -268,7 +290,7 @@ async function promptGateway(flags: Map<string, string | boolean>): Promise<void
   }
   let methods = flagString(flags, 'auth-methods').split(',').filter(Boolean);
   if (methods.length === 0) {
-    p.log.info('You can enable more than one sign-in method. Gateway users will see all enabled options on the sign-in page.');
+    info('You can enable more than one sign-in method. Gateway users will see all enabled options on the sign-in page.');
     const selected = await p.multiselect({
       message: 'Which sign-in methods should Gateway offer?',
       options: [
@@ -284,7 +306,7 @@ async function promptGateway(flags: Map<string, string | boolean>): Promise<void
   }
   const usesEmail = methods.includes('password') || methods.includes('emailOtp');
   if (usesEmail) {
-    p.log.info('Email sign-in requires SMTP to deliver one-time codes and password-recovery emails. Choose a preset or configure another SMTP relay.');
+    info('Email sign-in requires SMTP to deliver one-time codes and password-recovery emails. Choose a preset or configure another SMTP relay.');
     await promptSmtpPreset(flags);
     await promptMissingValue(flags, 'smtp-host', 'SMTP host', 'smtp.example.com', required('SMTP host'));
     await promptMissingValue(flags, 'smtp-port', 'SMTP port', '587', required('SMTP port'));
@@ -300,7 +322,7 @@ async function promptGateway(flags: Map<string, string | boolean>): Promise<void
     await promptMissingValue(flags, 'smtp-sender-email', 'SMTP sender email', 'gateway@example.com', required('Sender email'));
   }
   if (methods.includes('oidc')) {
-    p.log.info('Create an OIDC client in your identity provider first. The redirect URI shown below must be allowed by that client.');
+    info('Create an OIDC client in your identity provider first. The redirect URI shown below must be allowed by that client.');
     await promptMissingValue(flags, 'oidc-issuer', 'OIDC issuer URL', 'https://id.example.com', required('OIDC issuer'));
     await promptMissingValue(flags, 'oidc-client-id', 'OIDC client ID', 'gateway', required('OIDC client ID'), false, 'gateway');
     await promptMissingValue(flags, 'oidc-client-secret', 'OIDC client secret', '••••••••', required('OIDC client secret'), true);
@@ -308,7 +330,7 @@ async function promptGateway(flags: Map<string, string | boolean>): Promise<void
   }
   let adminMethod = flagString(flags, 'initial-admin-method');
   if (!adminMethod) {
-    p.log.info('The first administrator receives Gateway admin access immediately after installation.');
+    info('The first administrator receives Gateway admin access immediately after installation.');
     const selected = await p.select({ message: 'How will the initial administrator sign in?', options: methods.map((method) => ({ value: method, label: method === 'oidc' ? 'OIDC' : method === 'password' ? 'Email and password' : 'Email one-time code' })) });
     if (p.isCancel(selected)) cancel('Installation cancelled.');
     adminMethod = selected;
