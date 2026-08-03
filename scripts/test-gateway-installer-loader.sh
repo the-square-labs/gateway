@@ -168,3 +168,9 @@ gateway_wrapper_from_stdin="$(run_gateway_wrapper_from_stdin --nightly --dry-run
 
 node_wrapper_from_stdin="$(run_node_wrapper_from_stdin --type nginx --nightly --dry-run)"
 [[ "$node_wrapper_from_stdin" == "install node --type nginx --dry-run --version nightly " ]] || { echo "stdin node wrapper forwarding failed: $node_wrapper_from_stdin" >&2; exit 1; }
+
+mkdir -p "$TMP_DIR/loader-tmp"
+PATH="$TMP_DIR/bin:$PATH" TEST_ARCHIVE="$TMP_DIR/gateway-installer-linux-amd64.tar.gz" TEST_CHECKSUM="$CHECKSUM" CAPTURED_ARGS="$TMP_DIR/captured-args" \
+  GATEWAY_INSTALLER_CACHE_DIR="$TMP_DIR/installer-cache" GATEWAY_INSTALLER_TMP_DIR="$TMP_DIR/loader-tmp" \
+  "$ROOT/scripts/gateway-installer-loader.sh" gateway latest https://gitlab.example.com group/project --nightly --dry-run >/dev/null
+[[ -z "$(find "$TMP_DIR/loader-tmp" -mindepth 1 -maxdepth 1 -print -quit)" ]] || { echo "loader temporary directory was not removed" >&2; exit 1; }

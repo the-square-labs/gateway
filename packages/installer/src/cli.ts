@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { displayEngineArgs, engineArgs, flagBool, flagString, parseCommand, type InstallerTarget } from './args.js';
+import { engineStep, failureSummary } from './engine-output.js';
 
 const VERSION = process.env.GATEWAY_INSTALLER_VERSION ?? 'dev';
 const DEFAULT_GITLAB_URL = process.env.GATEWAY_GITLAB_URL ?? 'https://gitlab.wiolett.net';
@@ -375,11 +376,13 @@ function enginePath(): string {
   return resolve(here, '../gateway-installer-engine');
 }
 
-const ENGINE_STEP_PREFIX = '@@wiolett-step:';
-
 class EngineRunError extends Error {
-  constructor(logPath: string) {
-    super(`Installation failed. Technical details were saved to ${logPath}.`);
+  constructor(logPath: string | undefined, details: string) {
+    super([
+      'Installation failed.',
+      details ? `\n${details}` : '',
+      logPath ? `\nFull technical log: ${logPath}` : '',
+    ].join(''));
   }
 }
 
@@ -401,7 +404,8 @@ async function runEngine(target: InstallerTarget, flags: Map<string, string | bo
       const lines = pending.split(/\r?\n/);
       pending = lines.pop() ?? '';
       for (const line of lines) {
-        if (line.startsWith(ENGINE_STEP_PREFIX)) spinner.message(line.slice(ENGINE_STEP_PREFIX.length));
+        const step = engineStep(line);
+        if (step) spinner.message(step);
       }
     };
     child.stdout?.on('data', receive);
@@ -412,9 +416,10 @@ async function runEngine(target: InstallerTarget, flags: Map<string, string | bo
         resolvePromise();
         return;
       }
+      const details = failureSummary(output);
       void writeFile(logPath, output, { mode: 0o600 }).then(
-        () => reject(new EngineRunError(logPath)),
-        () => reject(new Error(`Installation failed (engine exit code ${code ?? 'unknown'}).`)),
+        () => reject(new EngineRunError(logPath, details)),
+        () => reject(new EngineRunError(undefined, details)),
       );
     });
   });

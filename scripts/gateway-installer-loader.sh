@@ -101,7 +101,8 @@ CACHE_ROOT="${GATEWAY_INSTALLER_CACHE_DIR:-/tmp/wiolett-gateway-installer}"
 CACHE_DIR="${CACHE_ROOT}/${INSTALLER_TAG}/${ARCH}"
 CACHE_ARCHIVE="${CACHE_DIR}/${ASSET}"
 CACHE_CHECKSUMS="${CACHE_DIR}/checksums.txt"
-TMP_DIR="$(mktemp -d /tmp/gateway-installer.XXXXXX)"
+TMP_BASE="${GATEWAY_INSTALLER_TMP_DIR:-/tmp}"
+TMP_DIR="$(mktemp -d "${TMP_BASE%/}/gateway-installer.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 status "Preparing ${TARGET} installer · ${INSTALLER_TAG} · ${ARCH}"
 EXPECTED=""
@@ -151,7 +152,8 @@ if [[ "$TARGET" == "gateway" ]]; then
       INSTALLER_ARGS+=("--version" "$INSTALLER_TAG")
     fi
   fi
-  exec "$INSTALLER" install gateway "${INSTALLER_ARGS[@]}"
+  "$INSTALLER" install gateway "${INSTALLER_ARGS[@]}"
+  exit $?
 fi
 if [[ "$NIGHTLY" == true ]]; then
   if [[ "$has_version" == false ]]; then
@@ -164,4 +166,4 @@ elif [[ "${REQUESTED_VERSION}" =~ -rc\. ]]; then
 elif [[ "$has_version" == true && "${INSTALLER_ARGS[version_value_index]}" =~ -rc\. ]]; then
   die "daemon release candidates require --nightly"
 fi
-exec "$INSTALLER" install node "${INSTALLER_ARGS[@]}"
+"$INSTALLER" install node "${INSTALLER_ARGS[@]}"

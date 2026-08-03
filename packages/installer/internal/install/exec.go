@@ -17,7 +17,7 @@ func (e systemExecutor) Run(ctx context.Context, name string, args ...string) er
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdout, cmd.Stderr = e.stdout, e.stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%s %v: %w", name, args, err)
+		return fmt.Errorf("%s failed: %w", name, err)
 	}
 	return nil
 }

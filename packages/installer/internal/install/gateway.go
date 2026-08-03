@@ -51,7 +51,7 @@ func (i *GatewayInstaller) Run(ctx context.Context, gateway config.Gateway) erro
 		return nil
 	}
 	reportStep(i.stdout, "Downloading Gateway images")
-	if err := i.exec.Run(ctx, "docker", "compose", "pull"); err != nil {
+	if err := i.exec.Run(ctx, "docker", "compose", "--progress", "json", "pull"); err != nil {
 		return err
 	}
 	reportStep(i.stdout, "Starting Gateway services")
