@@ -21,6 +21,10 @@ banner() {
   printf '  │  Wiolett Gateway Installer   │\n' >&2
   printf '  ╰──────────────────────────────╯\n' >&2
 }
+clear_screen() {
+  [[ "$SHOW_UI" == true ]] || return 0
+  printf '\033[2J\033[H\n' >&2
+}
 if command -v curl >/dev/null 2>&1; then
   download_stdout() { curl -fsSL "$1"; }
   download_file() {
@@ -59,6 +63,10 @@ for arg in "$@"; do
   fi
 done
 
+clear_screen
+banner
+status "Resolving installer release"
+
 if [[ "$NIGHTLY" == true ]]; then
   if [[ "$TARGET" == "node" || "$REQUESTED_VERSION" == "latest" ]]; then
     INSTALLER_TAG="$(download_stdout "$PACKAGE_VERSIONS_URL" | grep -oE '"version"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+"' | sed -E 's/.*"([^"]+)"$/\1/' | sort -V | tail -1)"
@@ -91,7 +99,6 @@ ASSET="gateway-installer-linux-${ARCH}.tar.gz"
 BASE_URL="${PACKAGE_API}/${INSTALLER_TAG}"
 TMP_DIR="$(mktemp -d /tmp/gateway-installer.XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
-banner
 status "Preparing ${TARGET} installer · ${INSTALLER_TAG} · ${ARCH}"
 download_file "Fetching release checksums" "${BASE_URL}/checksums.txt" "$TMP_DIR/checksums.txt" || die "could not download installer checksums"
 EXPECTED="$(awk -v asset="$ASSET" '{ filename = $2; sub(/^\*/, "", filename); sub(/^.*\//, "", filename); if (filename == asset) { print $1; exit } }' "$TMP_DIR/checksums.txt")"
@@ -104,6 +111,7 @@ status "Starting interactive setup"
 tar -xzf "$TMP_DIR/$ASSET" -C "$TMP_DIR" || die "installer archive could not be extracted"
 INSTALLER="$TMP_DIR/gateway-installer/gateway-installer"
 [[ -x "$INSTALLER" ]] || die "installer archive has an invalid layout"
+clear_screen
 if [[ "$SHOW_UI" == true && ! -t 0 ]]; then
   [[ -r /dev/tty ]] || die "interactive setup requires a terminal; save the script locally or use --yes"
   exec < /dev/tty
