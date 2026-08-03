@@ -7,12 +7,32 @@ GITLAB_URL="${1:?GitLab URL is required}"; shift
 GITLAB_PROJECT="${1:?GitLab project is required}"; shift
 
 die() { printf 'gateway installer loader: %s\n' "$*" >&2; exit 1; }
+SHOW_UI=false
+if [[ -t 2 && "${TERM:-dumb}" != "dumb" ]]; then SHOW_UI=true; fi
+SHOW_BANNER=true
+status() {
+  [[ "$SHOW_UI" == true ]] || return 0
+  printf '\n  %s\n' "$*" >&2
+}
+banner() {
+  [[ "$SHOW_UI" == true && "$SHOW_BANNER" == true ]] || return 0
+  printf '\n' >&2
+  printf '  ╭──────────────────────────────╮\n' >&2
+  printf '  │  Wiolett Gateway Installer   │\n' >&2
+  printf '  ╰──────────────────────────────╯\n' >&2
+}
 if command -v curl >/dev/null 2>&1; then
   download_stdout() { curl -fsSL "$1"; }
-  download_file() { curl -fsSL "$1" -o "$2"; }
+  download_file() {
+    status "$1"
+    if [[ "$SHOW_UI" == true ]]; then curl -fL --progress-bar "$2" -o "$3"; else curl -fsSL "$2" -o "$3"; fi
+  }
 elif command -v wget >/dev/null 2>&1; then
   download_stdout() { wget -qO- "$1"; }
-  download_file() { wget -qO "$2" "$1"; }
+  download_file() {
+    status "$1"
+    if [[ "$SHOW_UI" == true ]]; then wget -q --show-progress -O "$3" "$2"; else wget -qO "$3" "$2"; fi
+  }
 else
   die "curl or wget is required to download gateway-installer"
 fi
@@ -32,6 +52,8 @@ INSTALLER_ARGS=()
 for arg in "$@"; do
   if [[ "$arg" == "--nightly" ]]; then
     NIGHTLY=true
+  elif [[ "$arg" == "--no-logo" ]]; then
+    SHOW_BANNER=false
   else
     INSTALLER_ARGS+=("$arg")
   fi
@@ -69,12 +91,16 @@ ASSET="gateway-installer-linux-${ARCH}.tar.gz"
 BASE_URL="${PACKAGE_API}/${INSTALLER_TAG}"
 TMP_DIR="$(mktemp -d /tmp/gateway-installer.XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
-download_file "${BASE_URL}/checksums.txt" "$TMP_DIR/checksums.txt" || die "could not download installer checksums"
+banner
+status "Preparing ${TARGET} installer · ${INSTALLER_TAG} · ${ARCH}"
+download_file "Fetching release checksums" "${BASE_URL}/checksums.txt" "$TMP_DIR/checksums.txt" || die "could not download installer checksums"
 EXPECTED="$(awk -v asset="$ASSET" '{ filename = $2; sub(/^\*/, "", filename); sub(/^.*\//, "", filename); if (filename == asset) { print $1; exit } }' "$TMP_DIR/checksums.txt")"
 [[ "$EXPECTED" =~ ^[a-fA-F0-9]{64}$ ]] || die "checksum for ${ASSET} is missing"
-download_file "${BASE_URL}/${ASSET}" "$TMP_DIR/$ASSET" || die "could not download ${ASSET}"
+download_file "Downloading installer bundle" "${BASE_URL}/${ASSET}" "$TMP_DIR/$ASSET" || die "could not download ${ASSET}"
+status "Verifying download"
 ACTUAL="$(sha256sum "$TMP_DIR/$ASSET" | awk '{print $1}')"
 [[ "$ACTUAL" == "$EXPECTED" ]] || die "checksum verification failed"
+status "Starting interactive setup"
 tar -xzf "$TMP_DIR/$ASSET" -C "$TMP_DIR" || die "installer archive could not be extracted"
 INSTALLER="$TMP_DIR/gateway-installer/gateway-installer"
 [[ -x "$INSTALLER" ]] || die "installer archive has an invalid layout"
