@@ -23,7 +23,7 @@ banner() {
 }
 clear_screen() {
   [[ "$SHOW_UI" == true ]] || return 0
-  printf '\033[2J\033[H\n' >&2
+  printf '\033[2J\033[H' >&2
 }
 if command -v curl >/dev/null 2>&1; then
   download_stdout() { curl -fsSL "$1"; }
@@ -97,18 +97,38 @@ fi
 
 ASSET="gateway-installer-linux-${ARCH}.tar.gz"
 BASE_URL="${PACKAGE_API}/${INSTALLER_TAG}"
+CACHE_ROOT="${GATEWAY_INSTALLER_CACHE_DIR:-/tmp/wiolett-gateway-installer}"
+CACHE_DIR="${CACHE_ROOT}/${INSTALLER_TAG}/${ARCH}"
+CACHE_ARCHIVE="${CACHE_DIR}/${ASSET}"
+CACHE_CHECKSUMS="${CACHE_DIR}/checksums.txt"
 TMP_DIR="$(mktemp -d /tmp/gateway-installer.XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 status "Preparing ${TARGET} installer · ${INSTALLER_TAG} · ${ARCH}"
-download_file "Fetching release checksums" "${BASE_URL}/checksums.txt" "$TMP_DIR/checksums.txt" || die "could not download installer checksums"
-EXPECTED="$(awk -v asset="$ASSET" '{ filename = $2; sub(/^\*/, "", filename); sub(/^.*\//, "", filename); if (filename == asset) { print $1; exit } }' "$TMP_DIR/checksums.txt")"
-[[ "$EXPECTED" =~ ^[a-fA-F0-9]{64}$ ]] || die "checksum for ${ASSET} is missing"
-download_file "Downloading installer bundle" "${BASE_URL}/${ASSET}" "$TMP_DIR/$ASSET" || die "could not download ${ASSET}"
-status "Verifying download"
-ACTUAL="$(sha256sum "$TMP_DIR/$ASSET" | awk '{print $1}')"
-[[ "$ACTUAL" == "$EXPECTED" ]] || die "checksum verification failed"
+EXPECTED=""
+BUNDLE="$CACHE_ARCHIVE"
+if [[ -f "$CACHE_CHECKSUMS" && -f "$CACHE_ARCHIVE" ]]; then
+  EXPECTED="$(awk -v asset="$ASSET" '{ filename = $2; sub(/^\*/, "", filename); sub(/^.*\//, "", filename); if (filename == asset) { print $1; exit } }' "$CACHE_CHECKSUMS")"
+  ACTUAL="$(sha256sum "$CACHE_ARCHIVE" | awk '{print $1}')"
+  if [[ "$EXPECTED" =~ ^[a-fA-F0-9]{64}$ && "$ACTUAL" == "$EXPECTED" ]]; then
+    status "Using cached installer bundle"
+  else
+    EXPECTED=""
+  fi
+fi
+if [[ -z "$EXPECTED" ]]; then
+  download_file "Fetching release checksums" "${BASE_URL}/checksums.txt" "$TMP_DIR/checksums.txt" || die "could not download installer checksums"
+  EXPECTED="$(awk -v asset="$ASSET" '{ filename = $2; sub(/^\*/, "", filename); sub(/^.*\//, "", filename); if (filename == asset) { print $1; exit } }' "$TMP_DIR/checksums.txt")"
+  [[ "$EXPECTED" =~ ^[a-fA-F0-9]{64}$ ]] || die "checksum for ${ASSET} is missing"
+  download_file "Downloading installer bundle" "${BASE_URL}/${ASSET}" "$TMP_DIR/$ASSET" || die "could not download ${ASSET}"
+  status "Verifying download"
+  ACTUAL="$(sha256sum "$TMP_DIR/$ASSET" | awk '{print $1}')"
+  [[ "$ACTUAL" == "$EXPECTED" ]] || die "checksum verification failed"
+  mkdir -p "$CACHE_DIR"
+  mv -f "$TMP_DIR/checksums.txt" "$CACHE_CHECKSUMS"
+  mv -f "$TMP_DIR/$ASSET" "$CACHE_ARCHIVE"
+fi
 status "Starting interactive setup"
-tar -xzf "$TMP_DIR/$ASSET" -C "$TMP_DIR" || die "installer archive could not be extracted"
+tar -xzf "$BUNDLE" -C "$TMP_DIR" || die "installer archive could not be extracted"
 INSTALLER="$TMP_DIR/gateway-installer/gateway-installer"
 [[ -x "$INSTALLER" ]] || die "installer archive has an invalid layout"
 clear_screen

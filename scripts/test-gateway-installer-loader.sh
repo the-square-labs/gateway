@@ -27,6 +27,7 @@ while [[ $# -gt 0 ]]; do
     *) shift ;;
   esac
 done
+if [[ -n "${CURL_LOG:-}" ]]; then printf '%s\n' "$url" >> "$CURL_LOG"; fi
 case "$url" in
   */packages\?package_type=generic\&package_name=gateway-installer\&per_page=100)
     printf '[{"version":"v3.0.0-rc.2"},{"version":"v3.0.0-rc.10"},{"version":"v2.9.0-installer"}]\n'
@@ -86,21 +87,21 @@ done
 run_loader() {
   : > "$TMP_DIR/captured-args"
   PATH="$TMP_DIR/bin:$PATH" TEST_ARCHIVE="$TMP_DIR/gateway-installer-linux-amd64.tar.gz" TEST_CHECKSUM="$CHECKSUM" CAPTURED_ARGS="$TMP_DIR/captured-args" \
-    "$ROOT/scripts/gateway-installer-loader.sh" "$@"
+    GATEWAY_INSTALLER_CACHE_DIR="$TMP_DIR/installer-cache" CURL_LOG="$TMP_DIR/curl.log" "$ROOT/scripts/gateway-installer-loader.sh" "$@"
   tr '\n' ' ' < "$TMP_DIR/captured-args"
 }
 
 run_loader_with_wget() {
   : > "$TMP_DIR/captured-args"
   PATH="$TMP_DIR/wget-bin" TEST_ARCHIVE="$TMP_DIR/gateway-installer-linux-amd64.tar.gz" TEST_CHECKSUM="$CHECKSUM" CAPTURED_ARGS="$TMP_DIR/captured-args" \
-    "$ROOT/scripts/gateway-installer-loader.sh" "$@"
+    GATEWAY_INSTALLER_CACHE_DIR="$TMP_DIR/installer-cache" "$ROOT/scripts/gateway-installer-loader.sh" "$@"
   tr '\n' ' ' < "$TMP_DIR/captured-args"
 }
 
 run_gateway_wrapper() {
   : > "$TMP_DIR/captured-args"
   PATH="$TMP_DIR/bin:$PATH" TEST_ARCHIVE="$TMP_DIR/gateway-installer-linux-amd64.tar.gz" TEST_CHECKSUM="$CHECKSUM" CAPTURED_ARGS="$TMP_DIR/captured-args" \
-    GITLAB_API_URL="https://gitlab.example.com" GITLAB_PROJECT_PATH="group/project" \
+    GITLAB_API_URL="https://gitlab.example.com" GITLAB_PROJECT_PATH="group/project" GATEWAY_INSTALLER_CACHE_DIR="$TMP_DIR/installer-cache" CURL_LOG="$TMP_DIR/curl.log" \
     "$ROOT/scripts/install.sh" "$@"
   tr '\n' ' ' < "$TMP_DIR/captured-args"
 }
@@ -108,7 +109,7 @@ run_gateway_wrapper() {
 run_node_wrapper() {
   : > "$TMP_DIR/captured-args"
   PATH="$TMP_DIR/bin:$PATH" TEST_ARCHIVE="$TMP_DIR/gateway-installer-linux-amd64.tar.gz" TEST_CHECKSUM="$CHECKSUM" CAPTURED_ARGS="$TMP_DIR/captured-args" \
-    GATEWAY_GITLAB_URL="https://gitlab.example.com" GATEWAY_GITLAB_PROJECT="group/project" \
+    GATEWAY_GITLAB_URL="https://gitlab.example.com" GATEWAY_GITLAB_PROJECT="group/project" GATEWAY_INSTALLER_CACHE_DIR="$TMP_DIR/installer-cache" CURL_LOG="$TMP_DIR/curl.log" \
     "$ROOT/scripts/setup-daemon.sh" "$@"
   tr '\n' ' ' < "$TMP_DIR/captured-args"
 }
@@ -116,19 +117,24 @@ run_node_wrapper() {
 run_gateway_wrapper_from_stdin() {
   : > "$TMP_DIR/captured-args"
   PATH="$TMP_DIR/bin:$PATH" TEST_LOADER="$ROOT/scripts/gateway-installer-loader.sh" TEST_ARCHIVE="$TMP_DIR/gateway-installer-linux-amd64.tar.gz" TEST_CHECKSUM="$CHECKSUM" CAPTURED_ARGS="$TMP_DIR/captured-args" \
-    bash -s -- "$@" < "$ROOT/scripts/install.sh"
+    GATEWAY_INSTALLER_CACHE_DIR="$TMP_DIR/installer-cache" CURL_LOG="$TMP_DIR/curl.log" bash -s -- "$@" < "$ROOT/scripts/install.sh"
   tr '\n' ' ' < "$TMP_DIR/captured-args"
 }
 
 run_node_wrapper_from_stdin() {
   : > "$TMP_DIR/captured-args"
   PATH="$TMP_DIR/bin:$PATH" TEST_LOADER="$ROOT/scripts/gateway-installer-loader.sh" TEST_ARCHIVE="$TMP_DIR/gateway-installer-linux-amd64.tar.gz" TEST_CHECKSUM="$CHECKSUM" CAPTURED_ARGS="$TMP_DIR/captured-args" \
-    bash -s -- "$@" < "$ROOT/scripts/setup-daemon.sh"
+    GATEWAY_INSTALLER_CACHE_DIR="$TMP_DIR/installer-cache" CURL_LOG="$TMP_DIR/curl.log" bash -s -- "$@" < "$ROOT/scripts/setup-daemon.sh"
   tr '\n' ' ' < "$TMP_DIR/captured-args"
 }
 
 stable="$(run_loader node latest https://gitlab.example.com group/project --dry-run)"
 [[ "$stable" == "install node --dry-run " ]] || { echo "stable loader forwarding failed: $stable" >&2; exit 1; }
+
+cached_stable="$(run_loader node latest https://gitlab.example.com group/project --dry-run)"
+[[ "$cached_stable" == "install node --dry-run " ]] || { echo "cached stable loader forwarding failed: $cached_stable" >&2; exit 1; }
+archive_downloads="$(grep -Ec 'gateway-installer-linux-(amd64|arm64)\.tar\.gz' "$TMP_DIR/curl.log" || true)"
+[[ "$archive_downloads" == "1" ]] || { echo "cached installer archive was downloaded ${archive_downloads} times" >&2; cat "$TMP_DIR/curl.log" >&2; exit 1; }
 
 nightly_node="$(run_loader node latest https://gitlab.example.com group/project --nightly --type nginx --dry-run)"
 [[ "$nightly_node" == "install node --type nginx --dry-run --version nightly " ]] || { echo "nightly node loader forwarding failed: $nightly_node" >&2; exit 1; }
