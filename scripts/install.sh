@@ -10,10 +10,51 @@ INSTALL_DIR="${GATEWAY_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 IMAGE="${GATEWAY_IMAGE:-$DEFAULT_IMAGE}"
 TRANSPORT="${GATEWAY_WEB_TRANSPORT:-}"
 SOURCE_DIR="${GATEWAY_SOURCE_DIR:-}"
+LOG_FILE="${GATEWAY_INSTALL_LOG_FILE:-/tmp/gateway-install.log}"
 
-info() { printf '  INFO  %s\n' "$1"; }
-ok() { printf '  OK    %s\n' "$1"; }
-die() { printf '  ERROR %s\n' "$1" >&2; exit 1; }
+# ── Colors ────────────────────────────────────────────────────────────
+BRAND_MINT='\033[38;2;140;176;132m'
+GRAY='\033[0;90m'
+NC='\033[0m'
+BOLD='\033[1m'
+INFO_TAG='\033[47m\033[90m'
+WARN_TAG='\033[43m\033[30m'
+ERROR_TAG='\033[41m\033[97m'
+SUCCESS_TAG='\033[42m\033[97m'
+
+info() { echo -e "${INFO_TAG} INFO ${NC} $*"; }
+ok() { echo -e "${SUCCESS_TAG} OK ${NC} $*"; }
+die() { echo -e "${ERROR_TAG} ERROR ${NC} $*" >&2; exit 1; }
+
+show_logo() {
+  echo ""
+  echo '                                              '
+  echo '                                              '
+  echo ' ▄████   ▄▄▄ ▄▄▄▄▄▄ ▄▄▄▄▄ ▄▄   ▄▄  ▄▄▄  ▄▄ ▄▄ '
+  echo '██  ▄▄▄ ██▀██  ██   ██▄▄  ██ ▄ ██ ██▀██ ▀███▀ '
+  echo ' ▀███▀  ██▀██  ██   ██▄▄▄  ▀█▀█▀  ██▀██   █   '
+  echo '                                              '
+  echo ""
+}
+
+show_header() {
+  if [[ -t 1 ]] && command -v clear >/dev/null 2>&1; then
+    clear
+  fi
+  show_logo
+  echo -e "${BOLD}${BRAND_MINT}Gateway — Installer${NC}"
+  echo -e "${GRAY}Self-hosted infrastructure control plane${NC}"
+  echo ""
+}
+
+run_quiet() {
+  local label="$1"
+  shift
+  if "$@" >>"$LOG_FILE" 2>&1; then
+    return
+  fi
+  die "${label} failed. Check ${LOG_FILE} for details."
+}
 
 usage() {
   cat <<'EOF'
@@ -40,6 +81,8 @@ while (($#)); do
     *) die "Unknown option: $1" ;;
   esac
 done
+
+show_header
 
 command -v curl >/dev/null || die "curl is required"
 command -v openssl >/dev/null || die "openssl is required"
@@ -74,6 +117,9 @@ if [[ "$FRESH" == 1 && -z "$TRANSPORT" ]]; then
   fi
 fi
 [[ "$TRANSPORT" == "http" || "$TRANSPORT" == "https" || "$FRESH" == 0 ]] || die "GATEWAY_WEB_TRANSPORT must be http or https"
+umask 077
+: >"$LOG_FILE" 2>/dev/null || die "Unable to create installer log at ${LOG_FILE}"
+chmod 600 "$LOG_FILE" 2>/dev/null || true
 
 if [[ -n "$SOURCE_DIR" ]]; then
   [[ "$FRESH" == 1 ]] || die "--source-dir is supported only for a fresh Gateway installation"
@@ -83,7 +129,7 @@ if [[ -n "$SOURCE_DIR" ]]; then
   VERSION="local-$(date -u +%Y%m%d%H%M%S)"
   IMAGE_REF="${IMAGE}:${VERSION}"
   info "Building Gateway from local source: ${SOURCE_DIR}"
-  "${DOCKER[@]}" build --build-arg "APP_VERSION=${VERSION}" --tag "$IMAGE_REF" "$SOURCE_DIR"
+  run_quiet "Gateway image build" "${DOCKER[@]}" build --build-arg "APP_VERSION=${VERSION}" --tag "$IMAGE_REF" "$SOURCE_DIR"
 else
   encoded_project="${GITLAB_PROJECT_PATH//\//%2F}"
   info "Resolving the latest Gateway release"
@@ -121,10 +167,9 @@ set_env() {
   mv "$output" .env
 }
 
-detect_local_host_addresses() {
-  local addresses=""
+detect_local_host_address_lines() {
   if command -v ip >/dev/null; then
-    addresses="$(ip -o addr show up 2>/dev/null | awk '
+    ip -o addr show up scope global 2>/dev/null | awk '
       {
         interface = $2
         sub(/@.*/, "", interface)
@@ -137,11 +182,45 @@ detect_local_host_addresses() {
       interface ~ /^podman/ ||
       interface ~ /^cni/ ||
       interface ~ /^flannel/ ||
-      interface ~ /^cali/ { next }
-      $3 == "inet" || $3 == "inet6" { sub(/\/.*/, "", $4); print $4 }
-    ')"
+      interface ~ /^cali/ ||
+      interface ~ /^kube/ ||
+      interface ~ /^tailscale/ ||
+      interface ~ /^zt/ ||
+      interface ~ /^lxc/ ||
+      interface ~ /^incus/ ||
+      interface ~ /^vboxnet/ ||
+      interface ~ /^vmnet/ { next }
+      $3 == "inet" { sub(/\/.*/, "", $4); if ($4 !~ /^127\./) print $4; next }
+      $3 == "inet6" {
+        sub(/\/.*/, "", $4)
+        address = tolower($4)
+        if (address != "::1" && address !~ /^fe80:/) print $4
+      }
+    ' | awk '!seen[$0]++'
   fi
-  printf '%s\n' "$addresses" | sed '/^[[:space:]]*$/d' | paste -sd, -
+}
+
+detect_local_host_addresses() {
+  detect_local_host_address_lines | paste -sd, -
+}
+
+format_gateway_url() {
+  local address="$1"
+  if [[ "$address" == *:* ]]; then
+    printf '%s://[%s]:3000' "$TRANSPORT" "$address"
+  else
+    printf '%s://%s:3000' "$TRANSPORT" "$address"
+  fi
+}
+
+print_gateway_urls() {
+  local address
+  echo -e "  ${BRAND_MINT}Open:${NC}"
+  echo -e "    ${GRAY}Local:${NC}   ${TRANSPORT}://localhost:3000"
+  while IFS= read -r address; do
+    [[ -n "$address" ]] || continue
+    printf '    %bNetwork:%b %s\n' "$GRAY" "$NC" "$(format_gateway_url "$address")"
+  done < <(detect_local_host_address_lines)
 }
 
 if [[ "$FRESH" == 1 ]]; then
@@ -237,8 +316,8 @@ volumes:
 COMPOSE
 else
   info "Migrating the existing installer-managed Compose foundation"
-  "${DOCKER[@]}" pull "$IMAGE_REF"
-  "${DOCKER[@]}" run --rm -v "$INSTALL_DIR:/host" "$IMAGE_REF" \
+  run_quiet "Gateway image pull" "${DOCKER[@]}" pull "$IMAGE_REF"
+  run_quiet "Gateway foundation migration" "${DOCKER[@]}" run --rm -v "$INSTALL_DIR:/host" "$IMAGE_REF" \
     node dist/foundation-migrator.js \
     --host-dir /host \
     --target-version "$VERSION" \
@@ -247,9 +326,10 @@ fi
 
 if [[ -z "$SOURCE_DIR" ]]; then
   info "Pulling ${IMAGE_REF}"
-  "${DOCKER[@]}" compose pull
+  run_quiet "Gateway service image pull" "${DOCKER[@]}" compose pull
 fi
-"${DOCKER[@]}" compose up -d
+info "Starting Gateway services"
+run_quiet "Gateway service startup" "${DOCKER[@]}" compose up -d
 
 info "Waiting for Gateway"
 healthy=0
@@ -267,25 +347,27 @@ done
 # legacy tuple before it removes anything from disk.
 if grep -Eq '^(OIDC_|CLICKHOUSE_|APP_URL=|SETUP_TOKEN=)' .env; then
   info "Finalizing legacy settings migration"
-  "${DOCKER[@]}" compose run --rm -T -v "$INSTALL_DIR:/host" app \
+  run_quiet "Legacy settings migration" "${DOCKER[@]}" compose run --rm -T -v "$INSTALL_DIR:/host" app \
     node dist/cli/migrate-legacy-settings.js /host
-  "${DOCKER[@]}" compose up -d --force-recreate app
+  run_quiet "Gateway restart after legacy migration" "${DOCKER[@]}" compose up -d --force-recreate app
 fi
 
 printf '\n'
 ok "Gateway ${VERSION} is running"
 if [[ "$FRESH" == 1 ]]; then
-  setup_json="$("${DOCKER[@]}" compose exec -T app node dist/cli/setup-code.js | sed -n '/^{"id":/p' | tail -n1)"
+  if ! setup_json="$("${DOCKER[@]}" compose exec -T app node dist/cli/setup-code.js 2>>"$LOG_FILE" | sed -n '/^{"id":/p' | tail -n1)"; then
+    die "Gateway started, but the setup code could not be generated. Check ${LOG_FILE} for details."
+  fi
   setup_code="$(printf '%s' "$setup_json" | sed -n 's/.*"code":"\([^"]*\)".*/\1/p')"
   expires_at="$(printf '%s' "$setup_json" | sed -n 's/.*"expiresAt":"\([^"]*\)".*/\1/p')"
   ca_fingerprint="$(printf '%s' "$setup_json" | sed -n 's/.*"caFingerprint":"\([^"]*\)".*/\1/p')"
   [[ -n "$setup_code" ]] || die "Gateway started, but the setup code could not be generated"
-  printf '  Open:       %s://<server-ip>:3000\n' "$TRANSPORT"
-  printf '  Setup code: %s\n' "$setup_code"
-  printf '  Expires:    %s\n' "$expires_at"
-  printf '  System CA:  %s\n' "$ca_fingerprint"
-  printf '  Reset:      cd %s && docker compose exec app node dist/cli/reset-setup.js\n' "$INSTALL_DIR"
-  printf '\nThe setup code is shown once. Finish configuration in the browser.\n'
+  print_gateway_urls
+  printf '  %bSetup code:%b %s\n' "$BRAND_MINT" "$NC" "$setup_code"
+  printf '  %bExpires:%b    %s\n' "$GRAY" "$NC" "$expires_at"
+  printf '  %bSystem CA:%b  %s\n' "$GRAY" "$NC" "$ca_fingerprint"
+  printf '  %bReset:%b      cd %s && docker compose exec app node dist/cli/reset-setup.js\n' "$GRAY" "$NC" "$INSTALL_DIR"
+  printf '\n  %bThe setup code is shown once. Finish configuration in the browser.%b\n' "$GRAY" "$NC"
 else
-  printf '  Existing installation updated; persisted Gateway settings were preserved.\n'
+  printf '  %bExisting installation updated; persisted Gateway settings were preserved.%b\n' "$GRAY" "$NC"
 fi

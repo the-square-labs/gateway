@@ -33,15 +33,28 @@ describe('install.sh managed browser bootstrap', () => {
     const source = readFileSync(installer, 'utf8');
     expect(source).toContain('--source-dir PATH');
     expect(source).toContain('Building Gateway from local source');
-    expect(source).toContain('"${DOCKER[@]}" build');
+    expect(source).toMatch(/run_quiet "Gateway image build" "\$\{DOCKER\[@\]\}" build/);
     expect(source).toContain('--source-dir is supported only for a fresh Gateway installation');
   });
 
-  it('does not advertise Docker or CNI interface addresses as host-local targets', () => {
+  it('renders a branded, quiet installer and lists usable connection URLs', () => {
     const source = readFileSync(installer, 'utf8');
+    expect(source).toContain("BRAND_MINT='\\033[38;2;140;176;132m'");
+    expect(source).toContain('Gateway — Installer');
+    expect(source).toContain(' ▄████   ▄▄▄ ▄▄▄▄▄▄ ▄▄▄▄▄ ▄▄   ▄▄  ▄▄▄  ▄▄ ▄▄ ');
+    expect(source).toMatch(/run_quiet "Gateway service startup" "\$\{DOCKER\[@\]\}" compose up -d/);
+    expect(source).toContain('print_gateway_urls');
+    expect(source).not.toContain('<server-ip>');
+  });
+
+  it('does not advertise Docker, CNI, or loopback interface addresses as host-local targets', () => {
+    const source = readFileSync(installer, 'utf8');
+    expect(source).toContain('ip -o addr show up scope global');
     expect(source).toContain('interface ~ /^docker/');
     expect(source).toContain('interface ~ /^br-/');
     expect(source).toContain('interface ~ /^veth/');
     expect(source).toContain('interface ~ /^cni/');
+    expect(source).toContain('interface ~ /^tailscale/');
+    expect(source).toContain('address != "::1" && address !~ /^fe80:/');
   });
 });
