@@ -223,7 +223,22 @@ function patchAppImage(lines: string[], appBlock: { start: number; end: number; 
     next[index] = `${match[1]}image: \${GATEWAY_IMAGE_REF}`;
     return next;
   }
-  throw new Error('foundation migration failed: services.app.image line not found in docker-compose.yml');
+
+  // Pre-v2.5 installer-managed foundations built the application locally and
+  // therefore have no app.image field. Replace that build block rather than
+  // retaining it: a production update must run the verified, pinned image.
+  const legacyBuild = findNestedBlock(next, appBlock, 'build');
+  if (!legacyBuild) throw new Error('foundation migration failed: services.app.image or build block not found');
+
+  const withoutBuild = [...next.slice(0, legacyBuild.start), ...next.slice(legacyBuild.end)];
+  const refreshedApp = findServiceBlock(withoutBuild, 'app');
+  if (!refreshedApp) throw new Error('foundation migration failed: services.app block not found');
+  const indent = ' '.repeat(refreshedApp.indent + 2);
+  return [
+    ...withoutBuild.slice(0, refreshedApp.start + 1),
+    `${indent}image: \${GATEWAY_IMAGE_REF}`,
+    ...withoutBuild.slice(refreshedApp.start + 1),
+  ];
 }
 
 function patchAppSandboxVolume(lines: string[], appBlock: { start: number; end: number; indent: number }): string[] {

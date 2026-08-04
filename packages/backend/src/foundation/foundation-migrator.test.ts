@@ -27,6 +27,16 @@ const EXPECTED_IMAGE_LINE = `image: ${DOLLAR}{GATEWAY_IMAGE_REF}`;
 const EXPECTED_SANDBOX_VOLUME =
   `      - ${DOLLAR}{SANDBOX_RUNNER_WORKSPACE_DIR:-/var/lib/gateway/sandbox-workspaces}:` +
   `${DOLLAR}{SANDBOX_RUNNER_WORKSPACE_DIR:-/var/lib/gateway/sandbox-workspaces}`;
+const BUILD_ONLY_APP_COMPOSE = `services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./docker-compose.yml:/app/docker-compose.yml:ro
+`;
 
 describe('foundation migrator patches', () => {
   it('adds the managed sandbox volume and normalizes the app image reference', () => {
@@ -41,6 +51,15 @@ describe('foundation migrator patches', () => {
     expect(patched).toContain('wget --no-check-certificate -qO- https://127.0.0.1:3000/health');
     expect(patched).toContain('\nvolumes:\n  gateway_data:');
     expect(patchCompose(patched)).toBe(patched);
+  });
+
+  it('replaces the pre-v2.5 build-only app definition with the pinned release image', () => {
+    const patched = patchCompose(BUILD_ONLY_APP_COMPOSE);
+
+    expect(patched).toContain(EXPECTED_IMAGE_LINE);
+    expect(patched).not.toContain('    build:');
+    expect(patched).not.toContain('      context: .');
+    expect(patched).not.toContain('      dockerfile: Dockerfile');
   });
 
   it('removes legacy OIDC and ClickHouse wiring without disturbing unrelated configuration', () => {
