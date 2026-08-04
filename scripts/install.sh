@@ -130,7 +130,7 @@ show_header() {
 run_quiet() {
   local label="$1"
   shift
-  if "$@" >>"$LOG_FILE" 2>&1; then
+  if "$@" </dev/null >>"$LOG_FILE" 2>&1; then
     return
   fi
   die "${label} failed. Check ${LOG_FILE} for details."
@@ -598,7 +598,7 @@ fi
 ok "Gateway ${VERSION} is running"
 guide_blank
 if [[ "$FRESH" == 1 ]]; then
-  if ! setup_json="$("${DOCKER[@]}" compose exec -T app node dist/cli/setup-code.js 2>>"$LOG_FILE" | sed -n '/^{"id":/p' | tail -n1)"; then
+  if ! setup_json="$("${DOCKER[@]}" compose exec -T app node dist/cli/setup-code.js </dev/null 2>>"$LOG_FILE" | sed -n '/^{"id":/p' | tail -n1)"; then
     die "Gateway started, but the setup code could not be generated. Check ${LOG_FILE} for details."
   fi
   setup_code="$(printf '%s' "$setup_json" | sed -n 's/.*"code":"\([^"]*\)".*/\1/p')"
