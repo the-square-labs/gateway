@@ -9,6 +9,7 @@ import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
 import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { CryptoService } from '@/services/crypto.service.js';
+import { parseLegacySettingsEnv } from './legacy-settings-env.js';
 
 async function main() {
   const hostDir = process.argv[2] ? path.resolve(process.argv[2]) : null;
@@ -16,15 +17,23 @@ async function main() {
   const db = createDrizzleClient(env.DATABASE_URL);
   try {
     const crypto = new CryptoService(env.PKI_MASTER_KEY);
-    const oidcValues = [env.OIDC_ISSUER, env.OIDC_CLIENT_ID, env.OIDC_CLIENT_SECRET, env.OIDC_REDIRECT_URI];
+    const hostEnv = hostDir
+      ? parseLegacySettingsEnv(env, await fs.readFile(path.join(hostDir, '.env'), 'utf8'))
+      : { env, appUrl: process.env.APP_URL };
+    const oidcValues = [
+      hostEnv.env.OIDC_ISSUER,
+      hostEnv.env.OIDC_CLIENT_ID,
+      hostEnv.env.OIDC_CLIENT_SECRET,
+      hostEnv.env.OIDC_REDIRECT_URI,
+    ];
     if (oidcValues.some(Boolean) && !oidcValues.every(Boolean)) {
       throw new Error('Refusing to remove an incomplete legacy OIDC configuration');
     }
 
-    const oidcImported = await new OidcSettingsService(db, crypto).importLegacyEnv(env);
-    const clickHouseImported = await new LoggingSettingsService(db, crypto).importLegacyEnv(env);
+    const oidcImported = await new OidcSettingsService(db, crypto).importLegacyEnv(hostEnv.env);
+    const clickHouseImported = await new LoggingSettingsService(db, crypto).importLegacyEnv(hostEnv.env);
     const general = new GeneralSettingsService(db);
-    await general.importLegacyPublicUrl(process.env.APP_URL);
+    await general.importLegacyPublicUrl(hostEnv.appUrl);
 
     if (hostDir) await removeLegacyKeys(path.join(hostDir, '.env'));
     process.stdout.write(`${JSON.stringify({ ok: true, oidcImported, clickHouseImported })}\n`);
