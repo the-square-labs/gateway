@@ -26,6 +26,7 @@ ERROR_TAG='\033[41m\033[97m'
 DAEMON_TYPE=""
 GITLAB_URL="${GATEWAY_GITLAB_URL:-https://gitlab.wiolett.net}"
 GITLAB_PROJECT="${GATEWAY_GITLAB_PROJECT:-wiolett/gateway}"
+LOCAL_SCRIPT_DIR="${GATEWAY_SETUP_SCRIPT_DIR:-}"
 PASSTHROUGH_ARGS=()
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -48,21 +49,62 @@ mktemp_compat() {
 }
 
 show_logo() {
+    local title="$1"
+    local subtitle="$2"
+
+    echo -e "${BRAND_MINT}╭───────────────────────────────────╮${NC}"
+    printf "${BRAND_MINT}│${NC} ${BOLD}${BRAND_MINT}%-33s${NC} ${BRAND_MINT}│${NC}\n" "$title"
+    printf "${BRAND_MINT}│${NC} ${GRAY}%-33s${NC} ${BRAND_MINT}│${NC}\n" "$subtitle"
+    echo -e "${BRAND_MINT}╰───────────────────────────────────╯${NC}"
     echo ""
-    echo '░██       ░██ ░██           ░██               ░██       ░██    '
-    echo '░██       ░██               ░██               ░██       ░██    '
-    echo '░██  ░██  ░██ ░██ ░███████  ░██  ░███████  ░████████ ░████████ '
-    echo '░██ ░████ ░██ ░██░██    ░██ ░██ ░██    ░██    ░██       ░██    '
-    echo '░██░██ ░██░██ ░██░██    ░██ ░██ ░█████████    ░██       ░██    '
-    echo '░████   ░████ ░██░██    ░██ ░██ ░██           ░██       ░██    '
-    echo '░███     ░███ ░██ ░███████  ░██  ░███████      ░████     ░████ '
-    echo ""
-    echo -e "${BRAND_MINT}░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░${NC}"
-    echo -e "${BRAND_MINT}░░░█▀▀░█▀█░▀█▀░█▀▀░█░█░█▀█░█░█░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░${NC}"
-    echo -e "${BRAND_MINT}░░░█░█░█▀█░░█░░█▀▀░█▄█░█▀█░░█░░░░▀░▀░▀░▀░▀░▀░▀░▀░▀░▀░▀░▀░▀░░░░${NC}"
-    echo -e "${BRAND_MINT}░░░▀▀▀░▀░▀░░▀░░▀▀▀░▀░▀░▀░▀░░▀░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░${NC}"
-    echo -e "${BRAND_MINT}░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░${NC}"
-    echo ""
+}
+
+guide() { echo -e "${BRAND_MINT}│${NC} $*"; }
+guide_blank() { echo -e "${BRAND_MINT}│${NC}"; }
+guide_end() { echo -e "${BRAND_MINT}╰${NC}"; }
+guide_start() { echo -e "${BRAND_MINT}╭${NC} $*"; }
+selector_title() { echo -e "${BRAND_MINT}◆${NC} ${GRAY}$*${NC}"; }
+
+prompt_menu() {
+    local default="$1"
+    shift
+    local -a options=("$@")
+    local selected=$((default - 1)) key sequence tty="/dev/tty" index
+    [[ -r "$tty" && -w "$tty" && "${TERM:-dumb}" != "dumb" ]] || die "Cannot show an interactive menu — use --type flag"
+    render_menu() {
+        local resolved="${1:-0}" rail=" "
+        [[ "$resolved" -eq 1 ]] && rail="│"
+        for index in "${!options[@]}"; do
+            if [[ "$index" -eq "$selected" ]]; then
+                printf "${BRAND_MINT}%s${NC}  ${BRAND_MINT}●${NC} ${BOLD}%d) %s${NC}\033[K\n" "$rail" "$((index + 1))" "${options[$index]}" > "$tty"
+            else
+                printf "${BRAND_MINT}%s${NC}  ${GRAY}○${NC} %d) %s\033[K\n" "$rail" "$((index + 1))" "${options[$index]}" > "$tty"
+            fi
+        done
+        [[ "$resolved" -eq 1 ]] || printf "  ${GRAY}Use ↑/↓ and Enter${NC}\033[K\n" > "$tty"
+    }
+    render_menu
+    while true; do
+        IFS= read -rsn1 key < "$tty" || die "Interactive menu closed"
+        if [[ "$key" == $'\e' ]]; then
+            IFS= read -rsn2 sequence < "$tty" || sequence=""
+            key+="$sequence"
+        fi
+        case "$key" in
+            $'\e[A') selected=$(( (selected + ${#options[@]} - 1) % ${#options[@]} )) ;;
+            $'\e[B') selected=$(( (selected + 1) % ${#options[@]} )) ;;
+            '')
+                printf "\033[$(( ${#options[@]} + 1 ))A\r" > "$tty"
+                render_menu 1
+                printf "\r\033[K" > "$tty"
+                echo "$((selected + 1))"
+                return
+                ;;
+            *) continue ;;
+        esac
+        printf "\033[$(( ${#options[@]} + 1 ))A\r" > "$tty"
+        render_menu
+    done
 }
 
 # ── Parse Arguments ─────────────────────────────────────────────────
@@ -77,6 +119,7 @@ Options:
   --type <type>            Daemon type: nginx, docker, databases, or monitoring
   --gitlab-url <url>       GitLab instance URL (default: https://gitlab.wiolett.net)
   --gitlab-project <proj>  GitLab project path (default: wiolett/gateway)
+  --script-dir <path>      Run a daemon-specific installer from a local directory
   -h, --help               Show this help
 
 All other flags are forwarded to the daemon-specific setup script.
@@ -99,6 +142,7 @@ while [[ $# -gt 0 ]]; do
         --type)           DAEMON_TYPE="$2"; shift 2 ;;
         --gitlab-url)     GITLAB_URL="$2"; PASSTHROUGH_ARGS+=("--gitlab-url" "$2"); shift 2 ;;
         --gitlab-project) GITLAB_PROJECT="$2"; PASSTHROUGH_ARGS+=("--gitlab-project" "$2"); shift 2 ;;
+        --script-dir)     LOCAL_SCRIPT_DIR="$2"; shift 2 ;;
         -h|--help)        show_help ;;
         *)                PASSTHROUGH_ARGS+=("$1"); shift ;;
     esac
@@ -114,21 +158,9 @@ if [[ -z "$DAEMON_TYPE" ]]; then
     if [ -t 1 ] && command_exists clear; then
         clear
     fi
-    show_logo
-    echo -e "${BOLD}${BRAND_MINT}  Gateway — Daemon Setup${NC}"
-    echo ""
-    echo -e "  ${GRAY}Select daemon type to install:${NC}"
-    echo ""
-    echo -e "    ${BRAND_MINT}1)${NC} nginx       — Reverse proxy node (nginx + nginx-daemon)"
-    echo -e "    ${BRAND_MINT}2)${NC} docker      — Docker container management node"
-    echo -e "    ${BRAND_MINT}3)${NC} databases   — Restricted Docker database node"
-    echo -e "    ${BRAND_MINT}4)${NC} monitoring  — System metrics agent (no nginx/docker)"
-    echo ""
-    if [ -e /dev/tty ]; then
-        read -r -p "$(echo -e "  ${BRAND_MINT}Choose [1-4]: ${NC}")" choice < /dev/tty
-    else
-        die "Cannot prompt for type — use --type flag"
-    fi
+    show_logo "Gateway Daemon Setup" "Choose a node installer"
+    selector_title "Select daemon type to install:"
+    choice=$(prompt_menu "1" "nginx       — Reverse proxy node (nginx + nginx-daemon)" "docker      — Docker container management node" "databases   — Restricted Docker database node" "monitoring  — System metrics agent (no nginx/docker)")
     case "$choice" in
         1|nginx)      DAEMON_TYPE="nginx" ;;
         2|docker)     DAEMON_TYPE="docker" ;;
@@ -136,7 +168,6 @@ if [[ -z "$DAEMON_TYPE" ]]; then
         4|monitoring) DAEMON_TYPE="monitoring" ;;
         *) die "Invalid choice: $choice" ;;
     esac
-    echo ""
 fi
 
 # ── Validate type ───────────────────────────────────────────────────
@@ -157,20 +188,24 @@ esac
 ENCODED_PROJECT="${GITLAB_PROJECT//\//%2F}"
 GITLAB_API="${GITLAB_URL}/api/v4/projects/${ENCODED_PROJECT}"
 
-# ── Download and execute ────────────────────────────────────────────
-DOWNLOAD_URL="${GITLAB_URL}/${GITLAB_PROJECT}/-/raw/main/scripts/${SCRIPT_NAME}"
+# ── Resolve and execute ─────────────────────────────────────────────
+if [[ -n "$LOCAL_SCRIPT_DIR" ]]; then
+    TMPSCRIPT="${LOCAL_SCRIPT_DIR%/}/${SCRIPT_NAME}"
+    [[ -f "$TMPSCRIPT" ]] || die "Local installer not found: ${TMPSCRIPT}"
+    log "Running local ${SCRIPT_NAME}..."
+else
+    DOWNLOAD_URL="${GITLAB_URL}/${GITLAB_PROJECT}/-/raw/main/scripts/${SCRIPT_NAME}"
+    log "Downloading ${SCRIPT_NAME} from ${GITLAB_URL}..."
 
-log "Downloading ${SCRIPT_NAME} from ${GITLAB_URL}..."
+    TMPSCRIPT=$(mktemp_compat /tmp/gateway-setup)
+    trap 'rm -f "$TMPSCRIPT"' EXIT
 
-TMPSCRIPT=$(mktemp_compat /tmp/gateway-setup)
-trap 'rm -f "$TMPSCRIPT"' EXIT
-
-if ! curl -fsSL "$DOWNLOAD_URL" -o "$TMPSCRIPT"; then
-    die "Failed to download ${SCRIPT_NAME} from releases. URL: ${DOWNLOAD_URL}"
+    if ! curl -fsSL "$DOWNLOAD_URL" -o "$TMPSCRIPT"; then
+        die "Failed to download ${SCRIPT_NAME} from releases. URL: ${DOWNLOAD_URL}"
+    fi
+    chmod +x "$TMPSCRIPT"
+    log "Running ${SCRIPT_NAME}..."
 fi
-
-chmod +x "$TMPSCRIPT"
-log "Running ${SCRIPT_NAME}..."
 echo ""
 
 exec bash "$TMPSCRIPT" "${PASSTHROUGH_ARGS[@]}"

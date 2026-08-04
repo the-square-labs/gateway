@@ -95,7 +95,7 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-da
 
 Use `managed` for fresh proxy hosts where Gateway should own nginx. Use `integrate` when nginx is already used by other workloads on the same host.
 
-Gateway proxy hosts require nginx `1.25.1` or newer. On a fresh host, the installer uses the nginx.org stable package by default. When it detects an older existing nginx, it asks before upgrading it; declining stops the installation before Gateway changes the nginx configuration or enrolls the daemon. In non-interactive mode, pass `--nginx-repo stable` to explicitly authorize that upgrade.
+Gateway proxy hosts require nginx `1.25.1` or newer. On a fresh host, the installer always uses the nginx.org stable package. When it detects an older existing nginx, it asks before upgrading it; declining stops the installation before Gateway changes the nginx configuration or enrolls the daemon. Non-interactive installation refuses an unsupported existing nginx because it cannot ask for that approval.
 
 ## Enrollment Flow
 

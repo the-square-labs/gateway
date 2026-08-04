@@ -11,6 +11,7 @@ IMAGE="${GATEWAY_IMAGE:-$DEFAULT_IMAGE}"
 TRANSPORT="${GATEWAY_WEB_TRANSPORT:-}"
 SOURCE_DIR="${GATEWAY_SOURCE_DIR:-}"
 LOG_FILE="${GATEWAY_INSTALL_LOG_FILE:-/tmp/gateway-install.log}"
+DRY_RUN=0
 UPDATE_SIGNING_PUBLIC_KEY='-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAxLXGD8vCYQCYboK301miZXyAaoOLc43zFVnMlH3FeWg=
 -----END PUBLIC KEY-----'
@@ -20,21 +21,102 @@ BRAND_MINT='\033[38;2;140;176;132m'
 GRAY='\033[0;90m'
 NC='\033[0m'
 BOLD='\033[1m'
-INFO_TAG='\033[47m\033[90m'
+INFO_TAG='\033[48;2;74;74;74m\033[38;2;185;185;185m'
 WARN_TAG='\033[43m\033[30m'
 ERROR_TAG='\033[41m\033[97m'
 SUCCESS_TAG='\033[42m\033[97m'
+GUIDE_ACTIVE=0
 
-info() { echo -e "${INFO_TAG} INFO ${NC} $*"; }
-ok() { echo -e "${SUCCESS_TAG} OK ${NC} $*"; }
-die() { echo -e "${ERROR_TAG} ERROR ${NC} $*" >&2; exit 1; }
+info() {
+  if [[ "$GUIDE_ACTIVE" -eq 1 ]]; then
+    echo -e "${BRAND_MINT}│${NC} ${INFO_TAG} INFO ${NC} $*"
+  else
+    echo -e "${INFO_TAG} INFO ${NC} $*"
+  fi
+}
+ok() {
+  if [[ "$GUIDE_ACTIVE" -eq 1 ]]; then
+    echo -e "${BRAND_MINT}│${NC} \033[48;2;140;176;132m\033[30m  OK  ${NC} $*"
+  else
+    echo -e "\033[48;2;140;176;132m\033[30m  OK  ${NC} $*"
+  fi
+}
+die() {
+  echo -e "${ERROR_TAG} ERROR ${NC} $*" >&2
+  echo "" >&2
+  echo -e "${ERROR_TAG} ■ ${NC} ${BOLD}Installation completed with errors.${NC}" >&2
+  echo "" >&2
+  exit 1
+}
+
+guide() { echo -e "${BRAND_MINT}│${NC} $*"; }
+guide_blank() { echo -e "${BRAND_MINT}│${NC}"; }
+guide_start() { GUIDE_ACTIVE=1; echo -e "${BRAND_MINT}╭${NC} $*"; }
+selector_title() { echo -e "${BRAND_MINT}◆${NC} ${GRAY}$*${NC}"; }
+
+short_digest() {
+  local value="${1#sha256:}"
+  if [[ ${#value} -le 12 ]]; then
+    printf '%s' "$value"
+  else
+    printf '%s...%s' "${value:0:4}" "${value: -4}"
+  fi
+}
+
+prompt_menu() {
+  local default="$1"
+  shift
+  local -a options=("$@")
+  local selected=$((default - 1)) key sequence tty="/dev/tty" index
+  [[ -r "$tty" && -w "$tty" && "${TERM:-dumb}" != "dumb" ]] || { echo "$default"; return; }
+  render_menu() {
+    local resolved="${1:-0}" rail=" "
+    [[ "$resolved" -eq 1 ]] && rail="│"
+    for index in "${!options[@]}"; do
+      if [[ "$index" -eq "$selected" ]]; then
+        printf "${BRAND_MINT}%s${NC}  ${BRAND_MINT}●${NC} ${BOLD}%d) %s${NC}\033[K\n" "$rail" "$((index + 1))" "${options[$index]}" > "$tty"
+      else
+        printf "${BRAND_MINT}%s${NC}  ${GRAY}○${NC} %d) %s\033[K\n" "$rail" "$((index + 1))" "${options[$index]}" > "$tty"
+      fi
+    done
+    [[ "$resolved" -eq 1 ]] || printf "  ${GRAY}Use ↑/↓ and Enter${NC}\033[K\n" > "$tty"
+  }
+  render_menu
+  while true; do
+    IFS= read -rsn1 key < "$tty" || { echo "$default"; return; }
+    if [[ "$key" == $'\e' ]]; then
+      IFS= read -rsn2 sequence < "$tty" || sequence=""
+      key+="$sequence"
+    fi
+    case "$key" in
+      $'\e[A') selected=$(( (selected + ${#options[@]} - 1) % ${#options[@]} )) ;;
+      $'\e[B') selected=$(( (selected + 1) % ${#options[@]} )) ;;
+      '')
+        printf "\033[$(( ${#options[@]} + 1 ))A\r" > "$tty"
+        render_menu 1
+        printf "\r\033[K" > "$tty"
+        echo "$((selected + 1))"
+        return
+        ;;
+      *) continue ;;
+    esac
+    printf "\033[$(( ${#options[@]} + 1 ))A\r" > "$tty"
+    render_menu
+  done
+}
 
 show_header() {
+  local content_width=43 frame_width rule
   if [[ -t 1 ]] && command -v clear >/dev/null 2>&1; then
     clear
   fi
-  echo -e "${BOLD}${BRAND_MINT}Gateway Installer${NC}"
-  echo -e "${GRAY}Self-hosted infrastructure control plane${NC}"
+  frame_width=$((content_width + 2))
+  printf -v rule '%*s' "$frame_width" ''
+  rule="${rule// /─}"
+  echo -e "${BRAND_MINT}╭${rule}╮${NC}"
+  printf "${BRAND_MINT}│${NC} ${BOLD}${BRAND_MINT}%-*.*s${NC} ${BRAND_MINT}│${NC}\n" "$content_width" "$content_width" "Gateway Installer"
+  printf "${BRAND_MINT}│${NC} ${GRAY}%-*.*s${NC} ${BRAND_MINT}│${NC}\n" "$content_width" "$content_width" "Self-hosted infrastructure control plane"
+  echo -e "${BRAND_MINT}╰${rule}╯${NC}"
   echo ""
 }
 
@@ -123,7 +205,7 @@ verify_signed_release() {
 
   IMAGE_REF="$image_ref"
   DATABASE_CONNECTOR_IMAGE_REF="$connector_image_ref"
-  ok "Release ${version} verified (SHA-256: ${digest#sha256:})"
+  ok "Release ${version} verified (SHA-256: $(short_digest "$digest"))"
 }
 
 local_source_checksum() {
@@ -139,86 +221,22 @@ local_source_checksum() {
   ) | sha256sum | awk '{print $1}'
 }
 
-usage() {
-  cat <<'EOF'
-Usage: install.sh [--install-dir PATH] [--image IMAGE] [--source-dir PATH] [--http|--https]
-
-Installs or updates Gateway. On a fresh interactive install, the only prompt
-selects native HTTPS or HTTP for port 3000. Non-interactive installs default
-to native HTTPS. All product configuration continues in the browser wizard.
-
---source-dir builds the Gateway image from a local source checkout on this
-host. It is intended for a fresh test installation and skips GitLab release
-discovery and image pulls.
-EOF
-}
-
-while (($#)); do
-  case "$1" in
-    --install-dir) INSTALL_DIR="${2:?missing path}"; shift 2 ;;
-    --image) IMAGE="${2:?missing image}"; shift 2 ;;
-    --source-dir) SOURCE_DIR="${2:?missing path}"; shift 2 ;;
-    --http) TRANSPORT="http"; shift ;;
-    --https) TRANSPORT="https"; shift ;;
-    -h|--help) usage; exit 0 ;;
-    *) die "Unknown option: $1" ;;
-  esac
-done
-
-show_header
-
-command -v curl >/dev/null || die "curl is required"
-command -v openssl >/dev/null || die "openssl is required"
-if ! command -v docker >/dev/null; then
-  die "Docker Engine with the Compose plugin is required"
-fi
-docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required"
-
-DOCKER=(docker)
-if ! docker info >/dev/null 2>&1; then
-  command -v sudo >/dev/null || die "Docker is not accessible by the current user"
-  sudo docker info >/dev/null 2>&1 || die "Docker is not accessible"
-  DOCKER=(sudo docker)
-fi
-
-if [[ ! -d "$INSTALL_DIR" ]]; then
-  if mkdir -p "$INSTALL_DIR" 2>/dev/null; then :; else sudo mkdir -p "$INSTALL_DIR"; sudo chown "$(id -u):$(id -g)" "$INSTALL_DIR"; fi
-fi
-cd "$INSTALL_DIR"
-INSTALL_DIR="$(pwd)"
-
-FRESH=0
-[[ -f .env ]] || FRESH=1
-
-if [[ "$FRESH" == 1 && -z "$TRANSPORT" ]]; then
-  TRANSPORT="https"
-  if [[ -r /dev/tty && -w /dev/tty ]]; then
-    printf 'Gateway can serve port 3000 with its own System CA certificate.\n' >/dev/tty
-    printf 'Use native HTTPS now? [Y/n] ' >/dev/tty
-    read -r answer </dev/tty || true
-    case "${answer:-Y}" in n|N|no|NO) TRANSPORT="http" ;; esac
-    printf '\n' >/dev/tty
+prepare_install_metadata() {
+  if [[ -n "$SOURCE_DIR" ]]; then
+    [[ "$FRESH" == 1 ]] || die "--source-dir is supported only for a fresh Gateway installation"
+    [[ -d "$SOURCE_DIR" && -f "$SOURCE_DIR/Dockerfile" && -f "$SOURCE_DIR/package.json" ]] || \
+      die "--source-dir must point to a Gateway source checkout"
+    SOURCE_DIR="$(cd "$SOURCE_DIR" && pwd)"
+    VERSION="local-$(date -u +%Y%m%d%H%M%S)"
+    IMAGE_REF="${IMAGE}:${VERSION}"
+    ARTIFACT_DIGEST="$(local_source_checksum)"
+    [[ "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ]] || die "Could not calculate the local source checksum"
+    ARTIFACT_KIND="local source checksum"
+    DATABASE_CONNECTOR_IMAGE_REF=""
+    return
   fi
-fi
-[[ "$TRANSPORT" == "http" || "$TRANSPORT" == "https" || "$FRESH" == 0 ]] || die "GATEWAY_WEB_TRANSPORT must be http or https"
-umask 077
-: >"$LOG_FILE" 2>/dev/null || die "Unable to create installer log at ${LOG_FILE}"
-chmod 600 "$LOG_FILE" 2>/dev/null || true
 
-if [[ -n "$SOURCE_DIR" ]]; then
-  [[ "$FRESH" == 1 ]] || die "--source-dir is supported only for a fresh Gateway installation"
-  [[ -d "$SOURCE_DIR" && -f "$SOURCE_DIR/Dockerfile" && -f "$SOURCE_DIR/package.json" ]] || \
-    die "--source-dir must point to a Gateway source checkout"
-  SOURCE_DIR="$(cd "$SOURCE_DIR" && pwd)"
-  VERSION="local-$(date -u +%Y%m%d%H%M%S)"
-  IMAGE_REF="${IMAGE}:${VERSION}"
-  source_checksum="$(local_source_checksum)"
-  [[ "$source_checksum" =~ ^[a-f0-9]{64}$ ]] || die "Could not calculate the local source checksum"
-  info "Version: ${VERSION} (local source)"
-  ok "Local source checksum calculated (SHA-256: ${source_checksum})"
-  info "Building Gateway from local source: ${SOURCE_DIR}"
-  run_quiet "Gateway image build" "${DOCKER[@]}" build --build-arg "APP_VERSION=${VERSION}" --tag "$IMAGE_REF" "$SOURCE_DIR"
-else
+  local encoded_project release_json
   encoded_project="${GITLAB_PROJECT_PATH//\//%2F}"
   info "Resolving the latest Gateway release"
   release_json="$(curl -fsSL "${GITLAB_API_URL}/api/v4/projects/${encoded_project}/releases?per_page=100")" || die "Unable to query releases"
@@ -233,6 +251,124 @@ else
   [[ -n "$VERSION" ]] || die "The release API did not return an eligible Gateway release"
   info "Version: ${VERSION}"
   verify_signed_release "$VERSION" "$encoded_project"
+  ARTIFACT_DIGEST="${IMAGE_REF##*@sha256:}"
+  ARTIFACT_KIND="signed image digest"
+}
+
+print_install_details() {
+  selector_title "Installation details:"
+  guide "  ${GRAY}Release:${NC}         ${VERSION}"
+  guide "  ${GRAY}${ARTIFACT_KIND}:${NC} $(short_digest "$ARTIFACT_DIGEST")"
+  guide "  ${GRAY}Target path:${NC}     ${INSTALL_DIR}"
+  guide "  ${GRAY}Mode:${NC}            $([[ "$FRESH" == 1 ]] && echo 'fresh install' || echo 'update')"
+  guide_blank
+}
+
+usage() {
+  cat <<'EOF'
+Usage: install.sh [--install-dir PATH] [--image IMAGE] [--source-dir PATH] [--http|--https] [--dry-run]
+
+Installs or updates Gateway. On a fresh interactive install, the only prompt
+selects native HTTPS or HTTP for port 3000. Non-interactive installs default
+to native HTTPS. All product configuration continues in the browser wizard.
+
+--source-dir builds the Gateway image from a local source checkout on this
+host. It is intended for a fresh test installation and skips GitLab release
+discovery and image pulls.
+
+--dry-run renders the interactive flow and planned installation without
+creating files, building or pulling images, or starting services.
+EOF
+}
+
+while (($#)); do
+  case "$1" in
+    --install-dir) INSTALL_DIR="${2:?missing path}"; shift 2 ;;
+    --image) IMAGE="${2:?missing image}"; shift 2 ;;
+    --source-dir) SOURCE_DIR="${2:?missing path}"; shift 2 ;;
+    --http) TRANSPORT="http"; shift ;;
+    --https) TRANSPORT="https"; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "Unknown option: $1" ;;
+  esac
+done
+
+show_header
+
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  command -v curl >/dev/null || die "curl is required"
+  command -v openssl >/dev/null || die "openssl is required"
+  if ! command -v docker >/dev/null; then
+    die "Docker Engine with the Compose plugin is required"
+  fi
+  docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required"
+
+  DOCKER=(docker)
+  if ! docker info >/dev/null 2>&1; then
+    command -v sudo >/dev/null || die "Docker is not accessible by the current user"
+    sudo docker info >/dev/null 2>&1 || die "Docker is not accessible"
+    DOCKER=(sudo docker)
+  fi
+
+  if [[ ! -d "$INSTALL_DIR" ]]; then
+    if mkdir -p "$INSTALL_DIR" 2>/dev/null; then :; else sudo mkdir -p "$INSTALL_DIR"; sudo chown "$(id -u):$(id -g)" "$INSTALL_DIR"; fi
+  fi
+  cd "$INSTALL_DIR"
+  INSTALL_DIR="$(pwd)"
+  FRESH=0
+  [[ -f .env ]] || FRESH=1
+else
+  FRESH=1
+  [[ -f "$INSTALL_DIR/.env" ]] && FRESH=0
+fi
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  command -v curl >/dev/null || die "curl is required to inspect the release in dry-run mode"
+  command -v openssl >/dev/null || die "openssl is required to verify the release in dry-run mode"
+  DRY_RUN_LOG="$(mktemp)"
+  LOG_FILE="$DRY_RUN_LOG"
+else
+  umask 077
+  : >"$LOG_FILE" 2>/dev/null || die "Unable to create installer log at ${LOG_FILE}"
+  chmod 600 "$LOG_FILE" 2>/dev/null || true
+fi
+
+guide_start "${GRAY}Preparing Gateway installation:${NC}"
+guide_blank
+prepare_install_metadata
+guide_blank
+print_install_details
+
+if [[ "$FRESH" == 1 && -z "$TRANSPORT" ]]; then
+  TRANSPORT="https"
+  if [[ -r /dev/tty && -w /dev/tty ]]; then
+    guide "${GRAY}Gateway can serve port 3000 with its own System CA certificate.${NC}"
+    selector_title "Web transport:"
+    transport_choice=$(prompt_menu "1" "Internal HTTPS  — use Gateway System CA on :3000" "HTTP            — configure TLS in a reverse proxy later")
+    case "$transport_choice" in
+      1) TRANSPORT="https" ;;
+      2) TRANSPORT="http" ;;
+      *) TRANSPORT="https" ;;
+    esac
+    guide "${GRAY}Selected: ${NC}${TRANSPORT}"
+    guide_blank
+  fi
+fi
+[[ "$TRANSPORT" == "http" || "$TRANSPORT" == "https" || "$FRESH" == 0 ]] || die "GATEWAY_WEB_TRANSPORT must be http or https"
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  info "Dry run: would validate Docker and prepare Gateway services"
+  info "Dry run: would start Gateway with ${TRANSPORT} on port 3000"
+  rm -f "$DRY_RUN_LOG"
+  guide_blank
+  echo -e "${BRAND_MINT}■${NC} ${BOLD}Dry run completed successfully — no host changes were made.${NC}"
+  echo ""
+  exit 0
+fi
+
+if [[ -n "$SOURCE_DIR" ]]; then
+  info "Building Gateway from local source: ${SOURCE_DIR}"
+  run_quiet "Gateway image build" "${DOCKER[@]}" build --build-arg "APP_VERSION=${VERSION}" --tag "$IMAGE_REF" "$SOURCE_DIR"
 fi
 
 env_value() {
@@ -304,11 +440,11 @@ format_gateway_url() {
 
 print_gateway_urls() {
   local address
-  echo -e "  ${BRAND_MINT}Open:${NC}"
-  echo -e "    ${GRAY}Local:${NC}   ${TRANSPORT}://localhost:3000"
+  guide "${BRAND_MINT}Open:${NC}"
+  guide "  ${GRAY}Local:${NC}   ${TRANSPORT}://localhost:3000"
   while IFS= read -r address; do
     [[ -n "$address" ]] || continue
-    printf '    %bNetwork:%b %s\n' "$GRAY" "$NC" "$(format_gateway_url "$address")"
+    guide "  ${GRAY}Network:${NC} $(format_gateway_url "$address")"
   done < <(detect_local_host_address_lines)
 }
 
@@ -444,7 +580,7 @@ if grep -Eq '^(OIDC_|CLICKHOUSE_|APP_URL=|SETUP_TOKEN=)' .env; then
   run_quiet "Gateway restart after legacy migration" "${DOCKER[@]}" compose up -d --force-recreate app
 fi
 
-printf '\n'
+guide_blank
 ok "Gateway ${VERSION} is running"
 if [[ "$FRESH" == 1 ]]; then
   if ! setup_json="$("${DOCKER[@]}" compose exec -T app node dist/cli/setup-code.js 2>>"$LOG_FILE" | sed -n '/^{"id":/p' | tail -n1)"; then
@@ -455,11 +591,12 @@ if [[ "$FRESH" == 1 ]]; then
   ca_fingerprint="$(printf '%s' "$setup_json" | sed -n 's/.*"caFingerprint":"\([^"]*\)".*/\1/p')"
   [[ -n "$setup_code" ]] || die "Gateway started, but the setup code could not be generated"
   print_gateway_urls
-  printf '  %bSetup code:%b %s\n' "$BRAND_MINT" "$NC" "$setup_code"
-  printf '  %bExpires:%b    %s\n' "$GRAY" "$NC" "$expires_at"
-  printf '  %bSystem CA:%b  %s\n' "$GRAY" "$NC" "$ca_fingerprint"
-  printf '  %bReset:%b      cd %s && docker compose exec app node dist/cli/reset-setup.js\n' "$GRAY" "$NC" "$INSTALL_DIR"
-  printf '\n  %bThe setup code is shown once. Finish configuration in the browser.%b\n' "$GRAY" "$NC"
+  guide "${BRAND_MINT}Setup code:${NC} ${setup_code}"
+  guide "${GRAY}Expires:${NC}    ${expires_at}"
+  guide "${GRAY}System CA:${NC}  ${ca_fingerprint}"
+  guide "${GRAY}Reset:${NC}      cd ${INSTALL_DIR} && docker compose exec app node dist/cli/reset-setup.js"
+  guide_blank
+  guide "${GRAY}The setup code is shown once. Finish configuration in the browser.${NC}"
 else
-  printf '  %bExisting installation updated; persisted Gateway settings were preserved.%b\n' "$GRAY" "$NC"
+  guide "${GRAY}Existing installation updated; persisted Gateway settings were preserved.${NC}"
 fi

@@ -5,21 +5,61 @@ IFS=$'\n\t'
 # Gateway managed-database node setup.
 #
 # This is intentionally a thin, root-only wrapper around setup-docker-node.sh:
-# the existing docker-daemon remains the only daemon binary.  The capability
-# preflight runs before that script can install or enroll the node.
+# the existing docker-daemon remains the only daemon binary. Storage selection
+# and the capability preflight are rendered in its shared interactive flow.
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+BRAND_MINT='\033[38;2;140;176;132m'
+GRAY='\033[0;90m'
+BOLD='\033[1m'
 NC='\033[0m'
 
 err() { printf '%b\n' "${RED}ERROR${NC} $*" >&2; }
 log() { printf '%b\n' "${GREEN}INFO${NC} $*"; }
-die() { err "$@"; exit 1; }
+die() {
+    err "$@"
+    echo "" >&2
+    echo "■ Installation completed with errors." >&2
+    echo "" >&2
+    exit 1
+}
 command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+show_header() {
+    echo -e "${BRAND_MINT}╭───────────────────────────────────╮${NC}"
+    printf "${BRAND_MINT}│${NC} ${BOLD}${BRAND_MINT}%-33s${NC} ${BRAND_MINT}│${NC}\n" "Gateway Node Setup"
+    printf "${BRAND_MINT}│${NC} ${GRAY}%-33s${NC} ${BRAND_MINT}│${NC}\n" "Database daemon installer"
+    echo -e "${BRAND_MINT}╰───────────────────────────────────╯${NC}"
+    echo ""
+}
+
+guide() { echo -e "${BRAND_MINT}│${NC} $*"; }
+guide_blank() { echo -e "${BRAND_MINT}│${NC}"; }
+guide_start() { echo -e "${BRAND_MINT}╭${NC} $*"; }
+
+prompt_choice() {
+    local prompt="$1"
+    local default="$2"
+    local reply
+    if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+        echo "$default"
+        return
+    fi
+    if [[ -e /dev/tty ]]; then
+        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" reply < /dev/tty
+    else
+        reply=""
+    fi
+    echo "${reply:-$default}"
+}
 
 GITLAB_URL="${GATEWAY_GITLAB_URL:-https://gitlab.wiolett.net}"
 GITLAB_PROJECT="${GATEWAY_GITLAB_PROJECT:-wiolett/gateway}"
-STORAGE_ROOT="${GATEWAY_DATABASE_STORAGE_ROOT:-/var/lib/docker-daemon/databases}"
+STORAGE_ROOT="${GATEWAY_DATABASE_STORAGE_ROOT:-}"
+RUN_USER="root"
+DRY_RUN=0
+NON_INTERACTIVE=0
 PASSTHROUGH=()
 LOCAL_DOCKER_SCRIPT="$(dirname "$0")/setup-docker-node.sh"
 DOWNLOADED_DOCKER_SCRIPT=""
@@ -41,6 +81,7 @@ Options:
   --gitlab-url <url>      GitLab instance used to fetch setup-docker-node.sh
   --gitlab-project <proj> GitLab project path
   --user root             Accepted only for compatibility; databases always run as root
+  --dry-run               Validate delegated Docker setup without changing the host
   -h, --help              Show this help
 
 All other options are forwarded to setup-docker-node.sh. The node is enrolled
@@ -97,54 +138,22 @@ while [[ $# -gt 0 ]]; do
             [[ "$2" == "root" ]] || die "Database nodes must run docker-daemon as root."
             shift 2
             ;;
+        --dry-run)
+            DRY_RUN=1
+            PASSTHROUGH+=("--dry-run")
+            shift
+            ;;
+        -y|--yes)
+            NON_INTERACTIVE=1
+            PASSTHROUGH+=("$1")
+            shift
+            ;;
         -h|--help) usage ;;
         *) PASSTHROUGH+=("$1"); shift ;;
     esac
 done
 
 [[ "$EUID" -eq 0 ]] || die "This script must be run as root (or with sudo)."
-
-preflight() {
-    local required=(awk blockdev chmod command df dd fallocate grep losetup mkfs.ext4 mount mountpoint mktemp resize2fs rm rmdir stat umount)
-    local cmd
-    for cmd in "${required[@]}"; do
-        command_exists "$cmd" || die "Required command '$cmd' is missing; refusing enrollment."
-    done
-
-    [[ "$STORAGE_ROOT" == /* ]] || die "--storage-root must be an absolute path."
-    [[ "$STORAGE_ROOT" != "/" ]] || die "Refusing '/' as database storage root."
-    [[ ! -L "$STORAGE_ROOT" ]] || die "Refusing symlink storage root: $STORAGE_ROOT"
-    mkdir -p -- "$STORAGE_ROOT"
-    [[ -d "$STORAGE_ROOT" && -w "$STORAGE_ROOT" ]] || die "Storage root is not writable: $STORAGE_ROOT"
-
-    local available_kib
-    available_kib=$(df -Pk -- "$STORAGE_ROOT" | awk 'NR==2 {print $4}')
-    [[ "$available_kib" =~ ^[0-9]+$ && "$available_kib" -ge 32768 ]] || die "Storage root needs at least 32 MiB free for preflight."
-
-    PREFLIGHT_DIR=$(mktemp -d "$STORAGE_ROOT/.gateway-db-preflight.XXXXXX")
-    MOUNT_DIR="$PREFLIGHT_DIR/mnt"
-    mkdir -- "$MOUNT_DIR"
-    local image="$PREFLIGHT_DIR/test.img"
-    dd if=/dev/zero of="$image" bs=1M count=16 status=none conv=fsync
-    [[ "$(stat -c '%s' "$image")" -eq 16777216 ]] || die "Preflight image is sparse or has the wrong size."
-    mkfs.ext4 -q -F "$image" >/dev/null 2>&1 || die "Could not format disposable ext4 image."
-    LOOP_DEVICE=$(losetup --find --show "$image") || die "No loop device is available."
-    [[ -b "$LOOP_DEVICE" ]] || die "losetup did not return a block device."
-    mount "$LOOP_DEVICE" "$MOUNT_DIR" || die "Could not mount disposable ext4 image."
-    printf 'gateway-db-preflight\n' > "$MOUNT_DIR/.write-test" || die "Mounted storage is not writable."
-    fallocate -l 32M "$image" || die "Could not grow disposable ext4 image."
-    losetup -c "$LOOP_DEVICE" || die "Loop device does not support capacity refresh."
-    [[ "$(blockdev --getsize64 "$LOOP_DEVICE")" -eq 33554432 ]] || die "Loop device did not observe expanded image capacity."
-    resize2fs "$LOOP_DEVICE" >/dev/null || die "Could not grow mounted ext4 image."
-    sync
-    umount "$MOUNT_DIR" || die "Could not unmount disposable ext4 image."
-    losetup -d "$LOOP_DEVICE" || die "Could not detach disposable loop device."
-    LOOP_DEVICE=""
-    log "Storage preflight passed for $STORAGE_ROOT"
-}
-
-preflight
-cleanup_preflight
 
 if [[ -x "$LOCAL_DOCKER_SCRIPT" ]]; then
     DOCKER_SCRIPT="$LOCAL_DOCKER_SCRIPT"
@@ -161,4 +170,4 @@ fi
 # Force the restricted node's service identity and preserve the caller's flags.
 export GATEWAY_DATABASE_STORAGE_ROOT="$STORAGE_ROOT"
 export GATEWAY_DOCKER_MODE="databases"
-bash "$DOCKER_SCRIPT" "${PASSTHROUGH[@]}" --user root
+bash "$DOCKER_SCRIPT" "${PASSTHROUGH[@]}" --user "$RUN_USER"

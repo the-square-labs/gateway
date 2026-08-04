@@ -24,7 +24,7 @@ GRAY='\033[0;90m'
 NC='\033[0m'
 BOLD='\033[1m'
 TITLE_TAG='\033[48;2;140;176;132m\033[30m'
-INFO_TAG='\033[47m\033[90m'
+INFO_TAG='\033[48;2;74;74;74m\033[38;2;185;185;185m'
 WARN_TAG='\033[43m\033[30m'
 ERROR_TAG='\033[41m\033[97m'
 SUCCESS_TAG='\033[42m\033[97m'
@@ -41,6 +41,8 @@ GITLAB_PROJECT="${GATEWAY_GITLAB_PROJECT:-wiolett/gateway}"
 RUN_USER=""
 NON_INTERACTIVE=0
 NO_LOGO=0
+DRY_RUN=0
+GUIDE_ACTIVE=0
 APT_UPDATED=0
 OS_VERSION_CODENAME=""
 DOCKER_USE_SUDO=0
@@ -55,32 +57,206 @@ EXISTING_GATEWAY_ADDR=""
 EXISTING_ENROLLED=0
 
 # ── Helpers ──────────────────────────────────────────────────────────
-log()  { echo -e "${INFO_TAG} INFO ${NC} $*"; }
+log()  {
+    if [[ "$GUIDE_ACTIVE" -eq 1 && "$NO_LOGO" -eq 0 ]]; then
+        echo -e "${BRAND_MINT}│${NC} ${INFO_TAG} INFO ${NC} $*"
+    else
+        echo -e "${INFO_TAG} INFO ${NC} $*"
+    fi
+}
 warn() { echo -e "${WARN_TAG} WARN ${NC} $*"; }
 err()  { echo -e "${ERROR_TAG} ERROR ${NC} $*" >&2; }
-ok()   { echo -e "${SUCCESS_TAG} OK ${NC} $*"; }
+ok()   {
+    if [[ "$GUIDE_ACTIVE" -eq 1 && "$NO_LOGO" -eq 0 ]]; then
+        echo -e "${BRAND_MINT}│${NC} \033[48;2;140;176;132m\033[30m  OK  ${NC} $*"
+    else
+        echo -e "\033[48;2;140;176;132m\033[30m  OK  ${NC} $*"
+    fi
+}
 
-die() { err "$@"; exit 1; }
+die() {
+    err "$@"
+    echo "" >&2
+    echo -e "${RED}■${NC} Installation completed with errors." >&2
+    echo "" >&2
+    exit 1
+}
+
+complete_success() {
+    local message="${1:-Installation completed successfully.}"
+    if [[ "$GUIDE_ACTIVE" -eq 1 && "$NO_LOGO" -eq 0 ]]; then
+        guide_blank
+        echo -e "${BRAND_MINT}■${NC} ${BOLD}${message}${NC}"
+        echo ""
+    else
+        echo ""
+        echo -e "${BRAND_MINT}■${NC} ${BOLD}${message}${NC}"
+        echo ""
+    fi
+}
+
+complete_incomplete() {
+    if [[ "$GUIDE_ACTIVE" -eq 1 && "$NO_LOGO" -eq 0 ]]; then
+        guide_blank
+        echo -e "${YELLOW}■${NC} ${BOLD}Installation not completed.${NC}"
+        echo ""
+    else
+        echo ""
+        echo -e "${YELLOW}■${NC} ${BOLD}Installation not completed.${NC}"
+        echo ""
+    fi
+}
 
 show_logo() {
-    echo ""
-    echo '░██       ░██ ░██           ░██               ░██       ░██    '
-    echo '░██       ░██               ░██               ░██       ░██    '
-    echo '░██  ░██  ░██ ░██ ░███████  ░██  ░███████  ░████████ ░████████ '
-    echo '░██ ░████ ░██ ░██░██    ░██ ░██ ░██    ░██    ░██       ░██    '
-    echo '░██░██ ░██░██ ░██░██    ░██ ░██ ░█████████    ░██       ░██    '
-    echo '░████   ░████ ░██░██    ░██ ░██ ░██           ░██       ░██    '
-    echo '░███     ░███ ░██ ░███████  ░██  ░███████      ░████     ░████ '
-    echo ""
-    echo -e "${BRAND_MINT}░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░${NC}"
-    echo -e "${BRAND_MINT}░░░█▀▀░█▀█░▀█▀░█▀▀░█░█░█▀█░█░█░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░${NC}"
-    echo -e "${BRAND_MINT}░░░█░█░█▀█░░█░░█▀▀░█▄█░█▀█░░█░░░░▀░▀░▀░▀░▀░▀░▀░▀░▀░▀░▀░▀░▀░░░░${NC}"
-    echo -e "${BRAND_MINT}░░░▀▀▀░▀░▀░░▀░░▀▀▀░▀░▀░▀░▀░░▀░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░${NC}"
-    echo -e "${BRAND_MINT}░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░${NC}"
+    local subtitle="Docker daemon installer"
+    [[ "$DOCKER_MODE" == "databases" ]] && subtitle="Database daemon installer"
+    echo -e "${BRAND_MINT}╭───────────────────────────────────╮${NC}"
+    printf "${BRAND_MINT}│${NC} ${BOLD}${BRAND_MINT}%-33s${NC} ${BRAND_MINT}│${NC}\n" "Gateway Node Setup"
+    printf "${BRAND_MINT}│${NC} ${GRAY}%-33s${NC} ${BRAND_MINT}│${NC}\n" "$subtitle"
+    echo -e "${BRAND_MINT}╰───────────────────────────────────╯${NC}"
     echo ""
 }
 
-title() { echo ""; echo -e "${TITLE_TAG} $1 ${NC}"; echo ""; }
+guide() {
+    if [[ "${NO_LOGO:-0}" -eq 1 ]]; then
+        echo -e "$*"
+    else
+        echo -e "${BRAND_MINT}│${NC} $*"
+    fi
+}
+
+guide_blank() {
+    [[ "${NO_LOGO:-0}" -eq 1 ]] || echo -e "${BRAND_MINT}│${NC}"
+}
+selector_title() { echo -e "${BRAND_MINT}◆${NC} ${GRAY}$*${NC}"; }
+
+guide_start() {
+    if [[ "${NO_LOGO:-0}" -eq 1 ]]; then
+        echo -e "$*"
+    else
+        GUIDE_ACTIVE=1
+        echo -e "${BRAND_MINT}╭${NC} $*"
+    fi
+}
+
+database_storage_root_for_mount() {
+    local mountpoint="$1"
+    if [[ "$mountpoint" == "/" ]]; then
+        echo "/var/lib/docker-daemon/databases"
+    else
+        echo "${mountpoint%/}/gateway-databases"
+    fi
+}
+
+select_database_storage() {
+    [[ "$DOCKER_MODE" == "databases" ]] || return 0
+    if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+        [[ -n "$DATABASE_STORAGE_ROOT" ]] || DATABASE_STORAGE_ROOT="/var/lib/docker-daemon/databases"
+        return
+    fi
+
+    selector_title "Database images storage:"
+    local -a mounts=() options=()
+    local target source fstype candidate entry index mountpoint free storage_default=1 storage_choice custom_choice
+    if command_exists findmnt; then
+        while IFS=' ' read -r target source fstype; do
+            case "$fstype" in tmpfs|devtmpfs|proc|sysfs|cgroup*|overlay|squashfs|ramfs|nsfs) continue ;; esac
+            case "$target" in /proc*|/sys*|/dev*|/run*|/snap*) continue ;; esac
+            [[ -d "$target" ]] || continue
+            candidate=$(database_storage_root_for_mount "$target")
+            mounts+=("$target|$candidate")
+        done < <(findmnt -rn -o TARGET,SOURCE,FSTYPE)
+    fi
+    if [[ "${#mounts[@]}" -eq 0 ]]; then
+        mounts=("/|/var/lib/docker-daemon/databases")
+    fi
+    index=1
+    for entry in "${mounts[@]}"; do
+        candidate="${entry#*|}"
+        if [[ -n "$DATABASE_STORAGE_ROOT" && "$candidate" == "$DATABASE_STORAGE_ROOT" ]]; then
+            storage_default="$index"
+            break
+        fi
+        index=$((index + 1))
+    done
+    index=1
+    for entry in "${mounts[@]}"; do
+        mountpoint="${entry%%|*}"
+        candidate="${entry#*|}"
+        free=$(df -hP "$mountpoint" | awk 'NR==2 {print $4}')
+        options+=("${candidate}  (${mountpoint}, ${free} free)")
+        index=$((index + 1))
+    done
+    custom_choice=$index
+    options+=("Custom path")
+    storage_choice=$(prompt_choice "Choose disk" "$storage_default" "${options[@]}")
+    [[ "$storage_choice" =~ ^[0-9]+$ ]] && (( storage_choice >= 1 && storage_choice <= "$custom_choice" )) || die "Invalid storage choice: $storage_choice"
+    if [[ "$storage_choice" -eq "$custom_choice" ]]; then
+        guide_blank
+        DATABASE_STORAGE_ROOT=$(prompt_input "Database images storage path" "${DATABASE_STORAGE_ROOT:-/var/lib/docker-daemon/databases}")
+        [[ -n "$DATABASE_STORAGE_ROOT" ]] || die "Database storage path is required"
+        guide_blank
+    else
+        DATABASE_STORAGE_ROOT="${mounts[$((storage_choice - 1))]#*|}"
+    fi
+    guide "${GRAY}Selected: ${NC}${DATABASE_STORAGE_ROOT}"
+    guide_blank
+}
+
+preflight_database_storage() {
+    [[ "$DOCKER_MODE" == "databases" ]] || return 0
+    [[ -n "$DATABASE_STORAGE_ROOT" && "$DATABASE_STORAGE_ROOT" == /* && "$DATABASE_STORAGE_ROOT" != "/" ]] || die "Database storage root is invalid."
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        log "Dry run: skipping disposable storage preflight for ${DATABASE_STORAGE_ROOT}"
+        return
+    fi
+    local required=(awk blockdev chmod command df dd fallocate grep losetup mkfs.ext4 mount mountpoint mktemp resize2fs rm rmdir stat umount)
+    local cmd preflight_dir mount_dir loop_device image available_kib
+    for cmd in "${required[@]}"; do command_exists "$cmd" || die "Required command '$cmd' is missing; refusing enrollment."; done
+    [[ ! -L "$DATABASE_STORAGE_ROOT" ]] || die "Refusing symlink storage root: ${DATABASE_STORAGE_ROOT}"
+    mkdir -p -- "$DATABASE_STORAGE_ROOT"
+    [[ -d "$DATABASE_STORAGE_ROOT" && -w "$DATABASE_STORAGE_ROOT" ]] || die "Storage root is not writable: ${DATABASE_STORAGE_ROOT}"
+    available_kib=$(df -Pk -- "$DATABASE_STORAGE_ROOT" | awk 'NR==2 {print $4}')
+    [[ "$available_kib" =~ ^[0-9]+$ && "$available_kib" -ge 32768 ]] || die "Storage root needs at least 32 MiB free for preflight."
+    preflight_dir=$(mktemp -d "$DATABASE_STORAGE_ROOT/.gateway-db-preflight.XXXXXX")
+    mount_dir="$preflight_dir/mnt"; image="$preflight_dir/test.img"; mkdir "$mount_dir"
+    dd if=/dev/zero of="$image" bs=1M count=16 status=none conv=fsync
+    [[ "$(stat -c '%s' "$image")" -eq 16777216 ]] || die "Preflight image is sparse or has the wrong size."
+    mkfs.ext4 -q -F "$image" >/dev/null 2>&1 || die "Could not format disposable ext4 image."
+    loop_device=$(losetup --find --show "$image") || die "No loop device is available."
+    mount "$loop_device" "$mount_dir" || die "Could not mount disposable ext4 image."
+    printf 'gateway-db-preflight\n' > "$mount_dir/.write-test" || die "Mounted storage is not writable."
+    fallocate -l 32M "$image" || die "Could not grow disposable ext4 image."
+    losetup -c "$loop_device" || die "Loop device does not support capacity refresh."
+    [[ "$(blockdev --getsize64 "$loop_device")" -eq 33554432 ]] || die "Loop device did not observe expanded image capacity."
+    resize2fs "$loop_device" >/dev/null || die "Could not grow mounted ext4 image."
+    umount "$mount_dir" || die "Could not unmount disposable ext4 image."
+    losetup -d "$loop_device" || die "Could not detach disposable loop device."
+    rm -f "$image"; rmdir "$mount_dir" "$preflight_dir"
+    ok "Storage preflight passed for ${DATABASE_STORAGE_ROOT}"
+}
+
+guide_end() {
+    :
+}
+
+summary_start() {
+    guide_blank
+    if [[ "${NO_LOGO:-0}" -eq 1 ]]; then
+        echo -e "${BRAND_MINT}◆${NC} ${BOLD}Configuration Summary${NC}"
+    else
+        echo -e "${BRAND_MINT}◆${NC} ${BOLD}Configuration Summary${NC}"
+    fi
+    guide_blank
+}
+
+summary_row() {
+    guide "  $1"
+}
+
+summary_end() {
+    guide_blank
+}
 
 prompt_input() {
     local prompt="$1"
@@ -92,9 +268,9 @@ prompt_input() {
     fi
     if [ -e /dev/tty ]; then
         if [ -n "$default" ]; then
-            read -r -p "$(echo -e "  ${BRAND_MINT}${prompt} [${default}]: ${NC}")" result < /dev/tty
+            read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" result < /dev/tty
         else
-            read -r -p "$(echo -e "  ${BRAND_MINT}${prompt}: ${NC}")" result < /dev/tty
+            read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt}: ${NC}")" result < /dev/tty
         fi
     else
         result=""
@@ -110,7 +286,7 @@ prompt_secret() {
         return
     fi
     if [ -e /dev/tty ]; then
-        read -rs -p "$(echo -e "  ${BRAND_MINT}${prompt}: ${NC}")" result < /dev/tty
+        read -rs -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt}: ${NC}")" result < /dev/tty
         echo "" >&2
     else
         result=""
@@ -128,10 +304,10 @@ prompt_yes_no() {
     fi
     if [ -e /dev/tty ]; then
         if [[ "$default" == "Y" ]]; then
-            read -r -p "$(echo -e "  ${BRAND_MINT}${prompt} [Y/n]: ${NC}")" reply < /dev/tty
+            read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [Y/n]: ${NC}")" reply < /dev/tty
             reply="${reply:-Y}"
         else
-            read -r -p "$(echo -e "  ${BRAND_MINT}${prompt} [y/N]: ${NC}")" reply < /dev/tty
+            read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [y/N]: ${NC}")" reply < /dev/tty
             reply="${reply:-N}"
         fi
     else
@@ -144,13 +320,52 @@ prompt_choice() {
     local prompt="$1"
     local default="$2"
     shift 2
-    local reply
+    local -a options=("$@")
+    local reply selected=0 key sequence tty="/dev/tty" index
     if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
         echo "$default"
         return
     fi
+    if [[ "${#options[@]}" -gt 0 && -r "$tty" && -w "$tty" && "${TERM:-dumb}" != "dumb" ]]; then
+        selected=$((default - 1))
+        (( selected >= 0 && selected < ${#options[@]} )) || selected=0
+        render_menu() {
+            local resolved="${1:-0}" rail=" "
+            [[ "$resolved" -eq 1 ]] && rail="│"
+            for index in "${!options[@]}"; do
+                if [[ "$index" -eq "$selected" ]]; then
+                    printf "${BRAND_MINT}%s${NC}  ${BRAND_MINT}●${NC} ${BOLD}%d) %s${NC}\033[K\n" "$rail" "$((index + 1))" "${options[$index]}" > "$tty"
+                else
+                    printf "${BRAND_MINT}%s${NC}  ${GRAY}○${NC} %d) %s\033[K\n" "$rail" "$((index + 1))" "${options[$index]}" > "$tty"
+                fi
+            done
+            [[ "$resolved" -eq 1 ]] || printf "  ${GRAY}Use ↑/↓ and Enter${NC}\033[K\n" > "$tty"
+        }
+        render_menu
+        while true; do
+            IFS= read -rsn1 key < "$tty" || { echo "$default"; return; }
+            if [[ "$key" == $'\e' ]]; then
+                IFS= read -rsn2 sequence < "$tty" || sequence=""
+                key+="$sequence"
+            fi
+            case "$key" in
+                $'\e[A') selected=$(( (selected + ${#options[@]} - 1) % ${#options[@]} )) ;;
+                $'\e[B') selected=$(( (selected + 1) % ${#options[@]} )) ;;
+                '')
+                    printf "\033[$(( ${#options[@]} + 1 ))A\r" > "$tty"
+                    render_menu 1
+                    printf "\r\033[K" > "$tty"
+                    echo "$((selected + 1))"
+                    return
+                    ;;
+                *) continue ;;
+            esac
+            printf "\033[$(( ${#options[@]} + 1 ))A\r" > "$tty"
+            render_menu
+        done
+    fi
     if [ -e /dev/tty ]; then
-        read -r -p "$(echo -e "  ${BRAND_MINT}${prompt} [${default}]: ${NC}")" reply < /dev/tty
+        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" reply < /dev/tty
     else
         reply=""
     fi
@@ -239,6 +454,7 @@ ensure_curl_installed() {
     if command_exists curl; then
         return
     fi
+    [[ "$DRY_RUN" -eq 0 ]] || die "curl is required to resolve the daemon release during dry run."
     log "curl not found, installing it..."
     install_system_packages curl ca-certificates
 }
@@ -514,8 +730,9 @@ Gateway Docker Node Setup — installs docker-daemon and enrolls with Gateway
 Usage:
   setup-docker-node.sh [options]
 
-  In interactive mode (default), the script prompts for gateway address, port,
-  enrollment token, and Gateway certificate fingerprint. Use flags to pre-fill or skip prompts.
+  In interactive mode (default), the script prompts only for missing gateway host,
+  enrollment token, and Gateway certificate fingerprint. Port defaults to 9443 and
+  daemon version defaults to latest unless supplied.
 
 Options:
   --gateway <addr>         Gateway gRPC address as host:port (e.g. gateway.example.com:9443)
@@ -529,6 +746,7 @@ Options:
   --gitlab-url <url>       GitLab instance URL (default: https://gitlab.wiolett.net)
   --gitlab-project <proj>  GitLab project path (default: wiolett/gateway)
   --no-logo                Suppress the logo banner
+  --dry-run                Validate inputs and show the plan without changing the host
   -y, --yes                Non-interactive mode (no prompts, all values required via flags)
   -h, --help               Show this help
 
@@ -567,6 +785,7 @@ while [[ $# -gt 0 ]]; do
         --gitlab-url)     GITLAB_URL="$2"; shift 2 ;;
         --gitlab-project) GITLAB_PROJECT="$2"; shift 2 ;;
         --no-logo)        NO_LOGO=1; shift ;;
+        --dry-run)        DRY_RUN=1; shift ;;
         -y|--yes)         NON_INTERACTIVE=1; NO_LOGO=1; shift ;;
         -h|--help)        show_help ;;
         *) die "Unknown option: $1. Use --help for usage." ;;
@@ -605,28 +824,32 @@ if [[ -z "$GATEWAY_ADDR" && -n "$EXISTING_GATEWAY_ADDR" ]]; then
     fi
 fi
 
-: > "$LOG_FILE"
+if [[ "$DRY_RUN" -eq 0 ]]; then
+    : > "$LOG_FILE"
+fi
 
-ensure_docker_installed
-DOCKER_VER=$(docker_run version --format '{{.Server.Version}}' 2>/dev/null || echo "unknown")
+if command_exists docker; then
+    DOCKER_VER=$(docker_run version --format '{{.Server.Version}}' 2>/dev/null || echo "unreachable")
+else
+    DOCKER_VER="not installed"
+fi
 
 # ── Logo ─────────────────────────────────────────────────────────────
 if [[ "$NO_LOGO" -eq 0 ]]; then
-    if [ -t 1 ] && command_exists clear; then
+    if [[ "${GATEWAY_SETUP_NO_CLEAR:-0}" != "1" ]] && [ -t 1 ] && command_exists clear; then
         clear
     fi
     show_logo
-    title "Gateway Docker Node Setup"
 fi
 
 # ── Interactive configuration ────────────────────────────────────────
 if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
-    echo -e "  ${GRAY}This script will:${NC}"
-    echo -e "  ${GRAY}  1. Download and install the docker-daemon binary${NC}"
-    echo -e "  ${GRAY}  2. Enroll this node with your Gateway server${NC}"
-    echo -e "  ${GRAY}  3. Start the daemon as a systemd service${NC}"
-    echo -e "  ${GRAY}  Docker ${DOCKER_VER} detected.${NC}"
-    echo ""
+    guide_start "${GRAY}This script will:${NC}"
+    guide "${GRAY}  1. Download and install the docker-daemon binary${NC}"
+    guide "${GRAY}  2. Enroll this node with your Gateway server${NC}"
+    guide "${GRAY}  3. Start the daemon as a systemd service${NC}"
+    guide "${GRAY}  Docker ${DOCKER_VER} detected.${NC}"
+    guide_blank
 
     if [[ "$EXISTING_ENROLLED" -eq 1 && -n "$EXISTING_GATEWAY_ADDR" && -z "$ENROLL_TOKEN" ]]; then
         log "Existing enrolled docker node detected — reusing current gateway configuration"
@@ -636,56 +859,49 @@ if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
             GATEWAY_HOST=$(prompt_input "Gateway hostname or IP" "")
             [[ -z "$GATEWAY_HOST" ]] && die "Gateway hostname is required"
         else
-            echo -e "  ${GRAY}Gateway host: ${BRAND_MINT}${GATEWAY_HOST}${NC}"
+            guide "${GRAY}Gateway host: ${BRAND_MINT}${GATEWAY_HOST}${NC}"
         fi
-
-        # Gateway port
-        GATEWAY_PORT=$(prompt_input "gRPC port" "${GATEWAY_PORT}")
-        [[ -z "$GATEWAY_PORT" ]] && GATEWAY_PORT="9443"
 
         GATEWAY_ADDR="${GATEWAY_HOST}:${GATEWAY_PORT}"
 
-        echo ""
+        guide_blank
 
         # Enrollment token
         if [[ -z "$ENROLL_TOKEN" ]]; then
             ENROLL_TOKEN=$(prompt_secret "Enrollment token (from Admin > Nodes)")
             [[ -z "$ENROLL_TOKEN" ]] && die "Enrollment token is required"
         else
-            echo -e "  ${GRAY}Token: ${ENROLL_TOKEN:0:12}...${ENROLL_TOKEN: -4}${NC}"
+            guide "${GRAY}Token: ${ENROLL_TOKEN:0:12}...${ENROLL_TOKEN: -4}${NC}"
         fi
 
         if [[ -z "$GATEWAY_CERT_SHA256" ]]; then
             GATEWAY_CERT_SHA256=$(prompt_input "Gateway certificate SHA-256 fingerprint" "")
             [[ -z "$GATEWAY_CERT_SHA256" ]] && die "Gateway certificate SHA-256 fingerprint is required"
         else
-            echo -e "  ${GRAY}Gateway cert: ${GATEWAY_CERT_SHA256}${NC}"
+            guide "${GRAY}Gateway cert: ${GATEWAY_CERT_SHA256}${NC}"
         fi
 
-        echo ""
+        guide_blank
     fi
 
-    # Daemon version
-    DAEMON_VERSION=$(prompt_input "Daemon version" "${DAEMON_VERSION}")
+    select_database_storage
+    preflight_database_storage
 
-    echo ""
+    [[ "$DOCKER_MODE" == "databases" ]] || guide_blank
 
     # User selection
     if [[ -z "$RUN_USER" ]]; then
-        echo -e "  ${GRAY}Run daemon as:${NC}"
-        echo -e "    ${BRAND_MINT}1)${NC} root  ${GRAY}[default]${NC}"
-        echo -e "    ${BRAND_MINT}2)${NC} Current user ($(logname 2>/dev/null || echo "$SUDO_USER"))"
-        echo -e "    ${BRAND_MINT}3)${NC} Custom user"
-        echo ""
-        user_choice=$(prompt_choice "Choose" "1")
+        selector_title "Run daemon as:"
+        user_choice=$(prompt_choice "Choose" "1" "root  [default]" "Current user ($(logname 2>/dev/null || echo "$SUDO_USER"))" "Custom user")
         case "$user_choice" in
             1|root)   RUN_USER="root" ;;
             2)        RUN_USER="$(logname 2>/dev/null || echo "${SUDO_USER:-root}")" ;;
             3)        RUN_USER=$(prompt_input "Username" ""); [[ -z "$RUN_USER" ]] && die "Username is required" ;;
             *)        RUN_USER="root" ;;
         esac
-        echo ""
+        guide "${GRAY}Selected: ${NC}${RUN_USER}"
     fi
+    guide_end
 else
     # Non-interactive: validate required fields
     if [[ -z "$GATEWAY_ADDR" && "$EXISTING_ENROLLED" -eq 0 ]]; then
@@ -698,6 +914,8 @@ else
         die "--gateway-cert-sha256 is required in non-interactive mode"
     fi
     [[ -z "$RUN_USER" ]] && RUN_USER="root"
+    select_database_storage
+    preflight_database_storage
 fi
 
 # ── Resolve run user/group ───────────────────────────────────────────
@@ -709,12 +927,6 @@ else
         die "User '$RUN_USER' does not exist. Create it first or choose a different user."
     fi
     RUN_GROUP=$(id -gn "$RUN_USER" 2>/dev/null)
-    if docker_group_exists && ! groups "$RUN_USER" 2>/dev/null | grep -qw docker; then
-        warn "User '$RUN_USER' is not in the 'docker' group. Adding it now."
-        usermod -aG docker "$RUN_USER" >>"$LOG_FILE" 2>&1 || true
-    elif ! docker_group_exists; then
-        warn "Docker group was not found. docker-daemon will run without SupplementaryGroups=docker."
-    fi
 fi
 
 resolve_download_url "$DAEMON_VERSION"
@@ -728,35 +940,72 @@ if [[ "$EXISTING_INSTALL" -eq 1 ]]; then
     echo ""
 fi
 
-echo -e "  ${BOLD}Configuration Summary${NC}"
-echo -e "  ${GRAY}────────────────────────────────────────${NC}"
-echo -e "  Gateway:     ${BRAND_MINT}${GATEWAY_ADDR}${NC}"
+summary_start
+summary_row "Gateway:     ${GATEWAY_ADDR}"
 if [[ -n "$ENROLL_TOKEN" ]]; then
-    echo -e "  Token:       ${GRAY}${ENROLL_TOKEN:0:12}...${NC}"
+    summary_row "Token:       ${ENROLL_TOKEN:0:12}..."
 else
-    echo -e "  Token:       ${GRAY}existing enrollment${NC}"
+    summary_row "Token:       existing enrollment"
 fi
 if [[ -n "$GATEWAY_CERT_SHA256" ]]; then
-    echo -e "  Cert SHA256: ${GRAY}${GATEWAY_CERT_SHA256}${NC}"
+    summary_row "Cert SHA256: ${GATEWAY_CERT_SHA256}"
 else
-    echo -e "  Cert SHA256: ${GRAY}existing enrollment${NC}"
+    summary_row "Cert SHA256: existing enrollment"
 fi
-echo -e "  Arch:        ${ARCH}"
-echo -e "  OS:          ${OS_ID}"
-echo -e "  Docker:      ${DOCKER_VER}"
-echo -e "  Install ver: ${RESOLVED_DAEMON_VERSION}"
-echo -e "  Current ver: $([[ "$EXISTING_INSTALL" -eq 1 ]] && echo "${EXISTING_VERSION}" || echo "not installed")"
-echo -e "  Mode:        $([[ "$EXISTING_INSTALL" -eq 1 ]] && echo "update" || echo "fresh install")"
-echo -e "  Run as:      ${RUN_USER}:${RUN_GROUP}"
-echo -e "  GitLab:      ${GITLAB_URL}"
-echo -e "  ${GRAY}────────────────────────────────────────${NC}"
-echo ""
+summary_row "Arch:        ${ARCH}"
+summary_row "OS:          ${OS_ID}"
+summary_row "Docker:      ${DOCKER_VER}"
+summary_row "Install ver: ${RESOLVED_DAEMON_VERSION}"
+summary_row "Current ver: $([[ "$EXISTING_INSTALL" -eq 1 ]] && echo "${EXISTING_VERSION}" || echo "not installed")"
+summary_row "Mode:        $([[ "$EXISTING_INSTALL" -eq 1 ]] && echo "update" || echo "fresh install")"
+summary_row "Run as:      ${RUN_USER}:${RUN_GROUP}"
+summary_row "GitLab:      ${GITLAB_URL}"
+summary_end
 
 if ! prompt_yes_no "Proceed with installation?" "Y"; then
-    echo "  Aborted."
+    complete_incomplete
     exit 0
 fi
-echo ""
+guide_blank
+
+dry_run_preview() {
+    if command_exists docker; then
+        ok "Docker is available (${DOCKER_VER})"
+    else
+        log "Docker not found, installing it..."
+        ok "Docker installed (dry run)"
+    fi
+    log "Creating required directories..."
+    ok "Directories created (dry run)"
+    log "Downloading docker-daemon..."
+    log "Verifying checksum..."
+    ok "Checksum verified (dry run)"
+    ok "docker-daemon installed (${RESOLVED_DAEMON_VERSION}; dry run)"
+    log "Writing config and enrolling with Gateway..."
+    ok "Config written to /etc/docker-daemon/config.yaml (dry run)"
+    if [[ "$DOCKER_MODE" == "databases" ]]; then
+        ok "Database docker profile written (root daemon, storage: ${DATABASE_STORAGE_ROOT}; dry run)"
+    fi
+    log "Enabling and starting docker-daemon..."
+    ok "docker-daemon is running (dry run)"
+    complete_success "Dry run completed successfully — no host changes were made."
+}
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+    dry_run_preview
+    exit 0
+fi
+
+ensure_docker_installed
+
+if [[ "$RUN_USER" != "root" ]]; then
+    if docker_group_exists && ! groups "$RUN_USER" 2>/dev/null | grep -qw docker; then
+        warn "User '$RUN_USER' is not in the 'docker' group. Adding it now."
+        usermod -aG docker "$RUN_USER" >>"$LOG_FILE" 2>&1 || true
+    elif ! docker_group_exists; then
+        warn "Docker group was not found. docker-daemon will run without SupplementaryGroups=docker."
+    fi
+fi
 
 # ── Step 1: Create directories ───────────────────────────────────────
 create_directories() {
@@ -990,7 +1239,6 @@ write_database_profile_config
 start_daemon
 
 echo ""
-echo -e "${GREEN}${BOLD}Docker node setup complete!${NC}"
 echo ""
 echo -e "  The node should appear as ${GREEN}online${NC} in Gateway within a few seconds."
 if has_systemd; then
@@ -1002,4 +1250,4 @@ elif has_openrc; then
 else
     echo -e "  Start daemon:  ${BRAND_MINT}docker-daemon run${NC}"
 fi
-echo ""
+complete_success
