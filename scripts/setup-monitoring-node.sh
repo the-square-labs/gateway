@@ -23,8 +23,8 @@ NC='\033[0m'
 BOLD='\033[1m'
 TITLE_TAG='\033[48;2;140;176;132m\033[30m'
 INFO_TAG='\033[48;2;74;74;74m\033[38;2;185;185;185m'
-WARN_TAG='\033[43m\033[30m'
-ERROR_TAG='\033[41m\033[97m'
+WARN_TAG='\033[48;2;112;97;48m\033[38;2;244;234;198m'
+ERROR_TAG='\033[48;2;96;61;43m\033[38;2;245;221;202m'
 SUCCESS_TAG='\033[42m\033[97m'
 
 # ── Defaults ──────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ ok()   {
 die() {
     err "$@"
     echo "" >&2
-    echo -e "${RED}■${NC} Installation completed with errors." >&2
+    echo -e "${ERROR_TAG} ■ ${NC} Installation completed with errors." >&2
     echo "" >&2
     exit 1
 }

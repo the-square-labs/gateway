@@ -8,19 +8,19 @@ IFS=$'\n\t'
 # the existing docker-daemon remains the only daemon binary. Storage selection
 # and the capability preflight are rendered in its shared interactive flow.
 
-RED='\033[0;31m'
 GREEN='\033[0;32m'
 BRAND_MINT='\033[38;2;140;176;132m'
 GRAY='\033[0;90m'
 BOLD='\033[1m'
 NC='\033[0m'
+ERROR_TAG='\033[48;2;96;61;43m\033[38;2;245;221;202m'
 
-err() { printf '%b\n' "${RED}ERROR${NC} $*" >&2; }
+err() { printf '%b\n' "${ERROR_TAG} ERROR ${NC} $*" >&2; }
 log() { printf '%b\n' "${GREEN}INFO${NC} $*"; }
 die() {
     err "$@"
     echo "" >&2
-    echo "■ Installation completed with errors." >&2
+    echo -e "${ERROR_TAG} ■ ${NC} Installation completed with errors." >&2
     echo "" >&2
     exit 1
 }
