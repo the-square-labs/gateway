@@ -352,10 +352,15 @@ if [[ "$FRESH" == 1 && -z "$TRANSPORT" ]]; then
       *) TRANSPORT="https" ;;
     esac
     guide "${GRAY}Selected: ${NC}${TRANSPORT}"
-    guide_blank
   fi
 fi
 [[ "$TRANSPORT" == "http" || "$TRANSPORT" == "https" || "$FRESH" == 0 ]] || die "GATEWAY_WEB_TRANSPORT must be http or https"
+if [[ "$FRESH" == 1 ]]; then
+  if [[ "$TRANSPORT" == "https" ]]; then
+    guide "${GRAY}Your browser will show a certificate warning on first visit. This is expected until the Gateway System CA is trusted.${NC}"
+  fi
+  guide_blank
+fi
 if [[ "$DRY_RUN" -eq 1 ]]; then
   info "Dry run: would validate Docker and prepare Gateway services"
   info "Dry run: would start Gateway with ${TRANSPORT} on port 3000"
@@ -591,6 +596,7 @@ if [[ "$FRESH" == 1 ]]; then
   ca_fingerprint="$(printf '%s' "$setup_json" | sed -n 's/.*"caFingerprint":"\([^"]*\)".*/\1/p')"
   [[ -n "$setup_code" ]] || die "Gateway started, but the setup code could not be generated"
   print_gateway_urls
+  guide_blank
   guide "${BRAND_MINT}Setup code:${NC} ${setup_code}"
   guide "${GRAY}Expires:${NC}    ${expires_at}"
   guide "${GRAY}System CA:${NC}  ${ca_fingerprint}"
