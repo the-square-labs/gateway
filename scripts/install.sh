@@ -11,6 +11,9 @@ IMAGE="${GATEWAY_IMAGE:-$DEFAULT_IMAGE}"
 TRANSPORT="${GATEWAY_WEB_TRANSPORT:-}"
 SOURCE_DIR="${GATEWAY_SOURCE_DIR:-}"
 LOG_FILE="${GATEWAY_INSTALL_LOG_FILE:-/tmp/gateway-install.log}"
+UPDATE_SIGNING_PUBLIC_KEY='-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAxLXGD8vCYQCYboK301miZXyAaoOLc43zFVnMlH3FeWg=
+-----END PUBLIC KEY-----'
 
 # ── Colors ────────────────────────────────────────────────────────────
 BRAND_MINT='\033[38;2;140;176;132m'
@@ -26,23 +29,11 @@ info() { echo -e "${INFO_TAG} INFO ${NC} $*"; }
 ok() { echo -e "${SUCCESS_TAG} OK ${NC} $*"; }
 die() { echo -e "${ERROR_TAG} ERROR ${NC} $*" >&2; exit 1; }
 
-show_logo() {
-  echo ""
-  echo '                                              '
-  echo '                                              '
-  echo ' ▄████   ▄▄▄ ▄▄▄▄▄▄ ▄▄▄▄▄ ▄▄   ▄▄  ▄▄▄  ▄▄ ▄▄ '
-  echo '██  ▄▄▄ ██▀██  ██   ██▄▄  ██ ▄ ██ ██▀██ ▀███▀ '
-  echo ' ▀███▀  ██▀██  ██   ██▄▄▄  ▀█▀█▀  ██▀██   █   '
-  echo '                                              '
-  echo ""
-}
-
 show_header() {
   if [[ -t 1 ]] && command -v clear >/dev/null 2>&1; then
     clear
   fi
-  show_logo
-  echo -e "${BOLD}${BRAND_MINT}Gateway — Installer${NC}"
+  echo -e "${BOLD}${BRAND_MINT}Gateway Installer${NC}"
   echo -e "${GRAY}Self-hosted infrastructure control plane${NC}"
   echo ""
 }
@@ -54,6 +45,88 @@ run_quiet() {
     return
   fi
   die "${label} failed. Check ${LOG_FILE} for details."
+}
+
+json_string_field() {
+  local file="$1" key="$2"
+  sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$file" | head -n1
+}
+
+decode_base64url() {
+  local value="$1" output="$2"
+  value="${value//-/+}"
+  value="${value//_/\/}"
+  case $((${#value} % 4)) in
+    0) ;;
+    2) value+="==" ;;
+    3) value+="=" ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$value" | openssl base64 -d -A >"$output"
+}
+
+verify_signed_release() {
+  local version="$1" encoded_project="$2"
+  local tmp_dir manifest_file payload_file signature_file key_file
+  local payload signature kind manifest_version tag image digest image_ref
+
+  tmp_dir="$(mktemp -d)"
+  manifest_file="${tmp_dir}/gateway-image.update.json"
+  payload_file="${tmp_dir}/payload.json"
+  signature_file="${tmp_dir}/signature.bin"
+  key_file="${tmp_dir}/update-signing-public-key.pem"
+
+  info "Verifying signed release manifest for ${version}"
+  if ! curl -fsSL "${GITLAB_API_URL}/api/v4/projects/${encoded_project}/packages/generic/gateway/${version}/gateway-image.update.json" -o "$manifest_file" >>"$LOG_FILE" 2>&1; then
+    rm -rf "$tmp_dir"
+    die "Could not download the signed release manifest. Check ${LOG_FILE} for details."
+  fi
+
+  payload="$(json_string_field "$manifest_file" payload)"
+  signature="$(json_string_field "$manifest_file" signature)"
+  if [[ -z "$payload" || -z "$signature" ]]; then
+    rm -rf "$tmp_dir"
+    die "Signed release manifest is malformed."
+  fi
+  if ! decode_base64url "$payload" "$payload_file" 2>>"$LOG_FILE" ||
+    ! decode_base64url "$signature" "$signature_file" 2>>"$LOG_FILE"; then
+    rm -rf "$tmp_dir"
+    die "Signed release manifest contains invalid base64 data."
+  fi
+  printf '%s\n' "$UPDATE_SIGNING_PUBLIC_KEY" >"$key_file"
+  if ! openssl pkeyutl -verify -rawin -pubin -inkey "$key_file" -in "$payload_file" -sigfile "$signature_file" >>"$LOG_FILE" 2>&1; then
+    rm -rf "$tmp_dir"
+    die "Signed release manifest signature verification failed."
+  fi
+
+  kind="$(json_string_field "$payload_file" kind)"
+  manifest_version="$(json_string_field "$payload_file" version)"
+  tag="$(json_string_field "$payload_file" tag)"
+  image="$(json_string_field "$payload_file" image)"
+  digest="$(json_string_field "$payload_file" digest)"
+  image_ref="$(json_string_field "$payload_file" imageRef)"
+  if [[ "$kind" != "gateway-image" || "$manifest_version" != "$version" || "$tag" != "$version" ||
+    "$image" != "$IMAGE" || ! "$digest" =~ ^sha256:[a-f0-9]{64}$ || "$image_ref" != "${IMAGE}@${digest}" ]]; then
+    rm -rf "$tmp_dir"
+    die "Signed release manifest does not match the requested Gateway image."
+  fi
+  rm -rf "$tmp_dir"
+
+  IMAGE_REF="$image_ref"
+  ok "Release ${version} verified (SHA-256: ${digest#sha256:})"
+}
+
+local_source_checksum() {
+  (
+    cd "$SOURCE_DIR"
+    find . -type f \
+      ! -path './.git/*' \
+      ! -path './node_modules/*' \
+      ! -path './.memory/*' \
+      -print0 |
+      LC_ALL=C sort -z |
+      xargs -0 sha256sum
+  ) | sha256sum | awk '{print $1}'
 }
 
 usage() {
@@ -128,6 +201,10 @@ if [[ -n "$SOURCE_DIR" ]]; then
   SOURCE_DIR="$(cd "$SOURCE_DIR" && pwd)"
   VERSION="local-$(date -u +%Y%m%d%H%M%S)"
   IMAGE_REF="${IMAGE}:${VERSION}"
+  source_checksum="$(local_source_checksum)"
+  [[ "$source_checksum" =~ ^[a-f0-9]{64}$ ]] || die "Could not calculate the local source checksum"
+  info "Version: ${VERSION} (local source)"
+  ok "Local source checksum calculated (SHA-256: ${source_checksum})"
   info "Building Gateway from local source: ${SOURCE_DIR}"
   run_quiet "Gateway image build" "${DOCKER[@]}" build --build-arg "APP_VERSION=${VERSION}" --tag "$IMAGE_REF" "$SOURCE_DIR"
 else
@@ -143,7 +220,8 @@ else
       tail -n1 || true
   )"
   [[ -n "$VERSION" ]] || die "The release API did not return an eligible Gateway release"
-  IMAGE_REF="${IMAGE}:${VERSION}"
+  info "Version: ${VERSION}"
+  verify_signed_release "$VERSION" "$encoded_project"
 fi
 
 env_value() {

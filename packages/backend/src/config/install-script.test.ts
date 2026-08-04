@@ -37,14 +37,24 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('--source-dir is supported only for a fresh Gateway installation');
   });
 
-  it('renders a branded, quiet installer and lists usable connection URLs', () => {
+  it('renders a compact, quiet installer and lists usable connection URLs', () => {
     const source = readFileSync(installer, 'utf8');
     expect(source).toContain("BRAND_MINT='\\033[38;2;140;176;132m'");
-    expect(source).toContain('Gateway — Installer');
-    expect(source).toContain(' ▄████   ▄▄▄ ▄▄▄▄▄▄ ▄▄▄▄▄ ▄▄   ▄▄  ▄▄▄  ▄▄ ▄▄ ');
+    expect(source).toContain('Gateway Installer');
+    expect(source).not.toContain('show_logo()');
     expect(source).toMatch(/run_quiet "Gateway service startup" "\$\{DOCKER\[@\]\}" compose up -d/);
     expect(source).toContain('print_gateway_urls');
     expect(source).not.toContain('<server-ip>');
+  });
+
+  it('pins production installs to a verified signed image digest and labels local checksums', () => {
+    const source = readFileSync(installer, 'utf8');
+    expect(source).toContain('verify_signed_release');
+    expect(source).toContain('decode_base64url');
+    expect(source).toContain('openssl pkeyutl -verify -rawin -pubin');
+    expect(source).toContain('gateway-image.update.json');
+    expect(source).toContain('IMAGE_REF="$image_ref"');
+    expect(source).toContain('Local source checksum calculated');
   });
 
   it('does not advertise Docker, CNI, or loopback interface addresses as host-local targets', () => {
