@@ -580,8 +580,8 @@ if grep -Eq '^(OIDC_|CLICKHOUSE_|APP_URL=|SETUP_TOKEN=)' .env; then
   run_quiet "Gateway restart after legacy migration" "${DOCKER[@]}" compose up -d --force-recreate app
 fi
 
-guide_blank
 ok "Gateway ${VERSION} is running"
+guide_blank
 if [[ "$FRESH" == 1 ]]; then
   if ! setup_json="$("${DOCKER[@]}" compose exec -T app node dist/cli/setup-code.js 2>>"$LOG_FILE" | sed -n '/^{"id":/p' | tail -n1)"; then
     die "Gateway started, but the setup code could not be generated. Check ${LOG_FILE} for details."
@@ -600,3 +600,7 @@ if [[ "$FRESH" == 1 ]]; then
 else
   guide "${GRAY}Existing installation updated; persisted Gateway settings were preserved.${NC}"
 fi
+
+guide_blank
+echo -e "${BRAND_MINT}■${NC} ${BOLD}Gateway installation completed successfully.${NC}"
+echo ""
