@@ -41,6 +41,7 @@ GITLAB_URL="${GATEWAY_GITLAB_URL:-https://gitlab.wiolett.net}"
 GITLAB_PROJECT="${GATEWAY_GITLAB_PROJECT:-wiolett/gateway}"
 RUN_USER=""
 NGINX_REPO=""
+NGINX_REPO_EXPLICIT=0
 NGINX_MODE="${GATEWAY_NODE_NGINX_MODE:-}"
 NON_INTERACTIVE=0
 NO_LOGO=0
@@ -48,6 +49,7 @@ STUB_STATUS_URL="http://127.0.0.1/nginx_status"
 INTEGRATED_STUB_STATUS_PORT="8081"
 NGINX_SITES_DIR="/etc/nginx/gateway/conf.d"
 NGINX_HTPASSWD_DIR="/etc/nginx/gateway/htpasswd"
+NGINX_MIN_VERSION="1.25.1"
 RESOLVED_DAEMON_VERSION=""
 EXISTING_INSTALL=0
 EXISTING_VERSION=""
@@ -261,7 +263,7 @@ Options:
                            Gateway gRPC TLS leaf fingerprint from the generated setup command
   --version <ver>          Daemon version to install (default: latest)
   --user <user>            Run daemon as this user (default: root)
-  --skip-nginx             Skip nginx installation (if already installed)
+  --skip-nginx             Reuse installed nginx (must be 1.25.1 or newer)
   --nginx-repo <type>      Nginx repo: system, stable, or custom (default: interactive)
   --nginx-mode <mode>      Nginx config mode: managed or integrate
   --gitlab-url <url>       GitLab instance URL (default: https://gitlab.wiolett.net)
@@ -311,7 +313,7 @@ while [[ $# -gt 0 ]]; do
         --version)        DAEMON_VERSION="$2"; shift 2 ;;
         --user)           RUN_USER="$2"; shift 2 ;;
         --skip-nginx)     SKIP_NGINX=1; shift ;;
-        --nginx-repo)     NGINX_REPO="$2"; shift 2 ;;
+        --nginx-repo)     NGINX_REPO="$2"; NGINX_REPO_EXPLICIT=1; shift 2 ;;
         --nginx-mode)     NGINX_MODE="$2"; shift 2 ;;
         --gitlab-url)     GITLAB_URL="$2"; shift 2 ;;
         --gitlab-project) GITLAB_PROJECT="$2"; shift 2 ;;
@@ -443,16 +445,16 @@ if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
     if [[ -z "$NGINX_REPO" && "$SKIP_NGINX" -eq 0 ]]; then
         if ! command_exists nginx; then
             echo -e "  ${GRAY}Nginx version:${NC}"
-            echo -e "    ${BRAND_MINT}1)${NC} System default  ${GRAY}[default]${NC}"
-            echo -e "    ${BRAND_MINT}2)${NC} Stable (nginx.org official repo)"
+            echo -e "    ${BRAND_MINT}1)${NC} System default"
+            echo -e "    ${BRAND_MINT}2)${NC} Stable (nginx.org official repo) ${GRAY}[default]${NC}"
             echo -e "    ${BRAND_MINT}3)${NC} Custom"
             echo ""
-            nginx_choice=$(prompt_choice "Choose" "1")
+            nginx_choice=$(prompt_choice "Choose" "2")
             case "$nginx_choice" in
                 1|system) NGINX_REPO="system" ;;
                 2|stable) NGINX_REPO="stable" ;;
                 3|custom) NGINX_REPO="custom" ;;
-                *)        NGINX_REPO="system" ;;
+                *)        NGINX_REPO="stable" ;;
             esac
             echo ""
         fi
@@ -488,7 +490,7 @@ else
     fi
     # Default user to root in non-interactive mode
     [[ -z "$RUN_USER" ]] && RUN_USER="root"
-    [[ -z "$NGINX_REPO" ]] && NGINX_REPO="system"
+    [[ -z "$NGINX_REPO" ]] && NGINX_REPO="stable"
     if [[ -z "$NGINX_MODE" ]]; then
         if command_exists nginx; then
             NGINX_MODE="integrate"
@@ -546,6 +548,7 @@ echo -e "  Current ver: $([[ "$EXISTING_INSTALL" -eq 1 ]] && echo "${EXISTING_VE
 echo -e "  Mode:        $([[ "$EXISTING_INSTALL" -eq 1 ]] && echo "update" || echo "fresh install")"
 echo -e "  Run as:      ${RUN_USER}:${RUN_GROUP}"
 echo -e "  Skip nginx:  $([ "$SKIP_NGINX" -eq 1 ] && echo "yes" || echo "no")"
+echo -e "  Nginx min:   ${NGINX_MIN_VERSION}"
 echo -e "  Nginx mode:  ${NGINX_MODE}"
 echo -e "  GitLab:      ${GITLAB_URL}"
 echo -e "  ${GRAY}────────────────────────────────────────${NC}"
@@ -585,28 +588,29 @@ REPO
     esac
 }
 
-install_nginx() {
-    if command_exists nginx; then
-        local ver
-        ver=$(nginx -v 2>&1 | sed -n 's#.*nginx/\([0-9.]*\).*#\1#p' | head -n 1)
-        ver="${ver:-unknown}"
-        ok "nginx already installed (${ver})"
-        return 0
-    fi
+nginx_version() {
+    nginx -v 2>&1 | sed -n 's#.*nginx/\([0-9.]*\).*#\1#p' | head -n 1
+}
 
-    if [[ "$SKIP_NGINX" -eq 1 ]]; then
-        warn "Skipping nginx install (--skip-nginx). Make sure nginx is available."
-        return 0
-    fi
+nginx_version_at_least() {
+    local actual="$1"
+    local required="$2"
+    local actual_major actual_minor actual_patch required_major required_minor required_patch
 
-    # Add stable repo if requested
-    if [[ "$NGINX_REPO" == "stable" ]]; then
-        install_nginx_stable_repo
-    elif [[ "$NGINX_REPO" == "custom" ]]; then
-        warn "Custom nginx repo selected — assuming repo is already configured."
-    fi
+    [[ "$actual" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || return 1
+    IFS='.' read -r actual_major actual_minor actual_patch <<< "$actual"
+    IFS='.' read -r required_major required_minor required_patch <<< "$required"
+    actual_patch="${actual_patch:-0}"
+    required_patch="${required_patch:-0}"
 
-    log "Installing nginx..."
+    (( 10#$actual_major > 10#$required_major )) ||
+        (( 10#$actual_major == 10#$required_major && 10#$actual_minor > 10#$required_minor )) ||
+        (( 10#$actual_major == 10#$required_major && 10#$actual_minor == 10#$required_minor && 10#$actual_patch >= 10#$required_patch ))
+}
+
+install_nginx_package() {
+    local upgrade_existing="${1:-0}"
+    log "$([[ "$upgrade_existing" -eq 1 ]] && echo "Upgrading nginx..." || echo "Installing nginx...")"
     case "$OS_LIKE" in
         *debian*|*ubuntu*)
             apt-get update -qq >> "$LOG_FILE" 2>&1
@@ -614,22 +618,32 @@ install_nginx() {
             ;;
         *rhel*|*fedora*|*centos*)
             if command_exists dnf; then
-                dnf install -y -q nginx >> "$LOG_FILE" 2>&1
+                if [[ "$upgrade_existing" -eq 1 ]]; then
+                    dnf upgrade -y -q nginx >> "$LOG_FILE" 2>&1
+                else
+                    dnf install -y -q nginx >> "$LOG_FILE" 2>&1
+                fi
             else
-                yum install -y -q nginx >> "$LOG_FILE" 2>&1
+                if [[ "$upgrade_existing" -eq 1 ]]; then
+                    yum update -y -q nginx >> "$LOG_FILE" 2>&1
+                else
+                    yum install -y -q nginx >> "$LOG_FILE" 2>&1
+                fi
             fi
             ;;
         *arch*)
             pacman -Sy --noconfirm nginx >> "$LOG_FILE" 2>&1
             ;;
         *alpine*)
-            apk add --no-cache nginx >> "$LOG_FILE" 2>&1
+            apk add --no-cache --upgrade nginx >> "$LOG_FILE" 2>&1
             ;;
         *)
-            die "Cannot auto-install nginx on ${OS_ID}. Install nginx manually and rerun with --skip-nginx."
+            die "Cannot auto-install nginx on ${OS_ID}. Install nginx ${NGINX_MIN_VERSION} or newer and rerun."
             ;;
     esac
+}
 
+start_nginx_service() {
     if has_systemd; then
         systemctl enable nginx >> "$LOG_FILE" 2>&1 || true
         systemctl start nginx >> "$LOG_FILE" 2>&1 || true
@@ -639,7 +653,64 @@ install_nginx() {
     elif command_exists service; then
         service nginx start >> "$LOG_FILE" 2>&1 || true
     fi
-    ok "nginx installed"
+}
+
+install_nginx() {
+    if command_exists nginx; then
+        local ver
+        ver=$(nginx_version)
+        ver="${ver:-unknown}"
+        if nginx_version_at_least "$ver" "$NGINX_MIN_VERSION"; then
+            ok "nginx already installed (${ver})"
+            return 0
+        fi
+
+        [[ "$SKIP_NGINX" -eq 0 ]] ||
+            die "--skip-nginx requires nginx ${NGINX_MIN_VERSION}+; found ${ver}."
+
+        warn "nginx ${ver} is below the required ${NGINX_MIN_VERSION} for Gateway HTTP/2 support."
+        if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+            [[ "$NGINX_REPO_EXPLICIT" -eq 1 && "$NGINX_REPO" == "stable" ]] ||
+                die "nginx ${NGINX_MIN_VERSION}+ is required. Re-run with --nginx-repo stable to authorize the upgrade."
+        elif ! prompt_yes_no "Upgrade nginx to the official stable repository now?" "Y"; then
+            die "Gateway node setup aborted. nginx ${NGINX_MIN_VERSION}+ is required."
+        fi
+
+        NGINX_REPO="stable"
+        install_nginx_stable_repo
+        install_nginx_package 1
+        start_nginx_service
+    else
+        [[ "$SKIP_NGINX" -eq 0 ]] || die "--skip-nginx requires nginx ${NGINX_MIN_VERSION}+ to be installed."
+        if [[ "$NGINX_REPO" == "stable" ]]; then
+            install_nginx_stable_repo
+        elif [[ "$NGINX_REPO" == "custom" ]]; then
+            warn "Custom nginx repo selected — assuming it provides nginx ${NGINX_MIN_VERSION}+"
+        fi
+        install_nginx_package
+        start_nginx_service
+    fi
+
+    local installed_ver
+    installed_ver=$(nginx_version)
+    installed_ver="${installed_ver:-unknown}"
+    if ! nginx_version_at_least "$installed_ver" "$NGINX_MIN_VERSION"; then
+        warn "nginx ${installed_ver} is below the required ${NGINX_MIN_VERSION} for Gateway HTTP/2 support."
+        if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+            die "nginx ${NGINX_MIN_VERSION}+ is required; found ${installed_ver}."
+        elif ! prompt_yes_no "Upgrade nginx to the official stable repository now?" "Y"; then
+            die "Gateway node setup aborted. nginx ${NGINX_MIN_VERSION}+ is required."
+        fi
+        NGINX_REPO="stable"
+        install_nginx_stable_repo
+        install_nginx_package 1
+        start_nginx_service
+        installed_ver=$(nginx_version)
+        installed_ver="${installed_ver:-unknown}"
+        nginx_version_at_least "$installed_ver" "$NGINX_MIN_VERSION" ||
+            die "nginx ${NGINX_MIN_VERSION}+ is required; found ${installed_ver}."
+    fi
+    ok "nginx ready (${installed_ver})"
 }
 
 # ── Step 2: Configure nginx ───────────────────────────────────────────

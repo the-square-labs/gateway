@@ -75,8 +75,11 @@ server {
     listen [::]:80;
 {{/unless}}
 {{#if sslEnabled}}
-    listen 443 ssl{{#if http2Support}} http2{{/if}};
-    listen [::]:443 ssl{{#if http2Support}} http2{{/if}};
+    listen 443 ssl;
+    listen [::]:443 ssl;
+{{#if http2Support}}
+    http2 on;
+{{/if}}
 {{/if}}
     server_name {{serverNames}};
 
@@ -86,11 +89,6 @@ server {
 {{#if sslChainPath}}
     ssl_trusted_certificate {{sslChainPath}};
 {{/if}}
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
-    ssl_prefer_server_ciphers off;
-    ssl_session_timeout 1d;
-    ssl_session_tickets off;
 
 {{/if}}
     access_log {{logPath}}.access.log;
@@ -103,16 +101,20 @@ server {
     }
 
 {{/unless}}
+    location / {
 {{#if accessList}}
 {{#each accessList.ipRules}}
-    {{sanitize this.type}} {{sanitize this.value}};
+        {{sanitize this.type}} {{sanitize this.value}};
 {{/each}}
 {{#if accessListHasIpRules}}
-    deny all;
+        deny all;
+{{/if}}
+{{#if accessList.basicAuthEnabled}}
+        auth_basic "Restricted Access";
+        auth_basic_user_file /etc/nginx/gateway/htpasswd/access-list-{{accessList.id}};
+{{/if}}
 
 {{/if}}
-{{/if}}
-    location / {
 {{#if rateLimitEnabled}}
         limit_req zone=ratelimit_{{id}} burst={{rateLimitBurst}} nodelay;
 {{/if}}
@@ -150,10 +152,6 @@ server {
 {{/each}}
     }
 
-{{#if accessList.basicAuthEnabled}}
-    auth_basic "Restricted Access";
-    auth_basic_user_file /etc/nginx/gateway/htpasswd/access-list-{{accessList.id}};
-{{/if}}
 {{#if advancedConfig}}
     {{{indent advancedConfig 4}}}
 {{/if}}
@@ -186,8 +184,11 @@ const BUILTIN_REDIRECT_TEMPLATE = `server {
 {{#if sslEnabled}}
 
 server {
-    listen 443 ssl{{#if http2Support}} http2{{/if}};
-    listen [::]:443 ssl{{#if http2Support}} http2{{/if}};
+    listen 443 ssl;
+    listen [::]:443 ssl;
+{{#if http2Support}}
+    http2 on;
+{{/if}}
     server_name {{serverNames}};
 
 {{#if sslCertPath}}
@@ -199,9 +200,6 @@ server {
 {{#if sslChainPath}}
     ssl_trusted_certificate {{sslChainPath}};
 {{/if}}
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
-    ssl_prefer_server_ciphers off;
 
     access_log {{logPath}}.access.log;
     error_log {{logPath}}.error.log warn;
@@ -234,8 +232,11 @@ const BUILTIN_DEAD_TEMPLATE = `server {
 {{#if sslEnabled}}
 
 server {
-    listen 443 ssl{{#if http2Support}} http2{{/if}};
-    listen [::]:443 ssl{{#if http2Support}} http2{{/if}};
+    listen 443 ssl;
+    listen [::]:443 ssl;
+{{#if http2Support}}
+    http2 on;
+{{/if}}
     server_name {{serverNames}};
 
 {{#if sslCertPath}}
@@ -247,9 +248,6 @@ server {
 {{#if sslChainPath}}
     ssl_trusted_certificate {{sslChainPath}};
 {{/if}}
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
-    ssl_prefer_server_ciphers off;
 
     access_log {{logPath}}.access.log;
     error_log {{logPath}}.error.log warn;

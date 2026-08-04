@@ -144,8 +144,9 @@ export class NginxConfigGenerator {
     }
 
     if (host.sslEnabled) {
-      lines.push(`    listen 443 ssl${host.http2Support ? ' http2' : ''};`);
-      lines.push(`    listen [::]:443 ssl${host.http2Support ? ' http2' : ''};`);
+      lines.push('    listen 443 ssl;');
+      lines.push('    listen [::]:443 ssl;');
+      if (host.http2Support) lines.push('    http2 on;');
     }
 
     lines.push(`    server_name ${serverNames};`);
@@ -155,13 +156,6 @@ export class NginxConfigGenerator {
       if (host.sslCertPath) lines.push(`    ssl_certificate ${host.sslCertPath};`);
       if (host.sslKeyPath) lines.push(`    ssl_certificate_key ${host.sslKeyPath};`);
       if (host.sslChainPath) lines.push(`    ssl_trusted_certificate ${host.sslChainPath};`);
-      lines.push('    ssl_protocols TLSv1.2 TLSv1.3;');
-      lines.push(
-        '    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;'
-      );
-      lines.push('    ssl_prefer_server_ciphers off;');
-      lines.push('    ssl_session_timeout 1d;');
-      lines.push('    ssl_session_tickets off;');
       lines.push('');
     }
 
@@ -178,19 +172,23 @@ export class NginxConfigGenerator {
       lines.push('');
     }
 
+    lines.push('    location / {');
+
     if (host.accessList) {
       for (const rule of host.accessList.ipRules) {
         const safeType = this.sanitizeNginxValue(rule.type);
         const safeValue = this.sanitizeNginxValue(rule.value);
-        lines.push(`    ${safeType} ${safeValue};`);
+        lines.push(`        ${safeType} ${safeValue};`);
       }
       if (host.accessList.ipRules.length > 0) {
-        lines.push('    deny all;');
+        lines.push('        deny all;');
+      }
+      if (host.accessList.basicAuthEnabled) {
+        lines.push('        auth_basic "Restricted Access";');
+        lines.push(`        auth_basic_user_file /etc/nginx/gateway/htpasswd/access-list-${host.accessList.id};`);
       }
       lines.push('');
     }
-
-    lines.push('    location / {');
 
     if (host.rateLimitEnabled && host.rateLimitOptions) {
       lines.push(`        limit_req zone=ratelimit_${host.id} burst=${rateLimitBurst} nodelay;`);
@@ -250,13 +248,6 @@ export class NginxConfigGenerator {
     }
 
     lines.push('    }');
-
-    if (host.accessList?.basicAuthEnabled) {
-      lines.push('');
-      lines.push('    # Basic authentication');
-      lines.push('    auth_basic "Restricted Access";');
-      lines.push(`    auth_basic_user_file /etc/nginx/gateway/htpasswd/access-list-${host.accessList.id};`);
-    }
 
     if (host.advancedConfig) {
       lines.push('');
@@ -320,19 +311,15 @@ export class NginxConfigGenerator {
     if (host.sslEnabled) {
       lines.push('');
       lines.push('server {');
-      lines.push(`    listen 443 ssl${host.http2Support ? ' http2' : ''};`);
-      lines.push(`    listen [::]:443 ssl${host.http2Support ? ' http2' : ''};`);
+      lines.push('    listen 443 ssl;');
+      lines.push('    listen [::]:443 ssl;');
+      if (host.http2Support) lines.push('    http2 on;');
       lines.push(`    server_name ${serverNames};`);
       lines.push('');
 
       if (host.sslCertPath) lines.push(`    ssl_certificate ${host.sslCertPath};`);
       if (host.sslKeyPath) lines.push(`    ssl_certificate_key ${host.sslKeyPath};`);
       if (host.sslChainPath) lines.push(`    ssl_trusted_certificate ${host.sslChainPath};`);
-      lines.push('    ssl_protocols TLSv1.2 TLSv1.3;');
-      lines.push(
-        '    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;'
-      );
-      lines.push('    ssl_prefer_server_ciphers off;');
       lines.push('');
       lines.push(`    access_log ${NGINX_LOGS_PREFIX}/proxy-${host.id}.access.log;`);
       lines.push(`    error_log ${NGINX_LOGS_PREFIX}/proxy-${host.id}.error.log warn;`);
@@ -370,18 +357,14 @@ export class NginxConfigGenerator {
     if (host.sslEnabled) {
       lines.push('');
       lines.push('server {');
-      lines.push(`    listen 443 ssl${host.http2Support ? ' http2' : ''};`);
-      lines.push(`    listen [::]:443 ssl${host.http2Support ? ' http2' : ''};`);
+      lines.push('    listen 443 ssl;');
+      lines.push('    listen [::]:443 ssl;');
+      if (host.http2Support) lines.push('    http2 on;');
       lines.push(`    server_name ${serverNames};`);
       lines.push('');
       if (host.sslCertPath) lines.push(`    ssl_certificate ${host.sslCertPath};`);
       if (host.sslKeyPath) lines.push(`    ssl_certificate_key ${host.sslKeyPath};`);
       if (host.sslChainPath) lines.push(`    ssl_trusted_certificate ${host.sslChainPath};`);
-      lines.push('    ssl_protocols TLSv1.2 TLSv1.3;');
-      lines.push(
-        '    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;'
-      );
-      lines.push('    ssl_prefer_server_ciphers off;');
       lines.push('');
       lines.push(`    access_log ${NGINX_LOGS_PREFIX}/proxy-${host.id}.access.log;`);
       lines.push(`    error_log ${NGINX_LOGS_PREFIX}/proxy-${host.id}.error.log warn;`);

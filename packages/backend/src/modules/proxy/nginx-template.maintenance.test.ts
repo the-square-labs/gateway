@@ -59,11 +59,10 @@ describe('canonical Gateway nginx pages', () => {
     const rendered = templateService.applyMaintenanceGuard(normalConfig);
 
     expect(rendered).toContain('listen 80;');
-    expect(rendered).toContain('listen 443 ssl http2;');
+    expect(rendered).toContain('listen 443 ssl;');
+    expect(rendered).toContain('http2 on;');
     expect(rendered.match(/server \{/g)).toHaveLength(2);
     expect(rendered.match(/# Gateway maintenance mode/g)).toHaveLength(2);
-    expect(rendered).toContain('ssl_session_timeout 1d;');
-    expect(rendered).toContain('ssl_session_tickets off;');
     expect(rendered).toContain('ssl_certificate /etc/nginx/certs/example.crt;');
     expect(rendered).toContain('ssl_certificate_key /etc/nginx/certs/example.key;');
     expect(rendered).toContain('location /.well-known/acme-challenge/');
@@ -74,6 +73,52 @@ describe('canonical Gateway nginx pages', () => {
     expect(rendered).toContain('proxy_pass http://10.0.0.2:8080;');
     expect(rendered).toContain('X-Advanced');
     expect(rendered.indexOf('# Gateway maintenance mode')).toBeLessThan(rendered.indexOf('location /'));
+  });
+
+  it('leaves TLS policy to the shared Nginx configuration for SNI-origin compatibility', async () => {
+    const rendered = await service().renderForHost(host, null);
+
+    expect(rendered).toContain('listen 443 ssl;');
+    expect(rendered).toContain('http2 on;');
+    expect(rendered).toContain('ssl_certificate /etc/nginx/certs/example.crt;');
+    expect(rendered).toContain('ssl_certificate_key /etc/nginx/certs/example.key;');
+    expect(rendered).not.toContain('ssl_protocols');
+    expect(rendered).not.toContain('ssl_ciphers');
+    expect(rendered).not.toContain('ssl_session_');
+    expect(rendered).toContain('ssl_trusted_certificate /etc/nginx/certs/example.chain.crt;');
+  });
+
+  it.each(['redirect', '404'] as const)('uses the same shared TLS policy for built-in %s hosts', async (type) => {
+    const template = await service().getBuiltinTemplateContent(type);
+    const rendered = service().renderTemplate(template, { ...host, type });
+
+    expect(rendered).toContain('ssl_certificate /etc/nginx/certs/example.crt;');
+    expect(rendered).toContain('ssl_certificate_key /etc/nginx/certs/example.key;');
+    expect(rendered).toContain('ssl_trusted_certificate /etc/nginx/certs/example.chain.crt;');
+    expect(rendered).not.toContain('ssl_protocols');
+    expect(rendered).not.toContain('ssl_ciphers');
+    expect(rendered).not.toContain('ssl_session_');
+  });
+
+  it('applies a basic-auth-only ACL to the upstream location without emitting deny all', async () => {
+    const rendered = await service().renderForHost(
+      { ...host, accessList: { id: 'basic-only', ipRules: [], basicAuthEnabled: true } },
+      null
+    );
+
+    expect(rendered).not.toContain('deny all;');
+    expect(rendered).toMatch(
+      /location \/ \{[\s\S]*auth_basic "Restricted Access";[\s\S]*auth_basic_user_file \/etc\/nginx\/gateway\/htpasswd\/access-list-basic-only;[\s\S]*proxy_pass/
+    );
+  });
+
+  it('keeps IP ACL fallback inside the upstream location only', async () => {
+    const rendered = await service().renderForHost(host, null);
+    const upstreamLocation = rendered.lastIndexOf('location / {');
+    const denyAll = rendered.indexOf('deny all;');
+
+    expect(denyAll).toBeGreaterThan(upstreamLocation);
+    expect(rendered.slice(0, upstreamLocation)).not.toContain('deny all;');
   });
 
   it('preserves custom listen and certificate directives byte-for-byte', () => {

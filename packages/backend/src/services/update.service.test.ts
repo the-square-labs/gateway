@@ -188,8 +188,7 @@ describe('UpdateService foundation migration', () => {
   it('persists the verified database connector image through the foundation migration', async () => {
     const dockerService = makeDockerService();
     const service = makeUpdateService(dockerService);
-    const connectorImage =
-      'registry.example.com/wiolett/gateway/database-connector@sha256:connector-digest';
+    const connectorImage = 'registry.example.com/wiolett/gateway/database-connector@sha256:connector-digest';
 
     await service.performUpdate('v2.4.3', makeArtifact('registry.example.com/wiolett/gateway:v2.4.3', connectorImage));
 

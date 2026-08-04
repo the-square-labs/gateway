@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isDigestPinnedImageRef,
   normalizeGitLabApiUrl,
   trustedGitLabPackagePrefix,
   UpdateArtifactTrustError,
-  isDigestPinnedImageRef,
   verifyDaemonUpdateManifest,
   verifyGatewayImageManifest,
 } from './update-artifact-trust.js';
