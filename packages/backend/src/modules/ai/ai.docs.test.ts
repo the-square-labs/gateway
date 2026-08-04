@@ -36,6 +36,13 @@ describe('AI internal docs registry', () => {
       'ai-settings',
       'gitlab',
       'notifications',
+      'overview',
+      'installation',
+      'authentication',
+      'cloudflare',
+      'docker-registries',
+      'clickhouse',
+      'troubleshooting',
     ]);
     expect(DOC_TOPIC_SCOPES).toMatchObject({
       discovery: 'feat:ai:use',
@@ -52,6 +59,13 @@ describe('AI internal docs registry', () => {
       'licensing-updates': ['license:view', 'license:manage', 'admin:update'],
       gitlab: 'integrations:gitlab:view',
       notifications: 'notifications:view',
+      overview: 'feat:ai:use',
+      installation: 'feat:ai:use',
+      authentication: 'feat:ai:use',
+      cloudflare: 'integrations:cloudflare:view',
+      'docker-registries': 'docker:registries:view',
+      clickhouse: 'databases:view',
+      troubleshooting: 'feat:ai:use',
       proxy: 'proxy:view',
       inference: expect.arrayContaining(['inference:use', 'inference:providers:manage', 'inference:models:manage']),
     });
@@ -114,6 +128,19 @@ describe('AI internal docs registry', () => {
     );
     expect(getInternalDocumentation('api', ['feat:ai:use']).content).toContain('manage_oauth_authorization');
     expect(getInternalDocumentation('api', ['feat:ai:use']).content).toContain('manage_api_token');
+    expect(getInternalDocumentation('overview', ['feat:ai:use']).content).toContain(
+      'self-hosted infrastructure control plane'
+    );
+    expect(getInternalDocumentation('installation', ['feat:ai:use']).content).toContain('Browser Setup Wizard');
+    expect(getInternalDocumentation('authentication', ['feat:ai:use']).content).toContain('email one-time-code');
+    expect(getInternalDocumentation('cloudflare', ['integrations:cloudflare:view']).content).toContain(
+      'encrypted API token'
+    );
+    expect(getInternalDocumentation('docker-registries', ['docker:registries:view']).content).toContain(
+      'trusted HTTPS token-service origin'
+    );
+    expect(getInternalDocumentation('clickhouse', ['databases:view']).content).toContain('native TLS endpoint');
+    expect(getInternalDocumentation('troubleshooting', ['feat:ai:use']).content).toContain('Start With Evidence');
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).toContain('update_ai_settings');
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).toContain('providerUrl');
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).not.toContain('baseUrl:');

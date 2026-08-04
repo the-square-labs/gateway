@@ -53,7 +53,7 @@ For flags, non-interactive installs, custom SSL, OIDC details, updates, and node
 |------|------|
 | Understand what Gateway can manage | [Capabilities](docs/capabilities.md) |
 | Install Gateway | [Installation guide](docs/installation.md) |
-| Add nginx, Docker, or monitoring nodes | [Nodes and daemons](docs/nodes.md) |
+| Add nginx, Docker, database, or monitoring nodes | [Nodes and daemons](docs/nodes.md) |
 | Export or import Docker containers with or without an embedded image | [GWCA container archives](docs/docker-container-archives.md) |
 | Configure tokens, OAuth, MCP, logging, updates, and AI | [Operations guide](docs/operations.md) |
 | Configure the multi-provider inference proxy | [Inference proxy](docs/inference.md) |
@@ -102,7 +102,7 @@ The CLI asks for the Gateway URL and completes OAuth when no active connection e
 | Docker | Container lifecycle, deployments, rollout/rollback, cross-node container and volume migrations, offline inventory snapshots, registries, images, networks, volumes, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, mounts, and cleanup. |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports, and proxy binding. |
 | Domains | Central domain registry, DNS checks, record validation, and usage tracking. |
-| Databases | Saved PostgreSQL and Redis connections, encrypted credentials, health history, schema/key browsing, query consoles, and write operations. |
+| Databases | Saved PostgreSQL, Redis, and ClickHouse connections with encrypted credentials, health history, browsing, scoped query consoles, and capability-aware write operations; private-by-default managed Postgres, Redis, and ClickHouse instances can bind securely to Docker workloads. |
 | Monitoring | Node CPU, memory, disk, network, service status, daemon runtime details, log streaming, and update checks. |
 | Logging | Optional ClickHouse-backed structured log ingestion with schemas, retention, ingest tokens, rate limits, search, storage caps, and health safeguards. |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages, and optional AI assistant. |
@@ -126,8 +126,8 @@ Gateway runs as a Docker stack on the control-plane server. Managed hosts run sm
                       |
         +-------------+-------------------+
         |             |                   |
- nginx-daemon   docker-daemon     monitoring-daemon
- proxy host     container host    metrics-only host
+ nginx-daemon   docker-daemon     database profile     monitoring-daemon
+ proxy host     container host    managed databases    metrics-only host
 ```
 
 Nodes do not need inbound management ports. Public traffic ports, such as `80` and `443` on nginx nodes, are still required for the services you expose.
@@ -155,7 +155,7 @@ Completed foundations:
 - [x] Docker host management with deployments, webhooks, registries, logs, files, consoles, and secrets.
 - [x] Monitoring daemon for host metrics, runtime state, and log streaming.
 - [x] Internal PKI, ACME SSL, certificate templates, domain tracking, and expiry alerts.
-- [x] PostgreSQL and Redis database explorer with encrypted saved credentials, plus private-by-default managed Postgres, Redis, and ClickHouse database nodes with secure application bindings.
+- [x] PostgreSQL, Redis, and ClickHouse database explorer with encrypted saved credentials, plus private-by-default managed Postgres, Redis, and ClickHouse database nodes with secure application bindings.
 - [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
 - [x] Optional ClickHouse-backed structured logging and optional AI assistant.
 - [x] Optional multi-provider inference gateway with OpenAI-compatible and harness-specific APIs.
@@ -170,7 +170,6 @@ Planned work:
 - [ ] CLI for scriptable programmatic control from terminals and CI/CD jobs.
 - [ ] Plugin system for extending Gateway with new integrations and operational modules.
 - [ ] Per-user AI assistant quotas and richer usage reporting.
-- [ ] Local username/password authentication as an OIDC alternative.
 - [ ] More guided onboarding for first-time installs and first-node setup.
 - [ ] Broader operational documentation and examples for common deployment patterns.
 

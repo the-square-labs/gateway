@@ -113,7 +113,7 @@ Domain workflows:
 
 ## Databases
 
-Gateway can store external PostgreSQL and Redis connections with encrypted credentials, and deploy managed Postgres, Redis, and ClickHouse instances on dedicated database nodes.
+Gateway can store external PostgreSQL, Redis, and ClickHouse connections with encrypted credentials, and deploy managed Postgres, Redis, and ClickHouse instances on dedicated database nodes.
 
 Managed instances are private by default. Gateway binds applications through a private connector and authenticated tunnel, with a separate engine identity per binding. Publishing TCP for external infrastructure is an explicit opt-in; it requires database authentication, Gateway does not open host firewalls automatically, and the path is not tunnel-encrypted unless native database TLS is configured.
 
@@ -141,16 +141,24 @@ Redis:
 - Set, delete, and expire keys when permitted.
 - Run Redis commands through a scoped console.
 
+ClickHouse:
+
+- Test saved connections and track health history.
+- Browse databases, tables, views, dictionaries, and rows.
+- Run SQL through a scoped console.
+- Insert, update, or delete rows only when the selected table engine, server version, and caller permissions allow the operation; schema mutations are not exposed through the explorer.
+
 Credential reveal and query execution are intentionally separate permissions. Users can be allowed to monitor a database without being allowed to reveal credentials or run arbitrary commands. Binding-injected application credentials are not displayed by default.
 
 ## Nodes And Monitoring
 
-Gateway supports three daemon types:
+Gateway supports four daemon types:
 
 | Type | Daemon | Purpose |
 |------|--------|---------|
 | nginx | `nginx-daemon` | Reverse proxy management. |
 | docker | `docker-daemon` | Docker container and deployment management. |
+| databases | `docker-daemon` | Restricted profile for Gateway-managed Postgres, Redis, and ClickHouse instances. |
 | monitoring | `monitoring-daemon` | Host metrics without nginx or Docker control. |
 
 Node features:
@@ -165,7 +173,7 @@ Node features:
 - Report local/public IP addresses and allow an explicit Docker service address for cross-node and proxy-upstream traffic.
 - Remotely update daemon binaries with SHA256 verification and atomic replacement.
 
-Managed services keep running if Gateway is offline. You lose central control until Gateway returns, but nginx and Docker continue using the last applied host state.
+Managed services keep running if Gateway is offline. You lose central control until Gateway returns, but nginx, Docker, and managed database services continue using the last applied host state.
 
 ## Structured Logging
 
@@ -240,7 +248,7 @@ For scope rules and delegation details, see [SCOPES.md](../SCOPES.md).
 
 Administration features:
 
-- OIDC authentication.
+- OIDC, local password, and email one-time-code authentication; users can add passkeys after setup.
 - Built-in and custom permission groups.
 - Per-user additional scope grants, bounded by the permissions of the administrator assigning them.
 - Granular scopes for users, groups, API tokens, OAuth grants, and MCP access.

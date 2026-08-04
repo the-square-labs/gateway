@@ -58,6 +58,13 @@ interface SetupUnlockResult {
   csrfToken: string;
 }
 
+interface SetupApplyResult {
+  status: "completed";
+  restartRequired: boolean;
+}
+
+const TLS_RESTART_REDIRECT_DELAY_MS = 20_000;
+
 interface PersistedSetupDraft {
   step: SetupStep;
   publicUrl: string;
@@ -119,6 +126,7 @@ export function SetupWizardPage() {
   const [draftCodeId, setDraftCodeId] = useState<string | null>(null);
   const [draftReady, setDraftReady] = useState(false);
   const [setupInProgress, setSetupInProgress] = useState(false);
+  const [restartPending, setRestartPending] = useState(false);
   const [loadingSession, setLoadingSession] = useState(true);
   const [busy, setBusy] = useState(false);
   const [code, setCode] = useState("");
@@ -255,6 +263,12 @@ export function SetupWizardPage() {
       active = false;
     };
   }, [hydrate]);
+
+  useEffect(() => {
+    if (!restartPending) return;
+    const timer = window.setTimeout(() => window.location.assign("/login"), TLS_RESTART_REDIRECT_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [restartPending]);
 
   useEffect(() => {
     if (!draftReady || !draftCodeId || !unlocked) return;
@@ -541,7 +555,7 @@ export function SetupWizardPage() {
               <FinishStep
                 administrator={admin}
                 administratorCreated={Boolean(config?.administratorCreated)}
-                busy={busy}
+                busy={busy || restartPending}
                 enabledMethods={enabledPrimaryMethods}
                 logging={logging}
                 network={network}
@@ -551,7 +565,7 @@ export function SetupWizardPage() {
                 onBack={previousStep}
                 onContinue={() =>
                   void run(async () => {
-                    await setupRequest(
+                    const result = await setupRequest<SetupApplyResult>(
                       "/wizard/apply",
                       "POST",
                       {
@@ -581,7 +595,11 @@ export function SetupWizardPage() {
                       csrfToken
                     );
                     if (draftCodeId) sessionStorage.removeItem(draftStorageKey(draftCodeId));
-                    window.location.assign("/login");
+                    if (result.restartRequired) {
+                      setRestartPending(true);
+                    } else {
+                      window.location.assign("/login");
+                    }
                   })
                 }
               />

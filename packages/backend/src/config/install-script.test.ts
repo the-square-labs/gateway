@@ -20,7 +20,8 @@ describe('install.sh managed browser bootstrap', () => {
 
   it('keeps transport as the only product choice and delegates setup to the browser', () => {
     const source = readFileSync(installer, 'utf8');
-    expect(source).toContain('Use native HTTPS now?');
+    expect(source).toContain('Web transport:');
+    expect(source).toContain('Internal HTTPS  — use Gateway System CA on :3000');
     expect(source).toContain('Finish configuration in the browser');
     expect(source).not.toMatch(/^OIDC_ISSUER=/m);
     expect(source).not.toMatch(/^CLICKHOUSE_URL=/m);
@@ -57,7 +58,8 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('databaseConnectorImage');
     expect(source).toContain('DATABASE_CONNECTOR_IMAGE_REF="$connector_image_ref"');
     expect(source).toContain('--database-connector-image "$DATABASE_CONNECTOR_IMAGE_REF"');
-    expect(source).toContain('Local source checksum calculated');
+    expect(source).toContain('ARTIFACT_KIND="local source checksum"');
+    expect(source).toContain('short_digest "$ARTIFACT_DIGEST"');
   });
 
   it('does not advertise Docker, CNI, or loopback interface addresses as host-local targets', () => {

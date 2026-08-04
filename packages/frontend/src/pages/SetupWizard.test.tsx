@@ -301,7 +301,9 @@ describe("SetupWizardPage", () => {
       .mockImplementationOnce(() => response(200, { data: PENDING_STATUS }))
       .mockImplementationOnce(() => response(200, { data: UNLOCKED }))
       .mockImplementationOnce(() => response(200, { data: CONFIG }))
-      .mockImplementation(() => response(500, { message: "captured apply" }));
+      .mockImplementation(() =>
+        response(200, { data: { status: "completed", restartRequired: true } })
+      );
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
 
@@ -410,6 +412,9 @@ describe("SetupWizardPage", () => {
       logging: { mode: "disabled" },
     });
     expect(JSON.parse(String(init.body)).administrator).not.toHaveProperty("password");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Apply configuration" })).toBeDisabled();
+    });
   });
 
   it("disables invalid steps and applies the shared Resend SMTP preset", async () => {

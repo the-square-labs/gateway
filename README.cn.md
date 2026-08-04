@@ -30,21 +30,20 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 > [!IMPORTANT]
 > **Production 部署说明：** Gateway 是一个高权限的基础设施控制平面。为了执行 self-updates 和本地维护等内部操作，Gateway app 会挂载宿主机 Docker socket。请在隔离 VM 或专用主机上运行 Gateway，不要在同一 Docker 主机上放置无关 workloads。
 
-> [!WARNING]
-> **必须使用 OIDC：** 出于安全原因，Gateway 目前只支持通过 OpenID Connect provider 进行 SSO 登录。没有内置 username/password authentication，因此用户登录前需要先配置 OIDC provider。
+安装器会启动 Gateway 并输出一次性设置代码。随后浏览器向导会配置规范 URL、节点网络 endpoint、一个或多个登录方式（OIDC、密码或 email code）、首个系统管理员以及可选的 structured logging。
 
 根据你的部署方式开放对应端口：
 
 | 端口 | 用途 |
 |------|------|
 | `3000/tcp` | Gateway app UI/API 端口。对于 behind-NAT installs，请只在本地网络开放，并让外部 reverse proxy 指向它。 |
-| `443/tcp` | 当 Gateway installer 在 Gateway 旁配置 nginx 并设置域名时，用于公开 HTTPS UI/API 访问。 |
+| `443/tcp` | 由你自己的 reverse proxy 提供的可选 public HTTPS endpoint。Gateway 本身监听 `3000/tcp`。 |
 | `80/tcp` | HTTP 和 ACME HTTP-01 challenge，仅在使用该 challenge mode 时需要。 |
 | `9443/tcp` | managed daemon connections 使用的 gRPC control plane。 |
 
-在 NAT 或已有外部 reverse proxy 后面时，只在本地网络发布 `3000/tcp`，并配置外部 proxy 将 Gateway 公共域名转发到 `http://<gateway-lan-ip>:3000`。如果让 Gateway installer 为 Gateway 域名配置同机 nginx，那么 UI/API 访问只需要 `443/tcp`。Managed nodes 仍会 outbound 连接 Gateway 的 `9443/tcp`；它们不需要入站 management ports。
+在 NAT 或已有外部 reverse proxy 后面时，只在本地网络发布 `3000/tcp`，并配置外部 proxy 将 Gateway 公共域名转发到选定的 HTTP 或 HTTPS transport（`<gateway-lan-ip>:3000`）。Managed nodes 仍会 outbound 连接 Gateway 的 `9443/tcp`；它们不需要入站 management ports。
 
-安装器会询问 domain、OIDC provider、SSL mode、resource profile 和 log rotation 设置。完成后，打开 Gateway，登录并添加第一个节点。
+新的交互式安装在 shell 中只询问一个问题：端口 `3000` 使用 native HTTPS 还是 HTTP。所有产品配置都在 browser wizard 中完成；更新是非交互式的，并保留现有设置。
 
 关于 flags、non-interactive installs、custom SSL、OIDC details、updates 和 node setup，请阅读 [installation guide](docs/installation.md)。
 
@@ -54,7 +53,7 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 |------|------|
 | 了解 Gateway 可以管理什么 | [Capabilities](docs/capabilities.md) |
 | 安装 Gateway | [Installation guide](docs/installation.md) |
-| 添加 nginx、Docker 或 monitoring 节点 | [Nodes and daemons](docs/nodes.md) |
+| 添加 nginx、Docker、database 或 monitoring 节点 | [Nodes and daemons](docs/nodes.md) |
 | 导出或导入包含或不包含内嵌 image 的 Docker containers | [GWCA container archives](docs/docker-container-archives.md) |
 | 配置 tokens、OAuth、MCP、logging、updates 和 AI | [Operations guide](docs/operations.md) |
 | 配置 multi-provider inference proxy | [Inference proxy](docs/inference.md) |
@@ -103,12 +102,12 @@ npx -y @wiolett/gateway-inference@latest setup claude-code
 | Docker | Container lifecycle, deployments, rollout/rollback, cross-node container 和 volume migrations, offline inventory snapshots, registries, images, networks, volumes, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, mounts 和 cleanup。 |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports 和 proxy binding。 |
 | Domains | Central domain registry, DNS checks, record validation 和 usage tracking。 |
-| Databases | Saved PostgreSQL 和 Redis connections, encrypted credentials, health history, schema/key browsing, query consoles 和 write operations。 |
+| Databases | Saved PostgreSQL、Redis 和 ClickHouse connections，含 encrypted credentials、health history、browsing、scoped query consoles 和 capability-aware write operations；private-by-default managed Postgres、Redis 和 ClickHouse instances 可安全绑定到 Docker workloads。 |
 | Monitoring | Node CPU, memory, disk, network, service status, daemon runtime details, log streaming 和 update checks。 |
 | Logging | 可选的 ClickHouse-backed structured log ingestion，包含 schemas、retention、ingest tokens、rate limits 和 search。 |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages 和 optional AI assistant。 |
 | Inference | 可选的 multi-provider model gateway，包含独立 tokens、usage controls、OpenAI-compatible APIs，以及通过 `@wiolett/gateway-inference` 管理的 Codex 或 Claude Code 配置。 |
-| Administration | OIDC login, group-based 和 per-user additional permissions, scoped programmatic access, audit logs, setup state, updates 和 license controls。 |
+| Administration | OIDC、password、email-code 和 passkey login，group-based 和 per-user additional permissions, scoped programmatic access, audit logs, setup state, updates 和 license controls。 |
 
 ## 工作方式
 
@@ -136,7 +135,7 @@ Gateway 作为 Docker stack 运行在 control-plane server 上。Managed hosts �
 
 Gateway 的设计目标是让自托管基础设施控制平面默认更安全：
 
-- 用户登录只通过 OIDC SSO，因此 password policy、MFA、device posture 和 identity lifecycle 都留在你的 identity provider 中。
+- 用户登录支持 OIDC、password、email code 和 passkeys。Local authentication 需要已验证的 SMTP delivery，group MFA policy 会在 primary credential 后生效。
 - Managed nodes 通过 gRPC 和 mTLS outbound 连接 Gateway。首次 enrollment 需要一次性 token 和生成的 Gateway gRPC certificate fingerprint，daemon 会在发送 token 前验证 Gateway TLS leaf。Enrollment 完成后，daemon commands 需要由 Gateway internal node CA 签发的 client certificate。
 - 每个 node certificate 都绑定到一个 node identity。Gateway 在接受 control streams、log streams 和 certificate renewal requests 前会检查 mTLS certificate identity。
 - 节点不需要入站 management 端口。失去 Gateway 访问不会停止现有 nginx configs 或 Docker containers；它只会暂停 centralized control。
@@ -155,7 +154,7 @@ Gateway 已经面向 production operations，而不是狭窄的 MVP。当前方�
 - [x] Docker host management with deployments, webhooks, registries, logs, files, consoles, and secrets.
 - [x] Monitoring daemon for host metrics, runtime state, and log streaming.
 - [x] Internal PKI, ACME SSL, certificate templates, domain tracking, and expiry alerts.
-- [x] PostgreSQL and Redis database explorer with encrypted saved credentials.
+- [x] PostgreSQL、Redis 和 ClickHouse database explorer with encrypted saved credentials，以及 private-by-default managed Postgres、Redis 和 ClickHouse database nodes with secure application bindings。
 - [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
 - [x] Optional ClickHouse-backed structured logging and optional AI assistant.
 - [x] 可选的 multi-provider inference gateway，提供 OpenAI-compatible 和 harness-specific APIs。
@@ -170,7 +169,6 @@ Gateway 已经面向 production operations，而不是狭窄的 MVP。当前方�
 - [ ] CLI for scriptable programmatic control from terminals and CI/CD jobs.
 - [ ] Plugin system for extending Gateway with new integrations and operational modules.
 - [ ] Per-user AI assistant quotas and richer usage reporting.
-- [ ] Local username/password authentication as an OIDC alternative.
 - [ ] More guided onboarding for first-time installs and first-node setup.
 - [ ] Broader operational documentation and examples for common deployment patterns.
 
@@ -197,7 +195,7 @@ Gateway 已经面向 production operations，而不是狭窄的 MVP。当前方�
 <details>
 <summary><strong>Gateway 可以不使用 ClickHouse 吗？</strong></summary>
 
-可以。如果 `CLICKHOUSE_URL` 为空，structured logging UI 和 ingest API 会被禁用。Gateway 的其他部分会继续工作。
+可以。在 first-run wizard 或 **Settings → Gateway** 中为 structured logging 选择 **Disabled**。Gateway 的其他部分会继续工作；managed local ClickHouse 可以在不删除 data volume 的情况下关闭。
 </details>
 
 <details>

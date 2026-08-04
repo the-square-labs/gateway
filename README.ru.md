@@ -30,21 +30,20 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 > [!IMPORTANT]
 > **Примечание для production-развертывания:** Gateway - привилегированная панель управления инфраструктурой. Для внутренних операций, таких как self-updates и локальное обслуживание, приложение Gateway монтирует Docker socket хоста. Запускайте Gateway в изолированной VM или на выделенном хосте и не размещайте на том же Docker-хосте посторонние workloads.
 
-> [!WARNING]
-> **OIDC обязателен:** По соображениям безопасности Gateway сейчас поддерживает вход только через SSO с OpenID Connect provider. Встроенной username/password-аутентификации нет, поэтому перед входом пользователей нужно настроить OIDC provider.
+Installer запускает Gateway и выводит одноразовый код настройки. В браузерном мастере затем задаются канонический URL, сетевые endpoints для nodes, один или несколько способов входа (OIDC, пароль или email-код), первый системный администратор и опциональное structured logging.
 
 Откройте порты, подходящие для вашей схемы развертывания:
 
 | Порт | Назначение |
 |------|------------|
 | `3000/tcp` | UI/API порт приложения Gateway. Для установок за NAT откройте его только в локальной сети и направьте внешний reverse proxy на него. |
-| `443/tcp` | Публичный HTTPS-доступ к UI/API, когда installer Gateway настраивает nginx рядом с Gateway и задает домен. |
+| `443/tcp` | Опциональный публичный HTTPS endpoint вашего reverse proxy. Сам Gateway слушает `3000/tcp`. |
 | `80/tcp` | HTTP и ACME HTTP-01 challenge, только если используется этот challenge mode. |
 | `9443/tcp` | gRPC control plane для подключений managed daemons. |
 
-За NAT или существующим внешним reverse proxy публикуйте `3000/tcp` только в локальной сети и настройте внешний proxy на передачу публичного домена Gateway к `http://<gateway-lan-ip>:3000`. Если installer Gateway настраивает nginx рядом с Gateway для домена Gateway, для доступа к UI/API нужен только `443/tcp`. Managed nodes все равно подключаются исходяще к Gateway на `9443/tcp`; входящие management-порты им не нужны.
+За NAT или существующим внешним reverse proxy публикуйте `3000/tcp` только в локальной сети и настройте внешний proxy на передачу публичного домена Gateway к выбранному HTTP- или HTTPS-транспорту на `<gateway-lan-ip>:3000`. Managed nodes все равно подключаются исходяще к Gateway на `9443/tcp`; входящие management-порты им не нужны.
 
-Инсталлятор спросит домен, OIDC provider, размещение PostgreSQL, режим structured logging, SSL mode, resource profile и настройки log rotation. После завершения откройте Gateway, войдите в систему и добавьте первый узел.
+При новой интерактивной установке единственный shell-вопрос — использовать ли native HTTPS или HTTP на порту `3000`. Вся настройка продукта выполняется в browser wizard; обновления неинтерактивны и сохраняют настройки.
 
 Флаги, non-interactive installs, custom SSL, OIDC details, updates и node setup описаны в [installation guide](docs/installation.md).
 
@@ -54,7 +53,7 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 |------|--------|
 | Понять, чем может управлять Gateway | [Capabilities](docs/capabilities.md) |
 | Установить Gateway | [Installation guide](docs/installation.md) |
-| Добавить nginx, Docker или monitoring узлы | [Nodes and daemons](docs/nodes.md) |
+| Добавить nginx, Docker, database или monitoring узлы | [Nodes and daemons](docs/nodes.md) |
 | Экспортировать или импортировать Docker-контейнеры со встроенным image или без него | [GWCA container archives](docs/docker-container-archives.md) |
 | Настроить tokens, OAuth, MCP, logging, updates и AI | [Operations guide](docs/operations.md) |
 | Настроить multi-provider inference proxy | [Inference proxy](docs/inference.md) |
@@ -103,12 +102,12 @@ npx -y @wiolett/gateway-inference@latest setup claude-code
 | Docker | Container lifecycle, deployments, rollout/rollback, cross-node migrations контейнеров и volumes, offline inventory snapshots, registries, images, networks, volumes, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, mounts и cleanup. |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports и proxy binding. |
 | Domains | Central domain registry, DNS checks, record validation и usage tracking. |
-| Databases | Saved PostgreSQL и Redis connections, encrypted credentials, health history, schema/key browsing, query consoles и write operations. |
+| Databases | Saved PostgreSQL, Redis и ClickHouse connections с encrypted credentials, health history, browsing, scoped query consoles и capability-aware write operations; private-by-default managed Postgres, Redis и ClickHouse instances могут безопасно подключаться к Docker workloads. |
 | Monitoring | Node CPU, memory, disk, network, service status, daemon runtime details, log streaming и update checks. |
 | Logging | Опциональный ClickHouse-backed structured log ingestion со schemas, retention, ingest tokens, rate limits и search. |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages и optional AI assistant. |
 | Inference | Опциональный multi-provider model gateway с отдельными tokens, usage controls, OpenAI-compatible API и управляемой настройкой Codex или Claude Code через `@wiolett/gateway-inference`. |
-| Administration | OIDC login, group-based и дополнительные per-user permissions, scoped programmatic access, audit logs, setup state, updates и license controls. |
+| Administration | OIDC, password, email-code и passkey login, group-based и дополнительные per-user permissions, scoped programmatic access, audit logs, setup state, updates и license controls. |
 
 ## Как это работает
 
@@ -137,7 +136,7 @@ Gateway запускается как Docker stack на control-plane серве
 
 Gateway по умолчанию ориентирован на безопасную работу как self-hosted infrastructure control plane:
 
-- Вход пользователей только через SSO с OIDC, поэтому password policy, MFA, device posture и lifecycle учетных записей остаются у identity provider.
+- Вход поддерживает OIDC, пароль, email-коды и passkeys. Local authentication требует проверенной SMTP-доставки, а group MFA policy применяется после primary credential.
 - Managed nodes подключаются к Gateway исходяще по gRPC с mTLS. Первая регистрация требует одноразовый token и сгенерированный fingerprint gRPC-сертификата Gateway, а daemon проверяет TLS leaf Gateway перед отправкой token. После enrollment daemon-команды требуют client certificate, выпущенный внутренней node CA Gateway.
 - Каждый node certificate привязан к node identity. Gateway проверяет mTLS certificate identity перед приемом control streams, log streams и certificate renewal requests.
 - Узлам не нужны входящие management-порты. Потеря доступа к Gateway не останавливает существующие nginx configs или Docker containers; она только приостанавливает centralized control.
@@ -156,7 +155,7 @@ Gateway уже ориентирован на production operations, а не на
 - [x] Docker host management with deployments, webhooks, registries, logs, files, consoles, and secrets.
 - [x] Monitoring daemon for host metrics, runtime state, and log streaming.
 - [x] Internal PKI, ACME SSL, certificate templates, domain tracking, and expiry alerts.
-- [x] PostgreSQL и Redis database explorer с encrypted saved credentials, а также private-by-default managed Postgres, Redis и ClickHouse database nodes с secure application bindings.
+- [x] PostgreSQL, Redis и ClickHouse database explorer с encrypted saved credentials, а также private-by-default managed Postgres, Redis и ClickHouse database nodes с secure application bindings.
 - [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
 - [x] Optional ClickHouse-backed structured logging and optional AI assistant.
 - [x] Опциональный multi-provider inference gateway с OpenAI-compatible и harness-specific APIs.
@@ -171,7 +170,6 @@ Gateway уже ориентирован на production operations, а не на
 - [ ] CLI for scriptable programmatic control from terminals and CI/CD jobs.
 - [ ] Plugin system for extending Gateway with new integrations and operational modules.
 - [ ] Per-user AI assistant quotas and richer usage reporting.
-- [ ] Local username/password authentication as an OIDC alternative.
 - [ ] More guided onboarding for first-time installs and first-node setup.
 - [ ] Broader operational documentation and examples for common deployment patterns.
 
@@ -198,7 +196,7 @@ Gateway уже ориентирован на production operations, а не на
 <details>
 <summary><strong>Может ли Gateway работать без ClickHouse?</strong></summary>
 
-Да. Если `CLICKHOUSE_URL` пустой, structured logging UI и ingest API отключаются. Остальная часть Gateway продолжает работать.
+Да. Выберите **Disabled** для structured logging в first-run wizard или **Settings → Gateway**. Остальная часть Gateway продолжает работать; managed local ClickHouse можно отключить без удаления data volume.
 </details>
 
 <details>

@@ -128,7 +128,7 @@ describe("SqlExplorer (ClickHouse)", () => {
     );
 
     expect(await screen.findByText("analytics.events")).toBeInTheDocument();
-    await user.click(screen.getByTitle("Insert row"));
+    await user.click(await screen.findByTitle("Insert row"));
     const inputs = screen.getAllByRole("textbox");
     await user.type(inputs.at(-2)!, "2");
     await user.type(inputs.at(-1)!, "purchase");
