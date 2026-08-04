@@ -183,10 +183,11 @@ FRESH=0
 if [[ "$FRESH" == 1 && -z "$TRANSPORT" ]]; then
   TRANSPORT="https"
   if [[ -r /dev/tty && -w /dev/tty ]]; then
-    printf '\nGateway can serve port 3000 with its own System CA certificate.\n' >/dev/tty
+    printf 'Gateway can serve port 3000 with its own System CA certificate.\n' >/dev/tty
     printf 'Use native HTTPS now? [Y/n] ' >/dev/tty
     read -r answer </dev/tty || true
     case "${answer:-Y}" in n|N|no|NO) TRANSPORT="http" ;; esac
+    printf '\n' >/dev/tty
   fi
 fi
 [[ "$TRANSPORT" == "http" || "$TRANSPORT" == "https" || "$FRESH" == 0 ]] || die "GATEWAY_WEB_TRANSPORT must be http or https"
