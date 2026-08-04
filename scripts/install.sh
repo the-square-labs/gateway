@@ -9,6 +9,7 @@ GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-wiolett/gateway}"
 INSTALL_DIR="${GATEWAY_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 IMAGE="${GATEWAY_IMAGE:-$DEFAULT_IMAGE}"
 TRANSPORT="${GATEWAY_WEB_TRANSPORT:-}"
+SOURCE_DIR="${GATEWAY_SOURCE_DIR:-}"
 
 info() { printf '  INFO  %s\n' "$1"; }
 ok() { printf '  OK    %s\n' "$1"; }
@@ -16,11 +17,15 @@ die() { printf '  ERROR %s\n' "$1" >&2; exit 1; }
 
 usage() {
   cat <<'EOF'
-Usage: install.sh [--install-dir PATH] [--image IMAGE] [--http|--https]
+Usage: install.sh [--install-dir PATH] [--image IMAGE] [--source-dir PATH] [--http|--https]
 
 Installs or updates Gateway. On a fresh interactive install, the only prompt
 selects native HTTPS or HTTP for port 3000. Non-interactive installs default
 to native HTTPS. All product configuration continues in the browser wizard.
+
+--source-dir builds the Gateway image from a local source checkout on this
+host. It is intended for a fresh test installation and skips GitLab release
+discovery and image pulls.
 EOF
 }
 
@@ -28,6 +33,7 @@ while (($#)); do
   case "$1" in
     --install-dir) INSTALL_DIR="${2:?missing path}"; shift 2 ;;
     --image) IMAGE="${2:?missing image}"; shift 2 ;;
+    --source-dir) SOURCE_DIR="${2:?missing path}"; shift 2 ;;
     --http) TRANSPORT="http"; shift ;;
     --https) TRANSPORT="https"; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -69,19 +75,30 @@ if [[ "$FRESH" == 1 && -z "$TRANSPORT" ]]; then
 fi
 [[ "$TRANSPORT" == "http" || "$TRANSPORT" == "https" || "$FRESH" == 0 ]] || die "GATEWAY_WEB_TRANSPORT must be http or https"
 
-encoded_project="${GITLAB_PROJECT_PATH//\//%2F}"
-info "Resolving the latest Gateway release"
-release_json="$(curl -fsSL "${GITLAB_API_URL}/api/v4/projects/${encoded_project}/releases?per_page=100")" || die "Unable to query releases"
-VERSION="$(
-  printf '%s' "$release_json" |
-    grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' |
-    sed -E 's/^.*"([^"]+)"$/\1/' |
-    grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' |
-    sort -V |
-    tail -n1 || true
-)"
-[[ -n "$VERSION" ]] || die "The release API did not return an eligible Gateway release"
-IMAGE_REF="${IMAGE}:${VERSION}"
+if [[ -n "$SOURCE_DIR" ]]; then
+  [[ "$FRESH" == 1 ]] || die "--source-dir is supported only for a fresh Gateway installation"
+  [[ -d "$SOURCE_DIR" && -f "$SOURCE_DIR/Dockerfile" && -f "$SOURCE_DIR/package.json" ]] || \
+    die "--source-dir must point to a Gateway source checkout"
+  SOURCE_DIR="$(cd "$SOURCE_DIR" && pwd)"
+  VERSION="local-$(date -u +%Y%m%d%H%M%S)"
+  IMAGE_REF="${IMAGE}:${VERSION}"
+  info "Building Gateway from local source: ${SOURCE_DIR}"
+  "${DOCKER[@]}" build --build-arg "APP_VERSION=${VERSION}" --tag "$IMAGE_REF" "$SOURCE_DIR"
+else
+  encoded_project="${GITLAB_PROJECT_PATH//\//%2F}"
+  info "Resolving the latest Gateway release"
+  release_json="$(curl -fsSL "${GITLAB_API_URL}/api/v4/projects/${encoded_project}/releases?per_page=100")" || die "Unable to query releases"
+  VERSION="$(
+    printf '%s' "$release_json" |
+      grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' |
+      sed -E 's/^.*"([^"]+)"$/\1/' |
+      grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' |
+      sort -V |
+      tail -n1 || true
+  )"
+  [[ -n "$VERSION" ]] || die "The release API did not return an eligible Gateway release"
+  IMAGE_REF="${IMAGE}:${VERSION}"
+fi
 
 env_value() {
   local key="$1"
@@ -228,8 +245,10 @@ else
     --image-ref "$IMAGE_REF"
 fi
 
-info "Pulling ${IMAGE_REF}"
-"${DOCKER[@]}" compose pull
+if [[ -z "$SOURCE_DIR" ]]; then
+  info "Pulling ${IMAGE_REF}"
+  "${DOCKER[@]}" compose pull
+fi
 "${DOCKER[@]}" compose up -d
 
 info "Waiting for Gateway"

@@ -29,6 +29,14 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).not.toContain('cloudflare');
   });
 
+  it('can build a fresh test install from a local source checkout without GitLab release discovery', () => {
+    const source = readFileSync(installer, 'utf8');
+    expect(source).toContain('--source-dir PATH');
+    expect(source).toContain('Building Gateway from local source');
+    expect(source).toContain('"${DOCKER[@]}" build');
+    expect(source).toContain('--source-dir is supported only for a fresh Gateway installation');
+  });
+
   it('does not advertise Docker or CNI interface addresses as host-local targets', () => {
     const source = readFileSync(installer, 'utf8');
     expect(source).toContain('interface ~ /^docker/');
