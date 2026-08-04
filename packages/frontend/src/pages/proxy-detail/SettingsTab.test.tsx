@@ -82,6 +82,12 @@ function makeProps(overrides: Partial<SettingsTabProps> = {}): SettingsTabProps 
 }
 
 describe("proxy detail SettingsTab", () => {
+  it("keeps the access-list combobox outside the panel clipping boundary", () => {
+    render(<SettingsTab {...makeProps()} />);
+
+    expect(screen.getByText("Access List").closest("div.border")).toHaveClass("overflow-visible");
+  });
+
   it("allows selecting an SSL certificate before SSL is enabled", () => {
     render(<SettingsTab {...makeProps()} />);
 

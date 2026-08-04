@@ -213,7 +213,7 @@ export function SettingsTab({
         <PanelShell
           title="Access List"
           description="Restrict access via IP rules or basic authentication"
-          className={cn(host.type !== "proxy" && "md:col-span-2")}
+          className={cn("overflow-visible", host.type !== "proxy" && "md:col-span-2")}
           actions={
             <Combobox
               value={accessListId}
