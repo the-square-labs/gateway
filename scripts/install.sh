@@ -34,6 +34,13 @@ info() {
     echo -e "${INFO_TAG} INFO ${NC} $*"
   fi
 }
+warn() {
+  if [[ "$GUIDE_ACTIVE" -eq 1 ]]; then
+    echo -e "${BRAND_MINT}│${NC} ${WARN_TAG} WARN ${NC} $*"
+  else
+    echo -e "${WARN_TAG} WARN ${NC} $*"
+  fi
+}
 ok() {
   if [[ "$GUIDE_ACTIVE" -eq 1 ]]; then
     echo -e "${BRAND_MINT}│${NC} \033[48;2;140;176;132m\033[30m  OK  ${NC} $*"
@@ -357,9 +364,12 @@ fi
 [[ "$TRANSPORT" == "http" || "$TRANSPORT" == "https" || "$FRESH" == 0 ]] || die "GATEWAY_WEB_TRANSPORT must be http or https"
 if [[ "$FRESH" == 1 ]]; then
   if [[ "$TRANSPORT" == "https" ]]; then
-    guide "${GRAY}Your browser will show a certificate warning on first visit. This is expected until the Gateway System CA is trusted.${NC}"
+    guide_blank
+    warn "Your browser will show a certificate warning on first visit."
+    warn "This is expected until the Gateway System CA is trusted."
+  else
+    guide_blank
   fi
-  guide_blank
 fi
 if [[ "$DRY_RUN" -eq 1 ]]; then
   info "Dry run: would validate Docker and prepare Gateway services"
