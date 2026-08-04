@@ -3,6 +3,7 @@ import {
   normalizeGitLabApiUrl,
   trustedGitLabPackagePrefix,
   UpdateArtifactTrustError,
+  isDigestPinnedImageRef,
   verifyDaemonUpdateManifest,
   verifyGatewayImageManifest,
 } from './update-artifact-trust.js';
@@ -95,5 +96,12 @@ describe('update artifact trust', () => {
         image: 'registry.example.com/wiolett/gateway',
       })
     ).toThrow(UpdateArtifactTrustError);
+  });
+
+  it('accepts only a digest-pinned connector image in the Gateway repository', () => {
+    const repository = 'registry.gitlab.wiolett.net/wiolett/gateway/database-connector';
+    expect(isDigestPinnedImageRef(`${repository}@sha256:${checksum}`, repository)).toBe(true);
+    expect(isDigestPinnedImageRef(`${repository}:v2.5.0`, repository)).toBe(false);
+    expect(isDigestPinnedImageRef(`registry.example.com/connector@sha256:${checksum}`, repository)).toBe(false);
   });
 });

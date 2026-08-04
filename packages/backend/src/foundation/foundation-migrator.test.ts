@@ -176,12 +176,14 @@ describe('runFoundationMigrations', () => {
       hostDir: tempDir,
       targetVersion: 'v2.4.3',
       imageRef: 'registry/gateway:v2.4.3',
+      databaseConnectorImage: 'registry/gateway/database-connector@sha256:connector',
       sandboxWorkspaceDir,
     });
     const second = await runFoundationMigrations({
       hostDir: tempDir,
       targetVersion: 'v2.4.3',
       imageRef: 'registry/gateway:v2.4.3',
+      databaseConnectorImage: 'registry/gateway/database-connector@sha256:connector',
       sandboxWorkspaceDir,
     });
 
@@ -190,6 +192,9 @@ describe('runFoundationMigrations', () => {
     expect(second.changedFiles).toEqual([]);
     expect(second.backupDir).toBeNull();
     expect(await readFile(path.join(tempDir, '.env'), 'utf8')).toContain('GATEWAY_IMAGE_REF=registry/gateway:v2.4.3');
+    expect(await readFile(path.join(tempDir, '.env'), 'utf8')).toContain(
+      'DATABASE_CONNECTOR_IMAGE=registry/gateway/database-connector@sha256:connector'
+    );
     expect(await readFile(path.join(tempDir, 'docker-compose.yml'), 'utf8')).toContain(
       '# gateway-managed:start sandbox-workspace'
     );

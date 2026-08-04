@@ -46,6 +46,7 @@ export interface GatewayImageManifestPayload {
   image: string;
   digest: string;
   imageRef: string;
+  databaseConnectorImage?: string;
   createdAt: string;
   gitCommitSha?: string;
   gitPipelineId?: string;
@@ -63,6 +64,7 @@ export interface TrustedGatewayUpdateArtifact {
   signedManifest: string;
   imageRef: string;
   digest: string;
+  databaseConnectorImage?: string;
 }
 
 export interface DaemonUpdateManifestExpectation {
@@ -120,13 +122,26 @@ export function verifyGatewayImageManifest(
   if (payload.imageRef !== `${payload.image}@${payload.digest}`) {
     throw new UpdateArtifactTrustError('Gateway update image reference is not digest pinned');
   }
+  if (
+    payload.databaseConnectorImage !== undefined &&
+    (typeof payload.databaseConnectorImage !== 'string' ||
+      !isDigestPinnedImageRef(payload.databaseConnectorImage, `${payload.image}/database-connector`))
+  ) {
+    throw new UpdateArtifactTrustError('Gateway update database connector image reference is not digest pinned');
+  }
 
   return {
     payload,
     signedManifest,
     imageRef: payload.imageRef,
     digest: payload.digest,
+    ...(payload.databaseConnectorImage ? { databaseConnectorImage: payload.databaseConnectorImage } : {}),
   };
+}
+
+export function isDigestPinnedImageRef(imageRef: string, repository: string): boolean {
+  const digest = imageRef.startsWith(`${repository}@`) ? imageRef.slice(repository.length + 1) : '';
+  return DIGEST_RE.test(digest);
 }
 
 export function trustedGitLabPackagePrefix(gitlabApiUrl: string, projectPath: string): string {

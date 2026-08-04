@@ -316,18 +316,22 @@ export class UpdateService {
       envTag: tag,
       imageRef: artifact.imageRef,
     });
+    const foundationCommand = [
+      'node',
+      'dist/foundation-migrator.js',
+      '--host-dir',
+      '/host',
+      '--target-version',
+      tag,
+      '--image-ref',
+      artifact.imageRef,
+      ...(artifact.databaseConnectorImage
+        ? ['--database-connector-image', artifact.databaseConnectorImage]
+        : []),
+    ];
     const migrationResult = await this.dockerService.runOneShot({
       Image: artifact.imageRef,
-      Cmd: [
-        'node',
-        'dist/foundation-migrator.js',
-        '--host-dir',
-        '/host',
-        '--target-version',
-        tag,
-        '--image-ref',
-        artifact.imageRef,
-      ],
+      Cmd: foundationCommand,
       HostConfig: {
         Binds: [`${composeDir}:/host`, `${DEFAULT_SANDBOX_WORKSPACE_DIR}:${DEFAULT_SANDBOX_WORKSPACE_DIR}`],
       },

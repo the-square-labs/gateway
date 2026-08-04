@@ -54,6 +54,9 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('openssl pkeyutl -verify -rawin -pubin');
     expect(source).toContain('gateway-image.update.json');
     expect(source).toContain('IMAGE_REF="$image_ref"');
+    expect(source).toContain('databaseConnectorImage');
+    expect(source).toContain('DATABASE_CONNECTOR_IMAGE_REF="$connector_image_ref"');
+    expect(source).toContain('--database-connector-image "$DATABASE_CONNECTOR_IMAGE_REF"');
     expect(source).toContain('Local source checksum calculated');
   });
 

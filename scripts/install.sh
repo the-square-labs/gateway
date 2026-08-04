@@ -68,7 +68,7 @@ decode_base64url() {
 verify_signed_release() {
   local version="$1" encoded_project="$2"
   local tmp_dir manifest_file payload_file signature_file key_file
-  local payload signature kind manifest_version tag image digest image_ref
+  local payload signature kind manifest_version tag image digest image_ref connector_image_ref connector_image connector_digest
 
   tmp_dir="$(mktemp -d)"
   manifest_file="${tmp_dir}/gateway-image.update.json"
@@ -105,14 +105,24 @@ verify_signed_release() {
   image="$(json_string_field "$payload_file" image)"
   digest="$(json_string_field "$payload_file" digest)"
   image_ref="$(json_string_field "$payload_file" imageRef)"
+  connector_image_ref="$(json_string_field "$payload_file" databaseConnectorImage)"
   if [[ "$kind" != "gateway-image" || "$manifest_version" != "$version" || "$tag" != "$version" ||
     "$image" != "$IMAGE" || ! "$digest" =~ ^sha256:[a-f0-9]{64}$ || "$image_ref" != "${IMAGE}@${digest}" ]]; then
     rm -rf "$tmp_dir"
     die "Signed release manifest does not match the requested Gateway image."
   fi
+  if [[ -n "$connector_image_ref" ]]; then
+    connector_image="${IMAGE}/database-connector"
+    connector_digest="${connector_image_ref##*@}"
+    if [[ "$connector_image_ref" != "${connector_image}@${connector_digest}" || ! "$connector_digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+      rm -rf "$tmp_dir"
+      die "Signed release manifest contains an invalid database connector image."
+    fi
+  fi
   rm -rf "$tmp_dir"
 
   IMAGE_REF="$image_ref"
+  DATABASE_CONNECTOR_IMAGE_REF="$connector_image_ref"
   ok "Release ${version} verified (SHA-256: ${digest#sha256:})"
 }
 
@@ -307,6 +317,9 @@ if [[ "$FRESH" == 1 ]]; then
   : >.env
 fi
 ensure_env GATEWAY_IMAGE_REF "$IMAGE_REF"
+if [[ -n "${DATABASE_CONNECTOR_IMAGE_REF:-}" ]]; then
+  ensure_env DATABASE_CONNECTOR_IMAGE "$DATABASE_CONNECTOR_IMAGE_REF"
+fi
 ensure_env DB_PASSWORD "$(openssl rand -hex 24)"
 ensure_env PKI_MASTER_KEY "$(openssl rand -hex 32)"
 ensure_env SETUP_BOOTSTRAP "$([[ "$FRESH" == 1 ]] && printf true || printf false)"
@@ -396,11 +409,11 @@ COMPOSE
 else
   info "Migrating the existing installer-managed Compose foundation"
   run_quiet "Gateway image pull" "${DOCKER[@]}" pull "$IMAGE_REF"
-  run_quiet "Gateway foundation migration" "${DOCKER[@]}" run --rm -v "$INSTALL_DIR:/host" "$IMAGE_REF" \
-    node dist/foundation-migrator.js \
-    --host-dir /host \
-    --target-version "$VERSION" \
-    --image-ref "$IMAGE_REF"
+  foundation_args=(node dist/foundation-migrator.js --host-dir /host --target-version "$VERSION" --image-ref "$IMAGE_REF")
+  if [[ -n "${DATABASE_CONNECTOR_IMAGE_REF:-}" ]]; then
+    foundation_args+=(--database-connector-image "$DATABASE_CONNECTOR_IMAGE_REF")
+  fi
+  run_quiet "Gateway foundation migration" "${DOCKER[@]}" run --rm -v "$INSTALL_DIR:/host" "$IMAGE_REF" "${foundation_args[@]}"
 fi
 
 if [[ -z "$SOURCE_DIR" ]]; then

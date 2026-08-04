@@ -4,6 +4,7 @@ interface CliOptions {
   hostDir: string;
   targetVersion?: string;
   imageRef?: string;
+  databaseConnectorImage?: string;
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -23,6 +24,11 @@ function parseArgs(argv: string[]): CliOptions {
     }
     if (arg === '--image-ref' && next) {
       options.imageRef = next;
+      index += 1;
+      continue;
+    }
+    if (arg === '--database-connector-image' && next) {
+      options.databaseConnectorImage = next;
       index += 1;
       continue;
     }

@@ -69,6 +69,7 @@ func sign(args []string) {
 	sha256Hex := fs.String("sha256", "", "binary SHA256")
 	image := fs.String("image", "", "gateway image repository")
 	digest := fs.String("digest", "", "gateway image digest")
+	databaseConnectorImage := fs.String("database-connector-image", "", "digest-pinned database connector image reference")
 	commitSHA := fs.String("git-commit-sha", "", "Git commit SHA")
 	pipelineID := fs.String("git-pipeline-id", "", "GitLab pipeline ID")
 	must(fs.Parse(args))
@@ -112,7 +113,7 @@ func sign(args []string) {
 			"--image":   *image,
 			"--digest":  *digest,
 		})
-		payload = map[string]string{
+		payloadMap := map[string]string{
 			"kind":          "gateway-image",
 			"version":       *version,
 			"tag":           *tag,
@@ -123,6 +124,10 @@ func sign(args []string) {
 			"gitCommitSha":  *commitSHA,
 			"gitPipelineId": *pipelineID,
 		}
+		if *databaseConnectorImage != "" {
+			payloadMap["databaseConnectorImage"] = *databaseConnectorImage
+		}
+		payload = payloadMap
 	default:
 		die("--kind must be gateway-image or daemon-binary")
 	}

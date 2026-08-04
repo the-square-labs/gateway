@@ -10,6 +10,7 @@ export interface FoundationMigrationOptions {
   hostDir: string;
   targetVersion?: string;
   imageRef?: string;
+  databaseConnectorImage?: string;
   sandboxWorkspaceDir?: string;
 }
 
@@ -41,6 +42,7 @@ export async function runFoundationMigrations(options: FoundationMigrationOption
   const envPatch = patchEnv(envContent, {
     ...(options.targetVersion ? { GATEWAY_VERSION: options.targetVersion } : {}),
     ...(options.imageRef ? { GATEWAY_IMAGE_REF: options.imageRef } : {}),
+    ...(options.databaseConnectorImage ? { DATABASE_CONNECTOR_IMAGE: options.databaseConnectorImage } : {}),
     SANDBOX_RUNNER_WORKSPACE_DIR: envValue(envContent, 'SANDBOX_RUNNER_WORKSPACE_DIR') ?? defaultSandboxWorkspaceDir,
   });
 
