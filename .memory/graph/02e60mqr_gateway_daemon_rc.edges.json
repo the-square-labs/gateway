@@ -1,0 +1,35 @@
+{
+  "file_name": "02e60mqr_gateway_daemon_rc",
+  "edges": [
+    {
+      "from_id": "02e60mqr",
+      "to_id": "kufbu8qt",
+      "relation": "same_workflow",
+      "weight": 0.9,
+      "reason": "Both documents describe the Gateway/daemon release workflow and tagging/signing verification steps; they are directly used together when publishing RCs and validating update manifests.",
+      "source": "auto",
+      "created_at": 1785767931383,
+      "updated_at": 1785767931383
+    },
+    {
+      "from_id": "02e60mqr",
+      "to_id": "zzulrspz",
+      "relation": "same_workflow",
+      "weight": 0.8,
+      "reason": "Covers daemon compatibility and how Gateway selects/marks daemon versions, which is directly relevant to the RC tag ordering and selection rules in the source.",
+      "source": "auto",
+      "created_at": 1785767931383,
+      "updated_at": 1785767931383
+    },
+    {
+      "from_id": "02e60mqr",
+      "to_id": "hqwh565e",
+      "relation": "same_area",
+      "weight": 0.6,
+      "reason": "Describes the Gateway installer release tag and archive contents; relevant because the source references Gateway RC installers and node --nightly behavior.",
+      "source": "auto",
+      "created_at": 1785767931383,
+      "updated_at": 1785767931383
+    }
+  ]
+}

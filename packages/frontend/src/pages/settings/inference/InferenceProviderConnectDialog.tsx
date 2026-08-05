@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { ExternalLink, RefreshCw } from "lucide-react";
+import { ArrowLeft, ExternalLink, MoreHorizontal, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
@@ -42,12 +42,18 @@ export function InferenceProviderConnectDialog({
   initialProviderId,
   onOpenChange,
   onConnected,
+  locked = false,
+  onBack,
+  onSkip,
 }: {
   open: boolean;
   catalog: InferenceProviderCatalogItem[];
   initialProviderId?: string;
   onOpenChange: (open: boolean) => void;
   onConnected: () => void | Promise<void>;
+  locked?: boolean;
+  onBack?: () => void;
+  onSkip?: () => void;
 }) {
   const initial = useMemo(
     () =>
@@ -65,14 +71,9 @@ export function InferenceProviderConnectDialog({
   const [oauth, setOAuth] = useState<InferenceOAuthSession | null>(null);
   const [callback, setCallback] = useState("");
   const [saving, setSaving] = useState(false);
-  const [flowError, setFlowError] = useState<string | null>(null);
   const lastSubmittedCallback = useRef("");
   const selected = catalog.find((provider) => provider.id === providerId);
-  const contentKey = flowError
-    ? "error"
-    : oauth
-      ? `oauth-${oauth.completionMode}`
-      : `setup-${providerId}-${authType}`;
+  const contentKey = oauth ? `oauth-${oauth.completionMode}` : `setup-${providerId}-${authType}`;
 
   useEffect(() => {
     if (!open || !initial) return;
@@ -86,7 +87,6 @@ export function InferenceProviderConnectDialog({
     setAllowPrivateNetwork(false);
     setOAuth(null);
     setCallback("");
-    setFlowError(null);
     lastSubmittedCallback.current = "";
   }, [initial, open]);
 
@@ -101,20 +101,22 @@ export function InferenceProviderConnectDialog({
   };
 
   const setOauthState = useCallback((session: InferenceOAuthSession | null) => {
-    setOAuth(session);
-    setFlowError(
+    if (
       session &&
-        (session.status === "error" ||
-          session.status === "expired" ||
-          session.status === "cancelled")
-        ? (session.errorMessage ??
-            (session.status === "expired"
-              ? "Authorization timed out after 10 minutes"
-              : session.status === "cancelled"
-                ? "Authorization was cancelled"
-                : "Authorization failed"))
-        : null
-    );
+      (session.status === "error" || session.status === "expired" || session.status === "cancelled")
+    ) {
+      toast.error(
+        session.errorMessage ??
+          (session.status === "expired"
+            ? "Authorization timed out after 10 minutes"
+            : session.status === "cancelled"
+              ? "Authorization was cancelled"
+              : "Authorization failed")
+      );
+      setOAuth(null);
+      return;
+    }
+    setOAuth(session);
   }, []);
 
   const finish = useCallback(
@@ -142,10 +144,10 @@ export function InferenceProviderConnectDialog({
           timer = window.setTimeout(poll, Math.max(1, session.pollIntervalSeconds ?? 5) * 1000);
         }
       } catch (error) {
-        if (!cancelled)
-          setFlowError(
-            error instanceof Error ? error.message : "Authorization status check failed"
-          );
+        if (!cancelled) {
+          toast.error(error instanceof Error ? error.message : "Authorization status check failed");
+          setOauthState(null);
+        }
       }
     };
     timer = window.setTimeout(poll, Math.max(1, oauth.pollIntervalSeconds ?? 5) * 1000);
@@ -153,7 +155,7 @@ export function InferenceProviderConnectDialog({
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [finish, oauth, open]);
+  }, [finish, oauth, open, setOauthState]);
 
   useEffect(() => {
     if (!open || !oauth || oauth.status !== "pending") return;
@@ -162,11 +164,12 @@ export function InferenceProviderConnectDialog({
       try {
         await finish(await api.getInferenceOAuthStatus(oauth.id));
       } catch (error) {
-        setFlowError(error instanceof Error ? error.message : "Authorization timed out");
+        toast.error(error instanceof Error ? error.message : "Authorization timed out");
+        setOauthState(null);
       }
     }, remaining + 250);
     return () => window.clearTimeout(timer);
-  }, [finish, oauth, open]);
+  }, [finish, oauth, open, setOauthState]);
 
   useEffect(() => {
     const value = callback.trim();
@@ -182,11 +185,10 @@ export function InferenceProviderConnectDialog({
     const timer = window.setTimeout(async () => {
       lastSubmittedCallback.current = value;
       setSaving(true);
-      setFlowError(null);
       try {
         await finish(await api.completeInferenceOAuth(oauth.id, value));
       } catch (error) {
-        setFlowError(error instanceof Error ? error.message : "Authorization failed");
+        toast.error(error instanceof Error ? error.message : "Authorization failed");
       } finally {
         setSaving(false);
       }
@@ -210,7 +212,6 @@ export function InferenceProviderConnectDialog({
     )
       return;
     setSaving(true);
-    setFlowError(null);
     try {
       if (authType === "oauth") {
         const session = await api.startInferenceOAuth({
@@ -235,7 +236,7 @@ export function InferenceProviderConnectDialog({
         await onConnected();
       }
     } catch (error) {
-      setFlowError(error instanceof Error ? error.message : "Failed to connect provider");
+      toast.error(error instanceof Error ? error.message : "Failed to connect provider");
     } finally {
       setSaving(false);
     }
@@ -247,24 +248,34 @@ export function InferenceProviderConnectDialog({
     onOpenChange(nextOpen);
   };
 
-  const retry = () => {
-    if (oauth?.status === "pending") void api.cancelInferenceOAuth(oauth.id).catch(() => {});
-    setOauthState(null);
-    setCallback("");
-    lastSubmittedCallback.current = "";
-  };
-
   return (
-    <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="sm:max-w-xl">
+    <Dialog open={open} onOpenChange={locked ? () => {} : close}>
+      <DialogContent
+        hideCloseButton={locked}
+        className="sm:max-w-xl"
+        onEscapeKeyDown={locked ? (event) => event.preventDefault() : undefined}
+        onPointerDownOutside={locked ? (event) => event.preventDefault() : undefined}
+        onInteractOutside={locked ? (event) => event.preventDefault() : undefined}
+      >
         <DialogHeader>
           <DialogTitle>Connect inference provider</DialogTitle>
-          <DialogDescription>Add a subscription account or API credential.</DialogDescription>
         </DialogHeader>
+        <DialogDescription asChild>
+          <div className="space-y-2">
+            <p>
+              Connect a subscription account or API credential so Gateway can discover the models
+              available from this provider.
+            </p>
+            <p>
+              The connection stays managed by Gateway and can be reviewed, changed, or removed later
+              from Gateway Inference settings.
+            </p>
+          </div>
+        </DialogDescription>
         <AnimatedHeight>
-          <AnimatePresence initial={false} mode="wait">
+          <AnimatePresence initial={false} mode="popLayout">
             <motion.div key={contentKey} {...STEP_ANIMATION}>
-              {!oauth && !flowError && (
+              {!oauth && (
                 <div className="border border-border">
                   <SettingsControlRow title="Provider">
                     <Select
@@ -343,7 +354,7 @@ export function InferenceProviderConnectDialog({
                   )}
                 </div>
               )}
-              {oauth && !flowError && (
+              {oauth && (
                 <div className="space-y-3 border border-border p-4">
                   {oauth.completionMode === "device_poll" ? (
                     <>
@@ -356,14 +367,20 @@ export function InferenceProviderConnectDialog({
                           label="Authorization code"
                           value={oauth.userCode}
                           valueClassName="font-mono"
+                          actions={
+                            <Button
+                              asChild
+                              variant="ghost"
+                              className="h-9 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            >
+                              <a href={oauth.authorizationUrl} target="_blank" rel="noreferrer">
+                                <ExternalLink className="h-3.5 w-3.5" />
+                                Open
+                              </a>
+                            </Button>
+                          }
                         />
                       )}
-                      <Button asChild variant="outline">
-                        <a href={oauth.authorizationUrl} target="_blank" rel="noreferrer">
-                          <ExternalLink className="h-4 w-4" />
-                          Open authorization
-                        </a>
-                      </Button>
                       <p className="flex items-center gap-2 text-xs text-muted-foreground">
                         <RefreshCw className="h-3.5 w-3.5 animate-spin" />
                         Waiting for provider authorization…
@@ -395,24 +412,46 @@ export function InferenceProviderConnectDialog({
                   )}
                 </div>
               )}
-              {flowError && (
-                <div className="border border-destructive/50 p-4">
-                  <p className="text-sm font-medium text-destructive">Authorization failed</p>
-                  <p className="mt-1 text-sm text-muted-foreground">{flowError}</p>
-                </div>
-              )}
             </motion.div>
           </AnimatePresence>
         </AnimatedHeight>
         <DialogFooter>
-          {flowError && (
-            <Button variant="outline" onClick={retry}>
-              Retry
+          {locked ? (
+            <>
+              {onBack && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (oauth?.status === "pending")
+                      void api.cancelInferenceOAuth(oauth.id).catch(() => {});
+                    onBack();
+                  }}
+                  disabled={saving}
+                >
+                  <ArrowLeft />
+                  Back
+                </Button>
+              )}
+              {onSkip && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (oauth?.status === "pending")
+                      void api.cancelInferenceOAuth(oauth.id).catch(() => {});
+                    onSkip();
+                  }}
+                  disabled={saving}
+                >
+                  <MoreHorizontal />
+                  Skip
+                </Button>
+              )}
+            </>
+          ) : (
+            <Button variant="outline" onClick={() => close(false)}>
+              {oauth ? "Close" : "Cancel"}
             </Button>
           )}
-          <Button variant="outline" onClick={() => close(false)}>
-            {oauth ? "Close" : "Cancel"}
-          </Button>
           {!oauth && (
             <Button
               onClick={() => void connect()}

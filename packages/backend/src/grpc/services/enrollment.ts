@@ -67,29 +67,30 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
 
         const nodeId = matchedNode.id;
 
-        // Issue mTLS certificate via the system CA (real PKI)
-        const certResult = await deps.systemCA.issueNodeCert(nodeId, req.hostname);
-
-        // Update node with daemon info + cert tracking
-        await deps.db
-          .update(nodes)
-          .set({
-            status: 'online',
-            hostname: req.hostname,
-            daemonVersion: req.daemonVersion,
-            osInfo: req.osInfo,
-            capabilities: {
-              ...(req.nginxVersion ? { nginxVersion: req.nginxVersion } : {}),
-              ...(req.daemonType ? { daemonType: req.daemonType } : {}),
-            },
-            lastSeenAt: new Date(),
-            enrollmentTokenSelector: null,
-            enrollmentTokenHash: null,
-            certificateSerial: certResult.serial,
-            certificateExpiresAt: certResult.expiresAt,
-            updatedAt: new Date(),
-          })
-          .where(eq(nodes.id, nodeId));
+        // The node serial update is committed with the system-leaf ownership
+        // swap. If this update fails, the prior current certificate remains
+        // usable and the newly issued unbound leaf is never auto-cleaned.
+        const certResult = await deps.systemCA.issueNodeCert(nodeId, req.hostname, async (tx, certificate) => {
+          await tx
+            .update(nodes)
+            .set({
+              status: 'online',
+              hostname: req.hostname,
+              daemonVersion: req.daemonVersion,
+              osInfo: req.osInfo,
+              capabilities: {
+                ...(req.nginxVersion ? { nginxVersion: req.nginxVersion } : {}),
+                ...(req.daemonType ? { daemonType: req.daemonType } : {}),
+              },
+              lastSeenAt: new Date(),
+              enrollmentTokenSelector: null,
+              enrollmentTokenHash: null,
+              certificateSerial: certificate.serialNumber,
+              certificateExpiresAt: certificate.notAfter,
+              updatedAt: new Date(),
+            })
+            .where(eq(nodes.id, nodeId));
+        });
 
         await deps.auditService.log({
           userId: null,
@@ -189,17 +190,17 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
           return;
         }
 
-        // Issue new cert via system CA
-        const certResult = await deps.systemCA.issueNodeCert(req.nodeId, node.hostname);
-
-        await deps.db
-          .update(nodes)
-          .set({
-            certificateSerial: certResult.serial,
-            certificateExpiresAt: certResult.expiresAt,
-            updatedAt: new Date(),
-          })
-          .where(eq(nodes.id, req.nodeId));
+        // Atomically change the stored serial with the current-leaf swap.
+        const certResult = await deps.systemCA.issueNodeCert(req.nodeId, node.hostname, async (tx, certificate) => {
+          await tx
+            .update(nodes)
+            .set({
+              certificateSerial: certificate.serialNumber,
+              certificateExpiresAt: certificate.notAfter,
+              updatedAt: new Date(),
+            })
+            .where(eq(nodes.id, req.nodeId));
+        });
 
         logger.info('Node cert renewed', { nodeId: req.nodeId, serial: certResult.serial });
 

@@ -35,7 +35,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
     gatewayLogs: { enabled: false },
     orphanedVolumes: { enabled: false, retentionDays: 30 },
     dockerPrune: { enabled: true },
-    orphanedCerts: { enabled: false },
+    orphanedCerts: { enabled: true },
     acmeCleanup: { enabled: true },
   });
   const [hkSavedConfig, setHkSavedConfig] = useState<HousekeepingConfig | null>(null);
@@ -473,10 +473,14 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
               disabled={controlsDisabled}
             />
             <HousekeepingCard
-              label="Orphaned Certs"
-              description="Remove unreferenced cert files"
+              label="Retired System PKI Keys"
+              description="Destroy private keys 30 days after system certificate retirement"
               stat={hkStats ? String(hkStats.orphanedCerts.count) : "..."}
-              statDetail="found"
+              statDetail={
+                hkStats
+                  ? `${hkStats.orphanedCerts.supersededCount} superseded, ${hkStats.orphanedCerts.unknownCount} unknown`
+                  : "eligible"
+              }
               enabled={hkConfig.orphanedCerts.enabled}
               onToggle={(v) =>
                 setHkConfig((current) => ({ ...current, orphanedCerts: { enabled: v } }))

@@ -31,9 +31,9 @@ export class CRLService {
     return this.generateCRL(caId);
   }
 
-  async generateCRL(caId: string): Promise<Buffer> {
+  async generateCRL(caId: string, options?: { allowSystem?: boolean }): Promise<Buffer> {
     const env = getEnv();
-    const { ca, privateKeyPem } = await this.caService.getCASigningMaterials(caId);
+    const { ca, privateKeyPem } = await this.caService.getCASigningMaterials(caId, options);
 
     // Get all revoked certificates for this CA
     const revokedCerts = await this.db.query.certificates.findMany({

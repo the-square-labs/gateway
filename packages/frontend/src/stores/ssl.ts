@@ -22,14 +22,16 @@ interface SSLState {
   certificates: SSLCertificate[];
   selectedCert: SSLCertificate | null;
   isLoading: boolean;
+  isLoadingMore: boolean;
   error: string | null;
   filters: SSLCertFilters;
-  page: number;
   limit: number;
   total: number;
-  totalPages: number;
+  hasMore: boolean;
+  nextPage: number;
 
   fetchCertificates: () => Promise<void>;
+  fetchNextPage: () => Promise<void>;
   selectCertificate: (id: string) => Promise<void>;
   clearSelected: () => void;
   requestACME: (data: RequestACMECertRequest) => Promise<SSLCertificateOperationResult>;
@@ -43,7 +45,6 @@ interface SSLState {
   deleteCert: (id: string) => Promise<void>;
   completeDNSVerify: (id: string) => Promise<SSLCertificate>;
   setFilters: (filters: Partial<SSLCertFilters>) => void;
-  setPage: (page: number) => void;
   resetFilters: () => void;
 }
 
@@ -59,21 +60,21 @@ export const useSSLStore = create<SSLState>()((set, get) => ({
   certificates: [],
   selectedCert: null,
   isLoading: false,
+  isLoadingMore: false,
   error: null,
   filters: { ...defaultFilters },
-  page: 1,
   limit: 25,
   total: 0,
-  totalPages: 0,
+  hasMore: false,
+  nextPage: 1,
 
   fetchCertificates: async () => {
     const requestId = ++fetchSSLCertificatesRequestId;
-    const { filters, page, limit } = get();
+    const { filters, limit } = get();
     const showSystem =
       useUIStore.getState().showSystemCertificates &&
       useAuthStore.getState().hasScope("admin:details:certificates");
-    const isDefault =
-      page === 1 && !filters.search && filters.type === "all" && filters.status === "active";
+    const isDefault = !filters.search && filters.type === "all" && filters.status === "active";
     const cacheKey = `ssl:list:${showSystem ? "system" : "default"}`;
 
     // Show cached data instantly for default view
@@ -86,15 +87,16 @@ export const useSSLStore = create<SSLState>()((set, get) => ({
         set({
           certificates: cached.data || [],
           total: cached.pagination?.total ?? 0,
-          totalPages: cached.pagination?.totalPages ?? 0,
+          hasMore: (cached.pagination?.totalPages ?? 0) > 1,
+          nextPage: 2,
         });
     }
 
     const hasData = get().certificates.length > 0;
-    set({ isLoading: !hasData, error: null });
+    set({ isLoading: !hasData, isLoadingMore: false, error: null });
     try {
       const response = await api.listSSLCertificates({
-        page,
+        page: 1,
         limit,
         search: filters.search || undefined,
         type: filters.type !== "all" ? filters.type : undefined,
@@ -106,13 +108,54 @@ export const useSSLStore = create<SSLState>()((set, get) => ({
       set({
         certificates: response.data || [],
         total: response.pagination?.total ?? 0,
-        totalPages: response.pagination?.totalPages ?? 0,
+        hasMore: (response.pagination?.page ?? 1) < (response.pagination?.totalPages ?? 0),
+        nextPage: (response.pagination?.page ?? 1) + 1,
         isLoading: false,
+        isLoadingMore: false,
       });
     } catch (err) {
       if (requestId !== fetchSSLCertificatesRequestId) return;
       const message = err instanceof Error ? err.message : "Failed to fetch SSL certificates";
-      set({ error: message, isLoading: false });
+      set({ error: message, isLoading: false, isLoadingMore: false });
+    }
+  },
+
+  fetchNextPage: async () => {
+    const { filters, limit, hasMore, isLoading, isLoadingMore, nextPage } = get();
+    if (!hasMore || isLoading || isLoadingMore) return;
+
+    const requestId = ++fetchSSLCertificatesRequestId;
+    const showSystem =
+      useUIStore.getState().showSystemCertificates &&
+      useAuthStore.getState().hasScope("admin:details:certificates");
+    set({ isLoadingMore: true, error: null });
+    try {
+      const response = await api.listSSLCertificates({
+        page: nextPage,
+        limit,
+        search: filters.search || undefined,
+        type: filters.type !== "all" ? filters.type : undefined,
+        status: filters.status !== "all" ? filters.status : undefined,
+        showSystem,
+      });
+      if (requestId !== fetchSSLCertificatesRequestId) return;
+      set((state) => {
+        const knownIds = new Set(state.certificates.map((certificate) => certificate.id));
+        const nextCertificates = (response.data || []).filter(
+          (certificate) => !knownIds.has(certificate.id)
+        );
+        return {
+          certificates: [...state.certificates, ...nextCertificates],
+          total: response.pagination?.total ?? state.total,
+          hasMore: (response.pagination?.page ?? nextPage) < (response.pagination?.totalPages ?? 0),
+          nextPage: (response.pagination?.page ?? nextPage) + 1,
+          isLoadingMore: false,
+        };
+      });
+    } catch (err) {
+      if (requestId !== fetchSSLCertificatesRequestId) return;
+      const message = err instanceof Error ? err.message : "Failed to fetch more SSL certificates";
+      set({ error: message, isLoadingMore: false });
     }
   },
 
@@ -174,6 +217,7 @@ export const useSSLStore = create<SSLState>()((set, get) => ({
     set((state) => ({
       certificates: state.certificates.filter((c) => c.id !== id),
       selectedCert: state.selectedCert?.id === id ? null : state.selectedCert,
+      total: Math.max(0, state.total - 1),
     }));
   },
 
@@ -189,18 +233,22 @@ export const useSSLStore = create<SSLState>()((set, get) => ({
   setFilters: (newFilters) => {
     set((state) => ({
       filters: { ...state.filters, ...newFilters },
-      page: 1,
+      certificates: [],
+      hasMore: false,
+      nextPage: 1,
+      isLoadingMore: false,
     }));
     get().fetchCertificates();
   },
 
-  setPage: (page) => {
-    set({ page });
-    get().fetchCertificates();
-  },
-
   resetFilters: () => {
-    set({ filters: { ...defaultFilters }, page: 1 });
+    set({
+      filters: { ...defaultFilters },
+      certificates: [],
+      hasMore: false,
+      nextPage: 1,
+      isLoadingMore: false,
+    });
     get().fetchCertificates();
   },
 }));

@@ -1,0 +1,15 @@
+{
+  "file_name": "8irxtjyz_gateway_notification_template",
+  "edges": [
+    {
+      "from_id": "8irxtjyz",
+      "to_id": "huz2cldt",
+      "relation": "same_area",
+      "weight": 0.6,
+      "reason": "Notification rendering fixes in gateway notifications align with evaluation/service changes and resource labeling rules.",
+      "source": "auto",
+      "created_at": 1783070862022,
+      "updated_at": 1783070862022
+    }
+  ]
+}

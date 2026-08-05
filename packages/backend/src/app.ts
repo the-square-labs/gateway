@@ -74,6 +74,7 @@ import { createNodeNginxLogStreamWSHandlers } from '@/modules/nodes/node-nginx-l
 import { nodesRoutes } from '@/modules/nodes/nodes.routes.js';
 import { notificationRoutes } from '@/modules/notifications/notification.routes.js';
 import { oauthMetadataRoutes, oauthRoutes } from '@/modules/oauth/oauth.routes.js';
+import { finalizeSetupRoutes } from '@/modules/onboarding/finalize-setup.routes.js';
 import { caRoutes } from '@/modules/pki/ca.routes.js';
 import { certRoutes } from '@/modules/pki/cert.routes.js';
 import { publicPkiRoutes } from '@/modules/pki/public.routes.js';
@@ -622,6 +623,7 @@ export function createApp() {
   app.route('/api/access-lists', accessListRoutes);
   app.route('/api/monitoring', monitoringRoutes);
   app.route('/api/setup', setupRoutes);
+  app.route('/api/finalize-setup', finalizeSetupRoutes);
   app.route('/api/status-page', statusPageRoutes);
   app.route('/api/system/license', licenseRoutes);
   app.route('/api/system', systemRoutes);

@@ -1,4 +1,5 @@
 import { createChildLogger } from '@/lib/logger.js';
+import type { EventBusService } from '@/services/event-bus.service.js';
 import type { ClickHouseStorageStats, LoggingClickHouseService } from './logging-clickhouse.service.js';
 import type { LoggingFeatureService } from './logging-feature.service.js';
 
@@ -69,6 +70,7 @@ export class LoggingMaintenanceService {
   private operationQueue: Promise<void> = Promise.resolve();
   private consecutivePingFailures = 0;
   private snapshot: LoggingMaintenanceSnapshot;
+  private eventBus?: EventBusService;
 
   constructor(
     private readonly storage: LoggingClickHouseService,
@@ -82,12 +84,23 @@ export class LoggingMaintenanceService {
     this.managedInternalLogs = enabled;
   }
 
+  setEventBus(eventBus: EventBusService): void {
+    this.eventBus = eventBus;
+  }
+
   getSnapshot(): LoggingMaintenanceSnapshot {
     return structuredClone(this.snapshot);
   }
 
   async runGuard(policy?: StructuredLogsPolicy): Promise<LoggingMaintenanceSnapshot> {
-    return this.serialize(() => this.runGuardOnce(policy));
+    return this.serialize(async () => {
+      const previous = this.snapshot;
+      const next = await this.runGuardOnce(policy);
+      if (previous.status !== next.status || previous.reason !== next.reason) {
+        this.eventBus?.publish('logging.health.changed', { status: next.status, reason: next.reason });
+      }
+      return next;
+    });
   }
 
   async cleanupStructuredLogs(policy: StructuredLogsPolicy): Promise<LoggingCleanupResult> {

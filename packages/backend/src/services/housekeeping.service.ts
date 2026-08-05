@@ -15,9 +15,11 @@ import type { LoggingMaintenanceService } from '@/modules/logging/logging-mainte
 import type { NotificationDeliveryService } from '@/modules/notifications/notification-delivery.service.js';
 import type { DockerService } from './docker.service.js';
 import type { NodeDispatchService } from './node-dispatch.service.js';
+import type { SystemCertificateLifecycleService } from './system-certificate-lifecycle.service.js';
 
 const logger = createChildLogger('HousekeepingService');
 const VOLUME_CLEANUP_PROTECTED_LABEL = 'gateway.housekeeping.protected';
+const SYSTEM_CERTIFICATE_KEY_RETENTION_DAYS = 30;
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -66,7 +68,13 @@ export interface HousekeepingStats {
   orphanedAIArtifacts: { count: number; totalSizeBytes: number };
   gatewayLogs: { totalSizeBytes: number; fileCount: number; available: false };
   orphanedVolumes: { count: number; reclaimableBytes: number };
-  orphanedCerts: { count: number; certIds: string[] };
+  orphanedCerts: {
+    count: number;
+    certIds: string[];
+    currentCount: number;
+    supersededCount: number;
+    unknownCount: number;
+  };
   acmeChallenges: { fileCount: number; totalSizeBytes: number };
   dockerImages: { oldImageCount: number; reclaimableBytes: number };
   lastRun: HousekeepingRunResult | null;
@@ -117,7 +125,7 @@ const DEFAULTS: Record<string, unknown> = {
   [KEYS.orphanedVolumesEnabled]: false,
   [KEYS.orphanedVolumesRetention]: 30,
   [KEYS.dockerPruneEnabled]: true,
-  [KEYS.orphanedCertsEnabled]: false,
+  [KEYS.orphanedCertsEnabled]: true,
   [KEYS.acmeCleanupEnabled]: true,
 };
 
@@ -450,6 +458,11 @@ export class HousekeepingService {
     this.dockerManagementService = svc;
   }
 
+  private systemCertificateLifecycle?: SystemCertificateLifecycleService;
+  setSystemCertificateLifecycleService(svc: SystemCertificateLifecycleService) {
+    this.systemCertificateLifecycle = svc;
+  }
+
   private async cleanDeliveryLog(retentionDays: number): Promise<{ itemsCleaned: number }> {
     if (!this.notifDeliveryService) return { itemsCleaned: 0 };
     const count = await this.notifDeliveryService.cleanOldEntries(retentionDays);
@@ -493,9 +506,12 @@ export class HousekeepingService {
   }
 
   private async cleanOrphanedCerts(): Promise<{ itemsCleaned: number }> {
-    // Cert files are managed by daemon nodes. Orphan cleanup is a daemon-side concern.
-    logger.debug('Orphaned cert cleanup is managed by daemon nodes');
-    return { itemsCleaned: 0 };
+    if (!this.systemCertificateLifecycle) return { itemsCleaned: 0 };
+    return {
+      itemsCleaned: await this.systemCertificateLifecycle.destroyRetiredPrivateKeys(
+        SYSTEM_CERTIFICATE_KEY_RETENTION_DAYS
+      ),
+    };
   }
 
   private async cleanAcmeChallenges(): Promise<{ itemsCleaned: number }> {
@@ -657,8 +673,10 @@ export class HousekeepingService {
   }
 
   private async getOrphanedCertStats(): Promise<HousekeepingStats['orphanedCerts']> {
-    // Cert files are on daemon nodes, not accessible from Gateway
-    return { count: 0, certIds: [] };
+    if (!this.systemCertificateLifecycle) {
+      return { count: 0, certIds: [], currentCount: 0, supersededCount: 0, unknownCount: 0 };
+    }
+    return this.systemCertificateLifecycle.getPrivateKeyCleanupStats(SYSTEM_CERTIFICATE_KEY_RETENTION_DAYS);
   }
 
   private async getAcmeChallengeStats(): Promise<HousekeepingStats['acmeChallenges']> {

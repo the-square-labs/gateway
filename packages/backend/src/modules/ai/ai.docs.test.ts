@@ -131,6 +131,10 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('overview', ['feat:ai:use']).content).toContain(
       'self-hosted infrastructure control plane'
     );
+    expect(getInternalDocumentation('overview', ['feat:ai:use']).content).toContain('set_resource_pin');
+    expect(getInternalDocumentation('overview', ['feat:ai:use']).content).toContain(
+      'Yellow means at least one warning card is visible'
+    );
     expect(getInternalDocumentation('installation', ['feat:ai:use']).content).toContain('Browser Setup Wizard');
     expect(getInternalDocumentation('authentication', ['feat:ai:use']).content).toContain('email one-time-code');
     expect(getInternalDocumentation('cloudflare', ['integrations:cloudflare:view']).content).toContain(

@@ -1,0 +1,55 @@
+{
+  "file_name": "qme9z5oh_state_machine_gotchas",
+  "edges": [
+    {
+      "from_id": "qme9z5oh",
+      "to_id": "7oked0dp",
+      "relation": "related_to",
+      "weight": 0.4483,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1783631334423,
+      "updated_at": 1783631334423
+    },
+    {
+      "from_id": "qme9z5oh",
+      "to_id": "8rqz22k0",
+      "relation": "uses_service",
+      "weight": 0.4187,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1783631334423,
+      "updated_at": 1783631334423
+    },
+    {
+      "from_id": "qme9z5oh",
+      "to_id": "fgmxlp0p",
+      "relation": "related_to",
+      "weight": 0.4282,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1783631334423,
+      "updated_at": 1783631334423
+    },
+    {
+      "from_id": "qme9z5oh",
+      "to_id": "fk86zmru",
+      "relation": "uses_service",
+      "weight": 0.5001,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1783631334423,
+      "updated_at": 1783631334423
+    },
+    {
+      "from_id": "qme9z5oh",
+      "to_id": "pstn8fla",
+      "relation": "related_to",
+      "weight": 0.4644,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1783631334423,
+      "updated_at": 1783631334423
+    }
+  ]
+}

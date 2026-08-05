@@ -1,0 +1,15 @@
+{
+  "file_name": "vrch49nc_gateway_migrator_update",
+  "edges": [
+    {
+      "from_id": "vrch49nc",
+      "to_id": "kufbu8qt",
+      "relation": "same_workflow",
+      "weight": 0.85,
+      "reason": "Release tag/signing rules and the self-update migrator are parts of the Gateway update workflow.",
+      "source": "manual",
+      "created_at": 1784761805148,
+      "updated_at": 1784761805148
+    }
+  ]
+}

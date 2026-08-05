@@ -436,21 +436,7 @@ export function LoginPage() {
   }
 
   return (
-    <AuthShell
-      footerLeading={
-        activeLoginStep === "password" ? (
-          <Button
-            type="button"
-            variant="link"
-            className="h-auto p-0"
-            onClick={() => setPasswordResetConfirmOpen(true)}
-            disabled={busy}
-          >
-            Forgot password?
-          </Button>
-        ) : undefined
-      }
-    >
+    <AuthShell>
       <AnimatedHeight>
         <AnimatePresence mode="popLayout" initial={false}>
           <motion.div
@@ -862,6 +848,19 @@ export function LoginPage() {
                   can close this window.
                 </p>
               </section>
+            )}
+            {activeLoginStep === "password" && (
+              <div className="flex justify-center pt-3">
+                <Button
+                  type="button"
+                  variant="link"
+                  className="h-auto p-0"
+                  onClick={() => setPasswordResetConfirmOpen(true)}
+                  disabled={busy}
+                >
+                  Forgot password?
+                </Button>
+              </div>
             )}
           </motion.div>
         </AnimatePresence>

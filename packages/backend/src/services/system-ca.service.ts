@@ -1,11 +1,11 @@
-import { X509Certificate as NodeX509Certificate } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createPrivateKey, createPublicKey, X509Certificate as NodeX509Certificate } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname } from 'node:path';
 import * as x509 from '@peculiar/x509';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { certificateAuthorities } from '@/db/schema/index.js';
+import { certificateAuthorities, certificates } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { getPublicIPs } from '@/modules/domains/dns.utils.js';
 import type { CAService } from '@/modules/pki/ca.service.js';
@@ -13,6 +13,11 @@ import type { CertService } from '@/modules/pki/cert.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CryptoService } from './crypto.service.js';
 import { validateGrpcServerCertificate } from './grpc-server-certificate.js';
+import type {
+  SystemCertificateBindingHandle,
+  SystemCertificateCurrentBinding,
+  SystemCertificateLifecycleService,
+} from './system-certificate-lifecycle.service.js';
 
 const logger = createChildLogger('SystemCA');
 
@@ -81,18 +86,137 @@ function certificateHasExpectedSans(certPem: string, expectedSans: readonly stri
   );
 }
 
+function safelyUnlink(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
+async function recoverListenerMaterial(
+  db: DrizzleClient,
+  certPath: string,
+  keyPath: string,
+  listener: 'gRPC' | 'web'
+): Promise<void> {
+  const certBackup = `${certPath}.previous`;
+  const keyBackup = `${keyPath}.previous`;
+  if (!existsSync(certBackup) && !existsSync(keyBackup)) return;
+  const [current] = await db
+    .select({ certificatePem: certificates.certificatePem })
+    .from(certificates)
+    .where(
+      and(
+        eq(certificates.systemOwnerType, 'gateway_listener'),
+        eq(certificates.systemOwnerId, listener === 'gRPC' ? 'grpc' : 'web'),
+        eq(certificates.systemLifecycleState, 'current')
+      )
+    )
+    .limit(1);
+  // A crash after DB commit but before backup cleanup must retain the newly
+  // current pair. Only restore backups when the on-disk certificate is not
+  // the certificate that the committed lifecycle identifies as current.
+  if (current && existsSync(certPath) && readFileSync(certPath, 'utf8') === current.certificatePem) {
+    if (existsSync(certBackup)) safelyUnlink(certBackup);
+    if (existsSync(keyBackup)) safelyUnlink(keyBackup);
+    return;
+  }
+  // Otherwise installation did not commit and the old pair remains current.
+  if (existsSync(certBackup)) {
+    safelyUnlink(certPath);
+    renameSync(certBackup, certPath);
+  }
+  if (existsSync(keyBackup)) {
+    safelyUnlink(keyPath);
+    renameSync(keyBackup, keyPath);
+  }
+}
+
+/**
+ * Validate and install a listener TLS pair before its DB lifecycle transition
+ * commits. If installation fails, restore the prior pair and rethrow so the
+ * lifecycle transaction keeps the previous certificate current.
+ */
+function installListenerMaterial(
+  certPath: string,
+  keyPath: string,
+  certificatePem: string,
+  privateKeyPem: string
+): SystemCertificateBindingHandle {
+  const certificate = new NodeX509Certificate(certificatePem);
+  const key = createPrivateKey(privateKeyPem);
+  const certificatePublic = certificate.publicKey.export({ type: 'spki', format: 'der' });
+  const keyPublic = createPublicKey(key).export({ type: 'spki', format: 'der' });
+  if (!certificatePublic.equals(keyPublic)) throw new Error('Listener certificate and private key do not match');
+  const suffix = `.pending-${process.pid}-${Date.now()}`;
+  const certTemporary = `${certPath}${suffix}`;
+  const keyTemporary = `${keyPath}${suffix}`;
+  const certBackup = `${certPath}.previous`;
+  const keyBackup = `${keyPath}.previous`;
+  let certInstalled = false;
+  let keyInstalled = false;
+  let certBackedUp = false;
+  let keyBackedUp = false;
+
+  mkdirSync(dirname(certPath), { recursive: true });
+  mkdirSync(dirname(keyPath), { recursive: true });
+  writeFileSync(certTemporary, certificatePem, { mode: 0o644 });
+  writeFileSync(keyTemporary, privateKeyPem, { mode: 0o600 });
+  try {
+    if (existsSync(certPath)) {
+      renameSync(certPath, certBackup);
+      certBackedUp = true;
+    }
+    if (existsSync(keyPath)) {
+      renameSync(keyPath, keyBackup);
+      keyBackedUp = true;
+    }
+    renameSync(certTemporary, certPath);
+    certInstalled = true;
+    renameSync(keyTemporary, keyPath);
+    keyInstalled = true;
+  } catch (error) {
+    if (certInstalled) safelyUnlink(certPath);
+    if (keyInstalled) safelyUnlink(keyPath);
+    if (certBackedUp && existsSync(certBackup)) renameSync(certBackup, certPath);
+    if (keyBackedUp && existsSync(keyBackup)) renameSync(keyBackup, keyPath);
+    throw error;
+  } finally {
+    safelyUnlink(certTemporary);
+    safelyUnlink(keyTemporary);
+  }
+  return {
+    onCommitted: () => {
+      if (certBackedUp) safelyUnlink(certBackup);
+      if (keyBackedUp) safelyUnlink(keyBackup);
+    },
+    onRollback: () => {
+      if (certInstalled) safelyUnlink(certPath);
+      if (keyInstalled) safelyUnlink(keyPath);
+      if (certBackedUp && existsSync(certBackup)) renameSync(certBackup, certPath);
+      if (keyBackedUp && existsSync(keyBackup)) renameSync(keyBackup, keyPath);
+    },
+  };
+}
+
 export class SystemCAService {
   private generalSettingsService?: GeneralSettingsService;
+  private systemCertificateLifecycle?: SystemCertificateLifecycleService;
 
   constructor(
     private readonly db: DrizzleClient,
     private readonly caService: CAService,
-    private readonly certService: CertService,
+    readonly _certService: CertService,
     readonly _cryptoService: CryptoService
   ) {}
 
   setGeneralSettingsService(service: GeneralSettingsService) {
     this.generalSettingsService = service;
+  }
+
+  setSystemCertificateLifecycleService(service: SystemCertificateLifecycleService) {
+    this.systemCertificateLifecycle = service;
   }
 
   /** Ensure the system CA exists. Creates it on first startup. Returns its ID. */
@@ -187,6 +311,7 @@ export class SystemCAService {
     expectedSans: string[],
     listener: 'gRPC' | 'web'
   ): Promise<{ certPath: string; keyPath: string }> {
+    await recoverListenerMaterial(this.db, certPath, keyPath, listener);
     // Reuse if files exist and cert is still valid (> 7 days remaining)
     if (existsSync(certPath) && existsSync(keyPath)) {
       try {
@@ -221,24 +346,21 @@ export class SystemCAService {
 
     const caId = await this.getSystemCAId();
 
-    const result = await this.certService.issueCertificate(
-      {
-        caId,
-        type: 'tls-server',
-        commonName,
-        sans: expectedSans,
-        keyAlgorithm: 'ecdsa-p256',
-        validityDays: 365,
-      },
+    const issueInput = {
+      caId,
+      type: 'tls-server' as const,
+      commonName,
+      sans: expectedSans,
+      keyAlgorithm: 'ecdsa-p256' as const,
+      validityDays: 365,
+    };
+    const result = await this.requireSystemCertificateLifecycle().issueCurrent(
+      issueInput,
       SYSTEM_USER_ID,
-      { allowSystem: true }
+      { type: 'gateway_listener', id: listener === 'gRPC' ? 'grpc' : 'web' },
+      async (_tx, certificate) =>
+        installListenerMaterial(certPath, keyPath, certificate.certificatePem, certificate.privateKeyPem)
     );
-
-    // Write cert and key to disk
-    mkdirSync(dirname(certPath), { recursive: true });
-    mkdirSync(dirname(keyPath), { recursive: true });
-    writeFileSync(certPath, result.certificate.certificatePem, { mode: 0o644 });
-    writeFileSync(keyPath, result.privateKeyPem, { mode: 0o600 });
 
     logger.info(`${listener} server cert issued`, { serial: result.certificate.serialNumber, certPath });
     return { certPath, keyPath };
@@ -276,7 +398,8 @@ export class SystemCAService {
   /** Issue a TLS client cert for a daemon node using the system CA. */
   async issueNodeCert(
     nodeId: string,
-    hostname: string
+    hostname: string,
+    bindCurrent?: SystemCertificateCurrentBinding
   ): Promise<{
     caCertPem: string;
     certPem: string;
@@ -292,17 +415,19 @@ export class SystemCAService {
       .where(eq(certificateAuthorities.id, caId))
       .limit(1);
 
-    const result = await this.certService.issueCertificate(
-      {
-        caId,
-        type: 'tls-client',
-        commonName: nodeId,
-        sans: [hostname],
-        keyAlgorithm: 'ecdsa-p256',
-        validityDays: 365,
-      },
+    const issueInput = {
+      caId,
+      type: 'tls-client' as const,
+      commonName: nodeId,
+      sans: [hostname],
+      keyAlgorithm: 'ecdsa-p256' as const,
+      validityDays: 365,
+    };
+    const result = await this.requireSystemCertificateLifecycle().issueCurrent(
+      issueInput,
       SYSTEM_USER_ID,
-      { allowSystem: true }
+      { type: 'node', id: nodeId },
+      bindCurrent
     );
 
     return {
@@ -312,5 +437,12 @@ export class SystemCAService {
       serial: result.certificate.serialNumber,
       expiresAt: result.certificate.notAfter,
     };
+  }
+
+  private requireSystemCertificateLifecycle(): SystemCertificateLifecycleService {
+    if (!this.systemCertificateLifecycle) {
+      throw new Error('System certificate lifecycle service is required before issuing system leaves');
+    }
+    return this.systemCertificateLifecycle;
   }
 }

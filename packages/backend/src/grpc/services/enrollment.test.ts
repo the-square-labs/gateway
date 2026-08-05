@@ -146,13 +146,16 @@ function makeDeps(db: any, connected = true) {
       deregister: vi.fn(async () => undefined),
     },
     systemCA: {
-      issueNodeCert: vi.fn(async () => ({
-        serial: 'new01',
-        expiresAt,
-        caCertPem: 'ca-cert-pem',
-        certPem: 'cert-pem',
-        keyPem: 'key-pem',
-      })),
+      issueNodeCert: vi.fn(async (_nodeId: string, _hostname: string, bindCurrent?: (tx: unknown, cert: any) => Promise<void>) => {
+        if (bindCurrent) await bindCurrent(db, { id: 'cert-1', serialNumber: 'new01', notAfter: expiresAt });
+        return {
+          serial: 'new01',
+          expiresAt,
+          caCertPem: 'ca-cert-pem',
+          certPem: 'cert-pem',
+          keyPem: 'key-pem',
+        };
+      }),
     },
     dispatch: {},
     auditService: {
@@ -174,7 +177,7 @@ describe('Enroll token lookup', () => {
 
     await createEnrollmentHandlers(deps).Enroll(makeEnrollCall(enrollmentToken.token), callback);
 
-    expect(deps.systemCA.issueNodeCert).toHaveBeenCalledWith(nodeId, 'daemon-host');
+    expect(deps.systemCA.issueNodeCert).toHaveBeenCalledWith(nodeId, 'daemon-host', expect.any(Function));
     expect(compareSpy).toHaveBeenCalledTimes(1);
     expect(updateSet).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -206,7 +209,7 @@ describe('Enroll token lookup', () => {
 
     await createEnrollmentHandlers(deps).Enroll(makeEnrollCall(legacyToken), callback);
 
-    expect(deps.systemCA.issueNodeCert).toHaveBeenCalledWith(nodeId, 'daemon-host');
+    expect(deps.systemCA.issueNodeCert).toHaveBeenCalledWith(nodeId, 'daemon-host', expect.any(Function));
     expect(compareSpy).toHaveBeenCalledTimes(2);
     expect(callback).toHaveBeenCalledWith(null, expect.objectContaining({ nodeId }));
     compareSpy.mockRestore();
@@ -247,7 +250,7 @@ describe('RenewCertificate daemon certificate identity', () => {
 
     await createEnrollmentHandlers(deps).RenewCertificate(makeCall({ serialNumber: 'aa01' }), callback);
 
-    expect(deps.systemCA.issueNodeCert).toHaveBeenCalledWith(nodeId, 'node-1');
+    expect(deps.systemCA.issueNodeCert).toHaveBeenCalledWith(nodeId, 'node-1', expect.any(Function));
     expect(updateSet).toHaveBeenCalledWith(
       expect.objectContaining({ certificateSerial: 'new01', certificateExpiresAt: expiresAt })
     );

@@ -2,6 +2,19 @@ import type { AIToolDefinition } from './ai.types.js';
 
 export const PKI_AI_TOOLS: AIToolDefinition[] = [
   {
+    name: 'audit_system_pki_leaves',
+    description:
+      'Explicit read-only audit of leaves issued by Gateway system CAs. System PKI is otherwise hidden. Reports persisted lifecycle evidence and never revokes, deletes, exports keys, or cleans certificates.',
+    parameters: {
+      type: 'object',
+      properties: { caId: { type: 'string', description: 'Optional system CA UUID to audit' } },
+    },
+    destructive: false,
+    category: 'PKI - System Audit',
+    requiredScope: 'admin:details:certificates',
+    invalidateStores: [],
+  },
+  {
     name: 'list_cas',
     description:
       'List all Certificate Authorities with their status, type, and hierarchy. Returns id, commonName, type (root/intermediate), status, notBefore, notAfter, parentId.',

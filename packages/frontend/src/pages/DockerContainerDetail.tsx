@@ -212,7 +212,7 @@ export function DockerContainerDetail({
 
   // Pin
   const [pinOpen, setPinOpen] = useState(false);
-  const { isPinnedSidebar, toggleSidebar, updateMeta } = usePinnedContainersStore();
+  const { isPinnedDashboard, isPinnedSidebar, toggleDashboard, toggleSidebar, updateMeta } = usePinnedContainersStore();
   const navigationMigration = (location.state as { dockerMigration?: DockerMigration } | null)
     ?.dockerMigration;
   const migrationHandoff =
@@ -1030,6 +1030,26 @@ export function DockerContainerDetail({
             <DialogTitle>Pin Container</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Add to dashboard</p>
+                <p className="text-xs text-muted-foreground">Show compact status on the dashboard</p>
+              </div>
+              <Switch
+                checked={isPinnedDashboard(containerId!)}
+                disabled={!!effectiveTransition}
+                onChange={() => {
+                  toggleDashboard(containerId!, {
+                    nodeId: nodeId!,
+                    nodeSlug,
+                    name,
+                    state: baseState,
+                    scopeResourceId,
+                  });
+                  usePinnedContainersStore.getState().invalidate();
+                }}
+              />
+            </div>
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium">Add to sidebar</p>

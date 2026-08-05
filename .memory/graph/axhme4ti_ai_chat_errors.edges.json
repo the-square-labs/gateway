@@ -1,0 +1,25 @@
+{
+  "file_name": "axhme4ti_ai_chat_errors",
+  "edges": [
+    {
+      "from_id": "axhme4ti",
+      "to_id": "fgmxlp0p",
+      "relation": "related_to",
+      "weight": 0.1107,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1785446626367,
+      "updated_at": 1785446626367
+    },
+    {
+      "from_id": "axhme4ti",
+      "to_id": "pstn8fla",
+      "relation": "same_area",
+      "weight": 0.1098,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1785446626367,
+      "updated_at": 1785446626367
+    }
+  ]
+}

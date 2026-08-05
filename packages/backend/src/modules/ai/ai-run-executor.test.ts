@@ -89,6 +89,7 @@ function createExecutorHarness(
   const publishAssistantCommentDelta = vi.fn();
   const publishAssistantCommentDone = vi.fn();
   const publishCredentialChallenge = vi.fn();
+  const publishClientAction = vi.fn();
   const executor = new AIRunExecutor(
     { select, insert, update } as never,
     publishConversationChanged,
@@ -96,7 +97,8 @@ function createExecutorHarness(
     publishAssistantCommentDelta,
     publishAssistantCommentDone,
     undefined,
-    publishCredentialChallenge
+    publishCredentialChallenge,
+    publishClientAction
   );
 
   container.registerInstance(AIService, {
@@ -113,6 +115,7 @@ function createExecutorHarness(
     publishAssistantDelta,
     publishAssistantCommentDelta,
     publishCredentialChallenge,
+    publishClientAction,
   };
 }
 
@@ -555,6 +558,45 @@ describe('AIRunExecutor live assistant draft streaming', () => {
         assistantMessageId: 'assistant-message-1',
       })
     );
+  });
+
+  it('publishes a local client action once when a tool result requests one', async () => {
+    const harness = createExecutorHarness([
+      {
+        type: 'tool_call_start',
+        requestId: 'request-1',
+        id: 'call-pin',
+        name: 'set_resource_pin',
+        arguments: {},
+      },
+      {
+        type: 'tool_result',
+        requestId: 'request-1',
+        id: 'call-pin',
+        name: 'set_resource_pin',
+        result: {
+          clientAction: {
+            type: 'set_resource_pin',
+            resourceType: 'node',
+            resourceId: 'node-1',
+            target: 'dashboard',
+            pinned: true,
+          },
+        },
+      },
+      { type: 'done', requestId: 'request-1' },
+    ]);
+
+    await executeRun(harness.executor);
+
+    expect(harness.publishClientAction).toHaveBeenCalledTimes(1);
+    expect(harness.publishClientAction).toHaveBeenCalledWith(USER.id, 'conversation-1', 'run-1', {
+      type: 'set_resource_pin',
+      resourceType: 'node',
+      resourceId: 'node-1',
+      target: 'dashboard',
+      pinned: true,
+    });
   });
 
   it('persists a redacted copy of one-time API token tool results', async () => {

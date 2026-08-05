@@ -1,0 +1,25 @@
+import { describe, expect, it } from 'vitest';
+import { getSessionCookieName } from './session-cookie.js';
+import { getSessionWebSocketCredential } from './websocket-auth.js';
+
+process.env.NODE_ENV = 'test';
+process.env.DATABASE_URL = 'http://localhost/db';
+process.env.REDIS_URL = 'redis://localhost:6379';
+process.env.PKI_MASTER_KEY = '0000000000000000000000000000000000000000000000000000000000000000';
+
+describe('browser WebSocket credentials', () => {
+  const allowedOrigin = () => true;
+
+  it('accepts a transport-specific browser session cookie', () => {
+    expect(
+      getSessionWebSocketCredential(`${getSessionCookieName('http')}=session-1`, 'http://gateway.test', allowedOrigin)
+    ).toEqual({ type: 'session', value: 'session-1' });
+  });
+
+  it('continues to accept legacy browser session cookies', () => {
+    expect(getSessionWebSocketCredential('session_id=legacy-session', 'https://gateway.test', allowedOrigin)).toEqual({
+      type: 'session',
+      value: 'legacy-session',
+    });
+  });
+});

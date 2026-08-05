@@ -1,0 +1,35 @@
+{
+  "file_name": "kufbu8qt_gateway_release_workflow",
+  "edges": [
+    {
+      "from_id": "kufbu8qt",
+      "to_id": "acdy69d9",
+      "relation": "uses_service",
+      "weight": 0.4,
+      "reason": "Gateway licensing workflow interacts with external license server; related to gateway operations ecosystem.",
+      "source": "auto",
+      "created_at": 1784761706108,
+      "updated_at": 1784761706108
+    },
+    {
+      "from_id": "kufbu8qt",
+      "to_id": "vrch49nc",
+      "relation": "same_workflow",
+      "weight": 0.85,
+      "reason": "Release tag/signing rules and the self-update migrator are parts of the Gateway update workflow.",
+      "source": "manual",
+      "created_at": 1784761805148,
+      "updated_at": 1784761805148
+    },
+    {
+      "from_id": "kufbu8qt",
+      "to_id": "zzulrspz",
+      "relation": "same_area",
+      "weight": 0.5,
+      "reason": "Daemon version compatibility and gateway daemon updates are related areas of gateway lifecycle.",
+      "source": "auto",
+      "created_at": 1784761706108,
+      "updated_at": 1784761706108
+    }
+  ]
+}

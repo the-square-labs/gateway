@@ -1433,7 +1433,6 @@ export const AI_TOOLS: AIToolDefinition[] = [
     requiredScope: 'feat:ai:use',
     invalidateStores: [],
   },
-
   // ── Permission Groups ──
   {
     name: 'list_groups',
@@ -1506,6 +1505,32 @@ export const AI_TOOLS: AIToolDefinition[] = [
     category: 'Administration',
     requiredScope: 'admin:groups',
     invalidateStores: ['groups'],
+  },
+  {
+    name: 'set_resource_pin',
+    description:
+      "Set whether a readable resource is pinned to the current browser session's Dashboard or Sidebar. This is a local UI preference, not a server-side resource mutation. Resolve the resource with find_resource first; Docker pins also require nodeId, nodeSlug, and name. This tool is unavailable to MCP clients.",
+    parameters: {
+      type: 'object',
+      properties: {
+        resourceType: {
+          type: 'string',
+          enum: ['node', 'proxy_host', 'database', 'docker_container', 'docker_deployment'],
+        },
+        resourceId: { type: 'string', description: 'Gateway resource ID to pin or unpin.' },
+        target: { type: 'string', enum: ['dashboard', 'sidebar'] },
+        pinned: { type: 'boolean', description: 'True pins the resource; false removes only this placement.' },
+        nodeId: { type: 'string', description: 'Required when resourceType is a Docker container or deployment.' },
+        nodeSlug: { type: 'string', description: 'Required when resourceType is a Docker container or deployment.' },
+        name: { type: 'string', description: 'Required when resourceType is a Docker container or deployment.' },
+        scopeResourceId: { type: 'string', description: 'Optional stable Docker access identity.' },
+      },
+      required: ['resourceType', 'resourceId', 'target', 'pinned'],
+    },
+    destructive: false,
+    category: 'Dashboard',
+    requiredScope: 'feat:ai:use',
+    invalidateStores: [],
   },
 
   // ── Ask Question ──

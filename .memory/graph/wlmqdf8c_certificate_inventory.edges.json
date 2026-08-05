@@ -1,0 +1,35 @@
+{
+  "file_name": "wlmqdf8c_certificate_inventory",
+  "edges": [
+    {
+      "from_id": "wlmqdf8c",
+      "to_id": "94t2cjlq",
+      "relation": "same_area",
+      "weight": 0.82,
+      "reason": "Both define Gateway frontend shared table, PanelShell, and badge conventions for resource views.",
+      "source": "auto",
+      "created_at": 1785946669740,
+      "updated_at": 1785946669740
+    },
+    {
+      "from_id": "wlmqdf8c",
+      "to_id": "ip47mets",
+      "relation": "same_area",
+      "weight": 0.75,
+      "reason": "Documents the design-system DataTable and shared primitive architecture used by the PKI inventory.",
+      "source": "auto",
+      "created_at": 1785946669740,
+      "updated_at": 1785946669740
+    },
+    {
+      "from_id": "wlmqdf8c",
+      "to_id": "0s83sww0",
+      "relation": "related_to",
+      "weight": 0.62,
+      "reason": "Provides the frontend design-system migration rules relevant to adopting shared DataTable and Badge components.",
+      "source": "auto",
+      "created_at": 1785946669740,
+      "updated_at": 1785946669740
+    }
+  ]
+}

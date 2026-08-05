@@ -1152,7 +1152,9 @@ enroll_daemon() {
     fi
 
     log "Writing config and enrolling with Gateway..."
-    "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256"
+    if ! "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256" >> "$LOG_FILE" 2>&1; then
+        die "Failed to enroll nginx-daemon. Check ${LOG_FILE} for details."
+    fi
     sed -i "s|config_dir: \".*\"|config_dir: \"${NGINX_SITES_DIR}\"|" /etc/nginx-daemon/config.yaml
     sed -i "s|htpasswd_dir: \".*\"|htpasswd_dir: \"${NGINX_HTPASSWD_DIR}\"|" /etc/nginx-daemon/config.yaml
     if [[ "$STUB_STATUS_URL" != "http://127.0.0.1/nginx_status" ]]; then

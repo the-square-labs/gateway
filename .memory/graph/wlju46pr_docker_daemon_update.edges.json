@@ -1,0 +1,15 @@
+{
+  "file_name": "wlju46pr_docker_daemon_update",
+  "edges": [
+    {
+      "from_id": "wlju46pr",
+      "to_id": "muapjlzr",
+      "relation": "same_workflow",
+      "weight": 0.85,
+      "reason": "Snap/systemd Docker daemon installation compatibility and local daemon update procedures belong to the same daemon lifecycle.",
+      "source": "manual",
+      "created_at": 1784761859355,
+      "updated_at": 1784761859355
+    }
+  ]
+}

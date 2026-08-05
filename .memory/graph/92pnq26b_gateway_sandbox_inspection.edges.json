@@ -1,0 +1,35 @@
+{
+  "file_name": "92pnq26b_gateway_sandbox_inspection",
+  "edges": [
+    {
+      "from_id": "92pnq26b",
+      "to_id": "7oked0dp",
+      "relation": "related_to",
+      "weight": 0.6,
+      "reason": "AI chat retrieval tooling and retrieval safety patterns share AI tooling verification concerns.",
+      "source": "auto",
+      "created_at": 1783631276015,
+      "updated_at": 1783631276015
+    },
+    {
+      "from_id": "92pnq26b",
+      "to_id": "duvbj7h2",
+      "relation": "related_to",
+      "weight": 0.5,
+      "reason": "AI tool reduction touches same domain of safe/verification patterns as artifact/tool boundaries.",
+      "source": "auto",
+      "created_at": 1783631276015,
+      "updated_at": 1783631276015
+    },
+    {
+      "from_id": "92pnq26b",
+      "to_id": "fgmxlp0p",
+      "relation": "related_to",
+      "weight": 0.6,
+      "reason": "Metadata-only payloads for AI tooling surface privacy/derivation concerns, similar to tool-arg safety patterns.",
+      "source": "auto",
+      "created_at": 1783631276015,
+      "updated_at": 1783631276015
+    }
+  ]
+}

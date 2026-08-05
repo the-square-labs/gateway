@@ -266,7 +266,10 @@ export function SetupWizardPage() {
 
   useEffect(() => {
     if (!restartPending) return;
-    const timer = window.setTimeout(() => window.location.assign("/login"), TLS_RESTART_REDIRECT_DELAY_MS);
+    const timer = window.setTimeout(
+      () => window.location.assign("/login"),
+      TLS_RESTART_REDIRECT_DELAY_MS
+    );
     return () => window.clearTimeout(timer);
   }, [restartPending]);
 

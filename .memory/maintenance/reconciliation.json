@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "last_reconciled_at": "2026-08-05T21:03:16.515Z",
+  "report": {
+    "summary": "Reviewed Gateway project memory and corrected the canonical inference endpoint contract from its explicitly superseding endpoint memory. No secret-bearing durable values or additional stale, duplicate, wrongly scoped, or contradictory content was found in the reviewed set.",
+    "reviewed": 170,
+    "changes": [
+      {
+        "action": "updated",
+        "memory_id": "dcfkgqwx",
+        "summary": "Updated harness-specific inference endpoint defaults, disabled behavior, and enablement acknowledgement to match the explicitly superseding endpoint contract."
+      }
+    ],
+    "unresolved": [
+      "Memory graph health reports 19 pre-existing dead pointers and 4 orphan nodes; graph pruning or repair was intentionally not performed because it was outside the approved scope."
+    ]
+  }
+}

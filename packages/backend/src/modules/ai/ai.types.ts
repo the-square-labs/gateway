@@ -194,6 +194,7 @@ export type WSServerMessage =
       runId: string;
       challenge: NonNullable<AIConversationRuntimeSnapshot['runtime']['pendingCredentialChallenge']>;
     }
+  | { type: 'client.action'; conversationId: string; runId: string; action: Record<string, unknown> }
   | { type: 'run.status_changed'; conversationId: string; run: AIConversationRuntimeSnapshot['runtime']['activeRun'] }
   | { type: 'stores.invalidated'; conversationId: string; stores: string[] }
   | {

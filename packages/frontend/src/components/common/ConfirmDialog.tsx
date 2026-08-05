@@ -17,6 +17,7 @@ interface ConfirmState {
   cancelLabel: string;
   cancelVariant: "outline" | "ghost";
   variant: "default" | "destructive";
+  locked: boolean;
   onConfirm: (() => void) | null;
   show: (opts: {
     title: string;
@@ -25,6 +26,7 @@ interface ConfirmState {
     cancelLabel?: string;
     cancelVariant?: "outline" | "ghost";
     variant?: "default" | "destructive";
+    locked?: boolean;
     onConfirm: () => void;
   }) => void;
   close: () => void;
@@ -38,6 +40,7 @@ export const useConfirmDialog = create<ConfirmState>()((set) => ({
   cancelLabel: "Cancel",
   cancelVariant: "outline",
   variant: "default",
+  locked: false,
   onConfirm: null,
   show: ({
     title,
@@ -46,6 +49,7 @@ export const useConfirmDialog = create<ConfirmState>()((set) => ({
     cancelLabel = "Cancel",
     cancelVariant = "outline",
     variant = "destructive",
+    locked = false,
     onConfirm,
   }) =>
     set({
@@ -56,6 +60,7 @@ export const useConfirmDialog = create<ConfirmState>()((set) => ({
       cancelLabel,
       cancelVariant,
       variant,
+      locked,
       onConfirm,
     }),
   close: () => set({ open: false, onConfirm: null }),
@@ -68,6 +73,7 @@ export function confirm(opts: {
   cancelLabel?: string;
   cancelVariant?: "outline" | "ghost";
   variant?: "default" | "destructive";
+  locked?: boolean;
 }): Promise<boolean> {
   return new Promise((resolve) => {
     useConfirmDialog.getState().show({
@@ -95,13 +101,26 @@ export function ConfirmDialog() {
     cancelLabel,
     cancelVariant,
     variant,
+    locked,
     onConfirm,
     close,
   } = useConfirmDialog();
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && close()}>
-      <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-md">
+    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && !locked && close()}>
+      <DialogContent
+        hideCloseButton={locked}
+        className="max-w-[calc(100vw-2rem)] sm:max-w-md"
+        onEscapeKeyDown={(event) => {
+          if (locked) event.preventDefault();
+        }}
+        onPointerDownOutside={(event) => {
+          if (locked) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (locked) event.preventDefault();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>

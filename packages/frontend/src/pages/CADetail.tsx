@@ -9,7 +9,7 @@ import {
   ShieldOff,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { CACreateDialog } from "@/components/ca/CACreateDialog";
 import { CertificateIssueDialog } from "@/components/certificates/CertificateIssueDialog";
@@ -72,7 +72,7 @@ export function CADetail() {
     try {
       const certs = await api.listCertificates({
         caId: id,
-        limit: 50,
+        limit: 10,
         showSystem: showSystemCertificates,
       });
       setCertificates(certs.data || []);
@@ -226,7 +226,7 @@ export function CADetail() {
     {
       id: "type",
       header: "Type",
-      render: (cert) => <span className="text-sm text-muted-foreground">{cert.type}</span>,
+      render: (cert) => <Badge variant="secondary">{cert.type}</Badge>,
     },
     {
       id: "expires",
@@ -430,7 +430,14 @@ export function CADetail() {
             <PanelShell
               title="Issued Certificates"
               description="Leaf certificates issued and signed by this CA."
-              actions={<Badge variant="secondary">{certificates.length}</Badge>}
+              actions={
+                <Link
+                  to="/certificates"
+                  className="text-sm text-muted-foreground hover:text-foreground"
+                >
+                  View all
+                </Link>
+              }
             >
               {certificates.length > 0 ? (
                 <SimpleTable

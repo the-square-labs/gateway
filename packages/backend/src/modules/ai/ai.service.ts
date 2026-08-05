@@ -1476,6 +1476,21 @@ export class AIService {
         return filtered;
       }
 
+      case 'set_resource_pin':
+        return {
+          clientAction: {
+            type: 'set_resource_pin',
+            resourceType: a.resourceType,
+            resourceId: a.resourceId,
+            target: a.target,
+            pinned: a.pinned,
+            nodeId: a.nodeId,
+            nodeSlug: a.nodeSlug,
+            name: a.name,
+            scopeResourceId: a.scopeResourceId,
+          },
+        };
+
       case 'manage_docker_container_config':
         return manageDockerContainerConfigTool({ dockerService: this.dockerService }, user, args);
 

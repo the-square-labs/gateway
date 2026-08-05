@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ilike, isNull, not, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, isNull, ne, or, sql } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
@@ -104,7 +104,7 @@ export class InferenceUsageService {
     const rows = await this.db
       .select({ id: users.id, email: users.email, name: users.name, avatarUrl: users.avatarUrl })
       .from(users)
-      .where(not(eq(users.oidcSubject, GATEWAY_SYSTEM_OIDC_SUBJECT)));
+      .where(or(isNull(users.oidcSubject), ne(users.oidcSubject, GATEWAY_SYSTEM_OIDC_SUBJECT)));
     return Promise.all(
       rows.map(async (user) => {
         try {
@@ -122,7 +122,9 @@ export class InferenceUsageService {
     const rows = await this.db
       .select({ id: users.id, email: users.email, name: users.name, avatarUrl: users.avatarUrl })
       .from(users)
-      .where(and(not(eq(users.oidcSubject, GATEWAY_SYSTEM_OIDC_SUBJECT)), isNull(users.deletedAt)));
+      .where(
+        and(or(isNull(users.oidcSubject), ne(users.oidcSubject, GATEWAY_SYSTEM_OIDC_SUBJECT)), isNull(users.deletedAt))
+      );
     return Promise.all(
       rows.map(async (user) => {
         try {

@@ -4,9 +4,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { authMiddleware } from '@/modules/auth/auth.middleware.js';
+import { getSessionCookieName } from '@/modules/auth/session-cookie.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { AppEnv, SessionData, User } from '@/types.js';
+
+process.env.NODE_ENV = 'test';
+process.env.DATABASE_URL = 'http://localhost/db';
+process.env.REDIS_URL = 'redis://localhost:6379';
+process.env.PKI_MASTER_KEY = '0000000000000000000000000000000000000000000000000000000000000000';
 
 const USER: User = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -98,6 +104,17 @@ describe('authMiddleware browser session credentials', () => {
         Cookie: 'session_id=session-1',
         'X-CSRF-Token': 'csrf-token',
       },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ userId: USER.id });
+  });
+
+  it('accepts the transport-specific session cookie', async () => {
+    registerSession();
+
+    const response = await createApp().request('/read', {
+      headers: { Cookie: `${getSessionCookieName('http')}=session-1` },
     });
 
     expect(response.status).toBe(200);

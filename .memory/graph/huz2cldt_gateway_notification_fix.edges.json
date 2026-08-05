@@ -1,0 +1,15 @@
+{
+  "file_name": "huz2cldt_gateway_notification_fix",
+  "edges": [
+    {
+      "from_id": "huz2cldt",
+      "to_id": "vvdi4727",
+      "relation": "same_area",
+      "weight": 0.4105,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1783025303253,
+      "updated_at": 1783025303253
+    }
+  ]
+}

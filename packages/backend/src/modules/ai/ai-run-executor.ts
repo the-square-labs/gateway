@@ -35,6 +35,13 @@ const COMPACTION_TAIL_MESSAGES = 8;
 const AUTO_COMPACTION_RETRY_PREFIX = 'auto-compact-retry-';
 const AUTO_COMPACTION_RETRY_ANSWER = 'Retry';
 
+function getClientAction(result: unknown): Record<string, unknown> | null {
+  if (!result || typeof result !== 'object') return null;
+  const action = (result as { clientAction?: unknown }).clientAction;
+  if (!action || typeof action !== 'object' || Array.isArray(action)) return null;
+  return action as Record<string, unknown>;
+}
+
 class AutoCompactionPausedError extends Error {
   constructor() {
     super('Automatic context compaction is waiting for retry');
@@ -57,6 +64,12 @@ type PublishCredentialChallenge = (
   conversationId: string,
   runId: string,
   challenge: AICredentialChallenge
+) => void;
+type PublishClientAction = (
+  userId: string,
+  conversationId: string,
+  runId: string,
+  action: Record<string, unknown>
 ) => void;
 
 interface ApprovalContinuationInput {
@@ -105,7 +118,8 @@ export class AIRunExecutor {
     private readonly publishAssistantCommentDelta: PublishAssistantCommentDelta,
     private readonly publishAssistantCommentDone: PublishAssistantCommentDone,
     private readonly conversationSearchService?: AIConversationSearchService,
-    private readonly publishCredentialChallenge?: PublishCredentialChallenge
+    private readonly publishCredentialChallenge?: PublishCredentialChallenge,
+    private readonly publishClientAction?: PublishClientAction
   ) {}
 
   startRunExecution(user: User, runId: string): void {
@@ -609,6 +623,8 @@ export class AIRunExecutor {
 
     if (event.type === 'tool_result') {
       await this.finishToolCall(run.id, event.id, event.name, event.result, event.error ?? null);
+      const clientAction = getClientAction(event.result);
+      if (clientAction) this.publishClientAction?.(user.id, run.conversationId, run.id, clientAction);
       this.publishConversationChanged(user.id, run.conversationId);
       return { assistantContent, assistantMessageWritten, done: false };
     }

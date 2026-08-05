@@ -3,6 +3,7 @@ import { useAccessListsStore } from "@/stores/access-lists";
 import { resetAIStateForAuthChange } from "@/stores/ai";
 import { useCAStore } from "@/stores/ca";
 import { useCertificatesStore } from "@/stores/certificates";
+import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useDockerStore } from "@/stores/docker";
 import { useDockerFolderStore } from "@/stores/docker-folders";
 import { useFolderStore } from "@/stores/folders";
@@ -19,6 +20,7 @@ import { useUIStore } from "@/stores/ui";
 export function resetClientSessionState() {
   api.resetSessionState();
   resetAIStateForAuthChange();
+  useDashboardBootstrapStore.getState().clear();
   useUIStore.setState({ aiPanelOpen: false });
 
   useCAStore.setState({ cas: [], selectedCA: null, isLoading: false, error: null });
@@ -26,21 +28,23 @@ export function resetClientSessionState() {
     certificates: [],
     selectedCertificate: null,
     isLoading: false,
+    isLoadingMore: false,
     error: null,
     filters: { search: "", status: "active", type: "all", caId: "all" },
-    page: 1,
     total: 0,
-    totalPages: 0,
+    hasMore: false,
+    nextPage: 1,
   });
   useSSLStore.setState({
     certificates: [],
     selectedCert: null,
     isLoading: false,
+    isLoadingMore: false,
     error: null,
     filters: { search: "", type: "all", status: "active" },
-    page: 1,
     total: 0,
-    totalPages: 0,
+    hasMore: false,
+    nextPage: 1,
   });
   useProxyStore.setState({
     proxyHosts: [],
@@ -99,7 +103,11 @@ export function resetClientSessionState() {
     totalPages: 0,
     refreshTick: state.refreshTick + 1,
   }));
-  usePinnedDatabasesStore.setState({ sidebarDatabaseIds: [], databaseMeta: {} });
+  usePinnedDatabasesStore.setState({
+    dashboardDatabaseIds: [],
+    sidebarDatabaseIds: [],
+    databaseMeta: {},
+  });
   usePinnedNodesStore.setState({ dashboardNodeIds: [], sidebarNodeIds: [] });
   usePinnedProxiesStore.setState({ dashboardProxyIds: [], sidebarProxyIds: [] });
   usePinnedContainersStore.setState({

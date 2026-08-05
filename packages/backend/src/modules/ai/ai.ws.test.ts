@@ -430,6 +430,55 @@ describe('AI websocket backend runtime commands', () => {
     );
   });
 
+  it('forwards client actions only to the subscribed conversation', async () => {
+    const { ws, handlers } = await openAuthenticatedWs();
+    const getConversationSnapshot = vi.fn().mockResolvedValue(createSnapshot(createRun()));
+    container.registerInstance(AIRunService, {
+      getConversationSnapshot,
+    } as unknown as AIRunService);
+
+    await handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          type: 'conversation.subscribe',
+          conversationId: 'conversation-1',
+          clientCommandId: 'cmd-subscribe',
+        }),
+      }),
+      ws as any
+    );
+    vi.mocked(ws.send).mockClear();
+
+    const action = {
+      type: 'set_resource_pin',
+      resourceType: 'node',
+      resourceId: 'node-1',
+      target: 'dashboard',
+      pinned: true,
+    };
+    container.resolve(EventBusService).publish(aiUserConversationsChangedChannel(USER.id), {
+      type: 'client.action',
+      userId: USER.id,
+      conversationId: 'conversation-1',
+      runId: 'run-1',
+      action,
+    });
+    container.resolve(EventBusService).publish(aiUserConversationsChangedChannel(USER.id), {
+      type: 'client.action',
+      userId: USER.id,
+      conversationId: 'conversation-2',
+      runId: 'run-2',
+      action,
+    });
+    handlers.onClose(new Event('close'), ws as any);
+
+    expect(getConversationSnapshot).toHaveBeenCalledTimes(1);
+    expect(ws.send).toHaveBeenCalledTimes(1);
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'client.action', conversationId: 'conversation-1', runId: 'run-1', action })
+    );
+  });
+
   it('forwards credential challenges immediately without fetching a fresh conversation snapshot', async () => {
     const { ws, handlers } = await openAuthenticatedWs();
     const getConversationSnapshot = vi.fn().mockResolvedValue(createSnapshot(createRun()));

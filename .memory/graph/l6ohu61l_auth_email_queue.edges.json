@@ -1,0 +1,25 @@
+{
+  "file_name": "l6ohu61l_auth_email_queue",
+  "edges": [
+    {
+      "from_id": "l6ohu61l",
+      "to_id": "yfhytkcz",
+      "relation": "same_area",
+      "weight": 0.6,
+      "reason": "Both entries concern gateway authentication workflows and token/credential handling (node enrollment tokens vs. auth email delivery and related auth lifecycle concerns).",
+      "source": "auto",
+      "created_at": 1785703093047,
+      "updated_at": 1785703093047
+    },
+    {
+      "from_id": "l6ohu61l",
+      "to_id": "412x4uua",
+      "relation": "depends_on",
+      "weight": 0.5,
+      "reason": "AuthService.listUsers() must expose authMethod for correct frontend behavior; frontend ApiClient surface/contract changes could affect or need to include this field.",
+      "source": "auto",
+      "created_at": 1785703093047,
+      "updated_at": 1785703093047
+    }
+  ]
+}

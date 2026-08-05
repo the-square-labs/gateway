@@ -1,5 +1,5 @@
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Plus } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CertificateIssueDialog } from "@/components/certificates/CertificateIssueDialog";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -8,10 +8,10 @@ import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
-import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { StatusBadge } from "@/components/common/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
 import {
   Select,
   SelectContent,
@@ -52,17 +52,19 @@ export function Certificates() {
   const {
     certificates,
     isLoading,
+    isLoadingMore,
     filters,
-    page,
-    totalPages,
+    hasMore,
     total,
     fetchCertificates,
+    fetchNextPage,
     setFilters,
-    setPage,
     resetFilters,
   } = useCertificatesStore();
   const [searchInput, setSearchInput] = useState(filters.search);
   const [issueDialogOpen, setIssueDialogOpen] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     void showSystemCertificates;
@@ -79,6 +81,19 @@ export function Certificates() {
     }
   });
 
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel || !hasMore || isLoadingMore) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) void fetchNextPage();
+      },
+      { root: scrollRef.current, threshold: 0.1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [fetchNextPage, hasMore, isLoadingMore]);
+
   const handleSearch = () => {
     setFilters({ search: searchInput });
   };
@@ -88,10 +103,11 @@ export function Certificates() {
     filters.type !== "all" ||
     filters.caId !== "all" ||
     filters.search !== "";
-  const certificateColumns: SimpleTableColumn<Certificate>[] = [
+  const certificateColumns: DataTableColumn<Certificate>[] = [
     {
-      id: "common-name",
+      key: "common-name",
       header: "Common Name",
+      width: "minmax(220px, 1.4fr)",
       render: (cert) => (
         <div>
           <div className="flex items-center gap-2">
@@ -109,20 +125,24 @@ export function Certificates() {
       ),
     },
     {
-      id: "type",
+      key: "type",
       header: "Type",
-      render: (cert) => <span className="text-sm text-muted-foreground">{cert.type}</span>,
+      width: "150px",
+      render: (cert) => <Badge variant="secondary">{cert.type}</Badge>,
     },
     {
-      id: "issuing-ca",
+      key: "issuing-ca",
       header: "Issuing CA",
+      width: "minmax(180px, 1fr)",
+      truncate: true,
       render: (cert) => (
         <span className="text-sm text-muted-foreground">{cert.issuerDn || cert.caId}</span>
       ),
     },
     {
-      id: "expires",
+      key: "expires",
       header: "Expires",
+      width: "140px",
       render: (cert) => {
         const expDays = daysUntil(cert.notAfter);
         return (
@@ -141,8 +161,9 @@ export function Certificates() {
       },
     },
     {
-      id: "status",
+      key: "status",
       header: "Status",
+      width: "120px",
       render: (cert) => <StatusBadge status={cert.status} />,
     },
   ];
@@ -256,42 +277,26 @@ export function Certificates() {
             </div>
           </div>
         ) : (certificates || []).length > 0 ? (
-          <div className="border border-border bg-card">
-            <SimpleTable
+          <div className="h-[min(60dvh,42rem)] min-h-72">
+            <DataTable
               columns={certificateColumns}
-              rows={certificates}
-              getRowKey={(cert) => cert.id}
+              data={certificates}
+              keyFn={(cert) => cert.id}
               onRowClick={(cert) => navigate(`/certificates/${cert.id}`)}
+              scrollRef={scrollRef}
+              horizontalScroll
+              minWidth="860px"
+              footer={
+                hasMore ? (
+                  <div
+                    ref={sentinelRef}
+                    className="flex items-center justify-center py-3 text-xs text-muted-foreground"
+                  >
+                    {isLoadingMore ? "Loading more certificates..." : "Scroll to load more"}
+                  </div>
+                ) : undefined
+              }
             />
-
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="flex items-center justify-between border-t border-border px-4 py-3">
-                <p className="text-sm text-muted-foreground">
-                  Page {page} of {totalPages}
-                </p>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page <= 1}
-                    onClick={() => setPage(page - 1)}
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                    Previous
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page >= totalPages}
-                    onClick={() => setPage(page + 1)}
-                  >
-                    Next
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            )}
           </div>
         ) : (
           <EmptyState

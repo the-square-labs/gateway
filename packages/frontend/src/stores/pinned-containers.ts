@@ -18,7 +18,7 @@ interface PinnedContainersState {
   /** Maps container/deployment ID → metadata for sidebar display */
   containerMeta: Record<string, PinnedContainerMeta>;
   refreshTick: number;
-  toggleDashboard: (containerId: string) => void;
+  toggleDashboard: (containerId: string, meta?: PinnedContainerMeta) => void;
   toggleSidebar: (containerId: string, meta?: PinnedContainerMeta) => void;
   removePin: (containerId: string) => void;
   isPinnedDashboard: (containerId: string) => boolean;
@@ -40,18 +40,23 @@ export const usePinnedContainersStore = create<PinnedContainersState>()(
       containerMeta: {},
       refreshTick: 0,
 
-      toggleDashboard: (containerId) =>
-        set((s) => ({
-          dashboardContainerIds: s.dashboardContainerIds.includes(containerId)
-            ? s.dashboardContainerIds.filter((id) => id !== containerId)
-            : [...s.dashboardContainerIds, containerId],
-        })),
+      toggleDashboard: (containerId, meta) =>
+        set((s) => {
+          const isDashboard = s.dashboardContainerIds.includes(containerId);
+          return {
+            dashboardContainerIds: isDashboard
+              ? s.dashboardContainerIds.filter((id) => id !== containerId)
+              : [...s.dashboardContainerIds, containerId],
+            containerMeta:
+              !isDashboard && meta ? { ...s.containerMeta, [containerId]: meta } : s.containerMeta,
+          };
+        }),
 
       toggleSidebar: (containerId, meta) =>
         set((s) => {
           const isSidebar = s.sidebarContainerIds.includes(containerId);
           const newMeta = { ...s.containerMeta };
-          if (isSidebar) {
+          if (isSidebar && !s.dashboardContainerIds.includes(containerId)) {
             delete newMeta[containerId];
           } else if (meta) {
             newMeta[containerId] = meta;

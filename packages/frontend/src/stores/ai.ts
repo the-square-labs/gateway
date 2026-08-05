@@ -17,6 +17,7 @@ import {
 } from "@/services/ai-conversations";
 import { AIWebSocketClient } from "@/services/ai-websocket";
 import { api } from "@/services/api";
+import { applyAssistantResourcePinAction } from "@/stores/assistant-resource-pins";
 import { useAuthStore } from "@/stores/auth";
 import { useUIStore } from "@/stores/ui";
 import type {
@@ -1701,6 +1702,12 @@ function handleWSMessage(
       set((state) =>
         projectConversationSnapshot(msg.snapshot, state.messages, state.pendingCredentialChallenge)
       );
+      break;
+
+    case "client.action":
+      if (get().activeConversationId !== msg.conversationId) return;
+      if (get().activeRunId && get().activeRunId !== msg.runId) return;
+      applyAssistantResourcePinAction({ clientAction: msg.action });
       break;
 
     case "assistant.delta":

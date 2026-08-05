@@ -4,6 +4,29 @@ import type { InferenceLimitPolicy } from '@/db/schema/inference-models.js';
 import { __testOnly, InferenceBudgetPolicyService } from './inference-budget-policy.js';
 
 describe('effective inference rolling-window policy', () => {
+  it('keeps setup and status available before a default policy is configured', async () => {
+    const database = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({ orderBy: vi.fn().mockResolvedValue([]) })),
+        })),
+      })),
+    };
+    const service = new InferenceBudgetPolicyService(database as never);
+
+    await expect(service.effective('cef8fbd8-f149-4cd6-b69f-34bea4a10c52')).resolves.toEqual({
+      enabled: false,
+      credits5hEnabled: false,
+      credits5h: 0,
+      credits7dEnabled: false,
+      credits7d: 0,
+      credits30dEnabled: false,
+      credits30d: 0,
+      apiMonthlyMicrodollars: 0,
+      billingTimezone: 'UTC',
+    });
+  });
+
   it('treats disabled default windows as global gates over a user override', () => {
     const defaults = policy({
       policyType: 'default',

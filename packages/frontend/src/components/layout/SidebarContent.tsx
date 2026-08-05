@@ -12,7 +12,7 @@ import {
   Server,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AIButton } from "@/components/ai/AIButton";
 import { confirmAILiteMode } from "@/components/ai/confirm-lite-mode";
@@ -43,9 +43,9 @@ import {
 import { isSidebarNavigationActive } from "@/lib/sidebar-navigation";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
-import { ApiRequestError } from "@/services/api-base";
 import { useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
+import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useDockerStore } from "@/stores/docker";
 import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import { usePinnedDatabasesStore } from "@/stores/pinned-databases";
@@ -54,7 +54,6 @@ import { usePinnedProxiesStore } from "@/stores/pinned-proxies";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
 import { useUpdateStore } from "@/stores/update";
-import type { Node, ProxyHost } from "@/types";
 import { AI_SCOPE, effectiveNodeStatus } from "@/types";
 
 function getInitials(name: string | null): string {
@@ -103,10 +102,11 @@ export function SidebarContent({
   const aiEnabled = useAIStore((s) => s.isEnabled);
   const updateAvailable = useUpdateStore((s) => s.status?.updateAvailable ?? false);
   const showUpdateNotifications = useUIStore((s) => s.showUpdateNotifications);
+  const showSystemCertificatePreference = useUIStore((s) => s.showSystemCertificates);
+  const showSystemCertificates =
+    hasScope("admin:details:certificates") && showSystemCertificatePreference;
   const showAILiteModeCTA = useUIStore((s) => s.showAILiteModeCTA);
   const sidebarPinnedIds = usePinnedNodesStore((s) => s.sidebarNodeIds);
-  const pinnedRefreshTick = usePinnedNodesStore((s) => s.refreshTick);
-  const [pinnedNodes, setPinnedNodes] = useState<Node[]>([]);
   const [statusPageEnabled, setStatusPageEnabled] = useState(false);
   const pkiEnabled = useSystemConfigStore((s) => s.config.features.pkiEnabled);
   const loggingEnabled = useSystemConfigStore((s) => s.config.features.loggingEnabled);
@@ -115,24 +115,18 @@ export function SidebarContent({
   const { usage: inferenceUsage } = useInferenceSelfUsage(canViewInferenceUsage);
 
   const sidebarPinnedProxyIds = usePinnedProxiesStore((s) => s.sidebarProxyIds);
-  const pinnedProxyRefreshTick = usePinnedProxiesStore((s) => s.refreshTick);
-  const [pinnedProxies, setPinnedProxies] = useState<ProxyHost[]>([]);
 
   const sidebarPinnedContainerIds = usePinnedContainersStore((s) => s.sidebarContainerIds);
   const pinnedContainerMeta = usePinnedContainersStore((s) => s.containerMeta);
-  const pinnedContainerRefreshTick = usePinnedContainersStore((s) => s.refreshTick);
   const dockerNodes = useDockerStore((s) => s.dockerNodes);
   const sidebarPinnedDatabaseIds = usePinnedDatabasesStore((s) => s.sidebarDatabaseIds);
   const pinnedDatabaseMeta = usePinnedDatabasesStore((s) => s.databaseMeta);
-  const pinnedDatabaseRefreshTick = usePinnedDatabasesStore((s) => s.refreshTick);
-  const canViewNodeDetails = useCallback(
-    (nodeId: string) => hasScope("nodes:details") || hasScope(`nodes:details:${nodeId}`),
-    [hasScope]
-  );
-  const canViewProxyDetails = useCallback(
-    (proxyId: string) => hasScope("proxy:view") || hasScope(`proxy:view:${proxyId}`),
-    [hasScope]
-  );
+  const dashboardPinnedNodeIds = usePinnedNodesStore((s) => s.dashboardNodeIds);
+  const dashboardPinnedProxyIds = usePinnedProxiesStore((s) => s.dashboardProxyIds);
+  const dashboardPinnedContainerIds = usePinnedContainersStore((s) => s.dashboardContainerIds);
+  const dashboardPinnedDatabaseIds = usePinnedDatabasesStore((s) => s.dashboardDatabaseIds);
+  const dashboardBootstrap = useDashboardBootstrapStore((s) => s.snapshot);
+  const loadDashboardBootstrap = useDashboardBootstrapStore((s) => s.load);
   const canViewContainerDetails = useCallback(
     (nodeId: string, scopeResourceId?: string) =>
       hasScope("docker:containers:view") ||
@@ -143,6 +137,105 @@ export function SidebarContent({
     (databaseId: string) => hasScope("databases:view") || hasScope(`databases:view:${databaseId}`),
     [hasScope]
   );
+  const pinnedNodes = dashboardBootstrap?.pinned.sidebar.nodes ?? [];
+  const pinnedProxies = dashboardBootstrap?.pinned.sidebar.proxies ?? [];
+
+  const dashboardBootstrapKey = useMemo(
+    () =>
+      JSON.stringify({
+        userId: user?.id ?? null,
+        scopes: [...(user?.scopes ?? [])].sort(),
+        showSystemCertificates,
+        showUpdateNotifications,
+        dashboard: {
+          nodeIds: dashboardPinnedNodeIds,
+          proxyHostIds: dashboardPinnedProxyIds,
+          databaseIds: dashboardPinnedDatabaseIds,
+          dockerIds: dashboardPinnedContainerIds,
+        },
+        sidebar: {
+          nodeIds: sidebarPinnedIds,
+          proxyHostIds: sidebarPinnedProxyIds,
+          databaseIds: sidebarPinnedDatabaseIds,
+          dockerIds: sidebarPinnedContainerIds,
+        },
+      }),
+    [
+      dashboardPinnedContainerIds,
+      dashboardPinnedDatabaseIds,
+      dashboardPinnedNodeIds,
+      dashboardPinnedProxyIds,
+      showSystemCertificates,
+      showUpdateNotifications,
+      sidebarPinnedDatabaseIds,
+      sidebarPinnedIds,
+      sidebarPinnedProxyIds,
+      sidebarPinnedContainerIds,
+      user?.id,
+      user?.scopes,
+    ]
+  );
+
+  useEffect(() => {
+    if (!user?.id) return;
+    void loadDashboardBootstrap(dashboardBootstrapKey, {
+      showSystemCertificates,
+      showUpdateNotifications,
+      pins: {
+        dashboard: {
+          nodeIds: dashboardPinnedNodeIds,
+          proxyHostIds: dashboardPinnedProxyIds,
+          databaseIds: dashboardPinnedDatabaseIds,
+          dockerResources: dashboardPinnedContainerIds
+            .map((id) => {
+              const meta = pinnedContainerMeta[id];
+              return meta
+                ? {
+                    id,
+                    nodeId: meta.nodeId,
+                    kind: meta.kind ?? "container",
+                    scopeResourceId: meta.scopeResourceId,
+                  }
+                : null;
+            })
+            .filter((value): value is NonNullable<typeof value> => value !== null),
+        },
+        sidebar: {
+          nodeIds: sidebarPinnedIds,
+          proxyHostIds: sidebarPinnedProxyIds,
+          databaseIds: sidebarPinnedDatabaseIds,
+          dockerResources: sidebarPinnedContainerIds
+            .map((id) => {
+              const meta = pinnedContainerMeta[id];
+              return meta
+                ? {
+                    id,
+                    nodeId: meta.nodeId,
+                    kind: meta.kind ?? "container",
+                    scopeResourceId: meta.scopeResourceId,
+                  }
+                : null;
+            })
+            .filter((value): value is NonNullable<typeof value> => value !== null),
+        },
+      },
+    });
+  }, [
+    dashboardBootstrapKey,
+    dashboardPinnedContainerIds,
+    dashboardPinnedDatabaseIds,
+    dashboardPinnedNodeIds,
+    dashboardPinnedProxyIds,
+    loadDashboardBootstrap,
+    pinnedContainerMeta,
+    showSystemCertificates,
+    showUpdateNotifications,
+    sidebarPinnedDatabaseIds,
+    sidebarPinnedIds,
+    sidebarPinnedProxyIds,
+    sidebarPinnedContainerIds,
+    user?.id,
+  ]);
 
   const refetchStatusPageEnabled = useCallback(() => {
     if (!hasScope("status-page:view")) {
@@ -163,226 +256,19 @@ export function SidebarContent({
     refetchStatusPageEnabled();
   });
 
-  const refetchPinnedNodes = useCallback(() => {
-    if (sidebarPinnedIds.length === 0) return;
-    api
-      .listNodes({ limit: 100 })
-      .then((r) => {
-        setPinnedNodes(
-          r.data.filter((n) => sidebarPinnedIds.includes(n.id) && canViewNodeDetails(n.id))
-        );
-      })
-      .catch(() => {});
-  }, [canViewNodeDetails, sidebarPinnedIds]);
-
   useEffect(() => {
-    if (sidebarPinnedIds.length === 0) {
-      setPinnedNodes([]);
-      return;
+    for (const database of dashboardBootstrap?.pinned.sidebar.databases ?? []) {
+      usePinnedDatabasesStore.getState().updateMeta(database.id, {
+        slug: database.slug,
+        name: database.name,
+        type: database.type,
+        healthStatus: database.healthStatus ?? undefined,
+      });
     }
-    void pinnedRefreshTick;
-    refetchPinnedNodes();
-  }, [sidebarPinnedIds, pinnedRefreshTick, refetchPinnedNodes]);
-
-  useEffect(() => {
-    if (sidebarPinnedProxyIds.length === 0) {
-      setPinnedProxies([]);
-      return;
+    for (const resource of dashboardBootstrap?.pinned.sidebar.dockerResources ?? []) {
+      usePinnedContainersStore.getState().updateMeta(resource.id, resource);
     }
-    void pinnedProxyRefreshTick;
-    api
-      .listProxyHosts({ limit: 100 })
-      .then((r) => {
-        setPinnedProxies(
-          (r.data ?? []).filter(
-            (p) => sidebarPinnedProxyIds.includes(p.id) && canViewProxyDetails(p.id)
-          )
-        );
-      })
-      .catch(() => {});
-  }, [canViewProxyDetails, sidebarPinnedProxyIds, pinnedProxyRefreshTick]);
-
-  useEffect(() => {
-    if (sidebarPinnedDatabaseIds.length === 0) return;
-    void pinnedDatabaseRefreshTick;
-    api
-      .listDatabases({ limit: 200 })
-      .then((r) => {
-        const all = r.data ?? [];
-        for (const db of all) {
-          if (!sidebarPinnedDatabaseIds.includes(db.id)) continue;
-          if (!canViewDatabaseDetails(db.id)) continue;
-          const existing = pinnedDatabaseMeta[db.id];
-          if (
-            !existing ||
-            existing.slug !== db.slug ||
-            existing.name !== db.name ||
-            existing.type !== db.type ||
-            existing.healthStatus !== db.healthStatus
-          ) {
-            usePinnedDatabasesStore.getState().updateMeta(db.id, {
-              slug: db.slug,
-              name: db.name,
-              type: db.type,
-              healthStatus: db.healthStatus,
-            });
-          }
-        }
-      })
-      .catch(() => {});
-  }, [
-    canViewDatabaseDetails,
-    pinnedDatabaseMeta,
-    pinnedDatabaseRefreshTick,
-    sidebarPinnedDatabaseIds,
-  ]);
-
-  useEffect(() => {
-    if (sidebarPinnedDatabaseIds.length === 0) return;
-    let cancelled = false;
-    for (const databaseId of sidebarPinnedDatabaseIds) {
-      if (!canViewDatabaseDetails(databaseId)) continue;
-      api
-        .getDatabase(databaseId)
-        .then((db) => {
-          if (cancelled) return;
-          const existing = pinnedDatabaseMeta[db.id];
-          if (
-            existing?.name === db.name &&
-            existing.slug === db.slug &&
-            existing.type === db.type &&
-            existing.healthStatus === db.healthStatus
-          ) {
-            return;
-          }
-          usePinnedDatabasesStore.getState().updateMeta(db.id, {
-            slug: db.slug,
-            name: db.name,
-            type: db.type,
-            healthStatus: db.healthStatus,
-          });
-        })
-        .catch((error) => {
-          if (cancelled) return;
-          if (error instanceof ApiRequestError && error.status === 404) {
-            usePinnedDatabasesStore.getState().removePin(databaseId);
-          }
-        });
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [canViewDatabaseDetails, pinnedDatabaseMeta, sidebarPinnedDatabaseIds]);
-
-  useEffect(() => {
-    // Re-fetch pinned details when a matching realtime event increments the store tick.
-    void pinnedContainerRefreshTick;
-    if (sidebarPinnedContainerIds.length === 0) return;
-    let cancelled = false;
-    for (const containerId of sidebarPinnedContainerIds) {
-      const meta = pinnedContainerMeta[containerId];
-      if (!meta || !canViewContainerDetails(meta.nodeId, meta.scopeResourceId)) continue;
-      const nodeSlug = dockerNodes.find((node) => node.id === meta.nodeId)?.slug || meta.nodeSlug;
-      const request =
-        meta.kind === "deployment"
-          ? api.getDockerDeployment(meta.nodeId, containerId)
-          : api.inspectContainer(meta.nodeId, containerId);
-      request
-        .then((value) => {
-          if (cancelled) return;
-          const current = usePinnedContainersStore.getState().containerMeta[containerId];
-          if (!current) return;
-          if (meta.kind === "deployment") {
-            const deployment = value as Awaited<ReturnType<typeof api.getDockerDeployment>>;
-            const nextNodeSlug = nodeSlug || current.nodeSlug;
-            const nextState = deployment._transition ?? deployment.status;
-            if (
-              current.nodeSlug === nextNodeSlug &&
-              current.name === deployment.name &&
-              current.state === nextState &&
-              current.kind === "deployment"
-            ) {
-              return;
-            }
-            usePinnedContainersStore.getState().updateMeta(containerId, {
-              ...current,
-              nodeSlug: nextNodeSlug,
-              name: deployment.name,
-              state: nextState,
-              kind: "deployment",
-            });
-            return;
-          }
-          const inspect = value as Record<string, any>;
-          const nextNodeSlug = nodeSlug || current.nodeSlug;
-          const nextName = String(inspect.Name ?? inspect.name ?? current.name).replace(/^\//, "");
-          const nextState =
-            inspect._transition ?? inspect.State?.Status ?? inspect.state ?? current.state;
-          if (
-            current.nodeSlug === nextNodeSlug &&
-            current.name === nextName &&
-            current.state === nextState &&
-            current.kind === "container"
-          ) {
-            return;
-          }
-          usePinnedContainersStore.getState().updateMeta(containerId, {
-            ...current,
-            nodeSlug: nextNodeSlug,
-            name: nextName,
-            state: nextState,
-            kind: "container",
-          });
-        })
-        .catch((error) => {
-          if (cancelled) return;
-          if (error instanceof ApiRequestError && error.status === 404) {
-            usePinnedContainersStore.getState().removePin(containerId);
-          }
-        });
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    canViewContainerDetails,
-    dockerNodes,
-    pinnedContainerMeta,
-    pinnedContainerRefreshTick,
-    sidebarPinnedContainerIds,
-  ]);
-
-  useRealtime(sidebarPinnedIds.length > 0 ? "node.changed" : null, () => {
-    usePinnedNodesStore.getState().invalidate();
-  });
-  useRealtime(sidebarPinnedProxyIds.length > 0 ? "proxy.host.changed" : null, () => {
-    usePinnedProxiesStore.getState().invalidate();
-  });
-  useRealtime(sidebarPinnedDatabaseIds.length > 0 ? "database.changed" : null, () => {
-    usePinnedDatabasesStore.getState().invalidate();
-  });
-  useRealtime(sidebarPinnedContainerIds.length > 0 ? "docker.container.changed" : null, () => {
-    usePinnedContainersStore.getState().invalidate();
-  });
-  useRealtime(sidebarPinnedContainerIds.length > 0 ? "docker.deployment.changed" : null, () => {
-    usePinnedContainersStore.getState().invalidate();
-  });
-  useRealtime(
-    sidebarPinnedIds.length > 0 || sidebarPinnedContainerIds.length > 0
-      ? "node.slug.changed"
-      : null,
-    (payload) => {
-      const event = payload as { id?: string; slug?: string };
-      if (!event.id || !event.slug) return;
-      usePinnedNodesStore.getState().invalidate();
-      const pinned = usePinnedContainersStore.getState();
-      for (const [containerId, meta] of Object.entries(pinned.containerMeta)) {
-        if (meta.nodeId === event.id && meta.nodeSlug !== event.slug) {
-          pinned.updateMeta(containerId, { ...meta, nodeSlug: event.slug });
-        }
-      }
-    }
-  );
+  }, [dashboardBootstrap]);
 
   const handleLogout = async () => {
     try {
@@ -418,6 +304,7 @@ export function SidebarContent({
   });
 
   const allNavItems = effectiveGroups.flatMap((g) => g.items);
+  const dashboardAttention = dashboardBootstrap?.attention.severity ?? null;
 
   return (
     <div
@@ -459,7 +346,24 @@ export function SidebarContent({
                     )}
                     onClick={() => navigate(item.href)}
                   >
-                    <item.icon className="h-4 w-4" />
+                    <span className="relative flex">
+                      <item.icon className="h-4 w-4" />
+                      {item.id === "dashboard" && dashboardAttention && (
+                        <span
+                          aria-label={
+                            dashboardAttention === "warning"
+                              ? "Dashboard requires attention"
+                              : "Dashboard has setup information"
+                          }
+                          className={cn(
+                            "absolute -right-2 -top-2 h-2 w-2",
+                            dashboardAttention === "warning"
+                              ? "bg-warning"
+                              : "bg-[color:var(--color-link)]"
+                          )}
+                        />
+                      )}
+                    </span>
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="right">{item.name}</TooltipContent>
@@ -782,6 +686,21 @@ export function SidebarContent({
                         >
                           <item.icon className="h-4 w-4 shrink-0" />
                           <span className="truncate">{item.name}</span>
+                          {item.id === "dashboard" && dashboardAttention && (
+                            <span
+                              aria-label={
+                                dashboardAttention === "warning"
+                                  ? "Dashboard requires attention"
+                                  : "Dashboard has setup information"
+                              }
+                              className={cn(
+                                "ml-auto h-2 w-2 shrink-0",
+                                dashboardAttention === "warning"
+                                  ? "bg-warning"
+                                  : "bg-[color:var(--color-link)]"
+                              )}
+                            />
+                          )}
                         </Link>
                       );
                     })}

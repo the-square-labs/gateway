@@ -1,0 +1,15 @@
+{
+  "file_name": "ac5muwri_localized_docs_sync",
+  "edges": [
+    {
+      "from_id": "ac5muwri",
+      "to_id": "duvbj7h2",
+      "relation": "same_area",
+      "weight": 0.68,
+      "reason": "Both concern Gateway AI module changes and verification, where user-visible tool changes may require synchronized AI documentation updates.",
+      "source": "auto",
+      "created_at": 1785878954365,
+      "updated_at": 1785878954365
+    }
+  ]
+}

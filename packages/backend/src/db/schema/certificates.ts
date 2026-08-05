@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
   index,
@@ -16,6 +17,20 @@ import { users } from './users.js';
 
 export const certStatusEnum = pgEnum('cert_status', ['active', 'revoked', 'expired']);
 export const certTypeEnum = pgEnum('cert_type', ['tls-server', 'tls-client', 'code-signing', 'email']);
+// Only certificates issued by a system CA can have lifecycle ownership. This
+// makes automatic cleanup opt-in at issuance time instead of trying to infer
+// ownership from a common name or serial after the fact.
+export const systemCertificateOwnerTypeEnum = pgEnum('system_certificate_owner_type', [
+  'node',
+  'managed_database',
+  'gateway_listener',
+]);
+export const systemCertificateLifecycleStateEnum = pgEnum('system_certificate_lifecycle_state', [
+  'current',
+  'superseded',
+  'retired',
+  'unknown',
+]);
 
 export const certificates = pgTable(
   'certificates',
@@ -61,6 +76,15 @@ export const certificates = pgTable(
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     revocationReason: varchar('revocation_reason', { length: 50 }),
 
+    // Explicit lifecycle ownership for leaves issued by a system CA. Normal
+    // PKI certificates keep these fields NULL and are never eligible for
+    // automatic revocation or private-key cleanup.
+    systemOwnerType: systemCertificateOwnerTypeEnum('system_owner_type'),
+    systemOwnerId: varchar('system_owner_id', { length: 255 }),
+    systemLifecycleState: systemCertificateLifecycleStateEnum('system_lifecycle_state'),
+    systemRetiredAt: timestamp('system_retired_at', { withTimezone: true }),
+    privateKeyDestroyedAt: timestamp('private_key_destroyed_at', { withTimezone: true }),
+
     // Metadata
     issuedById: uuid('issued_by_id')
       .notNull()
@@ -76,5 +100,9 @@ export const certificates = pgTable(
     typeIdx: index('cert_type_idx').on(table.type),
     notAfterIdx: index('cert_not_after_idx').on(table.notAfter),
     issuedByIdx: index('cert_issued_by_idx').on(table.issuedById),
+    systemLifecycleIdx: index('cert_system_lifecycle_idx').on(table.systemLifecycleState, table.systemRetiredAt),
+    currentSystemOwnerUnique: uniqueIndex('cert_system_current_owner_unique')
+      .on(table.systemOwnerType, table.systemOwnerId)
+      .where(sql`${table.systemLifecycleState} = 'current'`),
   })
 );

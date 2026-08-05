@@ -1,0 +1,15 @@
+{
+  "file_name": "hc1xhdcx_anthropic_claude_code",
+  "edges": [
+    {
+      "from_id": "hc1xhdcx",
+      "to_id": "dcfkgqwx",
+      "relation": "part_of",
+      "weight": 0.9,
+      "reason": "Claude Code harness support is part of the canonical Gateway inference product contract.",
+      "source": "manual",
+      "created_at": 1785451690854,
+      "updated_at": 1785451690854
+    }
+  ]
+}

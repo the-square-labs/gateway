@@ -1,0 +1,15 @@
+{
+  "file_name": "myhj1f8i_shared_bootstrap_snapshot",
+  "edges": [
+    {
+      "from_id": "myhj1f8i",
+      "to_id": "2tjfa2g5",
+      "relation": "related_to",
+      "weight": 0.34,
+      "reason": "Both define Gateway resource identity and realtime frontend behavior across nodes, containers, databases, and deployments.",
+      "source": "auto",
+      "created_at": 1785949902061,
+      "updated_at": 1785949902061
+    }
+  ]
+}

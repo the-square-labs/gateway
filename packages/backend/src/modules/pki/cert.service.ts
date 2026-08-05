@@ -17,6 +17,19 @@ import type { CertificateListQuery, IssueCertFromCSRInput, IssueCertificateInput
 
 const logger = createChildLogger('CertService');
 
+interface IssueCertificateOptions {
+  allowSystem?: boolean;
+  /**
+   * Reserved for the lifecycle service. Issuing a system leaf starts as
+   * report-only `unknown` until its owner swap is committed.
+   */
+  systemLifecycle?: {
+    ownerType: 'node' | 'managed_database' | 'gateway_listener';
+    ownerId: string;
+    state: 'unknown';
+  };
+}
+
 // Map string key usage to @peculiar/x509 flags
 const KEY_USAGE_MAP: Record<string, number> = {
   digitalSignature: x509.KeyUsageFlags.digitalSignature,
@@ -45,7 +58,7 @@ export class CertService {
     this.eventBus?.publish('cert.changed', { id, caId, action });
   }
 
-  async issueCertificate(input: IssueCertificateInput, userId: string, options?: { allowSystem?: boolean }) {
+  async issueCertificate(input: IssueCertificateInput, userId: string, options?: IssueCertificateOptions) {
     const { ca, privateKeyPem: caPrivateKeyPem } = await this.caService.getCASigningMaterials(input.caId, {
       allowSystem: options?.allowSystem,
     });
@@ -161,6 +174,9 @@ export class CertService {
         serverGenerated: true,
         keyUsage: keyUsageStrings,
         extKeyUsage: extKeyUsageStrings,
+        systemOwnerType: options?.systemLifecycle?.ownerType,
+        systemOwnerId: options?.systemLifecycle?.ownerId,
+        systemLifecycleState: options?.systemLifecycle?.state,
         issuedById: userId,
       })
       .returning();

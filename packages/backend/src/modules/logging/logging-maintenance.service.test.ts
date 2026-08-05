@@ -31,6 +31,19 @@ function storage(overrides: Record<string, unknown> = {}) {
 }
 
 describe('LoggingMaintenanceService', () => {
+  it('publishes a health event when the effective status changes', async () => {
+    const eventBus = { publish: vi.fn() };
+    const service = new LoggingMaintenanceService(storage(), feature());
+    service.setEventBus(eventBus as any);
+
+    await service.runGuard();
+
+    expect(eventBus.publish).toHaveBeenCalledWith(
+      'logging.health.changed',
+      expect.objectContaining({ status: 'healthy' })
+    );
+  });
+
   it('keeps storage available when metrics are unavailable after a successful ping', async () => {
     const storageService = storage({
       getStorageStats: vi.fn().mockRejectedValue(new Error('system.parts denied')),

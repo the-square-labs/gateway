@@ -201,4 +201,21 @@ describe("eventStream", () => {
 
     unsubscribe();
   });
+
+  it("notifies reconnect listeners only after the first connection", async () => {
+    const { eventStream } = await import("@/services/event-stream");
+    const onReconnect = vi.fn();
+    const unsubscribe = eventStream.onReconnect(onReconnect);
+    eventStream.start();
+    vi.runAllTimers();
+    MockWebSocket.instances[0]?.open();
+    expect(onReconnect).not.toHaveBeenCalled();
+
+    MockWebSocket.instances[0]?.onclose?.();
+    await vi.advanceTimersByTimeAsync(1_000);
+    MockWebSocket.instances[1]?.open();
+
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
 });

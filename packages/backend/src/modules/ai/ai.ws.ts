@@ -125,6 +125,7 @@ function subscribeToUserRuntime(ws: WSContext, state: WSConnectionState, userId:
       version?: number;
       invalidatedStores?: string[];
       challenge?: Extract<WSServerMessage, { type: 'credential.required' }>['challenge'];
+      action?: Record<string, unknown>;
     };
     if (event.userId !== userId || typeof event.conversationId !== 'string') return;
     if (event.type === 'credential.required') {
@@ -138,6 +139,21 @@ function subscribeToUserRuntime(ws: WSContext, state: WSConnectionState, userId:
           conversationId: event.conversationId,
           runId: event.runId,
           challenge: event.challenge,
+        });
+      }
+      return;
+    }
+    if (event.type === 'client.action') {
+      if (
+        state.subscribedConversationIds.has(event.conversationId) &&
+        typeof event.runId === 'string' &&
+        event.action
+      ) {
+        send(ws, {
+          type: 'client.action',
+          conversationId: event.conversationId,
+          runId: event.runId,
+          action: event.action,
         });
       }
       return;

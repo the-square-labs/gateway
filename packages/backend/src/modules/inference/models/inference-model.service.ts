@@ -373,6 +373,7 @@ export class InferenceModelService {
   ): Promise<{ modelIds: string[]; apiUsageEnabled: boolean }> {
     if (!modelIds.length) return { modelIds: [], apiUsageEnabled: false };
     const limits = await this.budgetPolicies.effective(userId);
+    if (!limits.enabled) return { modelIds: [], apiUsageEnabled: false };
     if (limits.apiMonthlyMicrodollars > 0) {
       return { modelIds, apiUsageEnabled: true };
     }

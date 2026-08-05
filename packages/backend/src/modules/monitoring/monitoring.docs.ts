@@ -10,6 +10,19 @@ export const dashboardStatsRoute = appRoute({
   responses: okJson(UnknownDataResponseSchema),
 });
 
+/**
+ * A single, user-scoped snapshot used by the Dashboard and its pinned-resource
+ * surfaces.  The POST body carries client-local display preferences and pin
+ * IDs, neither of which belongs in the persisted Gateway configuration.
+ */
+export const dashboardBootstrapRoute = appRoute({
+  method: 'post',
+  path: '/dashboard/bootstrap',
+  tags: ['Monitoring'],
+  summary: 'Get dashboard bootstrap snapshot',
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const healthStatusRoute = appRoute({
   method: 'get',
   path: '/health-status',

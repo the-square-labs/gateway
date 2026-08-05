@@ -1,0 +1,35 @@
+{
+  "file_name": "hh3v2vdi_gitlab_gateway_fix",
+  "edges": [
+    {
+      "from_id": "hh3v2vdi",
+      "to_id": "huz2cldt",
+      "relation": "same_workflow",
+      "weight": 0.4855,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1783267612534,
+      "updated_at": 1783267612534
+    },
+    {
+      "from_id": "hh3v2vdi",
+      "to_id": "qz6ixfnq",
+      "relation": "related_to",
+      "weight": 0.4174,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1783267612534,
+      "updated_at": 1783267612534
+    },
+    {
+      "from_id": "hh3v2vdi",
+      "to_id": "vrch49nc",
+      "relation": "related_to",
+      "weight": 0.4294,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1783267612534,
+      "updated_at": 1783267612534
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "file_name": "vrru6m60_session_cookie_migration",
+  "edges": [
+    {
+      "from_id": "vrru6m60",
+      "to_id": "elp4yliv",
+      "relation": "same_area",
+      "weight": 0.82,
+      "reason": "Both define backward-compatible gateway browser session and WebSocket authentication behavior.",
+      "source": "auto",
+      "created_at": 1785917504152,
+      "updated_at": 1785917504152
+    }
+  ]
+}

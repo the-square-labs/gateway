@@ -10,6 +10,7 @@ import type { LocalAuthService } from '@/modules/auth/local-auth.service.js';
 import type { OidcConfigInput, OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
 import type { LoggingRuntimeService } from '@/modules/logging/logging-runtime.service.js';
 import type { LoggingSettingsInput } from '@/modules/logging/logging-settings.service.js';
+import type { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
 import {
   type GeneralSettingsService,
   isValidGatewayIp,
@@ -63,6 +64,7 @@ export class SetupWizardService {
     private readonly authMail: AuthMailService,
     private readonly authService: AuthService,
     private readonly localAuth: LocalAuthService,
+    private readonly finalizeSetup: FinalizeSetupService,
     private readonly refreshGrpcIdentity?: () => Promise<void>,
     private readonly refreshWebIdentity?: () => Promise<void>
   ) {}
@@ -208,6 +210,7 @@ export class SetupWizardService {
       if (input.authMethod === 'password') {
         await this.localAuth.setInitialPasswordForSetup(user.id, input.password!);
       }
+      await this.finalizeSetup.initializeOwner(user.id);
       return user;
     } catch (error) {
       if (createdUserId)
@@ -215,6 +218,7 @@ export class SetupWizardService {
           .delete(users)
           .where(eq(users.id, createdUserId))
           .catch(() => {});
+      if (createdUserId) await this.finalizeSetup.clearOwner(createdUserId).catch(() => {});
       await this.db
         .delete(settings)
         .where(and(eq(settings.key, FIRST_ADMIN_CLAIM_KEY), eq(settings.value, claim)))
@@ -241,6 +245,7 @@ export class SetupWizardService {
   private async rollbackAdministrator(userId: string): Promise<void> {
     await this.db.delete(users).where(eq(users.id, userId));
     await this.db.delete(settings).where(eq(settings.key, FIRST_ADMIN_CLAIM_KEY));
+    await this.finalizeSetup.clearOwner(userId);
   }
 
   private async validateApply(input: SetupApplyInput): Promise<boolean> {

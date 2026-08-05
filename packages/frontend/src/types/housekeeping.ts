@@ -49,7 +49,13 @@ export interface HousekeepingStats {
   orphanedAIArtifacts: { count: number; totalSizeBytes: number };
   gatewayLogs: { totalSizeBytes: number; fileCount: number; available: false };
   orphanedVolumes: { count: number; reclaimableBytes: number };
-  orphanedCerts: { count: number; certIds: string[] };
+  orphanedCerts: {
+    count: number;
+    certIds: string[];
+    currentCount: number;
+    supersededCount: number;
+    unknownCount: number;
+  };
   acmeChallenges: { fileCount: number; totalSizeBytes: number };
   dockerImages: { oldImageCount: number; reclaimableBytes: number };
   lastRun: HousekeepingRunResult | null;

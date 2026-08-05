@@ -1,0 +1,15 @@
+{
+  "file_name": "orq9dru7_design_system_viewer",
+  "edges": [
+    {
+      "from_id": "orq9dru7",
+      "to_id": "ip47mets",
+      "relation": "part_of",
+      "weight": 0.95,
+      "reason": "Viewer runtime and packaging rules are part of the Gateway design-system workflow.",
+      "source": "manual",
+      "created_at": 1784761805140,
+      "updated_at": 1784761805140
+    }
+  ]
+}

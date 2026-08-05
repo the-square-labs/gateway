@@ -90,7 +90,7 @@ export function QuickStatsCard({
           href="/certificates"
         />
       )}
-      {hasScope("nodes:details") && (
+      {hasScope("nodes:details") && nodesList.length > 0 && (
         <StatCard
           title="Nodes"
           value={nodesList.filter((n) => n.status === "online").length}

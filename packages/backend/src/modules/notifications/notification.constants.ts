@@ -36,6 +36,7 @@ export type AlertCategory =
   | 'container'
   | 'proxy'
   | 'certificate'
+  | 'security'
   | 'database_postgres'
   | 'database_clickhouse'
   | 'database_redis';
@@ -176,6 +177,18 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
     ],
   },
   {
+    id: 'security',
+    label: 'Security',
+    metrics: [],
+    events: [{ id: 'mfa.required', label: 'Group MFA Required', defaultSeverity: 'warning' }],
+    variables: [
+      { name: '{{resource.name}}', description: 'Permission group name' },
+      { name: '{{resource.id}}', description: 'Permission group ID' },
+      { name: '{{resource.key}}', description: 'Internal alert resource key' },
+      { name: '{{event.name}}', description: 'Event pattern/name' },
+    ],
+  },
+  {
     id: 'database_postgres',
     label: 'Database - Postgres',
     metrics: [
@@ -306,6 +319,14 @@ export interface EventMapping {
 }
 
 export const EVENT_BUS_MAPPINGS: Record<string, EventMapping[]> = {
+  'group.mfa.required': [
+    {
+      category: 'security',
+      eventId: 'mfa.required',
+      match: (p) => p.requireGateway2fa === true,
+      extractResource: (p) => ({ type: 'permission_group', id: p.groupId, name: p.groupName }),
+    },
+  ],
   'node.changed': [
     {
       category: 'node',

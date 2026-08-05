@@ -27,4 +27,19 @@ describe("ConfirmDialog", () => {
     expect(description.closest("[data-dialog-body]")).toBeInTheDocument();
     expect(description.closest("[data-dialog-header]")).not.toBeInTheDocument();
   });
+
+  it("can require an explicit choice for guided setup confirmations", () => {
+    renderWithRouter(<ConfirmDialog />);
+
+    act(() => {
+      useConfirmDialog.getState().show({
+        title: "Skip the guided setup?",
+        description: "Continue through the setup checklist or dismiss it.",
+        locked: true,
+        onConfirm: vi.fn(),
+      });
+    });
+
+    expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
+  });
 });

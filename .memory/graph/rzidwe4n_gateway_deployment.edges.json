@@ -1,0 +1,35 @@
+{
+  "file_name": "rzidwe4n_gateway_deployment",
+  "edges": [
+    {
+      "from_id": "rzidwe4n",
+      "to_id": "vrch49nc",
+      "relation": "same_area",
+      "weight": 0.68,
+      "reason": "Both cover Gateway image-based updates followed by Compose app recreation and deployment verification.",
+      "source": "auto",
+      "created_at": 1785951411641,
+      "updated_at": 1785951411641
+    },
+    {
+      "from_id": "rzidwe4n",
+      "to_id": "7rchqhpz",
+      "relation": "related_to",
+      "weight": 0.62,
+      "reason": "Both document Gateway Docker deployment workflows, including when app container recreation is appropriate.",
+      "source": "auto",
+      "created_at": 1785951411641,
+      "updated_at": 1785951411641
+    },
+    {
+      "from_id": "rzidwe4n",
+      "to_id": "kufbu8qt",
+      "relation": "related_to",
+      "weight": 0.52,
+      "reason": "Both describe Gateway image tagging and deployment practices, though one targets staging worktrees and the other releases.",
+      "source": "auto",
+      "created_at": 1785951411641,
+      "updated_at": 1785951411641
+    }
+  ]
+}

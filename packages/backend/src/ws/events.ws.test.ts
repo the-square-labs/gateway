@@ -41,6 +41,43 @@ afterEach(() => {
 });
 
 describe('events websocket authentication', () => {
+  it('delivers an MFA requirement event only to its target user', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({ user: USER, effectiveScopes: USER.scopes });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+    const ownChannel = `mfa.required.${USER.id}`;
+    const otherChannel = 'mfa.required.22222222-2222-4222-8222-222222222222';
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscribe', channels: [ownChannel, otherChannel] }),
+      }),
+      ws as any
+    );
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'subscribed', channels: [ownChannel], rejected: [otherChannel] })
+    );
+
+    eventBus.publish(ownChannel, { groupId: 'group-1', requireGateway2fa: true });
+    eventBus.publish(otherChannel, { groupId: 'group-2', requireGateway2fa: true });
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'event',
+        channel: ownChannel,
+        payload: { groupId: 'group-1', requireGateway2fa: true },
+      })
+    );
+    expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('group-2'));
+
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
   it('delivers inference usage invalidations only to the affected user', async () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);
@@ -97,6 +134,39 @@ describe('events websocket authentication', () => {
       })
     );
 
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
+  it('delivers logging-health updates to housekeeping viewers', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({
+      user: { ...USER, scopes: ['housekeeping:view'] },
+      effectiveScopes: ['housekeeping:view'],
+    });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscribe', channels: ['logging.health.changed'] }),
+      }),
+      ws as any
+    );
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'subscribed', channels: ['logging.health.changed'], rejected: [] })
+    );
+    eventBus.publish('logging.health.changed', { status: 'pressure', reason: 'Disk capacity' });
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'event',
+        channel: 'logging.health.changed',
+        payload: { status: 'pressure', reason: 'Disk capacity' },
+      })
+    );
     handlers.onClose(new Event('close'), ws as any);
   });
 

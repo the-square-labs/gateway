@@ -1,0 +1,15 @@
+{
+  "file_name": "gahvf5k5_gateway_mfa_policy",
+  "edges": [
+    {
+      "from_id": "gahvf5k5",
+      "to_id": "myhj1f8i",
+      "relation": "same_workflow",
+      "weight": 0.92,
+      "reason": "MFA realtime events invalidate the shared dashboard bootstrap and update its attention notices.",
+      "source": "auto",
+      "created_at": 1785962896588,
+      "updated_at": 1785962896588
+    }
+  ]
+}

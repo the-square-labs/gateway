@@ -1,0 +1,15 @@
+{
+  "file_name": "2tjfa2g5_gateway_route_verification",
+  "edges": [
+    {
+      "from_id": "2tjfa2g5",
+      "to_id": "gnonxe58",
+      "relation": "related_to",
+      "weight": 0.35,
+      "reason": "Docker daemon incident patterns relate to gateway docker/backend verification paths (3b6g7z3k).",
+      "source": "auto",
+      "created_at": 1783637977211,
+      "updated_at": 1783637977211
+    }
+  ]
+}

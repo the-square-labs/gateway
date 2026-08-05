@@ -77,7 +77,7 @@ export function DatabaseDetail({
     null
   );
   const [loadingCredentials, setLoadingCredentials] = useState(false);
-  const { isPinnedSidebar, toggleSidebar } = usePinnedDatabasesStore();
+  const { isPinnedDashboard, isPinnedSidebar, toggleDashboard, toggleSidebar } = usePinnedDatabasesStore();
   const loadedDatabaseId = database?.id ?? "";
   const isManagedPaused = database?.managed?.status === "paused";
 
@@ -687,6 +687,24 @@ export function DatabaseDetail({
             <DialogTitle>Pin Database</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Add to dashboard</p>
+                <p className="text-xs text-muted-foreground">Show a compact health card on the dashboard</p>
+              </div>
+              <Switch
+                checked={isPinnedDashboard(database.id)}
+                onChange={() => {
+                  toggleDashboard(database.id, {
+                    slug: database.slug,
+                    name: database.name,
+                    type: database.type,
+                    healthStatus: liveHealthStatus,
+                  });
+                  usePinnedDatabasesStore.getState().invalidate();
+                }}
+              />
+            </div>
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium">Add to sidebar</p>

@@ -1,0 +1,45 @@
+{
+  "file_name": "gnonxe58_docker_daemon_incident",
+  "edges": [
+    {
+      "from_id": "gnonxe58",
+      "to_id": "asy6c7bj",
+      "relation": "related_to",
+      "weight": 0.42,
+      "reason": "Gateway safe-refactor and testing patterns that support the safer handling of oversized detail files; relates to frontend/backend resilience described in core memory.",
+      "source": "auto",
+      "created_at": 1783608056565,
+      "updated_at": 1783608056565
+    },
+    {
+      "from_id": "gnonxe58",
+      "to_id": "j4jc2kmk",
+      "relation": "same_area",
+      "weight": 0.45,
+      "reason": "Concrete implementation of log cap approach on gateway node; aligns with the log-keeping and bounded read strategy in the core memory.",
+      "source": "auto",
+      "created_at": 1783608056565,
+      "updated_at": 1783608056565
+    },
+    {
+      "from_id": "gnonxe58",
+      "to_id": "wlpy3efl",
+      "relation": "related_to",
+      "weight": 0.4,
+      "reason": "Addresses timeout semantics and lifecycle handling for Docker commands; complements frontend/backend stability patterns mentioned in the core memory.",
+      "source": "auto",
+      "created_at": 1783608056565,
+      "updated_at": 1783608056565
+    },
+    {
+      "from_id": "gnonxe58",
+      "to_id": "zq6da64z",
+      "relation": "same_area",
+      "weight": 0.65,
+      "reason": "Docker daemon incident with production node and Snap/Dockerd interaction; related to memory of daemon hardening and stability patterns.",
+      "source": "auto",
+      "created_at": 1783608056565,
+      "updated_at": 1783608056565
+    }
+  ]
+}

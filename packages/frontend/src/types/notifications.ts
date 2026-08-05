@@ -10,6 +10,7 @@ export interface AlertRule {
     | "container"
     | "proxy"
     | "certificate"
+    | "security"
     | "database_postgres"
     | "database_clickhouse"
     | "database_redis";

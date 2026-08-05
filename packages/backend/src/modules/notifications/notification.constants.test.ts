@@ -148,6 +148,22 @@ describe('evaluateWindowRatio', () => {
     expect(mapping?.extractData?.(payload)).toEqual({ status: 'error' });
   });
 
+  it('exposes group MFA enforcement as a security event without member data', () => {
+    const category = ALERT_CATEGORIES.find((candidate) => candidate.id === 'security');
+    const mapping = EVENT_BUS_MAPPINGS['group.mfa.required'][0];
+    const payload = {
+      groupId: 'group-1',
+      groupName: 'Operators',
+      requireGateway2fa: true,
+      memberCount: 42,
+    };
+
+    expect(category?.events).toContainEqual({ id: 'mfa.required', label: 'Group MFA Required', defaultSeverity: 'warning' });
+    expect(mapping.match(payload)).toBe(true);
+    expect(mapping.extractResource(payload)).toEqual({ type: 'permission_group', id: 'group-1', name: 'Operators' });
+    expect(mapping.extractData).toBeUndefined();
+  });
+
   it('skips Docker container state-only rows for metric extraction', () => {
     const result = extractMetricFromHealthReport('container', 'cpu', {
       containerStats: [

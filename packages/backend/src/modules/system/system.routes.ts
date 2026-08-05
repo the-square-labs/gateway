@@ -69,6 +69,7 @@ systemRoutes.openapi({ ...checkSystemUpdateRoute, middleware: sessionOnly }, asy
   if (forbidden) return forbidden;
   const updateService = container.resolve(UpdateService);
   const status = await updateService.checkForUpdates();
+  container.resolve(EventBusService).publish('system.update.changed', { updating: false, statusChanged: true });
   return c.json({ data: status });
 });
 

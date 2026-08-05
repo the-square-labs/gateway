@@ -1,0 +1,1 @@
+ALTER TABLE "certificate_authorities" ADD COLUMN "crl_refresh_pending_at" timestamp with time zone;

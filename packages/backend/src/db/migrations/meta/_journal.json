@@ -631,6 +631,20 @@
       "when": 1785697492473,
       "tag": "0089_black_boomerang",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1785946377902,
+      "tag": "0090_yummy_zuras",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1785947031480,
+      "tag": "0091_pink_lester",
+      "breakpoints": true
     }
   ]
 }

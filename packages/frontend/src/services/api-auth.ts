@@ -52,6 +52,7 @@ export function withAuthApi<TBase extends ApiClientBaseConstructor>(Base: TBase)
       totpConfigured: boolean;
       passkeyCount: number;
       recoveryCodeCount: number;
+      required: boolean;
     }> {
       return this.request("/auth/me/mfa");
     }

@@ -190,6 +190,7 @@ describe("Profile", () => {
       totpConfigured: false,
       passkeyCount: 0,
       recoveryCodeCount: 0,
+      required: false,
     });
     vi.spyOn(api, "listCurrentUserPasskeys").mockResolvedValue([]);
     vi.spyOn(api, "beginCurrentUserPasskeyRegistration").mockResolvedValue({});
@@ -221,6 +222,7 @@ describe("Profile", () => {
       totpConfigured: false,
       passkeyCount: 2,
       recoveryCodeCount: 0,
+      required: false,
     });
     vi.spyOn(api, "listCurrentUserPasskeys").mockResolvedValue([
       {
@@ -261,6 +263,7 @@ describe("Profile", () => {
       totpConfigured: false,
       passkeyCount: 0,
       recoveryCodeCount: 0,
+      required: false,
     });
     vi.spyOn(api, "listCurrentUserPasskeys").mockResolvedValue([]);
     vi.spyOn(api, "beginCurrentUserTotpSetup").mockResolvedValue({
@@ -304,6 +307,7 @@ describe("Profile", () => {
       totpConfigured: true,
       passkeyCount: 1,
       recoveryCodeCount: 10,
+      required: false,
     });
     vi.spyOn(api, "listCurrentUserPasskeys").mockResolvedValue([]);
     vi.spyOn(api, "resetCurrentUserTotp").mockResolvedValue();

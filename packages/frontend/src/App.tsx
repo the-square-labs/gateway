@@ -16,6 +16,7 @@ import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { ThemeProvider } from "@/components/layout/ThemeProvider";
 import { Button } from "@/components/ui/button";
 import { resolveMigrationTarget } from "@/lib/docker-migration-navigation";
+import { INFERENCE_USAGE_CHANGED_CHANNEL } from "@/lib/inference-self-usage";
 import {
   databaseRoute,
   dockerContainerRoute,
@@ -69,7 +70,9 @@ import { ApiRequestError } from "@/services/api-base";
 import { eventStream } from "@/services/event-stream";
 import { APP_STATUS_STORAGE_KEY, useAppStatusStore } from "@/stores/app-status";
 import { useAuthStore } from "@/stores/auth";
+import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useDockerStore } from "@/stores/docker";
+import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import { useResolvedPageRoute } from "@/stores/resolved-page-context";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { syncAILiteModeFromStorageValue, UI_STORAGE_KEY, useUIStore } from "@/stores/ui";
@@ -679,6 +682,18 @@ function RealtimeBridge() {
       s.hasScopedAccess("docker:volumes:view") ||
       s.hasScopedAccess("docker:networks:view")
   );
+  const canViewProxy = useAuthStore((s) => s.hasScopedAccess("proxy:view"));
+  const canViewDatabases = useAuthStore((s) => s.hasScopedAccess("databases:view"));
+  const canViewDockerContainers = useAuthStore((s) => s.hasScopedAccess("docker:containers:view"));
+  const canViewPkiCertificates = useAuthStore((s) => s.hasScopedAccess("pki:cert:view"));
+  const canViewSslCertificates = useAuthStore((s) => s.hasScopedAccess("ssl:cert:view"));
+  const canViewCAs = useAuthStore(
+    (s) => s.hasScope("pki:ca:view:root") || s.hasScope("pki:ca:view:intermediate")
+  );
+  const canViewInferenceUsage = useAuthStore((s) => s.hasScope("inference:usage:view:self"));
+  const canViewLogging = useAuthStore((s) => s.hasScope("housekeeping:view"));
+  const canViewAudit = useAuthStore((s) => s.hasScopedAccess("admin:audit"));
+  const invalidateDashboardBootstrap = useDashboardBootstrapStore((s) => s.invalidate);
   const setGatewayUpdatingActive = useAppStatusStore((s) => s.setGatewayUpdatingActive);
   const clearGatewayUpdating = useAppStatusStore((s) => s.clearGatewayUpdating);
   const hydrateAIApprovalMode = useUIStore((s) => s.hydrateAIApprovalMode);
@@ -719,12 +734,13 @@ function RealtimeBridge() {
     });
   }, [logout, setUser, user?.id]);
 
-  // Keep node-related views in sync by activating the shared node.changed
-  // invalidation path in the event stream singleton.
+  // This bridge is mounted for the whole authenticated session. Dashboard and Sidebar can
+  // therefore safely share a snapshot without relying on either route being mounted when
+  // an event arrives.
   useEffect(() => {
     if (!user || !canListNodes) return;
-    return eventStream.subscribe("node.changed", () => {});
-  }, [user, canListNodes]);
+    return eventStream.subscribe("node.changed", invalidateDashboardBootstrap);
+  }, [user, canListNodes, invalidateDashboardBootstrap]);
 
   useEffect(() => {
     if (!user || !canReceiveNodeSlug) return;
@@ -732,20 +748,96 @@ function RealtimeBridge() {
       const event = payload as { id?: string; slug?: string };
       if (!event.id || !event.slug) return;
       useDockerStore.getState().syncNodeAppearance({ id: event.id, slug: event.slug });
+      const pinned = usePinnedContainersStore.getState();
+      for (const [containerId, meta] of Object.entries(pinned.containerMeta)) {
+        if (meta.nodeId === event.id && meta.nodeSlug !== event.slug) {
+          pinned.updateMeta(containerId, { ...meta, nodeSlug: event.slug });
+        }
+      }
+      invalidateDashboardBootstrap();
     });
-  }, [canReceiveNodeSlug, user]);
+  }, [canReceiveNodeSlug, invalidateDashboardBootstrap, user]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    return eventStream.subscribe(`mfa.required.${user.id}`, invalidateDashboardBootstrap);
+  }, [invalidateDashboardBootstrap, user?.id]);
+
+  useEffect(() => {
+    if (!user || !canViewProxy) return;
+    return eventStream.subscribe("proxy.host.changed", invalidateDashboardBootstrap);
+  }, [canViewProxy, invalidateDashboardBootstrap, user]);
+
+  useEffect(() => {
+    if (!user || !canViewDatabases) return;
+    return eventStream.subscribe("database.changed", invalidateDashboardBootstrap);
+  }, [canViewDatabases, invalidateDashboardBootstrap, user]);
+
+  useEffect(() => {
+    if (!user || !canViewDockerContainers) return;
+    const unsubscribeContainer = eventStream.subscribe(
+      "docker.container.changed",
+      invalidateDashboardBootstrap
+    );
+    const unsubscribeDeployment = eventStream.subscribe(
+      "docker.deployment.changed",
+      invalidateDashboardBootstrap
+    );
+    return () => {
+      unsubscribeContainer();
+      unsubscribeDeployment();
+    };
+  }, [canViewDockerContainers, invalidateDashboardBootstrap, user]);
+
+  useEffect(() => {
+    if (!user || !canViewPkiCertificates) return;
+    return eventStream.subscribe("cert.changed", invalidateDashboardBootstrap);
+  }, [canViewPkiCertificates, invalidateDashboardBootstrap, user]);
+
+  useEffect(() => {
+    if (!user || !canViewSslCertificates) return;
+    return eventStream.subscribe("ssl.cert.changed", invalidateDashboardBootstrap);
+  }, [canViewSslCertificates, invalidateDashboardBootstrap, user]);
+
+  useEffect(() => {
+    if (!user || !canViewCAs) return;
+    return eventStream.subscribe("ca.changed", invalidateDashboardBootstrap);
+  }, [canViewCAs, invalidateDashboardBootstrap, user]);
+
+  useEffect(() => {
+    if (!user || !canViewInferenceUsage) return;
+    return eventStream.subscribe(INFERENCE_USAGE_CHANGED_CHANNEL, invalidateDashboardBootstrap);
+  }, [canViewInferenceUsage, invalidateDashboardBootstrap, user]);
+
+  useEffect(() => {
+    if (!user || !canViewLogging) return;
+    return eventStream.subscribe("logging.health.changed", invalidateDashboardBootstrap);
+  }, [canViewLogging, invalidateDashboardBootstrap, user]);
+
+  useEffect(() => {
+    if (!user || !canViewAudit) return;
+    return eventStream.subscribe("audit.changed", invalidateDashboardBootstrap);
+  }, [canViewAudit, invalidateDashboardBootstrap, user]);
 
   useEffect(() => {
     if (!user) return;
     return eventStream.subscribe("system.update.changed", (payload) => {
       const ev = payload as { updating?: boolean; targetVersion?: string | null } | undefined;
-      if (ev?.updating) {
-        setGatewayUpdatingActive(true, ev.targetVersion ?? null);
-      } else {
-        clearGatewayUpdating();
+      if (typeof ev?.updating === "boolean") {
+        if (ev.updating) {
+          setGatewayUpdatingActive(true, ev.targetVersion ?? null);
+        } else {
+          clearGatewayUpdating();
+        }
       }
+      invalidateDashboardBootstrap();
     });
-  }, [clearGatewayUpdating, user, setGatewayUpdatingActive]);
+  }, [clearGatewayUpdating, invalidateDashboardBootstrap, user, setGatewayUpdatingActive]);
+
+  useEffect(
+    () => eventStream.onReconnect(invalidateDashboardBootstrap),
+    [invalidateDashboardBootstrap]
+  );
 
   return null;
 }

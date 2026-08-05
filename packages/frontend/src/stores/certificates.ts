@@ -15,18 +15,19 @@ interface CertificatesState {
   certificates: Certificate[];
   selectedCertificate: Certificate | null;
   isLoading: boolean;
+  isLoadingMore: boolean;
   error: string | null;
   filters: CertificateFilters;
-  page: number;
   limit: number;
   total: number;
-  totalPages: number;
+  hasMore: boolean;
+  nextPage: number;
 
   fetchCertificates: () => Promise<void>;
+  fetchNextPage: () => Promise<void>;
   selectCertificate: (id: string) => Promise<void>;
   clearSelected: () => void;
   setFilters: (filters: Partial<CertificateFilters>) => void;
-  setPage: (page: number) => void;
   resetFilters: () => void;
 }
 
@@ -43,21 +44,21 @@ export const useCertificatesStore = create<CertificatesState>()((set, get) => ({
   certificates: [],
   selectedCertificate: null,
   isLoading: false,
+  isLoadingMore: false,
   error: null,
   filters: { ...defaultFilters },
-  page: 1,
   limit: 25,
   total: 0,
-  totalPages: 0,
+  hasMore: false,
+  nextPage: 1,
 
   fetchCertificates: async () => {
     const requestId = ++fetchCertificatesRequestId;
-    const { filters, page, limit } = get();
+    const { filters, limit } = get();
     const showSystem =
       useUIStore.getState().showSystemCertificates &&
       useAuthStore.getState().hasScope("admin:details:certificates");
     const isDefault =
-      page === 1 &&
       !filters.search &&
       filters.status === "active" &&
       filters.type === "all" &&
@@ -74,15 +75,16 @@ export const useCertificatesStore = create<CertificatesState>()((set, get) => ({
         set({
           certificates: cached.data || [],
           total: cached.pagination?.total ?? 0,
-          totalPages: cached.pagination?.totalPages ?? 0,
+          hasMore: (cached.pagination?.totalPages ?? 0) > 1,
+          nextPage: 2,
         });
     }
 
     const hasData = get().certificates.length > 0;
-    set({ isLoading: !hasData, error: null });
+    set({ isLoading: !hasData, isLoadingMore: false, error: null });
     try {
       const response = await api.listCertificates({
-        page,
+        page: 1,
         limit,
         search: filters.search || undefined,
         status: filters.status !== "all" ? filters.status : undefined,
@@ -95,13 +97,55 @@ export const useCertificatesStore = create<CertificatesState>()((set, get) => ({
       set({
         certificates: response.data || [],
         total: response.pagination?.total ?? 0,
-        totalPages: response.pagination?.totalPages ?? 0,
+        hasMore: (response.pagination?.page ?? 1) < (response.pagination?.totalPages ?? 0),
+        nextPage: (response.pagination?.page ?? 1) + 1,
         isLoading: false,
+        isLoadingMore: false,
       });
     } catch (err) {
       if (requestId !== fetchCertificatesRequestId) return;
       const message = err instanceof Error ? err.message : "Failed to fetch certificates";
-      set({ error: message, isLoading: false });
+      set({ error: message, isLoading: false, isLoadingMore: false });
+    }
+  },
+
+  fetchNextPage: async () => {
+    const { filters, limit, hasMore, isLoading, isLoadingMore, nextPage } = get();
+    if (!hasMore || isLoading || isLoadingMore) return;
+
+    const requestId = ++fetchCertificatesRequestId;
+    const showSystem =
+      useUIStore.getState().showSystemCertificates &&
+      useAuthStore.getState().hasScope("admin:details:certificates");
+    set({ isLoadingMore: true, error: null });
+    try {
+      const response = await api.listCertificates({
+        page: nextPage,
+        limit,
+        search: filters.search || undefined,
+        status: filters.status !== "all" ? filters.status : undefined,
+        type: filters.type !== "all" ? filters.type : undefined,
+        caId: filters.caId !== "all" ? filters.caId : undefined,
+        showSystem,
+      });
+      if (requestId !== fetchCertificatesRequestId) return;
+      set((state) => {
+        const knownIds = new Set(state.certificates.map((certificate) => certificate.id));
+        const nextCertificates = (response.data || []).filter(
+          (certificate) => !knownIds.has(certificate.id)
+        );
+        return {
+          certificates: [...state.certificates, ...nextCertificates],
+          total: response.pagination?.total ?? state.total,
+          hasMore: (response.pagination?.page ?? nextPage) < (response.pagination?.totalPages ?? 0),
+          nextPage: (response.pagination?.page ?? nextPage) + 1,
+          isLoadingMore: false,
+        };
+      });
+    } catch (err) {
+      if (requestId !== fetchCertificatesRequestId) return;
+      const message = err instanceof Error ? err.message : "Failed to fetch more certificates";
+      set({ error: message, isLoadingMore: false });
     }
   },
 
@@ -120,18 +164,22 @@ export const useCertificatesStore = create<CertificatesState>()((set, get) => ({
   setFilters: (newFilters) => {
     set((state) => ({
       filters: { ...state.filters, ...newFilters },
-      page: 1,
+      certificates: [],
+      hasMore: false,
+      nextPage: 1,
+      isLoadingMore: false,
     }));
     get().fetchCertificates();
   },
 
-  setPage: (page) => {
-    set({ page });
-    get().fetchCertificates();
-  },
-
   resetFilters: () => {
-    set({ filters: { ...defaultFilters }, page: 1 });
+    set({
+      filters: { ...defaultFilters },
+      certificates: [],
+      hasMore: false,
+      nextPage: 1,
+      isLoadingMore: false,
+    });
     get().fetchCertificates();
   },
 }));

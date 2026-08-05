@@ -24,13 +24,14 @@ import {
   revokeOtherCurrentUserSessionsRoute,
   updateCurrentUserPreferencesRoute,
 } from './auth.docs.js';
-import { authMiddleware, SESSION_COOKIE_NAME, sessionOnly } from './auth.middleware.js';
+import { authMiddleware, sessionOnly } from './auth.middleware.js';
 import { AuthService } from './auth.service.js';
 import { AuthSettingsService } from './auth.settings.service.js';
 import { LocalAuthService } from './local-auth.service.js';
 import { MfaService } from './mfa.service.js';
 import { OidcSettingsService } from './oidc-settings.service.js';
 import { PasskeyService } from './passkey.service.js';
+import { getAcceptedSessionCookieNames, getSessionCookieNameForUrl } from './session-cookie.js';
 
 export const authRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
@@ -84,7 +85,7 @@ async function setLocalSession(
   await container.resolve(AuthService).recordSuccessfulSignIn(user.id);
   const env = getEnv();
   const publicUrl = await getPublicUrl();
-  setCookie(c, SESSION_COOKIE_NAME, sessionId, {
+  setCookie(c, getSessionCookieNameForUrl(publicUrl), sessionId, {
     httpOnly: true,
     secure: new URL(publicUrl).protocol === 'https:',
     sameSite: 'Lax',
@@ -214,7 +215,7 @@ authRoutes.openapi(callbackRoute, async (c) => {
     });
 
     const publicUrl = await getPublicUrl();
-    setCookie(c, SESSION_COOKIE_NAME, result.sessionId, {
+    setCookie(c, getSessionCookieNameForUrl(publicUrl), result.sessionId, {
       httpOnly: true,
       secure: new URL(publicUrl).protocol === 'https:',
       sameSite: 'Lax',
@@ -445,7 +446,14 @@ authRoutes.openapi(logoutRoute, async (c) => {
     details: { hasSession: true },
   });
   const logoutUrl = await authService.logout(sessionId);
-  deleteCookie(c, SESSION_COOKIE_NAME, { path: '/' });
+  const cookieHeader = c.req.header('Cookie') ?? '';
+  if (cookieHeader.includes('gateway_session_')) {
+    for (const cookieName of getAcceptedSessionCookieNames()) {
+      deleteCookie(c, cookieName, { path: '/' });
+    }
+  } else {
+    deleteCookie(c, 'session_id', { path: '/' });
+  }
   return c.json({ message: 'Logged out successfully', logoutUrl });
 });
 
@@ -502,7 +510,9 @@ authRoutes.use('/me/mfa', sessionOnly);
 authRoutes.openapi(getCurrentUserMfaRoute, async (c) => {
   const user = c.get('user')!;
   assertLocalMfaAccount(user);
-  return c.json(await container.resolve(MfaService).getStatus(user.id));
+  const mfa = container.resolve(MfaService);
+  const [status, required] = await Promise.all([mfa.getStatus(user.id), mfa.isGatewayMfaRequired(user.id)]);
+  return c.json({ ...status, required });
 });
 
 authRoutes.use('/me/mfa/totp/setup', authMiddleware);

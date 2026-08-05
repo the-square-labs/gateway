@@ -2,6 +2,7 @@ import { useAppStatusStore } from "@/stores/app-status";
 import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
 import { useCertificatesStore } from "@/stores/certificates";
+import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useNodesStore } from "@/stores/nodes";
 import { useSSLStore } from "@/stores/ssl";
 import { useUIStore } from "@/stores/ui";
@@ -15,6 +16,7 @@ export function resetTestStores() {
     isAuthenticated: false,
     isLoading: true,
   });
+  useDashboardBootstrapStore.getState().clear();
 
   useAppStatusStore.setState({
     maintenanceActive: false,
@@ -63,23 +65,25 @@ export function resetTestStores() {
     certificates: [],
     selectedCertificate: null,
     isLoading: false,
+    isLoadingMore: false,
     error: null,
     filters: { search: "", status: "active", type: "all", caId: "all" },
-    page: 1,
     limit: 25,
     total: 0,
-    totalPages: 0,
+    hasMore: false,
+    nextPage: 1,
   });
 
   useSSLStore.setState({
     certificates: [],
     selectedCert: null,
     isLoading: false,
+    isLoadingMore: false,
     error: null,
     filters: { search: "", type: "all", status: "active" },
-    page: 1,
     limit: 25,
     total: 0,
-    totalPages: 0,
+    hasMore: false,
+    nextPage: 1,
   });
 }

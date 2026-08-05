@@ -1,0 +1,25 @@
+{
+  "file_name": "hqwh565e_gateway_installer_node",
+  "edges": [
+    {
+      "from_id": "hqwh565e",
+      "to_id": "kufbu8qt",
+      "relation": "same_workflow",
+      "weight": 0.8,
+      "reason": "Installer archives are published under release tags and interact with the Gateway release/signing workflow and annotated tags for releases (vX.Y.Z vs vX.Y.Z-installer).",
+      "source": "auto",
+      "created_at": 1785753911586,
+      "updated_at": 1785753911586
+    },
+    {
+      "from_id": "hqwh565e",
+      "to_id": "vrch49nc",
+      "relation": "related_to",
+      "weight": 0.6,
+      "reason": "Installer payload and engine participate in the self-update/migrator flow that prepares/validates target images and compose recreation; parity and manifest contents affect migrator operations.",
+      "source": "auto",
+      "created_at": 1785753911586,
+      "updated_at": 1785753911586
+    }
+  ]
+}

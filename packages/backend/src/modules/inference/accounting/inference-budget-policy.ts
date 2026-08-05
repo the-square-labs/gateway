@@ -36,6 +36,18 @@ export interface InferenceBudgetUsage {
   recoveryAt: { credits5h: Date; credits7d: Date; credits30d: Date; apiMonthly: Date };
 }
 
+const UNCONFIGURED_LIMITS: EffectiveInferenceLimits = {
+  enabled: false,
+  credits5hEnabled: false,
+  credits5h: 0,
+  credits7dEnabled: false,
+  credits7d: 0,
+  credits30dEnabled: false,
+  credits30d: 0,
+  apiMonthlyMicrodollars: 0,
+  billingTimezone: 'UTC',
+};
+
 @injectable()
 export class InferenceBudgetPolicyService {
   constructor(@inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient) {}
@@ -51,9 +63,11 @@ export class InferenceBudgetPolicyService {
     const defaultPolicy = rows.find((row) => row.policyType === 'default');
     const userPolicy = rows.find((row) => row.policyType === 'user');
     const policy = userPolicy ?? defaultPolicy;
-    if (!policy) {
-      throw new InferenceProtocolError(503, 'budget_policy_unavailable', 'Inference limits are not configured');
-    }
+    // A Gateway can have Inference enabled before an administrator configures
+    // a default policy (notably older guided setups). Treat that as disabled
+    // access instead of an infrastructure failure, so status and setup APIs
+    // stay available to repair the configuration.
+    if (!policy) return { ...UNCONFIGURED_LIMITS };
     return effectiveLimits(policy, userPolicy ? defaultPolicy : undefined);
   }
 

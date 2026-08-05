@@ -2,7 +2,7 @@ import { isIP } from 'node:net';
 import bcrypt from 'bcryptjs';
 import { asc, count, eq, ilike, inArray, or, type SQL } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { certificates, dockerDeployments, nodes, proxyHosts } from '@/db/schema/index.js';
+import { dockerDeployments, managedDatabaseInstances, nodes, proxyHosts } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
@@ -14,6 +14,7 @@ import type { EventBusService } from '@/services/event-bus.service.js';
 import type { GrpcIdentityService } from '@/services/grpc-identity.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
+import type { SystemCertificateLifecycleService } from '@/services/system-certificate-lifecycle.service.js';
 import { createNodeEnrollmentToken } from './node-enrollment-token.js';
 import {
   abortNodeFileUpload,
@@ -46,6 +47,7 @@ function stripNodeHealthHistory<T extends { healthHistory?: unknown }>(node: T):
 export class NodesService {
   private daemonUpdateService?: DaemonUpdateService;
   private generalSettingsService?: GeneralSettingsService;
+  private systemCertificateLifecycle?: SystemCertificateLifecycleService;
   private grpcPort = 9443;
 
   constructor(
@@ -66,6 +68,9 @@ export class NodesService {
   setGeneralSettingsService(service: GeneralSettingsService, grpcPort: number) {
     this.generalSettingsService = service;
     this.grpcPort = grpcPort;
+  }
+  setSystemCertificateLifecycleService(service: SystemCertificateLifecycleService) {
+    this.systemCertificateLifecycle = service;
   }
   private emitNode(id: string, action: 'created' | 'updated' | 'deleted', extra: Record<string, unknown> = {}) {
     this.eventBus?.publish('node.changed', { id, action, ...extra });
@@ -422,6 +427,18 @@ export class NodesService {
       );
     }
 
+    const [managedDatabaseCount] = await this.db
+      .select({ count: count() })
+      .from(managedDatabaseInstances)
+      .where(eq(managedDatabaseInstances.nodeId, id));
+    if (managedDatabaseCount && managedDatabaseCount.count > 0) {
+      throw new AppError(
+        409,
+        'NODE_HAS_MANAGED_DATABASES',
+        `Cannot delete node with ${managedDatabaseCount.count} managed database(s). Reassign or delete them first.`
+      );
+    }
+
     // Close gRPC stream if connected
     const connectedNode = this.registry.getNode(id);
     if (connectedNode) {
@@ -429,27 +446,15 @@ export class NodesService {
       await this.registry.deregister(id);
     }
 
-    // Revoke mTLS certificate if one was issued
-    if (node.certificateSerial) {
-      try {
-        const [cert] = await this.db
-          .select({ id: certificates.id })
-          .from(certificates)
-          .where(eq(certificates.serialNumber, node.certificateSerial))
-          .limit(1);
-        if (cert) {
-          await this.db
-            .update(certificates)
-            .set({ status: 'revoked', revokedAt: new Date(), revocationReason: 'cessationOfOperation' })
-            .where(eq(certificates.id, cert.id));
-          logger.info('Revoked node mTLS certificate', { certSerial: node.certificateSerial });
-        }
-      } catch (err) {
-        logger.warn('Failed to revoke node certificate', { error: (err as Error).message });
+    // Retire certificates and delete their owner in one transaction: a failed
+    // owner deletion cannot leave a still-active node with a revoked leaf.
+    await this.db.transaction(async (tx) => {
+      if (this.systemCertificateLifecycle) {
+        await this.systemCertificateLifecycle.retireOwner({ type: 'node', id }, 'cessationOfOperation', tx);
       }
-    }
-
-    await this.db.delete(nodes).where(eq(nodes.id, id));
+      await tx.delete(nodes).where(eq(nodes.id, id));
+    });
+    await this.systemCertificateLifecycle?.retryPendingCRLs();
 
     await this.auditService.log({
       userId,

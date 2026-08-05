@@ -1,0 +1,15 @@
+{
+  "file_name": "ap6ao8jy_docker_terminal_resize",
+  "edges": [
+    {
+      "from_id": "ap6ao8jy",
+      "to_id": "gnonxe58",
+      "relation": "related_to",
+      "weight": 0.5,
+      "reason": "Daemon log handling and bounded log consumption relate to stable operation of Docker-backed sessions, relevant to resize and exec lifecycle resilience.",
+      "source": "auto",
+      "created_at": 1784716257278,
+      "updated_at": 1784716257278
+    }
+  ]
+}

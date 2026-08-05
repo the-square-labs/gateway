@@ -1,7 +1,8 @@
 import { hasScope, hasScopeBase } from '@/lib/permissions.js';
-import { authenticateBearerToken, SESSION_COOKIE_NAME } from '@/modules/auth/auth.middleware.js';
+import { authenticateBearerToken } from '@/modules/auth/auth.middleware.js';
 import { resolveLiveSessionUser } from '@/modules/auth/live-session-user.js';
 import type { User } from '@/types.js';
+import { getAcceptedSessionCookieNames } from './session-cookie.js';
 
 export type WebSocketCredential =
   | {
@@ -39,8 +40,15 @@ export function getSessionWebSocketCredential(
   isAllowedOrigin: (origin: string | undefined) => boolean
 ): WebSocketCredential | null {
   if (!isAllowedOrigin(origin)) return null;
-  const sessionId = getCookieValue(cookieHeader, SESSION_COOKIE_NAME);
-  return sessionId ? { type: 'session', value: sessionId } : null;
+  if (cookieHeader?.includes('gateway_session_')) {
+    for (const cookieName of getAcceptedSessionCookieNames()) {
+      const sessionId = getCookieValue(cookieHeader, cookieName);
+      if (sessionId) return { type: 'session', value: sessionId };
+    }
+  }
+  const legacySessionId = getCookieValue(cookieHeader, 'session_id');
+  if (legacySessionId) return { type: 'session', value: legacySessionId };
+  return null;
 }
 
 export function getProgrammaticWebSocketCredential(

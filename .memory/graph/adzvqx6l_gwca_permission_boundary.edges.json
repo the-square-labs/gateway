@@ -1,0 +1,35 @@
+{
+  "file_name": "adzvqx6l_gwca_permission_boundary",
+  "edges": [
+    {
+      "from_id": "adzvqx6l",
+      "to_id": "b3glzfjy",
+      "relation": "related_to",
+      "weight": 0.9,
+      "reason": "Both cover gateway security/permission boundaries and handling of secrets and sensitive data; the export permission details interact with the broader remediation decisions and data-protection policies.",
+      "source": "auto",
+      "created_at": 1785532682326,
+      "updated_at": 1785532682326
+    },
+    {
+      "from_id": "adzvqx6l",
+      "to_id": "kk05lizc",
+      "relation": "related_to",
+      "weight": 0.6,
+      "reason": "Env and secret persistence/back-end handling affects what data is available for container exports and how docker:containers:files and docker:containers:environment should be enforced.",
+      "source": "auto",
+      "created_at": 1785532682326,
+      "updated_at": 1785532682326
+    },
+    {
+      "from_id": "adzvqx6l",
+      "to_id": "nuc3c3hq",
+      "relation": "related_to",
+      "weight": 0.3,
+      "reason": "Secure artifact and file-access patterns are relevant to implementing safe export mechanics (avoid path-based access and ensure secrets handling is hardened).",
+      "source": "auto",
+      "created_at": 1785532682326,
+      "updated_at": 1785532682326
+    }
+  ]
+}

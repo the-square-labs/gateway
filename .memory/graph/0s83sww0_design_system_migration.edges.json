@@ -1,0 +1,25 @@
+{
+  "file_name": "0s83sww0_design_system_migration",
+  "edges": [
+    {
+      "from_id": "0s83sww0",
+      "to_id": "ip47mets",
+      "relation": "depends_on",
+      "weight": 1,
+      "reason": "Frontend DS migrations must follow the canonical design-system architecture and component boundaries.",
+      "source": "manual",
+      "created_at": 1784761805136,
+      "updated_at": 1784761805136
+    },
+    {
+      "from_id": "0s83sww0",
+      "to_id": "orq9dru7",
+      "relation": "related_to",
+      "weight": 0.45,
+      "reason": "Design-system viewer packaging/docs impact the migration workflow and viewer previews.",
+      "source": "auto",
+      "created_at": 1784761760331,
+      "updated_at": 1784761760331
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "file_name": "w75b8az4_gateway_gitlab_verification",
+  "edges": [
+    {
+      "from_id": "w75b8az4",
+      "to_id": "92pnq26b",
+      "relation": "same_workflow",
+      "weight": 0.65,
+      "reason": "Same gateway sandbox/verification workflow focusing on clone inspection and artifact handling within AI tooling workflow.",
+      "source": "auto",
+      "created_at": 1783631298510,
+      "updated_at": 1783631298510
+    },
+    {
+      "from_id": "w75b8az4",
+      "to_id": "evv95a8g",
+      "relation": "same_area",
+      "weight": 0.5,
+      "reason": "Frontend/backend allowlist caching and edit/create flow optimization in gateway GitLab integration.",
+      "source": "auto",
+      "created_at": 1783631298510,
+      "updated_at": 1783631298510
+    },
+    {
+      "from_id": "w75b8az4",
+      "to_id": "nuc3c3hq",
+      "relation": "related_to",
+      "weight": 0.4,
+      "reason": "Sandbox artifact I/O security pattern and verification sequence share sandbox/runtime concerns.",
+      "source": "auto",
+      "created_at": 1783631298510,
+      "updated_at": 1783631298510
+    }
+  ]
+}

@@ -64,6 +64,11 @@ interface AuditLogRow {
 @injectable()
 export class AuditService {
   constructor(@inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient) {}
+  private eventBus?: import('@/services/event-bus.service.js').EventBusService;
+
+  setEventBus(eventBus: import('@/services/event-bus.service.js').EventBusService): void {
+    this.eventBus = eventBus;
+  }
 
   async log(entry: AuditEntry, options: AuditLogOptions = {}): Promise<boolean> {
     try {
@@ -89,6 +94,7 @@ export class AuditService {
         ipAddress: entry.ipAddress ?? requestContext?.ipAddress,
         userAgent: entry.userAgent ?? requestContext?.userAgent,
       });
+      this.eventBus?.publish('audit.changed', {});
       if (options.markRequest ?? true) {
         markAuditEmitted();
       }

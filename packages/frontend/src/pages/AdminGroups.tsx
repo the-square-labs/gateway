@@ -58,6 +58,7 @@ import {
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
+import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import type { DatabaseConnection, LoggingSchema, Node, PermissionGroup, ProxyHost } from "@/types";
 import { GROUP_ASSIGNABLE_SCOPES, RESOURCE_SCOPABLE_SCOPES } from "@/types";
 
@@ -309,6 +310,7 @@ export function AdminGroups({
       setSaving(true);
       try {
         await api.updateGroup(editingGroup.id, { requireGateway2fa: formRequireGateway2fa });
+        useDashboardBootstrapStore.getState().invalidate();
         toast.success("MFA policy updated");
         setDialogOpen(false);
         fetchGroups();
@@ -347,6 +349,7 @@ export function AdminGroups({
           parentId: formParentId,
           requireGateway2fa: formRequireGateway2fa,
         });
+        useDashboardBootstrapStore.getState().invalidate();
         toast.success("Group updated");
       } else {
         await api.createGroup({

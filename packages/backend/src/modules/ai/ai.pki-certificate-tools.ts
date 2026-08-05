@@ -7,6 +7,7 @@ import {
 } from '@/modules/pki/cert.schemas.js';
 import type { CertService } from '@/modules/pki/cert.service.js';
 import { ExportService } from '@/modules/pki/export.service.js';
+import { SystemCertificateLifecycleService } from '@/services/system-certificate-lifecycle.service.js';
 import type { User } from '@/types.js';
 import { agentPage, agentPageLimit, allowedResourceIdsForScopes } from './ai.service-helpers.js';
 
@@ -16,6 +17,7 @@ export const PKI_CERTIFICATE_TOOL_NAMES = new Set([
   'issue_certificate',
   'revoke_certificate',
   'manage_certificate',
+  'audit_system_pki_leaves',
 ]);
 
 export interface PkiCertificateToolContext {
@@ -34,6 +36,13 @@ export async function executePkiCertificateTool(
   const a = args as any;
 
   switch (toolName) {
+    case 'audit_system_pki_leaves': {
+      context.ensureToolScope(user, 'pki:cert:view');
+      context.ensureToolScope(user, 'admin:details:certificates');
+      return container.resolve(SystemCertificateLifecycleService).auditSystemLeaves(
+        typeof a.caId === 'string' ? a.caId : undefined
+      );
+    }
     case 'list_certificates':
       return context.certService.listCertificates(
         {

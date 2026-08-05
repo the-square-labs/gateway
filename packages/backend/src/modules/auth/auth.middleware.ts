@@ -9,8 +9,9 @@ import { OAuthService } from '@/modules/oauth/oauth.service.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { AppEnv, User } from '@/types.js';
+import { getAcceptedSessionCookieNames, LEGACY_SESSION_COOKIE_NAME } from './session-cookie.js';
 
-const SESSION_COOKIE_NAME = 'session_id';
+const SESSION_COOKIE_NAME = LEGACY_SESSION_COOKIE_NAME;
 const CSRF_HEADER_NAME = 'X-CSRF-Token';
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -37,8 +38,16 @@ function extractCredential(c: Context<AppEnv>): { type: CredentialType; value: s
     }
   }
 
-  const cookieSession = getCookie(c, SESSION_COOKIE_NAME);
-  if (cookieSession) return { type: 'session', value: cookieSession };
+  const cookieHeader = c.req.header('Cookie') ?? '';
+  if (cookieHeader.includes('gateway_session_')) {
+    for (const cookieName of getAcceptedSessionCookieNames()) {
+      const cookieSession = getCookie(c, cookieName);
+      if (cookieSession) return { type: 'session', value: cookieSession };
+    }
+  }
+
+  const legacySession = getCookie(c, SESSION_COOKIE_NAME);
+  if (legacySession) return { type: 'session', value: legacySession };
 
   return null;
 }

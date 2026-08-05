@@ -10,11 +10,16 @@ import type {
   CreateAccessListRequest,
   CreateDomainRequest,
   DashboardStats,
+  DashboardBootstrap,
+  DashboardBootstrapRequest,
   DeleteDomainRequest,
   DnsStatus,
   Domain,
   DomainSearchResult,
   DomainWithUsage,
+  FinalizeSetupState,
+  FinalizeSetupStep,
+  FinalizeSetupStepStatus,
   LinkInternalCertRequest,
   NginxTemplate,
   PaginatedResponse,
@@ -75,6 +80,37 @@ class ApiClient extends withInferenceApi(
     )
   )
 ) {
+  async getFinalizeSetupState(): Promise<FinalizeSetupState | null> {
+    return this.unwrapData(this.request<{ data: FinalizeSetupState | null }>("/finalize-setup"));
+  }
+
+  async updateFinalizeSetupStep(
+    step: FinalizeSetupStep,
+    status: Exclude<FinalizeSetupStepStatus, "pending">
+  ): Promise<FinalizeSetupState> {
+    return this.unwrapData(
+      this.request<{ data: FinalizeSetupState }>(`/finalize-setup/steps/${step}`, {
+        method: "PUT",
+        body: JSON.stringify({ status }),
+      })
+    );
+  }
+
+  async dismissFinalizeSetup(): Promise<void> {
+    await this.request("/finalize-setup/dismiss", { method: "POST" });
+  }
+
+  async getFinalizeSetupMfaReminder(): Promise<boolean> {
+    const result = await this.unwrapData(
+      this.request<{ data: { show: boolean } }>("/finalize-setup/mfa-reminder")
+    );
+    return result.show;
+  }
+
+  async hideFinalizeSetupMfaReminder(): Promise<void> {
+    await this.request("/finalize-setup/mfa-reminder/hide", { method: "POST" });
+  }
+
   /**
    * Prefetch key data for all pages in background.
    * Called once after auth to prime the cache.
@@ -1736,6 +1772,15 @@ class ApiClient extends withInferenceApi(
       this.request<{ data: DashboardStats }>(
         `/monitoring/dashboard${showSystem ? "?showSystem=true" : ""}`
       )
+    );
+  }
+
+  async getDashboardBootstrap(request: DashboardBootstrapRequest): Promise<DashboardBootstrap> {
+    return this.unwrapData(
+      this.request<{ data: DashboardBootstrap }>("/monitoring/dashboard/bootstrap", {
+        method: "POST",
+        body: JSON.stringify(request),
+      })
     );
   }
 

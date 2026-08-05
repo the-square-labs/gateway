@@ -1,0 +1,55 @@
+{
+  "file_name": "nuc3c3hq_gateway_sandbox_artifact",
+  "edges": [
+    {
+      "from_id": "nuc3c3hq",
+      "to_id": "7oked0dp",
+      "relation": "same_area",
+      "weight": 0.5,
+      "reason": "Both reside in gateway project and address AI/chat retrieval and search tooling within gateway context.",
+      "source": "auto",
+      "created_at": 1783275576368,
+      "updated_at": 1783275576368
+    },
+    {
+      "from_id": "nuc3c3hq",
+      "to_id": "duvbj7h2",
+      "relation": "same_area",
+      "weight": 0.5,
+      "reason": "Gateway AI tools refactor within gateway project; related to overall gateway memory space.",
+      "source": "auto",
+      "created_at": 1783275576368,
+      "updated_at": 1783275576368
+    },
+    {
+      "from_id": "nuc3c3hq",
+      "to_id": "hh3v2vdi",
+      "relation": "same_area",
+      "weight": 0.5,
+      "reason": "GitLab/docker/registry verification context within gateway; related to gateway verification patterns.",
+      "source": "auto",
+      "created_at": 1783275576368,
+      "updated_at": 1783275576368
+    },
+    {
+      "from_id": "nuc3c3hq",
+      "to_id": "vrch49nc",
+      "relation": "same_area",
+      "weight": 0.5,
+      "reason": "Both reside in gateway project and address verification/security patterns.",
+      "source": "auto",
+      "created_at": 1783275576368,
+      "updated_at": 1783275576368
+    },
+    {
+      "from_id": "nuc3c3hq",
+      "to_id": "yfhytkcz",
+      "relation": "same_area",
+      "weight": 0.5,
+      "reason": "Gateway enrollment/security pattern changes; same project area as sandbox artifact.",
+      "source": "auto",
+      "created_at": 1783275576368,
+      "updated_at": 1783275576368
+    }
+  ]
+}

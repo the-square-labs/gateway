@@ -7,11 +7,12 @@ const mocks = vi.hoisted(() => ({
     exportPKCS12: vi.fn(),
     exportJKS: vi.fn(),
   },
+  systemCertificateLifecycle: { auditSystemLeaves: vi.fn() },
 }));
 
 vi.mock('@/container.js', () => ({
   container: {
-    resolve: vi.fn(() => mocks.exportService),
+    resolve: vi.fn((token) => (token?.name === 'SystemCertificateLifecycleService' ? mocks.systemCertificateLifecycle : mocks.exportService)),
   },
   TOKENS: {
     DrizzleClient: Symbol.for('DrizzleClient'),
@@ -63,6 +64,7 @@ describe('AIService PKI certificate tool routing', () => {
     mocks.exportService.exportDER.mockReturnValue(Buffer.from('der-bytes'));
     mocks.exportService.exportPKCS12.mockReturnValue(Buffer.from('pkcs12-bytes'));
     mocks.exportService.exportJKS.mockReturnValue(Buffer.from('jks-bytes'));
+    mocks.systemCertificateLifecycle.auditSystemLeaves.mockResolvedValue({ summary: { total: 0 } });
   });
 
   it('routes certificate list/get/issue/revoke operations through the certificate service', async () => {
@@ -142,6 +144,22 @@ describe('AIService PKI certificate tool routing', () => {
       invalidateStores: ['certificates', 'ca'],
     });
     expect(certService.revokeCertificate).toHaveBeenCalledWith(CERT_ID, 'keyCompromise', 'user-1');
+  });
+
+  it('allows the explicit system audit only with both PKI view and system-details permission', async () => {
+    const service = createService({}, {});
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['pki:cert:view'] }, 'audit_system_pki_leaves', {})
+    ).resolves.toMatchObject({ error: expect.stringContaining('admin:details:certificates') });
+    await expect(
+      service.executeTool(
+        { ...BASE_USER, scopes: ['pki:cert:view', 'admin:details:certificates'] },
+        'audit_system_pki_leaves',
+        { caId: CA_ID }
+      )
+    ).resolves.toEqual({ result: { summary: { total: 0 } }, invalidateStores: [] });
+    expect(mocks.systemCertificateLifecycle.auditSystemLeaves).toHaveBeenCalledWith(CA_ID);
   });
 
   it('routes managed certificate CSR, chain, and export operations with operation-specific scopes', async () => {

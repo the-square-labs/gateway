@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { PanelShell } from "@/components/common/PanelShell";
+import { Badge } from "@/components/ui/badge";
 import type { CA } from "@/types";
 
 interface CertificateAuthoritiesCardProps {
@@ -30,11 +31,15 @@ export function CertificateAuthoritiesCard({ cas, hasScope }: CertificateAuthori
             className="flex items-center gap-3 px-4 py-3 hover:bg-muted/50 transition-colors"
           >
             <span className="text-sm font-medium truncate flex-1">{ca.commonName}</span>
-            <span className="text-xs text-muted-foreground">
+            <Badge variant="secondary" size="inline">
               {ca.type === "root" ? "Root" : "Intermediate"}
-            </span>
-            <span className="text-xs text-muted-foreground">{ca.keyAlgorithm}</span>
-            <span className="text-xs text-muted-foreground">{ca.certCount || 0} certs</span>
+            </Badge>
+            <Badge variant="outline" size="inline">
+              {ca.keyAlgorithm}
+            </Badge>
+            <Badge variant="secondary" size="inline">
+              {ca.certCount || 0} certs
+            </Badge>
           </Link>
         ))}
       </div>

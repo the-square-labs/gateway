@@ -1,10 +1,14 @@
 import { isIP } from 'node:net';
 import { eq } from 'drizzle-orm';
-import type { DrizzleClient } from '@/db/client.js';
+import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
 import { certificateAuthorities, certificates } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { CAService } from '@/modules/pki/ca.service.js';
 import type { CertService } from '@/modules/pki/cert.service.js';
+import type {
+  SystemCertificateCurrentBinding,
+  SystemCertificateLifecycleService,
+} from './system-certificate-lifecycle.service.js';
 
 const logger = createChildLogger('DatabaseCA');
 const SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
@@ -16,11 +20,16 @@ const DATABASE_CA_CN = 'Gateway Database CA';
  * an externally published database endpoint.
  */
 export class DatabaseCAService {
+  private systemCertificateLifecycle?: SystemCertificateLifecycleService;
   constructor(
     private readonly db: DrizzleClient,
     private readonly caService: CAService,
     private readonly certService: CertService
   ) {}
+
+  setSystemCertificateLifecycleService(service: SystemCertificateLifecycleService) {
+    this.systemCertificateLifecycle = service;
+  }
 
   async ensureDatabaseCA(): Promise<string> {
     const [existing] = await this.db
@@ -59,24 +68,51 @@ export class DatabaseCAService {
     return ca;
   }
 
-  async issueManagedDatabaseCertificate(managedDatabaseId: string, serviceAddresses: readonly string[]) {
+  async issueManagedDatabaseCertificate(
+    managedDatabaseId: string,
+    serviceAddresses: readonly string[],
+    bindCurrent?: SystemCertificateCurrentBinding
+  ) {
     const sans = [
       ...new Set(serviceAddresses.map((address) => address.trim()).filter((address) => isIP(address) !== 0)),
     ];
     if (sans.length === 0) throw new Error('Managed database node has no configured IP addresses for TLS');
     const ca = await this.getDatabaseCA();
-    return this.certService.issueCertificate(
-      {
-        caId: ca.id,
-        type: 'tls-server',
-        commonName: `managed-db-${managedDatabaseId}`,
-        sans,
-        keyAlgorithm: 'ecdsa-p256',
-        validityDays: 365,
-      },
+    const issueInput = {
+      caId: ca.id,
+      type: 'tls-server' as const,
+      commonName: `managed-db-${managedDatabaseId}`,
+      sans,
+      keyAlgorithm: 'ecdsa-p256' as const,
+      validityDays: 365,
+    };
+    return this.requireSystemCertificateLifecycle().issueCurrent(
+      issueInput,
       SYSTEM_USER_ID,
-      { allowSystem: true }
+      { type: 'managed_database', id: managedDatabaseId },
+      bindCurrent
     );
+  }
+
+  async retireManagedDatabaseCertificates(managedDatabaseId: string, transaction?: DrizzleTransaction) {
+    return (
+      this.systemCertificateLifecycle?.retireOwner(
+        { type: 'managed_database', id: managedDatabaseId },
+        'cessationOfOperation',
+        transaction
+      ) ?? 0
+    );
+  }
+
+  async retryPendingSystemCRLs() {
+    return this.systemCertificateLifecycle?.retryPendingCRLs() ?? 0;
+  }
+
+  private requireSystemCertificateLifecycle(): SystemCertificateLifecycleService {
+    if (!this.systemCertificateLifecycle) {
+      throw new Error('System certificate lifecycle service is required before issuing system leaves');
+    }
+    return this.systemCertificateLifecycle;
   }
 
   async getManagedDatabaseCertificateMaterial(certificateId: string) {

@@ -110,12 +110,12 @@ export function CAs() {
     {
       id: "algorithm",
       header: "Algorithm",
-      render: ({ ca }) => <span className="text-sm text-muted-foreground">{ca.keyAlgorithm}</span>,
+      render: ({ ca }) => <Badge variant="secondary">{ca.keyAlgorithm}</Badge>,
     },
     {
       id: "certificates",
       header: "Certificates",
-      render: ({ ca }) => <span className="text-sm text-muted-foreground">{ca.certCount}</span>,
+      render: ({ ca }) => <Badge variant="secondary">{ca.certCount}</Badge>,
     },
     {
       id: "expires",

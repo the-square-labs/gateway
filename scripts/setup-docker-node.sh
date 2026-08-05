@@ -1143,7 +1143,9 @@ enroll_daemon() {
     fi
 
     log "Writing config and enrolling with Gateway..."
-    "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256" --docker-socket "$DOCKER_SOCKET"
+    if ! "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256" --docker-socket "$DOCKER_SOCKET" >> "$LOG_FILE" 2>&1; then
+        die "Failed to enroll docker-daemon. Check ${LOG_FILE} for details."
+    fi
     ok "Config written to /etc/docker-daemon/config.yaml"
 }
 

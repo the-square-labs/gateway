@@ -11,6 +11,17 @@ describe('auditLog schema', () => {
 });
 
 describe('AuditService MCP context', () => {
+  it('publishes an audit change after a successful insert', async () => {
+    const values = vi.fn().mockResolvedValue(undefined);
+    const eventBus = { publish: vi.fn() };
+    const service = new AuditService({ insert: vi.fn(() => ({ values })) } as any);
+    service.setEventBus(eventBus as any);
+
+    await service.log({ userId: 'user-1', action: 'node.update', resourceType: 'node' });
+
+    expect(eventBus.publish).toHaveBeenCalledWith('audit.changed', {});
+  });
+
   it('enriches domain audit entries with the MCP tool and redacted arguments', async () => {
     const values = vi.fn().mockResolvedValue(undefined);
     const db = { insert: vi.fn(() => ({ values })) } as any;

@@ -82,6 +82,7 @@ import { InferenceSetupEventsService } from '@/modules/inference/inference-setup
 import { InferenceTokenService } from '@/modules/inference/inference-token.service.js';
 import { InferenceModelService } from '@/modules/inference/models/inference-model.service.js';
 import { InferenceModelAccessService } from '@/modules/inference/models/inference-model-access.service.js';
+import { InferenceModelConfigurationService } from '@/modules/inference/models/inference-model-configuration.service.js';
 import { InferenceDestinationPolicy } from '@/modules/inference/providers/inference-destination-policy.js';
 import { InferenceOAuthService } from '@/modules/inference/providers/inference-oauth.service.js';
 import { InferenceProviderRegistry } from '@/modules/inference/providers/inference-provider.registry.js';
@@ -120,6 +121,7 @@ import { NotificationDispatcherService } from '@/modules/notifications/notificat
 import { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import { NotificationWebhookService } from '@/modules/notifications/notification-webhook.service.js';
 import { OAuthService } from '@/modules/oauth/oauth.service.js';
+import { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
 import { CAService } from '@/modules/pki/ca.service.js';
 import { CertService } from '@/modules/pki/cert.service.js';
 import { CRLService } from '@/modules/pki/crl.service.js';
@@ -157,6 +159,7 @@ import { RuntimeRestartService } from '@/services/runtime-restart.service.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
 import { SessionService } from '@/services/session.service.js';
 import { SystemCAService } from '@/services/system-ca.service.js';
+import { SystemCertificateLifecycleService } from '@/services/system-certificate-lifecycle.service.js';
 import { UpdateService } from '@/services/update.service.js';
 import { WebIdentityService } from '@/services/web-identity.service.js';
 import { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
@@ -228,6 +231,7 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(OutboundWebhookPolicyService, outboundWebhookPolicyService);
 
   const auditService = new AuditService(db);
+  auditService.setEventBus(eventBus);
   container.registerInstance(AuditService, auditService);
 
   const authService = new AuthService(
@@ -275,6 +279,8 @@ export async function initializeContainer(): Promise<void> {
 
   const crlService = new CRLService(db, caService, cacheService);
   container.registerInstance(CRLService, crlService);
+  const systemCertificateLifecycleService = new SystemCertificateLifecycleService(db, certService, crlService);
+  container.registerInstance(SystemCertificateLifecycleService, systemCertificateLifecycleService);
 
   const ocspService = new OCSPService(db, cryptoService, caService, cacheService);
   container.registerInstance(OCSPService, ocspService);
@@ -329,6 +335,15 @@ export async function initializeContainer(): Promise<void> {
     inferenceSetupEvents
   );
   container.registerInstance(InferenceModelService, inferenceModelService);
+  const inferenceModelConfigurationService = new InferenceModelConfigurationService(
+    db,
+    inferenceProviderRegistry,
+    inferenceModelService,
+    inferenceModelAccessService,
+    auditService,
+    inferenceSetupEvents
+  );
+  container.registerInstance(InferenceModelConfigurationService, inferenceModelConfigurationService);
   const inferenceContinuationService = new InferenceContinuationService(redis, cryptoService);
   container.registerInstance(InferenceContinuationService, inferenceContinuationService);
   const inferenceRuntimeService = new InferenceRuntimeService();
@@ -454,12 +469,19 @@ export async function initializeContainer(): Promise<void> {
   // System CA for node mTLS
   const systemCA = new SystemCAService(db, caService, certService, cryptoService);
   systemCA.setGeneralSettingsService(generalSettingsService);
+  systemCA.setSystemCertificateLifecycleService(systemCertificateLifecycleService);
   container.registerInstance(SystemCAService, systemCA);
   await systemCA.ensureSystemCA();
 
   const databaseCA = new DatabaseCAService(db, caService, certService);
+  databaseCA.setSystemCertificateLifecycleService(systemCertificateLifecycleService);
   container.registerInstance(DatabaseCAService, databaseCA);
   await databaseCA.ensureDatabaseCA();
+  const systemCertificateReconciliation = await systemCertificateLifecycleService.reconcileExistingSystemLeaves();
+  if (systemCertificateReconciliation.adopted || systemCertificateReconciliation.unknown) {
+    logger.info('Reconciled existing system certificate lifecycle records', systemCertificateReconciliation);
+  }
+  await systemCertificateLifecycleService.retryPendingCRLs();
 
   const grpcIdentityService = new GrpcIdentityService(env, systemCA);
   container.registerInstance(GrpcIdentityService, grpcIdentityService);
@@ -490,6 +512,7 @@ export async function initializeContainer(): Promise<void> {
 
   const nodesService = new NodesService(db, auditService, nodeRegistry, grpcIdentityService, nodeDispatch);
   nodesService.setGeneralSettingsService(generalSettingsService, env.GRPC_PORT);
+  nodesService.setSystemCertificateLifecycleService(systemCertificateLifecycleService);
   container.registerInstance(NodesService, nodesService);
 
   const nodeFolderService = new NodeFolderService(db, auditService);
@@ -836,6 +859,8 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(SetupTokenPolicyService, setupTokenPolicyService);
   const setupAccessService = new SetupAccessService(db, cacheService, setupTokenPolicyService);
   container.registerInstance(SetupAccessService, setupAccessService);
+  const finalizeSetupService = new FinalizeSetupService(db);
+  container.registerInstance(FinalizeSetupService, finalizeSetupService);
 
   container.registerInstance(
     SetupWizardService,
@@ -849,6 +874,7 @@ export async function initializeContainer(): Promise<void> {
       authMailService,
       authService,
       container.resolve(LocalAuthService),
+      finalizeSetupService,
       async () => {
         const identity = await grpcIdentityService.refresh();
         await refreshGrpcServerCredentials(identity.certPath, identity.keyPath, systemCA);
@@ -893,6 +919,7 @@ export async function initializeContainer(): Promise<void> {
     loggingFeatureService,
     loggingRuntimeConfig.managedInternalLogs
   );
+  loggingMaintenanceService.setEventBus(eventBus);
   loggingRuntimeService.setMaintenanceService(loggingMaintenanceService);
   container.registerInstance(LoggingMaintenanceService, loggingMaintenanceService);
   try {
@@ -950,13 +977,13 @@ export async function initializeContainer(): Promise<void> {
   housekeepingService.setSandboxArtifactService(aiSandboxArtifactService);
   housekeepingService.setDockerManagementService(dockerManagementService);
   housekeepingService.setLoggingMaintenanceService(loggingMaintenanceService);
+  housekeepingService.setSystemCertificateLifecycleService(systemCertificateLifecycleService);
   container.registerInstance(HousekeepingService, housekeepingService);
 
   // Group service (injectable — resolve from container)
   const groupService = container.resolve(GroupService);
   groupService.setEventBus(eventBus);
   groupService.setSandboxService(aiSandboxService);
-  groupService.setSessionService(sessionService);
   const permissionGroupFolderService = new PermissionGroupFolderService(db, auditService);
   permissionGroupFolderService.setEventBus(eventBus);
   container.registerInstance(PermissionGroupFolderService, permissionGroupFolderService);
@@ -1045,6 +1072,9 @@ export async function initializeContainer(): Promise<void> {
   // Background jobs
   const scheduler = new SchedulerService();
   container.registerInstance(SchedulerService, scheduler);
+  scheduler.registerInterval('system-certificate-crl-retry', 5 * 60 * 1000, async () => {
+    await systemCertificateLifecycleService.retryPendingCRLs();
+  });
 
   const acmeRenewalJob = new ACMERenewalJob(db, sslService, alertService);
   acmeRenewalJob.setEventBus(eventBus);
@@ -1082,7 +1112,7 @@ export async function initializeContainer(): Promise<void> {
     await Promise.all([expiryAlertJob.run(), notifEvaluatorService.evaluateCertificateExpiry()]);
   });
 
-  const updateCheckJob = new UpdateCheckJob(updateService);
+  const updateCheckJob = new UpdateCheckJob(updateService, eventBus);
   scheduler.registerInterval('update-check', env.UPDATE_CHECK_INTERVAL_HOURS * 3_600_000, () => updateCheckJob.run());
   scheduler.registerInterval('license-heartbeat', LICENSE_HEARTBEAT_INTERVAL_MS, () => licenseService.heartbeat());
 

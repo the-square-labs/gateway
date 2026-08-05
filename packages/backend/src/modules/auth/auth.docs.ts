@@ -20,6 +20,7 @@ const MfaStatusSchema = z.object({
   totpConfigured: z.boolean(),
   passkeyCount: z.number().int(),
   recoveryCodeCount: z.number().int(),
+  required: z.boolean(),
 });
 
 export const csrfTokenRoute = appRoute({

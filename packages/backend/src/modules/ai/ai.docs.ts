@@ -63,6 +63,12 @@ Use find_resource with an empty query and a concrete type when the user asks to 
 - Certificates can be revoked with a reason (key_compromise, superseded, unspecified, etc.).
 - Private keys are generated server-side and encrypted at rest.
 
+## System PKI Audit
+- System CAs and their leaves are hidden from ordinary PKI tools.
+- Use \`audit_system_pki_leaves\` only when the user explicitly asks to inspect Gateway system PKI. It requires both PKI view permission and \`admin:details:certificates\`.
+- The report is read-only: \`current\` and \`retired\` reflect persisted lifecycle ownership; \`unknown\` means ownership cannot be proven and must never be mutated automatically.
+- Never use generic revoke/delete operations for system certificates or CAs: server policy rejects them. This tool cannot revoke, delete, issue, export keys, or clean up certificates.
+
 ## PKI → SSL Workflow
 PKI certificates live in a separate store from SSL certificates. To use a PKI cert with a proxy host:
 1. issue_certificate → returns { certificate, message }
@@ -1359,7 +1365,14 @@ Gateway is a self-hosted infrastructure control plane. It combines secure access
 - **Operations**: daemon health, notifications, housekeeping, status pages, updates, licensing, GitLab and Cloudflare integrations, and a separate Gateway Inference service.
 
 ## How To Guide A User
-Start with the user goal, then read the focused topic before explaining a workflow or calling tools. Use installation for a new deployment, authentication for access/sign-in questions, gateway-settings for control-plane settings and MCP, and troubleshooting for failures. A feature being described here does not grant permission to view or change it; always respect the user's scopes and confirm destructive changes.`,
+Start with the user goal, then read the focused topic before explaining a workflow or calling tools. Use installation for a new deployment, authentication for access/sign-in questions, gateway-settings for control-plane settings and MCP, and troubleshooting for failures. A feature being described here does not grant permission to view or change it; always respect the user's scopes and confirm destructive changes.
+
+## Dashboard Attention And Pins
+- The Dashboard sidebar item can show a **12px square attention badge**. Blue means the Dashboard has only informational cards, such as an unfinished setup checklist. Yellow means at least one warning card is visible; this includes red/unhealthy resource states, certificate expiry, low node capacity, MFA reminders, update/logging/inference warnings, and unhealthy pinned database or Docker resources. No badge means there are no visible information or warning cards for the current user.
+- The Dashboard is one user-scoped bootstrap snapshot. Do not describe the badge as an unread notification count or as a system-wide state: it reflects only cards visible to the signed-in user and their permissions.
+- Nodes, proxy hosts, databases, Docker containers, and Docker deployments can each be pinned independently to the **Dashboard**, the **Sidebar**, or both. A Dashboard pin adds a compact card; a Sidebar pin adds a quick-access link. Removing one placement must not remove the other.
+- When a user asks where to pin something, explain this distinction and recommend Dashboard for operational status and Sidebar for frequent navigation.
+- In the embedded Gateway Assistant, resolve the resource with \`find_resource\` first, then use \`set_resource_pin\` with an explicit \`target\` and \`pinned\` value. Docker pins also need \`nodeId\`, \`nodeSlug\`, and the resource \`name\`. This tool changes only the current browser session's saved layout preference and is intentionally unavailable through MCP.`,
 
   installation: `# Installing And First-Time Setup
 

@@ -48,6 +48,7 @@ const MCP_EXCLUDED_TOOLS = new Set([
   'list_sandbox_jobs',
   'manage_node_config',
   'manage_node_file',
+  'set_resource_pin',
 ]);
 const BROAD_ONLY_TOOL_SCOPES = new Set<string>();
 const DIRECT_DATABASE_VIEW_TOOLS = new Set(['list_databases', 'get_database_connection']);

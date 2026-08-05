@@ -532,11 +532,14 @@ export class ManagedDatabaseService {
     for (const row of rows) {
       const serviceAddresses = managedDatabaseServiceAddresses(row);
       if (serviceAddresses.length === 0) continue;
-      const issued = await this.databaseCA.issueManagedDatabaseCertificate(row.id, serviceAddresses);
-      await this.db
-        .update(managedDatabaseInstances)
-        .set({ certificateId: issued.certificate.id, updatedAt: new Date() })
-        .where(and(eq(managedDatabaseInstances.id, row.id), isNull(managedDatabaseInstances.certificateId)));
+      await this.databaseCA.issueManagedDatabaseCertificate(row.id, serviceAddresses, async (tx, certificate) => {
+        const updated = await tx
+          .update(managedDatabaseInstances)
+          .set({ certificateId: certificate.id, updatedAt: new Date() })
+          .where(and(eq(managedDatabaseInstances.id, row.id), isNull(managedDatabaseInstances.certificateId)))
+          .returning({ id: managedDatabaseInstances.id });
+        if (updated.length !== 1) throw new Error('Managed database certificate owner binding was not claimed');
+      });
     }
   }
 
@@ -796,24 +799,26 @@ export class ManagedDatabaseService {
         'Database node has no service IP addresses available for the managed TLS certificate'
       );
     }
-    const issued = await this.databaseCA.issueManagedDatabaseCertificate(existing.id, serviceAddresses);
     const credentials = JSON.parse(
       this.cryptoService.decryptString(parseEncryptedCredentials(existing.encryptedOwnerCredentials))
     ) as OwnerCredentials;
     const pendingOperation: ManagedDatabaseOperation = { id: crypto.randomUUID(), action: 'update' };
-    const [updating] = await this.db
-      .update(managedDatabaseInstances)
-      .set({
-        certificateId: issued.certificate.id,
-        status: 'updating',
-        pendingOperation,
-        lastError: null,
-        updatedById: userId,
-        updatedAt: new Date(),
-      })
-      .where(and(eq(managedDatabaseInstances.id, existing.id), isNull(managedDatabaseInstances.pendingOperation)))
-      .returning();
-    const claimed = this.requireOperationClaim(updating);
+    let claimed: ManagedDatabaseRow | undefined;
+    await this.databaseCA.issueManagedDatabaseCertificate(existing.id, serviceAddresses, async (tx, certificate) => {
+      const [updating] = await tx
+        .update(managedDatabaseInstances)
+        .set({
+          certificateId: certificate.id,
+          status: 'updating',
+          pendingOperation,
+          lastError: null,
+          updatedById: userId,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(managedDatabaseInstances.id, existing.id), isNull(managedDatabaseInstances.pendingOperation)))
+        .returning();
+      claimed = this.requireOperationClaim(updating);
+    });
     await this.auditService.log({
       userId,
       action: 'database.managed.tls_certificate.rotate',
@@ -821,12 +826,12 @@ export class ManagedDatabaseService {
       resourceId: existing.id,
       details: { name: existing.name, type: existing.type, serviceAddresses },
     });
-    this.emit(claimed, 'tls_certificate.rotating');
+    this.emit(claimed!, 'tls_certificate.rotating');
     return this.dispatchUpdate(
-      claimed,
+      claimed!,
       credentials,
-      managedDatabasePublishTcp(claimed),
-      managedDatabasePublishNativeTcp(claimed),
+      managedDatabasePublishTcp(claimed!),
+      managedDatabasePublishNativeTcp(claimed!),
       userId
     );
   }
@@ -1489,7 +1494,14 @@ export class ManagedDatabaseService {
     if (row.databaseConnectionId && this.databaseConnectionService) {
       await this.databaseConnectionService.disposeClient(row.databaseConnectionId);
     }
-    await this.db.delete(managedDatabaseInstances).where(eq(managedDatabaseInstances.id, row.id));
+    // This point is reached only after the daemon has confirmed its delete.
+    // Make the durable owner deletion and retirement one transaction so a DB
+    // failure cannot revoke a leaf that is still attached to an owner row.
+    await this.db.transaction(async (tx) => {
+      await this.databaseCA?.retireManagedDatabaseCertificates(row.id, tx);
+      await tx.delete(managedDatabaseInstances).where(eq(managedDatabaseInstances.id, row.id));
+    });
+    await this.databaseCA?.retryPendingSystemCRLs();
     if (row.databaseConnectionId) {
       await this.db.delete(databaseConnections).where(eq(databaseConnections.id, row.databaseConnectionId));
     }
@@ -1555,12 +1567,16 @@ export class ManagedDatabaseService {
         'Database node has no service IP addresses available for the managed TLS certificate'
       );
     }
-    const issued = await this.databaseCA.issueManagedDatabaseCertificate(row.id, serviceAddresses);
-    const [updated] = await this.db
-      .update(managedDatabaseInstances)
-      .set({ certificateId: issued.certificate.id, updatedAt: new Date() })
-      .where(eq(managedDatabaseInstances.id, row.id))
-      .returning();
+    let updated: ManagedDatabaseRow | undefined;
+    await this.databaseCA.issueManagedDatabaseCertificate(row.id, serviceAddresses, async (tx, certificate) => {
+      const [bound] = await tx
+        .update(managedDatabaseInstances)
+        .set({ certificateId: certificate.id, updatedAt: new Date() })
+        .where(and(eq(managedDatabaseInstances.id, row.id), isNull(managedDatabaseInstances.certificateId)))
+        .returning();
+      if (!bound) throw new Error('Managed database certificate owner binding was not claimed');
+      updated = bound;
+    });
     return updated!;
   }
 

@@ -163,8 +163,19 @@ export function InferenceUsage() {
   return <InferenceUsagePanel usage={usage} />;
 }
 
-export function DashboardInferenceUsage({ enabled }: { enabled: boolean }) {
-  const { usage, loading, error } = useInferenceSelfUsage(enabled);
+export function DashboardInferenceUsage({
+  enabled,
+  usage: bootstrapUsage,
+}: {
+  enabled: boolean;
+  usage?: InferenceSelfUsage | null;
+}) {
+  const {
+    usage: fetchedUsage,
+    loading,
+    error,
+  } = useInferenceSelfUsage(enabled && bootstrapUsage === undefined);
+  const usage = bootstrapUsage === undefined ? fetchedUsage : bootstrapUsage;
 
   if (loading || error || !usage?.enabled) return null;
 

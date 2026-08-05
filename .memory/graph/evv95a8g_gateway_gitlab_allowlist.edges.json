@@ -1,0 +1,45 @@
+{
+  "file_name": "evv95a8g_gateway_gitlab_allowlist",
+  "edges": [
+    {
+      "from_id": "evv95a8g",
+      "to_id": "fk86zmru",
+      "relation": "same_area",
+      "weight": 0.3707,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1783269495739,
+      "updated_at": 1783269495739
+    },
+    {
+      "from_id": "evv95a8g",
+      "to_id": "hh3v2vdi",
+      "relation": "related_to",
+      "weight": 0.4555,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1783269495739,
+      "updated_at": 1783269495739
+    },
+    {
+      "from_id": "evv95a8g",
+      "to_id": "ph8ejel0",
+      "relation": "related_to",
+      "weight": 0.3694,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1783269495739,
+      "updated_at": 1783269495739
+    },
+    {
+      "from_id": "evv95a8g",
+      "to_id": "pstn8fla",
+      "relation": "related_to",
+      "weight": 0.384,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1783269495739,
+      "updated_at": 1783269495739
+    }
+  ]
+}

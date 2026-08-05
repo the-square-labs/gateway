@@ -1,0 +1,25 @@
+{
+  "file_name": "h0g48t5u_daemon_install_output",
+  "edges": [
+    {
+      "from_id": "h0g48t5u",
+      "to_id": "muapjlzr",
+      "relation": "same_area",
+      "weight": 0.78,
+      "reason": "Both document durable setup-docker-node.sh daemon-install behavior and compatibility requirements.",
+      "source": "auto",
+      "created_at": 1785945645289,
+      "updated_at": 1785945645289
+    },
+    {
+      "from_id": "h0g48t5u",
+      "to_id": "hqwh565e",
+      "relation": "same_area",
+      "weight": 0.58,
+      "reason": "Both concern Gateway installer scripts and their packaged, scripted user-facing behavior.",
+      "source": "auto",
+      "created_at": 1785945645289,
+      "updated_at": 1785945645289
+    }
+  ]
+}

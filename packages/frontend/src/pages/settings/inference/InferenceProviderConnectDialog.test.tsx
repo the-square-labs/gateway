@@ -111,6 +111,53 @@ describe("InferenceProviderConnectDialog", () => {
     expect(api.cancelInferenceOAuth).toHaveBeenCalledWith("session-2");
   });
 
+  it("cancels a pending server session before returning from the locked onboarding flow", async () => {
+    const onBack = vi.fn();
+    vi.mocked(api.startInferenceOAuth).mockResolvedValue({
+      id: "session-locked",
+      providerId: "xai",
+      status: "pending",
+      authorizationUrl: "https://auth.x.ai/device",
+      completionMode: "device_poll",
+      userCode: "LOCK-ED",
+      pollIntervalSeconds: 30,
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    });
+    vi.mocked(api.cancelInferenceOAuth).mockResolvedValue({
+      id: "session-locked",
+      providerId: "xai",
+      status: "cancelled",
+      authorizationUrl: "https://auth.x.ai/device",
+      completionMode: "device_poll",
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    });
+
+    render(
+      <>
+        <InferenceProviderConnectDialog
+          open
+          catalog={[XAI]}
+          onOpenChange={vi.fn()}
+          onConnected={vi.fn()}
+          locked
+          onBack={onBack}
+        />
+        <ConfirmDialog />
+      </>
+    );
+    fireEvent.change(screen.getByPlaceholderText("Team account"), {
+      target: { value: "Grok team" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start authorization" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue to authorization" }));
+
+    await screen.findByText("LOCK-ED");
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+
+    expect(api.cancelInferenceOAuth).toHaveBeenCalledWith("session-locked");
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
   it("returns to connection setup when the provider warning is cancelled", () => {
     renderConnectDialog();
     fireEvent.change(screen.getByPlaceholderText("Team account"), {

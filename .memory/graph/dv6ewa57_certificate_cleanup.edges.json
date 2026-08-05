@@ -1,0 +1,15 @@
+{
+  "file_name": "dv6ewa57_certificate_cleanup",
+  "edges": [
+    {
+      "from_id": "dv6ewa57",
+      "to_id": "mu4tydcq",
+      "relation": "same_area",
+      "weight": 0.78,
+      "reason": "Both define ownership and lifecycle boundaries for PKI leaf certificates, including App-scoped ownership versus Gateway-owned certificate authorities.",
+      "source": "auto",
+      "created_at": 1785947706679,
+      "updated_at": 1785947706679
+    }
+  ]
+}

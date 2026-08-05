@@ -1,0 +1,35 @@
+{
+  "file_name": "a8l959n1_auth_payload_redaction",
+  "edges": [
+    {
+      "from_id": "a8l959n1",
+      "to_id": "l6ohu61l",
+      "relation": "related_to",
+      "weight": 0.8,
+      "reason": "Both discuss handling SMTP credentials and delivery flow; redaction guidance should align with encrypted email-job lifecycle and what is logged.",
+      "source": "auto",
+      "created_at": 1785712021407,
+      "updated_at": 1785712021407
+    },
+    {
+      "from_id": "a8l959n1",
+      "to_id": "b3glzfjy",
+      "relation": "same_workflow",
+      "weight": 0.7,
+      "reason": "Security-audit remediation boundaries directly inform audit/redaction policy and privilege separation for persisted audit details.",
+      "source": "auto",
+      "created_at": 1785712021407,
+      "updated_at": 1785712021407
+    },
+    {
+      "from_id": "a8l959n1",
+      "to_id": "elp4yliv",
+      "relation": "related_to",
+      "weight": 0.4,
+      "reason": "Session/user identity handling affects who can read audit entries; legacy session shapes are relevant when evaluating audit-reader privileges.",
+      "source": "auto",
+      "created_at": 1785712021407,
+      "updated_at": 1785712021407
+    }
+  ]
+}

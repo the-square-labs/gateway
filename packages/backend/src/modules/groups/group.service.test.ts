@@ -64,3 +64,66 @@ describe('GroupService delete authorization', () => {
     ).resolves.toBeUndefined();
   });
 });
+
+describe('GroupService MFA enforcement events', () => {
+  it('notifies only local users without an MFA factor when MFA becomes required', async () => {
+    const group = {
+      id: 'operators',
+      name: 'Operators',
+      description: null,
+      isBuiltin: false,
+      parentId: null,
+      scopes: [],
+      requireGateway2fa: false,
+      createdAt: new Date('2026-08-05T00:00:00.000Z'),
+      updatedAt: new Date('2026-08-05T00:00:00.000Z'),
+    };
+    const updated = { ...group, requireGateway2fa: true, updatedAt: new Date('2026-08-05T01:00:00.000Z') };
+    const db = {
+      query: { permissionGroups: { findFirst: vi.fn().mockResolvedValue(group) } },
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([updated]) })),
+        })),
+      })),
+      select: vi
+        .fn()
+        .mockImplementationOnce(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn().mockResolvedValue([
+              { id: 'member-needs-mfa', authMethod: 'password' },
+              { id: 'member-has-totp', authMethod: 'email_otp' },
+              { id: 'member-has-passkey', authMethod: 'password' },
+              { id: 'member-oidc', authMethod: 'oidc' },
+            ]),
+          })),
+        }))
+        .mockImplementationOnce(() => ({
+          from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([{ userId: 'member-has-totp' }]) })),
+        }))
+        .mockImplementationOnce(() => ({
+          from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([{ userId: 'member-has-passkey' }]) })),
+        })),
+    };
+    const service = new GroupService(db as unknown as DrizzleClient);
+    const publish = vi.fn();
+    service.setEventBus({ publish } as never);
+
+    await service.updateGroup('operators', { requireGateway2fa: true });
+
+    expect(publish).toHaveBeenCalledWith('mfa.required.member-needs-mfa', {
+      groupId: 'operators',
+      groupName: 'Operators',
+      requireGateway2fa: true,
+    });
+    expect(publish).not.toHaveBeenCalledWith('mfa.required.member-has-totp', expect.anything());
+    expect(publish).not.toHaveBeenCalledWith('mfa.required.member-has-passkey', expect.anything());
+    expect(publish).not.toHaveBeenCalledWith('mfa.required.member-oidc', expect.anything());
+    expect(publish).toHaveBeenCalledWith('group.mfa.required', {
+      groupId: 'operators',
+      groupName: 'Operators',
+      requireGateway2fa: true,
+      memberCount: 4,
+    });
+  });
+});

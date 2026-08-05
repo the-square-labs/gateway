@@ -1,5 +1,4 @@
 import { Link } from "react-router-dom";
-import { EmptyState } from "@/components/common/EmptyState";
 import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
@@ -18,7 +17,7 @@ export function HealthOverviewCard({
   hasScope,
   loading = false,
 }: HealthOverviewCardProps) {
-  if (!hasScope("proxy:view")) return null;
+  if (!hasScope("proxy:view") || (!loading && healthHosts.length === 0)) return null;
 
   return (
     <PanelShell
@@ -71,14 +70,7 @@ export function HealthOverviewCard({
             </Link>
           ))}
         </div>
-      ) : (
-        <EmptyState
-          message="No proxy hosts configured."
-          actionLabel={hasScope("proxy:create") ? "Add one" : undefined}
-          actionHref={hasScope("proxy:create") ? "/proxy-hosts/new" : undefined}
-          embedded
-        />
-      )}
+      ) : null}
     </PanelShell>
   );
 }

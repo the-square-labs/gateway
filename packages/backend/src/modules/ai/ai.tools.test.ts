@@ -38,7 +38,7 @@ function sandboxToolNamesForScopes(scopes: string[], sandboxEnabled: boolean): s
 describe('AI tool scope filtering', () => {
   it('keeps core registry ordering, uniqueness, and invalidation contracts stable', () => {
     expect(new Set(AI_TOOLS.map((tool) => tool.name)).size).toBe(AI_TOOLS.length);
-    expect(AI_TOOLS.slice(0, 83).map((tool) => tool.name)).toEqual([
+    expect(AI_TOOLS.slice(0, 84).map((tool) => tool.name)).toEqual([
       'discover_tools',
       'get_current_context',
       'wait',
@@ -49,6 +49,7 @@ describe('AI tool scope filtering', () => {
       'find_in_chat',
       'read_chat_slice',
       'list_chat_projects',
+      'audit_system_pki_leaves',
       'list_cas',
       'get_ca',
       'create_root_ca',
@@ -134,6 +135,7 @@ describe('AI tool scope filtering', () => {
     expect(TOOL_STORE_INVALIDATION_MAP.update_ai_settings).toEqual(['settings']);
     expect(TOOL_STORE_INVALIDATION_MAP.manage_license).toEqual(['settings']);
     expect(TOOL_STORE_INVALIDATION_MAP.manage_housekeeping).toEqual(['settings']);
+    expect(toolNames(['feat:ai:use'])).toContain('set_resource_pin');
     expect(TOOL_STORE_INVALIDATION_MAP.update_gateway_settings).toEqual(['settings']);
     expect(isDestructiveTool('find_resource')).toBe(false);
     expect(isDestructiveTool('list_proxy_hosts')).toBe(false);

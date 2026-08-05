@@ -1,0 +1,35 @@
+{
+  "file_name": "j4jc2kmk_log_cap_config",
+  "edges": [
+    {
+      "from_id": "j4jc2kmk",
+      "to_id": "nr9hvzr3",
+      "relation": "related_to",
+      "weight": 0.3652,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1783110487867,
+      "updated_at": 1783110487867
+    },
+    {
+      "from_id": "j4jc2kmk",
+      "to_id": "wlju46pr",
+      "relation": "related_to",
+      "weight": 0.3721,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1783110487867,
+      "updated_at": 1783110487867
+    },
+    {
+      "from_id": "j4jc2kmk",
+      "to_id": "zq6da64z",
+      "relation": "related_to",
+      "weight": 0.381,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1783110487867,
+      "updated_at": 1783110487867
+    }
+  ]
+}

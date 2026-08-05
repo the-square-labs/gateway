@@ -44,6 +44,10 @@ function createHarness() {
     setInitialPasswordForSetup: vi.fn(),
     validateInitialPasswordForSetup: vi.fn(),
   };
+  const finalizeSetup = {
+    initializeOwner: vi.fn(),
+    clearOwner: vi.fn(),
+  };
   const refreshGrpcIdentity = vi.fn();
   const refreshWebIdentity = vi.fn();
   const claimReturning = vi.fn().mockResolvedValue([{ key: 'setup:first_admin_claim' }]);
@@ -70,6 +74,7 @@ function createHarness() {
     mail as any,
     auth as any,
     local as any,
+    finalizeSetup as any,
     refreshGrpcIdentity,
     refreshWebIdentity
   );
@@ -88,6 +93,7 @@ function createHarness() {
     mail,
     auth,
     local,
+    finalizeSetup,
     logging,
     claimReturning,
     refreshGrpcIdentity,
@@ -219,6 +225,7 @@ describe('SetupWizardService', () => {
     });
     expect(harness.local.validateInitialPasswordForSetup).toHaveBeenCalledWith('correct horse battery staple');
     expect(harness.local.setInitialPasswordForSetup).toHaveBeenCalledWith('user-1', 'correct horse battery staple');
+    expect(harness.finalizeSetup.initializeOwner).toHaveBeenCalledWith('user-1');
   });
 
   it('rejects a concurrent first-administrator request that did not obtain the database claim', async () => {

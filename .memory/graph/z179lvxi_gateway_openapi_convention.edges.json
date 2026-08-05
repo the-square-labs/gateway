@@ -1,0 +1,25 @@
+{
+  "file_name": "z179lvxi_gateway_openapi_convention",
+  "edges": [
+    {
+      "from_id": "z179lvxi",
+      "to_id": "2tjfa2g5",
+      "relation": "related_to",
+      "weight": 0.3,
+      "reason": "Gateway route verification and routing conventions inform how docs and OpenAPI routes are served and validated.",
+      "source": "auto",
+      "created_at": 1784761696367,
+      "updated_at": 1784761696367
+    },
+    {
+      "from_id": "z179lvxi",
+      "to_id": "h8y5ou2d",
+      "relation": "related_to",
+      "weight": 0.25,
+      "reason": "AI/web-search refactor patterns in gateway share cross-cutting concerns with OpenAPI/docs routing and resource loading.",
+      "source": "auto",
+      "created_at": 1784761696367,
+      "updated_at": 1784761696367
+    }
+  ]
+}

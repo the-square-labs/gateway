@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import forge from 'node-forge';
@@ -125,6 +125,10 @@ describe('SystemCAService.ensureGrpcServerCert', () => {
       }),
     };
     const service = new SystemCAService(createDb(dbResults) as any, {} as any, certService as any, {} as any);
+    service.setSystemCertificateLifecycleService({
+      issueCurrent: (input: unknown, issuedById: string) =>
+        certService.issueCertificate(input, issuedById, { allowSystem: true }),
+    } as any);
     return { service, certService };
   }
 
@@ -353,5 +357,50 @@ describe('SystemCAService.ensureGrpcServerCert', () => {
 
     await expect(service.ensureGrpcServerCert(certPath, keyPath)).resolves.toEqual({ certPath, keyPath });
     expect(certService.issueCertificate).toHaveBeenCalledTimes(1);
+  });
+
+  it('binds reissued gateway listener material through the system lifecycle service', async () => {
+    const replacement = createCertificatePair();
+    const dir = mkdtempSync(join(tmpdir(), 'gateway-system-ca-test-'));
+    tempDirs.push(dir);
+    const certPath = join(dir, 'grpc-server.crt');
+    const keyPath = join(dir, 'grpc-server.key');
+    const { service, certService } = createService([[{ id: 'system-ca-id' }]], replacement);
+    const issueCurrent = vi.fn(async (_input, _userId, _owner, bindCurrent) => {
+      const issued = {
+        certificate: { certificatePem: replacement.certPem, serialNumber: 'lifecycle-serial', notAfter: new Date() },
+        privateKeyPem: replacement.keyPem,
+      };
+      await bindCurrent({}, { ...issued.certificate, privateKeyPem: issued.privateKeyPem });
+      return issued;
+    });
+    service.setSystemCertificateLifecycleService({ issueCurrent } as any);
+
+    await service.ensureGrpcServerCert(certPath, keyPath);
+
+    expect(issueCurrent).toHaveBeenCalledWith(
+      expect.objectContaining({ caId: 'system-ca-id', commonName: 'gateway-grpc' }),
+      expect.any(String),
+      { type: 'gateway_listener', id: 'grpc' },
+      expect.any(Function)
+    );
+    expect(readFileSync(certPath, 'utf8')).toBe(replacement.certPem);
+    expect(readFileSync(keyPath, 'utf8')).toBe(replacement.keyPem);
+    expect(certService.issueCertificate).not.toHaveBeenCalled();
+  });
+
+  it('refuses direct system-listener issuance when lifecycle ownership is unavailable', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gateway-system-ca-test-'));
+    tempDirs.push(dir);
+    const service = new SystemCAService(
+      createDb([[{ id: 'system-ca-id' }]]) as any,
+      {} as any,
+      { issueCertificate: vi.fn() } as any,
+      {} as any
+    );
+
+    await expect(
+      service.ensureGrpcServerCert(join(dir, 'grpc-server.crt'), join(dir, 'grpc-server.key'))
+    ).rejects.toThrow('System certificate lifecycle service is required');
   });
 });

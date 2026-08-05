@@ -56,9 +56,9 @@ describe("AdminNodes", () => {
     expect(await screen.findByText("Node Created")).toBeInTheDocument();
     expect(screen.getByText(/single-use/i)).toBeInTheDocument();
     expect(screen.getByText("token-123")).toBeInTheDocument();
-    expect(screen.getByText(/setup-daemon\.sh/)).toHaveTextContent("--type nginx");
-    expect(screen.getByText(/setup-daemon\.sh/)).toHaveTextContent("--token token-123");
-    expect(screen.getByText(/setup-daemon\.sh/)).toHaveTextContent(
+    expect(screen.getByText(/setup-node\.sh/)).not.toHaveTextContent("--type");
+    expect(screen.getByText(/setup-node\.sh/)).toHaveTextContent("--token token-123");
+    expect(screen.getByText(/setup-node\.sh/)).toHaveTextContent(
       "--gateway-cert-sha256 sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     );
   });

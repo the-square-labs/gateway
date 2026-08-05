@@ -13,7 +13,7 @@ interface NodesCardProps {
 }
 
 export function NodesCard({ nodesList, hasScope, loading = false }: NodesCardProps) {
-  if (!hasScope("nodes:details")) return null;
+  if (!hasScope("nodes:details") || (!loading && nodesList.length === 0)) return null;
 
   return (
     <PanelShell

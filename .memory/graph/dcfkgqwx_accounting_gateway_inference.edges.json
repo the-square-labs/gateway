@@ -1,0 +1,15 @@
+{
+  "file_name": "dcfkgqwx_accounting_gateway_inference",
+  "edges": [
+    {
+      "from_id": "dcfkgqwx",
+      "to_id": "123u7vfm",
+      "relation": "same_area",
+      "weight": 0.78,
+      "reason": "Both define Gateway-specific authentication and token contracts for isolated service/data-plane surfaces.",
+      "source": "auto",
+      "created_at": 1785963785518,
+      "updated_at": 1785963785518
+    }
+  ]
+}

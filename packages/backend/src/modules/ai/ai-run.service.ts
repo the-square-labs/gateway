@@ -75,6 +75,14 @@ export interface AICredentialRequiredEvent {
   challenge: AICredentialChallenge;
 }
 
+export interface AIClientActionEvent {
+  type: 'client.action';
+  userId: string;
+  conversationId: string;
+  runId: string;
+  action: Record<string, unknown>;
+}
+
 export interface CreateAIRunInput {
   conversationId: string;
   userId: string;
@@ -175,7 +183,8 @@ export class AIRunService {
       (userId, conversationId, runId) => this.publishAssistantCommentDone(userId, conversationId, runId),
       conversationSearchService,
       (userId, conversationId, runId, challenge) =>
-        this.publishCredentialChallenge(userId, conversationId, runId, challenge)
+        this.publishCredentialChallenge(userId, conversationId, runId, challenge),
+      (userId, conversationId, runId, action) => this.publishClientAction(userId, conversationId, runId, action)
     );
   }
 
@@ -1097,6 +1106,22 @@ export class AIRunService {
       runId,
       challenge,
     } satisfies AICredentialRequiredEvent;
+    this.eventBus?.publish(aiUserConversationsChangedChannel(userId), event);
+  }
+
+  private publishClientAction(
+    userId: string,
+    conversationId: string,
+    runId: string,
+    action: Record<string, unknown>
+  ): void {
+    const event = {
+      type: 'client.action',
+      userId,
+      conversationId,
+      runId,
+      action,
+    } satisfies AIClientActionEvent;
     this.eventBus?.publish(aiUserConversationsChangedChannel(userId), event);
   }
 }

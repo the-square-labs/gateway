@@ -42,6 +42,8 @@ class EventStream {
   private openTimer: ReturnType<typeof setTimeout> | null = null;
   private connected = false;
   private listeners = new Set<(connected: boolean) => void>();
+  private reconnectListeners = new Set<() => void>();
+  private hasConnected = false;
   private nodeChangedTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingNodeChangedPayload: unknown;
 
@@ -95,6 +97,7 @@ class EventStream {
     }
     this.wireSubs.clear();
     this.pendingSubs.clear();
+    this.hasConnected = false;
     this.setConnected(false);
   }
 
@@ -112,6 +115,8 @@ class EventStream {
     // events from a closing socket from mutating singleton state after a
     // subsequent start() has already opened a replacement.
     ws.onopen = () => {
+      const isReconnect = this.hasConnected;
+      this.hasConnected = true;
       this.backoffMs = 1000;
       this.setConnected(true);
       const desired = new Set([...this.handlers.keys(), ...this.pendingSubs]);
@@ -119,6 +124,9 @@ class EventStream {
       this.pendingSubs.clear();
       if (desired.size > 0) {
         this.sendSubscribe([...desired]);
+      }
+      if (isReconnect) {
+        for (const listener of this.reconnectListeners) listener();
       }
     };
 
@@ -352,6 +360,11 @@ class EventStream {
     return () => {
       this.listeners.delete(fn);
     };
+  }
+
+  onReconnect(fn: () => void): () => void {
+    this.reconnectListeners.add(fn);
+    return () => this.reconnectListeners.delete(fn);
   }
 
   private setConnected(value: boolean) {

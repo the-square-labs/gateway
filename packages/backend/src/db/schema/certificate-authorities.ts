@@ -62,6 +62,9 @@ export const certificateAuthorities = pgTable(
     // CRL tracking
     crlNumber: integer('crl_number').notNull().default(0),
     lastCrlAt: timestamp('last_crl_at', { withTimezone: true }),
+    // A revocation remains durable even if the CRL endpoint is temporarily
+    // unavailable. This marker makes the CRL retry explicit and restart-safe.
+    crlRefreshPendingAt: timestamp('crl_refresh_pending_at', { withTimezone: true }),
 
     // System flag — locked CAs cannot be deleted (e.g. node mTLS CA)
     isSystem: boolean('is_system').notNull().default(false),

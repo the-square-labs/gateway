@@ -1,0 +1,35 @@
+{
+  "file_name": "c3nk8hzp_preserve_dialog_payload",
+  "edges": [
+    {
+      "from_id": "c3nk8hzp",
+      "to_id": "94t2cjlq",
+      "relation": "same_area",
+      "weight": 0.9,
+      "reason": "Both concern Gateway frontend shared UI/dialog behavior and component conventions—payload-retention during dialog transitions should align with these UI primitives and animation/exit timing patterns.",
+      "source": "auto",
+      "created_at": 1785707704671,
+      "updated_at": 1785707704671
+    },
+    {
+      "from_id": "c3nk8hzp",
+      "to_id": "ip47mets",
+      "relation": "same_area",
+      "weight": 0.7,
+      "reason": "Design-system architecture governs Dialog primitive behavior and lifecycle; preserving payload across open/close transitions should be implemented consistent with DS Dialog semantics and layering rules.",
+      "source": "auto",
+      "created_at": 1785707704671,
+      "updated_at": 1785707704671
+    },
+    {
+      "from_id": "c3nk8hzp",
+      "to_id": "0s83sww0",
+      "relation": "same_area",
+      "weight": 0.4,
+      "reason": "Migration guidance affects where the dialog transition logic should live (app vs design-system); useful when deciding whether to implement payload-retention in DS or frontend consumer code.",
+      "source": "auto",
+      "created_at": 1785707704671,
+      "updated_at": 1785707704671
+    }
+  ]
+}

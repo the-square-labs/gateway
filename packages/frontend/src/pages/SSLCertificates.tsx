@@ -1,12 +1,4 @@
-import {
-  ChevronLeft,
-  ChevronRight,
-  Cloud,
-  MoreVertical,
-  Plus,
-  RefreshCw,
-  Trash2,
-} from "lucide-react";
+import { Cloud, MoreVertical, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -15,7 +7,6 @@ import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
-import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { DNSChallengeVerification } from "@/components/ssl/DNSChallengeVerification";
 import {
   SSLCertificateCreateDialog,
@@ -23,6 +14,7 @@ import {
 } from "@/components/ssl/SSLCertificateCreateDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
 import {
   Dialog,
   DialogContent,
@@ -176,13 +168,13 @@ export function SSLCertificates() {
   const {
     certificates,
     isLoading,
+    isLoadingMore,
     filters,
-    page,
-    totalPages,
+    hasMore,
     total,
     fetchCertificates,
+    fetchNextPage,
     setFilters,
-    setPage,
     resetFilters,
     renewCert,
     setAutoRenew,
@@ -216,6 +208,8 @@ export function SSLCertificates() {
     setValue: setRenewingCert,
   } = useDeferredDialogState<RenewingCertificate>();
   const previewCleanupTimerRef = useRef<number | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     void showSystemCertificates;
@@ -225,6 +219,19 @@ export function SSLCertificates() {
   useRealtime("ssl.cert.changed", () => {
     fetchCertificates();
   });
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel || !hasMore || isLoadingMore) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) void fetchNextPage();
+      },
+      { root: scrollRef.current, threshold: 0.1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [fetchNextPage, hasMore, isLoadingMore]);
 
   useEffect(
     () => () => {
@@ -359,10 +366,11 @@ export function SSLCertificates() {
     }, 250);
   };
 
-  const certificateColumns: SimpleTableColumn<SSLCertificate>[] = [
+  const certificateColumns: DataTableColumn<SSLCertificate>[] = [
     {
-      id: "name",
+      key: "name",
       header: "Name",
+      width: "minmax(200px, 1.25fr)",
       render: (cert) => (
         <div className="flex min-w-0 items-center gap-2">
           <p className="truncate text-sm font-medium">{cert.name}</p>
@@ -375,8 +383,10 @@ export function SSLCertificates() {
       ),
     },
     {
-      id: "domains",
+      key: "domains",
       header: "Domains",
+      width: "minmax(200px, 1.25fr)",
+      truncate: true,
       render: (cert) => (
         <div className="min-w-0">
           <p className="truncate text-sm text-muted-foreground">
@@ -389,18 +399,21 @@ export function SSLCertificates() {
       ),
     },
     {
-      id: "type",
+      key: "type",
       header: "Type",
+      width: "110px",
       render: (cert) => <SSLTypeBadge type={cert.type} />,
     },
     {
-      id: "status",
+      key: "status",
       header: "Status",
+      width: "120px",
       render: (cert) => <SSLStatusBadge status={cert.status} />,
     },
     {
-      id: "expires",
+      key: "expires",
       header: "Expires",
+      width: "150px",
       render: (cert) => {
         const expDays = cert.notAfter ? daysUntil(cert.notAfter) : null;
         return cert.notAfter ? (
@@ -426,8 +439,9 @@ export function SSLCertificates() {
       },
     },
     {
-      id: "autoRenew",
+      key: "autoRenew",
       header: "Auto-Renew",
+      width: "150px",
       render: (cert) => {
         if (cert.type !== "acme") return <Badge variant="secondary">No</Badge>;
         if (cert.autoRenew && cert.autoRenewProvider === "cloudflare") {
@@ -447,10 +461,10 @@ export function SSLCertificates() {
       },
     },
     {
-      id: "actions",
+      key: "actions",
       header: "",
       align: "right",
-      className: "w-10",
+      width: "48px",
       render: (cert) => {
         const hasPendingDNSVerification =
           (cert.acmePendingOperation === "issue" || cert.acmePendingOperation === "renewal") &&
@@ -619,45 +633,26 @@ export function SSLCertificates() {
         />
 
         {(certificates || []).length > 0 || isLoading ? (
-          <div className="border border-border bg-card">
-            <SimpleTable
+          <div className="h-[min(60dvh,42rem)] min-h-72">
+            <DataTable
               columns={certificateColumns}
-              rows={certificates || []}
-              getRowKey={(cert) => cert.id}
-              loading={isLoading}
-              loadingMessage="Loading certificates..."
-              emptyMessage="No SSL certificates."
+              data={certificates || []}
+              keyFn={(cert) => cert.id}
               onRowClick={openCertificatePreview}
+              scrollRef={scrollRef}
+              horizontalScroll
+              minWidth="1040px"
+              footer={
+                hasMore ? (
+                  <div
+                    ref={sentinelRef}
+                    className="flex items-center justify-center py-3 text-xs text-muted-foreground"
+                  >
+                    {isLoadingMore ? "Loading more certificates..." : "Scroll to load more"}
+                  </div>
+                ) : undefined
+              }
             />
-
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="flex items-center justify-between border-t border-border px-4 py-3">
-                <p className="text-sm text-muted-foreground">
-                  Page {page} of {totalPages}
-                </p>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page <= 1}
-                    onClick={() => setPage(page - 1)}
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                    Previous
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page >= totalPages}
-                    onClick={() => setPage(page + 1)}
-                  >
-                    Next
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            )}
           </div>
         ) : (
           <EmptyState

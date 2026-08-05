@@ -2,7 +2,7 @@ import { and, count, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { permissionGroups, users } from '@/db/schema/index.js';
+import { permissionGroups, userPasskeys, users, userTotpFactors } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { hasScope, isScopeSubset } from '@/lib/permissions.js';
 import { canonicalizeScopes } from '@/lib/scopes.js';
@@ -13,6 +13,7 @@ import {
   computeEffectiveUserAccess,
   fetchGroupScopeMap,
 } from '@/modules/auth/live-session-user.js';
+import { mfaRequiredChannel } from '@/modules/auth/mfa-events.js';
 import type { CreateGroupInput, UpdateGroupInput } from './group.schemas.js';
 
 const logger = createChildLogger('GroupService');
@@ -33,15 +34,11 @@ export class GroupService {
 
   private eventBus?: import('@/services/event-bus.service.js').EventBusService;
   private sandboxService?: AISandboxService;
-  private sessionService?: import('@/services/session.service.js').SessionService;
   setEventBus(bus: import('@/services/event-bus.service.js').EventBusService) {
     this.eventBus = bus;
   }
   setSandboxService(service: AISandboxService) {
     this.sandboxService = service;
-  }
-  setSessionService(service: import('@/services/session.service.js').SessionService) {
-    this.sessionService = service;
   }
   private emitGroup(id: string, action: 'created' | 'updated' | 'deleted') {
     this.eventBus?.publish('group.changed', { id, action });
@@ -88,6 +85,41 @@ export class GroupService {
         logger.warn('Failed to revoke sandbox jobs after group permission cascade', { userId: u.id, groupId, error });
       });
     }
+  }
+
+  /** Notify only local accounts that still need to enroll an MFA factor. */
+  private async notifyMfaPolicyChanged(
+    groupId: string,
+    groupName: string,
+    requireGateway2fa: boolean
+  ): Promise<{ memberCount: number }> {
+    const members = await this.db
+      .select({ id: users.id, authMethod: users.authMethod })
+      .from(users)
+      .where(and(eq(users.groupId, groupId), isNull(users.deletedAt)));
+    const localUserIds = members.filter((member) => member.authMethod !== 'oidc').map((member) => member.id);
+    if (localUserIds.length === 0) return { memberCount: members.length };
+
+    const [totpFactors, passkeys] = await Promise.all([
+      this.db
+        .select({ userId: userTotpFactors.userId })
+        .from(userTotpFactors)
+        .where(inArray(userTotpFactors.userId, localUserIds)),
+      this.db
+        .select({ userId: userPasskeys.userId })
+        .from(userPasskeys)
+        .where(inArray(userPasskeys.userId, localUserIds)),
+    ]);
+    const configuredUserIds = new Set([...totpFactors, ...passkeys].map((factor) => factor.userId));
+    const affectedUserIds = localUserIds.filter((userId) => !configuredUserIds.has(userId));
+    for (const userId of affectedUserIds) {
+      this.eventBus?.publish(mfaRequiredChannel(userId), {
+        groupId,
+        groupName,
+        requireGateway2fa,
+      });
+    }
+    return { memberCount: members.length };
   }
 
   async getEffectiveScopesForGroupId(groupId: string): Promise<string[]> {
@@ -273,6 +305,14 @@ export class GroupService {
 
     logger.info('Created permission group', { groupId: group.id, name: group.name, parentId: group.parentId });
     this.emitGroup(group.id, 'created');
+    if (group.requireGateway2fa) {
+      this.eventBus?.publish('group.mfa.required', {
+        groupId: group.id,
+        groupName: group.name,
+        requireGateway2fa: true,
+        memberCount: 0,
+      });
+    }
 
     return {
       ...group,
@@ -368,8 +408,13 @@ export class GroupService {
     logger.info('Updated permission group', { groupId: id, name: updated.name });
     this.emitGroup(id, 'updated');
     if (input.requireGateway2fa !== undefined && input.requireGateway2fa !== group.requireGateway2fa) {
-      const members = await this.db.select({ id: users.id }).from(users).where(eq(users.groupId, id));
-      await Promise.all(members.map((member) => this.sessionService?.destroyAllUserSessions(member.id)));
+      const { memberCount } = await this.notifyMfaPolicyChanged(updated.id, updated.name, input.requireGateway2fa);
+      this.eventBus?.publish('group.mfa.required', {
+        groupId: updated.id,
+        groupName: updated.name,
+        requireGateway2fa: input.requireGateway2fa,
+        memberCount,
+      });
     }
     if (input.scopes !== undefined || input.parentId !== undefined) {
       await this.cascadePermissions(id);

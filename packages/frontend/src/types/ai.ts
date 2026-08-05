@@ -435,6 +435,12 @@ export type WSServerMessage =
       runId: string;
       challenge: AICredentialChallenge;
     }
+  | {
+      type: "client.action";
+      conversationId: string;
+      runId: string;
+      action: Record<string, unknown>;
+    }
   | { type: "run.status_changed"; conversationId: string; run: AIRun | null }
   | { type: "stores.invalidated"; conversationId: string; stores: string[] }
   | {

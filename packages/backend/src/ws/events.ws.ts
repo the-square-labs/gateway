@@ -4,6 +4,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { hasScope, hasScopeBase } from '@/lib/permissions.js';
 import { resolveLiveSessionUser, resolveLiveUser } from '@/modules/auth/live-session-user.js';
+import { MFA_REQUIRED_CHANNEL_PREFIX } from '@/modules/auth/mfa-events.js';
 import {
   DockerAccessResourceService,
   dockerScopedNodeIds,
@@ -67,8 +68,10 @@ function send(ws: WSContext, msg: ServerMsg) {
  */
 function requiredScopeFor(channel: string): string | null {
   if (channel.startsWith('permissions.changed.')) return null;
+  if (channel.startsWith(MFA_REQUIRED_CHANNEL_PREFIX)) return null;
   if (channel === 'domain.changed') return 'domains:view';
   if (channel === 'logging.logs.ingested') return 'logs:read';
+  if (channel === 'logging.health.changed') return 'housekeeping:view';
   if (channel === 'logging.environment.changed') return 'logs:environments:view';
   if (channel === 'logging.schema.changed') return 'logs:schemas:view';
   if (channel === 'system.update.changed') return 'admin:update';
@@ -101,6 +104,7 @@ function requiredScopeFor(channel: string): string | null {
   if (channel === 'node.slug.changed') return 'nodes:details';
   if (channel === 'node.changed' || channel === 'node.folder.changed') return 'nodes:details';
   if (channel === 'user.changed') return 'admin:users';
+  if (channel === 'audit.changed') return 'admin:audit';
   if (channel === 'group.changed') return 'admin:groups';
   if (channel === 'notification.alert-rule.changed') return 'notifications:view';
   if (channel === 'notification.webhook.changed') return 'notifications:view';
@@ -113,6 +117,7 @@ function requiredScopeFor(channel: string): string | null {
 
 function hasChannelAccess(scopes: string[], channel: string): boolean {
   if (channel.startsWith('permissions.changed.')) return true;
+  if (channel.startsWith(MFA_REQUIRED_CHANNEL_PREFIX)) return true;
   if (channel === 'system.update.changed') return true;
   if (channel === 'integration.connector.changed') {
     return (
@@ -608,6 +613,13 @@ function processMessage(ws: WSContext, state: ConnState, msg: ClientMsg) {
       // permissions.changed.<userId>: only the user's own is allowed
       if (ch.startsWith('permissions.changed.')) {
         const targetUserId = ch.slice('permissions.changed.'.length);
+        if (targetUserId !== state.user?.id) {
+          rejected.push(ch);
+          continue;
+        }
+      }
+      if (ch.startsWith(MFA_REQUIRED_CHANNEL_PREFIX)) {
+        const targetUserId = ch.slice(MFA_REQUIRED_CHANNEL_PREFIX.length);
         if (targetUserId !== state.user?.id) {
           rejected.push(ch);
           continue;

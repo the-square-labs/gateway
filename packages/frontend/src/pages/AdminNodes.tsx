@@ -29,7 +29,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 import { nodeIconClassNames } from "@/lib/node-appearance";
 import { nodeRoute } from "@/lib/resource-routes";
@@ -86,6 +86,14 @@ const NODE_TYPES = [
   },
 ];
 
+const DAEMON_INSTALLER_URL = "https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts";
+const DAEMON_INSTALLER_BY_TYPE: Partial<Record<(typeof NODE_TYPES)[number]["value"], string>> = {
+  nginx: "setup-node.sh",
+  docker: "setup-docker-node.sh",
+  databases: "setup-database-node.sh",
+  monitoring: "setup-monitoring-node.sh",
+};
+
 const STATUS_BADGE: Record<
   string,
   "default" | "secondary" | "destructive" | "success" | "warning"
@@ -130,6 +138,8 @@ export function AdminNodes() {
     targets?: EnrollmentTargets;
   } | null>(null);
   const [enrolling, setEnrolling] = useState(false);
+  const [enrollmentTargetId, setEnrollmentTargetId] = useState("public");
+  const [enrollmentTransport, setEnrollmentTransport] = useState<"curl" | "wget">("curl");
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
   const enrollResultResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const daemonUpdates = useDaemonUpdatesStore((s) => s.statuses);
@@ -210,6 +220,8 @@ export function AdminNodes() {
         gatewayCertSha256: result.gatewayCertSha256,
         targets: result.gatewayEnrollmentTargets,
       });
+      setEnrollmentTargetId("public");
+      setEnrollmentTransport("curl");
       setEnrollDialogOpen(false);
       setEnrollResultDialogOpen(true);
       setEnrollType("nginx");
@@ -246,8 +258,6 @@ export function AdminNodes() {
     }, 220);
   };
 
-  const scriptUrl = "https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-daemon.sh";
-
   const fallbackGatewayAddr = `${window.location.hostname}:9443`;
   const enrollmentTargets = enrollResult
     ? [
@@ -270,11 +280,19 @@ export function AdminNodes() {
 
   const commandForTarget = (gateway: string, transport: "curl" | "wget") => {
     if (!enrollResult) return "";
+    const scriptName = DAEMON_INSTALLER_BY_TYPE[enrollResult.type as (typeof NODE_TYPES)[number]["value"]];
+    if (!scriptName) return "";
+    const scriptUrl = `${DAEMON_INSTALLER_URL}/${scriptName}`;
     const fetcher = transport === "curl" ? `curl -sSL ${scriptUrl}` : `wget -qO- ${scriptUrl}`;
-    return `${fetcher} | sudo bash -s -- \\\n  --type ${enrollResult.type} \\\n  --gateway ${gateway} \\\n  --token ${enrollResult.token} \\\n  --gateway-cert-sha256 ${enrollResult.gatewayCertSha256}`;
+    return `${fetcher} | sudo bash -s -- \\
+  --gateway ${gateway} \\
+  --token ${enrollResult.token} \\
+  --gateway-cert-sha256 ${enrollResult.gatewayCertSha256}`;
   };
 
-  const copyCommandValue = (command: string) => command.replace(/\\\n\s*/g, "");
+  const copyCommandValue = (command: string) => command.replace(/\s*\\\n\s*/g, " ");
+  const selectedEnrollmentTarget =
+    enrollmentTargets.find((target) => target.id === enrollmentTargetId) ?? enrollmentTargets[0];
   const canCreateNode = enrollDisplayName.trim().length > 0;
   const warningClassName =
     "border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground";
@@ -569,47 +587,41 @@ export function AdminNodes() {
                     private network.
                   </p>
                 )}
-                <Tabs defaultValue={enrollmentTargets[0]?.id ?? "public"}>
+                <div className="flex flex-wrap items-center gap-2">
                   {enrollmentTargets.length > 1 && (
-                    <TabsList className="mb-2">
+                    <Tabs
+                      value={selectedEnrollmentTarget?.id ?? "public"}
+                      onValueChange={setEnrollmentTargetId}
+                    >
+                      <TabsList>
                       {enrollmentTargets.map((target) => (
                         <TabsTrigger key={target.id} value={target.id}>
                           {target.label}
                         </TabsTrigger>
                       ))}
-                    </TabsList>
+                      </TabsList>
+                    </Tabs>
                   )}
-                  {enrollmentTargets.map((target) => {
-                    const curlCommand = commandForTarget(target.gateway, "curl");
-                    const wgetCommand = commandForTarget(target.gateway, "wget");
-                    return (
-                      <TabsContent key={target.id} value={target.id} className="mt-0">
-                        <Tabs defaultValue="curl">
-                          <TabsList>
-                            <TabsTrigger value="curl">curl</TabsTrigger>
-                            <TabsTrigger value="wget">wget</TabsTrigger>
-                          </TabsList>
-                          <TabsContent value="curl" className="mt-2">
-                            <CopyCodeBlock
-                              label="curl command"
-                              value={curlCommand}
-                              copyValue={copyCommandValue(curlCommand)}
-                              className="[&>p]:hidden"
-                            />
-                          </TabsContent>
-                          <TabsContent value="wget" className="mt-2">
-                            <CopyCodeBlock
-                              label="wget command"
-                              value={wgetCommand}
-                              copyValue={copyCommandValue(wgetCommand)}
-                              className="[&>p]:hidden"
-                            />
-                          </TabsContent>
-                        </Tabs>
-                      </TabsContent>
-                    );
-                  })}
-                </Tabs>
+                  <Tabs
+                    value={enrollmentTransport}
+                    onValueChange={(value) => setEnrollmentTransport(value as "curl" | "wget")}
+                  >
+                    <TabsList>
+                      <TabsTrigger value="curl">curl</TabsTrigger>
+                      <TabsTrigger value="wget">wget</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                </div>
+                {selectedEnrollmentTarget && (
+                  <CopyCodeBlock
+                    label={`${enrollmentTransport} command`}
+                    value={commandForTarget(selectedEnrollmentTarget.gateway, enrollmentTransport)}
+                    copyValue={copyCommandValue(
+                      commandForTarget(selectedEnrollmentTarget.gateway, enrollmentTransport)
+                    )}
+                    className="[&>p]:hidden"
+                  />
+                )}
               </div>
 
               <div className="space-y-1.5">
