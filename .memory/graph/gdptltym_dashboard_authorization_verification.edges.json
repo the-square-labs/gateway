@@ -1,0 +1,35 @@
+{
+  "file_name": "gdptltym_dashboard_authorization_verification",
+  "edges": [
+    {
+      "from_id": "gdptltym",
+      "to_id": "myhj1f8i",
+      "relation": "same_workflow",
+      "weight": 0.92,
+      "reason": "Both define the shared dashboard bootstrap, pin state, realtime invalidation, and attention-notice behavior.",
+      "source": "auto",
+      "created_at": 1785966902898,
+      "updated_at": 1785966902898
+    },
+    {
+      "from_id": "gdptltym",
+      "to_id": "2tjfa2g5",
+      "relation": "same_area",
+      "weight": 0.72,
+      "reason": "Both specify server-resolved identity and scoped handling for Docker containers and deployments.",
+      "source": "auto",
+      "created_at": 1785966902898,
+      "updated_at": 1785966902898
+    },
+    {
+      "from_id": "gdptltym",
+      "to_id": "gahvf5k5",
+      "relation": "same_area",
+      "weight": 0.68,
+      "reason": "Both cover authenticated dashboard state, session-sensitive invalidation, and realtime authorization boundaries.",
+      "source": "auto",
+      "created_at": 1785966902898,
+      "updated_at": 1785966902898
+    }
+  ]
+}

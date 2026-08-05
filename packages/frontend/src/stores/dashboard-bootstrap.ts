@@ -7,6 +7,7 @@ interface DashboardBootstrapState {
   key: string | null;
   request: DashboardBootstrapRequest | null;
   loading: boolean;
+  error: boolean;
   load: (key: string, request: DashboardBootstrapRequest) => Promise<DashboardBootstrap | null>;
   invalidate: () => void;
   clear: () => void;
@@ -34,12 +35,13 @@ export const useDashboardBootstrapStore = create<DashboardBootstrapState>()((set
   key: null,
   request: null,
   loading: false,
+  error: false,
   load: async (key, request) => {
     if (inFlight?.key === key) return inFlight.promise;
     if (get().key === key && get().snapshot) return get().snapshot;
     // A new request supersedes any deferred refresh for the same old snapshot.
     pendingRefresh = null;
-    set({ loading: !get().snapshot, request });
+    set({ loading: !get().snapshot, request, error: false });
     const token = ++requestToken;
     const promise = api
       .getDashboardBootstrap(request)
@@ -48,7 +50,7 @@ export const useDashboardBootstrapStore = create<DashboardBootstrapState>()((set
           retryAttempts = 0;
           if (retryTimer) clearTimeout(retryTimer);
           retryTimer = null;
-          set({ snapshot, key, loading: false });
+          set({ snapshot, key, loading: false, error: false });
         }
         return snapshot;
       })
@@ -63,6 +65,8 @@ export const useDashboardBootstrapStore = create<DashboardBootstrapState>()((set
               set({ key: null });
               void get().load(key, request);
             }, delay);
+          } else if (!get().snapshot) {
+            set({ error: true });
           }
         }
         return get().snapshot;
@@ -101,6 +105,6 @@ export const useDashboardBootstrapStore = create<DashboardBootstrapState>()((set
     retryAttempts = 0;
     if (retryTimer) clearTimeout(retryTimer);
     retryTimer = null;
-    set({ snapshot: null, key: null, request: null, loading: false });
+    set({ snapshot: null, key: null, request: null, loading: false, error: false });
   },
 }));

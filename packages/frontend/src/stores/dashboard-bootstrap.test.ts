@@ -78,4 +78,22 @@ describe("dashboard bootstrap store", () => {
     await vi.waitFor(() => expect(api.getDashboardBootstrap).toHaveBeenCalledTimes(2));
     expect(useDashboardBootstrapStore.getState().snapshot).toBe(SNAPSHOT);
   });
+
+  it("exposes a retryable error when the initial bootstrap retry budget is exhausted", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(api.getDashboardBootstrap).mockRejectedValue(new Error("temporarily unavailable"));
+
+      await useDashboardBootstrapStore.getState().load("user:scope:pins", {});
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(4_000);
+
+      expect(api.getDashboardBootstrap).toHaveBeenCalledTimes(4);
+      expect(useDashboardBootstrapStore.getState().error).toBe(true);
+      expect(useDashboardBootstrapStore.getState().loading).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

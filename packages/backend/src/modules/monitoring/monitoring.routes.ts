@@ -293,14 +293,11 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
       async (nodeId): Promise<DashboardDockerResource[]> => {
         const forNode = requestedDockerResources.filter((resource) => resource.nodeId === nodeId);
         if (!hasDockerResourceScope(scopes, 'docker:containers:view', nodeId, '')) {
-          const scoped = forNode.filter((resource) =>
-            hasDockerResourceScope(scopes, 'docker:containers:view', nodeId, resource.scopeResourceId ?? resource.id)
-          );
-          if (scoped.length === 0) return [];
-          return Promise.all(
-            scoped.map(async (resource) => {
+          const scoped = await Promise.all(
+            forNode.map(async (resource): Promise<DashboardDockerResource | null> => {
               if (resource.kind === 'deployment') {
                 const deployment = await container.resolve(DockerDeploymentService).get(nodeId, resource.id);
+                if (!hasDockerResourceScope(scopes, 'docker:containers:view', nodeId, deployment.id)) return null;
                 return {
                   id: deployment.id,
                   nodeId,
@@ -313,16 +310,24 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
               const containerData = await container
                 .resolve(DockerManagementService)
                 .inspectContainer(nodeId, resource.id);
+              const scopeResourceId = String(containerData?.scopeResourceId ?? '');
+              if (
+                !scopeResourceId ||
+                !hasDockerResourceScope(scopes, 'docker:containers:view', nodeId, scopeResourceId)
+              ) {
+                return null;
+              }
               return {
                 id: resource.id,
                 nodeId,
                 name: String(containerData?.Name ?? containerData?.name ?? resource.id).replace(/^\//, ''),
                 state: containerData?._transition ?? containerData?.State?.Status ?? containerData?.state,
                 kind: 'container' as const,
-                scopeResourceId: resource.scopeResourceId,
+                scopeResourceId,
               };
             })
           );
+          return scoped.filter((resource): resource is DashboardDockerResource => resource !== null);
         }
 
         const [containers, deployments] = await Promise.all([

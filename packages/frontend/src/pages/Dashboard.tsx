@@ -1,8 +1,9 @@
-import { AlertTriangle, ArrowRight, Info } from "lucide-react";
+import { AlertTriangle, ArrowRight, Info, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageTransition } from "@/components/common/PageTransition";
+import { Button } from "@/components/ui/button";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
@@ -78,6 +79,7 @@ export function Dashboard() {
   const pinnedContainerMeta = usePinnedContainersStore((s) => s.containerMeta);
   const dashboardBootstrap = useDashboardBootstrapStore((s) => s.snapshot);
   const dashboardBootstrapLoading = useDashboardBootstrapStore((s) => s.loading);
+  const dashboardBootstrapError = useDashboardBootstrapStore((s) => s.error);
   const loadDashboardBootstrap = useDashboardBootstrapStore((s) => s.load);
   const invalidateDashboardBootstrap = useDashboardBootstrapStore((s) => s.invalidate);
   const pkiEnabled = useSystemConfigStore((s) => s.config.features.pkiEnabled);
@@ -379,6 +381,30 @@ export function Dashboard() {
     (scope: string) => (forcedExpiringItems ? true : hasScopedAccess(scope)),
     [forcedExpiringItems, hasScopedAccess]
   );
+
+  if (!dashboardBootstrap && dashboardBootstrapError) {
+    return (
+      <PageTransition>
+        <div className="flex h-full min-h-[24rem] items-center justify-center p-6">
+          <div className="max-w-sm space-y-4 text-center">
+            <div className="flex h-12 w-12 items-center justify-center border border-destructive/30 bg-destructive/5 mx-auto">
+              <AlertTriangle className="h-6 w-6 text-destructive" />
+            </div>
+            <div className="space-y-1">
+              <h1 className="text-lg font-semibold">Dashboard is temporarily unavailable</h1>
+              <p className="text-sm text-muted-foreground">
+                We could not load the latest dashboard data. Please try again.
+              </p>
+            </div>
+            <Button onClick={invalidateDashboardBootstrap}>
+              <RotateCw className="mr-2 h-4 w-4" />
+              Retry
+            </Button>
+          </div>
+        </div>
+      </PageTransition>
+    );
+  }
 
   if (!dashboardBootstrap && (dashboardBootstrapLoading || !!user?.id)) {
     return <LoadingSpinner />;

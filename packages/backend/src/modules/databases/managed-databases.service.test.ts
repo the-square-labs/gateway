@@ -27,11 +27,12 @@ const managedRow = {
 function reconciliationService(row: Record<string, unknown>, result: { success: boolean; detail?: string }) {
   const returning = vi.fn().mockResolvedValue([{ ...row, status: 'ready', pendingOperation: null, lastError: null }]);
   const set = vi.fn(() => ({ where: vi.fn(() => ({ returning })) }));
-  const db = {
+  const db: Record<string, any> = {
     select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([row]) })) })),
     update: vi.fn(() => ({ set })),
     delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
   };
+  db.transaction = vi.fn(async (callback: (tx: typeof db) => Promise<unknown>) => callback(db));
   const dispatch = { sendDockerDatabaseCommand: vi.fn().mockResolvedValue(result) };
   const audit = { log: vi.fn().mockResolvedValue(true) };
   const crypto = {
@@ -446,6 +447,7 @@ describe('managed database catalog and input guardrails', () => {
 
     await service.reconcilePendingOperations();
 
+    expect(db.transaction).toHaveBeenCalledTimes(1);
     expect(db.delete).toHaveBeenCalledTimes(1);
     expect(db.update).not.toHaveBeenCalled();
   });
