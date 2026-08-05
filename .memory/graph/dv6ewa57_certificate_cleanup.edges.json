@@ -3,13 +3,33 @@
   "edges": [
     {
       "from_id": "dv6ewa57",
+      "to_id": "v80uezny",
+      "relation": "same_area",
+      "weight": 0.9,
+      "reason": "Both define system-PKI certificate lifecycle visibility, ownership, and mutation boundaries.",
+      "source": "auto",
+      "created_at": 1785965684434,
+      "updated_at": 1785965684434
+    },
+    {
+      "from_id": "dv6ewa57",
       "to_id": "mu4tydcq",
       "relation": "same_area",
       "weight": 0.78,
-      "reason": "Both define ownership and lifecycle boundaries for PKI leaf certificates, including App-scoped ownership versus Gateway-owned certificate authorities.",
+      "reason": "App ownership rules explicitly include PKI leaf certificates and constrain their resource ownership model.",
       "source": "auto",
-      "created_at": 1785947706679,
-      "updated_at": 1785947706679
+      "created_at": 1785965684434,
+      "updated_at": 1785965684434
+    },
+    {
+      "from_id": "dv6ewa57",
+      "to_id": "wlmqdf8c",
+      "relation": "same_area",
+      "weight": 0.62,
+      "reason": "Defines inventory and visibility behavior for PKI and SSL certificates managed through lifecycle-aware views.",
+      "source": "auto",
+      "created_at": 1785965684434,
+      "updated_at": 1785965684434
     }
   ]
 }

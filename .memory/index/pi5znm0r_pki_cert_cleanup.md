@@ -11,8 +11,14 @@
   ],
   "layer": "lite",
   "ref": "dv6ewa57",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1785947696656,
-  "updated_at": 1785947696656
+  "updated_at": 1785965680509
 }
 ---
-[→ dv6ewa57] System PKI leaves use explicit certificate-level lifecycle fields; cleanup is key-only after retention.
+[→ dv6ewa57] # System PKI Lifecycle and Ownership
+
+- Every newly issued system leaf must record explicit owner type/id and lifecycle state.
+- Insert new leaves as owned `...
