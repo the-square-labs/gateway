@@ -27,6 +27,19 @@ describe("dashboard bootstrap store", () => {
     expect(fromDashboard).toBe(SNAPSHOT);
   });
 
+  it("does not refetch when a component reruns its effect with the same snapshot key", async () => {
+    vi.mocked(api.getDashboardBootstrap).mockResolvedValue(SNAPSHOT);
+
+    await useDashboardBootstrapStore.getState().load("user:scope:pins", {
+      pins: { dashboard: { nodeIds: [] }, sidebar: { nodeIds: [] } },
+    });
+    await useDashboardBootstrapStore.getState().load("user:scope:pins", {
+      pins: { dashboard: { nodeIds: [] }, sidebar: { nodeIds: [] } },
+    });
+
+    expect(api.getDashboardBootstrap).toHaveBeenCalledTimes(1);
+  });
+
   it("reloads after a realtime invalidation without clearing the visible snapshot", async () => {
     vi.mocked(api.getDashboardBootstrap).mockResolvedValue(SNAPSHOT);
     await useDashboardBootstrapStore.getState().load("user:scope:pins", {});

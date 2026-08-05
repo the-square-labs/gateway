@@ -814,7 +814,8 @@ export async function initializeContainer(): Promise<void> {
     aiSettingsService,
     generalSettingsService,
     inferenceModelService,
-    inferenceRuntimeService
+    inferenceRuntimeService,
+    inferenceBudgetPolicyService
   );
   container.registerInstance(AIProviderRuntimeService, aiProviderRuntimeService);
   const aiSandboxArtifactService = new AISandboxArtifactService(env);

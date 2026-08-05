@@ -16,7 +16,10 @@ import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { ThemeProvider } from "@/components/layout/ThemeProvider";
 import { Button } from "@/components/ui/button";
 import { resolveMigrationTarget } from "@/lib/docker-migration-navigation";
-import { INFERENCE_USAGE_CHANGED_CHANNEL } from "@/lib/inference-self-usage";
+import {
+  INFERENCE_USAGE_CHANGED_CHANNEL,
+  type InferenceUsageChangedEvent,
+} from "@/lib/inference-self-usage";
 import {
   databaseRoute,
   dockerContainerRoute,
@@ -68,6 +71,7 @@ import { TemplatesPage } from "@/pages/TemplatesPage";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { eventStream } from "@/services/event-stream";
+import { useAIStore } from "@/stores/ai";
 import { APP_STATUS_STORAGE_KEY, useAppStatusStore } from "@/stores/app-status";
 import { useAuthStore } from "@/stores/auth";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
@@ -690,10 +694,11 @@ function RealtimeBridge() {
   const canViewCAs = useAuthStore(
     (s) => s.hasScope("pki:ca:view:root") || s.hasScope("pki:ca:view:intermediate")
   );
-  const canViewInferenceUsage = useAuthStore((s) => s.hasScope("inference:usage:view:self"));
+  const canUseInference = useAuthStore((s) => s.hasScope("inference:use"));
   const canViewLogging = useAuthStore((s) => s.hasScope("housekeeping:view"));
   const canViewAudit = useAuthStore((s) => s.hasScopedAccess("admin:audit"));
   const invalidateDashboardBootstrap = useDashboardBootstrapStore((s) => s.invalidate);
+  const refreshAIProviderStatus = useAIStore((s) => s.refreshProviderStatus);
   const setGatewayUpdatingActive = useAppStatusStore((s) => s.setGatewayUpdatingActive);
   const clearGatewayUpdating = useAppStatusStore((s) => s.clearGatewayUpdating);
   const hydrateAIApprovalMode = useUIStore((s) => s.hydrateAIApprovalMode);
@@ -805,9 +810,15 @@ function RealtimeBridge() {
   }, [canViewCAs, invalidateDashboardBootstrap, user]);
 
   useEffect(() => {
-    if (!user || !canViewInferenceUsage) return;
-    return eventStream.subscribe(INFERENCE_USAGE_CHANGED_CHANNEL, invalidateDashboardBootstrap);
-  }, [canViewInferenceUsage, invalidateDashboardBootstrap, user]);
+    if (!user || !canUseInference) return;
+    return eventStream.subscribe(INFERENCE_USAGE_CHANGED_CHANNEL, (payload) => {
+      const event = payload as InferenceUsageChangedEvent;
+      // Settlements already refresh quota consumers. A policy change also changes
+      // whether AI Assistant is available, so update its session-wide status now.
+      if (event.reason === "limits") void refreshAIProviderStatus().catch(() => {});
+      invalidateDashboardBootstrap();
+    });
+  }, [canUseInference, invalidateDashboardBootstrap, refreshAIProviderStatus, user]);
 
   useEffect(() => {
     if (!user || !canViewLogging) return;

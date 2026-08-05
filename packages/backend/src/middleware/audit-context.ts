@@ -16,6 +16,9 @@ const FALLBACK_AUDIT_SKIP_ROUTES: Array<{ method: string; pattern: RegExp }> = [
   { method: 'POST', pattern: /^\/api\/logging\/environments\/[^/]+\/search$/ },
   { method: 'POST', pattern: /^\/api\/mcp\/?$/ },
   { method: 'POST', pattern: /^\/api\/ai\/context-estimate$/ },
+  // Dashboard bootstrap is a read-only aggregate request. Auditing it emits
+  // audit.changed, which is itself a bootstrap invalidation trigger.
+  { method: 'POST', pattern: /^\/api\/monitoring\/dashboard\/bootstrap$/ },
   { method: 'POST', pattern: /^\/api\/system\/check-update$/ },
   { method: 'POST', pattern: /^\/api\/system\/daemon-updates\/check$/ },
   { method: 'POST', pattern: /^\/api\/system\/license\/check$/ },

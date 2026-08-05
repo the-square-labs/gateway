@@ -890,6 +890,17 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         action: () => useUIStore.getState().setAIPanelOpen(true),
       });
     }
+    // Temporary visual QA entry for the guided Assistant setup warning.
+    if (hasScope("settings:gateway:edit")) {
+      actions.push({
+        id: "action:preview-assistant-inference-access-notice",
+        label: "Preview Assistant Inference access notice",
+        detail: "Temporary UI check",
+        keywords: ["temporary", "onboarding", "inference", "assistant"],
+        icon: Bot,
+        action: () => navigate("/dashboard?preview=assistant-inference-access"),
+      });
+    }
     return actions;
   }, [aiEnabled, aiScopeOk, hasScope, navigate, pkiEnabled, toggleSidebar]);
 

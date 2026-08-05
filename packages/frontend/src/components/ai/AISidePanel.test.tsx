@@ -7,6 +7,8 @@ import { INFERENCE_SELF_USAGE_UPDATED_EVENT } from "@/lib/inference-self-usage";
 import { api } from "@/services/api";
 import { useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
+import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
+import { usePinnedNodesStore } from "@/stores/pinned-nodes";
 import { useUIStore } from "@/stores/ui";
 import { renderWithRouter } from "@/test/render";
 import type { AIMessage } from "@/types/ai";
@@ -62,6 +64,8 @@ describe("AISidePanel autoscroll", () => {
       });
       useUIStore.setState({ aiPanelOpen: false, aiLiteMode: false, sidebarOpen: true });
       useAuthStore.setState({ user: null, isAuthenticated: false, isLoading: false });
+      useDashboardBootstrapStore.getState().clear();
+      usePinnedNodesStore.setState({ dashboardNodeIds: [], sidebarNodeIds: [] });
       useConfirmDialog.getState().close();
     });
     localStorage.removeItem("gateway-ai-panel-width");
@@ -883,6 +887,61 @@ describe("AISidePanel autoscroll", () => {
 
     await user.click(screen.getByRole("button", { name: /User One/i }));
     expect(await screen.findByText("Administration")).toBeInTheDocument();
+  });
+
+  it("shows Dashboard and Sidebar-pinned resources in lite mode", () => {
+    act(() => {
+      useAuthStore.setState({
+        user: {
+          id: "user-1",
+          email: "user@example.com",
+          name: "User One",
+          groupName: "admin",
+          scopes: ["feat:ai:use", "nodes:details"],
+          isBlocked: false,
+        } as any,
+        isAuthenticated: true,
+        isLoading: false,
+      });
+      useUIStore.setState({ sidebarOpen: true });
+      usePinnedNodesStore.setState({ sidebarNodeIds: ["node-1"] });
+      useDashboardBootstrapStore.setState({
+        snapshot: {
+          attention: { severity: "warning", notices: [] },
+          pinned: {
+            dashboard: { nodes: [], proxies: [], databases: [], dockerResources: [] },
+            sidebar: {
+              nodes: [
+                {
+                  id: "node-1",
+                  slug: "edge-1",
+                  hostname: "edge-1",
+                  displayName: "Edge node",
+                  status: "online",
+                },
+              ],
+              proxies: [],
+              databases: [],
+              dockerResources: [],
+            },
+          },
+        } as any,
+      });
+    });
+
+    renderWithRouter(
+      <TooltipProvider>
+        <AILiteSidebar />
+      </TooltipProvider>,
+      { route: "/" }
+    );
+
+    expect(screen.getByRole("link", { name: /dashboard/i })).toHaveAttribute("href", "/dashboard");
+    expect((screen.getByPlaceholderText("Search...") as HTMLInputElement).readOnly).toBe(true);
+    expect(screen.getByRole("link", { name: /edge node/i })).toHaveAttribute(
+      "href",
+      "/nodes/edge-1"
+    );
   });
 
   it("clears the active lite sidebar conversation when starting a new chat", async () => {

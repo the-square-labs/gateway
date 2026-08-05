@@ -864,7 +864,7 @@ AI conversations are stored on the backend. Tool discovery is conversation-scope
 - Tool-generated files are attached through send_artifact and should not be duplicated as manual download links.
 
 ## Lite Mode
-Lite mode is an AI-first desktop layout. The assistant becomes the main screen, the sidebar shows recent and pinned conversations, and Settings/Administration/top-level pages keep a back button to return to chat.
+Lite mode is an AI-first desktop layout. The assistant becomes the main screen, the sidebar shows a separated Dashboard link, Sidebar-pinned resources, and recent/pinned conversations. Dashboard pins are not duplicated there: use the Sidebar placement for frequent navigation. Settings/Administration/top-level pages keep a back button to return to chat.
 
 Do not assume the current page from chat text. Use get_current_context when the user refers to their visible page.`,
 

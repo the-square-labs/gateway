@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import OpenAI from 'openai';
 import { AppError } from '@/middleware/error-handler.js';
+import type { InferenceBudgetPolicyService } from '@/modules/inference/accounting/inference-budget-policy.js';
 import type { InferenceRuntimeService } from '@/modules/inference/inference-runtime.service.js';
 import type { InferenceModelService } from '@/modules/inference/models/inference-model.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
@@ -51,7 +52,8 @@ export class AIProviderRuntimeService {
     private readonly settings: AISettingsService,
     private readonly generalSettings: GeneralSettingsService,
     private readonly inferenceModels: InferenceModelService,
-    private readonly inferenceRuntime: InferenceRuntimeService
+    private readonly inferenceRuntime: InferenceRuntimeService,
+    private readonly inferencePolicies: InferenceBudgetPolicyService
   ) {}
 
   async adminModels(): Promise<AIInferenceModelOption[]> {
@@ -83,12 +85,17 @@ export class AIProviderRuntimeService {
         models: [],
       };
     }
-    const models = (await this.inferenceModels.listForUser(user)).data.map(toPublicModelOption);
+    const [modelsResult, limits] = await Promise.all([
+      this.inferenceModels.listForUser(user),
+      this.inferencePolicies.effective(user.id),
+    ]);
+    const models = modelsResult.data.map(toPublicModelOption);
     const defaultAvailable = models.some((model) => model.id === config.gatewayInferenceModel);
     return {
       enabled:
         config.enabled &&
         this.inferenceRuntime.isConfigured() &&
+        limits.enabled &&
         models.length > 0 &&
         (defaultAvailable || config.gatewayInferenceAllowUserModelSelection),
       providerType: config.providerType,

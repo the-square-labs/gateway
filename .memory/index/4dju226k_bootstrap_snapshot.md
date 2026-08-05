@@ -3,9 +3,10 @@
   "id": "4dju226k",
   "file_name": "4dju226k_bootstrap_snapshot",
   "tags": [
-    "assistant",
+    "audit",
+    "bootstrap",
     "dashboard",
-    "pins",
+    "rate-limit",
     "realtime"
   ],
   "layer": "lite",
@@ -14,7 +15,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1785949175721,
-  "updated_at": 1785949896540
+  "updated_at": 1785970761696
 }
 ---
-[→ myhj1f8i] Dashboard bootstrap, attention badge, pins, and Assistant pinning contract
+[→ myhj1f8i] Prevent dashboard bootstrap audit-event loops

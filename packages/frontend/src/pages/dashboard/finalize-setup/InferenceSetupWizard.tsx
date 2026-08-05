@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/select";
 import { InferenceProviderConnectDialog } from "@/pages/settings/inference/InferenceProviderConnectDialog";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
 import { useSystemConfigStore } from "@/stores/system-config";
 import type {
   InferenceLimitInput,
@@ -72,6 +73,7 @@ export function InferenceSetupWizard({
 }) {
   const systemConfig = useSystemConfigStore((state) => state.config);
   const setSystemConfig = useSystemConfigStore((state) => state.setConfig);
+  const currentUser = useAuthStore((state) => state.user);
   const inferenceEnabled = systemConfig.features.inferenceEnabled;
   const [catalog, setCatalog] = useState<InferenceProviderCatalogItem[]>([]);
   const [connections, setConnections] = useState<InferenceProviderConnection[]>([]);
@@ -136,8 +138,33 @@ export function InferenceSetupWizard({
   const ensureDefaultLimits = async () => {
     const policies = await api.listInferenceLimits();
     if (!policies.some((policy) => policy.policyType === "default")) {
-      await api.setInferenceDefaultLimits(ONBOARDING_DEFAULT_LIMITS);
+      return api.setInferenceDefaultLimits(ONBOARDING_DEFAULT_LIMITS);
     }
+    return policies;
+  };
+
+  const ensureCurrentUserEnabled = async () => {
+    if (!currentUser) return;
+    const policies = await ensureDefaultLimits();
+    const userPolicy = policies.find(
+      (policy) => policy.policyType === "user" && policy.userId === currentUser.id
+    );
+    const defaultPolicy = policies.find((policy) => policy.policyType === "default");
+    if (userPolicy?.enabled || (!userPolicy && defaultPolicy?.enabled)) return;
+
+    const base = userPolicy ?? defaultPolicy;
+    await api.setInferenceUserLimits(currentUser.id, {
+      enabled: true,
+      credits5hEnabled: base?.credits5hEnabled ?? ONBOARDING_DEFAULT_LIMITS.credits5hEnabled,
+      credits5h: Number(base?.credits5h ?? ONBOARDING_DEFAULT_LIMITS.credits5h),
+      credits7dEnabled: base?.credits7dEnabled ?? ONBOARDING_DEFAULT_LIMITS.credits7dEnabled,
+      credits7d: Number(base?.credits7d ?? ONBOARDING_DEFAULT_LIMITS.credits7d),
+      credits30dEnabled: base?.credits30dEnabled ?? ONBOARDING_DEFAULT_LIMITS.credits30dEnabled,
+      credits30d: Number(base?.credits30d ?? ONBOARDING_DEFAULT_LIMITS.credits30d),
+      apiMonthlyMicrodollars:
+        base?.apiMonthlyMicrodollars ?? ONBOARDING_DEFAULT_LIMITS.apiMonthlyMicrodollars,
+      billingTimezone: base?.billingTimezone ?? ONBOARDING_DEFAULT_LIMITS.billingTimezone,
+    });
   };
 
   const enable = async () => {
@@ -151,6 +178,7 @@ export function InferenceSetupWizard({
         },
       });
       await ensureDefaultLimits();
+      await ensureCurrentUserEnabled();
       setSystemConfig({
         ...systemConfig,
         features: { ...systemConfig.features, ...updated.generalSettings.features },
@@ -215,6 +243,7 @@ export function InferenceSetupWizard({
       });
       const nextModels = await api.listInferenceModels();
       setModels(nextModels);
+      await ensureCurrentUserEnabled();
       if (selectableModel(nextModels)) setCompleted(true);
     } catch (cause) {
       toast.error(
@@ -229,6 +258,7 @@ export function InferenceSetupWizard({
     setSaving(true);
     try {
       await ensureDefaultLimits();
+      await ensureCurrentUserEnabled();
       setCompleted(true);
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "Failed to configure inference limits");

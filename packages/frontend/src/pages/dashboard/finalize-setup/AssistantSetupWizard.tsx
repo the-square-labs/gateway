@@ -1,4 +1,4 @@
-import { ArrowRight, Bot, Cpu, ExternalLink, Loader2 } from "lucide-react";
+import { ArrowRight, Bot, Cpu, ExternalLink, Loader2, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { api } from "@/services/api";
+import { useAIStore } from "@/stores/ai";
 import { FinalizeSetupCompletion } from "./FinalizeSetupCompletion";
 import { FinalizeSetupWizardDialog } from "./FinalizeSetupWizardDialog";
 
@@ -58,6 +59,8 @@ export function AssistantSetupWizard({
   onConfigured,
   onSkipped,
   onNeedInference,
+  previewInferenceAccessNotice = false,
+  onPreviewClose,
 }: {
   open: boolean;
   draft: AssistantSetupDraft;
@@ -66,6 +69,8 @@ export function AssistantSetupWizard({
   onConfigured: () => Promise<void>;
   onSkipped: () => Promise<void>;
   onNeedInference: () => void;
+  previewInferenceAccessNotice?: boolean;
+  onPreviewClose?: () => void;
 }) {
   const [inferenceModels, setInferenceModels] = useState<InferenceModelOption[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -73,11 +78,11 @@ export function AssistantSetupWizard({
   const [completed, setCompleted] = useState(false);
 
   useEffect(() => {
-    if (open) setCompleted(false);
-  }, [open]);
+    setCompleted(open && previewInferenceAccessNotice);
+  }, [open, previewInferenceAccessNotice]);
 
   useEffect(() => {
-    if (!open || draft.source !== "inference") return;
+    if (!open || previewInferenceAccessNotice || draft.source !== "inference") return;
     setLoadingModels(true);
     api
       .getAIConfig()
@@ -90,7 +95,7 @@ export function AssistantSetupWizard({
         toast.error(cause instanceof Error ? cause.message : "Failed to load inference models")
       )
       .finally(() => setLoadingModels(false));
-  }, [draft, onDraftChange, open]);
+  }, [draft, onDraftChange, open, previewInferenceAccessNotice]);
 
   const save = async () => {
     if (!draft.source) return;
@@ -117,6 +122,7 @@ export function AssistantSetupWizard({
               gatewayInferenceModel: draft.model,
             }
       );
+      await useAIStore.getState().refreshProviderStatus();
       setCompleted(true);
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "Failed to configure AI Assistant");
@@ -154,6 +160,7 @@ export function AssistantSetupWizard({
         </>
       }
       stepKey={screen}
+      onClose={previewInferenceAccessNotice ? onPreviewClose : undefined}
       onBack={completed ? undefined : draft.source ? () => setSource(null) : onBack}
       onSkip={completed ? undefined : onSkipped}
       skipDisabled={saving}
@@ -178,13 +185,29 @@ export function AssistantSetupWizard({
       }
     >
       {completed ? (
-        <FinalizeSetupCompletion
-          title="AI Assistant configured"
-          continueIn="Continue from Settings → AI Assistant to change its provider, model, or enablement whenever your requirements change."
-        >
-          Gateway can now use the selected model for assistant requests while preserving each
-          operator's permissions.
-        </FinalizeSetupCompletion>
+        <div className="space-y-3">
+          <FinalizeSetupCompletion
+            title="AI Assistant configured"
+            continueIn="Continue from Settings → AI Assistant to change its provider, model, or enablement whenever your requirements change."
+          >
+            Gateway can now use the selected model for assistant requests while preserving each
+            operator's permissions.
+          </FinalizeSetupCompletion>
+          {draft.source === "inference" && (
+            <div className="flex gap-3 border border-warning/60 p-4">
+              <TriangleAlert className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
+              <div>
+                <p className="text-sm font-semibold text-warning">
+                  Enable users in Gateway Inference
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Users need an enabled Inference policy before the Assistant is available to them.
+                  Review this in Settings → Gateway Inference → Limits.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
       ) : draft.source === null ? (
         <div className="space-y-3">
           <Button

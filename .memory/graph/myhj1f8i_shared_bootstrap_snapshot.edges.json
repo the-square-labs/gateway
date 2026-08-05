@@ -3,13 +3,33 @@
   "edges": [
     {
       "from_id": "myhj1f8i",
-      "to_id": "2tjfa2g5",
-      "relation": "related_to",
-      "weight": 0.34,
-      "reason": "Both define Gateway resource identity and realtime frontend behavior across nodes, containers, databases, and deployments.",
+      "to_id": "gahvf5k5",
+      "relation": "same_workflow",
+      "weight": 0.9,
+      "reason": "MFA policy changes and authenticated realtime channels invalidate the shared dashboard bootstrap.",
       "source": "auto",
-      "created_at": 1785949902061,
-      "updated_at": 1785949902061
+      "created_at": 1785970767864,
+      "updated_at": 1785970767864
+    },
+    {
+      "from_id": "myhj1f8i",
+      "to_id": "gdptltym",
+      "relation": "same_workflow",
+      "weight": 0.84,
+      "reason": "Defines authorization, retry, pin-scope, and auth-reset safety rules for the dashboard bootstrap.",
+      "source": "auto",
+      "created_at": 1785970767864,
+      "updated_at": 1785970767864
+    },
+    {
+      "from_id": "myhj1f8i",
+      "to_id": "2tjfa2g5",
+      "relation": "same_area",
+      "weight": 0.58,
+      "reason": "Shares dashboard pin and realtime behavior with gateway routing and route-resolution contracts.",
+      "source": "auto",
+      "created_at": 1785970767864,
+      "updated_at": 1785970767864
     }
   ]
 }

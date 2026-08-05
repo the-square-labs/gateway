@@ -69,6 +69,7 @@ function createService(config: AIConfig = CONFIG, runtimeConfigured = true) {
       yield { type: 'completed' as const, status: 'completed' as const };
     })(),
   });
+  const inferencePolicies = { effective: vi.fn().mockResolvedValue({ enabled: true }) };
   const service = new AIProviderRuntimeService(
     { getConfig: vi.fn().mockResolvedValue(config) } as never,
     { isFeatureEnabled: vi.fn().mockResolvedValue(true) } as never,
@@ -76,9 +77,10 @@ function createService(config: AIConfig = CONFIG, runtimeConfigured = true) {
       listForUser: vi.fn().mockResolvedValue({ object: 'list', data: MODELS }),
       listAdmin: vi.fn().mockResolvedValue([]),
     } as never,
-    { isConfigured: vi.fn().mockReturnValue(runtimeConfigured), execute } as never
+    { isConfigured: vi.fn().mockReturnValue(runtimeConfigured), execute } as never,
+    inferencePolicies as never
   );
-  return { service, execute };
+  return { service, execute, inferencePolicies };
 }
 
 describe('AIProviderRuntimeService', () => {
@@ -136,6 +138,13 @@ describe('AIProviderRuntimeService', () => {
       providerType: 'gateway_inference',
       defaultModel: 'gateway-default',
     });
+  });
+
+  it('reports the assistant disabled when the current user is disabled in Gateway Inference', async () => {
+    const { service, inferencePolicies } = createService();
+    inferencePolicies.effective.mockResolvedValueOnce({ enabled: false });
+
+    await expect(service.statusForUser(USER)).resolves.toMatchObject({ enabled: false });
   });
 
   it('rejects a reasoning effort unsupported by the selected model', async () => {

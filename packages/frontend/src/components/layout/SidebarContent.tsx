@@ -1,17 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import {
-  ArrowUpCircle,
-  Box,
-  Database,
-  Expand,
-  GitBranch,
-  Globe,
-  PanelLeft,
-  PanelLeftClose,
-  Search,
-  Server,
-  X,
-} from "lucide-react";
+import { ArrowUpCircle, Expand, PanelLeft, PanelLeftClose, Search, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AIButton } from "@/components/ai/AIButton";
@@ -33,13 +21,6 @@ import { useInferenceSelfUsage } from "@/hooks/use-inference-self-usage";
 import { useRealtime } from "@/hooks/use-realtime";
 import { visibleNavigationGroups } from "@/lib/app-navigation";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
-import {
-  databaseRoute,
-  dockerContainerRoute,
-  dockerDeploymentRoute,
-  nodeRoute,
-  proxyHostRoute,
-} from "@/lib/resource-routes";
 import { isSidebarNavigationActive } from "@/lib/sidebar-navigation";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -54,7 +35,8 @@ import { usePinnedProxiesStore } from "@/stores/pinned-proxies";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
 import { useUpdateStore } from "@/stores/update";
-import { AI_SCOPE, effectiveNodeStatus } from "@/types";
+import { AI_SCOPE } from "@/types";
+import { SidebarPinnedResources } from "./SidebarPinnedResources";
 
 function getInitials(name: string | null): string {
   if (!name) return "?";
@@ -120,26 +102,12 @@ export function SidebarContent({
   const pinnedContainerMeta = usePinnedContainersStore((s) => s.containerMeta);
   const dockerNodes = useDockerStore((s) => s.dockerNodes);
   const sidebarPinnedDatabaseIds = usePinnedDatabasesStore((s) => s.sidebarDatabaseIds);
-  const pinnedDatabaseMeta = usePinnedDatabasesStore((s) => s.databaseMeta);
   const dashboardPinnedNodeIds = usePinnedNodesStore((s) => s.dashboardNodeIds);
   const dashboardPinnedProxyIds = usePinnedProxiesStore((s) => s.dashboardProxyIds);
   const dashboardPinnedContainerIds = usePinnedContainersStore((s) => s.dashboardContainerIds);
   const dashboardPinnedDatabaseIds = usePinnedDatabasesStore((s) => s.dashboardDatabaseIds);
   const dashboardBootstrap = useDashboardBootstrapStore((s) => s.snapshot);
   const loadDashboardBootstrap = useDashboardBootstrapStore((s) => s.load);
-  const canViewContainerDetails = useCallback(
-    (nodeId: string, scopeResourceId?: string) =>
-      hasScope("docker:containers:view") ||
-      hasScope(`docker:containers:view:${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`),
-    [hasScope]
-  );
-  const canViewDatabaseDetails = useCallback(
-    (databaseId: string) => hasScope("databases:view") || hasScope(`databases:view:${databaseId}`),
-    [hasScope]
-  );
-  const pinnedNodes = dashboardBootstrap?.pinned.sidebar.nodes ?? [];
-  const pinnedProxies = dashboardBootstrap?.pinned.sidebar.proxies ?? [];
-
   const dashboardBootstrapKey = useMemo(
     () =>
       JSON.stringify({
@@ -255,20 +223,6 @@ export function SidebarContent({
   useRealtime("status-page.changed", () => {
     refetchStatusPageEnabled();
   });
-
-  useEffect(() => {
-    for (const database of dashboardBootstrap?.pinned.sidebar.databases ?? []) {
-      usePinnedDatabasesStore.getState().updateMeta(database.id, {
-        slug: database.slug,
-        name: database.name,
-        type: database.type,
-        healthStatus: database.healthStatus ?? undefined,
-      });
-    }
-    for (const resource of dashboardBootstrap?.pinned.sidebar.dockerResources ?? []) {
-      usePinnedContainersStore.getState().updateMeta(resource.id, resource);
-    }
-  }, [dashboardBootstrap]);
 
   const handleLogout = async () => {
     try {
@@ -498,172 +452,7 @@ export function SidebarContent({
                   {groupIndex > 0 && <Separator />}
 
                   {/* Pinned items — right after Dashboard */}
-                  {groupIndex === 1 &&
-                    (pinnedNodes.length > 0 ||
-                      pinnedProxies.length > 0 ||
-                      sidebarPinnedDatabaseIds.length > 0 ||
-                      sidebarPinnedContainerIds.length > 0) && (
-                      <>
-                        <nav className="space-y-0.5 px-2 py-2">
-                          <p className="px-3 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                            Pinned Items
-                          </p>
-                          {pinnedProxies.map((proxy) => {
-                            const isActive =
-                              location.pathname === proxyHostRoute(proxy.slug) ||
-                              location.pathname.startsWith(`${proxyHostRoute(proxy.slug)}/`);
-                            const hs = (proxy as any).effectiveHealthStatus ?? proxy.healthStatus;
-                            return (
-                              <Link
-                                key={proxy.id}
-                                to={proxyHostRoute(proxy.slug)}
-                                onClick={onNavigate}
-                                className={cn(
-                                  "flex items-center gap-3 px-3 py-2 text-sm transition-colors whitespace-nowrap overflow-hidden",
-                                  isActive
-                                    ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                                )}
-                              >
-                                <Globe className="h-4 w-4 shrink-0" />
-                                <span className="truncate">{proxy.domainNames[0]}</span>
-                                <span
-                                  className={cn(
-                                    "ml-auto h-2 w-2 rounded-full shrink-0",
-                                    hs === "online"
-                                      ? "bg-emerald-500"
-                                      : hs === "offline" || hs === "degraded"
-                                        ? "bg-red-400"
-                                        : "bg-muted-foreground/40"
-                                  )}
-                                />
-                              </Link>
-                            );
-                          })}
-                          {pinnedNodes.map((node) => {
-                            const isActive =
-                              location.pathname === nodeRoute(node.slug) ||
-                              location.pathname.startsWith(`${nodeRoute(node.slug)}/`);
-                            const status = effectiveNodeStatus(node);
-                            return (
-                              <Link
-                                key={node.id}
-                                to={nodeRoute(node.slug)}
-                                onClick={onNavigate}
-                                className={cn(
-                                  "flex items-center gap-3 px-3 py-2 text-sm transition-colors whitespace-nowrap overflow-hidden",
-                                  isActive
-                                    ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                                )}
-                              >
-                                <Server className="h-4 w-4 shrink-0" />
-                                <span className="truncate">
-                                  {node.displayName || node.hostname}
-                                </span>
-                                <span
-                                  className={cn(
-                                    "ml-auto h-2 w-2 rounded-full shrink-0",
-                                    status === "online"
-                                      ? "bg-emerald-500"
-                                      : status === "degraded"
-                                        ? "bg-warning"
-                                        : status === "offline" || status === "error"
-                                          ? "bg-red-400"
-                                          : "bg-warning"
-                                  )}
-                                />
-                              </Link>
-                            );
-                          })}
-                          {sidebarPinnedDatabaseIds.map((databaseId) => {
-                            const meta = pinnedDatabaseMeta[databaseId];
-                            if (!meta?.slug || !canViewDatabaseDetails(databaseId)) return null;
-                            const isActive =
-                              location.pathname === databaseRoute(meta.slug) ||
-                              location.pathname.startsWith(`${databaseRoute(meta.slug)}/`);
-                            return (
-                              <Link
-                                key={databaseId}
-                                to={databaseRoute(meta.slug, "overview")}
-                                onClick={onNavigate}
-                                className={cn(
-                                  "flex items-center gap-3 px-3 py-2 text-sm transition-colors whitespace-nowrap overflow-hidden",
-                                  isActive
-                                    ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                                )}
-                              >
-                                <Database className="h-4 w-4 shrink-0" />
-                                <span className="truncate">{meta.name}</span>
-                                <span
-                                  className={cn(
-                                    "ml-auto h-2 w-2 rounded-full shrink-0",
-                                    meta.healthStatus === "online"
-                                      ? "bg-emerald-500"
-                                      : meta.healthStatus === "degraded"
-                                        ? "bg-warning"
-                                        : meta.healthStatus === "offline"
-                                          ? "bg-red-400"
-                                          : "bg-muted-foreground/40"
-                                  )}
-                                />
-                              </Link>
-                            );
-                          })}
-                          {sidebarPinnedContainerIds.map((cid) => {
-                            const meta = pinnedContainerMeta[cid];
-                            if (
-                              !meta?.nodeSlug ||
-                              !canViewContainerDetails(meta.nodeId, meta.scopeResourceId)
-                            )
-                              return null;
-                            const isDeployment = meta.kind === "deployment";
-                            const containerPath = isDeployment
-                              ? dockerDeploymentRoute(meta.nodeSlug, meta.name)
-                              : dockerContainerRoute(meta.nodeSlug, meta.name);
-                            const isActive =
-                              location.pathname === containerPath ||
-                              location.pathname.startsWith(`${containerPath}/`);
-                            const Icon = isDeployment ? GitBranch : Box;
-                            return (
-                              <Link
-                                key={cid}
-                                to={containerPath}
-                                onClick={onNavigate}
-                                className={cn(
-                                  "flex items-center gap-3 px-3 py-2 text-sm transition-colors whitespace-nowrap overflow-hidden",
-                                  isActive
-                                    ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                                )}
-                              >
-                                <Icon className="h-4 w-4 shrink-0" />
-                                <span className="truncate">{meta.name}</span>
-                                <span
-                                  className={cn(
-                                    "ml-auto h-2 w-2 rounded-full shrink-0",
-                                    meta.state === "running"
-                                      ? "bg-emerald-500"
-                                      : meta.state === "exited" || meta.state === "dead"
-                                        ? "bg-red-400"
-                                        : meta.state === "stopping" ||
-                                            meta.state === "restarting" ||
-                                            meta.state === "recreating" ||
-                                            meta.state === "killing" ||
-                                            meta.state === "updating" ||
-                                            meta.state === "migrating"
-                                          ? "animate-pulse bg-warning"
-                                          : "bg-muted-foreground/40"
-                                  )}
-                                />
-                              </Link>
-                            );
-                          })}
-                        </nav>
-                        <Separator />
-                      </>
-                    )}
+                  {groupIndex === 1 && <SidebarPinnedResources onNavigate={onNavigate} />}
                   <nav className="space-y-0.5 px-2 py-2">
                     {groupIndex > 0 && (
                       <p className="px-3 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">

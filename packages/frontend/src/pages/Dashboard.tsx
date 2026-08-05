@@ -1,6 +1,6 @@
 import { AlertTriangle, ArrowRight, Info, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageTransition } from "@/components/common/PageTransition";
 import { Button } from "@/components/ui/button";
@@ -67,6 +67,7 @@ function makeDevExpiringItems(): ExpiringItem[] {
 }
 
 export function Dashboard() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user, hasScope, hasScopedAccess } = useAuthStore();
   const dashboardPinnedIds = usePinnedNodesStore((s) => s.dashboardNodeIds);
   const sidebarPinnedNodeIds = usePinnedNodesStore((s) => s.sidebarNodeIds);
@@ -207,6 +208,13 @@ export function Dashboard() {
     EMPTY_ASSISTANT_SETUP_DRAFT
   );
   const [returnToAssistant, setReturnToAssistant] = useState(false);
+  const previewInferenceAssistantNotice =
+    searchParams.get("preview") === "assistant-inference-access";
+  const closeInferenceAssistantNoticePreview = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("preview");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
   const canViewNodeDetails = useCallback(
     (nodeId: string) => hasScope("nodes:details") || hasScope(`nodes:details:${nodeId}`),
     [hasScope]
@@ -675,6 +683,17 @@ export function Dashboard() {
                 setReturnToAssistant(true);
                 setActiveFinalizeWizard("inference");
               }}
+            />
+            <AssistantSetupWizard
+              open={previewInferenceAssistantNotice}
+              draft={{ ...EMPTY_ASSISTANT_SETUP_DRAFT, source: "inference" }}
+              onDraftChange={() => {}}
+              onBack={closeInferenceAssistantNoticePreview}
+              onConfigured={async () => closeInferenceAssistantNoticePreview()}
+              onSkipped={async () => closeInferenceAssistantNoticePreview()}
+              onNeedInference={closeInferenceAssistantNoticePreview}
+              previewInferenceAccessNotice
+              onPreviewClose={closeInferenceAssistantNoticePreview}
             />
             <InferenceSetupWizard
               open={activeFinalizeWizard === "inference"}

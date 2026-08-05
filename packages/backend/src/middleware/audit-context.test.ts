@@ -89,6 +89,7 @@ describe('shouldSkipFallbackAudit', () => {
     expect(__testOnly.shouldSkipFallbackAudit('POST', '/api/mcp')).toBe(true);
     expect(__testOnly.shouldSkipFallbackAudit('POST', '/api/mcp/')).toBe(true);
     expect(__testOnly.shouldSkipFallbackAudit('POST', '/api/ai/context-estimate')).toBe(true);
+    expect(__testOnly.shouldSkipFallbackAudit('POST', '/api/monitoring/dashboard/bootstrap')).toBe(true);
     expect(__testOnly.shouldSkipFallbackAudit('POST', '/api/docker/snapshots/refresh')).toBe(true);
   });
 

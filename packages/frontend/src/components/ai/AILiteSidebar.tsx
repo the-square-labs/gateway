@@ -21,6 +21,7 @@ import {
   CircleAlert,
   Folder,
   FolderOpen,
+  LayoutDashboard,
   Loader2,
   Lock,
   MessageSquare,
@@ -31,11 +32,13 @@ import {
   Pin,
   PinOff,
   Plus,
+  Search,
   Trash2,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AccountMenuContent } from "@/components/layout/AccountMenuContent";
+import { SidebarPinnedResources } from "@/components/layout/SidebarPinnedResources";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -63,6 +66,7 @@ import type { AIConversationFolder, AIConversationSummary } from "@/services/ai-
 import { api } from "@/services/api";
 import { useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
+import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useUIStore } from "@/stores/ui";
 
 const EXPANDED_PROJECT_IDS_STORAGE_KEY = "gateway-ai-lite-expanded-project-ids";
@@ -116,6 +120,7 @@ export function AILiteSidebar({
   onResizeStart,
   onResizeEnd,
 }: AILiteSidebarProps) {
+  const location = useLocation();
   const navigate = useNavigate();
   const { user, hasAnyScope, logout } = useAuthStore();
   const {
@@ -125,7 +130,11 @@ export function AILiteSidebar({
     togglePinnedAIConversation,
     showAILiteModeCTA,
     setAILiteMode,
+    setCommandPaletteOpen: openPalette,
   } = useUIStore();
+  const dashboardAttention = useDashboardBootstrapStore(
+    (s) => s.snapshot?.attention.severity ?? null
+  );
   const {
     messages,
     sidebarActiveConversationId,
@@ -317,6 +326,25 @@ export function AILiteSidebar({
               <TooltipContent side="right">New chat</TooltipContent>
             </Tooltip>
 
+            <Separator className="my-1 w-6" />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  asChild
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  aria-label="Dashboard"
+                >
+                  <Link to="/dashboard">
+                    <LayoutDashboard className="h-4 w-4" />
+                  </Link>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">Dashboard</TooltipContent>
+            </Tooltip>
+            <Separator className="my-1 w-6" />
+
             <div className="flex-1" />
 
             <DropdownMenu>
@@ -407,8 +435,53 @@ export function AILiteSidebar({
               </div>
             </div>
 
-            <div className="flex min-h-0 flex-1 flex-col border-t border-border">
+            <div className="relative border-y border-border">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search..."
+                readOnly
+                onClick={() => openPalette(true)}
+                style={{ height: 44 }}
+                className="cursor-pointer border-0 pl-9 text-sm focus-visible:outline-none focus-visible:ring-0"
+              />
+              <span className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 text-xs tracking-widest text-muted-foreground md:inline">
+                ⌘K
+              </span>
+            </div>
+
+            <div className="border-b border-border px-2 py-2">
+              <Link
+                to="/dashboard"
+                className={cn(
+                  "flex items-center gap-3 px-3 py-2 text-sm transition-colors",
+                  location.pathname === "/dashboard"
+                    ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                )}
+              >
+                <LayoutDashboard className="h-4 w-4 shrink-0" />
+                <span>Dashboard</span>
+                {dashboardAttention && (
+                  <span
+                    aria-label={
+                      dashboardAttention === "warning"
+                        ? "Dashboard requires attention"
+                        : "Dashboard has setup information"
+                    }
+                    className={cn(
+                      "ml-auto h-2 w-2 shrink-0",
+                      dashboardAttention === "warning"
+                        ? "bg-warning"
+                        : "bg-[color:var(--color-link)]"
+                    )}
+                  />
+                )}
+              </Link>
+            </div>
+
+            <div className="flex min-h-0 flex-1 flex-col">
               <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto dashboard-scrollbar">
+                <SidebarPinnedResources loadBootstrap />
                 {isLoadingRecentConversations && recentConversations.length === 0 ? (
                   <div className="px-3 py-3 text-xs text-muted-foreground">Loading...</div>
                 ) : (
