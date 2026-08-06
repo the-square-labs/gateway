@@ -22,6 +22,13 @@ interface HousekeepingSectionProps {
   canConfigure: boolean;
 }
 
+function normalizeHousekeepingConfig(config: HousekeepingConfig): HousekeepingConfig {
+  return {
+    ...config,
+    clickHouseInternals: config.clickHouseInternals ?? { enabled: false },
+  };
+}
+
 export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectionProps) {
   const [hkConfig, setHkConfig] = useState<HousekeepingConfig>({
     enabled: true,
@@ -31,6 +38,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
     dismissedAlerts: { enabled: true, retentionDays: 30 },
     deliveryLog: { enabled: true, retentionDays: 7 },
     structuredLogs: { enabled: false, maxRows: 100_000, maxSizeBytes: 10 * 1024 ** 3 },
+    clickHouseInternals: { enabled: false },
     orphanedAIArtifacts: { enabled: true },
     gatewayLogs: { enabled: false },
     orphanedVolumes: { enabled: false, retentionDays: 30 },
@@ -48,17 +56,19 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
   const loadHousekeeping = useCallback(async () => {
     const cachedConfig = api.getCached<HousekeepingConfig>("housekeeping:config");
     if (cachedConfig) {
-      setHkConfig(cachedConfig);
-      setHkSavedConfig(cachedConfig);
+      const config = normalizeHousekeepingConfig(cachedConfig);
+      setHkConfig(config);
+      setHkSavedConfig(config);
     }
     const cachedStats = api.getCached<HousekeepingStats>("housekeeping:stats");
     if (cachedStats) setHkStats(cachedStats);
     api
       .getHousekeepingConfig()
       .then((c) => {
-        api.setCache("housekeeping:config", c);
-        setHkConfig(c);
-        setHkSavedConfig(c);
+        const config = normalizeHousekeepingConfig(c);
+        api.setCache("housekeeping:config", config);
+        setHkConfig(config);
+        setHkSavedConfig(config);
       })
       .catch(() => {});
     api
@@ -83,7 +93,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
     if (!canConfigure) return;
     setHkSaving(true);
     try {
-      const updated = await api.updateHousekeepingConfig(hkConfig);
+      const updated = normalizeHousekeepingConfig(await api.updateHousekeepingConfig(hkConfig));
       api.setCache("housekeeping:config", updated);
       setHkConfig(updated);
       setHkSavedConfig(updated);
@@ -335,17 +345,21 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
             />
             <HousekeepingCard
               label="ClickHouse Internals"
-              description="Monitor ClickHouse system logs"
+              description="Trim supported ClickHouse system logs when they exceed 256 MiB"
               stat={hkStats ? formatBytes(hkStats.clickHouseInternals.totalSizeBytes) : "..."}
               statDetail={
                 hkStats?.clickHouseInternals.capBytes
                   ? `of ${formatBytes(hkStats.clickHouseInternals.capBytes)}`
                   : undefined
               }
-              enabled
-              onToggle={() => {}}
-              disabled
-              disabledReason="Always on"
+              enabled={hkConfig.clickHouseInternals.enabled}
+              onToggle={(enabled) =>
+                setHkConfig((current) => ({
+                  ...current,
+                  clickHouseInternals: { ...current.clickHouseInternals, enabled },
+                }))
+              }
+              disabled={controlsDisabled}
             />
             <HousekeepingCard
               label="Audit Log"

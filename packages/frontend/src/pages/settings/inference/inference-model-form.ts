@@ -19,7 +19,7 @@ export const CLIENT_REASONING_EFFORTS = [
 export interface ModelForm {
   publicId: string;
   displayName: string;
-  subscriptionMultiplier: number;
+  subscriptionMultiplier: string;
   contextWindow: string;
   maxInputTokens: string;
   maxOutputTokens: string;
@@ -27,11 +27,11 @@ export interface ModelForm {
 }
 
 export interface ModelPricingForm {
-  inputPrice: number;
-  outputPrice: number;
-  imagePrice: number;
-  searchPrice: number;
-  realtimePrice: number;
+  inputPrice: string;
+  outputPrice: string;
+  imagePrice: string;
+  searchPrice: string;
+  realtimePrice: string;
 }
 
 export interface ProviderModelBinding {
@@ -62,7 +62,7 @@ export interface ProviderModelOption {
 export const EMPTY_MODEL_FORM: ModelForm = {
   publicId: "",
   displayName: "",
-  subscriptionMultiplier: 1,
+  subscriptionMultiplier: "1",
   contextWindow: "",
   maxInputTokens: "",
   maxOutputTokens: "",
@@ -70,11 +70,11 @@ export const EMPTY_MODEL_FORM: ModelForm = {
 };
 
 export const EMPTY_MODEL_PRICING: ModelPricingForm = {
-  inputPrice: 0,
-  outputPrice: 0,
-  imagePrice: 0,
-  searchPrice: 0,
-  realtimePrice: 0,
+  inputPrice: "0",
+  outputPrice: "0",
+  imagePrice: "0",
+  searchPrice: "0",
+  realtimePrice: "0",
 };
 
 export function providerModelKey(providerId: string, remoteModelId: string) {
@@ -181,7 +181,7 @@ export function formFromModel(model: InferenceModel): ModelForm {
   return {
     publicId: model.publicId,
     displayName: model.displayName,
-    subscriptionMultiplier: model.subscriptionMultiplier,
+    subscriptionMultiplier: String(model.subscriptionMultiplier),
     contextWindow: String(model.contextWindow),
     maxInputTokens: String(model.maxInputTokens),
     maxOutputTokens: model.maxOutputTokens == null ? "" : String(model.maxOutputTokens),
@@ -273,11 +273,11 @@ export function pricingFromModel(model: InferenceModel | null): ModelPricingForm
   const pricing = model?.sources[0]?.pricing;
   if (!pricing) return EMPTY_MODEL_PRICING;
   return {
-    inputPrice: (pricing.inputMicrodollarsPerMillion ?? 0) / 1_000_000,
-    outputPrice: (pricing.outputMicrodollarsPerMillion ?? 0) / 1_000_000,
-    imagePrice: (pricing.otherUnitPrices.image_generation ?? 0) / 1_000_000,
-    searchPrice: (pricing.otherUnitPrices.web_search_query ?? 0) / 1_000_000,
-    realtimePrice: (pricing.otherUnitPrices.realtime_session ?? 0) / 1_000_000,
+    inputPrice: String((pricing.inputMicrodollarsPerMillion ?? 0) / 1_000_000),
+    outputPrice: String((pricing.outputMicrodollarsPerMillion ?? 0) / 1_000_000),
+    imagePrice: String((pricing.otherUnitPrices.image_generation ?? 0) / 1_000_000),
+    searchPrice: String((pricing.otherUnitPrices.web_search_query ?? 0) / 1_000_000),
+    realtimePrice: String((pricing.otherUnitPrices.realtime_session ?? 0) / 1_000_000),
   };
 }
 
@@ -286,27 +286,39 @@ export function pricingFromProvider(
 ): ModelPricingForm {
   if (!pricing) return EMPTY_MODEL_PRICING;
   return {
-    inputPrice: pricing.inputMicrodollarsPerMillion / 1_000_000,
-    outputPrice: pricing.outputMicrodollarsPerMillion / 1_000_000,
-    imagePrice: (pricing.otherUnitPrices?.image_generation ?? 0) / 1_000_000,
-    searchPrice: (pricing.otherUnitPrices?.web_search_query ?? 0) / 1_000_000,
-    realtimePrice: (pricing.otherUnitPrices?.realtime_session ?? 0) / 1_000_000,
+    inputPrice: String(pricing.inputMicrodollarsPerMillion / 1_000_000),
+    outputPrice: String(pricing.outputMicrodollarsPerMillion / 1_000_000),
+    imagePrice: String((pricing.otherUnitPrices?.image_generation ?? 0) / 1_000_000),
+    searchPrice: String((pricing.otherUnitPrices?.web_search_query ?? 0) / 1_000_000),
+    realtimePrice: String((pricing.otherUnitPrices?.realtime_session ?? 0) / 1_000_000),
   };
 }
 
 export function pricingPayload(pricing: ModelPricingForm) {
   return {
     version: `manual-${new Date().toISOString()}`,
-    inputMicrodollarsPerMillion: Math.round(pricing.inputPrice * 1_000_000),
-    outputMicrodollarsPerMillion: Math.round(pricing.outputPrice * 1_000_000),
+    inputMicrodollarsPerMillion: Math.round(Number(pricing.inputPrice) * 1_000_000),
+    outputMicrodollarsPerMillion: Math.round(Number(pricing.outputPrice) * 1_000_000),
     otherUnitPrices: {
-      image_generation: Math.round(pricing.imagePrice * 1_000_000),
-      image_edit: Math.round(pricing.imagePrice * 1_000_000),
-      web_search_query: Math.round(pricing.searchPrice * 1_000_000),
-      realtime_session: Math.round(pricing.realtimePrice * 1_000_000),
+      image_generation: Math.round(Number(pricing.imagePrice) * 1_000_000),
+      image_edit: Math.round(Number(pricing.imagePrice) * 1_000_000),
+      web_search_query: Math.round(Number(pricing.searchPrice) * 1_000_000),
+      realtime_session: Math.round(Number(pricing.realtimePrice) * 1_000_000),
     },
     source: "manual" as const,
   };
+}
+
+export function parsePositiveNumber(value: string): number | null {
+  const parsed = Number(value);
+  return value.trim() && Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+export function hasCompletePricing(pricing: ModelPricingForm): boolean {
+  return Object.values(pricing).every((value) => {
+    const parsed = Number(value);
+    return value.trim() && Number.isFinite(parsed) && parsed >= 0;
+  });
 }
 
 function intersect(values: string[][]) {

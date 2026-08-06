@@ -10,7 +10,6 @@ const LOCAL: LoggingRuntimeSettings = {
   database: 'gateway_logs',
   table: 'logs',
   requestTimeoutMs: 5000,
-  managedInternalLogs: false,
 };
 
 function docker() {

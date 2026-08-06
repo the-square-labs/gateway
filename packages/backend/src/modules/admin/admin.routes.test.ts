@@ -118,7 +118,6 @@ function registerSession(scopes: string[]) {
       database: 'gateway_logs',
       table: 'logs',
       requestTimeoutMs: 5000,
-      managedInternalLogs: false,
     }),
   } as unknown as LoggingSettingsService);
   container.registerInstance(WebTransportSettingsService, {
@@ -232,7 +231,6 @@ describe('admin Gateway settings route permissions', () => {
         database: 'gateway_logs',
         table: 'logs',
         requestTimeoutMs: 5000,
-        managedInternalLogs: false,
       },
       mcpServerEnabled: true,
       mcpExtendedCompatibility: false,

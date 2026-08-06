@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanelShell } from "@/components/common/PanelShell";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { ProgressBar } from "@/components/ui/progress-bar";
 import { StatCard } from "@/components/ui/stat-card";
 import { useInferenceSelfUsage } from "@/hooks/use-inference-self-usage";
@@ -54,18 +55,21 @@ function InferenceUsagePanel({ usage }: { usage: InferenceSelfUsage }) {
       ? [{ label: "Monthly", value: usage.subscription["30d"], icon: Gauge }]
       : []),
   ];
-  const cardCount = 1 + Math.max(1, subscriptionWindows.length);
+  const cards = [
+    ...(usage.api.configured
+      ? [{ label: "API usage", value: usage.api, icon: CircleDollarSign }]
+      : []),
+    ...subscriptionWindows,
+  ];
+  const cardCount = cards.length;
+
+  if (cardCount === 0) return null;
 
   return (
     <PanelShell
       title="Inference usage"
-      description="Credit limits are shared across eligible AI providers. Limits recover automatically."
+      description="Usage limits for the AI models available to you. Limits recover automatically."
     >
-      {!usage.enabled && (
-        <div className="border-b border-border px-4 py-3 text-sm text-muted-foreground">
-          Inference is currently unavailable for your account.
-        </div>
-      )}
       <div
         className={cn(
           "grid grid-cols-1 gap-px bg-border sm:grid-cols-2",
@@ -74,34 +78,9 @@ function InferenceUsagePanel({ usage }: { usage: InferenceSelfUsage }) {
           cardCount === 2 && "xl:grid-cols-2"
         )}
       >
-        {usage.api.configured ? (
-          <UsageStatCard label="API usage" value={usage.api} icon={CircleDollarSign} />
-        ) : (
-          <StatCard
-            className="border-0"
-            label="API usage"
-            value="Disabled"
-            icon={CircleDollarSign}
-            progress={{ percent: 0 }}
-            subtitle="API usage is disabled."
-            subtitleClassName="text-xs"
-          />
-        )}
-        {subscriptionWindows.length > 0 ? (
-          subscriptionWindows.map(({ label, value, icon }) => (
-            <UsageStatCard key={label} label={label} value={value} icon={icon} />
-          ))
-        ) : (
-          <StatCard
-            className="border-0"
-            label="AI credits"
-            value="Unlimited"
-            icon={Gauge}
-            progress={{ percent: 0 }}
-            subtitle="No credit limits configured."
-            subtitleClassName="text-xs"
-          />
-        )}
+        {cards.map(({ label, value, icon }) => (
+          <UsageStatCard key={label} label={label} value={value} icon={icon} />
+        ))}
       </div>
     </PanelShell>
   );
@@ -233,7 +212,11 @@ export function DashboardInferenceUsage({
   );
 }
 
-export function CompactInferenceUsage() {
+export function CompactInferenceUsage({
+  withMenuSeparator = false,
+}: {
+  withMenuSeparator?: boolean;
+}) {
   const { usage, loading, error } = useInferenceSelfUsage();
   const [open, setOpen] = useState(initialCompactUsageOpen);
 
@@ -252,18 +235,7 @@ export function CompactInferenceUsage() {
     ...(usage.api.configured ? [{ label: "API", value: usage.api }] : []),
   ];
 
-  if (windows.length === 0) {
-    return (
-      <Button
-        variant="ghost"
-        className="h-auto w-full justify-start gap-2 px-2 py-3 text-sm font-normal md:py-1.5"
-        disabled
-      >
-        <Gauge />
-        <span>Unlimited AI usage</span>
-      </Button>
-    );
-  }
+  if (windows.length === 0) return null;
 
   const changeOpen = (nextOpen: boolean) => {
     setOpen(nextOpen);
@@ -275,41 +247,44 @@ export function CompactInferenceUsage() {
   };
 
   return (
-    <Collapsible open={open} onOpenChange={changeOpen}>
-      <CollapsibleTrigger asChild>
-        <Button
-          variant="ghost"
-          className="h-auto w-full justify-start gap-2 px-2 py-3 text-sm font-normal md:py-1.5"
-        >
-          <Gauge />
-          <span>AI usage remaining</span>
-          <ChevronDown
-            className={cn("ml-auto transition-transform", open && "rotate-180")}
-            aria-hidden="true"
-          />
-        </Button>
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="space-y-2 px-2 pb-2 pt-1">
-          {windows.map(({ label, value }) => {
-            const remaining = remainingPercentage(value.percentage);
-            return (
-              <div
-                key={label}
-                className="space-y-1"
-                aria-label={`${label} remaining ${remaining}%`}
-              >
-                <div className="flex items-center justify-between text-[13px] text-muted-foreground">
-                  <span>{label}</span>
-                  <span>{remaining}%</span>
+    <>
+      <Collapsible open={open} onOpenChange={changeOpen}>
+        <CollapsibleTrigger asChild>
+          <Button
+            variant="ghost"
+            className="h-auto w-full justify-start gap-2 px-2 py-3 text-sm font-normal md:py-1.5"
+          >
+            <Gauge />
+            <span>AI usage remaining</span>
+            <ChevronDown
+              className={cn("ml-auto transition-transform", open && "rotate-180")}
+              aria-hidden="true"
+            />
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="space-y-2 px-2 pb-2 pt-1">
+            {windows.map(({ label, value }) => {
+              const remaining = remainingPercentage(value.percentage);
+              return (
+                <div
+                  key={label}
+                  className="space-y-1"
+                  aria-label={`${label} remaining ${remaining}%`}
+                >
+                  <div className="flex items-center justify-between text-[13px] text-muted-foreground">
+                    <span>{label}</span>
+                    <span>{remaining}%</span>
+                  </div>
+                  <ProgressBar value={remaining} indicatorClassName="bg-foreground" />
                 </div>
-                <ProgressBar value={remaining} indicatorClassName="bg-foreground" />
-              </div>
-            );
-          })}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
+              );
+            })}
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+      {withMenuSeparator ? <DropdownMenuSeparator className="bg-border" /> : null}
+    </>
   );
 }
 

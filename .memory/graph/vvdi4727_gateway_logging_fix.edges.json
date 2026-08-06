@@ -3,26 +3,6 @@
   "edges": [
     {
       "from_id": "vvdi4727",
-      "to_id": "2npkkqwm",
-      "relation": "related_to",
-      "weight": 0.65,
-      "reason": "Logging/ClickHouse exposure changes relate to gateway logging infrastructure and access controls described in the main source.",
-      "source": "auto",
-      "created_at": 1782933291639,
-      "updated_at": 1782933291639
-    },
-    {
-      "from_id": "vvdi4727",
-      "to_id": "soe1372f",
-      "relation": "same_area",
-      "weight": 0.6,
-      "reason": "Both reside in gateway package area and involve large-scale gateway refactor activities.",
-      "source": "auto",
-      "created_at": 1782933291639,
-      "updated_at": 1782933291639
-    },
-    {
-      "from_id": "vvdi4727",
       "to_id": "ph8ejel0",
       "relation": "same_area",
       "weight": 0.55,

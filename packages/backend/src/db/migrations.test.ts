@@ -101,6 +101,21 @@ describe('drizzle migration metadata', () => {
     expect(migration).toContain('"revoked_at" is null');
   });
 
+  it('refreshes GPT-5.6 provider prices with the complete long-context tier', () => {
+    const migration = readFileSync(
+      join(process.cwd(), 'src/db/migrations/0092_refresh_openai_gpt_5_6_pricing.sql'),
+      'utf8'
+    );
+
+    expect(migration).toContain("'openai-api-2026-08-06'");
+    expect(migration).toContain("WHEN 'gpt-5.6-terra' THEN 2000000");
+    expect(migration).toContain("WHEN 'gpt-5.6-luna' THEN 200000");
+    expect(migration).toContain("'long_context_threshold_tokens', 272000");
+    expect(migration).toContain("'long_context_input_microdollars_per_million'");
+    expect(migration).toContain('"snapshots"."source" = \'manual\'');
+    expect(migration).toContain('ON CONFLICT ("source_id", "version") DO NOTHING');
+  });
+
   it('collapses existing inference token grants into the manage permission', () => {
     const migration = readFileSync(
       join(process.cwd(), 'src/db/migrations/0078_collapse_inference_token_permissions.sql'),

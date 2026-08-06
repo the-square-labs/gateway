@@ -104,6 +104,41 @@ describe('effective inference rolling-window policy', () => {
   });
 });
 
+describe('API token pricing', () => {
+  const gpt56LunaPricing = {
+    inputMicrodollarsPerMillion: 200_000,
+    cachedInputMicrodollarsPerMillion: 20_000,
+    cacheWriteMicrodollarsPerMillion: 250_000,
+    outputMicrodollarsPerMillion: 1_200_000,
+    reasoningMicrodollarsPerMillion: null,
+    otherUnitPrices: {
+      long_context_threshold_tokens: 272_000,
+      long_context_input_microdollars_per_million: 400_000,
+      long_context_cached_input_microdollars_per_million: 40_000,
+      long_context_cache_write_microdollars_per_million: 500_000,
+      long_context_output_microdollars_per_million: 1_800_000,
+    },
+  };
+
+  it('keeps the short-context rate at exactly 272K input tokens', () => {
+    expect(
+      __testOnly.apiMicrodollars(
+        { inputTokens: 272_000, cachedInputTokens: 0, cacheWriteTokens: 0, outputTokens: 10_000, reasoningTokens: 0 },
+        gpt56LunaPricing
+      )
+    ).toBe(66_400);
+  });
+
+  it('uses the long-context rate for the entire request above 272K input tokens', () => {
+    expect(
+      __testOnly.apiMicrodollars(
+        { inputTokens: 272_001, cachedInputTokens: 0, cacheWriteTokens: 0, outputTokens: 10_000, reasoningTokens: 0 },
+        gpt56LunaPricing
+      )
+    ).toBe(126_801);
+  });
+});
+
 function policy(overrides: Partial<InferenceLimitPolicy>): InferenceLimitPolicy {
   return {
     id: '6a3cb7ab-73c1-4fdb-baa5-7fdc757cc126',

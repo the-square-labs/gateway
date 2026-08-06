@@ -23,7 +23,6 @@ interface StoredLoggingSettings {
   database: string;
   table: string;
   requestTimeoutMs: number;
-  managedInternalLogs: boolean;
 }
 
 export interface LoggingRuntimeSettings {
@@ -34,7 +33,6 @@ export interface LoggingRuntimeSettings {
   database: string;
   table: string;
   requestTimeoutMs: number;
-  managedInternalLogs: boolean;
 }
 
 export interface LoggingSettingsInput {
@@ -45,7 +43,6 @@ export interface LoggingSettingsInput {
   database?: string;
   table?: string;
   requestTimeoutMs?: number;
-  managedInternalLogs?: boolean;
 }
 
 export class LoggingSettingsService {
@@ -125,7 +122,6 @@ export class LoggingSettingsService {
       database,
       table,
       requestTimeoutMs,
-      managedInternalLogs: input.managedInternalLogs ?? previous?.managedInternalLogs ?? false,
     });
     return this.getRuntimeConfig();
   }
@@ -145,7 +141,6 @@ export class LoggingSettingsService {
       database: env.CLICKHOUSE_DATABASE,
       table: env.CLICKHOUSE_LOGS_TABLE,
       requestTimeoutMs: env.CLICKHOUSE_REQUEST_TIMEOUT_MS,
-      managedInternalLogs: env.CLICKHOUSE_MANAGED_INTERNAL_LOGS,
     });
     return true;
   }
@@ -176,6 +171,5 @@ function disabledConfig(): LoggingRuntimeSettings {
     database: 'gateway_logs',
     table: 'logs',
     requestTimeoutMs: 5000,
-    managedInternalLogs: false,
   };
 }

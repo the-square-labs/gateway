@@ -1,12 +1,21 @@
-import { and, asc, desc, eq, ilike, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { inferenceLimitPolicies, inferenceRequests, inferenceUsageLedger, users } from '@/db/schema/index.js';
+import {
+  inferenceLimitPolicies,
+  inferenceModelSources,
+  inferenceProviderConnections,
+  inferenceRequests,
+  inferenceUsageLedger,
+  users,
+} from '@/db/schema/index.js';
 import type { InferenceRequestStatus } from '@/db/schema/inference-usage.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
+import type { User } from '@/types.js';
+import type { InferenceModelAccessService } from '../models/inference-model-access.service.js';
 import { type InferenceBudgetPolicyService, SUBSCRIPTION_CHAT_BUDGET_FRACTION } from './inference-budget-policy.js';
 import { publishInferenceUsageChanged } from './inference-usage-events.js';
 
@@ -30,36 +39,60 @@ export class InferenceUsageService {
     @inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient,
     private readonly policies: InferenceBudgetPolicyService,
     private readonly audit: AuditService,
-    private readonly eventBus?: EventBusService
+    private readonly eventBus?: EventBusService,
+    private readonly modelAccess?: InferenceModelAccessService
   ) {}
 
-  async self(userId: string) {
-    const limits = await this.policies.effective(userId);
-    const usage = await this.policies.usage(userId, limits);
+  async self(user: User) {
+    const limits = await this.policies.effective(user.id);
+    const usage = await this.policies.usage(user.id, limits);
+    const available = limits.enabled ? await this.availableBudgetTypes(user) : { api: false, subscription: false };
     return {
       enabled: limits.enabled,
       api: {
-        configured: limits.apiMonthlyMicrodollars > 0,
+        configured: available.api && limits.apiMonthlyMicrodollars > 0,
         percentage: percentage(usage.apiMonthlyMicrodollars, limits.apiMonthlyMicrodollars),
         recoveryAt: usage.recoveryAt.apiMonthly.toISOString(),
       },
       subscription: {
         '5h': {
-          configured: limits.credits5hEnabled,
+          configured: available.subscription && limits.credits5hEnabled,
           percentage: subscriptionPercentage(usage.credits5h, limits.credits5h),
           recoveryAt: usage.recoveryAt.credits5h.toISOString(),
         },
         '7d': {
-          configured: limits.credits7dEnabled,
+          configured: available.subscription && limits.credits7dEnabled,
           percentage: subscriptionPercentage(usage.credits7d, limits.credits7d),
           recoveryAt: usage.recoveryAt.credits7d.toISOString(),
         },
         '30d': {
-          configured: limits.credits30dEnabled,
+          configured: available.subscription && limits.credits30dEnabled,
           percentage: subscriptionPercentage(usage.credits30d, limits.credits30d),
           recoveryAt: usage.recoveryAt.credits30d.toISOString(),
         },
       },
+    };
+  }
+
+  private async availableBudgetTypes(user: User): Promise<{ api: boolean; subscription: boolean }> {
+    if (!this.modelAccess) return { api: false, subscription: false };
+    const modelIds = [...(await this.modelAccess.allowedModelIds(user))];
+    if (!modelIds.length) return { api: false, subscription: false };
+
+    const sources = await this.db
+      .select({ sourceType: inferenceModelSources.sourceType })
+      .from(inferenceModelSources)
+      .innerJoin(inferenceProviderConnections, eq(inferenceModelSources.connectionId, inferenceProviderConnections.id))
+      .where(
+        and(
+          inArray(inferenceModelSources.modelId, modelIds),
+          eq(inferenceModelSources.enabled, true),
+          eq(inferenceProviderConnections.enabled, true)
+        )
+      );
+    return {
+      api: sources.some((source) => source.sourceType === 'api'),
+      subscription: sources.some((source) => source.sourceType === 'subscription'),
     };
   }
 

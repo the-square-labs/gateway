@@ -1,3 +1,4 @@
+import { longContextOtherUnitPrices } from '../inference-pricing.js';
 import type { InferenceProviderModelPricing } from './inference-provider.types.js';
 
 export interface KnownInferenceProviderModel {
@@ -15,6 +16,7 @@ export interface KnownInferenceProviderModel {
 }
 
 const OPENAI_VERSION = 'openai-api-2026-07-27';
+const OPENAI_GPT_5_6_VERSION = 'openai-api-2026-08-06';
 const ANTHROPIC_VERSION = 'anthropic-api-2026-07-27';
 const MOONSHOT_VERSION = 'moonshot-api-2026-07-27';
 const OPENAI_SOURCE = 'https://developers.openai.com/api/docs/models';
@@ -24,22 +26,62 @@ const MOONSHOT_SOURCE = 'https://platform.kimi.ai/docs/pricing';
 const OPENAI_REASONING = ['none', 'low', 'medium', 'high', 'xhigh'] as const;
 const OPENAI_REASONING_MAX = [...OPENAI_REASONING, 'max'] as const;
 const CLAUDE_REASONING = ['low', 'medium', 'high', 'max'] as const;
+const GPT_5_6_PRICING = {
+  version: OPENAI_GPT_5_6_VERSION,
+  cacheWriteInputMultiplier: 1.25,
+  longContextThresholdTokens: 272_000,
+};
 
 const OPENAI_MODELS: Record<string, KnownInferenceProviderModel> = {
   'chat-latest': openAiModel('Chat Latest', 'chat-latest', 400_000, 128_000, 5, 30, 0.5),
-  'gpt-5.6': openAiModel('GPT-5.6 Sol', 'gpt-5.6-sol', 1_050_000, 128_000, 5, 30, 0.5, OPENAI_REASONING_MAX),
-  'gpt-5.6-sol': openAiModel('GPT-5.6 Sol', 'gpt-5.6-sol', 1_050_000, 128_000, 5, 30, 0.5, OPENAI_REASONING_MAX),
+  'gpt-5.6': openAiModel(
+    'GPT-5.6 Sol',
+    'gpt-5.6-sol',
+    1_050_000,
+    128_000,
+    5,
+    30,
+    0.5,
+    OPENAI_REASONING_MAX,
+    true,
+    GPT_5_6_PRICING
+  ),
+  'gpt-5.6-sol': openAiModel(
+    'GPT-5.6 Sol',
+    'gpt-5.6-sol',
+    1_050_000,
+    128_000,
+    5,
+    30,
+    0.5,
+    OPENAI_REASONING_MAX,
+    true,
+    GPT_5_6_PRICING
+  ),
   'gpt-5.6-terra': openAiModel(
     'GPT-5.6 Terra',
     'gpt-5.6-terra',
     1_050_000,
     128_000,
-    2.5,
-    15,
-    0.25,
-    OPENAI_REASONING_MAX
+    2,
+    12,
+    0.2,
+    OPENAI_REASONING_MAX,
+    true,
+    GPT_5_6_PRICING
   ),
-  'gpt-5.6-luna': openAiModel('GPT-5.6 Luna', 'gpt-5.6-luna', 1_050_000, 128_000, 1, 6, 0.1, OPENAI_REASONING_MAX),
+  'gpt-5.6-luna': openAiModel(
+    'GPT-5.6 Luna',
+    'gpt-5.6-luna',
+    1_050_000,
+    128_000,
+    0.2,
+    1.2,
+    0.02,
+    OPENAI_REASONING_MAX,
+    true,
+    GPT_5_6_PRICING
+  ),
   'gpt-5.5': openAiModel('GPT-5.5', 'gpt-5.5', 1_050_000, 128_000, 5, 30, 0.5, OPENAI_REASONING),
   'gpt-5.5-pro': openAiModel('GPT-5.5 Pro', 'gpt-5.5-pro', 1_050_000, 128_000, 30, 180, undefined, [
     'medium',
@@ -229,9 +271,11 @@ function openAiModel(
   outputPrice: number,
   cachedInputPrice?: number,
   reasoningEfforts: readonly string[] = [],
-  vision = true
+  vision = true,
+  pricingOptions?: { version: string; cacheWriteInputMultiplier: number; longContextThresholdTokens?: number }
 ): KnownInferenceProviderModel {
   const maxInputTokens = contextWindow > maxOutputTokens ? contextWindow - maxOutputTokens : contextWindow;
+  const pricingVersion = pricingOptions?.version ?? OPENAI_VERSION;
   return {
     displayName,
     contextWindow,
@@ -241,8 +285,15 @@ function openAiModel(
     modalities: ['text', ...(vision ? ['image'] : [])],
     capabilities: { reasoning: reasoningEfforts.length > 0, tools: true, vision },
     reasoningEfforts: [...reasoningEfforts],
-    pricing: tokenPricing(OPENAI_VERSION, inputPrice, outputPrice, cachedInputPrice),
-    catalogVersion: OPENAI_VERSION,
+    pricing: tokenPricing(
+      pricingVersion,
+      inputPrice,
+      outputPrice,
+      cachedInputPrice,
+      pricingOptions ? inputPrice * pricingOptions.cacheWriteInputMultiplier : undefined,
+      pricingOptions?.longContextThresholdTokens
+    ),
+    catalogVersion: pricingVersion,
     sourceUrl: `${OPENAI_SOURCE}/${slug}`,
   };
 }
@@ -320,14 +371,31 @@ function tokenPricing(
   inputPrice: number,
   outputPrice: number,
   cachedInputPrice?: number,
-  cacheWritePrice?: number
+  cacheWritePrice?: number,
+  longContextThresholdTokens?: number
 ): InferenceProviderModelPricing {
+  const inputMicrodollarsPerMillion = microdollars(inputPrice);
+  const cachedInputMicrodollarsPerMillion = cachedInputPrice === undefined ? undefined : microdollars(cachedInputPrice);
+  const cacheWriteMicrodollarsPerMillion = cacheWritePrice === undefined ? undefined : microdollars(cacheWritePrice);
+  const outputMicrodollarsPerMillion = microdollars(outputPrice);
   return {
     version,
-    inputMicrodollarsPerMillion: microdollars(inputPrice),
-    ...(cachedInputPrice === undefined ? {} : { cachedInputMicrodollarsPerMillion: microdollars(cachedInputPrice) }),
-    ...(cacheWritePrice === undefined ? {} : { cacheWriteMicrodollarsPerMillion: microdollars(cacheWritePrice) }),
-    outputMicrodollarsPerMillion: microdollars(outputPrice),
+    inputMicrodollarsPerMillion,
+    ...(cachedInputMicrodollarsPerMillion === undefined ? {} : { cachedInputMicrodollarsPerMillion }),
+    ...(cacheWriteMicrodollarsPerMillion === undefined ? {} : { cacheWriteMicrodollarsPerMillion }),
+    outputMicrodollarsPerMillion,
+    ...(longContextThresholdTokens === undefined ||
+    cachedInputMicrodollarsPerMillion === undefined ||
+    cacheWriteMicrodollarsPerMillion === undefined
+      ? {}
+      : {
+          otherUnitPrices: longContextOtherUnitPrices(longContextThresholdTokens, {
+            inputMicrodollarsPerMillion,
+            cachedInputMicrodollarsPerMillion,
+            cacheWriteMicrodollarsPerMillion,
+            outputMicrodollarsPerMillion,
+          }),
+        }),
     source: 'provider',
   };
 }

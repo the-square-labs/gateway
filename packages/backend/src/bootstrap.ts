@@ -359,7 +359,13 @@ export async function initializeContainer(): Promise<void> {
     eventBus
   );
   container.registerInstance(InferenceAccountingService, inferenceAccountingService);
-  const inferenceUsageService = new InferenceUsageService(db, inferenceBudgetPolicyService, auditService, eventBus);
+  const inferenceUsageService = new InferenceUsageService(
+    db,
+    inferenceBudgetPolicyService,
+    auditService,
+    eventBus,
+    inferenceModelAccessService
+  );
   container.registerInstance(InferenceUsageService, inferenceUsageService);
   const inferenceReservationReconciler = new InferenceReservationReconciler(
     db,
@@ -914,14 +920,8 @@ export async function initializeContainer(): Promise<void> {
     loggingFeatureService
   );
   container.registerInstance(LoggingRuntimeService, loggingRuntimeService);
-  const loggingRuntimeConfig = await loggingSettingsService.getRuntimeConfig();
-  const loggingMaintenanceService = new LoggingMaintenanceService(
-    loggingClickHouseService,
-    loggingFeatureService,
-    loggingRuntimeConfig.managedInternalLogs
-  );
+  const loggingMaintenanceService = new LoggingMaintenanceService(loggingClickHouseService, loggingFeatureService);
   loggingMaintenanceService.setEventBus(eventBus);
-  loggingRuntimeService.setMaintenanceService(loggingMaintenanceService);
   container.registerInstance(LoggingMaintenanceService, loggingMaintenanceService);
   try {
     await loggingRuntimeService.initialize();
@@ -1127,7 +1127,10 @@ export async function initializeContainer(): Promise<void> {
   scheduler.register('housekeeping', hkConfig.cronExpression, () => housekeepingJob.run());
   scheduler.registerInterval('clickhouse-health-guard', 5 * 60 * 1000, async () => {
     const config = await housekeepingService.getConfig();
-    await loggingMaintenanceService.runGuard(config.enabled ? config.structuredLogs : undefined);
+    await loggingMaintenanceService.runGuard(
+      config.enabled ? config.structuredLogs : undefined,
+      config.enabled && config.clickHouseInternals.enabled
+    );
   });
 
   // Stale node detection (every 60 seconds) + missed health report detection (every 30 seconds)
@@ -1154,7 +1157,12 @@ export async function initializeContainer(): Promise<void> {
   setTimeout(() => {
     housekeepingService
       .getConfig()
-      .then((config) => loggingMaintenanceService.runGuard(config.enabled ? config.structuredLogs : undefined))
+      .then((config) =>
+        loggingMaintenanceService.runGuard(
+          config.enabled ? config.structuredLogs : undefined,
+          config.enabled && config.clickHouseInternals.enabled
+        )
+      )
       .catch((error) => logger.warn('Initial ClickHouse health guard failed', { error }));
   }, 1000);
 

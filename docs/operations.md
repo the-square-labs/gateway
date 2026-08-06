@@ -167,9 +167,9 @@ Logging is optional and is configured in **Settings → Gateway** as disabled, m
 
 Gateway pins its managed local ClickHouse container to an explicit `clickhouse/clickhouse-server` release tag instead of using `latest`. Upgrade the pinned runtime intentionally and verify it against a copy of existing ClickHouse data.
 
-An always-on guard monitors disk, structured logs, and ClickHouse internal logs. Internal-table cleanup is an explicit persisted setting and should be enabled only when the entire ClickHouse instance is dedicated to Gateway.
+An always-on guard monitors disk, structured logs, and ClickHouse internal logs. Enable **ClickHouse Internals** in **Settings → Housekeeping** to allow the five-minute guard and manual Housekeeping runs to trim supported system-log tables; enable it only when the entire ClickHouse instance is dedicated to Gateway.
 
-Settings > Housekeeping can additionally cap the shared structured-log table by row count and approximate on-disk size. Cleanup drops only complete oldest daily partitions and preserves the current partition. Per-environment `retentionDays` TTL remains active independently. Remote ClickHouse instances are monitored when their account can read storage metadata; internal cleanup is best effort and does not make ingest unavailable merely because maintenance privileges are absent.
+Settings > Housekeeping can additionally cap the shared structured-log table by row count and approximate on-disk size. Cleanup drops only complete oldest daily partitions and preserves the current partition. Per-environment `retentionDays` TTL remains active independently. Internal cleanup is best effort and does not make ingest unavailable merely because maintenance privileges are absent.
 
 If logging is disabled:
 

@@ -41,10 +41,6 @@ const envSchema = z.object({
   CLICKHOUSE_DATABASE: z.string().default('gateway_logs'),
   CLICKHOUSE_LOGS_TABLE: z.string().default('logs'),
   CLICKHOUSE_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
-  CLICKHOUSE_MANAGED_INTERNAL_LOGS: z
-    .string()
-    .default('false')
-    .transform((value) => value === 'true' || value === '1'),
 
   // External logging ingest guardrails
   LOGGING_INGEST_MAX_BODY_BYTES: z.coerce.number().int().positive().default(1_048_576),

@@ -1,0 +1,25 @@
+{
+  "file_name": "2npkkqwm_gateway_clickhouse_logging",
+  "edges": [
+    {
+      "from_id": "2npkkqwm",
+      "to_id": "j4jc2kmk",
+      "relation": "same_area",
+      "weight": 0.65,
+      "reason": "Both document Gateway operational log housekeeping, covering Docker container log caps alongside structured ClickHouse retention.",
+      "source": "auto",
+      "created_at": 1785978790336,
+      "updated_at": 1785978790336
+    },
+    {
+      "from_id": "2npkkqwm",
+      "to_id": "7abclq2n",
+      "relation": "same_area",
+      "weight": 0.45,
+      "reason": "Both concern Gateway ClickHouse usage, linking the operational logging store to its repository-level database connector behavior.",
+      "source": "auto",
+      "created_at": 1785978790336,
+      "updated_at": 1785978790336
+    }
+  ]
+}

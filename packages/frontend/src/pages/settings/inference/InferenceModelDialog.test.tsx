@@ -219,6 +219,11 @@ describe("InferenceModelDialog", () => {
     expect(screen.getByRole("spinbutton", { name: "Maximum output tokens" })).toHaveAttribute(
       "readonly"
     );
+    const multiplier = screen.getByRole("spinbutton", { name: "Subscription multiplier" });
+    await user.clear(multiplier);
+    expect(multiplier).toHaveValue(null);
+    expect(screen.getByRole("button", { name: "Add model" })).toBeDisabled();
+    await user.type(multiplier, "1");
     await user.clear(screen.getByRole("spinbutton", { name: "Context window" }));
     await user.type(screen.getByRole("spinbutton", { name: "Context window" }), "350000");
     expect(screen.queryByText(/Managed provider pricing/)).not.toBeInTheDocument();
@@ -250,12 +255,6 @@ describe("InferenceModelDialog", () => {
         modalities: ["text"],
         capabilities: { reasoning: false, tools: true, vision: false },
         reasoningEfforts: [],
-        pricing: {
-          version: "manual-test",
-          inputMicrodollarsPerMillion: 1,
-          outputMicrodollarsPerMillion: 1,
-          source: "provider",
-        },
         available: true,
       },
     ];
@@ -301,6 +300,12 @@ describe("InferenceModelDialog", () => {
     expect(optionalOutput).toHaveAttribute("placeholder", "Not reported");
     expect(optionalOutput).toHaveValue(null);
     expect(addModel).toBeEnabled();
+
+    await user.click(screen.getByRole("tab", { name: "Pricing" }));
+    const inputPrice = screen.getByRole("spinbutton", { name: "Input tokens" });
+    await user.clear(inputPrice);
+    expect(inputPrice).toHaveValue(null);
+    expect(addModel).toBeDisabled();
   });
 });
 

@@ -160,7 +160,6 @@ const SetupLoggingSchema = z.object({
   database: z.string().trim().min(1).optional(),
   table: z.string().trim().min(1).optional(),
   requestTimeoutMs: z.number().int().positive().optional(),
-  managedInternalLogs: z.boolean().optional(),
 });
 
 const SetupApplySchema = z.object({

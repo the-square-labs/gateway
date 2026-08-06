@@ -32,6 +32,7 @@ export const HousekeepingConfigUpdateSchema = z
           .optional(),
       })
       .optional(),
+    clickHouseInternals: z.object({ enabled: z.boolean().optional() }).optional(),
     orphanedAIArtifacts: z.object({ enabled: z.boolean().optional() }).optional(),
     gatewayLogs: z.object({ enabled: z.literal(false).optional() }).optional(),
     orphanedVolumes: z

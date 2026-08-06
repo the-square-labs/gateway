@@ -30,7 +30,31 @@ describe('known inference provider model catalog', () => {
       pricing: {
         inputMicrodollarsPerMillion: 5_000_000,
         cachedInputMicrodollarsPerMillion: 500_000,
+        cacheWriteMicrodollarsPerMillion: 6_250_000,
         outputMicrodollarsPerMillion: 30_000_000,
+      },
+    });
+    expect(knownProviderModel('openai-apikey', 'gpt-5.6-terra')).toMatchObject({
+      pricing: {
+        inputMicrodollarsPerMillion: 2_000_000,
+        cachedInputMicrodollarsPerMillion: 200_000,
+        cacheWriteMicrodollarsPerMillion: 2_500_000,
+        outputMicrodollarsPerMillion: 12_000_000,
+      },
+    });
+    expect(knownProviderModel('openai-apikey', 'gpt-5.6-luna')).toMatchObject({
+      pricing: {
+        inputMicrodollarsPerMillion: 200_000,
+        cachedInputMicrodollarsPerMillion: 20_000,
+        cacheWriteMicrodollarsPerMillion: 250_000,
+        outputMicrodollarsPerMillion: 1_200_000,
+        otherUnitPrices: {
+          long_context_threshold_tokens: 272_000,
+          long_context_input_microdollars_per_million: 400_000,
+          long_context_cached_input_microdollars_per_million: 40_000,
+          long_context_cache_write_microdollars_per_million: 500_000,
+          long_context_output_microdollars_per_million: 1_800_000,
+        },
       },
     });
     expect(knownProviderModel('openai-apikey', 'gpt-4')).toMatchObject({

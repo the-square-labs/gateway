@@ -100,7 +100,6 @@ export const UpdateAuthProvisioningSettingsSchema = z.object({
       database: z.string().trim().min(1).max(255).optional(),
       table: z.string().trim().min(1).max(255).optional(),
       requestTimeoutMs: z.number().int().positive().max(120_000).optional(),
-      managedInternalLogs: z.boolean().optional(),
     })
     .optional(),
   generalSettings: z

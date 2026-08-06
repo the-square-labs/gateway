@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  INFERENCE_CATALOG_CHANGED_CHANNEL,
   INFERENCE_SELF_USAGE_CACHE_KEY,
   INFERENCE_USAGE_CHANGED_CHANNEL,
   subscribeToInferenceSelfUsage,
@@ -53,10 +54,14 @@ export function useInferenceSelfUsage(enabled = true) {
     const unsubscribeRealtime = eventStream.subscribe(INFERENCE_USAGE_CHANGED_CHANNEL, () => {
       void load();
     });
+    const unsubscribeCatalog = eventStream.subscribe(INFERENCE_CATALOG_CHANGED_CHANNEL, () => {
+      void load();
+    });
     void load();
     return () => {
       unsubscribeUsage();
       unsubscribeRealtime();
+      unsubscribeCatalog();
     };
   }, [enabled, load]);
 

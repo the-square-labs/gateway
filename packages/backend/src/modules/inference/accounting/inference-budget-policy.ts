@@ -4,6 +4,7 @@ import { TOKENS } from '@/container.js';
 import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
 import { inferenceLimitPolicies, inferenceUsageLedger } from '@/db/schema/index.js';
 import type { InferenceLimitPolicy } from '@/db/schema/inference-models.js';
+import { tokenPricingForInputTokens } from '../inference-pricing.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 
 export const SUBSCRIPTION_WINDOWS = {
@@ -216,18 +217,23 @@ export function apiMicrodollars(
     cacheWriteMicrodollarsPerMillion: number | null;
     outputMicrodollarsPerMillion: number | null;
     reasoningMicrodollarsPerMillion: number | null;
+    otherUnitPrices?: Record<string, number>;
   }
 ): number {
-  if (pricing.inputMicrodollarsPerMillion === null || pricing.outputMicrodollarsPerMillion === null) {
+  const effectivePricing = tokenPricingForInputTokens(usage.inputTokens, pricing);
+  if (effectivePricing.inputMicrodollarsPerMillion === null || effectivePricing.outputMicrodollarsPerMillion === null) {
     throw new InferenceProtocolError(503, 'pricing_unavailable', 'API pricing is unavailable');
   }
   const uncachedInput = Math.max(0, usage.inputTokens - usage.cachedInputTokens);
   const cost =
-    uncachedInput * pricing.inputMicrodollarsPerMillion +
-    usage.cachedInputTokens * (pricing.cachedInputMicrodollarsPerMillion ?? pricing.inputMicrodollarsPerMillion) +
-    usage.cacheWriteTokens * (pricing.cacheWriteMicrodollarsPerMillion ?? pricing.inputMicrodollarsPerMillion) +
-    usage.outputTokens * pricing.outputMicrodollarsPerMillion +
-    usage.reasoningTokens * (pricing.reasoningMicrodollarsPerMillion ?? pricing.outputMicrodollarsPerMillion);
+    uncachedInput * effectivePricing.inputMicrodollarsPerMillion +
+    usage.cachedInputTokens *
+      (effectivePricing.cachedInputMicrodollarsPerMillion ?? effectivePricing.inputMicrodollarsPerMillion) +
+    usage.cacheWriteTokens *
+      (effectivePricing.cacheWriteMicrodollarsPerMillion ?? effectivePricing.inputMicrodollarsPerMillion) +
+    usage.outputTokens * effectivePricing.outputMicrodollarsPerMillion +
+    usage.reasoningTokens *
+      (effectivePricing.reasoningMicrodollarsPerMillion ?? effectivePricing.outputMicrodollarsPerMillion);
   return Math.ceil(cost / 1_000_000);
 }
 
@@ -279,4 +285,4 @@ function zonedDateToUtc(year: number, month: number, day: number, timezone: stri
   return candidate;
 }
 
-export const __testOnly = { effectiveLimits };
+export const __testOnly = { effectiveLimits, apiMicrodollars };

@@ -112,7 +112,6 @@ const DEFAULT_LOGGING_DRAFT = {
   database: "gateway_logs",
   table: "logs",
   requestTimeoutMs: "5000",
-  managedInternalLogs: false,
 };
 
 function bytesToMegabytes(bytes: number) {
@@ -266,7 +265,6 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
         database: settingsData.logging?.database ?? "gateway_logs",
         table: settingsData.logging?.table ?? "logs",
         requestTimeoutMs: String(settingsData.logging?.requestTimeoutMs ?? 5000),
-        managedInternalLogs: settingsData.logging?.managedInternalLogs ?? false,
       });
       setPublicUrl(settingsData.generalSettings.publicUrl ?? "");
       setTrustedProxyCidrs(settingsData.networkSecurity.trustedProxyCidrs.join(", "));
@@ -421,7 +419,6 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
                 database: loggingDraft.database.trim(),
                 table: loggingDraft.table.trim(),
                 requestTimeoutMs: Number(loggingDraft.requestTimeoutMs),
-                managedInternalLogs: loggingDraft.managedInternalLogs,
               }
             : {}),
         },
@@ -1203,21 +1200,6 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
                   }
                 />
               </SettingsControlRow>
-              <div className="flex items-center justify-between gap-4 px-4 py-3">
-                <div>
-                  <p className="text-sm font-medium">Manage ClickHouse internal logs</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    Allow Gateway maintenance jobs to manage supported ClickHouse system log tables.
-                  </p>
-                </div>
-                <Switch
-                  checked={loggingDraft.managedInternalLogs}
-                  disabled={!canEdit || isSavingLogging}
-                  onChange={(managedInternalLogs) =>
-                    setLoggingDraft((current) => ({ ...current, managedInternalLogs }))
-                  }
-                />
-              </div>
             </>
           )}
         </div>

@@ -74,14 +74,9 @@ export class LoggingMaintenanceService {
 
   constructor(
     private readonly storage: LoggingClickHouseService,
-    private readonly feature: LoggingFeatureService,
-    private managedInternalLogs = false
+    private readonly feature: LoggingFeatureService
   ) {
     this.snapshot = emptySnapshot(storage.isConfigured());
-  }
-
-  setManagedInternalLogs(enabled: boolean): void {
-    this.managedInternalLogs = enabled;
   }
 
   setEventBus(eventBus: EventBusService): void {
@@ -92,15 +87,8 @@ export class LoggingMaintenanceService {
     return structuredClone(this.snapshot);
   }
 
-  async runGuard(policy?: StructuredLogsPolicy): Promise<LoggingMaintenanceSnapshot> {
-    return this.serialize(async () => {
-      const previous = this.snapshot;
-      const next = await this.runGuardOnce(policy);
-      if (previous.status !== next.status || previous.reason !== next.reason) {
-        this.eventBus?.publish('logging.health.changed', { status: next.status, reason: next.reason });
-      }
-      return next;
-    });
+  async runGuard(policy?: StructuredLogsPolicy, cleanInternalLogs = false): Promise<LoggingMaintenanceSnapshot> {
+    return this.serialize(() => this.refreshSnapshot(policy, cleanInternalLogs));
   }
 
   async cleanupStructuredLogs(policy: StructuredLogsPolicy): Promise<LoggingCleanupResult> {
@@ -110,12 +98,24 @@ export class LoggingMaintenanceService {
   async cleanupStructuredLogsAndRefresh(policy: StructuredLogsPolicy): Promise<LoggingCleanupResult> {
     return this.serialize(async () => {
       const result = await this.cleanupStructuredLogsOnce(policy);
-      await this.runGuardOnce(policy);
+      await this.refreshSnapshot(policy, false);
       return result;
     });
   }
 
-  private async runGuardOnce(policy?: StructuredLogsPolicy): Promise<LoggingMaintenanceSnapshot> {
+  async cleanupInternalLogsAndRefresh(policy?: StructuredLogsPolicy): Promise<LoggingCleanupResult> {
+    return this.serialize(async () => {
+      const result = await this.cleanupInternalLogs();
+      await this.refreshSnapshot(policy, false);
+      if (result.error) throw new Error(result.error);
+      return { itemsCleaned: result.itemsCleaned, spaceFreedBytes: result.spaceFreedBytes };
+    });
+  }
+
+  private async runGuardOnce(
+    policy?: StructuredLogsPolicy,
+    cleanInternalLogs = false
+  ): Promise<LoggingMaintenanceSnapshot> {
     if (!this.storage.isConfigured()) {
       this.snapshot = emptySnapshot(false);
       return this.getSnapshot();
@@ -141,9 +141,9 @@ export class LoggingMaintenanceService {
 
     let cleanupError: string | null = null;
     let cleaned = false;
-    if (this.managedInternalLogs && stats.internalBytes > CLICKHOUSE_INTERNAL_LOG_CAP_BYTES) {
+    if (cleanInternalLogs && stats.internalBytes > CLICKHOUSE_INTERNAL_LOG_CAP_BYTES) {
       const result = await this.cleanupInternalLogs();
-      cleaned = result.cleaned;
+      cleaned = result.itemsCleaned > 0;
       cleanupError = result.error;
     }
     if (policy?.enabled && exceedsStructuredLimits(stats, policy)) {
@@ -165,6 +165,18 @@ export class LoggingMaintenanceService {
     this.snapshot = this.buildSnapshot(stats, policy, cleanupError, cleaned);
     this.updateCapacityGate(this.snapshot);
     return this.getSnapshot();
+  }
+
+  private async refreshSnapshot(
+    policy?: StructuredLogsPolicy,
+    cleanInternalLogs = false
+  ): Promise<LoggingMaintenanceSnapshot> {
+    const previous = this.snapshot;
+    const next = await this.runGuardOnce(policy, cleanInternalLogs);
+    if (previous.status !== next.status || previous.reason !== next.reason) {
+      this.eventBus?.publish('logging.health.changed', { status: next.status, reason: next.reason });
+    }
+    return next;
   }
 
   private async cleanupStructuredLogsOnce(policy: StructuredLogsPolicy): Promise<LoggingCleanupResult> {
@@ -200,9 +212,10 @@ export class LoggingMaintenanceService {
     return result;
   }
 
-  private async cleanupInternalLogs(): Promise<{ cleaned: boolean; error: string | null }> {
+  private async cleanupInternalLogs(): Promise<LoggingCleanupResult & { error: string | null }> {
     const errors: string[] = [];
-    let cleaned = false;
+    let itemsCleaned = 0;
+    let spaceFreedBytes = 0;
     try {
       await this.storage.flushSystemLogs();
     } catch (error) {
@@ -214,8 +227,8 @@ export class LoggingMaintenanceService {
       const tables = allTables.filter((table) =>
         CLEANABLE_INTERNAL_LOG_TABLES.has(table.table.replace(/_[0-9]+$/, ''))
       );
-      const preferred = tables.filter((table) => table.table !== 'query_log');
-      const fallback = tables.filter((table) => table.table === 'query_log');
+      const preferred = tables.filter((table) => table.table.replace(/_[0-9]+$/, '') !== 'query_log');
+      const fallback = tables.filter((table) => table.table.replace(/_[0-9]+$/, '') === 'query_log');
       let remaining = tables.reduce((sum, table) => sum + table.bytes, 0);
       const target = CLICKHOUSE_INTERNAL_LOG_CAP_BYTES * CLICKHOUSE_INTERNAL_CLEANUP_TARGET_RATIO;
       for (const table of [...preferred, ...fallback]) {
@@ -223,7 +236,8 @@ export class LoggingMaintenanceService {
         try {
           await this.storage.cleanInternalLogTable(table.table);
           remaining = Math.max(0, remaining - table.bytes);
-          cleaned = true;
+          itemsCleaned += table.rows;
+          spaceFreedBytes += table.bytes;
         } catch (error) {
           errors.push(`${table.table}: ${message(error)}`);
         }
@@ -234,7 +248,7 @@ export class LoggingMaintenanceService {
 
     const cleanupError = errors.length > 0 ? errors.join('; ') : null;
     if (cleanupError) logger.warn('ClickHouse internal log cleanup was incomplete', { cleanupError });
-    return { cleaned, error: cleanupError };
+    return { itemsCleaned, spaceFreedBytes, error: cleanupError };
   }
 
   private buildSnapshot(
@@ -272,7 +286,11 @@ export class LoggingMaintenanceService {
       reason = cleanupError;
     } else if (pressure) {
       status = 'pressure';
-      reason = 'ClickHouse storage is approaching its configured capacity';
+      reason = internalPressure
+        ? 'ClickHouse internal logs are approaching their 256 MiB maintenance cap'
+        : structuredUsageRatio >= CLICKHOUSE_INTERNAL_WARNING_RATIO
+          ? 'Structured log storage is approaching its configured limit'
+          : 'ClickHouse disk free space is running low';
     }
 
     return {

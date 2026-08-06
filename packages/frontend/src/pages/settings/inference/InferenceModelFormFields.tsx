@@ -157,7 +157,7 @@ export function ModelGeneralFields({
             min="0.01"
             step="0.1"
             value={form.subscriptionMultiplier}
-            onChange={(event) => setFormValue("subscriptionMultiplier", Number(event.target.value))}
+            onChange={(event) => setFormValue("subscriptionMultiplier", event.target.value)}
           />
         </label>
       </div>

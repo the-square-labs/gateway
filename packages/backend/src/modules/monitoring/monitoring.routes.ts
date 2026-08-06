@@ -218,7 +218,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
   const inferencePromise = canViewInference
     ? container
         .resolve(InferenceUsageService)
-        .self(user.id)
+        .self(user)
         // Usage is an optional dashboard card. An older installation can have
         // Gateway Inference enabled before a default budget policy exists; that
         // must not make the whole dashboard unavailable.

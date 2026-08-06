@@ -4,6 +4,7 @@ import { vi } from "vitest";
 import { AdminNodes } from "@/pages/AdminNodes";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { useDaemonUpdatesStore } from "@/stores/daemon-updates";
 import { makeNode, makeUser } from "@/test/fixtures";
 import { renderWithRouter } from "@/test/render";
 
@@ -12,6 +13,50 @@ vi.mock("@/hooks/use-realtime", () => ({
 }));
 
 describe("AdminNodes", () => {
+  it("shows offline status instead of an available daemon update", async () => {
+    useDaemonUpdatesStore.getState().setDaemonUpdates([]);
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [
+        makeNode({
+          id: "node-offline",
+          status: "offline",
+          isConnected: false,
+          daemonVersion: "2.4.0",
+        }),
+      ],
+      total: 1,
+      page: 1,
+      limit: 50,
+      totalPages: 1,
+    });
+    vi.spyOn(api, "listNodeFolders").mockResolvedValue([]);
+    vi.spyOn(api, "getDaemonUpdates").mockResolvedValue([
+      {
+        daemonType: "nginx",
+        latestVersion: "v2.5.0",
+        lastCheckedAt: new Date().toISOString(),
+        nodes: [
+          {
+            nodeId: "node-offline",
+            hostname: "edge-1",
+            currentVersion: "2.4.0",
+            updateAvailable: true,
+          },
+        ],
+      },
+    ]);
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["nodes:details", "admin:update"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+
+    renderWithRouter(<AdminNodes />);
+
+    expect(await screen.findByText("offline")).toBeInTheDocument();
+    expect(screen.queryByText("v2.5.0")).not.toBeInTheDocument();
+  });
+
   it("creates a node and shows the enrollment token and setup command", async () => {
     vi.spyOn(api, "listNodes").mockResolvedValue({
       data: [],

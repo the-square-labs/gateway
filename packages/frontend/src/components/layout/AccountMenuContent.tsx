@@ -46,12 +46,7 @@ export function AccountMenuContent({
         </div>
       </div>
       <DropdownMenuSeparator className="bg-border" />
-      {showInferenceUsage ? (
-        <>
-          <CompactInferenceUsage />
-          <DropdownMenuSeparator className="bg-border" />
-        </>
-      ) : null}
+      {showInferenceUsage ? <CompactInferenceUsage withMenuSeparator /> : null}
       <DropdownMenuItem onClick={() => navigateTo("/profile")}>
         <UserRound />
         Profile

@@ -33,9 +33,6 @@ export function parseLegacySettingsEnv(runtimeEnv: Env, content: string): Legacy
       CLICKHOUSE_DATABASE: optional('CLICKHOUSE_DATABASE') ?? runtimeEnv.CLICKHOUSE_DATABASE,
       CLICKHOUSE_LOGS_TABLE: optional('CLICKHOUSE_LOGS_TABLE') ?? runtimeEnv.CLICKHOUSE_LOGS_TABLE,
       CLICKHOUSE_REQUEST_TIMEOUT_MS: integer('CLICKHOUSE_REQUEST_TIMEOUT_MS', runtimeEnv.CLICKHOUSE_REQUEST_TIMEOUT_MS),
-      CLICKHOUSE_MANAGED_INTERNAL_LOGS: ['true', '1'].includes(
-        optional('CLICKHOUSE_MANAGED_INTERNAL_LOGS')?.toLowerCase() ?? ''
-      ),
     },
     appUrl: optional('APP_URL'),
   };

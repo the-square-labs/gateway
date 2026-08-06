@@ -354,13 +354,13 @@ export function AdminNodes() {
         renderCell: (node) => {
           if (isNodeUpdating(node)) return <Badge variant="warning">UPDATING</Badge>;
           if (isNodeIncompatible(node)) return <Badge variant="destructive">INCOMPATIBLE</Badge>;
+          const eStatus = effectiveNodeStatus(node);
           const daemonType = node.type === "databases" ? "docker" : node.type;
           const typeStatus = daemonUpdates.find((s) => s.daemonType === daemonType);
           const nodeStatus = typeStatus?.nodes.find((n) => n.nodeId === node.id);
-          if (nodeStatus?.updateAvailable && typeStatus?.latestVersion) {
+          if (eStatus === "online" && nodeStatus?.updateAvailable && typeStatus?.latestVersion) {
             return <Badge className="bg-warning text-black">{typeStatus.latestVersion}</Badge>;
           }
-          const eStatus = effectiveNodeStatus(node);
           return <Badge variant={STATUS_BADGE[eStatus] || "secondary"}>{eStatus}</Badge>;
         },
       },

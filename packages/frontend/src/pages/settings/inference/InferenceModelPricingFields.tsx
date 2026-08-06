@@ -14,7 +14,7 @@ export function ModelPricingFields({
   setPricing: Dispatch<SetStateAction<ModelPricingForm>>;
 }) {
   const managed = selected.pricing;
-  const setPrice = <K extends keyof ModelPricingForm>(key: K, value: number) =>
+  const setPrice = <K extends keyof ModelPricingForm>(key: K, value: string) =>
     setPricing((current) => ({ ...current, [key]: value }));
 
   return (
@@ -114,8 +114,8 @@ function ManualPriceRow({
   unit = "USD per 1M tokens",
 }: {
   label: string;
-  value: number;
-  onChange: (value: number) => void;
+  value: string;
+  onChange: (value: string) => void;
   unit?: string;
 }) {
   return (
@@ -127,7 +127,7 @@ function ManualPriceRow({
         value={value}
         aria-label={label}
         className="w-full"
-        onChange={(event) => onChange(Number(event.target.value))}
+        onChange={(event) => onChange(event.target.value)}
       />
     </SettingsControlRow>
   );

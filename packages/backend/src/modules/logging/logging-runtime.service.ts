@@ -1,12 +1,9 @@
 import type { LocalClickHouseService } from './local-clickhouse.service.js';
 import type { LoggingClickHouseService } from './logging-clickhouse.service.js';
 import type { LoggingFeatureService } from './logging-feature.service.js';
-import type { LoggingMaintenanceService } from './logging-maintenance.service.js';
 import type { LoggingSettingsInput, LoggingSettingsService } from './logging-settings.service.js';
 
 export class LoggingRuntimeService {
-  private maintenance?: LoggingMaintenanceService;
-
   constructor(
     private readonly settings: LoggingSettingsService,
     private readonly local: LocalClickHouseService,
@@ -33,12 +30,7 @@ export class LoggingRuntimeService {
     await this.applyRuntime(runtime);
   }
 
-  setMaintenanceService(service: LoggingMaintenanceService): void {
-    this.maintenance = service;
-  }
-
   private async applyRuntime(runtime: Awaited<ReturnType<LoggingSettingsService['getRuntimeConfig']>>): Promise<void> {
-    this.maintenance?.setManagedInternalLogs(runtime.managedInternalLogs);
     if (runtime.mode === 'local') {
       await this.local.reconcile(runtime);
       await this.storage.configure(runtime);

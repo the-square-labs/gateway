@@ -112,7 +112,6 @@ export interface AuthProvisioningSettings {
     database: string;
     table: string;
     requestTimeoutMs: number;
-    managedInternalLogs: boolean;
   };
   mcpServerEnabled: boolean;
   mcpExtendedCompatibility: boolean;

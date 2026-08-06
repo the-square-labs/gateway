@@ -31,9 +31,11 @@ import {
   exposedReasoningEfforts,
   formFromModel,
   formWithProviderModel,
+  hasCompletePricing,
   hasCompleteTechnicalLimits,
   modelTechnicalLimits,
   normalizeReasoningMap,
+  parsePositiveNumber,
   pricingFromModel,
   pricingFromProvider,
   pricingPayload,
@@ -136,6 +138,8 @@ export function InferenceModelDialog({
       const normalizedMapping = normalizeReasoningMap(mapping);
       const efforts = exposedReasoningEfforts(normalizedMapping);
       const limits = modelTechnicalLimits(form);
+      const subscriptionMultiplier = parsePositiveNumber(form.subscriptionMultiplier);
+      if (subscriptionMultiplier === null || !hasCompletePricing(pricing)) return;
       const payload = {
         publicId: form.publicId.trim(),
         displayName: form.displayName.trim(),
@@ -148,7 +152,7 @@ export function InferenceModelDialog({
         reasoningEfforts: efforts,
         defaultReasoningEffort: efforts.includes(defaultEffort) ? defaultEffort : null,
         defaultAccessAllowed: accessMode === "everyone",
-        subscriptionMultiplier: form.subscriptionMultiplier,
+        subscriptionMultiplier,
       };
       await api.saveInferenceModelConfiguration(editing?.id ?? null, {
         model: payload,
@@ -186,12 +190,12 @@ export function InferenceModelDialog({
     selected &&
       form.publicId.trim() &&
       form.displayName.trim() &&
-      form.subscriptionMultiplier > 0 &&
+      parsePositiveNumber(form.subscriptionMultiplier) !== null &&
       hasCompleteTechnicalLimits(form) &&
       selected.bindings.length > 0 &&
       (accessMode !== "selected" ||
         (accessSubjects.length > 0 && accessSubjects.every((subject) => subject.subjectId))) &&
-      Object.values(pricing).every((value) => Number.isFinite(value) && value >= 0) &&
+      hasCompletePricing(pricing) &&
       Object.entries(mapping).every(
         ([clientEffort, upstreamEffort]) => clientEffort.trim() && upstreamEffort.trim()
       ) &&

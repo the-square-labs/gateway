@@ -65,7 +65,6 @@ export class LoggingClickHouseService {
       database: env.CLICKHOUSE_DATABASE,
       table: env.CLICKHOUSE_LOGS_TABLE,
       requestTimeoutMs: env.CLICKHOUSE_REQUEST_TIMEOUT_MS,
-      managedInternalLogs: env.CLICKHOUSE_MANAGED_INTERNAL_LOGS,
     });
   }
 

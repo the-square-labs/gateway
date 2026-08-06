@@ -156,14 +156,7 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
     {
       id: "billing",
       header: "Billing",
-      render: (model) => {
-        const apiSource = model.sources.find((source) => source.sourceType === "api");
-        return apiSource ? (
-          <span>{apiSource.pricing ? "API pricing ready" : "Pricing required"}</span>
-        ) : (
-          <span>{model.subscriptionMultiplier}× credits</span>
-        );
-      },
+      render: (model) => <span>{model.subscriptionMultiplier}× credits</span>,
     },
     {
       id: "status",

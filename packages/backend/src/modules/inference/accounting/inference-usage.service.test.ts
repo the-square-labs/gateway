@@ -69,9 +69,14 @@ describe('inference usage presentation', () => {
   });
 
   it.each([
-    { limit: 0, configured: false },
-    { limit: 10_000_000, configured: true },
-  ])('reports whether the API budget is configured without exposing its value', async ({ limit, configured }) => {
+    { sourceTypes: ['subscription'], apiConfigured: false, subscriptionConfigured: true },
+    { sourceTypes: ['api'], apiConfigured: true, subscriptionConfigured: false },
+    { sourceTypes: [], apiConfigured: false, subscriptionConfigured: false },
+  ])('shows only limits for budget types reachable through available models', async ({
+    sourceTypes,
+    apiConfigured,
+    subscriptionConfigured,
+  }) => {
     const policies = {
       effective: vi.fn().mockResolvedValue({
         enabled: true,
@@ -81,7 +86,7 @@ describe('inference usage presentation', () => {
         credits7d: 500,
         credits30dEnabled: false,
         credits30d: 1_000,
-        apiMonthlyMicrodollars: limit,
+        apiMonthlyMicrodollars: 10_000_000,
         billingTimezone: 'UTC',
       }),
       usage: vi.fn().mockResolvedValue({
@@ -97,17 +102,34 @@ describe('inference usage presentation', () => {
         },
       }),
     };
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          innerJoin: vi.fn(() => ({
+            where: vi.fn().mockResolvedValue(sourceTypes.map((sourceType) => ({ sourceType }))),
+          })),
+        })),
+      })),
+    };
+    const modelAccess = { allowedModelIds: vi.fn().mockResolvedValue(new Set(['model-1'])) };
     const service = new InferenceUsageService(
-      {} as ConstructorParameters<typeof InferenceUsageService>[0],
+      db as unknown as ConstructorParameters<typeof InferenceUsageService>[0],
       policies as unknown as ConstructorParameters<typeof InferenceUsageService>[1],
-      {} as ConstructorParameters<typeof InferenceUsageService>[2]
+      {} as ConstructorParameters<typeof InferenceUsageService>[2],
+      undefined,
+      modelAccess as unknown as ConstructorParameters<typeof InferenceUsageService>[4]
     );
 
-    const result = await service.self('user-1');
+    const result = await service.self({
+      id: 'user-1',
+      groupId: 'group-1',
+      scopes: ['inference:use'],
+      isBlocked: false,
+    } as never);
 
-    expect(result.api.configured).toBe(configured);
+    expect(result.api.configured).toBe(apiConfigured);
     expect(result.subscription['5h'].configured).toBe(false);
-    expect(result.subscription['7d'].configured).toBe(true);
+    expect(result.subscription['7d'].configured).toBe(subscriptionConfigured);
     expect(result.subscription['30d'].configured).toBe(false);
     expect(result.api).not.toHaveProperty('limit');
   });

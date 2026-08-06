@@ -14,7 +14,6 @@ const runtimeEnv = {
   CLICKHOUSE_DATABASE: 'gateway_logs',
   CLICKHOUSE_LOGS_TABLE: 'logs',
   CLICKHOUSE_REQUEST_TIMEOUT_MS: 5000,
-  CLICKHOUSE_MANAGED_INTERNAL_LOGS: false,
 } as Env;
 
 describe('parseLegacySettingsEnv', () => {
@@ -33,7 +32,6 @@ describe('parseLegacySettingsEnv', () => {
         'CLICKHOUSE_DATABASE=logs',
         'CLICKHOUSE_LOGS_TABLE=events',
         'CLICKHOUSE_REQUEST_TIMEOUT_MS=9000',
-        'CLICKHOUSE_MANAGED_INTERNAL_LOGS=true',
         'APP_URL=https://gateway.example.test',
       ].join('\n')
     );
@@ -41,7 +39,6 @@ describe('parseLegacySettingsEnv', () => {
     expect(env.OIDC_CLIENT_SECRET).toBe('super-secret');
     expect(env.CLICKHOUSE_URL).toBe('https://clickhouse.example.test:8443');
     expect(env.CLICKHOUSE_REQUEST_TIMEOUT_MS).toBe(9000);
-    expect(env.CLICKHOUSE_MANAGED_INTERNAL_LOGS).toBe(true);
     expect(appUrl).toBe('https://gateway.example.test');
   });
 

@@ -6,9 +6,11 @@ import {
   EMPTY_MODEL_FORM,
   exposedReasoningEfforts,
   formWithProviderModel,
+  hasCompletePricing,
   hasCompleteTechnicalLimits,
   modelTechnicalLimits,
   normalizeReasoningMap,
+  parsePositiveNumber,
   pricingFromProvider,
   providerModelLabels,
 } from "./inference-model-form";
@@ -180,9 +182,23 @@ describe("inference model form helpers", () => {
 
     expect(option?.pricing).toEqual(discovered.pricing);
     expect(pricingFromProvider(option?.pricing)).toMatchObject({
-      inputPrice: 0.25,
-      outputPrice: 2,
+      inputPrice: "0.25",
+      outputPrice: "2",
     });
+  });
+
+  it("keeps blank billing drafts invalid instead of treating them as zero", () => {
+    expect(parsePositiveNumber("")).toBeNull();
+    expect(parsePositiveNumber("1.5")).toBe(1.5);
+    expect(
+      hasCompletePricing({
+        inputPrice: "",
+        outputPrice: "2",
+        imagePrice: "0",
+        searchPrice: "0",
+        realtimePrice: "0",
+      })
+    ).toBe(false);
   });
 });
 

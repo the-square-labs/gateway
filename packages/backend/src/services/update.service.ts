@@ -486,7 +486,6 @@ function legacySettingsMigrationEnv(env: Env): string[] {
     CLICKHOUSE_DATABASE: env.CLICKHOUSE_DATABASE,
     CLICKHOUSE_LOGS_TABLE: env.CLICKHOUSE_LOGS_TABLE,
     CLICKHOUSE_REQUEST_TIMEOUT_MS: env.CLICKHOUSE_REQUEST_TIMEOUT_MS,
-    CLICKHOUSE_MANAGED_INTERNAL_LOGS: env.CLICKHOUSE_MANAGED_INTERNAL_LOGS,
   };
   return Object.entries(values)
     .filter((entry): entry is [string, string | number | boolean] => entry[1] !== undefined)

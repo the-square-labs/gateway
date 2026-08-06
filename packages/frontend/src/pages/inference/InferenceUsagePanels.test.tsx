@@ -77,7 +77,7 @@ describe("InferenceUsage", () => {
     });
   });
 
-  it("keeps a disabled API card when the effective monthly budget is zero", async () => {
+  it("omits API usage when no API-backed model is available", async () => {
     vi.mocked(api.getInferenceSelfUsage).mockResolvedValue({
       enabled: true,
       api: { configured: false, percentage: 0, recoveryAt: "2026-08-01T00:00:00.000Z" },
@@ -91,14 +91,10 @@ describe("InferenceUsage", () => {
     render(<InferenceUsage />);
 
     expect(await screen.findByText("5 hours")).toBeInTheDocument();
-    const apiLabel = screen.getByText("API usage");
-    const apiCard = apiLabel.closest<HTMLElement>(".border-0");
-    expect(apiCard).toHaveTextContent("Disabled");
-    expect(apiCard).toHaveTextContent("API usage is disabled.");
-    expect(apiCard?.querySelector(".bg-primary")).toHaveStyle({ width: "0%" });
+    expect(screen.queryByText("API usage")).not.toBeInTheDocument();
   });
 
-  it("shows an unlimited credit card when every subscription window is disabled", async () => {
+  it("hides the profile panel when no billable model type is available", async () => {
     vi.mocked(api.getInferenceSelfUsage).mockResolvedValue({
       enabled: true,
       api: { configured: false, percentage: 0, recoveryAt: "2026-08-01T00:00:00.000Z" },
@@ -111,18 +107,8 @@ describe("InferenceUsage", () => {
 
     const { container } = render(<InferenceUsage />);
 
-    expect(await screen.findByText("API usage")).toBeInTheDocument();
-    expect(screen.getByText("Disabled")).toBeInTheDocument();
-    expect(screen.getByText("AI credits")).toBeInTheDocument();
-    expect(screen.getByText("Unlimited")).toBeInTheDocument();
-    expect(screen.getByText("API usage is disabled.")).toHaveClass("text-xs");
-    expect(screen.getByText("No credit limits configured.")).toHaveClass("text-xs");
-    expect(container.querySelectorAll(".border-0")).toHaveLength(2);
-    const emptyProgress = container.querySelector(".grid")?.querySelectorAll(".bg-primary");
-    expect(emptyProgress).toHaveLength(2);
-    for (const indicator of emptyProgress ?? []) {
-      expect(indicator).toHaveStyle({ width: "0%" });
-    }
+    await waitFor(() => expect(api.getInferenceSelfUsage).toHaveBeenCalledTimes(1));
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("shows dashboard usage only below 20 percent remaining", async () => {
@@ -223,7 +209,7 @@ describe("InferenceUsage", () => {
     expect(screen.queryByLabelText("Weekly remaining 95%")).not.toBeInTheDocument();
   });
 
-  it("renders unlimited AI usage as a disabled non-collapsible row", async () => {
+  it("hides compact usage when no billable model type is available", async () => {
     vi.mocked(api.getInferenceSelfUsage).mockResolvedValue({
       enabled: true,
       api: { configured: false, percentage: 0, recoveryAt: "2026-08-01T00:00:00.000Z" },
@@ -234,12 +220,10 @@ describe("InferenceUsage", () => {
       },
     });
 
-    render(<CompactInferenceUsage />);
+    const { container } = render(<CompactInferenceUsage />);
 
-    const unlimited = await screen.findByRole("button", { name: "Unlimited AI usage" });
-    expect(unlimited).toBeDisabled();
-    expect(unlimited).not.toHaveAttribute("aria-expanded");
-    expect(unlimited.querySelector(".lucide-chevron-down")).not.toBeInTheDocument();
+    await waitFor(() => expect(api.getInferenceSelfUsage).toHaveBeenCalledTimes(1));
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("keeps a retryable inline error instead of replacing the page", async () => {

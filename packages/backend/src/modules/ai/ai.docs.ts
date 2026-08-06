@@ -493,7 +493,7 @@ Automated cleanup tasks, configurable in Settings.
   - Dismissed Alerts: remove old dismissed alerts.
   - Delivery Log: delete old notification delivery attempts.
   - Structured Logs: cap ClickHouse application logs by total rows and approximate disk size while preserving the newest daily partition.
-  - ClickHouse Internals: an always-on safety guard monitors high-volume system logs independently of the housekeeping schedule. Automatic internal-table cleanup is limited to explicitly Gateway-managed ClickHouse instances; remote instances are monitor-only by default.
+  - ClickHouse Internals: monitor high-volume system logs and, when enabled, trim supported internal tables during manual Housekeeping runs and the five-minute health guard. Enable it only for a ClickHouse instance dedicated to Gateway.
   - Orphaned AI Artifacts: delete files no longer attached to a chat.
   - Orphaned Certs: remove unreferenced certificate files.
   - ACME Challenges: clean up old validation tokens.
@@ -663,7 +663,7 @@ Managed database instances are not generic Docker workloads. The database node o
 
 Gateway can ingest structured logs from external services into ClickHouse-backed logging environments.
 
-Per-environment retention TTL is complemented by optional Housekeeping caps for total rows and approximate disk size. ClickHouse also has an always-on internal-log safety budget and health guard; destructive internal cleanup is restricted to explicitly Gateway-managed instances, while remote instances are monitor-only by default. Users with housekeeping access see storage pressure on the Dashboard.
+Per-environment retention TTL is complemented by optional Housekeeping caps for total rows and approximate disk size. ClickHouse also has an internal-log safety budget and health guard. Enable ClickHouse Internals in Housekeeping to allow cleanup of supported system tables, and only do so for an instance dedicated to Gateway. Users with housekeeping access see storage pressure on the Dashboard.
 
 ## Resource Types
 Use manage_logging with singular resource names:

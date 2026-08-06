@@ -203,7 +203,7 @@ inferenceManagementRoutes.openapi(inferenceModelSuggestionsRoute, async (c) => {
 
 inferenceManagementRoutes.use('/usage/self', requireScope('inference:usage:view:self'));
 inferenceManagementRoutes.openapi(inferenceSelfUsageRoute, async (c) => {
-  return c.json(await container.resolve(InferenceUsageService).self(c.get('user')!.id));
+  return c.json(await container.resolve(InferenceUsageService).self(c.get('user')!));
 });
 
 inferenceManagementRoutes.use('/usage/system', requireScope('inference:usage:view'));

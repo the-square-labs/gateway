@@ -471,7 +471,6 @@ class ApiClient extends withInferenceApi(
       database?: string;
       table?: string;
       requestTimeoutMs?: number;
-      managedInternalLogs?: boolean;
     };
     mcpServerEnabled?: boolean;
     mcpExtendedCompatibility?: boolean;

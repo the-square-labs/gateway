@@ -461,7 +461,9 @@ export function Dashboard() {
                         : loggingHealth.status === "unavailable"
                           ? "Structured logging unavailable"
                           : loggingHealth.status === "pressure"
-                            ? "Structured logging storage is running low"
+                            ? loggingHealth.internal.bytes >= loggingHealth.internal.warningBytes
+                              ? "ClickHouse internal logs are running high"
+                              : "Structured logging storage is running low"
                             : "Structured logging maintenance degraded"}
                     </p>
                     <p className="truncate text-sm text-muted-foreground">

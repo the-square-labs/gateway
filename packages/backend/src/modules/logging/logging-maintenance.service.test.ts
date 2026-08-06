@@ -129,9 +129,9 @@ describe('LoggingMaintenanceService', () => {
       ]),
       cleanInternalLogTable,
     });
-    const service = new LoggingMaintenanceService(storageService, feature(), true);
+    const service = new LoggingMaintenanceService(storageService, feature());
 
-    await expect(service.runGuard()).resolves.toMatchObject({ status: 'healthy' });
+    await expect(service.runGuard(undefined, true)).resolves.toMatchObject({ status: 'healthy' });
     expect(cleanInternalLogTable).toHaveBeenCalledWith('trace_log');
     expect(cleanInternalLogTable).not.toHaveBeenCalledWith('query_log');
   });
@@ -156,6 +156,69 @@ describe('LoggingMaintenanceService', () => {
 
     await expect(service.runGuard()).resolves.toMatchObject({ status: 'pressure' });
     expect(cleanInternalLogTable).not.toHaveBeenCalled();
+  });
+
+  it('reports internal-table cleanup to a manual Housekeeping run', async () => {
+    const cleanInternalLogTable = vi.fn().mockResolvedValue(undefined);
+    const storageService = storage({
+      getStorageStats: vi
+        .fn()
+        .mockResolvedValueOnce({
+          structuredRows: 100,
+          structuredBytes: 1000,
+          internalRows: 1_000_000,
+          internalBytes: CLICKHOUSE_INTERNAL_LOG_CAP_BYTES * 2,
+          diskTotalBytes: 100 * 1024 ** 3,
+          diskFreeBytes: 80 * 1024 ** 3,
+        })
+        .mockResolvedValueOnce({
+          structuredRows: 100,
+          structuredBytes: 1000,
+          internalRows: 42,
+          internalBytes: 32 * 1024 ** 2,
+          diskTotalBytes: 100 * 1024 ** 3,
+          diskFreeBytes: 80 * 1024 ** 3,
+        }),
+      listInternalLogTables: vi
+        .fn()
+        .mockResolvedValue([{ table: 'trace_log', rows: 42, bytes: CLICKHOUSE_INTERNAL_LOG_CAP_BYTES }]),
+      cleanInternalLogTable,
+    });
+    const service = new LoggingMaintenanceService(storageService, feature());
+    const eventBus = { publish: vi.fn() };
+    service.setEventBus(eventBus as any);
+
+    await expect(service.runGuard()).resolves.toMatchObject({ status: 'pressure' });
+    eventBus.publish.mockClear();
+
+    await expect(service.cleanupInternalLogsAndRefresh()).resolves.toEqual({
+      itemsCleaned: 42,
+      spaceFreedBytes: CLICKHOUSE_INTERNAL_LOG_CAP_BYTES,
+    });
+    expect(cleanInternalLogTable).toHaveBeenCalledWith('trace_log');
+    expect(eventBus.publish).toHaveBeenCalledWith(
+      'logging.health.changed',
+      expect.objectContaining({ status: 'healthy' })
+    );
+  });
+
+  it('cleans versioned query-log tables only after other internal logs', async () => {
+    const cleanInternalLogTable = vi.fn().mockResolvedValue(undefined);
+    const service = new LoggingMaintenanceService(
+      storage({
+        listInternalLogTables: vi.fn().mockResolvedValue([
+          { table: 'query_log_0', rows: 5, bytes: 50 * 1024 ** 2 },
+          { table: 'trace_log', rows: 20, bytes: 200 * 1024 ** 2 },
+        ]),
+        cleanInternalLogTable,
+      }),
+      feature()
+    );
+
+    await service.cleanupInternalLogsAndRefresh();
+
+    expect(cleanInternalLogTable).toHaveBeenCalledWith('trace_log');
+    expect(cleanInternalLogTable).not.toHaveBeenCalledWith('query_log_0');
   });
 
   it('drops oldest structured partitions while preserving the newest partition', async () => {
