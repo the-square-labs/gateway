@@ -79,13 +79,14 @@ describe("Profile", () => {
     expect(usage.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("groups API, OAuth, and inference credentials on the Authorizations tab", async () => {
+  it("groups API, OAuth, inference credentials, and sessions on the Authorizations tab", async () => {
     const user = userEvent.setup();
     renderProfile("/profile/authorizations");
 
     expect(screen.getByText("Gateway API authorizations")).toBeInTheDocument();
     expect(screen.getByText("OAuth authorizations")).toBeInTheDocument();
     expect(screen.getByText("Inference token authorizations")).toBeInTheDocument();
+    expect(await screen.findByText("No active browser sessions")).toBeInTheDocument();
     expect(screen.queryByText("Inference usage panel")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "Preferences" }));
@@ -111,7 +112,8 @@ describe("Profile", () => {
         lastSeenAt: Date.now(),
         expiresAt: Date.now() + 60_000,
         ipAddress: "203.0.113.10",
-        userAgent: "Gateway test browser",
+        userAgent:
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36",
         mfaSatisfiedAt: null,
         isCurrent: true,
       },
@@ -122,15 +124,17 @@ describe("Profile", () => {
         lastSeenAt: Date.now() - 60_000,
         expiresAt: Date.now() + 60_000,
         ipAddress: "203.0.113.11",
-        userAgent: "Other Gateway browser",
+        userAgent:
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36",
         mfaSatisfiedAt: null,
         isCurrent: false,
       },
     ]);
 
-    renderProfile("/profile");
+    renderProfile("/profile/authorizations");
 
     expect(await screen.findByText("This browser")).toBeInTheDocument();
+    expect(screen.getByText("Chrome on macOS")).toBeInTheDocument();
     expect(screen.getByText("This browser").closest("div.flex.flex-col")).toHaveClass(
       "bg-muted/60",
       "dark:bg-muted"
@@ -147,9 +151,10 @@ describe("Profile", () => {
     expect(signOutOtherSessions).toHaveAttribute("data-button");
     expect(signOutOtherSessions).toHaveClass("h-9", "px-4");
     expect(signOutOtherSessions.parentElement).not.toHaveClass("[&_[data-button]]:h-9");
-    expect(
-      screen.getByRole("button", { name: "Revoke session from Other Gateway browser" })
-    ).toHaveClass("h-9", "w-9");
+    expect(screen.getByRole("button", { name: "Revoke session from Chrome on macOS" })).toHaveClass(
+      "h-9",
+      "w-9"
+    );
   });
 
   it("hides the sign-out-others action when this is the only browser session", async () => {
@@ -167,7 +172,7 @@ describe("Profile", () => {
       },
     ]);
 
-    renderProfile("/profile");
+    renderProfile("/profile/authorizations");
 
     expect(await screen.findByText("This browser")).toBeInTheDocument();
     expect(screen.getByText("This browser").closest("div.flex.flex-col")).not.toHaveClass(

@@ -1,0 +1,15 @@
+{
+  "file_name": "hic3s1ta_oidc_session_metadata",
+  "edges": [
+    {
+      "from_id": "hic3s1ta",
+      "to_id": "elp4yliv",
+      "relation": "same_area",
+      "weight": 0.84,
+      "reason": "Both define defensive session handling in Gateway auth, including SessionService behavior for legacy sessions and stored authentication metadata.",
+      "source": "auto",
+      "created_at": 1786007174177,
+      "updated_at": 1786007174177
+    }
+  ]
+}

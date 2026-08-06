@@ -206,7 +206,10 @@ authRoutes.openapi(callbackRoute, async (c) => {
     const callbackUrl = new URL(oidc.redirectUri);
     callbackUrl.search = requestUrl.search;
 
-    const result = await authService.handleCallback(callbackUrl.toString(), state);
+    const result = await authService.handleCallback(callbackUrl.toString(), state, {
+      ipAddress: await getClientIpForContext(c),
+      userAgent: c.req.header('user-agent'),
+    });
     await auditService.log({
       userId: result.user.id,
       action: 'auth.login',

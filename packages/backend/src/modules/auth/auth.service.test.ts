@@ -1,7 +1,12 @@
 import 'reflect-metadata';
 import { describe, expect, it, vi } from 'vitest';
 import { inferenceProviderConnections, users } from '@/db/schema/index.js';
-import { AuthService, type NormalizedOidcClaims, normalizeOidcClaims } from './auth.service.js';
+import {
+  AuthService,
+  type NormalizedOidcClaims,
+  normalizeOidcClaims,
+  type OidcSessionMetadata,
+} from './auth.service.js';
 import { computeEffectiveUserAccess, fetchGroupScopeMap } from './live-session-user.js';
 
 const authorizationCodeGrantMock = vi.hoisted(() => vi.fn());
@@ -465,6 +470,43 @@ describe('AuthService OIDC identity binding', () => {
     );
   });
 
+  it('stores client metadata on OIDC sessions', async () => {
+    const existingUser = dbUser({ oidcSubject: 'real-sub' });
+    const harness = createAuthServiceHarness({
+      authSettings: {
+        oidcAutoCreateUsers: true,
+        oidcDefaultGroupId: 'viewer-group',
+        oidcRequireVerifiedEmail: false,
+      },
+      existingBySubject: existingUser,
+    });
+
+    await harness.loginWithClaims(
+      {
+        oidcSubject: 'real-sub',
+        email: existingUser.email,
+        emailVerified: true,
+        name: existingUser.name,
+        avatarUrl: null,
+      },
+      {
+        ipAddress: '203.0.113.10',
+        userAgent: 'Mozilla/5.0 Gateway test browser',
+      }
+    );
+
+    expect(harness.sessionService.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: existingUser.id }),
+      'access-token',
+      'refresh-token',
+      {
+        authMethod: 'oidc',
+        ipAddress: '203.0.113.10',
+        userAgent: 'Mozilla/5.0 Gateway test browser',
+      }
+    );
+  });
+
   it('normalizes a missing OIDC name to the account email', async () => {
     const existingUser = dbUser({ oidcSubject: 'real-sub', name: null });
     const harness = createAuthServiceHarness({
@@ -776,7 +818,7 @@ function createAuthServiceHarness(options: {
     sessionService,
     service,
     updateSet,
-    async loginWithClaims(claims: NormalizedOidcClaims) {
+    async loginWithClaims(claims: NormalizedOidcClaims, sessionMetadata?: OidcSessionMetadata) {
       authorizationCodeGrantMock.mockResolvedValueOnce({
         access_token: 'access-token',
         refresh_token: 'refresh-token',
@@ -789,7 +831,11 @@ function createAuthServiceHarness(options: {
         }),
       });
 
-      return service.handleCallback('https://gateway.example.com/callback?code=code&state=state', 'state');
+      return service.handleCallback(
+        'https://gateway.example.com/callback?code=code&state=state',
+        'state',
+        sessionMetadata
+      );
     },
   };
 }

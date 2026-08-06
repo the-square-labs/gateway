@@ -214,7 +214,6 @@ export function Profile() {
                 )}
               </PanelShell>
 
-              <BrowserSessionsPanel />
               {user?.authMethod !== "oidc" && <LocalAccountSecurityPanel />}
 
               {canUseInference && canViewInferenceUsage && <InferenceUsage />}
@@ -309,6 +308,7 @@ export function Profile() {
                 loggingSchemasList={loggingSchemasList}
               />
               {canUseInference && <InferenceTokensSection canManage={canManageInferenceTokens} />}
+              <BrowserSessionsPanel />
             </div>
           </TabsContent>
         </Tabs>
@@ -392,7 +392,7 @@ function BrowserSessionsPanel() {
                 />
                 <div className="min-w-0">
                   <p className="text-sm font-medium">
-                    {session.isCurrent ? "This browser" : session.userAgent || "Unknown browser"}
+                    {session.isCurrent ? "This browser" : sessionBrowserLabel(session.userAgent)}
                   </p>
                   <p className="mt-0.5 truncate text-xs text-muted-foreground">
                     {session.authMethod.replace("_", " ")} · {session.ipAddress || "Unknown IP"} ·
@@ -405,7 +405,7 @@ function BrowserSessionsPanel() {
                   variant="outline"
                   size="icon"
                   onClick={() => revoke(session.id)}
-                  aria-label={`Revoke session from ${session.userAgent || session.ipAddress || "unknown browser"}`}
+                  aria-label={`Revoke session from ${session.userAgent ? sessionBrowserLabel(session.userAgent) : session.ipAddress || "unknown browser"}`}
                   title="Revoke session"
                 >
                   <Trash2 className="h-4 w-4" />
@@ -450,6 +450,36 @@ function sessionDeviceFromUserAgent(userAgent: string | null): {
     return { Icon: Smartphone, label: "Phone" };
   }
   return { Icon: Monitor, label: "Desktop computer" };
+}
+
+function sessionBrowserLabel(userAgent: string | null): string {
+  if (!userAgent) return "Unknown browser";
+
+  const browser = /Edg\//i.test(userAgent)
+    ? "Microsoft Edge"
+    : /OPR\//i.test(userAgent)
+      ? "Opera"
+      : /Chrome\//i.test(userAgent)
+        ? "Chrome"
+        : /Firefox\//i.test(userAgent)
+          ? "Firefox"
+          : /Version\/.*Safari\//i.test(userAgent)
+            ? "Safari"
+            : null;
+  const platform = /iPhone|iPad/i.test(userAgent)
+    ? "iOS"
+    : /Android/i.test(userAgent)
+      ? "Android"
+      : /Macintosh/i.test(userAgent)
+        ? "macOS"
+        : /Windows/i.test(userAgent)
+          ? "Windows"
+          : /Linux/i.test(userAgent)
+            ? "Linux"
+            : null;
+
+  if (browser && platform) return `${browser} on ${platform}`;
+  return browser || "Unknown browser";
 }
 
 function LocalAccountSecurityPanel() {

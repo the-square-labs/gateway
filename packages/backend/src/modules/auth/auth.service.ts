@@ -63,6 +63,11 @@ export interface NormalizedOidcClaims {
   avatarUrl: string | null;
 }
 
+export interface OidcSessionMetadata {
+  ipAddress?: string;
+  userAgent?: string;
+}
+
 export function normalizeOidcClaims(claims: Record<string, unknown> | undefined | null): NormalizedOidcClaims {
   const subject = typeof claims?.sub === 'string' ? claims.sub : '';
   if (!subject) {
@@ -198,7 +203,8 @@ export class AuthService {
 
   async handleCallback(
     callbackUrl: string,
-    state: string
+    state: string,
+    sessionMetadata: OidcSessionMetadata = {}
   ): Promise<{ sessionId: string; user: User; returnTo?: string }> {
     // Settings can change while the user is at the identity provider. Do not
     // accept a callback for a method that has been disabled in the meantime.
@@ -226,7 +232,10 @@ export class AuthService {
       const normalizedClaims = normalizeOidcClaims(tokens.claims() as Record<string, unknown> | undefined | null);
       const user = await this.findOrCreateUser(normalizedClaims);
 
-      const { sessionId } = await this.sessionService.createSession(user, tokens.access_token, tokens.refresh_token);
+      const { sessionId } = await this.sessionService.createSession(user, tokens.access_token, tokens.refresh_token, {
+        authMethod: 'oidc',
+        ...sessionMetadata,
+      });
       await this.recordSuccessfulSignIn(user.id);
 
       logger.info('User logged in', { userId: user.id, email: user.email });
