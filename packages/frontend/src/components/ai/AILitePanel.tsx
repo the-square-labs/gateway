@@ -583,9 +583,10 @@ export function AILitePanel() {
       {messages.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center px-4">
           <div className="flex w-full max-w-3xl flex-col items-center gap-3">
-            <Sparkles className="h-8 w-8 text-muted-foreground/40" />
-            <p className="text-center text-sm text-muted-foreground">
-              Ask me anything about your infrastructure
+            <Sparkles className="h-8 w-8 text-muted-foreground" />
+            <p className="max-w-md text-center text-sm text-foreground/70">
+              Ask questions, investigate issues, and manage your infrastructure with
+              permission-aware guidance.
             </p>
             <QuickActionChips onSelect={handleQuickAction} />
           </div>

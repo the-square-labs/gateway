@@ -666,7 +666,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
             <Button
               variant="ghost"
               size="icon"
-              className="h-9 w-9"
+              className="-mr-1 h-9 w-9"
               onClick={onClose}
               title="Close AI Assistant"
               aria-label="Close AI Assistant"
@@ -714,9 +714,10 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
       {/* Messages */}
       {messages.length === 0 ? (
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-3">
-          <Sparkles className="h-8 w-8 text-muted-foreground/40" />
-          <p className="text-sm text-muted-foreground text-center">
-            Ask me anything about your infrastructure
+          <Sparkles className="h-8 w-8 text-muted-foreground" />
+          <p className="max-w-sm text-center text-sm text-foreground/70">
+            Ask questions, investigate issues, and manage your infrastructure with permission-aware
+            guidance.
           </p>
           <QuickActionChips onSelect={handleQuickAction} />
           {(isLoadingRecentConversations || recentConversations.length > 0) && (

@@ -192,7 +192,6 @@ export function AIComposer({
   const modeMeta = AI_APPROVAL_MODE_META[approvalMode];
   const ModeIcon = modeMeta.icon;
   const [usage, setUsage] = useState<AIContextUsage | null>(null);
-  const [textareaFocused, setTextareaFocused] = useState(false);
   const [updatingProvider, setUpdatingProvider] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const contextUsageDialog = useAIStore((state) => state.contextUsageDialog);
@@ -322,8 +321,7 @@ export function AIComposer({
       {!inferenceQuota.exhausted && (
         <div
           className={cn(
-            "flex flex-col border bg-muted/30 transition-colors",
-            textareaFocused ? "border-ring ring-1 ring-inset ring-ring" : "border-border",
+            "flex flex-col border border-border bg-muted/30 transition-colors",
             surfaceClassName
           )}
         >
@@ -365,8 +363,6 @@ export function AIComposer({
             value={input}
             onChange={onInputChange}
             onKeyDown={onKeyDown}
-            onFocus={() => setTextareaFocused(true)}
-            onBlur={() => setTextareaFocused(false)}
             onPaste={(event) => attachFiles(event.clipboardData.files)}
             placeholder={isStreaming ? "AI is responding..." : "Ask anything... (/ commands)"}
             disabled={disabled}

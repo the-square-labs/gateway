@@ -482,7 +482,7 @@ export function DashboardLayout() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-11 w-11"
+                className="h-10 w-10"
                 onClick={() => setMobileMenuOpen(true)}
               >
                 <Menu className="h-5 w-5" />
@@ -491,7 +491,11 @@ export function DashboardLayout() {
                 <img src="/android-chrome-192x192.png" alt="Gateway" className="h-5 w-5" />
                 Gateway
               </span>
-              {useAuthStore.getState().hasScope(AI_SCOPE) && <AIButton />}
+              {useAuthStore.getState().hasScope(AI_SCOPE) && (
+                <div className="ml-2">
+                  <AIButton />
+                </div>
+              )}
             </div>
           </header>
 
