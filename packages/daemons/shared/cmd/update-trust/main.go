@@ -70,6 +70,7 @@ func sign(args []string) {
 	image := fs.String("image", "", "gateway image repository")
 	digest := fs.String("digest", "", "gateway image digest")
 	databaseConnectorImage := fs.String("database-connector-image", "", "digest-pinned database connector image reference")
+	relayVersion := fs.String("relay-version", "", "standalone relay contract version")
 	commitSHA := fs.String("git-commit-sha", "", "Git commit SHA")
 	pipelineID := fs.String("git-pipeline-id", "", "GitLab pipeline ID")
 	must(fs.Parse(args))
@@ -108,10 +109,11 @@ func sign(args []string) {
 		}
 	case "gateway-image":
 		required(map[string]string{
-			"--version": *version,
-			"--tag":     *tag,
-			"--image":   *image,
-			"--digest":  *digest,
+			"--version":       *version,
+			"--tag":           *tag,
+			"--image":         *image,
+			"--digest":        *digest,
+			"--relay-version": *relayVersion,
 		})
 		payloadMap := map[string]string{
 			"kind":          "gateway-image",
@@ -120,6 +122,7 @@ func sign(args []string) {
 			"image":         *image,
 			"digest":        *digest,
 			"imageRef":      fmt.Sprintf("%s@%s", *image, *digest),
+			"relayVersion":  *relayVersion,
 			"createdAt":     createdAt,
 			"gitCommitSha":  *commitSHA,
 			"gitPipelineId": *pipelineID,

@@ -1,5 +1,6 @@
 import type {
   DaemonUpdateStatus,
+  DashboardRelaySnapshot,
   HousekeepingConfig,
   HousekeepingRunResult,
   HousekeepingStats,
@@ -17,6 +18,12 @@ export function withSystemApi<TBase extends ApiClientBaseConstructor>(Base: TBas
 
     async getSystemConfig(): Promise<SystemConfig> {
       return this.unwrapData(this.request<{ data: SystemConfig }>("/system/config"));
+    }
+
+    async retryRelayRecovery(): Promise<DashboardRelaySnapshot> {
+      return this.unwrapData(
+        this.request<{ data: DashboardRelaySnapshot }>("/system/relay/recovery", { method: "POST" })
+      );
     }
 
     async checkForUpdates(): Promise<UpdateStatus> {

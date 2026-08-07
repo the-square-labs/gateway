@@ -62,12 +62,17 @@ export function createLogStreamHandlers(deps: GrpcServerDeps) {
         }
 
         const [node] = await deps.db
-          .select({ certificateSerial: nodes.certificateSerial, status: nodes.status })
+          .select({ certificateSerial: nodes.certificateSerial, status: nodes.status, type: nodes.type })
           .from(nodes)
           .where(eq(nodes.id, authenticatedNodeId))
           .limit(1);
 
-        if (!node || node.status === 'pending' || !node.certificateSerial) {
+        if (
+          !node ||
+          node.status === 'pending' ||
+          !node.certificateSerial ||
+          (certIdentity.nodeType && certIdentity.nodeType !== node.type)
+        ) {
           logger.warn('Log stream rejected: node is not enrolled', { nodeId });
           stream.end();
           return;

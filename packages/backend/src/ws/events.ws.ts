@@ -123,6 +123,7 @@ function hasChannelAccess(scopes: string[], channel: string): boolean {
   if (channel === 'read-model.refreshed') return true;
   if (channel === 'system.update.changed') return true;
   if (channel === 'system.config.changed') return true;
+  if (channel === 'system.relay.health.changed') return true;
   if (channel === 'integration.connector.changed') {
     return (
       hasScope(scopes, 'integrations:gitlab:view') ||

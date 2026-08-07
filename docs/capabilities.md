@@ -117,6 +117,8 @@ Gateway can store external PostgreSQL, Redis, and ClickHouse connections with en
 
 Managed instances are private by default. Gateway binds applications through a private connector and authenticated tunnel, with a separate engine identity per binding. Publishing TCP for external infrastructure is an explicit opt-in; it requires database authentication, Gateway does not open host firewalls automatically, and the path is not tunnel-encrypted unless native database TLS is configured.
 
+The managed-database tunnel terminates in a dedicated long-lived relay container on the existing Gateway `9443/tcp` endpoint. Ordinary application updates do not recreate this relay, so established binding sessions and new opens for already-ready bindings can continue while the app is restarting. Relay updates are explicit data-plane maintenance and may interrupt tunnel sessions.
+
 TCP publication and its host port are fixed at provisioning time because Docker cannot safely change live port bindings; recreate the managed instance to change that endpoint.
 
 Each binding creates a dedicated Postgres role, Redis ACL user, or ClickHouse user; deleting the binding revokes that principal. For normal containers Gateway attaches a private binding network and recreates the workload with the selected connection variables. For blue/green deployments it adds the private network and encrypted variables to the desired configuration, then rolls a slot so future blue and green containers receive the same connector endpoint.
@@ -173,7 +175,7 @@ Node features:
 - Report local/public IP addresses and allow an explicit Docker service address for cross-node and proxy-upstream traffic.
 - Remotely update daemon binaries with SHA256 verification and atomic replacement.
 
-Managed services keep running if Gateway is offline. You lose central control until Gateway returns, but nginx, Docker, and managed database services continue using the last applied host state.
+Managed services keep running if the Gateway app is offline. You lose central control until the app returns, but nginx, Docker, and managed database services continue using the last applied host state. With a healthy relay and PostgreSQL, private managed-database bindings continue independently of an app-only restart.
 
 ## Structured Logging
 

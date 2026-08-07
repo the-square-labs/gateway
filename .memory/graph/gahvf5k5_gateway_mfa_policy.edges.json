@@ -3,16 +3,6 @@
   "edges": [
     {
       "from_id": "gahvf5k5",
-      "to_id": "myhj1f8i",
-      "relation": "same_workflow",
-      "weight": 0.7483,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1786064967338,
-      "updated_at": 1786064967338
-    },
-    {
-      "from_id": "gahvf5k5",
       "to_id": "gdptltym",
       "relation": "related_to",
       "weight": 0.4908,

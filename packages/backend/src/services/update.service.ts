@@ -14,7 +14,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { DockerService } from './docker.service.js';
 
 const logger = createChildLogger('UpdateService');
-const DOCKER_COMPOSE_CLI_IMAGE_REF =
+export const DOCKER_COMPOSE_CLI_IMAGE_REF =
   'docker.io/library/docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c';
 
 export interface UpdateStatus {
@@ -315,6 +315,7 @@ export class UpdateService {
       composeDir,
       envTag: tag,
       imageRef: artifact.imageRef,
+      relayVersion: artifact.relayVersion,
     });
     const foundationCommand = [
       'node',
@@ -324,6 +325,10 @@ export class UpdateService {
       '--target-version',
       tag,
       '--image-ref',
+      artifact.imageRef,
+      '--relay-version',
+      artifact.relayVersion,
+      '--relay-image-ref',
       artifact.imageRef,
       ...(artifact.databaseConnectorImage ? ['--database-connector-image', artifact.databaseConnectorImage] : []),
     ];

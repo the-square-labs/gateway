@@ -1238,7 +1238,7 @@ func refreshDatabaseLoopDeviceCapacity(ctx context.Context, loopDevice string) e
 func attachDatabaseLoopDevice(ctx context.Context, imagePath string) (string, error) {
 	output, err := exec.CommandContext(ctx, "losetup", "--find", "--show", "--nooverlap", imagePath).CombinedOutput()
 	if err == nil {
-		loopDevice := strings.TrimSpace(string(output))
+		loopDevice := loopDeviceFromLosetupOutput(output)
 		if loopDevice == "" {
 			return "", errors.New("losetup did not return a loop device")
 		}
@@ -1255,7 +1255,7 @@ func attachDatabaseLoopDevice(ctx context.Context, imagePath string) (string, er
 	if findErr != nil {
 		return "", fmt.Errorf("find free database loop device: %w: %s", findErr, strings.TrimSpace(string(found)))
 	}
-	loopDevice := strings.TrimSpace(string(found))
+	loopDevice := loopDeviceFromLosetupOutput(found)
 	if loopDevice == "" {
 		return "", errors.New("losetup did not return a free loop device")
 	}
@@ -1263,6 +1263,16 @@ func attachDatabaseLoopDevice(ctx context.Context, imagePath string) (string, er
 		return "", fmt.Errorf("attach database storage image: %w: %s", attachErr, strings.TrimSpace(string(attached)))
 	}
 	return loopDevice, nil
+}
+
+func loopDeviceFromLosetupOutput(output []byte) string {
+	for _, line := range strings.Split(string(output), "\n") {
+		candidate := strings.TrimSpace(line)
+		if strings.HasPrefix(candidate, "/dev/loop") && !strings.ContainsAny(candidate, " \t") {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func mounted(path string) bool {

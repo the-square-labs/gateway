@@ -22,6 +22,7 @@ const SETTINGS: AuthProvisioningSettings = {
     gatewayPublicIps: [],
     gatewayGrpcPublicTarget: null,
     gatewayGrpcLocalIp: null,
+    relayAutoRecovery: true,
     features: {
       pkiEnabled: true,
       domainsEnabled: true,
@@ -105,6 +106,29 @@ describe("AuthProvisioningSection inference setting", () => {
     expect(inferenceToggle).toHaveAttribute("aria-pressed", "false");
     expect(screen.queryByText("Enable alpha inference?")).not.toBeInTheDocument();
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it("persists the bounded Gateway relay auto-recovery toggle", async () => {
+    api.setCache("settings:auth-provisioning", SETTINGS);
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(SETTINGS);
+    const update = vi
+      .spyOn(api, "updateAuthProvisioningSettings")
+      .mockImplementation(async (input) => ({
+        ...SETTINGS,
+        generalSettings: { ...SETTINGS.generalSettings, ...input.generalSettings },
+      }));
+    const user = userEvent.setup();
+
+    render(<AuthProvisioningSection canEdit />);
+    await user.click(
+      await screen.findByRole("button", { name: "Enable Gateway relay auto-recovery" })
+    );
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith({
+        generalSettings: expect.objectContaining({ relayAutoRecovery: false }),
+      })
+    );
   });
 
   it("persists extended MCP compatibility", async () => {

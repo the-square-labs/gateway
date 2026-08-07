@@ -2,7 +2,8 @@ import 'reflect-metadata';
 import { getEnv } from '@/config/env.js';
 import { container, TOKENS } from '@/container.js';
 import { createDrizzleClient } from '@/db/client.js';
-import { refreshGrpcServerCredentials } from '@/grpc/server.js';
+import { RelayControlClient } from '@/grpc/relay-control.client.js';
+import { refreshGrpcServerCredentials, stageGrpcServerRelayTrust } from '@/grpc/server.js';
 import { ACMERenewalJob } from '@/jobs/acme-renewal.job.js';
 import { DaemonUpdateCheckJob } from '@/jobs/daemon-update-check.job.js';
 import { DnsCheckJob } from '@/jobs/dns-check.job.js';
@@ -158,6 +159,11 @@ import { NginxConfigGenerator } from '@/services/nginx-config-generator.service.
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import { ReadModelCoordinator } from '@/services/read-model-coordinator.service.js';
+import { RelayDatabaseRoleProvisionerService } from '@/services/relay-database-role-provisioner.service.js';
+import { RelayDockerRecoveryService } from '@/services/relay-docker-recovery.service.js';
+import { RelayIdentityProvisionerService } from '@/services/relay-identity-provisioner.service.js';
+import { RelayStartupFinalizerService } from '@/services/relay-startup-finalizer.service.js';
+import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import { RuntimeRestartService } from '@/services/runtime-restart.service.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
@@ -502,6 +508,33 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(GrpcIdentityService, grpcIdentityService);
   await grpcIdentityService.resolve();
 
+  const relayDatabaseRoleProvisioner = new RelayDatabaseRoleProvisionerService(
+    env.DATABASE_URL,
+    env.GATEWAY_RELAY_DB_PASSWORD
+  );
+  container.registerInstance(RelayDatabaseRoleProvisionerService, relayDatabaseRoleProvisioner);
+  const relayIdentityProvisioner = new RelayIdentityProvisionerService(
+    db,
+    certService,
+    systemCertificateLifecycleService,
+    systemCA,
+    grpcIdentityService,
+    env.GATEWAY_RELAY_IDENTITY_DIR
+  );
+  container.registerInstance(RelayIdentityProvisionerService, relayIdentityProvisioner);
+  let relayControlClient: RelayControlClient | undefined;
+  if (env.GATEWAY_RELAY_REQUIRED) {
+    await relayDatabaseRoleProvisioner.ensure();
+    const identity = await relayIdentityProvisioner.ensure();
+    relayControlClient = new RelayControlClient({
+      target: env.GATEWAY_RELAY_TARGET,
+      systemCaPath: `${env.GATEWAY_RELAY_IDENTITY_DIR}/system-ca.crt`,
+      certificatePath: identity.appClientCertPath,
+      privateKeyPath: identity.appClientKeyPath,
+    });
+    container.registerInstance(RelayControlClient, relayControlClient);
+  }
+
   const webIdentityService = new WebIdentityService(env, systemCA);
   container.registerInstance(WebIdentityService, webIdentityService);
 
@@ -635,7 +668,7 @@ export async function initializeContainer(): Promise<void> {
   nginxTemplateService.setEventBus(eventBus);
   dockerRegistryService.setEventBus(eventBus);
 
-  const managedDatabaseTunnelProxy = new ManagedDatabaseTunnelProxy();
+  const managedDatabaseTunnelProxy = new ManagedDatabaseTunnelProxy(relayControlClient);
   container.registerInstance(ManagedDatabaseTunnelProxy, managedDatabaseTunnelProxy);
   const databaseConnectionService = new DatabaseConnectionService(
     db,
@@ -680,7 +713,8 @@ export async function initializeContainer(): Promise<void> {
     dockerDeploymentService,
     dockerSecretService,
     getEnv().DATABASE_CONNECTOR_IMAGE,
-    getEnv().NODE_ENV === 'development'
+    getEnv().NODE_ENV === 'development',
+    relayControlClient
   );
   managedDatabaseBindingService.setEventBus(eventBus);
   container.registerInstance(ManagedDatabaseBindingService, managedDatabaseBindingService);
@@ -903,8 +937,25 @@ export async function initializeContainer(): Promise<void> {
       container.resolve(LocalAuthService),
       finalizeSetupService,
       async () => {
-        const identity = await grpcIdentityService.refresh();
-        await refreshGrpcServerCredentials(identity.certPath, identity.keyPath, systemCA);
+        const externalIdentity = await grpcIdentityService.refresh();
+        if (!env.GATEWAY_RELAY_REQUIRED) {
+          await refreshGrpcServerCredentials(externalIdentity.certPath, externalIdentity.keyPath, systemCA);
+          return;
+        }
+        const relayIdentity = await relayIdentityProvisioner.refresh();
+        const commitRelayTrust = stageGrpcServerRelayTrust(relayIdentity.relayClientFingerprint);
+        await refreshGrpcServerCredentials(
+          relayIdentity.internalServerCertPath,
+          relayIdentity.internalServerKeyPath,
+          systemCA
+        );
+        try {
+          if (await relayControlClient?.reloadIdentity()) commitRelayTrust();
+        } catch (error) {
+          logger.warn('Relay identity refresh will be applied by the relay poller', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       },
       async () => {
         const transport = await webTransportSettingsService.getConfig();
@@ -916,6 +967,30 @@ export async function initializeContainer(): Promise<void> {
   // Docker service (kept for self-update and image pruning only)
   const dockerService = new DockerService('/var/run/docker.sock', '');
   container.registerInstance(DockerService, dockerService);
+  const relayDockerRecovery = new RelayDockerRecoveryService(dockerService, env);
+  container.registerInstance(RelayDockerRecoveryService, relayDockerRecovery);
+  const relayStartupFinalizer = new RelayStartupFinalizerService(relayControlClient ?? null, relayDockerRecovery, {
+    required: env.GATEWAY_RELAY_REQUIRED,
+    expectedVersion: env.GATEWAY_RELAY_VERSION,
+  });
+  container.registerInstance(RelayStartupFinalizerService, relayStartupFinalizer);
+  const relaySupervisor = new RelaySupervisorService(
+    db,
+    cacheService,
+    relayControlClient ?? null,
+    env.GATEWAY_RELAY_REQUIRED ? relayDockerRecovery : null,
+    generalSettingsService,
+    eventBus,
+    auditService,
+    {
+      required: env.GATEWAY_RELAY_REQUIRED,
+      managed: env.GATEWAY_RELAY_MANAGED,
+      expectedImage: env.GATEWAY_RELAY_IMAGE_REF ?? null,
+      expectedService: env.GATEWAY_RELAY_SERVICE_NAME,
+      expectedVersion: env.GATEWAY_RELAY_VERSION,
+    }
+  );
+  container.registerInstance(RelaySupervisorService, relaySupervisor);
 
   // Update service
   const updateService = new UpdateService(db, dockerService, env);

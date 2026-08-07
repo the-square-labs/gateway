@@ -13,16 +13,6 @@
     },
     {
       "from_id": "dcfkgqwx",
-      "to_id": "myhj1f8i",
-      "relation": "uses_service",
-      "weight": 0.4238,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1786064967326,
-      "updated_at": 1786064967326
-    },
-    {
-      "from_id": "dcfkgqwx",
       "to_id": "qme9z5oh",
       "relation": "uses_service",
       "weight": 0.4142,

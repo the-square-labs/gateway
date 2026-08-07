@@ -55,6 +55,10 @@ EXISTING_INSTALL=0
 EXISTING_VERSION=""
 EXISTING_GATEWAY_ADDR=""
 EXISTING_ENROLLED=0
+DATABASE_PREFLIGHT_DIR=""
+DATABASE_PREFLIGHT_MOUNT_DIR=""
+DATABASE_PREFLIGHT_LOOP_DEVICE=""
+DATABASE_PREFLIGHT_CREATED_ROOT=0
 
 # ── Helpers ──────────────────────────────────────────────────────────
 log()  {
@@ -148,6 +152,44 @@ database_storage_root_for_mount() {
     fi
 }
 
+database_storage_capability_hint() {
+    local virtualization=""
+    if command_exists systemd-detect-virt; then
+        virtualization=$(systemd-detect-virt 2>/dev/null || true)
+    fi
+    if [[ "$virtualization" == "lxc" ]]; then
+        printf '%s' "This host is an LXC guest. Configure the outer host to pass /dev/loop-control and a loop-device pool, allow loop block devices and mounts, or use a VM/bare-metal database node."
+        return
+    fi
+    printf '%s' "The database profile requires usable loop devices plus permission to mount ext4 filesystems."
+}
+
+cleanup_database_preflight() {
+    local previous_status=$?
+    set +e
+    if [[ -n "$DATABASE_PREFLIGHT_MOUNT_DIR" ]] && command_exists mountpoint && mountpoint -q "$DATABASE_PREFLIGHT_MOUNT_DIR"; then
+        umount "$DATABASE_PREFLIGHT_MOUNT_DIR" >>"$LOG_FILE" 2>&1 || true
+    fi
+    if [[ -n "$DATABASE_PREFLIGHT_LOOP_DEVICE" ]] && command_exists losetup; then
+        losetup -d "$DATABASE_PREFLIGHT_LOOP_DEVICE" >>"$LOG_FILE" 2>&1 || true
+    fi
+    if [[ -n "$DATABASE_PREFLIGHT_DIR" ]]; then
+        rm -f "$DATABASE_PREFLIGHT_DIR/mnt/.write-test" "$DATABASE_PREFLIGHT_DIR/test.img" >/dev/null 2>&1 || true
+        rmdir "$DATABASE_PREFLIGHT_DIR/mnt" "$DATABASE_PREFLIGHT_DIR" >/dev/null 2>&1 || true
+    fi
+    if [[ "$DATABASE_PREFLIGHT_CREATED_ROOT" -eq 1 && -n "$DATABASE_STORAGE_ROOT" ]]; then
+        rmdir "$DATABASE_STORAGE_ROOT" >/dev/null 2>&1 || true
+    fi
+    DATABASE_PREFLIGHT_DIR=""
+    DATABASE_PREFLIGHT_MOUNT_DIR=""
+    DATABASE_PREFLIGHT_LOOP_DEVICE=""
+    DATABASE_PREFLIGHT_CREATED_ROOT=0
+    set -e
+    return "$previous_status"
+}
+
+trap cleanup_database_preflight EXIT
+
 select_database_storage() {
     [[ "$DOCKER_MODE" == "databases" ]] || return 0
     if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
@@ -210,30 +252,68 @@ preflight_database_storage() {
         log "Dry run: skipping disposable storage preflight for ${DATABASE_STORAGE_ROOT}"
         return
     fi
-    local required=(awk blockdev chmod command df dd fallocate grep losetup mkfs.ext4 mount mountpoint mktemp resize2fs rm rmdir stat umount)
-    local cmd preflight_dir mount_dir loop_device image available_kib
+    local required=(awk blockdev chmod df fallocate grep losetup mkfs.ext4 mount mountpoint mktemp resize2fs rm rmdir stat umount)
+    local cmd image available_kib available_loop allocated_bytes loop_output
     for cmd in "${required[@]}"; do command_exists "$cmd" || die "Required command '$cmd' is missing; refusing enrollment."; done
     [[ ! -L "$DATABASE_STORAGE_ROOT" ]] || die "Refusing symlink storage root: ${DATABASE_STORAGE_ROOT}"
-    mkdir -p -- "$DATABASE_STORAGE_ROOT"
+    if [[ ! -e "$DATABASE_STORAGE_ROOT" ]]; then
+        mkdir -p -- "$DATABASE_STORAGE_ROOT"
+        DATABASE_PREFLIGHT_CREATED_ROOT=1
+    fi
     [[ -d "$DATABASE_STORAGE_ROOT" && -w "$DATABASE_STORAGE_ROOT" ]] || die "Storage root is not writable: ${DATABASE_STORAGE_ROOT}"
     available_kib=$(df -Pk -- "$DATABASE_STORAGE_ROOT" | awk 'NR==2 {print $4}')
-    [[ "$available_kib" =~ ^[0-9]+$ && "$available_kib" -ge 32768 ]] || die "Storage root needs at least 32 MiB free for preflight."
-    preflight_dir=$(mktemp -d "$DATABASE_STORAGE_ROOT/.gateway-db-preflight.XXXXXX")
-    mount_dir="$preflight_dir/mnt"; image="$preflight_dir/test.img"; mkdir "$mount_dir"
-    dd if=/dev/zero of="$image" bs=1M count=16 status=none conv=fsync
-    [[ "$(stat -c '%s' "$image")" -eq 16777216 ]] || die "Preflight image is sparse or has the wrong size."
-    mkfs.ext4 -q -F "$image" >/dev/null 2>&1 || die "Could not format disposable ext4 image."
-    loop_device=$(losetup --find --show "$image") || die "No loop device is available."
-    mount "$loop_device" "$mount_dir" || die "Could not mount disposable ext4 image."
-    printf 'gateway-db-preflight\n' > "$mount_dir/.write-test" || die "Mounted storage is not writable."
-    fallocate -l 32M "$image" || die "Could not grow disposable ext4 image."
-    losetup -c "$loop_device" || die "Loop device does not support capacity refresh."
-    [[ "$(blockdev --getsize64 "$loop_device")" -eq 33554432 ]] || die "Loop device did not observe expanded image capacity."
-    resize2fs "$loop_device" >/dev/null || die "Could not grow mounted ext4 image."
-    umount "$mount_dir" || die "Could not unmount disposable ext4 image."
-    losetup -d "$loop_device" || die "Could not detach disposable loop device."
-    rm -f "$image"; rmdir "$mount_dir" "$preflight_dir"
+    [[ "$available_kib" =~ ^[0-9]+$ && "$available_kib" -ge 163840 ]] || die "Storage root needs at least 160 MiB free to validate the minimum database image lifecycle."
+
+    if ! available_loop=$(losetup -f 2>>"$LOG_FILE"); then
+        die "No free loop device is available. $(database_storage_capability_hint)"
+    fi
+    [[ "$available_loop" == /dev/loop* && -b "$available_loop" ]] || die "losetup returned an unusable loop device. $(database_storage_capability_hint)"
+
+    DATABASE_PREFLIGHT_DIR=$(mktemp -d "$DATABASE_STORAGE_ROOT/.gateway-db-preflight.XXXXXX")
+    DATABASE_PREFLIGHT_MOUNT_DIR="$DATABASE_PREFLIGHT_DIR/mnt"
+    image="$DATABASE_PREFLIGHT_DIR/test.img"
+    mkdir "$DATABASE_PREFLIGHT_MOUNT_DIR"
+
+    fallocate -l 64M "$image" >>"$LOG_FILE" 2>&1 || die "Could not preallocate a fixed-size database image."
+    [[ "$(stat -c '%s' "$image")" -eq 67108864 ]] || die "Preflight image has the wrong logical size."
+    allocated_bytes=$(( $(stat -c '%b' "$image") * 512 ))
+    [[ "$allocated_bytes" -ge 67108864 ]] || die "Storage filesystem created a sparse image instead of reserving the requested capacity."
+    mkfs.ext4 -q -F "$image" >>"$LOG_FILE" 2>&1 || die "Could not format the disposable database image as ext4."
+
+    if loop_output=$(losetup --find --show --nooverlap "$image" 2>>"$LOG_FILE"); then
+        DATABASE_PREFLIGHT_LOOP_DEVICE=$(printf '%s\n' "$loop_output" | awk '/^\/dev\/loop[0-9]+$/ { print; exit }')
+    else
+        DATABASE_PREFLIGHT_LOOP_DEVICE=$(losetup -f 2>>"$LOG_FILE") || die "No free loop device is available. $(database_storage_capability_hint)"
+        losetup "$DATABASE_PREFLIGHT_LOOP_DEVICE" "$image" >>"$LOG_FILE" 2>&1 || die "Could not attach the disposable database image. $(database_storage_capability_hint)"
+    fi
+    [[ -n "$DATABASE_PREFLIGHT_LOOP_DEVICE" && -b "$DATABASE_PREFLIGHT_LOOP_DEVICE" ]] || die "losetup did not attach a usable loop device. $(database_storage_capability_hint)"
+
+    mount -o noatime "$DATABASE_PREFLIGHT_LOOP_DEVICE" "$DATABASE_PREFLIGHT_MOUNT_DIR" >>"$LOG_FILE" 2>&1 || die "Could not mount the disposable ext4 database image. $(database_storage_capability_hint)"
+    printf 'gateway-db-preflight\n' > "$DATABASE_PREFLIGHT_MOUNT_DIR/.write-test" || die "Mounted database storage is not writable."
+
+    fallocate -l 128M "$image" >>"$LOG_FILE" 2>&1 || die "Could not grow the disposable database image."
+    losetup -c "$DATABASE_PREFLIGHT_LOOP_DEVICE" >>"$LOG_FILE" 2>&1 || die "Loop device does not support capacity refresh."
+    [[ "$(blockdev --getsize64 "$DATABASE_PREFLIGHT_LOOP_DEVICE")" -eq 134217728 ]] || die "Loop device did not observe expanded image capacity."
+    resize2fs "$DATABASE_PREFLIGHT_LOOP_DEVICE" >>"$LOG_FILE" 2>&1 || die "Could not grow the mounted ext4 database filesystem."
+
+    umount "$DATABASE_PREFLIGHT_MOUNT_DIR" >>"$LOG_FILE" 2>&1 || die "Could not unmount the disposable database image."
+    DATABASE_PREFLIGHT_MOUNT_DIR=""
+    losetup -d "$DATABASE_PREFLIGHT_LOOP_DEVICE" >>"$LOG_FILE" 2>&1 || die "Could not detach the disposable loop device."
+    DATABASE_PREFLIGHT_LOOP_DEVICE=""
+    rm -f "$image"
+    rmdir "$DATABASE_PREFLIGHT_DIR/mnt" "$DATABASE_PREFLIGHT_DIR"
+    DATABASE_PREFLIGHT_DIR=""
+    DATABASE_PREFLIGHT_CREATED_ROOT=0
     ok "Storage preflight passed for ${DATABASE_STORAGE_ROOT}"
+}
+
+preflight_database_docker() {
+    [[ "$DOCKER_MODE" == "databases" ]] || return 0
+    [[ "$RUN_USER" == "root" ]] || die "Database docker-daemon profile must run as root."
+    docker_run info >>"$LOG_FILE" 2>&1 || die "Docker Engine is not reachable; refusing database-node enrollment."
+    [[ "$DOCKER_SOCKET" == unix://* ]] || die "Database nodes require a local Docker Engine socket; refusing remote Docker context '${DOCKER_SOCKET}'."
+    [[ -S "${DOCKER_SOCKET#unix://}" ]] || die "Docker Engine socket is unavailable at ${DOCKER_SOCKET#unix://}."
+    ok "Docker Engine preflight passed (${DOCKER_SOCKET})"
 }
 
 guide_end() {
@@ -997,6 +1077,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 fi
 
 ensure_docker_installed
+preflight_database_docker
 
 if [[ "$RUN_USER" != "root" ]]; then
     if docker_group_exists && ! groups "$RUN_USER" 2>/dev/null | grep -qw docker; then

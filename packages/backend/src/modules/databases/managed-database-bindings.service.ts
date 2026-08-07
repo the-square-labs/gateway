@@ -1,9 +1,12 @@
 import crypto from 'node:crypto';
+import path from 'node:path';
 import { and, asc, eq } from 'drizzle-orm';
 import { DEVELOPMENT_DATABASE_CONNECTOR_IMAGE } from '@/config/env.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { managedDatabaseBindings, managedDatabaseInstances, nodes } from '@/db/schema/index.js';
+import type { RelayControlClient } from '@/grpc/relay-control.client.js';
 import { revokeDatabaseTunnelBinding } from '@/grpc/services/database-tunnel.js';
+import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
@@ -30,6 +33,7 @@ interface OwnerCredentials {
 }
 
 const immutableImageReference = /^[a-zA-Z0-9][a-zA-Z0-9./:_-]*@sha256:[a-f0-9]{64}$/;
+const logger = createChildLogger('ManagedDatabaseBindings');
 
 function enginePort(type: ManagedDatabaseRow['type']): number {
   switch (type) {
@@ -85,7 +89,8 @@ export class ManagedDatabaseBindingService {
     private readonly dockerDeployments: DockerDeploymentService,
     private readonly dockerSecrets: DockerSecretService,
     private readonly connectorImage: string,
-    private readonly allowDevelopmentConnectorImage = false
+    private readonly allowDevelopmentConnectorImage = false,
+    private readonly relayClient?: Pick<RelayControlClient, 'revokeBinding'>
   ) {}
 
   setEventBus(bus: EventBusService) {
@@ -200,7 +205,17 @@ export class ManagedDatabaseBindingService {
       .returning();
     // Close existing relay sessions before any fallible cleanup. The status
     // transition prevents new opens while the source daemon persists revocation.
-    revokeDatabaseTunnelBinding(deleting!.id);
+    try {
+      if (this.relayClient) await this.relayClient.revokeBinding(deleting!.id, 1_000);
+      else revokeDatabaseTunnelBinding(deleting!.id);
+    } catch (error) {
+      // The five-second relay reconciliation is the durable fallback. Cleanup
+      // must continue after the committed deleting transition.
+      logger.warn('Direct relay binding revocation failed; reconciliation will retry', {
+        bindingId: deleting!.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     try {
       await this.deprovisionBinding(database, deleting!, userId, options);
     } catch (error) {
@@ -317,7 +332,7 @@ export class ManagedDatabaseBindingService {
         binding.managedDatabaseId
       );
       this.requireSuccess(prepared);
-      const socketPath = this.tunnelSocketPath(prepared.detail);
+      const socketMount = this.tunnelSocketMount(prepared.detail);
       admissionPrepared = true;
 
       this.requireSuccess(
@@ -338,10 +353,10 @@ export class ManagedDatabaseBindingService {
           image: this.connectorImage,
           env: [
             `GATEWAY_DB_BINDING_ID=${binding.id}`,
-            'GATEWAY_DB_SOCKET=/run/gateway-db/tunnel.sock',
+            `GATEWAY_DB_SOCKET=${socketMount.connectorPath}`,
             `GATEWAY_DB_LISTEN=:${enginePort(database.type)}`,
           ],
-          binds: [`${socketPath}:/run/gateway-db/tunnel.sock`],
+          binds: [`${socketMount.hostDirectory}:/run/gateway-db:ro`],
           network_mode: binding.networkName,
           network_aliases: [binding.connectorAlias],
           restartPolicy: 'unless-stopped',
@@ -689,6 +704,19 @@ export class ManagedDatabaseBindingService {
       // Convert malformed daemon details to a generic provisioning error.
     }
     throw new Error('database tunnel socket is unavailable');
+  }
+
+  private tunnelSocketMount(detail: string | undefined) {
+    const socketPath = this.tunnelSocketPath(detail);
+    const hostDirectory = path.posix.dirname(socketPath);
+    const socketName = path.posix.basename(socketPath);
+    if (hostDirectory === '/' || !socketName || socketName === '.' || socketName === '..') {
+      throw new Error('database tunnel socket directory is unavailable');
+    }
+    return {
+      hostDirectory,
+      connectorPath: path.posix.join('/run/gateway-db', socketName),
+    };
   }
 
   private containerID(detail: string | undefined) {

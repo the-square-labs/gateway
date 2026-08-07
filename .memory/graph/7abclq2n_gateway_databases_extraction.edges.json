@@ -3,16 +3,6 @@
   "edges": [
     {
       "from_id": "7abclq2n",
-      "to_id": "2npkkqwm",
-      "relation": "related_to",
-      "weight": 0.4238,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967478,
-      "updated_at": 1786064967478
-    },
-    {
-      "from_id": "7abclq2n",
       "to_id": "3b6g7z3k",
       "relation": "related_to",
       "weight": 0.4219,

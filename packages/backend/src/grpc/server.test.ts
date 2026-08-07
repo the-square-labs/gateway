@@ -101,6 +101,24 @@ describe('createGrpcServerCredentials', () => {
     expect(createProviderCredentials.mock.calls[0]?.[2]).toBe(false);
   });
 
+  it('can require the relay service client certificate on the internal listener', async () => {
+    const { caPem, certPem, keyPem } = createCertificatePair();
+    const { certPath, keyPath } = writeTlsFiles(certPem, keyPem);
+    const credentials = {} as grpc.ServerCredentials;
+    const createProviderCredentials = vi
+      .spyOn(grpc.experimental as any, 'createCertificateProviderServerCredentials')
+      .mockReturnValue(credentials);
+
+    await createGrpcServerCredentials(
+      certPath,
+      keyPath,
+      { getSystemCACertPem: vi.fn().mockResolvedValue(caPem) } as any,
+      true
+    );
+
+    expect(createProviderCredentials.mock.calls[0]?.[2]).toBe(true);
+  });
+
   it('notifies active certificate provider listeners when TLS material is refreshed', async () => {
     const { caPem, certPem, keyPem } = createCertificatePair();
     const { certPath, keyPath } = writeTlsFiles(certPem, keyPem);

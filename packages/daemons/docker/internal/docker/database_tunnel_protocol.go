@@ -20,9 +20,15 @@ const (
 	databaseTunnelQueueDepth       = 4
 	databaseTunnelHandshakeLimit   = 128
 
-	// DatabaseTunnelSocketFilename is the single daemon-owned socket mounted
-	// only into first-party connector sidecars on a general Docker node.
-	DatabaseTunnelSocketFilename = "database-tunnel.sock"
+	// DatabaseTunnelSocketDirectory is mounted read-only into first-party
+	// connector sidecars. Mounting the directory instead of the socket inode
+	// lets connectors follow a replacement socket after a daemon restart.
+	DatabaseTunnelSocketDirectory      = "database-tunnel"
+	DatabaseTunnelSocketFilename       = "tunnel.sock"
+	legacyDatabaseTunnelSocketFilename = "database-tunnel.sock"
+	databaseConnectorLabel             = "wiolett.gateway.managed-database.connector"
+	databaseConnectorSocketDirectory   = "/run/gateway-db"
+	databaseConnectorSocketPath        = databaseConnectorSocketDirectory + "/tunnel.sock"
 	// DatabaseTunnelHandshakeMagic starts every connector-sidecar handshake.
 	DatabaseTunnelHandshakeMagic = "GWDB1\n"
 )
@@ -208,7 +214,7 @@ func (p *DockerPlugin) handleDatabaseBindingCommand(cmd *pb.DockerDatabaseBindin
 		if err == nil {
 			if p.cfg.Docker.Mode != "databases" {
 				detail, _ := json.Marshal(map[string]string{
-					"socketPath": filepath.Join(p.cfg.StateDir, DatabaseTunnelSocketFilename),
+					"socketPath": databaseTunnelSocketPath(p.cfg.StateDir),
 				})
 				result.Detail = string(detail)
 			}

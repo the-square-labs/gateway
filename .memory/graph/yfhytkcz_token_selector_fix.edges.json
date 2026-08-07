@@ -3,53 +3,23 @@
   "edges": [
     {
       "from_id": "yfhytkcz",
-      "to_id": "nuc3c3hq",
-      "relation": "same_area",
-      "weight": 0.419,
-      "reason": "The memories share tags or vocabulary from the same area.",
+      "to_id": "ov8vmocj",
+      "relation": "same_workflow",
+      "weight": 0.82,
+      "reason": "Both define gateway gRPC enrollment and certificate-handling behavior, including local TLS verification and daemon authentication.",
       "source": "auto",
-      "created_at": 1786064967876,
-      "updated_at": 1786064967876
-    },
-    {
-      "from_id": "yfhytkcz",
-      "to_id": "vvdi4727",
-      "relation": "uses_service",
-      "weight": 0.4106,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1786064967876,
-      "updated_at": 1786064967876
+      "created_at": 1786067606428,
+      "updated_at": 1786067606428
     },
     {
       "from_id": "yfhytkcz",
       "to_id": "nr9hvzr3",
-      "relation": "uses_service",
-      "weight": 0.4026,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "relation": "same_workflow",
+      "weight": 0.61,
+      "reason": "The token enrollment smoke test depends on the gateway's local daemon and development startup environment.",
       "source": "auto",
-      "created_at": 1786064967876,
-      "updated_at": 1786064967876
-    },
-    {
-      "from_id": "yfhytkcz",
-      "to_id": "ov8vmocj",
-      "relation": "uses_service",
-      "weight": 0.3976,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1786064967876,
-      "updated_at": 1786064967876
-    },
-    {
-      "from_id": "yfhytkcz",
-      "to_id": "huz2cldt",
-      "relation": "uses_service",
-      "weight": 0.397,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1786064967876,
-      "updated_at": 1786064967876
+      "created_at": 1786067606428,
+      "updated_at": 1786067606428
     }
   ]
 }

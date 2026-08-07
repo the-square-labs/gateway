@@ -116,6 +116,20 @@ describe('drizzle migration metadata', () => {
     expect(migration).toContain('ON CONFLICT ("source_id", "version") DO NOTHING');
   });
 
+  it('exposes only the stable read-only relay authorization projection', () => {
+    const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0093_open_charles_xavier.sql'), 'utf8');
+
+    expect(migration).toContain("ADD VALUE 'gateway_service'");
+    expect(migration).toContain('"gateway_relay_node_identities_v1"');
+    expect(migration).toContain('"gateway_relay_managed_databases_v1"');
+    expect(migration).toContain('"gateway_relay_bindings_v1"');
+    expect(migration.match(/security_barrier = true/g)).toHaveLength(3);
+    expect(migration).toContain('binding."status"::text AS "binding_status"');
+    expect(migration).toContain('managed."status"::text AS "database_status"');
+    expect(migration).not.toMatch(/encrypted_(?:credentials|owner_credentials|direct_credentials)/);
+    expect(migration).not.toContain('connection_uri');
+  });
+
   it('collapses existing inference token grants into the manage permission', () => {
     const migration = readFileSync(
       join(process.cwd(), 'src/db/migrations/0078_collapse_inference_token_permissions.sql'),

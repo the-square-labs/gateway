@@ -33,16 +33,6 @@
     },
     {
       "from_id": "hic3s1ta",
-      "to_id": "myhj1f8i",
-      "relation": "same_workflow",
-      "weight": 0.2873,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1786064967254,
-      "updated_at": 1786064967254
-    },
-    {
-      "from_id": "hic3s1ta",
       "to_id": "l6ohu61l",
       "relation": "related_to",
       "weight": 0.2684,

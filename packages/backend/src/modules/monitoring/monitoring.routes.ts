@@ -23,6 +23,7 @@ import { CertService } from '@/modules/pki/cert.service.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
+import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import { UpdateService } from '@/services/update.service.js';
 import type { AppEnv } from '@/types.js';
@@ -573,7 +574,17 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
   const pinnedDockerWarning = pinnedDockerResources.some((resource) =>
     ['failed', 'unhealthy', 'exited', 'dead', 'stopped', 'degraded'].includes(String(resource.state).toLowerCase())
   );
+  const relay = container.isRegistered(RelaySupervisorService)
+    ? container.resolve(RelaySupervisorService).getSnapshot(hasScope(scopes, 'admin:system'))
+    : null;
+  const relayNotice =
+    relay?.state === 'critical'
+      ? { id: 'gateway-relay', severity: 'critical' as const }
+      : relay && ['migration_pending', 'maintenance', 'recovering'].includes(relay.state)
+        ? { id: 'gateway-relay', severity: 'warning' as const }
+        : null;
   const notices = [
+    ...(relayNotice ? [relayNotice] : []),
     ...(canViewSsl && stats.sslCertificates.expiringSoon > 0
       ? [{ id: 'ssl-certificates-expiring', severity: 'warning' as const }]
       : []),
@@ -641,6 +652,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
       loggingHealth,
       inferenceUsage,
       inviteUserMethods,
+      relay,
       pinned: {
         dashboard: {
           nodes: resolveByIds(dashboardPinNodeIds, visibleNodes),

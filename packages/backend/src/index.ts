@@ -20,6 +20,7 @@ import { createApp } from '@/app.js';
 import { container, initializeContainer } from '@/bootstrap.js';
 import { getEnv } from '@/config/env.js';
 import { TOKENS } from '@/container.js';
+import { RelayControlClient } from '@/grpc/relay-control.client.js';
 import { startGrpcServer, stopGrpcServer } from '@/grpc/server.js';
 import { logger } from '@/lib/logger.js';
 import { AISandboxService } from '@/modules/ai/ai.sandbox.service.js';
@@ -35,6 +36,9 @@ import { CryptoService } from '@/services/crypto.service.js';
 import { GrpcIdentityService } from '@/services/grpc-identity.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
+import { RelayIdentityProvisionerService } from '@/services/relay-identity-provisioner.service.js';
+import { RelayStartupFinalizerService } from '@/services/relay-startup-finalizer.service.js';
+import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
 import { SystemCAService } from '@/services/system-ca.service.js';
 import { WebIdentityService } from '@/services/web-identity.service.js';
@@ -106,16 +110,32 @@ async function main() {
     const db = container.resolve(TOKENS.DrizzleClient) as any;
     const systemCA = container.resolve(SystemCAService);
     const grpcIdentity = await container.resolve(GrpcIdentityService).resolve();
+    const relayIdentity = env.GATEWAY_RELAY_REQUIRED
+      ? await container.resolve(RelayIdentityProvisionerService).ensure()
+      : null;
 
-    await startGrpcServer(env.GRPC_PORT, grpcIdentity.certPath, grpcIdentity.keyPath, {
-      registry,
-      dispatch,
-      auditService,
-      db,
-      caService,
-      cryptoService,
-      systemCA,
-    });
+    await startGrpcServer(
+      env.GRPC_PORT,
+      relayIdentity?.internalServerCertPath ?? grpcIdentity.certPath,
+      relayIdentity?.internalServerKeyPath ?? grpcIdentity.keyPath,
+      {
+        registry,
+        dispatch,
+        auditService,
+        db,
+        caService,
+        cryptoService,
+        systemCA,
+        relayPeerFingerprint: relayIdentity?.relayClientFingerprint,
+      }
+    );
+    const relayFinalization = await container.resolve(RelayStartupFinalizerService).finalize();
+    if (relayFinalization.status === 'degraded') {
+      logger.error('Gateway relay startup finalization did not reach readiness', relayFinalization);
+    } else if (relayFinalization.status === 'active') {
+      logger.info('Gateway relay startup finalization completed', relayFinalization);
+    }
+    await container.resolve(RelaySupervisorService).start();
 
     // Start background jobs
     const sandboxRunner = container.resolve(AISandboxRunnerService);
@@ -132,6 +152,7 @@ async function main() {
     const shutdown = async () => {
       logger.info('Shutting down server...');
       scheduler.stop();
+      container.resolve(RelaySupervisorService).stop();
 
       try {
         await stopGrpcServer();
@@ -144,6 +165,7 @@ async function main() {
       } catch (err) {
         logger.error('Failed to close managed database tunnel listeners', { err });
       }
+      if (env.GATEWAY_RELAY_REQUIRED) container.resolve(RelayControlClient).close();
 
       try {
         const sandbox = container.resolve(AISandboxService);

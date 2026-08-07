@@ -128,6 +128,7 @@ export interface AuthProvisioningSettings {
     gatewayPublicIps: string[];
     gatewayGrpcPublicTarget: string | null;
     gatewayGrpcLocalIp: string | null;
+    relayAutoRecovery: boolean;
     features: {
       pkiEnabled: boolean;
       domainsEnabled: boolean;

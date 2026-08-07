@@ -339,6 +339,16 @@ export class DockerService {
     }
   }
 
+  async restartContainer(id: string, timeoutSeconds = 10): Promise<void> {
+    const res = await this.request(
+      'POST',
+      `${API_VERSION}/containers/${encodeURIComponent(id)}/restart?t=${encodeURIComponent(String(timeoutSeconds))}`
+    );
+    if (res.statusCode !== 204) {
+      throw new Error(`Docker container restart failed (${res.statusCode}): ${res.body}`);
+    }
+  }
+
   async connectContainerToNetwork(id: string, network: string, aliases: string[] = []): Promise<void> {
     const res = await this.request('POST', `${API_VERSION}/networks/${encodeURIComponent(network)}/connect`, {
       Container: id,

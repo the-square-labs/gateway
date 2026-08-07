@@ -50,16 +50,6 @@
       "source": "auto",
       "created_at": 1786064967629,
       "updated_at": 1786064967629
-    },
-    {
-      "from_id": "orq9dru7",
-      "to_id": "myhj1f8i",
-      "relation": "related_to",
-      "weight": 0.3517,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967629,
-      "updated_at": 1786064967629
     }
   ]
 }

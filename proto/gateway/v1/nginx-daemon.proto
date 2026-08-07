@@ -62,6 +62,17 @@ service DatabaseTunnel {
   rpc Tunnel(stream DatabaseTunnelMessage) returns (stream DatabaseTunnelMessage);
 }
 
+// App-only control surface exposed by the standalone Gateway relay on the
+// existing gRPC listener. Every method is authorized by the caller's service
+// mTLS identity; daemon certificates cannot use this service.
+service GatewayRelayControl {
+  rpc GetHealth(RelayHealthRequest) returns (RelayHealthResponse);
+  rpc RevokeBinding(RelayRevokeBindingRequest) returns (RelayRevokeBindingResponse);
+  rpc OpenManagedDatabaseTunnel(stream RelayManagedDatabaseTunnelMessage)
+      returns (stream RelayManagedDatabaseTunnelMessage);
+  rpc ReloadIdentity(RelayReloadIdentityRequest) returns (RelayReloadIdentityResponse);
+}
+
 // Messages FROM daemon TO Gateway
 message DaemonMessage {
   oneof payload {
@@ -655,4 +666,66 @@ message DatabaseTunnelError {
   string binding_id = 2;
   string code = 3;
   string message = 4;
+}
+
+message RelayHealthRequest {}
+
+message RelayHealthResponse {
+  string relay_version = 1;
+  uint32 protocol_version = 2;
+  uint32 database_contract_version = 3;
+  bool liveness = 4;
+  bool readiness = 5;
+  bool data_plane_healthy = 6;
+  bool app_proxy_healthy = 7;
+  string reason = 8;
+  int64 last_healthy_at_unix_ms = 9;
+}
+
+message RelayRevokeBindingRequest {
+  string binding_id = 1;
+}
+
+message RelayRevokeBindingResponse {
+  bool accepted = 1;
+}
+
+message RelayReloadIdentityRequest {}
+
+message RelayReloadIdentityResponse {
+  bool reloaded = 1;
+}
+
+// One OpenManagedDatabaseTunnel RPC carries exactly one app-owned database
+// driver connection. The relay maps it onto the database daemon's existing
+// interactive or monitoring lane, where tunnel_id multiplexing remains in use.
+message RelayManagedDatabaseTunnelMessage {
+  oneof payload {
+    RelayManagedDatabaseTunnelOpen open = 1;
+    RelayManagedDatabaseTunnelReady ready = 2;
+    RelayManagedDatabaseTunnelData data = 3;
+    RelayManagedDatabaseTunnelClose close = 4;
+    RelayManagedDatabaseTunnelError error = 5;
+  }
+}
+
+message RelayManagedDatabaseTunnelOpen {
+  string managed_database_id = 1;
+  string lane = 2; // "interactive" or "monitoring"
+  int32 max_chunk_bytes = 3;
+}
+
+message RelayManagedDatabaseTunnelReady {
+  int32 max_chunk_bytes = 1;
+}
+
+message RelayManagedDatabaseTunnelData {
+  bytes data = 1;
+}
+
+message RelayManagedDatabaseTunnelClose {}
+
+message RelayManagedDatabaseTunnelError {
+  string code = 1;
+  string message = 2;
 }

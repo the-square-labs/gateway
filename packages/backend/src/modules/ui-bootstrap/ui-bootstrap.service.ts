@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { getResourceScopedIds, hasScope, hasScopeBase } from '@/lib/permissions.js';
 import type { AIProviderRuntimeService } from '@/modules/ai/ai-provider-runtime.service.js';
 import { dockerScopedNodeIds } from '@/modules/docker/docker-access-resource.service.js';
-import type { LoggingFeatureService } from '@/modules/logging/logging-feature.service.js';
 import type { IntegrationsService } from '@/modules/integrations/integrations.service.js';
+import type { LoggingFeatureService } from '@/modules/logging/logging-feature.service.js';
 import type { NodesService } from '@/modules/nodes/nodes.service.js';
 import {
   DEFAULT_GENERAL_SETTINGS,
@@ -48,6 +48,7 @@ export interface UIBootstrapShell {
     gatewayPublicIps: string[];
     gatewayGrpcPublicTarget: string | null;
     gatewayGrpcLocalIp: string | null;
+    relayAutoRecovery: boolean;
     features: {
       pkiEnabled: boolean;
       domainsEnabled: boolean;
@@ -135,6 +136,7 @@ export class UIBootstrapService {
         gatewayPublicIps: config.gatewayPublicIps,
         gatewayGrpcPublicTarget: config.gatewayGrpcPublicTarget,
         gatewayGrpcLocalIp: config.gatewayGrpcLocalIp,
+        relayAutoRecovery: config.relayAutoRecovery,
         features: {
           pkiEnabled: config.features.pkiEnabled,
           domainsEnabled: config.features.domainsEnabled,
@@ -161,7 +163,9 @@ export class UIBootstrapService {
     const cached = await this.snapshots.get<ShellNode[]>(NODE_SNAPSHOT_KIND, NODE_SNAPSHOT_ID);
     if (cached) return cached;
 
-    const refreshed = await this.snapshots.withLease(NODE_SNAPSHOT_KIND, NODE_SNAPSHOT_ID, (lease) => this.loadNodes(lease));
+    const refreshed = await this.snapshots.withLease(NODE_SNAPSHOT_KIND, NODE_SNAPSHOT_ID, (lease) =>
+      this.loadNodes(lease)
+    );
     if (refreshed.acquired) return refreshed.value;
 
     // Another request is already rebuilding the safe DB-derived source. Do
@@ -180,7 +184,9 @@ export class UIBootstrapService {
   }
 
   private async refreshNodes(): Promise<void> {
-    const leased = await this.snapshots.withLease(NODE_SNAPSHOT_KIND, NODE_SNAPSHOT_ID, (lease) => this.loadNodes(lease));
+    const leased = await this.snapshots.withLease(NODE_SNAPSHOT_KIND, NODE_SNAPSHOT_ID, (lease) =>
+      this.loadNodes(lease)
+    );
     if (!leased.acquired) return;
   }
 
@@ -188,7 +194,9 @@ export class UIBootstrapService {
     const cached = await this.snapshots.get<GeneralSettings>(CONFIG_SNAPSHOT_KIND, CONFIG_SNAPSHOT_ID);
     if (cached) return cached;
 
-    const refreshed = await this.snapshots.withLease(CONFIG_SNAPSHOT_KIND, CONFIG_SNAPSHOT_ID, (lease) => this.loadConfig(lease));
+    const refreshed = await this.snapshots.withLease(CONFIG_SNAPSHOT_KIND, CONFIG_SNAPSHOT_ID, (lease) =>
+      this.loadConfig(lease)
+    );
     if (refreshed.acquired) return refreshed.value;
 
     // A peer is already doing the safe database read. The request still needs
@@ -198,7 +206,9 @@ export class UIBootstrapService {
   }
 
   private async refreshConfig(): Promise<void> {
-    const leased = await this.snapshots.withLease(CONFIG_SNAPSHOT_KIND, CONFIG_SNAPSHOT_ID, (lease) => this.loadConfig(lease));
+    const leased = await this.snapshots.withLease(CONFIG_SNAPSHOT_KIND, CONFIG_SNAPSHOT_ID, (lease) =>
+      this.loadConfig(lease)
+    );
     if (!leased.acquired) return;
   }
 
@@ -253,7 +263,8 @@ export class UIBootstrapService {
         if (page >= (response.totalPages ?? page)) break;
       }
       return await this.snapshots.replace(NODE_SNAPSHOT_KIND, NODE_SNAPSHOT_ID, nodes, {
-        availability: 'available', lease,
+        availability: 'available',
+        lease,
       });
     } catch (error) {
       return this.snapshots.markError(NODE_SNAPSHOT_KIND, NODE_SNAPSHOT_ID, [], error, 'unknown', lease);
@@ -261,11 +272,18 @@ export class UIBootstrapService {
   }
 
   private async loadConfig(lease?: ResourceSnapshotLease | null): Promise<ResourceSnapshotEnvelope<GeneralSettings>> {
-    await this.snapshots.markRefreshing(CONFIG_SNAPSHOT_KIND, CONFIG_SNAPSHOT_ID, DEFAULT_GENERAL_SETTINGS, 'unknown', lease);
+    await this.snapshots.markRefreshing(
+      CONFIG_SNAPSHOT_KIND,
+      CONFIG_SNAPSHOT_ID,
+      DEFAULT_GENERAL_SETTINGS,
+      'unknown',
+      lease
+    );
     try {
       const config = await this.settings.getConfig();
       return await this.snapshots.replace(CONFIG_SNAPSHOT_KIND, CONFIG_SNAPSHOT_ID, config, {
-        availability: 'available', lease,
+        availability: 'available',
+        lease,
       });
     } catch (error) {
       return this.snapshots.markError(
@@ -279,38 +297,41 @@ export class UIBootstrapService {
     }
   }
 
-  private async loadStatusPageConfig(lease?: ResourceSnapshotLease | null): Promise<ResourceSnapshotEnvelope<StatusPageConfig>> {
+  private async loadStatusPageConfig(
+    lease?: ResourceSnapshotLease | null
+  ): Promise<ResourceSnapshotEnvelope<StatusPageConfig>> {
     const fallback = { enabled: false } as StatusPageConfig;
     await this.snapshots.markRefreshing(STATUS_PAGE_SNAPSHOT_KIND, STATUS_PAGE_SNAPSHOT_ID, fallback, 'unknown', lease);
     try {
       const config = await this.statusPage.getConfig();
       return await this.snapshots.replace(STATUS_PAGE_SNAPSHOT_KIND, STATUS_PAGE_SNAPSHOT_ID, config, {
-        availability: 'available', lease,
+        availability: 'available',
+        lease,
       });
     } catch (error) {
-      return this.snapshots.markError(STATUS_PAGE_SNAPSHOT_KIND, STATUS_PAGE_SNAPSHOT_ID, fallback, error, 'unknown', lease);
-    }
-  }
-
-  private async loadCloudflareIntegration(lease?: ResourceSnapshotLease | null): Promise<ResourceSnapshotEnvelope<boolean>> {
-    await this.snapshots.markRefreshing(CLOUDFLARE_SNAPSHOT_KIND, CLOUDFLARE_SNAPSHOT_ID, false, 'unknown', lease);
-    try {
-      const hasIntegration = await this.integrations.hasEnabledCloudflareConnector();
-      return await this.snapshots.replace(
-        CLOUDFLARE_SNAPSHOT_KIND,
-        CLOUDFLARE_SNAPSHOT_ID,
-        hasIntegration,
-        { availability: 'available', lease }
-      );
-    } catch (error) {
       return this.snapshots.markError(
-        CLOUDFLARE_SNAPSHOT_KIND,
-        CLOUDFLARE_SNAPSHOT_ID,
-        false,
+        STATUS_PAGE_SNAPSHOT_KIND,
+        STATUS_PAGE_SNAPSHOT_ID,
+        fallback,
         error,
         'unknown',
         lease
       );
+    }
+  }
+
+  private async loadCloudflareIntegration(
+    lease?: ResourceSnapshotLease | null
+  ): Promise<ResourceSnapshotEnvelope<boolean>> {
+    await this.snapshots.markRefreshing(CLOUDFLARE_SNAPSHOT_KIND, CLOUDFLARE_SNAPSHOT_ID, false, 'unknown', lease);
+    try {
+      const hasIntegration = await this.integrations.hasEnabledCloudflareConnector();
+      return await this.snapshots.replace(CLOUDFLARE_SNAPSHOT_KIND, CLOUDFLARE_SNAPSHOT_ID, hasIntegration, {
+        availability: 'available',
+        lease,
+      });
+    } catch (error) {
+      return this.snapshots.markError(CLOUDFLARE_SNAPSHOT_KIND, CLOUDFLARE_SNAPSHOT_ID, false, error, 'unknown', lease);
     }
   }
 

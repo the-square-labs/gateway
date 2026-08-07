@@ -28,7 +28,38 @@ export interface DashboardStats {
   };
 }
 
-export type DashboardAttentionSeverity = "info" | "warning";
+export type DashboardAttentionSeverity = "info" | "warning" | "critical";
+
+export type RelayLifecycleState =
+  | "migration_pending"
+  | "maintenance"
+  | "healthy"
+  | "suspect"
+  | "recovering"
+  | "critical";
+
+export interface DashboardRelaySnapshot {
+  state: RelayLifecycleState;
+  impact: string | null;
+  attempt: number;
+  maxAttempts: 3;
+  lastHealthyAt: string | null;
+  reason?: string | null;
+  lastProbeAt?: string | null;
+  attemptHistory?: Array<{
+    attempt: number;
+    startedAt: string;
+    action?: "start" | "restart" | "compose_up";
+    result: "running" | "failed" | "healthy";
+  }>;
+  relayVersion?: string | null;
+  protocolVersion?: number | null;
+  databaseContractVersion?: number | null;
+  expectedService?: string;
+  expectedImage?: string | null;
+  expectedVersion?: string | null;
+  canRetry?: boolean;
+}
 
 export interface DashboardPinnedDockerResourceRequest {
   id: string;
@@ -89,6 +120,7 @@ export interface DashboardBootstrap {
   loggingHealth: unknown | null;
   inferenceUsage: InferenceSelfUsage | null;
   inviteUserMethods: { password: boolean; emailOtp: boolean } | null;
+  relay: DashboardRelaySnapshot | null;
   pinned: {
     dashboard: DashboardBootstrapPinnedResources;
     sidebar: DashboardBootstrapPinnedResources;

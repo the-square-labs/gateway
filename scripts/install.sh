@@ -3,6 +3,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 DEFAULT_IMAGE="registry.gitlab.wiolett.net/wiolett/gateway"
+DOCKER_COMPOSE_CLI_IMAGE_REF="docker.io/library/docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c"
 DEFAULT_INSTALL_DIR="/opt/gateway"
 GITLAB_API_URL="${GITLAB_API_URL:-https://gitlab.wiolett.net}"
 GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-wiolett/gateway}"
@@ -368,7 +369,7 @@ decode_base64url() {
 verify_signed_release() {
   local version="$1" encoded_project="$2"
   local tmp_dir manifest_file payload_file signature_file key_file
-  local payload signature kind manifest_version tag image digest image_ref connector_image_ref connector_image connector_digest
+  local payload signature kind manifest_version tag image digest image_ref relay_version connector_image_ref connector_image connector_digest
 
   tmp_dir="$(mktemp -d)"
   manifest_file="${tmp_dir}/gateway-image.update.json"
@@ -405,6 +406,8 @@ verify_signed_release() {
   image="$(json_string_field "$payload_file" image)"
   digest="$(json_string_field "$payload_file" digest)"
   image_ref="$(json_string_field "$payload_file" imageRef)"
+  relay_version="$(json_string_field "$payload_file" relayVersion)"
+  [[ -n "$relay_version" ]] || relay_version=1
   connector_image_ref="$(json_string_field "$payload_file" databaseConnectorImage)"
   if [[ "$kind" != "gateway-image" || "$manifest_version" != "$version" || "$tag" != "$version" ||
     "$image" != "$IMAGE" || ! "$digest" =~ ^sha256:[a-f0-9]{64}$ || "$image_ref" != "${IMAGE}@${digest}" ]]; then
@@ -419,9 +422,14 @@ verify_signed_release() {
       die "Signed release manifest contains an invalid database connector image."
     fi
   fi
+  if [[ ! "$relay_version" =~ ^[1-9][0-9]*$ ]]; then
+    rm -rf "$tmp_dir"
+    die "Signed release manifest contains an invalid relay version."
+  fi
   rm -rf "$tmp_dir"
 
   IMAGE_REF="$image_ref"
+  RELAY_VERSION="$relay_version"
   DATABASE_CONNECTOR_IMAGE_REF="$connector_image_ref"
   ok "Release ${version} verified (SHA-256: $(short_digest "$digest"))"
 }
@@ -451,6 +459,8 @@ prepare_install_metadata() {
     [[ "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ]] || die "Could not calculate the local source checksum"
     ARTIFACT_KIND="local source checksum"
     DATABASE_CONNECTOR_IMAGE_REF=""
+    RELAY_VERSION="$(sed -nE "s/^export const RELAY_VERSION = '([1-9][0-9]*)';$/\1/p" "$SOURCE_DIR/packages/backend/src/relay/version.ts")"
+    [[ "$RELAY_VERSION" =~ ^[1-9][0-9]*$ ]] || die "Local source contains an invalid relay version"
     return
   fi
 
@@ -677,10 +687,16 @@ if [[ -n "${DATABASE_CONNECTOR_IMAGE_REF:-}" ]]; then
   ensure_env DATABASE_CONNECTOR_IMAGE "$DATABASE_CONNECTOR_IMAGE_REF"
 fi
 ensure_env DB_PASSWORD "$(openssl rand -hex 24)"
+ensure_env GATEWAY_RELAY_DB_PASSWORD "$(openssl rand -hex 24)"
 ensure_env PKI_MASTER_KEY "$(openssl rand -hex 32)"
 ensure_env SETUP_BOOTSTRAP "$([[ "$FRESH" == 1 ]] && printf true || printf false)"
 ensure_env WEB_TLS_BOOTSTRAP_MODE "${TRANSPORT:-http}"
 ensure_env SANDBOX_RUNNER_WORKSPACE_DIR "/var/lib/gateway/sandbox-workspaces"
+ensure_env GATEWAY_RELAY_MANAGED "$([[ -z "$SOURCE_DIR" ]] && printf true || printf false)"
+if [[ "$FRESH" == 1 ]]; then
+  ensure_env GATEWAY_RELAY_IMAGE_REF "$IMAGE_REF"
+  ensure_env GATEWAY_RELAY_VERSION "$RELAY_VERSION"
+fi
 local_host_addresses="$(detect_local_host_addresses)"
 if [[ -n "$local_host_addresses" ]]; then
   set_env GATEWAY_LOCAL_HOSTS "$local_host_addresses"
@@ -701,6 +717,8 @@ services:
   app:
     image: ${GATEWAY_IMAGE_REF}
     restart: unless-stopped
+    labels:
+      com.wiolett.gateway.managed-service: app
     env_file: .env
     environment:
       NODE_ENV: production
@@ -710,12 +728,22 @@ services:
       PKI_MASTER_KEY: ${PKI_MASTER_KEY}
       WEB_TLS_AUTO_DIR: /var/lib/gateway/tls
       GRPC_TLS_AUTO_DIR: /var/lib/gateway/tls
+      GATEWAY_RELAY_REQUIRED: "true"
+      GATEWAY_RELAY_MANAGED: "${GATEWAY_RELAY_MANAGED:-true}"
+      GATEWAY_RELAY_TARGET: relay:9443
+      GATEWAY_RELAY_IDENTITY_DIR: /var/lib/gateway-relay
+      GATEWAY_RELAY_DB_PASSWORD: ${GATEWAY_RELAY_DB_PASSWORD}
+      GATEWAY_RELAY_IMAGE_REF: ${GATEWAY_RELAY_IMAGE_REF}
+      GATEWAY_RELAY_SERVICE_NAME: relay
+      GATEWAY_RELAY_VERSION: ${GATEWAY_RELAY_VERSION}
       SANDBOX_RUNNER_WORKSPACE_DIR: ${SANDBOX_RUNNER_WORKSPACE_DIR:-/var/lib/gateway/sandbox-workspaces}
     ports:
       - "3000:3000"
-      - "9443:9443"
+    expose:
+      - "9443"
     volumes:
       - gateway_data:/var/lib/gateway
+      - gateway_relay_identity:/var/lib/gateway-relay
       - ${SANDBOX_RUNNER_WORKSPACE_DIR:-/var/lib/gateway/sandbox-workspaces}:${SANDBOX_RUNNER_WORKSPACE_DIR:-/var/lib/gateway/sandbox-workspaces}
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -728,6 +756,31 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+      start_period: 20s
+
+  relay:
+    image: ${GATEWAY_RELAY_IMAGE_REF}
+    command: ["node", "dist/relay/index.js"]
+    restart: unless-stopped
+    labels:
+      com.wiolett.gateway.managed-service: relay
+    environment:
+      RELAY_DATABASE_URL: postgres://gateway_relay:${GATEWAY_RELAY_DB_PASSWORD}@postgres:5432/gateway
+      RELAY_IDENTITY_DIR: /var/lib/gateway-relay
+      RELAY_APP_GRPC_TARGET: app:9443
+      GATEWAY_RELAY_VERSION: ${GATEWAY_RELAY_VERSION}
+    ports:
+      - "9443:9443"
+    volumes:
+      - gateway_relay_identity:/var/lib/gateway-relay:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "dist/relay/healthcheck.js"]
+      interval: 5s
+      timeout: 3s
+      retries: 2
       start_period: 20s
 
   postgres:
@@ -759,13 +812,14 @@ services:
 
 volumes:
   gateway_data:
+  gateway_relay_identity:
   postgres_data:
   redis_data:
 COMPOSE
 else
   info "Migrating the existing installer-managed Compose foundation"
   run_quiet "Gateway image pull" "${DOCKER[@]}" pull "$IMAGE_REF"
-  foundation_args=(node dist/foundation-migrator.js --host-dir /host --target-version "$VERSION" --image-ref "$IMAGE_REF")
+  foundation_args=(node dist/foundation-migrator.js --host-dir /host --target-version "$VERSION" --image-ref "$IMAGE_REF" --relay-version "$RELAY_VERSION" --relay-image-ref "$IMAGE_REF")
   if [[ -n "${DATABASE_CONNECTOR_IMAGE_REF:-}" ]]; then
     foundation_args+=(--database-connector-image "$DATABASE_CONNECTOR_IMAGE_REF")
   fi
@@ -776,6 +830,8 @@ if [[ -z "$SOURCE_DIR" ]]; then
   info "Pulling ${IMAGE_REF}"
   run_quiet "Gateway service image pull" "${DOCKER[@]}" compose pull
 fi
+info "Preparing the pinned recovery helper"
+run_quiet "Gateway recovery helper image pull" "${DOCKER[@]}" pull "$DOCKER_COMPOSE_CLI_IMAGE_REF"
 info "Starting Gateway services"
 run_quiet "Gateway service startup" "${DOCKER[@]}" compose up -d
 

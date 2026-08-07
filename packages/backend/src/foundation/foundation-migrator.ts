@@ -1,16 +1,22 @@
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { RELAY_VERSION } from '@/relay/version.js';
 
 export const DEFAULT_SANDBOX_WORKSPACE_DIR = '/var/lib/gateway/sandbox-workspaces';
 
 const SANDBOX_VOLUME_START = '# gateway-managed:start sandbox-workspace';
 const SANDBOX_VOLUME_END = '# gateway-managed:end sandbox-workspace';
+const RELAY_SERVICE_START = '# gateway-managed:start relay-service';
+const RELAY_SERVICE_END = '# gateway-managed:end relay-service';
 
 export interface FoundationMigrationOptions {
   hostDir: string;
   targetVersion?: string;
   imageRef?: string;
   databaseConnectorImage?: string;
+  relayVersion?: string;
+  relayImageRef?: string;
   sandboxWorkspaceDir?: string;
 }
 
@@ -39,10 +45,27 @@ export async function runFoundationMigrations(options: FoundationMigrationOption
   const defaultSandboxWorkspaceDir = options.sandboxWorkspaceDir ?? DEFAULT_SANDBOX_WORKSPACE_DIR;
 
   const envContent = await fs.readFile(envPath, 'utf8');
+  const requestedRelayVersion = options.relayVersion ?? RELAY_VERSION;
+  if (requestedRelayVersion !== RELAY_VERSION) {
+    throw new Error(
+      `foundation migration relay version ${requestedRelayVersion} does not match target image relay version ${RELAY_VERSION}`
+    );
+  }
+  const currentRelayVersion = envValue(envContent, 'GATEWAY_RELAY_VERSION');
+  const currentRelayImageRef = envValue(envContent, 'GATEWAY_RELAY_IMAGE_REF');
+  const targetRelayImageRef = options.relayImageRef ?? options.imageRef;
+  const effectiveRelayImageRef =
+    currentRelayVersion === requestedRelayVersion && currentRelayImageRef ? currentRelayImageRef : targetRelayImageRef;
+  if (!effectiveRelayImageRef) {
+    throw new Error('foundation migration requires a relay image reference');
+  }
   const envPatch = patchEnv(envContent, {
     ...(options.targetVersion ? { GATEWAY_VERSION: options.targetVersion } : {}),
     ...(options.imageRef ? { GATEWAY_IMAGE_REF: options.imageRef } : {}),
     ...(options.databaseConnectorImage ? { DATABASE_CONNECTOR_IMAGE: options.databaseConnectorImage } : {}),
+    GATEWAY_RELAY_IMAGE_REF: effectiveRelayImageRef,
+    GATEWAY_RELAY_VERSION: requestedRelayVersion,
+    GATEWAY_RELAY_DB_PASSWORD: envValue(envContent, 'GATEWAY_RELAY_DB_PASSWORD') ?? randomBytes(24).toString('hex'),
     SANDBOX_RUNNER_WORKSPACE_DIR: envValue(envContent, 'SANDBOX_RUNNER_WORKSPACE_DIR') ?? defaultSandboxWorkspaceDir,
   });
 
@@ -142,7 +165,8 @@ export function patchCompose(content: string): string {
   const healthcheckPatched = patchAppHealthcheck(runtimePatched);
   const environmentPatched = removeLegacyAppEnvironment(healthcheckPatched);
   const clickHousePatched = removeLegacyClickHouseService(environmentPatched);
-  return `${clickHousePatched.join('\n')}${hadTrailingNewline ? '\n' : ''}`;
+  const relayPatched = patchRelayFoundation(clickHousePatched);
+  return `${relayPatched.join('\n')}${hadTrailingNewline ? '\n' : ''}`;
 }
 
 function patchAppRuntimeStorageAndSocket(lines: string[]): string[] {
@@ -215,6 +239,216 @@ function removeLegacyClickHouseService(lines: string[]): string[] {
     if (clickHouseVolume) next = [...next.slice(0, clickHouseVolume.start), ...next.slice(clickHouseVolume.end)];
   }
   return next;
+}
+
+function patchRelayFoundation(lines: string[]): string[] {
+  let next = removeAppPublicGrpcPort(lines);
+  next = upsertAppRelayEnvironment(next);
+  next = upsertAppLabel(next);
+  next = upsertAppRelayIdentityVolume(next);
+  next = upsertAppGrpcExpose(next);
+  next = upsertRelayService(next);
+  return ensureTopLevelVolume(next, 'gateway_relay_identity');
+}
+
+function removeAppPublicGrpcPort(lines: string[]): string[] {
+  const app = findServiceBlock(lines, 'app');
+  const ports = app ? findNestedBlock(lines, app, 'ports') : null;
+  if (!ports) return lines;
+  if (lines.slice(ports.start + 1, ports.end).some((line) => /^\s*target\s*:\s*9443\s*$/.test(line))) {
+    throw new Error('foundation migration failed: long-form app port 9443 mapping is unsupported');
+  }
+  return lines.filter((line, index) => {
+    if (index <= ports.start || index >= ports.end) return true;
+    const match = /^\s*-\s*["']?([^"'#]+)["']?\s*(?:#.*)?$/.exec(line);
+    if (!match) return true;
+    const parts = match[1]!.trim().split(':');
+    return !(parts.length >= 2 && parts.at(-1) === '9443');
+  });
+}
+
+function upsertAppRelayEnvironment(lines: string[]): string[] {
+  return upsertServiceKeyedEntries(
+    lines,
+    'app',
+    'environment',
+    [
+      'GATEWAY_RELAY_REQUIRED',
+      'GATEWAY_RELAY_MANAGED',
+      'GATEWAY_RELAY_TARGET',
+      'GATEWAY_RELAY_IDENTITY_DIR',
+      'GATEWAY_RELAY_DB_PASSWORD',
+      'GATEWAY_RELAY_IMAGE_REF',
+      'GATEWAY_RELAY_SERVICE_NAME',
+      'GATEWAY_RELAY_VERSION',
+    ],
+    [
+      'GATEWAY_RELAY_REQUIRED: "true"',
+      'GATEWAY_RELAY_MANAGED: "true"',
+      'GATEWAY_RELAY_TARGET: relay:9443',
+      'GATEWAY_RELAY_IDENTITY_DIR: /var/lib/gateway-relay',
+      'GATEWAY_RELAY_DB_PASSWORD: ${GATEWAY_RELAY_DB_PASSWORD}',
+      'GATEWAY_RELAY_IMAGE_REF: ${GATEWAY_RELAY_IMAGE_REF}',
+      'GATEWAY_RELAY_SERVICE_NAME: relay',
+      'GATEWAY_RELAY_VERSION: ${GATEWAY_RELAY_VERSION}',
+    ]
+  );
+}
+
+function upsertAppLabel(lines: string[]): string[] {
+  return upsertServiceKeyedEntries(
+    lines,
+    'app',
+    'labels',
+    ['com.wiolett.gateway.managed-service'],
+    ['com.wiolett.gateway.managed-service: app']
+  );
+}
+
+function upsertServiceKeyedEntries(
+  lines: string[],
+  serviceName: string,
+  blockName: string,
+  keys: string[],
+  mappingEntries: string[]
+): string[] {
+  let next = [...lines];
+  let service = findServiceBlock(next, serviceName);
+  if (!service) throw new Error(`foundation migration failed: services.${serviceName} block not found`);
+  let block = findNestedBlock(next, service, blockName);
+  if (!block) {
+    const blockIndent = service.indent + 2;
+    const entryIndent = blockIndent + 2;
+    return [
+      ...next.slice(0, service.end),
+      `${' '.repeat(blockIndent)}${blockName}:`,
+      ...mappingEntries.map((entry) => `${' '.repeat(entryIndent)}${entry}`),
+      ...next.slice(service.end),
+    ];
+  }
+
+  const directIndent = block.indent + 2;
+  const keyPattern = new RegExp(`^\\s*(?:-\\s*)?(?:${keys.map(escapeRegExp).join('|')})(?:\\s*[:=])`);
+  next = next.filter((line, index) => {
+    if (index <= block!.start || index >= block!.end) return true;
+    const indent = line.length - line.trimStart().length;
+    return !(indent === directIndent && keyPattern.test(line));
+  });
+  service = findServiceBlock(next, serviceName);
+  block = service ? findNestedBlock(next, service, blockName) : null;
+  if (!block) throw new Error(`foundation migration failed: services.${serviceName}.${blockName} block disappeared`);
+  const listStyle = next
+    .slice(block.start + 1, block.end)
+    .find((line) => line.trim() && !line.trimStart().startsWith('#'))
+    ?.trimStart()
+    .startsWith('-');
+  const entries = mappingEntries.map((entry) => {
+    if (!listStyle) return `${' '.repeat(directIndent)}${entry}`;
+    const separator = entry.indexOf(':');
+    return `${' '.repeat(directIndent)}- ${entry.slice(0, separator)}=${entry
+      .slice(separator + 1)
+      .trim()
+      .replace(/^"|"$/g, '')}`;
+  });
+  return [...next.slice(0, block.end), ...entries, ...next.slice(block.end)];
+}
+
+function upsertAppRelayIdentityVolume(lines: string[]): string[] {
+  const app = findServiceBlock(lines, 'app');
+  const volumes = app ? findNestedBlock(lines, app, 'volumes') : null;
+  if (!volumes) throw new Error('foundation migration failed: services.app.volumes block not found');
+  const indent = volumes.indent + 2;
+  const next = lines.filter((line, index) => {
+    if (index <= volumes.start || index >= volumes.end) return true;
+    return !/^\s*-\s*[^#]*:\/var\/lib\/gateway-relay(?::(?:ro|rw))?\s*(?:#.*)?$/.test(line);
+  });
+  const refreshedApp = findServiceBlock(next, 'app');
+  const refreshed = refreshedApp ? findNestedBlock(next, refreshedApp, 'volumes') : null;
+  if (!refreshed) throw new Error('foundation migration failed: services.app.volumes block disappeared');
+  return [
+    ...next.slice(0, refreshed.end),
+    `${' '.repeat(indent)}- gateway_relay_identity:/var/lib/gateway-relay`,
+    ...next.slice(refreshed.end),
+  ];
+}
+
+function upsertAppGrpcExpose(lines: string[]): string[] {
+  const app = findServiceBlock(lines, 'app');
+  if (!app) throw new Error('foundation migration failed: services.app block not found');
+  const expose = findNestedBlock(lines, app, 'expose');
+  if (!expose) {
+    return [
+      ...lines.slice(0, app.end),
+      `${' '.repeat(app.indent + 2)}expose:`,
+      `${' '.repeat(app.indent + 4)}- "9443"`,
+      ...lines.slice(app.end),
+    ];
+  }
+  const indent = expose.indent + 2;
+  const next = lines.filter((line, index) => {
+    if (index <= expose.start || index >= expose.end) return true;
+    return !/^\s*-\s*["']?9443["']?\s*(?:#.*)?$/.test(line);
+  });
+  const refreshedApp = findServiceBlock(next, 'app');
+  const refreshed = refreshedApp ? findNestedBlock(next, refreshedApp, 'expose') : null;
+  if (!refreshed) throw new Error('foundation migration failed: services.app.expose block disappeared');
+  return [...next.slice(0, refreshed.end), `${' '.repeat(indent)}- "9443"`, ...next.slice(refreshed.end)];
+}
+
+function upsertRelayService(lines: string[]): string[] {
+  const canonical = relayServiceBlock();
+  const markerStart = findLineInRange(lines, 0, lines.length, RELAY_SERVICE_START);
+  const markerEnd = findLineInRange(lines, 0, lines.length, RELAY_SERVICE_END);
+  if (markerStart >= 0 || markerEnd >= 0) {
+    if (markerStart < 0 || markerEnd < markerStart) {
+      throw new Error('foundation migration failed: malformed relay service managed block');
+    }
+    return [...lines.slice(0, markerStart), ...canonical, ...lines.slice(markerEnd + 1)];
+  }
+
+  const relay = findServiceBlock(lines, 'relay');
+  if (relay) {
+    const owned = lines
+      .slice(relay.start, relay.end)
+      .some((line) => /com\.wiolett\.gateway\.managed-service\s*[:=]\s*relay/.test(line));
+    if (!owned) throw new Error('foundation migration failed: existing relay service is not installer-managed');
+    return [...lines.slice(0, relay.start), ...canonical, ...lines.slice(relay.end)];
+  }
+
+  const services = findTopLevelBlock(lines, 'services');
+  if (!services) throw new Error('foundation migration failed: services block not found');
+  return [...lines.slice(0, services.end), '', ...canonical, ...lines.slice(services.end)];
+}
+
+function relayServiceBlock(): string[] {
+  return [
+    `  ${RELAY_SERVICE_START}`,
+    '  relay:',
+    '    image: ${GATEWAY_RELAY_IMAGE_REF}',
+    '    command: ["node", "dist/relay/index.js"]',
+    '    restart: unless-stopped',
+    '    labels:',
+    '      com.wiolett.gateway.managed-service: relay',
+    '    environment:',
+    '      RELAY_DATABASE_URL: postgres://gateway_relay:${GATEWAY_RELAY_DB_PASSWORD}@postgres:5432/gateway',
+    '      RELAY_IDENTITY_DIR: /var/lib/gateway-relay',
+    '      RELAY_APP_GRPC_TARGET: app:9443',
+    '      GATEWAY_RELAY_VERSION: ${GATEWAY_RELAY_VERSION}',
+    '    ports:',
+    '      - "9443:9443"',
+    '    volumes:',
+    '      - gateway_relay_identity:/var/lib/gateway-relay:ro',
+    '    depends_on:',
+    '      postgres:',
+    '        condition: service_healthy',
+    '    healthcheck:',
+    '      test: ["CMD", "node", "dist/relay/healthcheck.js"]',
+    '      interval: 5s',
+    '      timeout: 3s',
+    '      retries: 2',
+    '      start_period: 20s',
+    `  ${RELAY_SERVICE_END}`,
+  ];
 }
 
 function patchAppImage(lines: string[], appBlock: { start: number; end: number; indent: number }): string[] {

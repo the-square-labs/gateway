@@ -14,6 +14,7 @@ export interface SystemConfig {
   gatewayPublicIps: string[];
   gatewayGrpcPublicTarget: string | null;
   gatewayGrpcLocalIp: string | null;
+  relayAutoRecovery: boolean;
   features: GatewayFeatureConfig;
 }
 

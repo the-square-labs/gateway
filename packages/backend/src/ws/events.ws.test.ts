@@ -170,6 +170,39 @@ describe('events websocket authentication', () => {
     handlers.onClose(new Event('close'), ws as any);
   });
 
+  it('delivers relay-health invalidations to every authenticated user', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({
+      user: { ...USER, scopes: [] },
+      effectiveScopes: [],
+    });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscribe', channels: ['system.relay.health.changed'] }),
+      }),
+      ws as any
+    );
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'subscribed', channels: ['system.relay.health.changed'], rejected: [] })
+    );
+    eventBus.publish('system.relay.health.changed', { state: 'critical' });
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'event',
+        channel: 'system.relay.health.changed',
+        payload: { state: 'critical' },
+      })
+    );
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
   it('delivers migration events with view access to the stable migrated resource', async () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);

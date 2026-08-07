@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/auth"
 	"github.com/wiolett-industries/gateway/daemon-shared/connector"
@@ -13,6 +14,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/state"
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
 	"github.com/wiolett-industries/gateway/daemon-shared/sysmetrics"
+	"google.golang.org/grpc"
 )
 
 // Version is set via -ldflags at build time; falls back to "dev".
@@ -22,14 +24,15 @@ var Version = "dev"
 // It handles enrollment, mTLS, reconnection, and delegates
 // daemon-specific behavior to the DaemonPlugin.
 type DaemonBase struct {
-	cfg         *BaseConfig
-	cfgPath     string
-	state       *state.State
-	connector   *connector.Connector
-	plugin      DaemonPlugin
-	sysReporter *sysmetrics.SystemReporter
-	logger      *slog.Logger
-	baseHandler slog.Handler // original handler, never wrapped
+	cfg                   *BaseConfig
+	cfgPath               string
+	state                 *state.State
+	connector             *connector.Connector
+	plugin                DaemonPlugin
+	sysReporter           *sysmetrics.SystemReporter
+	logger                *slog.Logger
+	baseHandler           slog.Handler // original handler, never wrapped
+	tunnelIdentityChanged chan struct{}
 }
 
 // NewDaemonBase creates a new DaemonBase with the given plugin.
@@ -47,13 +50,14 @@ func NewDaemonBase(cfg *BaseConfig, cfgPath string, plugin DaemonPlugin, logger 
 	}
 
 	return &DaemonBase{
-		cfg:         cfg,
-		cfgPath:     cfgPath,
-		state:       st,
-		plugin:      plugin,
-		sysReporter: newSystemReporter(),
-		logger:      startupLogger,
-		baseHandler: logger.Handler(), // original handler without startup buffer
+		cfg:                   cfg,
+		cfgPath:               cfgPath,
+		state:                 st,
+		plugin:                plugin,
+		sysReporter:           newSystemReporter(),
+		logger:                startupLogger,
+		baseHandler:           logger.Handler(), // original handler without startup buffer
+		tunnelIdentityChanged: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -73,6 +77,19 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 	// Step 3: Start background cert renewal
 	go runCertRenewal(ctx, d)
 	go d.sysReporter.RunPublicIPDiscovery(ctx)
+	if databaseTunnel, ok := d.plugin.(DatabaseTunnelPlugin); ok {
+		// The tunnel owns one process-lifetime ClientConn. It is intentionally
+		// outside runSessionCycle: control reconnects must not cancel tunnel
+		// streams or the TCP sessions multiplexed through them.
+		go runProcessDatabaseTunnel(
+			ctx,
+			d.connector.ConnectWithRetry,
+			databaseTunnel,
+			d.state.NodeID,
+			d.tunnelIdentityChanged,
+			d.logger,
+		)
+	}
 
 	// Step 4: Connect and run (with reconnection loop)
 	for {
@@ -91,6 +108,68 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 			return fmt.Errorf("restart requested: %s", restart.Message)
 		}
 		d.logger.Warn("session ended, reconnecting", "error", err)
+	}
+}
+
+type databaseTunnelConnect func(context.Context) (*grpc.ClientConn, error)
+
+func runProcessDatabaseTunnel(
+	ctx context.Context,
+	connect databaseTunnelConnect,
+	plugin DatabaseTunnelPlugin,
+	nodeID string,
+	identityChanged <-chan struct{},
+	logger *slog.Logger,
+) {
+	for ctx.Err() == nil {
+		conn, err := connect(ctx)
+		if err != nil {
+			if ctx.Err() == nil {
+				logger.Warn("database tunnel connection failed", "error", err)
+			}
+			return
+		}
+		tunnelCtx, cancelTunnel := context.WithCancel(ctx)
+		tunnelEnded := make(chan struct{})
+		go func() {
+			plugin.RunDatabaseTunnel(tunnelCtx, conn, nodeID)
+			close(tunnelEnded)
+		}()
+		rotated := false
+		select {
+		case <-ctx.Done():
+		case <-identityChanged:
+			rotated = true
+			logger.Info("database tunnel identity changed, reconnecting")
+		case <-tunnelEnded:
+		}
+		cancelTunnel()
+		if conn != nil {
+			_ = conn.Close()
+		}
+		select {
+		case <-tunnelEnded:
+		case <-ctx.Done():
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if rotated {
+			continue
+		}
+		logger.Warn("database tunnel lifecycle ended unexpectedly, restarting")
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+func (d *DaemonBase) notifyTunnelIdentityChanged() {
+	select {
+	case d.tunnelIdentityChanged <- struct{}{}:
+	default:
 	}
 }
 

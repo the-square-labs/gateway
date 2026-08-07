@@ -7,6 +7,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc && tsc-alias",
     "start": "node dist/index.js",
+    "start:relay": "node dist/relay/index.js",
+    "healthcheck:relay": "node dist/relay/healthcheck.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

@@ -65,10 +65,6 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 	if migrationStreamer, ok := d.plugin.(MigrationStreamPlugin); ok {
 		go migrationStreamer.RunMigrationStream(sessionCtx, conn, d.state.NodeID)
 	}
-	if databaseTunnel, ok := d.plugin.(DatabaseTunnelPlugin); ok {
-		go databaseTunnel.RunDatabaseTunnel(sessionCtx, conn, d.state.NodeID)
-	}
-
 	asyncCommandSlots := make(chan struct{}, maxAsyncCommandHandlers)
 	sendAsyncCommandResult := func(c *pb.GatewayCommand, handle func(*pb.GatewayCommand) *pb.CommandResult) {
 		select {
@@ -288,7 +284,10 @@ func runCertRenewal(ctx context.Context, d *DaemonBase) {
 		}
 
 		d.state.SetCertExpiry(resp.CertExpiresAt)
-		d.state.Save()
+		if err := d.state.Save(); err != nil {
+			d.logger.Warn("cert renewal: state save failed", "error", err)
+		}
+		d.notifyTunnelIdentityChanged()
 		d.logger.Info("mTLS cert renewed successfully")
 	}
 

@@ -24,7 +24,7 @@ interface IssueCertificateOptions {
    * report-only `unknown` until its owner swap is committed.
    */
   systemLifecycle?: {
-    ownerType: 'node' | 'managed_database' | 'gateway_listener';
+    ownerType: 'node' | 'managed_database' | 'gateway_listener' | 'gateway_service';
     ownerId: string;
     state: 'unknown';
   };

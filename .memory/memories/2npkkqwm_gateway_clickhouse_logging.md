@@ -12,9 +12,9 @@
   "ref": null,
   "source": "model_inferred",
   "confidence": 0.99,
-  "importance": 0.88,
+  "importance": 0.9,
   "created_at": 1777399734516,
-  "updated_at": 1785978784294
+  "updated_at": 1786067585216
 }
 ---
 ## Gateway ClickHouse Logging
@@ -35,6 +35,6 @@
 ## Gateway Logging API and Security
 
 - Public `GET /api/logging/status` was removed because it exposed ClickHouse/logging runtime metadata and was unused by the SDK.
-- Frontend reads the logging feature flag from authenticated `GET /api/system/config` as `features.loggingEnabled`.
+- Frontend reads the logging feature flag from authenticated `GET /api/system/config` as `features.loggingEnabled`; it is not editable through `GeneralSettingsService`.
 - Logging ingest endpoints remain publicly accessible with token authentication and are gated by whether logging is enabled.
 - Protected logging UI/API routes use path-specific feature gating; unknown `/api/logging/*` routes must not reveal enabled/disabled state.

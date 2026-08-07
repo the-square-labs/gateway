@@ -128,6 +128,21 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	if err != nil {
 		return fmt.Errorf("initialize managed database binding registry: %w", err)
 	}
+	if p.cfg.Docker.Mode != "databases" {
+		// This migration is deliberately local and runs before enrollment or a
+		// Gateway tunnel is required. A failed migration keeps the daemon from
+		// advertising a healthy node with connectors pinned to a closed inode.
+		if err := prepareDatabaseTunnelSocketDirectory(p.cfg.StateDir); err != nil {
+			return err
+		}
+		migrated, migrateErr := p.reconcileLegacyDatabaseConnectorMounts(ctx)
+		if migrateErr != nil {
+			return fmt.Errorf("migrate legacy database connector mounts: %w", migrateErr)
+		}
+		if migrated > 0 {
+			p.logger.Info("legacy database connector mounts migrated", "count", migrated)
+		}
+	}
 	if p.cfg.Docker.Mode == "databases" {
 		p.databaseManager, err = newManagedDatabaseManager(p.cfg, p.client, p.logger)
 		if err != nil {

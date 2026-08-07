@@ -30,6 +30,7 @@ function createCertificatePair(
     clientAuth = false,
     altNames = [
       { type: 2, value: 'localhost' },
+      { type: 2, value: 'relay' },
       { type: 7, ip: '127.0.0.1' },
     ],
   } = options;

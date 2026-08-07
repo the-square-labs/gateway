@@ -31,7 +31,7 @@ function collectGrpcServerSans(): string[] {
   // mandatory makes a healthy gRPC listener certificate look stale on every
   // restart. Stable listener names must come from APP_URL, public addresses,
   // explicit extra SANs, or the saved Gateway endpoint settings below.
-  const values = ['localhost', '127.0.0.1'];
+  const values = ['localhost', '127.0.0.1', 'relay'];
 
   const appUrl = process.env.APP_URL;
   if (appUrl) {

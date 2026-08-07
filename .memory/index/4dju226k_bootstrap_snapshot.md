@@ -3,11 +3,11 @@
   "id": "4dju226k",
   "file_name": "4dju226k_bootstrap_snapshot",
   "tags": [
-    "audit",
     "bootstrap",
     "dashboard",
     "rate-limit",
-    "realtime"
+    "realtime",
+    "sidebar"
   ],
   "layer": "lite",
   "ref": "myhj1f8i",
@@ -15,7 +15,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1785949175721,
-  "updated_at": 1785970761696
+  "updated_at": 1786067598014
 }
 ---
-[→ myhj1f8i] Prevent dashboard bootstrap audit-event loops
+[→ myhj1f8i] Split the mixed dashboard aggregate into its distinct bootstrap/sidebar contract; MFA, pins, session compatibility, routes, and their verification remain in their focused canonical memories.

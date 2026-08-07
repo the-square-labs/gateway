@@ -1,7 +1,9 @@
 import { isIP } from 'node:net';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import { container } from '@/container.js';
-import { refreshGrpcServerCredentials } from '@/grpc/server.js';
+import type { Env } from '@/config/env.js';
+import { container, TOKENS } from '@/container.js';
+import { RelayControlClient } from '@/grpc/relay-control.client.js';
+import { refreshGrpcServerCredentials, stageGrpcServerRelayTrust } from '@/grpc/server.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { canManageUser, isScopeSubset } from '@/lib/permissions.js';
@@ -43,6 +45,7 @@ import { GeneralSettingsService } from '@/modules/settings/general-settings.serv
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { OutboundWebhookPolicyService } from '@/modules/settings/outbound-webhook-policy.service.js';
 import { GrpcIdentityService } from '@/services/grpc-identity.service.js';
+import { RelayIdentityProvisionerService } from '@/services/relay-identity-provisioner.service.js';
 import { RuntimeRestartService } from '@/services/runtime-restart.service.js';
 import { SessionService } from '@/services/session.service.js';
 import { SystemCAService } from '@/services/system-ca.service.js';
@@ -101,6 +104,32 @@ function touchesGrpcEndpointSettings(input: unknown): boolean {
   if (!input || typeof input !== 'object') return false;
   const record = input as Record<string, unknown>;
   return 'gatewayGrpcPublicTarget' in record || 'gatewayGrpcLocalIp' in record;
+}
+
+async function refreshActiveGrpcServerIdentity(): Promise<void> {
+  const env = container.resolve<Env>(TOKENS.Env);
+  const grpcIdentityService = container.resolve(GrpcIdentityService);
+  const systemCA = container.resolve(SystemCAService);
+  const externalIdentity = await grpcIdentityService.refresh();
+  if (!env.GATEWAY_RELAY_REQUIRED) {
+    await refreshGrpcServerCredentials(externalIdentity.certPath, externalIdentity.keyPath, systemCA);
+    return;
+  }
+
+  const relayIdentity = await container.resolve(RelayIdentityProvisionerService).refresh();
+  const commitRelayTrust = stageGrpcServerRelayTrust(relayIdentity.relayClientFingerprint);
+  await refreshGrpcServerCredentials(
+    relayIdentity.internalServerCertPath,
+    relayIdentity.internalServerKeyPath,
+    systemCA
+  );
+  try {
+    if (await container.resolve(RelayControlClient).reloadIdentity()) commitRelayTrust();
+  } catch (error) {
+    logger.warn('Relay identity refresh will be applied by the relay poller', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 // List all users
@@ -309,11 +338,11 @@ adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('sett
     const logging = input.logging
       ? await container.resolve(LoggingRuntimeService).update(input.logging)
       : await loggingSettingsService.getPublicConfig();
-    const shouldRefreshGrpcIdentity = touchesGrpcEndpointSettings(input.generalSettings);
+    const mayRefreshGrpcIdentity = touchesGrpcEndpointSettings(input.generalSettings);
     const shouldRefreshWebIdentity = input.generalSettings?.publicUrl !== undefined;
     const nextTlsEnabled = input.webTlsEnabled ?? previousWebTransport.tlsEnabled;
     const previousGeneralSettings =
-      shouldRefreshGrpcIdentity || shouldRefreshWebIdentity ? await generalSettingsService.getConfig() : null;
+      mayRefreshGrpcIdentity || shouldRefreshWebIdentity ? await generalSettingsService.getConfig() : null;
     const [updated, smtp, oidc, mcpSettings, generalSettings, networkSecurity, outboundWebhookPolicy] =
       await Promise.all([
         authSettingsService.updateConfig(input),
@@ -334,14 +363,18 @@ adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('sett
           : outboundWebhookPolicyService.getConfig(),
       ]);
 
+    const shouldRefreshGrpcIdentity = Boolean(
+      mayRefreshGrpcIdentity &&
+        previousGeneralSettings &&
+        (previousGeneralSettings.gatewayGrpcPublicTarget !== generalSettings.gatewayGrpcPublicTarget ||
+          previousGeneralSettings.gatewayGrpcLocalIp !== generalSettings.gatewayGrpcLocalIp)
+    );
+
     if (shouldRefreshGrpcIdentity || (shouldRefreshWebIdentity && nextTlsEnabled)) {
-      const grpcIdentityService = container.resolve(GrpcIdentityService);
-      const systemCA = container.resolve(SystemCAService);
       const webIdentityService = container.resolve(WebIdentityService);
       try {
         if (shouldRefreshGrpcIdentity) {
-          const grpcIdentity = await grpcIdentityService.refresh();
-          await refreshGrpcServerCredentials(grpcIdentity.certPath, grpcIdentity.keyPath, systemCA);
+          await refreshActiveGrpcServerIdentity();
         }
         if (shouldRefreshWebIdentity && nextTlsEnabled) await webIdentityService.refresh();
       } catch (error) {
@@ -349,8 +382,7 @@ adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('sett
           try {
             await generalSettingsService.updateConfig(previousGeneralSettings);
             if (shouldRefreshGrpcIdentity) {
-              const rollbackIdentity = await grpcIdentityService.refresh();
-              await refreshGrpcServerCredentials(rollbackIdentity.certPath, rollbackIdentity.keyPath, systemCA);
+              await refreshActiveGrpcServerIdentity();
             }
             if (shouldRefreshWebIdentity && nextTlsEnabled) await webIdentityService.refresh();
           } catch (rollbackError) {

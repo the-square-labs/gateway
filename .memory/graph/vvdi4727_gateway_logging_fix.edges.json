@@ -3,29 +3,9 @@
   "edges": [
     {
       "from_id": "vvdi4727",
-      "to_id": "2npkkqwm",
-      "relation": "related_to",
-      "weight": 0.5222,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967864,
-      "updated_at": 1786064967864
-    },
-    {
-      "from_id": "vvdi4727",
       "to_id": "fgmxlp0p",
       "relation": "same_area",
       "weight": 0.4423,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1786064967864,
-      "updated_at": 1786064967864
-    },
-    {
-      "from_id": "vvdi4727",
-      "to_id": "yfhytkcz",
-      "relation": "same_area",
-      "weight": 0.4106,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
       "created_at": 1786064967864,

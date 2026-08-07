@@ -111,6 +111,10 @@ describe('UpdateService foundation migration', () => {
           'v2.4.3',
           '--image-ref',
           artifact.imageRef,
+          '--relay-version',
+          '1',
+          '--relay-image-ref',
+          artifact.imageRef,
         ],
         HostConfig: expect.objectContaining({
           Binds: expect.arrayContaining([
@@ -260,6 +264,7 @@ function makeArtifact(imageRef: string, databaseConnectorImage?: string): Truste
   return {
     imageRef,
     digest: 'sha256:new',
+    relayVersion: '1',
     signedManifest: 'signed',
     payload: {
       kind: 'gateway-image',

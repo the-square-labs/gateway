@@ -829,6 +829,11 @@ function RealtimeBridge() {
     return eventStream.subscribe("audit.changed", invalidateDashboardBootstrap);
   }, [canViewAudit, invalidateDashboardBootstrap, user]);
 
+  useEffect(() => {
+    if (!user) return;
+    return eventStream.subscribe("system.relay.health.changed", invalidateDashboardBootstrap);
+  }, [invalidateDashboardBootstrap, user]);
+
   // Feature flags and limits drive permission-authorized shell geometry. The
   // event carries no settings; reload the typed bootstrap atomically instead.
   useEffect(() => {

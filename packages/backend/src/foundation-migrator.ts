@@ -5,6 +5,8 @@ interface CliOptions {
   targetVersion?: string;
   imageRef?: string;
   databaseConnectorImage?: string;
+  relayVersion?: string;
+  relayImageRef?: string;
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -29,6 +31,16 @@ function parseArgs(argv: string[]): CliOptions {
     }
     if (arg === '--database-connector-image' && next) {
       options.databaseConnectorImage = next;
+      index += 1;
+      continue;
+    }
+    if (arg === '--relay-version' && next) {
+      options.relayVersion = next;
+      index += 1;
+      continue;
+    }
+    if (arg === '--relay-image-ref' && next) {
+      options.relayImageRef = next;
       index += 1;
       continue;
     }

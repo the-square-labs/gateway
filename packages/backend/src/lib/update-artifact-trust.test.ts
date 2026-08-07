@@ -1,3 +1,4 @@
+import { generateKeyPairSync, sign } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   isDigestPinnedImageRef,
@@ -86,6 +87,7 @@ describe('update artifact trust', () => {
     });
 
     expect(artifact.imageRef).toBe(`registry.gitlab.wiolett.net/wiolett/gateway@sha256:${checksum}`);
+    expect(artifact.relayVersion).toBe('1');
   });
 
   it('rejects gateway manifests for a different image repository', () => {
@@ -103,5 +105,35 @@ describe('update artifact trust', () => {
     expect(isDigestPinnedImageRef(`${repository}@sha256:${checksum}`, repository)).toBe(true);
     expect(isDigestPinnedImageRef(`${repository}:v2.5.0`, repository)).toBe(false);
     expect(isDigestPinnedImageRef(`registry.example.com/connector@sha256:${checksum}`, repository)).toBe(false);
+  });
+
+  it('rejects an invalid relay version even when the manifest signature is valid', () => {
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    const payload = Buffer.from(
+      JSON.stringify({
+        kind: 'gateway-image',
+        version: 'v9.9.9',
+        tag: 'v9.9.9',
+        image: 'registry.example/gateway',
+        digest: `sha256:${checksum}`,
+        imageRef: `registry.example/gateway@sha256:${checksum}`,
+        relayVersion: '../mutable',
+        createdAt: '2026-08-07T00:00:00.000Z',
+      })
+    );
+    const envelope = JSON.stringify({
+      schemaVersion: 1,
+      keyId: 'wiolett-update-v1',
+      payload: payload.toString('base64url'),
+      signature: sign(null, payload, privateKey).toString('base64url'),
+    });
+
+    expect(() =>
+      verifyGatewayImageManifest(
+        envelope,
+        { version: 'v9.9.9', tag: 'v9.9.9', image: 'registry.example/gateway' },
+        publicKey.export({ type: 'spki', format: 'pem' })
+      )
+    ).toThrow('Gateway update relay version is invalid');
   });
 });

@@ -1,5 +1,13 @@
-import { describe, expect, it } from 'vitest';
-import { extractDaemonCertificateIdentity, extractNodeIdFromCert, normalizeCertificateSerial } from './auth.js';
+import { createHash } from 'node:crypto';
+import * as grpc from '@grpc/grpc-js';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  configureRelayForwardedIdentityTrust,
+  extractDaemonCertificateIdentity,
+  extractNodeIdFromCert,
+  normalizeCertificateSerial,
+  stageRelayForwardedIdentityTrust,
+} from './auth.js';
 
 function makeCall(options: {
   cn?: string | null;
@@ -67,6 +75,62 @@ describe('extractDaemonCertificateIdentity', () => {
     expect(
       extractDaemonCertificateIdentity(makeCall({ cn: 'not-a-node-id', serialNumber: 'aa01', authorized: true }))
     ).toBe(null);
+  });
+});
+
+describe('relay-forwarded daemon identity', () => {
+  const nodeId = '11111111-1111-4111-8111-111111111111';
+  const raw = Buffer.from('current-relay-certificate');
+  const fingerprint = `sha256:${createHash('sha256').update(raw).digest('hex')}`;
+
+  afterEach(() => configureRelayForwardedIdentityTrust(null));
+
+  function forwardedCall(peerRaw = raw) {
+    const metadata = new grpc.Metadata();
+    metadata.set('x-wiolett-relay-node-id', nodeId);
+    metadata.set('x-wiolett-relay-cert-serial', 'AA:01');
+    metadata.set('x-wiolett-relay-node-type', 'docker');
+    return {
+      metadata,
+      handler: {
+        http2Stream: {
+          session: {
+            socket: {
+              authorized: true,
+              getPeerCertificate: () => ({ raw: peerRaw, subject: { CN: 'relay-app-client' }, serialNumber: '02' }),
+            },
+          },
+        },
+      },
+    } as any;
+  }
+
+  it('accepts forwarded identity only from the configured relay service leaf', () => {
+    configureRelayForwardedIdentityTrust(fingerprint);
+    expect(extractDaemonCertificateIdentity(forwardedCall())).toEqual({
+      nodeId,
+      serialNumber: 'aa01',
+      nodeType: 'docker',
+    });
+  });
+
+  it('rejects spoofed forwarded metadata from another system-CA client', () => {
+    configureRelayForwardedIdentityTrust(fingerprint);
+    expect(extractDaemonCertificateIdentity(forwardedCall(Buffer.from('daemon-certificate')))).toBeNull();
+  });
+
+  it('accepts old and new relay leaves only during the bounded rotation window', () => {
+    const nextRaw = Buffer.from('next-relay-certificate');
+    const nextFingerprint = `sha256:${createHash('sha256').update(nextRaw).digest('hex')}`;
+    configureRelayForwardedIdentityTrust(fingerprint);
+
+    const commit = stageRelayForwardedIdentityTrust(nextFingerprint);
+    expect(extractDaemonCertificateIdentity(forwardedCall(raw))).not.toBeNull();
+    expect(extractDaemonCertificateIdentity(forwardedCall(nextRaw))).not.toBeNull();
+
+    commit();
+    expect(extractDaemonCertificateIdentity(forwardedCall(raw))).toBeNull();
+    expect(extractDaemonCertificateIdentity(forwardedCall(nextRaw))).not.toBeNull();
   });
 });
 

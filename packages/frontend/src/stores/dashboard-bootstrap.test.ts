@@ -51,6 +51,42 @@ describe("dashboard bootstrap store", () => {
     expect(api.getDashboardBootstrap).toHaveBeenCalledTimes(2);
   });
 
+  it("clears a critical relay attention state after the realtime refresh becomes healthy", async () => {
+    const critical = {
+      ...SNAPSHOT,
+      relay: {
+        state: "critical",
+        impact: "Managed nodes and secure database connections are disconnected.",
+        attempt: 3,
+        maxAttempts: 3,
+        lastHealthyAt: null,
+      },
+      attention: { severity: "critical", notices: [{ id: "gateway-relay", severity: "critical" }] },
+    } as DashboardBootstrap;
+    const healthy = {
+      ...SNAPSHOT,
+      relay: {
+        state: "healthy",
+        impact: null,
+        attempt: 0,
+        maxAttempts: 3,
+        lastHealthyAt: "2026-08-05T00:01:00.000Z",
+      },
+      attention: { severity: null, notices: [] },
+    } as DashboardBootstrap;
+    vi.mocked(api.getDashboardBootstrap)
+      .mockResolvedValueOnce(critical)
+      .mockResolvedValueOnce(healthy);
+
+    await useDashboardBootstrapStore.getState().load("user:scope:pins", {});
+    useDashboardBootstrapStore.getState().invalidate();
+
+    await vi.waitFor(() =>
+      expect(useDashboardBootstrapStore.getState().snapshot?.relay?.state).toBe("healthy")
+    );
+    expect(useDashboardBootstrapStore.getState().snapshot?.attention.severity).toBeNull();
+  });
+
   it("refetches after an invalidation that arrives while the previous request is in flight", async () => {
     let resolveRefresh: (snapshot: DashboardBootstrap) => void;
     const refreshRequest = new Promise<DashboardBootstrap>((resolve) => {

@@ -501,13 +501,15 @@ export function createMigrationTransferHandlers(deps: GrpcServerDeps) {
         const connected = deps.registry.getNode(identity.nodeId);
         if (!connected || connected.type !== 'docker') throw new Error('Docker node is not connected');
         const [node] = await deps.db
-          .select({ certificateSerial: nodes.certificateSerial, status: nodes.status })
+          .select({ certificateSerial: nodes.certificateSerial, status: nodes.status, type: nodes.type })
           .from(nodes)
           .where(eq(nodes.id, identity.nodeId))
           .limit(1);
         if (
           !node ||
           node.status === 'pending' ||
+          node.type !== 'docker' ||
+          (identity.nodeType && identity.nodeType !== node.type) ||
           !node.certificateSerial ||
           normalizeCertificateSerial(node.certificateSerial) !== identity.serialNumber
         ) {

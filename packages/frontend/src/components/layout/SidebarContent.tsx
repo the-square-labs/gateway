@@ -35,6 +35,7 @@ import { useUIStore } from "@/stores/ui";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import { useUpdateStore } from "@/stores/update";
 import { AI_SCOPE } from "@/types";
+import { dashboardAttentionDotClass, dashboardAttentionLabel } from "./dashboard-attention";
 import { SidebarPinnedResources } from "./SidebarPinnedResources";
 
 function getInitials(name: string | null): string {
@@ -295,16 +296,10 @@ export function SidebarContent({
                       <item.icon className="h-4 w-4" />
                       {item.id === "dashboard" && dashboardAttention && (
                         <span
-                          aria-label={
-                            dashboardAttention === "warning"
-                              ? "Dashboard requires attention"
-                              : "Dashboard has setup information"
-                          }
+                          aria-label={dashboardAttentionLabel(dashboardAttention)}
                           className={cn(
                             "absolute -right-2 -top-2 h-2 w-2",
-                            dashboardAttention === "warning"
-                              ? "bg-warning"
-                              : "bg-[color:var(--color-link)]"
+                            dashboardAttentionDotClass(dashboardAttention)
                           )}
                         />
                       )}
@@ -468,16 +463,10 @@ export function SidebarContent({
                           <span className="truncate">{item.name}</span>
                           {item.id === "dashboard" && dashboardAttention && (
                             <span
-                              aria-label={
-                                dashboardAttention === "warning"
-                                  ? "Dashboard requires attention"
-                                  : "Dashboard has setup information"
-                              }
+                              aria-label={dashboardAttentionLabel(dashboardAttention)}
                               className={cn(
                                 "ml-auto h-2 w-2 shrink-0",
-                                dashboardAttention === "warning"
-                                  ? "bg-warning"
-                                  : "bg-[color:var(--color-link)]"
+                                dashboardAttentionDotClass(dashboardAttention)
                               )}
                             />
                           )}

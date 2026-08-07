@@ -17,6 +17,7 @@ export const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
   gatewayPublicIps: [],
   gatewayGrpcPublicTarget: null,
   gatewayGrpcLocalIp: null,
+  relayAutoRecovery: true,
   features: DEFAULT_GATEWAY_FEATURES,
 };
 

@@ -136,6 +136,7 @@ export const UpdateAuthProvisioningSettingsSchema = z.object({
         .refine(isValidGatewayIpPortTarget, 'Must be an IPv4 or IPv6 address, optionally with a port')
         .nullable()
         .optional(),
+      relayAutoRecovery: z.boolean().optional(),
       features: z
         .object({
           pkiEnabled: z.boolean().optional(),

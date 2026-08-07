@@ -157,6 +157,11 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
           return;
         }
 
+        if (certIdentity.nodeType && certIdentity.nodeType !== node.type) {
+          callback({ code: 7, message: 'Client certificate node type does not match requested node' });
+          return;
+        }
+
         const storedSerial = normalizeCertificateSerial(node.certificateSerial);
         if (storedSerial !== certIdentity.serialNumber) {
           logger.warn('Certificate renewal rejected: certificate serial does not match enrolled node', {

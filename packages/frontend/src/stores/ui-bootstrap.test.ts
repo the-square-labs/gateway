@@ -10,6 +10,7 @@ const SNAPSHOT = {
     gatewayPublicIps: [],
     gatewayGrpcPublicTarget: null,
     gatewayGrpcLocalIp: null,
+    relayAutoRecovery: true,
     features: {
       pkiEnabled: true,
       domainsEnabled: true,

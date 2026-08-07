@@ -78,6 +78,7 @@ describe("Logging UI", () => {
         gatewayPublicIps: [],
         gatewayGrpcPublicTarget: null,
         gatewayGrpcLocalIp: null,
+        relayAutoRecovery: true,
         features: {
           pkiEnabled: true,
           domainsEnabled: true,

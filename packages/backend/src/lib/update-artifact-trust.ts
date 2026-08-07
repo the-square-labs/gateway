@@ -46,6 +46,7 @@ export interface GatewayImageManifestPayload {
   image: string;
   digest: string;
   imageRef: string;
+  relayVersion?: string;
   databaseConnectorImage?: string;
   createdAt: string;
   gitCommitSha?: string;
@@ -64,6 +65,7 @@ export interface TrustedGatewayUpdateArtifact {
   signedManifest: string;
   imageRef: string;
   digest: string;
+  relayVersion: string;
   databaseConnectorImage?: string;
 }
 
@@ -111,9 +113,10 @@ export function verifyDaemonUpdateManifest(
 
 export function verifyGatewayImageManifest(
   signedManifest: string,
-  expected: GatewayImageManifestExpectation
+  expected: GatewayImageManifestExpectation,
+  publicKey: string | Buffer = UPDATE_SIGNING_PUBLIC_KEY_PEM
 ): TrustedGatewayUpdateArtifact {
-  const payload = verifySignedPayload<GatewayImageManifestPayload>(signedManifest);
+  const payload = verifySignedPayload<GatewayImageManifestPayload>(signedManifest, publicKey);
   if (payload.kind !== 'gateway-image') throw new UpdateArtifactTrustError('Update manifest kind is not gateway-image');
   if (payload.version !== expected.version) throw new UpdateArtifactTrustError('Gateway update version mismatch');
   if (payload.tag !== expected.tag) throw new UpdateArtifactTrustError('Gateway update tag mismatch');
@@ -121,6 +124,9 @@ export function verifyGatewayImageManifest(
   if (!DIGEST_RE.test(payload.digest)) throw new UpdateArtifactTrustError('Gateway update digest is invalid');
   if (payload.imageRef !== `${payload.image}@${payload.digest}`) {
     throw new UpdateArtifactTrustError('Gateway update image reference is not digest pinned');
+  }
+  if (payload.relayVersion !== undefined && !/^[1-9][0-9]*$/.test(payload.relayVersion)) {
+    throw new UpdateArtifactTrustError('Gateway update relay version is invalid');
   }
   if (
     payload.databaseConnectorImage !== undefined &&
@@ -135,6 +141,9 @@ export function verifyGatewayImageManifest(
     signedManifest,
     imageRef: payload.imageRef,
     digest: payload.digest,
+    // Signed manifests published before relay extraction did not carry this
+    // field. They map to the initial relay contract for compatibility.
+    relayVersion: payload.relayVersion ?? '1',
     ...(payload.databaseConnectorImage ? { databaseConnectorImage: payload.databaseConnectorImage } : {}),
   };
 }
@@ -154,7 +163,7 @@ export function normalizeGitLabApiUrl(value: string): string {
   return value.replace(/\/+$/, '');
 }
 
-function verifySignedPayload<T>(signedManifest: string): T {
+function verifySignedPayload<T>(signedManifest: string, publicKey: string | Buffer = UPDATE_SIGNING_PUBLIC_KEY_PEM): T {
   let envelope: SignedUpdateEnvelope;
   try {
     envelope = JSON.parse(signedManifest) as SignedUpdateEnvelope;
@@ -182,7 +191,7 @@ function verifySignedPayload<T>(signedManifest: string): T {
     throw new UpdateArtifactTrustError('Update manifest contains invalid base64url data');
   }
 
-  if (!verify(null, payloadBytes, UPDATE_SIGNING_PUBLIC_KEY_PEM, signature)) {
+  if (!verify(null, payloadBytes, publicKey, signature)) {
     throw new UpdateArtifactTrustError('Update manifest signature is invalid');
   }
 

@@ -9,6 +9,7 @@ import { MfaService } from '@/modules/auth/mfa.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
 import { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
+import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { AppEnv, SessionData, User } from '@/types.js';
 import { DashboardReadModelService } from './dashboard-read-model.service.js';
@@ -79,11 +80,90 @@ function registerSession(scopes: string[]) {
   } as unknown as DrizzleClient);
 }
 
+function registerMinimalDashboardDependencies() {
+  container.registerInstance(DashboardReadModelService, {
+    get: vi.fn(async (name: string) => ({ data: name === 'stats-user' ? STATS : [], revision: 1 })),
+  } as never);
+  container.registerInstance(MonitoringService, {
+    getDashboardStats: vi.fn(),
+    getHealthOverview: vi.fn(),
+  } as never);
+  container.registerInstance(FinalizeSetupService, {
+    getForUser: vi.fn(async () => null),
+    shouldShowMfaReminder: vi.fn(async () => false),
+  } as never);
+  container.registerInstance(MfaService, {
+    getStatus: vi.fn(async () => ({ totpConfigured: false, passkeyCount: 0 })),
+    isGatewayMfaRequired: vi.fn(async () => false),
+  } as never);
+  container.registerInstance(AuthSettingsService, {
+    getConfig: vi.fn(async () => ({ methods: { password: true, emailOtp: false } })),
+  } as never);
+}
+
 afterEach(() => {
   container.reset();
 });
 
 describe('dashboard bootstrap route', () => {
+  it('adds a critical relay notice while keeping diagnostics out of the all-user snapshot', async () => {
+    registerSession([]);
+    registerMinimalDashboardDependencies();
+    const getSnapshot = vi.fn((admin: boolean) => ({
+      state: 'critical',
+      impact: 'Managed nodes and secure database connections are disconnected.',
+      attempt: 3,
+      maxAttempts: 3,
+      lastHealthyAt: null,
+      ...(admin ? { reason: 'unreachable', expectedImage: 'private-diagnostic' } : {}),
+    }));
+    container.registerInstance(RelaySupervisorService, { getSnapshot } as never);
+
+    const response = await createApp().request('/api/monitoring/dashboard/bootstrap', {
+      method: 'POST',
+      headers: { Cookie: 'session_id=session-1', 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+
+    expect(response.status).toBe(200);
+    expect(getSnapshot).toHaveBeenCalledWith(false);
+    const body = (await response.json()) as any;
+    expect(body.data.attention).toMatchObject({
+      severity: 'critical',
+      notices: expect.arrayContaining([{ id: 'gateway-relay', severity: 'critical' }]),
+    });
+    expect(body.data.relay).not.toHaveProperty('reason');
+    expect(body.data.relay).not.toHaveProperty('expectedImage');
+  });
+
+  it('requests admin relay diagnostics only with admin:system', async () => {
+    registerSession(['admin:system']);
+    registerMinimalDashboardDependencies();
+    const getSnapshot = vi.fn(() => ({
+      state: 'critical',
+      impact: 'Managed nodes and secure database connections are disconnected.',
+      attempt: 3,
+      maxAttempts: 3,
+      lastHealthyAt: null,
+      reason: 'unreachable',
+      expectedService: 'relay',
+      expectedImage: 'gateway@sha256:diagnostic',
+      canRetry: true,
+    }));
+    container.registerInstance(RelaySupervisorService, { getSnapshot } as never);
+
+    const response = await createApp().request('/api/monitoring/dashboard/bootstrap', {
+      method: 'POST',
+      headers: { Cookie: 'session_id=session-1', 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+
+    expect(getSnapshot).toHaveBeenCalledWith(true);
+    await expect(response.json()).resolves.toMatchObject({
+      data: { relay: { reason: 'unreachable', expectedService: 'relay', canRetry: true } },
+    });
+  });
+
   it('uses hot projections and Docker snapshots rather than live managed-resource reads', async () => {
     const nodeId = '22222222-2222-4222-8222-222222222222';
     const dashboardReadModels = {

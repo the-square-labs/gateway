@@ -1,9 +1,19 @@
+import { createHash } from 'node:crypto';
 import type { ServerDuplexStream, ServerUnaryCall } from '@grpc/grpc-js';
 import { createChildLogger } from '@/lib/logger.js';
 
 const logger = createChildLogger('GrpcAuth');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const RELAY_NODE_TYPES = new Set(['nginx', 'bastion', 'monitoring', 'docker', 'databases']);
+const RELAY_METADATA = {
+  nodeId: 'x-wiolett-relay-node-id',
+  certificateSerial: 'x-wiolett-relay-cert-serial',
+  nodeType: 'x-wiolett-relay-node-type',
+} as const;
+let trustedRelayFingerprints = new Set<string>();
+let relayTrustRotationTimer: ReturnType<typeof setTimeout> | null = null;
+let relayTrustGeneration = 0;
 
 function getPeerCertificateSocket(call: unknown): {
   authorized?: boolean;
@@ -45,6 +55,47 @@ function getPeerCertificateSocket(call: unknown): {
 export interface DaemonCertificateIdentity {
   nodeId: string;
   serialNumber: string;
+  nodeType?: 'nginx' | 'bastion' | 'monitoring' | 'docker' | 'databases';
+}
+
+export function configureRelayForwardedIdentityTrust(fingerprint: string | null): void {
+  relayTrustGeneration += 1;
+  if (relayTrustRotationTimer) clearTimeout(relayTrustRotationTimer);
+  relayTrustRotationTimer = null;
+  trustedRelayFingerprints = fingerprint ? new Set([fingerprint]) : new Set();
+}
+
+/**
+ * Trust both the current and next relay leaf during a bounded live-rotation
+ * window. The returned commit drops the old fingerprint immediately after the
+ * relay confirms its reload; the timer is a fail-closed fallback when that RPC
+ * cannot be confirmed and the relay must pick up files through its poller.
+ */
+export function stageRelayForwardedIdentityTrust(nextFingerprint: string, graceMs = 30_000): () => void {
+  if (relayTrustRotationTimer) clearTimeout(relayTrustRotationTimer);
+  const generation = ++relayTrustGeneration;
+  trustedRelayFingerprints = new Set([...trustedRelayFingerprints, nextFingerprint]);
+  let committed = false;
+  const commit = () => {
+    if (committed || generation !== relayTrustGeneration) return;
+    committed = true;
+    configureRelayForwardedIdentityTrust(nextFingerprint);
+  };
+  relayTrustRotationTimer = setTimeout(commit, graceMs);
+  relayTrustRotationTimer.unref?.();
+  return commit;
+}
+
+export function isTrustedRelayServiceCall(
+  call: ServerDuplexStream<unknown, unknown> | ServerUnaryCall<unknown, unknown>
+): boolean {
+  if (trustedRelayFingerprints.size === 0) return false;
+  const socket = getPeerCertificateSocket(call);
+  if (!socket || socket.authorized !== true) return false;
+  const peer = socket.getPeerCertificate(false) as { raw?: unknown };
+  if (!Buffer.isBuffer(peer?.raw)) return false;
+  const fingerprint = `sha256:${createHash('sha256').update(peer.raw).digest('hex')}`;
+  return trustedRelayFingerprints.has(fingerprint);
 }
 
 export function normalizeCertificateSerial(serial: string): string {
@@ -82,6 +133,29 @@ export function extractDaemonCertificateIdentity(
         authorizationError: socket.authorizationError,
       });
       return null;
+    }
+
+    if (trustedRelayFingerprints.size > 0) {
+      if (!isTrustedRelayServiceCall(call)) {
+        logger.warn('Forwarded daemon identity rejected: peer is not the current relay service identity');
+        return null;
+      }
+      const readOne = (key: string): string | null => {
+        const values = call.metadata.get(key);
+        return values.length === 1 && typeof values[0] === 'string' ? values[0] : null;
+      };
+      const nodeId = readOne(RELAY_METADATA.nodeId);
+      const serialNumber = readOne(RELAY_METADATA.certificateSerial);
+      const nodeType = readOne(RELAY_METADATA.nodeType);
+      if (!nodeId || !UUID_RE.test(nodeId) || !serialNumber || !nodeType || !RELAY_NODE_TYPES.has(nodeType)) {
+        logger.warn('Forwarded daemon identity rejected: metadata is missing or invalid');
+        return null;
+      }
+      return {
+        nodeId,
+        serialNumber: normalizeCertificateSerial(serialNumber),
+        nodeType: nodeType as DaemonCertificateIdentity['nodeType'],
+      };
     }
 
     const authContext =

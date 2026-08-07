@@ -10,6 +10,7 @@ import { LoggingFeatureService } from '@/modules/logging/logging-feature.service
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { DaemonUpdateService, daemonTypeForNodeType } from '@/services/daemon-update.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
+import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { UpdateService } from '@/services/update.service.js';
 import type { AppEnv } from '@/types.js';
 import {
@@ -55,12 +56,19 @@ systemRoutes.openapi(systemConfigRoute, async (c) => {
       gatewayPublicIps: config.gatewayPublicIps,
       gatewayGrpcPublicTarget: config.gatewayGrpcPublicTarget,
       gatewayGrpcLocalIp: config.gatewayGrpcLocalIp,
+      relayAutoRecovery: config.relayAutoRecovery,
       features: {
         ...config.features,
         loggingEnabled: loggingFeature.isEnabled(),
       },
     },
   });
+});
+
+systemRoutes.post('/relay/recovery', sessionOnly, requireScope('admin:system'), async (c) => {
+  const user = c.get('user')!;
+  const data = await container.resolve(RelaySupervisorService).retryRecovery(user.id);
+  return c.json({ data });
 });
 
 // POST /check-update — manual check against GitLab (admin only)

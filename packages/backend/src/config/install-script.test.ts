@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const installer = fileURLToPath(new URL('../../../../scripts/install.sh', import.meta.url));
+const dockerNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-docker-node.sh', import.meta.url));
 
 describe('install.sh managed browser bootstrap', () => {
   it('is valid shell and still works when piped to bash', () => {
@@ -36,6 +37,10 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('Building Gateway from local source');
     expect(source).toMatch(/run_quiet "Gateway image build" "\$\{DOCKER\[@\]\}" build/);
     expect(source).toContain('--source-dir is supported only for a fresh Gateway installation');
+    expect(source).toContain(
+      'ensure_env GATEWAY_RELAY_MANAGED "$([[ -z "$SOURCE_DIR" ]] && printf true || printf false)"'
+    );
+    expect(source).toContain('GATEWAY_RELAY_MANAGED: "${GATEWAY_RELAY_MANAGED:-true}"');
   });
 
   it('renders a compact, quiet installer and lists usable connection URLs', () => {
@@ -57,6 +62,11 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('IMAGE_REF="$image_ref"');
     expect(source).toContain('databaseConnectorImage');
     expect(source).toContain('DATABASE_CONNECTOR_IMAGE_REF="$connector_image_ref"');
+    expect(source).toContain('RELAY_VERSION="$relay_version"');
+    expect(source).toContain('GATEWAY_RELAY_IMAGE_REF');
+    expect(source).toContain('gateway_relay_identity:/var/lib/gateway-relay:ro');
+    expect(source).toContain('      - "9443:9443"');
+    expect(source).toContain('Gateway recovery helper image pull');
     expect(source).toContain('--database-connector-image "$DATABASE_CONNECTOR_IMAGE_REF"');
     expect(source).toContain('ARTIFACT_KIND="local source checksum"');
     expect(source).toContain('short_digest "$ARTIFACT_DIGEST"');
@@ -71,5 +81,45 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('interface ~ /^cni/');
     expect(source).toContain('interface ~ /^tailscale/');
     expect(source).toContain('address != "::1" && address !~ /^fe80:/');
+  });
+});
+
+describe('database daemon installer prerequisites', () => {
+  it('keeps the shared Docker-node installer valid shell', () => {
+    const syntax = spawnSync('bash', ['-n', dockerNodeInstaller], { encoding: 'utf8' });
+    expect(syntax.status, syntax.stderr).toBe(0);
+  });
+
+  it('proves the runtime-equivalent fixed-size ext4 image lifecycle before enrollment', () => {
+    const source = readFileSync(dockerNodeInstaller, 'utf8');
+    expect(source).toContain('losetup --find --show --nooverlap "$image"');
+    expect(source).toContain('mount -o noatime "$DATABASE_PREFLIGHT_LOOP_DEVICE"');
+    expect(source).toContain('fallocate -l 64M "$image"');
+    expect(source).toContain('fallocate -l 128M "$image"');
+    expect(source).toContain('losetup -c "$DATABASE_PREFLIGHT_LOOP_DEVICE"');
+    expect(source).toContain('resize2fs "$DATABASE_PREFLIGHT_LOOP_DEVICE"');
+    expect(source).toContain('blockdev --getsize64 "$DATABASE_PREFLIGHT_LOOP_DEVICE"');
+    expect(source).toContain('Storage filesystem created a sparse image');
+  });
+
+  it('cleans failed probes and explains unsupported LXC hosts', () => {
+    const source = readFileSync(dockerNodeInstaller, 'utf8');
+    expect(source).toContain('trap cleanup_database_preflight EXIT');
+    expect(source).toContain('umount "$DATABASE_PREFLIGHT_MOUNT_DIR"');
+    expect(source).toContain('losetup -d "$DATABASE_PREFLIGHT_LOOP_DEVICE"');
+    expect(source).toContain('This host is an LXC guest.');
+    expect(source).toContain('pass /dev/loop-control and a loop-device pool');
+  });
+
+  it('checks the local Docker Engine after host storage and before daemon enrollment', () => {
+    const source = readFileSync(dockerNodeInstaller, 'utf8');
+    const ensureDocker = source.lastIndexOf('\nensure_docker_installed\n');
+    const dockerPreflight = source.lastIndexOf('\npreflight_database_docker\n');
+    const enrollDaemon = source.lastIndexOf('\nenroll_daemon\n');
+
+    expect(ensureDocker).toBeGreaterThanOrEqual(0);
+    expect(dockerPreflight).toBeGreaterThan(ensureDocker);
+    expect(enrollDaemon).toBeGreaterThan(dockerPreflight);
+    expect(source).toContain('Database nodes require a local Docker Engine socket');
   });
 });

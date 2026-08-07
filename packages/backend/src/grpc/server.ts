@@ -12,6 +12,11 @@ import { validateGrpcServerCertificate } from '@/services/grpc-server-certificat
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { SystemCAService } from '@/services/system-ca.service.js';
+import {
+  configureRelayForwardedIdentityTrust,
+  isTrustedRelayServiceCall,
+  stageRelayForwardedIdentityTrust,
+} from './interceptors/auth.js';
 import { createControlHandlers } from './services/control.js';
 import { createDatabaseTunnelHandlers } from './services/database-tunnel.js';
 import { createEnrollmentHandlers } from './services/enrollment.js';
@@ -94,6 +99,7 @@ export interface GrpcServerDeps {
   caService: CAService;
   cryptoService: CryptoService;
   systemCA: SystemCAService;
+  relayPeerFingerprint?: string;
 }
 
 let server: grpc.Server | null = null;
@@ -123,7 +129,8 @@ async function readGrpcServerTlsMaterial(
 export async function createGrpcServerCredentials(
   tlsCertPath: string | undefined,
   tlsKeyPath: string | undefined,
-  systemCA: SystemCAService
+  systemCA: SystemCAService,
+  requireClientCertificate = false
 ): Promise<grpc.ServerCredentials> {
   const { cert, key, ca } = await readGrpcServerTlsMaterial(tlsCertPath, tlsKeyPath, systemCA);
 
@@ -133,7 +140,7 @@ export async function createGrpcServerCredentials(
   return (grpc.experimental as any).createCertificateProviderServerCredentials(
     certificateProvider,
     certificateProvider,
-    false
+    requireClientCertificate
   );
 }
 
@@ -150,6 +157,10 @@ export async function refreshGrpcServerCredentials(
   const { cert, key, ca } = await readGrpcServerTlsMaterial(tlsCertPath, tlsKeyPath, systemCA);
   certificateProvider.update(ca, cert, key);
   logger.info('Refreshed gRPC server TLS material');
+}
+
+export function stageGrpcServerRelayTrust(nextFingerprint: string): () => void {
+  return stageRelayForwardedIdentityTrust(nextFingerprint);
 }
 
 export async function startGrpcServer(
@@ -169,6 +180,8 @@ export async function startGrpcServer(
 
   const proto = grpc.loadPackageDefinition(packageDefinition) as any;
   const gatewayV1 = proto.gateway.v1;
+  const relayOnly = Boolean(deps.relayPeerFingerprint);
+  configureRelayForwardedIdentityTrust(deps.relayPeerFingerprint ?? null);
 
   server = new grpc.Server({
     'grpc.keepalive_time_ms': 30000,
@@ -178,15 +191,49 @@ export async function startGrpcServer(
     'grpc.max_receive_message_length': GRPC_MAX_MESSAGE_BYTES,
   });
 
-  // Register service handlers
-  server.addService(gatewayV1.NodeEnrollment.service, createEnrollmentHandlers(deps));
-  server.addService(gatewayV1.NodeControl.service, createControlHandlers(deps));
-  server.addService(gatewayV1.LogStream.service, createLogStreamHandlers(deps));
-  server.addService(gatewayV1.MigrationTransfer.service, createMigrationTransferHandlers(deps));
-  server.addService(gatewayV1.DatabaseTunnel.service, createDatabaseTunnelHandlers(deps));
+  const protectUnary = (handler: (call: any, callback: any) => void) => (call: any, callback: any) => {
+    if (!isTrustedRelayServiceCall(call)) {
+      callback({ code: grpc.status.PERMISSION_DENIED, message: 'Current relay service identity required' });
+      return;
+    }
+    handler(call, callback);
+  };
+  const protectStream = (handler: (call: any) => void) => (call: any) => {
+    if (!isTrustedRelayServiceCall(call)) {
+      call.destroy(
+        Object.assign(new Error('Current relay service identity required'), { code: grpc.status.PERMISSION_DENIED })
+      );
+      return;
+    }
+    handler(call);
+  };
 
-  const credentials = await createGrpcServerCredentials(tlsCertPath, tlsKeyPath, deps.systemCA);
-  logger.info('gRPC server using TLS with Gateway system CA client certificate validation');
+  const enrollment = createEnrollmentHandlers(deps);
+  const control = createControlHandlers(deps);
+  const logs = createLogStreamHandlers(deps);
+  const migration = createMigrationTransferHandlers(deps);
+  server.addService(
+    gatewayV1.NodeEnrollment.service,
+    relayOnly
+      ? {
+          Enroll: protectUnary(enrollment.Enroll),
+          RenewCertificate: protectUnary(enrollment.RenewCertificate),
+        }
+      : enrollment
+  );
+  server.addService(
+    gatewayV1.NodeControl.service,
+    relayOnly ? { CommandStream: protectStream(control.CommandStream) } : control
+  );
+  server.addService(gatewayV1.LogStream.service, relayOnly ? { StreamLogs: protectStream(logs.StreamLogs) } : logs);
+  server.addService(
+    gatewayV1.MigrationTransfer.service,
+    relayOnly ? { Transfer: protectStream(migration.Transfer) } : migration
+  );
+  if (!relayOnly) server.addService(gatewayV1.DatabaseTunnel.service, createDatabaseTunnelHandlers(deps));
+
+  const credentials = await createGrpcServerCredentials(tlsCertPath, tlsKeyPath, deps.systemCA, relayOnly);
+  logger.info('gRPC server using TLS with Gateway system CA client certificate validation', { relayOnly });
 
   return new Promise((resolvePromise, reject) => {
     server!.bindAsync(`0.0.0.0:${port}`, credentials, (err, boundPort) => {
@@ -210,6 +257,7 @@ export function stopGrpcServer(): Promise<void> {
       logger.info('gRPC server stopped');
       server = null;
       certificateProvider = null;
+      configureRelayForwardedIdentityTrust(null);
       resolve();
     });
   });

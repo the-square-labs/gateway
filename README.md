@@ -116,10 +116,10 @@ Gateway runs as a Docker stack on the control-plane server. Managed hosts run sm
 ```text
                 Gateway server
         +-----------------------------+
-        | app + redis                 |
+        | app + relay + redis         |
         | postgres local or remote    |
         | clickhouse local/remote/off |
-        | gRPC :9443                  |
+        | relay gRPC :9443            |
         +-------------+---------------+
                       |
                 outbound mTLS
@@ -129,6 +129,8 @@ Gateway runs as a Docker stack on the control-plane server. Managed hosts run sm
  nginx-daemon   docker-daemon     database profile     monitoring-daemon
  proxy host     container host    managed databases    metrics-only host
 ```
+
+The relay is a separate long-lived container and is the only public owner of `9443/tcp`. Ordinary app-only updates keep the relay container and established managed-database binding streams running; a relay update remains an explicit data-plane maintenance event.
 
 Nodes do not need inbound management ports. Public traffic ports, such as `80` and `443` on nginx nodes, are still required for the services you expose.
 

@@ -24,6 +24,7 @@ export const systemCertificateOwnerTypeEnum = pgEnum('system_certificate_owner_t
   'node',
   'managed_database',
   'gateway_listener',
+  'gateway_service',
 ]);
 export const systemCertificateLifecycleStateEnum = pgEnum('system_certificate_lifecycle_state', [
   'current',

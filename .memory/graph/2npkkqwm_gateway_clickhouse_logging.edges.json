@@ -3,53 +3,33 @@
   "edges": [
     {
       "from_id": "2npkkqwm",
-      "to_id": "vvdi4727",
-      "relation": "related_to",
-      "weight": 0.5222,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967267,
-      "updated_at": 1786064967267
-    },
-    {
-      "from_id": "2npkkqwm",
       "to_id": "7abclq2n",
-      "relation": "related_to",
-      "weight": 0.4238,
-      "reason": "The memories are similar enough to be useful related context.",
+      "relation": "same_area",
+      "weight": 0.72,
+      "reason": "Both document Gateway ClickHouse integration and provider-specific database handling.",
       "source": "auto",
-      "created_at": 1786064967267,
-      "updated_at": 1786064967267
+      "created_at": 1786067588812,
+      "updated_at": 1786067588812
     },
     {
       "from_id": "2npkkqwm",
-      "to_id": "nr9hvzr3",
-      "relation": "related_to",
-      "weight": 0.335,
-      "reason": "The memories are similar enough to be useful related context.",
+      "to_id": "j4jc2kmk",
+      "relation": "same_area",
+      "weight": 0.63,
+      "reason": "Both address operational log growth and maintenance for Gateway-local ClickHouse services.",
       "source": "auto",
-      "created_at": 1786064967267,
-      "updated_at": 1786064967267
+      "created_at": 1786067588812,
+      "updated_at": 1786067588812
     },
     {
       "from_id": "2npkkqwm",
-      "to_id": "myhj1f8i",
-      "relation": "related_to",
-      "weight": 0.3344,
-      "reason": "The memories are similar enough to be useful related context.",
+      "to_id": "vvdi4727",
+      "relation": "same_area",
+      "weight": 0.58,
+      "reason": "Both cover the Gateway logging subsystem and its operational configuration.",
       "source": "auto",
-      "created_at": 1786064967267,
-      "updated_at": 1786064967267
-    },
-    {
-      "from_id": "2npkkqwm",
-      "to_id": "gahvf5k5",
-      "relation": "related_to",
-      "weight": 0.3219,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967267,
-      "updated_at": 1786064967267
+      "created_at": 1786067588812,
+      "updated_at": 1786067588812
     }
   ]
 }

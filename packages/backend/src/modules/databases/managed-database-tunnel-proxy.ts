@@ -1,5 +1,7 @@
 import net from 'node:net';
-import { type ManagedDatabaseTunnelLane, openGatewayManagedDatabaseTunnel } from '@/grpc/services/database-tunnel.js';
+import type { RelayControlClient } from '@/grpc/relay-control.client.js';
+import { openGatewayManagedDatabaseTunnel } from '@/grpc/services/database-tunnel.js';
+import type { RelayManagedDatabaseLane } from '@/relay/protocol.js';
 
 export interface ManagedDatabaseTunnelEndpoint {
   host: '127.0.0.1';
@@ -16,9 +18,11 @@ export class ManagedDatabaseTunnelProxy {
   private readonly servers = new Map<string, net.Server>();
   private readonly sockets = new Map<string, Set<net.Socket>>();
 
+  constructor(private readonly relayClient?: Pick<RelayControlClient, 'openManagedDatabaseTunnel'>) {}
+
   getEndpoint(
     managedDatabaseId: string,
-    lane: ManagedDatabaseTunnelLane = 'interactive'
+    lane: RelayManagedDatabaseLane = 'interactive'
   ): Promise<ManagedDatabaseTunnelEndpoint> {
     const key = `${managedDatabaseId}:${lane}`;
     const existing = this.endpoints.get(key);
@@ -45,7 +49,7 @@ export class ManagedDatabaseTunnelProxy {
   private async createEndpoint(
     key: string,
     managedDatabaseId: string,
-    lane: ManagedDatabaseTunnelLane
+    lane: RelayManagedDatabaseLane
   ): Promise<ManagedDatabaseTunnelEndpoint> {
     const sockets = new Set<net.Socket>();
     const server = net.createServer((socket) => {
@@ -56,7 +60,10 @@ export class ManagedDatabaseTunnelProxy {
       // Node promotes it to an uncaughtException and can take down the API.
       socket.on('error', () => {});
       socket.pause();
-      void openGatewayManagedDatabaseTunnel(managedDatabaseId, lane)
+      const openTunnel = this.relayClient
+        ? this.relayClient.openManagedDatabaseTunnel(managedDatabaseId, lane)
+        : openGatewayManagedDatabaseTunnel(managedDatabaseId, lane);
+      void openTunnel
         .then((tunnel) => {
           const closePeer = () => {
             if (!tunnel.destroyed) tunnel.destroy();

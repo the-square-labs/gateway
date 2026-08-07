@@ -1,0 +1,35 @@
+{
+  "file_name": "iois3ul4_managed_database_relay",
+  "edges": [
+    {
+      "from_id": "iois3ul4",
+      "to_id": "02e60mqr",
+      "relation": "same_workflow",
+      "weight": 0.72,
+      "reason": "Both define daemon and installer upgrade/release behavior, including versioned artifacts and node installation paths.",
+      "source": "auto",
+      "created_at": 1786119407723,
+      "updated_at": 1786119407723
+    },
+    {
+      "from_id": "iois3ul4",
+      "to_id": "nr9hvzr3",
+      "relation": "same_area",
+      "weight": 0.58,
+      "reason": "Both document Gateway-managed daemon lifecycle and operational recovery for persistent daemon containers and identities.",
+      "source": "auto",
+      "created_at": 1786119407723,
+      "updated_at": 1786119407723
+    },
+    {
+      "from_id": "iois3ul4",
+      "to_id": "rzidwe4n",
+      "relation": "same_area",
+      "weight": 0.52,
+      "reason": "Both cover Docker-based Gateway operations on host 172.20.0.131, including deployment and stateful workload handling.",
+      "source": "auto",
+      "created_at": 1786119407723,
+      "updated_at": 1786119407723
+    }
+  ]
+}

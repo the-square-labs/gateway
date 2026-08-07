@@ -56,6 +56,7 @@ const DEFAULT_GENERAL_SETTINGS = {
   gatewayPublicIps: [] as string[],
   gatewayGrpcPublicTarget: null as string | null,
   gatewayGrpcLocalIp: null as string | null,
+  relayAutoRecovery: true,
   features: DEFAULT_GENERAL_FEATURES,
 };
 const DEFAULT_AUTH_METHODS = { oidc: true, password: false, emailOtp: false, passkeyLogin: false };
@@ -471,6 +472,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
         withDefaultSystemConfig({
           fileUploadMaxBytes: nextSettings.generalSettings.fileUploadMaxBytes,
           fileOpenMaxBytes: nextSettings.generalSettings.fileOpenMaxBytes,
+          relayAutoRecovery: nextSettings.generalSettings.relayAutoRecovery,
           features: {
             ...currentFeatures,
             ...nextSettings.generalSettings.features,
@@ -960,6 +962,21 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
               checked={pkiEnabled}
               disabled={!canEdit || isSavingGeneral}
               onChange={setPkiEnabled}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-4 px-4 py-3">
+            <div>
+              <p className="text-sm font-medium">Gateway relay auto-recovery</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Let Gateway make up to three bounded attempts to restart its managed relay before
+                reporting a critical incident
+              </p>
+            </div>
+            <Switch
+              checked={settings.generalSettings.relayAutoRecovery}
+              disabled={!canEdit || isSavingGeneral}
+              ariaLabel="Enable Gateway relay auto-recovery"
+              onChange={(checked) => void updateGeneralSettings({ relayAutoRecovery: checked })}
             />
           </div>
           <div className="flex items-center justify-between gap-4 px-4 py-3">

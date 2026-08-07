@@ -39,6 +39,7 @@ const configData = {
   gatewayPublicIps: ['127.0.0.1'],
   gatewayGrpcPublicTarget: null,
   gatewayGrpcLocalIp: null,
+  relayAutoRecovery: false,
   features: { pkiEnabled: true, domainsEnabled: true, inferenceEnabled: true },
 };
 

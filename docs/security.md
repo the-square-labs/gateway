@@ -17,6 +17,8 @@ Gateway defaults to security controls that reduce the most common self-hosted co
 - Managed databases are private by default. Application bindings use Gateway-authenticated tunnels and per-binding engine identities. A published database TCP endpoint is an explicit opt-in; direct TLS is enabled by default and may be deliberately disabled per database.
 - Gateway creates a dedicated Database CA at startup, separate from daemon mTLS. Each managed database receives a server certificate containing its database node's reported service IPs. Direct clients receive only the CA certificate and fingerprint; the server private key remains on the database node. Rotate the certificate after changing a node's published IPs.
 - A connector sidecar exposes only an ordinary database TCP endpoint on a private Docker network. It has no database credentials and no Gateway mTLS material; a daemon-owned Unix socket admits it by a binding ID and carries traffic on the daemon's existing mTLS session.
+- The public daemon endpoint on `9443/tcp` is owned by a separate relay container, not the web application process. The app reaches relay control RPCs over service mTLS, and relay reaches the app's internal gRPC endpoint with its own service identity. The relay accepts forwarded node identity only from that authenticated app/relay boundary and rechecks current authorization in PostgreSQL.
+- Relay database access uses a dedicated PostgreSQL role restricted to versioned security-barrier views. It cannot read encrypted credentials or mutate Gateway state. Every new binding open fails closed when the required view contract or PostgreSQL authorization check is unavailable; established streams are not closed merely because PostgreSQL is temporarily unavailable.
 - Binding identities are least-privilege: Redis bindings receive ordinary data, connection, transaction, and pub/sub commands plus explicit script execution/load commands; they cannot administer ACLs, flush/kill scripts, or manage Redis Functions. Connector, daemon, and Gateway enforce per-binding/session admission caps and close idle tunnel sessions.
 - Managed database lifecycle commands carry durable operation IDs. A lost command response is reconciled against daemon state before Gateway reports a terminal result, so a delayed create, resize, or delete cannot be mistaken for a different operation.
 - No anonymous control plane. Administrative and automation actions are permission-gated and audited.
@@ -35,7 +37,7 @@ Gateway binds OIDC users by the provider subject (`sub`) after first login. Manu
 
 ## Node Trust Uses PKI And mTLS
 
-Managed hosts run small daemons for nginx, Docker, or monitoring. Those daemons do not expose a management API to the network. Instead, they connect outbound to Gateway on the gRPC control-plane port, normally `9443/tcp`. Gateway daemon gRPC is always TLS; there is no plaintext development or production mode.
+Managed hosts run small daemons for nginx, Docker, or monitoring. Those daemons do not expose a management API to the network. Instead, they connect outbound to Gateway's dedicated relay on the gRPC control-plane port, normally `9443/tcp`. Gateway daemon gRPC is always TLS; there is no plaintext development or production mode. The daemon keeps one control connection and one independent long-lived tunnel connection so an app-only restart does not tear down binding traffic.
 
 Long-term daemon trust is based on Gateway's internal node PKI:
 

@@ -215,6 +215,15 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               stream.end();
               return;
             }
+            if (certIdentity.nodeType && certIdentity.nodeType !== node.type) {
+              logger.error('Node registration rejected: forwarded node type does not match database state', {
+                nodeId: claimedNodeId,
+              });
+              registering = false;
+              clearPendingCommandRegistration(claimedNodeId, registrationToken);
+              stream.end();
+              return;
+            }
             if (!node.certificateSerial) {
               logger.error('Node registration rejected: node has no stored certificate serial', {
                 nodeId: claimedNodeId,

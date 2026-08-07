@@ -1,14 +1,9 @@
 package docker
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/binary"
 	"encoding/hex"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	mobymount "github.com/moby/moby/api/types/mount"
 	mobyclient "github.com/moby/moby/client"
 	"github.com/wiolett-industries/gateway/daemon-shared/connector"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
@@ -193,7 +189,7 @@ func (r *databaseTunnelRouter) shutdown() {
 	r.once.Do(func() {
 		if r.listener != nil {
 			_ = r.listener.Close()
-			_ = os.Remove(filepath.Join(r.plugin.cfg.StateDir, DatabaseTunnelSocketFilename))
+			_ = os.Remove(databaseTunnelSocketPath(r.plugin.cfg.StateDir))
 		}
 		r.mu.Lock()
 		slots := make([]*databaseTunnelSlot, 0, len(r.slots))
@@ -271,7 +267,10 @@ func (r *databaseTunnelRouter) runTransport(
 }
 
 func (r *databaseTunnelRouter) startListener() error {
-	socketPath := filepath.Join(r.plugin.cfg.StateDir, DatabaseTunnelSocketFilename)
+	if err := prepareDatabaseTunnelSocketDirectory(r.plugin.cfg.StateDir); err != nil {
+		return err
+	}
+	socketPath := databaseTunnelSocketPath(r.plugin.cfg.StateDir)
 	if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove stale database tunnel socket: %w", err)
 	}
@@ -279,8 +278,8 @@ func (r *databaseTunnelRouter) startListener() error {
 	if err != nil {
 		return fmt.Errorf("listen on database tunnel socket: %w", err)
 	}
-	// The parent state directory is 0700, while the socket itself must remain
-	// usable by a non-root first-party sidecar after Docker bind-mounts it.
+	// Only this dedicated directory is exposed read-only to the first-party
+	// connector. The socket itself must be usable by its non-root process.
 	if err := os.Chmod(socketPath, 0666); err != nil {
 		_ = listener.Close()
 		_ = os.Remove(socketPath)
@@ -289,6 +288,117 @@ func (r *databaseTunnelRouter) startListener() error {
 	r.listener = listener
 	go r.acceptLoop()
 	return nil
+}
+
+func prepareDatabaseTunnelSocketDirectory(stateDir string) error {
+	socketDirectory := filepath.Join(stateDir, DatabaseTunnelSocketDirectory)
+	if err := os.MkdirAll(socketDirectory, 0755); err != nil {
+		return fmt.Errorf("create database tunnel socket directory: %w", err)
+	}
+	if err := os.Chmod(socketDirectory, 0755); err != nil {
+		return fmt.Errorf("set database tunnel socket directory permissions: %w", err)
+	}
+	return nil
+}
+
+func databaseTunnelSocketPath(stateDir string) string {
+	return filepath.Join(stateDir, DatabaseTunnelSocketDirectory, DatabaseTunnelSocketFilename)
+}
+
+func legacyDatabaseTunnelSocketPath(stateDir string) string {
+	return filepath.Join(stateDir, legacyDatabaseTunnelSocketFilename)
+}
+
+// reconcileLegacyDatabaseConnectorMounts performs the one-time upgrade from
+// the old socket-file bind to the restart-safe directory bind. Only
+// first-party connector containers with the exact legacy bind are recreated.
+func (p *DockerPlugin) reconcileLegacyDatabaseConnectorMounts(ctx context.Context) (int, error) {
+	containers, err := p.client.ListContainers(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("list connector containers: %w", err)
+	}
+
+	migrated := 0
+	for _, candidate := range containers {
+		if candidate.Labels[databaseConnectorLabel] != "true" {
+			continue
+		}
+		changed, migrateErr := p.migrateLegacyDatabaseConnectorMount(ctx, candidate.ID)
+		if migrateErr != nil {
+			return migrated, fmt.Errorf("migrate connector %s: %w", candidate.ID, migrateErr)
+		}
+		if changed {
+			migrated++
+		}
+	}
+	return migrated, nil
+}
+
+func (p *DockerPlugin) migrateLegacyDatabaseConnectorMount(ctx context.Context, containerID string) (bool, error) {
+	inspectResult, err := p.client.cli.ContainerInspect(ctx, containerID, mobyclient.ContainerInspectOptions{})
+	if err != nil {
+		return false, fmt.Errorf("inspect container: %w", err)
+	}
+	inspect := inspectResult.Container
+	if inspect.Config == nil || inspect.Config.Labels[databaseConnectorLabel] != "true" {
+		return false, nil
+	}
+	if inspect.HostConfig == nil {
+		return false, errors.New("connector host configuration is unavailable")
+	}
+
+	binds, bindsChanged := replaceLegacyDatabaseConnectorBinds(p.cfg.StateDir, inspect.HostConfig.Binds)
+	mounts, mountsChanged := replaceLegacyDatabaseConnectorMounts(p.cfg.StateDir, inspect.HostConfig.Mounts)
+	if !bindsChanged && !mountsChanged {
+		return false, nil
+	}
+	rollback, err := cloneInspectResponse(&inspect)
+	if err != nil {
+		return false, fmt.Errorf("snapshot connector for rollback: %w", err)
+	}
+	inspect.HostConfig.Binds = binds
+	inspect.HostConfig.Mounts = mounts
+	imageReference := inspect.Config.Image
+	if imageReference == "" {
+		imageReference = inspect.Image
+	}
+	if imageReference == "" {
+		return false, errors.New("connector image reference is unavailable")
+	}
+	if err := p.client.recreateContainer(ctx, &inspect, imageReference, nil, nil, rollback); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func replaceLegacyDatabaseConnectorMounts(stateDir string, mounts []mobymount.Mount) ([]mobymount.Mount, bool) {
+	legacySocket := legacyDatabaseTunnelSocketPath(stateDir)
+	replacementDirectory := filepath.Join(stateDir, DatabaseTunnelSocketDirectory)
+	updated := append([]mobymount.Mount(nil), mounts...)
+	changed := false
+	for index, mounted := range updated {
+		if mounted.Type == mobymount.TypeBind && mounted.Source == legacySocket && mounted.Target == databaseConnectorSocketPath {
+			updated[index].Source = replacementDirectory
+			updated[index].Target = databaseConnectorSocketDirectory
+			updated[index].ReadOnly = true
+			changed = true
+		}
+	}
+	return updated, changed
+}
+
+func replaceLegacyDatabaseConnectorBinds(stateDir string, binds []string) ([]string, bool) {
+	legacyBind := legacyDatabaseTunnelSocketPath(stateDir) + ":" + databaseConnectorSocketPath
+	replacement := filepath.Join(stateDir, DatabaseTunnelSocketDirectory) + ":" + databaseConnectorSocketDirectory + ":ro"
+	updated := append([]string(nil), binds...)
+	changed := false
+	for index, bind := range updated {
+		if bind == legacyBind || bind == legacyBind+":ro" {
+			updated[index] = replacement
+			changed = true
+		}
+	}
+	return updated, changed
 }
 
 func (t *databaseTunnelTransport) run() error {
@@ -613,100 +723,10 @@ func (m *managedDatabaseManager) dial(ctx context.Context, managedDatabaseID str
 	if err != nil {
 		return nil, err
 	}
-	if record.Type != "postgres" || !record.TLSEnabled {
-		return connection, nil
-	}
-	return m.startPostgresTLS(ctx, connection, record)
-}
-
-// PostgreSQL upgrades TCP connections through its SSLRequest preface rather
-// than beginning with a TLS ClientHello. The private Gateway tunnel remains
-// opaque to workloads, but this hop must use TLS when pg_hba.conf requires
-// TLS for all TCP clients.
-func (m *managedDatabaseManager) startPostgresTLS(
-	ctx context.Context,
-	connection net.Conn,
-	record managedDatabaseRecord,
-) (net.Conn, error) {
-	config, err := m.postgresTLSClientConfig(record)
-	if err != nil {
-		_ = connection.Close()
-		return nil, err
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
-		deadline = contextDeadline
-	}
-	if err := connection.SetDeadline(deadline); err != nil {
-		_ = connection.Close()
-		return nil, fmt.Errorf("set PostgreSQL TLS deadline: %w", err)
-	}
-	var request [8]byte
-	binary.BigEndian.PutUint32(request[:4], 8)
-	binary.BigEndian.PutUint32(request[4:], 80877103)
-	if _, err := connection.Write(request[:]); err != nil {
-		_ = connection.Close()
-		return nil, fmt.Errorf("request PostgreSQL TLS: %w", err)
-	}
-	var response [1]byte
-	if _, err := io.ReadFull(connection, response[:]); err != nil {
-		_ = connection.Close()
-		return nil, fmt.Errorf("read PostgreSQL TLS response: %w", err)
-	}
-	if response[0] != 'S' {
-		_ = connection.Close()
-		return nil, errors.New("PostgreSQL server rejected TLS")
-	}
-	tlsConnection := tls.Client(connection, config)
-	if err := tlsConnection.HandshakeContext(ctx); err != nil {
-		_ = connection.Close()
-		return nil, fmt.Errorf("negotiate PostgreSQL TLS: %w", err)
-	}
-	if err := tlsConnection.SetDeadline(time.Time{}); err != nil {
-		_ = tlsConnection.Close()
-		return nil, fmt.Errorf("clear PostgreSQL TLS deadline: %w", err)
-	}
-	return tlsConnection, nil
-}
-
-func (m *managedDatabaseManager) postgresTLSClientConfig(record managedDatabaseRecord) (*tls.Config, error) {
-	tlsDir := m.tlsDirectory(record)
-	certificatePEM, err := os.ReadFile(filepath.Join(tlsDir, "cert.pem"))
-	if err != nil {
-		return nil, fmt.Errorf("read managed PostgreSQL certificate: %w", err)
-	}
-	certificateBlock, _ := pem.Decode(certificatePEM)
-	if certificateBlock == nil {
-		return nil, errors.New("parse managed PostgreSQL certificate")
-	}
-	expectedCertificate, err := x509.ParseCertificate(certificateBlock.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("parse managed PostgreSQL certificate: %w", err)
-	}
-	caPEM, err := os.ReadFile(filepath.Join(tlsDir, "ca.pem"))
-	if err != nil {
-		return nil, fmt.Errorf("read managed PostgreSQL CA certificate: %w", err)
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(caPEM) {
-		return nil, errors.New("parse managed PostgreSQL CA certificate")
-	}
-	return &tls.Config{
-		MinVersion:         tls.VersionTLS12,
-		RootCAs:            roots,
-		InsecureSkipVerify: true, // Verified below against this database's exact certificate and Gateway CA.
-		VerifyConnection: func(state tls.ConnectionState) error {
-			if len(state.PeerCertificates) == 0 {
-				return errors.New("PostgreSQL TLS server did not present a certificate")
-			}
-			peer := state.PeerCertificates[0]
-			if !bytes.Equal(peer.Raw, expectedCertificate.Raw) {
-				return errors.New("PostgreSQL TLS server certificate does not match the managed database")
-			}
-			_, err := peer.Verify(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
-			return err
-		},
-	}, nil
+	// Keep the engine protocol opaque. PostgreSQL performs its own SSLRequest
+	// negotiation on this connection; eagerly upgrading here would consume that
+	// handshake and make the workload send a second SSLRequest inside TLS.
+	return connection, nil
 }
 
 func managedDatabaseEnginePort(engine string) (string, error) {

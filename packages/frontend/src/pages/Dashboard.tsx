@@ -1,9 +1,13 @@
 import { AlertTriangle, ArrowRight, Info, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { DetailRow } from "@/components/common/DetailRow";
 import { PageTransition } from "@/components/common/PageTransition";
+import { PanelShell } from "@/components/common/PanelShell";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
@@ -15,6 +19,7 @@ import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
 import type {
   AuditLogEntry,
+  DashboardRelaySnapshot,
   DashboardStats,
   FinalizeSetupState,
   FinalizeSetupStep,
@@ -68,6 +73,172 @@ function makeDevExpiringItems(): ExpiringItem[] {
 
 function isFinalizeSetupComplete(state: FinalizeSetupState): boolean {
   return Object.values(state.steps).every((status) => status !== "pending");
+}
+
+function relayReasonLabel(reason: string | null | undefined): string {
+  return reason ? reason.replaceAll("_", " ") : "Not reported";
+}
+
+function relayImageSummary(image: string | null | undefined): string {
+  if (!image) return "Not reported";
+  const [repository, digest] = image.split("@sha256:");
+  const name = repository?.split("/").at(-1) || repository;
+  return digest ? `${name}@sha256:${digest.slice(0, 12)}…` : image;
+}
+
+function relayNoticeContent(relay: DashboardRelaySnapshot) {
+  if (relay.state === "critical") {
+    return {
+      title: "Gateway relay is unavailable",
+      summary: "Managed nodes and secure database connections are disconnected.",
+      description: "Automatic recovery failed. Immediate administrator action is required.",
+    };
+  }
+  if (relay.state === "recovering") {
+    return {
+      title: "Gateway relay recovery in progress",
+      summary: `Recovery attempt ${relay.attempt} of ${relay.maxAttempts} is in progress.`,
+      description:
+        "Secure database connections are temporarily unavailable while Gateway recovers the relay.",
+    };
+  }
+  if (relay.state === "maintenance") {
+    return {
+      title: "Gateway relay maintenance in progress",
+      summary: "Secure database connections are temporarily unavailable.",
+      description:
+        "Gateway is updating the relay and will restore connections when maintenance completes.",
+    };
+  }
+  return {
+    title: "Gateway relay activation in progress",
+    summary: "Secure database connections may be temporarily unavailable.",
+    description:
+      "Gateway is activating the standalone relay required for managed database connections.",
+  };
+}
+
+export function RelayHealthNotice({
+  relay,
+  isAdmin,
+  retryPending,
+  onRetry,
+}: {
+  relay: DashboardRelaySnapshot | null;
+  isAdmin: boolean;
+  retryPending: boolean;
+  onRetry: () => void;
+}) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  if (
+    !relay ||
+    !["migration_pending", "maintenance", "recovering", "critical"].includes(relay.state)
+  ) {
+    return null;
+  }
+  const critical = relay.state === "critical";
+  const copy = relayNoticeContent(relay);
+  return (
+    <>
+      <div
+        role={critical ? "alert" : "status"}
+        aria-live="polite"
+        className={
+          critical ? "border border-destructive/60 bg-card" : "border border-warning/60 bg-card"
+        }
+      >
+        <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
+            <AlertTriangle
+              className={`h-4 w-4 shrink-0 ${critical ? "text-destructive" : "text-warning"}`}
+            />
+            <div className="min-w-0">
+              <p
+                className={`text-sm font-semibold ${critical ? "text-destructive" : "text-warning"}`}
+              >
+                {copy.title}
+              </p>
+              <p className="text-sm text-muted-foreground">{copy.summary}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            className={`flex shrink-0 items-center gap-1 text-sm font-medium hover:underline ${critical ? "text-destructive" : "text-warning"}`}
+            onClick={() => setDetailsOpen(true)}
+          >
+            View details
+            <ArrowRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <DialogContent unstyled className="p-0 sm:max-w-lg">
+          <DialogTitle className="sr-only">{copy.title}</DialogTitle>
+          <DialogDescription className="sr-only">{copy.description}</DialogDescription>
+          <PanelShell
+            className="border-0"
+            headerClassName="pr-10"
+            title={copy.title}
+            description={copy.description}
+            bodyClassName="divide-y divide-border"
+          >
+            {!isAdmin ? (
+              <DetailRow label="Action" value="Contact your administrator." />
+            ) : (
+              <>
+                <DetailRow label="Reason" value={relayReasonLabel(relay.reason)} />
+                <DetailRow
+                  label="Last healthy"
+                  value={relay.lastHealthyAt ? formatRelativeDate(relay.lastHealthyAt) : "Never"}
+                />
+                <DetailRow
+                  label="Last probe"
+                  value={relay.lastProbeAt ? formatRelativeDate(relay.lastProbeAt) : "Not reported"}
+                />
+                <DetailRow
+                  label="Versions"
+                  value={`relay ${relay.relayVersion ?? "?"}, protocol ${relay.protocolVersion ?? "?"}, contract ${relay.databaseContractVersion ?? "?"}`}
+                />
+                <DetailRow label="Service" value={relay.expectedService ?? "relay"} />
+                <DetailRow
+                  label="Image"
+                  value={
+                    <span className="break-all" title={relay.expectedImage ?? undefined}>
+                      {relayImageSummary(relay.expectedImage)}
+                    </span>
+                  }
+                />
+                {relay.attemptHistory && relay.attemptHistory.length > 0 && (
+                  <DetailRow
+                    label="Attempts"
+                    value={relay.attemptHistory
+                      .map(
+                        (attempt) =>
+                          `#${attempt.attempt} ${attempt.action ?? "check"} ${attempt.result}`
+                      )
+                      .join(" · ")}
+                  />
+                )}
+              </>
+            )}
+            {critical && isAdmin && (
+              <div className="flex justify-end px-4 py-3">
+                <Button
+                  variant="destructive"
+                  disabled={retryPending || relay.canRetry !== true}
+                  onClick={onRetry}
+                >
+                  <RotateCw className={retryPending ? "animate-spin" : undefined} />
+                  {retryPending ? "Retrying recovery" : "Retry recovery"}
+                </Button>
+              </div>
+            )}
+          </PanelShell>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
 }
 
 /** Keep only permission-authorized dashboard geometry stable while data hydrates. */
@@ -286,6 +457,7 @@ export function Dashboard() {
     EMPTY_ASSISTANT_SETUP_DRAFT
   );
   const [returnToAssistant, setReturnToAssistant] = useState(false);
+  const [relayRetryPending, setRelayRetryPending] = useState(false);
   const previewInferenceAssistantNotice =
     searchParams.get("preview") === "assistant-inference-access";
   const closeInferenceAssistantNoticePreview = useCallback(() => {
@@ -398,6 +570,27 @@ export function Dashboard() {
   const mfaOnboardingReminder = Boolean(
     user?.authMethod !== "oidc" && showMfaOnboardingReminder && !mfaHasFactor && !mfaRequired
   );
+  const relay = dashboardBootstrap?.relay ?? null;
+  const relayNotice =
+    relay && ["migration_pending", "maintenance", "recovering", "critical"].includes(relay.state)
+      ? relay
+      : null;
+  const canRetryRelay = hasScope("admin:system") && relayNotice?.state === "critical";
+
+  useEffect(() => {
+    if (relay?.state !== "critical" || relay.canRetry === false) setRelayRetryPending(false);
+  }, [relay?.canRetry, relay?.state]);
+
+  const retryRelayRecovery = useCallback(async () => {
+    if (!canRetryRelay || !relay?.canRetry || relayRetryPending) return;
+    setRelayRetryPending(true);
+    try {
+      await api.retryRelayRecovery();
+      invalidateDashboardBootstrap();
+    } catch {
+      setRelayRetryPending(false);
+    }
+  }, [canRetryRelay, invalidateDashboardBootstrap, relay?.canRetry, relayRetryPending]);
 
   const finishInferenceWizard = useCallback(
     async (status: "configured" | "skipped") => {
@@ -509,6 +702,13 @@ export function Dashboard() {
           <p className="text-sm text-muted-foreground">Gateway and PKI infrastructure overview</p>
         </div>
         <div className="space-y-6">
+          <RelayHealthNotice
+            relay={relayNotice}
+            isAdmin={hasScope("admin:system")}
+            retryPending={relayRetryPending}
+            onRetry={() => void retryRelayRecovery()}
+          />
+
           {/* Update available */}
           {dashboardBootstrap?.update?.updateAvailable &&
             dashboardBootstrap.update.latestVersion &&

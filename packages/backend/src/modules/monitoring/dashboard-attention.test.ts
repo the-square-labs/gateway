@@ -10,6 +10,12 @@ describe('getDashboardAttentionSeverity', () => {
     expect(getDashboardAttentionSeverity([{ severity: 'info' }, { severity: 'warning' }])).toBe('warning');
   });
 
+  it('prioritizes critical relay incidents over warnings and information', () => {
+    expect(
+      getDashboardAttentionSeverity([{ severity: 'info' }, { severity: 'critical' }, { severity: 'warning' }])
+    ).toBe('critical');
+  });
+
   it('hides the badge when no notices are visible', () => {
     expect(getDashboardAttentionSeverity([])).toBeNull();
   });

@@ -38,6 +38,10 @@ import {
 import { type ReactNode, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AccountMenuContent } from "@/components/layout/AccountMenuContent";
+import {
+  dashboardAttentionDotClass,
+  dashboardAttentionLabel,
+} from "@/components/layout/dashboard-attention";
 import { SidebarPinnedResources } from "@/components/layout/SidebarPinnedResources";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -463,16 +467,10 @@ export function AILiteSidebar({
                 <span>Dashboard</span>
                 {dashboardAttention && (
                   <span
-                    aria-label={
-                      dashboardAttention === "warning"
-                        ? "Dashboard requires attention"
-                        : "Dashboard has setup information"
-                    }
+                    aria-label={dashboardAttentionLabel(dashboardAttention)}
                     className={cn(
                       "ml-auto h-2 w-2 shrink-0",
-                      dashboardAttention === "warning"
-                        ? "bg-warning"
-                        : "bg-[color:var(--color-link)]"
+                      dashboardAttentionDotClass(dashboardAttention)
                     )}
                   />
                 )}

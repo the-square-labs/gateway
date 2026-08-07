@@ -4,14 +4,21 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	mobymount "github.com/moby/moby/api/types/mount"
+	mobyclient "github.com/moby/moby/client"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/docker-daemon/internal/config"
 )
@@ -207,6 +214,265 @@ func TestManagedDatabaseEnginePortsAreFixed(t *testing.T) {
 	}
 	if _, err := managedDatabaseEnginePort("mysql"); err == nil {
 		t.Fatal("expected unsupported engine to be rejected")
+	}
+}
+
+func TestReplaceLegacyDatabaseConnectorBindsIsExactAndIdempotent(t *testing.T) {
+	stateDir := "/var/lib/docker-daemon"
+	legacy := stateDir + "/database-tunnel.sock:/run/gateway-db/tunnel.sock"
+	other := "/host/other:/container/other:ro"
+
+	updated, changed := replaceLegacyDatabaseConnectorBinds(stateDir, []string{legacy, other})
+	if !changed {
+		t.Fatal("expected legacy connector bind to be replaced")
+	}
+	want := stateDir + "/database-tunnel:/run/gateway-db:ro"
+	if updated[0] != want || updated[1] != other {
+		t.Fatalf("unexpected updated binds: %#v", updated)
+	}
+
+	second, changed := replaceLegacyDatabaseConnectorBinds(stateDir, updated)
+	if changed {
+		t.Fatal("restart-safe directory bind must not be migrated again")
+	}
+	if second[0] != want || second[1] != other {
+		t.Fatalf("unexpected idempotent binds: %#v", second)
+	}
+}
+
+func TestReplaceLegacyDatabaseConnectorMountsIsExactAndIdempotent(t *testing.T) {
+	stateDir := "/var/lib/docker-daemon"
+	legacy := mobymount.Mount{
+		Type:   mobymount.TypeBind,
+		Source: stateDir + "/database-tunnel.sock",
+		Target: "/run/gateway-db/tunnel.sock",
+	}
+	other := mobymount.Mount{Type: mobymount.TypeBind, Source: "/host/other", Target: "/container/other"}
+
+	updated, changed := replaceLegacyDatabaseConnectorMounts(stateDir, []mobymount.Mount{legacy, other})
+	if !changed {
+		t.Fatal("expected structured legacy connector mount to be replaced")
+	}
+	if updated[0].Source != stateDir+"/database-tunnel" || updated[0].Target != "/run/gateway-db" || !updated[0].ReadOnly {
+		t.Fatalf("unexpected updated mount: %#v", updated[0])
+	}
+	if updated[1] != other {
+		t.Fatalf("unrelated mount changed: %#v", updated[1])
+	}
+
+	second, changed := replaceLegacyDatabaseConnectorMounts(stateDir, updated)
+	if changed {
+		t.Fatal("restart-safe structured mount must not be migrated again")
+	}
+	if second[0] != updated[0] || second[1] != other {
+		t.Fatalf("unexpected idempotent mounts: %#v", second)
+	}
+}
+
+func TestReconcileLegacyDatabaseConnectorMountsRecreatesFirstPartyConnector(t *testing.T) {
+	stateDir := t.TempDir()
+	legacyBind := legacyDatabaseTunnelSocketPath(stateDir) + ":" + databaseConnectorSocketPath
+	var created map[string]any
+	stopCalls := 0
+	removeCalls := 0
+	startCalls := 0
+
+	dockerAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/containers/json"):
+			_, _ = fmt.Fprintf(w, `[{"Id":"legacy-connector","Names":["/gateway-db-connector"],"Image":"connector:test","State":"running","Labels":{%q:"true"}}]`, databaseConnectorLabel)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/containers/legacy-connector/json"):
+			_, _ = fmt.Fprintf(w, `{
+				"Id":"legacy-connector",
+				"Name":"/gateway-db-connector",
+				"Image":"sha256:connector",
+				"Config":{"Image":"connector:test","Env":["GATEWAY_DB_SOCKET=/run/gateway-db/tunnel.sock"],"Labels":{%q:"true"}},
+				"HostConfig":{"Binds":[%q],"RestartPolicy":{"Name":"unless-stopped"}},
+				"State":{"Running":true},
+				"NetworkSettings":{"Networks":{"binding-network":{"NetworkID":"network-id","Aliases":["database"]}}}
+			}`, databaseConnectorLabel, legacyBind)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/legacy-connector/stop"):
+			stopCalls++
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/containers/legacy-connector"):
+			removeCalls++
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/create"):
+			if err := json.NewDecoder(r.Body).Decode(&created); err != nil {
+				t.Errorf("decode recreated connector: %v", err)
+			}
+			_, _ = w.Write([]byte(`{"Id":"replacement-connector","Warnings":[]}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/replacement-connector/start"):
+			startCalls++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "unexpected Docker API request", http.StatusNotFound)
+			t.Errorf("unexpected Docker API request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer dockerAPI.Close()
+
+	dockerClient, err := mobyclient.NewClientWithOpts(
+		mobyclient.WithHost(dockerAPI.URL),
+		mobyclient.WithVersion("1.43"),
+	)
+	if err != nil {
+		t.Fatalf("create Docker API client: %v", err)
+	}
+	defer dockerClient.Close()
+
+	daemonConfig := &config.Config{}
+	daemonConfig.StateDir = stateDir
+	plugin := &DockerPlugin{
+		cfg:    daemonConfig,
+		client: &Client{cli: dockerClient, logger: slog.Default()},
+		logger: slog.Default(),
+	}
+	migrated, err := plugin.reconcileLegacyDatabaseConnectorMounts(t.Context())
+	if err != nil {
+		t.Fatalf("reconcile legacy connector: %v", err)
+	}
+	if migrated != 1 {
+		t.Fatalf("migrated connectors = %d, want 1", migrated)
+	}
+	if stopCalls != 1 || removeCalls != 1 || startCalls != 1 {
+		t.Fatalf("unexpected lifecycle calls: stop=%d remove=%d start=%d", stopCalls, removeCalls, startCalls)
+	}
+
+	hostConfig, ok := created["HostConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("recreated connector HostConfig is unavailable: %#v", created)
+	}
+	binds, ok := hostConfig["Binds"].([]any)
+	if !ok || len(binds) != 1 {
+		t.Fatalf("unexpected recreated connector binds: %#v", hostConfig["Binds"])
+	}
+	wantBind := filepath.Join(stateDir, DatabaseTunnelSocketDirectory) + ":" + databaseConnectorSocketDirectory + ":ro"
+	if binds[0] != wantBind {
+		t.Fatalf("recreated connector bind = %#v, want %q", binds[0], wantBind)
+	}
+
+	networking, ok := created["NetworkingConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("recreated connector networking config is unavailable: %#v", created)
+	}
+	endpoints, ok := networking["EndpointsConfig"].(map[string]any)
+	if !ok || endpoints["binding-network"] == nil {
+		t.Fatalf("binding network was not preserved: %#v", networking)
+	}
+}
+
+func TestManagedPostgresTunnelPreservesClientSSLRequest(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.2:5432")
+	if err != nil {
+		t.Skipf("PostgreSQL test endpoint is unavailable: %v", err)
+	}
+	defer listener.Close()
+
+	const (
+		databaseID  = "44444444-4444-4444-8444-444444444444"
+		containerID = "managed-postgres-container"
+		networkName = "managed-postgres-network"
+	)
+	dockerAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{
+			"Id": %q,
+			"Config": {"Labels": {%q: %q, %q: "postgres"}},
+			"State": {"Running": true},
+			"NetworkSettings": {"Networks": {%q: {"IPAddress": "127.0.0.2"}}}
+		}`, containerID, managedDatabaseLabel, databaseID, managedDatabaseTypeTag, networkName)
+	}))
+	defer dockerAPI.Close()
+
+	dockerClient, err := mobyclient.NewClientWithOpts(
+		mobyclient.WithHost(dockerAPI.URL),
+		mobyclient.WithVersion("1.43"),
+	)
+	if err != nil {
+		t.Fatalf("create Docker API client: %v", err)
+	}
+	defer dockerClient.Close()
+
+	storageRoot := t.TempDir()
+	manager, err := newManagedDatabaseManager(
+		&config.Config{Docker: config.DockerConfig{Database: config.DatabaseConfig{StorageRoot: storageRoot}}},
+		&Client{cli: dockerClient, logger: slog.Default()},
+		slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("create managed database manager: %v", err)
+	}
+	record := managedDatabaseRecord{
+		ID:          databaseID,
+		Type:        "postgres",
+		ContainerID: containerID,
+		NetworkName: networkName,
+		ImagePath:   filepath.Join(storageRoot, "images", databaseID+".img"),
+		MountPath:   filepath.Join(storageRoot, "mounts", databaseID),
+		TLSEnabled:  true,
+	}
+	if err := manager.saveRecord(record); err != nil {
+		t.Fatalf("save managed database record: %v", err)
+	}
+
+	type dialResult struct {
+		connection net.Conn
+		err        error
+	}
+	dialed := make(chan dialResult, 1)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	go func() {
+		connection, dialErr := manager.dial(ctx, databaseID)
+		dialed <- dialResult{connection: connection, err: dialErr}
+	}()
+
+	serverConnection, err := listener.Accept()
+	if err != nil {
+		t.Fatalf("accept managed PostgreSQL connection: %v", err)
+	}
+	defer serverConnection.Close()
+	if err := serverConnection.SetReadDeadline(time.Now().Add(150 * time.Millisecond)); err != nil {
+		t.Fatalf("set preface observation deadline: %v", err)
+	}
+	probe := make([]byte, 1)
+	if count, readErr := serverConnection.Read(probe); count != 0 {
+		t.Fatalf("database daemon eagerly wrote %d protocol bytes before the client", count)
+	} else if networkError, ok := readErr.(net.Error); !ok || !networkError.Timeout() {
+		t.Fatalf("observe idle managed PostgreSQL connection: %v", readErr)
+	}
+
+	var result dialResult
+	select {
+	case result = <-dialed:
+	case <-ctx.Done():
+		t.Fatal("managed PostgreSQL dial did not return an opaque connection")
+	}
+	if result.err != nil {
+		t.Fatalf("dial managed PostgreSQL: %v", result.err)
+	}
+	defer result.connection.Close()
+	if err := serverConnection.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear preface observation deadline: %v", err)
+	}
+
+	sslRequest := []byte{0, 0, 0, 8, 4, 210, 22, 47}
+	writeDone := make(chan error, 1)
+	go func() {
+		_, writeErr := result.connection.Write(sslRequest)
+		writeDone <- writeErr
+	}()
+	received := make([]byte, len(sslRequest))
+	if _, err := io.ReadFull(serverConnection, received); err != nil {
+		t.Fatalf("read forwarded PostgreSQL SSLRequest: %v", err)
+	}
+	if !bytes.Equal(received, sslRequest) {
+		t.Fatalf("PostgreSQL SSLRequest changed in transit: got %v want %v", received, sslRequest)
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatalf("write PostgreSQL SSLRequest: %v", err)
 	}
 }
 

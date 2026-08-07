@@ -23,6 +23,7 @@ export interface GeneralSettings {
   gatewayPublicIps: string[];
   gatewayGrpcPublicTarget: string | null;
   gatewayGrpcLocalIp: string | null;
+  relayAutoRecovery: boolean;
   features: GeneralFeatureSettings;
   inference: GeneralInferenceSettings;
 }
@@ -44,6 +45,7 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   gatewayPublicIps: [],
   gatewayGrpcPublicTarget: null,
   gatewayGrpcLocalIp: null,
+  relayAutoRecovery: true,
   features: {
     pkiEnabled: true,
     domainsEnabled: true,
@@ -337,6 +339,10 @@ export class GeneralSettingsService {
       gatewayPublicIps,
       gatewayGrpcPublicTarget: normalizeHostPortTarget(record.gatewayGrpcPublicTarget as string | null | undefined),
       gatewayGrpcLocalIp: normalizeIpPortTarget(record.gatewayGrpcLocalIp as string | null | undefined),
+      relayAutoRecovery:
+        typeof record.relayAutoRecovery === 'boolean'
+          ? record.relayAutoRecovery
+          : DEFAULT_GENERAL_SETTINGS.relayAutoRecovery,
       features: {
         pkiEnabled:
           typeof features.pkiEnabled === 'boolean' ? features.pkiEnabled : DEFAULT_GENERAL_SETTINGS.features.pkiEnabled,

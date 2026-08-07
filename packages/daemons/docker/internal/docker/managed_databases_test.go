@@ -448,6 +448,23 @@ func TestRefreshDatabaseLoopDeviceCapacityUsesLosetupCapacityRefresh(t *testing.
 	}
 }
 
+func TestAttachDatabaseLoopDeviceIgnoresSuccessfulLosetupWarnings(t *testing.T) {
+	binDir := t.TempDir()
+	script := "#!/bin/sh\nprintf '/dev/loop7\\n'\nprintf 'losetup: image does not end on a 512-byte sector boundary\\n' >&2\n"
+	if err := os.WriteFile(filepath.Join(binDir, "losetup"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	loopDevice, err := attachDatabaseLoopDevice(t.Context(), "/var/lib/gateway/database.img")
+	if err != nil {
+		t.Fatalf("attach loop device: %v", err)
+	}
+	if loopDevice != "/dev/loop7" {
+		t.Fatalf("expected loop device only, got %q", loopDevice)
+	}
+}
+
 func TestValidateManagedDatabaseBindingInputRejectsUnsafeValues(t *testing.T) {
 	input := managedDatabaseBindingCommand{
 		BindingID:     "binding_123",

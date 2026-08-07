@@ -218,7 +218,9 @@ For a database node, use the installer rather than preparing filesystems manuall
 sudo ./scripts/setup-daemon.sh --type databases
 ```
 
-It rejects a host that cannot create, mount, write, and detach a temporary ext4 image. The database profile then uses fixed-size preallocated ext4 images under `/var/lib/docker-daemon/databases` by default (or the configured external mount), so each managed database has a hard storage limit without reformatting the VM disk.
+It rejects a host that cannot complete the same fixed-size storage lifecycle used at runtime: preallocate and format an ext4 image, attach a free loop device, mount and write it, grow the image and filesystem, then unmount and detach it. It also verifies the local Docker Engine before enrollment. Failed probes clean their temporary mount, loop attachment, and image before the installer exits. The database profile then uses fixed-size preallocated ext4 images under `/var/lib/docker-daemon/databases` by default (or the configured external mount), so each managed database has a hard storage limit without reformatting the VM disk.
+
+VM and bare-metal hosts normally expose the required loop and mount capabilities directly. An LXC database node is supported only when its outer host explicitly passes `/dev/loop-control` plus a loop-device pool and permits loop block devices and mounts. The installer detects an ordinary LXC guest without those capabilities and stops before enrollment with that remediation; it never falls back to an unbounded Docker volume.
 
 The database installer runs `docker-daemon` only as root and shows a local-disk selector in an interactive terminal. Choose an eligible mounted filesystem or a custom path; the selected location becomes the storage root. For automation, pass `--storage-root <path>` (or set `GATEWAY_DATABASE_STORAGE_ROOT`) together with the normal enrollment flags and `--yes`. The preflight runs before enrollment, and `--dry-run` performs no storage preparation or other host mutation.
 

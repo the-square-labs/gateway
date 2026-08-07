@@ -20,12 +20,16 @@ function service(
 }
 
 describe('managed database binding provisioning guardrails', () => {
-  it('accepts only the daemon-provided absolute tunnel socket path', () => {
+  it('mounts only the daemon-provided socket directory so connectors follow a replaced socket inode', () => {
     const instance = service() as any;
     expect(
-      instance.tunnelSocketPath(JSON.stringify({ socketPath: '/var/lib/docker-daemon/database-tunnel.sock' }))
-    ).toBe('/var/lib/docker-daemon/database-tunnel.sock');
-    expect(() => instance.tunnelSocketPath(JSON.stringify({ socketPath: '../database-tunnel.sock' }))).toThrow();
+      instance.tunnelSocketMount(JSON.stringify({ socketPath: '/var/lib/docker-daemon/database-tunnel/tunnel.sock' }))
+    ).toEqual({
+      hostDirectory: '/var/lib/docker-daemon/database-tunnel',
+      connectorPath: '/run/gateway-db/tunnel.sock',
+    });
+    expect(() => instance.tunnelSocketMount(JSON.stringify({ socketPath: '../database-tunnel.sock' }))).toThrow();
+    expect(() => instance.tunnelSocketMount(JSON.stringify({ socketPath: '/database-tunnel.sock' }))).toThrow();
   });
 
   it('does not accept a failed daemon command as provisioned', () => {

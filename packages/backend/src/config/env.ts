@@ -156,6 +156,20 @@ const envSchema = z.object({
   GRPC_TLS_CERT: optionalNonEmptyString,
   GRPC_TLS_KEY: optionalNonEmptyString,
   GRPC_TLS_AUTO_DIR: nonEmptyStringWithDefault('/var/lib/gateway/tls'),
+  GATEWAY_RELAY_IDENTITY_DIR: nonEmptyStringWithDefault('/var/lib/gateway-relay'),
+  GATEWAY_RELAY_TARGET: nonEmptyStringWithDefault('relay:9443'),
+  GATEWAY_RELAY_DB_PASSWORD: optionalNonEmptyString,
+  GATEWAY_RELAY_REQUIRED: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
+  GATEWAY_RELAY_MANAGED: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
+  GATEWAY_RELAY_IMAGE_REF: optionalNonEmptyString,
+  GATEWAY_RELAY_SERVICE_NAME: nonEmptyStringWithDefault('relay'),
+  GATEWAY_RELAY_VERSION: optionalNonEmptyString,
 
   // AI sandbox artifacts
   AI_SANDBOX_ARTIFACT_DIR: nonEmptyStringWithDefault('/var/lib/gateway/ai-artifacts'),

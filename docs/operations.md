@@ -14,7 +14,9 @@ From the UI:
 2. Click **Check for updates** and review the available version.
 3. Click **Update**.
 
-Gateway verifies the signed release manifest, pulls the selected image by its immutable digest, updates `GATEWAY_IMAGE_REF`, and recreates its own container. Automatic gateway updates fail closed when the signed manifest is missing, invalid, or does not match the requested version and running image repository.
+Gateway verifies the signed release manifest, pulls the selected image by its immutable digest, runs the target image's foundation migrator, updates `GATEWAY_IMAGE_REF`, and recreates its own container. The daemon relay has an independent `GATEWAY_RELAY_IMAGE_REF`; it is recreated only when the signed manifest changes `relayVersion`. Automatic gateway updates fail closed when the signed manifest is missing, invalid, or does not match the requested version and running image repository.
+
+App-only updates leave established managed-database binding streams on the relay running. Updating the relay itself is an explicit data-plane maintenance event and may interrupt those streams. The one-time migration from a pre-relay deployment also has an expected interruption while public `9443/tcp` ownership moves from `app` to `relay`.
 
 Manual update:
 
@@ -49,6 +51,9 @@ The installer writes infrastructure/bootstrap values to `.env`. Product settings
 | `DATABASE_URL` | PostgreSQL connection URL. |
 | `REDIS_URL` | Redis connection URL. |
 | `GATEWAY_IMAGE_REF` | Gateway image reference used by Compose. The installer writes the selected release tag; signed self-updates replace it with `image@sha256:<digest>`. |
+| `GATEWAY_RELAY_IMAGE_REF` | Independently pinned image reference used by the relay service. It advances only when the signed release changes `relayVersion`. |
+| `GATEWAY_RELAY_VERSION` | Signed relay contract version used to decide whether an update must recreate the relay. |
+| `GATEWAY_RELAY_DB_PASSWORD` | Dedicated PostgreSQL password for the relay's read-only authorization role. Treat it as a secret. |
 | `SETUP_BOOTSTRAP` | Installer-only flag that permits a fresh empty database to enter first-run setup. |
 | `WEB_TLS_BOOTSTRAP_MODE` | Seeds `http` or `https` only when no persisted web-transport choice exists. |
 | `WEB_TLS_AUTO_DIR` | Persistent directory for the native web TLS leaf and private key. |
@@ -345,6 +350,12 @@ If a node does not connect:
 - If logs mention a Gateway certificate fingerprint mismatch, delete the pending node and create a new node in Gateway, then rerun the generated command. You may change `--gateway` to a direct `9443/tcp` endpoint, but keep the generated `--gateway-cert-sha256` value.
 - Check the daemon systemd logs.
 - Confirm system time is sane on both Gateway and the node.
+
+If Dashboard shows the red **Gateway relay is unavailable** state:
+
+- Allow the bounded automatic recovery attempts to finish or use **View details** to inspect the safe diagnostic reason.
+- If recovery remains critical, verify the `relay` Compose service, its identity volume, PostgreSQL reachability, and the independently pinned relay image. Do not bypass the relay by publishing another port or moving `9443/tcp` back to `app`.
+- The red state means managed-node and private managed-database tunnel traffic is unavailable. Existing database sessions survive a PostgreSQL outage after establishment, but new opens fail closed until authorization can be checked.
 
 If OAuth or OIDC fails:
 

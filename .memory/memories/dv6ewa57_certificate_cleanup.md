@@ -15,7 +15,7 @@
   "confidence": 0.99,
   "importance": 0.95,
   "created_at": 1785947696656,
-  "updated_at": 1785965680509
+  "updated_at": 1786067590918
 }
 ---
 # System PKI Lifecycle and Ownership
@@ -28,6 +28,7 @@
 - Destroying a key and recording its redacted per-certificate audit row must be one database transaction. Audit metadata may include cert/CA/owner/lifecycle/retention/trigger, never key or PEM material.
 - Preserve certificate rows, PEM, revocation/audit data, CAs, user PKI, SSL/ACME, current leaves, and unknown leaves.
 - Retry pending system CRLs at bootstrap and every five minutes; clear the marker only after successful generation.
+- When a PKI lifecycle change introduces a database transaction, affected test database stubs must implement and assert transaction usage; run the full backend suite because narrow dashboard checks will not expose fixture drift.
 
 ## Ownership and Assistant Boundaries
 
