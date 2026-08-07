@@ -24,8 +24,6 @@ import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
 import type {
   AuditLogEntry,
-  DashboardAttentionSeverity,
-  DashboardBootstrap,
   DashboardRelaySnapshot,
   DashboardStats,
   FinalizeSetupState,
@@ -33,7 +31,6 @@ import type {
   LoggingMaintenanceSnapshot,
   Node,
   ProxyHost,
-  RelayLifecycleState,
 } from "@/types";
 import type { InferenceSelfUsage } from "@/types/inference";
 import { CertificateAuthoritiesCard } from "./dashboard/CertificateAuthoritiesCard";
@@ -77,112 +74,6 @@ function makeDevExpiringItems(): ExpiringItem[] {
     makeItem("dev-expiring-preview", "backend.preview.pearldivergame.com", 15),
     makeItem("dev-expiring-staging", "backend.staging.pearldivergame.com", 15),
   ];
-}
-
-const DEV_RELAY_ATTENTION_ID = "relay:dev-preview";
-
-type RelayDevPreview = {
-  key: number;
-  relay: DashboardRelaySnapshot;
-  isAdmin: boolean;
-  retryPending: boolean;
-  openDetails: boolean;
-};
-
-type RelayPreviewState = Extract<
-  RelayLifecycleState,
-  "migration_pending" | "maintenance" | "recovering" | "critical"
->;
-
-function makeDevRelaySnapshot(state: RelayPreviewState): DashboardRelaySnapshot {
-  const now = Date.now();
-  const startedAt = (minutesAgo: number) => new Date(now - minutesAgo * 60 * 1000).toISOString();
-  const common = {
-    state,
-    maxAttempts: 3 as const,
-    lastHealthyAt: startedAt(8),
-    lastProbeAt: startedAt(0),
-    relayVersion: "worktree-relay-e2e",
-    protocolVersion: 2,
-    databaseContractVersion: 1,
-    expectedService: "relay",
-    expectedImage: `registry.example/gateway-relay@sha256:${"a".repeat(64)}`,
-    expectedVersion: "worktree",
-  };
-
-  if (state === "migration_pending") {
-    return {
-      ...common,
-      impact: "Secure database connections may be temporarily unavailable.",
-      attempt: 0,
-      reason: "migration_pending",
-      canRetry: false,
-    };
-  }
-  if (state === "maintenance") {
-    return {
-      ...common,
-      impact: "Secure database connections are temporarily unavailable.",
-      attempt: 1,
-      reason: "relay_update",
-      attemptHistory: [
-        { attempt: 1, startedAt: startedAt(1), action: "compose_up", result: "running" },
-      ],
-      canRetry: false,
-    };
-  }
-  if (state === "recovering") {
-    return {
-      ...common,
-      impact: "Secure database connections are temporarily unavailable.",
-      attempt: 2,
-      reason: "health_probe_failed",
-      attemptHistory: [
-        { attempt: 1, startedAt: startedAt(3), action: "restart", result: "failed" },
-        { attempt: 2, startedAt: startedAt(1), action: "restart", result: "running" },
-      ],
-      canRetry: false,
-    };
-  }
-  return {
-    ...common,
-    state: "critical",
-    impact: "Managed nodes and secure database connections are disconnected.",
-    attempt: 3,
-    lastHealthyAt: startedAt(24),
-    reason: "unreachable",
-    attemptHistory: [
-      { attempt: 1, startedAt: startedAt(7), action: "start", result: "failed" },
-      { attempt: 2, startedAt: startedAt(5), action: "restart", result: "failed" },
-      { attempt: 3, startedAt: startedAt(3), action: "compose_up", result: "failed" },
-    ],
-    canRetry: true,
-  };
-}
-
-function attentionSeverity(
-  notices: DashboardBootstrap["attention"]["notices"]
-): DashboardAttentionSeverity | null {
-  if (notices.some((notice) => notice.severity === "critical")) return "critical";
-  if (notices.some((notice) => notice.severity === "warning")) return "warning";
-  if (notices.some((notice) => notice.severity === "info")) return "info";
-  return null;
-}
-
-function updateDevRelayAttention(severity: DashboardAttentionSeverity | null): boolean {
-  const store = useDashboardBootstrapStore.getState();
-  if (!store.snapshot) return false;
-  const notices = store.snapshot.attention.notices.filter(
-    (notice) => notice.id !== DEV_RELAY_ATTENTION_ID
-  );
-  if (severity) notices.push({ id: DEV_RELAY_ATTENTION_ID, severity });
-  useDashboardBootstrapStore.setState({
-    snapshot: {
-      ...store.snapshot,
-      attention: { notices, severity: attentionSeverity(notices) },
-    },
-  });
-  return true;
 }
 
 function isFinalizeSetupComplete(state: FinalizeSetupState): boolean {
@@ -237,15 +128,13 @@ export function RelayHealthNotice({
   isAdmin,
   retryPending,
   onRetry,
-  initialDetailsOpen = false,
 }: {
   relay: DashboardRelaySnapshot | null;
   isAdmin: boolean;
   retryPending: boolean;
   onRetry: () => void;
-  initialDetailsOpen?: boolean;
 }) {
-  const [detailsOpen, setDetailsOpen] = useState(initialDetailsOpen);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   if (
     !relay ||
     !["migration_pending", "maintenance", "recovering", "critical"].includes(relay.state)
@@ -603,7 +492,6 @@ export function Dashboard() {
   );
   const [returnToAssistant, setReturnToAssistant] = useState(false);
   const [relayRetryPending, setRelayRetryPending] = useState(false);
-  const [relayDevPreview, setRelayDevPreview] = useState<RelayDevPreview | null>(null);
   const previewInferenceAssistantNotice =
     searchParams.get("preview") === "assistant-inference-access";
   const closeInferenceAssistantNoticePreview = useCallback(() => {
@@ -716,7 +604,7 @@ export function Dashboard() {
   const mfaOnboardingReminder = Boolean(
     user?.authMethod !== "oidc" && showMfaOnboardingReminder && !mfaHasFactor && !mfaRequired
   );
-  const relay = relayDevPreview?.relay ?? dashboardBootstrap?.relay ?? null;
+  const relay = dashboardBootstrap?.relay ?? null;
   const relayNotice =
     relay && ["migration_pending", "maintenance", "recovering", "critical"].includes(relay.state)
       ? relay
@@ -738,10 +626,6 @@ export function Dashboard() {
     }
   }, [canRetryRelay, invalidateDashboardBootstrap, relay?.canRetry, relayRetryPending]);
 
-  const retryRelayRecoveryPreview = useCallback(() => {
-    setRelayDevPreview((preview) => (preview ? { ...preview, retryPending: true } : preview));
-  }, []);
-
   const finishInferenceWizard = useCallback(
     async (status: "configured" | "skipped") => {
       setFinalizeSetupBusy(true);
@@ -762,107 +646,21 @@ export function Dashboard() {
   );
 
   useEffect(() => {
-    if (
-      typeof window === "undefined" ||
-      (!import.meta.env.DEV && import.meta.env.VITE_GATEWAY_DEV_TOOLS !== "true")
-    )
-      return;
+    if (!import.meta.env.DEV || typeof window === "undefined") return;
 
     const win = window as DashboardDevWindow;
     const gatewayDev = (win.gatewayDev ??= {});
     const showExpiringSoon = () => setForcedExpiringItems(makeDevExpiringItems());
     const hideExpiringSoon = () => setForcedExpiringItems(null);
-    let relayPreviewKey = 0;
-    const showRelayPreview = (
-      state: RelayPreviewState,
-      options: { isAdmin?: boolean; retryPending?: boolean; openDetails?: boolean } = {}
-    ) => {
-      const severity = state === "critical" ? "critical" : "warning";
-      if (!updateDevRelayAttention(severity)) return false;
-      relayPreviewKey += 1;
-      setRelayDevPreview({
-        key: relayPreviewKey,
-        relay: makeDevRelaySnapshot(state),
-        isAdmin: options.isAdmin ?? true,
-        retryPending: options.retryPending ?? false,
-        openDetails: options.openDetails ?? false,
-      });
-      return true;
-    };
-    const hideRelayPreview = () => {
-      updateDevRelayAttention(null);
-      setRelayDevPreview(null);
-    };
-    const showRelayActivation = () => showRelayPreview("migration_pending");
-    const showRelayMaintenance = () => showRelayPreview("maintenance");
-    const showRelayRecovering = () => showRelayPreview("recovering");
-    const showRelayCritical = () => showRelayPreview("critical");
-    const openRelayActivationDetails = () =>
-      showRelayPreview("migration_pending", { openDetails: true });
-    const openRelayMaintenanceDetails = () =>
-      showRelayPreview("maintenance", { openDetails: true });
-    const openRelayRecoveringDetails = () => showRelayPreview("recovering", { openDetails: true });
-    const openRelayCriticalDetails = () => showRelayPreview("critical", { openDetails: true });
-    const openRelayCriticalUserDetails = () =>
-      showRelayPreview("critical", { isAdmin: false, openDetails: true });
-    const openRelayCriticalRetrying = () =>
-      showRelayPreview("critical", { retryPending: true, openDetails: true });
-    const relayUiCommands = () => [
-      "gatewayDev.showRelayActivation()",
-      "gatewayDev.showRelayMaintenance()",
-      "gatewayDev.showRelayRecovering()",
-      "gatewayDev.showRelayCritical()",
-      "gatewayDev.openRelayActivationDetails()",
-      "gatewayDev.openRelayMaintenanceDetails()",
-      "gatewayDev.openRelayRecoveringDetails()",
-      "gatewayDev.openRelayCriticalDetails()",
-      "gatewayDev.openRelayCriticalUserDetails()",
-      "gatewayDev.openRelayCriticalRetrying()",
-      "gatewayDev.hideRelayPreview()",
-    ];
 
     gatewayDev.showExpiringSoon = showExpiringSoon;
     gatewayDev.hideExpiringSoon = hideExpiringSoon;
-    gatewayDev.showRelayActivation = showRelayActivation;
-    gatewayDev.showRelayMaintenance = showRelayMaintenance;
-    gatewayDev.showRelayRecovering = showRelayRecovering;
-    gatewayDev.showRelayCritical = showRelayCritical;
-    gatewayDev.openRelayActivationDetails = openRelayActivationDetails;
-    gatewayDev.openRelayMaintenanceDetails = openRelayMaintenanceDetails;
-    gatewayDev.openRelayRecoveringDetails = openRelayRecoveringDetails;
-    gatewayDev.openRelayCriticalDetails = openRelayCriticalDetails;
-    gatewayDev.openRelayCriticalUserDetails = openRelayCriticalUserDetails;
-    gatewayDev.openRelayCriticalRetrying = openRelayCriticalRetrying;
-    gatewayDev.hideRelayPreview = hideRelayPreview;
-    gatewayDev.relayUiCommands = relayUiCommands;
     win.gatewayDevShowExpiringSoon = showExpiringSoon;
     win.gatewayDevHideExpiringSoon = hideExpiringSoon;
 
     return () => {
-      updateDevRelayAttention(null);
       if (gatewayDev.showExpiringSoon === showExpiringSoon) delete gatewayDev.showExpiringSoon;
       if (gatewayDev.hideExpiringSoon === hideExpiringSoon) delete gatewayDev.hideExpiringSoon;
-      if (gatewayDev.showRelayActivation === showRelayActivation)
-        delete gatewayDev.showRelayActivation;
-      if (gatewayDev.showRelayMaintenance === showRelayMaintenance)
-        delete gatewayDev.showRelayMaintenance;
-      if (gatewayDev.showRelayRecovering === showRelayRecovering)
-        delete gatewayDev.showRelayRecovering;
-      if (gatewayDev.showRelayCritical === showRelayCritical) delete gatewayDev.showRelayCritical;
-      if (gatewayDev.openRelayActivationDetails === openRelayActivationDetails)
-        delete gatewayDev.openRelayActivationDetails;
-      if (gatewayDev.openRelayMaintenanceDetails === openRelayMaintenanceDetails)
-        delete gatewayDev.openRelayMaintenanceDetails;
-      if (gatewayDev.openRelayRecoveringDetails === openRelayRecoveringDetails)
-        delete gatewayDev.openRelayRecoveringDetails;
-      if (gatewayDev.openRelayCriticalDetails === openRelayCriticalDetails)
-        delete gatewayDev.openRelayCriticalDetails;
-      if (gatewayDev.openRelayCriticalUserDetails === openRelayCriticalUserDetails)
-        delete gatewayDev.openRelayCriticalUserDetails;
-      if (gatewayDev.openRelayCriticalRetrying === openRelayCriticalRetrying)
-        delete gatewayDev.openRelayCriticalRetrying;
-      if (gatewayDev.hideRelayPreview === hideRelayPreview) delete gatewayDev.hideRelayPreview;
-      if (gatewayDev.relayUiCommands === relayUiCommands) delete gatewayDev.relayUiCommands;
       if (win.gatewayDevShowExpiringSoon === showExpiringSoon)
         delete win.gatewayDevShowExpiringSoon;
       if (win.gatewayDevHideExpiringSoon === hideExpiringSoon)
@@ -939,12 +737,10 @@ export function Dashboard() {
         </div>
         <div className="space-y-6">
           <RelayHealthNotice
-            key={relayDevPreview?.key ?? "live"}
             relay={relayNotice}
-            isAdmin={relayDevPreview?.isAdmin ?? hasScope("admin:system")}
-            retryPending={relayDevPreview?.retryPending ?? relayRetryPending}
-            onRetry={relayDevPreview ? retryRelayRecoveryPreview : () => void retryRelayRecovery()}
-            initialDetailsOpen={relayDevPreview?.openDetails}
+            isAdmin={hasScope("admin:system")}
+            retryPending={relayRetryPending}
+            onRetry={() => void retryRelayRecovery()}
           />
 
           {/* Update available */}

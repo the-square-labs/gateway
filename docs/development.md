@@ -80,30 +80,6 @@ Configure the canonical URL, authentication, and structured logging through the 
 | `pnpm db:studio` | Open Drizzle Studio. |
 | `pnpm graph` | Open the Nx dependency graph. |
 
-## Relay UI Previews
-
-In a development build, open the Dashboard and run these commands in the browser console. Relay previews only change client-side state; retry actions do not call the backend.
-
-For a production-style QA image, opt in at build time with `--build-arg VITE_GATEWAY_DEV_TOOLS=true`. Release images omit the commands by default.
-
-```js
-gatewayDev.showRelayActivation()
-gatewayDev.showRelayMaintenance()
-gatewayDev.showRelayRecovering()
-gatewayDev.showRelayCritical()
-
-gatewayDev.openRelayActivationDetails()
-gatewayDev.openRelayMaintenanceDetails()
-gatewayDev.openRelayRecoveringDetails()
-gatewayDev.openRelayCriticalDetails()
-gatewayDev.openRelayCriticalUserDetails()
-gatewayDev.openRelayCriticalRetrying()
-
-gatewayDev.hideRelayPreview()
-```
-
-Run `gatewayDev.relayUiCommands()` to return the full command list. Non-critical previews also set the Dashboard sidebar warning marker; the critical preview sets its red critical marker.
-
 ## Repository Layout
 
 ```text
