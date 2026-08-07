@@ -4,6 +4,7 @@ import { resetAIStateForAuthChange } from "@/stores/ai";
 import { useCAStore } from "@/stores/ca";
 import { useCertificatesStore } from "@/stores/certificates";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import { useDockerStore } from "@/stores/docker";
 import { useDockerFolderStore } from "@/stores/docker-folders";
 import { useFolderStore } from "@/stores/folders";
@@ -21,6 +22,7 @@ export function resetClientSessionState() {
   api.resetSessionState();
   resetAIStateForAuthChange();
   useDashboardBootstrapStore.getState().clear();
+  useUIBootstrapStore.getState().clear();
   useUIStore.setState({ aiPanelOpen: false });
 
   useCAStore.setState({ cas: [], selectedCA: null, isLoading: false, error: null });

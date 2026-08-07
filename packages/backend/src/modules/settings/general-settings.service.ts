@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { settings } from '@/db/schema/index.js';
 import type { InferenceSetupEventsService } from '@/modules/inference/inference-setup-events.service.js';
+import type { EventBusService } from '@/services/event-bus.service.js';
 
 const SETTINGS_KEY = 'general:settings';
 const BODY_LIMIT_OVERHEAD_RATIO = 1.5;
@@ -184,7 +185,8 @@ export class GeneralSettingsService {
 
   constructor(
     private readonly db: DrizzleClient,
-    private readonly inferenceSetupEvents?: InferenceSetupEventsService
+    private readonly inferenceSetupEvents?: InferenceSetupEventsService,
+    private readonly eventBus?: EventBusService
   ) {}
 
   setInferenceDisabledHandler(handler: () => Promise<void>): void {
@@ -225,6 +227,9 @@ export class GeneralSettingsService {
       });
     this.cached = next;
     this.cachedAt = Date.now();
+    // No configuration is carried by this event. It only lets cached,
+    // permission-filtered read models refresh immediately.
+    this.eventBus?.publish('system.config.changed', {});
     if (
       current.features.inferenceEnabled !== next.features.inferenceEnabled ||
       current.inference.harnessSpecificEndpointsEnabled !== next.inference.harnessSpecificEndpointsEnabled

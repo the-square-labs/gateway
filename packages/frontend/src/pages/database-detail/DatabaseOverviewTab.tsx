@@ -1,9 +1,9 @@
 import { Activity } from "lucide-react";
 import { useMemo } from "react";
 import { DetailRow } from "@/components/common/DetailRow";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import type { DatabaseConnection, DatabaseMetricSnapshot } from "@/types";
 import { formatHealthStatusLabel, formatMetricValue, HEALTH_BADGE, METRIC_COLORS } from "./shared";
@@ -379,9 +379,17 @@ export function DatabaseOverviewTab({
     <div className="space-y-4">
       {showMonitoring &&
         (monitoringLoading && !latest ? (
-          <div className="flex items-center gap-3 border border-border bg-card p-4 text-sm text-muted-foreground">
-            <LoadingSpinner className="" />
-            <span>Loading monitoring data...</span>
+          <div
+            className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"
+            aria-label="Loading database monitoring"
+          >
+            {Array.from({ length: 4 }, (_, index) => (
+              <div key={index} className="space-y-3 border border-border bg-card p-4">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-7 w-16" />
+                <Skeleton className="h-2 w-full" />
+              </div>
+            ))}
           </div>
         ) : latest ? (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">

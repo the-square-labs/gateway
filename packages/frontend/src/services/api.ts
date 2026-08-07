@@ -1,3 +1,7 @@
+import {
+  INFERENCE_SELF_USAGE_CACHE_KEY,
+  publishInferenceSelfUsage,
+} from "@/lib/inference-self-usage";
 import { useAuthStore } from "@/stores/auth";
 import { useUIStore } from "@/stores/ui";
 import type {
@@ -9,9 +13,9 @@ import type {
   BrowserSession,
   CreateAccessListRequest,
   CreateDomainRequest,
-  DashboardStats,
   DashboardBootstrap,
   DashboardBootstrapRequest,
+  DashboardStats,
   DeleteDomainRequest,
   DnsStatus,
   Domain,
@@ -41,6 +45,7 @@ import type {
   StatusPageServiceItem,
   StatusPageSourceType,
   TemplateVariableDef,
+  UIBootstrapShell,
   UpdateDomainRequest,
   UploadCertRequest,
   User,
@@ -80,6 +85,10 @@ class ApiClient extends withInferenceApi(
     )
   )
 ) {
+  async getUIBootstrap(): Promise<UIBootstrapShell> {
+    return this.unwrapData(this.request<{ data: UIBootstrapShell }>("/ui/bootstrap"));
+  }
+
   async getFinalizeSetupState(): Promise<FinalizeSetupState | null> {
     return this.unwrapData(this.request<{ data: FinalizeSetupState | null }>("/finalize-setup"));
   }
@@ -94,10 +103,6 @@ class ApiClient extends withInferenceApi(
         body: JSON.stringify({ status }),
       })
     );
-  }
-
-  async dismissFinalizeSetup(): Promise<void> {
-    await this.request("/finalize-setup/dismiss", { method: "POST" });
   }
 
   async getFinalizeSetupMfaReminder(): Promise<boolean> {
@@ -1775,12 +1780,17 @@ class ApiClient extends withInferenceApi(
   }
 
   async getDashboardBootstrap(request: DashboardBootstrapRequest): Promise<DashboardBootstrap> {
-    return this.unwrapData(
+    const snapshot = await this.unwrapData(
       this.request<{ data: DashboardBootstrap }>("/monitoring/dashboard/bootstrap", {
         method: "POST",
         body: JSON.stringify(request),
       })
     );
+    if (snapshot.inferenceUsage) {
+      this.setCache(INFERENCE_SELF_USAGE_CACHE_KEY, snapshot.inferenceUsage);
+      publishInferenceSelfUsage(snapshot.inferenceUsage);
+    }
+    return snapshot;
   }
 
   async getHealthOverview(): Promise<ProxyHost[]> {

@@ -13,19 +13,21 @@ import { MfaService } from '@/modules/auth/mfa.service.js';
 import { DatabaseConnectionService } from '@/modules/databases/databases.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
-import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
+import { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
 import { InferenceUsageService } from '@/modules/inference/accounting/inference-usage.service.js';
 import { LoggingMaintenanceService } from '@/modules/logging/logging-maintenance.service.js';
 import { NodesService } from '@/modules/nodes/nodes.service.js';
-import { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
+import { FinalizeSetupService, isFinalizeSetupComplete } from '@/modules/onboarding/finalize-setup.service.js';
 import { CAService } from '@/modules/pki/ca.service.js';
 import { CertService } from '@/modules/pki/cert.service.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
+import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import { UpdateService } from '@/services/update.service.js';
 import type { AppEnv } from '@/types.js';
 import { getDashboardAttentionSeverity } from './dashboard-attention.js';
+import { DashboardReadModelService, dashboardStatsFromSourceSnapshots } from './dashboard-read-model.service.js';
 import { getNginxLogHistory, logRelay, type RelayedLogEntry } from './log-relay.service.js';
 import {
   dashboardBootstrapRoute,
@@ -40,9 +42,63 @@ export const monitoringRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiVa
 
 monitoringRoutes.use('*', authMiddleware);
 
+async function scopedDashboardStatsFromReadModels(
+  scopes: string[],
+  showSystem: boolean,
+  fallback: () => Promise<Awaited<ReturnType<MonitoringService['getDashboardStats']>>>
+) {
+  const canViewProxy = hasScopeBase(scopes, 'proxy:view');
+  const canViewSsl = hasScopeBase(scopes, 'ssl:cert:view');
+  const canViewPki = hasScopeBase(scopes, 'pki:cert:view');
+  const canViewCa = hasScope(scopes, 'pki:ca:view:root') || hasScope(scopes, 'pki:ca:view:intermediate');
+  const canViewNodes = hasScopeBase(scopes, 'nodes:details');
+  const readModels = container.resolve(DashboardReadModelService);
+  const [proxies, ssl, pki, cas, nodes] = await Promise.all([
+    canViewProxy ? readModels.get<any[]>('proxies') : Promise.resolve(null),
+    canViewSsl ? readModels.get<any[]>('ssl') : Promise.resolve(null),
+    canViewPki ? readModels.get<any[]>('pki') : Promise.resolve(null),
+    canViewCa ? readModels.get<any[]>('cas') : Promise.resolve(null),
+    canViewNodes ? container.resolve(ResourceSnapshotStore).get<any[]>('ui-shell-nodes', 'all') : Promise.resolve(null),
+  ]);
+  const required = [
+    ...(canViewProxy ? [proxies] : []),
+    ...(canViewSsl ? [ssl] : []),
+    ...(canViewPki ? [pki] : []),
+    ...(canViewCa ? [cas] : []),
+    ...(canViewNodes ? [nodes] : []),
+  ];
+  if (required.some((snapshot) => !snapshot || snapshot.revision === 0)) return fallback();
+
+  return dashboardStatsFromSourceSnapshots(
+    {
+      proxies: proxies?.data ?? [],
+      ssl: ssl?.data ?? [],
+      pki: pki?.data ?? [],
+      cas: cas?.data ?? [],
+      nodes: nodes?.data ?? [],
+    },
+    {
+      showSystem,
+      allowedCaTypes: [
+        hasScope(scopes, 'pki:ca:view:root') ? 'root' : null,
+        hasScope(scopes, 'pki:ca:view:intermediate') ? 'intermediate' : null,
+      ].filter((type): type is 'root' | 'intermediate' => !!type),
+      allowedProxyHostIds: hasScope(scopes, 'proxy:view') ? undefined : getResourceScopedIds(scopes, 'proxy:view'),
+      allowedSslCertificateIds: hasScope(scopes, 'ssl:cert:view')
+        ? undefined
+        : getResourceScopedIds(scopes, 'ssl:cert:view'),
+      allowedPkiCertificateIds: hasScope(scopes, 'pki:cert:view')
+        ? undefined
+        : getResourceScopedIds(scopes, 'pki:cert:view'),
+      allowedNodeIds: hasScope(scopes, 'nodes:details') ? undefined : getResourceScopedIds(scopes, 'nodes:details'),
+    }
+  );
+}
+
 // Dashboard stats — aggregate counts for proxy hosts, SSL certs, PKI certs, CAs
 monitoringRoutes.openapi(dashboardStatsRoute, async (c) => {
   const monitoringService = container.resolve(MonitoringService);
+  const dashboardReadModels = container.resolve(DashboardReadModelService);
   const showSystem = c.req.query('showSystem') === 'true';
   const scopes = c.get('effectiveScopes') || [];
   const canViewProxyStats = hasScopeBase(scopes, 'proxy:view');
@@ -51,22 +107,40 @@ monitoringRoutes.openapi(dashboardStatsRoute, async (c) => {
   const canViewCaStats = hasScope(scopes, 'pki:ca:view:root') || hasScope(scopes, 'pki:ca:view:intermediate');
   const canViewNodeStats = hasScopeBase(scopes, 'nodes:details');
   const canViewSystemStats = showSystem && hasScope(scopes, 'admin:details:certificates');
-
-  const stats = await monitoringService.getDashboardStats({
-    showSystem: canViewSystemStats,
-    allowedCaTypes: [
-      hasScope(scopes, 'pki:ca:view:root') ? 'root' : null,
-      hasScope(scopes, 'pki:ca:view:intermediate') ? 'intermediate' : null,
-    ].filter((type): type is 'root' | 'intermediate' => !!type),
-    allowedProxyHostIds: hasScope(scopes, 'proxy:view') ? undefined : getResourceScopedIds(scopes, 'proxy:view'),
-    allowedSslCertificateIds: hasScope(scopes, 'ssl:cert:view')
-      ? undefined
-      : getResourceScopedIds(scopes, 'ssl:cert:view'),
-    allowedPkiCertificateIds: hasScope(scopes, 'pki:cert:view')
-      ? undefined
-      : getResourceScopedIds(scopes, 'pki:cert:view'),
-    allowedNodeIds: hasScope(scopes, 'nodes:details') ? undefined : getResourceScopedIds(scopes, 'nodes:details'),
-  });
+  const directStats = () =>
+    monitoringService.getDashboardStats({
+      showSystem: canViewSystemStats,
+      allowedCaTypes: [
+        hasScope(scopes, 'pki:ca:view:root') ? 'root' : null,
+        hasScope(scopes, 'pki:ca:view:intermediate') ? 'intermediate' : null,
+      ].filter((type): type is 'root' | 'intermediate' => !!type),
+      allowedProxyHostIds: hasScope(scopes, 'proxy:view') ? undefined : getResourceScopedIds(scopes, 'proxy:view'),
+      allowedSslCertificateIds: hasScope(scopes, 'ssl:cert:view')
+        ? undefined
+        : getResourceScopedIds(scopes, 'ssl:cert:view'),
+      allowedPkiCertificateIds: hasScope(scopes, 'pki:cert:view')
+        ? undefined
+        : getResourceScopedIds(scopes, 'pki:cert:view'),
+      allowedNodeIds: hasScope(scopes, 'nodes:details') ? undefined : getResourceScopedIds(scopes, 'nodes:details'),
+    });
+  // A global aggregate can be returned unchanged only when every category the
+  // caller can see is broad. Scoped grants must retain their existing DB-side
+  // filtering before anything reaches the response.
+  const canUseGlobalSnapshot =
+    (!canViewProxyStats || hasScope(scopes, 'proxy:view')) &&
+    (!canViewSslStats || hasScope(scopes, 'ssl:cert:view')) &&
+    (!canViewPkiCertStats || hasScope(scopes, 'pki:cert:view')) &&
+    (!canViewNodeStats || hasScope(scopes, 'nodes:details')) &&
+    (!canViewCaStats || (hasScope(scopes, 'pki:ca:view:root') && hasScope(scopes, 'pki:ca:view:intermediate')));
+  const snapshot = canUseGlobalSnapshot
+    ? await dashboardReadModels.get<any>(canViewSystemStats ? 'stats-system' : 'stats-user')
+    : null;
+  const stats =
+    snapshot && snapshot.revision > 0
+      ? snapshot.data
+      : canUseGlobalSnapshot
+        ? await directStats()
+        : await scopedDashboardStatsFromReadModels(scopes, canViewSystemStats, directStats);
   return c.json({
     data: {
       proxyHosts: canViewProxyStats ? stats.proxyHosts : { total: 0, enabled: 0, online: 0, offline: 0, degraded: 0 },
@@ -154,50 +228,112 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
   const canViewDatabases = hasScopeBase(scopes, 'databases:view');
   const canViewAudit = hasScope(scopes, 'admin:audit');
   const monitoringService = container.resolve(MonitoringService);
+  const dashboardReadModels = container.resolve(DashboardReadModelService);
   const user = c.get('user')!;
   const canViewLogging = hasScope(scopes, 'housekeeping:view');
   const canViewInference = hasScope(scopes, 'inference:use') && hasScope(scopes, 'inference:usage:view:self');
-  const nodeOptions = hasScope(scopes, 'nodes:details')
-    ? undefined
-    : { allowedIds: getResourceScopedIds(scopes, 'nodes:details') };
-  const statsPromise = monitoringService.getDashboardStats({
-    showSystem,
-    allowedCaTypes: [
-      hasScope(scopes, 'pki:ca:view:root') ? 'root' : null,
-      hasScope(scopes, 'pki:ca:view:intermediate') ? 'intermediate' : null,
-    ].filter((type): type is 'root' | 'intermediate' => !!type),
-    allowedProxyHostIds: hasScope(scopes, 'proxy:view') ? undefined : getResourceScopedIds(scopes, 'proxy:view'),
-    allowedSslCertificateIds: hasScope(scopes, 'ssl:cert:view')
-      ? undefined
-      : getResourceScopedIds(scopes, 'ssl:cert:view'),
-    allowedPkiCertificateIds: hasScope(scopes, 'pki:cert:view')
-      ? undefined
-      : getResourceScopedIds(scopes, 'pki:cert:view'),
-    allowedNodeIds: hasScope(scopes, 'nodes:details') ? undefined : getResourceScopedIds(scopes, 'nodes:details'),
-  });
+  const scopedNodeIds = getResourceScopedIds(scopes, 'nodes:details');
+  const nodeOptions = hasScope(scopes, 'nodes:details') ? undefined : { allowedIds: scopedNodeIds };
+  const directStats = () =>
+    monitoringService.getDashboardStats({
+      showSystem,
+      allowedCaTypes: [
+        hasScope(scopes, 'pki:ca:view:root') ? 'root' : null,
+        hasScope(scopes, 'pki:ca:view:intermediate') ? 'intermediate' : null,
+      ].filter((type): type is 'root' | 'intermediate' => !!type),
+      allowedProxyHostIds: hasScope(scopes, 'proxy:view') ? undefined : getResourceScopedIds(scopes, 'proxy:view'),
+      allowedSslCertificateIds: hasScope(scopes, 'ssl:cert:view')
+        ? undefined
+        : getResourceScopedIds(scopes, 'ssl:cert:view'),
+      allowedPkiCertificateIds: hasScope(scopes, 'pki:cert:view')
+        ? undefined
+        : getResourceScopedIds(scopes, 'pki:cert:view'),
+      allowedNodeIds: hasScope(scopes, 'nodes:details') ? undefined : getResourceScopedIds(scopes, 'nodes:details'),
+    });
+  const hasBroadStatsAccess =
+    (!canViewProxy || hasScope(scopes, 'proxy:view')) &&
+    (!canViewSsl || hasScope(scopes, 'ssl:cert:view')) &&
+    (!canViewPki || hasScope(scopes, 'pki:cert:view')) &&
+    (!canViewNodes || hasScope(scopes, 'nodes:details')) &&
+    (!canViewCa || (hasScope(scopes, 'pki:ca:view:root') && hasScope(scopes, 'pki:ca:view:intermediate')));
+  const statsPromise = hasBroadStatsAccess
+    ? dashboardReadModels
+        .get<any>(showSystem ? 'stats-system' : 'stats-user')
+        // Revision zero is the coordinator's in-progress placeholder, not a
+        // real (empty) dashboard.  Do the safe service fallback only until a
+        // first complete projection exists; subsequent refreshes keep serving
+        // the last-known-good snapshot.
+        .then((snapshot) => (snapshot && snapshot.revision > 0 ? snapshot.data : directStats()))
+    : scopedDashboardStatsFromReadModels(scopes, showSystem, directStats);
   const healthPromise = canViewProxy
-    ? monitoringService.getHealthOverview(
-        hasScope(scopes, 'proxy:view') ? undefined : { allowedHostIds: getResourceScopedIds(scopes, 'proxy:view') }
-      )
+    ? dashboardReadModels.get<any[]>('health').then((snapshot) => {
+        const health = snapshot && snapshot.revision > 0 ? snapshot.data : null;
+        if (!health) {
+          return monitoringService.getHealthOverview(
+            hasScope(scopes, 'proxy:view') ? undefined : { allowedHostIds: getResourceScopedIds(scopes, 'proxy:view') }
+          );
+        }
+        if (hasScope(scopes, 'proxy:view')) return health;
+        const allowed = new Set(getResourceScopedIds(scopes, 'proxy:view'));
+        return health.filter((host) => allowed.has(host.id));
+      })
     : Promise.resolve([]);
   const nodesPromise = canViewNodes
-    ? container.resolve(NodesService).list({ page: 1, limit: 100 } as any, nodeOptions)
+    ? (async () => {
+        const snapshot = await container.resolve(ResourceSnapshotStore).get<any[]>('ui-shell-nodes', 'all');
+        if (snapshot && snapshot.revision > 0) {
+          const visible = hasScope(scopes, 'nodes:details')
+            ? snapshot.data
+            : snapshot.data.filter((node) => scopedNodeIds.includes(node.id));
+          return { data: visible.slice(0, 100) };
+        }
+        // Redis-cold fallback is database/registry-only; never a daemon RPC.
+        return container.resolve(NodesService).list({ page: 1, limit: 100 }, nodeOptions);
+      })()
     : Promise.resolve({ data: [] as any[] });
   const sslPromise = canViewSsl
-    ? container
-        .resolve(SSLService)
-        .listCerts(
-          { page: 1, limit: 100, status: 'active', showSystem } as any,
-          hasScope(scopes, 'ssl:cert:view') ? undefined : { allowedIds: getResourceScopedIds(scopes, 'ssl:cert:view') }
-        )
+    ? dashboardReadModels.get<any[]>('ssl').then(async (snapshot) => {
+        if (!snapshot || snapshot.revision === 0) {
+          return container
+            .resolve(SSLService)
+            .listCerts(
+              { page: 1, limit: 100, status: 'active', showSystem } as any,
+              hasScope(scopes, 'ssl:cert:view')
+                ? undefined
+                : { allowedIds: getResourceScopedIds(scopes, 'ssl:cert:view') }
+            );
+        }
+        const allowed = new Set(getResourceScopedIds(scopes, 'ssl:cert:view'));
+        return {
+          data: snapshot.data
+            .filter((certificate) => certificate.status === 'active')
+            .filter((certificate) => showSystem || !certificate.isSystem)
+            .filter((certificate) => hasScope(scopes, 'ssl:cert:view') || allowed.has(certificate.id))
+            .slice(0, 100),
+        };
+      })
     : Promise.resolve({ data: [] as any[] });
   const pkiPromise = canViewPki
-    ? container
-        .resolve(CertService)
-        .listCertificates(
-          { page: 1, limit: 100, status: 'active', showSystem } as any,
-          hasScope(scopes, 'pki:cert:view') ? undefined : { allowedIds: getResourceScopedIds(scopes, 'pki:cert:view') }
-        )
+    ? dashboardReadModels.get<any[]>('pki').then(async (snapshot) => {
+        if (!snapshot || snapshot.revision === 0) {
+          return container
+            .resolve(CertService)
+            .listCertificates(
+              { page: 1, limit: 100, status: 'active', showSystem } as any,
+              hasScope(scopes, 'pki:cert:view')
+                ? undefined
+                : { allowedIds: getResourceScopedIds(scopes, 'pki:cert:view') }
+            );
+        }
+        const allowed = new Set(getResourceScopedIds(scopes, 'pki:cert:view'));
+        return {
+          data: snapshot.data
+            .filter((certificate) => certificate.status === 'active')
+            .filter((certificate) => showSystem || !certificate.isSystem)
+            .filter((certificate) => hasScope(scopes, 'pki:cert:view') || allowed.has(certificate.id))
+            .slice(0, 100),
+        };
+      })
     : Promise.resolve({ data: [] as any[] });
   const finalizeSetupPromise = container.resolve(FinalizeSetupService).getForUser(user.id);
   const mfaPromise =
@@ -235,14 +371,15 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
       emailOtp: config.methods.emailOtp,
     }));
   const casPromise = canViewCa
-    ? container
-        .resolve(CAService)
-        .getCATree(showSystem)
-        .then((cas) =>
-          cas.filter((ca) =>
+    ? dashboardReadModels.get<any[]>('cas').then(async (snapshot) => {
+        const rows =
+          snapshot && snapshot.revision > 0 ? snapshot.data : await container.resolve(CAService).getCATree(true);
+        return rows
+          .filter((ca) => showSystem || !ca.isSystem)
+          .filter((ca) =>
             ca.type === 'root' ? hasScope(scopes, 'pki:ca:view:root') : hasScope(scopes, 'pki:ca:view:intermediate')
-          )
-        )
+          );
+      })
     : Promise.resolve([]);
   const activityPromise = canViewAudit
     ? container
@@ -270,96 +407,67 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
   );
   const pinnedProxyPromise =
     canViewProxy && requestedProxyIds.length > 0
-      ? container
-          .resolve(ProxyService)
-          .listProxyHosts({ page: 1, limit: Math.min(100, requestedProxyIds.length) } as any, {
-            allowedIds: requestedProxyIds.filter(
-              (id) => hasScope(scopes, 'proxy:view') || hasScope(scopes, `proxy:view:${id}`)
-            ),
-          })
+      ? dashboardReadModels.get<any[]>('proxies').then(async (snapshot) => {
+          const allowedIds = requestedProxyIds.filter(
+            (id) => hasScope(scopes, 'proxy:view') || hasScope(scopes, `proxy:view:${id}`)
+          );
+          if (snapshot && snapshot.revision > 0) {
+            const allowed = new Set(allowedIds);
+            return { data: snapshot.data.filter((proxy) => allowed.has(proxy.id)) };
+          }
+          return container
+            .resolve(ProxyService)
+            .listProxyHosts({ page: 1, limit: Math.min(100, allowedIds.length) } as any, { allowedIds });
+        })
       : Promise.resolve({ data: [] as any[] });
   const pinnedDatabasePromise =
     canViewDatabases && requestedDatabaseIds.length > 0
-      ? container
-          .resolve(DatabaseConnectionService)
-          .list({ page: 1, limit: Math.min(100, requestedDatabaseIds.length) } as any, {
-            allowedIds: requestedDatabaseIds.filter(
-              (id) => hasScope(scopes, 'databases:view') || hasScope(scopes, `databases:view:${id}`)
-            ),
-          })
+      ? dashboardReadModels.get<any[]>('databases').then(async (snapshot) => {
+          const allowedIds = requestedDatabaseIds.filter(
+            (id) => hasScope(scopes, 'databases:view') || hasScope(scopes, `databases:view:${id}`)
+          );
+          if (snapshot && snapshot.revision > 0) {
+            const allowed = new Set(allowedIds);
+            return { data: snapshot.data.filter((database) => allowed.has(database.id)) };
+          }
+          return container
+            .resolve(DatabaseConnectionService)
+            .list({ page: 1, limit: Math.min(100, allowedIds.length) } as any, { allowedIds });
+        })
       : Promise.resolve({ data: [] as any[] });
   const pinnedDockerPromise: Promise<DashboardDockerResource[]> = Promise.all(
     [...new Set(requestedDockerResources.map((resource) => resource.nodeId))].map(
       async (nodeId): Promise<DashboardDockerResource[]> => {
         const forNode = requestedDockerResources.filter((resource) => resource.nodeId === nodeId);
-        if (!hasDockerResourceScope(scopes, 'docker:containers:view', nodeId, '')) {
-          const scoped = await Promise.all(
-            forNode.map(async (resource): Promise<DashboardDockerResource | null> => {
-              if (resource.kind === 'deployment') {
-                const deployment = await container.resolve(DockerDeploymentService).get(nodeId, resource.id);
-                if (!hasDockerResourceScope(scopes, 'docker:containers:view', nodeId, deployment.id)) return null;
-                return {
-                  id: deployment.id,
-                  nodeId,
-                  name: deployment.name,
-                  state: deployment._transition ?? deployment.status,
-                  kind: 'deployment' as const,
-                  scopeResourceId: resource.scopeResourceId ?? deployment.id,
-                };
-              }
-              const containerData = await container
-                .resolve(DockerManagementService)
-                .inspectContainer(nodeId, resource.id);
-              const scopeResourceId = String(containerData?.scopeResourceId ?? '');
-              if (
-                !scopeResourceId ||
-                !hasDockerResourceScope(scopes, 'docker:containers:view', nodeId, scopeResourceId)
-              ) {
-                return null;
-              }
-              return {
-                id: resource.id,
-                nodeId,
-                name: String(containerData?.Name ?? containerData?.name ?? resource.id).replace(/^\//, ''),
-                state: containerData?._transition ?? containerData?.State?.Status ?? containerData?.state,
-                kind: 'container' as const,
-                scopeResourceId,
-              };
-            })
-          );
-          return scoped.filter((resource): resource is DashboardDockerResource => resource !== null);
-        }
-
-        const [containers, deployments] = await Promise.all([
-          container.resolve(DockerManagementService).listContainers(nodeId),
-          container.resolve(DockerDeploymentService).listSummary(nodeId),
-        ]);
+        // Dashboard reads the already reconciled daemon inventory.  Decorating
+        // the snapshot may read Gateway metadata, but must never issue a live
+        // Docker command while a user is opening a page.
+        const snapshot = await container
+          .resolve(DockerSnapshotService)
+          .getList<Record<string, unknown>[]>(nodeId, 'containers');
+        const containers = await container
+          .resolve(DockerManagementService)
+          .decorateContainerSnapshot(nodeId, Array.isArray(snapshot.data) ? snapshot.data : []);
         return forNode.reduce<DashboardDockerResource[]>((resolved, resource) => {
-          if (resource.kind === 'deployment') {
-            const deployment = deployments.find((item) => item.id === resource.id);
-            if (deployment) {
-              resolved.push({
-                id: deployment.id,
-                nodeId,
-                name: deployment.name,
-                state: deployment._transition ?? deployment.status,
-                kind: 'deployment' as const,
-                scopeResourceId: resource.scopeResourceId ?? deployment.id,
-              });
-            }
-            return resolved;
-          }
           const containerData = containers.find(
-            (item: any) => item.id === resource.id || item.scopeResourceId === resource.scopeResourceId
+            (item: any) =>
+              (resource.kind === 'deployment'
+                ? item.deploymentId === resource.id || item.id === resource.id
+                : item.id === resource.id) || item.scopeResourceId === resource.scopeResourceId
           );
-          if (containerData) {
+          const scopeResourceId = String(containerData?.scopeResourceId ?? '');
+          if (
+            containerData &&
+            scopeResourceId &&
+            hasDockerResourceScope(scopes, 'docker:containers:view', nodeId, scopeResourceId)
+          ) {
             resolved.push({
-              id: resource.id,
+              id: resource.kind === 'deployment' ? String(containerData.deploymentId ?? containerData.id) : resource.id,
               nodeId,
               name: String(containerData.name ?? containerData.Name ?? resource.id).replace(/^\//, ''),
               state: containerData._transition ?? containerData.state ?? containerData.State?.Status,
-              kind: 'container' as const,
-              scopeResourceId: containerData.scopeResourceId ?? resource.scopeResourceId,
+              kind: resource.kind,
+              scopeResourceId,
             });
           }
           return resolved;
@@ -488,7 +596,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
       ? [{ id: 'logging-health', severity: 'warning' as const }]
       : []),
     ...(lowInference ? [{ id: 'inference-usage', severity: 'warning' as const }] : []),
-    ...(finalizeSetup && !(mfa && !mfaHasFactor && mfa.showReminder)
+    ...(finalizeSetup && !isFinalizeSetupComplete(finalizeSetup) && !(mfa && !mfaHasFactor && mfa.showReminder)
       ? [{ id: 'finalize-setup', severity: 'info' as const }]
       : []),
   ];
@@ -563,9 +671,15 @@ monitoringRoutes.openapi(healthStatusRoute, async (c) => {
     return c.json({ data: [] });
   }
   const monitoringService = container.resolve(MonitoringService);
-  const overview = await monitoringService.getHealthOverview(
-    hasScope(scopes, 'proxy:view') ? undefined : { allowedHostIds: getResourceScopedIds(scopes, 'proxy:view') }
-  );
+  const snapshot = await container.resolve(DashboardReadModelService).get<any[]>('health');
+  const overview =
+    snapshot && snapshot.revision > 0
+      ? hasScope(scopes, 'proxy:view')
+        ? snapshot.data
+        : snapshot.data.filter((host) => getResourceScopedIds(scopes, 'proxy:view').includes(host.id))
+      : await monitoringService.getHealthOverview(
+          hasScope(scopes, 'proxy:view') ? undefined : { allowedHostIds: getResourceScopedIds(scopes, 'proxy:view') }
+        );
   return c.json({ data: overview });
 });
 

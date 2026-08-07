@@ -53,3 +53,4 @@ export {
 export type * from "./ssl";
 export type * from "./status-page";
 export type * from "./system";
+export type * from "./ui-bootstrap";

@@ -1,4 +1,5 @@
 import type { CA, Node, ProxyHost } from "@/types";
+import type { InferenceSelfUsage } from "@/types/inference";
 
 // Dashboard Stats
 export interface DashboardStats {
@@ -86,7 +87,7 @@ export interface DashboardBootstrap {
   } | null;
   update: { updateAvailable?: boolean; latestVersion?: string } | null;
   loggingHealth: unknown | null;
-  inferenceUsage: unknown | null;
+  inferenceUsage: InferenceSelfUsage | null;
   inviteUserMethods: { password: boolean; emailOtp: boolean } | null;
   pinned: {
     dashboard: DashboardBootstrapPinnedResources;

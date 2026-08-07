@@ -9,8 +9,9 @@ import {
   useSystemConfigStore,
   withDefaultSystemConfig,
 } from "@/stores/system-config";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import { makeUser } from "@/test/fixtures";
-import type { SystemConfig } from "@/types";
+import type { SystemConfig, UIBootstrapShell } from "@/types";
 import { Settings } from "./Settings";
 
 vi.mock("@/components/layout/SidebarContent", () => ({
@@ -22,9 +23,14 @@ vi.mock("@/components/common/ConfirmDialog", () => ({ ConfirmDialog: () => null 
 vi.mock("@/pages/settings/InferenceSettingsSection", () => ({
   InferenceSettingsSection: () => <div>Inference settings ready</div>,
 }));
+vi.mock("@/pages/settings/DockerRegistriesSection", () => ({
+  DockerRegistriesSection: ({ nodesList }: { nodesList: unknown[] }) => (
+    <div>Registry nodes: {nodesList.length}</div>
+  ),
+}));
 
 describe("Settings inference bootstrap", () => {
-  it("keeps the primary loader until feature config is known and preserves the deep link", async () => {
+  it("keeps a stable application skeleton until feature config is known and preserves the deep link", async () => {
     const user = makeUser({
       scopes: ["inference:use", "inference:providers:view"],
     });
@@ -35,12 +41,14 @@ describe("Settings inference bootstrap", () => {
       isLoading: false,
     });
 
-    let resolveConfig!: (config: SystemConfig) => void;
-    const getSystemConfig = vi.spyOn(api, "getSystemConfig").mockReturnValue(
-      new Promise<SystemConfig>((resolve) => {
-        resolveConfig = resolve;
+    useUIBootstrapStore.getState().clear();
+    let resolveShell!: (shell: UIBootstrapShell) => void;
+    const getUIBootstrap = vi.spyOn(api, "getUIBootstrap").mockReturnValue(
+      new Promise<UIBootstrapShell>((resolve) => {
+        resolveShell = resolve;
       })
     );
+    const getInferenceSelfUsage = vi.spyOn(api, "getInferenceSelfUsage");
     vi.spyOn(api, "listNodes").mockResolvedValue({
       data: [],
       total: 0,
@@ -78,37 +86,89 @@ describe("Settings inference bootstrap", () => {
       </MemoryRouter>
     );
 
-    expect(screen.getByText("Loading...")).toBeInTheDocument();
+    expect(screen.getByLabelText("Loading application")).toBeInTheDocument();
     expect(screen.queryByText("Inference settings ready")).not.toBeInTheDocument();
+    expect(getInferenceSelfUsage).not.toHaveBeenCalled();
 
     await act(async () => {
-      resolveConfig(
-        withDefaultSystemConfig({
-          ...DEFAULT_SYSTEM_CONFIG,
-          features: { ...DEFAULT_SYSTEM_CONFIG.features, inferenceEnabled: true },
-        })
-      );
+      resolveShell(makeShell(true));
     });
 
     expect(await screen.findByText("Inference settings ready")).toBeInTheDocument();
     expect(screen.getByTestId("location")).toHaveTextContent("/settings/inference");
+    expect(getInferenceSelfUsage).not.toHaveBeenCalled();
 
-    getSystemConfig.mockResolvedValue(
-      withDefaultSystemConfig({
-        ...DEFAULT_SYSTEM_CONFIG,
-        features: { ...DEFAULT_SYSTEM_CONFIG.features, inferenceEnabled: false },
-      })
-    );
+    getUIBootstrap.mockResolvedValue(makeShell(false));
     window.dispatchEvent(new Event("focus"));
 
     await waitFor(() => {
       expect(useSystemConfigStore.getState().config.features.inferenceEnabled).toBe(false);
     });
-    expect(getSystemConfig).toHaveBeenCalledTimes(2);
+    expect(getUIBootstrap).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses the shell node projection for a settings tab instead of refetching nodes", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["docker:registries:view"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    useSystemConfigStore.setState({
+      config: DEFAULT_SYSTEM_CONFIG,
+      loaded: true,
+      isLoading: false,
+    });
+    useUIBootstrapStore.setState({ snapshot: makeShell(false) });
+    const listNodes = vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [],
+      total: 0,
+      page: 1,
+      limit: 100,
+      totalPages: 0,
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/settings/gateway"]}>
+        <Routes>
+          <Route path="/settings/:tab?" element={<Settings />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("Registry nodes: 0")).toBeInTheDocument();
+    expect(listNodes).not.toHaveBeenCalled();
   });
 });
 
 function LocationProbe() {
   const location = useLocation();
   return <span data-testid="location">{location.pathname}</span>;
+}
+
+function makeShell(inferenceEnabled: boolean): UIBootstrapShell {
+  const config: SystemConfig = withDefaultSystemConfig({
+    ...DEFAULT_SYSTEM_CONFIG,
+    features: { ...DEFAULT_SYSTEM_CONFIG.features, inferenceEnabled },
+  });
+  return {
+    access: { fingerprint: "test", scopes: [] },
+    systemConfig: config,
+    navigation: {
+      hasNginxNodes: true,
+      hasCloudflareIntegration: false,
+      statusPageEnabled: false,
+      dockerNodes: [],
+      nodes: {
+        data: [],
+        revision: 1,
+        observedAt: null,
+        lastAttemptAt: null,
+        lastError: null,
+        refreshStatus: "success",
+        availability: "available",
+      },
+    },
+    update: null,
+    aiStatus: null,
+  };
 }

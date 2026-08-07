@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
+import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import {
   CompactInferenceUsage,
   DashboardInferenceUsage,
@@ -18,6 +19,16 @@ describe("InferenceUsage", () => {
     vi.clearAllMocks();
     window.localStorage.clear();
     vi.mocked(api.getCached).mockReturnValue(undefined);
+    useDashboardBootstrapStore.getState().clear();
+    // Most compact-usage cases exercise the post-bootstrap fallback path.
+    // The dedicated test below covers the initial shared-bootstrap wait.
+    useDashboardBootstrapStore.setState({
+      key: "dashboard-key",
+      request: {} as never,
+      loading: false,
+      snapshot: null,
+      error: false,
+    });
   });
 
   it("shows percentages and recovery only without raw credits, dollars, tokens, or providers", async () => {
@@ -186,6 +197,39 @@ describe("InferenceUsage", () => {
     await user.click(trigger);
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     expect(window.localStorage.getItem("gateway:account-menu:ai-usage-open")).toBe("false");
+  });
+
+  it("waits for the shared dashboard bootstrap instead of racing a usage request", async () => {
+    useDashboardBootstrapStore.setState({
+      key: "dashboard-key",
+      request: {} as never,
+      loading: true,
+      snapshot: null,
+      error: false,
+    });
+
+    render(<CompactInferenceUsage withMenuSeparator />);
+
+    expect(screen.getByLabelText("Loading AI usage")).toBeInTheDocument();
+    expect(api.getInferenceSelfUsage).not.toHaveBeenCalled();
+
+    useDashboardBootstrapStore.setState({
+      loading: false,
+      snapshot: {
+        inferenceUsage: {
+          enabled: true,
+          api: { configured: false, percentage: 0, recoveryAt: "2026-08-01T00:00:00.000Z" },
+          subscription: {
+            "5h": { configured: true, percentage: 1, recoveryAt: "2026-07-24T22:00:00.000Z" },
+            "7d": { configured: false, percentage: 0, recoveryAt: "2026-07-31T00:00:00.000Z" },
+            "30d": { configured: false, percentage: 0, recoveryAt: "2026-08-23T00:00:00.000Z" },
+          },
+        },
+      } as never,
+    });
+
+    expect(await screen.findByLabelText("5 hours remaining 99%")).toBeInTheDocument();
+    expect(api.getInferenceSelfUsage).not.toHaveBeenCalled();
   });
 
   it("restores the compact disclosure state from local storage", async () => {

@@ -115,6 +115,7 @@ function getLoginRedirectUrl(): string {
 
 export class ApiClientBase {
   protected cache = new Map<string, CacheEntry>();
+  private readonly cacheInflight = new Map<string, Promise<unknown>>();
   private csrfToken: string | null = null;
   private sessionGeneration = 0;
 
@@ -156,6 +157,7 @@ export class ApiClientBase {
 
   resetSessionState(): void {
     this.cache.clear();
+    this.cacheInflight.clear();
     this.csrfToken = null;
     this.sessionGeneration += 1;
   }
@@ -171,14 +173,29 @@ export class ApiClientBase {
   ): Promise<T> {
     const generation = this.sessionGeneration;
     const cached = this.getCached<T>(key, ttl);
-    // Always fetch fresh data
-    const fresh = fetcher().then((data) => {
-      this.assertSessionGeneration(generation);
-      this.setCache(key, data);
-      return data;
-    });
-    // If we have cache, return it immediately (fresh fetch still updates cache in background)
-    if (cached !== undefined) return cached;
+    const existing = this.cacheInflight.get(key) as Promise<T> | undefined;
+    const fresh =
+      existing ??
+      (() => {
+        const request = fetcher()
+          .then((data) => {
+            this.assertSessionGeneration(generation);
+            this.setCache(key, data);
+            return data;
+          })
+          .finally(() => {
+            if (this.cacheInflight.get(key) === request) this.cacheInflight.delete(key);
+          });
+        this.cacheInflight.set(key, request);
+        return request;
+      })();
+
+    // Cached values keep layout stable while exactly one shared refresh runs.
+    // Consume background errors here; a later foreground caller can retry.
+    if (cached !== undefined) {
+      void fresh.catch(() => {});
+      return cached;
+    }
     return fresh;
   }
 
@@ -366,10 +383,19 @@ export class ApiClientBase {
     if (method === "GET") {
       const generation = this.sessionGeneration;
       const cacheKey = `req:${url}`;
-      const data = await this.fetchRaw<T>(url, options);
-      this.assertSessionGeneration(generation);
-      this.setCache(cacheKey, data);
-      return data;
+      const existing = this.cacheInflight.get(cacheKey) as Promise<T> | undefined;
+      if (existing) return existing;
+      const request = this.fetchRaw<T>(url, options)
+        .then((data) => {
+          this.assertSessionGeneration(generation);
+          this.setCache(cacheKey, data);
+          return data;
+        })
+        .finally(() => {
+          if (this.cacheInflight.get(cacheKey) === request) this.cacheInflight.delete(cacheKey);
+        });
+      this.cacheInflight.set(cacheKey, request);
+      return request;
     }
 
     // Non-GET: invalidate cached GET requests for this endpoint path

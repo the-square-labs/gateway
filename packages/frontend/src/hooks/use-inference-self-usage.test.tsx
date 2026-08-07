@@ -64,7 +64,9 @@ describe("useInferenceSelfUsage", () => {
       expect(result.current.dashboard.usage?.subscription["7d"].percentage).toBe(40);
     });
     expect(mocks.getInferenceSelfUsage).toHaveBeenCalledTimes(1);
-    expect(mocks.subscribe).toHaveBeenCalledTimes(2);
+    // Each mounted consumer listens for usage settlements and catalog changes;
+    // request deduplication still keeps the initial read to one request.
+    expect(mocks.subscribe).toHaveBeenCalledTimes(4);
     expect(mocks.subscribe).toHaveBeenCalledWith(
       INFERENCE_USAGE_CHANGED_CHANNEL,
       expect.any(Function)
@@ -80,5 +82,15 @@ describe("useInferenceSelfUsage", () => {
       expect(result.current.dashboard.usage?.subscription["7d"].percentage).toBe(85);
     });
     expect(mocks.getInferenceSelfUsage).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the dashboard-warmed usage snapshot without issuing another initial request", () => {
+    mocks.getCached.mockReturnValue(usage(40));
+
+    const { result } = renderHook(() => useInferenceSelfUsage());
+
+    expect(result.current.loading).toBe(false);
+    expect(result.current.usage?.subscription["7d"].percentage).toBe(40);
+    expect(mocks.getInferenceSelfUsage).not.toHaveBeenCalled();
   });
 });

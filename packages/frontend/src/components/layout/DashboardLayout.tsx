@@ -1,5 +1,5 @@
-import { Loader2, Menu } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Menu } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { AIButton } from "@/components/ai/AIButton";
 import { AILitePanel } from "@/components/ai/AILitePanel";
@@ -10,31 +10,157 @@ import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { PageTransition } from "@/components/common/PageTransition";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useInferenceSelfUsage } from "@/hooks/use-inference-self-usage";
-import { keyboardNavigationRoutes } from "@/lib/app-navigation";
-import { DOCKER_VIEW_NODE_SCOPES, loadVisibleDockerNodes } from "@/lib/docker-node-access";
+import { keyboardNavigationRoutes, visibleNavigationGroups } from "@/lib/app-navigation";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
-import { hasScopeBase, scopeMatches } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
+import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useDockerStore } from "@/stores/docker";
 import { useResolvedPageContext } from "@/stores/resolved-page-context";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import { useUpdateStore } from "@/stores/update";
-import { AI_SCOPE, isNodeIncompatible, type User } from "@/types";
+import { AI_SCOPE } from "@/types";
 import { SidebarContent } from "./SidebarContent";
 
 const SIDEBAR_WIDTH_KEY = "gateway-sidebar-width";
 const DEFAULT_SIDEBAR_WIDTH = 260;
-let dashboardBootstrapKey: string | null = null;
-let dashboardBootstrapPromise: Promise<{ hasNginxNodes: boolean }> | null = null;
-let dashboardBootstrapResult: { hasNginxNodes: boolean } | null = null;
+
+/**
+ * Authentication has already determined the user before this renders. Keep a
+ * stable application frame while the permission-filtered shell projection is
+ * warming instead of replacing the entire UI with a spinner.
+ */
+function ApplicationShellSkeleton({
+  scopes,
+  pathname,
+}: {
+  scopes: readonly string[];
+  pathname: string;
+}) {
+  const navigationGroups = visibleNavigationGroups({
+    scopes,
+    // Feature values are not available until the typed shell resolves. These
+    // are deliberately optimistic only for skeleton geometry; actual links
+    // still render solely from the server-provided feature projection.
+    pkiEnabled: true,
+    loggingEnabled: true,
+    inferenceEnabled: true,
+    statusPageEnabled: true,
+    hasNginxNodes: true,
+    hasCloudflareIntegration: true,
+    hasDockerNodes: true,
+  });
+  const isSettings = pathname.startsWith("/settings");
+  const isProfile = pathname.startsWith("/profile");
+  const isDetail = /\/(?:nodes|proxy-hosts|certificates|cas|databases|docker)\/[^/]+/.test(
+    pathname
+  );
+
+  return (
+    <div
+      className="flex h-screen overflow-hidden bg-background"
+      aria-busy="true"
+      aria-label="Loading application"
+    >
+      <aside className="hidden h-full w-[260px] shrink-0 border-r border-sidebar-border bg-sidebar-background md:block">
+        <div className="border-b border-sidebar-border px-4 py-5">
+          <Skeleton className="h-6 w-32" />
+        </div>
+        <div className="space-y-3 px-3 py-4">
+          {navigationGroups.map((group) => (
+            <div key={group.id} className="space-y-1">
+              <Skeleton className="mx-2 h-3 w-16" />
+              {group.items.map((item, index) => (
+                <div key={item.id} className="flex items-center gap-3 px-2 py-2">
+                  <Skeleton className="h-4 w-4 shrink-0" />
+                  <Skeleton className={index === 0 ? "h-4 w-24" : "h-4 w-32"} />
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </aside>
+      <main className="min-w-0 flex-1 overflow-hidden p-6">
+        <div className="mb-4 flex h-8 items-center md:hidden">
+          <Skeleton className="h-10 w-10" />
+          <Skeleton className="ml-3 h-5 w-28" />
+        </div>
+        <Skeleton className="h-8 w-48" />
+        <Skeleton className="mt-3 h-4 w-72" />
+        {isSettings || isProfile ? (
+          <>
+            <div className="mt-6 flex gap-2 border-b border-border pb-3">
+              {Array.from({ length: isSettings ? 4 : 3 }, (_, index) => (
+                <Skeleton key={index} className="h-8 w-28" />
+              ))}
+            </div>
+            <div className="mt-4 space-y-4">
+              {Array.from({ length: 2 }, (_, index) => (
+                <div key={index} className="min-h-40 border border-border bg-card p-5">
+                  <Skeleton className="h-5 w-36" />
+                  <Skeleton className="mt-3 h-4 w-64" />
+                  <div className="mt-6 space-y-3">
+                    {[0, 1, 2].map((row) => (
+                      <Skeleton key={row} className="h-9 w-full" />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : isDetail ? (
+          <>
+            <div className="mt-6 flex gap-2 border-b border-border pb-3">
+              {Array.from({ length: 4 }, (_, index) => (
+                <Skeleton key={index} className="h-8 w-24" />
+              ))}
+            </div>
+            <div className="mt-4 min-h-72 border border-border bg-card p-5">
+              <Skeleton className="h-5 w-40" />
+              <div className="mt-6 space-y-4">
+                {[0, 1, 2, 3].map((row) => (
+                  <Skeleton key={row} className="h-12 w-full" />
+                ))}
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              {Array.from({ length: 4 }, (_, index) => (
+                <div key={index} className="min-h-32 border border-border bg-card p-5">
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="mt-5 h-8 w-16" />
+                  <Skeleton className="mt-4 h-3 w-28" />
+                </div>
+              ))}
+            </div>
+            <div className="mt-6 grid gap-6 xl:grid-cols-2">
+              {Array.from({ length: 2 }, (_, index) => (
+                <div key={index} className="min-h-64 border border-border bg-card p-5">
+                  <Skeleton className="h-5 w-32" />
+                  <div className="mt-6 space-y-4">
+                    {[0, 1, 2].map((row) => (
+                      <Skeleton key={row} className="h-12 w-full" />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </main>
+    </div>
+  );
+}
 
 function readSidebarWidth(): number {
   try {
@@ -63,28 +189,42 @@ export function DashboardLayout() {
     aiLiteMode,
   } = useUIStore();
   const aiEnabled = useAIStore((state) => state.isEnabled);
-  const inferenceEnabled = useSystemConfigStore((state) => state.config.features.inferenceEnabled);
-  const canViewInferenceUsage =
-    inferenceEnabled && scopeMatches(currentUser?.scopes ?? [], "inference:use");
-  const { usage: inferenceUsage } = useInferenceSelfUsage(canViewInferenceUsage);
-  const dashboardHasLowInferenceUsage = hasLowInferenceUsage(inferenceUsage);
+  const dashboardInferenceUsage = useDashboardBootstrapStore(
+    (state) => state.snapshot?.inferenceUsage ?? null
+  );
+  const dashboardHasLowInferenceUsage = hasLowInferenceUsage(dashboardInferenceUsage);
 
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
   const [isResizing, setIsResizing] = useState(false);
-  const [hasNginxNodes, setHasNginxNodes] = useState(true); // default true to avoid flash
-  const bootstrapCancelledRef = useRef(false);
-  const loadSystemConfig = useSystemConfigStore((state) => state.load);
+  const setSystemConfig = useSystemConfigStore((state) => state.setConfig);
   const systemConfigLoaded = useSystemConfigStore((state) => state.loaded);
   const [systemConfigReady, setSystemConfigReady] = useState(systemConfigLoaded);
+  const uiBootstrap = useUIBootstrapStore((state) => state.snapshot);
+  const loadUIBootstrap = useUIBootstrapStore((state) => state.load);
+  const invalidateUIBootstrap = useUIBootstrapStore((state) => state.invalidate);
+  const clearUIBootstrap = useUIBootstrapStore((state) => state.clear);
+  const hasNginxNodes = uiBootstrap?.navigation.hasNginxNodes ?? true;
 
   useEffect(() => {
     if (systemConfigLoaded) setSystemConfigReady(true);
   }, [systemConfigLoaded]);
 
+  // Project each refreshed shell atomically into the existing feature stores.
+  // The layout must subscribe to the store as well as await the first load so
+  // realtime invalidations update navigation without a full page reload.
+  useEffect(() => {
+    if (!uiBootstrap) return;
+    setSystemConfig(uiBootstrap.systemConfig);
+    useDockerStore.getState().setDockerNodes(uiBootstrap.navigation.dockerNodes);
+    if (uiBootstrap.update) useUpdateStore.setState({ status: uiBootstrap.update });
+    if (uiBootstrap.aiStatus) useAIStore.getState().setProviderStatus(uiBootstrap.aiStatus);
+    setSystemConfigReady(true);
+  }, [setSystemConfig, uiBootstrap]);
+
   useEffect(() => {
     if (!isAuthenticated) return;
     const refresh = () => {
-      if (document.visibilityState !== "hidden") void loadSystemConfig().catch(() => {});
+      if (document.visibilityState !== "hidden") invalidateUIBootstrap();
     };
     window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", refresh);
@@ -92,14 +232,12 @@ export function DashboardLayout() {
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", refresh);
     };
-  }, [isAuthenticated, loadSystemConfig]);
+  }, [invalidateUIBootstrap, isAuthenticated]);
 
   useEffect(() => {
     if (isAuthenticated) return;
-    dashboardBootstrapKey = null;
-    dashboardBootstrapPromise = null;
-    dashboardBootstrapResult = null;
-  }, [isAuthenticated]);
+    clearUIBootstrap();
+  }, [clearUIBootstrap, isAuthenticated]);
 
   const handleSidebarResize = useCallback((width: number) => {
     setSidebarWidth(width);
@@ -122,133 +260,47 @@ export function DashboardLayout() {
   }, []);
 
   useEffect(() => {
-    bootstrapCancelledRef.current = false;
-
-    const runGlobalBootstrap = (user: User) => {
-      const bootstrapKey = `${user.id}:${user.scopes.join("|")}`;
-      if (dashboardBootstrapKey === bootstrapKey && dashboardBootstrapResult) {
-        setHasNginxNodes(dashboardBootstrapResult.hasNginxNodes);
-        return;
-      }
-      if (dashboardBootstrapKey === bootstrapKey && dashboardBootstrapPromise) {
-        dashboardBootstrapPromise
-          .then((result) => {
-            if (!bootstrapCancelledRef.current) setHasNginxNodes(result.hasNginxNodes);
-          })
-          .catch(() => {});
-        return;
-      }
-
-      dashboardBootstrapKey = bootstrapKey;
-      dashboardBootstrapResult = null;
-
-      dashboardBootstrapPromise = (async () => {
-        let hasNginxNodes = true;
-        const canListAllNodes =
-          scopeMatches(user.scopes, "nodes:details") ||
-          user.scopes.includes("nodes:folders:manage");
-        const canListScopedNodes = hasScopeBase(user.scopes, "nodes:details");
-        const canListDockerNodes = [
-          "docker:containers:view",
-          "docker:images:view",
-          "docker:volumes:view",
-          "docker:networks:view",
-        ].some((scope) => hasScopeBase(user.scopes, scope));
-
-        // Preload visible node types for sidebar visibility.
-        if (canListAllNodes || canListScopedNodes) {
-          try {
-            const r = await api.listNodes({ limit: 100 });
-            const nginxNds = r.data.filter((n) => n.type === "nginx" && !isNodeIncompatible(n));
-            hasNginxNodes = nginxNds.length > 0;
-          } catch {
-            // Keep the default permissive sidebar state if node preload fails.
-          }
-        }
-
-        // Docker route access is filtered independently from nodes:details.
-        if (canListDockerNodes) {
-          try {
-            useDockerStore
-              .getState()
-              .setDockerNodes(
-                await loadVisibleDockerNodes(
-                  user.scopes,
-                  DOCKER_VIEW_NODE_SCOPES,
-                  canListAllNodes || canListScopedNodes
-                )
-              );
-          } catch {
-            // Docker pages can retry their own scoped node preload.
-          }
-        }
-
-        await Promise.all([
-          user.scopes?.includes("admin:update")
-            ? useUpdateStore.getState().fetchStatus()
-            : Promise.resolve(),
-          user.scopes?.includes(AI_SCOPE)
-            ? api
-                .getAIStatus()
-                .then((status) => useAIStore.getState().setProviderStatus(status))
-                .catch(() => {})
-            : Promise.resolve(),
-        ]);
-
-        return { hasNginxNodes };
-      })();
-
-      dashboardBootstrapPromise
-        .then((result) => {
-          if (dashboardBootstrapKey !== bootstrapKey) return;
-          dashboardBootstrapResult = result;
-          if (!bootstrapCancelledRef.current) setHasNginxNodes(result.hasNginxNodes);
-        })
-        .catch(() => {})
-        .finally(() => {
-          if (dashboardBootstrapKey === bootstrapKey) dashboardBootstrapPromise = null;
-        });
-    };
+    let cancelled = false;
 
     const checkAuth = async () => {
       try {
         const existingUser = currentUser ?? useAuthStore.getState().user;
         const user = existingUser ?? (await api.getCurrentUser());
-        if (bootstrapCancelledRef.current) return;
+        if (cancelled) return;
         if (user.isBlocked) {
           setUser(user);
           setLoading(false);
           navigate("/blocked");
           return;
         }
-        if (!useSystemConfigStore.getState().loaded) {
-          try {
-            await loadSystemConfig();
-          } catch {
-            // Continue with feature defaults, but never leave the primary loader stuck.
-          }
-        }
-        if (bootstrapCancelledRef.current) return;
-        setSystemConfigReady(true);
         if (!existingUser) setUser(user);
-        runGlobalBootstrap(user);
+        // Scopes are now known. The shell can render permission-safe skeleton
+        // geometry while its read model fills in, rather than retaining the
+        // anonymous loading state for a database/cache request.
+        setLoading(false);
+        const shell = await loadUIBootstrap(`${user.id}:${[...user.scopes].sort().join("|")}`);
+        if (cancelled) return;
+        if (!shell) {
+          // A failed optional shell refresh must not strand an authenticated
+          // user on a permanent skeleton. Default config is conservative and
+          // the next focus/realtime invalidation retries the projection.
+          setSystemConfigReady(true);
+        }
       } catch (error) {
         if (error instanceof ApiRequestError && error.status === 401) {
-          dashboardBootstrapKey = null;
           logout();
           navigate("/login");
         }
       } finally {
-        if (!bootstrapCancelledRef.current) setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
-    checkAuth();
-
+    void checkAuth();
     return () => {
-      bootstrapCancelledRef.current = true;
+      cancelled = true;
     };
-  }, [currentUser, loadSystemConfig, logout, navigate, setLoading, setUser]);
+  }, [currentUser, loadUIBootstrap, logout, navigate, setLoading, setUser]);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -443,7 +495,14 @@ export function DashboardLayout() {
           loggingEnabled: features.loggingEnabled,
           inferenceEnabled: features.inferenceEnabled,
           hasLowInferenceUsage: dashboardHasLowInferenceUsage,
-          hasDockerNodes: useDockerStore.getState().dockerNodes.length > 0,
+          hasDockerNodes:
+            useDockerStore.getState().dockerNodes.length > 0 ||
+            [
+              "docker:containers:view",
+              "docker:images:view",
+              "docker:volumes:view",
+              "docker:networks:view",
+            ].some((scope) => useAuthStore.getState().hasScopedAccess(scope)),
         });
         if (e.key in routes) {
           e.preventDefault();
@@ -460,12 +519,7 @@ export function DashboardLayout() {
 
   if (isLoading || !systemConfigReady) {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          <p className="text-sm text-muted-foreground">Loading...</p>
-        </div>
-      </div>
+      <ApplicationShellSkeleton scopes={currentUser?.scopes ?? []} pathname={location.pathname} />
     );
   }
 

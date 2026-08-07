@@ -91,6 +91,7 @@ import { publicStatusPageRoutes, statusPageRoutes } from '@/modules/status-page/
 import { StatusPageService } from '@/modules/status-page/status-page.service.js';
 import { systemRoutes } from '@/modules/system/system.routes.js';
 import { tokensRoutes } from '@/modules/tokens/tokens.routes.js';
+import { uiBootstrapRoutes } from '@/modules/ui-bootstrap/ui-bootstrap.routes.js';
 import type { RedisClient } from '@/services/cache.service.js';
 import type { AppEnv } from '@/types.js';
 import { authenticateEventsConnection, createEventsWSHandlers } from '@/ws/events.ws.js';
@@ -627,6 +628,7 @@ export function createApp() {
   app.route('/api/status-page', statusPageRoutes);
   app.route('/api/system/license', licenseRoutes);
   app.route('/api/system', systemRoutes);
+  app.route('/api/ui', uiBootstrapRoutes);
   app.route('/api/housekeeping', housekeepingRoutes);
   app.route('/api/integrations', integrationsRoutes);
   app.route('/api/notifications', notificationRoutes);

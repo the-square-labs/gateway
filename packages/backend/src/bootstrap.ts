@@ -111,6 +111,7 @@ import { LoggingSettingsService } from '@/modules/logging/logging-settings.servi
 import { LoggingTokenService } from '@/modules/logging/logging-token.service.js';
 import { LoggingValidationService } from '@/modules/logging/logging-validation.service.js';
 import { McpSettingsService } from '@/modules/mcp/mcp-settings.service.js';
+import { DashboardReadModelService } from '@/modules/monitoring/dashboard-read-model.service.js';
 import { MonitoringService } from '@/modules/monitoring/monitoring.service.js';
 import { NodeFolderService } from '@/modules/nodes/node-folders.service.js';
 import { NodeMonitoringService } from '@/modules/nodes/node-monitoring.service.js';
@@ -143,6 +144,7 @@ import { SSLService } from '@/modules/ssl/ssl.service.js';
 import { StatusIncidentEvaluatorService } from '@/modules/status-page/status-incident-evaluator.service.js';
 import { StatusPageService } from '@/modules/status-page/status-page.service.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
+import { UIBootstrapService } from '@/modules/ui-bootstrap/ui-bootstrap.service.js';
 import { CacheService, createRedisClient } from '@/services/cache.service.js';
 import { ConfigValidatorService } from '@/services/config-validator.service.js';
 import { CryptoService } from '@/services/crypto.service.js';
@@ -155,6 +157,8 @@ import { HousekeepingService } from '@/services/housekeeping.service.js';
 import { NginxConfigGenerator } from '@/services/nginx-config-generator.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
+import { ReadModelCoordinator } from '@/services/read-model-coordinator.service.js';
+import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import { RuntimeRestartService } from '@/services/runtime-restart.service.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
 import { SessionService } from '@/services/session.service.js';
@@ -188,9 +192,14 @@ export async function initializeContainer(): Promise<void> {
   const cacheService = new CacheService(redis);
   container.registerInstance(CacheService, cacheService);
 
+  const resourceSnapshotStore = new ResourceSnapshotStore(cacheService);
+  container.registerInstance(ResourceSnapshotStore, resourceSnapshotStore);
+
   // Realtime event bus (in-process; swappable to Redis pub/sub later)
   const eventBus = new EventBusService();
   container.registerInstance(EventBusService, eventBus);
+  const readModelCoordinator = new ReadModelCoordinator(eventBus);
+  container.registerInstance(ReadModelCoordinator, readModelCoordinator);
   const inferenceSetupEvents = new InferenceSetupEventsService(eventBus);
   container.registerInstance(InferenceSetupEventsService, inferenceSetupEvents);
 
@@ -216,7 +225,7 @@ export async function initializeContainer(): Promise<void> {
   const mcpSettingsService = new McpSettingsService(db);
   container.registerInstance(McpSettingsService, mcpSettingsService);
 
-  const generalSettingsService = new GeneralSettingsService(db, inferenceSetupEvents);
+  const generalSettingsService = new GeneralSettingsService(db, inferenceSetupEvents, eventBus);
   container.registerInstance(GeneralSettingsService, generalSettingsService);
   await generalSettingsService.importLegacyPublicUrl(process.env.APP_URL);
 
@@ -806,6 +815,17 @@ export async function initializeContainer(): Promise<void> {
   // Monitoring services
   const monitoringService = new MonitoringService(db);
   container.registerInstance(MonitoringService, monitoringService);
+  const dashboardReadModels = new DashboardReadModelService(
+    resourceSnapshotStore,
+    readModelCoordinator,
+    monitoringService,
+    proxyService,
+    databaseConnectionService,
+    sslService,
+    certService,
+    caService
+  );
+  container.registerInstance(DashboardReadModelService, dashboardReadModels);
 
   // AI Settings
   const aiSettingsService = new AISettingsService(db, cryptoService);
@@ -911,6 +931,19 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(LoggingClickHouseService, loggingClickHouseService);
   const loggingFeatureService = new LoggingFeatureService(loggingClickHouseService);
   container.registerInstance(LoggingFeatureService, loggingFeatureService);
+
+  const uiBootstrapService = new UIBootstrapService(
+    resourceSnapshotStore,
+    readModelCoordinator,
+    nodesService,
+    generalSettingsService,
+    loggingFeatureService,
+    integrationsService,
+    statusPageService,
+    updateService,
+    aiProviderRuntimeService
+  );
+  container.registerInstance(UIBootstrapService, uiBootstrapService);
   const localClickHouseService = new LocalClickHouseService(dockerService);
   container.registerInstance(LocalClickHouseService, localClickHouseService);
   const loggingRuntimeService = new LoggingRuntimeService(
@@ -1165,6 +1198,10 @@ export async function initializeContainer(): Promise<void> {
       )
       .catch((error) => logger.warn('Initial ClickHouse health guard failed', { error }));
   }, 1000);
+
+  // Read models warm asynchronously. Gateway readiness and request handlers
+  // never wait for a node or external resource to answer this initial pass.
+  readModelCoordinator.start();
 
   logger.info('Dependency injection container initialized');
 }

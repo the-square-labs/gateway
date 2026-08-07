@@ -46,6 +46,28 @@ describe("ApiClientBase", () => {
     });
   });
 
+  it("shares a concurrent GET instead of issuing duplicate wire requests", async () => {
+    const client = new TestApiClient();
+    let resolveFetch!: (response: Response) => void;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        resolveFetch = resolve;
+      })
+    );
+
+    const first = client.getThing();
+    const second = client.getThing();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    resolveFetch(
+      new Response(JSON.stringify({ value: 1 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    await expect(Promise.all([first, second])).resolves.toEqual([{ value: 1 }, { value: 1 }]);
+  });
+
   it("invalidates cached GET entries after a mutation", async () => {
     const client = new TestApiClient();
     const fetchMock = vi
@@ -129,6 +151,27 @@ describe("ApiClientBase", () => {
 
     await expect(request).rejects.toMatchObject({ code: "SESSION_CHANGED" });
     expect(client.getCached("custom:key")).toBeUndefined();
+  });
+
+  it("deduplicates concurrent cache misses and one stale-while-revalidate refresh", async () => {
+    const client = new TestApiClient();
+    let resolve!: (value: { value: number }) => void;
+    const pending = new Promise<{ value: number }>((done) => {
+      resolve = done;
+    });
+    const fetcher = vi.fn(() => pending);
+
+    const first = client.cachedRequest("custom:key", fetcher);
+    const second = client.cachedRequest("custom:key", fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    resolve({ value: 4 });
+    await expect(Promise.all([first, second])).resolves.toEqual([{ value: 4 }, { value: 4 }]);
+
+    const refreshed = new Promise<{ value: number }>(() => {});
+    const refreshFetcher = vi.fn(() => refreshed);
+    await expect(client.cachedRequest("custom:key", refreshFetcher)).resolves.toEqual({ value: 4 });
+    await expect(client.cachedRequest("custom:key", refreshFetcher)).resolves.toEqual({ value: 4 });
+    expect(refreshFetcher).toHaveBeenCalledTimes(1);
   });
 
   it("sends cookie credentials and no session Authorization header", async () => {

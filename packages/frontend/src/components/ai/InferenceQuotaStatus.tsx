@@ -105,9 +105,12 @@ export function useInferenceQuota({
   return getInferenceQuotaState(usage);
 }
 
-export function useInferenceQuotaSnapshot(enabled: boolean): InferenceQuotaState {
-  const { usage } = useInferenceSelfUsage(enabled);
-  return getInferenceQuotaState(usage);
+export function useInferenceQuotaSnapshot(
+  enabled: boolean,
+  usageOverride?: InferenceSelfUsage | null
+): InferenceQuotaState {
+  const { usage } = useInferenceSelfUsage(enabled && usageOverride === undefined);
+  return getInferenceQuotaState(usageOverride === undefined ? usage : usageOverride);
 }
 
 export function InferenceQuotaStatus({

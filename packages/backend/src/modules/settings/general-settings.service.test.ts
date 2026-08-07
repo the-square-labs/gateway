@@ -86,4 +86,24 @@ describe('GeneralSettingsService inference feature', () => {
 
     expect(fallback).toHaveBeenCalledOnce();
   });
+
+  it('publishes a configuration invalidation without exposing settings data', async () => {
+    const limit = vi.fn().mockResolvedValue([{ value: { features: { pkiEnabled: true, domainsEnabled: true } } }]);
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({ limit })),
+        })),
+      })),
+      insert: vi.fn(() => ({
+        values: vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) })),
+      })),
+    };
+    const eventBus = { publish: vi.fn() };
+    const service = new GeneralSettingsService(db as never, undefined, eventBus as never);
+
+    await service.updateConfig({ features: { inferenceEnabled: true } });
+
+    expect(eventBus.publish).toHaveBeenCalledWith('system.config.changed', {});
+  });
 });

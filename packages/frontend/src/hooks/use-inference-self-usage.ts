@@ -57,7 +57,7 @@ export function useInferenceSelfUsage(enabled = true) {
     const unsubscribeCatalog = eventStream.subscribe(INFERENCE_CATALOG_CHANGED_CHANNEL, () => {
       void load();
     });
-    void load();
+    if (!api.getCached<InferenceSelfUsage>(INFERENCE_SELF_USAGE_CACHE_KEY)) void load();
     return () => {
       unsubscribeUsage();
       unsubscribeRealtime();

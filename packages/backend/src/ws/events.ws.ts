@@ -69,12 +69,14 @@ function send(ws: WSContext, msg: ServerMsg) {
 function requiredScopeFor(channel: string): string | null {
   if (channel.startsWith('permissions.changed.')) return null;
   if (channel.startsWith(MFA_REQUIRED_CHANNEL_PREFIX)) return null;
+  if (channel === 'read-model.refreshed') return null;
   if (channel === 'domain.changed') return 'domains:view';
   if (channel === 'logging.logs.ingested') return 'logs:read';
   if (channel === 'logging.health.changed') return 'housekeeping:view';
   if (channel === 'logging.environment.changed') return 'logs:environments:view';
   if (channel === 'logging.schema.changed') return 'logs:schemas:view';
   if (channel === 'system.update.changed') return 'admin:update';
+  if (channel === 'system.config.changed') return null;
   if (channel === 'status-page.changed') return 'status-page:view';
   if (channel === 'pki.template.changed') return 'pki:templates:view';
   if (channel === 'nginx.template.changed') return 'proxy:templates:view';
@@ -118,7 +120,9 @@ function requiredScopeFor(channel: string): string | null {
 function hasChannelAccess(scopes: string[], channel: string): boolean {
   if (channel.startsWith('permissions.changed.')) return true;
   if (channel.startsWith(MFA_REQUIRED_CHANNEL_PREFIX)) return true;
+  if (channel === 'read-model.refreshed') return true;
   if (channel === 'system.update.changed') return true;
+  if (channel === 'system.config.changed') return true;
   if (channel === 'integration.connector.changed') {
     return (
       hasScope(scopes, 'integrations:gitlab:view') ||
@@ -262,6 +266,7 @@ function hasDockerEventAccess(scopes: string[], baseScope: string, payload: unkn
 
 function canReceiveChannelPayload(scopes: string[], channel: string, payload: unknown, userId?: string): boolean {
   if (channel === 'system.update.changed') return true;
+  if (channel === 'system.config.changed') return true;
   if (channel === INFERENCE_USAGE_CHANGED_CHANNEL) {
     const event = payload as Partial<InferenceUsageChangedEvent> | undefined;
     return event?.targetUserId === null || event?.targetUserId === userId;

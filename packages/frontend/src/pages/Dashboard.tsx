@@ -1,9 +1,9 @@
 import { AlertTriangle, ArrowRight, Info, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageTransition } from "@/components/common/PageTransition";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
@@ -64,6 +64,84 @@ function makeDevExpiringItems(): ExpiringItem[] {
     makeItem("dev-expiring-preview", "backend.preview.pearldivergame.com", 15),
     makeItem("dev-expiring-staging", "backend.staging.pearldivergame.com", 15),
   ];
+}
+
+function isFinalizeSetupComplete(state: FinalizeSetupState): boolean {
+  return Object.values(state.steps).every((status) => status !== "pending");
+}
+
+/** Keep only permission-authorized dashboard geometry stable while data hydrates. */
+function DashboardSkeleton({
+  hasScope,
+  pkiEnabled,
+  pinnedCards,
+}: {
+  hasScope: (scope: string) => boolean;
+  pkiEnabled: boolean;
+  pinnedCards: number;
+}) {
+  const statCards = [
+    hasScope("proxy:view"),
+    hasScope("ssl:cert:view"),
+    pkiEnabled && hasScope("pki:cert:view"),
+    hasScope("nodes:details"),
+  ].filter(Boolean).length;
+  const panels = [
+    hasScope("proxy:view"),
+    hasScope("nodes:details"),
+    pkiEnabled && (hasScope("pki:ca:view:root") || hasScope("pki:ca:view:intermediate")),
+    hasScope("admin:audit"),
+  ].filter(Boolean).length;
+
+  return (
+    <PageTransition>
+      <div className="h-full overflow-y-auto p-6">
+        <div className="mb-4">
+          <h1 className="text-2xl font-bold">Dashboard</h1>
+          <p className="text-sm text-muted-foreground">Gateway and PKI infrastructure overview</p>
+        </div>
+        <div className="space-y-6" aria-busy="true" aria-label="Loading dashboard">
+          {statCards > 0 && (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              {Array.from({ length: statCards }, (_, index) => (
+                <div key={index} className="min-h-32 border border-border bg-card p-5">
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="mt-5 h-8 w-14" />
+                  <Skeleton className="mt-4 h-3 w-28" />
+                </div>
+              ))}
+            </div>
+          )}
+          {pinnedCards > 0 && (
+            <div className="grid gap-4 xl:grid-cols-2">
+              {Array.from({ length: pinnedCards }, (_, index) => (
+                <div key={index} className="min-h-40 border border-border bg-card p-5">
+                  <Skeleton className="h-5 w-36" />
+                  <Skeleton className="mt-5 h-4 w-2/3" />
+                  <Skeleton className="mt-3 h-4 w-1/2" />
+                  <Skeleton className="mt-6 h-3 w-full" />
+                </div>
+              ))}
+            </div>
+          )}
+          {panels > 0 && (
+            <div className="grid gap-6 xl:grid-cols-2">
+              {Array.from({ length: panels }, (_, index) => (
+                <div key={index} className="min-h-64 border border-border bg-card p-5">
+                  <Skeleton className="h-5 w-32" />
+                  <div className="mt-6 space-y-4">
+                    {[0, 1, 2].map((row) => (
+                      <Skeleton key={row} className="h-12 w-full" />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </PageTransition>
+  );
 }
 
 export function Dashboard() {
@@ -225,6 +303,15 @@ export function Dashboard() {
   );
   const canViewInferenceUsage =
     inferenceEnabled && hasScope("inference:use") && hasScope("inference:usage:view:self");
+  const pinnedSkeletonCards = Math.min(
+    8,
+    dashboardPinnedIds.filter(canViewNodeDetails).length +
+      dashboardPinnedProxyIds.filter(canViewProxyDetails).length +
+      dashboardPinnedDatabaseIds.filter(
+        (id) => hasScope("databases:view") || hasScope(`databases:view:${id}`)
+      ).length +
+      (hasScopedAccess("docker:containers:view") ? dashboardPinnedContainerIds.length : 0)
+  );
 
   const refreshMfaState = useCallback(async () => {
     invalidateDashboardBootstrap();
@@ -283,19 +370,9 @@ export function Dashboard() {
     [updateFinalizeSetupStep]
   );
 
-  const dismissFinalizeSetup = useCallback(async () => {
-    setFinalizeSetupBusy(true);
-    try {
-      await api.dismissFinalizeSetup();
-      setFinalizeSetupOpen(false);
-      // Keep the dialog mounted through Radix's closed-state animation.
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 200));
-      setFinalizeSetup(null);
-      await refreshMfaState();
-    } finally {
-      setFinalizeSetupBusy(false);
-    }
-  }, [refreshMfaState]);
+  const skipFinalizeSetupForNow = useCallback(() => {
+    setFinalizeSetupOpen(false);
+  }, []);
 
   const openFinalizeWizard = useCallback((step: FinalizeSetupRootStep) => {
     setFinalizeSetupOpen(false);
@@ -415,7 +492,13 @@ export function Dashboard() {
   }
 
   if (!dashboardBootstrap && (dashboardBootstrapLoading || !!user?.id)) {
-    return <LoadingSpinner />;
+    return (
+      <DashboardSkeleton
+        hasScope={hasScopedAccess}
+        pkiEnabled={pkiEnabled}
+        pinnedCards={pinnedSkeletonCards}
+      />
+    );
   }
 
   return (
@@ -542,7 +625,7 @@ export function Dashboard() {
             </div>
           )}
 
-          {finalizeSetup && !mfaOnboardingReminder && (
+          {finalizeSetup && !isFinalizeSetupComplete(finalizeSetup) && !mfaOnboardingReminder && (
             <div
               className="border bg-card"
               style={{ borderColor: "color-mix(in srgb, var(--color-link) 55%, transparent)" }}
@@ -645,10 +728,12 @@ export function Dashboard() {
             <FinalizeSetupDialog
               open={finalizeSetupOpen && activeFinalizeWizard === null}
               state={finalizeSetup}
+              userId={user?.id ?? ""}
               busy={finalizeSetupBusy}
               canInviteUsers={inviteUserMethods !== null}
               onOpenWizard={openFinalizeWizard}
-              onDismiss={dismissFinalizeSetup}
+              onSkipForNow={skipFinalizeSetupForNow}
+              onFinish={() => setFinalizeSetupOpen(false)}
             />
             <NodeSetupWizard
               open={activeFinalizeWizard === "nodes"}

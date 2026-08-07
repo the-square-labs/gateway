@@ -2,6 +2,7 @@ import { Box, Database, GitBranch, Globe, Server } from "lucide-react";
 import { useCallback, useEffect, useMemo } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   databaseRoute,
   dockerContainerRoute,
@@ -161,6 +162,51 @@ export function SidebarPinnedResources({
 
   const pinnedNodes = dashboardBootstrap?.pinned.sidebar.nodes ?? [];
   const pinnedProxies = dashboardBootstrap?.pinned.sidebar.proxies ?? [];
+  const sidebarPinCount =
+    sidebarPinnedNodeIds.length +
+    sidebarPinnedProxyIds.length +
+    sidebarPinnedDatabaseIds.length +
+    sidebarPinnedContainerIds.length;
+  const canPotentiallyViewPinned =
+    sidebarPinnedNodeIds.some(
+      (id) => hasScope("nodes:details") || hasScope(`nodes:details:${id}`)
+    ) ||
+    sidebarPinnedProxyIds.some((id) => hasScope("proxy:view") || hasScope(`proxy:view:${id}`)) ||
+    sidebarPinnedDatabaseIds.some((id) => canViewDatabaseDetails(id)) ||
+    sidebarPinnedContainerIds.some((id) => {
+      const meta = pinnedContainerMeta[id];
+      return meta
+        ? canViewContainerDetails(meta.nodeId, meta.scopeResourceId)
+        : hasScope("docker:containers:view");
+    });
+  // Pin placement is local, while resource visibility is server-authoritative.
+  // Keep only a neutral, permission-gated structure until the sidebar
+  // projection arrives; names and statuses never appear optimistically.
+  if (!dashboardBootstrap) {
+    if (sidebarPinCount === 0 || !canPotentiallyViewPinned) return null;
+    return (
+      <>
+        <nav
+          className="space-y-0.5 px-2 py-2"
+          aria-busy="true"
+          aria-label="Loading pinned resources"
+        >
+          <p className="px-3 py-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Pinned Items
+          </p>
+          {Array.from({ length: Math.min(sidebarPinCount, 4) }, (_, index) => (
+            <div key={index} className="flex items-center gap-3 px-3 py-2">
+              <Skeleton className="h-4 w-4 shrink-0" />
+              <Skeleton className="h-4 w-28" />
+              <Skeleton className="ml-auto h-2 w-2" />
+            </div>
+          ))}
+        </nav>
+        <Separator />
+      </>
+    );
+  }
+
   const hasPinnedResources =
     pinnedNodes.length > 0 ||
     pinnedProxies.length > 0 ||

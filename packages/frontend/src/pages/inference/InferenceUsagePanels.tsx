@@ -13,11 +13,13 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { ProgressBar } from "@/components/ui/progress-bar";
+import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { useInferenceSelfUsage } from "@/hooks/use-inference-self-usage";
 import { DASHBOARD_INFERENCE_USAGE_THRESHOLD } from "@/lib/inference-self-usage";
 import { cn, formatDate } from "@/lib/utils";
 import { api } from "@/services/api";
+import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import type {
   InferenceSelfUsage,
   InferenceSystemUsage,
@@ -119,8 +121,20 @@ export function InferenceUsage() {
 
   if (loading) {
     return (
-      <PanelShell title="Inference usage">
-        <div className="px-4 py-6 text-sm text-muted-foreground">Loading usage...</div>
+      <PanelShell
+        title="Inference usage"
+        description="Usage limits for the AI models available to you. Limits recover automatically."
+      >
+        <div className="grid grid-cols-1 gap-px bg-border sm:grid-cols-2" aria-busy="true">
+          {Array.from({ length: 2 }, (_, index) => (
+            <div key={index} className="space-y-3 bg-card p-4">
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-7 w-16" />
+              <Skeleton className="h-2 w-full" />
+              <Skeleton className="h-3 w-40" />
+            </div>
+          ))}
+        </div>
       </PanelShell>
     );
   }
@@ -217,10 +231,33 @@ export function CompactInferenceUsage({
 }: {
   withMenuSeparator?: boolean;
 }) {
-  const { usage, loading, error } = useInferenceSelfUsage();
+  const dashboardUsage = useDashboardBootstrapStore((state) => state.snapshot?.inferenceUsage);
+  const dashboardBootstrapLoading = useDashboardBootstrapStore((state) => state.loading);
+  const dashboardBootstrapStarted = useDashboardBootstrapStore(
+    (state) => state.key !== null || state.request !== null || state.snapshot !== null
+  );
+  // Sidebar starts the shared dashboard bootstrap after the authenticated shell
+  // mounts. Hold this small permission-gated menu section in place until that
+  // request settles so it cannot race a second /inference/usage/self request.
+  const waitForDashboardBootstrap = !dashboardBootstrapStarted || dashboardBootstrapLoading;
+  const useUsageFallback = dashboardBootstrapStarted && !dashboardBootstrapLoading && dashboardUsage === undefined;
+  const { usage: fetchedUsage, error } = useInferenceSelfUsage(useUsageFallback);
+  const usage = dashboardUsage === undefined ? fetchedUsage : dashboardUsage;
   const [open, setOpen] = useState(initialCompactUsageOpen);
 
-  if (loading || error || !usage?.enabled) return null;
+  if (waitForDashboardBootstrap) {
+    return (
+      <>
+        {withMenuSeparator ? <DropdownMenuSeparator className="bg-border" /> : null}
+        <div className="space-y-2 px-2 py-2" aria-busy="true" aria-label="Loading AI usage">
+          <Skeleton className="h-3 w-24" />
+          <Skeleton className="h-2 w-full" />
+        </div>
+      </>
+    );
+  }
+
+  if (error || !usage?.enabled) return null;
 
   const windows = [
     ...(usage.subscription["5h"].configured

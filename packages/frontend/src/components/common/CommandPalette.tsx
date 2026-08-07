@@ -48,7 +48,6 @@ import {
   CommandSeparator,
   CommandShortcut,
 } from "@/components/ui/command";
-import { useInferenceSelfUsage } from "@/hooks/use-inference-self-usage";
 import { type AppNavigationItemId, visibleNavigationGroups } from "@/lib/app-navigation";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
 import {
@@ -66,8 +65,10 @@ import { useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
 import { useCommandPalettePageActions } from "@/stores/command-palette-page-actions";
 import { useResolvedPageContext } from "@/stores/resolved-page-context";
+import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { DockerContainer, Node, ResourceSearchResult, ResourceSearchType } from "@/types";
 
 interface CommandPaletteProps {
@@ -241,7 +242,6 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [commandContainers, setCommandContainers] = useState<DockerContainer[]>([]);
   const [commandEntitiesPending, setCommandEntitiesPending] = useState(false);
-  const [statusPageEnabled, setStatusPageEnabled] = useState(false);
   const [resourceResults, setResourceResults] = useState<ResourceSearchResult[]>([]);
   const [resourceSearchPending, setResourceSearchPending] = useState(false);
   const resourceSearchSequence = useRef(0);
@@ -251,6 +251,12 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const pkiEnabled = useSystemConfigStore((state) => state.config.features.pkiEnabled);
   const loggingEnabled = useSystemConfigStore((state) => state.config.features.loggingEnabled);
   const inferenceEnabled = useSystemConfigStore((state) => state.config.features.inferenceEnabled);
+  const statusPageEnabled = useUIBootstrapStore(
+    (state) => state.snapshot?.navigation.statusPageEnabled ?? false
+  );
+  const hasCloudflareIntegration = useUIBootstrapStore(
+    (state) => state.snapshot?.navigation.hasCloudflareIntegration ?? false
+  );
   const recentPages = useUIStore((state) => state.recentPages);
   const commandActionUsage = useUIStore((state) => state.commandActionUsage);
   const recordCommandActionUsage = useUIStore((state) => state.recordCommandActionUsage);
@@ -264,10 +270,18 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const inferenceStreaming = useAIStore((state) => state.isStreaming);
   const aiEnabled = useAIStore((state) => state.isEnabled);
   const canViewInferenceUsage = hasScope("inference:usage:view:self");
-  const { usage: inferenceUsage } = useInferenceSelfUsage(
-    inferenceEnabled && hasScope("inference:use")
+  const dashboardInferenceUsage = useDashboardBootstrapStore(
+    (state) => state.snapshot?.inferenceUsage
   );
-  const inferenceQuota = useInferenceQuotaSnapshot(gatewayInferenceMode && canViewInferenceUsage);
+  const dashboardBootstrapLoading = useDashboardBootstrapStore((state) => state.loading);
+  const dashboardBootstrapStarted = useDashboardBootstrapStore(
+    (state) => state.key !== null || state.request !== null || state.snapshot !== null
+  );
+  const waitForDashboardBootstrap = !dashboardBootstrapStarted || dashboardBootstrapLoading;
+  const inferenceQuota = useInferenceQuotaSnapshot(
+    gatewayInferenceMode && canViewInferenceUsage && inferenceEnabled && hasScope("inference:use") && !waitForDashboardBootstrap,
+    dashboardInferenceUsage
+  );
   const isCommandMode = search.startsWith(">");
   const commandQuery = isCommandMode ? search.slice(1).trim().toLowerCase() : "";
   const searchQuery = isCommandMode ? "" : search.toLowerCase().trim();
@@ -313,15 +327,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         .then((response) => setNodes(response.data ?? []))
         .catch(() => setNodes([]));
     }
-    if (hasScope("status-page:view")) {
-      void api
-        .getStatusPageSettings()
-        .then((settings) => setStatusPageEnabled(settings.enabled))
-        .catch(() => setStatusPageEnabled(false));
-    } else {
-      setStatusPageEnabled(false);
-    }
-  }, [hasScope, hasScopedAccess, open]);
+  }, [hasScopedAccess, open]);
 
   useEffect(() => {
     if (!open || !isCommandMode) return;
@@ -428,10 +434,19 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         pkiEnabled,
         loggingEnabled,
         inferenceEnabled,
-        hasLowInferenceUsage: hasLowInferenceUsage(inferenceUsage),
+        hasLowInferenceUsage: hasLowInferenceUsage(dashboardInferenceUsage ?? null),
         statusPageEnabled,
+        hasCloudflareIntegration,
       }),
-    [inferenceEnabled, inferenceUsage, loggingEnabled, pkiEnabled, statusPageEnabled, user?.scopes]
+    [
+      dashboardInferenceUsage,
+      hasCloudflareIntegration,
+      inferenceEnabled,
+      loggingEnabled,
+      pkiEnabled,
+      statusPageEnabled,
+      user?.scopes,
+    ]
   );
 
   const baseNavigationEntries = useMemo<PaletteEntry[]>(

@@ -383,6 +383,33 @@ describe('events websocket authentication', () => {
     handlers.onClose(new Event('close'), ws as any);
   });
 
+  it('delivers configuration invalidations to an authenticated user without configuration payload', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({ user: USER, effectiveScopes: USER.scopes });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscribe', channels: ['system.config.changed'] }),
+      }),
+      ws as any
+    );
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'subscribed', channels: ['system.config.changed'], rejected: [] })
+    );
+    eventBus.publish('system.config.changed', {});
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'event', channel: 'system.config.changed', payload: {} })
+    );
+
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
   it('filters logging events by environment-scoped log access', async () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);

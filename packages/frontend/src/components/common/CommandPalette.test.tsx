@@ -3,13 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { FolderPlus, RefreshCw } from "lucide-react";
 import { useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { INFERENCE_SELF_USAGE_UPDATED_EVENT } from "@/lib/inference-self-usage";
 import { api } from "@/services/api";
 import { useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
 import { useCommandPalettePageActions } from "@/stores/command-palette-page-actions";
 import { useResolvedPageContext } from "@/stores/resolved-page-context";
 import { useUIStore } from "@/stores/ui";
+import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { renderWithRouter } from "@/test/render";
 import { CommandPalette } from "./CommandPalette";
 
@@ -33,6 +33,7 @@ describe("CommandPalette", () => {
       status: "idle",
       resource: null,
     });
+    useDashboardBootstrapStore.getState().clear();
     useCommandPalettePageActions.setState({ ownerToken: 0, registrations: {} });
     useUIStore.setState({ recentPages: [], commandActionUsage: {} });
   });
@@ -296,12 +297,6 @@ describe("CommandPalette", () => {
         },
       },
     };
-    vi.spyOn(api, "getInferenceSelfUsage").mockImplementation(async () => {
-      window.dispatchEvent(
-        new CustomEvent(INFERENCE_SELF_USAGE_UPDATED_EVENT, { detail: exhaustedUsage })
-      );
-      return exhaustedUsage;
-    });
     const sendMessage = vi.fn();
 
     act(() => {
@@ -331,6 +326,7 @@ describe("CommandPalette", () => {
         },
         sendMessage,
       });
+      useDashboardBootstrapStore.setState({ snapshot: { inferenceUsage: exhaustedUsage } as never });
     });
 
     renderWithRouter(<CommandPalette open onOpenChange={vi.fn()} />);

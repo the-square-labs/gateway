@@ -543,6 +543,21 @@ export class IntegrationsService {
     );
   }
 
+  /** Safe shell-level capability check; never exposes connector metadata or credentials. */
+  async hasEnabledCloudflareConnector(): Promise<boolean> {
+    const [connector] = await this.db
+      .select({ id: integrationConnectors.id })
+      .from(integrationConnectors)
+      .where(
+        and(
+          eq(integrationConnectors.provider, 'cloudflare'),
+          eq(integrationConnectors.enabled, true)
+        )
+      )
+      .limit(1);
+    return connector !== undefined;
+  }
+
   async getCloudflareConnector(id: string) {
     const row = await this.getConnectorRow(id, 'cloudflare');
     const zones = await this.listCloudflareZoneRows(id);

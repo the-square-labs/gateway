@@ -5,9 +5,9 @@ import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PoweredByFooter } from "@/components/common/PoweredByFooter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useSystemConfigStore } from "@/stores/system-config";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { Node } from "@/types";
 import { AIConfigSection } from "./settings/AIConfigSection";
 import { AuthProvisioningSection } from "./settings/AuthProvisioningSection";
@@ -30,7 +30,8 @@ export function Settings() {
   const { tab: tabParam } = useParams<{ tab?: string }>();
   const navigate = useNavigate();
   const { hasScope } = useAuthStore();
-  const [nodesList, setNodesList] = useState<Node[]>([]);
+  const shellNodes = useUIBootstrapStore((state) => state.snapshot?.navigation.nodes.data);
+  const [nodesList, setNodesList] = useState<Node[]>(() => shellNodes ?? []);
   const activeTab = isSettingsTab(tabParam) ? tabParam : null;
   const inferenceEnabled = useSystemConfigStore((state) => state.config.features.inferenceEnabled);
 
@@ -80,76 +81,15 @@ export function Settings() {
   const currentTab = activeTab && availableTabs.includes(activeTab) ? activeTab : availableTabs[0];
 
   useEffect(() => {
-    api
-      .listNodes({ limit: 100 })
-      .then((r) => setNodesList(r.data ?? []))
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (canViewGatewaySettings) {
-      api
-        .getAuthProvisioningSettings()
-        .then((data) => api.setCache("settings:auth-provisioning", data))
-        .catch(() => {});
+    if (currentTab !== "gateway" && currentTab !== "features") {
+      setNodesList([]);
+      return;
     }
-    if (canManageRegistries) {
-      api
-        .listDockerRegistries()
-        .then((data) => api.setCache("settings:docker-registries", data ?? []))
-        .catch(() => {});
-    }
-    if (canViewLicense) {
-      api
-        .getLicenseStatus()
-        .then((data) => api.setCache("settings:license-status", data))
-        .catch(() => {});
-    }
-    if (canConfigAI) {
-      api
-        .getAIConfig()
-        .then((data) => api.setCache("settings:ai-config", data))
-        .catch(() => {});
-    }
-    if (canViewStatusPage) {
-      api
-        .getStatusPageSettings()
-        .then((data) => api.setCache("settings:status-page-config", data))
-        .catch(() => {});
-      api
-        .listStatusPageProxyTemplates()
-        .then((data) => api.setCache("settings:status-page-proxy-templates", data ?? []))
-        .catch(() => {});
-      api
-        .listSSLCertificates({ limit: 100 })
-        .then((res) => api.setCache("settings:status-page-ssl-certs", res.data ?? []))
-        .catch(() => {});
-    }
-    if (canViewHousekeeping) {
-      api
-        .getHousekeepingConfig()
-        .then((data) => api.setCache("housekeeping:config", data))
-        .catch(() => {});
-      api
-        .getHousekeepingStats()
-        .then((data) => api.setCache("housekeeping:stats", data))
-        .catch(() => {});
-    }
-    if (canViewIntegrations) {
-      api
-        .listGitLabConnectors()
-        .then((data) => api.setCache("settings:gitlab-connectors", data ?? []))
-        .catch(() => {});
-    }
-  }, [
-    canConfigAI,
-    canManageRegistries,
-    canViewGatewaySettings,
-    canViewHousekeeping,
-    canViewIntegrations,
-    canViewLicense,
-    canViewStatusPage,
-  ]);
+    // The authenticated shell has already loaded this permission-filtered
+    // projection. Reusing it avoids an empty select followed by a separate
+    // nodes request when a settings tab first mounts.
+    setNodesList(shellNodes ?? []);
+  }, [currentTab, shellNodes]);
 
   useEffect(() => {
     const firstTab = availableTabs[0];

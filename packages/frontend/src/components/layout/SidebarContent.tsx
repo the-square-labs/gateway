@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUpCircle, Expand, PanelLeft, PanelLeftClose, Search, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AIButton } from "@/components/ai/AIButton";
 import { confirmAILiteMode } from "@/components/ai/confirm-lite-mode";
@@ -17,8 +17,6 @@ import { ResizeHandle } from "@/components/ui/resize-handle";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useInferenceSelfUsage } from "@/hooks/use-inference-self-usage";
-import { useRealtime } from "@/hooks/use-realtime";
 import { visibleNavigationGroups } from "@/lib/app-navigation";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
 import { isSidebarNavigationActive } from "@/lib/sidebar-navigation";
@@ -34,6 +32,7 @@ import { usePinnedNodesStore } from "@/stores/pinned-nodes";
 import { usePinnedProxiesStore } from "@/stores/pinned-proxies";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import { useUpdateStore } from "@/stores/update";
 import { AI_SCOPE } from "@/types";
 import { SidebarPinnedResources } from "./SidebarPinnedResources";
@@ -72,7 +71,7 @@ export function SidebarContent({
 }: SidebarContentProps) {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, hasScope, logout } = useAuthStore();
+  const { user, hasScope, hasScopedAccess, logout } = useAuthStore();
   const {
     sidebarOpen,
     toggleSidebar,
@@ -89,12 +88,15 @@ export function SidebarContent({
     hasScope("admin:details:certificates") && showSystemCertificatePreference;
   const showAILiteModeCTA = useUIStore((s) => s.showAILiteModeCTA);
   const sidebarPinnedIds = usePinnedNodesStore((s) => s.sidebarNodeIds);
-  const [statusPageEnabled, setStatusPageEnabled] = useState(false);
+  const statusPageEnabled = useUIBootstrapStore(
+    (state) => state.snapshot?.navigation.statusPageEnabled ?? false
+  );
+  const hasCloudflareIntegration = useUIBootstrapStore(
+    (state) => state.snapshot?.navigation.hasCloudflareIntegration ?? false
+  );
   const pkiEnabled = useSystemConfigStore((s) => s.config.features.pkiEnabled);
   const loggingEnabled = useSystemConfigStore((s) => s.config.features.loggingEnabled);
   const inferenceEnabled = useSystemConfigStore((s) => s.config.features.inferenceEnabled);
-  const canViewInferenceUsage = inferenceEnabled && hasScope("inference:use");
-  const { usage: inferenceUsage } = useInferenceSelfUsage(canViewInferenceUsage);
 
   const sidebarPinnedProxyIds = usePinnedProxiesStore((s) => s.sidebarProxyIds);
 
@@ -205,25 +207,6 @@ export function SidebarContent({
     user?.id,
   ]);
 
-  const refetchStatusPageEnabled = useCallback(() => {
-    if (!hasScope("status-page:view")) {
-      setStatusPageEnabled(false);
-      return;
-    }
-    api
-      .getStatusPageSettings()
-      .then((settings) => setStatusPageEnabled(settings.enabled))
-      .catch(() => setStatusPageEnabled(false));
-  }, [hasScope]);
-
-  useEffect(() => {
-    refetchStatusPageEnabled();
-  }, [refetchStatusPageEnabled]);
-
-  useRealtime("status-page.changed", () => {
-    refetchStatusPageEnabled();
-  });
-
   const handleLogout = async () => {
     try {
       await api.logout();
@@ -251,10 +234,18 @@ export function SidebarContent({
     pkiEnabled,
     loggingEnabled,
     inferenceEnabled,
-    hasLowInferenceUsage: hasLowInferenceUsage(inferenceUsage),
+    hasLowInferenceUsage: hasLowInferenceUsage(dashboardBootstrap?.inferenceUsage ?? null),
     statusPageEnabled,
+    hasCloudflareIntegration,
     hasNginxNodes,
-    hasDockerNodes: dockerNodes.length > 0,
+    hasDockerNodes:
+      dockerNodes.length > 0 ||
+      [
+        "docker:containers:view",
+        "docker:images:view",
+        "docker:volumes:view",
+        "docker:networks:view",
+      ].some(hasScopedAccess),
   });
 
   const allNavItems = effectiveGroups.flatMap((g) => g.items);

@@ -10,6 +10,7 @@ import {
   useParams,
 } from "react-router-dom";
 import { AppStatusGate } from "@/components/common/AppStatusGate";
+import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 import { RequireScope } from "@/components/common/RequireScope";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -80,6 +81,7 @@ import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import { useResolvedPageRoute } from "@/stores/resolved-page-context";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { syncAILiteModeFromStorageValue, UI_STORAGE_KEY, useUIStore } from "@/stores/ui";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { DockerMigration } from "@/types";
 
 /** Helper to wrap a page element with a scope guard */
@@ -149,11 +151,7 @@ function PopoutAuthGate({ children }: { children: React.ReactElement }) {
 }
 
 function DetailRouteLoading() {
-  return (
-    <div className="flex h-full items-center justify-center">
-      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-    </div>
-  );
+  return <DetailPageSkeleton label="Loading resource" />;
 }
 
 function DetailRouteFailure({
@@ -621,11 +619,7 @@ function LoggingPageGuard({ detailType }: { detailType?: "environment" | "schema
   }
 
   if (!systemConfigLoaded || systemConfigLoading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </div>
-    );
+    return <DetailPageSkeleton label="Loading logging configuration" />;
   }
 
   if (
@@ -698,6 +692,7 @@ function RealtimeBridge() {
   const canViewLogging = useAuthStore((s) => s.hasScope("housekeeping:view"));
   const canViewAudit = useAuthStore((s) => s.hasScopedAccess("admin:audit"));
   const invalidateDashboardBootstrap = useDashboardBootstrapStore((s) => s.invalidate);
+  const invalidateUIBootstrap = useUIBootstrapStore((s) => s.invalidate);
   const refreshAIProviderStatus = useAIStore((s) => s.refreshProviderStatus);
   const setGatewayUpdatingActive = useAppStatusStore((s) => s.setGatewayUpdatingActive);
   const clearGatewayUpdating = useAppStatusStore((s) => s.clearGatewayUpdating);
@@ -743,9 +738,12 @@ function RealtimeBridge() {
   // therefore safely share a snapshot without relying on either route being mounted when
   // an event arrives.
   useEffect(() => {
-    if (!user || !canListNodes) return;
-    return eventStream.subscribe("node.changed", invalidateDashboardBootstrap);
-  }, [user, canListNodes, invalidateDashboardBootstrap]);
+    if (!user || (!canListNodes && !canReceiveNodeSlug)) return;
+    return eventStream.subscribe("node.changed", () => {
+      invalidateDashboardBootstrap();
+      invalidateUIBootstrap();
+    });
+  }, [user, canListNodes, canReceiveNodeSlug, invalidateDashboardBootstrap, invalidateUIBootstrap]);
 
   useEffect(() => {
     if (!user || !canReceiveNodeSlug) return;
@@ -760,8 +758,9 @@ function RealtimeBridge() {
         }
       }
       invalidateDashboardBootstrap();
+      invalidateUIBootstrap();
     });
-  }, [canReceiveNodeSlug, invalidateDashboardBootstrap, user]);
+  }, [canReceiveNodeSlug, invalidateDashboardBootstrap, invalidateUIBootstrap, user]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -830,6 +829,29 @@ function RealtimeBridge() {
     return eventStream.subscribe("audit.changed", invalidateDashboardBootstrap);
   }, [canViewAudit, invalidateDashboardBootstrap, user]);
 
+  // Feature flags and limits drive permission-authorized shell geometry. The
+  // event carries no settings; reload the typed bootstrap atomically instead.
+  useEffect(() => {
+    if (!user) return;
+    return eventStream.subscribe("system.config.changed", invalidateUIBootstrap);
+  }, [invalidateUIBootstrap, user]);
+
+  useEffect(() => {
+    if (!user) return;
+    return eventStream.subscribe("integration.connector.changed", invalidateUIBootstrap);
+  }, [invalidateUIBootstrap, user]);
+
+  useEffect(() => {
+    if (
+      !user?.scopes.some(
+        (scope) => scope === "status-page:view" || scope.startsWith("status-page:view:")
+      )
+    ) {
+      return;
+    }
+    return eventStream.subscribe("status-page.changed", invalidateUIBootstrap);
+  }, [invalidateUIBootstrap, user]);
+
   useEffect(() => {
     if (!user) return;
     return eventStream.subscribe("system.update.changed", (payload) => {
@@ -842,12 +864,32 @@ function RealtimeBridge() {
         }
       }
       invalidateDashboardBootstrap();
+      invalidateUIBootstrap();
     });
-  }, [clearGatewayUpdating, invalidateDashboardBootstrap, user, setGatewayUpdatingActive]);
+  }, [
+    clearGatewayUpdating,
+    invalidateDashboardBootstrap,
+    invalidateUIBootstrap,
+    user,
+    setGatewayUpdatingActive,
+  ]);
+
+  useEffect(() => {
+    if (!user) return;
+    return eventStream.subscribe("read-model.refreshed", (payload) => {
+      const id = (payload as { id?: string } | null)?.id;
+      if (id?.startsWith("dashboard-source:")) invalidateDashboardBootstrap();
+      if (id?.startsWith("ui-shell:")) invalidateUIBootstrap();
+    });
+  }, [invalidateDashboardBootstrap, invalidateUIBootstrap, user]);
 
   useEffect(
-    () => eventStream.onReconnect(invalidateDashboardBootstrap),
-    [invalidateDashboardBootstrap]
+    () =>
+      eventStream.onReconnect(() => {
+        invalidateDashboardBootstrap();
+        invalidateUIBootstrap();
+      }),
+    [invalidateDashboardBootstrap, invalidateUIBootstrap]
   );
 
   return null;

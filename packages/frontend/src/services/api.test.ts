@@ -133,6 +133,31 @@ describe("api client contract", () => {
     window.removeEventListener(INFERENCE_SELF_USAGE_UPDATED_EVENT, onUsage);
   });
 
+  it("warms inference usage from the shared dashboard bootstrap response", async () => {
+    const usage = {
+      enabled: true,
+      api: { configured: false, percentage: 0, recoveryAt: "2030-01-01T00:00:00.000Z" },
+      subscription: {
+        "5h": { configured: false, percentage: 0, recoveryAt: "2030-01-01T00:00:00.000Z" },
+        "7d": { configured: true, percentage: 25, recoveryAt: "2030-01-07T00:00:00.000Z" },
+        "30d": { configured: false, percentage: 0, recoveryAt: "2030-01-30T00:00:00.000Z" },
+      },
+    };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ csrfToken: "csrf-token" }))
+      .mockResolvedValueOnce(jsonResponse({ data: { inferenceUsage: usage } }));
+    const onUsage = vi.fn();
+    window.addEventListener(INFERENCE_SELF_USAGE_UPDATED_EVENT, onUsage);
+
+    await api.getDashboardBootstrap({});
+
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/monitoring/dashboard/bootstrap");
+    expect(api.getCached("req:/api/inference/usage/self")).toEqual(usage);
+    expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ detail: usage }));
+    window.removeEventListener(INFERENCE_SELF_USAGE_UPDATED_EVENT, onUsage);
+  });
+
   it("replaces a user's exact additional permissions", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
