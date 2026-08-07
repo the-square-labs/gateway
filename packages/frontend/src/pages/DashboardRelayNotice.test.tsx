@@ -31,7 +31,12 @@ describe("RelayHealthNotice", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Gateway relay is unavailable");
     expect(screen.queryByText("Contact your administrator.")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "View details" }));
-    expect(screen.getByText("Contact your administrator.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Please contact your administrator to restore managed nodes and secure database connections."
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(screen.queryByText(/Reason:/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Retry recovery" })).not.toBeInTheDocument();
   });
@@ -42,6 +47,15 @@ describe("RelayHealthNotice", () => {
 
     expect(screen.queryByText("unreachable")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "View details" }));
+    expect(screen.getByRole("table")).toHaveClass("table-fixed");
+    expect(
+      screen.getByText("Automatic recovery failed. Immediate administrator action is required.")
+    ).toHaveAttribute("data-dialog-description");
+    expect(
+      screen
+        .getByText("Automatic recovery failed. Immediate administrator action is required.")
+        .closest("[data-dialog-body]")
+    ).not.toBeNull();
     expect(screen.getByText("Reason").nextElementSibling).toHaveTextContent("unreachable");
     expect(screen.getByText("Attempts").nextElementSibling).toHaveTextContent("#3 restart failed");
     fireEvent.click(screen.getByRole("button", { name: "Retry recovery" }));

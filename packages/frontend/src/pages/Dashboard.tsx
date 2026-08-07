@@ -1,11 +1,16 @@
 import { AlertTriangle, ArrowRight, Info, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { DetailRow } from "@/components/common/DetailRow";
 import { PageTransition } from "@/components/common/PageTransition";
-import { PanelShell } from "@/components/common/PanelShell";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -249,6 +254,40 @@ export function RelayHealthNotice({
   }
   const critical = relay.state === "critical";
   const copy = relayNoticeContent(relay);
+  const diagnostics = [
+    { label: "Reason", value: relayReasonLabel(relay.reason) },
+    {
+      label: "Last healthy",
+      value: relay.lastHealthyAt ? formatRelativeDate(relay.lastHealthyAt) : "Never",
+    },
+    {
+      label: "Last probe",
+      value: relay.lastProbeAt ? formatRelativeDate(relay.lastProbeAt) : "Not reported",
+    },
+    {
+      label: "Versions",
+      value: `relay ${relay.relayVersion ?? "?"}, protocol ${relay.protocolVersion ?? "?"}, contract ${relay.databaseContractVersion ?? "?"}`,
+    },
+    { label: "Service", value: relay.expectedService ?? "relay" },
+    {
+      label: "Image",
+      value: relayImageSummary(relay.expectedImage),
+      title: relay.expectedImage ?? undefined,
+      breakAll: true,
+    },
+    ...(relay.attemptHistory && relay.attemptHistory.length > 0
+      ? [
+          {
+            label: "Attempts",
+            value: relay.attemptHistory
+              .map(
+                (attempt) => `#${attempt.attempt} ${attempt.action ?? "check"} ${attempt.result}`
+              )
+              .join(" · "),
+          },
+        ]
+      : []),
+  ];
   return (
     <>
       <div
@@ -284,68 +323,59 @@ export function RelayHealthNotice({
       </div>
 
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
-        <DialogContent unstyled className="p-0 sm:max-w-lg">
-          <DialogTitle className="sr-only">{copy.title}</DialogTitle>
-          <DialogDescription className="sr-only">{copy.description}</DialogDescription>
-          <PanelShell
-            className="border-0"
-            headerClassName="pr-10"
-            title={copy.title}
-            description={copy.description}
-            bodyClassName="divide-y divide-border"
-          >
-            {!isAdmin ? (
-              <DetailRow label="Action" value="Contact your administrator." />
-            ) : (
-              <>
-                <DetailRow label="Reason" value={relayReasonLabel(relay.reason)} />
-                <DetailRow
-                  label="Last healthy"
-                  value={relay.lastHealthyAt ? formatRelativeDate(relay.lastHealthyAt) : "Never"}
-                />
-                <DetailRow
-                  label="Last probe"
-                  value={relay.lastProbeAt ? formatRelativeDate(relay.lastProbeAt) : "Not reported"}
-                />
-                <DetailRow
-                  label="Versions"
-                  value={`relay ${relay.relayVersion ?? "?"}, protocol ${relay.protocolVersion ?? "?"}, contract ${relay.databaseContractVersion ?? "?"}`}
-                />
-                <DetailRow label="Service" value={relay.expectedService ?? "relay"} />
-                <DetailRow
-                  label="Image"
-                  value={
-                    <span className="break-all" title={relay.expectedImage ?? undefined}>
-                      {relayImageSummary(relay.expectedImage)}
-                    </span>
-                  }
-                />
-                {relay.attemptHistory && relay.attemptHistory.length > 0 && (
-                  <DetailRow
-                    label="Attempts"
-                    value={relay.attemptHistory
-                      .map(
-                        (attempt) =>
-                          `#${attempt.attempt} ${attempt.action ?? "check"} ${attempt.result}`
-                      )
-                      .join(" · ")}
-                  />
-                )}
-              </>
-            )}
-            {critical && isAdmin && (
-              <div className="flex justify-end px-4 py-3">
-                <Button
-                  variant="destructive"
-                  disabled={retryPending || relay.canRetry !== true}
-                  onClick={onRetry}
-                >
-                  <RotateCw className={retryPending ? "animate-spin" : undefined} />
-                  {retryPending ? "Retrying recovery" : "Retry recovery"}
-                </Button>
-              </div>
-            )}
-          </PanelShell>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{copy.title}</DialogTitle>
+          </DialogHeader>
+
+          {isAdmin ? <DialogDescription>{copy.description}</DialogDescription> : null}
+
+          {isAdmin ? (
+            <div className="border border-border bg-muted/40">
+              <table className="w-full table-fixed text-sm">
+                <tbody className="divide-y divide-border">
+                  {diagnostics.map((diagnostic) => (
+                    <tr key={diagnostic.label}>
+                      <th
+                        scope="row"
+                        className="w-32 px-3 py-2.5 text-left align-top font-normal text-muted-foreground"
+                      >
+                        {diagnostic.label}
+                      </th>
+                      <td
+                        className={`px-3 py-2.5 align-top text-foreground ${diagnostic.breakAll ? "break-all" : "break-words"}`}
+                        title={diagnostic.title}
+                      >
+                        {diagnostic.value}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="space-y-3 text-sm text-muted-foreground">
+              <DialogDescription>{copy.description}</DialogDescription>
+              <p>
+                {critical
+                  ? "Please contact your administrator to restore managed nodes and secure database connections."
+                  : "Gateway is handling this automatically. No action is required unless this message remains visible."}
+              </p>
+            </div>
+          )}
+
+          {critical && isAdmin ? (
+            <DialogFooter>
+              <Button
+                variant="destructive"
+                disabled={retryPending || relay.canRetry !== true}
+                onClick={onRetry}
+              >
+                <RotateCw className={retryPending ? "animate-spin" : undefined} />
+                {retryPending ? "Retrying recovery" : "Retry recovery"}
+              </Button>
+            </DialogFooter>
+          ) : null}
         </DialogContent>
       </Dialog>
     </>
