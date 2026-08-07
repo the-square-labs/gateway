@@ -84,6 +84,8 @@ Configure the canonical URL, authentication, and structured logging through the 
 
 In a development build, open the Dashboard and run these commands in the browser console. Relay previews only change client-side state; retry actions do not call the backend.
 
+For a production-style QA image, opt in at build time with `--build-arg VITE_GATEWAY_DEV_TOOLS=true`. Release images omit the commands by default.
+
 ```js
 gatewayDev.showRelayActivation()
 gatewayDev.showRelayMaintenance()

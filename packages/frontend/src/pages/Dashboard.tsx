@@ -728,7 +728,11 @@ export function Dashboard() {
   );
 
   useEffect(() => {
-    if (!import.meta.env.DEV || typeof window === "undefined") return;
+    if (
+      typeof window === "undefined" ||
+      (!import.meta.env.DEV && import.meta.env.VITE_GATEWAY_DEV_TOOLS !== "true")
+    )
+      return;
 
     const win = window as DashboardDevWindow;
     const gatewayDev = (win.gatewayDev ??= {});

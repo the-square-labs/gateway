@@ -20,6 +20,9 @@ RUN pnpm install --frozen-lockfile
 # ── Build frontend ──────────────────────────────────────────────────
 FROM base AS frontend-builder
 
+ARG VITE_GATEWAY_DEV_TOOLS=false
+ENV VITE_GATEWAY_DEV_TOOLS=$VITE_GATEWAY_DEV_TOOLS
+
 COPY packages/frontend/ packages/frontend/
 RUN pnpm --filter frontend build
 
