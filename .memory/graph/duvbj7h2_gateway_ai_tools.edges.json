@@ -3,13 +3,53 @@
   "edges": [
     {
       "from_id": "duvbj7h2",
-      "to_id": "ph8ejel0",
-      "relation": "same_workflow",
-      "weight": 0.58,
-      "reason": "Both cover AI service refactor with web-search capabilities and testing contracts.",
+      "to_id": "412x4uua",
+      "relation": "same_area",
+      "weight": 0.5701,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1781993074133,
-      "updated_at": 1781993074133
+      "created_at": 1786064967969,
+      "updated_at": 1786064967969
+    },
+    {
+      "from_id": "duvbj7h2",
+      "to_id": "ph8ejel0",
+      "relation": "same_area",
+      "weight": 0.5494,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967969,
+      "updated_at": 1786064967969
+    },
+    {
+      "from_id": "duvbj7h2",
+      "to_id": "h8y5ou2d",
+      "relation": "same_workflow",
+      "weight": 0.4988,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1786064967969,
+      "updated_at": 1786064967969
+    },
+    {
+      "from_id": "duvbj7h2",
+      "to_id": "8rqz22k0",
+      "relation": "same_workflow",
+      "weight": 0.4984,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1786064967969,
+      "updated_at": 1786064967969
+    },
+    {
+      "from_id": "duvbj7h2",
+      "to_id": "7oked0dp",
+      "relation": "same_area",
+      "weight": 0.4942,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967969,
+      "updated_at": 1786064967969
     }
   ]
 }

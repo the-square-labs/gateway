@@ -681,12 +681,14 @@ export function Databases({
   );
   const [createOpen, setCreateOpen] = useState(false);
   const [managedCreateOpen, setManagedCreateOpen] = useState(false);
+  const [managedNodeRequiredOpen, setManagedNodeRequiredOpen] = useState(false);
   const [managedCreateStep, setManagedCreateStep] = useState<1 | 2 | 3>(1);
   const [managedCreateSession, setManagedCreateSession] = useState(0);
   const [draft, setDraft] = useState<DatabaseConnectionDraft>(draftFromConnection(null));
   const [managedDraft, setManagedDraft] = useState<ManagedDatabaseCreateInput>(defaultManagedDraft);
   const [managedCatalog, setManagedCatalog] = useState<ManagedDatabaseCatalogEntry[]>([]);
   const [databaseNodes, setDatabaseNodes] = useState<Node[]>([]);
+  const [databaseNodesLoaded, setDatabaseNodesLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [managedSaving, setManagedSaving] = useState(false);
   const [managedProvisioning, setManagedProvisioning] = useState<{ phase: "waiting" } | null>(null);
@@ -697,12 +699,16 @@ export function Databases({
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
 
   const openManagedCreate = useCallback(() => {
+    if (databaseNodesLoaded && databaseNodes.length === 0) {
+      setManagedNodeRequiredOpen(true);
+      return;
+    }
     setManagedDraft(defaultManagedDraft(managedCatalog));
     setManagedCreateStep(1);
     setManagedCreateSession((session) => session + 1);
     setManagedProvisioning(null);
     setManagedCreateOpen(true);
-  }, [managedCatalog]);
+  }, [databaseNodes.length, databaseNodesLoaded, managedCatalog]);
 
   const closeManagedCreate = useCallback(() => {
     if (managedProvisioning?.phase === "waiting") return;
@@ -775,7 +781,10 @@ export function Databases({
           ? Promise.resolve([] as ManagedDatabaseCatalogEntry[])
           : api.listManagedDatabaseCatalog(),
       ]);
-      if (nodes.status === "fulfilled") setDatabaseNodes(nodes.value.data);
+      if (nodes.status === "fulfilled") {
+        setDatabaseNodes(nodes.value.data);
+        setDatabaseNodesLoaded(true);
+      }
       if (catalog.status === "fulfilled") setManagedCatalog(catalog.value);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to load databases");
@@ -791,7 +800,10 @@ export function Databases({
   useRealtime(hasScopedAccess("nodes:details") ? "node.changed" : null, () => {
     void api
       .listNodes({ type: "databases", limit: 100 })
-      .then((result) => setDatabaseNodes(result.data))
+      .then((result) => {
+        setDatabaseNodes(result.data);
+        setDatabaseNodesLoaded(true);
+      })
       .catch(() => undefined);
   });
 
@@ -1222,6 +1234,33 @@ export function Databases({
                   )}
                 </div>
               )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {!embedded && (
+        <Dialog open={managedNodeRequiredOpen} onOpenChange={setManagedNodeRequiredOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Connect a node first</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              Managed databases run on a connected node. Add a node first, then return here to
+              deploy your database.
+            </p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setManagedNodeRequiredOpen(false)}>
+                Close
+              </Button>
+              <Button
+                onClick={() => {
+                  setManagedNodeRequiredOpen(false);
+                  navigate("/nodes");
+                }}
+              >
+                Open Nodes <ArrowRight className="h-4 w-4" />
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

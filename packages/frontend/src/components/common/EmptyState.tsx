@@ -29,8 +29,8 @@ export function EmptyState({
   return (
     <div
       className={cn(
-        "flex flex-col items-center gap-2 bg-card",
-        embedded ? "py-8" : "py-16 border border-border"
+        "flex w-full flex-col items-center justify-center gap-2 bg-card text-center",
+        embedded ? "px-4 py-8" : "border border-border px-6 py-12"
       )}
     >
       <p className="text-sm text-muted-foreground">

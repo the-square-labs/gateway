@@ -4,7 +4,7 @@ import { settings } from '@/db/schema/settings.js';
 
 const MCP_SETTINGS_DEFAULTS = {
   'mcp:server_enabled': false,
-  'mcp:extended_compatibility': false,
+  'mcp:extended_compatibility': true,
 } as const;
 
 export interface McpSettingsConfig {

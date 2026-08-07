@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
+import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { HealthBars } from "@/components/ui/health-bars";
@@ -77,7 +77,8 @@ export function DatabaseDetail({
     null
   );
   const [loadingCredentials, setLoadingCredentials] = useState(false);
-  const { isPinnedDashboard, isPinnedSidebar, toggleDashboard, toggleSidebar } = usePinnedDatabasesStore();
+  const { isPinnedDashboard, isPinnedSidebar, toggleDashboard, toggleSidebar } =
+    usePinnedDatabasesStore();
   const loadedDatabaseId = database?.id ?? "";
   const isManagedPaused = database?.managed?.status === "paused";
 
@@ -481,13 +482,13 @@ export function DatabaseDetail({
     }
   };
 
-  if (loading || !database) {
+  if (loading) return <DetailPageSkeleton label="Loading database" tabs={5} />;
+  if (!database)
     return (
-      <div className="flex items-center justify-center py-16">
-        <LoadingSpinner className="" />
+      <div className="flex h-full items-center justify-center text-muted-foreground">
+        Database not found
       </div>
     );
-  }
 
   const isFullHeightTab =
     activeTab === "explorer" ||
@@ -690,7 +691,9 @@ export function DatabaseDetail({
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium">Add to dashboard</p>
-                <p className="text-xs text-muted-foreground">Show a compact health card on the dashboard</p>
+                <p className="text-xs text-muted-foreground">
+                  Show a compact health card on the dashboard
+                </p>
               </div>
               <Switch
                 checked={isPinnedDashboard(database.id)}

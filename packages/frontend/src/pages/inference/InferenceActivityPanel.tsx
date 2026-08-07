@@ -196,6 +196,7 @@ export function InferenceActivityPanel() {
     ],
     [filterOptions.models]
   );
+  const activityTableHeight = rows.length ? 49 + rows.length * 49 + 44 : undefined;
 
   const previewColumns = useMemo<SimpleTableColumn<InferenceActivity>[]>(
     () => [
@@ -307,35 +308,36 @@ export function InferenceActivityPanel() {
                 </>
               }
             />
-            {loading && rows.length === 0 ? (
-              <div className="py-8 text-sm text-muted-foreground">Loading activity...</div>
-            ) : (
-              <div className="h-[min(56dvh,36rem)] min-h-72">
-                <DataTable
-                  columns={activityColumns}
-                  data={rows}
-                  keyFn={(row) => row.id}
-                  horizontalScroll
-                  minWidth="52rem"
-                  emptyMessage="No inference activity"
-                  scrollRef={tableScrollRef}
-                  footer={
-                    nextPage ? (
-                      <div
-                        ref={sentinelRef}
-                        className="py-3 text-center text-xs text-muted-foreground"
-                      >
-                        {loading ? "Loading more…" : "Scroll to load older requests"}
-                      </div>
-                    ) : rows.length > 0 ? (
-                      <div className="py-3 text-center text-xs text-muted-foreground">
-                        End of activity
-                      </div>
-                    ) : null
-                  }
-                />
-              </div>
-            )}
+            <div
+              className="max-h-[min(56dvh,36rem)]"
+              style={activityTableHeight ? { height: activityTableHeight } : undefined}
+            >
+              <DataTable
+                columns={activityColumns}
+                data={rows}
+                keyFn={(row) => row.id}
+                horizontalScroll
+                minWidth="52rem"
+                className="h-full"
+                emptyMessage="No inference activity"
+                scrollRef={tableScrollRef}
+                loading={loading && rows.length === 0}
+                footer={
+                  nextPage ? (
+                    <div
+                      ref={sentinelRef}
+                      className="py-3 text-center text-xs text-muted-foreground"
+                    >
+                      {loading ? "Loading more…" : "Scroll to load older requests"}
+                    </div>
+                  ) : rows.length > 0 ? (
+                    <div className="py-3 text-center text-xs text-muted-foreground">
+                      End of activity
+                    </div>
+                  ) : null
+                }
+              />
+            </div>
           </div>
         </DialogContent>
       </Dialog>

@@ -5,41 +5,51 @@
       "from_id": "nr9hvzr3",
       "to_id": "c8ql9nhv",
       "relation": "uses_service",
-      "weight": 0.65,
-      "reason": "startup recovery notes reference and rely on existing gateway-dind/daemon containers; c8ql9nhv describes local daemon startup using nginx-daemon and docker-daemon counterparts.",
+      "weight": 0.6234,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
-      "created_at": 1782916298075,
-      "updated_at": 1782916298075
+      "created_at": 1786064967892,
+      "updated_at": 1786064967892
+    },
+    {
+      "from_id": "nr9hvzr3",
+      "to_id": "7rchqhpz",
+      "relation": "related_to",
+      "weight": 0.5673,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967892,
+      "updated_at": 1786064967892
+    },
+    {
+      "from_id": "nr9hvzr3",
+      "to_id": "wlju46pr",
+      "relation": "related_to",
+      "weight": 0.4767,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967892,
+      "updated_at": 1786064967892
+    },
+    {
+      "from_id": "nr9hvzr3",
+      "to_id": "rzidwe4n",
+      "relation": "related_to",
+      "weight": 0.4739,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967892,
+      "updated_at": 1786064967892
     },
     {
       "from_id": "nr9hvzr3",
       "to_id": "412x4uua",
       "relation": "uses_service",
-      "weight": 0.6,
-      "reason": "API client refactor and tests align with gateway API verification patterns for proxies, databases, and Docker methods.",
+      "weight": 0.433,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
-      "created_at": 1782916298075,
-      "updated_at": 1782916298075
-    },
-    {
-      "from_id": "nr9hvzr3",
-      "to_id": "4tmpz7of",
-      "relation": "related_to",
-      "weight": 0.5,
-      "reason": "both discuss Docker detail mutations and frontend/backend mutation handling patterns in the gateway.",
-      "source": "auto",
-      "created_at": 1782916298075,
-      "updated_at": 1782916298075
-    },
-    {
-      "from_id": "nr9hvzr3",
-      "to_id": "37llsl1w",
-      "relation": "related_to",
-      "weight": 0.4,
-      "reason": "API error handling and normalization concerns span both API errors and frontend display logic mentioned across paths.",
-      "source": "auto",
-      "created_at": 1782916298075,
-      "updated_at": 1782916298075
+      "created_at": 1786064967892,
+      "updated_at": 1786064967892
     }
   ]
 }

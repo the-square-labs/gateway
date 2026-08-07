@@ -12,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { InferenceProviderConnectDialog } from "@/pages/settings/inference/InferenceProviderConnectDialog";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -342,8 +343,14 @@ export function InferenceSetupWizard({
             its centrally managed catalog.
           </FinalizeSetupCompletion>
         ) : loading ? (
-          <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
-            <Loader2 className="mr-2 animate-spin" /> Loading Gateway Inference…
+          <div className="space-y-4" aria-busy="true" aria-label="Loading Gateway Inference">
+            <Skeleton className="h-5 w-48" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-4/5" />
+            <div className="border border-border p-4 space-y-3">
+              <Skeleton className="h-4 w-36" />
+              <Skeleton className="h-10 w-full" />
+            </div>
           </div>
         ) : !inferenceEnabled ? (
           <div
@@ -393,7 +400,7 @@ export function InferenceSetupWizard({
             <SettingsControlRow
               title="Default model"
               description="Enabled for all Gateway users until you refine access in Settings."
-              controlsClassName="sm:min-w-[22rem]"
+              controlsClassName="sm:w-full sm:min-w-0 sm:max-w-[20rem]"
             >
               <Select value={selectedSource} onValueChange={setSelectedSource}>
                 <SelectTrigger className="w-full">

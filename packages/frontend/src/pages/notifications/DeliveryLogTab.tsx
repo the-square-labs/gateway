@@ -2,7 +2,6 @@ import { CheckCircle2, Clock, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/EmptyState";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import {
   ResourceListCell,
   type ResourceListColumn,
@@ -21,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
@@ -213,8 +213,6 @@ export function DeliveryLogTab({ refreshToken }: { refreshToken: number }) {
     );
   }, [deliveries, search]);
 
-  if (isLoading && deliveries.length === 0) return <LoadingSpinner />;
-
   return (
     <div className="flex min-w-0 flex-col gap-3">
       <SearchFilterBar
@@ -242,7 +240,9 @@ export function DeliveryLogTab({ refreshToken }: { refreshToken: number }) {
           </Select>
         }
       />
-      {deliveries.length === 0 ? (
+      {isLoading && deliveries.length === 0 ? (
+        <DeliveryRowsSkeleton />
+      ) : deliveries.length === 0 ? (
         <EmptyState message="No deliveries yet. Delivery attempts will appear here when alerts fire." />
       ) : (
         <ResourceListFrame minWidth={896} innerClassName="flex flex-col">
@@ -419,5 +419,47 @@ export function DeliveryLogTab({ refreshToken }: { refreshToken: number }) {
         </Dialog>
       )}
     </div>
+  );
+}
+
+function DeliveryRowsSkeleton() {
+  return (
+    <ResourceListFrame
+      minWidth={896}
+      innerClassName="flex flex-col"
+      aria-label="Loading delivery log"
+    >
+      <ResourceListHeaderTable columns={DELIVERY_COLUMNS} />
+      <ResourceListTable columns={DELIVERY_COLUMNS} bodyClassName="[&>tr:last-child]:border-b-0">
+        {Array.from({ length: 6 }, (_, index) => (
+          <ResourceListRow key={index} className="opacity-100">
+            <ResourceListCell>
+              <Skeleton className="h-8 w-8" />
+            </ResourceListCell>
+            <ResourceListCell>
+              <Skeleton className="h-4 w-28" />
+            </ResourceListCell>
+            <ResourceListCell>
+              <Skeleton className="h-4 w-36" />
+            </ResourceListCell>
+            <ResourceListCell>
+              <Skeleton className="h-5 w-16" />
+            </ResourceListCell>
+            <ResourceListCell>
+              <Skeleton className="h-5 w-12" />
+            </ResourceListCell>
+            <ResourceListCell>
+              <Skeleton className="h-4 w-12" />
+            </ResourceListCell>
+            <ResourceListCell>
+              <Skeleton className="h-4 w-10" />
+            </ResourceListCell>
+            <ResourceListCell>
+              <Skeleton className="h-4 w-32" />
+            </ResourceListCell>
+          </ResourceListRow>
+        ))}
+      </ResourceListTable>
+    </ResourceListFrame>
   );
 }

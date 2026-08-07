@@ -17,7 +17,6 @@ import { CommandPalettePageActions } from "@/components/common/CommandPalettePag
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailRow } from "@/components/common/DetailRow";
 import { EmptyState } from "@/components/common/EmptyState";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -41,6 +40,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
 import { daysUntil, formatDate, formatSerialNumber, hoursUntil } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -136,9 +136,7 @@ export function CADetail() {
     }
   };
 
-  if (isLoading) {
-    return <LoadingSpinner />;
-  }
+  if (isLoading) return <CADetailSkeleton />;
   if (!selectedCA) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -630,5 +628,41 @@ export function CADetail() {
         </Dialog>
       </div>
     </PageTransition>
+  );
+}
+
+function CADetailSkeleton() {
+  return (
+    <PageTransition>
+      <div
+        className="h-full space-y-4 overflow-y-auto p-6"
+        aria-label="Loading certificate authority"
+      >
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-9 w-9" />
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-64 max-w-[65vw]" />
+            <Skeleton className="h-4 w-80 max-w-[75vw]" />
+          </div>
+        </div>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <CADetailSkeletonPanel />
+          <CADetailSkeletonPanel />
+        </div>
+        <CADetailSkeletonPanel />
+      </div>
+    </PageTransition>
+  );
+}
+
+function CADetailSkeletonPanel() {
+  return (
+    <div className="space-y-3 border border-border bg-card p-4">
+      <Skeleton className="h-5 w-40" />
+      <Skeleton className="h-4 w-full" />
+      <Skeleton className="h-4 w-4/5" />
+      <Skeleton className="h-4 w-2/3" />
+      <Skeleton className="h-4 w-3/4" />
+    </div>
   );
 }

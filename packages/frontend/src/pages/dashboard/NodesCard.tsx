@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { nodeRoute } from "@/lib/resource-routes";
 import type { Node } from "@/types";
 import { effectiveNodeStatus } from "@/types";
@@ -13,6 +13,8 @@ interface NodesCardProps {
 }
 
 export function NodesCard({ nodesList, hasScope, loading = false }: NodesCardProps) {
+  // Keep the panel's geometry while its permitted data resolves, then omit it
+  // entirely when there is nothing useful to show on the dashboard.
   if (!hasScope("nodes:details") || (!loading && nodesList.length === 0)) return null;
 
   return (
@@ -25,11 +27,10 @@ export function NodesCard({ nodesList, hasScope, loading = false }: NodesCardPro
       }
     >
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="flex flex-col items-center gap-3">
-            <LoadingSpinner className="" />
-            <p className="text-sm text-muted-foreground">Loading nodes...</p>
-          </div>
+        <div className="space-y-3 px-4 py-4" aria-busy="true">
+          {[0, 1, 2].map((index) => (
+            <Skeleton key={index} className="h-9 w-full" />
+          ))}
         </div>
       ) : nodesList.length > 0 ? (
         <div className="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border">

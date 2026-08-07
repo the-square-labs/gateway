@@ -54,12 +54,3 @@ finalizeSetupRoutes.put('/steps/:step', async (c) => {
     requireAvailable(error);
   }
 });
-
-finalizeSetupRoutes.post('/dismiss', async (c) => {
-  try {
-    await container.resolve(FinalizeSetupService).dismiss(c.get('user')!.id);
-    return c.body(null, 204);
-  } catch (error) {
-    requireAvailable(error);
-  }
-});

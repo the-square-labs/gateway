@@ -4,7 +4,6 @@ import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { CommandPalettePageActions } from "@/components/common/CommandPalettePageActions";
 import { DetailRow } from "@/components/common/DetailRow";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -34,6 +33,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
 import { daysUntil, formatDate, formatSerialNumber, hoursUntil } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -133,9 +133,7 @@ export function CertificateDetail() {
     void handleDownload("pkcs12", pkcs12Passphrase);
   };
 
-  if (isLoading) {
-    return <LoadingSpinner />;
-  }
+  if (isLoading) return <CertificateDetailSkeleton />;
 
   if (!cert) {
     return (
@@ -450,5 +448,38 @@ export function CertificateDetail() {
         </Dialog>
       </div>
     </PageTransition>
+  );
+}
+
+function CertificateDetailSkeleton() {
+  return (
+    <PageTransition>
+      <div className="h-full space-y-4 overflow-y-auto p-6" aria-label="Loading certificate">
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-9 w-9" />
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-64 max-w-[65vw]" />
+            <Skeleton className="h-4 w-80 max-w-[75vw]" />
+          </div>
+        </div>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <CertificateDetailSkeletonPanel />
+          <CertificateDetailSkeletonPanel />
+        </div>
+        <CertificateDetailSkeletonPanel />
+      </div>
+    </PageTransition>
+  );
+}
+
+function CertificateDetailSkeletonPanel() {
+  return (
+    <div className="space-y-3 border border-border bg-card p-4">
+      <Skeleton className="h-5 w-36" />
+      <Skeleton className="h-4 w-full" />
+      <Skeleton className="h-4 w-5/6" />
+      <Skeleton className="h-4 w-2/3" />
+      <Skeleton className="h-4 w-3/4" />
+    </div>
   );
 }

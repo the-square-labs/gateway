@@ -1,9 +1,9 @@
 import { Link } from "react-router-dom";
 import { EmptyState } from "@/components/common/EmptyState";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { formatRelativeDate } from "@/lib/utils";
 import type { AuditLogEntry } from "@/types";
 
@@ -59,11 +59,10 @@ export function RecentActivityCard({
       }
     >
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="flex flex-col items-center gap-3">
-            <LoadingSpinner className="" />
-            <p className="text-sm text-muted-foreground">Loading activity...</p>
-          </div>
+        <div className="space-y-3 px-4 py-4" aria-busy="true">
+          {[0, 1, 2].map((index) => (
+            <Skeleton key={index} className="h-9 w-full" />
+          ))}
         </div>
       ) : activity.length > 0 ? (
         <SimpleTable

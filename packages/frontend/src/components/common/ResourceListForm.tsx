@@ -1,12 +1,18 @@
 import { DndContext } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
-import { ResourceListFrame, ResourceListHeaderTable } from "@/components/common/ResourceListLayout";
+import {
+  ResourceListCell,
+  ResourceListFrame,
+  ResourceListHeaderTable,
+  ResourceListRow,
+  ResourceListTable,
+} from "@/components/common/ResourceListLayout";
 import { ResourceDragOverlay } from "@/components/common/resource-list/ResourceDragOverlay";
 import { ResourceFolderGroup } from "@/components/common/resource-list/ResourceFolderGroup";
 import { ResourceUngroupedSection } from "@/components/common/resource-list/ResourceUngroupedSection";
 import type { ResourceListFormProps } from "@/components/common/resource-list/types";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export function ResourceListForm<TFolder, TItem>({
   columns,
@@ -55,18 +61,31 @@ export function ResourceListForm<TFolder, TItem>({
       )}
     </ResourceListFrame>
   );
+  const loadingFrame = (
+    <div aria-label={loadingLabel} aria-busy="true">
+      <ResourceListFrame minWidth={minWidth}>
+        <ResourceListHeaderTable columns={columns} />
+        <ResourceListTable columns={columns}>
+          {Array.from({ length: 5 }, (_, row) => (
+            <ResourceListRow key={row} aria-hidden="true">
+              {columns.map((column, columnIndex) => (
+                <ResourceListCell key={column.id} align={column.align}>
+                  <Skeleton className={columnIndex === 0 ? "h-5 w-2/3" : "h-4 w-1/2"} />
+                </ResourceListCell>
+              ))}
+            </ResourceListRow>
+          ))}
+        </ResourceListTable>
+      </ResourceListFrame>
+    </div>
+  );
 
   return (
     <div className="space-y-3">
       <SearchFilterBar {...search} />
       {afterSearch}
       {showLoading ? (
-        <div className="flex items-center justify-center py-16">
-          <div className="flex flex-col items-center gap-3">
-            <LoadingSpinner className="" />
-            <p className="text-sm text-muted-foreground">{loadingLabel}</p>
-          </div>
-        </div>
+        loadingFrame
       ) : hasContent ? (
         <DndContext
           sensors={dnd?.sensors}

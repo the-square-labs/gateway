@@ -4,12 +4,52 @@
     {
       "from_id": "ac5muwri",
       "to_id": "duvbj7h2",
-      "relation": "same_area",
-      "weight": 0.68,
-      "reason": "Both concern Gateway AI module changes and verification, where user-visible tool changes may require synchronized AI documentation updates.",
+      "relation": "related_to",
+      "weight": 0.3584,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1785878954365,
-      "updated_at": 1785878954365
+      "created_at": 1786064967402,
+      "updated_at": 1786064967402
+    },
+    {
+      "from_id": "ac5muwri",
+      "to_id": "myhj1f8i",
+      "relation": "related_to",
+      "weight": 0.3538,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967402,
+      "updated_at": 1786064967402
+    },
+    {
+      "from_id": "ac5muwri",
+      "to_id": "vrch49nc",
+      "relation": "related_to",
+      "weight": 0.3534,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967402,
+      "updated_at": 1786064967402
+    },
+    {
+      "from_id": "ac5muwri",
+      "to_id": "h8y5ou2d",
+      "relation": "related_to",
+      "weight": 0.3392,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967402,
+      "updated_at": 1786064967402
+    },
+    {
+      "from_id": "ac5muwri",
+      "to_id": "8irxtjyz",
+      "relation": "related_to",
+      "weight": 0.3331,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967402,
+      "updated_at": 1786064967402
     }
   ]
 }

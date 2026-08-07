@@ -3,33 +3,53 @@
   "edges": [
     {
       "from_id": "92pnq26b",
-      "to_id": "7oked0dp",
-      "relation": "related_to",
-      "weight": 0.6,
-      "reason": "AI chat retrieval tooling and retrieval safety patterns share AI tooling verification concerns.",
+      "to_id": "w75b8az4",
+      "relation": "same_workflow",
+      "weight": 0.5373,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1783631276015,
-      "updated_at": 1783631276015
+      "created_at": 1786064967760,
+      "updated_at": 1786064967760
+    },
+    {
+      "from_id": "92pnq26b",
+      "to_id": "nuc3c3hq",
+      "relation": "related_to",
+      "weight": 0.4638,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967760,
+      "updated_at": 1786064967760
+    },
+    {
+      "from_id": "92pnq26b",
+      "to_id": "hh3v2vdi",
+      "relation": "uses_service",
+      "weight": 0.4533,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1786064967760,
+      "updated_at": 1786064967760
     },
     {
       "from_id": "92pnq26b",
       "to_id": "duvbj7h2",
-      "relation": "related_to",
-      "weight": 0.5,
-      "reason": "AI tool reduction touches same domain of safe/verification patterns as artifact/tool boundaries.",
+      "relation": "same_workflow",
+      "weight": 0.4377,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1783631276015,
-      "updated_at": 1783631276015
+      "created_at": 1786064967760,
+      "updated_at": 1786064967760
     },
     {
       "from_id": "92pnq26b",
-      "to_id": "fgmxlp0p",
+      "to_id": "vrch49nc",
       "relation": "related_to",
-      "weight": 0.6,
-      "reason": "Metadata-only payloads for AI tooling surface privacy/derivation concerns, similar to tool-arg safety patterns.",
+      "weight": 0.374,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1783631276015,
-      "updated_at": 1783631276015
+      "created_at": 1786064967760,
+      "updated_at": 1786064967760
     }
   ]
 }

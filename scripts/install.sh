@@ -136,6 +136,217 @@ run_quiet() {
   die "${label} failed. Check ${LOG_FILE} for details."
 }
 
+# ── Docker Engine bootstrap ─────────────────────────────────────────
+# Keep this installer self-contained: a fresh Gateway host must not require
+# Docker to have been installed manually beforehand.  The package flow mirrors
+# scripts/setup-docker-node.sh so Gateway and Docker-node installation use the
+# same official Docker Engine repositories and Compose v2 plugin.
+command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+run_root_quiet() {
+  local label="$1"
+  shift
+  if [[ $EUID -eq 0 ]]; then
+    run_quiet "$label" "$@"
+    return
+  fi
+  command_exists sudo || die "${label} requires root privileges. Re-run as root or install sudo."
+  run_quiet "$label" sudo "$@"
+}
+
+detect_docker_os() {
+  if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    DOCKER_OS_ID="${ID:-unknown}"
+    DOCKER_OS_LIKE="${ID_LIKE:-$DOCKER_OS_ID}"
+    DOCKER_OS_CODENAME="${VERSION_CODENAME:-}"
+  else
+    DOCKER_OS_ID="unknown"
+    DOCKER_OS_LIKE="unknown"
+    DOCKER_OS_CODENAME=""
+  fi
+}
+
+docker_repo_distro_family() {
+  case "$DOCKER_OS_ID" in
+    ubuntu) printf 'ubuntu' ;;
+    debian) printf 'debian' ;;
+    fedora) printf 'fedora' ;;
+    rhel) printf 'rhel' ;;
+    centos|centos_stream) printf 'centos' ;;
+    *)
+      if [[ "$DOCKER_OS_LIKE" == *ubuntu* ]]; then
+        printf 'ubuntu'
+      elif [[ "$DOCKER_OS_LIKE" == *debian* ]]; then
+        printf 'debian'
+      elif [[ "$DOCKER_OS_LIKE" == *fedora* ]]; then
+        printf 'fedora'
+      elif [[ "$DOCKER_OS_LIKE" == *rhel* || "$DOCKER_OS_LIKE" == *centos* ]]; then
+        printf 'rhel'
+      fi
+      ;;
+  esac
+}
+
+install_docker_packages() {
+  if command_exists apt-get; then
+    if [[ "${DOCKER_APT_UPDATED:-0}" -eq 0 ]]; then
+      run_root_quiet "Refreshing package metadata" apt-get update
+      DOCKER_APT_UPDATED=1
+    fi
+    run_root_quiet "Installing Docker dependencies" apt-get install -y "$@"
+  elif command_exists dnf; then
+    run_root_quiet "Installing Docker dependencies" dnf install -y "$@"
+  elif command_exists yum; then
+    run_root_quiet "Installing Docker dependencies" yum install -y "$@"
+  else
+    die "Could not detect a supported package manager for Docker installation."
+  fi
+}
+
+ensure_curl_for_docker() {
+  command_exists curl && return
+  info "curl was not found; installing it for Docker setup"
+  install_docker_packages curl ca-certificates
+  ok "curl installed"
+}
+
+write_docker_apt_source() {
+  local source_file="/etc/apt/sources.list.d/docker.sources"
+  local source
+  source="Types: deb
+URIs: https://download.docker.com/linux/${1}
+Suites: ${2}
+Components: stable
+Architectures: ${3}
+Signed-By: /etc/apt/keyrings/docker.asc"
+
+  if [[ $EUID -eq 0 ]]; then
+    printf '%s\n' "$source" >"$source_file" || die "Could not write Docker apt repository configuration."
+  else
+    command_exists sudo || die "Writing the Docker apt repository requires root privileges."
+    if ! printf '%s\n' "$source" | sudo tee "$source_file" >/dev/null 2>>"$LOG_FILE"; then
+      die "Could not write Docker apt repository configuration. Check ${LOG_FILE} for details."
+    fi
+  fi
+}
+
+setup_docker_apt_repository() {
+  local repo_distro="$1" codename arch
+  install_docker_packages ca-certificates curl gnupg
+  run_root_quiet "Preparing Docker apt keyring" install -m 0755 -d /etc/apt/keyrings
+  run_root_quiet "Downloading Docker signing key" curl -fsSL "https://download.docker.com/linux/${repo_distro}/gpg" -o /etc/apt/keyrings/docker.asc
+  run_root_quiet "Configuring Docker signing key" chmod a+r /etc/apt/keyrings/docker.asc
+  codename="$DOCKER_OS_CODENAME"
+  if [[ -z "$codename" ]] && command_exists lsb_release; then
+    codename="$(lsb_release -cs 2>/dev/null || true)"
+  fi
+  [[ -n "$codename" ]] || die "Could not determine the distribution codename for Docker installation."
+  arch="$(dpkg --print-architecture)"
+  write_docker_apt_source "$repo_distro" "$codename" "$arch"
+  DOCKER_APT_UPDATED=0
+}
+
+setup_docker_rpm_repository() {
+  local repo_distro="$1"
+  ensure_curl_for_docker
+  if command_exists dnf; then
+    install_docker_packages dnf-plugins-core
+  else
+    install_docker_packages yum-utils
+  fi
+  run_root_quiet "Configuring Docker package repository" curl -fsSL "https://download.docker.com/linux/${repo_distro}/docker-ce.repo" -o /etc/yum.repos.d/docker-ce.repo
+}
+
+remove_conflicting_docker_packages() {
+  local repo_family="$1"
+  case "$repo_family" in
+    ubuntu|debian)
+      run_root_quiet "Removing conflicting Docker packages" apt-get remove -y docker.io docker-compose docker-compose-v2 docker-doc podman-docker containerd runc
+      DOCKER_APT_UPDATED=0
+      ;;
+    fedora|centos|rhel)
+      if command_exists dnf; then
+        run_root_quiet "Removing conflicting Docker packages" dnf remove -y docker docker-client docker-client-latest docker-common docker-latest docker-latest-logrotate docker-logrotate docker-engine podman runc
+      else
+        run_root_quiet "Removing conflicting Docker packages" yum remove -y docker docker-client docker-client-latest docker-common docker-latest docker-latest-logrotate docker-logrotate docker-engine podman runc
+      fi
+      ;;
+  esac
+}
+
+install_docker_engine() {
+  local repo_family
+  detect_docker_os
+  repo_family="$(docker_repo_distro_family)"
+  [[ -n "$repo_family" ]] || die "Automatic Docker installation is supported only on Debian, Ubuntu, Fedora, CentOS, and RHEL."
+
+  info "Installing Docker Engine and Docker Compose v2 plugin"
+  remove_conflicting_docker_packages "$repo_family"
+  case "$repo_family" in
+    ubuntu|debian)
+      setup_docker_apt_repository "$repo_family"
+      install_docker_packages docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      ;;
+    fedora|centos|rhel)
+      setup_docker_rpm_repository "$repo_family"
+      install_docker_packages docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      ;;
+  esac
+  ok "Docker Engine and Docker Compose v2 installed"
+}
+
+select_docker_command() {
+  if docker info >/dev/null 2>&1; then
+    DOCKER=(docker)
+    return 0
+  fi
+  if command_exists sudo && sudo docker info >/dev/null 2>&1; then
+    DOCKER=(sudo docker)
+    return 0
+  fi
+  return 1
+}
+
+ensure_docker_running() {
+  select_docker_command && return
+  info "Starting Docker service"
+  if command_exists systemctl; then
+    run_root_quiet "Starting Docker service" systemctl enable --now docker
+  elif command_exists rc-service; then
+    command_exists rc-update && run_root_quiet "Enabling Docker service" rc-update add docker default
+    run_root_quiet "Starting Docker service" rc-service docker start
+  elif command_exists service; then
+    run_root_quiet "Starting Docker service" service docker start
+  else
+    die "Docker is installed but no supported service manager was found. Start Docker, then run this installer again."
+  fi
+
+  local retries=5
+  while [[ "$retries" -gt 0 ]]; do
+    if select_docker_command; then
+      ok "Docker service is running"
+      return
+    fi
+    retries=$((retries - 1))
+    sleep 2
+  done
+  die "Docker is installed but the daemon is not reachable. Check ${LOG_FILE} for details."
+}
+
+ensure_docker_available() {
+  if ! command_exists docker; then
+    guide_start "${GRAY}Preparing Docker Engine:${NC}"
+    guide_blank
+    info "Docker was not found on this host"
+    ensure_curl_for_docker
+    install_docker_engine
+    guide_blank
+  fi
+  ensure_docker_running
+}
+
 json_string_field() {
   local file="$1" key="$2"
   sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$file" | head -n1
@@ -304,19 +515,13 @@ done
 show_header
 
 if [[ "$DRY_RUN" -eq 0 ]]; then
-  command -v curl >/dev/null || die "curl is required"
-  command -v openssl >/dev/null || die "openssl is required"
-  if ! command -v docker >/dev/null; then
-    die "Docker Engine with the Compose plugin is required"
-  fi
-  docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required"
-
-  DOCKER=(docker)
-  if ! docker info >/dev/null 2>&1; then
-    command -v sudo >/dev/null || die "Docker is not accessible by the current user"
-    sudo docker info >/dev/null 2>&1 || die "Docker is not accessible"
-    DOCKER=(sudo docker)
-  fi
+  umask 077
+  : >"$LOG_FILE" 2>/dev/null || die "Unable to create installer log at ${LOG_FILE}"
+  chmod 600 "$LOG_FILE" 2>/dev/null || true
+  ensure_docker_available
+  command_exists curl || die "curl is required"
+  command_exists openssl || die "openssl is required"
+  "${DOCKER[@]}" compose version >/dev/null 2>&1 || die "Docker Compose v2 is required"
 
   if [[ ! -d "$INSTALL_DIR" ]]; then
     if mkdir -p "$INSTALL_DIR" 2>/dev/null; then :; else sudo mkdir -p "$INSTALL_DIR"; sudo chown "$(id -u):$(id -g)" "$INSTALL_DIR"; fi

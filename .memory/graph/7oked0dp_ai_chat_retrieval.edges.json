@@ -3,43 +3,53 @@
   "edges": [
     {
       "from_id": "7oked0dp",
-      "to_id": "ph8ejel0",
-      "relation": "derived_from",
-      "weight": 0.72,
-      "reason": "Both discuss separation/refactor of AI web-search behavior into dedicated modules and tests; same area of AI gateway services.",
+      "to_id": "fgmxlp0p",
+      "relation": "same_area",
+      "weight": 0.6726,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1782520396384,
-      "updated_at": 1782520396384
+      "created_at": 1786064967958,
+      "updated_at": 1786064967958
     },
     {
       "from_id": "7oked0dp",
-      "to_id": "h8y5ou2d",
-      "relation": "derived_from",
-      "weight": 0.68,
-      "reason": "Relocates resource-search/find logic; same area of AI gateway resource/search refactor.",
+      "to_id": "8rqz22k0",
+      "relation": "same_area",
+      "weight": 0.5674,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1782520396384,
-      "updated_at": 1782520396384
+      "created_at": 1786064967958,
+      "updated_at": 1786064967958
     },
     {
       "from_id": "7oked0dp",
-      "to_id": "3b6g7z3k",
-      "relation": "depends_on",
-      "weight": 0.58,
-      "reason": "Backend database view/editor fixes interrelate with Postgres handling; same gateway database concerns.",
+      "to_id": "pstn8fla",
+      "relation": "same_area",
+      "weight": 0.5577,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1782520396384,
-      "updated_at": 1782520396384
+      "created_at": 1786064967958,
+      "updated_at": 1786064967958
     },
     {
       "from_id": "7oked0dp",
-      "to_id": "412x4uua",
-      "relation": "uses_service",
-      "weight": 0.5,
-      "reason": "Frontend API client refactor pattern used as precedent for service extraction; same_gateway frontend/backend collaboration.",
+      "to_id": "fk86zmru",
+      "relation": "same_area",
+      "weight": 0.5459,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1782520396384,
-      "updated_at": 1782520396384
+      "created_at": 1786064967958,
+      "updated_at": 1786064967958
+    },
+    {
+      "from_id": "7oked0dp",
+      "to_id": "duvbj7h2",
+      "relation": "same_area",
+      "weight": 0.4942,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967958,
+      "updated_at": 1786064967958
     }
   ]
 }

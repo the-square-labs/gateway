@@ -1,10 +1,10 @@
 import { RefreshCw, Save } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -115,10 +115,6 @@ export function NodeConfigTab({ nodeId, nodeStatus, actionLocked = false }: Node
     );
   }
 
-  if (loading) {
-    return <LoadingSpinner />;
-  }
-
   const hasChanges = configContent !== originalConfig;
 
   return (
@@ -127,12 +123,19 @@ export function NodeConfigTab({ nodeId, nodeStatus, actionLocked = false }: Node
       description="Edit and validate the node nginx configuration"
       actions={
         <div className="flex items-center gap-2">
-          <Button variant="ghost" onClick={handleTest} disabled={isTesting || actionLocked}>
+          <Button
+            variant="ghost"
+            onClick={handleTest}
+            disabled={loading || isTesting || actionLocked}
+          >
             <RefreshCw className={cn("h-4 w-4", isTesting && "animate-spin")} />
             Validate
           </Button>
           {canManage && (
-            <Button onClick={handleSave} disabled={isSaving || !hasChanges || actionLocked}>
+            <Button
+              onClick={handleSave}
+              disabled={loading || isSaving || !hasChanges || actionLocked}
+            >
               <Save className="h-4 w-4" />
               Save
             </Button>
@@ -143,21 +146,34 @@ export function NodeConfigTab({ nodeId, nodeStatus, actionLocked = false }: Node
       bodyClassName="flex min-h-0 flex-1"
       wrapHeader
     >
-      <CodeEditor
-        value={configContent}
-        onChange={
-          canManage && !actionLocked
-            ? (val) => {
-                setConfigContent(val);
-                setErrorLines([]);
-              }
-            : () => {}
-        }
-        readOnly={!canManage || actionLocked}
-        errorLines={errorLines}
-        minHeight="0px"
-        bordered={false}
-      />
+      {loading ? (
+        <div
+          className="flex min-h-0 flex-1 flex-col gap-3 p-4"
+          aria-label="Loading nginx configuration"
+        >
+          <Skeleton className="h-4 w-1/3" />
+          <Skeleton className="h-4 w-5/6" />
+          <Skeleton className="h-4 w-2/3" />
+          <Skeleton className="h-4 w-4/5" />
+          <Skeleton className="h-4 w-1/2" />
+        </div>
+      ) : (
+        <CodeEditor
+          value={configContent}
+          onChange={
+            canManage && !actionLocked
+              ? (val) => {
+                  setConfigContent(val);
+                  setErrorLines([]);
+                }
+              : () => {}
+          }
+          readOnly={!canManage || actionLocked}
+          errorLines={errorLines}
+          minHeight="0px"
+          bordered={false}
+        />
+      )}
     </PanelShell>
   );
 }

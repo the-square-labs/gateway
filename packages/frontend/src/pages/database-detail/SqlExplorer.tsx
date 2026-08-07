@@ -13,7 +13,6 @@ import {
   Settings,
 } from "lucide-react";
 import { EmptyState } from "@/components/common/EmptyState";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { DatabaseConnection } from "@/types";
 import { PostgresColumnSchemaDialog } from "./PostgresColumnSchemaDialog";
 import {
@@ -227,9 +227,21 @@ export function SqlExplorer({
           }
         >
           {loadingRows || !metadata ? (
-            <div className="flex min-h-40 flex-1 items-center justify-center gap-3 text-sm text-muted-foreground">
-              <LoadingSpinner className="" />
-              <span>Loading table rows...</span>
+            <div
+              className="flex min-h-40 flex-1 flex-col gap-3 p-4"
+              aria-label="Loading table rows"
+            >
+              {Array.from({ length: 6 }, (_, index) => (
+                <div
+                  key={index}
+                  className="grid grid-cols-[minmax(0,1fr)_88px_minmax(0,1fr)_36px] gap-3"
+                >
+                  <Skeleton className="h-8" />
+                  <Skeleton className="h-8" />
+                  <Skeleton className="h-8" />
+                  <Skeleton className="h-8" />
+                </div>
+              ))}
             </div>
           ) : (
             <>
@@ -456,11 +468,13 @@ export function SqlExplorer({
           )}
         </PanelShell>
       ) : loadingSchemas || loadingTables ? (
-        <div className="flex items-center justify-center gap-3 border border-border bg-card p-8 text-sm text-muted-foreground">
-          <LoadingSpinner className="" />
-          <span>
-            {loadingSchemas ? "Loading database schemas..." : "Loading database tables..."}
-          </span>
+        <div
+          className="space-y-3 border border-border bg-card p-4"
+          aria-label="Loading database explorer"
+        >
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-2/3" />
+          <Skeleton className="h-24 w-full" />
         </div>
       ) : (
         <EmptyState message={emptyExplorerMessage} />

@@ -107,7 +107,7 @@ mcpRoutes.post('/', async (c) => {
     issuedMcpSessionId: responseMcpSessionId,
     authType: auth.authType,
     clientId: auth.clientId,
-    eagerToolListing: c.get('mcpExtendedCompatibility') ?? false,
+    eagerToolListing: c.get('mcpExtendedCompatibility') ?? true,
   });
 
   await server.connect(transport);

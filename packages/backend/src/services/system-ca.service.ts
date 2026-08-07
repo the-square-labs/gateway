@@ -25,7 +25,13 @@ const SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
 const SYSTEM_CA_CN = 'Gateway Node CA';
 
 function collectGrpcServerSans(): string[] {
-  const values = ['localhost', hostname(), '127.0.0.1'];
+  // Do not infer the machine hostname here. In container deployments Docker
+  // replaces it on every recreated app container, while the generated TLS
+  // files survive on the Gateway data volume. Treating that ephemeral value as
+  // mandatory makes a healthy gRPC listener certificate look stale on every
+  // restart. Stable listener names must come from APP_URL, public addresses,
+  // explicit extra SANs, or the saved Gateway endpoint settings below.
+  const values = ['localhost', '127.0.0.1'];
 
   const appUrl = process.env.APP_URL;
   if (appUrl) {

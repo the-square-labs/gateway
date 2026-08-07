@@ -4,7 +4,6 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
@@ -186,10 +185,6 @@ export function AccessLists() {
     }
   };
 
-  if (isLoading) {
-    return <LoadingSpinner />;
-  }
-
   const accessListColumns: SimpleTableColumn<AccessList>[] = [
     {
       id: "name",
@@ -302,12 +297,14 @@ export function AccessLists() {
         </div>
 
         {/* Table */}
-        {accessLists.length > 0 ? (
+        {isLoading || accessLists.length > 0 ? (
           <div className="border border-border bg-card">
             <SimpleTable
               columns={accessListColumns}
               rows={accessLists}
               getRowKey={(al) => al.id}
+              loading={isLoading}
+              loadingMessage="Loading access lists"
               onRowClick={canEditAccessList ? openEdit : undefined}
             />
           </div>

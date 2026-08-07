@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { CommandPalettePageActions } from "@/components/common/CommandPalettePageActions";
+import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -65,11 +66,12 @@ export function LoggingSchemaDetail({
     });
   }, [schema]);
 
-  if (loading || !schema) {
+  if (loading) return <DetailPageSkeleton label="Loading logging schema" tabs={3} />;
+  if (!schema) {
     return (
       <PageTransition>
         <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
-          {loading ? "Loading logging schema..." : "Logging schema not found."}
+          Logging schema not found.
         </div>
       </PageTransition>
     );
@@ -254,11 +256,12 @@ export function LoggingEnvironmentDetail({
     setSettingsDraft(environment);
   }, [environment]);
 
-  if (loading || !environment) {
+  if (loading) return <DetailPageSkeleton label="Loading logging environment" tabs={3} />;
+  if (!environment) {
     return (
       <PageTransition>
         <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
-          {loading ? "Loading logging environment..." : "Logging environment not found."}
+          Logging environment not found.
         </div>
       </PageTransition>
     );

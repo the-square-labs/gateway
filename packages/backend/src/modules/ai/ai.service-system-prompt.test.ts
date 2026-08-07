@@ -228,6 +228,7 @@ describe('AIService system prompt', () => {
     expect(prompt).toContain('internal_documentation({ topic: "inference" })');
     expect(prompt).toContain('Never reuse Assistant/MCP credentials');
     expect(prompt).toContain('Use /api/inference/v1 for OpenAI-compatible clients');
+    expect(prompt).toContain('generalSettings.inference.harnessSpecificEndpointsEnabled');
   });
 
   it('warns Docker-scoped users to recover stale container IDs through resource search', async () => {

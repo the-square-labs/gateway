@@ -3,13 +3,53 @@
   "edges": [
     {
       "from_id": "vvdi4727",
-      "to_id": "ph8ejel0",
-      "relation": "same_area",
-      "weight": 0.55,
-      "reason": "AI/web-service refactor within gateway ecosystem; aligns with broader gateway modernization efforts.",
+      "to_id": "2npkkqwm",
+      "relation": "related_to",
+      "weight": 0.5222,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1782933291639,
-      "updated_at": 1782933291639
+      "created_at": 1786064967864,
+      "updated_at": 1786064967864
+    },
+    {
+      "from_id": "vvdi4727",
+      "to_id": "fgmxlp0p",
+      "relation": "same_area",
+      "weight": 0.4423,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967864,
+      "updated_at": 1786064967864
+    },
+    {
+      "from_id": "vvdi4727",
+      "to_id": "yfhytkcz",
+      "relation": "same_area",
+      "weight": 0.4106,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967864,
+      "updated_at": 1786064967864
+    },
+    {
+      "from_id": "vvdi4727",
+      "to_id": "huz2cldt",
+      "relation": "same_area",
+      "weight": 0.4105,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967864,
+      "updated_at": 1786064967864
+    },
+    {
+      "from_id": "vvdi4727",
+      "to_id": "nuc3c3hq",
+      "relation": "same_area",
+      "weight": 0.4072,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967864,
+      "updated_at": 1786064967864
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { ExternalLink, Loader2, Lock, RefreshCw, Shield } from "lucide-react";
+import { ExternalLink, Lock, RefreshCw, Shield } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { proxyHostRoute } from "@/lib/resource-routes";
@@ -200,8 +201,19 @@ export function DomainDetailDialog({
         </DialogHeader>
 
         {isLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+          <div className="space-y-4" aria-busy="true" aria-label="Loading domain details">
+            <Skeleton className="h-10 w-full" />
+            <div className="border border-border bg-card divide-y divide-border">
+              {Array.from({ length: 3 }, (_, index) => (
+                <div key={index} className="flex items-center justify-between gap-4 p-4">
+                  <div className="space-y-2">
+                    <Skeleton className="h-4 w-24" />
+                    <Skeleton className="h-3 w-48" />
+                  </div>
+                  <Skeleton className="h-5 w-10" />
+                </div>
+              ))}
+            </div>
           </div>
         ) : domain ? (
           <div className="space-y-4">

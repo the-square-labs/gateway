@@ -11,10 +11,9 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { CommandPalettePageActions } from "@/components/common/CommandPalettePageActions";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
+import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
@@ -39,6 +38,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import type { ProxyHostType, TemplateVariableDef } from "@/types";
@@ -435,64 +435,64 @@ export function NginxTemplateEdit() {
     setVariables((prev) => prev.filter((_, i) => i !== index));
   };
 
-  if (isLoading) {
-    return <LoadingSpinner />;
-  }
+  const headerActions = [
+    ...(!isBuiltin
+      ? [
+          {
+            id: "template:settings",
+            label: "Template settings",
+            icon: <Settings2 className="h-4 w-4" />,
+            onClick: () => setSettingsOpen(true),
+          },
+        ]
+      : []),
+    {
+      id: "template:test",
+      label: isTesting ? "Testing template" : "Test template",
+      icon: <FlaskConical className="h-4 w-4" />,
+      disabled: !content.trim() || isTesting,
+      onClick: handleTest,
+    },
+    ...(!isBuiltin
+      ? [
+          {
+            id: "template:save",
+            label: isSaving ? "Saving template" : "Save template",
+            icon: <Save className="h-4 w-4" />,
+            disabled: isSaving || !name.trim() || !content.trim(),
+            onClick: handleSave,
+          },
+        ]
+      : []),
+    {
+      id: "template:preview",
+      label: "Preview template",
+      icon: <Eye className="h-4 w-4" />,
+      disabled: !content.trim(),
+      onClick: handlePreview,
+      separatorBefore: true,
+    },
+    {
+      id: "template:cheatsheet",
+      label: "Variables cheatsheet",
+      icon: <HelpCircle className="h-4 w-4" />,
+      onClick: () => setCheatsheetOpen(true),
+    },
+  ];
+
+  if (isLoading) return <NginxTemplateEditorSkeleton />;
 
   return (
     <PageTransition>
       <div className="h-full flex flex-col p-6 gap-4 overflow-hidden">
-        <CommandPalettePageActions
-          actions={[
-            ...(!isBuiltin
-              ? [
-                  {
-                    id: "template:settings",
-                    label: "Template settings",
-                    icon: <Settings2 className="h-4 w-4" />,
-                    action: () => setSettingsOpen(true),
-                  },
-                ]
-              : []),
-            {
-              id: "template:test",
-              label: isTesting ? "Testing template" : "Test template",
-              icon: <FlaskConical className="h-4 w-4" />,
-              disabled: !content.trim() || isTesting,
-              action: handleTest,
-            },
-            ...(!isBuiltin
-              ? [
-                  {
-                    id: "template:save",
-                    label: isSaving ? "Saving template" : "Save template",
-                    icon: <Save className="h-4 w-4" />,
-                    disabled: isSaving || !name.trim() || !content.trim(),
-                    action: handleSave,
-                  },
-                ]
-              : []),
-            {
-              id: "template:preview",
-              label: "Preview template",
-              icon: <Eye className="h-4 w-4" />,
-              disabled: !content.trim(),
-              action: handlePreview,
-            },
-            {
-              id: "template:cheatsheet",
-              label: "Variables cheatsheet",
-              icon: <HelpCircle className="h-4 w-4" />,
-              action: () => setCheatsheetOpen(true),
-            },
-          ]}
-        />
-        <div className="flex flex-wrap items-center justify-between gap-2 shrink-0">
-          <div className="flex items-center gap-3">
+        <div className="flex min-w-0 shrink-0 items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
             <PageBackButton onClick={() => navigate(backHref)} />
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-bold">{isNew ? "Create Config Template" : name}</h1>
+                <h1 className="truncate text-2xl font-bold">
+                  {isNew ? "Create Config Template" : name}
+                </h1>
                 <Badge variant="secondary" size="inline" className="uppercase">
                   {type}
                 </Badge>
@@ -511,7 +511,7 @@ export function NginxTemplateEdit() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <ResponsiveHeaderActions actions={headerActions}>
             {!isBuiltin && (
               <Button variant="outline" onClick={() => setSettingsOpen(true)}>
                 <Settings2 className="h-4 w-4" />
@@ -549,7 +549,7 @@ export function NginxTemplateEdit() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-          </div>
+          </ResponsiveHeaderActions>
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_10rem] shrink-0">
@@ -825,6 +825,43 @@ export function NginxTemplateEdit() {
           </DialogContent>
         </Dialog>
       )}
+    </PageTransition>
+  );
+}
+
+function NginxTemplateEditorSkeleton() {
+  return (
+    <PageTransition>
+      <div
+        className="h-full flex flex-col gap-4 overflow-hidden p-6"
+        aria-label="Loading config template"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <Skeleton className="h-9 w-9 shrink-0" />
+            <div className="space-y-2">
+              <Skeleton className="h-7 w-64 max-w-[60vw]" />
+              <Skeleton className="h-4 w-80 max-w-[70vw]" />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Skeleton className="h-9 w-20" />
+            <Skeleton className="h-9 w-16" />
+          </div>
+        </div>
+        <div className="grid shrink-0 grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_10rem]">
+          <Skeleton className="h-10" />
+          <Skeleton className="h-10" />
+          <Skeleton className="h-10" />
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col gap-3 border border-border bg-card p-4">
+          <Skeleton className="h-4 w-1/3" />
+          <Skeleton className="h-4 w-5/6" />
+          <Skeleton className="h-4 w-2/3" />
+          <Skeleton className="h-4 w-4/5" />
+          <Skeleton className="h-4 w-1/2" />
+        </div>
+      </div>
     </PageTransition>
   );
 }

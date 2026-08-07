@@ -3,23 +3,53 @@
   "edges": [
     {
       "from_id": "gdptltym",
-      "to_id": "2tjfa2g5",
-      "relation": "same_area",
-      "weight": 0.72,
-      "reason": "Both specify server-resolved identity and scoped handling for Docker containers and deployments.",
+      "to_id": "myhj1f8i",
+      "relation": "related_to",
+      "weight": 0.5742,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1785966902898,
-      "updated_at": 1785966902898
+      "created_at": 1786064967294,
+      "updated_at": 1786064967294
     },
     {
       "from_id": "gdptltym",
       "to_id": "gahvf5k5",
-      "relation": "same_area",
-      "weight": 0.68,
-      "reason": "Both cover authenticated dashboard state, session-sensitive invalidation, and realtime authorization boundaries.",
+      "relation": "related_to",
+      "weight": 0.4908,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1785966902898,
-      "updated_at": 1785966902898
+      "created_at": 1786064967294,
+      "updated_at": 1786064967294
+    },
+    {
+      "from_id": "gdptltym",
+      "to_id": "2tjfa2g5",
+      "relation": "same_area",
+      "weight": 0.4738,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967294,
+      "updated_at": 1786064967294
+    },
+    {
+      "from_id": "gdptltym",
+      "to_id": "gnonxe58",
+      "relation": "related_to",
+      "weight": 0.4084,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967294,
+      "updated_at": 1786064967294
+    },
+    {
+      "from_id": "gdptltym",
+      "to_id": "asy6c7bj",
+      "relation": "related_to",
+      "weight": 0.3999,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967294,
+      "updated_at": 1786064967294
     }
   ]
 }

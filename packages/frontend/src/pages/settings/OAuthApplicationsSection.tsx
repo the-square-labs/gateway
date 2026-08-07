@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import {
   buildFinalScopes,
@@ -263,7 +264,7 @@ export function OAuthApplicationsSection({
         description="Applications you authorized to access Gateway with your account"
       >
         {loading ? (
-          <div className="p-4 text-sm text-muted-foreground">Loading OAuth applications...</div>
+          <OAuthApplicationRowsSkeleton />
         ) : authorizations.length === 0 ? (
           <EmptyState message="No OAuth applications authorized yet." embedded />
         ) : (
@@ -464,6 +465,25 @@ export function OAuthApplicationsSection({
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function OAuthApplicationRowsSkeleton() {
+  return (
+    <div className="divide-y divide-border" aria-label="Loading OAuth applications">
+      {Array.from({ length: 3 }, (_, index) => (
+        <div key={index} className="flex items-center justify-between gap-3 p-4 sm:gap-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <Skeleton className="h-10 w-10 shrink-0" />
+            <div className="space-y-2">
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-3 w-64 max-w-[60vw]" />
+            </div>
+          </div>
+          <Skeleton className="h-9 w-9 shrink-0" />
+        </div>
+      ))}
+    </div>
   );
 }
 

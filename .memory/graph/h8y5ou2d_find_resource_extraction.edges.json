@@ -5,31 +5,51 @@
       "from_id": "h8y5ou2d",
       "to_id": "ph8ejel0",
       "relation": "same_area",
-      "weight": 0.65,
-      "reason": "Web search extraction mirrors the AI service refactor within the gateway AI module; same area of resource search/web search concerns.",
+      "weight": 0.7061,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1781992362952,
-      "updated_at": 1781992362952
+      "created_at": 1786064967980,
+      "updated_at": 1786064967980
     },
     {
       "from_id": "h8y5ou2d",
-      "to_id": "sg6sqaui",
+      "to_id": "duvbj7h2",
       "relation": "same_workflow",
-      "weight": 0.58,
-      "reason": "First safe refactor pass extracting helpers from ai.service.ts; aligns with modular refactors in gateway AI services.",
+      "weight": 0.4988,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1781992362952,
-      "updated_at": 1781992362952
+      "created_at": 1786064967980,
+      "updated_at": 1786064967980
+    },
+    {
+      "from_id": "h8y5ou2d",
+      "to_id": "asy6c7bj",
+      "relation": "same_area",
+      "weight": 0.4749,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967980,
+      "updated_at": 1786064967980
     },
     {
       "from_id": "h8y5ou2d",
       "to_id": "412x4uua",
-      "relation": "depends_on",
-      "weight": 0.4,
-      "reason": "Frontend API client refactor cluster; backend/gateway changes often depend on API client contract stability.",
+      "relation": "same_area",
+      "weight": 0.442,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1781992362952,
-      "updated_at": 1781992362952
+      "created_at": 1786064967980,
+      "updated_at": 1786064967980
+    },
+    {
+      "from_id": "h8y5ou2d",
+      "to_id": "huz2cldt",
+      "relation": "same_workflow",
+      "weight": 0.3881,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1786064967980,
+      "updated_at": 1786064967980
     }
   ]
 }

@@ -165,7 +165,10 @@ describe('AIService maintenance tools', () => {
       updateConfig: vi.fn().mockResolvedValue({ serverEnabled: true, extendedCompatibility: true }),
     };
     const generalSettingsService = {
-      getConfig: vi.fn().mockResolvedValue({ features: { pkiEnabled: true, domainsEnabled: true } }),
+      getConfig: vi.fn().mockResolvedValue({
+        features: { pkiEnabled: true, domainsEnabled: true, inferenceEnabled: true },
+        inference: { harnessSpecificEndpointsEnabled: true },
+      }),
       updateConfig: vi.fn().mockResolvedValue({ features: { pkiEnabled: false, domainsEnabled: true } }),
     };
     const networkSettingsService = {
@@ -211,6 +214,10 @@ describe('AIService maintenance tools', () => {
         oidcAutoCreateUsers: true,
         mcpServerEnabled: false,
         mcpExtendedCompatibility: false,
+        generalSettings: {
+          features: { inferenceEnabled: true },
+          inference: { harnessSpecificEndpointsEnabled: true },
+        },
         availableGroups: [{ id: '00000000-0000-4000-8000-000000000001', name: 'viewer', isBuiltin: true }],
       },
       invalidateStores: [],

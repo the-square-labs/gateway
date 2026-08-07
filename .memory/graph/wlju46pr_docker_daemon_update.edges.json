@@ -10,6 +10,56 @@
       "source": "manual",
       "created_at": 1784761859355,
       "updated_at": 1784761859355
+    },
+    {
+      "from_id": "wlju46pr",
+      "to_id": "c8ql9nhv",
+      "relation": "uses_service",
+      "weight": 0.5482,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1786064968089,
+      "updated_at": 1786064968089
+    },
+    {
+      "from_id": "wlju46pr",
+      "to_id": "gnonxe58",
+      "relation": "same_area",
+      "weight": 0.4997,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064968089,
+      "updated_at": 1786064968089
+    },
+    {
+      "from_id": "wlju46pr",
+      "to_id": "nr9hvzr3",
+      "relation": "uses_service",
+      "weight": 0.4767,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1786064968089,
+      "updated_at": 1786064968089
+    },
+    {
+      "from_id": "wlju46pr",
+      "to_id": "muapjlzr",
+      "relation": "uses_service",
+      "weight": 0.4627,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1786064968089,
+      "updated_at": 1786064968089
+    },
+    {
+      "from_id": "wlju46pr",
+      "to_id": "zq6da64z",
+      "relation": "uses_service",
+      "weight": 0.4561,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1786064968089,
+      "updated_at": 1786064968089
     }
   ]
 }

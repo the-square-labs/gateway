@@ -3,53 +3,53 @@
   "edges": [
     {
       "from_id": "nuc3c3hq",
-      "to_id": "7oked0dp",
-      "relation": "same_area",
-      "weight": 0.5,
-      "reason": "Both reside in gateway project and address AI/chat retrieval and search tooling within gateway context.",
+      "to_id": "92pnq26b",
+      "relation": "related_to",
+      "weight": 0.4638,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1783275576368,
-      "updated_at": 1783275576368
-    },
-    {
-      "from_id": "nuc3c3hq",
-      "to_id": "duvbj7h2",
-      "relation": "same_area",
-      "weight": 0.5,
-      "reason": "Gateway AI tools refactor within gateway project; related to overall gateway memory space.",
-      "source": "auto",
-      "created_at": 1783275576368,
-      "updated_at": 1783275576368
-    },
-    {
-      "from_id": "nuc3c3hq",
-      "to_id": "hh3v2vdi",
-      "relation": "same_area",
-      "weight": 0.5,
-      "reason": "GitLab/docker/registry verification context within gateway; related to gateway verification patterns.",
-      "source": "auto",
-      "created_at": 1783275576368,
-      "updated_at": 1783275576368
+      "created_at": 1786064967793,
+      "updated_at": 1786064967793
     },
     {
       "from_id": "nuc3c3hq",
       "to_id": "vrch49nc",
-      "relation": "same_area",
-      "weight": 0.5,
-      "reason": "Both reside in gateway project and address verification/security patterns.",
+      "relation": "related_to",
+      "weight": 0.4453,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1783275576368,
-      "updated_at": 1783275576368
+      "created_at": 1786064967793,
+      "updated_at": 1786064967793
     },
     {
       "from_id": "nuc3c3hq",
-      "to_id": "yfhytkcz",
+      "to_id": "7oked0dp",
       "relation": "same_area",
-      "weight": 0.5,
-      "reason": "Gateway enrollment/security pattern changes; same project area as sandbox artifact.",
+      "weight": 0.4402,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1783275576368,
-      "updated_at": 1783275576368
+      "created_at": 1786064967793,
+      "updated_at": 1786064967793
+    },
+    {
+      "from_id": "nuc3c3hq",
+      "to_id": "b3glzfjy",
+      "relation": "same_area",
+      "weight": 0.4395,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967793,
+      "updated_at": 1786064967793
+    },
+    {
+      "from_id": "nuc3c3hq",
+      "to_id": "fgmxlp0p",
+      "relation": "same_area",
+      "weight": 0.4347,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967793,
+      "updated_at": 1786064967793
     }
   ]
 }

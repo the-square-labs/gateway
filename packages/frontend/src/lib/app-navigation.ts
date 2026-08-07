@@ -64,6 +64,7 @@ export interface AppNavigationVisibility {
   hasLowInferenceUsage?: boolean;
   statusPageEnabled?: boolean;
   hasNginxNodes?: boolean;
+  hasCloudflareIntegration?: boolean;
   hasDockerNodes?: boolean;
 }
 
@@ -309,7 +310,7 @@ export function canAccessNavigationItem(
     case "proxy-hosts":
       return hasScopeBase(scopes, "proxy:view") || scopeMatches(scopes, "proxy:folders:manage");
     case "domains":
-      return hasScopeBase(scopes, "domains:view");
+      return hasScopeBase(scopes, "domains:view") && context.hasCloudflareIntegration === true;
     case "ssl-certificates":
       return hasScopeBase(scopes, "ssl:cert:view");
     case "authorities":

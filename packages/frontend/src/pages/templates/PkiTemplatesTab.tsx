@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageTransition } from "@/components/common/PageTransition";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
@@ -336,10 +335,6 @@ export function PkiTemplatesTab({
     return null;
   }
 
-  if (isLoading) {
-    return <LoadingSpinner />;
-  }
-
   const content = (
     <>
       <div className={embedded ? "space-y-4" : "h-full overflow-y-auto p-6 space-y-4"}>
@@ -359,12 +354,14 @@ export function PkiTemplatesTab({
         )}
 
         {/* Template grid */}
-        {templates.length > 0 ? (
+        {isLoading || templates.length > 0 ? (
           <div className="border border-border bg-card">
             <SimpleTable
               columns={templateColumns}
               rows={templates}
               getRowKey={(template) => template.id}
+              loading={isLoading}
+              loadingMessage="Loading certificate templates"
               onRowClick={(template) => {
                 if (canEditTemplates && !template.isBuiltin) openEdit(template);
               }}

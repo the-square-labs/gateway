@@ -44,6 +44,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -373,7 +374,7 @@ function BrowserSessionsPanel() {
     >
       <div className="divide-y divide-border">
         {loading ? (
-          <p className="px-4 py-3 text-sm text-muted-foreground">Loading sessions…</p>
+          <SessionRowsSkeleton />
         ) : sessions.length === 0 ? (
           <p className="px-4 py-3 text-sm text-muted-foreground">No active browser sessions</p>
         ) : (
@@ -416,6 +417,28 @@ function BrowserSessionsPanel() {
         )}
       </div>
     </PanelShell>
+  );
+}
+
+function SessionRowsSkeleton() {
+  return (
+    <div aria-label="Loading active sessions">
+      {Array.from({ length: 3 }, (_, index) => (
+        <div
+          key={index}
+          className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div className="flex min-w-0 items-center gap-4">
+            <Skeleton className="h-10 w-10 shrink-0" />
+            <div className="space-y-2">
+              <Skeleton className="h-4 w-36" />
+              <Skeleton className="h-3 w-64 max-w-[60vw]" />
+            </div>
+          </div>
+          <Skeleton className="h-9 w-9 shrink-0" />
+        </div>
+      ))}
+    </div>
   );
 }
 

@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -159,8 +158,6 @@ export function AlertsTab({
     }
   }, [canManage, openCreate, openCreateToken]);
 
-  if (isLoading) return <LoadingSpinner />;
-
   const visibleRules = canRead ? rules : [];
   const columns: SimpleTableColumn<AlertRule>[] = [
     {
@@ -251,17 +248,19 @@ export function AlertsTab({
       <p className="text-sm text-muted-foreground">
         Alerts define conditions that trigger notifications to webhooks.
       </p>
-      {visibleRules.length === 0 ? (
-        <EmptyState message="No alerts configured. Create an alert to start receiving notifications." />
-      ) : (
+      {isLoading || visibleRules.length > 0 ? (
         <div className="border border-border bg-card">
           <SimpleTable
             columns={columns}
             rows={visibleRules}
             getRowKey={(rule) => rule.id}
+            loading={isLoading}
+            loadingMessage="Loading alerts"
             onRowClick={canManage ? openEdit : undefined}
           />
         </div>
+      ) : (
+        <EmptyState message="No alerts configured. Create an alert to start receiving notifications." />
       )}
       <AlertDialog
         open={dialogOpen}

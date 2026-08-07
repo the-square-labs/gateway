@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import {
@@ -149,7 +150,8 @@ export function DockerDeploymentDetail({
   const [pinOpen, setPinOpen] = useState(false);
   const [migrationOpen, setMigrationOpen] = useState(false);
   const [restoredMigration, setRestoredMigration] = useState<DockerMigration | null>(null);
-  const { isPinnedDashboard, isPinnedSidebar, toggleDashboard, toggleSidebar, updateMeta } = usePinnedContainersStore();
+  const { isPinnedDashboard, isPinnedSidebar, toggleDashboard, toggleSidebar, updateMeta } =
+    usePinnedContainersStore();
 
   const [activeTab, setActiveTab] = useUrlTab(
     ["overview", "logs", "console", "files", "stats", "environment", "slots", "settings", "config"],
@@ -515,11 +517,7 @@ export function DockerDeploymentDetail({
     });
   };
 
-  if (loading && !deployment) {
-    return (
-      <div className="flex items-center justify-center py-16 text-muted-foreground">Loading...</div>
-    );
-  }
+  if (loading && !deployment) return <DetailPageSkeleton label="Loading deployment" tabs={5} />;
 
   if (!deployment) return null;
 
@@ -894,7 +892,9 @@ export function DockerDeploymentDetail({
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium">Add to dashboard</p>
-                <p className="text-xs text-muted-foreground">Show compact status on the dashboard</p>
+                <p className="text-xs text-muted-foreground">
+                  Show compact status on the dashboard
+                </p>
               </div>
               <Switch
                 checked={isPinnedDashboard(deployment.id)}

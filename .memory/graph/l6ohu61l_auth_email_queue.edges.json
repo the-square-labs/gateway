@@ -3,23 +3,53 @@
   "edges": [
     {
       "from_id": "l6ohu61l",
-      "to_id": "yfhytkcz",
-      "relation": "same_area",
-      "weight": 0.6,
-      "reason": "Both entries concern gateway authentication workflows and token/credential handling (node enrollment tokens vs. auth email delivery and related auth lifecycle concerns).",
+      "to_id": "a8l959n1",
+      "relation": "related_to",
+      "weight": 0.3577,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1785703093047,
-      "updated_at": 1785703093047
+      "created_at": 1786064967465,
+      "updated_at": 1786064967465
     },
     {
       "from_id": "l6ohu61l",
-      "to_id": "412x4uua",
-      "relation": "depends_on",
-      "weight": 0.5,
-      "reason": "AuthService.listUsers() must expose authMethod for correct frontend behavior; frontend ApiClient surface/contract changes could affect or need to include this field.",
+      "to_id": "gahvf5k5",
+      "relation": "related_to",
+      "weight": 0.3086,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1785703093047,
-      "updated_at": 1785703093047
+      "created_at": 1786064967465,
+      "updated_at": 1786064967465
+    },
+    {
+      "from_id": "l6ohu61l",
+      "to_id": "elp4yliv",
+      "relation": "related_to",
+      "weight": 0.2834,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967465,
+      "updated_at": 1786064967465
+    },
+    {
+      "from_id": "l6ohu61l",
+      "to_id": "yjerrsgn",
+      "relation": "related_to",
+      "weight": 0.2804,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967465,
+      "updated_at": 1786064967465
+    },
+    {
+      "from_id": "l6ohu61l",
+      "to_id": "b3glzfjy",
+      "relation": "related_to",
+      "weight": 0.2778,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967465,
+      "updated_at": 1786064967465
     }
   ]
 }

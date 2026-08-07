@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
@@ -858,31 +857,24 @@ export function AuditLog({
           </div>
         </div>
 
-        {isLoading && entries.length === 0 ? (
-          <LoadingSpinner />
-        ) : (
-          <div className="flex-1 min-h-0">
-            <DataTable
-              columns={columns}
-              data={entries}
-              keyFn={(e) => e.id}
-              onRowClick={openEntryDetails}
-              scrollRef={scrollRef}
-              horizontalScroll
-              minWidth="1000px"
-              emptyMessage="No audit log entries found"
-              footer={
-                <div ref={sentinelRef} className="py-4 text-center text-xs text-muted-foreground">
-                  {loadingMore
-                    ? "Loading more…"
-                    : !hasMore && entries.length > 0
-                      ? "End of log"
-                      : ""}
-                </div>
-              }
-            />
-          </div>
-        )}
+        <div className="flex-1 min-h-0">
+          <DataTable
+            columns={columns}
+            data={entries}
+            keyFn={(e) => e.id}
+            loading={isLoading && entries.length === 0}
+            onRowClick={openEntryDetails}
+            scrollRef={scrollRef}
+            horizontalScroll
+            minWidth="1000px"
+            emptyMessage="No audit log entries found"
+            footer={
+              <div ref={sentinelRef} className="py-4 text-center text-xs text-muted-foreground">
+                {loadingMore ? "Loading more…" : !hasMore && entries.length > 0 ? "End of log" : ""}
+              </div>
+            }
+          />
+        </div>
       </div>
 
       <Dialog open={configOpen} onOpenChange={handleConfigureOpenChange}>

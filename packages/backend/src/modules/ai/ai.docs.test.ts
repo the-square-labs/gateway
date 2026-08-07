@@ -162,6 +162,9 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
       'npx -y @wiolett/gateway-inference@latest setup claude-code'
     );
+    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
+      'generalSettings.inference.harnessSpecificEndpointsEnabled'
+    );
     expect(getInternalDocumentation('inference', ['inference:use']).content).toContain('Claude Code 2.1.129 or newer');
     expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
       'Claude Desktop and the Claude Code VS Code extension'

@@ -16,7 +16,6 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
@@ -582,10 +581,6 @@ export function AdminGroups({
     },
   ];
 
-  if (isLoading) {
-    return <LoadingSpinner />;
-  }
-
   const content = (
     <>
       <div className={embedded ? "space-y-4" : "h-full overflow-y-auto p-6 space-y-4"}>
@@ -596,8 +591,9 @@ export function AdminGroups({
               <div>
                 <h1 className="text-2xl font-bold">Permission Groups</h1>
                 <p className="text-sm text-muted-foreground">
-                  {groups.length} group{groups.length !== 1 ? "s" : ""} &middot; Manage scoped
-                  access control
+                  {isLoading
+                    ? "Loading permission groups..."
+                    : `${groups.length} group${groups.length !== 1 ? "s" : ""} · Manage scoped access control`}
                 </p>
               </div>
             </div>
@@ -652,7 +648,7 @@ export function AdminGroups({
             hasActiveFilters,
             onReset: () => setListSearch(""),
           }}
-          loading={false}
+          loading={isLoading}
           loadingLabel="Loading permission groups..."
           emptyState={
             <EmptyState

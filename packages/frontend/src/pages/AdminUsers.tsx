@@ -17,7 +17,6 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
@@ -464,10 +463,6 @@ export function AdminUsers({
     },
   ];
 
-  if (isLoading) {
-    return <LoadingSpinner />;
-  }
-
   // Group users by their group name for summary
   const groupCounts = new Map<string, number>();
   let blockedCount = 0;
@@ -492,8 +487,10 @@ export function AdminUsers({
             <div>
               <h1 className="text-2xl font-bold">Users</h1>
               <p className="text-sm text-muted-foreground">
-                {users.length} user{users.length !== 1 ? "s" : ""}
-                {summaryParts.length > 0 && <> &middot; {summaryParts.join(", ")}</>}
+                {isLoading
+                  ? "Loading users..."
+                  : `${users.length} user${users.length !== 1 ? "s" : ""}`}
+                {!isLoading && summaryParts.length > 0 && <> &middot; {summaryParts.join(", ")}</>}
               </p>
             </div>
           </div>
@@ -556,7 +553,7 @@ export function AdminUsers({
           hasActiveFilters,
           onReset: () => setSearch(""),
         }}
-        loading={false}
+        loading={isLoading}
         loadingLabel="Loading users..."
         emptyState={
           <EmptyState

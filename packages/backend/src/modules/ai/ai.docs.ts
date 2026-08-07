@@ -1015,7 +1015,7 @@ Use \`get_gateway_settings\` before changing control-plane settings and \`update
 ## MCP
 - mcpServerEnabled enables the remote MCP endpoint. MCP still requires an OAuth token issued for the MCP resource and the owning user must have \`mcp:use\`.
 - The default MCP mode starts with a compact core toolset. \`discover_tools\` activates domain toolsets for the current session, Gateway sends \`notifications/tools/list_changed\`, and the client should refresh \`tools/list\`.
-- mcpExtendedCompatibility is a fallback for clients that ignore list-change notifications. It returns every OAuth-scoped tool in the initial \`tools/list\` response and omits \`discover_tools\`. This may expose hundreds of tool schemas, so keep it disabled for compliant clients.
+- mcpExtendedCompatibility is enabled by default. It returns every OAuth-scoped tool in the initial \`tools/list\` response and omits \`discover_tools\`. Disable it only when a harness loads every tool schema into its context at once and exhausts that context; disabling it can leave that harness unable to use some Gateway tools.
 
 ## General And Network Settings
 - generalSettings contains feature flags and shared limits. Inference is disabled by default under Settings > Gateway settings > General settings, and its harness-specific endpoints are configured separately under Settings > Inference.
@@ -1117,7 +1117,7 @@ No global installation or PATH change is required:
 npx -y @wiolett/gateway-inference@latest
 \`\`\`
 
-An administrator must first enable **Harness-specific endpoints** in **Settings > Inference** and accept the alpha-risk warning. Harness APIs track unstable upstream contracts and may stop working after a client update; the base OpenAI-compatible adapter does not require this toggle. The interactive manager asks for the Gateway URL, completes isolated OAuth/PKCE, and can configure, diagnose, repair, or remove supported harness integrations. The only direct commands are \`login [gateway]\`, \`logout\`, and \`setup [harness]\`. If the user does not name a harness, ask whether they use Codex or Claude Code before giving harness-specific instructions.
+An administrator must first enable **Harness-specific endpoints** in **Settings > Inference** and accept the alpha-risk warning. Harness APIs track unstable upstream contracts and may stop working after a client update; the base OpenAI-compatible adapter does not require this toggle. Before giving harness setup instructions, call \`get_gateway_settings\` when it is available and report both \`generalSettings.features.inferenceEnabled\` and \`generalSettings.inference.harnessSpecificEndpointsEnabled\`. Without that read permission, do not guess either value: explain that an administrator must confirm them. The interactive manager asks for the Gateway URL, completes isolated OAuth/PKCE, and can configure, diagnose, repair, or remove supported harness integrations. The only direct commands are \`login [gateway]\`, \`logout\`, and \`setup [harness]\`. If the user does not name a harness, ask whether they use Codex or Claude Code before giving harness-specific instructions.
 
 #### Codex CLI and Desktop
 

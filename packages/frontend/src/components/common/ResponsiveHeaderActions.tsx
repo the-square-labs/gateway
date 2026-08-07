@@ -1,5 +1,5 @@
 import { EllipsisVertical } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -19,6 +19,14 @@ export interface ResponsiveHeaderAction {
   disabledReason?: string;
   destructive?: boolean;
   separatorBefore?: boolean;
+}
+
+const MIN_HEADER_CONTENT_WIDTH_PX = 320;
+
+export function shouldCollapseHeaderActions(headerWidth: number, actionsWidth: number): boolean {
+  return (
+    headerWidth > 0 && actionsWidth > 0 && headerWidth < actionsWidth + MIN_HEADER_CONTENT_WIDTH_PX
+  );
 }
 
 export function HeaderOverflowMenu({
@@ -61,6 +69,12 @@ export function ResponsiveHeaderActions({
   actions: ResponsiveHeaderAction[];
   className?: string;
 }) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const actionsWidthRef = useRef(0);
+  const [collapsed, setCollapsed] = useState(false);
+  const actionSignature = actions.map((action) => action.id ?? action.label).join("|");
+
   useRegisterCommandPalettePageActions(
     actions.map((action, index) => ({
       id:
@@ -73,26 +87,54 @@ export function ResponsiveHeaderActions({
     }))
   );
 
+  useLayoutEffect(() => {
+    if (!actionSignature) return;
+
+    const root = rootRef.current;
+    const header = root?.parentElement;
+    if (!root || !header) return;
+
+    const updateLayout = () => {
+      if (actionsRef.current) {
+        actionsWidthRef.current = actionsRef.current.getBoundingClientRect().width;
+      }
+
+      const nextCollapsed = shouldCollapseHeaderActions(
+        header.getBoundingClientRect().width,
+        actionsWidthRef.current
+      );
+      setCollapsed((current) => (current === nextCollapsed ? current : nextCollapsed));
+    };
+
+    updateLayout();
+    if (typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(updateLayout);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, [actionSignature]);
+
   if (actions.length === 0) return null;
 
   return (
-    <>
-      <div className={`hidden items-center gap-2 sm:flex ${className}`}>{children}</div>
-      <div className="ml-auto flex shrink-0 self-center sm:hidden">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="icon" aria-label="Page actions">
-              <EllipsisVertical className="h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {actions.map((action) => (
-              <ResponsiveHeaderActionItem key={action.label} action={action} />
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-    </>
+    <div ref={rootRef} className="ml-auto flex shrink-0 self-center">
+      {collapsed ? (
+        <HeaderOverflowMenu actions={actions} ariaLabel="Page actions" />
+      ) : (
+        <div ref={actionsRef} className={`flex items-center gap-2 ${className}`}>
+          {children}
+        </div>
+      )}
+      {collapsed && (
+        <div
+          ref={actionsRef}
+          aria-hidden="true"
+          className="pointer-events-none fixed -left-full top-0 flex w-max items-center gap-2 invisible"
+        >
+          {children}
+        </div>
+      )}
+    </div>
   );
 }
 

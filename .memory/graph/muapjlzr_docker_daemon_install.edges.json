@@ -10,6 +10,56 @@
       "source": "manual",
       "created_at": 1784761859355,
       "updated_at": 1784761859355
+    },
+    {
+      "from_id": "muapjlzr",
+      "to_id": "zq6da64z",
+      "relation": "same_area",
+      "weight": 0.6078,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064968100,
+      "updated_at": 1786064968100
+    },
+    {
+      "from_id": "muapjlzr",
+      "to_id": "e5deql0f",
+      "relation": "same_area",
+      "weight": 0.4822,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064968100,
+      "updated_at": 1786064968100
+    },
+    {
+      "from_id": "muapjlzr",
+      "to_id": "wlju46pr",
+      "relation": "same_area",
+      "weight": 0.4627,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064968100,
+      "updated_at": 1786064968100
+    },
+    {
+      "from_id": "muapjlzr",
+      "to_id": "h0g48t5u",
+      "relation": "same_area",
+      "weight": 0.4379,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064968100,
+      "updated_at": 1786064968100
+    },
+    {
+      "from_id": "muapjlzr",
+      "to_id": "gnonxe58",
+      "relation": "same_area",
+      "weight": 0.4234,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064968100,
+      "updated_at": 1786064968100
     }
   ]
 }

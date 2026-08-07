@@ -1,5 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Fragment, type ReactNode, useEffect, useMemo, useRef } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 export interface DataTableColumn<T> {
@@ -41,6 +42,11 @@ interface DataTableProps<T> {
   minWidth?: string;
   /** Remove the outer card chrome when another shared shell owns the border. */
   embedded?: boolean;
+  /** Additional classes for the table shell (for example, `h-full` in page layouts). */
+  className?: string;
+  /** Keep column geometry visible while a permitted collection is loading. */
+  loading?: boolean;
+  loadingRows?: number;
 }
 
 type FlatItem<T> =
@@ -65,6 +71,9 @@ export function DataTable<T>({
   horizontalScroll = false,
   minWidth,
   embedded = false,
+  className,
+  loading = false,
+  loadingRows = 6,
 }: DataTableProps<T>) {
   const internalRef = useRef<HTMLDivElement>(null);
   const containerRef = scrollRef ?? internalRef;
@@ -108,6 +117,53 @@ export function DataTable<T>({
     virtualizer.measure();
   }, [virtualizer]);
 
+  if (loading) {
+    return (
+      <div
+        className={cn(
+          "flex min-h-0 max-h-full flex-col overflow-hidden bg-card",
+          !embedded && "rounded-lg border border-border",
+          className
+        )}
+        aria-busy="true"
+      >
+        <div className={horizontalScroll ? "overflow-auto" : "overflow-y-auto"}>
+          <div
+            className={horizontalScroll ? "min-w-max" : ""}
+            style={horizontalScroll && minWidth ? { minWidth } : undefined}
+          >
+            <div
+              className="grid bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground shadow-[inset_0_-1px_0_var(--color-border)]"
+              style={{ gridTemplateColumns }}
+            >
+              {columns.map((column) => (
+                <div
+                  key={column.key}
+                  className={`${column.align === "right" ? "text-right" : "text-left"} px-4 py-3 font-medium`}
+                >
+                  {column.header}
+                </div>
+              ))}
+            </div>
+            {Array.from({ length: loadingRows }, (_, index) => (
+              <div
+                key={index}
+                className="grid border-b border-border last:border-b-0"
+                style={{ gridTemplateColumns }}
+              >
+                {columns.map((column, columnIndex) => (
+                  <div key={column.key} className="px-4 py-3">
+                    <Skeleton className={`h-4 ${columnIndex === 0 ? "w-3/4" : "w-2/3"}`} />
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (data.length === 0) {
     return (
       <div
@@ -128,7 +184,8 @@ export function DataTable<T>({
     <div
       className={cn(
         "flex min-h-0 max-h-full flex-col overflow-hidden bg-card",
-        !embedded && "rounded-lg border border-border"
+        !embedded && "rounded-lg border border-border",
+        className
       )}
     >
       <div

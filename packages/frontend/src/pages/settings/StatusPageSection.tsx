@@ -220,6 +220,7 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
           label="Enabled"
           description="Expose the public status page through the configured domain"
           controlClassName="w-auto"
+          preserveRow
         >
           <Switch
             checked={config.enabled}
@@ -334,15 +335,24 @@ function SettingsRow({
   label,
   description,
   children,
-  controlClassName = "w-full sm:w-[28rem]",
+  controlClassName = "w-full md:w-[28rem]",
+  preserveRow = false,
 }: {
   label: string;
   description: string;
   children: React.ReactNode;
   controlClassName?: string;
+  /** Keep compact controls, such as a switch, aligned with their description at every width. */
+  preserveRow?: boolean;
 }) {
   return (
-    <label className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+    <label
+      className={
+        preserveRow
+          ? "flex flex-row items-center justify-between gap-4 px-4 py-3"
+          : "flex flex-col gap-3 px-4 py-3 md:flex-row md:items-center md:justify-between md:gap-4"
+      }
+    >
       <span className="min-w-0">
         <span className="block text-sm font-medium">{label}</span>
         <span className="mt-0.5 block text-xs text-muted-foreground">{description}</span>

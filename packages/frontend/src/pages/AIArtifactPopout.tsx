@@ -1,4 +1,4 @@
-import { Check, ClipboardCopy, Download, Loader2 } from "lucide-react";
+import { Check, ClipboardCopy, Download } from "lucide-react";
 import {
   type MouseEvent,
   type PointerEvent,
@@ -11,6 +11,7 @@ import { useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { imageMimeForFile } from "@/lib/file-types";
 
@@ -367,9 +368,13 @@ export function AIArtifactPopout() {
       </div>
 
       {isLoading ? (
-        <div className="flex flex-1 items-center justify-center text-muted-foreground">
-          <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-          Reading artifact...
+        <div
+          className="flex min-h-0 flex-1 flex-col gap-4 p-4"
+          aria-busy="true"
+          aria-label="Reading artifact"
+        >
+          <Skeleton className="h-5 w-48" />
+          <Skeleton className="min-h-0 flex-1 w-full" />
         </div>
       ) : error ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center text-sm text-muted-foreground">

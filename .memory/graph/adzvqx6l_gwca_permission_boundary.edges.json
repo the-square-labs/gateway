@@ -5,31 +5,51 @@
       "from_id": "adzvqx6l",
       "to_id": "b3glzfjy",
       "relation": "related_to",
-      "weight": 0.9,
-      "reason": "Both cover gateway security/permission boundaries and handling of secrets and sensitive data; the export permission details interact with the broader remediation decisions and data-protection policies.",
+      "weight": 0.3811,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1785532682326,
-      "updated_at": 1785532682326
+      "created_at": 1786064967488,
+      "updated_at": 1786064967488
+    },
+    {
+      "from_id": "adzvqx6l",
+      "to_id": "qz6ixfnq",
+      "relation": "related_to",
+      "weight": 0.3595,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967488,
+      "updated_at": 1786064967488
     },
     {
       "from_id": "adzvqx6l",
       "to_id": "kk05lizc",
       "relation": "related_to",
-      "weight": 0.6,
-      "reason": "Env and secret persistence/back-end handling affects what data is available for container exports and how docker:containers:files and docker:containers:environment should be enforced.",
+      "weight": 0.3471,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1785532682326,
-      "updated_at": 1785532682326
+      "created_at": 1786064967488,
+      "updated_at": 1786064967488
     },
     {
       "from_id": "adzvqx6l",
-      "to_id": "nuc3c3hq",
+      "to_id": "7rchqhpz",
       "relation": "related_to",
-      "weight": 0.3,
-      "reason": "Secure artifact and file-access patterns are relevant to implementing safe export mechanics (avoid path-based access and ensure secrets handling is hardened).",
+      "weight": 0.3185,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1785532682326,
-      "updated_at": 1785532682326
+      "created_at": 1786064967488,
+      "updated_at": 1786064967488
+    },
+    {
+      "from_id": "adzvqx6l",
+      "to_id": "c8ql9nhv",
+      "relation": "related_to",
+      "weight": 0.3158,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967488,
+      "updated_at": 1786064967488
     }
   ]
 }

@@ -30,7 +30,6 @@ function createCertificatePair(
     clientAuth = false,
     altNames = [
       { type: 2, value: 'localhost' },
-      { type: 2, value: hostname() },
       { type: 7, ip: '127.0.0.1' },
     ],
   } = options;
@@ -169,6 +168,18 @@ describe('SystemCAService.ensureGrpcServerCert', () => {
     );
   });
 
+  it('does not include the process hostname in automatic gRPC TLS SANs', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gateway-system-ca-test-'));
+    tempDirs.push(dir);
+    const certPath = join(dir, 'grpc-server.crt');
+    const keyPath = join(dir, 'grpc-server.key');
+    const { service, certService } = createService([[{ id: 'system-ca-id' }]]);
+
+    await service.ensureGrpcServerCert(certPath, keyPath);
+
+    expect(certService.issueCertificate.mock.calls[0]?.[0].sans).not.toContain(hostname());
+  });
+
   it('combines gRPC endpoint settings with existing environment SANs', async () => {
     process.env.APP_URL = 'https://gateway.example.com';
     process.env.PUBLIC_IPV4 = '203.0.113.10';
@@ -282,7 +293,6 @@ describe('SystemCAService.ensureGrpcServerCert', () => {
     const { caPem, certPem, keyPem } = createCertificatePair({
       altNames: [
         { type: 2, value: 'localhost' },
-        { type: 2, value: hostname() },
         { type: 7, ip: '127.0.0.1' },
         { type: 2, value: '203.0.113.10' },
       ],
@@ -302,7 +312,6 @@ describe('SystemCAService.ensureGrpcServerCert', () => {
     const { caPem, certPem, keyPem } = createCertificatePair({
       altNames: [
         { type: 2, value: 'localhost' },
-        { type: 2, value: hostname() },
         { type: 7, ip: '127.0.0.1' },
         { type: 2, value: 'old.example.com' },
       ],

@@ -3,33 +3,33 @@
   "edges": [
     {
       "from_id": "evv95a8g",
-      "to_id": "fk86zmru",
-      "relation": "same_area",
-      "weight": 0.3707,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1783269495739,
-      "updated_at": 1783269495739
-    },
-    {
-      "from_id": "evv95a8g",
       "to_id": "hh3v2vdi",
       "relation": "related_to",
       "weight": 0.4555,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1783269495739,
-      "updated_at": 1783269495739
+      "created_at": 1786064967805,
+      "updated_at": 1786064967805
     },
     {
       "from_id": "evv95a8g",
-      "to_id": "ph8ejel0",
-      "relation": "related_to",
-      "weight": 0.3694,
-      "reason": "The memories are similar enough to be useful related context.",
+      "to_id": "w75b8az4",
+      "relation": "same_area",
+      "weight": 0.4275,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1783269495739,
-      "updated_at": 1783269495739
+      "created_at": 1786064967805,
+      "updated_at": 1786064967805
+    },
+    {
+      "from_id": "evv95a8g",
+      "to_id": "h130czul",
+      "relation": "same_area",
+      "weight": 0.4222,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967805,
+      "updated_at": 1786064967805
     },
     {
       "from_id": "evv95a8g",
@@ -38,8 +38,18 @@
       "weight": 0.384,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1783269495739,
-      "updated_at": 1783269495739
+      "created_at": 1786064967805,
+      "updated_at": 1786064967805
+    },
+    {
+      "from_id": "evv95a8g",
+      "to_id": "fk86zmru",
+      "relation": "same_area",
+      "weight": 0.3707,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967805,
+      "updated_at": 1786064967805
     }
   ]
 }

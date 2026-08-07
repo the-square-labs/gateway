@@ -1,0 +1,55 @@
+{
+  "file_name": "e5deql0f_docker_installer_provisioning",
+  "edges": [
+    {
+      "from_id": "e5deql0f",
+      "to_id": "muapjlzr",
+      "relation": "same_area",
+      "weight": 0.4822,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967199,
+      "updated_at": 1786064967199
+    },
+    {
+      "from_id": "e5deql0f",
+      "to_id": "h0g48t5u",
+      "relation": "related_to",
+      "weight": 0.4306,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967199,
+      "updated_at": 1786064967199
+    },
+    {
+      "from_id": "e5deql0f",
+      "to_id": "c8ql9nhv",
+      "relation": "related_to",
+      "weight": 0.3605,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967199,
+      "updated_at": 1786064967199
+    },
+    {
+      "from_id": "e5deql0f",
+      "to_id": "rzidwe4n",
+      "relation": "related_to",
+      "weight": 0.3559,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967199,
+      "updated_at": 1786064967199
+    },
+    {
+      "from_id": "e5deql0f",
+      "to_id": "gnonxe58",
+      "relation": "related_to",
+      "weight": 0.3462,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967199,
+      "updated_at": 1786064967199
+    }
+  ]
+}

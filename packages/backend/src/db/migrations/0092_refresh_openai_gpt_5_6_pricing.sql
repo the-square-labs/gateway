@@ -13,25 +13,25 @@ SELECT
   "sources"."id",
   'openai-api-2026-08-06',
   'USD',
-  CASE "model_id"
+  CASE "normalized"."model_id"
     WHEN 'gpt-5.6' THEN 5000000
     WHEN 'gpt-5.6-sol' THEN 5000000
     WHEN 'gpt-5.6-terra' THEN 2000000
     WHEN 'gpt-5.6-luna' THEN 200000
   END,
-  CASE "model_id"
+  CASE "normalized"."model_id"
     WHEN 'gpt-5.6' THEN 500000
     WHEN 'gpt-5.6-sol' THEN 500000
     WHEN 'gpt-5.6-terra' THEN 200000
     WHEN 'gpt-5.6-luna' THEN 20000
   END,
-  CASE "model_id"
+  CASE "normalized"."model_id"
     WHEN 'gpt-5.6' THEN 6250000
     WHEN 'gpt-5.6-sol' THEN 6250000
     WHEN 'gpt-5.6-terra' THEN 2500000
     WHEN 'gpt-5.6-luna' THEN 250000
   END,
-  CASE "model_id"
+  CASE "normalized"."model_id"
     WHEN 'gpt-5.6' THEN 30000000
     WHEN 'gpt-5.6-sol' THEN 30000000
     WHEN 'gpt-5.6-terra' THEN 12000000
@@ -40,28 +40,28 @@ SELECT
   jsonb_build_object(
     'long_context_threshold_tokens', 272000,
     'long_context_input_microdollars_per_million',
-      CASE "model_id"
+      CASE "normalized"."model_id"
         WHEN 'gpt-5.6' THEN 10000000
         WHEN 'gpt-5.6-sol' THEN 10000000
         WHEN 'gpt-5.6-terra' THEN 4000000
         WHEN 'gpt-5.6-luna' THEN 400000
       END,
     'long_context_cached_input_microdollars_per_million',
-      CASE "model_id"
+      CASE "normalized"."model_id"
         WHEN 'gpt-5.6' THEN 1000000
         WHEN 'gpt-5.6-sol' THEN 1000000
         WHEN 'gpt-5.6-terra' THEN 400000
         WHEN 'gpt-5.6-luna' THEN 40000
       END,
     'long_context_cache_write_microdollars_per_million',
-      CASE "model_id"
+      CASE "normalized"."model_id"
         WHEN 'gpt-5.6' THEN 12500000
         WHEN 'gpt-5.6-sol' THEN 12500000
         WHEN 'gpt-5.6-terra' THEN 5000000
         WHEN 'gpt-5.6-luna' THEN 500000
       END,
     'long_context_output_microdollars_per_million',
-      CASE "model_id"
+      CASE "normalized"."model_id"
         WHEN 'gpt-5.6' THEN 45000000
         WHEN 'gpt-5.6-sol' THEN 45000000
         WHEN 'gpt-5.6-terra' THEN 18000000

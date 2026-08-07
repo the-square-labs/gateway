@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   buildFinalScopes,
   deriveAllowedResourceIdsByScope,
@@ -45,9 +46,9 @@ export function ApiTokensSection({
   loggingSchemasList,
 }: ApiTokensSectionProps) {
   const { cas } = useCAStore();
-  const [tokens, setTokens] = useState<ApiToken[]>(
-    () => api.getCached<ApiToken[]>("settings:api-tokens") ?? []
-  );
+  const cachedTokens = api.getCached<ApiToken[]>("settings:api-tokens");
+  const [tokens, setTokens] = useState<ApiToken[]>(() => cachedTokens ?? []);
+  const [loading, setLoading] = useState(() => cachedTokens === undefined);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newTokenName, setNewTokenName] = useState("");
   const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
@@ -89,6 +90,8 @@ export function ApiTokensSection({
       setTokens(data || []);
     } catch {
       // ignore
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -236,7 +239,9 @@ export function ApiTokensSection({
         }
       >
         <div>
-          {tokens.length > 0 ? (
+          {loading ? (
+            <TokenRowsSkeleton />
+          ) : tokens.length > 0 ? (
             <div className="divide-y divide-border">
               {tokens.map((token) => (
                 <div
@@ -414,5 +419,24 @@ export function ApiTokensSection({
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function TokenRowsSkeleton() {
+  return (
+    <div className="divide-y divide-border" aria-label="Loading API tokens">
+      {Array.from({ length: 3 }, (_, index) => (
+        <div key={index} className="flex items-center justify-between gap-3 p-4 sm:gap-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <Skeleton className="h-10 w-10 shrink-0" />
+            <div className="space-y-2">
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-3 w-64 max-w-[60vw]" />
+            </div>
+          </div>
+          <Skeleton className="h-9 w-9 shrink-0" />
+        </div>
+      ))}
+    </div>
   );
 }

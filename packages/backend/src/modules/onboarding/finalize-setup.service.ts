@@ -18,9 +18,8 @@ export type FinalizeSetupStep = (typeof FINALIZE_SETUP_STEPS)[number];
 export type FinalizeSetupStepStatus = 'pending' | 'configured' | 'skipped';
 
 export interface FinalizeSetupState {
-  version: 1;
+  version: 2;
   ownerUserId: string;
-  dismissedAt: string | null;
   /** A user can dismiss the post-onboarding MFA reminder without changing the checklist outcome. */
   mfaReminderHiddenAt?: string | null;
   steps: Record<FinalizeSetupStep, FinalizeSetupStepStatus>;
@@ -49,20 +48,37 @@ function pendingSteps(): Record<FinalizeSetupStep, FinalizeSetupStepStatus> {
   >;
 }
 
+export function isFinalizeSetupComplete(state: Pick<FinalizeSetupState, 'steps'>): boolean {
+  return FINALIZE_SETUP_STEPS.every((step) => state.steps[step] !== 'pending');
+}
+
+function toPublicState(state: FinalizeSetupState): FinalizeSetupPublicState {
+  return {
+    steps: state.steps,
+  };
+}
+
 function normalizeState(value: unknown): FinalizeSetupState | null {
   if (!value || typeof value !== 'object') return null;
-  const state = value as Partial<FinalizeSetupState>;
-  if (state.version !== 1 || typeof state.ownerUserId !== 'string' || !state.ownerUserId) return null;
-  if (state.dismissedAt !== null && typeof state.dismissedAt !== 'string') return null;
+  // Version 1 remains readable during the one-way migration to the current
+  // checklist shape. Partial<FinalizeSetupState> cannot represent it because
+  // the current interface intentionally pins `version` to 2.
+  const state = value as {
+    version?: unknown;
+    ownerUserId?: unknown;
+    mfaReminderHiddenAt?: unknown;
+    steps?: Partial<Record<FinalizeSetupStep, unknown>>;
+  };
+  if ((state.version !== 1 && state.version !== 2) || typeof state.ownerUserId !== 'string' || !state.ownerUserId)
+    return null;
   const steps = pendingSteps();
   for (const step of FINALIZE_SETUP_STEPS) {
     const status = state.steps?.[step];
     if (status === 'configured' || status === 'skipped' || status === 'pending') steps[step] = status;
   }
   return {
-    version: 1,
+    version: 2,
     ownerUserId: state.ownerUserId,
-    dismissedAt: state.dismissedAt ?? null,
     mfaReminderHiddenAt: typeof state.mfaReminderHiddenAt === 'string' ? state.mfaReminderHiddenAt : null,
     steps,
   };
@@ -73,9 +89,8 @@ export class FinalizeSetupService {
 
   async initializeOwner(userId: string): Promise<void> {
     const state: FinalizeSetupState = {
-      version: 1,
+      version: 2,
       ownerUserId: userId,
-      dismissedAt: null,
       mfaReminderHiddenAt: null,
       steps: pendingSteps(),
     };
@@ -93,8 +108,8 @@ export class FinalizeSetupService {
 
   async getForUser(userId: string): Promise<FinalizeSetupPublicState | null> {
     const state = await this.getStoredState();
-    if (!state || state.ownerUserId !== userId || state.dismissedAt) return null;
-    return { steps: state.steps };
+    if (!state || state.ownerUserId !== userId) return null;
+    return toPublicState(state);
   }
 
   async markStep(
@@ -106,18 +121,13 @@ export class FinalizeSetupService {
     if (state.steps[step] === 'configured' && status === 'skipped') {
       throw new FinalizeSetupStepConflictError();
     }
-    if (state.steps[step] === status) return { steps: state.steps };
+    if (state.steps[step] === status) return toPublicState(state);
     const next: FinalizeSetupState = {
       ...state,
       steps: { ...state.steps, [step]: status },
     };
     await this.save(next);
-    return { steps: next.steps };
-  }
-
-  async dismiss(userId: string): Promise<void> {
-    const state = await this.requireOwnerState(userId);
-    await this.save({ ...state, dismissedAt: new Date().toISOString() });
+    return toPublicState(next);
   }
 
   /**
@@ -130,7 +140,7 @@ export class FinalizeSetupService {
     return Boolean(
       state &&
         state.ownerUserId === userId &&
-        state.dismissedAt &&
+        isFinalizeSetupComplete(state) &&
         state.steps.mfa === 'skipped' &&
         !state.mfaReminderHiddenAt
     );
@@ -139,13 +149,15 @@ export class FinalizeSetupService {
   async hideMfaReminder(userId: string): Promise<void> {
     const state = await this.getStoredState();
     if (!state || state.ownerUserId !== userId) throw new FinalizeSetupUnavailableError();
-    if (!state.dismissedAt || state.steps.mfa !== 'skipped' || state.mfaReminderHiddenAt) return;
+    if (!isFinalizeSetupComplete(state) || state.steps.mfa !== 'skipped' || state.mfaReminderHiddenAt) return;
     await this.save({ ...state, mfaReminderHiddenAt: new Date().toISOString() });
   }
 
   private async requireOwnerState(userId: string): Promise<FinalizeSetupState> {
     const state = await this.getStoredState();
-    if (!state || state.ownerUserId !== userId || state.dismissedAt) throw new FinalizeSetupUnavailableError();
+    if (!state || state.ownerUserId !== userId || isFinalizeSetupComplete(state)) {
+      throw new FinalizeSetupUnavailableError();
+    }
     return state;
   }
 

@@ -311,20 +311,17 @@ export function InferenceUsersTable({
           className="border-b border-border"
           inputClassName="h-12 border-0 shadow-none focus-visible:ring-inset"
         />
-        {loading ? (
-          <div className="px-4 py-6 text-sm text-muted-foreground">Loading users...</div>
-        ) : (
-          <DataTable
-            columns={columns}
-            data={filtered}
-            keyFn={(user) => user.id}
-            onRowClick={canManage ? edit : undefined}
-            horizontalScroll
-            minWidth="58rem"
-            emptyMessage="No inference users"
-            embedded
-          />
-        )}
+        <DataTable
+          columns={columns}
+          data={filtered}
+          keyFn={(user) => user.id}
+          onRowClick={canManage ? edit : undefined}
+          horizontalScroll
+          minWidth="58rem"
+          emptyMessage="No inference users"
+          embedded
+          loading={loading}
+        />
       </PanelShell>
 
       <Dialog open={limitsOpen} onOpenChange={setLimitsOpen}>

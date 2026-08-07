@@ -5,21 +5,51 @@
       "from_id": "z179lvxi",
       "to_id": "2tjfa2g5",
       "relation": "related_to",
-      "weight": 0.3,
-      "reason": "Gateway route verification and routing conventions inform how docs and OpenAPI routes are served and validated.",
+      "weight": 0.3736,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1784761696367,
-      "updated_at": 1784761696367
+      "created_at": 1786064967674,
+      "updated_at": 1786064967674
+    },
+    {
+      "from_id": "z179lvxi",
+      "to_id": "37llsl1w",
+      "relation": "related_to",
+      "weight": 0.3397,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967674,
+      "updated_at": 1786064967674
+    },
+    {
+      "from_id": "z179lvxi",
+      "to_id": "asy6c7bj",
+      "relation": "related_to",
+      "weight": 0.3221,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967674,
+      "updated_at": 1786064967674
+    },
+    {
+      "from_id": "z179lvxi",
+      "to_id": "412x4uua",
+      "relation": "related_to",
+      "weight": 0.3101,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967674,
+      "updated_at": 1786064967674
     },
     {
       "from_id": "z179lvxi",
       "to_id": "h8y5ou2d",
       "relation": "related_to",
-      "weight": 0.25,
-      "reason": "AI/web-search refactor patterns in gateway share cross-cutting concerns with OpenAPI/docs routing and resource loading.",
+      "weight": 0.3038,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1784761696367,
-      "updated_at": 1784761696367
+      "created_at": 1786064967674,
+      "updated_at": 1786064967674
     }
   ]
 }

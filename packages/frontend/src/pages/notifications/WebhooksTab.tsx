@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -139,8 +138,6 @@ export function WebhooksTab({
     }
   }, [canManage, openCreate, openCreateToken]);
 
-  if (isLoading) return <LoadingSpinner />;
-
   const visibleWebhooks = canRead ? webhooks : [];
   const columns: SimpleTableColumn<NotificationWebhook>[] = [
     {
@@ -227,17 +224,19 @@ export function WebhooksTab({
       <p className="text-sm text-muted-foreground">
         Webhooks define where and how notifications are delivered.
       </p>
-      {visibleWebhooks.length === 0 ? (
-        <EmptyState message="No webhooks configured. Create a webhook to configure notification delivery." />
-      ) : (
+      {isLoading || visibleWebhooks.length > 0 ? (
         <div className="border border-border bg-card">
           <SimpleTable
             columns={columns}
             rows={visibleWebhooks}
             getRowKey={(webhook) => webhook.id}
+            loading={isLoading}
+            loadingMessage="Loading webhooks"
             onRowClick={canManage ? openEdit : undefined}
           />
         </div>
+      ) : (
+        <EmptyState message="No webhooks configured. Create a webhook to configure notification delivery." />
       )}
       <WebhookDialog
         open={dialogOpen}

@@ -4,7 +4,6 @@ import { useNavigate } from "react-router-dom";
 import { CertificateIssueDialog } from "@/components/certificates/CertificateIssueDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
@@ -170,9 +169,9 @@ export function Certificates() {
 
   return (
     <PageTransition>
-      <div className="h-full overflow-y-auto p-6 space-y-3">
+      <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden p-6">
         {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-3">
             <LiteModeBackButton />
             <div>
@@ -204,6 +203,7 @@ export function Certificates() {
 
         {/* Search and filters */}
         <SearchFilterBar
+          className="shrink-0"
           placeholder="Search by common name, serial number..."
           search={searchInput}
           onSearchChange={setSearchInput}
@@ -269,19 +269,13 @@ export function Certificates() {
         />
 
         {/* Table */}
-        {isLoading ? (
-          <div className="flex items-center justify-center py-16">
-            <div className="flex flex-col items-center gap-3">
-              <LoadingSpinner className="" />
-              <p className="text-sm text-muted-foreground">Loading certificates...</p>
-            </div>
-          </div>
-        ) : (certificates || []).length > 0 ? (
-          <div className="h-[min(60dvh,42rem)] min-h-72">
+        {isLoading || (certificates || []).length > 0 ? (
+          <div className="min-h-0 shrink">
             <DataTable
               columns={certificateColumns}
               data={certificates}
               keyFn={(cert) => cert.id}
+              loading={isLoading}
               onRowClick={(cert) => navigate(`/certificates/${cert.id}`)}
               scrollRef={scrollRef}
               horizontalScroll

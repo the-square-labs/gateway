@@ -1,6 +1,7 @@
 import type * as React from "react";
 import { Fragment } from "react";
 import { EmptyState } from "@/components/common/EmptyState";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 export interface SimpleTableColumn<TRow> {
@@ -26,7 +27,9 @@ interface SimpleTableProps<TRow> {
   rows: TRow[];
   getRowKey: (row: TRow, index: number) => React.Key;
   loading?: boolean;
+  /** Retained for existing callers; skeleton rows replace the old text-only state. */
   loadingMessage?: React.ReactNode;
+  loadingRows?: number;
   emptyMessage?: string;
   onRowClick?: (row: TRow, index: number) => void;
   isRowClickable?: (row: TRow, index: number) => boolean;
@@ -49,7 +52,8 @@ export function SimpleTable<TRow>({
   rows,
   getRowKey,
   loading,
-  loadingMessage = "Loading...",
+  loadingMessage = "Loading table",
+  loadingRows = 5,
   emptyMessage = "No items",
   onRowClick,
   isRowClickable,
@@ -60,11 +64,7 @@ export function SimpleTable<TRow>({
   bodyClassName,
   rowRenderer,
 }: SimpleTableProps<TRow>) {
-  if (loading) {
-    return <div className="px-4 py-6 text-sm text-muted-foreground">{loadingMessage}</div>;
-  }
-
-  if (rows.length === 0) {
+  if (!loading && rows.length === 0) {
     return <EmptyState message={emptyMessage} embedded />;
   }
 
@@ -88,43 +88,64 @@ export function SimpleTable<TRow>({
             ))}
           </tr>
         </thead>
-        <tbody className={bodyClassName}>
-          {rows.map((row, index) => {
-            const interactive = Boolean(onRowClick && (isRowClickable?.(row, index) ?? true));
-            const resolvedRowClassName =
-              typeof rowClassName === "function" ? rowClassName(row, index) : rowClassName;
+        <tbody
+          className={bodyClassName}
+          aria-busy={loading || undefined}
+          aria-label={loading && typeof loadingMessage === "string" ? loadingMessage : undefined}
+        >
+          {loading
+            ? Array.from({ length: loadingRows }, (_, index) => (
+                <tr key={`loading-${index}`} className="border-b border-border last:border-b-0">
+                  {columns.map((column, columnIndex) => (
+                    <td
+                      key={column.id}
+                      className={cn(
+                        "px-4 py-3 align-middle",
+                        alignClass(column.align),
+                        column.cellClassName
+                      )}
+                    >
+                      <Skeleton className={cn("h-4", columnIndex === 0 ? "w-36" : "w-20")} />
+                    </td>
+                  ))}
+                </tr>
+              ))
+            : rows.map((row, index) => {
+                const interactive = Boolean(onRowClick && (isRowClickable?.(row, index) ?? true));
+                const resolvedRowClassName =
+                  typeof rowClassName === "function" ? rowClassName(row, index) : rowClassName;
 
-            const className = cn(
-              "border-b border-border last:border-b-0",
-              interactive && "cursor-pointer transition-colors hover:bg-accent",
-              resolvedRowClassName
-            );
-            const onClick = interactive ? () => onRowClick?.(row, index) : undefined;
-            const children = columns.map((column) => (
-              <td
-                key={column.id}
-                className={cn(
-                  "px-4 py-3 align-middle",
-                  alignClass(column.align),
-                  column.cellClassName
-                )}
-              >
-                {column.render(row)}
-              </td>
-            ));
+                const className = cn(
+                  "border-b border-border last:border-b-0",
+                  interactive && "cursor-pointer transition-colors hover:bg-accent",
+                  resolvedRowClassName
+                );
+                const onClick = interactive ? () => onRowClick?.(row, index) : undefined;
+                const children = columns.map((column) => (
+                  <td
+                    key={column.id}
+                    className={cn(
+                      "px-4 py-3 align-middle",
+                      alignClass(column.align),
+                      column.cellClassName
+                    )}
+                  >
+                    {column.render(row)}
+                  </td>
+                ));
 
-            return (
-              <Fragment key={getRowKey(row, index)}>
-                {rowRenderer ? (
-                  rowRenderer({ row, index, interactive, className, onClick, children })
-                ) : (
-                  <tr className={className} onClick={onClick}>
-                    {children}
-                  </tr>
-                )}
-              </Fragment>
-            );
-          })}
+                return (
+                  <Fragment key={getRowKey(row, index)}>
+                    {rowRenderer ? (
+                      rowRenderer({ row, index, interactive, className, onClick, children })
+                    ) : (
+                      <tr className={className} onClick={onClick}>
+                        {children}
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
         </tbody>
       </table>
     </div>

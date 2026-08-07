@@ -1,0 +1,35 @@
+{
+  "file_name": "127mkya9_cli_codex_endpoints",
+  "edges": [
+    {
+      "from_id": "127mkya9",
+      "to_id": "gpx2fdwu",
+      "relation": "uses_service",
+      "weight": 0.167,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1786064967510,
+      "updated_at": 1786064967510
+    },
+    {
+      "from_id": "127mkya9",
+      "to_id": "dcfkgqwx",
+      "relation": "uses_service",
+      "weight": 0.1523,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1786064967510,
+      "updated_at": 1786064967510
+    },
+    {
+      "from_id": "127mkya9",
+      "to_id": "mjeqvnoq",
+      "relation": "same_area",
+      "weight": 0.1108,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967510,
+      "updated_at": 1786064967510
+    }
+  ]
+}

@@ -11,8 +11,8 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { formatBytes, formatUptime } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -140,9 +140,17 @@ export function NodeMonitoringTab({
 
   if (!latest) {
     return (
-      <div className="flex flex-col items-center gap-2 py-16">
-        <LoadingSpinner className="" />
-        <p className="text-sm text-muted-foreground">Connecting to monitoring stream...</p>
+      <div
+        className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"
+        aria-label="Loading node monitoring"
+      >
+        {Array.from({ length: 8 }, (_, index) => (
+          <div key={index} className="space-y-3 border border-border bg-card p-4">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-7 w-16" />
+            <Skeleton className="h-2 w-full" />
+          </div>
+        ))}
       </div>
     );
   }

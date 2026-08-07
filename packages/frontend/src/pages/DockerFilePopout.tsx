@@ -1,4 +1,4 @@
-import { Check, ClipboardCopy, Download, Loader2, Save } from "lucide-react";
+import { Check, ClipboardCopy, Download, Save } from "lucide-react";
 import {
   type MouseEvent,
   type PointerEvent,
@@ -11,6 +11,7 @@ import { useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { imageMimeForFile } from "@/lib/file-types";
 import { api } from "@/services/api";
@@ -375,9 +376,13 @@ export function DockerFilePopout() {
       </div>
 
       {isLoading ? (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground">
-          <Loader2 className="h-5 w-5 animate-spin mr-2" />
-          Reading file...
+        <div
+          className="flex min-h-0 flex-1 flex-col gap-4 p-4"
+          aria-busy="true"
+          aria-label="Reading file"
+        >
+          <Skeleton className="h-5 w-48" />
+          <Skeleton className="min-h-0 flex-1 w-full" />
         </div>
       ) : error ? (
         <div className="flex-1 flex items-center justify-center text-destructive text-sm">

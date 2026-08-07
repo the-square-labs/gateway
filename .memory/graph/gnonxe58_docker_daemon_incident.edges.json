@@ -3,43 +3,53 @@
   "edges": [
     {
       "from_id": "gnonxe58",
-      "to_id": "asy6c7bj",
-      "relation": "related_to",
-      "weight": 0.42,
-      "reason": "Gateway safe-refactor and testing patterns that support the safer handling of oversized detail files; relates to frontend/backend resilience described in core memory.",
-      "source": "auto",
-      "created_at": 1783608056565,
-      "updated_at": 1783608056565
-    },
-    {
-      "from_id": "gnonxe58",
       "to_id": "j4jc2kmk",
       "relation": "same_area",
-      "weight": 0.45,
-      "reason": "Concrete implementation of log cap approach on gateway node; aligns with the log-keeping and bounded read strategy in the core memory.",
+      "weight": 0.5016,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1783608056565,
-      "updated_at": 1783608056565
+      "created_at": 1786064967772,
+      "updated_at": 1786064967772
     },
     {
       "from_id": "gnonxe58",
-      "to_id": "wlpy3efl",
-      "relation": "related_to",
-      "weight": 0.4,
-      "reason": "Addresses timeout semantics and lifecycle handling for Docker commands; complements frontend/backend stability patterns mentioned in the core memory.",
+      "to_id": "wlju46pr",
+      "relation": "same_area",
+      "weight": 0.4997,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1783608056565,
-      "updated_at": 1783608056565
+      "created_at": 1786064967772,
+      "updated_at": 1786064967772
     },
     {
       "from_id": "gnonxe58",
       "to_id": "zq6da64z",
       "relation": "same_area",
-      "weight": 0.65,
-      "reason": "Docker daemon incident with production node and Snap/Dockerd interaction; related to memory of daemon hardening and stability patterns.",
+      "weight": 0.4627,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1783608056565,
-      "updated_at": 1783608056565
+      "created_at": 1786064967772,
+      "updated_at": 1786064967772
+    },
+    {
+      "from_id": "gnonxe58",
+      "to_id": "muapjlzr",
+      "relation": "same_area",
+      "weight": 0.4234,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967772,
+      "updated_at": 1786064967772
+    },
+    {
+      "from_id": "gnonxe58",
+      "to_id": "kk05lizc",
+      "relation": "related_to",
+      "weight": 0.4168,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967772,
+      "updated_at": 1786064967772
     }
   ]
 }

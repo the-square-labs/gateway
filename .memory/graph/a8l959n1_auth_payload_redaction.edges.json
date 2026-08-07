@@ -5,31 +5,51 @@
       "from_id": "a8l959n1",
       "to_id": "l6ohu61l",
       "relation": "related_to",
-      "weight": 0.8,
-      "reason": "Both discuss handling SMTP credentials and delivery flow; redaction guidance should align with encrypted email-job lifecycle and what is logged.",
+      "weight": 0.3577,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1785712021407,
-      "updated_at": 1785712021407
+      "created_at": 1786064967435,
+      "updated_at": 1786064967435
+    },
+    {
+      "from_id": "a8l959n1",
+      "to_id": "hic3s1ta",
+      "relation": "same_workflow",
+      "weight": 0.3429,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1786064967435,
+      "updated_at": 1786064967435
     },
     {
       "from_id": "a8l959n1",
       "to_id": "b3glzfjy",
       "relation": "same_workflow",
-      "weight": 0.7,
-      "reason": "Security-audit remediation boundaries directly inform audit/redaction policy and privilege separation for persisted audit details.",
+      "weight": 0.3408,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1785712021407,
-      "updated_at": 1785712021407
+      "created_at": 1786064967435,
+      "updated_at": 1786064967435
     },
     {
       "from_id": "a8l959n1",
-      "to_id": "elp4yliv",
+      "to_id": "vvdi4727",
       "relation": "related_to",
-      "weight": 0.4,
-      "reason": "Session/user identity handling affects who can read audit entries; legacy session shapes are relevant when evaluating audit-reader privileges.",
+      "weight": 0.3322,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1785712021407,
-      "updated_at": 1785712021407
+      "created_at": 1786064967435,
+      "updated_at": 1786064967435
+    },
+    {
+      "from_id": "a8l959n1",
+      "to_id": "w75b8az4",
+      "relation": "same_workflow",
+      "weight": 0.3015,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1786064967435,
+      "updated_at": 1786064967435
     }
   ]
 }

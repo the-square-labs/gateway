@@ -7,6 +7,7 @@ import { PanelShell } from "@/components/common/PanelShell";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
@@ -445,8 +446,50 @@ export function EnvironmentTab({
 
   // ── Derived state ────────────────────────────────────────────────
 
+  if (!canEdit && !canManageSecrets) {
+    return (
+      <div className="py-12 text-center text-muted-foreground">
+        You don't have permission to access environment variables or secrets.
+      </div>
+    );
+  }
+
   if (isLoading) {
-    return <div className="py-12 text-center text-muted-foreground">Loading environment...</div>;
+    return (
+      <div className="space-y-4" aria-busy="true" aria-label="Loading environment">
+        {canEdit && (
+          <PanelShell
+            title="Environment Variables"
+            description={
+              onSaveServiceEnv
+                ? "Saved to deployment configuration"
+                : "Changes will recreate the container"
+            }
+          >
+            <div className="space-y-3">
+              {Array.from({ length: 4 }, (_, index) => (
+                <div key={index} className="flex gap-3">
+                  <Skeleton className="h-9 flex-1" />
+                  <Skeleton className="h-9 flex-[2]" />
+                </div>
+              ))}
+            </div>
+          </PanelShell>
+        )}
+        {canManageSecrets && (
+          <PanelShell title="Secrets" description="Sensitive values stored with this resource">
+            <div className="space-y-3">
+              {Array.from({ length: 2 }, (_, index) => (
+                <div key={index} className="flex gap-3">
+                  <Skeleton className="h-9 flex-1" />
+                  <Skeleton className="h-9 flex-[2]" />
+                </div>
+              ))}
+            </div>
+          </PanelShell>
+        )}
+      </div>
+    );
   }
 
   const invalidKeyPattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -560,14 +603,6 @@ export function EnvironmentTab({
     secretRows.some((row) => !replacementDatabaseVariableNames.has(row.key.trim()) && row.dirty);
   const hasChanges = hasEnvChanges || hasSecretsChanges;
   const hasCombinedChanges = hasChanges || databaseLinkDraft.hasChanges;
-
-  if (!canEdit && !canManageSecrets) {
-    return (
-      <div className="py-12 text-center text-muted-foreground">
-        You don't have permission to access environment variables or secrets.
-      </div>
-    );
-  }
 
   return (
     <div className={rawMode ? "flex flex-col flex-1 min-h-0" : "pb-6 space-y-4"}>

@@ -1340,7 +1340,7 @@ export const AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'get_gateway_settings',
     description:
-      'Read Gateway control-plane settings: OIDC provisioning, MCP server enablement and compatibility, general feature limits, network security, and outbound webhook policy.',
+      'Read Gateway control-plane settings: OIDC provisioning, MCP server enablement and compatibility, and general settings including inferenceEnabled and harnessSpecificEndpointsEnabled, plus network security and outbound webhook policy.',
     parameters: { type: 'object', properties: {} },
     destructive: false,
     category: 'Maintenance',
@@ -1361,7 +1361,8 @@ export const AI_TOOLS: AIToolDefinition[] = [
         mcpServerEnabled: { type: 'boolean' },
         mcpExtendedCompatibility: {
           type: 'boolean',
-          description: 'Return every OAuth-scoped MCP tool in the initial tools/list response.',
+          description:
+            'Return every OAuth-scoped MCP tool in the initial tools/list response. Enabled by default; disable only for harnesses that load every tool schema into context and exhaust it, because they may then be unable to use some Gateway tools.',
         },
         generalSettings: { type: 'object' },
         networkSecurity: { type: 'object' },

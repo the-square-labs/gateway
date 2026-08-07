@@ -549,9 +549,9 @@ export function SSLCertificates() {
 
   return (
     <PageTransition>
-      <div className="h-full overflow-y-auto p-6 space-y-3">
+      <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden p-6">
         {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-3">
             <LiteModeBackButton />
             <div>
@@ -583,6 +583,7 @@ export function SSLCertificates() {
 
         {/* Search and filters */}
         <SearchFilterBar
+          className="shrink-0"
           placeholder="Search by name or domain..."
           search={searchInput}
           onSearchChange={setSearchInput}
@@ -633,7 +634,7 @@ export function SSLCertificates() {
         />
 
         {(certificates || []).length > 0 || isLoading ? (
-          <div className="h-[min(60dvh,42rem)] min-h-72">
+          <div className="min-h-0 shrink">
             <DataTable
               columns={certificateColumns}
               data={certificates || []}

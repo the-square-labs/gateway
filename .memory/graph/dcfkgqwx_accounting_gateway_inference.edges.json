@@ -3,13 +3,53 @@
   "edges": [
     {
       "from_id": "dcfkgqwx",
-      "to_id": "123u7vfm",
-      "relation": "same_area",
-      "weight": 0.78,
-      "reason": "Both define Gateway-specific authentication and token contracts for isolated service/data-plane surfaces.",
+      "to_id": "gpx2fdwu",
+      "relation": "uses_service",
+      "weight": 0.466,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
-      "created_at": 1785963785518,
-      "updated_at": 1785963785518
+      "created_at": 1786064967326,
+      "updated_at": 1786064967326
+    },
+    {
+      "from_id": "dcfkgqwx",
+      "to_id": "myhj1f8i",
+      "relation": "uses_service",
+      "weight": 0.4238,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1786064967326,
+      "updated_at": 1786064967326
+    },
+    {
+      "from_id": "dcfkgqwx",
+      "to_id": "qme9z5oh",
+      "relation": "uses_service",
+      "weight": 0.4142,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1786064967326,
+      "updated_at": 1786064967326
+    },
+    {
+      "from_id": "dcfkgqwx",
+      "to_id": "gahvf5k5",
+      "relation": "uses_service",
+      "weight": 0.4101,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1786064967326,
+      "updated_at": 1786064967326
+    },
+    {
+      "from_id": "dcfkgqwx",
+      "to_id": "7abclq2n",
+      "relation": "uses_service",
+      "weight": 0.3954,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1786064967326,
+      "updated_at": 1786064967326
     }
   ]
 }

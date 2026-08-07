@@ -26,6 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { api } from "@/services/api";
@@ -518,7 +519,24 @@ export const ManagedDatabaseLinksSection = forwardRef<
         }
       >
         {loading ? (
-          <EmptyState message="Loading managed database links" embedded />
+          <div
+            className="divide-y divide-border"
+            aria-busy="true"
+            aria-label="Loading managed database links"
+          >
+            {Array.from({ length: 3 }, (_, index) => (
+              <div
+                key={index}
+                className="flex min-h-16 items-center justify-between gap-4 px-4 py-3"
+              >
+                <div className="min-w-0 flex-1 space-y-2">
+                  <Skeleton className="h-4 w-36" />
+                  <Skeleton className="h-3 w-52" />
+                </div>
+                <Skeleton className="h-6 w-20" />
+              </div>
+            ))}
+          </div>
         ) : displayBindings.length === 0 ? (
           <EmptyState message="No managed database links" embedded />
         ) : (

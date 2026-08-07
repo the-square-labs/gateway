@@ -1,4 +1,14 @@
-import { ArrowRight, Bot, Check, Cloud, Cpu, KeyRound, Server, Sparkles, UserPlus } from "lucide-react";
+import {
+  ArrowRight,
+  Bot,
+  Check,
+  Cloud,
+  Cpu,
+  KeyRound,
+  Server,
+  Sparkles,
+  UserPlus,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -17,6 +27,28 @@ import type { FinalizeSetupState, FinalizeSetupStep, FinalizeSetupStepStatus } f
 export type FinalizeSetupRootStep =
   | Exclude<FinalizeSetupStep, "cloudflare" | "gitlab">
   | "integrations";
+
+export function finalizeSetupSkipPromptStorageKey(userId: string): string {
+  return `gateway:finalize-setup:skip-prompt-shown:${userId}`;
+}
+
+function readSkipPromptShown(userId: string): boolean {
+  if (!userId || typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(finalizeSetupSkipPromptStorageKey(userId)) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function saveSkipPromptShown(userId: string): void {
+  if (!userId || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(finalizeSetupSkipPromptStorageKey(userId), "true");
+  } catch {
+    // Storage can be unavailable; it is safe to ask for confirmation again.
+  }
+}
 
 const ROOT_STEPS: Array<{
   id: FinalizeSetupRootStep;
@@ -62,18 +94,27 @@ const ROOT_STEPS: Array<{
   },
 ];
 
+type FinalizeSetupRootStepStatus = FinalizeSetupStepStatus | "in_progress";
+
 function stepStatus(
   state: FinalizeSetupState,
   step: FinalizeSetupRootStep
-): FinalizeSetupStepStatus {
+): FinalizeSetupRootStepStatus {
   if (step !== "integrations") return state.steps[step];
   const statuses = [state.steps.cloudflare, state.steps.gitlab];
-  if (statuses.some((status) => status === "configured")) return "configured";
+  if (
+    statuses.every((status) => status !== "pending") &&
+    statuses.some((status) => status === "configured")
+  ) {
+    return "configured";
+  }
   if (statuses.every((status) => status !== "pending")) return "skipped";
+  if (statuses.some((status) => status === "configured" || status === "skipped"))
+    return "in_progress";
   return "pending";
 }
 
-function StatusBadge({ status }: { status: FinalizeSetupStepStatus }) {
+function StatusBadge({ status }: { status: FinalizeSetupRootStepStatus }) {
   if (status === "configured") {
     return (
       <Badge variant="success" className="gap-1">
@@ -82,26 +123,32 @@ function StatusBadge({ status }: { status: FinalizeSetupStepStatus }) {
     );
   }
   if (status === "skipped") return <Badge variant="outline">Skipped</Badge>;
+  if (status === "in_progress") return <Badge variant="secondary">In progress</Badge>;
   return <Badge variant="secondary">Not started</Badge>;
 }
 
 export function FinalizeSetupDialog({
   open,
   state,
+  userId,
   busy,
   canInviteUsers = false,
   onOpenWizard,
-  onDismiss,
+  onSkipForNow,
+  onFinish,
 }: {
   open: boolean;
   state: FinalizeSetupState;
+  userId: string;
   busy?: boolean;
   canInviteUsers?: boolean;
   onOpenWizard: (step: FinalizeSetupRootStep) => void;
-  onDismiss: () => void | Promise<void>;
+  onSkipForNow: () => void | Promise<void>;
+  onFinish: () => void;
 }) {
-  const hasConfiguredStep = Object.values(state.steps).some((status) => status === "configured");
+  const isComplete = Object.values(state.steps).every((status) => status !== "pending");
   const [dismissing, setDismissing] = useState(false);
+  const [skipPromptShown, setSkipPromptShown] = useState(() => readSkipPromptShown(userId));
 
   useEffect(() => {
     if (!open) {
@@ -109,28 +156,40 @@ export function FinalizeSetupDialog({
     }
   }, [open]);
 
-  const dismiss = async () => {
+  useEffect(() => {
+    setSkipPromptShown(readSkipPromptShown(userId));
+  }, [userId]);
+
+  const skipForNow = async () => {
     setDismissing(true);
     try {
-      await onDismiss();
+      await onSkipForNow();
     } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : "Failed to finalize setup");
+      toast.error(cause instanceof Error ? cause.message : "Failed to skip setup for now");
     } finally {
       setDismissing(false);
     }
   };
 
   const requestDismiss = async () => {
+    if (skipPromptShown) {
+      await skipForNow();
+      return;
+    }
     const confirmed = await confirm({
-      title: "Skip the guided setup?",
+      title: "Skip setup for now?",
       description:
         "These steps introduce Gateway's core capabilities. If you are new to Gateway or want to understand its features in more detail, we recommend completing at least the items that apply to your installation. You can still configure every feature later from Settings.",
       cancelLabel: "Continue setup",
-      confirmLabel: "Skip checklist",
+      confirmLabel: "Skip for now",
       variant: "default",
       locked: true,
     });
-    if (confirmed) await dismiss();
+    if (confirmed) {
+      saveSkipPromptShown(userId);
+      setSkipPromptShown(true);
+      await skipForNow();
+    }
   };
 
   return (
@@ -158,9 +217,9 @@ export function FinalizeSetupDialog({
               item is marked here so you can see your progress.
             </p>
             <p>
-              You can skip the checklist or an optional flow and return to every setting later. If
-              Gateway is new to you, completing at least the relevant items provides the quickest
-              path to understanding how its core features fit together.
+              You can skip this checklist for now or skip an optional flow and return to every
+              setting later. If Gateway is new to you, completing at least the relevant items
+              provides the quickest path to understanding how its core features fit together.
             </p>
           </div>
         </DialogDescription>
@@ -168,7 +227,7 @@ export function FinalizeSetupDialog({
           {ROOT_STEPS.filter((step) => step.id !== "invite_users" || canInviteUsers).map((step) => {
             const Icon = step.icon;
             const status = stepStatus(state, step.id);
-            const canOpen = status !== "configured";
+            const canOpen = !isComplete && status !== "configured";
             return (
               <Button
                 key={step.id}
@@ -198,18 +257,18 @@ export function FinalizeSetupDialog({
         </div>
         <DialogFooter>
           <Button
-            variant={hasConfiguredStep ? "default" : "outline"}
-            onClick={() => void (hasConfiguredStep ? dismiss() : requestDismiss())}
+            variant={isComplete ? "default" : "outline"}
+            onClick={() => void (isComplete ? onFinish() : requestDismiss())}
             disabled={busy || dismissing}
           >
-            {hasConfiguredStep ? (
+            {isComplete ? (
               <>
                 <Sparkles />
                 Finish
               </>
             ) : (
               <>
-                Skip
+                Skip for now
                 <ArrowRight />
               </>
             )}

@@ -3,23 +3,53 @@
   "edges": [
     {
       "from_id": "h0g48t5u",
-      "to_id": "muapjlzr",
+      "to_id": "02e60mqr",
       "relation": "same_area",
-      "weight": 0.78,
-      "reason": "Both document durable setup-docker-node.sh daemon-install behavior and compatibility requirements.",
+      "weight": 0.4602,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1785945645289,
-      "updated_at": 1785945645289
+      "created_at": 1786064967380,
+      "updated_at": 1786064967380
     },
     {
       "from_id": "h0g48t5u",
-      "to_id": "hqwh565e",
+      "to_id": "muapjlzr",
       "relation": "same_area",
-      "weight": 0.58,
-      "reason": "Both concern Gateway installer scripts and their packaged, scripted user-facing behavior.",
+      "weight": 0.4379,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1785945645289,
-      "updated_at": 1785945645289
+      "created_at": 1786064967380,
+      "updated_at": 1786064967380
+    },
+    {
+      "from_id": "h0g48t5u",
+      "to_id": "e5deql0f",
+      "relation": "related_to",
+      "weight": 0.4306,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967380,
+      "updated_at": 1786064967380
+    },
+    {
+      "from_id": "h0g48t5u",
+      "to_id": "gnonxe58",
+      "relation": "related_to",
+      "weight": 0.4026,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967380,
+      "updated_at": 1786064967380
+    },
+    {
+      "from_id": "h0g48t5u",
+      "to_id": "wlju46pr",
+      "relation": "related_to",
+      "weight": 0.4022,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967380,
+      "updated_at": 1786064967380
     }
   ]
 }

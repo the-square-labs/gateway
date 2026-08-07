@@ -3,53 +3,53 @@
   "edges": [
     {
       "from_id": "412x4uua",
+      "to_id": "duvbj7h2",
+      "relation": "same_area",
+      "weight": 0.5701,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064968001,
+      "updated_at": 1786064968001
+    },
+    {
+      "from_id": "412x4uua",
       "to_id": "asy6c7bj",
       "relation": "same_area",
       "weight": 0.5406,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1781991290022,
-      "updated_at": 1781991290022
+      "created_at": 1786064968001,
+      "updated_at": 1786064968001
     },
     {
       "from_id": "412x4uua",
-      "to_id": "7rchqhpz",
-      "relation": "related_to",
-      "weight": 0.4205,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1781991290022,
-      "updated_at": 1781991290022
-    },
-    {
-      "from_id": "412x4uua",
-      "to_id": "mw84toq1",
-      "relation": "related_to",
-      "weight": 0.4162,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1781991290022,
-      "updated_at": 1781991290022
-    },
-    {
-      "from_id": "412x4uua",
-      "to_id": "nnrf57rm",
+      "to_id": "ph8ejel0",
       "relation": "same_area",
-      "weight": 0.4143,
+      "weight": 0.4735,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1781991290022,
-      "updated_at": 1781991290022
+      "created_at": 1786064968001,
+      "updated_at": 1786064968001
     },
     {
       "from_id": "412x4uua",
-      "to_id": "4tmpz7of",
+      "to_id": "h8y5ou2d",
       "relation": "same_area",
-      "weight": 0.4131,
+      "weight": 0.442,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1781991290022,
-      "updated_at": 1781991290022
+      "created_at": 1786064968001,
+      "updated_at": 1786064968001
+    },
+    {
+      "from_id": "412x4uua",
+      "to_id": "nr9hvzr3",
+      "relation": "related_to",
+      "weight": 0.433,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064968001,
+      "updated_at": 1786064968001
     }
   ]
 }

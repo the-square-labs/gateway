@@ -3,33 +3,53 @@
   "edges": [
     {
       "from_id": "pstn8fla",
-      "to_id": "ph8ejel0",
+      "to_id": "fgmxlp0p",
       "relation": "same_area",
-      "weight": 0.5,
-      "reason": "Refactor of AI web search behavior and tests within gateway AI service; related to memory/guardrail changes in AI integration.",
+      "weight": 0.6658,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1782520710804,
-      "updated_at": 1782520710804
+      "created_at": 1786064967946,
+      "updated_at": 1786064967946
     },
     {
       "from_id": "pstn8fla",
-      "to_id": "iop65o1t",
+      "to_id": "7oked0dp",
       "relation": "same_area",
-      "weight": 0.45,
-      "reason": "Normalized OAuth permissions policy across Gateway and MCP scopes; aligns with API/tool access controls in gateway.",
+      "weight": 0.5577,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1782520710804,
-      "updated_at": 1782520710804
+      "created_at": 1786064967946,
+      "updated_at": 1786064967946
     },
     {
       "from_id": "pstn8fla",
-      "to_id": "sg6sqaui",
-      "relation": "depends_on",
-      "weight": 0.4,
-      "reason": "Guardrails and helper extraction affect AI service execution paths and tool usage.",
+      "to_id": "fk86zmru",
+      "relation": "same_area",
+      "weight": 0.5289,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1782520710804,
-      "updated_at": 1782520710804
+      "created_at": 1786064967946,
+      "updated_at": 1786064967946
+    },
+    {
+      "from_id": "pstn8fla",
+      "to_id": "8rqz22k0",
+      "relation": "same_area",
+      "weight": 0.5111,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967946,
+      "updated_at": 1786064967946
+    },
+    {
+      "from_id": "pstn8fla",
+      "to_id": "qme9z5oh",
+      "relation": "related_to",
+      "weight": 0.4644,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967946,
+      "updated_at": 1786064967946
     }
   ]
 }

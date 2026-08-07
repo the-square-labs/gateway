@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
@@ -444,11 +445,13 @@ export function AdminNodeDetail({
     }
   };
 
-  if (isLoading || !node) {
+  if (isLoading) return <DetailPageSkeleton label="Loading node" tabs={6} />;
+  if (!node)
     return (
-      <div className="flex items-center justify-center py-16 text-muted-foreground">Loading...</div>
+      <div className="flex h-full items-center justify-center text-muted-foreground">
+        Node not found
+      </div>
     );
-  }
 
   const updateTargetVersion = getNodeUpdateTargetVersion(node);
   const nodeState = nodeUpdating ? "updating" : effectiveNodeStatus(node);

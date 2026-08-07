@@ -8,8 +8,18 @@
       "weight": 0.1686,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1785404288149,
-      "updated_at": 1785404288149
+      "created_at": 1786064967551,
+      "updated_at": 1786064967551
+    },
+    {
+      "from_id": "xg6y81q3",
+      "to_id": "gpx2fdwu",
+      "relation": "same_area",
+      "weight": 0.1646,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967551,
+      "updated_at": 1786064967551
     }
   ]
 }

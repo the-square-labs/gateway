@@ -3,53 +3,53 @@
   "edges": [
     {
       "from_id": "3b6g7z3k",
-      "to_id": "4tmpz7of",
-      "relation": "same_area",
-      "weight": 0.4944,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1781735132483,
-      "updated_at": 1781735132483
-    },
-    {
-      "from_id": "3b6g7z3k",
-      "to_id": "ip47mets",
-      "relation": "same_area",
-      "weight": 0.4059,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1781735132483,
-      "updated_at": 1781735132483
-    },
-    {
-      "from_id": "3b6g7z3k",
-      "to_id": "h9ebt64w",
-      "relation": "same_area",
-      "weight": 0.3947,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1781735132483,
-      "updated_at": 1781735132483
-    },
-    {
-      "from_id": "3b6g7z3k",
-      "to_id": "123u7vfm",
+      "to_id": "7abclq2n",
       "relation": "related_to",
-      "weight": 0.3646,
+      "weight": 0.4219,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1781735132483,
-      "updated_at": 1781735132483
+      "created_at": 1786064967593,
+      "updated_at": 1786064967593
     },
     {
       "from_id": "3b6g7z3k",
-      "to_id": "7rchqhpz",
+      "to_id": "fk86zmru",
+      "relation": "same_area",
+      "weight": 0.3892,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967593,
+      "updated_at": 1786064967593
+    },
+    {
+      "from_id": "3b6g7z3k",
+      "to_id": "37llsl1w",
+      "relation": "same_area",
+      "weight": 0.385,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967593,
+      "updated_at": 1786064967593
+    },
+    {
+      "from_id": "3b6g7z3k",
+      "to_id": "2tjfa2g5",
       "relation": "related_to",
-      "weight": 0.3435,
+      "weight": 0.3702,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1781735132483,
-      "updated_at": 1781735132483
+      "created_at": 1786064967593,
+      "updated_at": 1786064967593
+    },
+    {
+      "from_id": "3b6g7z3k",
+      "to_id": "asy6c7bj",
+      "relation": "same_area",
+      "weight": 0.3584,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967593,
+      "updated_at": 1786064967593
     }
   ]
 }

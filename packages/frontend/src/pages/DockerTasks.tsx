@@ -498,9 +498,14 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
           }
         />
       ) : isLoading ? (
-        <div className="flex items-center justify-center py-16 text-muted-foreground">
-          Loading tasks...
-        </div>
+        <DataTable<DockerTaskRow>
+          columns={taskColumns}
+          data={[]}
+          keyFn={(task) => task.id}
+          horizontalScroll
+          minWidth="900px"
+          loading
+        />
       ) : (
         <EmptyState
           message="No tasks found."

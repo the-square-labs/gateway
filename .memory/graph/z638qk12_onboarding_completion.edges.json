@@ -1,0 +1,55 @@
+{
+  "file_name": "z638qk12_onboarding_completion",
+  "edges": [
+    {
+      "from_id": "z638qk12",
+      "to_id": "fk86zmru",
+      "relation": "same_area",
+      "weight": 0.4041,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967210,
+      "updated_at": 1786064967210
+    },
+    {
+      "from_id": "z638qk12",
+      "to_id": "gahvf5k5",
+      "relation": "same_area",
+      "weight": 0.3766,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967210,
+      "updated_at": 1786064967210
+    },
+    {
+      "from_id": "z638qk12",
+      "to_id": "37llsl1w",
+      "relation": "same_area",
+      "weight": 0.3649,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967210,
+      "updated_at": 1786064967210
+    },
+    {
+      "from_id": "z638qk12",
+      "to_id": "asy6c7bj",
+      "relation": "same_area",
+      "weight": 0.3552,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967210,
+      "updated_at": 1786064967210
+    },
+    {
+      "from_id": "z638qk12",
+      "to_id": "myhj1f8i",
+      "relation": "related_to",
+      "weight": 0.3493,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967210,
+      "updated_at": 1786064967210
+    }
+  ]
+}

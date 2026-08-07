@@ -119,7 +119,7 @@ describe("SqlExplorer (PostgreSQL)", () => {
     );
 
     expect(await screen.findByText("public.users")).toBeInTheDocument();
-    expect(screen.getAllByText("Loading table rows...")).toHaveLength(2);
+    expect(screen.getByLabelText("Loading table rows")).toBeInTheDocument();
 
     await act(async () => {
       resolveRows(result);

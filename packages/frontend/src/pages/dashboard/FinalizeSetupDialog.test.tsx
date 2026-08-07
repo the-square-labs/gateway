@@ -2,7 +2,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { confirm } from "@/components/common/ConfirmDialog";
 import type { FinalizeSetupState } from "@/types";
-import { FinalizeSetupDialog } from "./FinalizeSetupDialog";
+import {
+  finalizeSetupSkipPromptStorageKey,
+  FinalizeSetupDialog,
+} from "./FinalizeSetupDialog";
 
 vi.mock("@/components/common/ConfirmDialog", () => ({
   confirm: vi.fn(),
@@ -22,19 +25,22 @@ const pendingState: FinalizeSetupState = {
 
 describe("FinalizeSetupDialog", () => {
   beforeEach(() => {
+    window.localStorage.clear();
     vi.mocked(confirm).mockResolvedValue(true);
   });
 
-  it("routes a checklist item into its own wizard and confirms explicit dismissal", async () => {
+  it("routes a checklist item into its own wizard and confirms the first skip-for-now action", async () => {
     const onOpenWizard = vi.fn();
-    const onDismiss = vi.fn();
+    const onSkipForNow = vi.fn();
 
     render(
       <FinalizeSetupDialog
         open
         state={pendingState}
+        userId="owner-1"
         onOpenWizard={onOpenWizard}
-        onDismiss={onDismiss}
+        onSkipForNow={onSkipForNow}
+        onFinish={vi.fn()}
       />
     );
 
@@ -47,38 +53,65 @@ describe("FinalizeSetupDialog", () => {
     expect(onOpenWizard).toHaveBeenCalledWith("nodes");
     expect(screen.queryByRole("button", { name: "Start" })).not.toBeInTheDocument();
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(onDismiss).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    expect(onSkipForNow).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
     await waitFor(() =>
       expect(confirm).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "Skip the guided setup?",
+          title: "Skip setup for now?",
           cancelLabel: "Continue setup",
-          confirmLabel: "Skip checklist",
+          confirmLabel: "Skip for now",
           locked: true,
         })
       )
     );
-    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onSkipForNow).toHaveBeenCalledTimes(1));
+    expect(window.localStorage.getItem(finalizeSetupSkipPromptStorageKey("owner-1"))).toBe("true");
   });
 
-  it("uses Finish after an actual configured outcome without showing the skip confirmation", async () => {
-    const onDismiss = vi.fn();
+  it("uses Finish only after every item has an outcome without showing the skip confirmation", async () => {
+    const onFinish = vi.fn();
     render(
       <FinalizeSetupDialog
         open
-        state={{ ...pendingState, steps: { ...pendingState.steps, mfa: "configured" } }}
+        state={{
+          ...pendingState,
+          steps: Object.fromEntries(
+            Object.keys(pendingState.steps).map((step) => [step, "configured"])
+          ) as FinalizeSetupState["steps"],
+        }}
+        userId="owner-1"
         onOpenWizard={vi.fn()}
-        onDismiss={onDismiss}
+        onSkipForNow={vi.fn()}
+        onFinish={onFinish}
       />
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Finish" }));
-    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+    expect(onFinish).toHaveBeenCalledTimes(1);
     expect(confirm).not.toHaveBeenCalled();
   });
 
-  it("marks integrations complete once either connector is configured", () => {
+  it("closes without another warning after the first skip was acknowledged", async () => {
+    const onSkipForNow = vi.fn();
+    window.localStorage.setItem(finalizeSetupSkipPromptStorageKey("owner-1"), "true");
+    render(
+      <FinalizeSetupDialog
+        open
+        state={pendingState}
+        userId="owner-1"
+        onOpenWizard={vi.fn()}
+        onSkipForNow={onSkipForNow}
+        onFinish={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
+    await waitFor(() => expect(onSkipForNow).toHaveBeenCalledTimes(1));
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("keeps integrations in progress until both connectors have an outcome", () => {
     render(
       <FinalizeSetupDialog
         open
@@ -86,13 +119,15 @@ describe("FinalizeSetupDialog", () => {
           ...pendingState,
           steps: { ...pendingState.steps, cloudflare: "configured" },
         }}
+        userId="owner-1"
         onOpenWizard={vi.fn()}
-        onDismiss={vi.fn()}
+        onSkipForNow={vi.fn()}
+        onFinish={vi.fn()}
       />
     );
 
     expect(screen.getByRole("button", { name: /Connect integrations/i })).toHaveTextContent(
-      "Configured"
+      "In progress"
     );
   });
 
@@ -100,8 +135,10 @@ describe("FinalizeSetupDialog", () => {
     const props = {
       open: true,
       state: pendingState,
+      userId: "owner-1",
       onOpenWizard: vi.fn(),
-      onDismiss: vi.fn(),
+      onSkipForNow: vi.fn(),
+      onFinish: vi.fn(),
     };
     const { rerender } = render(<FinalizeSetupDialog {...props} />);
 

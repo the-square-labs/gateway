@@ -124,7 +124,7 @@ function withDefaultGeneralSettings(settings: AuthProvisioningSettings | null) {
     ...settings,
     methods: { ...DEFAULT_AUTH_METHODS, ...settings.methods },
     passwordPolicy: { ...DEFAULT_PASSWORD_POLICY, ...settings.passwordPolicy },
-    mcpExtendedCompatibility: settings.mcpExtendedCompatibility ?? false,
+    mcpExtendedCompatibility: settings.mcpExtendedCompatibility ?? true,
     webTransport: settings.webTransport ?? {
       tlsEnabled: false,
       restartRequired: false,
@@ -1561,8 +1561,8 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
             <div>
               <p className="text-sm font-medium">Extended MCP compatibility</p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Return all OAuth-scoped tools in the initial tool list for clients that cannot
-                refresh after discovery. This increases the initial tool catalog size.
+                Keep this enabled unless your harness loads every tool into its context at once and
+                exhausts it. Turning it off can prevent that harness from using some Gateway tools.
               </p>
             </div>
             <Switch

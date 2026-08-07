@@ -13,13 +13,53 @@
     },
     {
       "from_id": "0s83sww0",
+      "to_id": "ip47mets",
+      "relation": "uses_service",
+      "weight": 0.6045,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1786064967617,
+      "updated_at": 1786064967617
+    },
+    {
+      "from_id": "0s83sww0",
+      "to_id": "94t2cjlq",
+      "relation": "same_area",
+      "weight": 0.5344,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967617,
+      "updated_at": 1786064967617
+    },
+    {
+      "from_id": "0s83sww0",
       "to_id": "orq9dru7",
       "relation": "related_to",
-      "weight": 0.45,
-      "reason": "Design-system viewer packaging/docs impact the migration workflow and viewer previews.",
+      "weight": 0.4617,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1784761760331,
-      "updated_at": 1784761760331
+      "created_at": 1786064967617,
+      "updated_at": 1786064967617
+    },
+    {
+      "from_id": "0s83sww0",
+      "to_id": "7rchqhpz",
+      "relation": "related_to",
+      "weight": 0.3819,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1786064967617,
+      "updated_at": 1786064967617
+    },
+    {
+      "from_id": "0s83sww0",
+      "to_id": "bf8b2nk9",
+      "relation": "same_area",
+      "weight": 0.3676,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967617,
+      "updated_at": 1786064967617
     }
   ]
 }

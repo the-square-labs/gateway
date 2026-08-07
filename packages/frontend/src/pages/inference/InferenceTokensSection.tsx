@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { formatDate, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import type { InferenceToken } from "@/types/inference";
@@ -91,7 +92,7 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
         }
       >
         {loading ? (
-          <div className="p-4 text-sm text-muted-foreground">Loading inference API tokens...</div>
+          <InferenceTokenRowsSkeleton />
         ) : tokens.length === 0 ? (
           <EmptyState
             message={
@@ -197,5 +198,24 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function InferenceTokenRowsSkeleton() {
+  return (
+    <div className="divide-y divide-border" aria-label="Loading inference API tokens">
+      {Array.from({ length: 3 }, (_, index) => (
+        <div key={index} className="flex items-center justify-between gap-3 p-4 sm:gap-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <Skeleton className="h-10 w-10 shrink-0" />
+            <div className="space-y-2">
+              <Skeleton className="h-4 w-36" />
+              <Skeleton className="h-3 w-56 max-w-[60vw]" />
+            </div>
+          </div>
+          <Skeleton className="h-9 w-9 shrink-0" />
+        </div>
+      ))}
+    </div>
   );
 }

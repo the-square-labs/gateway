@@ -4,7 +4,6 @@ import { useNavigate } from "react-router-dom";
 import { CACreateDialog } from "@/components/ca/CACreateDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
@@ -151,15 +150,11 @@ export function CAs() {
     setStatusFilter("active");
   };
 
-  if (isLoading) {
-    return <LoadingSpinner />;
-  }
-
   return (
     <PageTransition>
-      <div className="h-full overflow-y-auto p-6 space-y-3">
+      <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden p-6">
         {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-3">
             <LiteModeBackButton />
             <div>
@@ -228,6 +223,7 @@ export function CAs() {
 
         {/* Search and filters */}
         <SearchFilterBar
+          className="shrink-0"
           placeholder="Search by common name..."
           search={search}
           onSearchChange={setSearch}
@@ -255,13 +251,14 @@ export function CAs() {
         />
 
         {/* Table */}
-        {visibleCAs.length > 0 ? (
-          <div className="border border-border bg-card">
+        {isLoading || visibleCAs.length > 0 ? (
+          <div className="min-h-0 shrink overflow-auto border border-border bg-card">
             <SimpleTable
               columns={caColumns}
               rows={caRows}
               getRowKey={({ ca }) => ca.id}
               onRowClick={({ ca }) => navigate(`/cas/${ca.id}`)}
+              loading={isLoading}
             />
           </div>
         ) : (

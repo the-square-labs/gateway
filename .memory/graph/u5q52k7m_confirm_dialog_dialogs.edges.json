@@ -1,0 +1,15 @@
+{
+  "file_name": "u5q52k7m_confirm_dialog_dialogs",
+  "edges": [
+    {
+      "from_id": "u5q52k7m",
+      "to_id": "c9rwyt9w",
+      "relation": "same_area",
+      "weight": 0.1224,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967520,
+      "updated_at": 1786064967520
+    }
+  ]
+}

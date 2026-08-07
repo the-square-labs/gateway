@@ -8,6 +8,7 @@ import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
 import type { DatabaseConnection, ManagedPostgresExtension } from "@/types";
 
@@ -134,8 +135,23 @@ export function PostgresExtensionsTab({
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {loading ? (
-          <div className="flex items-center justify-center py-10">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <div
+            className="divide-y divide-border"
+            aria-busy="true"
+            aria-label="Loading PostgreSQL extensions"
+          >
+            {Array.from({ length: 5 }, (_, index) => (
+              <div
+                key={index}
+                className="flex min-h-16 items-center justify-between gap-4 px-4 py-3"
+              >
+                <div className="min-w-0 flex-1 space-y-2">
+                  <Skeleton className="h-4 w-36" />
+                  <Skeleton className="h-3 w-4/5" />
+                </div>
+                <Skeleton className="h-9 w-20 shrink-0" />
+              </div>
+            ))}
           </div>
         ) : filteredExtensions.length === 0 ? (
           <EmptyState message="No PostgreSQL extensions match your search." embedded />

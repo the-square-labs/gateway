@@ -14,7 +14,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
@@ -31,6 +30,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { HealthBars } from "@/components/ui/health-bars";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -709,9 +709,13 @@ export function ProxyHostDetail({
   }, [activeTab, host, isRawMode, loadRenderedConfig]);
 
   // ── Loading state ─────────────────────────────────────────────
-  if (isLoading || !host) {
-    return <LoadingSpinner />;
-  }
+  if (isLoading) return <ProxyHostDetailSkeleton />;
+  if (!host)
+    return (
+      <div className="flex h-full items-center justify-center text-muted-foreground">
+        Proxy host not found
+      </div>
+    );
 
   return (
     <PageTransition>
@@ -1071,6 +1075,50 @@ export function ProxyHostDetail({
           </div>
         </DialogContent>
       </Dialog>
+    </PageTransition>
+  );
+}
+
+function ProxyHostDetailSkeleton() {
+  return (
+    <PageTransition>
+      <div
+        className="h-full flex flex-col gap-4 overflow-hidden p-6"
+        aria-label="Loading proxy host"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <Skeleton className="h-9 w-9 shrink-0" />
+            <div className="space-y-2">
+              <Skeleton className="h-7 w-56 max-w-[55vw]" />
+              <Skeleton className="h-4 w-80 max-w-[65vw]" />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Skeleton className="h-9 w-9" />
+            <Skeleton className="h-9 w-20" />
+          </div>
+        </div>
+        <div className="flex gap-1 border border-border p-1">
+          <Skeleton className="h-9 w-24" />
+          <Skeleton className="h-9 w-24" />
+          <Skeleton className="h-9 w-24" />
+        </div>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="space-y-3 border border-border bg-card p-4">
+            <Skeleton className="h-5 w-32" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-4/5" />
+            <Skeleton className="h-4 w-2/3" />
+          </div>
+          <div className="space-y-3 border border-border bg-card p-4">
+            <Skeleton className="h-5 w-28" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-3/4" />
+            <Skeleton className="h-4 w-1/2" />
+          </div>
+        </div>
+      </div>
     </PageTransition>
   );
 }

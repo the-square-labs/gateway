@@ -3,33 +3,53 @@
   "edges": [
     {
       "from_id": "8rqz22k0",
+      "to_id": "fgmxlp0p",
+      "relation": "same_area",
+      "weight": 0.5924,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967934,
+      "updated_at": 1786064967934
+    },
+    {
+      "from_id": "8rqz22k0",
+      "to_id": "7oked0dp",
+      "relation": "same_area",
+      "weight": 0.5674,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967934,
+      "updated_at": 1786064967934
+    },
+    {
+      "from_id": "8rqz22k0",
+      "to_id": "fk86zmru",
+      "relation": "same_area",
+      "weight": 0.5574,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967934,
+      "updated_at": 1786064967934
+    },
+    {
+      "from_id": "8rqz22k0",
+      "to_id": "pstn8fla",
+      "relation": "same_area",
+      "weight": 0.5111,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967934,
+      "updated_at": 1786064967934
+    },
+    {
+      "from_id": "8rqz22k0",
       "to_id": "duvbj7h2",
-      "relation": "same_area",
-      "weight": 0.6,
-      "reason": "tools definition and gateway tool registry context overlap with AI tooling lifecycle in source context.",
+      "relation": "same_workflow",
+      "weight": 0.4984,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1782786043594,
-      "updated_at": 1782786043594
-    },
-    {
-      "from_id": "8rqz22k0",
-      "to_id": "ph8ejel0",
-      "relation": "same_area",
-      "weight": 0.6,
-      "reason": "web search integration and AI service responsibilities share context with AI tooling and discovery.",
-      "source": "auto",
-      "created_at": 1782786043594,
-      "updated_at": 1782786043594
-    },
-    {
-      "from_id": "8rqz22k0",
-      "to_id": "h8y5ou2d",
-      "relation": "same_area",
-      "weight": 0.5,
-      "reason": "refactor and guardrails context for AI service translates to broader gateway AI tooling governance.",
-      "source": "auto",
-      "created_at": 1782786043594,
-      "updated_at": 1782786043594
+      "created_at": 1786064967934,
+      "updated_at": 1786064967934
     }
   ]
 }

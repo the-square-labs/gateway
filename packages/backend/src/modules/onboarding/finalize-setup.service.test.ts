@@ -41,9 +41,8 @@ function createDb(initial: FinalizeSetupState | null = null) {
 
 function pendingState(ownerUserId: string): FinalizeSetupState {
   return {
-    version: 1,
+    version: 2,
     ownerUserId,
-    dismissedAt: null,
     steps: {
       nodes: 'pending',
       ai_assistant: 'pending',
@@ -66,20 +65,19 @@ describe('FinalizeSetupService', () => {
     expect(harness.values).toHaveBeenCalledWith(
       expect.objectContaining({
         key: FINALIZE_SETUP_STATE_KEY,
-        value: expect.objectContaining({ ownerUserId: 'owner-1', dismissedAt: null }),
+        value: expect.objectContaining({ ownerUserId: 'owner-1' }),
       })
     );
   });
 
-  it('only exposes state to its owner and hides it after dismissal', async () => {
+  it('only exposes checklist state to its owner', async () => {
     const harness = createDb(pendingState('owner-1'));
     const service = new FinalizeSetupService(harness.db as never);
 
     expect(await service.getForUser('other-user')).toBeNull();
-    expect(await service.getForUser('owner-1')).toEqual({ steps: pendingState('owner-1').steps });
-
-    await service.dismiss('owner-1');
-    expect(await service.getForUser('owner-1')).toBeNull();
+    expect(await service.getForUser('owner-1')).toEqual({
+      steps: pendingState('owner-1').steps,
+    });
   });
 
   it('adds a pending invitation step when reading an existing checklist state', async () => {
@@ -90,6 +88,20 @@ describe('FinalizeSetupService', () => {
 
     await expect(service.getForUser('owner-1')).resolves.toMatchObject({
       steps: { invite_users: 'pending' },
+    });
+  });
+
+  it('reads a legacy dismissed checklist as an active checklist', async () => {
+    const legacyState = {
+      ...pendingState('owner-1'),
+      version: 1,
+      dismissedAt: '2026-08-06T00:00:00.000Z',
+    } as unknown as FinalizeSetupState;
+    const harness = createDb(legacyState);
+    const service = new FinalizeSetupService(harness.db as never);
+
+    await expect(service.getForUser('owner-1')).resolves.toEqual({
+      steps: pendingState('owner-1').steps,
     });
   });
 
@@ -115,12 +127,13 @@ describe('FinalizeSetupService', () => {
     );
   });
 
-  it('keeps a skipped MFA reminder separate from the dismissed checklist and lets its owner hide it', async () => {
+  it('shows a skipped MFA reminder only after every checklist item has an outcome and lets its owner hide it', async () => {
     const harness = createDb(pendingState('owner-1'));
     const service = new FinalizeSetupService(harness.db as never);
 
-    await service.markStep('owner-1', 'mfa', 'skipped');
-    await service.dismiss('owner-1');
+    for (const step of ['nodes', 'ai_assistant', 'inference', 'cloudflare', 'gitlab', 'mfa', 'invite_users'] as const) {
+      await service.markStep('owner-1', step, step === 'mfa' ? 'skipped' : 'configured');
+    }
     await expect(service.shouldShowMfaReminder('owner-1')).resolves.toBe(true);
 
     await service.hideMfaReminder('owner-1');

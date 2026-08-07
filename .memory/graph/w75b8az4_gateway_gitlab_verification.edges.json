@@ -5,31 +5,51 @@
       "from_id": "w75b8az4",
       "to_id": "92pnq26b",
       "relation": "same_workflow",
-      "weight": 0.65,
-      "reason": "Same gateway sandbox/verification workflow focusing on clone inspection and artifact handling within AI tooling workflow.",
+      "weight": 0.5373,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1783631298510,
-      "updated_at": 1783631298510
+      "created_at": 1786064967749,
+      "updated_at": 1786064967749
+    },
+    {
+      "from_id": "w75b8az4",
+      "to_id": "h130czul",
+      "relation": "same_area",
+      "weight": 0.4956,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1786064967749,
+      "updated_at": 1786064967749
+    },
+    {
+      "from_id": "w75b8az4",
+      "to_id": "hh3v2vdi",
+      "relation": "same_workflow",
+      "weight": 0.4633,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1786064967749,
+      "updated_at": 1786064967749
+    },
+    {
+      "from_id": "w75b8az4",
+      "to_id": "b3glzfjy",
+      "relation": "same_workflow",
+      "weight": 0.4619,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1786064967749,
+      "updated_at": 1786064967749
     },
     {
       "from_id": "w75b8az4",
       "to_id": "evv95a8g",
       "relation": "same_area",
-      "weight": 0.5,
-      "reason": "Frontend/backend allowlist caching and edit/create flow optimization in gateway GitLab integration.",
+      "weight": 0.4275,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1783631298510,
-      "updated_at": 1783631298510
-    },
-    {
-      "from_id": "w75b8az4",
-      "to_id": "nuc3c3hq",
-      "relation": "related_to",
-      "weight": 0.4,
-      "reason": "Sandbox artifact I/O security pattern and verification sequence share sandbox/runtime concerns.",
-      "source": "auto",
-      "created_at": 1783631298510,
-      "updated_at": 1783631298510
+      "created_at": 1786064967749,
+      "updated_at": 1786064967749
     }
   ]
 }

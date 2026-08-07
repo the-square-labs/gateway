@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -212,7 +213,8 @@ export function DockerContainerDetail({
 
   // Pin
   const [pinOpen, setPinOpen] = useState(false);
-  const { isPinnedDashboard, isPinnedSidebar, toggleDashboard, toggleSidebar, updateMeta } = usePinnedContainersStore();
+  const { isPinnedDashboard, isPinnedSidebar, toggleDashboard, toggleSidebar, updateMeta } =
+    usePinnedContainersStore();
   const navigationMigration = (location.state as { dockerMigration?: DockerMigration } | null)
     ?.dockerMigration;
   const migrationHandoff =
@@ -659,11 +661,13 @@ export function DockerContainerDetail({
     unavailable,
   ]);
 
-  if (isLoading || !container) {
+  if (isLoading) return <DetailPageSkeleton label="Loading container" tabs={6} />;
+  if (!container)
     return (
-      <div className="flex items-center justify-center py-16 text-muted-foreground">Loading...</div>
+      <div className="flex h-full items-center justify-center text-muted-foreground">
+        Container not found
+      </div>
     );
-  }
 
   const headerActions = [
     {
@@ -1033,7 +1037,9 @@ export function DockerContainerDetail({
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium">Add to dashboard</p>
-                <p className="text-xs text-muted-foreground">Show compact status on the dashboard</p>
+                <p className="text-xs text-muted-foreground">
+                  Show compact status on the dashboard
+                </p>
               </div>
               <Switch
                 checked={isPinnedDashboard(containerId!)}

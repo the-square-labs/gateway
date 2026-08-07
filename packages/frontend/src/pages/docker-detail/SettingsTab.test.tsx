@@ -153,6 +153,17 @@ describe("docker detail SettingsTab", () => {
     expect(screen.getByDisplayValue("3")).toBeInTheDocument();
   });
 
+  it("keeps permitted webhook and cleanup panels stable while their settings load", () => {
+    vi.spyOn(api, "getContainerWebhook").mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, "getContainerImageCleanup").mockReturnValue(new Promise(() => {}));
+
+    render(<WebhookSection nodeId="node-1" containerName="app" />);
+
+    expect(screen.getByText("Webhook")).toBeInTheDocument();
+    expect(screen.getByText("Image Cleanup")).toBeInTheDocument();
+    expect(screen.getByLabelText("Loading webhook")).toBeInTheDocument();
+  });
+
   it("renders attached Docker networks in settings", async () => {
     vi.spyOn(api, "listDockerNetworks").mockResolvedValue([
       {

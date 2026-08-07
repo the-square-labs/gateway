@@ -15,7 +15,6 @@ import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { Badge } from "@/components/ui/badge";
@@ -41,6 +40,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
@@ -617,8 +617,18 @@ function ServicesTab({
 }) {
   if (loading && groupedServices.length === 0) {
     return (
-      <div className="border border-border bg-card py-8">
-        <LoadingSpinner className="py-0" />
+      <div className="space-y-4" aria-label="Loading status page services">
+        {Array.from({ length: 2 }, (_, index) => (
+          <div key={index} className="border border-border bg-card">
+            <div className="border-b border-border px-4 py-3">
+              <Skeleton className="h-4 w-28" />
+            </div>
+            <div className="space-y-3 p-4">
+              <Skeleton className="h-5 w-48" />
+              <Skeleton className="h-4 w-4/5" />
+            </div>
+          </div>
+        ))}
       </div>
     );
   }
@@ -710,8 +720,14 @@ function IncidentsTab({
 }) {
   if (loading && incidents.length === 0) {
     return (
-      <div className="border border-border bg-card py-8">
-        <LoadingSpinner className="py-0" />
+      <div className="space-y-3" aria-label="Loading status page incidents">
+        {Array.from({ length: 3 }, (_, index) => (
+          <div key={index} className="space-y-3 border border-border bg-card p-4">
+            <Skeleton className="h-5 w-56" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-2/3" />
+          </div>
+        ))}
       </div>
     );
   }

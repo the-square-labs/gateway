@@ -59,6 +59,7 @@ describe("app navigation registry", () => {
           "acl:view",
         ],
         pkiEnabled: true,
+        hasCloudflareIntegration: true,
       })
     );
 
@@ -80,6 +81,14 @@ describe("app navigation registry", () => {
     const groups = visibleNavigationGroups(context({ scopes: ["integrations:cloudflare:view"] }));
 
     expect(groups.flatMap((group) => group.items.map((item) => item.id))).toContain("settings");
+  });
+
+  it("hides Domains until an enabled Cloudflare integration is configured", () => {
+    const ids = visibleNavigationGroups(
+      context({ scopes: ["domains:view"], hasCloudflareIntegration: false })
+    ).flatMap((group) => group.items.map((item) => item.id));
+
+    expect(ids).not.toContain("domains");
   });
 
   it("hides feature-backed destinations while their features are disabled", () => {

@@ -4,7 +4,6 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageTransition } from "@/components/common/PageTransition";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +16,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
@@ -117,10 +117,6 @@ export function NginxTemplates({
     return null;
   }
 
-  if (isLoading) {
-    return <LoadingSpinner />;
-  }
-
   const content = (
     <>
       <div className={embedded ? "space-y-4" : "h-full overflow-y-auto p-6 space-y-4"}>
@@ -141,7 +137,9 @@ export function NginxTemplates({
           </div>
         )}
 
-        {templates.length > 0 ? (
+        {isLoading ? (
+          <TemplateCardsSkeleton />
+        ) : templates.length > 0 ? (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {templates.map((t) => {
               const canEditTemplate =
@@ -257,4 +255,28 @@ export function NginxTemplates({
 
   if (embedded) return content;
   return <PageTransition>{content}</PageTransition>;
+}
+
+function TemplateCardsSkeleton() {
+  return (
+    <div
+      className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3"
+      aria-label="Loading config templates"
+    >
+      {Array.from({ length: 6 }, (_, index) => (
+        <div key={index} className="space-y-3 border border-border bg-card p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Skeleton className="h-4 w-4" />
+              <Skeleton className="h-4 w-28" />
+            </div>
+            <Skeleton className="h-8 w-8" />
+          </div>
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-2/3" />
+          <Skeleton className="h-5 w-16" />
+        </div>
+      ))}
+    </div>
+  );
 }
