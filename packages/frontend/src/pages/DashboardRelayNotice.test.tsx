@@ -39,6 +39,9 @@ describe("RelayHealthNotice", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(screen.queryByText(/Reason:/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Retry recovery" })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toHaveClass("sm:max-w-md");
+    fireEvent.click(screen.getAllByRole("button", { name: "Close" })[1]);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("shows bounded admin diagnostics and invokes manual retry", () => {

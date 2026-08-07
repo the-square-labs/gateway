@@ -323,7 +323,7 @@ export function RelayHealthNotice({
       </div>
 
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className={isAdmin ? "sm:max-w-lg" : "sm:max-w-md"}>
           <DialogHeader>
             <DialogTitle>{copy.title}</DialogTitle>
           </DialogHeader>
@@ -374,6 +374,10 @@ export function RelayHealthNotice({
                 <RotateCw className={retryPending ? "animate-spin" : undefined} />
                 {retryPending ? "Retrying recovery" : "Retry recovery"}
               </Button>
+            </DialogFooter>
+          ) : !isAdmin ? (
+            <DialogFooter>
+              <Button onClick={() => setDetailsOpen(false)}>Close</Button>
             </DialogFooter>
           ) : null}
         </DialogContent>
