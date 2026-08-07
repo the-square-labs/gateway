@@ -75,4 +75,19 @@ describe("RelayHealthNotice", () => {
     );
     expect(container).toBeEmptyDOMElement();
   });
+
+  it("can open the shared details shell immediately for development previews", () => {
+    render(
+      <RelayHealthNotice
+        relay={critical}
+        isAdmin
+        retryPending
+        onRetry={vi.fn()}
+        initialDetailsOpen
+      />
+    );
+
+    expect(screen.getByText("Reason").nextElementSibling).toHaveTextContent("unreachable");
+    expect(screen.getByRole("button", { name: "Retrying recovery" })).toBeDisabled();
+  });
 });
