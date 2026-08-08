@@ -11,7 +11,7 @@ IFS=$'\n\t'
 #     sudo bash -s -- --gateway gateway.example.com:9443 --token <ENROLLMENT_TOKEN> --gateway-cert-sha256 sha256:<HEX>
 # ───────────────────────────────────────────────────────────────────
 
-LOG_FILE="/tmp/gateway_monitoring_setup.log"
+LOG_FILE="/dev/null"
 
 # ── Colors ────────────────────────────────────────────────────────
 BRAND_MINT='\033[38;2;140;176;132m'
@@ -491,7 +491,8 @@ if [[ -z "$GATEWAY_ADDR" && -n "$EXISTING_GATEWAY_ADDR" ]]; then
 fi
 
 if [[ "$DRY_RUN" -eq 0 ]]; then
-    : > "$LOG_FILE"
+    LOG_FILE=$(mktemp /tmp/gateway_monitoring_setup.XXXXXX) || die "Could not create installer log file"
+    chmod 600 "$LOG_FILE" || die "Could not secure installer log file"
 fi
 
 # ── Logo ──────────────────────────────────────────────────────────
