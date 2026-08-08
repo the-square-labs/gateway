@@ -749,12 +749,6 @@ const RAW_TOKEN_SCOPES = [
     group: "Features",
   },
   {
-    value: "ai:sandbox:tier:max",
-    label: "Use Max Sandbox Tier",
-    desc: "Run AI sandbox jobs with maximum resource limits",
-    group: "Features",
-  },
-  {
     value: "ai:sandbox:manage",
     label: "Manage Sandbox Jobs",
     desc: "View and kill AI sandbox jobs",
@@ -1180,7 +1174,6 @@ const PROGRAMMATIC_DENIED_SCOPE_VALUES = new Set<string>([
   "ai:sandbox:use",
   "ai:sandbox:tier:medium",
   "ai:sandbox:tier:high",
-  "ai:sandbox:tier:max",
   "ai:sandbox:manage",
   "mcp:use",
   "inference:use",

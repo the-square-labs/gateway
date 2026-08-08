@@ -72,5 +72,5 @@ export const AIConfigUpdateSchema = z.object({
   webSearchProvider: z.enum(['tavily', 'brave', 'serper', 'searxng', 'exa']).optional(),
   webSearchBaseUrl: z.union([z.string().url(), z.literal('')]).optional(),
   sandboxEnabled: z.boolean().optional(),
-  sandboxDefaultTier: z.enum(['low', 'medium', 'high', 'max']).optional(),
+  sandboxDefaultTier: z.enum(['low', 'medium', 'high']).optional(),
 });

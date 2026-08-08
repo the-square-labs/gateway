@@ -92,7 +92,7 @@ export class AISettingsService {
       webSearchProvider: getValue<WebSearchProvider>('ai:web_search_provider'),
       webSearchBaseUrl: getValue<string>('ai:web_search_base_url'),
       sandboxEnabled: getValue<boolean>('ai:sandbox_enabled'),
-      sandboxDefaultTier: getValue<'low' | 'medium' | 'high' | 'max'>('ai:sandbox_default_tier'),
+      sandboxDefaultTier: getValue<'low' | 'medium' | 'high'>('ai:sandbox_default_tier'),
       webSearchEnabled:
         getValue<WebSearchProvider>('ai:web_search_provider') === 'searxng'
           ? !!getValue<string>('ai:web_search_base_url')

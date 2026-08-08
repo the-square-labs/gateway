@@ -3,10 +3,9 @@ import { hasScope } from '@/lib/permissions.js';
 export const SANDBOX_USE_SCOPE = 'ai:sandbox:use';
 export const SANDBOX_MEDIUM_SCOPE = 'ai:sandbox:tier:medium';
 export const SANDBOX_HIGH_SCOPE = 'ai:sandbox:tier:high';
-export const SANDBOX_MAX_SCOPE = 'ai:sandbox:tier:max';
 export const SANDBOX_MANAGE_SCOPE = 'ai:sandbox:manage';
 
-export const SANDBOX_RESOURCE_TIERS = ['low', 'medium', 'high', 'max'] as const;
+export const SANDBOX_RESOURCE_TIERS = ['low', 'medium', 'high'] as const;
 export type SandboxResourceTier = (typeof SANDBOX_RESOURCE_TIERS)[number];
 
 export const SANDBOX_RUNTIMES = ['alpine', 'node', 'python'] as const;
@@ -64,16 +63,6 @@ export const SANDBOX_TIER_POLICIES: Record<SandboxResourceTier, SandboxTierPolic
     memoryBytes: 1024 * 1024 * 1024,
     workspaceBytes: 6 * 1024 * 1024 * 1024,
     pidsLimit: 256,
-  },
-  max: {
-    tier: 'max',
-    requiredScopes: [SANDBOX_USE_SCOPE, SANDBOX_MAX_SCOPE],
-    defaultTtlSeconds: 300,
-    maxTtlSeconds: 12 * 60 * 60,
-    cpuQuota: 200_000,
-    memoryBytes: 4 * 1024 * 1024 * 1024,
-    workspaceBytes: 8 * 1024 * 1024 * 1024,
-    pidsLimit: 512,
   },
 };
 

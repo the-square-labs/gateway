@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   resolveSandboxPolicy,
   SANDBOX_HIGH_SCOPE,
-  SANDBOX_MAX_SCOPE,
   SANDBOX_MEDIUM_SCOPE,
   SANDBOX_USE_SCOPE,
   sandboxScopesSatisfied,
@@ -18,19 +17,15 @@ describe('sandbox policy', () => {
     expect(policy.requiredScopes).toEqual([SANDBOX_USE_SCOPE]);
   });
 
-  it('requires separate scopes for medium, high, and max tiers', () => {
+  it('requires separate scopes for medium and high tiers', () => {
     expect(() => resolveSandboxPolicy([SANDBOX_USE_SCOPE], 'medium', 60)).toThrow(SANDBOX_MEDIUM_SCOPE);
     expect(() => resolveSandboxPolicy([SANDBOX_USE_SCOPE], 'high', 60)).toThrow(SANDBOX_HIGH_SCOPE);
-    expect(() => resolveSandboxPolicy([SANDBOX_USE_SCOPE], 'max', 60)).toThrow(SANDBOX_MAX_SCOPE);
 
     expect(
       resolveSandboxPolicy([SANDBOX_USE_SCOPE, SANDBOX_MEDIUM_SCOPE], 'medium', undefined).effectiveTtlSeconds
     ).toBe(180);
     expect(resolveSandboxPolicy([SANDBOX_USE_SCOPE, SANDBOX_HIGH_SCOPE], 'high', 90_000).effectiveTtlSeconds).toBe(
       24 * 60 * 60
-    );
-    expect(resolveSandboxPolicy([SANDBOX_USE_SCOPE, SANDBOX_MAX_SCOPE], 'max', 90_000).effectiveTtlSeconds).toBe(
-      12 * 60 * 60
     );
   });
 

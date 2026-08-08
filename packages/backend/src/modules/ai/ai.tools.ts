@@ -1177,7 +1177,7 @@ export const AI_TOOLS: AIToolDefinition[] = [
         sandboxEnabled: { type: 'boolean', description: 'Expose sandbox execution tools to the assistant.' },
         sandboxDefaultTier: {
           type: 'string',
-          enum: ['low', 'medium', 'high', 'max'],
+          enum: ['low', 'medium', 'high'],
           description: 'Default sandbox resource tier.',
         },
       },

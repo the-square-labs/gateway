@@ -93,7 +93,7 @@ export interface AIConfig {
   webSearchProvider: WebSearchProvider;
   webSearchBaseUrl: string;
   sandboxEnabled: boolean;
-  sandboxDefaultTier: "low" | "medium" | "high" | "max";
+  sandboxDefaultTier: "low" | "medium" | "high";
   hasApiKey: boolean;
   apiKeyLast4: string;
   hasWebSearchKey: boolean;
@@ -132,7 +132,7 @@ export interface AISandboxJob {
   conversationId: string | null;
   kind: "script" | "process";
   runtime: "alpine" | "node" | "python";
-  resourceTier: "low" | "medium" | "high" | "max";
+  resourceTier: "low" | "medium" | "high";
   requestedTtlSeconds: number;
   effectiveTtlSeconds: number;
   requiredScopes: string[];

@@ -12,7 +12,7 @@ export const SANDBOX_AI_TOOLS: AIToolDefinition[] = [
         script: { type: 'string', description: 'Script body to execute inside the sandbox.' },
         resourceTier: {
           type: 'string',
-          enum: ['low', 'medium', 'high', 'max'],
+          enum: ['low', 'medium', 'high'],
           description:
             'Resource tier. Default: low. Workspace capacity is a soft quota and host-disk admission stops at 80%.',
         },
@@ -37,7 +37,7 @@ export const SANDBOX_AI_TOOLS: AIToolDefinition[] = [
         command: { type: 'array', items: { type: 'string' }, description: 'Command argv to run in the sandbox.' },
         resourceTier: {
           type: 'string',
-          enum: ['low', 'medium', 'high', 'max'],
+          enum: ['low', 'medium', 'high'],
           description:
             'Resource tier. Default: low. Workspace capacity is a soft quota and host-disk admission stops at 80%.',
         },

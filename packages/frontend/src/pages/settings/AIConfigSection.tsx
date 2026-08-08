@@ -60,7 +60,7 @@ interface AIConfigState {
   webSearchProvider: string;
   webSearchBaseUrl: string;
   sandboxEnabled: boolean;
-  sandboxDefaultTier: "low" | "medium" | "high" | "max";
+  sandboxDefaultTier: "low" | "medium" | "high";
 }
 
 function normalizeAIConfigState(config: AIConfigState): AIConfigState {
@@ -1146,7 +1146,6 @@ export function AIConfigSection() {
               <SelectItem value="low">Low — 0.25 CPU, 256 MB, 4 h max, 2 GB disk</SelectItem>
               <SelectItem value="medium">Medium — 0.5 CPU, 512 MB, 12 h max, 4 GB disk</SelectItem>
               <SelectItem value="high">High — 1 CPU, 1 GB, 24 h max, 6 GB disk</SelectItem>
-              <SelectItem value="max">Max — 2 CPU, 4 GB, 12 h max, 8 GB disk</SelectItem>
             </SelectContent>
           </Select>
         </SettingsControlRow>
