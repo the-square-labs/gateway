@@ -3,7 +3,13 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { GATEWAY_NOT_FOUND_HTML } from '@/lib/gateway-error-pages.js';
 import { SetupTokenPolicyService } from '@/modules/setup/setup-token-policy.js';
 import { StatusPageService } from '@/modules/status-page/status-page.service.js';
-import { createApp, isLocalMachineHost, normalizeRequestHost } from './app.js';
+import {
+  createApp,
+  getDirectLocalRequestOrigin,
+  isAllowedWebSocketOrigin,
+  isLocalMachineHost,
+  normalizeRequestHost,
+} from './app.js';
 import { container, TOKENS } from './container.js';
 
 beforeAll(() => {
@@ -62,6 +68,45 @@ describe('isLocalMachineHost', () => {
     '8.8.8.8',
     'gateway.example.com',
   ])('rejects non-local or public address %s', (host) => expect(isLocalMachineHost(host, localAddresses)).toBe(false));
+});
+
+describe('WebSocket origin guard', () => {
+  const localAddresses = new Set(['192.168.50.10', 'fd00::10']);
+
+  it('allows the canonical Gateway origin', () => {
+    expect(isAllowedWebSocketOrigin('https://gateway.example.com')).toBe(true);
+  });
+
+  it('allows a direct local Gateway origin with the matching host and port', () => {
+    const directOrigin = getDirectLocalRequestOrigin(
+      'http://192.168.50.10:3000/api/events',
+      '192.168.50.10:3000',
+      localAddresses
+    );
+
+    expect(directOrigin).toBe('http://192.168.50.10:3000');
+    expect(isAllowedWebSocketOrigin('http://192.168.50.10:3000', directOrigin)).toBe(true);
+  });
+
+  it.each([
+    'http://192.168.50.10:7777',
+    'http://localhost:3000',
+    'http://192.168.50.11:3000',
+  ])('rejects a different local Origin %s', (origin) => {
+    const directOrigin = getDirectLocalRequestOrigin(
+      'http://192.168.50.10:3000/api/events',
+      '192.168.50.10:3000',
+      localAddresses
+    );
+
+    expect(isAllowedWebSocketOrigin(origin, directOrigin)).toBe(false);
+  });
+
+  it('does not create a direct origin for a non-local target host', () => {
+    expect(
+      getDirectLocalRequestOrigin('https://gateway.example.com/api/events', 'gateway.example.com', localAddresses)
+    ).toBeNull();
+  });
 });
 
 describe('Gateway Host guard', () => {

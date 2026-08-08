@@ -176,15 +176,35 @@ const requireAnyEffectiveScope: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
-function isAllowedWebSocketOrigin(origin: string | undefined): boolean {
+export function getDirectLocalRequestOrigin(
+  requestUrl: string,
+  hostHeader: string | undefined,
+  localAddresses: ReadonlySet<string> = getLocalInterfaceAddresses()
+): string | null {
+  const rawHost = hostHeader?.trim();
+  const requestHost = normalizeRequestHost(rawHost);
+  if (!rawHost || !requestHost || !isLocalMachineHost(requestHost, localAddresses)) return null;
+
+  try {
+    const protocol = new URL(requestUrl).protocol;
+    if (protocol !== 'http:' && protocol !== 'https:') return null;
+    return new URL(`${protocol}//${rawHost}`).origin;
+  } catch {
+    return null;
+  }
+}
+
+export function isAllowedWebSocketOrigin(
+  origin: string | undefined,
+  directLocalRequestOrigin: string | null = null
+): boolean {
   if (!origin) return false;
   try {
     const url = new URL(origin);
     const requestOrigin = url.origin;
     const appOrigin = getCanonicalPublicUrlSync();
     if (requestOrigin === appOrigin) return true;
-    const requestHost = normalizeRequestHost(url.host);
-    if (requestHost && isLocalMachineHost(requestHost)) return true;
+    if (requestOrigin === directLocalRequestOrigin) return true;
     return (
       isDevelopment() && (requestOrigin.startsWith('http://localhost') || requestOrigin.startsWith('http://127.0.0.1'))
     );
@@ -201,8 +221,22 @@ function getCanonicalPublicUrlSync(): string {
   }
 }
 
-function getWebSocketSessionId(cookieHeader: string | undefined, origin: string | undefined): string {
-  const credential = getSessionWebSocketCredential(cookieHeader, origin, isAllowedWebSocketOrigin);
+function getAllowedWebSocketOrigin(requestUrl: string, hostHeader: string | undefined) {
+  const directLocalRequestOrigin = getDirectLocalRequestOrigin(requestUrl, hostHeader);
+  return (origin: string | undefined) => isAllowedWebSocketOrigin(origin, directLocalRequestOrigin);
+}
+
+function getWebSocketSessionId(
+  cookieHeader: string | undefined,
+  origin: string | undefined,
+  requestUrl: string,
+  hostHeader: string | undefined
+): string {
+  const credential = getSessionWebSocketCredential(
+    cookieHeader,
+    origin,
+    getAllowedWebSocketOrigin(requestUrl, hostHeader)
+  );
   return credential?.value ?? '';
 }
 
@@ -641,7 +675,12 @@ export function createApp() {
   app.get(
     '/api/ai/ws',
     upgradeWebSocket((c) => {
-      const sessionId = getWebSocketSessionId(c.req.header('cookie'), c.req.header('origin'));
+      const sessionId = getWebSocketSessionId(
+        c.req.header('cookie'),
+        c.req.header('origin'),
+        c.req.url,
+        c.req.header('host')
+      );
       return {
         onOpen(event, ws) {
           wsHandlers.onOpen(event, ws);
@@ -668,11 +707,12 @@ export function createApp() {
       const nodeId = c.req.param('nodeId') ?? '';
       const containerId = c.req.param('containerId') ?? '';
       const shell = c.req.query('shell') || '/bin/sh';
+      const isAllowedOrigin = getAllowedWebSocketOrigin(c.req.url, c.req.header('host'));
       const credential = getProgrammaticWebSocketCredential(
         c.req.header('cookie'),
         c.req.header('origin'),
         c.req.header('authorization'),
-        isAllowedWebSocketOrigin
+        isAllowedOrigin
       );
       return createDockerExecWSHandlers(nodeId, containerId, shell, credential);
     })
@@ -684,11 +724,12 @@ export function createApp() {
     upgradeWebSocket((c) => {
       const nodeId = c.req.param('nodeId') ?? '';
       const shell = c.req.query('shell') || 'auto';
+      const isAllowedOrigin = getAllowedWebSocketOrigin(c.req.url, c.req.header('host'));
       const credential = getProgrammaticWebSocketCredential(
         c.req.header('cookie'),
         c.req.header('origin'),
         c.req.header('authorization'),
-        isAllowedWebSocketOrigin
+        isAllowedOrigin
       );
       return createNodeExecWSHandlers(nodeId, shell, credential);
     })
@@ -702,11 +743,12 @@ export function createApp() {
       const containerId = c.req.param('containerId') ?? '';
       const requestedTail = Number(c.req.query('tail')) || 100;
       const tail = Math.min(Math.max(Math.trunc(requestedTail), 1), DOCKER_LOG_TAIL_MAX);
+      const isAllowedOrigin = getAllowedWebSocketOrigin(c.req.url, c.req.header('host'));
       const credential = getProgrammaticWebSocketCredential(
         c.req.header('cookie'),
         c.req.header('origin'),
         c.req.header('authorization'),
-        isAllowedWebSocketOrigin
+        isAllowedOrigin
       );
       return createDockerLogStreamWSHandlers(nodeId, containerId, tail, credential);
     })
@@ -718,11 +760,12 @@ export function createApp() {
       const databaseId = c.req.param('databaseId') ?? '';
       const requestedTail = Number(c.req.query('tail')) || 100;
       const tail = Math.min(Math.max(Math.trunc(requestedTail), 1), DOCKER_LOG_TAIL_MAX);
+      const isAllowedOrigin = getAllowedWebSocketOrigin(c.req.url, c.req.header('host'));
       const credential = getProgrammaticWebSocketCredential(
         c.req.header('cookie'),
         c.req.header('origin'),
         c.req.header('authorization'),
-        isAllowedWebSocketOrigin
+        isAllowedOrigin
       );
       return createManagedDatabaseLogStreamWSHandlers(databaseId, tail, credential);
     })
@@ -735,11 +778,12 @@ export function createApp() {
       const hostId = c.req.param('hostId') ?? '';
       const requestedTail = Number(c.req.query('tail')) || 100;
       const tail = Math.min(Math.max(Math.trunc(requestedTail), 1), DOCKER_LOG_TAIL_MAX);
+      const isAllowedOrigin = getAllowedWebSocketOrigin(c.req.url, c.req.header('host'));
       const credential = getProgrammaticWebSocketCredential(
         c.req.header('cookie'),
         c.req.header('origin'),
         c.req.header('authorization'),
-        isAllowedWebSocketOrigin
+        isAllowedOrigin
       );
       return createProxyLogStreamWSHandlers(hostId, tail, credential);
     })
@@ -752,11 +796,12 @@ export function createApp() {
       const nodeId = c.req.param('nodeId') ?? '';
       const requestedTail = Number(c.req.query('tail')) || 100;
       const tail = Math.min(Math.max(Math.trunc(requestedTail), 1), DOCKER_LOG_TAIL_MAX);
+      const isAllowedOrigin = getAllowedWebSocketOrigin(c.req.url, c.req.header('host'));
       const credential = getProgrammaticWebSocketCredential(
         c.req.header('cookie'),
         c.req.header('origin'),
         c.req.header('authorization'),
-        isAllowedWebSocketOrigin
+        isAllowedOrigin
       );
       return createNodeNginxLogStreamWSHandlers(nodeId, tail, credential);
     })
@@ -767,7 +812,12 @@ export function createApp() {
   app.get(
     '/api/events',
     upgradeWebSocket((c) => {
-      const sessionId = getWebSocketSessionId(c.req.header('cookie'), c.req.header('origin'));
+      const sessionId = getWebSocketSessionId(
+        c.req.header('cookie'),
+        c.req.header('origin'),
+        c.req.url,
+        c.req.header('host')
+      );
       return {
         onOpen(event, ws) {
           eventsHandlers.onOpen(event, ws);
@@ -792,11 +842,12 @@ export function createApp() {
     upgradeWebSocket((c) => {
       const nodeId = c.req.param('nodeId') ?? '';
       const project = decodeURIComponent(c.req.param('project') ?? '');
+      const isAllowedOrigin = getAllowedWebSocketOrigin(c.req.url, c.req.header('host'));
       const credential = getProgrammaticWebSocketCredential(
         c.req.header('cookie'),
         c.req.header('origin'),
         c.req.header('authorization'),
-        isAllowedWebSocketOrigin
+        isAllowedOrigin
       );
       return createComposeLogsWSHandlers(nodeId, project, credential);
     })
