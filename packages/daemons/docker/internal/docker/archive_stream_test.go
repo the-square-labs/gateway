@@ -134,6 +134,56 @@ func TestStripDockerArchiveRepoTagsRemovesAllTagMetadata(t *testing.T) {
 	}
 }
 
+func TestStripDockerArchiveRepoTagsRejectsMetadataPathAliasesAndDuplicates(t *testing.T) {
+	for _, entries := range [][]string{
+		{"/manifest.json"},
+		{"/../manifest.json"},
+		{"./manifest.json"},
+		{"//repositories"},
+		{"../../repositories"},
+		{"nested/../repositories"},
+		{"manifest.json", "manifest.json"},
+		{"repositories", "repositories"},
+	} {
+		t.Run(entries[0], func(t *testing.T) {
+			var source bytes.Buffer
+			writer := tar.NewWriter(&source)
+			for _, name := range entries {
+				if err := writer.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: 2}); err != nil {
+					t.Fatalf("write %s header: %v", name, err)
+				}
+				if _, err := writer.Write([]byte("{}")); err != nil {
+					t.Fatalf("write %s: %v", name, err)
+				}
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatalf("close source archive: %v", err)
+			}
+
+			var sanitized bytes.Buffer
+			if err := stripDockerArchiveRepoTags(bytes.NewReader(source.Bytes()), &sanitized); err == nil {
+				t.Fatalf("strip archive tags accepted metadata entries %#v", entries)
+			}
+		})
+	}
+}
+
+func TestStripDockerArchiveRepoTagsRejectsNonRegularMetadata(t *testing.T) {
+	var source bytes.Buffer
+	writer := tar.NewWriter(&source)
+	if err := writer.WriteHeader(&tar.Header{Name: "manifest.json", Typeflag: tar.TypeSymlink, Linkname: "payload.json"}); err != nil {
+		t.Fatalf("write symlink header: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close source archive: %v", err)
+	}
+
+	var sanitized bytes.Buffer
+	if err := stripDockerArchiveRepoTags(bytes.NewReader(source.Bytes()), &sanitized); err == nil {
+		t.Fatal("strip archive tags accepted a non-regular manifest entry")
+	}
+}
+
 func TestSanitizeGwcaLabelsRemovesReservedOwnershipNamespaces(t *testing.T) {
 	got := sanitizeGwcaLabels(map[string]string{
 		"app.label":                          "kept",

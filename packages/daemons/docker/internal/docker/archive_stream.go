@@ -414,6 +414,7 @@ func (w *countingWriter) Write(p []byte) (int, error) { w.n += int64(len(p)); re
 func stripDockerArchiveRepoTags(source io.Reader, destination io.Writer) (err error) {
 	input := tar.NewReader(source)
 	output := tar.NewWriter(destination)
+	seenMetadata := make(map[string]struct{}, 2)
 	defer func() {
 		if closeErr := output.Close(); err == nil && closeErr != nil {
 			err = fmt.Errorf("finish archive image stream: %w", closeErr)
@@ -429,7 +430,18 @@ func stripDockerArchiveRepoTags(source io.Reader, destination io.Writer) (err er
 			return fmt.Errorf("read archive image stream: %w", nextErr)
 		}
 
-		switch path.Clean(header.Name) {
+		metadataName, metadataErr := dockerArchiveTagMetadataEntryName(header)
+		if metadataErr != nil {
+			return metadataErr
+		}
+		if metadataName != "" {
+			if _, seen := seenMetadata[metadataName]; seen {
+				return fmt.Errorf("archive image contains duplicate %s entry", metadataName)
+			}
+			seenMetadata[metadataName] = struct{}{}
+		}
+
+		switch metadataName {
 		case "manifest.json":
 			manifest, readErr := readDockerArchiveManifest(input, header.Size)
 			if readErr != nil {
@@ -459,6 +471,27 @@ func stripDockerArchiveRepoTags(source io.Reader, destination io.Writer) (err er
 			}
 		}
 	}
+}
+
+// dockerArchiveTagMetadataEntryName identifies the two root metadata entries
+// Docker consumes for image tags. Reject aliases instead of copying them: the
+// Docker loader normalizes tar paths during extraction, so an absolute or
+// otherwise non-canonical name could become root metadata after this stream
+// has already decided it was an ordinary file.
+func dockerArchiveTagMetadataEntryName(header *tar.Header) (string, error) {
+	// Normalize against an extraction root. This catches aliases such as
+	// "/../manifest.json" and "../../repositories" as well as leading slashes.
+	cleanName := strings.TrimPrefix(path.Clean("/"+header.Name), "/")
+	if cleanName != "manifest.json" && cleanName != "repositories" {
+		return "", nil
+	}
+	if header.Name != cleanName {
+		return "", fmt.Errorf("archive image metadata entry %q has a non-canonical path", header.Name)
+	}
+	if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+		return "", fmt.Errorf("archive image metadata entry %q must be a regular file", header.Name)
+	}
+	return cleanName, nil
 }
 
 func readDockerArchiveManifest(reader io.Reader, size int64) ([]byte, error) {
