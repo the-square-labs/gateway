@@ -376,12 +376,13 @@ databaseRoutes.openapi(
     ...revealManagedDatabaseBindingCredentialsRoute,
     middleware: requireManagedDatabaseScopes('databases:credentials:reveal'),
   },
-  async (c) =>
-    c.json({
-      data: await container
-        .resolve(ManagedDatabaseBindingService)
-        .revealCredentials(c.req.param('id')!, c.req.param('bindingId')!),
-    })
+  async (c) => {
+    const bindings = container.resolve(ManagedDatabaseBindingService);
+    const managedDatabaseId = c.req.param('id')!;
+    const bindingId = c.req.param('bindingId')!;
+    await assertManagedDatabaseBindingTargetAccess(c, await bindings.getTarget(managedDatabaseId, bindingId));
+    return c.json({ data: await bindings.revealCredentials(managedDatabaseId, bindingId) });
+  }
 );
 
 databaseRoutes.openapi(listDatabaseFoldersRoute, async (c) => {
