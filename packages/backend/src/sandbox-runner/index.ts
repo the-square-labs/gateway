@@ -1008,10 +1008,10 @@ async function reconcileSandboxContainers(): Promise<{ removed: number }> {
   for (const container of containers) {
     const expiresAt = container.Labels?.['gateway.sandbox.expires_at'];
     const expired = !expiresAt || Date.parse(expiresAt) <= now;
-    const stopped = container.State !== 'running';
+    const terminal = container.State === 'exited' || container.State === 'dead';
     if (!expiresAt) {
       logger.warn('Removing sandbox container without expiry label', { containerId: container.Id });
-    } else if (!expired && !stopped) {
+    } else if (!expired && !terminal) {
       continue;
     }
 
