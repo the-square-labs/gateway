@@ -11,6 +11,8 @@ import type {
   SandboxRunnerExecutionResult,
   SandboxRunnerFetchParams,
   SandboxRunnerFetchResult,
+  SandboxRunnerFindJobContainerParams,
+  SandboxRunnerFindJobContainerResult,
   SandboxRunnerHealth,
   SandboxRunnerKillResult,
   SandboxRunnerListArtifactFilesParams,
@@ -27,10 +29,13 @@ import type {
   SandboxRunnerRunProcessParams,
   SandboxRunnerSendArtifactParams,
   SandboxRunnerSendArtifactResult,
+  SandboxRunnerUploadArtifactChunkParams,
+  SandboxRunnerUploadArtifactChunkResult,
   SandboxRunnerUploadArtifactParams,
   SandboxRunnerUploadArtifactResult,
   SandboxRunnerWaitProcessParams,
   SandboxRunnerWaitProcessResult,
+  SandboxRunnerWorkspaceUsageResult,
   SandboxRunnerWriteStdinParams,
   SandboxRunnerWriteStdinResult,
 } from './ai.sandbox-runner.protocol.js';
@@ -107,6 +112,11 @@ export class AISandboxRunnerService {
     return this.callRunner<SandboxRunnerFetchResult>('fetch', params);
   }
 
+  async findJobContainer(params: SandboxRunnerFindJobContainerParams) {
+    await this.ensureStarted();
+    return this.callRunner<SandboxRunnerFindJobContainerResult>('findJobContainer', params);
+  }
+
   async downloadArtifact(params: SandboxRunnerDownloadArtifactParams) {
     await this.ensureStarted();
     return this.callRunner<SandboxRunnerDownloadArtifactResult>('downloadArtifact', params);
@@ -117,6 +127,11 @@ export class AISandboxRunnerService {
     return this.callRunner<SandboxRunnerUploadArtifactResult>('uploadArtifact', params);
   }
 
+  async uploadArtifactChunk(params: SandboxRunnerUploadArtifactChunkParams) {
+    await this.ensureStarted();
+    return this.callRunner<SandboxRunnerUploadArtifactChunkResult>('uploadArtifactChunk', params);
+  }
+
   async listArtifactFiles(params: SandboxRunnerListArtifactFilesParams) {
     await this.ensureStarted();
     return this.callRunner<SandboxRunnerListArtifactFilesResult>('listArtifactFiles', params);
@@ -125,6 +140,11 @@ export class AISandboxRunnerService {
   async readArtifact(params: SandboxRunnerReadArtifactParams) {
     await this.ensureStarted();
     return this.callRunner<SandboxRunnerReadArtifactResult>('readArtifact', params);
+  }
+
+  async getWorkspaceUsage(params: SandboxRunnerProcessParams) {
+    await this.ensureStarted();
+    return this.callRunner<SandboxRunnerWorkspaceUsageResult>('getWorkspaceUsage', params);
   }
 
   async sendArtifact(params: SandboxRunnerSendArtifactParams) {
@@ -139,7 +159,8 @@ export class AISandboxRunnerService {
 
   async waitProcess(params: SandboxRunnerWaitProcessParams) {
     await this.ensureStarted();
-    return this.callRunner<SandboxRunnerWaitProcessResult>('waitProcess', params);
+    const timeoutMs = (params.timeoutMs ?? 25 * 60 * 1000) + 30_000;
+    return this.callRunner<SandboxRunnerWaitProcessResult>('waitProcess', params, timeoutMs);
   }
 
   async writeProcessStdin(params: SandboxRunnerWriteStdinParams) {
@@ -201,18 +222,19 @@ export class AISandboxRunnerService {
     throw new Error('Sandbox runner socket did not become ready');
   }
 
-  private callRunner<TResult>(method: SandboxRunnerRequest['method'], params: unknown): Promise<TResult> {
+  private callRunner<TResult>(
+    method: SandboxRunnerRequest['method'],
+    params: unknown,
+    timeoutMs = 25 * 60 * 1000
+  ): Promise<TResult> {
     return new Promise((resolve, reject) => {
       const id = randomUUID();
       const socket = net.createConnection({ path: this.socketPath });
       let buffer = '';
-      const timeout = setTimeout(
-        () => {
-          socket.destroy();
-          reject(new Error(`Sandbox runner call timed out: ${method}`));
-        },
-        25 * 60 * 1000
-      );
+      const timeout = setTimeout(() => {
+        socket.destroy();
+        reject(new Error(`Sandbox runner call timed out: ${method}`));
+      }, timeoutMs);
 
       socket.on('connect', () => {
         socket.write(`${JSON.stringify({ id, method, params } satisfies SandboxRunnerRequest)}\n`);

@@ -13,6 +13,8 @@ import type {
   SandboxRunnerExecutionResult,
   SandboxRunnerFetchParams,
   SandboxRunnerFetchResult,
+  SandboxRunnerFindJobContainerParams,
+  SandboxRunnerFindJobContainerResult,
   SandboxRunnerHealth,
   SandboxRunnerKillResult,
   SandboxRunnerListArtifactFilesEntry,
@@ -30,10 +32,13 @@ import type {
   SandboxRunnerRunProcessParams,
   SandboxRunnerSendArtifactParams,
   SandboxRunnerSendArtifactResult,
+  SandboxRunnerUploadArtifactChunkParams,
+  SandboxRunnerUploadArtifactChunkResult,
   SandboxRunnerUploadArtifactParams,
   SandboxRunnerUploadArtifactResult,
   SandboxRunnerWaitProcessParams,
   SandboxRunnerWaitProcessResult,
+  SandboxRunnerWorkspaceUsageResult,
   SandboxRunnerWriteStdinParams,
   SandboxRunnerWriteStdinResult,
 } from '@/modules/ai/ai.sandbox-runner.protocol.js';
@@ -48,6 +53,11 @@ import {
   resolveHostArtifactPath as resolveSafeHostArtifactPath,
 } from './artifact-path.js';
 import { readResponseBodyCapped } from './network.js';
+import {
+  evaluateWorkspaceAdmission,
+  measureWorkspaceUsageBytes,
+  remainingWorkspaceReservationBytes,
+} from './workspace-policy.js';
 
 const logger = createChildLogger('SandboxRunner');
 const SOCKET_PATH = process.env.SANDBOX_RUNNER_SOCKET || '/tmp/gateway-sandbox-runner.sock';
@@ -57,12 +67,20 @@ const STDIN_LIMIT_BYTES = 64 * 1024;
 const FETCH_LIMIT_BYTES = 10 * 1024 * 1024;
 const DOWNLOAD_LIMIT_BYTES = 200 * 1024 * 1024;
 const UPLOAD_ARTIFACT_LIMIT_BYTES = 200 * 1024 * 1024;
+const UPLOAD_ARTIFACT_CHUNK_LIMIT_BYTES = 256 * 1024;
 const READ_ARTIFACT_LIMIT_BYTES = 1024 * 1024;
 const SEND_ARTIFACT_LIMIT_BYTES = 10 * 1024 * 1024;
 const LIST_ARTIFACT_FILES_DEFAULT_LIMIT = 200;
 const LIST_ARTIFACT_FILES_MAX_LIMIT = 1000;
 const LIST_ARTIFACT_FILES_MAX_DEPTH = 8;
 const CPU_PERIOD = 100_000;
+const SANDBOX_CPU_SHARES = 128;
+const SANDBOX_BLKIO_WEIGHT = 10;
+const LEGACY_WORKSPACE_RESERVATION_BYTES: Record<string, number> = {
+  low: 1024 * 1024 * 1024,
+  medium: 2 * 1024 * 1024 * 1024,
+  high: 5 * 1024 * 1024 * 1024,
+};
 const RECONCILE_INTERVAL_MS = 30_000;
 const ARTIFACT_ROOT = '/workspace';
 const WORKSPACE_HOST_ROOT =
@@ -75,6 +93,8 @@ const docker = new DockerService(DOCKER_SOCKET, '');
 const runningTimeouts = new Map<string, NodeJS.Timeout>();
 const imageEnsurePromises = new Map<string, Promise<string>>();
 const workspaceDirs = new Map<string, string>();
+const workspaceReservations = new Map<string, number>();
+let workspaceAdmissionLock = Promise.resolve();
 
 interface RuntimeImageSpec {
   upstreamImage: string;
@@ -245,6 +265,7 @@ function sandboxLabels(
     'gateway.sandbox.required_scopes': policy.requiredScopes.join(','),
     'gateway.sandbox.expires_at': expiresAt.toISOString(),
     'gateway.sandbox.workspace_dir': workspaceDir,
+    'gateway.sandbox.workspace_reservation_bytes': String(policy.workspaceBytes),
   };
 }
 
@@ -269,12 +290,25 @@ async function createWorkspaceDir(): Promise<string> {
   return workspaceDir;
 }
 
-async function cleanupWorkspaceDir(workspaceDir: string | undefined): Promise<void> {
-  if (!workspaceDir) return;
+async function cleanupWorkspaceDir(workspaceDir: string | undefined): Promise<boolean> {
+  if (!workspaceDir) return true;
   const root = await fs.realpath(WORKSPACE_HOST_ROOT).catch(() => WORKSPACE_HOST_ROOT);
   const target = await fs.realpath(workspaceDir).catch(() => workspaceDir);
-  if (target !== root && target.startsWith(`${root}${path.sep}`)) {
-    await fs.rm(target, { recursive: true, force: true }).catch(() => {});
+  if (target === root || !target.startsWith(`${root}${path.sep}`)) {
+    logger.warn('Sandbox workspace is outside the managed root; retaining its stopped container for inspection', {
+      workspaceDir: target,
+    });
+    return false;
+  }
+  try {
+    await fs.rm(target, { recursive: true, force: true });
+    return true;
+  } catch (error) {
+    logger.warn('Failed to remove sandbox workspace; retaining its stopped container for retry', {
+      workspaceDir: target,
+      error,
+    });
+    return false;
   }
 }
 
@@ -305,16 +339,18 @@ async function allowSandboxFileHandleAccess(file: fs.FileHandle): Promise<void> 
   }
 }
 
-async function removeContainerAndWorkspace(containerId: string): Promise<void> {
+async function removeContainerAndWorkspace(containerId: string): Promise<boolean> {
   let workspaceDir = workspaceDirs.get(containerId);
   if (!workspaceDir) {
     const inspect = (await docker.inspectContainer(containerId).catch(() => null)) as any;
     const label = inspect?.Config?.Labels?.['gateway.sandbox.workspace_dir'];
     workspaceDir = typeof label === 'string' ? label : undefined;
   }
+  if (!(await cleanupWorkspaceDir(workspaceDir))) return false;
   await docker.removeContainer(containerId).catch(() => {});
   workspaceDirs.delete(containerId);
-  await cleanupWorkspaceDir(workspaceDir);
+  workspaceReservations.delete(containerId);
+  return true;
 }
 
 async function workspaceDirForProcess(processId: string): Promise<string> {
@@ -327,6 +363,129 @@ async function workspaceDirForProcess(processId: string): Promise<string> {
   }
   workspaceDirs.set(processId, workspaceDir);
   return workspaceDir;
+}
+
+async function workspaceReservationForProcess(processId: string): Promise<number> {
+  const mapped = workspaceReservations.get(processId);
+  if (mapped !== undefined) return mapped;
+  const inspect = (await docker.inspectContainer(processId)) as any;
+  const reservation = workspaceReservationFromLabels(inspect?.Config?.Labels);
+  if (!Number.isSafeInteger(reservation) || reservation <= 0) {
+    throw new Error('sandbox workspace reservation is not available for this process; restart the sandbox process');
+  }
+  workspaceReservations.set(processId, reservation);
+  return reservation;
+}
+
+function workspaceReservationFromLabels(labels: Record<string, string> | undefined): number {
+  const raw = labels?.['gateway.sandbox.workspace_reservation_bytes'];
+  const reservation = typeof raw === 'string' ? Number(raw) : 0;
+  if (Number.isSafeInteger(reservation) && reservation > 0) return reservation;
+  return LEGACY_WORKSPACE_RESERVATION_BYTES[labels?.['gateway.sandbox.tier'] ?? ''] ?? 0;
+}
+
+async function workspaceUsageForProcess(processId: string): Promise<number> {
+  const workspaceDir = await workspaceDirForProcess(processId);
+  return measureWorkspaceUsageBytes(workspaceDir);
+}
+
+async function assertWorkspaceArtifactQuota(processId: string, additionalBytes = 0): Promise<void> {
+  const [workspaceUsageBytes, reservationBytes] = await Promise.all([
+    workspaceUsageForProcess(processId),
+    workspaceReservationForProcess(processId),
+  ]);
+  if (workspaceUsageBytes > reservationBytes || workspaceUsageBytes + additionalBytes > reservationBytes) {
+    throw new Error(
+      `sandbox workspace soft quota exceeded: ${workspaceUsageBytes} bytes used, ${reservationBytes} bytes reserved`
+    );
+  }
+}
+
+async function getWorkspaceUsage(params: SandboxRunnerProcessParams): Promise<SandboxRunnerWorkspaceUsageResult> {
+  const [workspaceUsageBytes, workspaceReservationBytes] = await Promise.all([
+    workspaceUsageForProcess(params.processId),
+    workspaceReservationForProcess(params.processId),
+  ]);
+  return {
+    processId: params.processId,
+    workspaceUsageBytes,
+    workspaceReservationBytes,
+    overReservation: workspaceUsageBytes > workspaceReservationBytes,
+  };
+}
+
+async function findJobContainer(
+  params: SandboxRunnerFindJobContainerParams
+): Promise<SandboxRunnerFindJobContainerResult> {
+  const containers = await docker.listContainersByLabel(`gateway.sandbox.job_id=${params.jobId}`);
+  const container = containers[0];
+  return {
+    jobId: params.jobId,
+    containerId: container?.Id ?? null,
+    expiresAt: container?.Labels?.['gateway.sandbox.expires_at'] ?? null,
+  };
+}
+
+async function activeWorkspaceReservationBytes(): Promise<number> {
+  const containers = await docker.listContainersByLabel('gateway.sandbox=true');
+  let remainingBytes = 0;
+  for (const container of containers) {
+    const labels = container.Labels;
+    const reservationBytes = workspaceReservationFromLabels(labels);
+    const workspaceDir = labels?.['gateway.sandbox.workspace_dir'];
+    const usageBytes =
+      typeof workspaceDir === 'string'
+        ? await measureWorkspaceUsageBytes(workspaceDir).catch((error) => {
+            logger.warn('Failed to measure active sandbox workspace usage for admission', {
+              containerId: container.Id,
+              error,
+            });
+            return 0;
+          })
+        : 0;
+    remainingBytes += remainingWorkspaceReservationBytes(reservationBytes, usageBytes);
+    if (!Number.isSafeInteger(remainingBytes)) return Number.MAX_SAFE_INTEGER;
+  }
+  return remainingBytes;
+}
+
+async function assertWorkspaceAdmission(requestedReservationBytes: number): Promise<void> {
+  try {
+    await fs.mkdir(WORKSPACE_HOST_ROOT, { recursive: true, mode: 0o700 });
+    const filesystem = await fs.statfs(WORKSPACE_HOST_ROOT);
+    const blockSize = Number(filesystem.bsize);
+    const totalBytes = Number(filesystem.blocks) * blockSize;
+    const usedBytes = (Number(filesystem.blocks) - Number(filesystem.bfree)) * blockSize;
+    const activeReservationBytes = await activeWorkspaceReservationBytes();
+    const admission = evaluateWorkspaceAdmission({
+      totalBytes,
+      usedBytes,
+      activeReservationBytes,
+      requestedReservationBytes,
+    });
+    if (!admission.allowed) {
+      throw new Error(
+        `sandbox workspace admission denied: projected ${admission.projectedBytes} bytes reaches the 80% host-disk limit (${admission.limitBytes} bytes)`
+      );
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('sandbox workspace admission denied:')) throw error;
+    throw new Error('sandbox workspace admission denied: host-disk usage is unavailable');
+  }
+}
+
+async function withWorkspaceAdmissionLock<T>(work: () => Promise<T>): Promise<T> {
+  const previous = workspaceAdmissionLock;
+  let release!: () => void;
+  workspaceAdmissionLock = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await work();
+  } finally {
+    release();
+  }
 }
 
 const resolveHostArtifactPath = (workspaceDir: string, relativePath: string) =>
@@ -344,42 +503,50 @@ async function containerConfig(
 ): Promise<SandboxContainerConfig> {
   const expiresAt = new Date(Date.now() + policy.ttlSeconds * 1000);
   const workspaceDir = await createWorkspaceDir();
-  return {
-    workspaceDir,
-    config: {
-      Image: await ensureRuntimeImage(policy.runtime),
-      Cmd: command,
-      Labels: sandboxLabels(policy, expiresAt, workspaceDir),
-      User: '65534:65534',
-      WorkingDir: '/workspace',
-      AttachStdout: true,
-      AttachStderr: true,
-      AttachStdin: !!options.openStdin,
-      OpenStdin: !!options.openStdin,
-      StdinOnce: false,
-      Tty: false,
-      HostConfig: {
-        AutoRemove: false,
-        ReadonlyRootfs: true,
-        Binds: [`${workspaceDir}:/workspace:rw`],
-        NetworkMode: 'none',
-        CapDrop: ['ALL'],
-        SecurityOpt: ['no-new-privileges'],
-        PidsLimit: policy.pidsLimit,
-        Memory: policy.memoryBytes,
-        MemorySwap: policy.memoryBytes,
-        CpuPeriod: CPU_PERIOD,
-        CpuQuota: policy.cpuQuota,
-        LogConfig: {
-          Type: 'json-file',
-          Config: {
-            'max-size': '256k',
-            'max-file': '1',
+  try {
+    const image = await ensureRuntimeImage(policy.runtime);
+    return {
+      workspaceDir,
+      config: {
+        Image: image,
+        Cmd: command,
+        Labels: sandboxLabels(policy, expiresAt, workspaceDir),
+        User: '65534:65534',
+        WorkingDir: '/workspace',
+        AttachStdout: true,
+        AttachStderr: true,
+        AttachStdin: !!options.openStdin,
+        OpenStdin: !!options.openStdin,
+        StdinOnce: false,
+        Tty: false,
+        HostConfig: {
+          AutoRemove: false,
+          ReadonlyRootfs: true,
+          Binds: [`${workspaceDir}:/workspace:rw`],
+          NetworkMode: 'none',
+          CapDrop: ['ALL'],
+          SecurityOpt: ['no-new-privileges'],
+          PidsLimit: policy.pidsLimit,
+          Memory: policy.memoryBytes,
+          MemorySwap: policy.memoryBytes,
+          CpuPeriod: CPU_PERIOD,
+          CpuQuota: policy.cpuQuota,
+          CpuShares: SANDBOX_CPU_SHARES,
+          BlkioWeight: SANDBOX_BLKIO_WEIGHT,
+          LogConfig: {
+            Type: 'json-file',
+            Config: {
+              'max-size': '256k',
+              'max-file': '1',
+            },
           },
         },
       },
-    },
-  };
+    };
+  } catch (error) {
+    await cleanupWorkspaceDir(workspaceDir);
+    throw error;
+  }
 }
 
 function scheduleKill(containerId: string, ttlSeconds: number): void {
@@ -421,8 +588,13 @@ async function executeScript(params: SandboxRunnerExecuteScriptParams): Promise<
   );
   let containerId = '';
   try {
-    containerId = await docker.createContainer(config);
-    workspaceDirs.set(containerId, workspaceDir);
+    containerId = await withWorkspaceAdmissionLock(async () => {
+      await assertWorkspaceAdmission(params.policy.workspaceBytes);
+      const id = await docker.createContainer(config);
+      workspaceDirs.set(id, workspaceDir);
+      workspaceReservations.set(id, params.policy.workspaceBytes);
+      return id;
+    });
   } catch (error) {
     await cleanupWorkspaceDir(workspaceDir);
     throw error;
@@ -440,6 +612,7 @@ async function executeScript(params: SandboxRunnerExecuteScriptParams): Promise<
         throw error;
       });
     const output = truncateOutput(await docker.getContainerLogs(containerId));
+    const workspaceUsageBytes = await workspaceUsageForProcess(containerId);
     return {
       jobId: params.policy.jobId,
       containerId,
@@ -447,6 +620,7 @@ async function executeScript(params: SandboxRunnerExecuteScriptParams): Promise<
       output,
       outputBytes: Buffer.byteLength(output),
       timedOut,
+      workspaceUsageBytes,
     };
   } finally {
     clearKill(containerId);
@@ -458,20 +632,30 @@ async function runProcess(params: SandboxRunnerRunProcessParams): Promise<Sandbo
   const { config, workspaceDir } = await containerConfig(params.policy, params.command, { openStdin: true });
   let containerId = '';
   try {
-    containerId = await docker.createContainer(config);
-    workspaceDirs.set(containerId, workspaceDir);
+    containerId = await withWorkspaceAdmissionLock(async () => {
+      await assertWorkspaceAdmission(params.policy.workspaceBytes);
+      const id = await docker.createContainer(config);
+      workspaceDirs.set(id, workspaceDir);
+      workspaceReservations.set(id, params.policy.workspaceBytes);
+      return id;
+    });
   } catch (error) {
     await cleanupWorkspaceDir(workspaceDir);
     throw error;
   }
-  await docker.startContainer(containerId);
-  scheduleKill(containerId, params.policy.ttlSeconds);
-  return {
-    processId: containerId,
-    jobId: params.policy.jobId,
-    containerId,
-    expiresAt: new Date(Date.now() + params.policy.ttlSeconds * 1000).toISOString(),
-  };
+  try {
+    await docker.startContainer(containerId);
+    scheduleKill(containerId, params.policy.ttlSeconds);
+    return {
+      processId: containerId,
+      jobId: params.policy.jobId,
+      containerId,
+      expiresAt: new Date(Date.now() + params.policy.ttlSeconds * 1000).toISOString(),
+    };
+  } catch (error) {
+    await removeContainerAndWorkspace(containerId);
+    throw error;
+  }
 }
 
 async function fetchUrl(params: SandboxRunnerFetchParams): Promise<SandboxRunnerFetchResult> {
@@ -489,6 +673,7 @@ async function downloadArtifact(
   const fallbackFilename = fallbackFilenameFromUrl(url);
   const artifactPath = resolveArtifactPath(params.path, fallbackFilename);
   const { status, contentType, buffer } = await readResponseBodyCapped(url, DOWNLOAD_LIMIT_BYTES);
+  await assertWorkspaceArtifactQuota(params.processId, buffer.byteLength);
   const workspaceDir = await workspaceDirForProcess(params.processId);
   const hostArtifact = await resolveHostArtifactPath(workspaceDir, artifactPath.relativePath);
   const file = await openHostArtifact(hostArtifact, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC, 0o600);
@@ -514,6 +699,7 @@ async function uploadArtifact(params: SandboxRunnerUploadArtifactParams): Promis
   if (bytes.byteLength > UPLOAD_ARTIFACT_LIMIT_BYTES) {
     throw new Error(`artifact upload is limited to ${UPLOAD_ARTIFACT_LIMIT_BYTES} bytes`);
   }
+  await assertWorkspaceArtifactQuota(params.processId, bytes.byteLength);
   const workspaceDir = await workspaceDirForProcess(params.processId);
   const hostArtifact = await resolveHostArtifactPath(workspaceDir, artifactPath.relativePath);
   const file = await openHostArtifact(hostArtifact, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC, 0o600);
@@ -530,6 +716,50 @@ async function uploadArtifact(params: SandboxRunnerUploadArtifactParams): Promis
   };
 }
 
+async function uploadArtifactChunk(
+  params: SandboxRunnerUploadArtifactChunkParams
+): Promise<SandboxRunnerUploadArtifactChunkResult> {
+  const artifactPath = resolveArtifactPath(params.path);
+  const offset = Number.isSafeInteger(params.offset) && params.offset >= 0 ? params.offset : -1;
+  if (offset < 0) throw new Error('artifact upload offset must be a non-negative integer');
+  const bytes = Buffer.from(String(params.contentBase64 ?? ''), 'base64');
+  if (bytes.byteLength === 0 || bytes.byteLength > UPLOAD_ARTIFACT_CHUNK_LIMIT_BYTES) {
+    throw new Error(`artifact upload chunk is limited to ${UPLOAD_ARTIFACT_CHUNK_LIMIT_BYTES} bytes`);
+  }
+  await assertWorkspaceArtifactQuota(params.processId, bytes.byteLength);
+  const workspaceDir = await workspaceDirForProcess(params.processId);
+  const hostArtifact = await resolveHostArtifactPath(workspaceDir, artifactPath.relativePath);
+  const existing = await openHostArtifact(hostArtifact, constants.O_RDONLY)
+    .then(async (file) => {
+      try {
+        return await file.stat();
+      } finally {
+        await file.close();
+      }
+    })
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+  const existingBytes = existing?.isFile() ? existing.size : 0;
+  if (existing && !existing.isFile())
+    throw new Error(`artifact upload failed: ${artifactPath.relativePath} is not a file`);
+  if (existingBytes !== offset)
+    throw new Error(`artifact upload offset does not match stored size for ${artifactPath.relativePath}`);
+  const file = await openHostArtifact(
+    hostArtifact,
+    constants.O_WRONLY | constants.O_CREAT | (offset === 0 ? constants.O_TRUNC : constants.O_APPEND),
+    0o600
+  );
+  try {
+    await file.writeFile(bytes);
+    await allowSandboxFileHandleAccess(file);
+  } finally {
+    await file.close();
+  }
+  return { processId: params.processId, path: artifactPath.relativePath, sizeBytes: offset + bytes.byteLength };
+}
+
 function boundedInteger(value: unknown, fallback: number, min: number, max: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(value)));
@@ -538,6 +768,7 @@ function boundedInteger(value: unknown, fallback: number, min: number, max: numb
 async function listArtifactFiles(
   params: SandboxRunnerListArtifactFilesParams
 ): Promise<SandboxRunnerListArtifactFilesResult> {
+  await assertWorkspaceArtifactQuota(params.processId);
   const artifactPath = resolveArtifactDirectoryPath(params.path);
   const workspaceDir = await workspaceDirForProcess(params.processId);
   const rootDirectory = await resolveHostArtifactDirectory(workspaceDir, artifactPath.relativePath);
@@ -657,6 +888,7 @@ async function readArtifactBytes(
 }
 
 async function readArtifact(params: SandboxRunnerReadArtifactParams): Promise<SandboxRunnerReadArtifactResult> {
+  await assertWorkspaceArtifactQuota(params.processId);
   const encoding = params.encoding === 'base64' ? 'base64' : 'utf8';
   const result = await readArtifactBytes(
     params.processId,
@@ -680,6 +912,7 @@ async function readArtifact(params: SandboxRunnerReadArtifactParams): Promise<Sa
 }
 
 async function sendArtifact(params: SandboxRunnerSendArtifactParams): Promise<SandboxRunnerSendArtifactResult> {
+  await assertWorkspaceArtifactQuota(params.processId);
   const result = await readArtifactBytes(
     params.processId,
     params.path,
@@ -716,10 +949,12 @@ async function readProcessOutput(params: SandboxRunnerReadOutputParams): Promise
 async function waitProcess(params: SandboxRunnerWaitProcessParams): Promise<SandboxRunnerWaitProcessResult> {
   const exitCode = await docker.waitContainer(params.processId, params.timeoutMs ?? 25 * 60 * 1000);
   const output = truncateOutput(await docker.getContainerLogs(params.processId).catch(() => ''));
+  const workspaceUsageBytes = await workspaceUsageForProcess(params.processId).catch(() => 0);
   return {
     processId: params.processId,
     exitCode,
     outputBytes: Buffer.byteLength(output),
+    workspaceUsageBytes,
   };
 }
 
@@ -743,7 +978,9 @@ async function writeProcessStdin(params: SandboxRunnerWriteStdinParams): Promise
 async function killProcess(params: SandboxRunnerProcessParams): Promise<SandboxRunnerKillResult> {
   await killContainerIfRunning(params.processId);
   clearKill(params.processId);
-  await removeContainerAndWorkspace(params.processId);
+  if (!(await removeContainerAndWorkspace(params.processId))) {
+    throw new Error('Sandbox workspace cleanup is pending');
+  }
   return { processId: params.processId, killed: true };
 }
 
@@ -770,16 +1007,19 @@ async function reconcileSandboxContainers(): Promise<{ removed: number }> {
 
   for (const container of containers) {
     const expiresAt = container.Labels?.['gateway.sandbox.expires_at'];
+    const expired = !expiresAt || Date.parse(expiresAt) <= now;
+    const terminal = container.State === 'exited' || container.State === 'dead';
     if (!expiresAt) {
       logger.warn('Removing sandbox container without expiry label', { containerId: container.Id });
-    } else if (Date.parse(expiresAt) > now) {
+    } else if (!expired && !terminal) {
       continue;
     }
 
     await killContainerIfRunning(container.Id).catch(() => {});
-    await removeContainerAndWorkspace(container.Id);
-    clearKill(container.Id);
-    removed += 1;
+    if (await removeContainerAndWorkspace(container.Id)) {
+      clearKill(container.Id);
+      removed += 1;
+    }
   }
 
   return { removed };
@@ -797,12 +1037,18 @@ async function handle(request: SandboxRunnerRequest): Promise<unknown> {
       return fetchUrl(request.params as SandboxRunnerFetchParams);
     case 'downloadArtifact':
       return downloadArtifact(request.params as SandboxRunnerDownloadArtifactParams);
+    case 'findJobContainer':
+      return findJobContainer(request.params as SandboxRunnerFindJobContainerParams);
     case 'uploadArtifact':
       return uploadArtifact(request.params as SandboxRunnerUploadArtifactParams);
+    case 'uploadArtifactChunk':
+      return uploadArtifactChunk(request.params as SandboxRunnerUploadArtifactChunkParams);
     case 'listArtifactFiles':
       return listArtifactFiles(request.params as SandboxRunnerListArtifactFilesParams);
     case 'readArtifact':
       return readArtifact(request.params as SandboxRunnerReadArtifactParams);
+    case 'getWorkspaceUsage':
+      return getWorkspaceUsage(request.params as SandboxRunnerProcessParams);
     case 'sendArtifact':
       return sendArtifact(request.params as SandboxRunnerSendArtifactParams);
     case 'readProcessOutput':

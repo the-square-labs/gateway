@@ -160,6 +160,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `ai:sandbox:use` |  |
 | `ai:sandbox:tier:medium` |  |
 | `ai:sandbox:tier:high` |  |
+| `ai:sandbox:tier:max` |  |
 | `ai:sandbox:manage` |  |
 | `mcp:use` |  |
 | `inference:use` |  |
@@ -257,6 +258,7 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 | `ai:sandbox:use` | User/session-only sandbox runner access. |
 | `ai:sandbox:tier:medium` | User/session-only sandbox runner tier access. |
 | `ai:sandbox:tier:high` | User/session-only sandbox runner tier access. |
+| `ai:sandbox:tier:max` | User/session-only sandbox runner tier access. |
 | `ai:sandbox:manage` | User/session-only sandbox runner management. |
 | `mcp:use` | User-account capability gate for remote MCP. |
 | `inference:use` | User/session-only inference access; also grants current-user usage visibility. |

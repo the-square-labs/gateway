@@ -133,6 +133,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | ai:sandbox:use | Use AI sandbox runner tools |
 | ai:sandbox:tier:medium | Allow medium sandbox resource tier |
 | ai:sandbox:tier:high | Allow high sandbox resource tier |
+| ai:sandbox:tier:max | Allow max sandbox resource tier |
 | ai:sandbox:manage | View/manage sandbox jobs beyond the current user |
 | mcp:use | Allow a user account to access the remote MCP server with OAuth |
 

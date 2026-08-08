@@ -216,6 +216,12 @@ export interface VcsArchiveResult {
   bytes: Buffer;
 }
 
+export interface VcsArchiveStream {
+  filename: string;
+  contentType: string | null;
+  chunks: AsyncIterable<Buffer>;
+}
+
 export interface VcsRegistryRef {
   remoteRegistryId?: string | null;
   projectRemoteId?: string | null;
@@ -319,4 +325,10 @@ export interface VcsConnectorProvider extends ConnectorProvider {
     ref?: string,
     options?: { maxBytes?: number; timeoutMs?: number }
   ): Promise<VcsArchiveResult>;
+  streamRepositoryArchive(
+    auth: VcsConnectorAuth,
+    project: VcsProjectRef,
+    ref?: string,
+    options?: { maxBytes?: number; timeoutMs?: number }
+  ): Promise<VcsArchiveStream>;
 }

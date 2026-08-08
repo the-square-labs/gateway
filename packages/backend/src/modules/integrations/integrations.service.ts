@@ -1657,31 +1657,27 @@ export class IntegrationsService {
     });
     const targetPath = this.safeRelativePath(input.targetPath || this.slugPath(context.project.name || 'repository'));
     const archivePath = `.gateway/gitlab-${Date.now()}.tar.gz`;
+    const archiveReadyPath = `${archivePath}.ready`;
+    if (!('streamRepositoryArchive' in context.provider)) {
+      throw new AppError(
+        501,
+        'CONNECTOR_VCS_PROVIDER_UNAVAILABLE',
+        'The gitlab VCS provider cannot stream repository archives'
+      );
+    }
     const connectorSettings = this.gitLabSettings(context.connector);
     const cloneTimeoutSeconds = Math.max(10, connectorSettings.cloneTimeoutSeconds);
     const effectiveTtlSeconds = Math.min(input.ttlSeconds ?? cloneTimeoutSeconds, cloneTimeoutSeconds);
     const processTtlSeconds = effectiveTtlSeconds + cloneTimeoutSeconds;
-    const archive = await context.provider.downloadRepositoryArchive(
-      context.auth,
-      this.toProviderProject(context.project),
-      input.ref,
-      {
-        maxBytes: connectorSettings.cloneMaxSizeMb * 1024 * 1024,
-        timeoutMs: cloneTimeoutSeconds * 1000,
-      }
-    );
-    if (archive.bytes.byteLength > connectorSettings.cloneMaxSizeMb * 1024 * 1024) {
-      throw new AppError(413, 'GITLAB_ARCHIVE_TOO_LARGE', 'Repository archive exceeds connector clone size limit');
-    }
     const command = [
       'sh',
       '-lc',
       [
         'set -eu',
-        `while [ ! -f ${this.shellQuote(`/workspace/${archivePath}`)} ]; do sleep 0.2; done`,
+        `while [ ! -f ${this.shellQuote(`/workspace/${archiveReadyPath}`)} ]; do sleep 0.2; done`,
         `mkdir -p ${this.shellQuote(`/workspace/${targetPath}`)}`,
         `tar -xzf ${this.shellQuote(`/workspace/${archivePath}`)} -C ${this.shellQuote(`/workspace/${targetPath}`)} --strip-components=1`,
-        `rm -f ${this.shellQuote(`/workspace/${archivePath}`)}`,
+        `rm -f ${this.shellQuote(`/workspace/${archivePath}`)} ${this.shellQuote(`/workspace/${archiveReadyPath}`)}`,
         'echo CLONE_READY',
         `sleep ${effectiveTtlSeconds}`,
       ].join('; '),
@@ -1692,16 +1688,38 @@ export class IntegrationsService {
       ttlSeconds: processTtlSeconds,
       conversationId,
     });
-    await sandboxService.uploadArtifact(user, {
-      processId: process.processId,
-      path: archivePath,
-      contentBase64: archive.bytes.toString('base64'),
-    });
+    let archiveBytes = 0;
+    try {
+      const archive = await context.provider.streamRepositoryArchive(
+        context.auth,
+        this.toProviderProject(context.project),
+        input.ref,
+        {
+          maxBytes: connectorSettings.cloneMaxSizeMb * 1024 * 1024,
+          timeoutMs: cloneTimeoutSeconds * 1000,
+        }
+      );
+      const uploaded = await sandboxService.uploadArtifactStream(user, {
+        processId: process.processId,
+        path: archivePath,
+        chunks: archive.chunks,
+        maxBytes: connectorSettings.cloneMaxSizeMb * 1024 * 1024,
+      });
+      await sandboxService.uploadArtifact(user, {
+        processId: process.processId,
+        path: archiveReadyPath,
+        contentBase64: '',
+      });
+      archiveBytes = uploaded.sizeBytes;
+    } catch (error) {
+      await sandboxService.killProcess(user, process.processId).catch(() => {});
+      throw error;
+    }
     await this.auditGitLabTool(user, context.connector, GITLAB_AUDIT_ACTIONS.repositoryClone, {
       project: context.project.fullPath,
       ref: input.ref ?? null,
       targetPath,
-      archiveBytes: archive.bytes.byteLength,
+      archiveBytes,
       processId: process.processId,
     });
     return {
@@ -1709,7 +1727,7 @@ export class IntegrationsService {
       jobId: process.jobId,
       path: targetPath,
       ref: input.ref ?? context.project.defaultBranch ?? null,
-      archiveBytes: archive.bytes.byteLength,
+      archiveBytes,
       status: 'extracting',
       nextStep:
         'Call read_process_output for CLONE_READY, then use list_artifact_files with this processId/path for repository structure and read_artifact for specific files. Do not start another sandbox process just to list or read cloned files.',
