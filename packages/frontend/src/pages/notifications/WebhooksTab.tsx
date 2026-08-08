@@ -149,7 +149,10 @@ export function WebhooksTab({
       id: "url",
       header: "URL",
       render: (webhook) => (
-        <span className="block max-w-[300px] truncate font-mono text-sm text-muted-foreground">
+        <span
+          title={webhook.url}
+          className="block min-w-0 truncate font-mono text-sm text-muted-foreground"
+        >
           {webhook.url}
         </span>
       ),

@@ -429,6 +429,18 @@ const RAW_TOKEN_SCOPES = [
     group: "Administration",
   },
   {
+    value: "audit:siem:view",
+    label: "View SIEM Export",
+    desc: "View SIEM destinations and audit delivery history",
+    group: "Administration",
+  },
+  {
+    value: "audit:siem:manage",
+    label: "Manage SIEM Export",
+    desc: "Configure SIEM destinations and control audit deliveries",
+    group: "Administration",
+  },
+  {
     value: "admin:system",
     label: "System Admin",
     desc: "System-level administration (protected)",

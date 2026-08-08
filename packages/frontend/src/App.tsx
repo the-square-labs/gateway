@@ -528,10 +528,11 @@ function DatabaseDetailGuard() {
   );
 }
 
-function NotificationsPageGuard() {
+export function NotificationsPageGuard() {
   const hasAnyScope = useAuthStore((s) => s.hasAnyScope);
+  const siemEnabled = useSystemConfigStore((s) => s.config.features.siemEnabled);
 
-  const canAccessNotifications = hasAnyScope(
+  const hasCoreNotificationAccess = hasAnyScope(
     "notifications:alerts:view",
     "notifications:alerts:view",
     "notifications:alerts:create",
@@ -547,6 +548,9 @@ function NotificationsPageGuard() {
     "notifications:view",
     "notifications:manage"
   );
+  const canAccessNotifications =
+    hasCoreNotificationAccess ||
+    (siemEnabled && hasAnyScope("audit:siem:view", "audit:siem:manage"));
 
   if (!canAccessNotifications) {
     return <Navigate to="/" replace />;

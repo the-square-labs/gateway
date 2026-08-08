@@ -96,6 +96,7 @@ export function SidebarContent({
     (state) => state.snapshot?.navigation.hasCloudflareIntegration ?? false
   );
   const pkiEnabled = useSystemConfigStore((s) => s.config.features.pkiEnabled);
+  const siemEnabled = useSystemConfigStore((s) => s.config.features.siemEnabled);
   const loggingEnabled = useSystemConfigStore((s) => s.config.features.loggingEnabled);
   const inferenceEnabled = useSystemConfigStore((s) => s.config.features.inferenceEnabled);
 
@@ -233,6 +234,7 @@ export function SidebarContent({
   const effectiveGroups = visibleNavigationGroups({
     scopes: user?.scopes ?? [],
     pkiEnabled,
+    siemEnabled,
     loggingEnabled,
     inferenceEnabled,
     hasLowInferenceUsage: hasLowInferenceUsage(dashboardBootstrap?.inferenceUsage ?? null),

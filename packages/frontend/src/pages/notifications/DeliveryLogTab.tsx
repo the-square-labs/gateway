@@ -213,6 +213,12 @@ export function DeliveryLogTab({ refreshToken }: { refreshToken: number }) {
     );
   }, [deliveries, search]);
 
+  const deliveryFooterText = loadingMore
+    ? "Loading more..."
+    : !hasMore && deliveries.length > 0
+      ? "End of logs"
+      : null;
+
   return (
     <div className="flex min-w-0 flex-col gap-3">
       <SearchFilterBar
@@ -307,16 +313,15 @@ export function DeliveryLogTab({ refreshToken }: { refreshToken: number }) {
                 ))
               )}
               <ResourceListRow className="border-b-0 opacity-100">
-                <ResourceListCell colSpan={8} contentClassName="block p-0">
+                <ResourceListCell colSpan={8} contentClassName="min-h-0 p-0">
                   <div
                     ref={sentinelRef}
-                    className="flex min-h-12 items-center justify-center px-4 py-3 text-xs text-muted-foreground"
+                    className={`flex w-full items-center justify-center px-3 text-xs text-muted-foreground ${
+                      deliveryFooterText ? "h-8" : "h-px overflow-hidden"
+                    }`}
+                    aria-live="polite"
                   >
-                    {loadingMore
-                      ? "Loading more..."
-                      : !hasMore && deliveries.length > 0
-                        ? "End of logs"
-                        : null}
+                    {deliveryFooterText}
                   </div>
                 </ResourceListCell>
               </ResourceListRow>

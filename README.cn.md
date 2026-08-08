@@ -156,6 +156,7 @@ Gateway 已经面向 production operations，而不是狭窄的 MVP。当前方�
 - [x] Internal PKI, ACME SSL, certificate templates, domain tracking, and expiry alerts.
 - [x] PostgreSQL、Redis 和 ClickHouse database explorer with encrypted saved credentials，以及 private-by-default managed Postgres、Redis 和 ClickHouse database nodes with secure application bindings。
 - [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
+- [x] 可在 Gateway 设置中启用的 SIEM 审计导出，支持加密 Bearer、HMAC-SHA256 或自定义请求头认证。
 - [x] Optional ClickHouse-backed structured logging and optional AI assistant.
 - [x] 可选的 multi-provider inference gateway，提供 OpenAI-compatible 和 harness-specific APIs。
 - [x] View-based, resource-scoped permission model with filtered list visibility.

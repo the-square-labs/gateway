@@ -14,6 +14,7 @@ const SNAPSHOT = {
     features: {
       pkiEnabled: true,
       domainsEnabled: true,
+      siemEnabled: true,
       loggingEnabled: false,
       inferenceEnabled: false,
     },

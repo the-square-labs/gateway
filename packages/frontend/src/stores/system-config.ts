@@ -7,6 +7,7 @@ const BYTES_PER_MEGABYTE = 1024 * 1024;
 export const DEFAULT_GATEWAY_FEATURES: GatewayFeatureConfig = {
   pkiEnabled: true,
   domainsEnabled: true,
+  siemEnabled: true,
   loggingEnabled: false,
   inferenceEnabled: false,
 };

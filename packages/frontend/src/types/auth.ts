@@ -132,6 +132,7 @@ export interface AuthProvisioningSettings {
     features: {
       pkiEnabled: boolean;
       domainsEnabled: boolean;
+      siemEnabled: boolean;
       inferenceEnabled: boolean;
     };
   };

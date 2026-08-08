@@ -272,7 +272,12 @@ export class LicenseService {
     }
   }
 
-  private async getInstallationId(): Promise<string> {
+  /**
+   * Return the stable local installation identifier without contacting the
+   * license service. Non-licensing features may safely use it as a source
+   * identity without changing entitlement or heartbeat behavior.
+   */
+  async getInstallationId(): Promise<string> {
     const existing = await this.getSetting<string | null>(SETTINGS_KEYS.installationId, null);
     if (existing) return existing;
     const created = randomUUID();

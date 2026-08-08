@@ -1,0 +1,15 @@
+{
+  "file_name": "zsgne0nk_siem_gateway_deployment",
+  "edges": [
+    {
+      "from_id": "zsgne0nk",
+      "to_id": "43cdn720",
+      "relation": "supersedes",
+      "weight": 0.96,
+      "reason": "The new memory updates the same SIEM test-stand deployment from image r4 to r5 and provides newer deployment/UI status for the same host and services.",
+      "source": "auto",
+      "created_at": 1786150237032,
+      "updated_at": 1786150237032
+    }
+  ]
+}

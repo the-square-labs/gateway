@@ -26,6 +26,7 @@ const SETTINGS: AuthProvisioningSettings = {
     features: {
       pkiEnabled: true,
       domainsEnabled: true,
+      siemEnabled: true,
       inferenceEnabled: false,
     },
   },
@@ -83,6 +84,7 @@ describe("AuthProvisioningSection inference setting", () => {
           features: {
             pkiEnabled: true,
             domainsEnabled: true,
+            siemEnabled: true,
             inferenceEnabled: true,
           },
         }),
@@ -106,6 +108,37 @@ describe("AuthProvisioningSection inference setting", () => {
     expect(inferenceToggle).toHaveAttribute("aria-pressed", "false");
     expect(screen.queryByText("Enable alpha inference?")).not.toBeInTheDocument();
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it("persists the SIEM audit export toggle with the other Gateway features", async () => {
+    api.setCache("settings:auth-provisioning", SETTINGS);
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(SETTINGS);
+    const update = vi.spyOn(api, "updateAuthProvisioningSettings").mockImplementation(async () => ({
+      ...SETTINGS,
+      generalSettings: {
+        ...SETTINGS.generalSettings,
+        features: { ...SETTINGS.generalSettings.features, siemEnabled: false },
+      },
+    }));
+    const user = userEvent.setup();
+
+    render(<AuthProvisioningSection canEdit />);
+
+    await user.click(await screen.findByRole("button", { name: "Enable SIEM audit export" }));
+    const save = screen
+      .getAllByRole("button", { name: "Save" })
+      .find((button) => !(button as HTMLButtonElement).disabled);
+    if (!save) throw new Error("General settings save action not found");
+    await user.click(save);
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith({
+        generalSettings: expect.objectContaining({
+          features: expect.objectContaining({ siemEnabled: false }),
+        }),
+      })
+    );
+    expect(useSystemConfigStore.getState().config.features.siemEnabled).toBe(false);
   });
 
   it("persists the bounded Gateway relay auto-recovery toggle", async () => {

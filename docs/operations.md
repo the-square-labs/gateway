@@ -301,6 +301,18 @@ Gateway supports operational notification workflows:
 
 Use status pages for externally visible service health and incidents. Use notifications for internal operational alerts.
 
+### SIEM Audit Export
+
+Configure SIEM collectors in **Notifications → SIEM**. Gateway keeps delivery in the main app process: no separate Compose service or worker container is required. A scheduler claims durable outbox rows every 30 seconds with database leases, so more than one Gateway replica can run safely.
+
+The feature is enabled by default. Use **Settings → Gateway → General settings → SIEM audit export** to turn it off installation-wide: this hides the SIEM screens, makes the SIEM API and AI tools unavailable, stops new outbox rows, and pauses delivery without restarting Gateway. Existing destinations, terminal history, and queued records stay in PostgreSQL; queued records resume after re-enabling the feature.
+
+Each request sends `{ "schemaVersion": 1, "events": [...] }` to an HTTPS endpoint using either `Authorization: Bearer <token>`, one validated custom request header, or HMAC headers `X-Gateway-Timestamp` and `X-Gateway-Signature-256`. The HMAC is `sha256=<hex>` over `timestamp + "." + exact raw JSON request body`; the collector should reject stale timestamps and use constant-time comparison. A successful `2xx` completes the batch. Network errors, `408`, `429`, and `5xx` retry after 30 seconds, 2 minutes, 8 minutes, 30 minutes, 2 hours, 6 hours, and 12 hours, with at most eight attempts. Other `4xx` responses are terminal failures.
+
+Use **Send test event** after configuring a collector. It sends a synthetic event only and creates neither an audit-log record nor a queued delivery. The delivery log intentionally shows safe status, timing, retry information, error text, and the reduced event only; it never stores or displays collector response bodies. Terminal delivery history follows the Audit Log retention setting in **Settings → Housekeeping**.
+
+When troubleshooting, verify the endpoint against Gateway's outbound-webhook network policy, confirm the expected bearer, custom-header, or HMAC verification at the collector, and inspect the SIEM Delivery Log. Do not paste a token, header value, or HMAC secret into tickets, audit notes, chat, or collector URLs. Disabling an individual destination pauses its outstanding rows; re-enabling resumes them. Deleting a destination discards outstanding rows, while historical terminal rows remain until retention cleanup.
+
 ## Backups
 
 Back up:

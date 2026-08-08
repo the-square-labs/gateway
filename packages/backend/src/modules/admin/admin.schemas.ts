@@ -141,6 +141,7 @@ export const UpdateAuthProvisioningSettingsSchema = z.object({
         .object({
           pkiEnabled: z.boolean().optional(),
           domainsEnabled: z.boolean().optional(),
+          siemEnabled: z.boolean().optional(),
           inferenceEnabled: z.boolean().optional(),
         })
         .optional(),

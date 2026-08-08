@@ -648,6 +648,59 @@ describe("api client contract", () => {
     );
   });
 
+  it("serializes SIEM destination and delivery requests", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: [{ id: "siem-1", name: "Security Operations" }],
+          total: 1,
+          page: 1,
+          limit: 100,
+          totalPages: 1,
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse({ csrfToken: "csrf-token" }))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: "siem-1", secretConfigured: true } }))
+      .mockResolvedValueOnce(
+        jsonResponse({ data: { id: "delivery-1", destinationId: "siem-1", status: "queued" } })
+      );
+
+    await expect(
+      api.listSiemDestinations({ enabled: true, search: "security", limit: 100 })
+    ).resolves.toMatchObject({
+      total: 1,
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "/api/audit/siem/destinations?limit=100&enabled=true&search=security"
+    );
+
+    await expect(
+      api.createSiemDestination({
+        name: "Security Operations",
+        url: "https://siem.example.test/gateway/audit",
+        authType: "custom_header",
+        customHeaderName: "X-API-Key",
+        secret: "test-only-secret",
+      })
+    ).resolves.toMatchObject({ id: "siem-1", secretConfigured: true });
+    expect(fetchMock.mock.calls[2]?.[0]).toBe("/api/audit/siem/destinations");
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: "POST" });
+    expect(lastJsonBody(fetchMock)).toEqual({
+      name: "Security Operations",
+      url: "https://siem.example.test/gateway/audit",
+      authType: "custom_header",
+      customHeaderName: "X-API-Key",
+      secret: "test-only-secret",
+    });
+
+    await expect(api.requeueSiemDelivery("delivery-1")).resolves.toMatchObject({
+      status: "queued",
+    });
+    expect(fetchMock.mock.calls[3]?.[0]).toBe("/api/audit/siem/deliveries/delivery-1/requeue");
+    expect(fetchMock.mock.calls[3]?.[1]).toMatchObject({ method: "POST" });
+  });
+
   it("serializes logging environment, search, and facets requests", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

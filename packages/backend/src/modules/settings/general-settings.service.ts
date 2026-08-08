@@ -31,6 +31,7 @@ export interface GeneralSettings {
 export interface GeneralFeatureSettings {
   pkiEnabled: boolean;
   domainsEnabled: boolean;
+  siemEnabled: boolean;
   inferenceEnabled: boolean;
 }
 
@@ -49,6 +50,7 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   features: {
     pkiEnabled: true,
     domainsEnabled: true,
+    siemEnabled: true,
     inferenceEnabled: false,
   },
   inference: {
@@ -350,6 +352,10 @@ export class GeneralSettingsService {
           typeof features.domainsEnabled === 'boolean'
             ? features.domainsEnabled
             : DEFAULT_GENERAL_SETTINGS.features.domainsEnabled,
+        siemEnabled:
+          typeof features.siemEnabled === 'boolean'
+            ? features.siemEnabled
+            : DEFAULT_GENERAL_SETTINGS.features.siemEnabled,
         inferenceEnabled:
           typeof features.inferenceEnabled === 'boolean'
             ? features.inferenceEnabled

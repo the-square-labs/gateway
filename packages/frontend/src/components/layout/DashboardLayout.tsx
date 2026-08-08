@@ -51,6 +51,7 @@ function ApplicationShellSkeleton({
     // are deliberately optimistic only for skeleton geometry; actual links
     // still render solely from the server-provided feature projection.
     pkiEnabled: true,
+    siemEnabled: true,
     loggingEnabled: true,
     inferenceEnabled: true,
     statusPageEnabled: true,
@@ -492,6 +493,7 @@ export function DashboardLayout() {
         const routes = keyboardNavigationRoutes({
           scopes: auth.user?.scopes ?? [],
           pkiEnabled: features.pkiEnabled,
+          siemEnabled: features.siemEnabled,
           loggingEnabled: features.loggingEnabled,
           inferenceEnabled: features.inferenceEnabled,
           hasLowInferenceUsage: dashboardHasLowInferenceUsage,

@@ -503,7 +503,10 @@ export class AIService {
     private readonly sandboxService?: AISandboxService,
     private readonly artifactService?: AISandboxArtifactService,
     private readonly conversationSearchService?: AIConversationSearchService,
-    private readonly providerRuntimeService?: AIProviderRuntimeService
+    private readonly providerRuntimeService?: AIProviderRuntimeService,
+    private readonly siemDestinationService?: import('@/modules/audit/siem-destination.service.js').SiemDestinationService,
+    private readonly siemDeliveryService?: import('@/modules/audit/siem-delivery.service.js').SiemDeliveryService,
+    private readonly generalSettingsService?: import('@/modules/settings/general-settings.service.js').GeneralSettingsService
   ) {}
 
   private async resolveProviderSession(
@@ -786,6 +789,9 @@ export class AIService {
           notifWebhookService: this.notifWebhookService,
           notifDeliveryService: this.notifDeliveryService,
           notifDispatcherService: this.notifDispatcherService,
+          siemDestinationService: this.siemDestinationService,
+          siemDeliveryService: this.siemDeliveryService,
+          generalSettingsService: this.generalSettingsService,
         },
         user,
         toolName,

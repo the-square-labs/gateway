@@ -59,6 +59,7 @@ export interface AppNavigationGroup {
 export interface AppNavigationVisibility {
   scopes: readonly string[];
   pkiEnabled: boolean;
+  siemEnabled: boolean;
   loggingEnabled: boolean;
   inferenceEnabled: boolean;
   hasLowInferenceUsage?: boolean;
@@ -203,7 +204,7 @@ export const APP_NAVIGATION_GROUPS: readonly AppNavigationGroup[] = [
         name: "Notifications",
         href: "/notifications",
         icon: Bell,
-        keywords: ["alerts", "webhooks", "delivery log"],
+        keywords: ["alerts", "webhooks", "delivery log", "siem", "audit export"],
       },
       {
         id: "status-page",
@@ -242,7 +243,7 @@ export const APP_NAVIGATION_GROUPS: readonly AppNavigationGroup[] = [
   },
 ] as const;
 
-const NOTIFICATION_SCOPES = [
+const NOTIFICATION_CORE_SCOPES = [
   "notifications:alerts:view",
   "notifications:alerts:create",
   "notifications:alerts:edit",
@@ -255,6 +256,8 @@ const NOTIFICATION_SCOPES = [
   "notifications:view",
   "notifications:manage",
 ] as const;
+
+const SIEM_NOTIFICATION_SCOPES = ["audit:siem:view", "audit:siem:manage"] as const;
 
 const SETTINGS_SCOPES = [
   "settings:gateway:view",
@@ -354,7 +357,10 @@ export function canAccessNavigationItem(
     case "access-lists":
       return hasScopeBase(scopes, "acl:view");
     case "notifications":
-      return hasAnyScope(scopes, NOTIFICATION_SCOPES);
+      return (
+        hasAnyScope(scopes, NOTIFICATION_CORE_SCOPES) ||
+        (context.siemEnabled && hasAnyScope(scopes, SIEM_NOTIFICATION_SCOPES))
+      );
     case "status-page":
       return context.statusPageEnabled === true && scopeMatches(scopes, "status-page:view");
     case "administration":

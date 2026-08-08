@@ -1,0 +1,1 @@
+ALTER TABLE "siem_destinations" ADD COLUMN "custom_header_name" varchar(255);

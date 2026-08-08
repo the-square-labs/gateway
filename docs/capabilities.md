@@ -205,6 +205,7 @@ Gateway includes connector and operational communication surfaces:
 - Cloudflare connectors for managed A/AAAA records, DNS inspection, and automated DNS-01 certificate workflows.
 - GitLab connectors with project/group allowlists, scheduled synchronization, repository and CI operations, variables, webhooks, registry access, and sandbox clone support.
 - Webhook notification targets with custom headers, templates, HMAC signing, retries, and delivery history.
+- SIEM audit export, when enabled in Gateway settings, to up to five active HTTPS collectors, with encrypted bearer, HMAC-SHA256, or validated custom-header authentication, durable batched delivery, retry history, and least-privilege `audit:siem:*` scopes.
 - Threshold and event alert rules for nodes, containers, proxies, certificates, PostgreSQL, and Redis resources.
 - Public status pages with managed services, incidents, incident updates, proxy templates, and preview.
 
@@ -256,6 +257,7 @@ Administration features:
 - Granular scopes for users, groups, API tokens, OAuth grants, and MCP access.
 - Write-capable scopes imply matching read/view checks while preserving resource boundaries.
 - Audit log for user, token, OAuth, and AI-initiated actions.
+- SIEM destination management and privacy-reduced external audit export.
 - Setup state and first-run configuration.
 - Update checks and in-app Gateway updates.
 - Daemon runtime version tracking and daemon updates.

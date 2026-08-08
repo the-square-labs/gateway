@@ -107,6 +107,7 @@ function requiredScopeFor(channel: string): string | null {
   if (channel === 'node.changed' || channel === 'node.folder.changed') return 'nodes:details';
   if (channel === 'user.changed') return 'admin:users';
   if (channel === 'audit.changed') return 'admin:audit';
+  if (channel === 'siem.destination.changed' || channel === 'siem.delivery.changed') return 'audit:siem:view';
   if (channel === 'group.changed') return 'admin:groups';
   if (channel === 'notification.alert-rule.changed') return 'notifications:view';
   if (channel === 'notification.webhook.changed') return 'notifications:view';

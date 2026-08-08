@@ -241,6 +241,15 @@ describe('AI tool scope filtering', () => {
       'test_webhook',
       'list_webhook_deliveries',
       'get_delivery_stats',
+      'list_siem_destinations',
+      'get_siem_destination',
+      'create_siem_destination',
+      'update_siem_destination',
+      'delete_siem_destination',
+      'test_siem_destination',
+      'list_siem_deliveries',
+      'get_siem_delivery',
+      'requeue_siem_delivery',
     ]);
     expect(notificationToolNamesForScopes(['notifications:view'])).toEqual([
       'list_alert_rules',
@@ -249,7 +258,41 @@ describe('AI tool scope filtering', () => {
       'list_webhook_deliveries',
       'get_delivery_stats',
     ]);
-    expect(notificationToolNamesForScopes(['notifications:manage'])).toEqual(notificationToolNames);
+    expect(notificationToolNamesForScopes(['notifications:manage'])).toEqual([
+      'list_alert_rules',
+      'get_alert_rule',
+      'create_alert_rule',
+      'update_alert_rule',
+      'delete_alert_rule',
+      'list_webhooks',
+      'create_webhook',
+      'update_webhook',
+      'delete_webhook',
+      'test_webhook',
+      'list_webhook_deliveries',
+      'get_delivery_stats',
+    ]);
+    expect(notificationToolNamesForScopes(['audit:siem:view'])).toEqual([
+      'list_siem_destinations',
+      'get_siem_destination',
+      'list_siem_deliveries',
+      'get_siem_delivery',
+    ]);
+    expect(notificationToolNamesForScopes(['audit:siem:manage'])).toEqual([
+      'list_siem_destinations',
+      'get_siem_destination',
+      'create_siem_destination',
+      'update_siem_destination',
+      'delete_siem_destination',
+      'test_siem_destination',
+      'list_siem_deliveries',
+      'get_siem_delivery',
+      'requeue_siem_delivery',
+    ]);
+    const createSiemDestination = AI_TOOLS.find((tool) => tool.name === 'create_siem_destination');
+    expect(createSiemDestination?.parameters).toMatchObject({
+      properties: { authType: { enum: expect.arrayContaining(['custom_header']) } },
+    });
     expect(isDestructiveTool('create_alert_rule')).toBe(true);
     expect(isDestructiveTool('test_webhook')).toBe(false);
 

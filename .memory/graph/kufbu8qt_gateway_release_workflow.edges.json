@@ -43,16 +43,6 @@
     },
     {
       "from_id": "kufbu8qt",
-      "to_id": "rzidwe4n",
-      "relation": "related_to",
-      "weight": 0.4134,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967663,
-      "updated_at": 1786064967663
-    },
-    {
-      "from_id": "kufbu8qt",
       "to_id": "nr9hvzr3",
       "relation": "uses_service",
       "weight": 0.4103,

@@ -120,6 +120,8 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `admin:groups` |  |
 | `admin:groups:folders:manage` |  |
 | `admin:audit` |  |
+| `audit:siem:view` |  |
+| `audit:siem:manage` |  |
 | `admin:system` |  |
 | `admin:details:certificates` |  |
 | `admin:update` |  |
@@ -326,5 +328,6 @@ OAuth consent leaves high-risk scopes unchecked by default. The user must explic
 | `integrations:cloudflare:dns:delete` | Can delete Cloudflare DNS records. |
 | `logs:tokens:create` | Can mint logging ingest tokens. |
 | `admin:audit` | Can read audit history. |
+| `audit:siem:manage` | Can configure authenticated SIEM endpoints and replay failed audit exports. |
 | `admin:details:certificates` | Can view internal system PKI and SSL certificates. |
 | `admin:update` | Can check for and apply Gateway/daemon updates. |

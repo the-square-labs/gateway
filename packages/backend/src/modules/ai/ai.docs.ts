@@ -328,7 +328,38 @@ All significant actions are logged.
 - Actions follow pattern: "resource.action" (e.g., "ca.create", "cert.revoke", "proxy.update").
 - AI-initiated actions have details.ai_initiated: true.
 - Query with get_audit_log: filter by action, resourceType, pagination.
-- Housekeeping can auto-delete old entries (configurable retention).`,
+- Housekeeping can auto-delete old entries (configurable retention).
+- SIEM audit export is a separate privacy-reduced delivery stream. Its receiver never receives full audit details, user agents, resource names, secrets, or collector response bodies. See the siem topic for its lifecycle and tools.`,
+
+  siem: `# SIEM Audit Export
+
+## Purpose
+When enabled in Gateway general settings, Gateway can export privacy-reduced audit events to up to five active HTTPS SIEM collectors. This is an outbound push integration: Gateway sends batches to the collector; it does not expose a webhook for the collector to call.
+
+## Safe Event Contract
+Each event contains an id, a stable Gateway installation source identifier, type \`com.wiolett.gateway.audit.v1\`, ISO timestamp, action, optional actor id/email, resource type/id, and source IP. Never claim that full audit \`details\`, resource display names, user agents, secrets, credentials, raw request payloads, or collector response bodies are exported.
+
+## Destination Security
+- Endpoint URLs must be HTTPS and must not include userinfo, query parameters, or fragments.
+- The existing outbound-webhook network policy validates and pins DNS addresses to protect against SSRF and rebinding. Redirects are not followed.
+- Every destination uses a bearer token, HMAC-SHA256, or one validated custom HTTP header. The secret or custom header value is encrypted at rest and is never returned by API, UI, tools, logs, audit entries, or assistant responses.
+- Custom headers cannot replace Gateway transport headers such as \`Host\`, \`Content-Type\`, or the \`X-Gateway-*\` headers. A custom Authorization header is allowed when a collector requires a non-Bearer scheme.
+- HMAC sends \`X-Gateway-Timestamp\` and \`X-Gateway-Signature-256\` for \`timestamp + "." + rawBody\`; bearer uses the standard Authorization header.
+
+## Delivery Lifecycle
+- Audit writes and queued SIEM records are created in one database transaction; the request path never sends HTTP.
+- The in-process scheduler claims rows with database leases and sends a JSON body \`{ schemaVersion: 1, events: [...] }\`.
+- 2xx completes delivery. Network errors, 408, 429, and 5xx retry at 30s, 2m, 8m, 30m, 2h, 6h, and 12h, for at most eight attempts. Other 4xx responses fail terminally.
+- Disabling SIEM in Gateway general settings prevents new outbox rows and pauses delivery; destinations, history, and queued records stay intact until SIEM is enabled again.
+- Disabling a destination pauses outstanding work; enabling resumes it. Deleting a destination soft-deletes configuration and discards outstanding work. Only failed deliveries can be manually requeued.
+- A test sends a synthetic \`com.wiolett.gateway.audit.test.v1\` event only: it creates no audit row and no queued delivery.
+- Terminal delivery history follows Audit Log retention. Do not use notification-webhook delivery semantics for SIEM.
+
+## AI Tools
+- SIEM tools are unavailable while \`generalSettings.features.siemEnabled\` is false.
+- Read: \`list_siem_destinations\`, \`get_siem_destination\`, \`list_siem_deliveries\`, \`get_siem_delivery\` require \`audit:siem:view\`.
+- Change: \`create_siem_destination\`, \`update_siem_destination\`, \`delete_siem_destination\`, \`test_siem_destination\`, and \`requeue_siem_delivery\` require \`audit:siem:manage\` and go through normal tool approval.
+- Request a secret only when the caller explicitly wants to create or replace a destination. Treat it as one-time input and never echo it.`,
 
   nginx: `# Nginx Management
 
@@ -1491,7 +1522,8 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   templates: 'pki:templates:view',
   acme: 'ssl:cert:view',
   users: 'admin:users',
-  audit: 'admin:audit',
+  audit: ['admin:audit', 'audit:siem:view'],
+  siem: 'audit:siem:view',
   nginx: 'proxy:edit',
   nodes: 'nodes:details',
   folders: [
@@ -1532,7 +1564,7 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
     'settings:gateway:edit',
   ],
   gitlab: 'integrations:gitlab:view',
-  notifications: 'notifications:view',
+  notifications: ['notifications:view', 'audit:siem:view'],
   overview: 'feat:ai:use',
   installation: 'feat:ai:use',
   authentication: 'feat:ai:use',

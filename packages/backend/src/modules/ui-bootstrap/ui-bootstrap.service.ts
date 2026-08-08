@@ -52,6 +52,7 @@ export interface UIBootstrapShell {
     features: {
       pkiEnabled: boolean;
       domainsEnabled: boolean;
+      siemEnabled: boolean;
       loggingEnabled: boolean;
       inferenceEnabled: boolean;
     };
@@ -140,6 +141,7 @@ export class UIBootstrapService {
         features: {
           pkiEnabled: config.features.pkiEnabled,
           domainsEnabled: config.features.domainsEnabled,
+          siemEnabled: config.features.siemEnabled,
           loggingEnabled: this.loggingFeature.isEnabled(),
           inferenceEnabled: config.features.inferenceEnabled,
         },

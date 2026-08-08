@@ -1,6 +1,19 @@
+import { CreateSiemDestinationSchema, UpdateSiemDestinationSchema } from '@/modules/audit/siem.schemas.js';
 import { buildSampleEvent } from '@/modules/notifications/notification-templates.js';
 import type { User } from '@/types.js';
 import { agentPageLimit } from './ai.service-helpers.js';
+
+const SIEM_NOTIFICATION_TOOL_NAMES = new Set([
+  'list_siem_destinations',
+  'get_siem_destination',
+  'create_siem_destination',
+  'update_siem_destination',
+  'delete_siem_destination',
+  'test_siem_destination',
+  'list_siem_deliveries',
+  'get_siem_delivery',
+  'requeue_siem_delivery',
+]);
 
 export const NOTIFICATION_TOOL_NAMES = new Set([
   'list_alert_rules',
@@ -15,6 +28,7 @@ export const NOTIFICATION_TOOL_NAMES = new Set([
   'test_webhook',
   'list_webhook_deliveries',
   'get_delivery_stats',
+  ...SIEM_NOTIFICATION_TOOL_NAMES,
 ]);
 
 export interface NotificationToolContext {
@@ -22,6 +36,9 @@ export interface NotificationToolContext {
   notifWebhookService?: import('@/modules/notifications/notification-webhook.service.js').NotificationWebhookService;
   notifDeliveryService?: import('@/modules/notifications/notification-delivery.service.js').NotificationDeliveryService;
   notifDispatcherService?: import('@/modules/notifications/notification-dispatcher.service.js').NotificationDispatcherService;
+  siemDestinationService?: import('@/modules/audit/siem-destination.service.js').SiemDestinationService;
+  siemDeliveryService?: import('@/modules/audit/siem-delivery.service.js').SiemDeliveryService;
+  generalSettingsService?: import('@/modules/settings/general-settings.service.js').GeneralSettingsService;
 }
 
 export async function executeNotificationTool(
@@ -31,6 +48,16 @@ export async function executeNotificationTool(
   args: Record<string, unknown>
 ): Promise<unknown> {
   const a = args as any;
+
+  if (SIEM_NOTIFICATION_TOOL_NAMES.has(toolName)) {
+    try {
+      if (!context.generalSettingsService || !(await context.generalSettingsService.isFeatureEnabled('siemEnabled'))) {
+        return { error: 'SIEM feature is disabled' };
+      }
+    } catch {
+      return { error: 'SIEM feature is disabled' };
+    }
+  }
 
   switch (toolName) {
     case 'list_alert_rules':
@@ -147,6 +174,64 @@ export async function executeNotificationTool(
     case 'get_delivery_stats':
       if (!context.notifDeliveryService) return { error: 'Notification service not available' };
       return context.notifDeliveryService.getStats(a.webhookId);
+    case 'list_siem_destinations':
+      if (!context.siemDestinationService) return { error: 'SIEM service not available' };
+      return context.siemDestinationService.list({
+        page: 1,
+        limit: agentPageLimit(a.limit),
+        enabled: a.enabled,
+        search: a.search,
+      });
+    case 'get_siem_destination':
+      if (!context.siemDestinationService) return { error: 'SIEM service not available' };
+      return context.siemDestinationService.getById(a.destinationId);
+    case 'create_siem_destination':
+      if (!context.siemDestinationService) return { error: 'SIEM service not available' };
+      return context.siemDestinationService.create(
+        CreateSiemDestinationSchema.parse({
+          name: a.name,
+          url: a.url,
+          authType: a.authType,
+          ...(a.customHeaderName !== undefined ? { customHeaderName: a.customHeaderName } : {}),
+          secret: a.secret,
+          ...(a.enabled !== undefined ? { enabled: a.enabled } : {}),
+        }),
+        user.id
+      );
+    case 'update_siem_destination':
+      if (!context.siemDestinationService) return { error: 'SIEM service not available' };
+      return context.siemDestinationService.update(
+        a.destinationId,
+        UpdateSiemDestinationSchema.parse({
+          ...(a.name !== undefined ? { name: a.name } : {}),
+          ...(a.url !== undefined ? { url: a.url } : {}),
+          ...(a.authType !== undefined ? { authType: a.authType } : {}),
+          ...(a.customHeaderName !== undefined ? { customHeaderName: a.customHeaderName } : {}),
+          ...(a.secret !== undefined ? { secret: a.secret } : {}),
+          ...(a.enabled !== undefined ? { enabled: a.enabled } : {}),
+        }),
+        user.id
+      );
+    case 'delete_siem_destination':
+      if (!context.siemDestinationService) return { error: 'SIEM service not available' };
+      return context.siemDestinationService.delete(a.destinationId, user.id);
+    case 'test_siem_destination':
+      if (!context.siemDestinationService) return { error: 'SIEM service not available' };
+      return context.siemDestinationService.test(a.destinationId);
+    case 'list_siem_deliveries':
+      if (!context.siemDeliveryService) return { error: 'SIEM service not available' };
+      return context.siemDeliveryService.list({
+        page: 1,
+        limit: agentPageLimit(a.limit),
+        destinationId: a.destinationId,
+        status: a.status,
+      });
+    case 'get_siem_delivery':
+      if (!context.siemDeliveryService) return { error: 'SIEM service not available' };
+      return context.siemDeliveryService.getById(a.deliveryId);
+    case 'requeue_siem_delivery':
+      if (!context.siemDeliveryService) return { error: 'SIEM service not available' };
+      return context.siemDeliveryService.requeue(a.deliveryId);
     default:
       throw new Error(`Unsupported notification tool: ${toolName}`);
   }

@@ -6,12 +6,16 @@
     "deployment",
     "docker",
     "gateway",
-    "staging"
+    "siem",
+    "test-stand"
   ],
   "layer": "lite",
   "ref": "rzidwe4n",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1785951397694,
-  "updated_at": 1785951397694
+  "updated_at": 1786135093316
 }
 ---
-[→ rzidwe4n] 172.20.0.131 Gateway worktree deployment procedure
+[→ rzidwe4n] Gateway test-stand deploy procedure now records the safe no-host-port smoke fallback when gateway-e2e owns port 3000.

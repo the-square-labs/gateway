@@ -37,6 +37,7 @@ describe('UpdateAuthProvisioningSettingsSchema', () => {
         features: {
           pkiEnabled: false,
           domainsEnabled: true,
+          siemEnabled: false,
           inferenceEnabled: true,
         },
       },
