@@ -631,12 +631,12 @@ func TestClickHouseBindingProcessPrivilegesReconcileWithoutPasswordMutation(t *t
 
 func TestRedisBindingACLCannotAdministerTheServer(t *testing.T) {
 	command := redisBindingACLCommand()
-	for _, allowed := range []string{"'+@read'", "'+@write'", "'+@connection'", "'+@transaction'", "'+@pubsub'", "'+eval'", "'+evalsha'", "'+script|load'", "'-script|flush'", "'-@dangerous'"} {
+	for _, allowed := range []string{"'+@read'", "'+@write'", "'+@connection'", "'+@transaction'", "'+@pubsub'", "'+eval'", "'+evalsha'", "'-script'", "'-@dangerous'"} {
 		if !strings.Contains(command, allowed) {
 			t.Fatalf("Redis binding ACL must include %s", allowed)
 		}
 	}
-	for _, modern := range []string{"'+eval_ro'", "'+evalsha_ro'", "'+fcall'", "'+fcall_ro'", "'-function'"} {
+	for _, modern := range []string{"'+eval_ro'", "'+evalsha_ro'", "'+fcall'", "'+fcall_ro'", "'+script|load'", "'+script|exists'", "'-function'", "'-script|flush'"} {
 		if !strings.Contains(command, modern) {
 			t.Fatalf("Redis 7+ binding ACL must include %s", modern)
 		}
@@ -650,14 +650,25 @@ func TestRedisBindingACLCannotAdministerTheServer(t *testing.T) {
 }
 
 func TestRedisBindingACLRulesKeepRedis62Compatible(t *testing.T) {
+	baseRules := redisBindingACLBaseRules()
+	hasScriptDeny := false
 	for _, unsupported := range []string{"+eval_ro", "+evalsha_ro", "+fcall", "+fcall_ro", "-function"} {
-		for _, baseRule := range redisBindingACLBaseRules() {
+		for _, baseRule := range baseRules {
 			if baseRule == unsupported {
 				t.Fatalf("Redis 6.2 base ACL must not include Redis-7-only rule %s", unsupported)
 			}
 		}
 	}
-	if len(redisBindingACLModernRules()) != 5 {
+	for _, baseRule := range baseRules {
+		if strings.Contains(baseRule, "|") {
+			t.Fatalf("Redis 6.2 base ACL must not include Redis-7-only subcommand rule %s", baseRule)
+		}
+		hasScriptDeny = hasScriptDeny || baseRule == "-script"
+	}
+	if !hasScriptDeny {
+		t.Fatalf("Redis 6.2 base ACL must deny SCRIPT because it cannot safely allow only selected subcommands: %v", baseRules)
+	}
+	if len(redisBindingACLModernRules()) != 10 {
 		t.Fatalf("expected all Redis-7-only ACL rules to be gated, got %v", redisBindingACLModernRules())
 	}
 }

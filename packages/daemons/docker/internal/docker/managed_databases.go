@@ -611,13 +611,15 @@ func (m *managedDatabaseManager) applyClickHousePrincipal(ctx context.Context, r
 func redisBindingACLBaseRules() []string {
 	return []string{
 		"~*", "&*", "+@read", "+@write", "+@connection", "+@transaction", "+@pubsub",
-		"+eval", "+evalsha", "+script|load", "+script|exists",
-		"-script|flush", "-script|kill", "-script|debug", "-@dangerous",
+		"+eval", "+evalsha", "-script", "-@dangerous",
 	}
 }
 
 func redisBindingACLModernRules() []string {
-	return []string{"+eval_ro", "+evalsha_ro", "+fcall", "+fcall_ro", "-function"}
+	return []string{
+		"+eval_ro", "+evalsha_ro", "+fcall", "+fcall_ro", "+script|load", "+script|exists",
+		"-function", "-script|flush", "-script|kill", "-script|debug",
+	}
 }
 
 func redisBindingACLShellWords(rules []string) string {
