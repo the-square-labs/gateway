@@ -79,6 +79,30 @@ describe('AIService database tool routing', () => {
     expect(databaseService.get).not.toHaveBeenCalled();
   });
 
+  it('requires database edit scope before testing a saved connection', async () => {
+    const databaseService = {
+      testSavedConnection: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    const service = createService(databaseService);
+
+    const viewResult = await service.executeTool(
+      { ...BASE_USER, scopes: ['databases:view:db-1'] },
+      'manage_database_connection',
+      { operation: 'test', databaseId: 'db-1' }
+    );
+    expect(viewResult.error).toBe('PERMISSION_DENIED: Missing required scope databases:edit:db-1');
+    expect(databaseService.testSavedConnection).not.toHaveBeenCalled();
+
+    await expect(
+      service.executeTool(
+        { ...BASE_USER, scopes: ['databases:edit:db-1'] },
+        'manage_database_connection',
+        { operation: 'test', databaseId: 'db-1' }
+      )
+    ).resolves.toMatchObject({ result: { ok: true } });
+    expect(databaseService.testSavedConnection).toHaveBeenCalledWith('db-1', 'user-1');
+  });
+
   it('keeps query_postgres_read read-only even when the user has read query scope', async () => {
     const databaseService = {
       executePostgresSql: vi.fn(),
