@@ -76,6 +76,7 @@ export const UpdateAuthProvisioningSettingsSchema = z.object({
   oidcDefaultGroupId: z.string().uuid().optional(),
   oidcRequireVerifiedEmail: z.boolean().optional(),
   oauthExtendedCallbackCompatibility: z.boolean().optional(),
+  mfaExistingSessionGracePeriodDays: z.number().int().min(0).max(7).optional(),
   methods: AuthMethodsSchema.optional(),
   passwordPolicy: PasswordPolicySchema.optional(),
   smtp: SmtpConfigSchema.optional(),

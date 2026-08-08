@@ -106,6 +106,78 @@ afterEach(() => {
 });
 
 describe('dashboard bootstrap route', () => {
+  it('reports an active MFA session grace deadline even after the user has configured a factor', async () => {
+    const localUser: User = {
+      ...USER,
+      authMethod: 'password',
+      oidcSubject: null,
+    };
+    const graceExpiresAt = Date.now() + 60_000;
+    const localSession: SessionData = {
+      ...SESSION,
+      user: localUser,
+      mfaGraceExpiresAt: graceExpiresAt,
+    };
+    container.registerInstance(SessionService, {
+      getSession: vi.fn().mockResolvedValue(localSession),
+      validateCsrfToken: vi.fn().mockResolvedValue(true),
+      updateSession: vi.fn().mockResolvedValue(undefined),
+      refreshSession: vi.fn().mockResolvedValue(false),
+    } as unknown as SessionService);
+    container.registerInstance(TOKENS.DrizzleClient, {
+      query: {
+        users: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: localUser.id,
+            oidcSubject: localUser.oidcSubject,
+            authMethod: localUser.authMethod,
+            email: localUser.email,
+            name: localUser.name,
+            avatarUrl: localUser.avatarUrl,
+            groupId: localUser.groupId,
+            isBlocked: localUser.isBlocked,
+          }),
+        },
+        permissionGroups: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              id: localUser.groupId,
+              parentId: null,
+              name: localUser.groupName,
+              scopes: [],
+              requireGateway2fa: true,
+            },
+          ]),
+        },
+      },
+    } as unknown as DrizzleClient);
+    registerMinimalDashboardDependencies();
+    container.registerInstance(MfaService, {
+      getStatus: vi.fn(async () => ({ totpConfigured: false, passkeyCount: 1, recoveryCodeCount: 0 })),
+      isGatewayMfaRequired: vi.fn(async () => true),
+    } as never);
+
+    const response = await createApp().request('/api/monitoring/dashboard/bootstrap', {
+      method: 'POST',
+      headers: { Cookie: 'session_id=session-1', 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        mfa: {
+          required: true,
+          sessionMfaSatisfied: false,
+          graceExpiresAt,
+        },
+        attention: {
+          notices: expect.arrayContaining([{ id: 'mfa', severity: 'warning' }]),
+        },
+      },
+    });
+  });
+
   it('adds a critical relay notice while keeping diagnostics out of the all-user snapshot', async () => {
     registerSession([]);
     registerMinimalDashboardDependencies();

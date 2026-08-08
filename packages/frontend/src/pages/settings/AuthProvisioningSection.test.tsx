@@ -13,6 +13,7 @@ const SETTINGS: AuthProvisioningSettings = {
   oidcDefaultGroupId: "group-1",
   oidcRequireVerifiedEmail: true,
   oauthExtendedCallbackCompatibility: false,
+  mfaExistingSessionGracePeriodDays: 3,
   mcpServerEnabled: true,
   mcpExtendedCompatibility: false,
   generalSettings: {
@@ -47,6 +48,39 @@ describe("AuthProvisioningSection inference setting", () => {
   afterEach(() => {
     api.invalidateCache("settings:auth-provisioning");
     useConfirmDialog.getState().close();
+  });
+
+  it("persists the existing-session MFA grace period", async () => {
+    api.setCache("settings:auth-provisioning", SETTINGS);
+    const loadedSettings = { ...SETTINGS, mfaExistingSessionGracePeriodDays: 4 };
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(loadedSettings);
+    const update = vi
+      .spyOn(api, "updateAuthProvisioningSettings")
+      .mockImplementation(async (input) => ({
+        ...loadedSettings,
+        mfaExistingSessionGracePeriodDays:
+          input.mfaExistingSessionGracePeriodDays ??
+          loadedSettings.mfaExistingSessionGracePeriodDays,
+      }));
+    const user = userEvent.setup();
+
+    render(<AuthProvisioningSection canEdit />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("spinbutton", { name: "Existing-session MFA grace period in days" })
+      ).toHaveValue(4)
+    );
+    const gracePeriodInput = screen.getByRole("spinbutton", {
+      name: "Existing-session MFA grace period in days",
+    });
+    await user.clear(gracePeriodInput);
+    await user.type(gracePeriodInput, "5");
+    await user.click(screen.getByRole("button", { name: "Save MFA grace period" }));
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith({ mfaExistingSessionGracePeriodDays: 5 })
+    );
   });
 
   it("persists inference beside the other Gateway feature settings", async () => {

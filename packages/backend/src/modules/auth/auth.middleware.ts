@@ -8,7 +8,7 @@ import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
 import { OAuthService } from '@/modules/oauth/oauth.service.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import { SessionService } from '@/services/session.service.js';
-import type { AppEnv, User } from '@/types.js';
+import type { AppEnv, SessionData, User } from '@/types.js';
 import { getAcceptedSessionCookieNames, LEGACY_SESSION_COOKIE_NAME } from './session-cookie.js';
 
 const SESSION_COOKIE_NAME = LEGACY_SESSION_COOKIE_NAME;
@@ -59,6 +59,19 @@ function requiresCsrf(method: string): boolean {
 function allowsBlockedSessionPath(c: Context<AppEnv>): boolean {
   const path = new URL(c.req.url).pathname;
   return path === '/auth/csrf' || path === '/auth/me' || path === '/auth/logout';
+}
+
+function requiresMfaReauthentication(user: User, session: SessionData): boolean {
+  if (!user.requireGateway2fa || user.authMethod === 'oidc' || session.mfaSatisfiedAt !== undefined) {
+    return false;
+  }
+
+  const mfaGraceExpiresAt = session.mfaGraceExpiresAt;
+  return !(
+    typeof mfaGraceExpiresAt === 'number' &&
+    Number.isFinite(mfaGraceExpiresAt) &&
+    mfaGraceExpiresAt > Date.now()
+  );
 }
 
 export async function authenticateBearerToken(rawToken: string): Promise<AuthenticatedBearer | null> {
@@ -118,12 +131,6 @@ export const authMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     if (!session) {
       throw new HTTPException(401, { message: 'Invalid or expired session' });
     }
-    if (
-      requiresCsrf(c.req.method) &&
-      !(await sessionService.validateCsrfToken(credential.value, c.req.header(CSRF_HEADER_NAME), session))
-    ) {
-      throw new HTTPException(403, { message: 'Invalid CSRF token' });
-    }
     const sessionUserId = session.userId ?? session.user?.id;
     if (!sessionUserId) {
       await sessionService.destroySession(credential.value);
@@ -134,8 +141,18 @@ export const authMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     if (!user) {
       throw new HTTPException(401, { message: 'User no longer exists' });
     }
+    if (requiresMfaReauthentication(user, session)) {
+      await sessionService.destroySession(credential.value);
+      throw new HTTPException(401, { message: 'MFA sign-in required' });
+    }
     if (user.isBlocked && !allowsBlockedSessionPath(c)) {
       throw new HTTPException(403, { message: 'Account is blocked' });
+    }
+    if (
+      requiresCsrf(c.req.method) &&
+      !(await sessionService.validateCsrfToken(credential.value, c.req.header(CSRF_HEADER_NAME), session))
+    ) {
+      throw new HTTPException(403, { message: 'Invalid CSRF token' });
     }
 
     c.set('user', user);
@@ -173,6 +190,8 @@ export const optionalAuthMiddleware: MiddlewareHandler<AppEnv> = async (c, next)
         const db2 = container.resolve<DrizzleClient>(TOKENS.DrizzleClient);
         const user = await resolveLiveUser(db2, sessionUserId);
         if (!user) {
+          await sessionService.destroySession(credential.value);
+        } else if (requiresMfaReauthentication(user, session)) {
           await sessionService.destroySession(credential.value);
         } else {
           c.set('user', user);

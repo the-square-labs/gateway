@@ -1,6 +1,6 @@
 import { AlertTriangle, ArrowRight, Info, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { PageTransition } from "@/components/common/PageTransition";
 import { Button } from "@/components/ui/button";
 import {
@@ -351,7 +351,8 @@ function DashboardSkeleton({
 
 export function Dashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { user, hasScope, hasScopedAccess } = useAuthStore();
+  const navigate = useNavigate();
+  const { user, hasScope, hasScopedAccess, logout } = useAuthStore();
   const dashboardPinnedIds = usePinnedNodesStore((s) => s.dashboardNodeIds);
   const sidebarPinnedNodeIds = usePinnedNodesStore((s) => s.sidebarNodeIds);
   const dashboardPinnedProxyIds = usePinnedProxiesStore((s) => s.dashboardProxyIds);
@@ -479,6 +480,8 @@ export function Dashboard() {
     passkeyCount: number;
     recoveryCodeCount: number;
     required: boolean;
+    sessionMfaSatisfied: boolean;
+    graceExpiresAt: number | null;
   } | null>(null);
   const [showMfaOnboardingReminder, setShowMfaOnboardingReminder] = useState(false);
   const [mfaReminderOpen, setMfaReminderOpen] = useState(false);
@@ -589,6 +592,15 @@ export function Dashboard() {
     setMfaReminderOpen(true);
   }, []);
 
+  const signOutForMfa = useCallback(async () => {
+    try {
+      await api.logout();
+    } catch {
+      logout();
+    }
+    navigate("/login");
+  }, [logout, navigate]);
+
   const hideMfaOnboardingReminder = useCallback(async () => {
     setMfaReminderBusy(true);
     try {
@@ -601,6 +613,15 @@ export function Dashboard() {
 
   const mfaHasFactor = Boolean(mfaStatus?.totpConfigured || (mfaStatus?.passkeyCount ?? 0) > 0);
   const mfaRequired = Boolean(mfaStatus?.required && !mfaHasFactor);
+  const mfaGraceDeadline =
+    mfaStatus?.required &&
+    !mfaStatus.sessionMfaSatisfied &&
+    typeof mfaStatus.graceExpiresAt === "number" &&
+    Number.isFinite(mfaStatus.graceExpiresAt) &&
+    mfaStatus.graceExpiresAt > Date.now()
+      ? new Date(mfaStatus.graceExpiresAt).toLocaleString()
+      : null;
+  const mfaGraceReauthenticationRequired = Boolean(mfaGraceDeadline);
   const mfaOnboardingReminder = Boolean(
     user?.authMethod !== "oidc" && showMfaOnboardingReminder && !mfaHasFactor && !mfaRequired
   );
@@ -800,27 +821,44 @@ export function Dashboard() {
             </div>
           )}
 
-          {mfaRequired && (
+          {(mfaRequired || mfaGraceReauthenticationRequired) && (
             <div className="border border-warning/50 bg-card">
               <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex min-w-0 items-center gap-3">
                   <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold text-warning">Set up MFA to keep access</p>
+                    <p className="text-sm font-semibold text-warning">
+                      {mfaHasFactor
+                        ? "Sign in with MFA to keep access"
+                        : "Set up MFA and sign in again to keep access"}
+                    </p>
                     <p className="text-sm text-muted-foreground">
-                      Your group now requires MFA. At your next login, you will need a passkey or
-                      authenticator app. Set it up now to keep access uninterrupted.
+                      {mfaGraceDeadline
+                        ? `Your group now requires MFA. Complete a fresh sign-in with a passkey or authenticator app before ${mfaGraceDeadline}. Setting up a factor alone will not preserve this current session.`
+                        : "Your group requires MFA. Sign in with a passkey or authenticator app to continue."}
                     </p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  className="flex shrink-0 items-center gap-1 text-sm font-medium text-warning hover:underline"
-                  onClick={openStandaloneMfaSetup}
-                >
-                  Set up MFA
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </button>
+                <div className="flex shrink-0 items-center gap-4">
+                  {!mfaHasFactor && (
+                    <button
+                      type="button"
+                      className="flex items-center gap-1 text-sm font-medium text-warning hover:underline"
+                      onClick={openStandaloneMfaSetup}
+                    >
+                      Set up MFA
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="flex items-center gap-1 text-sm font-medium text-warning hover:underline"
+                    onClick={signOutForMfa}
+                  >
+                    Sign out
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               </div>
             </div>
           )}

@@ -20,6 +20,30 @@ describe('UpdateAuthProvisioningSettingsSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('accepts a bounded existing-session MFA grace period', () => {
+    const immediate = UpdateAuthProvisioningSettingsSchema.safeParse({
+      mfaExistingSessionGracePeriodDays: 0,
+    });
+    const maximum = UpdateAuthProvisioningSettingsSchema.safeParse({
+      mfaExistingSessionGracePeriodDays: 7,
+    });
+
+    expect(immediate.success).toBe(true);
+    expect(maximum.success).toBe(true);
+  });
+
+  it('rejects an out-of-range or fractional existing-session MFA grace period', () => {
+    expect(UpdateAuthProvisioningSettingsSchema.safeParse({ mfaExistingSessionGracePeriodDays: -1 }).success).toBe(
+      false
+    );
+    expect(UpdateAuthProvisioningSettingsSchema.safeParse({ mfaExistingSessionGracePeriodDays: 8 }).success).toBe(
+      false
+    );
+    expect(UpdateAuthProvisioningSettingsSchema.safeParse({ mfaExistingSessionGracePeriodDays: 1.5 }).success).toBe(
+      false
+    );
+  });
+
   it('accepts general file upload limit settings', () => {
     const result = UpdateAuthProvisioningSettingsSchema.safeParse({
       generalSettings: {

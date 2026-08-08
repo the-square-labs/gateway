@@ -3,7 +3,7 @@ import { HTTPException } from 'hono/http-exception';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { authMiddleware } from '@/modules/auth/auth.middleware.js';
+import { authMiddleware, optionalAuthMiddleware } from '@/modules/auth/auth.middleware.js';
 import { getSessionCookieName } from '@/modules/auth/session-cookie.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import { SessionService } from '@/services/session.service.js';
@@ -35,7 +35,15 @@ const SESSION: SessionData = {
   csrfToken: 'csrf-token',
 };
 
-function createDb({ isBlocked = false }: { isBlocked?: boolean } = {}): DrizzleClient {
+function createDb({
+  isBlocked = false,
+  requireGateway2fa = false,
+  authMethod = USER.authMethod,
+}: {
+  isBlocked?: boolean;
+  requireGateway2fa?: boolean;
+  authMethod?: User['authMethod'];
+} = {}): DrizzleClient {
   return {
     query: {
       users: {
@@ -46,6 +54,7 @@ function createDb({ isBlocked = false }: { isBlocked?: boolean } = {}): DrizzleC
           name: USER.name,
           avatarUrl: USER.avatarUrl,
           groupId: USER.groupId,
+          authMethod,
           isBlocked,
         }),
       },
@@ -56,6 +65,7 @@ function createDb({ isBlocked = false }: { isBlocked?: boolean } = {}): DrizzleC
             parentId: null,
             name: USER.groupName,
             scopes: USER.scopes,
+            requireGateway2fa,
           },
         ]),
       },
@@ -80,14 +90,36 @@ function createApp() {
   return app;
 }
 
-function registerSession({ csrfValid = true, isBlocked = false }: { csrfValid?: boolean; isBlocked?: boolean } = {}) {
-  container.registerInstance(SessionService, {
-    getSession: vi.fn().mockResolvedValue(SESSION),
+function createOptionalApp() {
+  const app = new Hono<AppEnv>();
+  app.use('*', optionalAuthMiddleware);
+  app.get('/optional', (c) => c.json({ authenticated: Boolean(c.get('user')) }));
+  return app;
+}
+
+function registerSession({
+  csrfValid = true,
+  isBlocked = false,
+  requireGateway2fa = false,
+  authMethod = USER.authMethod,
+  session = SESSION,
+}: {
+  csrfValid?: boolean;
+  isBlocked?: boolean;
+  requireGateway2fa?: boolean;
+  authMethod?: User['authMethod'];
+  session?: SessionData;
+} = {}) {
+  const sessionService = {
+    getSession: vi.fn().mockResolvedValue(session),
     validateCsrfToken: vi.fn().mockResolvedValue(csrfValid),
     updateSession: vi.fn().mockResolvedValue(undefined),
     refreshSession: vi.fn().mockResolvedValue(false),
-  } as unknown as SessionService);
-  container.registerInstance(TOKENS.DrizzleClient, createDb({ isBlocked }));
+    destroySession: vi.fn().mockResolvedValue(undefined),
+  };
+  container.registerInstance(SessionService, sessionService as unknown as SessionService);
+  container.registerInstance(TOKENS.DrizzleClient, createDb({ isBlocked, requireGateway2fa, authMethod }));
+  return sessionService;
 }
 
 afterEach(() => {
@@ -180,6 +212,97 @@ describe('authMiddleware browser session credentials', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ userId: USER.id });
+  });
+
+  it('allows an unsatisfied local session until its MFA grace deadline', async () => {
+    registerSession({
+      authMethod: 'password',
+      requireGateway2fa: true,
+      session: { ...SESSION, mfaGraceExpiresAt: Date.now() + 60_000 },
+    });
+
+    const response = await createApp().request('/read', {
+      headers: { Cookie: 'session_id=session-1' },
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it('drops an unsatisfied local session after its MFA grace deadline', async () => {
+    const sessionService = registerSession({
+      authMethod: 'password',
+      requireGateway2fa: true,
+      session: { ...SESSION, mfaGraceExpiresAt: Date.now() - 1 },
+    });
+
+    const response = await createApp().request('/read', {
+      headers: { Cookie: 'session_id=session-1' },
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ message: 'MFA sign-in required' });
+    expect(sessionService.destroySession).toHaveBeenCalledWith('session-1');
+  });
+
+  it('keeps an MFA-satisfied local session after its grace deadline', async () => {
+    registerSession({
+      authMethod: 'password',
+      requireGateway2fa: true,
+      session: {
+        ...SESSION,
+        mfaSatisfiedAt: Date.now() - 60_000,
+        mfaGraceExpiresAt: Date.now() - 1,
+      },
+    });
+
+    const response = await createApp().request('/read', {
+      headers: { Cookie: 'session_id=session-1' },
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it('ignores a stale MFA grace deadline when group MFA is disabled', async () => {
+    registerSession({
+      authMethod: 'password',
+      session: { ...SESSION, mfaGraceExpiresAt: Date.now() - 1 },
+    });
+
+    const response = await createApp().request('/read', {
+      headers: { Cookie: 'session_id=session-1' },
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it('keeps OIDC browser sessions outside Gateway MFA grace enforcement', async () => {
+    registerSession({
+      authMethod: 'oidc',
+      requireGateway2fa: true,
+      session: { ...SESSION, mfaGraceExpiresAt: Date.now() - 1 },
+    });
+
+    const response = await createApp().request('/read', {
+      headers: { Cookie: 'session_id=session-1' },
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it('treats an expired MFA grace session as anonymous under optional authentication', async () => {
+    const sessionService = registerSession({
+      authMethod: 'password',
+      requireGateway2fa: true,
+      session: { ...SESSION, mfaGraceExpiresAt: Date.now() - 1 },
+    });
+
+    const response = await createOptionalApp().request('/optional', {
+      headers: { Cookie: 'session_id=session-1' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ authenticated: false });
+    expect(sessionService.destroySession).toHaveBeenCalledWith('session-1');
   });
 
   it('rejects blocked session users on protected routes but leaves auth status and logout routes reachable', async () => {

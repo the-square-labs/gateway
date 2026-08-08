@@ -30,16 +30,6 @@
       "source": "auto",
       "created_at": 1786064967696,
       "updated_at": 1786064967696
-    },
-    {
-      "from_id": "35fip13o",
-      "to_id": "gahvf5k5",
-      "relation": "uses_service",
-      "weight": 0.3025,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1786064967696,
-      "updated_at": 1786064967696
     }
   ]
 }

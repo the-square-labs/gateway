@@ -25,6 +25,7 @@ import { SSLService } from '@/modules/ssl/ssl.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
+import { SessionService } from '@/services/session.service.js';
 import { UpdateService } from '@/services/update.service.js';
 import type { AppEnv } from '@/types.js';
 import { getDashboardAttentionSeverity } from './dashboard-attention.js';
@@ -337,6 +338,10 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
       })
     : Promise.resolve({ data: [] as any[] });
   const finalizeSetupPromise = container.resolve(FinalizeSetupService).getForUser(user.id);
+  const browserSessionPromise =
+    user.authMethod !== 'oidc' && c.get('sessionId')
+      ? container.resolve(SessionService).getSession(c.get('sessionId')!)
+      : Promise.resolve(null);
   const mfaPromise =
     user.authMethod === 'oidc'
       ? Promise.resolve(null)
@@ -344,7 +349,20 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
           container.resolve(MfaService).getStatus(user.id),
           container.resolve(MfaService).isGatewayMfaRequired(user.id),
           container.resolve(FinalizeSetupService).shouldShowMfaReminder(user.id),
-        ]).then(([status, required, showReminder]) => ({ ...status, required, showReminder }));
+          browserSessionPromise,
+        ]).then(([status, required, showReminder, session]) => ({
+          ...status,
+          required,
+          showReminder,
+          sessionMfaSatisfied: session?.mfaSatisfiedAt !== undefined,
+          graceExpiresAt:
+            required &&
+            session?.mfaSatisfiedAt === undefined &&
+            typeof session?.mfaGraceExpiresAt === 'number' &&
+            Number.isFinite(session.mfaGraceExpiresAt)
+              ? session.mfaGraceExpiresAt
+              : null,
+        }));
   const updatePromise =
     hasScope(scopes, 'admin:update') && request.showUpdateNotifications
       ? container.resolve(UpdateService).getCachedStatus()
@@ -550,6 +568,13 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
       .map((ca: any) => ({ id: ca.id, name: ca.commonName, type: 'ca', expiresAt: ca.notAfter })),
   ];
   const mfaHasFactor = !!mfa && (mfa.totpConfigured || mfa.passkeyCount > 0);
+  const mfaGraceActive = Boolean(
+    mfa &&
+      !mfa.sessionMfaSatisfied &&
+      typeof mfa.graceExpiresAt === 'number' &&
+      Number.isFinite(mfa.graceExpiresAt) &&
+      mfa.graceExpiresAt > now
+  );
   const lowInference = inferenceUsage
     ? [
         inferenceUsage.api,
@@ -599,7 +624,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     ...(nodeHealthWarning ? [{ id: 'node-health', severity: 'warning' as const }] : []),
     ...(pinnedDatabaseWarning ? [{ id: 'pinned-database-health', severity: 'warning' as const }] : []),
     ...(pinnedDockerWarning ? [{ id: 'pinned-docker-health', severity: 'warning' as const }] : []),
-    ...(mfa && !mfaHasFactor && (mfa.required || mfa.showReminder)
+    ...(mfa && ((!mfaHasFactor && (mfa.required || mfa.showReminder)) || mfaGraceActive)
       ? [{ id: 'mfa', severity: 'warning' as const }]
       : []),
     ...(update?.updateAvailable ? [{ id: 'gateway-update', severity: 'warning' as const }] : []),
