@@ -13,6 +13,8 @@ import type {
   SandboxRunnerExecutionResult,
   SandboxRunnerFetchParams,
   SandboxRunnerFetchResult,
+  SandboxRunnerFindJobContainerParams,
+  SandboxRunnerFindJobContainerResult,
   SandboxRunnerHealth,
   SandboxRunnerKillResult,
   SandboxRunnerListArtifactFilesEntry,
@@ -92,6 +94,7 @@ const runningTimeouts = new Map<string, NodeJS.Timeout>();
 const imageEnsurePromises = new Map<string, Promise<string>>();
 const workspaceDirs = new Map<string, string>();
 const workspaceReservations = new Map<string, number>();
+const pendingWorkspaceCleanupDirs = new Set<string>();
 let workspaceAdmissionLock = Promise.resolve();
 
 interface RuntimeImageSpec {
@@ -293,7 +296,13 @@ async function cleanupWorkspaceDir(workspaceDir: string | undefined): Promise<vo
   const root = await fs.realpath(WORKSPACE_HOST_ROOT).catch(() => WORKSPACE_HOST_ROOT);
   const target = await fs.realpath(workspaceDir).catch(() => workspaceDir);
   if (target !== root && target.startsWith(`${root}${path.sep}`)) {
-    await fs.rm(target, { recursive: true, force: true }).catch(() => {});
+    try {
+      await fs.rm(target, { recursive: true, force: true });
+      pendingWorkspaceCleanupDirs.delete(target);
+    } catch (error) {
+      pendingWorkspaceCleanupDirs.add(target);
+      logger.warn('Failed to remove sandbox workspace; cleanup will be retried', { workspaceDir: target, error });
+    }
   }
 }
 
@@ -395,6 +404,18 @@ async function getWorkspaceUsage(params: SandboxRunnerProcessParams): Promise<Sa
     workspaceUsageBytes,
     workspaceReservationBytes,
     overReservation: workspaceUsageBytes > workspaceReservationBytes,
+  };
+}
+
+async function findJobContainer(
+  params: SandboxRunnerFindJobContainerParams
+): Promise<SandboxRunnerFindJobContainerResult> {
+  const containers = await docker.listContainersByLabel(`gateway.sandbox.job_id=${params.jobId}`);
+  const container = containers[0];
+  return {
+    jobId: params.jobId,
+    containerId: container?.Id ?? null,
+    expiresAt: container?.Labels?.['gateway.sandbox.expires_at'] ?? null,
   };
 }
 
@@ -972,6 +993,8 @@ async function revokeUserSandboxAccess(params: SandboxRunnerRevokeUserParams): P
 
 async function reconcileSandboxContainers(): Promise<{ removed: number }> {
   const containers = await docker.listContainersByLabel('gateway.sandbox=true');
+  await retryPendingWorkspaceCleanup();
+  await sweepOrphanWorkspaceDirs(containers);
   const now = Date.now();
   let removed = 0;
 
@@ -992,6 +1015,36 @@ async function reconcileSandboxContainers(): Promise<{ removed: number }> {
   return { removed };
 }
 
+const SANDBOX_WORKSPACE_DIR_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-/i;
+
+async function retryPendingWorkspaceCleanup(): Promise<void> {
+  for (const workspaceDir of pendingWorkspaceCleanupDirs) {
+    await cleanupWorkspaceDir(workspaceDir);
+  }
+}
+
+async function sweepOrphanWorkspaceDirs(
+  containers: Awaited<ReturnType<typeof docker.listContainersByLabel>>
+): Promise<void> {
+  const root = await fs.realpath(WORKSPACE_HOST_ROOT).catch(() => null);
+  if (!root) return;
+  const referenced = new Set(
+    await Promise.all(
+      containers
+        .map((container) => container.Labels?.['gateway.sandbox.workspace_dir'])
+        .filter((workspaceDir): workspaceDir is string => typeof workspaceDir === 'string')
+        .map((workspaceDir) => fs.realpath(workspaceDir).catch(() => workspaceDir))
+    )
+  );
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink() || !SANDBOX_WORKSPACE_DIR_NAME.test(entry.name)) continue;
+    const workspaceDir = path.join(root, entry.name);
+    if (referenced.has(workspaceDir)) continue;
+    await cleanupWorkspaceDir(workspaceDir);
+  }
+}
+
 async function handle(request: SandboxRunnerRequest): Promise<unknown> {
   switch (request.method) {
     case 'health':
@@ -1004,6 +1057,8 @@ async function handle(request: SandboxRunnerRequest): Promise<unknown> {
       return fetchUrl(request.params as SandboxRunnerFetchParams);
     case 'downloadArtifact':
       return downloadArtifact(request.params as SandboxRunnerDownloadArtifactParams);
+    case 'findJobContainer':
+      return findJobContainer(request.params as SandboxRunnerFindJobContainerParams);
     case 'uploadArtifact':
       return uploadArtifact(request.params as SandboxRunnerUploadArtifactParams);
     case 'uploadArtifactChunk':

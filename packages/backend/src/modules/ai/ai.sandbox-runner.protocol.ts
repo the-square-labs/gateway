@@ -7,6 +7,7 @@ export type SandboxRunnerMethod =
   | 'fetch'
   | 'uploadArtifact'
   | 'downloadArtifact'
+  | 'findJobContainer'
   | 'listArtifactFiles'
   | 'readArtifact'
   | 'getWorkspaceUsage'
@@ -58,6 +59,15 @@ export interface SandboxRunnerRunProcessParams {
 
 export interface SandboxRunnerProcessParams {
   processId: string;
+}
+
+export interface SandboxRunnerFindJobContainerParams {
+  jobId: string;
+}
+
+export interface SandboxRunnerFindJobContainerResult extends SandboxRunnerFindJobContainerParams {
+  containerId: string | null;
+  expiresAt: string | null;
 }
 
 export interface SandboxRunnerFetchParams {

@@ -83,6 +83,7 @@ export interface SandboxSendArtifactInput {
 
 export class AISandboxService {
   private reconcileInterval: ReturnType<typeof setInterval> | null = null;
+  private readonly monitoredJobIds = new Set<string>();
 
   constructor(
     private readonly jobs: AISandboxJobsService,
@@ -355,6 +356,8 @@ export class AISandboxService {
   }
 
   private monitorProcessJob(jobId: string, containerId: string, expiresAt: string) {
+    if (this.monitoredJobIds.has(jobId)) return;
+    this.monitoredJobIds.add(jobId);
     void (async () => {
       try {
         const expiresAtMs = Date.parse(expiresAt);
@@ -371,6 +374,8 @@ export class AISandboxService {
         });
       } catch (error) {
         logger.warn('Failed to monitor sandbox process completion', { jobId, containerId, error });
+      } finally {
+        this.monitoredJobIds.delete(jobId);
       }
     })();
   }
@@ -429,6 +434,9 @@ export class AISandboxService {
 
   startPolicyReconciliation() {
     if (this.reconcileInterval) return;
+    void this.reconcileActiveJobs().catch((error) => {
+      logger.warn('Initial sandbox policy reconciliation failed', { error });
+    });
     this.reconcileInterval = setInterval(() => {
       this.reconcileActiveJobs().catch((error) => {
         logger.warn('Sandbox policy reconciliation failed', { error });
@@ -458,16 +466,52 @@ export class AISandboxService {
         continue;
       }
 
-      if (row.job.containerId) {
+      let containerId = row.job.containerId;
+      let recoveredExpiresAt: string | null = null;
+      if (!containerId) {
+        const recovered = await this.runner.findJobContainer({ jobId: row.job.id }).catch((error) => {
+          logger.warn('Failed to recover sandbox container from job label', { jobId: row.job.id, error });
+          return null;
+        });
+        if (recovered?.containerId) {
+          containerId = recovered.containerId;
+          recoveredExpiresAt = recovered.expiresAt;
+          await this.jobs.markRunning(row.job.id, containerId).catch((error) => {
+            logger.warn('Failed to restore sandbox job container reference', {
+              jobId: row.job.id,
+              containerId,
+              error,
+            });
+          });
+        }
+      }
+
+      let terminatedForQuota = false;
+      if (containerId) {
         await this.runner
-          .getWorkspaceUsage({ processId: row.job.containerId })
-          .then(({ workspaceUsageBytes, overReservation }) => {
+          .getWorkspaceUsage({ processId: containerId })
+          .then(async ({ workspaceUsageBytes, overReservation }) => {
             if (overReservation) {
-              logger.warn('Sandbox workspace exceeds its soft reservation; artifact operations remain blocked', {
+              logger.warn('Sandbox workspace exceeds its soft reservation; stopping the sandbox', {
                 jobId: row.job.id,
-                containerId: row.job.containerId,
+                containerId,
                 workspaceUsageBytes,
                 workspaceReservationBytes: row.job.workspaceReservationBytes,
+              });
+              try {
+                await this.runner.killProcess({ processId: containerId });
+              } catch (error) {
+                logger.warn('Failed to stop sandbox that exceeded its workspace reservation', {
+                  jobId: row.job.id,
+                  containerId,
+                  error,
+                });
+                return this.jobs.update(row.job.id, { workspaceUsageBytes });
+              }
+              terminatedForQuota = true;
+              return this.jobs.markFinishedIfActive(row.job.id, 'failed', {
+                error: 'Sandbox workspace exceeded its reserved capacity',
+                workspaceUsageBytes,
               });
             }
             return this.jobs.update(row.job.id, { workspaceUsageBytes });
@@ -475,10 +519,17 @@ export class AISandboxService {
           .catch((error) => {
             logger.warn('Failed to reconcile sandbox workspace usage', {
               jobId: row.job.id,
-              containerId: row.job.containerId,
+              containerId,
               error,
             });
           });
+      }
+
+      if (terminatedForQuota) continue;
+
+      if (containerId) {
+        const expiresAt = recoveredExpiresAt ?? row.job.expiresAt?.toISOString();
+        if (expiresAt) this.monitorProcessJob(row.job.id, containerId, expiresAt);
       }
 
       if (sandboxScopesSatisfied(row.currentScopes, row.job.requiredScopes)) continue;

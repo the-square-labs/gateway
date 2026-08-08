@@ -71,6 +71,71 @@ describe('AISandboxService', () => {
     expect(runner.killProcess).toHaveBeenCalledWith({ processId: 'container-1' });
   });
 
+  it('reattaches terminal monitoring to an active container after backend restart', async () => {
+    const job = {
+      id: 'job-recovered',
+      kind: 'process',
+      containerId: 'container-recovered',
+      expiresAt: new Date(Date.now() + 60_000),
+      requiredScopes: ['ai:sandbox:use'],
+      workspaceReservationBytes: 2 * 1024 * 1024 * 1024,
+    };
+    const jobs = {
+      listActiveWithEffectiveScopes: vi
+        .fn()
+        .mockResolvedValue([{ job, userId: 'user-1', currentScopes: ['ai:sandbox:use'] }]),
+      update: vi.fn().mockResolvedValue({}),
+      markFinishedIfActive: vi.fn().mockResolvedValue({ id: job.id, status: 'exited' }),
+    };
+    const runner = {
+      getWorkspaceUsage: vi
+        .fn()
+        .mockResolvedValue({ workspaceUsageBytes: 512, workspaceReservationBytes: 1024, overReservation: false }),
+      waitProcess: vi.fn().mockResolvedValue({ exitCode: 0, outputBytes: 12, workspaceUsageBytes: 512 }),
+      killProcess: vi.fn().mockResolvedValue({ processId: job.containerId, killed: true }),
+    };
+    const service = new AISandboxService(jobs as never, runner as never, {} as never);
+
+    await service.reconcileActiveJobs();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(runner.waitProcess).toHaveBeenCalledWith({ processId: job.containerId, timeoutMs: expect.any(Number) });
+    expect(runner.killProcess).toHaveBeenCalledWith({ processId: job.containerId });
+    expect(jobs.markFinishedIfActive).toHaveBeenCalledWith(job.id, 'exited', {
+      exitCode: 0,
+      outputBytes: 12,
+      workspaceUsageBytes: 512,
+    });
+  });
+
+  it('stops a sandbox that exceeds its observed workspace reservation', async () => {
+    const job = {
+      id: 'job-over-quota',
+      containerId: 'container-over-quota',
+      expiresAt: new Date(Date.now() + 60_000),
+      requiredScopes: [],
+      workspaceReservationBytes: 1024,
+    };
+    const jobs = {
+      listActiveWithEffectiveScopes: vi.fn().mockResolvedValue([{ job, userId: 'user-1', currentScopes: [] }]),
+      markFinishedIfActive: vi.fn().mockResolvedValue({ id: job.id, status: 'failed' }),
+    };
+    const runner = {
+      getWorkspaceUsage: vi
+        .fn()
+        .mockResolvedValue({ workspaceUsageBytes: 2048, workspaceReservationBytes: 1024, overReservation: true }),
+      killProcess: vi.fn().mockResolvedValue({ processId: job.containerId, killed: true }),
+    };
+    const service = new AISandboxService(jobs as never, runner as never, {} as never);
+
+    await expect(service.reconcileActiveJobs()).resolves.toEqual({ checked: 1, expired: 0, revoked: 0 });
+    expect(runner.killProcess).toHaveBeenCalledWith({ processId: job.containerId });
+    expect(jobs.markFinishedIfActive).toHaveBeenCalledWith(job.id, 'failed', {
+      error: 'Sandbox workspace exceeded its reserved capacity',
+      workspaceUsageBytes: 2048,
+    });
+  });
+
   it('returns a capacity error instead of an internal error when runner admission rejects a sandbox', async () => {
     const user = { id: 'user-1', scopes: ['ai:sandbox:use'] };
     const jobs = {

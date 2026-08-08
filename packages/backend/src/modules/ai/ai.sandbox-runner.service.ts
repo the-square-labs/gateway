@@ -11,6 +11,8 @@ import type {
   SandboxRunnerExecutionResult,
   SandboxRunnerFetchParams,
   SandboxRunnerFetchResult,
+  SandboxRunnerFindJobContainerParams,
+  SandboxRunnerFindJobContainerResult,
   SandboxRunnerHealth,
   SandboxRunnerKillResult,
   SandboxRunnerListArtifactFilesParams,
@@ -108,6 +110,11 @@ export class AISandboxRunnerService {
   async fetch(params: SandboxRunnerFetchParams) {
     await this.ensureStarted();
     return this.callRunner<SandboxRunnerFetchResult>('fetch', params);
+  }
+
+  async findJobContainer(params: SandboxRunnerFindJobContainerParams) {
+    await this.ensureStarted();
+    return this.callRunner<SandboxRunnerFindJobContainerResult>('findJobContainer', params);
   }
 
   async downloadArtifact(params: SandboxRunnerDownloadArtifactParams) {
