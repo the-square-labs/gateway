@@ -193,6 +193,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `docker:volumes:view` | Yes |
 | `docker:volumes:create` | Yes |
 | `docker:volumes:delete` | Yes |
+| `docker:volumes:export` | Yes |
 | `docker:volumes:files:read` | Yes |
 | `docker:volumes:files:write` | Yes |
 | `docker:networks:view` | Yes |
@@ -313,6 +314,7 @@ OAuth consent leaves high-risk scopes unchecked by default. The user must explic
 | `docker:containers:secrets` | Can reveal and manage encrypted container/deployment secrets. |
 | `docker:containers:mounts` | Can add, remove, or change container/deployment mounts. |
 | `docker:containers:migrate` | Can move containers or deployments and their data between Docker nodes. |
+| `docker:volumes:export` | Can export a Docker volume as a portable archive. |
 | `docker:volumes:files:read` | Can read files from Docker volumes. |
 | `docker:volumes:files:write` | Can create, modify, move, or delete files in Docker volumes. |
 | `databases:query:read` | Can read data from database resources. |

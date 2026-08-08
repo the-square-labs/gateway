@@ -58,6 +58,7 @@ export const RESOURCE_SCOPABLE_SCOPES = [
   "docker:volumes:view",
   "docker:volumes:create",
   "docker:volumes:delete",
+  "docker:volumes:export",
   "docker:volumes:files:read",
   "docker:volumes:files:write",
   "docker:networks:view",
@@ -941,6 +942,12 @@ const RAW_TOKEN_SCOPES = [
     value: "docker:volumes:delete",
     label: "Delete Volumes",
     desc: "Remove Docker volumes",
+    group: "Docker: Volumes",
+  },
+  {
+    value: "docker:volumes:export",
+    label: "Export Volumes",
+    desc: "Export portable Docker volume archives",
     group: "Docker: Volumes",
   },
   {

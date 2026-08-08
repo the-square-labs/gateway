@@ -136,6 +136,16 @@ describe('canonical scope definitions', () => {
     ).toBe(false);
   });
 
+  it('protects Docker volume archive export with a resource-scoped manual-approval permission', () => {
+    expect(SYSTEM_ADMIN_SCOPES).toContain('docker:volumes:export');
+    expect(ADMIN_SCOPES).toContain('docker:volumes:export');
+    expect(OPERATOR_SCOPES).not.toContain('docker:volumes:export');
+    expect(RESOURCE_SCOPABLE).toContain('docker:volumes:export');
+    expect(MANUAL_APPROVAL_SCOPES).toContain('docker:volumes:export');
+    expect(hasScopeForResource(['docker:volumes:export:node-1'], 'docker:volumes:export', 'node-1')).toBe(true);
+    expect(hasScopeForResource(['docker:volumes:export:node-1'], 'docker:volumes:export', 'node-2')).toBe(false);
+  });
+
   it('requires explicit grants for high-risk host node consoles', () => {
     expect(ALL_SCOPES).toContain('nodes:console');
     expect(SYSTEM_ADMIN_SCOPES).toContain('nodes:console');
@@ -224,6 +234,7 @@ describe('canonical scope definitions', () => {
       'docker:containers:secrets',
       'docker:containers:mounts',
       'docker:containers:migrate',
+      'docker:volumes:export',
       'docker:volumes:files:read',
       'docker:volumes:files:write',
       'databases:query:read',
