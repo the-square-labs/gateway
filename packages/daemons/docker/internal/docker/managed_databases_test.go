@@ -631,13 +631,34 @@ func TestClickHouseBindingProcessPrivilegesReconcileWithoutPasswordMutation(t *t
 
 func TestRedisBindingACLCannotAdministerTheServer(t *testing.T) {
 	command := redisBindingACLCommand()
-	for _, allowed := range []string{"'+@read'", "'+@write'", "'+@connection'", "'+@transaction'", "'+@pubsub'", "'+eval'", "'+evalsha'", "'+fcall'", "'+script|load'", "'-function'", "'-script|flush'", "'-@dangerous'"} {
+	for _, allowed := range []string{"'+@read'", "'+@write'", "'+@connection'", "'+@transaction'", "'+@pubsub'", "'+eval'", "'+evalsha'", "'+script|load'", "'-script|flush'", "'-@dangerous'"} {
 		if !strings.Contains(command, allowed) {
 			t.Fatalf("Redis binding ACL must include %s", allowed)
 		}
 	}
+	for _, modern := range []string{"'+eval_ro'", "'+evalsha_ro'", "'+fcall'", "'+fcall_ro'", "'-function'"} {
+		if !strings.Contains(command, modern) {
+			t.Fatalf("Redis 7+ binding ACL must include %s", modern)
+		}
+	}
+	if !strings.Contains(command, "redis_version:") || !strings.Contains(command, "[7-9]|[1-9][0-9]*") {
+		t.Fatal("Redis binding ACL must detect Redis 7+ before granting Redis-7-only commands")
+	}
 	if strings.Contains(command, "+@all") || strings.Contains(command, "+@admin") || strings.Contains(command, "+@scripting") {
 		t.Fatal("Redis binding ACL must not grant all, administrative, or scripting command categories")
+	}
+}
+
+func TestRedisBindingACLRulesKeepRedis62Compatible(t *testing.T) {
+	for _, unsupported := range []string{"+eval_ro", "+evalsha_ro", "+fcall", "+fcall_ro", "-function"} {
+		for _, baseRule := range redisBindingACLBaseRules() {
+			if baseRule == unsupported {
+				t.Fatalf("Redis 6.2 base ACL must not include Redis-7-only rule %s", unsupported)
+			}
+		}
+	}
+	if len(redisBindingACLModernRules()) != 5 {
+		t.Fatalf("expected all Redis-7-only ACL rules to be gated, got %v", redisBindingACLModernRules())
 	}
 }
 
