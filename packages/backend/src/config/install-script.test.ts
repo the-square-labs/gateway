@@ -4,7 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const installer = fileURLToPath(new URL('../../../../scripts/install.sh', import.meta.url));
+const nginxNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-node.sh', import.meta.url));
 const dockerNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-docker-node.sh', import.meta.url));
+const monitoringNodeInstaller = fileURLToPath(new URL('../../../../scripts/setup-monitoring-node.sh', import.meta.url));
 
 describe('install.sh managed browser bootstrap', () => {
   it('is valid shell and still works when piped to bash', () => {
@@ -121,5 +123,27 @@ describe('database daemon installer prerequisites', () => {
     expect(dockerPreflight).toBeGreaterThan(ensureDocker);
     expect(enrollDaemon).toBeGreaterThan(dockerPreflight);
     expect(source).toContain('Database nodes require a local Docker Engine socket');
+  });
+});
+
+describe('node installer private logs', () => {
+  it.each([
+    ['nginx', nginxNodeInstaller, 'gateway_node_setup'],
+    ['docker', dockerNodeInstaller, 'gateway_docker_setup'],
+    ['monitoring', monitoringNodeInstaller, 'gateway_monitoring_setup'],
+  ])('%s creates its private log before dependency work', (_name, path, logPrefix) => {
+    const source = readFileSync(path, 'utf8');
+    const syntax = spawnSync('bash', ['-n', path], { encoding: 'utf8' });
+    expect(syntax.status, syntax.stderr).toBe(0);
+
+    const needRoot = source.lastIndexOf('\nneed_root\n');
+    const privateLog = source.indexOf(`LOG_FILE=$(mktemp /tmp/${logPrefix}.XXXXXX)`);
+    const dependencyCheck = source.lastIndexOf('\ncheck_dependencies\n');
+
+    expect(needRoot).toBeGreaterThanOrEqual(0);
+    expect(privateLog).toBeGreaterThan(needRoot);
+    expect(privateLog).toBeLessThan(dependencyCheck);
+    expect(source).toContain('chmod 600 "$LOG_FILE"');
+    expect(source).toContain('LOG_FILE="/dev/null"');
   });
 });
