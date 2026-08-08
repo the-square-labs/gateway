@@ -1,0 +1,15 @@
+{
+  "file_name": "3fym4ikf_websocket_origin_boundary",
+  "edges": [
+    {
+      "from_id": "3fym4ikf",
+      "to_id": "vrru6m60",
+      "relation": "related_to",
+      "weight": 0.68,
+      "reason": "Both define Gateway browser WebSocket cookie-authentication boundaries; cookie naming and Origin validation are complementary, independent controls.",
+      "source": "auto",
+      "created_at": 1786190870025,
+      "updated_at": 1786190870025
+    }
+  ]
+}
