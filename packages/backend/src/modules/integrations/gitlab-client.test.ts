@@ -38,6 +38,20 @@ describe('GitLabClient', () => {
     });
   });
 
+  it('bounds native error response buffering while preserving the error preview', async () => {
+    const baseUrl = await listen((_request, response) => {
+      response.writeHead(502, { 'content-type': 'text/plain' });
+      response.write('upstream failure: ');
+      response.end('x'.repeat(512 * 1024));
+    });
+    const client = new GitLabClient(baseUrl, 'glpat-token');
+
+    await expect(client.requestBuffer('/projects/28/repository/archive.tar.gz', { maxBytes: 1024 })).rejects.toMatchObject({
+      code: 'GITLAB_API_ERROR',
+      details: expect.objectContaining({ body: expect.stringContaining('upstream failure:') }),
+    });
+  });
+
   it('preserves the token across same-origin archive redirects', async () => {
     const baseUrl = await listen((request, response) => {
       expect(request.headers['private-token']).toBe('glpat-token');

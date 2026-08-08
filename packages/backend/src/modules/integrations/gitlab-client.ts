@@ -4,6 +4,7 @@ import { AppError } from '@/middleware/error-handler.js';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_REDIRECTS = 5;
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
 
 export interface GitLabRequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -240,7 +241,15 @@ export class GitLabClient {
 
           if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
             const errorChunks: Buffer[] = [];
-            response.on('data', (chunk: Buffer) => errorChunks.push(chunk));
+            let errorBytes = 0;
+            response.on('data', (chunk: Buffer) => {
+              const remaining = MAX_ERROR_BODY_BYTES - errorBytes;
+              if (remaining <= 0) return;
+              const boundedChunk = chunk.subarray(0, remaining);
+              errorChunks.push(boundedChunk);
+              errorBytes += boundedChunk.byteLength;
+            });
+            response.on('error', reject);
             response.on('end', () => {
               reject(
                 new AppError(
