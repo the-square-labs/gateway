@@ -23,6 +23,7 @@ import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { DnsRecords, DomainWithUsage } from "@/types";
 import { DnsStatusBadge } from "./DnsStatusBadge";
+import { getDomainPermissions } from "./domain-permissions";
 
 interface DomainDetailDialogProps {
   domainId: string | null;
@@ -76,8 +77,8 @@ export function DomainDetailDialog({
   onUpdated,
 }: DomainDetailDialogProps) {
   const { hasScope } = useAuthStore();
-  const canEdit = hasScope("domains:edit");
-  const canEditDns = canEdit && hasScope("integrations:cloudflare:dns:edit");
+  const { canEditDomain: canEdit } = getDomainPermissions(hasScope);
+  const canEditDns = canEdit;
   const canIssueCert = canEdit && hasScope("ssl:cert:issue");
   const [domain, setDomain] = useState<DomainWithUsage | null>(null);
   const [description, setDescription] = useState("");

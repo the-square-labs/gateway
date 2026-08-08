@@ -189,7 +189,7 @@ Domains are Cloudflare-backed DNS records used across Gateway.
 - Domains used by proxy hosts cannot be deleted (remove from proxy first)
 - isSystem domains (management domains) cannot be deleted
 - Wildcard domains (*.example.com) can be registered
-- delete_domain requires domains:delete. Cloudflare DNS records are deleted only when the caller also has integrations:cloudflare:dns:delete
+- create_domain requires domains:create, and delete_domain requires domains:delete. Those domain permissions include the managed DNS records for the domain
 - For matched_existing domains, pass deleteDns=false to keep DNS and remove only the Gateway mapping, or deleteDns=true to remove the adopted Cloudflare records`,
 
   'access-lists': `# Access Lists
