@@ -177,6 +177,24 @@ export class DockerAccessResourceService {
     return row?.id ?? null;
   }
 
+  /**
+   * Resolve existing container access resources without reconciling runtime
+   * identities. Read-only callers use this before any daemon inspection so an
+   * inaccessible container cannot cause a scope rewrite as a side effect.
+   */
+  async listContainerResourceIdentities(nodeId: string) {
+    const rows = await this.db
+      .select({
+        id: dockerAccessResources.id,
+        name: dockerAccessResources.resourceKey,
+        runtimeId: dockerAccessResources.runtimeId,
+      })
+      .from(dockerAccessResources)
+      .where(and(eq(dockerAccessResources.nodeId, nodeId), eq(dockerAccessResources.resourceType, 'container')));
+    for (const row of rows) this.rememberContainer(nodeId, row.name, row.runtimeId, row.id);
+    return rows;
+  }
+
   async resolveResourceByName(nodeId: string, name: string): Promise<string | null> {
     const [deployment] = await this.db
       .select({ id: dockerDeployments.id })

@@ -51,6 +51,6 @@ describe('DockerManagementService container transitions', () => {
 
     await service.decorateContainerDetailSnapshot('node-1', detail);
 
-    expect(detail).toEqual({ Name: '/api' });
+    expect(detail).toEqual({ Name: '/api', gpuAttachment: { mode: 'none', deviceIds: [] } });
   });
 });

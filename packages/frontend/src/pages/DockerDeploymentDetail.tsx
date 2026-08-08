@@ -522,9 +522,12 @@ export function DockerDeploymentDetail({
   if (!deployment) return null;
 
   const actionDisabled = !!action || serviceBusy || unavailable;
-  const migrationDisabledReason = actionDisabled
-    ? "Deployment is unavailable or changing state"
-    : undefined;
+  const deploymentHasGpu = (deployment.desiredConfig.gpu?.deviceIds ?? []).length > 0;
+  const migrationDisabledReason = deploymentHasGpu
+    ? "GPU-attached deployments cannot be migrated in this version"
+    : actionDisabled
+      ? "Deployment is unavailable or changing state"
+      : undefined;
   const headerActions = [
     {
       label: "Pin",

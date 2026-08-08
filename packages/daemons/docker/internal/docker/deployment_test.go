@@ -1,10 +1,21 @@
 package docker
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/moby/moby/api/types/container"
+	"github.com/wiolett-industries/gateway/daemon-shared/gpu"
 )
+
+type failingGPUInventory struct{ err error }
+
+func (inventory failingGPUInventory) Collect(context.Context) []gpu.Device { return nil }
+
+func (inventory failingGPUInventory) Resolve(context.Context, []string) ([]gpu.Device, error) {
+	return nil, inventory.err
+}
 
 func TestApplyDeploymentRuntimeFromFormValues(t *testing.T) {
 	hostCfg := &container.HostConfig{}
@@ -67,5 +78,51 @@ func TestApplyDeploymentRuntimeFromNormalizedValues(t *testing.T) {
 	}
 	if hostCfg.NanoCPUs != 250000000 {
 		t.Fatalf("nano cpus = %d", hostCfg.NanoCPUs)
+	}
+}
+
+func TestDeployDeploymentSlotValidatesGPUBeforeReplacingTarget(t *testing.T) {
+	resolveErr := errors.New("selected GPU disappeared")
+	client := &Client{gpuInventory: failingGPUInventory{err: resolveErr}}
+	_, err := client.DeployDeploymentSlot(context.Background(), deploymentCommandPayload{
+		ToSlot: "green",
+		Deployment: deploymentSnapshot{
+			ID:          "deployment-1",
+			NetworkName: "deployment-net",
+			Slots: []struct {
+				Slot          string `json:"slot"`
+				ContainerName string `json:"containerName"`
+			}{{Slot: "green", ContainerName: "deployment-green"}},
+		},
+		DesiredConfig: deploymentDesiredConfig{
+			Image: "example:latest",
+			GPU:   &GPUConfig{DeviceIDs: []string{"nvidia:GPU-missing"}},
+		},
+	})
+	if !errors.Is(err, resolveErr) {
+		t.Fatalf("deploy error = %v, want GPU validation error", err)
+	}
+}
+
+func TestSwitchDeploymentValidatesGPUBeforeReplacingTarget(t *testing.T) {
+	resolveErr := errors.New("selected GPU disappeared")
+	client := &Client{gpuInventory: failingGPUInventory{err: resolveErr}}
+	_, err := client.SwitchDeployment(context.Background(), deploymentCommandPayload{
+		ActiveSlot: "blue",
+		Deployment: deploymentSnapshot{
+			ID:          "deployment-1",
+			NetworkName: "deployment-net",
+			Slots: []struct {
+				Slot          string `json:"slot"`
+				ContainerName string `json:"containerName"`
+			}{{Slot: "blue", ContainerName: "deployment-blue"}},
+		},
+		DesiredConfig: deploymentDesiredConfig{
+			Image: "example:latest",
+			GPU:   &GPUConfig{DeviceIDs: []string{"nvidia:GPU-missing"}},
+		},
+	})
+	if !errors.Is(err, resolveErr) {
+		t.Fatalf("switch error = %v, want GPU validation error", err)
 	}
 }

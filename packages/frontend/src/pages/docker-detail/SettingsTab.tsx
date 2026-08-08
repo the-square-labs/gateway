@@ -5,6 +5,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow, SettingsInlineControl } from "@/components/common/SettingsControlRow";
 import { DockerHealthCheckSection } from "@/components/docker/DockerHealthCheckSection";
+import { GpuSettingsSection, normalizeGpuDeviceIds } from "@/components/docker/GpuSettingsSection";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -33,6 +34,10 @@ import { WebhookSection } from "./WebhookSection";
 
 export { buildRecreatePayloadFromForm } from "./settings-payload";
 export { WebhookSection } from "./WebhookSection";
+
+const EMPTY_GPU_ATTACHMENT = { mode: "none" as const, deviceIds: [] };
+const GATEWAY_GPU_GROUP_IDS_LABEL = "wiolett.gateway.gpu.group-ids";
+const GATEWAY_GPU_GROUP_IDS_VERSION_LABEL = "wiolett.gateway.gpu.group-ids-version";
 
 function parseOptionalNumber(value: string): number | null {
   if (value.trim() === "") return null;
@@ -63,7 +68,8 @@ function sameRecreateBaseline(a: RecreateBaseline, b: RecreateBaseline) {
     a.workingDir === b.workingDir &&
     a.user === b.user &&
     a.hostname === b.hostname &&
-    a.labels === b.labels
+    a.labels === b.labels &&
+    a.gpuDeviceIds === b.gpuDeviceIds
   );
 }
 
@@ -140,6 +146,12 @@ export function SettingsTab({
     hasScope("docker:networks:view") || hasScope(`docker:networks:view:${nodeId}`);
   const recreatesRunningContainer =
     (data.State?.Status ?? (data.State?.Running ? "running" : "stopped")) === "running";
+  const gpuAttachment = data.gpuAttachment ?? EMPTY_GPU_ATTACHMENT;
+  const attachedGpuDeviceIds = gpuAttachment.deviceIds;
+  const initialGpuDeviceIds = useMemo(
+    () => (gpuAttachment.mode === "managed" ? normalizeGpuDeviceIds(attachedGpuDeviceIds) : []),
+    [attachedGpuDeviceIds, gpuAttachment.mode]
+  );
 
   // ── Live settings state (no recreation) ──
   const hostConfig = data.HostConfig ?? {};
@@ -273,7 +285,12 @@ export function SettingsTab({
   const initialUser = (config.User ?? "") as string;
   const initialHostname = (config.Hostname ?? "") as string;
   const initialLabels = Object.fromEntries(
-    Object.entries(configLabels).filter(([key]) => key !== GATEWAY_ARCHIVE_IMAGE_REFERENCE_LABEL)
+    Object.entries(configLabels).filter(
+      ([key]) =>
+        key !== GATEWAY_ARCHIVE_IMAGE_REFERENCE_LABEL &&
+        key !== GATEWAY_GPU_GROUP_IDS_LABEL &&
+        key !== GATEWAY_GPU_GROUP_IDS_VERSION_LABEL
+    )
   );
 
   const [ports, setPorts] = useState<PortMapping[]>(initialPorts);
@@ -288,6 +305,8 @@ export function SettingsTab({
   const [labels, setLabels] = useState<Array<{ key: string; value: string }>>(
     Object.entries(initialLabels).map(([key, value]) => ({ key, value }))
   );
+  const [gpuDeviceIds, setGpuDeviceIds] = useState(initialGpuDeviceIds);
+  const gpuDraftTouchedRef = useRef(false);
   const [recreateLoading, setRecreateLoading] = useState(false);
   const networkBaseline = useMemo(() => serializeNetworks(initialNetworks), [initialNetworks]);
 
@@ -303,6 +322,7 @@ export function SettingsTab({
       user: initialUser,
       hostname: initialHostname,
       labels: JSON.stringify(Object.entries(initialLabels).map(([k, v]) => ({ key: k, value: v }))),
+      gpuDeviceIds: JSON.stringify(initialGpuDeviceIds),
     }),
     [
       initialCmd,
@@ -314,6 +334,7 @@ export function SettingsTab({
       initialStopTimeout,
       initialUser,
       initialWorkdir,
+      initialGpuDeviceIds,
       parsedTag,
     ]
   );
@@ -359,7 +380,7 @@ export function SettingsTab({
   useEffect(() => {
     const previous = previousRecreateBaselineRef.current;
     const baselineChanged = !sameRecreateBaseline(previous, recreateBaseline);
-    const formMatchesPrevious =
+    const nonGpuFormMatchesPrevious =
       imageTag === previous.imageTag &&
       JSON.stringify(ports) === previous.ports &&
       JSON.stringify(mounts) === previous.mounts &&
@@ -370,10 +391,11 @@ export function SettingsTab({
       user === previous.user &&
       hostname === previous.hostname &&
       JSON.stringify(labels) === previous.labels;
+    const gpuDraftMatchesPrevious = JSON.stringify(gpuDeviceIds) === previous.gpuDeviceIds;
 
     previousRecreateBaselineRef.current = recreateBaseline;
 
-    if (!baselineChanged || !formMatchesPrevious) return;
+    if (!baselineChanged || !nonGpuFormMatchesPrevious) return;
     setImageTag(parsedTag);
     setPorts(initialPorts);
     setMounts(initialMounts);
@@ -384,10 +406,15 @@ export function SettingsTab({
     setUser(initialUser);
     setHostname(initialHostname);
     setLabels(Object.entries(initialLabels).map(([key, value]) => ({ key, value })));
+    if (!gpuDraftTouchedRef.current && gpuDraftMatchesPrevious) {
+      setGpuDeviceIds(initialGpuDeviceIds);
+    }
   }, [
     command,
     entrypoint,
+    gpuDeviceIds,
     hostname,
+    initialGpuDeviceIds,
     imageTag,
     initialCmd,
     initialEntrypoint,
@@ -617,10 +644,11 @@ export function SettingsTab({
     user !== recreateBaseline.user ||
     hostname !== recreateBaseline.hostname;
   const labelsChanged = JSON.stringify(labels) !== recreateBaseline.labels;
+  const gpuChanged = JSON.stringify(gpuDeviceIds) !== recreateBaseline.gpuDeviceIds;
   const networkValidationError = useMemo(() => validateNetworkDraft(networks), [networks]);
   const networksChanged = serializeNetworks(networks) !== networkBaselineRef.current;
   const hasConfigRecreateChanges =
-    portsChanged || mountsChanged || execChanged || labelsChanged || imageTagChanged;
+    portsChanged || mountsChanged || execChanged || labelsChanged || imageTagChanged || gpuChanged;
   const hasRecreateChanges = hasConfigRecreateChanges || networksChanged;
 
   // ── Track runtime changes against baseline ──
@@ -728,12 +756,15 @@ export function SettingsTab({
         hostname,
         labelsChanged,
         labels,
+        gpuChanged,
+        gpuDeviceIds,
         hasRuntimeChanges,
         runtimePayload: buildRuntimePayload(),
         recreateBaseline,
       });
 
       await api.recreateWithConfig(nodeId, containerId, payload);
+      gpuDraftTouchedRef.current = false;
       toast.success(
         recreatesRunningContainer ? "Recreating container..." : "Container configuration saved"
       );
@@ -759,6 +790,8 @@ export function SettingsTab({
     invalidate,
     labels,
     labelsChanged,
+    gpuChanged,
+    gpuDeviceIds,
     mounts,
     mountsChanged,
     nodeId,
@@ -823,7 +856,7 @@ export function SettingsTab({
         <PanelShell
           title="Execution"
           description="Requires container recreation"
-          dirty={execChanged || imageTagChanged}
+          dirty={execChanged || imageTagChanged || gpuChanged}
           bodyClassName="divide-y divide-border"
           actions={
             canEdit ? (
@@ -937,6 +970,18 @@ export function SettingsTab({
           </SettingsControlRow>
         </PanelShell>
       </div>
+
+      <GpuSettingsSection
+        nodeId={nodeId}
+        attachment={gpuAttachment}
+        canEdit={canEdit}
+        deviceIds={gpuDeviceIds}
+        dirty={gpuChanged}
+        onDeviceIdsChange={(nextDeviceIds) => {
+          gpuDraftTouchedRef.current = true;
+          setGpuDeviceIds(nextDeviceIds);
+        }}
+      />
 
       {/* ─── Port Mappings ────────────────────────────────────────── */}
       <PortMappingsSection

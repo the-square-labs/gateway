@@ -11,12 +11,19 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { GpuMonitoringSection } from "@/components/docker/GpuMonitoringSection";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { formatBytes, formatUptime } from "@/lib/utils";
 import { api } from "@/services/api";
-import type { NodeHealthReport, NodeStatsReport } from "@/types";
+import {
+  hasGpuMetric,
+  hasGpuMonitoringMetrics,
+  type NodeGpuDevice,
+  type NodeHealthReport,
+  type NodeStatsReport,
+} from "@/types";
 
 interface TrafficStats {
   statusCodes: { s2xx: number; s3xx: number; s4xx: number; s5xx: number };
@@ -45,6 +52,19 @@ function finiteNumber(value: unknown, fallback = 0) {
 
 function fixed(value: unknown, digits: number, fallback = "0") {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : fallback;
+}
+
+function gpuMetricHistory(
+  snapshots: Snapshot[],
+  deviceId: string,
+  metric: string,
+  value: (device: NodeGpuDevice) => number | undefined
+) {
+  return snapshots.flatMap((snapshot) => {
+    const device = snapshot.health?.gpuDevices?.find((candidate) => candidate.id === deviceId);
+    const current = device && hasGpuMetric(device, metric) ? value(device) : undefined;
+    return typeof current === "number" && Number.isFinite(current) ? [current] : [];
+  });
 }
 
 interface NodeMonitoringTabProps {
@@ -180,6 +200,7 @@ export function NodeMonitoringTab({
   // Split root mount from other mounts
   const rootMount = health?.diskMounts?.find((m) => m.mountPoint === "/");
   const otherMounts = health?.diskMounts?.filter((m) => m.mountPoint !== "/") ?? [];
+  const gpuDevices = (health?.gpuDevices ?? []).filter(hasGpuMonitoringMetrics);
 
   return (
     <div className="space-y-4">
@@ -263,6 +284,15 @@ export function NodeMonitoringTab({
           )}
         </div>
       </div>
+
+      {gpuDevices.map((gpu, index) => (
+        <GpuMonitoringSection
+          key={gpu.id}
+          gpu={gpu}
+          index={index}
+          history={(metric, value) => gpuMetricHistory(history, gpu.id, metric, value)}
+        />
+      ))}
 
       {/* Traffic — Status Codes & Response Times (nginx only) */}
       {nodeType === "nginx" && latest?.traffic && (

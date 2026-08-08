@@ -8,7 +8,7 @@ import type { NotificationEvaluatorService } from '@/modules/notifications/notif
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
-import type { DockerAccessResourceService } from './docker-access-resource.service.js';
+import { type DockerAccessResourceService, hasDockerResourceScope } from './docker-access-resource.service.js';
 import {
   createContainer as createDockerContainer,
   type DockerContainerMutationContext,
@@ -30,6 +30,7 @@ import { DOCKER_DEPLOYMENT_ID_LABEL, DOCKER_DEPLOYMENT_MANAGED_LABEL } from './d
 import { getContainerEnv as getDockerContainerEnv } from './docker-env-operations.js';
 import type { DockerEnvironmentService } from './docker-environment.service.js';
 import type { DockerFolderService } from './docker-folder.service.js';
+import { deriveDockerGpuAttachment, hasDockerGpuV1Capability } from './docker-gpu-attachment.js';
 import type { DockerHealthCheckService } from './docker-health-check.service.js';
 import type { DockerImageCleanupService } from './docker-image-cleanup.service.js';
 import {
@@ -97,8 +98,16 @@ import {
 const logger = createChildLogger('DockerManagementService');
 const DEFAULT_CONTAINER_STOP_TIMEOUT_SECONDS = 20;
 const CONTAINER_LIFECYCLE_TIMEOUT_BUFFER_SECONDS = 30;
+const GPU_USAGE_INSPECTION_BATCH_SIZE = 8;
 
 export type { ContainerTransition } from './docker-container-transitions.js';
+
+export interface DockerGpuAttachmentUser {
+  containerId: string;
+  name: string;
+  scopeResourceId: string | null;
+  deviceIds: string[];
+}
 
 export class DockerManagementService {
   private static readonly LONG_DOCKER_OPERATION_TIMEOUT_MS = 600000; // 10 minutes
@@ -559,6 +568,17 @@ export class DockerManagementService {
     return node;
   }
 
+  private async assertDockerGpuCapability(nodeId: string): Promise<void> {
+    const node = await this.validateDockerNode(nodeId);
+    if (!hasDockerGpuV1Capability(node.capabilities)) {
+      throw new AppError(
+        409,
+        'UNSUPPORTED_DAEMON',
+        'Docker node does not support Gateway GPU attachments. Update the Docker daemon before changing GPU configuration.'
+      );
+    }
+  }
+
   private parseResult(result: { success: boolean; error?: string; detail?: string }) {
     if (!result.success) {
       throw new AppError(502, 'DISPATCH_ERROR', dockerDispatchErrorMessage(result, 'Command failed on daemon'));
@@ -577,6 +597,83 @@ export class DockerManagementService {
     const result = await this.nodeDispatch.sendDockerContainerCommand(nodeId, 'list');
     const containers = this.parseResult(result);
     return this.decorateContainerSnapshot(nodeId, containers);
+  }
+
+  /**
+   * Resolve the physical GPUs used by real containers on demand. Container
+   * summaries intentionally omit HostConfig, so this read-only view inspects
+   * each entry only when the Settings table needs it.
+   */
+  async listGpuAttachmentUsers(nodeId: string, actorScopes: string[]): Promise<DockerGpuAttachmentUser[]> {
+    await this.validateDockerNode(nodeId);
+    const result = await this.nodeDispatch.sendDockerContainerCommand(nodeId, 'list');
+    const containers = this.parseResult(result);
+    if (!Array.isArray(containers)) return [];
+
+    const gpuInventory = await this.gpuInventoryForNode(nodeId);
+    const resourceRows = (await this.accessResourceService?.listContainerResourceIdentities(nodeId)) ?? [];
+    const resourceIdByName = new Map(resourceRows.map((row) => [row.name, row.id]));
+    const resourceIdByRuntime = new Map(
+      resourceRows.filter((row) => !!row.runtimeId).map((row) => [row.runtimeId!, row.id])
+    );
+    const visibleContainers = containers.flatMap((item) => {
+      const container = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+      const containerId = String(container.id ?? container.Id ?? '');
+      if (!containerId) return [];
+      const name = String(container.name ?? container.Name ?? '').replace(/^\/+/, '');
+      const labels = (container.labels ?? container.Labels ?? {}) as Record<string, unknown>;
+      const deploymentId = String(labels[DOCKER_DEPLOYMENT_ID_LABEL] ?? '');
+      const scopeResourceId =
+        labels[DOCKER_DEPLOYMENT_MANAGED_LABEL] === 'true' && deploymentId
+          ? deploymentId
+          : (resourceIdByRuntime.get(containerId) ?? resourceIdByName.get(name) ?? null);
+      if (!hasDockerResourceScope(actorScopes, 'docker:containers:view', nodeId, scopeResourceId ?? '')) {
+        return [];
+      }
+      return [{ containerId, name, scopeResourceId }];
+    });
+    const users: DockerGpuAttachmentUser[] = [];
+    for (let offset = 0; offset < visibleContainers.length; offset += GPU_USAGE_INSPECTION_BATCH_SIZE) {
+      const batch = visibleContainers.slice(offset, offset + GPU_USAGE_INSPECTION_BATCH_SIZE);
+      const inspected = await Promise.all(
+        batch.map(
+          async ({ containerId, name: listedName, scopeResourceId }): Promise<DockerGpuAttachmentUser | null> => {
+            try {
+              const inspectResult = await this.nodeDispatch.sendDockerContainerCommand(nodeId, 'inspect', {
+                containerId,
+              });
+              const detail = this.parseResult(inspectResult);
+              if (!detail || typeof detail !== 'object') return null;
+              const attachment = deriveDockerGpuAttachment(detail, gpuInventory);
+              if (attachment.mode !== 'managed' || attachment.deviceIds.length === 0) return null;
+
+              const name = String(
+                (detail as Record<string, unknown>).Name ?? (detail as Record<string, unknown>).name ?? listedName
+              ).replace(/^\/+/, '');
+              if (!name) return null;
+
+              return {
+                containerId,
+                name,
+                scopeResourceId,
+                deviceIds: attachment.deviceIds,
+              };
+            } catch (error) {
+              // A container can disappear between the list and inspect calls.
+              // Keep the rest of the shared-device view usable in that case.
+              logger.debug('Skipping GPU usage inspection for container', {
+                nodeId,
+                containerId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              return null;
+            }
+          }
+        )
+      );
+      users.push(...inspected.filter((user): user is DockerGpuAttachmentUser => !!user));
+    }
+    return users;
   }
 
   /** Add DB-backed folders, health checks and deployment rows without contacting a daemon. */
@@ -693,13 +790,33 @@ export class DockerManagementService {
     return data;
   }
 
+  private async gpuInventoryForNode(nodeId: string): Promise<unknown[]> {
+    const liveHealth = this.nodeRegistry.getNode(nodeId)?.lastHealthReport as Record<string, unknown> | undefined;
+    if (Array.isArray(liveHealth?.gpuDevices)) return liveHealth.gpuDevices;
+    try {
+      const [node] = await this.db
+        .select({ lastHealthReport: nodes.lastHealthReport })
+        .from(nodes)
+        .where(eq(nodes.id, nodeId))
+        .limit(1);
+      const persistedHealth = node?.lastHealthReport as Record<string, unknown> | null | undefined;
+      return Array.isArray(persistedHealth?.gpuDevices) ? persistedHealth.gpuDevices : [];
+    } catch {
+      // Decoration must not make a normal inspect unavailable when a previous
+      // health report cannot be read. An unrecognized host mapping remains
+      // explicitly read-only until inventory is available again.
+      return [];
+    }
+  }
+
   /** Add local transition/runtime state to a cached inspect without contacting a daemon. */
-  async decorateContainerDetailSnapshot(nodeId: string, data: any) {
+  async decorateContainerDetailSnapshot(nodeId: string, data: any, gpuInventory?: unknown[]) {
     if (!data) return data;
     const cName = ((data.Name ?? data.name ?? '') as string).replace(/^\/+/, '');
     const transition = cName ? this.getTransition(nodeId, cName) : undefined;
     if (transition) data._transition = transition;
     else delete data._transition;
+    data.gpuAttachment = deriveDockerGpuAttachment(data, gpuInventory ?? (await this.gpuInventoryForNode(nodeId)));
     const runtimeId = String(data.Id ?? data.id ?? '');
     const labels = (data.Config?.Labels ?? data.config?.labels ?? {}) as Record<string, string>;
     const deploymentId = labels[DOCKER_DEPLOYMENT_ID_LABEL];
@@ -735,6 +852,7 @@ export class DockerManagementService {
       taskService: this.taskService,
       longDockerOperationTimeoutMs: DockerManagementService.LONG_DOCKER_OPERATION_TIMEOUT_MS,
       validateDockerNode: (nodeId) => this.validateDockerNode(nodeId),
+      assertDockerGpuCapability: (nodeId) => this.assertDockerGpuCapability(nodeId),
       assertNameAvailable: (nodeId, name) => this.assertNameAvailable(nodeId, name),
       assertNotManagedDeploymentInternal: (nodeId, containerId) =>
         this.assertNotManagedDeploymentInternal(nodeId, containerId),

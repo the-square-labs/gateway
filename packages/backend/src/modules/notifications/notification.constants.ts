@@ -67,6 +67,22 @@ export interface CategoryDefinition {
   variables: Array<{ name: string; description: string }>;
 }
 
+const GPU_NODE_METRIC_IDS = new Set([
+  'gpu_utilization_percent',
+  'gpu_memory_used_percent',
+  'gpu_temperature_celsius',
+  'gpu_power_percent_of_limit',
+  'gpu_throttled',
+  'gpu_health_degraded',
+  'gpu_ecc_corrected_errors',
+  'gpu_ecc_uncorrected_errors',
+]);
+
+/** Node metrics which maintain one alert state per physical GPU device. */
+export function isPerDeviceNodeMetric(metric: string): boolean {
+  return GPU_NODE_METRIC_IDS.has(metric);
+}
+
 export const ALERT_CATEGORIES: CategoryDefinition[] = [
   {
     id: 'node',
@@ -75,6 +91,56 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { id: 'cpu', label: 'CPU Usage (%)', unit: '%', defaultOperator: '>', defaultValue: 90 },
       { id: 'memory', label: 'Memory Usage (%)', unit: '%', defaultOperator: '>', defaultValue: 90 },
       { id: 'disk', label: 'Disk Usage (%)', unit: '%', defaultOperator: '>', defaultValue: 85 },
+      {
+        id: 'gpu_utilization_percent',
+        label: 'GPU Utilization (%)',
+        unit: '%',
+        defaultOperator: '>',
+        defaultValue: 90,
+      },
+      {
+        id: 'gpu_memory_used_percent',
+        label: 'GPU VRAM Usage (%)',
+        unit: '%',
+        defaultOperator: '>',
+        defaultValue: 90,
+      },
+      {
+        id: 'gpu_temperature_celsius',
+        label: 'GPU Temperature',
+        unit: '°C',
+        defaultOperator: '>',
+        defaultValue: 85,
+      },
+      {
+        id: 'gpu_power_percent_of_limit',
+        label: 'GPU Power (% of Limit)',
+        unit: '%',
+        defaultOperator: '>',
+        defaultValue: 95,
+      },
+      { id: 'gpu_throttled', label: 'GPU Throttled', unit: 'state', defaultOperator: '>=', defaultValue: 1 },
+      {
+        id: 'gpu_health_degraded',
+        label: 'GPU Health Degraded',
+        unit: 'state',
+        defaultOperator: '>=',
+        defaultValue: 1,
+      },
+      {
+        id: 'gpu_ecc_corrected_errors',
+        label: 'GPU Corrected ECC Errors',
+        unit: 'errors',
+        defaultOperator: '>',
+        defaultValue: 0,
+      },
+      {
+        id: 'gpu_ecc_uncorrected_errors',
+        label: 'GPU Uncorrected ECC Errors',
+        unit: 'errors',
+        defaultOperator: '>',
+        defaultValue: 0,
+      },
     ],
     events: [
       { id: 'offline', label: 'Node Offline', defaultSeverity: 'critical', supportsThreshold: true },
@@ -86,7 +152,7 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { name: '{{resource.key}}', description: 'Internal alert resource key' },
       { name: '{{node.id}}', description: 'Node ID' },
       { name: '{{node.name}}', description: 'Node hostname' },
-      { name: '{{metric.name}}', description: 'Metric name (cpu, memory, disk)' },
+      { name: '{{metric.name}}', description: 'Metric name (CPU, memory, disk, or GPU metric)' },
       { name: '{{metric.value}}', description: 'Current metric value' },
       { name: '{{metric.threshold}}', description: 'Configured threshold' },
       { name: '{{metric.operator}}', description: 'Comparison operator' },
@@ -589,6 +655,10 @@ export function extractMetricFromHealthReport(
         };
       }
     }
+
+    if (isPerDeviceNodeMetric(metric)) {
+      return extractGpuMetricFromHealthReport(metric, healthData, metricTarget);
+    }
   }
 
   if (category === 'container') {
@@ -618,6 +688,98 @@ export function extractMetricFromHealthReport(
   }
 
   return null;
+}
+
+function gpuMetricIsAvailable(device: Record<string, unknown>, metric: string): boolean {
+  const availableMetrics = device.availableMetrics ?? device.available_metrics;
+  return (
+    Array.isArray(availableMetrics) &&
+    availableMetrics.some((candidate) => typeof candidate === 'string' && candidate.trim() === metric)
+  );
+}
+
+function gpuNumberMetric(device: Record<string, unknown>, availability: string, ...fields: string[]): number | null {
+  if (!gpuMetricIsAvailable(device, availability)) return null;
+  const raw = fields.map((field) => device[field]).find((value) => value !== undefined && value !== null);
+  if (typeof raw === 'string' && raw.trim() === '') return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+function gpuBooleanMetric(device: Record<string, unknown>, availability: string, ...fields: string[]): boolean | null {
+  if (!gpuMetricIsAvailable(device, availability)) return null;
+  const raw = fields.map((field) => device[field]).find((value) => value !== undefined && value !== null);
+  return typeof raw === 'boolean' ? raw : null;
+}
+
+function gpuHealthMetric(device: Record<string, unknown>): string | null {
+  if (!gpuMetricIsAvailable(device, 'health')) return null;
+  const raw = device.health;
+  return typeof raw === 'string' && raw.trim() ? raw.trim().toLowerCase() : null;
+}
+
+/**
+ * GPU telemetry is capability-aware. Unlike legacy host metrics, each field
+ * is unavailable until the daemon explicitly reports it in availableMetrics.
+ */
+function extractGpuMetricFromHealthReport(
+  metric: string,
+  healthData: any,
+  metricTarget?: string | null
+): { values: Array<{ resourceId: string; value: number }> } | null {
+  const devices = healthData.gpuDevices ?? healthData.gpu_devices;
+  if (!Array.isArray(devices)) return null;
+
+  const target = metricTarget?.trim() || null;
+  const values = devices.flatMap((rawDevice: unknown) => {
+    if (!rawDevice || typeof rawDevice !== 'object') return [];
+    const device = rawDevice as Record<string, unknown>;
+    const idValue = device.id ?? device.Id;
+    const resourceId = typeof idValue === 'string' ? idValue.trim() : '';
+    if (!resourceId || (target && resourceId !== target)) return [];
+
+    let value: number | null = null;
+    switch (metric) {
+      case 'gpu_utilization_percent':
+        value = gpuNumberMetric(device, 'utilization_percent', 'utilizationPercent', 'utilization_percent');
+        break;
+      case 'gpu_memory_used_percent': {
+        const total = gpuNumberMetric(device, 'memory_total_bytes', 'memoryTotalBytes', 'memory_total_bytes');
+        const used = gpuNumberMetric(device, 'memory_used_bytes', 'memoryUsedBytes', 'memory_used_bytes');
+        value = total !== null && total > 0 && used !== null ? (used / total) * 100 : null;
+        break;
+      }
+      case 'gpu_temperature_celsius':
+        value = gpuNumberMetric(device, 'temperature_celsius', 'temperatureCelsius', 'temperature_celsius');
+        break;
+      case 'gpu_power_percent_of_limit': {
+        const power = gpuNumberMetric(device, 'power_watts', 'powerWatts', 'power_watts');
+        const limit = gpuNumberMetric(device, 'power_limit_watts', 'powerLimitWatts', 'power_limit_watts');
+        value = power !== null && limit !== null && limit > 0 ? (power / limit) * 100 : null;
+        break;
+      }
+      case 'gpu_throttled': {
+        const throttled = gpuBooleanMetric(device, 'throttled', 'throttled');
+        value = throttled === null ? null : throttled ? 1 : 0;
+        break;
+      }
+      case 'gpu_health_degraded': {
+        const health = gpuHealthMetric(device);
+        value = health === null ? null : health === 'healthy' ? 0 : 1;
+        break;
+      }
+      case 'gpu_ecc_corrected_errors':
+        value = gpuNumberMetric(device, 'ecc_corrected_errors', 'eccCorrectedErrors', 'ecc_corrected_errors');
+        break;
+      case 'gpu_ecc_uncorrected_errors':
+        value = gpuNumberMetric(device, 'ecc_uncorrected_errors', 'eccUncorrectedErrors', 'ecc_uncorrected_errors');
+        break;
+    }
+
+    return value !== null && Number.isFinite(value) ? [{ resourceId, value }] : [];
+  });
+
+  return values.length > 0 ? { values } : null;
 }
 
 export function extractMetricFromDatabaseSnapshot(

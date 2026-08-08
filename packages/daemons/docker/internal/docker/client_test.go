@@ -18,6 +18,7 @@ import (
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/gpu"
 )
 
 func writeDockerLogFrame(t *testing.T, buf *bytes.Buffer, payload string) {
@@ -44,6 +45,231 @@ func TestContainerCreateConfigParsesRestartPolicyFromCamelCase(t *testing.T) {
 	}
 	if cfg.effectiveRestartPolicy() != "always" {
 		t.Fatalf("effective restart policy = %q", cfg.effectiveRestartPolicy())
+	}
+}
+
+func TestApplyGPUSelectionReplacesOnlyManagedGPUEntries(t *testing.T) {
+	hostCfg := &container.HostConfig{
+		Runtime: "nvidia",
+		Resources: container.Resources{
+			Devices: []container.DeviceMapping{
+				{PathOnHost: "/dev/random", PathInContainer: "/dev/random", CgroupPermissions: "r"},
+				{PathOnHost: "/dev/kfd", PathInContainer: "/dev/kfd", CgroupPermissions: "rwm"},
+				{PathOnHost: "/dev/dri/renderD128", PathInContainer: "/dev/dri/renderD128", CgroupPermissions: "rwm"},
+			},
+			DeviceRequests: []container.DeviceRequest{
+				{Driver: "vendor-other", DeviceIDs: []string{"keep"}},
+				{Driver: "nvidia", Count: 0, DeviceIDs: []string{"old-gpu"}, Capabilities: [][]string{{"gpu"}}},
+				{Driver: "", Count: 0, DeviceIDs: []string{"old-default"}, Capabilities: [][]string{{"gpu"}}},
+			},
+		},
+		GroupAdd: []string{"44"},
+	}
+
+	applyGPUSelection(hostCfg, []gpu.Device{
+		{Vendor: gpu.VendorNVIDIA, RuntimeID: "GPU-new"},
+		{Vendor: gpu.VendorAMD, DevicePaths: []string{"/dev/kfd", "/dev/dri/renderD130"}, GroupIDs: []string{"105"}},
+		{Vendor: gpu.VendorAMD, DevicePaths: []string{"/dev/kfd", "/dev/dri/renderD131"}, GroupIDs: []string{"105"}},
+	}, nil)
+
+	if hostCfg.Runtime != "" {
+		t.Fatalf("legacy NVIDIA runtime was not cleared: %q", hostCfg.Runtime)
+	}
+	if len(hostCfg.DeviceRequests) != 2 || hostCfg.DeviceRequests[0].Driver != "vendor-other" {
+		t.Fatalf("non-GPU device request was not preserved: %#v", hostCfg.DeviceRequests)
+	}
+	request := hostCfg.DeviceRequests[1]
+	if request.Driver != "nvidia" || len(request.DeviceIDs) != 1 || request.DeviceIDs[0] != "GPU-new" {
+		t.Fatalf("unexpected NVIDIA request: %#v", request)
+	}
+	paths := make(map[string]bool)
+	for _, mapping := range hostCfg.Devices {
+		paths[mapping.PathOnHost] = true
+	}
+	for _, expected := range []string{"/dev/random", "/dev/kfd", "/dev/dri/renderD130", "/dev/dri/renderD131"} {
+		if !paths[expected] {
+			t.Fatalf("expected device path %q, got %#v", expected, hostCfg.Devices)
+		}
+	}
+	if paths["/dev/dri/renderD128"] {
+		t.Fatalf("stale managed GPU mapping was retained: %#v", hostCfg.Devices)
+	}
+	if len(hostCfg.GroupAdd) != 2 || hostCfg.GroupAdd[0] != "44" || hostCfg.GroupAdd[1] != "105" {
+		t.Fatalf("unexpected GPU group list: %#v", hostCfg.GroupAdd)
+	}
+}
+
+func TestApplyGPUSelectionDetachesDefaultNVIDIARequest(t *testing.T) {
+	hostCfg := &container.HostConfig{
+		Resources: container.Resources{
+			DeviceRequests: []container.DeviceRequest{
+				{
+					Driver:       "",
+					Count:        0,
+					DeviceIDs:    []string{"GPU-old"},
+					Capabilities: [][]string{{"gpu"}},
+				},
+			},
+		},
+	}
+
+	applyGPUSelection(hostCfg, nil, nil)
+
+	if len(hostCfg.DeviceRequests) != 0 {
+		t.Fatalf("legacy default NVIDIA request was retained: %#v", hostCfg.DeviceRequests)
+	}
+}
+
+func TestApplyGPUSelectionPreservesCustomNVIDIARequest(t *testing.T) {
+	hostCfg := &container.HostConfig{
+		Resources: container.Resources{
+			DeviceRequests: []container.DeviceRequest{
+				{
+					Driver:       "nvidia",
+					Count:        0,
+					DeviceIDs:    []string{"GPU-custom"},
+					Capabilities: [][]string{{"gpu", "compute"}},
+					Options:      map[string]string{"capabilities": "compute,utility"},
+				},
+			},
+		},
+	}
+
+	applyGPUSelection(hostCfg, nil, nil)
+
+	if len(hostCfg.DeviceRequests) != 1 || hostCfg.DeviceRequests[0].Driver != "nvidia" {
+		t.Fatalf("custom NVIDIA request was removed: %#v", hostCfg.DeviceRequests)
+	}
+}
+
+func TestApplyGPUSelectionReplacesManagedGPUGroupIDs(t *testing.T) {
+	containerCfg := &container.Config{Labels: map[string]string{
+		gatewayGPUGroupIDsLabel:        "105",
+		gatewayGPUGroupIDsVersionLabel: gatewayGPUGroupIDsVersion,
+	}}
+	hostCfg := &container.HostConfig{Resources: container.Resources{}, GroupAdd: []string{"44", "105"}}
+
+	nextManaged := applyGPUSelection(
+		hostCfg,
+		[]gpu.Device{{Vendor: gpu.VendorIntel, DevicePaths: []string{"/dev/dri/renderD130"}, GroupIDs: []string{"106"}}},
+		managedGPUGroupIDs(containerCfg),
+	)
+	setManagedGPUGroupIDs(containerCfg, nextManaged)
+
+	if got, want := strings.Join(hostCfg.GroupAdd, ","), "44,106"; got != want {
+		t.Fatalf("replaced GPU group IDs = %q, want %q", got, want)
+	}
+	if got := containerCfg.Labels[gatewayGPUGroupIDsLabel]; got != "106" {
+		t.Fatalf("managed GPU group label = %q, want %q", got, "106")
+	}
+
+	nextManaged = applyGPUSelection(hostCfg, nil, managedGPUGroupIDs(containerCfg))
+	setManagedGPUGroupIDs(containerCfg, nextManaged)
+
+	if got, want := strings.Join(hostCfg.GroupAdd, ","), "44"; got != want {
+		t.Fatalf("detached GPU group IDs = %q, want %q", got, want)
+	}
+	if _, exists := containerCfg.Labels[gatewayGPUGroupIDsLabel]; exists {
+		t.Fatalf("managed GPU group label was retained: %#v", containerCfg.Labels)
+	}
+}
+
+func TestGPUDetachDoesNotInferOwnershipFromLegacyMappings(t *testing.T) {
+	containerCfg := &container.Config{}
+	hostCfg := &container.HostConfig{Resources: container.Resources{
+		Devices: []container.DeviceMapping{
+			{PathOnHost: "/dev/kfd", PathInContainer: "/dev/kfd", CgroupPermissions: "rwm"},
+			{PathOnHost: "/dev/dri/renderD128", PathInContainer: "/dev/dri/renderD128", CgroupPermissions: "rwm"},
+		},
+	}, GroupAdd: []string{"44", "105"}}
+	if previous := managedGPUGroupIDs(containerCfg); len(previous) != 0 {
+		t.Fatalf("legacy GPU mapping was treated as Gateway-owned: %#v", previous)
+	}
+
+	applyGPUSelection(hostCfg, nil, managedGPUGroupIDs(containerCfg))
+	if got, want := strings.Join(hostCfg.GroupAdd, ","), "44,105"; got != want {
+		t.Fatalf("legacy GPU group IDs were removed without provenance: %q, want %q", got, want)
+	}
+}
+
+func TestGatewayGPUGroupLabelSurvivesLabelReplacementAndDetach(t *testing.T) {
+	containerCfg := &container.Config{Labels: map[string]string{
+		gatewayGPUGroupIDsLabel:        "105",
+		gatewayGPUGroupIDsVersionLabel: gatewayGPUGroupIDsVersion,
+		"user.label":                   "before",
+	}}
+	replacementLabels := map[string]string{
+		gatewayGPUGroupIDsLabel:        "999",
+		gatewayGPUGroupIDsVersionLabel: "unexpected",
+		"user.label":                   "after",
+	}
+	preserveGatewayManagedContainerLabels(containerCfg.Labels, replacementLabels)
+	containerCfg.Labels = replacementLabels
+
+	if got := containerCfg.Labels[gatewayGPUGroupIDsLabel]; got != "105" {
+		t.Fatalf("replacement overwrote managed GPU group label: %q", got)
+	}
+	if got := containerCfg.Labels[gatewayGPUGroupIDsVersionLabel]; got != gatewayGPUGroupIDsVersion {
+		t.Fatalf("replacement overwrote managed GPU group label version: %q", got)
+	}
+
+	hostCfg := &container.HostConfig{Resources: container.Resources{
+		Devices: []container.DeviceMapping{
+			{PathOnHost: "/dev/kfd", PathInContainer: "/dev/kfd", CgroupPermissions: "rwm"},
+			{PathOnHost: "/dev/dri/renderD128", PathInContainer: "/dev/dri/renderD128", CgroupPermissions: "rwm"},
+		},
+	}, GroupAdd: []string{"44", "105"}}
+	previous := managedGPUGroupIDs(containerCfg)
+	if got, want := strings.Join(previous, ","), "105"; got != want {
+		t.Fatalf("managed GPU group IDs = %q, want %q", got, want)
+	}
+	nextManaged := applyGPUSelection(hostCfg, nil, previous)
+	setManagedGPUGroupIDs(containerCfg, nextManaged)
+
+	if got, want := strings.Join(hostCfg.GroupAdd, ","), "44"; got != want {
+		t.Fatalf("detached GPU group IDs = %q, want %q", got, want)
+	}
+	if _, exists := containerCfg.Labels[gatewayGPUGroupIDsLabel]; exists {
+		t.Fatalf("managed GPU group label was retained: %#v", containerCfg.Labels)
+	}
+}
+
+func TestGatewayGPUGroupProvenanceCannotBeIntroducedByLabelReplacement(t *testing.T) {
+	existingLabels := map[string]string{"user.label": "before"}
+	replacementLabels := map[string]string{
+		gatewayGPUGroupIDsLabel:        "105",
+		gatewayGPUGroupIDsVersionLabel: gatewayGPUGroupIDsVersion,
+		"user.label":                   "after",
+	}
+
+	preserveGatewayManagedContainerLabels(existingLabels, replacementLabels)
+
+	for _, label := range []string{gatewayGPUGroupIDsLabel, gatewayGPUGroupIDsVersionLabel} {
+		if _, exists := replacementLabels[label]; exists {
+			t.Fatalf("replacement introduced daemon-owned GPU provenance %q: %#v", label, replacementLabels)
+		}
+	}
+}
+
+func TestGPUDetachKeepsGroupThatPredatesGatewayAttachment(t *testing.T) {
+	containerCfg := &container.Config{}
+	hostCfg := &container.HostConfig{Resources: container.Resources{}, GroupAdd: []string{"44", "105"}}
+	devices := []gpu.Device{{
+		Vendor:      gpu.VendorAMD,
+		DevicePaths: []string{"/dev/kfd", "/dev/dri/renderD128"},
+		GroupIDs:    []string{"105"},
+	}}
+
+	nextManaged := applyGPUSelection(hostCfg, devices, managedGPUGroupIDs(containerCfg))
+	setManagedGPUGroupIDs(containerCfg, nextManaged)
+	if len(nextManaged) != 0 || containerCfg.Labels[gatewayGPUGroupIDsLabel] != "" {
+		t.Fatalf("pre-existing GPU group was recorded as Gateway-managed: managed=%#v labels=%#v", nextManaged, containerCfg.Labels)
+	}
+
+	nextManaged = applyGPUSelection(hostCfg, nil, managedGPUGroupIDs(containerCfg))
+	setManagedGPUGroupIDs(containerCfg, nextManaged)
+	if got, want := strings.Join(hostCfg.GroupAdd, ","), "44,105"; got != want {
+		t.Fatalf("detach removed group that predated GPU attachment: %q, want %q", got, want)
 	}
 }
 

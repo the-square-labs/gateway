@@ -105,6 +105,14 @@ export const listContainersRoute = appRoute({
   request: { params: nodeParams, query: dockerListQuery },
   responses: okJson(UnknownDataResponseSchema),
 });
+export const listContainerGpuUsageRoute = appRoute({
+  method: 'get',
+  path: '/nodes/{nodeId}/containers/gpu-usage',
+  tags: ['Docker Containers'],
+  summary: 'List visible container users for each managed GPU',
+  request: { params: nodeParams },
+  responses: okJson(UnknownDataResponseSchema),
+});
 export const createContainerRoute = appRoute({
   method: 'post',
   path: '/nodes/{nodeId}/containers',

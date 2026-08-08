@@ -50,6 +50,7 @@ import {
 } from './docker-deployment-operations.js';
 import { desiredConfigForRegistryAttempt, isRegistryRetryableError } from './docker-deployment-registry.js';
 import { toSyntheticRow } from './docker-deployment-synthetic.js';
+import { hasDockerGpuV1Capability } from './docker-gpu-attachment.js';
 import type { DockerHealthCheckDto, DockerHealthCheckService } from './docker-health-check.service.js';
 import type { DockerImageCleanupService } from './docker-image-cleanup.service.js';
 import type { DockerMigrationGuard } from './docker-migration-guard.js';
@@ -205,6 +206,17 @@ export class DockerDeploymentService {
     return node;
   }
 
+  private async assertDockerGpuCapability(nodeId: string): Promise<void> {
+    const node = await this.validateDockerNode(nodeId);
+    if (!hasDockerGpuV1Capability(node.capabilities)) {
+      throw new AppError(
+        409,
+        'UNSUPPORTED_DAEMON',
+        'Docker node does not support Gateway GPU attachments. Update the Docker daemon before changing GPU configuration.'
+      );
+    }
+  }
+
   private async assertNameAvailable(nodeId: string, name: string, excludeDeploymentId?: string) {
     const existingDeploymentQuery = this.db
       .select({ id: dockerDeployments.id })
@@ -340,6 +352,7 @@ export class DockerDeploymentService {
   async create(nodeId: string, input: DockerDeploymentCreateInput, userId: string, actorScopes: string[] = []) {
     await assertNodeAllowsServiceCreation(this.db, nodeId, 'docker');
     await this.validateDockerNode(nodeId);
+    if (input.gpu !== undefined) await this.assertDockerGpuCapability(nodeId);
     normalizeRoutes(input.routes);
     const health = normalizeHealth(input.health);
     await this.assertNameAvailable(nodeId, input.name);
@@ -361,6 +374,7 @@ export class DockerDeploymentService {
       labels: input.labels,
       restartPolicy: input.restartPolicy,
       runtime: input.runtime,
+      gpu: input.gpu,
     };
     assertDockerMountChangeAllowed({ nodeId, actorScopes, nextConfig: desiredConfig, currentDefinitions: [] });
 
@@ -530,6 +544,9 @@ export class DockerDeploymentService {
     const desiredConfig = input.desiredConfig
       ? { ...current.desiredConfig, ...input.desiredConfig }
       : current.desiredConfig;
+    if (input.desiredConfig && Object.hasOwn(input.desiredConfig, 'gpu')) {
+      await this.assertDockerGpuCapability(nodeId);
+    }
     assertDockerMountChangeAllowed({
       nodeId,
       resourceId: deploymentId,
@@ -653,6 +670,7 @@ export class DockerDeploymentService {
       image: targetImage,
       env: input.env ?? deployment.desiredConfig.env,
     };
+    if (desiredConfig.gpu !== undefined) await this.assertDockerGpuCapability(nodeId);
     assertDockerMountChangeAllowed({
       nodeId,
       resourceId: deploymentId,
@@ -756,6 +774,7 @@ export class DockerDeploymentService {
       ...releaseContext?.desiredConfig,
       image: releaseContext?.image ?? deployment.desiredConfig.image,
     };
+    if (desiredConfig.gpu !== undefined) await this.assertDockerGpuCapability(nodeId);
     assertDockerMountChangeAllowed({
       nodeId,
       resourceId: deploymentId,

@@ -45,6 +45,32 @@ describe("api client contract", () => {
     );
   });
 
+  it("lists managed GPU users for a Docker node", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({
+        data: [
+          {
+            deviceId: "nvidia:gpu-1",
+            containerCount: 1,
+            containers: [{ name: "inference" }],
+          },
+        ],
+      })
+    );
+
+    await expect(api.listDockerGpuUsage("node-1")).resolves.toEqual([
+      {
+        deviceId: "nvidia:gpu-1",
+        containerCount: 1,
+        containers: [{ name: "inference" }],
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith("/api/docker/nodes/node-1/containers/gpu-usage", {
+      credentials: "include",
+      headers: expect.any(Headers),
+    });
+  });
+
   it("serializes proxy host list filters and unwraps proxy host mutations", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

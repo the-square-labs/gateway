@@ -99,11 +99,11 @@ npx -y @wiolett/gateway-inference@latest setup claude-code
 | Область | Кратко |
 |---------|--------|
 | Reverse proxy | Multi-node nginx management, proxy hosts, Docker container/deployment upstreams, maintenance mode, redirects, WebSockets, access lists, health checks, host folders, templates, logs и stats. |
-| Docker | Container lifecycle, deployments, rollout/rollback, cross-node migrations контейнеров и volumes, offline inventory snapshots, registries, images, networks, volumes, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, mounts и cleanup. |
+| Docker | Container lifecycle, deployments, rollout/rollback, подключение shared физических NVIDIA/AMD/Intel GPU, допустимые cross-node migrations контейнеров и volumes, offline inventory snapshots, registries, images, networks, volumes, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, mounts и cleanup. GPU-attached workloads в v1 нельзя мигрировать или экспортировать. |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports и proxy binding. |
 | Domains | Central domain registry, DNS checks, record validation и usage tracking. |
 | Databases | Saved PostgreSQL, Redis и ClickHouse connections с encrypted credentials, health history, browsing, scoped query consoles и capability-aware write operations; private-by-default managed Postgres, Redis и ClickHouse instances могут безопасно подключаться к Docker workloads. |
-| Monitoring | Node CPU, memory, disk, network, service status, daemon runtime details, log streaming и update checks. |
+| Monitoring | Node CPU, memory, disk, network, service status, capability-aware telemetry физических GPU, daemon runtime details, log streaming и update checks. |
 | Logging | Опциональный ClickHouse-backed structured log ingestion со schemas, retention, ingest tokens, rate limits и search. |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages и optional AI assistant. |
 | Inference | Опциональный multi-provider model gateway с отдельными tokens, usage controls, OpenAI-compatible API и управляемой настройкой Codex или Claude Code через `@wiolett/gateway-inference`. |

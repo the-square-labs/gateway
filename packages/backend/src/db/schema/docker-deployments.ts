@@ -37,6 +37,7 @@ export interface DockerDeploymentDesiredConfig {
   networks?: string[];
   restartPolicy?: 'no' | 'always' | 'unless-stopped' | 'on-failure';
   runtime?: Record<string, unknown>;
+  gpu?: { deviceIds: string[] };
 }
 
 export const dockerDeployments = pgTable(

@@ -13,6 +13,7 @@ describe("buildRecreatePayloadFromForm", () => {
     user: "node",
     hostname: "gateway",
     labels: "[]",
+    gpuDeviceIds: "[]",
   };
 
   it("builds recreate payload with parsed execution fields and trimmed labels", () => {
@@ -36,6 +37,8 @@ describe("buildRecreatePayloadFromForm", () => {
           { key: " service ", value: "backend" },
           { key: "", value: "ignored" },
         ],
+        gpuChanged: true,
+        gpuDeviceIds: ["nvidia:GPU-1"],
         hasRuntimeChanges: true,
         runtimePayload: { restartPolicy: "always" },
         recreateBaseline,
@@ -51,8 +54,36 @@ describe("buildRecreatePayloadFromForm", () => {
       labels: {
         service: "backend",
       },
+      gpu: { deviceIds: ["nvidia:GPU-1"] },
       restartPolicy: "always",
     });
+  });
+
+  it("sends an explicit empty GPU selection to detach every managed GPU", () => {
+    expect(
+      buildRecreatePayloadFromForm({
+        parsedImageName: "registry.example.com/team/app",
+        imageTag: "latest",
+        imageTagChanged: false,
+        portsChanged: false,
+        ports: [],
+        mountsChanged: false,
+        mounts: [],
+        entrypoint: "",
+        command: "",
+        stopTimeout: "10",
+        workingDir: "/app",
+        user: "node",
+        hostname: "gateway",
+        labelsChanged: false,
+        labels: [],
+        gpuChanged: true,
+        gpuDeviceIds: [],
+        hasRuntimeChanges: false,
+        runtimePayload: null,
+        recreateBaseline,
+      })
+    ).toEqual({ gpu: { deviceIds: [] } });
   });
 
   it("removes the tag suffix and clears entrypoint/command when values are blanked", () => {
@@ -73,6 +104,8 @@ describe("buildRecreatePayloadFromForm", () => {
         hostname: "gateway",
         labelsChanged: false,
         labels: [],
+        gpuChanged: false,
+        gpuDeviceIds: [],
         hasRuntimeChanges: false,
         runtimePayload: null,
         recreateBaseline: {

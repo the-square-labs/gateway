@@ -37,7 +37,7 @@ vi.mock('@/modules/monitoring/log-relay.service.js', () => ({
   logRelay: {},
 }));
 
-import { nodesRoutes } from './nodes.routes.js';
+import { compactMonitoringHistorySnapshot, nodesRoutes } from './nodes.routes.js';
 
 function createApp() {
   const app = new Hono<AppEnv>();
@@ -45,6 +45,29 @@ function createApp() {
   app.route('/', nodesRoutes);
   return app;
 }
+
+describe('compactMonitoringHistorySnapshot', () => {
+  it('retains GPU inventory in the initial monitoring history payload', () => {
+    const gpuDevices = [
+      {
+        id: 'nvidia:gpu-1',
+        vendor: 'nvidia',
+        model: 'RTX 3050',
+        availableMetrics: ['utilization_percent', 'temperature_celsius'],
+        utilizationPercent: 12.5,
+        temperatureCelsius: 54,
+      },
+    ];
+
+    const compacted = compactMonitoringHistorySnapshot({
+      timestamp: '2026-08-08T00:00:00.000Z',
+      health: { cpuPercent: 4, gpuDevices },
+      stats: {},
+    });
+
+    expect(compacted.health.gpuDevices).toEqual(gpuDevices);
+  });
+});
 
 describe('nodesRoutes list access', () => {
   beforeEach(() => {

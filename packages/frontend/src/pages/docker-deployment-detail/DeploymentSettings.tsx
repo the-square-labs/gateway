@@ -12,13 +12,21 @@ import {
   UNKNOWN_DOCKER_RUNTIME_CAPACITY,
 } from "@/lib/docker-runtime-capacity";
 import { api } from "@/services/api";
-import type { DockerDeployment, DockerHealthCheck, DockerWebhook } from "@/types";
+import {
+  type DockerDeployment,
+  type DockerHealthCheck,
+  type DockerWebhook,
+  gpuDeviceLabel,
+  type NodeGpuDevice,
+} from "@/types";
 import { formatBytes } from "../docker-detail/helpers";
 import { LabelsSection } from "../docker-detail/LabelsSection";
 import { type PortMapping, PortMappingsSection } from "../docker-detail/PortMappingsSection";
 import { type RuntimeFieldErrors, RuntimeSection } from "../docker-detail/RuntimeSection";
 import { WebhookSection } from "../docker-detail/SettingsTab";
 import { type MountEntry, VolumeMountsSection } from "../docker-detail/VolumeMountsSection";
+
+const EMPTY_GPU_DEVICE_IDS: string[] = [];
 
 function splitImageRef(imageRef: string) {
   const digestIndex = imageRef.indexOf("@");
@@ -63,6 +71,10 @@ function normalizeLabels(labels: unknown): Array<{ key: string; value: string }>
     key,
     value,
   }));
+}
+
+function normalizeGpuDeviceIds(ids: readonly string[]) {
+  return [...new Set(ids.map((id) => id.trim()).filter(Boolean))].sort();
 }
 
 export function DeploymentSettings({
@@ -118,6 +130,11 @@ export function DeploymentSettings({
     [deployment.desiredConfig]
   );
   const runtime = ((deployment.desiredConfig as any).runtime ?? {}) as Record<string, any>;
+  const desiredGpuDeviceIds = deployment.desiredConfig.gpu?.deviceIds ?? EMPTY_GPU_DEVICE_IDS;
+  const initialGpuDeviceIds = useMemo(
+    () => normalizeGpuDeviceIds(desiredGpuDeviceIds),
+    [desiredGpuDeviceIds]
+  );
   const desiredImageParts = useMemo(
     () => splitImageRef(deployment.desiredConfig.image),
     [deployment.desiredConfig.image]
@@ -142,6 +159,7 @@ export function DeploymentSettings({
       cpuShares: runtime.cpuShares ? String(runtime.cpuShares) : "",
       pidsLimit: runtime.pidsLimit ? String(runtime.pidsLimit) : "",
       drainSeconds: String(deployment.drainSeconds),
+      gpuDeviceIds: JSON.stringify(initialGpuDeviceIds),
     }),
     [
       deployment.desiredConfig.restartPolicy,
@@ -154,6 +172,7 @@ export function DeploymentSettings({
       initialMounts,
       initialPorts,
       initialReadinessRouteIndex,
+      initialGpuDeviceIds,
       initialUser,
       initialWorkingDir,
       runtime.cpuCount,
@@ -183,6 +202,9 @@ export function DeploymentSettings({
   const [cpuShares, setCpuShares] = useState(runtime.cpuShares ? String(runtime.cpuShares) : "");
   const [pidsLimit, setPidsLimit] = useState(runtime.pidsLimit ? String(runtime.pidsLimit) : "");
   const [drainSeconds, setDrainSeconds] = useState(String(deployment.drainSeconds));
+  const [gpuDeviceIds, setGpuDeviceIds] = useState(initialGpuDeviceIds);
+  const [gpuDevices, setGpuDevices] = useState<NodeGpuDevice[]>([]);
+  const [gpuInventoryLoaded, setGpuInventoryLoaded] = useState(false);
   const [runtimeCapacity, setRuntimeCapacity] = useState<DockerRuntimeCapacity>(
     UNKNOWN_DOCKER_RUNTIME_CAPACITY
   );
@@ -196,6 +218,26 @@ export function DeploymentSettings({
       if (!cancelled) setRuntimeCapacity(capacity);
     });
 
+    return () => {
+      cancelled = true;
+    };
+  }, [nodeId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setGpuInventoryLoaded(false);
+    void api
+      .getNode(nodeId)
+      .then((node) => {
+        if (cancelled) return;
+        setGpuDevices(node.liveHealthReport?.gpuDevices ?? node.lastHealthReport?.gpuDevices ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setGpuDevices([]);
+      })
+      .finally(() => {
+        if (!cancelled) setGpuInventoryLoaded(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -220,7 +262,8 @@ export function DeploymentSettings({
       cpuCount === previous.cpuCount &&
       cpuShares === previous.cpuShares &&
       pidsLimit === previous.pidsLimit &&
-      drainSeconds === previous.drainSeconds;
+      drainSeconds === previous.drainSeconds &&
+      JSON.stringify(gpuDeviceIds) === previous.gpuDeviceIds;
 
     previousDeploymentBaselineRef.current = deploymentBaseline;
 
@@ -242,6 +285,7 @@ export function DeploymentSettings({
     setCpuShares(deploymentBaseline.cpuShares);
     setPidsLimit(deploymentBaseline.pidsLimit);
     setDrainSeconds(deploymentBaseline.drainSeconds);
+    setGpuDeviceIds(initialGpuDeviceIds);
   }, [
     command,
     cpuCount,
@@ -249,7 +293,9 @@ export function DeploymentSettings({
     deploymentBaseline,
     drainSeconds,
     entrypoint,
+    gpuDeviceIds,
     imageTag,
+    initialGpuDeviceIds,
     initialLabels,
     initialMounts,
     initialPorts,
@@ -280,8 +326,14 @@ export function DeploymentSettings({
   const mountsChanged = JSON.stringify(mounts) !== JSON.stringify(initialMounts);
   const labelsChanged = JSON.stringify(labels) !== JSON.stringify(initialLabels);
   const drainChanged = drainSeconds !== String(deployment.drainSeconds);
+  const gpuChanged = JSON.stringify(gpuDeviceIds) !== deploymentBaseline.gpuDeviceIds;
   const settingsChanged =
-    executionChanged || portsChanged || mountsChanged || labelsChanged || drainChanged;
+    executionChanged ||
+    portsChanged ||
+    mountsChanged ||
+    labelsChanged ||
+    drainChanged ||
+    gpuChanged;
   const executionCardChanged = executionChanged || drainChanged;
   const runtimeChanged =
     restartPolicy !== (deployment.desiredConfig.restartPolicy ?? "unless-stopped") ||
@@ -467,6 +519,7 @@ export function DeploymentSettings({
                       user,
                       mounts,
                       labels: labelMap,
+                      ...(gpuChanged ? { gpu: { deviceIds: gpuDeviceIds } } : {}),
                     },
                     routes: ports
                       .filter((port) => port.hostPort && port.containerPort)
@@ -549,6 +602,60 @@ export function DeploymentSettings({
           </div>
         </PanelShell>
       </div>
+
+      <PanelShell title="GPU" description="Applies to both blue/green slots" dirty={gpuChanged}>
+        {!gpuInventoryLoaded ? (
+          <p className="px-4 py-3 text-sm text-muted-foreground">Loading node GPU inventory…</p>
+        ) : gpuDevices.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-muted-foreground">
+            No GPUs are currently reported by this node.
+          </p>
+        ) : (
+          <>
+            <div>
+              {gpuDevices.map((gpu) => {
+                const checked = gpuDeviceIds.includes(gpu.id);
+                const disabled = !!action || (!gpu.attachable && !checked);
+                return (
+                  <label
+                    key={gpu.id}
+                    className={`flex min-w-0 items-center gap-2 border-b border-border px-4 py-3 text-sm last:border-b-0 ${disabled ? "opacity-60" : "cursor-pointer"}`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="form-checkbox shrink-0"
+                      checked={checked}
+                      disabled={disabled}
+                      onChange={() =>
+                        setGpuDeviceIds((current) =>
+                          normalizeGpuDeviceIds(
+                            checked
+                              ? current.filter((deviceId) => deviceId !== gpu.id)
+                              : [...current, gpu.id]
+                          )
+                        )
+                      }
+                    />
+                    <span className="min-w-0">
+                      <span className="block font-medium">{gpuDeviceLabel(gpu)}</span>
+                      <span className="block break-all text-xs text-muted-foreground">
+                        {gpu.attachable
+                          ? `Shared physical device · ${gpu.id}`
+                          : gpu.unavailableReason || "Unavailable for container attachment"}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <p className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
+              {gpuDeviceIds.length > 0
+                ? `${gpuDeviceIds.length} physical GPU${gpuDeviceIds.length === 1 ? "" : "s"} selected`
+                : "No GPU selected"}
+            </p>
+          </>
+        )}
+      </PanelShell>
 
       <PortMappingsSection
         canEdit

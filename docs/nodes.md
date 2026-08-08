@@ -52,6 +52,28 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-do
   sudo bash -s -- --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
 ```
 
+## Docker GPU Workloads
+
+Gateway can attach one or more discovered physical GPUs to a standalone Docker container or a blue/green deployment. The selection is node-local and uses stable device IDs; Gateway never accepts a browser-supplied host path or runtime ID.
+
+### Host prerequisites
+
+GPU support is opt-in host preparation. Gateway discovers and validates the resulting host state, but never installs a driver, a container runtime, or a vendor userspace stack.
+
+- **NVIDIA:** install a working NVIDIA driver so `nvidia-smi` can query the card, then configure NVIDIA Container Toolkit with Docker so Docker reports an `nvidia` runtime. Gateway marks the device unavailable until both checks pass.
+- **AMD:** the Linux driver must expose both `/dev/kfd` and the GPU's `/dev/dri/renderD*` node. Gateway maps only those daemon-discovered paths; an image still needs the ROCm or other userspace it requires.
+- **Intel:** the Linux driver must expose the GPU's `/dev/dri/renderD*` node. `intel_gpu_top` is optional and only enriches utilization telemetry; the workload image still needs its own oneAPI, media, or other userspace dependencies where applicable.
+
+The GPU must appear as attachable on the node before it can be selected. A device in NVIDIA MIG/partitioned mode, NVIDIA exclusive compute mode, or another unsupported virtualized/partitioned mode remains visible but cannot be attached.
+
+### Shared-device and portability boundaries
+
+- Physical GPU selections are shared: Gateway does not reserve VRAM, enforce quotas, schedule workloads, or calculate per-container GPU usage. Multiple containers may select the same attachable device.
+- GPU changes use the normal recreate path. Duplicating a container preserves its GPU selection. A blue/green deployment gives the same selection to both application slots; the router never receives a GPU mapping.
+- Node monitoring and GPU alerts use only device metrics that the daemon explicitly reports. A container's monitoring panel repeats that physical shared-device telemetry and does not claim it belongs only to that container.
+- Gateway does not manage MIG, vGPU, SR-IOV, mediated devices, exclusive GPU allocation, or host driver/runtime installation. Existing unrecognized manual GPU mappings stay read-only so Gateway does not rewrite arbitrary host devices.
+- GPU-attached containers and deployments cannot migrate between nodes in v1. GPU-attached standalone containers also cannot be exported as `.gwca` archives. Detach the GPU and recreate the workload before using those portability workflows.
+
 Monitoring node:
 
 ```bash

@@ -99,11 +99,11 @@ The CLI asks for the Gateway URL and completes OAuth when no active connection e
 | Area | Summary |
 |------|---------|
 | Reverse proxy | Multi-node nginx management, proxy hosts, Docker container/deployment upstreams, maintenance mode, redirects, WebSockets, access lists, health checks, host folders, templates, logs, and stats. |
-| Docker | Container lifecycle, deployments, rollout/rollback, cross-node container and volume migrations, offline inventory snapshots, registries, images, networks, volumes, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, mounts, and cleanup. |
+| Docker | Container lifecycle, deployments, rollout/rollback, shared physical NVIDIA/AMD/Intel GPU attachment, eligible cross-node container and volume migrations, offline inventory snapshots, registries, images, networks, volumes, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, mounts, and cleanup. GPU-attached workloads cannot migrate or export in v1. |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports, and proxy binding. |
 | Domains | Central domain registry, DNS checks, record validation, and usage tracking. |
 | Databases | Saved PostgreSQL, Redis, and ClickHouse connections with encrypted credentials, health history, browsing, scoped query consoles, and capability-aware write operations; private-by-default managed Postgres, Redis, and ClickHouse instances can bind securely to Docker workloads. |
-| Monitoring | Node CPU, memory, disk, network, service status, daemon runtime details, log streaming, and update checks. |
+| Monitoring | Node CPU, memory, disk, network, service status, capability-aware physical GPU telemetry, daemon runtime details, log streaming, and update checks. |
 | Logging | Optional ClickHouse-backed structured log ingestion with schemas, retention, ingest tokens, rate limits, search, storage caps, and health safeguards. |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages, and optional AI assistant. |
 | Inference | Optional multi-provider model gateway with dedicated tokens, usage controls, OpenAI-compatible APIs, and managed Codex or Claude Code setup through `@wiolett/gateway-inference`. |

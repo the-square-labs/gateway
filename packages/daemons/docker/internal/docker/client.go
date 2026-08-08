@@ -24,12 +24,16 @@ import (
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
+	"github.com/wiolett-industries/gateway/daemon-shared/gpu"
 )
 
 const (
 	defaultContainerStopTimeoutSeconds = 20
 	maxDockerLogReadBytes              = 8 * 1024 * 1024
 	maxDockerLogLineBytes              = 1024 * 1024
+	gatewayGPUGroupIDsLabel            = "wiolett.gateway.gpu.group-ids"
+	gatewayGPUGroupIDsVersionLabel     = "wiolett.gateway.gpu.group-ids-version"
+	gatewayGPUGroupIDsVersion          = "1"
 )
 
 var errDockerLogsTooLarge = errors.New("docker logs response exceeds safety limit")
@@ -38,8 +42,14 @@ var detailedContainerTopArgs = []string{"-eo", "pid,user,%cpu,%mem,vsz,rss,tty,s
 
 // Client wraps the Docker SDK client with convenience methods.
 type Client struct {
-	cli    *client.Client
-	logger *slog.Logger
+	cli          *client.Client
+	logger       *slog.Logger
+	gpuInventory gpuInventory
+}
+
+type gpuInventory interface {
+	Collect(context.Context) []gpu.Device
+	Resolve(context.Context, []string) ([]gpu.Device, error)
 }
 
 type HTTPProbeConfig struct {
@@ -91,7 +101,7 @@ func NewClient(socketPath string, logger *slog.Logger) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create docker client: %w", err)
 	}
-	return &Client{cli: cli, logger: logger}, nil
+	return &Client{cli: cli, logger: logger, gpuInventory: gpu.NewCollector(logger)}, nil
 }
 
 // Close releases the underlying Docker client resources.
@@ -442,11 +452,19 @@ type ContainerCreateConfig struct {
 	NetworkAliases []string `json:"network_aliases,omitempty"`
 	RestartPolicy  string   `json:"restartPolicy,omitempty"` // "no", "always", "unless-stopped", "on-failure"
 	// Backward-compatible alias for older daemon-local config payloads.
-	RestartPolicyLegacy string   `json:"restart_policy,omitempty"`
-	Privileged          bool     `json:"privileged,omitempty"`
-	CapAdd              []string `json:"cap_add,omitempty"`
-	CapDrop             []string `json:"cap_drop,omitempty"`
-	ExtraHosts          []string `json:"extra_hosts,omitempty"`
+	RestartPolicyLegacy string     `json:"restart_policy,omitempty"`
+	Privileged          bool       `json:"privileged,omitempty"`
+	CapAdd              []string   `json:"cap_add,omitempty"`
+	CapDrop             []string   `json:"cap_drop,omitempty"`
+	ExtraHosts          []string   `json:"extra_hosts,omitempty"`
+	GPU                 *GPUConfig `json:"gpu,omitempty"`
+}
+
+// GPUConfig is a node-scoped, Gateway-owned selection. Empty deviceIds is an
+// explicit detach request during recreate; an omitted GPU field preserves the
+// existing HostConfig mapping.
+type GPUConfig struct {
+	DeviceIDs []string `json:"deviceIds"`
 }
 
 func (cfg ContainerCreateConfig) effectiveRestartPolicy() string {
@@ -454,6 +472,265 @@ func (cfg ContainerCreateConfig) effectiveRestartPolicy() string {
 		return cfg.RestartPolicy
 	}
 	return cfg.RestartPolicyLegacy
+}
+
+// GPUDevices returns the daemon-authoritative inventory with Docker-specific
+// NVIDIA runtime readiness applied. Monitoring-only daemons intentionally do
+// not make this additional Docker check.
+func (c *Client) GPUDevices(ctx context.Context) []gpu.Device {
+	if c.gpuInventory == nil {
+		return nil
+	}
+	devices := c.gpuInventory.Collect(ctx)
+	return gpu.ApplyNVIDIAContainerRuntimeReadiness(devices, c.nvidiaRuntimeAvailable(ctx))
+}
+
+func (c *Client) nvidiaRuntimeAvailable(ctx context.Context) bool {
+	if c.cli == nil {
+		return false
+	}
+	info, err := c.cli.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return false
+	}
+	_, available := info.Info.Runtimes["nvidia"]
+	return available
+}
+
+type gpuSelection struct {
+	devices []gpu.Device
+}
+
+func (c *Client) resolveGPUConfig(ctx context.Context, config *GPUConfig) (*gpuSelection, error) {
+	if config == nil {
+		return nil, nil
+	}
+	if c.gpuInventory == nil {
+		return nil, fmt.Errorf("GPU discovery is unavailable on this Docker daemon")
+	}
+	devices, err := c.gpuInventory.Resolve(ctx, config.DeviceIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, device := range devices {
+		if device.Vendor == gpu.VendorNVIDIA && !c.nvidiaRuntimeAvailable(ctx) {
+			return nil, fmt.Errorf("GPU device %q is unavailable: NVIDIA Container Toolkit is not configured in Docker", device.ID)
+		}
+	}
+	return &gpuSelection{devices: devices}, nil
+}
+
+func (c *Client) applyGPUConfig(ctx context.Context, containerCfg *container.Config, hostCfg *container.HostConfig, config *GPUConfig) error {
+	selection, err := c.resolveGPUConfig(ctx, config)
+	if err != nil {
+		return err
+	}
+	c.applyResolvedGPUSelection(containerCfg, hostCfg, selection)
+	return nil
+}
+
+func (c *Client) applyResolvedGPUSelection(containerCfg *container.Config, hostCfg *container.HostConfig, selection *gpuSelection) {
+	if selection == nil {
+		return
+	}
+	previousManagedGroupIDs := managedGPUGroupIDs(containerCfg)
+	nextManagedGroupIDs := applyGPUSelection(hostCfg, selection.devices, previousManagedGroupIDs)
+	setManagedGPUGroupIDs(containerCfg, nextManagedGroupIDs)
+}
+
+// applyGPUSelection only changes Gateway-managed GPU entries. It deliberately
+// leaves unrelated HostConfig devices intact so a GPU edit cannot become a
+// generic host-device rewrite.
+func applyGPUSelection(hostCfg *container.HostConfig, devices []gpu.Device, previousManagedGroupIDs []string) []string {
+	if hostCfg == nil {
+		return nil
+	}
+	filteredRequests := hostCfg.DeviceRequests[:0]
+	for _, request := range hostCfg.DeviceRequests {
+		if isGatewayNVIDIARequest(request) {
+			continue
+		}
+		filteredRequests = append(filteredRequests, request)
+	}
+	hostCfg.DeviceRequests = filteredRequests
+
+	filteredMappings := hostCfg.Devices[:0]
+	for _, mapping := range hostCfg.Devices {
+		if isGatewayDirectGPUPath(mapping.PathOnHost) {
+			continue
+		}
+		filteredMappings = append(filteredMappings, mapping)
+	}
+	hostCfg.Devices = filteredMappings
+	if hostCfg.Runtime == "nvidia" {
+		hostCfg.Runtime = ""
+	}
+
+	nvidiaIDs := make([]string, 0, len(devices))
+	groupIDs := withoutStrings(hostCfg.GroupAdd, previousManagedGroupIDs)
+	currentGroupIDs := make(map[string]struct{}, len(groupIDs))
+	for _, groupID := range groupIDs {
+		currentGroupIDs[groupID] = struct{}{}
+	}
+	previousManagedSet := make(map[string]struct{}, len(previousManagedGroupIDs))
+	for _, groupID := range previousManagedGroupIDs {
+		previousManagedSet[groupID] = struct{}{}
+	}
+	nextManagedGroupIDs := []string{}
+	mappedPaths := make(map[string]struct{}, len(hostCfg.Devices))
+	for _, mapping := range hostCfg.Devices {
+		mappedPaths[mapping.PathOnHost] = struct{}{}
+	}
+	for _, device := range devices {
+		switch device.Vendor {
+		case gpu.VendorNVIDIA:
+			if device.RuntimeID != "" {
+				nvidiaIDs = append(nvidiaIDs, device.RuntimeID)
+			}
+		case gpu.VendorAMD, gpu.VendorIntel:
+			for _, path := range device.DevicePaths {
+				if _, exists := mappedPaths[path]; exists {
+					continue
+				}
+				mappedPaths[path] = struct{}{}
+				hostCfg.Devices = append(hostCfg.Devices, container.DeviceMapping{
+					PathOnHost:        path,
+					PathInContainer:   path,
+					CgroupPermissions: "rwm",
+				})
+			}
+			for _, groupID := range device.GroupIDs {
+				if groupID == "" {
+					continue
+				}
+				_, alreadyPresent := currentGroupIDs[groupID]
+				_, wasGatewayManaged := previousManagedSet[groupID]
+				if !alreadyPresent {
+					groupIDs = append(groupIDs, groupID)
+					currentGroupIDs[groupID] = struct{}{}
+				}
+				if wasGatewayManaged || !alreadyPresent {
+					nextManagedGroupIDs = appendUniqueStrings(nextManagedGroupIDs, groupID)
+				}
+			}
+		}
+	}
+	if len(nvidiaIDs) > 0 {
+		hostCfg.DeviceRequests = append(hostCfg.DeviceRequests, container.DeviceRequest{
+			Driver:       "nvidia",
+			DeviceIDs:    nvidiaIDs,
+			Capabilities: [][]string{{"gpu"}},
+		})
+	}
+	hostCfg.GroupAdd = groupIDs
+	return nextManagedGroupIDs
+}
+
+func managedGPUGroupIDs(containerCfg *container.Config) []string {
+	if containerCfg == nil || containerCfg.Labels == nil || containerCfg.Labels[gatewayGPUGroupIDsVersionLabel] != gatewayGPUGroupIDsVersion {
+		return nil
+	}
+	return parseGPUGroupIDs(containerCfg.Labels[gatewayGPUGroupIDsLabel])
+}
+
+func preserveGatewayManagedContainerLabels(existing map[string]string, replacement map[string]string) {
+	if replacement == nil {
+		return
+	}
+	if existing != nil {
+		if value, exists := existing[archiveImageReferenceLabel]; exists {
+			replacement[archiveImageReferenceLabel] = value
+		}
+	}
+	// GPU group provenance is daemon-owned metadata. Never admit values from a
+	// caller: an untracked label must not turn a pre-existing group into one we
+	// are allowed to remove on a later detach.
+	for _, label := range []string{gatewayGPUGroupIDsLabel, gatewayGPUGroupIDsVersionLabel} {
+		if existing == nil {
+			delete(replacement, label)
+			continue
+		}
+		if value, exists := existing[label]; exists {
+			replacement[label] = value
+		} else {
+			delete(replacement, label)
+		}
+	}
+}
+
+func setManagedGPUGroupIDs(containerCfg *container.Config, groupIDs []string) {
+	if containerCfg == nil {
+		return
+	}
+	if len(groupIDs) == 0 {
+		if containerCfg.Labels != nil {
+			delete(containerCfg.Labels, gatewayGPUGroupIDsLabel)
+			delete(containerCfg.Labels, gatewayGPUGroupIDsVersionLabel)
+		}
+		return
+	}
+	sort.Strings(groupIDs)
+	if containerCfg.Labels == nil {
+		containerCfg.Labels = map[string]string{}
+	}
+	containerCfg.Labels[gatewayGPUGroupIDsLabel] = strings.Join(groupIDs, ",")
+	containerCfg.Labels[gatewayGPUGroupIDsVersionLabel] = gatewayGPUGroupIDsVersion
+}
+
+func parseGPUGroupIDs(value string) []string {
+	return appendUniqueStrings(nil, strings.Split(value, ",")...)
+}
+
+func withoutStrings(values []string, remove []string) []string {
+	if len(remove) == 0 {
+		return append([]string(nil), values...)
+	}
+	removed := make(map[string]struct{}, len(remove))
+	for _, value := range remove {
+		if value != "" {
+			removed[value] = struct{}{}
+		}
+	}
+	filtered := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, shouldRemove := removed[value]; !shouldRemove {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
+}
+
+func isGatewayNVIDIARequest(request container.DeviceRequest) bool {
+	driver := strings.TrimSpace(request.Driver)
+	if driver != "" && !strings.EqualFold(driver, "nvidia") {
+		return false
+	}
+	if len(request.DeviceIDs) == 0 || len(request.Capabilities) != 1 || len(request.Capabilities[0]) != 1 || !strings.EqualFold(request.Capabilities[0][0], "gpu") {
+		return false
+	}
+	return len(request.Options) == 0 && request.Count == 0
+}
+
+func isGatewayDirectGPUPath(path string) bool {
+	return path == "/dev/kfd" || strings.HasPrefix(path, "/dev/dri/renderD")
+}
+
+func appendUniqueStrings(values []string, additions ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(additions))
+	for _, value := range values {
+		seen[value] = struct{}{}
+	}
+	for _, value := range additions {
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
 }
 
 // CreateContainer parses configJSON into a container config and creates the container.
@@ -488,6 +765,11 @@ func (c *Client) CreateContainer(ctx context.Context, configJSON string) (string
 		CapAdd:      cfg.CapAdd,
 		CapDrop:     cfg.CapDrop,
 		ExtraHosts:  cfg.ExtraHosts,
+	}
+	if cfg.GPU != nil {
+		if err := c.applyGPUConfig(ctx, containerCfg, hostCfg, cfg.GPU); err != nil {
+			return "", "", err
+		}
 	}
 
 	// Parse port bindings: "80/tcp" -> "8080"
@@ -801,6 +1083,7 @@ func (c *Client) RecreateWithConfig(ctx context.Context, id string, configJSON s
 		NanoCPUs      *int64            `json:"nanoCPUs"`
 		CpuShares     *int64            `json:"cpuShares"`
 		PidsLimit     *int64            `json:"pidsLimit"`
+		GPU           *GPUConfig        `json:"gpu"`
 	}
 	if err := json.Unmarshal([]byte(configJSON), &params); err != nil {
 		return fmt.Errorf("parse recreate config: %w", err)
@@ -888,9 +1171,7 @@ func (c *Client) RecreateWithConfig(ctx context.Context, id string, configJSON s
 
 	// Apply labels override
 	if params.Labels != nil {
-		if imageReference := insp.Config.Labels[archiveImageReferenceLabel]; imageReference != "" {
-			params.Labels[archiveImageReferenceLabel] = imageReference
-		}
+		preserveGatewayManagedContainerLabels(insp.Config.Labels, params.Labels)
 		insp.Config.Labels = params.Labels
 	}
 	if params.StopTimeout != nil {
@@ -922,6 +1203,11 @@ func (c *Client) RecreateWithConfig(ctx context.Context, id string, configJSON s
 	if params.PidsLimit != nil {
 		pids := *params.PidsLimit
 		insp.HostConfig.PidsLimit = &pids
+	}
+	if params.GPU != nil {
+		if err := c.applyGPUConfig(ctx, insp.Config, insp.HostConfig, params.GPU); err != nil {
+			return err
+		}
 	}
 
 	imageRef := params.Image

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/gpu"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
 	"github.com/wiolett-industries/gateway/daemon-shared/sysmetrics"
@@ -14,7 +15,8 @@ import (
 // MonitoringPlugin implements lifecycle.DaemonPlugin for the monitoring daemon.
 // It provides system-level metrics without any nginx-specific functionality.
 type MonitoringPlugin struct {
-	logger *slog.Logger
+	logger       *slog.Logger
+	gpuCollector *gpu.Collector
 }
 
 // NewMonitoringPlugin creates a new MonitoringPlugin.
@@ -32,6 +34,7 @@ func (p *MonitoringPlugin) SetLogger(logger *slog.Logger) {
 
 func (p *MonitoringPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) error {
 	p.logger = logger
+	p.gpuCollector = gpu.NewCollector(logger)
 	return nil
 }
 
@@ -69,7 +72,15 @@ func (p *MonitoringPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResu
 }
 
 func (p *MonitoringPlugin) CollectHealth(base *pb.HealthReport) *pb.HealthReport {
-	// Monitoring daemon only reports system metrics; base already contains those.
+	// Monitoring nodes report physical inventory and any available host metrics.
+	// Attachability is only used for Docker-node selection, so no Docker runtime
+	// probe is attempted here.
+	if p.gpuCollector != nil {
+		base.GpuDevices = make([]*pb.GpuDevice, 0)
+		for _, device := range p.gpuCollector.Collect(context.Background()) {
+			base.GpuDevices = append(base.GpuDevices, device.ToProto())
+		}
+	}
 	return base
 }
 

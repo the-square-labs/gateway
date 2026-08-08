@@ -4,6 +4,7 @@ import { dockerDeployments, dockerEnvVars, dockerSecrets, nodes, proxyHosts } fr
 import { AppError } from '@/middleware/error-handler.js';
 import type { DockerManagementService } from './docker.service.js';
 import type { DockerDeploymentService } from './docker-deployment.service.js';
+import { dockerGpuAttachmentFromInspect } from './docker-gpu-attachment.js';
 import type { DockerMigrationPreflight, DockerMigrationPreflightInput } from './docker-migration.schemas.js';
 import {
   compareDockerMigrationCapabilities,
@@ -134,6 +135,7 @@ export class DockerMigrationPreflightService {
       }
     }
     this.checkHostBoundSettings(inspect, blockers);
+    this.checkDeploymentGpuSelection(deployment, blockers, name);
 
     const [
       sourceVolumes,
@@ -457,9 +459,33 @@ export class DockerMigrationPreflightService {
     if (namespaceModes.some((mode) => mode === 'host' || String(mode ?? '').startsWith('container:'))) {
       blockers.push(issue('MIGRATION_NAMESPACE_UNSUPPORTED', 'Host or container namespace sharing is not portable'));
     }
+    const gpuAttachment = dockerGpuAttachmentFromInspect(inspect);
+    if (gpuAttachment.mode !== 'none') {
+      blockers.push(issue('GPU_MIGRATION_UNSUPPORTED', 'GPU-mapped containers cannot be migrated in this version'));
+      return;
+    }
     if ((host.Devices?.length ?? 0) > 0 || (host.DeviceRequests?.length ?? 0) > 0) {
       blockers.push(
-        issue('MIGRATION_DEVICE_VALIDATION_REQUIRED', 'Device and GPU mappings require target manifest validation')
+        issue('MIGRATION_DEVICE_VALIDATION_REQUIRED', 'Device mappings require target manifest validation')
+      );
+    }
+  }
+
+  private checkDeploymentGpuSelection(
+    deployment: Awaited<ReturnType<DockerDeploymentService['get']>> | undefined,
+    blockers: Issue[],
+    name: string
+  ) {
+    if (!deployment) return;
+    const configs = [deployment.desiredConfig, ...deployment.slots.map((slot) => slot.desiredConfig)];
+    const hasGpuSelection = configs.some((config) => {
+      const gpu = config?.gpu;
+      if (gpu === undefined) return false;
+      return !Array.isArray(gpu.deviceIds) || gpu.deviceIds.length > 0;
+    });
+    if (hasGpuSelection) {
+      blockers.push(
+        issue('GPU_MIGRATION_UNSUPPORTED', 'GPU-mapped deployments cannot be migrated in this version', name)
       );
     }
   }

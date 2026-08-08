@@ -38,6 +38,12 @@ type DockerListQuery = {
   search?: string;
 };
 
+type DockerGpuUsage = {
+  deviceId: string;
+  containerCount: number;
+  containers: Array<{ name: string }>;
+};
+
 function dockerListQuery(params?: DockerListQuery & { noCache?: boolean }) {
   const query = new URLSearchParams();
   if (params?.search?.trim()) query.set("search", params.search.trim());
@@ -224,6 +230,12 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       const params = typeof options === "boolean" ? { noCache: options } : options;
       const url = `/docker/nodes/${nodeId}/containers${dockerListQuery(params)}`;
       return withDockerListMeta(await this.request<DockerListEnvelope<DockerContainer>>(url));
+    }
+
+    async listDockerGpuUsage(nodeId: string): Promise<DockerGpuUsage[]> {
+      return this.unwrapData(
+        this.request<{ data: DockerGpuUsage[] }>(`/docker/nodes/${nodeId}/containers/gpu-usage`)
+      );
     }
 
     async listDockerContainerSnapshots(params?: DockerListQuery & { nodeId?: string }) {

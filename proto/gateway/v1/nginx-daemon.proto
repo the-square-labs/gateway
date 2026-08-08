@@ -159,6 +159,9 @@ message HealthReport {
   int32 containers_total = 32;
   repeated string local_ip_addresses = 33;
   repeated string public_ip_addresses = 34;
+  // Physical GPU inventory and capability-aware telemetry. Metrics are only
+  // meaningful when their name is present in GpuDevice.available_metrics.
+  repeated GpuDevice gpu_devices = 35;
 }
 
 message StatsReport {
@@ -460,6 +463,33 @@ message ContainerStats {
   int64 block_read_bytes = 10;
   int64 block_write_bytes = 11;
   int64 pids = 12;
+}
+
+// A node-scoped physical GPU. `id` is stable for the lifetime of the device
+// on this node and is the only identifier accepted by Gateway GPU attachment
+// requests. Host paths are informational only and never executable input.
+message GpuDevice {
+  string id = 1;
+  string vendor = 2; // "nvidia", "amd", or "intel"
+  string model = 3;
+  string pci_address = 4;
+  string render_node = 5;
+  int32 device_index = 6;
+  bool attachable = 7;
+  string unavailable_reason = 8;
+  bool partitioned = 9;
+
+  double utilization_percent = 10;
+  int64 memory_total_bytes = 11;
+  int64 memory_used_bytes = 12;
+  double temperature_celsius = 13;
+  double power_watts = 14;
+  double power_limit_watts = 15;
+  bool throttled = 16;
+  int64 ecc_corrected_errors = 17;
+  int64 ecc_uncorrected_errors = 18;
+  string health = 19;
+  repeated string available_metrics = 20;
 }
 
 // ─── Log Streaming ──────────────────────────────────────────────────

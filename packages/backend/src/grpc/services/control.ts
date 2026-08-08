@@ -2,6 +2,7 @@ import type { ServerDuplexStream } from '@grpc/grpc-js';
 import { eq } from 'drizzle-orm';
 import { container } from '@/container.js';
 import { nodes } from '@/db/schema/index.js';
+import type { NodeGpuDevice } from '@/db/schema/nodes.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { isMinorCompatible } from '@/lib/semver.js';
@@ -53,6 +54,148 @@ function hasDockerMetricSample(container: any) {
     container.blockWriteBytes ?? container.block_write_bytes,
     container.pids,
   ].some((value) => Number(value ?? 0) > 0);
+}
+
+function numberIfReported(device: any, availableMetrics: Set<string>, metric: string, ...fields: string[]) {
+  if (!availableMetrics.has(metric)) return undefined;
+  const raw = fields.map((field) => device[field]).find((value) => value !== undefined && value !== null);
+  if (typeof raw === 'string' && raw.trim() === '') return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function booleanIfReported(device: any, availableMetrics: Set<string>, metric: string, ...fields: string[]) {
+  if (!availableMetrics.has(metric)) return undefined;
+  const raw = fields.map((field) => device[field]).find((value) => value !== undefined && value !== null);
+  return typeof raw === 'boolean' ? raw : undefined;
+}
+
+function stringIfReported(device: any, availableMetrics: Set<string>, metric: string, ...fields: string[]) {
+  if (!availableMetrics.has(metric)) return undefined;
+  const raw = fields.map((field) => device[field]).find((value) => value !== undefined && value !== null);
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/**
+ * gRPC proto3 scalars default to zero when omitted. GPU metrics are therefore
+ * only persisted when their name is explicitly listed in availableMetrics.
+ */
+export function mapGpuHealthDevices(rawDevices: unknown): NodeGpuDevice[] {
+  if (!Array.isArray(rawDevices)) return [];
+
+  return rawDevices.flatMap((rawDevice) => {
+    if (!rawDevice || typeof rawDevice !== 'object') return [];
+    const device = rawDevice as Record<string, unknown>;
+    const id = stringValue(device.id ?? device.Id);
+    if (!id) return [];
+
+    const rawAvailableMetrics: unknown[] = Array.isArray(device.availableMetrics)
+      ? device.availableMetrics
+      : Array.isArray(device.available_metrics)
+        ? device.available_metrics
+        : [];
+    const availableMetrics = new Set<string>(
+      rawAvailableMetrics
+        .filter((metric): metric is string => typeof metric === 'string' && metric.trim().length > 0)
+        .map((metric) => metric.trim())
+    );
+    const utilizationPercent = numberIfReported(
+      device,
+      availableMetrics,
+      'utilization_percent',
+      'utilizationPercent',
+      'utilization_percent'
+    );
+    const memoryTotalBytes = numberIfReported(
+      device,
+      availableMetrics,
+      'memory_total_bytes',
+      'memoryTotalBytes',
+      'memory_total_bytes'
+    );
+    const memoryUsedBytes = numberIfReported(
+      device,
+      availableMetrics,
+      'memory_used_bytes',
+      'memoryUsedBytes',
+      'memory_used_bytes'
+    );
+    const temperatureCelsius = numberIfReported(
+      device,
+      availableMetrics,
+      'temperature_celsius',
+      'temperatureCelsius',
+      'temperature_celsius'
+    );
+    const powerWatts = numberIfReported(device, availableMetrics, 'power_watts', 'powerWatts', 'power_watts');
+    const powerLimitWatts = numberIfReported(
+      device,
+      availableMetrics,
+      'power_limit_watts',
+      'powerLimitWatts',
+      'power_limit_watts'
+    );
+    const throttled = booleanIfReported(device, availableMetrics, 'throttled', 'throttled');
+    const eccCorrectedErrors = numberIfReported(
+      device,
+      availableMetrics,
+      'ecc_corrected_errors',
+      'eccCorrectedErrors',
+      'ecc_corrected_errors'
+    );
+    const eccUncorrectedErrors = numberIfReported(
+      device,
+      availableMetrics,
+      'ecc_uncorrected_errors',
+      'eccUncorrectedErrors',
+      'ecc_uncorrected_errors'
+    );
+    const health = stringIfReported(device, availableMetrics, 'health', 'health');
+
+    const validatedMetrics = [
+      utilizationPercent !== undefined && 'utilization_percent',
+      memoryTotalBytes !== undefined && 'memory_total_bytes',
+      memoryUsedBytes !== undefined && 'memory_used_bytes',
+      temperatureCelsius !== undefined && 'temperature_celsius',
+      powerWatts !== undefined && 'power_watts',
+      powerLimitWatts !== undefined && 'power_limit_watts',
+      throttled !== undefined && 'throttled',
+      eccCorrectedErrors !== undefined && 'ecc_corrected_errors',
+      eccUncorrectedErrors !== undefined && 'ecc_uncorrected_errors',
+      health !== undefined && 'health',
+    ].filter((metric): metric is string => typeof metric === 'string');
+
+    return [
+      {
+        id,
+        vendor: stringValue(device.vendor ?? device.Vendor),
+        model: stringValue(device.model ?? device.Model),
+        pciAddress: stringValue(device.pciAddress ?? device.pci_address ?? device.PciAddress),
+        renderNode: stringValue(device.renderNode ?? device.render_node ?? device.RenderNode),
+        deviceIndex: Number(device.deviceIndex ?? device.device_index ?? device.DeviceIndex ?? 0),
+        attachable: Boolean(device.attachable ?? device.Attachable),
+        unavailableReason: stringValue(
+          device.unavailableReason ?? device.unavailable_reason ?? device.UnavailableReason
+        ),
+        partitioned: Boolean(device.partitioned ?? device.Partitioned),
+        availableMetrics: validatedMetrics,
+        ...(utilizationPercent !== undefined ? { utilizationPercent } : {}),
+        ...(memoryTotalBytes !== undefined ? { memoryTotalBytes } : {}),
+        ...(memoryUsedBytes !== undefined ? { memoryUsedBytes } : {}),
+        ...(temperatureCelsius !== undefined ? { temperatureCelsius } : {}),
+        ...(powerWatts !== undefined ? { powerWatts } : {}),
+        ...(powerLimitWatts !== undefined ? { powerLimitWatts } : {}),
+        ...(throttled !== undefined ? { throttled } : {}),
+        ...(eccCorrectedErrors !== undefined ? { eccCorrectedErrors } : {}),
+        ...(eccUncorrectedErrors !== undefined ? { eccUncorrectedErrors } : {}),
+        ...(health !== undefined ? { health } : {}),
+      },
+    ];
+  });
 }
 
 export function diffDockerContainerStateReports(
@@ -318,6 +461,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                     ...(msg.register.capabilities?.includes('docker_deployments_v1')
                       ? { dockerDeploymentsV1: true }
                       : {}),
+                    ...(msg.register.capabilities?.includes('docker_gpu_v1') ? { dockerGpuV1: true } : {}),
                     ...(msg.register.capabilities?.includes('docker_migration_v1') ? { dockerMigrationV1: true } : {}),
                     cpuModel: msg.register.cpuModel || undefined,
                     cpuCores: msg.register.cpuCores || undefined,
@@ -497,6 +641,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                       })),
                     }
                   : {}),
+                gpuDevices: mapGpuHealthDevices(msg.healthReport.gpuDevices),
               };
 
               const connectedNode = deps.registry.getNode(activeNodeId);

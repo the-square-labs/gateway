@@ -129,6 +129,19 @@ describe('evaluateWindowRatio', () => {
     });
   });
 
+  it('defines capability-aware GPU node metrics without auto-creating alert rules', () => {
+    const nodeCategory = ALERT_CATEGORIES.find((category) => category.id === 'node');
+
+    expect(nodeCategory?.metrics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'gpu_utilization_percent', defaultValue: 90 }),
+        expect.objectContaining({ id: 'gpu_memory_used_percent', defaultValue: 90 }),
+        expect.objectContaining({ id: 'gpu_power_percent_of_limit', defaultValue: 95 }),
+        expect.objectContaining({ id: 'gpu_throttled', defaultOperator: '>=', defaultValue: 1 }),
+      ])
+    );
+  });
+
   it('maps managed database lifecycle events without forwarding credentials or errors', () => {
     const mapping = EVENT_BUS_MAPPINGS['database.changed'].find(
       (candidate) => candidate.category === 'database_postgres' && candidate.eventId === 'error'
@@ -158,7 +171,11 @@ describe('evaluateWindowRatio', () => {
       memberCount: 42,
     };
 
-    expect(category?.events).toContainEqual({ id: 'mfa.required', label: 'Group MFA Required', defaultSeverity: 'warning' });
+    expect(category?.events).toContainEqual({
+      id: 'mfa.required',
+      label: 'Group MFA Required',
+      defaultSeverity: 'warning',
+    });
     expect(mapping.match(payload)).toBe(true);
     expect(mapping.extractResource(payload)).toEqual({ type: 'permission_group', id: 'group-1', name: 'Operators' });
     expect(mapping.extractData).toBeUndefined();
@@ -173,5 +190,55 @@ describe('evaluateWindowRatio', () => {
     });
 
     expect(result).toEqual({ values: [{ resourceId: 'api', value: 42 }] });
+  });
+
+  it('extracts GPU metrics only when the daemon explicitly marks them available', () => {
+    const healthData = {
+      gpuDevices: [
+        {
+          id: 'nvidia:gpu-a',
+          availableMetrics: [
+            'utilization_percent',
+            'memory_total_bytes',
+            'memory_used_bytes',
+            'power_watts',
+            'power_limit_watts',
+            'throttled',
+            'health',
+          ],
+          utilizationPercent: 0,
+          memoryTotalBytes: 8_000,
+          memoryUsedBytes: 4_000,
+          powerWatts: 40,
+          powerLimitWatts: 80,
+          throttled: false,
+          health: 'healthy',
+          temperatureCelsius: 0,
+        },
+        {
+          id: 'amd:gpu-b',
+          availableMetrics: ['utilization_percent'],
+          utilizationPercent: 75,
+        },
+      ],
+    };
+
+    expect(extractMetricFromHealthReport('node', 'gpu_utilization_percent', healthData, 'nvidia:gpu-a')).toEqual({
+      values: [{ resourceId: 'nvidia:gpu-a', value: 0 }],
+    });
+    expect(extractMetricFromHealthReport('node', 'gpu_memory_used_percent', healthData, 'nvidia:gpu-a')).toEqual({
+      values: [{ resourceId: 'nvidia:gpu-a', value: 50 }],
+    });
+    expect(extractMetricFromHealthReport('node', 'gpu_power_percent_of_limit', healthData, 'nvidia:gpu-a')).toEqual({
+      values: [{ resourceId: 'nvidia:gpu-a', value: 50 }],
+    });
+    expect(extractMetricFromHealthReport('node', 'gpu_throttled', healthData, 'nvidia:gpu-a')).toEqual({
+      values: [{ resourceId: 'nvidia:gpu-a', value: 0 }],
+    });
+    expect(extractMetricFromHealthReport('node', 'gpu_health_degraded', healthData, 'nvidia:gpu-a')).toEqual({
+      values: [{ resourceId: 'nvidia:gpu-a', value: 0 }],
+    });
+    expect(extractMetricFromHealthReport('node', 'gpu_temperature_celsius', healthData, 'nvidia:gpu-a')).toBeNull();
+    expect(extractMetricFromHealthReport('node', 'gpu_utilization_percent', healthData, 'missing')).toBeNull();
   });
 });
