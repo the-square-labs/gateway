@@ -180,6 +180,7 @@ export function DockerContainerDetail({
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [archiveImageMode, setArchiveImageMode] = useState<"portable" | "registry">("portable");
   const [archiveWritableLayer, setArchiveWritableLayer] = useState(false);
+  const [archiveIncludeEnvironment, setArchiveIncludeEnvironment] = useState(false);
   const [archiveIncludeSecrets, setArchiveIncludeSecrets] = useState(false);
   const [archiveExporting, setArchiveExporting] = useState(false);
   const [archiveDevPreview, setArchiveDevPreview] = useState(false);
@@ -191,6 +192,7 @@ export function DockerContainerDetail({
       setArchiveDevPreview(true);
       setArchiveImageMode("portable");
       setArchiveWritableLayer(true);
+      setArchiveIncludeEnvironment(true);
       setArchiveIncludeSecrets(true);
       setArchiveOpen(true);
     };
@@ -537,7 +539,11 @@ export function DockerContainerDetail({
         containerId!,
         archiveWritableLayer,
         archiveImageMode,
-        archiveCapabilities.canIncludeSecrets && archiveIncludeSecrets,
+        archiveCapabilities.canIncludeEnvironment &&
+          archiveCapabilities.canIncludeSecrets &&
+          archiveIncludeEnvironment &&
+          archiveIncludeSecrets,
+        archiveCapabilities.canIncludeEnvironment && archiveIncludeEnvironment,
         ({ loaded, total }) => {
           const description =
             total > 0
@@ -757,6 +763,10 @@ export function DockerContainerDetail({
             icon: <Archive className="h-4 w-4" />,
             onClick: () => {
               setArchiveDevPreview(false);
+              setArchiveImageMode(archiveCapabilities.canExportPortable ? "portable" : "registry");
+              setArchiveWritableLayer(false);
+              setArchiveIncludeEnvironment(false);
+              setArchiveIncludeSecrets(false);
               setArchiveOpen(true);
             },
             disabled: actionDisabled || gpuMapped,
@@ -1092,6 +1102,7 @@ export function DockerContainerDetail({
           if (!nextOpen && archiveExporting) return;
           setArchiveOpen(nextOpen);
           if (!nextOpen) {
+            setArchiveIncludeEnvironment(false);
             setArchiveIncludeSecrets(false);
             setArchiveDevPreview(false);
           }
@@ -1112,8 +1123,8 @@ export function DockerContainerDetail({
           </DialogHeader>
           <div className="space-y-4 text-sm">
             <p className="text-muted-foreground">
-              Container settings, environment values, and volume declarations are included. Volume
-              contents are not included.
+              Container settings and volume declarations are included. Volume contents are not
+              included.
             </p>
             <div className="space-y-1.5">
               <p className="font-medium">Image mode</p>
@@ -1130,7 +1141,12 @@ export function DockerContainerDetail({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="portable">Portable · include Docker image</SelectItem>
+                  <SelectItem
+                    value="portable"
+                    disabled={!archiveCapabilities.canExportPortable && !archiveDevPreview}
+                  >
+                    Portable · include Docker image
+                  </SelectItem>
                   <SelectItem value="registry">Registry-backed · configuration only</SelectItem>
                 </SelectContent>
               </Select>
@@ -1139,6 +1155,11 @@ export function DockerContainerDetail({
                   ? "The archive is self-contained and can be imported without registry access."
                   : "The target node must already have or be able to pull the exact image digest."}
               </p>
+              {!archiveCapabilities.canExportPortable && !archiveDevPreview && (
+                <p className="text-xs text-muted-foreground">
+                  Portable export requires Files access.
+                </p>
+              )}
             </div>
             <PanelShell>
               <SettingsControlRow
@@ -1153,20 +1174,38 @@ export function DockerContainerDetail({
                   ariaLabel="Include writable container layer"
                 />
               </SettingsControlRow>
-              {(archiveCapabilities.canIncludeSecrets || archiveDevPreview) && (
+              {(archiveCapabilities.canIncludeEnvironment || archiveDevPreview) && (
                 <SettingsControlRow
-                  title="Include secrets"
-                  description="Stores decrypted secret values in the archive. Treat the downloaded file as sensitive."
+                  title="Include environment"
+                  description="Includes Gateway-managed container environment overrides. Environment values baked into the image may still be present in a portable archive."
                   controlsClassName="sm:min-w-0"
                 >
                   <Switch
-                    checked={archiveIncludeSecrets}
-                    onChange={setArchiveIncludeSecrets}
+                    checked={archiveIncludeEnvironment}
+                    onChange={(includeEnvironment) => {
+                      setArchiveIncludeEnvironment(includeEnvironment);
+                      if (!includeEnvironment) setArchiveIncludeSecrets(false);
+                    }}
                     disabled={archiveExporting}
-                    ariaLabel="Include container secrets"
+                    ariaLabel="Include container environment"
                   />
                 </SettingsControlRow>
               )}
+              {archiveIncludeEnvironment &&
+                (archiveCapabilities.canIncludeSecrets || archiveDevPreview) && (
+                  <SettingsControlRow
+                    title="Include secrets"
+                    description="Stores decrypted secret values in the archive. Treat the downloaded file as sensitive."
+                    controlsClassName="sm:min-w-0"
+                  >
+                    <Switch
+                      checked={archiveIncludeSecrets}
+                      onChange={setArchiveIncludeSecrets}
+                      disabled={archiveExporting}
+                      ariaLabel="Include container secrets"
+                    />
+                  </SettingsControlRow>
+                )}
             </PanelShell>
           </div>
           <DialogFooter>

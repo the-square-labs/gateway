@@ -53,8 +53,10 @@ export function containerArchiveCapabilities(scopes: {
   secrets: boolean;
 }) {
   return {
-    canExport: scopes.export && scopes.files && scopes.environment,
-    canIncludeSecrets: scopes.secrets,
+    canExport: scopes.export,
+    canExportPortable: scopes.export && scopes.files,
+    canIncludeEnvironment: scopes.environment,
+    canIncludeSecrets: scopes.environment && scopes.secrets,
   };
 }
 

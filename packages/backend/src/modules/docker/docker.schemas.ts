@@ -137,17 +137,31 @@ export const ContainerStopSchema = z.object({ timeout: DockerStopTimeoutSchema.o
 export const ContainerKillSchema = z.object({ signal: z.string().default('SIGKILL') });
 export const ContainerRenameSchema = z.object({ name: ContainerNameSchema });
 export const ContainerDuplicateSchema = z.object({ name: ContainerNameSchema });
-export const ContainerArchiveExportQuerySchema = z.object({
-  imageMode: z.enum(['portable', 'registry']).default('portable'),
-  includeWritableLayer: z.preprocess(
-    (value) => (value === 'true' ? true : value === 'false' ? false : value),
-    z.boolean().default(false)
-  ),
-  includeSecrets: z.preprocess(
-    (value) => (value === 'true' ? true : value === 'false' ? false : value),
-    z.boolean().default(false)
-  ),
-});
+export const ContainerArchiveExportQuerySchema = z
+  .object({
+    imageMode: z.enum(['portable', 'registry']).default('portable'),
+    includeWritableLayer: z.preprocess(
+      (value) => (value === 'true' ? true : value === 'false' ? false : value),
+      z.boolean().default(false)
+    ),
+    includeEnvironment: z.preprocess(
+      (value) => (value === 'true' ? true : value === 'false' ? false : value),
+      z.boolean().default(true)
+    ),
+    includeSecrets: z.preprocess(
+      (value) => (value === 'true' ? true : value === 'false' ? false : value),
+      z.boolean().default(false)
+    ),
+  })
+  .superRefine((value, context) => {
+    if (value.includeSecrets && !value.includeEnvironment) {
+      context.addIssue({
+        code: 'custom',
+        path: ['includeSecrets'],
+        message: 'Secrets can only be included when environment is included',
+      });
+    }
+  });
 const ContainerArchiveStringMappingsSchema = z
   .record(z.string().min(1).max(512), z.string().min(1).max(4096))
   .refine((value) => Object.keys(value).length <= 256, 'Too many archive mappings');

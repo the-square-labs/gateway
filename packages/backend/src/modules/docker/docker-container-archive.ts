@@ -47,6 +47,7 @@ export async function openGwcaExport(args: {
   environment: Record<string, string>;
   secrets?: Record<string, string>;
   secretKeys?: string[];
+  includeEnvironment?: boolean;
   includeSecrets?: boolean;
 }): Promise<{ archiveId: string; filename: string; stream: ReadableStream<Uint8Array> }> {
   const archiveId = randomUUID();
@@ -60,6 +61,7 @@ export async function openGwcaExport(args: {
     environment: args.environment,
     secrets: args.secrets ?? {},
     secretKeys: args.secretKeys ?? [],
+    includeEnvironment: args.includeEnvironment !== false,
     includeSecrets: args.includeSecrets === true,
   });
   try {
