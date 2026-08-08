@@ -211,9 +211,12 @@ describe('AI tool scope filtering', () => {
     expect(toolNames(['nodes:console'])).toContain('execute_node_console_command');
     expect(toolNames(['domains:view'])).toContain('list_domains');
     expect(toolNames(['domains:view'])).not.toContain('create_domain');
-    expect(toolNames(['integrations:cloudflare:dns:edit'])).toContain('create_domain');
+    expect(toolNames(['domains:create'])).toContain('create_domain');
+    expect(toolNames(['integrations:cloudflare:dns:edit'])).not.toContain('create_domain');
     expect(toolNames(['domains:delete'])).toContain('delete_domain');
     expect(toolNames(['integrations:cloudflare:dns:delete'])).not.toContain('delete_domain');
+    expect(toolNames(['domains:view'])).toContain('manage_domain');
+    expect(toolNames(['integrations:cloudflare:dns:view'])).not.toContain('manage_domain');
   });
 
   it('requires direct database view before advertising database query tools', () => {

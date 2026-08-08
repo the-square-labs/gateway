@@ -3,7 +3,7 @@ import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { authMiddleware, requireAnyScope, requireScope } from '@/modules/auth/auth.middleware.js';
+import { authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import {
   CreateResourceFolderSchema,
@@ -134,7 +134,7 @@ domainRoutes.openapi({ ...searchDomainsRoute, middleware: requireScope('domains:
 
 // Preview domain DNS (must be before /:id)
 domainRoutes.openapi(
-  { ...previewDomainRoute, middleware: requireScope('integrations:cloudflare:dns:edit') },
+  { ...previewDomainRoute, middleware: requireScope('domains:create') },
   async (c) => {
     const body = await c.req.json();
     const input = PreviewDomainSchema.parse(body);
@@ -164,7 +164,7 @@ domainRoutes.openapi({ ...getDomainRoute, middleware: requireScope('domains:view
 
 // Create domain
 domainRoutes.openapi(
-  { ...createDomainRoute, middleware: requireScope('integrations:cloudflare:dns:edit') },
+  { ...createDomainRoute, middleware: requireScope('domains:create') },
   async (c) => {
     const user = c.get('user')!;
     const body = await c.req.json();
@@ -191,9 +191,6 @@ domainRoutes.openapi({ ...updateDomainRoute, middleware: requireScope('domains:e
   const user = c.get('user')!;
   const body = await c.req.json();
   const input = UpdateDomainSchema.parse(body);
-  if (input.proxied !== undefined && !hasScope(c.get('effectiveScopes') || [], 'integrations:cloudflare:dns:edit')) {
-    return c.json({ code: 'FORBIDDEN', message: 'Missing required scope: integrations:cloudflare:dns:edit' }, 403);
-  }
   const domainsService = container.resolve(DomainsService);
   try {
     const domain = await domainsService.updateDomain(c.req.param('id')!, input, user.id);
@@ -208,15 +205,14 @@ domainRoutes.openapi({ ...updateDomainRoute, middleware: requireScope('domains:e
 
 // Delete domain
 domainRoutes.openapi(
-  { ...deleteDomainRoute, middleware: requireAnyScope('domains:delete', 'integrations:cloudflare:dns:delete') },
+  { ...deleteDomainRoute, middleware: requireScope('domains:delete') },
   async (c) => {
     const user = c.get('user')!;
     const domainsService = container.resolve(DomainsService);
-    const canDeleteDns = hasScope(c.get('effectiveScopes') || [], 'integrations:cloudflare:dns:delete');
     try {
       const rawBody = await c.req.text();
       const input = rawBody ? DeleteDomainSchema.parse(JSON.parse(rawBody)) : {};
-      await domainsService.deleteDomain(c.req.param('id')!, user.id, input, { canDeleteDns });
+      await domainsService.deleteDomain(c.req.param('id')!, user.id, input);
       return c.json({ data: { success: true } });
     } catch (err) {
       if (err instanceof AppError) {

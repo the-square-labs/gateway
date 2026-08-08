@@ -714,7 +714,7 @@ export const AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: true,
     category: 'Domains',
-    requiredScope: 'integrations:cloudflare:dns:edit',
+    requiredScope: 'domains:create',
     invalidateStores: ['domains'],
   },
   {
