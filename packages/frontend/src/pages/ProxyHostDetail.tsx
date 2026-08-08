@@ -4,6 +4,7 @@ import {
   Info,
   Pencil,
   Pin,
+  RefreshCw,
   ScrollText,
   Settings as SettingsIcon,
   SlidersHorizontal,
@@ -37,7 +38,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import { proxyHostRoute } from "@/lib/resource-routes";
-import { cn } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
@@ -97,6 +98,7 @@ export function ProxyHostDetail({
   const [healthHistory, setHealthHistory] = useState<NonNullable<ProxyHost["healthHistory"]>>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isMaintenanceToggling, setIsMaintenanceToggling] = useState(false);
+  const [isTlsResyncing, setIsTlsResyncing] = useState(false);
 
   const [activeTab, setActiveTab] = useUrlTab(visibleTabs, "details", (tab) =>
     proxyHostRoute(routeSlug, tab)
@@ -611,6 +613,20 @@ export function ProxyHostDetail({
     }
   };
 
+  const handleTlsResync = async () => {
+    if (!host || !hasScope("admin:update")) return;
+    setIsTlsResyncing(true);
+    try {
+      await api.resyncProxyHostTls(host.id);
+      await loadHost(true);
+      toast.success("TLS synchronization completed");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to synchronize TLS configuration");
+    } finally {
+      setIsTlsResyncing(false);
+    }
+  };
+
   // ── Derived values ────────────────────────────────────────────
   const isRawMode = host?.rawConfigEnabled ?? false;
   const isSystemHost = host?.isSystem ?? false;
@@ -618,6 +634,12 @@ export function ProxyHostDetail({
     !!host &&
     (host.maintenanceEnabled ||
       (host.enabled && host.type === "proxy" && !host.rawConfigEnabled && !host.isSystem));
+  const canResyncTls =
+    !!host &&
+    host.sslEnabled &&
+    host.enabled &&
+    hasScope("admin:update") &&
+    host.tlsDistribution?.status !== "ready";
 
   const handleAccessListChange = useCallback(
     async (value: string) => {
@@ -803,6 +825,18 @@ export function ProxyHostDetail({
                     },
                   ]
                 : []),
+              ...(canResyncTls
+                ? [
+                    {
+                      label: "Retry TLS Sync",
+                      icon: (
+                        <RefreshCw className={cn("h-4 w-4", isTlsResyncing && "animate-spin")} />
+                      ),
+                      onClick: handleTlsResync,
+                      disabled: isTlsResyncing,
+                    },
+                  ]
+                : []),
               ...(!isSystemHost && hasScope("proxy:delete")
                 ? [
                     {
@@ -825,7 +859,7 @@ export function ProxyHostDetail({
                 Edit
               </Button>
             )}
-            {(canEditProxyHost || (!isSystemHost && hasScope("proxy:delete"))) && (
+            {(canEditProxyHost || canResyncTls || (!isSystemHost && hasScope("proxy:delete"))) && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="icon" aria-label="More proxy host actions">
@@ -840,6 +874,12 @@ export function ProxyHostDetail({
                     >
                       <Wrench className="mr-2 h-4 w-4" />
                       {host.maintenanceEnabled ? "Disable Maintenance" : "Enable Maintenance"}
+                    </DropdownMenuItem>
+                  )}
+                  {canResyncTls && (
+                    <DropdownMenuItem onClick={handleTlsResync} disabled={isTlsResyncing}>
+                      <RefreshCw className={cn("mr-2 h-4 w-4", isTlsResyncing && "animate-spin")} />
+                      Retry TLS Sync
                     </DropdownMenuItem>
                   )}
                   {!isSystemHost && hasScope("proxy:delete") && (
@@ -860,6 +900,61 @@ export function ProxyHostDetail({
         {/* ── Health bars (only when healthCheckEnabled) ──────── */}
         {host.healthCheckEnabled && (
           <HealthBars history={healthHistory} currentStatus={host.healthStatus} />
+        )}
+
+        {host.sslEnabled && host.tlsDistribution && (
+          <div
+            className={cn(
+              "flex flex-wrap items-center justify-between gap-3 border p-3 text-sm",
+              host.tlsDistribution.status === "ready"
+                ? "border-success/40 bg-success/10"
+                : host.tlsDistribution.status === "failed"
+                  ? "border-destructive/40 bg-destructive/10"
+                  : "border-warning bg-warning/10"
+            )}
+          >
+            <div className="min-w-0 space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">TLS distribution</span>
+                <Badge
+                  size="inline"
+                  variant={
+                    host.tlsDistribution.status === "ready"
+                      ? "success"
+                      : host.tlsDistribution.status === "failed"
+                        ? "destructive"
+                        : "warning"
+                  }
+                >
+                  {host.tlsDistribution.status.replaceAll("_", " ")}
+                </Badge>
+                <span className="text-muted-foreground">
+                  {host.tlsDistribution.readyReplicaCount}/{host.tlsDistribution.replicaCount}{" "}
+                  replicas ready
+                </span>
+              </div>
+              {host.tlsDistribution.lastVerifiedAt && (
+                <p className="text-muted-foreground">
+                  Last verified {formatDateTime(host.tlsDistribution.lastVerifiedAt)}
+                </p>
+              )}
+              {host.tlsDistribution.error && (
+                <p className="break-words text-destructive">{host.tlsDistribution.error}</p>
+              )}
+            </div>
+            {canResyncTls && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleTlsResync}
+                disabled={isTlsResyncing}
+                aria-label={`Retry TLS sync for ${host.domainNames[0] || "proxy host"}`}
+              >
+                <RefreshCw className={cn("h-4 w-4", isTlsResyncing && "animate-spin")} />
+                Retry TLS Sync
+              </Button>
+            )}
+          </div>
         )}
 
         {host.maintenanceEnabled && (

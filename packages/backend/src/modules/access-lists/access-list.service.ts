@@ -2,16 +2,15 @@ import bcrypt from 'bcryptjs';
 import { count, desc, eq, ilike, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import type { BasicAuthUser } from '@/db/schema/access-lists.js';
-import { certificates } from '@/db/schema/certificates.js';
 import { accessLists } from '@/db/schema/index.js';
 import { proxyHosts } from '@/db/schema/proxy-hosts.js';
-import { sslCertificates } from '@/db/schema/ssl-certificates.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere, escapeLike } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { NginxTemplateService } from '@/modules/proxy/nginx-template.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
+import type { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
 import type { NginxConfigGenerator, ProxyHostConfig } from '@/services/nginx-config-generator.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { PaginatedResponse } from '@/types.js';
@@ -36,7 +35,8 @@ export class AccessListService {
     readonly _configGenerator: NginxConfigGenerator,
     private readonly nginxTemplateService: NginxTemplateService,
     private readonly auditService: AuditService,
-    private readonly nodeDispatch: NodeDispatchService
+    private readonly nodeDispatch: NodeDispatchService,
+    private readonly certificateDistribution: NginxCertificateDistributionService
   ) {}
 
   private eventBus?: EventBusService;
@@ -169,8 +169,14 @@ export class AccessListService {
       for (const host of affectedHosts) {
         if (!host.enabled) continue;
 
-        // Resolve SSL cert paths from known file path patterns
-        const certPaths = await this.resolveCertPathsForHost(host);
+        const supportsDistribution = await this.certificateDistribution.supportsNode(host.nodeId);
+        const preparedTls =
+          host.sslEnabled && supportsDistribution ? await this.certificateDistribution.prepareForHost(host) : null;
+        const certPaths = preparedTls
+          ? preparedTls
+          : host.sslEnabled && !supportsDistribution
+            ? await this.certificateDistribution.legacyPathsForHost(host)
+            : { sslCertPath: null, sslKeyPath: null, sslChainPath: null };
 
         const config: ProxyHostConfig = {
           id: host.id,
@@ -180,7 +186,7 @@ export class AccessListService {
           forwardHost: host.forwardHost,
           forwardPort: host.forwardPort,
           forwardScheme: host.forwardScheme ?? 'http',
-          sslEnabled: host.sslEnabled,
+          sslEnabled: host.sslEnabled && !!certPaths.sslCertPath && !!certPaths.sslKeyPath,
           sslForced: host.sslForced,
           http2Support: host.http2Support,
           websocketSupport: host.websocketSupport,
@@ -201,8 +207,17 @@ export class AccessListService {
         };
 
         const generatedConfig = await this.nginxTemplateService.renderForHost(config, host.nginxTemplateId ?? null);
-        const nodeId = await this.nodeDispatch.resolveNodeId(host.nodeId);
-        await this.nodeDispatch.applyConfig(nodeId, host.id, generatedConfig);
+        if (preparedTls) {
+          await this.certificateDistribution.applyHostBundle(
+            { id: host.id, nodeId: host.nodeId },
+            generatedConfig,
+            preparedTls
+          );
+        } else {
+          const nodeId = await this.nodeDispatch.resolveNodeId(host.nodeId);
+          const result = await this.nodeDispatch.applyConfig(nodeId, host.id, generatedConfig);
+          if (!result.success) throw new Error(result.error || 'Daemon config apply failed');
+        }
       }
     }
 
@@ -384,57 +399,6 @@ export class AccessListService {
       }
     }
     logger.debug('Htpasswd removed from nodes', { accessListId });
-  }
-
-  // -----------------------------------------------------------------------
-  // Helpers — resolve cert paths for a proxy host (without decryption)
-  // -----------------------------------------------------------------------
-
-  /**
-   * Resolve SSL certificate file paths for a proxy host using the known
-   * nginx cert path pattern. This avoids needing CryptoService to decrypt
-   * keys — the cert files should already be deployed on disk.
-   */
-  private async resolveCertPathsForHost(
-    host: typeof proxyHosts.$inferSelect
-  ): Promise<{ sslCertPath: string | null; sslKeyPath: string | null; sslChainPath: string | null }> {
-    const empty = { sslCertPath: null, sslKeyPath: null, sslChainPath: null };
-
-    if (!host.sslEnabled) return empty;
-
-    const NGINX_CERTS_PREFIX = '/etc/nginx/certs';
-
-    if (host.sslCertificateId) {
-      const sslCert = await this.db.query.sslCertificates.findFirst({
-        where: eq(sslCertificates.id, host.sslCertificateId),
-        columns: { id: true, certificatePem: true, chainPem: true },
-      });
-
-      if (sslCert?.certificatePem) {
-        return {
-          sslCertPath: `${NGINX_CERTS_PREFIX}/${sslCert.id}/fullchain.pem`,
-          sslKeyPath: `${NGINX_CERTS_PREFIX}/${sslCert.id}/privkey.pem`,
-          sslChainPath: sslCert.chainPem ? `${NGINX_CERTS_PREFIX}/${sslCert.id}/chain.pem` : null,
-        };
-      }
-    }
-
-    if (host.internalCertificateId) {
-      const cert = await this.db.query.certificates.findFirst({
-        where: eq(certificates.id, host.internalCertificateId),
-        columns: { id: true, certificatePem: true },
-      });
-
-      if (cert?.certificatePem) {
-        return {
-          sslCertPath: `${NGINX_CERTS_PREFIX}/internal-${cert.id}/fullchain.pem`,
-          sslKeyPath: `${NGINX_CERTS_PREFIX}/internal-${cert.id}/privkey.pem`,
-          sslChainPath: null,
-        };
-      }
-    }
-
-    return empty;
   }
 
   // -----------------------------------------------------------------------

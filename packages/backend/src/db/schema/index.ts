@@ -37,6 +37,7 @@ export * from './integration-connectors.js';
 export * from './logging.js';
 export * from './logging-environment-folders.js';
 export * from './logging-schema-folders.js';
+export * from './nginx-certificate-distribution.js';
 export * from './nginx-templates.js';
 export * from './node-folders.js';
 export * from './nodes.js';

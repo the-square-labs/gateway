@@ -9,6 +9,7 @@ import { isMinorCompatible } from '@/lib/semver.js';
 import { daemonLogRelay } from '@/modules/monitoring/log-relay.service.js';
 import { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
+import { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
 import type { DaemonMessage, GatewayCommand } from '../generated/types.js';
 import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
 import type { GrpcServerDeps } from '../server.js';
@@ -505,19 +506,31 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               // stream may not be ready yet
             }
 
-            // Compare config hash and trigger full resync if different (nginx nodes only)
-            if (nodeType === 'nginx' && gatewayHash && gatewayHash !== msg.register.configVersionHash) {
-              logger.info('Config hash mismatch, triggering full resync', {
-                nodeId: claimedNodeId,
-                daemonHash: msg.register.configVersionHash,
-                gatewayHash,
-              });
-              // Async resync — don't block registration
+            // A v2 Nginx daemon reconciles on every reconnect; an older daemon
+            // retains the established hash-mismatch-only resync path.
+            const supportsTlsDistribution =
+              msg.register.capabilities?.includes('nginx_certificate_distribution_v2') ?? false;
+            const configHashMismatch = !!gatewayHash && gatewayHash !== msg.register.configVersionHash;
+            if (nodeType === 'nginx' && (supportsTlsDistribution || configHashMismatch)) {
+              logger.info(
+                supportsTlsDistribution
+                  ? 'TLS distribution reconnect reconciliation'
+                  : 'Config hash mismatch, triggering full resync',
+                {
+                  nodeId: claimedNodeId,
+                  daemonHash: msg.register.configVersionHash,
+                  gatewayHash,
+                }
+              );
+              // Async reconciliation — never block node registration.
               setImmediate(async () => {
                 try {
                   if (!isClaimedStreamCurrent(claimedNodeId)) return;
                   const proxyService = container.resolve(ProxyService);
                   await proxyService.resyncAllHostsOnNode(claimedNodeId);
+                  if (supportsTlsDistribution) {
+                    await container.resolve(NginxCertificateDistributionService).reconcileIntegrity(claimedNodeId);
+                  }
                 } catch (err) {
                   logger.error('Full resync failed', { nodeId: claimedNodeId, error: (err as Error).message });
                 }

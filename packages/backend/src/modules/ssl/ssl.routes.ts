@@ -16,6 +16,7 @@ import {
   listSslCertificatesRoute,
   renewSslCertificateRoute,
   requestAcmeCertificateRoute,
+  resyncSslCertificateDistributionRoute,
   setSslCertificateAutoRenewRoute,
   uploadSslCertificateRoute,
   verifyDnsSslCertificateRoute,
@@ -122,6 +123,15 @@ sslRoutes.openapi({ ...verifyDnsSslCertificateRoute, middleware: requireScope('s
   const id = c.req.param('id')!;
   const cert = await sslService.completeDNS01Verification(id, user.id);
   return c.json({ data: cert });
+});
+
+// Repair is an operator action and deliberately uses the existing global
+// admin mutation permission rather than exposing certificate material.
+sslRoutes.openapi({ ...resyncSslCertificateDistributionRoute, middleware: requireScope('admin:update') }, async (c) => {
+  const sslService = container.resolve(SSLService);
+  const user = c.get('user')!;
+  const result = await sslService.resyncDistribution(c.req.param('id')!, user.id);
+  return c.json({ data: result });
 });
 
 // Delete SSL certificate

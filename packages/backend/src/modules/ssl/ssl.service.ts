@@ -8,10 +8,10 @@ import { x509 } from '@/lib/x509.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { IntegrationsService } from '@/modules/integrations/integrations.service.js';
+import type { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
-import type { NginxConfigGenerator } from '@/services/nginx-config-generator.service.js';
-import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
+import type { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
 import type { PaginatedResponse } from '@/types.js';
 import type { ACMEService } from './acme.service.js';
 import type {
@@ -50,20 +50,58 @@ export class SSLService {
   constructor(
     private readonly db: DrizzleClient,
     private readonly acmeService: ACMEService,
-    private readonly configGenerator: NginxConfigGenerator,
     private readonly cryptoService: CryptoService,
     private readonly auditService: AuditService,
-    private readonly nodeDispatch: NodeDispatchService
+    private readonly certificateDistribution: NginxCertificateDistributionService
   ) {}
 
   private eventBus?: EventBusService;
   private integrationsService?: IntegrationsService;
+  private proxyService?: ProxyService;
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
   }
   setIntegrationsService(service: IntegrationsService) {
     this.integrationsService = service;
   }
+  setProxyService(service: ProxyService) {
+    this.proxyService = service;
+  }
+
+  /**
+   * Certificate issuance changes canonical material first, then every active
+   * Proxy Host receives its own atomic TLS bundle. This also upgrades legacy
+   * hosts that predate deployment records; failures remain a distribution
+   * status on that host instead of invalidating an otherwise valid renewal.
+   */
+  private async refreshGatewayAssetAndSyncProxyHosts(certId: string, userId: string): Promise<number> {
+    await this.certificateDistribution.upsertGatewayAsset({ type: 'ssl', id: certId });
+    return this.resyncActiveProxyHosts(certId, userId);
+  }
+
+  private async resyncActiveProxyHosts(certId: string, userId: string): Promise<number> {
+    if (!this.proxyService) return 0;
+
+    const activeHosts = await this.db.query.proxyHosts.findMany({
+      where: and(eq(proxyHosts.sslCertificateId, certId), eq(proxyHosts.enabled, true)),
+      columns: { id: true },
+    });
+    let synchronized = 0;
+    for (const host of activeHosts) {
+      try {
+        await this.proxyService.resyncTlsHost(host.id, userId);
+        synchronized += 1;
+      } catch (error) {
+        logger.warn('TLS certificate refresh could not yet synchronize a proxy host', {
+          certId,
+          hostId: host.id,
+          error: error instanceof Error ? error.message : 'unknown error',
+        });
+      }
+    }
+    return synchronized;
+  }
+
   private emitCert(
     id: string,
     action: 'created' | 'renewed' | 'deleted' | 'updated' | 'renewal_failed' | 'expired',
@@ -119,12 +157,7 @@ export class SSLService {
 
       // Deploy cert files to nginx
       try {
-        await this.deployCertToDefaultNode(
-          cert.id,
-          result.certificatePem,
-          result.privateKeyPem,
-          result.chainPem || undefined
-        );
+        await this.refreshGatewayAssetAndSyncProxyHosts(cert.id, userId);
       } catch (deployError) {
         const deployMessage = deployError instanceof Error ? deployError.message : 'Unknown deploy error';
         await this.db
@@ -365,12 +398,7 @@ export class SSLService {
 
         // Deploy to nginx — separate try/catch since cert is already valid at this point
         try {
-          await this.deployCertToDefaultNode(
-            certId,
-            result.certificatePem,
-            result.privateKeyPem,
-            result.chainPem || undefined
-          );
+          await this.refreshGatewayAssetAndSyncProxyHosts(certId, userId);
         } catch (deployError) {
           const deployMsg = deployError instanceof Error ? deployError.message : 'Unknown deploy error';
           logger.error('Certificate obtained but deploy to nginx failed', { certId, error: deployMsg });
@@ -502,12 +530,7 @@ export class SSLService {
 
     // Deploy cert files to nginx
     try {
-      await this.deployCertToDefaultNode(
-        cert.id,
-        input.certificatePem,
-        input.privateKeyPem,
-        input.chainPem || undefined
-      );
+      await this.refreshGatewayAssetAndSyncProxyHosts(cert.id, userId);
     } catch (deployError) {
       const deployMessage = deployError instanceof Error ? deployError.message : 'Unknown deploy error';
       await this.db
@@ -599,9 +622,10 @@ export class SSLService {
       })
       .returning();
 
-    // Deploy the PKI cert's PEM to nginx cert files
+    // Store the linked certificate canonically. Active hosts are synchronized
+    // through their atomic TLS bundle; no default-node predeployment occurs.
     if (privateKeyPem) {
-      await this.deployCertToDefaultNode(cert.id, pkiCert.certificatePem, privateKeyPem);
+      await this.refreshGatewayAssetAndSyncProxyHosts(cert.id, userId);
     }
 
     await this.auditService.log({
@@ -684,13 +708,8 @@ export class SSLService {
       // Update cert data in DB
       await this.db.update(sslCertificates).set(renewUpdateData).where(eq(sslCertificates.id, certId));
 
-      // Redeploy to nginx
-      await this.deployCertToDefaultNode(
-        certId,
-        result.certificatePem,
-        result.privateKeyPem,
-        result.chainPem || undefined
-      );
+      // Refresh the canonical asset and atomically synchronize active hosts.
+      await this.refreshGatewayAssetAndSyncProxyHosts(certId, userId);
 
       await this.auditService.log({
         userId,
@@ -1118,8 +1137,7 @@ export class SSLService {
       });
     }
 
-    // Remove cert files from nginx
-    await this.removeCertFromDefaultNode(certId);
+    await this.certificateDistribution.removeSslCertificateAsset(certId);
 
     // Delete from DB
     await this.db.delete(sslCertificates).where(eq(sslCertificates.id, certId));
@@ -1134,6 +1152,24 @@ export class SSLService {
 
     logger.info('Certificate deleted', { certId, name: cert.name });
     this.emitCert(certId, 'deleted', cert.name);
+  }
+
+  async resyncDistribution(certId: string, userId: string): Promise<{ synchronized: number }> {
+    const cert = await this.db.query.sslCertificates.findFirst({
+      where: eq(sslCertificates.id, certId),
+      columns: { id: true, name: true },
+    });
+    if (!cert) throw new AppError(404, 'SSL_CERT_NOT_FOUND', 'SSL certificate not found');
+    const result = await this.certificateDistribution.syncCertificate({ type: 'ssl', id: certId });
+    const synchronized = Math.max(result.synchronized, await this.resyncActiveProxyHosts(certId, userId));
+    await this.auditService.log({
+      userId,
+      action: 'ssl.distribution_resync',
+      resourceType: 'ssl_certificate',
+      resourceId: certId,
+      details: { synchronized },
+    });
+    return { synchronized };
   }
 
   // ---------------------------------------------------------------------------
@@ -1180,8 +1216,11 @@ export class SSLService {
 
     const total = Number(totalCount);
 
+    const distribution = await this.certificateDistribution.getStatusesForSslCertificates(
+      entries.map((entry) => entry.id)
+    );
     return {
-      data: entries,
+      data: entries.map((entry) => ({ ...entry, distribution: distribution.get(entry.id) })),
       pagination: {
         page: params.page,
         limit: params.limit,
@@ -1202,7 +1241,10 @@ export class SSLService {
 
     if (!cert) throw new AppError(404, 'SSL_CERT_NOT_FOUND', 'SSL certificate not found');
 
-    return this.sanitizeCert(cert);
+    return {
+      ...this.sanitizeCert(cert),
+      distribution: await this.certificateDistribution.getStatusForSslCertificate(certId),
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -1301,47 +1343,5 @@ export class SSLService {
       dekIv: undefined,
       acmeAccountKey: undefined,
     };
-  }
-
-  // ---------------------------------------------------------------------------
-  // Helpers — deploy certs via daemon
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Deploy a certificate to all nodes that have proxy hosts using it.
-   * Falls back to the default node if no hosts reference the cert yet
-   * (e.g., pre-deploying a cert before assigning it to a host).
-   */
-  private async deployCertToDefaultNode(
-    certId: string,
-    certPem: string,
-    keyPem: string,
-    chainPem?: string
-  ): Promise<{ certPath: string; keyPath: string; chainPath?: string }> {
-    const nodeIds = await this.resolveNodesForCert(certId);
-    const certBuf = Buffer.from(certPem);
-    const keyBuf = Buffer.from(keyPem);
-    const chainBuf = chainPem ? Buffer.from(chainPem) : undefined;
-
-    for (const nodeId of nodeIds) {
-      await this.nodeDispatch.deployCertificate(nodeId, certId, certBuf, keyBuf, chainBuf);
-    }
-    return this.configGenerator.getCertPaths(certId);
-  }
-
-  private async removeCertFromDefaultNode(certId: string): Promise<void> {
-    const nodeIds = await this.resolveNodesForCert(certId);
-    for (const nodeId of nodeIds) {
-      await this.nodeDispatch.removeCertificate(nodeId, certId);
-    }
-  }
-
-  /** Find all distinct nodes that have proxy hosts using a given certificate. */
-  private async resolveNodesForCert(certId: string): Promise<string[]> {
-    const rows = await this.db
-      .selectDistinct({ nodeId: proxyHosts.nodeId })
-      .from(proxyHosts)
-      .where(eq(proxyHosts.sslCertificateId, certId));
-    return [...new Set(rows.map((r) => r.nodeId).filter(Boolean) as string[])];
   }
 }

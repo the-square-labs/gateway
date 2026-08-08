@@ -1,5 +1,6 @@
 import { getEnv } from '@/config/env.js';
 import { AppError } from '@/middleware/error-handler.js';
+import type { PreparedTlsCertificate } from '@/services/nginx-certificate-distribution.service.js';
 
 export type HealthCheckBodyMatchMode = 'includes' | 'exact' | 'starts_with' | 'ends_with';
 
@@ -15,6 +16,7 @@ export interface CertPaths {
   sslCertPath: string | null;
   sslKeyPath: string | null;
   sslChainPath: string | null;
+  preparedTls?: PreparedTlsCertificate | null;
 }
 
 export interface SslPrerequisiteState {

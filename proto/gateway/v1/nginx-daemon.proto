@@ -236,6 +236,12 @@ message GatewayCommand {
     // managed database binding on a general Docker node. No host, TCP port or
     // credential is ever passed through this command.
     DockerDatabaseBindingCommand docker_database_binding = 33;
+    // Nginx TLS distribution v2. These commands are accepted only by a daemon
+    // that reports nginx_certificate_distribution_v2 during registration.
+    ApplyTlsBundleCommand apply_tls_bundle = 34;
+    InspectCertificatesCommand inspect_certificates = 35;
+    ExportLegacyCertificatesCommand export_legacy_certificates = 36;
+    RemoveCertificateReplicaCommand remove_certificate_replica = 37;
   }
 }
 
@@ -274,6 +280,41 @@ message DeployCertCommand {
   bytes cert_pem = 2;
   bytes key_pem = 3;
   bytes chain_pem = 4;
+}
+
+// Atomically stages each certificate version, switches current pointers,
+// writes one host config, validates nginx, and reloads. On failure the daemon
+// restores both the previous config and previous certificate pointers.
+message ApplyTlsBundleCommand {
+  string host_id = 1;
+  string config_content = 2;
+  repeated VersionedCertBundle certificates = 3;
+  string generation = 4;
+}
+
+message VersionedCertBundle {
+  string cert_id = 1;
+  bytes cert_pem = 2;
+  bytes key_pem = 3;
+  bytes chain_pem = 4;
+  string version = 5;
+  string replica_generation = 6;
+}
+
+// Both inspection and export are scoped to references explicitly supplied by
+// Gateway; neither command is a directory listing or generic file API.
+message InspectCertificatesCommand {
+  repeated string cert_ids = 1;
+}
+
+message ExportLegacyCertificatesCommand {
+  repeated string cert_ids = 1;
+}
+
+message RemoveCertificateReplicaCommand {
+  string cert_id = 1;
+  string expected_version = 2;
+  string expected_replica_generation = 3;
 }
 
 message RemoveCertCommand {

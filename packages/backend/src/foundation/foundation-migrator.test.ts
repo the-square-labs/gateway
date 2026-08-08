@@ -50,7 +50,7 @@ describe('foundation migrator patches', () => {
     expect(patched).toContain('      - gateway_data:/var/lib/gateway');
     expect(patched).toContain('wget --no-check-certificate -qO- https://127.0.0.1:3000/health');
     expect(patched).toContain('\nvolumes:\n  gateway_data:');
-    expect(patched).toContain('  relay:\n    image: ${GATEWAY_RELAY_IMAGE_REF}');
+    expect(patched).toContain(`  relay:\n    image: \${GATEWAY_RELAY_IMAGE_REF}`);
     expect(patched).toContain('com.wiolett.gateway.managed-service: app');
     expect(patched).toContain('gateway_relay_identity:/var/lib/gateway-relay');
     expect(patched.match(/9443:9443/g)).toHaveLength(1);

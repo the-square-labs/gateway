@@ -12,7 +12,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/container.js', () => ({
   container: {
-    resolve: vi.fn((token) => (token?.name === 'SystemCertificateLifecycleService' ? mocks.systemCertificateLifecycle : mocks.exportService)),
+    resolve: vi.fn((token) =>
+      token?.name === 'SystemCertificateLifecycleService' ? mocks.systemCertificateLifecycle : mocks.exportService
+    ),
   },
   TOKENS: {
     DrizzleClient: Symbol.for('DrizzleClient'),

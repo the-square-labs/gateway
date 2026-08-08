@@ -280,7 +280,8 @@ export function AdminNodes() {
 
   const commandForTarget = (gateway: string, transport: "curl" | "wget") => {
     if (!enrollResult) return "";
-    const scriptName = DAEMON_INSTALLER_BY_TYPE[enrollResult.type as (typeof NODE_TYPES)[number]["value"]];
+    const scriptName =
+      DAEMON_INSTALLER_BY_TYPE[enrollResult.type as (typeof NODE_TYPES)[number]["value"]];
     if (!scriptName) return "";
     const scriptUrl = `${DAEMON_INSTALLER_URL}/${scriptName}`;
     const fetcher = transport === "curl" ? `curl -sSL ${scriptUrl}` : `wget -qO- ${scriptUrl}`;
@@ -594,11 +595,11 @@ export function AdminNodes() {
                       onValueChange={setEnrollmentTargetId}
                     >
                       <TabsList>
-                      {enrollmentTargets.map((target) => (
-                        <TabsTrigger key={target.id} value={target.id}>
-                          {target.label}
-                        </TabsTrigger>
-                      ))}
+                        {enrollmentTargets.map((target) => (
+                          <TabsTrigger key={target.id} value={target.id}>
+                            {target.label}
+                          </TabsTrigger>
+                        ))}
                       </TabsList>
                     </Tabs>
                   )}

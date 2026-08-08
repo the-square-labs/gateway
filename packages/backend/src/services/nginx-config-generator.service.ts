@@ -413,4 +413,18 @@ export class NginxConfigGenerator {
       chainPath: `${NGINX_CERTS_PREFIX}/${certId}/chain.pem`,
     };
   }
+
+  /**
+   * v2 distribution never points a proxy config at a mutable certificate
+   * file. The daemon switches this `current` symlink only after staging the
+   * complete certificate/key pair, so an Nginx reload cannot observe a half
+   * written certificate.
+   */
+  getVersionedCertPaths(certId: string): { certPath: string; keyPath: string; chainPath: string } {
+    return {
+      certPath: `${NGINX_CERTS_PREFIX}/${certId}/current/fullchain.pem`,
+      keyPath: `${NGINX_CERTS_PREFIX}/${certId}/current/privkey.pem`,
+      chainPath: `${NGINX_CERTS_PREFIX}/${certId}/current/chain.pem`,
+    };
+  }
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { AppError } from '@/middleware/error-handler.js';
 import { ProxyService } from './proxy.service.js';
 
 vi.mock('@/db/schema/access-lists.js', () => ({ accessLists: { id: 'access_lists.id' } }));
@@ -121,8 +122,38 @@ function setup(
     resolveNodeId: vi.fn().mockResolvedValue(existing.nodeId),
     applyConfig: vi.fn().mockResolvedValue(applyResult),
   } as any;
-  const service = new ProxyService(db, nginxTemplateService, auditService, {} as any, configGenerator, nodeDispatch);
-  return { service, existing, writes, db, nginxTemplateService, auditService, configGenerator, nodeDispatch };
+  const certificateDistribution = {
+    supportsNode: vi.fn().mockResolvedValue(false),
+    legacyPathsForHost: vi.fn(
+      async (host: { sslCertificateId?: string | null; internalCertificateId?: string | null }) => {
+        const certId = host.sslCertificateId ?? `internal-${host.internalCertificateId}`;
+        return {
+          sslCertPath: `/etc/nginx/certs/${certId}/fullchain.pem`,
+          sslKeyPath: `/etc/nginx/certs/${certId}/privkey.pem`,
+          sslChainPath: null,
+        };
+      }
+    ),
+  } as any;
+  const service = new ProxyService(
+    db,
+    nginxTemplateService,
+    auditService,
+    configGenerator,
+    nodeDispatch,
+    certificateDistribution
+  );
+  return {
+    service,
+    existing,
+    writes,
+    db,
+    nginxTemplateService,
+    auditService,
+    configGenerator,
+    nodeDispatch,
+    certificateDistribution,
+  };
 }
 
 describe('ProxyService maintenance lifecycle', () => {
@@ -171,16 +202,10 @@ describe('ProxyService maintenance lifecycle', () => {
 
   it('keeps HTTPS paths for an already-deployed legacy certificate during maintenance', async () => {
     const certificateId = '44444444-4444-4444-8444-444444444444';
-    const { service, db, configGenerator, nginxTemplateService } = setup(
+    const { service, nginxTemplateService, certificateDistribution } = setup(
       { success: true },
       { sslEnabled: true, sslForced: true, sslCertificateId: certificateId }
     );
-    db.query.sslCertificates.findFirst.mockResolvedValue({
-      id: certificateId,
-      certificatePem: null,
-      privateKeyPem: null,
-      chainPem: null,
-    });
 
     await service.toggleMaintenance(
       '11111111-1111-4111-8111-111111111111',
@@ -188,7 +213,9 @@ describe('ProxyService maintenance lifecycle', () => {
       '33333333-3333-4333-8333-333333333333'
     );
 
-    expect(configGenerator.getCertPaths).toHaveBeenCalledWith(certificateId);
+    expect(certificateDistribution.legacyPathsForHost).toHaveBeenCalledWith(
+      expect.objectContaining({ sslCertificateId: certificateId })
+    );
     expect(nginxTemplateService.renderForHost).toHaveBeenCalledWith(
       expect.objectContaining({
         sslEnabled: true,
@@ -277,5 +304,89 @@ describe('ProxyService maintenance lifecycle', () => {
     expect(result.maintenanceEnabled).toBe(true);
     expect(writes).toHaveLength(0);
     expect(nodeDispatch.applyConfig).not.toHaveBeenCalled();
+  });
+
+  it('keeps an existing HTTPS host editable on an old daemon when a full-form update leaves TLS unchanged', async () => {
+    const certificateId = '44444444-4444-4444-8444-444444444444';
+    const existing = makeHost({ sslEnabled: true, sslForced: true, sslCertificateId: certificateId });
+    const updated = makeHost({ ...existing, forwardPort: 8081, updatedAt: new Date() });
+    const db = {
+      query: {
+        proxyHosts: { findFirst: vi.fn().mockResolvedValue(existing) },
+        accessLists: { findFirst: vi.fn() },
+      },
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([updated]) })) })),
+      })),
+    } as any;
+    const certificateDistribution = {
+      supportsNode: vi.fn().mockResolvedValue(false),
+      legacyPathsForHost: vi.fn().mockResolvedValue({
+        sslCertPath: `/etc/nginx/certs/${certificateId}/fullchain.pem`,
+        sslKeyPath: `/etc/nginx/certs/${certificateId}/privkey.pem`,
+        sslChainPath: null,
+      }),
+      prepareForHost: vi.fn().mockRejectedValue(new Error('v2 must not be required for unchanged TLS')),
+    } as any;
+    const service = new ProxyService(
+      db,
+      { renderForHost: vi.fn().mockReturnValue('updated config') } as any,
+      { log: vi.fn().mockResolvedValue(undefined) } as any,
+      {} as any,
+      {
+        resolveNodeId: vi.fn().mockResolvedValue(existing.nodeId),
+        applyConfig: vi.fn().mockResolvedValue({ success: true }),
+      } as any,
+      certificateDistribution
+    );
+
+    await service.updateProxyHost(
+      existing.id,
+      { forwardPort: 8081, sslEnabled: true, sslCertificateId: certificateId } as any,
+      '33333333-3333-4333-8333-333333333333'
+    );
+
+    expect(certificateDistribution.legacyPathsForHost).toHaveBeenCalledOnce();
+    expect(certificateDistribution.prepareForHost).not.toHaveBeenCalled();
+  });
+
+  it('returns the explicit daemon-update error when an old daemon receives a changed TLS reference', async () => {
+    const oldCertificateId = '44444444-4444-4444-8444-444444444444';
+    const newCertificateId = '55555555-5555-4555-8555-555555555555';
+    const existing = makeHost({ sslEnabled: true, sslForced: true, sslCertificateId: oldCertificateId });
+    const updated = makeHost({ ...existing, sslCertificateId: newCertificateId, updatedAt: new Date() });
+    const db = {
+      query: { proxyHosts: { findFirst: vi.fn().mockResolvedValue(existing) } },
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([updated]) })) })),
+      })),
+    } as any;
+    const daemonUpdateRequired = new AppError(
+      409,
+      'NGINX_TLS_DAEMON_UPDATE_REQUIRED',
+      'Update the selected Nginx daemon before changing this TLS proxy host'
+    );
+    const certificateDistribution = {
+      supportsNode: vi.fn().mockResolvedValue(false),
+      prepareForHost: vi.fn().mockRejectedValue(daemonUpdateRequired),
+      legacyPathsForHost: vi.fn(),
+    } as any;
+    const service = new ProxyService(
+      db,
+      { renderForHost: vi.fn() } as any,
+      { log: vi.fn() } as any,
+      {} as any,
+      {} as any,
+      certificateDistribution
+    );
+
+    await expect(
+      service.updateProxyHost(
+        existing.id,
+        { sslCertificateId: newCertificateId } as any,
+        '33333333-3333-4333-8333-333333333333'
+      )
+    ).rejects.toMatchObject({ code: 'NGINX_TLS_DAEMON_UPDATE_REQUIRED', statusCode: 409 });
+    expect(certificateDistribution.prepareForHost).toHaveBeenCalledOnce();
   });
 });

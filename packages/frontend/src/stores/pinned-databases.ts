@@ -57,7 +57,8 @@ export const usePinnedDatabasesStore = create<PinnedDatabasesState>()(
             dashboardDatabaseIds: isDashboard
               ? s.dashboardDatabaseIds.filter((id) => id !== databaseId)
               : [...s.dashboardDatabaseIds, databaseId],
-            databaseMeta: !isDashboard && meta ? { ...s.databaseMeta, [databaseId]: meta } : s.databaseMeta,
+            databaseMeta:
+              !isDashboard && meta ? { ...s.databaseMeta, [databaseId]: meta } : s.databaseMeta,
           };
         }),
 

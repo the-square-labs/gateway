@@ -287,10 +287,10 @@ function upsertAppRelayEnvironment(lines: string[]): string[] {
       'GATEWAY_RELAY_MANAGED: "true"',
       'GATEWAY_RELAY_TARGET: relay:9443',
       'GATEWAY_RELAY_IDENTITY_DIR: /var/lib/gateway-relay',
-      'GATEWAY_RELAY_DB_PASSWORD: ${GATEWAY_RELAY_DB_PASSWORD}',
-      'GATEWAY_RELAY_IMAGE_REF: ${GATEWAY_RELAY_IMAGE_REF}',
+      `GATEWAY_RELAY_DB_PASSWORD: \${GATEWAY_RELAY_DB_PASSWORD}`,
+      `GATEWAY_RELAY_IMAGE_REF: \${GATEWAY_RELAY_IMAGE_REF}`,
       'GATEWAY_RELAY_SERVICE_NAME: relay',
-      'GATEWAY_RELAY_VERSION: ${GATEWAY_RELAY_VERSION}',
+      `GATEWAY_RELAY_VERSION: \${GATEWAY_RELAY_VERSION}`,
     ]
   );
 }
@@ -424,16 +424,16 @@ function relayServiceBlock(): string[] {
   return [
     `  ${RELAY_SERVICE_START}`,
     '  relay:',
-    '    image: ${GATEWAY_RELAY_IMAGE_REF}',
+    `    image: \${GATEWAY_RELAY_IMAGE_REF}`,
     '    command: ["node", "dist/relay/index.js"]',
     '    restart: unless-stopped',
     '    labels:',
     '      com.wiolett.gateway.managed-service: relay',
     '    environment:',
-    '      RELAY_DATABASE_URL: postgres://gateway_relay:${GATEWAY_RELAY_DB_PASSWORD}@postgres:5432/gateway',
+    `      RELAY_DATABASE_URL: postgres://gateway_relay:\${GATEWAY_RELAY_DB_PASSWORD}@postgres:5432/gateway`,
     '      RELAY_IDENTITY_DIR: /var/lib/gateway-relay',
     '      RELAY_APP_GRPC_TARGET: app:9443',
-    '      GATEWAY_RELAY_VERSION: ${GATEWAY_RELAY_VERSION}',
+    `      GATEWAY_RELAY_VERSION: \${GATEWAY_RELAY_VERSION}`,
     '    ports:',
     '      - "9443:9443"',
     '    volumes:',

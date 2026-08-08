@@ -81,7 +81,13 @@ describe('SSLService DNS-01 renewal', () => {
         },
       }),
     } as any;
-    const service = new SSLService(db, acmeService, {} as any, cryptoService, { log: vi.fn() } as any, {} as any);
+    const service = new SSLService(
+      db,
+      acmeService,
+      cryptoService,
+      { log: vi.fn() } as any,
+      { upsertGatewayAsset: vi.fn() } as any
+    );
     service.setIntegrationsService(integrationsService);
     const complete = vi
       .spyOn(service, 'completeDNS01Verification')
@@ -175,7 +181,13 @@ describe('SSLService DNS-01 renewal', () => {
         client: { deleteDnsRecord },
       }),
     } as any;
-    const service = new SSLService(db, acmeService, {} as any, cryptoService, { log: vi.fn() } as any, {} as any);
+    const service = new SSLService(
+      db,
+      acmeService,
+      cryptoService,
+      { log: vi.fn() } as any,
+      { upsertGatewayAsset: vi.fn() } as any
+    );
     service.setIntegrationsService(integrationsService);
     const complete = vi.spyOn(service, 'completeDNS01Verification');
 
@@ -252,7 +264,13 @@ describe('SSLService DNS-01 renewal', () => {
         .fn()
         .mockRejectedValue(new AppError(502, 'CLOUDFLARE_UNAVAILABLE', 'Cloudflare unavailable')),
     } as any;
-    const service = new SSLService(db, acmeService, {} as any, cryptoService, { log: vi.fn() } as any, {} as any);
+    const service = new SSLService(
+      db,
+      acmeService,
+      cryptoService,
+      { log: vi.fn() } as any,
+      { upsertGatewayAsset: vi.fn() } as any
+    );
     service.setIntegrationsService(integrationsService);
 
     await expect(service.renewCert('cert-1', 'user-1')).rejects.toMatchObject({
@@ -314,7 +332,13 @@ describe('SSLService DNS-01 renewal', () => {
         client: { deleteDnsRecord: vi.fn().mockResolvedValue(undefined) },
       }),
     } as any;
-    const service = new SSLService(db, acmeService, {} as any, cryptoService, { log: vi.fn() } as any, {} as any);
+    const service = new SSLService(
+      db,
+      acmeService,
+      cryptoService,
+      { log: vi.fn() } as any,
+      { upsertGatewayAsset: vi.fn() } as any
+    );
     service.setIntegrationsService(integrationsService);
 
     await expect(
@@ -389,7 +413,13 @@ describe('SSLService DNS-01 renewal', () => {
         client: { deleteDnsRecord },
       }),
     } as any;
-    const service = new SSLService(db, acmeService, {} as any, cryptoService, { log: vi.fn() } as any, {} as any);
+    const service = new SSLService(
+      db,
+      acmeService,
+      cryptoService,
+      { log: vi.fn() } as any,
+      { upsertGatewayAsset: vi.fn() } as any
+    );
     service.setIntegrationsService(integrationsService);
 
     await expect(
