@@ -515,6 +515,36 @@ export class ManagedDatabaseService {
     }
   }
 
+  /**
+   * Upgrade published ClickHouse direct principals created before their
+   * process-table grant was narrowed. Private instances never had a direct
+   * principal, so leave them untouched rather than creating one during startup.
+   */
+  async reconcileClickHouseDirectAccessPrincipals() {
+    const rows = await this.db.select().from(managedDatabaseInstances);
+    let failures = 0;
+    for (const row of rows) {
+      if (
+        row.type !== 'clickhouse' ||
+        row.status !== 'ready' ||
+        row.pendingOperation ||
+        !managedDatabasePublishTcp(row)
+      ) {
+        continue;
+      }
+      try {
+        const direct = this.directAccessCredentials(row);
+        if (!direct) continue;
+        await this.provisionDirectAccessPrincipal(row, this.ownerCredentials(row), direct, { reconcileOnly: true });
+      } catch {
+        failures += 1;
+      }
+    }
+    if (failures > 0) {
+      throw new Error(`Failed to reconcile ${failures} ClickHouse direct-access principal(s)`);
+    }
+  }
+
   /** Backfill certificates for instances created before direct TLS existed. */
   async reconcileDatabaseCertificates() {
     if (!this.databaseCA) return;
@@ -1662,7 +1692,8 @@ export class ManagedDatabaseService {
   private async provisionDirectAccessPrincipal(
     row: ManagedDatabaseRow,
     owner: OwnerCredentials,
-    credentials: OwnerCredentials
+    credentials: OwnerCredentials,
+    options: { reconcileOnly?: boolean } = {}
   ) {
     const result = await this.nodeDispatch.sendDockerDatabaseCommand(
       row.nodeId,
@@ -1675,6 +1706,7 @@ export class ManagedDatabaseService {
         databaseName: credentials.databaseName ?? 'redis',
         ownerUsername: owner.username,
         ownerPassword: owner.password,
+        ...(options.reconcileOnly ? { reconcileOnly: true } : {}),
       })
     );
     if (!result.success) {

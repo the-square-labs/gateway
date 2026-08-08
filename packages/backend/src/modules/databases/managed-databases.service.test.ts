@@ -774,6 +774,57 @@ describe('managed database catalog and input guardrails', () => {
     expect(result.success).toBe(false);
   });
 
+  it('reconciles a published ClickHouse direct principal without rotating its credentials', async () => {
+    const published = {
+      ...managedRow,
+      type: 'clickhouse' as const,
+      status: 'ready' as const,
+      pendingOperation: null,
+      engineConfig: { databaseName: 'app', publishTcp: true },
+      publishedPort: 32768,
+      encryptedOwnerCredentials: JSON.stringify({ encryptedKey: 'owner-key', encryptedDek: 'owner-dek' }),
+      encryptedDirectCredentials: JSON.stringify({ encryptedKey: 'direct-key', encryptedDek: 'direct-dek' }),
+    };
+    const privateDatabase = {
+      ...published,
+      id: '66666666-6666-4666-8666-666666666666',
+      engineConfig: { databaseName: 'app', publishTcp: false },
+      publishedPort: null,
+    };
+    const dispatch = { sendDockerDatabaseCommand: vi.fn().mockResolvedValue({ success: true }) };
+    const service = new ManagedDatabaseService(
+      { select: vi.fn(() => ({ from: vi.fn().mockResolvedValue([published, privateDatabase]) })) } as never,
+      { log: vi.fn() } as never,
+      {
+        decryptString: vi.fn((encrypted: { encryptedKey: string }) =>
+          JSON.stringify(
+            encrypted.encryptedKey === 'direct-key'
+              ? { username: 'gw_clickhouse_direct_123', password: 'direct-password', databaseName: 'app' }
+              : { username: 'clickhouse_owner', password: 'owner-password', databaseName: 'app' }
+          )
+        ),
+      } as never,
+      dispatch as never
+    );
+
+    await service.reconcileClickHouseDirectAccessPrincipals();
+
+    expect(dispatch.sendDockerDatabaseCommand).toHaveBeenCalledTimes(1);
+    expect(dispatch.sendDockerDatabaseCommand).toHaveBeenCalledWith(
+      published.nodeId,
+      'binding_create',
+      published.id,
+      expect.stringContaining('"reconcileOnly":true')
+    );
+    const command = JSON.parse(dispatch.sendDockerDatabaseCommand.mock.calls[0]![3]) as Record<string, unknown>;
+    expect(command).toMatchObject({
+      username: 'gw_clickhouse_direct_123',
+      password: 'direct-password',
+      ownerUsername: 'clickhouse_owner',
+      reconcileOnly: true,
+    });
+  });
+
   it('restores owner credentials for an existing published database connection', async () => {
     const row = {
       ...managedRow,

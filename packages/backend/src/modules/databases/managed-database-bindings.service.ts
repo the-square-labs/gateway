@@ -116,6 +116,53 @@ export class ManagedDatabaseBindingService {
     };
   }
 
+  /**
+   * Reapply the least-privilege system.processes grant for existing ClickHouse
+   * bindings without changing their credentials or connector state.
+   */
+  async reconcileClickHousePrincipals() {
+    const rows = await this.db
+      .select({ database: managedDatabaseInstances, binding: managedDatabaseBindings })
+      .from(managedDatabaseBindings)
+      .innerJoin(managedDatabaseInstances, eq(managedDatabaseInstances.id, managedDatabaseBindings.managedDatabaseId));
+    let failures = 0;
+    for (const { database, binding } of rows) {
+      if (
+        database.type !== 'clickhouse' ||
+        database.status !== 'ready' ||
+        database.pendingOperation ||
+        binding.status !== 'ready'
+      ) {
+        continue;
+      }
+      try {
+        const credentials = this.bindingCredentials(binding);
+        const owner = this.ownerCredentials(database);
+        this.requireSuccess(
+          await this.nodeDispatch.sendDockerDatabaseCommand(
+            database.nodeId,
+            'binding_create',
+            database.id,
+            JSON.stringify({
+              bindingId: binding.id,
+              username: credentials.username,
+              password: credentials.password,
+              databaseName: credentials.databaseName ?? 'app',
+              ownerUsername: owner.username,
+              ownerPassword: owner.password,
+              reconcileOnly: true,
+            })
+          )
+        );
+      } catch {
+        failures += 1;
+      }
+    }
+    if (failures > 0) {
+      throw new Error(`Failed to reconcile ${failures} ClickHouse binding principal(s)`);
+    }
+  }
+
   async create(managedDatabaseId: string, input: CreateManagedDatabaseBindingInput, userId: string) {
     const preflightDatabase = await this.getReadyDatabase(managedDatabaseId);
     await this.assertDockerNode(input.targetNodeId);

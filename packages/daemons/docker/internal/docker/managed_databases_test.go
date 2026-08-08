@@ -532,11 +532,33 @@ func TestClickHouseBindingPrincipalGrantsMonitoringViews(t *testing.T) {
 		OwnerUsername: "app_owner",
 		OwnerPassword: "owner-secret",
 	})
-	for _, table := range []string{"parts", "processes", "merges", "mutations", "events", "disks"} {
+	for _, table := range []string{"parts", "merges", "mutations", "events", "disks"} {
 		grant := `GRANT SELECT ON system.` + table + ` TO "app_user"`
 		if !strings.Contains(sql, grant) {
 			t.Fatalf("ClickHouse binding SQL must grant monitoring view %s: %q", table, sql)
 		}
+	}
+	if !strings.Contains(sql, `REVOKE SELECT ON system.processes FROM "app_user"`) {
+		t.Fatalf("ClickHouse binding SQL must revoke broad live-query access: %q", sql)
+	}
+	if !strings.Contains(sql, `GRANT SELECT(memory_usage) ON system.processes TO "app_user"`) {
+		t.Fatalf("ClickHouse binding SQL must preserve process memory monitoring: %q", sql)
+	}
+	if strings.Contains(sql, `GRANT SELECT ON system.processes TO "app_user"`) {
+		t.Fatalf("ClickHouse binding SQL must not grant live query text access: %q", sql)
+	}
+}
+
+func TestClickHouseBindingProcessPrivilegesReconcileWithoutPasswordMutation(t *testing.T) {
+	sql := clickHouseBindingProcessPrivilegesSQL("app_user")
+	if strings.Contains(sql, "IDENTIFIED") || strings.Contains(sql, "CREATE USER") || strings.Contains(sql, "ALTER USER") {
+		t.Fatalf("ClickHouse process privilege reconciliation must not mutate credentials: %q", sql)
+	}
+	if !strings.Contains(sql, `REVOKE SELECT ON system.processes FROM "app_user"`) {
+		t.Fatalf("ClickHouse process privilege reconciliation must remove broad access: %q", sql)
+	}
+	if !strings.Contains(sql, `GRANT SELECT(memory_usage) ON system.processes TO "app_user"`) {
+		t.Fatalf("ClickHouse process privilege reconciliation must retain memory monitoring: %q", sql)
 	}
 }
 

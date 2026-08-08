@@ -183,6 +183,7 @@ type managedDatabaseBindingCommand struct {
 	DatabaseName  string `json:"databaseName"`
 	OwnerUsername string `json:"ownerUsername"`
 	OwnerPassword string `json:"ownerPassword"`
+	ReconcileOnly bool   `json:"reconcileOnly,omitempty"`
 }
 
 type managedDatabaseOperationCommand struct {
@@ -489,7 +490,11 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 		if err := validateManagedDatabaseBindingInput(input); err != nil {
 			return "", err
 		}
-		if action == "binding_create" {
+		if action == "binding_create" && input.ReconcileOnly {
+			if err := m.reconcileClickHouseBindingProcessPrivileges(ctx, record, input); err != nil {
+				return "", err
+			}
+		} else if action == "binding_create" {
 			if err := m.createBindingPrincipal(ctx, record, input); err != nil {
 				return "", err
 			}
@@ -554,6 +559,22 @@ func (m *managedDatabaseManager) createBindingPrincipal(ctx context.Context, rec
 	return m.runManagedDatabaseExec(ctx, record.ContainerID, command, stdin, env)
 }
 
+// reconcileClickHouseBindingProcessPrivileges updates only the privilege that
+// protects live query text. It deliberately does not alter the account or its
+// password, so a background remediation cannot interrupt active clients.
+func (m *managedDatabaseManager) reconcileClickHouseBindingProcessPrivileges(ctx context.Context, record managedDatabaseRecord, input managedDatabaseBindingCommand) error {
+	if record.Type != "clickhouse" {
+		return errors.New("ClickHouse process privilege reconciliation is unsupported for this database engine")
+	}
+	return m.runManagedDatabaseExec(
+		ctx,
+		record.ContainerID,
+		[]string{"clickhouse-client", "--user", input.OwnerUsername, "--database", input.DatabaseName, "--multiquery"},
+		clickHouseBindingProcessPrivilegesSQL(input.Username)+"\n",
+		[]string{"CLICKHOUSE_PASSWORD=" + input.OwnerPassword},
+	)
+}
+
 func redisBindingACLCommand() string {
 	return `redis-cli --no-auth-warning --user default ACL SETUSER "$GATEWAY_DB_BINDING_USER" reset on ">$GATEWAY_DB_BINDING_PASSWORD" '~*' '&*' '+@read' '+@write' '+@connection' '+@transaction' '+@pubsub' '+eval' '+evalsha' '+eval_ro' '+evalsha_ro' '+fcall' '+fcall_ro' '+script|load' '+script|exists' '-function' '-script|flush' '-script|kill' '-script|debug' '-@dangerous'`
 }
@@ -595,9 +616,14 @@ func postgresBindingRemoveSQL(input managedDatabaseBindingCommand) string {
 
 func clickHouseBindingCreateSQL(input managedDatabaseBindingCommand) string {
 	return fmt.Sprintf(
-		"CREATE USER IF NOT EXISTS %s IDENTIFIED WITH sha256_password BY %s; ALTER USER %s IDENTIFIED WITH sha256_password BY %s; GRANT ALL ON %s.* TO %s; GRANT SELECT ON system.parts TO %s; GRANT SELECT ON system.processes TO %s; GRANT SELECT ON system.merges TO %s; GRANT SELECT ON system.mutations TO %s; GRANT SELECT ON system.events TO %s; GRANT SELECT ON system.disks TO %s;\n",
-		quoteSQLIdentifier(input.Username), quoteSQLLiteral(input.Password), quoteSQLIdentifier(input.Username), quoteSQLLiteral(input.Password), quoteSQLIdentifier(input.DatabaseName), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username),
+		"CREATE USER IF NOT EXISTS %s IDENTIFIED WITH sha256_password BY %s; ALTER USER %s IDENTIFIED WITH sha256_password BY %s; GRANT ALL ON %s.* TO %s; GRANT SELECT ON system.parts TO %s; %s GRANT SELECT ON system.merges TO %s; GRANT SELECT ON system.mutations TO %s; GRANT SELECT ON system.events TO %s; GRANT SELECT ON system.disks TO %s;\n",
+		quoteSQLIdentifier(input.Username), quoteSQLLiteral(input.Password), quoteSQLIdentifier(input.Username), quoteSQLLiteral(input.Password), quoteSQLIdentifier(input.DatabaseName), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), clickHouseBindingProcessPrivilegesSQL(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username),
 	)
+}
+
+func clickHouseBindingProcessPrivilegesSQL(username string) string {
+	principal := quoteSQLIdentifier(username)
+	return fmt.Sprintf("REVOKE SELECT ON system.processes FROM %s; GRANT SELECT(memory_usage) ON system.processes TO %s;", principal, principal)
 }
 
 func clickHouseBindingRemoveSQL(input managedDatabaseBindingCommand) string {
