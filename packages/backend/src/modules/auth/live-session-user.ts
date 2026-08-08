@@ -11,6 +11,7 @@ export interface GroupScopeRecord {
   parentId: string | null;
   scopes: unknown;
   name?: string | null;
+  requireGateway2fa?: boolean;
 }
 
 export function computeEffectiveGroupAccess(groupId: string, groupMap: Map<string, GroupScopeRecord>) {
@@ -57,7 +58,7 @@ export function computeEffectiveUserAccess(
 
 export async function fetchGroupScopeMap(db: DrizzleClient): Promise<Map<string, GroupScopeRecord>> {
   const allGroups = await db.query.permissionGroups.findMany({
-    columns: { id: true, parentId: true, scopes: true, name: true },
+    columns: { id: true, parentId: true, scopes: true, name: true, requireGateway2fa: true },
   });
   return new Map(allGroups.map((group) => [group.id, group]));
 }
@@ -78,9 +79,10 @@ export async function resolveLiveUser(db: DrizzleClient, userId: string): Promis
   });
   if (!dbUser) return null;
 
-  const { groupName, groupScopes, additionalScopes, scopes } = await resolveEffectiveUserAccess(
-    db,
+  const groupMap = await fetchGroupScopeMap(db);
+  const { groupName, groupScopes, additionalScopes, scopes } = computeEffectiveUserAccess(
     dbUser.groupId,
+    groupMap,
     dbUser.additionalScopes
   );
   return {
@@ -92,6 +94,7 @@ export async function resolveLiveUser(db: DrizzleClient, userId: string): Promis
     avatarUrl: dbUser.avatarUrl,
     groupId: dbUser.groupId,
     groupName,
+    requireGateway2fa: Boolean(groupMap.get(dbUser.groupId)?.requireGateway2fa),
     groupScopes,
     additionalScopes,
     scopes: dbUser.deletedAt ? [] : scopes,

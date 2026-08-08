@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { NumericInput } from "@/components/ui/numeric-input";
 import {
   Select,
   SelectContent,
@@ -69,6 +70,7 @@ const DEFAULT_PASSWORD_POLICY = {
   requireDigit: false,
   requireSymbol: false,
 };
+const DEFAULT_MFA_EXISTING_SESSION_GRACE_PERIOD_DAYS = 3;
 
 type SmtpTestEmailKind = "smtp_configuration" | "password_setup" | "password_reset" | "email_otp";
 
@@ -126,6 +128,8 @@ function withDefaultGeneralSettings(settings: AuthProvisioningSettings | null) {
     ...settings,
     methods: { ...DEFAULT_AUTH_METHODS, ...settings.methods },
     passwordPolicy: { ...DEFAULT_PASSWORD_POLICY, ...settings.passwordPolicy },
+    mfaExistingSessionGracePeriodDays:
+      settings.mfaExistingSessionGracePeriodDays ?? DEFAULT_MFA_EXISTING_SESSION_GRACE_PERIOD_DAYS,
     mcpExtendedCompatibility: settings.mcpExtendedCompatibility ?? true,
     webTransport: settings.webTransport ?? {
       tlsEnabled: false,
@@ -142,6 +146,14 @@ function withDefaultGeneralSettings(settings: AuthProvisioningSettings | null) {
       },
     },
   };
+}
+
+function getMfaExistingSessionGracePeriodDays(
+  settings: AuthProvisioningSettings | null | undefined
+) {
+  return (
+    settings?.mfaExistingSessionGracePeriodDays ?? DEFAULT_MFA_EXISTING_SESSION_GRACE_PERIOD_DAYS
+  );
 }
 
 export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProps) {
@@ -161,10 +173,24 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
   const [isSavingNetwork, setIsSavingNetwork] = useState(false);
   const [isSavingWebhookPolicy, setIsSavingWebhookPolicy] = useState(false);
   const [isSavingLocalAuth, setIsSavingLocalAuth] = useState(false);
+  const [isSavingMfaGracePeriod, setIsSavingMfaGracePeriod] = useState(false);
   const [isSavingOidc, setIsSavingOidc] = useState(false);
   const [oidcDraft, setOidcDraft] = useState(DEFAULT_OIDC_DRAFT);
   const [isSavingLogging, setIsSavingLogging] = useState(false);
   const [loggingDraft, setLoggingDraft] = useState(DEFAULT_LOGGING_DRAFT);
+  const [mfaGracePeriodDays, setMfaGracePeriodDays] = useState(() =>
+    getMfaExistingSessionGracePeriodDays(
+      api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")
+    )
+  );
+  const [mfaGracePeriodRaw, setMfaGracePeriodRaw] = useState(() =>
+    String(
+      getMfaExistingSessionGracePeriodDays(
+        api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")
+      )
+    )
+  );
+  const [mfaGracePeriodInputKey, setMfaGracePeriodInputKey] = useState(0);
   const [publicUrl, setPublicUrl] = useState(
     () =>
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
@@ -242,8 +268,13 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
   const load = useCallback(async () => {
     try {
       const settingsData = await api.getAuthProvisioningSettings();
-      api.setCache("settings:auth-provisioning", settingsData);
-      setSettings(withDefaultGeneralSettings(settingsData));
+      const normalizedSettings = withDefaultGeneralSettings(settingsData)!;
+      api.setCache("settings:auth-provisioning", normalizedSettings);
+      setSettings(normalizedSettings);
+      const mfaGracePeriodDays = getMfaExistingSessionGracePeriodDays(normalizedSettings);
+      setMfaGracePeriodDays(mfaGracePeriodDays);
+      setMfaGracePeriodRaw(String(mfaGracePeriodDays));
+      setMfaGracePeriodInputKey((key) => key + 1);
       const smtpPresetId = settingsData.smtp?.host
         ? getSmtpPresetId(settingsData.smtp.host)
         : "resend";
@@ -302,8 +333,9 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
   );
 
   const applySettings = (updated: AuthProvisioningSettings) => {
-    api.setCache("settings:auth-provisioning", updated);
-    setSettings(updated);
+    const normalizedSettings = withDefaultGeneralSettings(updated)!;
+    api.setCache("settings:auth-provisioning", normalizedSettings);
+    setSettings(normalizedSettings);
   };
 
   const handleToggleAutoCreate = async (checked: boolean) => {
@@ -744,6 +776,37 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       return false;
     } finally {
       setIsSavingLocalAuth(false);
+    }
+  };
+
+  const saveMfaGracePeriod = async () => {
+    if (!settings || !canEdit) return;
+    const gracePeriodDays = Number(mfaGracePeriodRaw);
+    if (
+      mfaGracePeriodRaw.trim() === "" ||
+      !Number.isInteger(gracePeriodDays) ||
+      gracePeriodDays < 0 ||
+      gracePeriodDays > 7
+    ) {
+      toast.error("MFA grace period must be a whole number between 0 and 7 days");
+      return;
+    }
+
+    setIsSavingMfaGracePeriod(true);
+    try {
+      const updated = await api.updateAuthProvisioningSettings({
+        mfaExistingSessionGracePeriodDays: gracePeriodDays,
+      });
+      const normalizedSettings = withDefaultGeneralSettings(updated)!;
+      applySettings(normalizedSettings);
+      setMfaGracePeriodDays(normalizedSettings.mfaExistingSessionGracePeriodDays);
+      setMfaGracePeriodRaw(String(normalizedSettings.mfaExistingSessionGracePeriodDays));
+      setMfaGracePeriodInputKey((key) => key + 1);
+      toast.success("MFA grace period updated");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update MFA grace period");
+    } finally {
+      setIsSavingMfaGracePeriod(false);
     }
   };
 
@@ -1346,6 +1409,47 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
             </div>
           ))}
         </div>
+      </PanelShell>
+
+      <PanelShell
+        title="Multi-factor authentication"
+        description="Controls how Gateway enforces MFA for local browser sessions"
+        actions={
+          <Button
+            aria-label="Save MFA grace period"
+            onClick={saveMfaGracePeriod}
+            disabled={!canEdit || isSavingMfaGracePeriod}
+          >
+            {isSavingMfaGracePeriod ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Save className="h-4 w-4" />
+            )}
+            Save
+          </Button>
+        }
+      >
+        <SettingsControlRow
+          title="Existing-session MFA grace period"
+          description="Days existing local browser sessions may continue after group MFA is enabled. New sign-ins require MFA immediately. 0 applies immediately."
+        >
+          <div className="flex w-full items-center gap-2 sm:w-40">
+            <NumericInput
+              key={mfaGracePeriodInputKey}
+              aria-label="Existing-session MFA grace period in days"
+              value={mfaGracePeriodDays}
+              min={0}
+              max={7}
+              step={1}
+              disabled={!canEdit || isSavingMfaGracePeriod}
+              onChange={(value, raw) => {
+                setMfaGracePeriodDays(value);
+                setMfaGracePeriodRaw(raw);
+              }}
+            />
+            <span className="text-sm text-muted-foreground">days</span>
+          </div>
+        </SettingsControlRow>
       </PanelShell>
 
       <PanelShell

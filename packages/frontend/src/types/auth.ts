@@ -71,6 +71,7 @@ export interface AuthProvisioningSettings {
   oidcDefaultGroupId: string;
   oidcRequireVerifiedEmail: boolean;
   oauthExtendedCallbackCompatibility: boolean;
+  mfaExistingSessionGracePeriodDays: number;
   methods?: {
     oidc: boolean;
     password: boolean;

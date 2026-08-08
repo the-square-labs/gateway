@@ -2,21 +2,29 @@ import { and, count, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { permissionGroups, userPasskeys, users, userTotpFactors } from '@/db/schema/index.js';
+import { permissionGroups, users } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { hasScope, isScopeSubset } from '@/lib/permissions.js';
 import { canonicalizeScopes } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AISandboxService } from '@/modules/ai/ai.sandbox.service.js';
+import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import {
   computeEffectiveGroupAccess,
   computeEffectiveUserAccess,
   fetchGroupScopeMap,
 } from '@/modules/auth/live-session-user.js';
 import { mfaRequiredChannel } from '@/modules/auth/mfa-events.js';
+import { SessionService } from '@/services/session.service.js';
 import type { CreateGroupInput, UpdateGroupInput } from './group.schemas.js';
 
 const logger = createChildLogger('GroupService');
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+
+interface DirectGroupMember {
+  id: string;
+  authMethod: string;
+}
 
 function disallowedScopes(effectiveScopes: string[], actorScopes: string[]) {
   return effectiveScopes.filter((scope) => !hasScope(actorScopes, scope));
@@ -30,7 +38,11 @@ function assertNoProtectedSystemScope(effectiveScopes: string[]) {
 
 @injectable()
 export class GroupService {
-  constructor(@inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient) {}
+  constructor(
+    @inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient,
+    @inject(SessionService) private readonly sessionService: SessionService,
+    @inject(AuthSettingsService) private readonly authSettingsService: AuthSettingsService
+  ) {}
 
   private eventBus?: import('@/services/event-bus.service.js').EventBusService;
   private sandboxService?: AISandboxService;
@@ -87,32 +99,17 @@ export class GroupService {
     }
   }
 
-  /** Notify only local accounts that still need to enroll an MFA factor. */
+  /** Notify every direct local member so active dashboards refresh MFA policy state. */
   private async notifyMfaPolicyChanged(
     groupId: string,
     groupName: string,
-    requireGateway2fa: boolean
+    requireGateway2fa: boolean,
+    members: DirectGroupMember[]
   ): Promise<{ memberCount: number }> {
-    const members = await this.db
-      .select({ id: users.id, authMethod: users.authMethod })
-      .from(users)
-      .where(and(eq(users.groupId, groupId), isNull(users.deletedAt)));
     const localUserIds = members.filter((member) => member.authMethod !== 'oidc').map((member) => member.id);
     if (localUserIds.length === 0) return { memberCount: members.length };
 
-    const [totpFactors, passkeys] = await Promise.all([
-      this.db
-        .select({ userId: userTotpFactors.userId })
-        .from(userTotpFactors)
-        .where(inArray(userTotpFactors.userId, localUserIds)),
-      this.db
-        .select({ userId: userPasskeys.userId })
-        .from(userPasskeys)
-        .where(inArray(userPasskeys.userId, localUserIds)),
-    ]);
-    const configuredUserIds = new Set([...totpFactors, ...passkeys].map((factor) => factor.userId));
-    const affectedUserIds = localUserIds.filter((userId) => !configuredUserIds.has(userId));
-    for (const userId of affectedUserIds) {
+    for (const userId of localUserIds) {
       this.eventBus?.publish(mfaRequiredChannel(userId), {
         groupId,
         groupName,
@@ -120,6 +117,38 @@ export class GroupService {
       });
     }
     return { memberCount: members.length };
+  }
+
+  private async getDirectGroupMembers(groupId: string): Promise<DirectGroupMember[]> {
+    return this.db
+      .select({ id: users.id, authMethod: users.authMethod })
+      .from(users)
+      .where(and(eq(users.groupId, groupId), isNull(users.deletedAt)));
+  }
+
+  private async updateMfaSessionGraceDeadlines(
+    members: DirectGroupMember[],
+    requireGateway2fa: boolean
+  ): Promise<void> {
+    const localUserIds = members.filter((member) => member.authMethod !== 'oidc').map((member) => member.id);
+    if (localUserIds.length === 0) return;
+
+    if (requireGateway2fa) {
+      const { mfaExistingSessionGracePeriodDays } = await this.authSettingsService.getConfig();
+      const gracePeriodDays =
+        Number.isInteger(mfaExistingSessionGracePeriodDays) &&
+        mfaExistingSessionGracePeriodDays >= 0 &&
+        mfaExistingSessionGracePeriodDays <= 7
+          ? mfaExistingSessionGracePeriodDays
+          : 0;
+      const mfaGraceExpiresAt = Date.now() + gracePeriodDays * MILLISECONDS_PER_DAY;
+      await Promise.all(
+        localUserIds.map((userId) => this.sessionService.setUserSessionsMfaGraceExpiresAt(userId, mfaGraceExpiresAt))
+      );
+      return;
+    }
+
+    await Promise.all(localUserIds.map((userId) => this.sessionService.clearUserSessionsMfaGraceExpiresAt(userId)));
   }
 
   async getEffectiveScopesForGroupId(groupId: string): Promise<string[]> {
@@ -392,6 +421,13 @@ export class GroupService {
       }
     }
 
+    const nextMfaPolicy = input.requireGateway2fa;
+    const mfaPolicyChanged = nextMfaPolicy !== undefined && nextMfaPolicy !== group.requireGateway2fa;
+    const mfaMembers = mfaPolicyChanged ? await this.getDirectGroupMembers(id) : [];
+    if (mfaPolicyChanged && nextMfaPolicy !== undefined) {
+      await this.updateMfaSessionGraceDeadlines(mfaMembers, nextMfaPolicy);
+    }
+
     const [updated] = await this.db
       .update(permissionGroups)
       .set({
@@ -407,12 +443,12 @@ export class GroupService {
 
     logger.info('Updated permission group', { groupId: id, name: updated.name });
     this.emitGroup(id, 'updated');
-    if (input.requireGateway2fa !== undefined && input.requireGateway2fa !== group.requireGateway2fa) {
-      const { memberCount } = await this.notifyMfaPolicyChanged(updated.id, updated.name, input.requireGateway2fa);
+    if (mfaPolicyChanged && nextMfaPolicy !== undefined) {
+      const { memberCount } = await this.notifyMfaPolicyChanged(updated.id, updated.name, nextMfaPolicy, mfaMembers);
       this.eventBus?.publish('group.mfa.required', {
         groupId: updated.id,
         groupName: updated.name,
-        requireGateway2fa: input.requireGateway2fa,
+        requireGateway2fa: nextMfaPolicy,
         memberCount,
       });
     }

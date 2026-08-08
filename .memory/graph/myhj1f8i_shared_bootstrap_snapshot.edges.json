@@ -3,16 +3,6 @@
   "edges": [
     {
       "from_id": "myhj1f8i",
-      "to_id": "gahvf5k5",
-      "relation": "same_workflow",
-      "weight": 0.86,
-      "reason": "MFA policy changes and user MFA events invalidate the shared dashboard bootstrap and update its attention notices.",
-      "source": "auto",
-      "created_at": 1786067601079,
-      "updated_at": 1786067601079
-    },
-    {
-      "from_id": "myhj1f8i",
       "to_id": "gdptltym",
       "relation": "same_workflow",
       "weight": 0.8,

@@ -115,6 +115,8 @@ export interface DashboardBootstrap {
     recoveryCodeCount: number;
     required: boolean;
     showReminder: boolean;
+    sessionMfaSatisfied: boolean;
+    graceExpiresAt: number | null;
   } | null;
   update: { updateAvailable?: boolean; latestVersion?: string } | null;
   loggingHealth: unknown | null;

@@ -11,6 +11,7 @@ export interface User {
   avatarUrl: string | null;
   groupId: string;
   groupName: string;
+  requireGateway2fa?: boolean;
   groupScopes?: string[];
   additionalScopes?: string[];
   scopes: string[];
@@ -34,6 +35,7 @@ export interface SessionData {
   ipAddress?: string;
   userAgent?: string;
   mfaSatisfiedAt?: number;
+  mfaGraceExpiresAt?: number;
   expiresAt: number;
 }
 

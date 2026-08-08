@@ -448,6 +448,7 @@ class ApiClient extends withInferenceApi(
     oidcDefaultGroupId?: string;
     oidcRequireVerifiedEmail?: boolean;
     oauthExtendedCallbackCompatibility?: boolean;
+    mfaExistingSessionGracePeriodDays?: number;
     methods?: Partial<NonNullable<AuthProvisioningSettings["methods"]>>;
     passwordPolicy?: Partial<NonNullable<AuthProvisioningSettings["passwordPolicy"]>>;
     smtp?: {

@@ -9,6 +9,7 @@ const AUTH_SETTINGS_DEFAULTS = {
   'auth:oidc_auto_create_users': true,
   'auth:oidc_require_verified_email': false,
   'auth:oauth_extended_callback_compatibility': false,
+  'auth:mfa_existing_session_grace_period_days': 3,
   'auth:methods': { oidc: true, password: false, emailOtp: false, passkeyLogin: false },
   'auth:password_policy': {
     minLength: 12,
@@ -41,6 +42,7 @@ export interface AuthProvisioningSettings {
   oidcDefaultGroupId: string;
   oidcRequireVerifiedEmail: boolean;
   oauthExtendedCallbackCompatibility: boolean;
+  mfaExistingSessionGracePeriodDays: number;
   methods: LocalAuthMethods;
   passwordPolicy: PasswordPolicy;
 }
@@ -63,6 +65,10 @@ export class AuthSettingsService {
       'auth:oauth_extended_callback_compatibility',
       AUTH_SETTINGS_DEFAULTS['auth:oauth_extended_callback_compatibility']
     );
+    const mfaExistingSessionGracePeriodDays = await this.getSetting<number>(
+      'auth:mfa_existing_session_grace_period_days',
+      AUTH_SETTINGS_DEFAULTS['auth:mfa_existing_session_grace_period_days']
+    );
     const methods = await this.getSetting<LocalAuthMethods>('auth:methods', AUTH_SETTINGS_DEFAULTS['auth:methods']);
     const passwordPolicy = await this.getSetting<PasswordPolicy>(
       'auth:password_policy',
@@ -74,6 +80,7 @@ export class AuthSettingsService {
       oidcDefaultGroupId: defaultGroupId,
       oidcRequireVerifiedEmail: requireVerifiedEmail,
       oauthExtendedCallbackCompatibility,
+      mfaExistingSessionGracePeriodDays,
       methods,
       passwordPolicy,
     };
@@ -84,6 +91,7 @@ export class AuthSettingsService {
     oidcDefaultGroupId?: string;
     oidcRequireVerifiedEmail?: boolean;
     oauthExtendedCallbackCompatibility?: boolean;
+    mfaExistingSessionGracePeriodDays?: number;
     methods?: Partial<LocalAuthMethods>;
     passwordPolicy?: Partial<PasswordPolicy>;
   }): Promise<AuthProvisioningSettings> {
@@ -97,6 +105,21 @@ export class AuthSettingsService {
 
     if (updates.oauthExtendedCallbackCompatibility !== undefined) {
       await this.setSetting('auth:oauth_extended_callback_compatibility', updates.oauthExtendedCallbackCompatibility);
+    }
+
+    if (updates.mfaExistingSessionGracePeriodDays !== undefined) {
+      if (
+        !Number.isInteger(updates.mfaExistingSessionGracePeriodDays) ||
+        updates.mfaExistingSessionGracePeriodDays < 0 ||
+        updates.mfaExistingSessionGracePeriodDays > 7
+      ) {
+        throw new AppError(
+          400,
+          'INVALID_MFA_GRACE_PERIOD',
+          'MFA existing-session grace period must be an integer between 0 and 7 days'
+        );
+      }
+      await this.setSetting('auth:mfa_existing_session_grace_period_days', updates.mfaExistingSessionGracePeriodDays);
     }
 
     if (updates.methods !== undefined) {

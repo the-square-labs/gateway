@@ -48,6 +48,35 @@ describe('AuthSettingsService', () => {
     });
   });
 
+  it('defaults the existing-session MFA grace period to three days', async () => {
+    const { db } = createDb();
+    const service = new AuthSettingsService(db);
+
+    await expect(service.getConfig()).resolves.toMatchObject({
+      mfaExistingSessionGracePeriodDays: 3,
+    });
+  });
+
+  it('persists a valid existing-session MFA grace period', async () => {
+    const { db } = createDb();
+    const service = new AuthSettingsService(db);
+
+    await service.updateConfig({ mfaExistingSessionGracePeriodDays: 5 });
+
+    await expect(service.getConfig()).resolves.toMatchObject({
+      mfaExistingSessionGracePeriodDays: 5,
+    });
+  });
+
+  it('rejects an invalid existing-session MFA grace period', async () => {
+    const { db } = createDb();
+    const service = new AuthSettingsService(db);
+
+    await expect(service.updateConfig({ mfaExistingSessionGracePeriodDays: 8 })).rejects.toMatchObject({
+      code: 'INVALID_MFA_GRACE_PERIOD',
+    });
+  });
+
   it('persists OAuth extended callback compatibility updates', async () => {
     const { db } = createDb();
     const service = new AuthSettingsService(db);

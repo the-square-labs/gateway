@@ -82,6 +82,19 @@ export class SessionService {
     await this.cache.set(`${SESSION_PREFIX}${sessionId}`, updatedSession, remainingTtl);
   }
 
+  async setUserSessionsMfaGraceExpiresAt(userId: string, mfaGraceExpiresAt: number): Promise<void> {
+    await this.updateUserSessions(userId, { mfaGraceExpiresAt });
+  }
+
+  async clearUserSessionsMfaGraceExpiresAt(userId: string): Promise<void> {
+    await this.updateUserSessions(userId, { mfaGraceExpiresAt: undefined });
+  }
+
+  private async updateUserSessions(userId: string, updates: Partial<SessionData>): Promise<void> {
+    const sessionIds = await this.cache.smembers(`${USER_SESSIONS_PREFIX}${userId}`);
+    await Promise.all(sessionIds.map((sessionId) => this.updateSession(sessionId, updates)));
+  }
+
   async ensureCsrfToken(sessionId: string, session?: SessionData | null): Promise<string | null> {
     const resolved = session ?? (await this.getSession(sessionId));
     if (!resolved) return null;
