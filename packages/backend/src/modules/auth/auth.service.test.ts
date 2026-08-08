@@ -226,6 +226,7 @@ describe('AuthService additional permissions', () => {
   const targetUser = {
     id: '22222222-2222-4222-8222-222222222222',
     oidcSubject: 'target-user',
+    authMethod: 'password' as const,
     email: 'target@example.com',
     name: 'Target',
     avatarUrl: null,
@@ -236,6 +237,72 @@ describe('AuthService additional permissions', () => {
     scopes: ['nodes:details:node-1'],
     isBlocked: false,
   };
+
+  function createGroupMoveContext({
+    sourceRequiresMfa,
+    destinationRequiresMfa,
+    authMethod = 'password',
+  }: {
+    sourceRequiresMfa: boolean;
+    destinationRequiresMfa: boolean;
+    authMethod?: 'oidc' | 'password' | 'email_otp';
+  }) {
+    const currentDbUser = {
+      ...targetUser,
+      groupId: 'group-1',
+      authMethod,
+      additionalScopes: ['nodes:console:node-1'],
+    };
+    const updatedDbUser = {
+      ...currentDbUser,
+      groupId: 'group-2',
+      aiApprovalMode: 'normal',
+      folderId: null,
+      sortOrder: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const returning = vi.fn().mockResolvedValue([updatedDbUser]);
+    const where = vi.fn(() => ({ returning }));
+    const set = vi.fn(() => ({ where }));
+    const update = vi.fn(() => ({ set }));
+    const findGroup = vi
+      .fn()
+      .mockResolvedValueOnce({
+        id: 'group-2',
+        name: 'MFA destination',
+        requireGateway2fa: destinationRequiresMfa,
+      })
+      .mockResolvedValueOnce({
+        id: 'group-1',
+        name: 'Source',
+        requireGateway2fa: sourceRequiresMfa,
+      });
+    const sessionService = {
+      setUserSessionsMfaGraceExpiresAt: vi.fn().mockResolvedValue(undefined),
+      clearUserSessionsMfaGraceExpiresAt: vi.fn().mockResolvedValue(undefined),
+    };
+    const authSettingsService = {
+      getConfig: vi.fn().mockResolvedValue({ mfaExistingSessionGracePeriodDays: 3 }),
+    };
+    const eventBus = { publish: vi.fn() };
+    const service = new AuthService(
+      {
+        query: {
+          permissionGroups: { findFirst: findGroup },
+          users: { findFirst: vi.fn().mockResolvedValue(currentDbUser) },
+        },
+        update,
+      } as any,
+      sessionService as any,
+      {} as any,
+      authSettingsService as any,
+      {} as any
+    );
+    service.setEventBus(eventBus as any);
+
+    return { service, sessionService, authSettingsService, eventBus, update };
+  }
 
   function serviceWithTarget() {
     const service = new AuthService({} as any, {} as any, {} as any, {} as any, {} as any);
@@ -285,31 +352,10 @@ describe('AuthService additional permissions', () => {
   });
 
   it('persists additional permissions across a group change and emits effective scopes', async () => {
-    const updatedDbUser = {
-      ...targetUser,
-      groupId: 'group-2',
-      additionalScopes: ['nodes:console:node-1'],
-      aiApprovalMode: 'normal',
-      folderId: null,
-      sortOrder: 0,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-    const returning = vi.fn().mockResolvedValue([updatedDbUser]);
-    const where = vi.fn(() => ({ returning }));
-    const set = vi.fn(() => ({ where }));
-    const eventBus = { publish: vi.fn() };
-    const service = new AuthService(
-      {
-        query: { permissionGroups: { findFirst: vi.fn().mockResolvedValue({ id: 'group-2' }) } },
-        update: vi.fn(() => ({ set })),
-      } as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any
-    );
-    service.setEventBus(eventBus as any);
+    const { service, eventBus } = createGroupMoveContext({
+      sourceRequiresMfa: false,
+      destinationRequiresMfa: false,
+    });
 
     const updated = await service.updateUserGroup(targetUser.id, 'group-2');
 
@@ -320,6 +366,83 @@ describe('AuthService additional permissions', () => {
       groupId: 'group-2',
       reason: 'permissions_changed',
     });
+  });
+
+  it('starts the configured grace period and notifies a local user when group MFA becomes required', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-08T12:00:00.000Z'));
+    try {
+      const { service, sessionService, eventBus, update } = createGroupMoveContext({
+        sourceRequiresMfa: false,
+        destinationRequiresMfa: true,
+      });
+
+      await service.updateUserGroup(targetUser.id, 'group-2');
+
+      expect(sessionService.setUserSessionsMfaGraceExpiresAt).toHaveBeenCalledWith(
+        targetUser.id,
+        Date.now() + 3 * 24 * 60 * 60 * 1000
+      );
+      expect(sessionService.setUserSessionsMfaGraceExpiresAt.mock.invocationCallOrder[0]).toBeLessThan(
+        update.mock.invocationCallOrder[0]
+      );
+      expect(eventBus.publish).toHaveBeenCalledWith(`mfa.required.${targetUser.id}`, {
+        groupId: 'group-2',
+        groupName: 'MFA destination',
+        requireGateway2fa: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the grace period and notifies a local user when group MFA is removed', async () => {
+    const { service, sessionService, authSettingsService, eventBus, update } = createGroupMoveContext({
+      sourceRequiresMfa: true,
+      destinationRequiresMfa: false,
+    });
+
+    await service.updateUserGroup(targetUser.id, 'group-2');
+
+    expect(sessionService.clearUserSessionsMfaGraceExpiresAt).toHaveBeenCalledWith(targetUser.id);
+    expect(sessionService.clearUserSessionsMfaGraceExpiresAt.mock.invocationCallOrder[0]).toBeGreaterThan(
+      update.mock.invocationCallOrder[0]
+    );
+    expect(authSettingsService.getConfig).not.toHaveBeenCalled();
+    expect(eventBus.publish).toHaveBeenCalledWith(`mfa.required.${targetUser.id}`, {
+      groupId: 'group-2',
+      groupName: 'MFA destination',
+      requireGateway2fa: false,
+    });
+  });
+
+  it('does not extend an existing grace period when moving between MFA-required groups', async () => {
+    const { service, sessionService, authSettingsService, eventBus } = createGroupMoveContext({
+      sourceRequiresMfa: true,
+      destinationRequiresMfa: true,
+    });
+
+    await service.updateUserGroup(targetUser.id, 'group-2');
+
+    expect(sessionService.setUserSessionsMfaGraceExpiresAt).not.toHaveBeenCalled();
+    expect(sessionService.clearUserSessionsMfaGraceExpiresAt).not.toHaveBeenCalled();
+    expect(authSettingsService.getConfig).not.toHaveBeenCalled();
+    expect(eventBus.publish).not.toHaveBeenCalledWith(`mfa.required.${targetUser.id}`, expect.anything());
+  });
+
+  it('leaves OIDC group moves outside Gateway MFA grace handling', async () => {
+    const { service, sessionService, authSettingsService, eventBus } = createGroupMoveContext({
+      sourceRequiresMfa: false,
+      destinationRequiresMfa: true,
+      authMethod: 'oidc',
+    });
+
+    await service.updateUserGroup(targetUser.id, 'group-2');
+
+    expect(sessionService.setUserSessionsMfaGraceExpiresAt).not.toHaveBeenCalled();
+    expect(sessionService.clearUserSessionsMfaGraceExpiresAt).not.toHaveBeenCalled();
+    expect(authSettingsService.getConfig).not.toHaveBeenCalled();
+    expect(eventBus.publish).not.toHaveBeenCalledWith(`mfa.required.${targetUser.id}`, expect.anything());
   });
 });
 

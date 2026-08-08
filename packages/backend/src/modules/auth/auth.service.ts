@@ -34,6 +34,7 @@ import {
   fetchGroupScopeMap,
   resolveEffectiveUserAccess,
 } from './live-session-user.js';
+import { mfaRequiredChannel } from './mfa-events.js';
 import type { OidcRuntimeConfig, OidcSettingsService } from './oidc-settings.service.js';
 
 const logger = createChildLogger('AuthService');
@@ -41,6 +42,7 @@ const logger = createChildLogger('AuthService');
 const PKCE_STATE_PREFIX = 'oidc:pkce:';
 const PRECREATED_SUBJECT_PREFIX = 'manual:';
 const SYSTEM_SUBJECT_PREFIX = 'system:';
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 export const AI_APPROVAL_MODES = ['always-ask', 'normal', 'bypass-non-destructive', 'bypass-everything'] as const;
 export type AIApprovalMode = (typeof AI_APPROVAL_MODES)[number];
 
@@ -654,12 +656,44 @@ export class AuthService {
   }
 
   async updateUserGroup(userId: string, groupId: string): Promise<User> {
-    // Verify the group exists
-    const group = await this.db.query.permissionGroups.findFirst({
-      where: eq(permissionGroups.id, groupId),
-    });
+    const [group, currentUser] = await Promise.all([
+      this.db.query.permissionGroups.findFirst({
+        where: eq(permissionGroups.id, groupId),
+      }),
+      this.db.query.users.findFirst({
+        columns: { groupId: true, authMethod: true },
+        where: and(eq(users.id, userId), isNull(users.deletedAt)),
+      }),
+    ]);
     if (!group) {
       throw new Error('Permission group not found');
+    }
+    if (!currentUser) {
+      throw new Error('User not found');
+    }
+
+    const previousGroup =
+      currentUser.groupId === groupId
+        ? group
+        : await this.db.query.permissionGroups.findFirst({
+            where: eq(permissionGroups.id, currentUser.groupId),
+          });
+    const mfaPolicyChanged =
+      currentUser.authMethod !== 'oidc' &&
+      Boolean(previousGroup?.requireGateway2fa) !== Boolean(group.requireGateway2fa);
+
+    if (mfaPolicyChanged && group.requireGateway2fa) {
+      const { mfaExistingSessionGracePeriodDays } = await this.authSettingsService.getConfig();
+      const gracePeriodDays =
+        Number.isInteger(mfaExistingSessionGracePeriodDays) &&
+        mfaExistingSessionGracePeriodDays >= 0 &&
+        mfaExistingSessionGracePeriodDays <= 7
+          ? mfaExistingSessionGracePeriodDays
+          : 0;
+      await this.sessionService.setUserSessionsMfaGraceExpiresAt(
+        userId,
+        Date.now() + gracePeriodDays * MILLISECONDS_PER_DAY
+      );
     }
 
     const [updatedUser] = await this.db
@@ -672,9 +706,20 @@ export class AuthService {
       throw new Error('User not found');
     }
 
+    if (mfaPolicyChanged && !group.requireGateway2fa) {
+      await this.sessionService.clearUserSessionsMfaGraceExpiresAt(userId);
+    }
+
     const mapped = await this.mapDbUserToUser(updatedUser);
     this.emitUser(userId, 'updated');
     this.emitPermissions(userId, mapped.isBlocked ? [] : mapped.scopes, groupId);
+    if (mfaPolicyChanged) {
+      this.eventBus?.publish(mfaRequiredChannel(userId), {
+        groupId: group.id,
+        groupName: group.name,
+        requireGateway2fa: group.requireGateway2fa,
+      });
+    }
     return mapped;
   }
 

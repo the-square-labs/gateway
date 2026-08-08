@@ -106,6 +106,30 @@ describe('AIService admin user lifecycle tools', () => {
     expect(authService.deleteUser).toHaveBeenCalledWith('user-2', 'user-1');
   });
 
+  it('uses AuthService MFA grace handling when changing a user group', async () => {
+    const targetUser = {
+      id: 'user-2',
+      oidcSubject: 'oidc-user-2',
+      scopes: ['proxy:view'],
+    };
+    const updatedUser = { ...targetUser, groupId: 'group-2' };
+    const authService = {
+      getUserById: vi.fn().mockResolvedValue(targetUser),
+      assertCanUpdateUserGroup: vi.fn().mockResolvedValue(targetUser),
+      updateUserGroup: vi.fn().mockResolvedValue(updatedUser),
+    };
+    const service = createService({ authService });
+
+    await expect(
+      service.executeTool(BASE_USER, 'update_user_role', { userId: 'user-2', groupId: 'group-2' })
+    ).resolves.toEqual({
+      result: updatedUser,
+      invalidateStores: ['users'],
+    });
+
+    expect(authService.updateUserGroup).toHaveBeenCalledWith('user-2', 'group-2');
+  });
+
   it('rejects self and system user lifecycle mutations', async () => {
     const authService = {
       getUserById: vi.fn().mockResolvedValue({

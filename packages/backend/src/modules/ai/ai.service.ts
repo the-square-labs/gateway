@@ -39,7 +39,6 @@ import { EventBusService } from '@/services/event-bus.service.js';
 import { HousekeepingService } from '@/services/housekeeping.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
-import { SessionService } from '@/services/session.service.js';
 import { UpdateService } from '@/services/update.service.js';
 import type { User } from '@/types.js';
 import { ACCESS_LIST_TOOL_NAMES, executeAccessListTool } from './ai.access-list-tools.js';
@@ -1086,9 +1085,7 @@ export class AIService {
           throw new Error('Cannot modify the system user');
         }
         await this.authService.assertCanUpdateUserGroup(user.id, user.scopes, a.userId, a.groupId);
-        const updated = await this.authService.updateUserGroup(a.userId, a.groupId);
-        await container.resolve(SessionService).destroyAllUserSessions(a.userId);
-        return updated;
+        return this.authService.updateUserGroup(a.userId, a.groupId);
       }
       case 'set_user_blocked': {
         if (a.userId === user.id) {
