@@ -608,8 +608,38 @@ func (m *managedDatabaseManager) applyClickHousePrincipal(ctx context.Context, r
 	)
 }
 
+func redisBindingACLBaseRules() []string {
+	return []string{
+		"~*", "&*", "+@read", "+@write", "+@connection", "+@transaction", "+@pubsub",
+		"+eval", "+evalsha", "-script", "-@dangerous",
+	}
+}
+
+func redisBindingACLModernRules() []string {
+	return []string{
+		"+eval_ro", "+evalsha_ro", "+fcall", "+fcall_ro", "+script|load", "+script|exists",
+		"-function", "-script|flush", "-script|kill", "-script|debug",
+	}
+}
+
+func redisBindingACLShellWords(rules []string) string {
+	return "'" + strings.Join(rules, "' '") + "'"
+}
+
 func redisBindingACLCommand() string {
-	return `redis-cli --no-auth-warning --user default ACL SETUSER "$GATEWAY_DB_BINDING_USER" reset on ">$GATEWAY_DB_BINDING_PASSWORD" '~*' '&*' '+@read' '+@write' '+@connection' '+@transaction' '+@pubsub' '+eval' '+evalsha' '+eval_ro' '+evalsha_ro' '+fcall' '+fcall_ro' '+script|load' '+script|exists' '-function' '-script|flush' '-script|kill' '-script|debug' '-@dangerous'`
+	return fmt.Sprintf(`redis_major="$(redis-cli --no-auth-warning --user default INFO server 2>/dev/null | sed -n 's/^redis_version:\([0-9][0-9]*\)\..*/\1/p')"
+set -- redis-cli --no-auth-warning --user default ACL SETUSER "$GATEWAY_DB_BINDING_USER" reset on ">$GATEWAY_DB_BINDING_PASSWORD"
+for acl_rule in %s; do
+  set -- "$@" "$acl_rule"
+done
+case "$redis_major" in
+  [7-9]|[1-9][0-9]*)
+    for acl_rule in %s; do
+      set -- "$@" "$acl_rule"
+    done
+    ;;
+esac
+"$@"`, redisBindingACLShellWords(redisBindingACLBaseRules()), redisBindingACLShellWords(redisBindingACLModernRules()))
 }
 
 func (m *managedDatabaseManager) removeBindingPrincipal(ctx context.Context, record managedDatabaseRecord, input managedDatabaseBindingCommand) error {
