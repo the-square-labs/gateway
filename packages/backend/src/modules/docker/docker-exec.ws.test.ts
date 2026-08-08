@@ -1,11 +1,29 @@
-import { describe, expect, it, vi } from 'vitest';
+import 'reflect-metadata';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { container } from '@/container.js';
+import { NodeDispatchService } from '@/services/node-dispatch.service.js';
+import { NodeRegistryService } from '@/services/node-registry.service.js';
+import { DockerManagementService } from './docker.service.js';
 import {
   DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES,
+  createDockerExecWSHandlers,
   isDockerExecPreauthMessageTooLarge,
   parseDockerExecTerminalSize,
   resizeDockerExec,
   resolveDockerExecUser,
 } from './docker-exec.ws.js';
+
+const authMocks = vi.hoisted(() => ({
+  resolveWebSocketCredential: vi.fn(),
+  resolveWebSocketCredentialForScopeBase: vi.fn(() => new Promise<never>(() => {})),
+}));
+
+vi.mock('@/modules/auth/websocket-auth.js', () => authMocks);
+
+afterEach(() => {
+  container.reset();
+  vi.clearAllMocks();
+});
 
 describe('resolveDockerExecUser', () => {
   it('uses the configured container execution user when present', async () => {
@@ -83,10 +101,34 @@ describe('Docker exec terminal resize', () => {
 });
 
 describe('Docker exec unauthenticated message limit', () => {
-  it('limits only oversized UTF-8 payloads before authentication', () => {
+  it('limits oversized UTF-8 and binary payloads before authentication', () => {
     expect(isDockerExecPreauthMessageTooLarge('{"type":"resize","rows":24,"cols":120}')).toBe(false);
     expect(isDockerExecPreauthMessageTooLarge('x'.repeat(DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES))).toBe(false);
     expect(isDockerExecPreauthMessageTooLarge('x'.repeat(DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES + 1))).toBe(true);
     expect(isDockerExecPreauthMessageTooLarge('€'.repeat(Math.ceil(DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES / 3)))).toBe(true);
+    expect(isDockerExecPreauthMessageTooLarge(new Uint8Array(DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES + 1).buffer)).toBe(
+      true
+    );
+  });
+
+  it('closes an unauthenticated socket that sends an oversized binary frame', async () => {
+    container.registerInstance(NodeDispatchService, {} as NodeDispatchService);
+    container.registerInstance(NodeRegistryService, {} as NodeRegistryService);
+    container.registerInstance(DockerManagementService, {} as DockerManagementService);
+    const ws = { send: vi.fn(), close: vi.fn() };
+    const handlers = createDockerExecWSHandlers('node-1', 'container-1', '/bin/sh', null);
+
+    handlers.onOpen({} as never, ws as never);
+    await handlers.onMessage(
+      { data: new Uint8Array(DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES + 1).buffer } as never,
+      ws as never
+    );
+
+    expect(JSON.parse(String(ws.send.mock.calls[0]?.[0]))).toEqual({
+      type: 'error',
+      message: 'Message too large before authentication',
+    });
+    expect(ws.close).toHaveBeenCalledWith(1009, 'Message too large');
+    handlers.onClose({} as never, ws as never);
   });
 });

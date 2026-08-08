@@ -15,8 +15,12 @@ import { dockerScopedNodeIds, hasDockerResourceScope } from './docker-access-res
 const logger = createChildLogger('DockerExec');
 export const DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES = 16 * 1024;
 
-export function isDockerExecPreauthMessageTooLarge(raw: string): boolean {
-  return Buffer.byteLength(raw, 'utf8') > DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES;
+export function isDockerExecPreauthMessageTooLarge(payload: unknown): boolean {
+  if (typeof payload === 'string') return Buffer.byteLength(payload, 'utf8') > DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES;
+  if (payload instanceof ArrayBuffer) return payload.byteLength > DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES;
+  if (ArrayBuffer.isView(payload)) return payload.byteLength > DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES;
+  if (typeof Blob !== 'undefined' && payload instanceof Blob) return payload.size > DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES;
+  return Buffer.byteLength(String(payload), 'utf8') > DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES;
 }
 
 async function authorizeExecAccess(
@@ -157,13 +161,11 @@ export function createDockerExecWSHandlers(
       const state = wsStates.get(ws);
       if (!state) return;
 
-      const raw = typeof event.data === 'string' ? event.data : String(event.data);
-
       // The credential is supplied during the WebSocket handshake, so no
       // legitimate pre-auth client command needs a large payload. Avoid JSON
       // parsing attacker-controlled megabyte payloads while authentication is
       // still in flight; authenticated terminal input keeps its existing flow.
-      if (!state.authenticated && isDockerExecPreauthMessageTooLarge(raw)) {
+      if (!state.authenticated && isDockerExecPreauthMessageTooLarge(event.data)) {
         send(ws, { type: 'error', message: 'Message too large before authentication' });
         try {
           ws.close(1009, 'Message too large');
@@ -172,6 +174,8 @@ export function createDockerExecWSHandlers(
         }
         return;
       }
+
+      const raw = typeof event.data === 'string' ? event.data : String(event.data);
 
       let msg: Record<string, unknown>;
       try {
