@@ -11,7 +11,7 @@ type PendingMetadataEntry = MetadataEntry & { environmentId: string };
 export const LOGGING_METADATA_KEY_MAX_LENGTH = 255;
 
 export function isSupportedLoggingMetadataKey(key: string): boolean {
-  return key.length <= LOGGING_METADATA_KEY_MAX_LENGTH;
+  return Array.from(key).length <= LOGGING_METADATA_KEY_MAX_LENGTH;
 }
 
 export interface LoggingMetadataView {
