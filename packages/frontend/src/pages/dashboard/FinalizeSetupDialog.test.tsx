@@ -2,10 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { confirm } from "@/components/common/ConfirmDialog";
 import type { FinalizeSetupState } from "@/types";
-import {
-  finalizeSetupSkipPromptStorageKey,
-  FinalizeSetupDialog,
-} from "./FinalizeSetupDialog";
+import { FinalizeSetupDialog, finalizeSetupSkipPromptStorageKey } from "./FinalizeSetupDialog";
 
 vi.mock("@/components/common/ConfirmDialog", () => ({
   confirm: vi.fn(),

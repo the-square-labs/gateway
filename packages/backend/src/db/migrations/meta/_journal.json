@@ -687,6 +687,13 @@
       "when": 1786228326451,
       "tag": "0097_windy_mac_gargan",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1786228385000,
+      "tag": "0098_narrow_beyonder",
+      "breakpoints": true
     }
   ]
 }

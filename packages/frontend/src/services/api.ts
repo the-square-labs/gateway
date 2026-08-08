@@ -1724,6 +1724,17 @@ class ApiClient extends withInferenceApi(
     );
   }
 
+  async resyncSSLCertificateDistribution(id: string): Promise<{ synchronized: number }> {
+    return this.unwrapData(
+      this.request<{ data: { synchronized: number } }>(
+        `/ssl-certificates/${id}/distribution/resync`,
+        {
+          method: "POST",
+        }
+      )
+    );
+  }
+
   async deleteSSLCert(id: string): Promise<void> {
     return this.request<void>(`/ssl-certificates/${id}`, { method: "DELETE" });
   }

@@ -11,7 +11,9 @@ function makeCache() {
       return 'OK';
     }),
     del: vi.fn(async (...keys: string[]) => {
-      keys.forEach((key) => values.delete(key));
+      keys.forEach((key) => {
+        values.delete(key);
+      });
       return keys.length;
     }),
     eval: vi.fn(async (_script: string, _keys: number, key: string, token: string) => {

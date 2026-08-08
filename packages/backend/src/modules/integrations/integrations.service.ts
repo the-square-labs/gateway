@@ -548,12 +548,7 @@ export class IntegrationsService {
     const [connector] = await this.db
       .select({ id: integrationConnectors.id })
       .from(integrationConnectors)
-      .where(
-        and(
-          eq(integrationConnectors.provider, 'cloudflare'),
-          eq(integrationConnectors.enabled, true)
-        )
-      )
+      .where(and(eq(integrationConnectors.provider, 'cloudflare'), eq(integrationConnectors.enabled, true)))
       .limit(1);
     return connector !== undefined;
   }

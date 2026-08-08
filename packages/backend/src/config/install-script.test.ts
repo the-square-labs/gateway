@@ -42,7 +42,7 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain(
       'ensure_env GATEWAY_RELAY_MANAGED "$([[ -z "$SOURCE_DIR" ]] && printf true || printf false)"'
     );
-    expect(source).toContain('GATEWAY_RELAY_MANAGED: "${GATEWAY_RELAY_MANAGED:-true}"');
+    expect(source).toContain(`GATEWAY_RELAY_MANAGED: "\${GATEWAY_RELAY_MANAGED:-true}"`);
   });
 
   it('renders a compact, quiet installer and lists usable connection URLs', () => {

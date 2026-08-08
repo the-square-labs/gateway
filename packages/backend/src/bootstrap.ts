@@ -160,6 +160,7 @@ import { DockerService } from '@/services/docker.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { GrpcIdentityService } from '@/services/grpc-identity.service.js';
 import { HousekeepingService } from '@/services/housekeeping.service.js';
+import { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
 import { NginxConfigGenerator } from '@/services/nginx-config-generator.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
@@ -570,6 +571,15 @@ export async function initializeContainer(): Promise<void> {
   const nodeDispatch = new NodeDispatchService(nodeRegistry, db);
   container.registerInstance(NodeDispatchService, nodeDispatch);
 
+  const nginxCertificateDistribution = new NginxCertificateDistributionService(
+    db,
+    cryptoService,
+    nginxConfigGenerator,
+    nodeDispatch
+  );
+  nginxCertificateDistribution.setEventBus(eventBus);
+  container.registerInstance(NginxCertificateDistributionService, nginxCertificateDistribution);
+
   const nodesService = new NodesService(db, auditService, nodeRegistry, grpcIdentityService, nodeDispatch);
   nodesService.setGeneralSettingsService(generalSettingsService, env.GRPC_PORT);
   nodesService.setSystemCertificateLifecycleService(systemCertificateLifecycleService);
@@ -754,9 +764,9 @@ export async function initializeContainer(): Promise<void> {
     db,
     nginxTemplateService,
     auditService,
-    cryptoService,
     nginxConfigGenerator,
     nodeDispatch,
+    nginxCertificateDistribution,
     proxyDockerUpstreamService
   );
   proxyService.setEventBus(eventBus);
@@ -847,14 +857,16 @@ export async function initializeContainer(): Promise<void> {
     nginxConfigGenerator,
     nginxTemplateService,
     auditService,
-    nodeDispatch
+    nodeDispatch,
+    nginxCertificateDistribution
   );
   accessListService.setEventBus(eventBus);
   container.registerInstance(AccessListService, accessListService);
 
-  const sslService = new SSLService(db, acmeService, nginxConfigGenerator, cryptoService, auditService, nodeDispatch);
+  const sslService = new SSLService(db, acmeService, cryptoService, auditService, nginxCertificateDistribution);
   sslService.setEventBus(eventBus);
   sslService.setIntegrationsService(integrationsService);
+  sslService.setProxyService(proxyService);
   integrationsService.setSSLService(sslService);
   container.registerInstance(SSLService, sslService);
 
@@ -1210,6 +1222,10 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(SchedulerService, scheduler);
   scheduler.registerInterval('system-certificate-crl-retry', 5 * 60 * 1000, async () => {
     await systemCertificateLifecycleService.retryPendingCRLs();
+  });
+  scheduler.registerInterval('nginx-tls-certificate-integrity', 6 * 60 * 60 * 1000, async () => {
+    await nginxCertificateDistribution.reconcileIntegrity();
+    await nginxCertificateDistribution.cleanupDueReplicas();
   });
 
   const acmeRenewalJob = new ACMERenewalJob(db, sslService, alertService);

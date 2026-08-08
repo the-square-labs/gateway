@@ -12,7 +12,8 @@ interface CopyButtonProps {
 }
 
 function copyWithLegacyCommand(value: string): void {
-  const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const previouslyFocused =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const textarea = document.createElement("textarea");
   textarea.value = value;
   textarea.setAttribute("readonly", "");

@@ -232,15 +232,18 @@ export function NodeSetupWizard({
             {targets.length > 1 && (
               <Tabs value={selectedTarget?.id ?? "public"} onValueChange={setTargetId}>
                 <TabsList>
-                {targets.map((target) => (
-                  <TabsTrigger key={target.id} value={target.id}>
-                    {target.label}
-                  </TabsTrigger>
-                ))}
+                  {targets.map((target) => (
+                    <TabsTrigger key={target.id} value={target.id}>
+                      {target.label}
+                    </TabsTrigger>
+                  ))}
                 </TabsList>
               </Tabs>
             )}
-            <Tabs value={transport} onValueChange={(value) => setTransport(value as "curl" | "wget")}>
+            <Tabs
+              value={transport}
+              onValueChange={(value) => setTransport(value as "curl" | "wget")}
+            >
               <TabsList>
                 <TabsTrigger value="curl">curl</TabsTrigger>
                 <TabsTrigger value="wget">wget</TabsTrigger>

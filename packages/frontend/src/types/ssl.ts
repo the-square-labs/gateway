@@ -2,6 +2,19 @@
 export type SSLCertType = "acme" | "upload" | "internal";
 export type SSLCertStatus = "active" | "expired" | "pending" | "error";
 export type ACMEChallengeType = "http-01" | "dns-01";
+export type CertificateDistributionStatus =
+  | "ready"
+  | "pending"
+  | "failed"
+  | "daemon_update_required";
+
+export interface CertificateDistributionState {
+  status: CertificateDistributionStatus;
+  replicaCount: number;
+  readyReplicaCount: number;
+  lastVerifiedAt: string | null;
+  error: string | null;
+}
 
 export interface SSLCertificate {
   id: string;
@@ -29,6 +42,7 @@ export interface SSLCertificate {
   lastRenewedAt: string | null;
   renewalError: string | null;
   status: SSLCertStatus;
+  distribution?: CertificateDistributionState;
   isSystem?: boolean;
   createdAt: string;
   updatedAt: string;

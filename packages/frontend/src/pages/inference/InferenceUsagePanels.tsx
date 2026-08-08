@@ -240,7 +240,8 @@ export function CompactInferenceUsage({
   // mounts. Hold this small permission-gated menu section in place until that
   // request settles so it cannot race a second /inference/usage/self request.
   const waitForDashboardBootstrap = !dashboardBootstrapStarted || dashboardBootstrapLoading;
-  const useUsageFallback = dashboardBootstrapStarted && !dashboardBootstrapLoading && dashboardUsage === undefined;
+  const useUsageFallback =
+    dashboardBootstrapStarted && !dashboardBootstrapLoading && dashboardUsage === undefined;
   const { usage: fetchedUsage, error } = useInferenceSelfUsage(useUsageFallback);
   const usage = dashboardUsage === undefined ? fetchedUsage : dashboardUsage;
   const [open, setOpen] = useState(initialCompactUsageOpen);

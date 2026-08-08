@@ -6,10 +6,16 @@ function makeEventBus() {
   return {
     subscribe: vi.fn((channel: string, listener: (payload: unknown) => void) => {
       listeners.set(channel, [...(listeners.get(channel) ?? []), listener]);
-      return () => listeners.set(channel, (listeners.get(channel) ?? []).filter((item) => item !== listener));
+      return () =>
+        listeners.set(
+          channel,
+          (listeners.get(channel) ?? []).filter((item) => item !== listener)
+        );
     }),
     emit(channel: string, payload: unknown) {
-      listeners.get(channel)?.forEach((listener) => listener(payload));
+      listeners.get(channel)?.forEach((listener) => {
+        listener(payload);
+      });
     },
   };
 }

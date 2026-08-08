@@ -110,6 +110,7 @@ func (p *NginxPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		Architecture:       arch,
 		KernelVersion:      kernelVer,
 		DaemonType:         "nginx",
+		Capabilities:       []string{"nginx_certificate_distribution_v2"},
 	}
 }
 

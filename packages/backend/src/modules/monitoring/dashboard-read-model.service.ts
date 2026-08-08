@@ -4,10 +4,7 @@ import type { CertService } from '@/modules/pki/cert.service.js';
 import type { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { SSLService } from '@/modules/ssl/ssl.service.js';
 import type { ReadModelCoordinator } from '@/services/read-model-coordinator.service.js';
-import type {
-  ResourceSnapshotEnvelope,
-  ResourceSnapshotStore,
-} from '@/services/resource-snapshot.store.js';
+import type { ResourceSnapshotEnvelope, ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import type { DashboardStats, HealthOverviewEntry, MonitoringService } from './monitoring.service.js';
 
 export const DASHBOARD_READ_MODEL_KIND = 'dashboard-source';
@@ -74,11 +71,9 @@ export class DashboardReadModelService {
       () => this.listAll((page) => this.proxies.listProxyHosts({ page, limit: 1_000 } as never)),
       ['proxy.host.changed']
     );
-    this.register(
-      'databases',
-      () => this.listAll((page) => this.databases.list({ page, limit: 1_000 } as never)),
-      ['database.changed']
-    );
+    this.register('databases', () => this.listAll((page) => this.databases.list({ page, limit: 1_000 } as never)), [
+      'database.changed',
+    ]);
     this.register(
       'ssl',
       () => this.listAll((page) => this.ssl.listCerts({ page, limit: 1_000, showSystem: true } as never)),

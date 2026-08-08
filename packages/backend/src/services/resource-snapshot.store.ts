@@ -148,7 +148,10 @@ export class ResourceSnapshotStore {
   }
 
   async remove(kind: string, id: string): Promise<void> {
-    await this.cache.getClient().del(this.dataKey(kind, id), this.leaseKey(kind, id)).catch(() => {});
+    await this.cache
+      .getClient()
+      .del(this.dataKey(kind, id), this.leaseKey(kind, id))
+      .catch(() => {});
   }
 
   /**
@@ -216,14 +219,16 @@ export class ResourceSnapshotStore {
         await this.cache.set(this.dataKey(kind, id), next);
         return next;
       }
-      const written = await this.cache.getClient().eval(
-        "if redis.call('get', KEYS[1]) == ARGV[1] then redis.call('set', KEYS[2], ARGV[2]); return 1 end return 0",
-        2,
-        this.leaseKey(kind, id),
-        this.dataKey(kind, id),
-        lease.token,
-        JSON.stringify(next)
-      );
+      const written = await this.cache
+        .getClient()
+        .eval(
+          "if redis.call('get', KEYS[1]) == ARGV[1] then redis.call('set', KEYS[2], ARGV[2]); return 1 end return 0",
+          2,
+          this.leaseKey(kind, id),
+          this.dataKey(kind, id),
+          lease.token,
+          JSON.stringify(next)
+        );
       if (written === 1) return next;
       return (await this.get<T>(kind, id)) ?? next;
     } catch {

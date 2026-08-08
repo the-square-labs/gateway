@@ -4,7 +4,6 @@ import { resetAIStateForAuthChange } from "@/stores/ai";
 import { useCAStore } from "@/stores/ca";
 import { useCertificatesStore } from "@/stores/certificates";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
-import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import { useDockerStore } from "@/stores/docker";
 import { useDockerFolderStore } from "@/stores/docker-folders";
 import { useFolderStore } from "@/stores/folders";
@@ -17,6 +16,7 @@ import { useProxyStore } from "@/stores/proxy";
 import { useSSLStore } from "@/stores/ssl";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 
 export function resetClientSessionState() {
   api.resetSessionState();

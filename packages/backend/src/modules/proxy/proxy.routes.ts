@@ -20,6 +20,7 @@ import {
   getProxyHostRoute,
   listProxyHostsRoute,
   renderedProxyConfigRoute,
+  resyncProxyHostTlsRoute,
   toggleProxyHostRoute,
   toggleProxyMaintenanceRoute,
   updateProxyHostRoute,
@@ -215,6 +216,13 @@ proxyRoutes.openapi(
     return c.json({ data: serializeProxyHostForBrowser(host as any, scopes, id) });
   }
 );
+
+proxyRoutes.openapi({ ...resyncProxyHostTlsRoute, middleware: requireScope('admin:update') }, async (c) => {
+  const proxyService = container.resolve(ProxyService);
+  const user = c.get('user')!;
+  const result = await proxyService.resyncTlsHost(c.req.param('id')!, user.id);
+  return c.json({ data: result });
+});
 
 proxyRoutes.openapi({ ...renderedProxyConfigRoute, middleware: sessionOnly }, async (c) => {
   const id = c.req.param('id')!;

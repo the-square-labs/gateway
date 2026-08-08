@@ -7,9 +7,9 @@ import { api } from "@/services/api";
 import { useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
 import { useCommandPalettePageActions } from "@/stores/command-palette-page-actions";
+import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useResolvedPageContext } from "@/stores/resolved-page-context";
 import { useUIStore } from "@/stores/ui";
-import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { renderWithRouter } from "@/test/render";
 import { CommandPalette } from "./CommandPalette";
 
@@ -326,7 +326,9 @@ describe("CommandPalette", () => {
         },
         sendMessage,
       });
-      useDashboardBootstrapStore.setState({ snapshot: { inferenceUsage: exhaustedUsage } as never });
+      useDashboardBootstrapStore.setState({
+        snapshot: { inferenceUsage: exhaustedUsage } as never,
+      });
     });
 
     renderWithRouter(<CommandPalette open onOpenChange={vi.fn()} />);
