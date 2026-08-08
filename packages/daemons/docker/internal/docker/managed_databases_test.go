@@ -549,6 +549,73 @@ func TestClickHouseBindingPrincipalGrantsMonitoringViews(t *testing.T) {
 	}
 }
 
+func TestClickHouseReaderPrincipalExcludesLiveQueryText(t *testing.T) {
+	sql := clickHousePrincipalSQL(clickHousePrincipalCommand{
+		PrincipalType: "reader",
+		Username:      "query_reader",
+		Password:      "replacement-long-random-secret",
+		DatabaseName:  "app_database",
+		OwnerUsername: "app_owner",
+		OwnerPassword: "owner-secret",
+	})
+	for _, expected := range []string{
+		`REVOKE ALL ON *.* FROM "query_reader"`,
+		`GRANT SELECT ON "app_database".* TO "query_reader"`,
+		`GRANT SELECT(name) ON system.databases TO "query_reader"`,
+		`GRANT SELECT(name, engine, total_rows, total_bytes, database, sorting_key, primary_key, partition_key, create_table_query) ON system.tables TO "query_reader"`,
+		`GRANT SELECT(name, type, default_kind, default_expression, comment, is_in_primary_key, is_in_sorting_key, is_in_partition_key, database, table, position) ON system.columns TO "query_reader"`,
+	} {
+		if !strings.Contains(sql, expected) {
+			t.Fatalf("reader principal SQL must contain %q: %q", expected, sql)
+		}
+	}
+	if strings.Contains(sql, "system.processes") || strings.Contains(sql, "GRANT ALL") {
+		t.Fatalf("reader principal must not receive process or broad privileges: %q", sql)
+	}
+}
+
+func TestClickHouseWriterPrincipalRevokesLegacyLiveQueryAccess(t *testing.T) {
+	sql := clickHousePrincipalSQL(clickHousePrincipalCommand{
+		PrincipalType: "writer",
+		Username:      "query_writer",
+		Password:      "replacement-long-random-secret",
+		DatabaseName:  "app_database",
+		OwnerUsername: "app_owner",
+		OwnerPassword: "owner-secret",
+	})
+	for _, expected := range []string{
+		`REVOKE ALL ON *.* FROM "query_writer"`,
+		`GRANT ALL ON "app_database".* TO "query_writer"`,
+		`REVOKE SELECT ON system.processes FROM "query_writer"`,
+		`GRANT SELECT(memory_usage) ON system.processes TO "query_writer"`,
+	} {
+		if !strings.Contains(sql, expected) {
+			t.Fatalf("writer principal SQL must contain %q: %q", expected, sql)
+		}
+	}
+	if strings.Contains(sql, `GRANT SELECT ON system.processes TO "query_writer"`) {
+		t.Fatalf("writer principal must not receive live query text access: %q", sql)
+	}
+}
+
+func TestValidateClickHousePrincipalInputRejectsUnsafeValues(t *testing.T) {
+	input := clickHousePrincipalCommand{
+		PrincipalType: "reader",
+		Username:      "query_reader",
+		Password:      "a-long-random-secret-password",
+		DatabaseName:  "app_database",
+		OwnerUsername: "app_owner",
+		OwnerPassword: "another-long-owner-secret",
+	}
+	if err := validateClickHousePrincipalInput(input); err != nil {
+		t.Fatalf("expected valid ClickHouse principal input: %v", err)
+	}
+	input.PrincipalType = "owner"
+	if err := validateClickHousePrincipalInput(input); err == nil {
+		t.Fatal("expected unsupported principal type to be rejected")
+	}
+}
+
 func TestClickHouseBindingProcessPrivilegesReconcileWithoutPasswordMutation(t *testing.T) {
 	sql := clickHouseBindingProcessPrivilegesSQL("app_user")
 	if strings.Contains(sql, "IDENTIFIED") || strings.Contains(sql, "CREATE USER") || strings.Contains(sql, "ALTER USER") {

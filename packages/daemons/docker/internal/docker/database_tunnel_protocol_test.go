@@ -113,14 +113,20 @@ func TestDatabaseProfileDispatchesBindingPreparation(t *testing.T) {
 
 	capabilities := plugin.BuildRegisterMessage("node-id").Capabilities
 	advertisesBindings := false
+	advertisesClickHousePrincipals := false
 	for _, capability := range capabilities {
 		if capability == "docker_database_bindings_v1" {
 			advertisesBindings = true
-			break
+		}
+		if capability == "managed_clickhouse_principals_v1" {
+			advertisesClickHousePrincipals = true
 		}
 	}
 	if !advertisesBindings {
 		t.Fatalf("database-profile daemon did not advertise binding support: %v", capabilities)
+	}
+	if !advertisesClickHousePrincipals {
+		t.Fatalf("database-profile daemon did not advertise secure ClickHouse principal support: %v", capabilities)
 	}
 }
 

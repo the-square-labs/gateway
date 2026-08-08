@@ -730,12 +730,6 @@ export async function initializeContainer(): Promise<void> {
   );
   managedDatabaseBindingService.setEventBus(eventBus);
   container.registerInstance(ManagedDatabaseBindingService, managedDatabaseBindingService);
-  void managedDatabaseService.reconcileClickHouseDirectAccessPrincipals().catch((error) => {
-    logger.warn('Failed to reconcile ClickHouse direct-access principals', { error });
-  });
-  void managedDatabaseBindingService.reconcileClickHousePrincipals().catch((error) => {
-    logger.warn('Failed to reconcile ClickHouse binding principals', { error });
-  });
 
   const databaseFolderService = new DatabaseFolderService(db, auditService);
   container.registerInstance(DatabaseFolderService, databaseFolderService);

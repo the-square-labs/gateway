@@ -486,6 +486,60 @@ describe('DatabaseConnectionService connection views', () => {
   });
 });
 
+describe('managed ClickHouse query principals', () => {
+  const canonicalConfig = {
+    type: 'clickhouse' as const,
+    url: 'https://owner.internal/',
+    host: 'owner.internal',
+    port: 8443,
+    database: 'app',
+    username: 'clickhouse_owner',
+    password: 'owner-password',
+    tlsEnabled: true,
+  };
+
+  function createManagedClickHouseService() {
+    const service = new DatabaseConnectionService(
+      {} as never,
+      { log: vi.fn() } as never,
+      { decryptString: vi.fn((payload: { payload: string }) => payload.payload) } as never,
+      { getEndpoint: vi.fn().mockResolvedValue({ host: '127.0.0.1', port: 19443 }) } as never
+    );
+    const internal = service as any;
+    vi.spyOn(internal, 'getRow').mockResolvedValue({
+      encryptedConfig: JSON.stringify({ payload: JSON.stringify(canonicalConfig) }),
+    });
+    vi.spyOn(internal, 'getManagedMetadata').mockResolvedValue({ id: 'managed-clickhouse-1' });
+    return { service, internal };
+  }
+
+  it('uses the reader identity instead of the canonical owner for read-scoped ClickHouse SQL', async () => {
+    const { service, internal } = createManagedClickHouseService();
+    const principal = vi.spyOn(internal, 'getManagedClickHouseQueryPrincipal').mockResolvedValue({
+      username: 'gw_clickhouse_query_reader',
+      password: 'reader-password',
+    });
+
+    await expect(service.getDecryptedConfig('db-1', 'interactive', 'read')).resolves.toMatchObject({
+      username: 'gw_clickhouse_query_reader',
+      password: 'reader-password',
+      host: '127.0.0.1',
+      port: 19443,
+      tlsEnabled: false,
+    });
+    expect(principal).toHaveBeenCalledWith('db-1', 'read');
+  });
+
+  it('fails closed instead of falling back to the owner when the secure reader is unavailable', async () => {
+    const { service, internal } = createManagedClickHouseService();
+    vi.spyOn(internal, 'getManagedClickHouseQueryPrincipal').mockResolvedValue(undefined);
+
+    await expect(service.getDecryptedConfig('db-1', 'interactive', 'read')).rejects.toMatchObject({
+      code: 'MANAGED_CLICKHOUSE_QUERY_ACCESS_UNAVAILABLE',
+    });
+  });
+});
+
 describe('DatabaseConnectionService credential retargeting guard', () => {
   function encryptedConfig(config: Record<string, unknown>) {
     return JSON.stringify({ payload: JSON.stringify(config) });

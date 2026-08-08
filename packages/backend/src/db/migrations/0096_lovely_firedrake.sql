@@ -1,0 +1,2 @@
+ALTER TABLE "managed_database_instances" ADD COLUMN "encrypted_query_credentials" text;--> statement-breakpoint
+ALTER TABLE "managed_database_instances" ADD COLUMN "clickhouse_query_principal_version" integer;

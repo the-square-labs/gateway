@@ -39,7 +39,7 @@ describe('managed database binding provisioning guardrails', () => {
     );
   });
 
-  it('reconciles ready ClickHouse binding privileges without changing binding credentials', async () => {
+  it('reconciles ready ClickHouse bindings through the versioned secure-principal action', async () => {
     const database = {
       id: '44444444-4444-4444-8444-444444444444',
       nodeId: '22222222-2222-4222-8222-222222222222',
@@ -84,18 +84,18 @@ describe('managed database binding provisioning guardrails', () => {
     expect(sendDockerDatabaseCommand).toHaveBeenCalledTimes(1);
     expect(sendDockerDatabaseCommand).toHaveBeenCalledWith(
       database.nodeId,
-      'binding_create',
+      'clickhouse_principal_apply_v1',
       database.id,
-      expect.stringContaining('"reconcileOnly":true')
+      expect.any(String)
     );
     const command = JSON.parse(sendDockerDatabaseCommand.mock.calls[0]![3]) as Record<string, unknown>;
     expect(command).toMatchObject({
-      bindingId: binding.id,
+      principalType: 'binding',
       username: 'gw_clickhouse_binding_123',
       password: 'binding-password',
       ownerUsername: 'clickhouse_owner',
-      reconcileOnly: true,
     });
+    expect(JSON.stringify(command)).not.toContain('reconcileOnly');
   });
 
   it('allows only the fixed local connector image with the explicit development flag', () => {

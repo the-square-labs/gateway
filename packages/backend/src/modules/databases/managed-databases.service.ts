@@ -4,6 +4,7 @@ import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import type { ManagedDatabaseEngineConfig, ManagedRedisConfig } from '@/db/schema/databases.js';
 import { databaseConnections, managedDatabaseBindings, managedDatabaseInstances, nodes } from '@/db/schema/index.js';
+import { createChildLogger } from '@/lib/logger.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -21,6 +22,8 @@ import type { DatabaseConnectionService } from './databases.service.js';
 
 const MEBIBYTE = 1024 * 1024;
 const GIBIBYTE = 1024 * MEBIBYTE;
+const CLICKHOUSE_QUERY_PRINCIPAL_VERSION = 1;
+const logger = createChildLogger('ManagedDatabaseService');
 
 function storageSizeBytesFromGb(storageSizeGb: number): number {
   return Math.round(storageSizeGb * GIBIBYTE);
@@ -315,6 +318,14 @@ function newDirectAccessCredentials(type: ManagedDatabaseRow['type'], databaseNa
   };
 }
 
+function newClickHouseQueryCredentials(databaseName?: string): OwnerCredentials {
+  return {
+    username: `gw_clickhouse_query_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`,
+    password: crypto.randomBytes(32).toString('base64url'),
+    databaseName: databaseName ?? 'app',
+  };
+}
+
 function parseEncryptedCredentials(value: string): { encryptedKey: string; encryptedDek: string } {
   try {
     const parsed = JSON.parse(value) as { encryptedKey?: string; encryptedDek?: string };
@@ -388,6 +399,7 @@ function parseManagedRuntimeStats(result: { detail?: string }): ManagedDatabaseR
 export class ManagedDatabaseService {
   private eventBus?: EventBusService;
   private reconciliationInFlight = false;
+  private readonly clickHousePrincipalReconciliationNodes = new Set<string>();
 
   constructor(
     private readonly db: DrizzleClient,
@@ -400,6 +412,16 @@ export class ManagedDatabaseService {
 
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
+    bus.subscribe('node.changed', (payload) => {
+      const event = payload as { id?: unknown; status?: unknown } | null;
+      if (typeof event?.id !== 'string' || event.status !== 'online') return;
+      this.reconcileClickHouseQueryPrincipalsForNode(event.id).catch((error) => {
+        logger.warn('Failed to reconcile ClickHouse query principals after daemon connect', {
+          nodeId: event.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    });
   }
 
   listCatalog() {
@@ -489,8 +511,9 @@ export class ManagedDatabaseService {
 
   /**
    * Backfill missing canonical database resources and restore their internal
-   * owner credentials. Direct-access accounts are intentionally restricted and
-   * must never be used by Gateway monitoring, Explorer, or Console.
+   * owner credentials. Direct-access and scoped query accounts are separate
+   * principals; the canonical owner remains reserved for administrative and
+   * internal control-plane operations.
    */
   async reconcileDatabaseConnections() {
     const rows = await this.db.select().from(managedDatabaseInstances);
@@ -516,11 +539,11 @@ export class ManagedDatabaseService {
   }
 
   /**
-   * Upgrade published ClickHouse direct principals created before their
-   * process-table grant was narrowed. Private instances never had a direct
-   * principal, so leave them untouched rather than creating one during startup.
+   * Converge all managed ClickHouse identities through the versioned daemon
+   * action. This is invoked only after a database daemon has connected, so an
+   * unavailable/older daemon cannot trigger a legacy binding_create fallback.
    */
-  async reconcileClickHouseDirectAccessPrincipals() {
+  async reconcileClickHouseQueryPrincipals(nodeId?: string) {
     const rows = await this.db.select().from(managedDatabaseInstances);
     let failures = 0;
     for (const row of rows) {
@@ -528,20 +551,28 @@ export class ManagedDatabaseService {
         row.type !== 'clickhouse' ||
         row.status !== 'ready' ||
         row.pendingOperation ||
-        !managedDatabasePublishTcp(row)
+        (nodeId !== undefined && row.nodeId !== nodeId)
       ) {
         continue;
       }
       try {
-        const direct = this.directAccessCredentials(row);
-        if (!direct) continue;
-        await this.provisionDirectAccessPrincipal(row, this.ownerCredentials(row), direct, { reconcileOnly: true });
+        await this.ensureClickHouseQueryPrincipals(row, null);
       } catch {
         failures += 1;
       }
     }
     if (failures > 0) {
-      throw new Error(`Failed to reconcile ${failures} ClickHouse direct-access principal(s)`);
+      throw new Error(`Failed to reconcile ${failures} ClickHouse query principal(s)`);
+    }
+  }
+
+  private async reconcileClickHouseQueryPrincipalsForNode(nodeId: string) {
+    if (this.clickHousePrincipalReconciliationNodes.has(nodeId)) return;
+    this.clickHousePrincipalReconciliationNodes.add(nodeId);
+    try {
+      await this.reconcileClickHouseQueryPrincipals(nodeId);
+    } finally {
+      this.clickHousePrincipalReconciliationNodes.delete(nodeId);
     }
   }
 
@@ -599,6 +630,11 @@ export class ManagedDatabaseService {
     const encryptedDirectCredentials = JSON.stringify(
       this.cryptoService.encryptString(JSON.stringify(directCredentials))
     );
+    const queryCredentials =
+      input.type === 'clickhouse' ? newClickHouseQueryCredentials(credentials.databaseName) : null;
+    const encryptedQueryCredentials = queryCredentials
+      ? JSON.stringify(this.cryptoService.encryptString(JSON.stringify(queryCredentials)))
+      : null;
     const runtimeConfig = {
       nanoCPUs: Math.round(input.cpuCores * 1_000_000_000),
       memoryLimitBytes: input.memoryMb * MEBIBYTE,
@@ -642,6 +678,7 @@ export class ManagedDatabaseService {
               engineConfig,
               encryptedOwnerCredentials,
               encryptedDirectCredentials,
+              encryptedQueryCredentials,
               storageSizeBytes: storageSizeBytesFromGb(input.storageSizeGb),
               runtimeConfig,
               tlsEnabled: input.tlsEnabled,
@@ -1127,7 +1164,8 @@ export class ManagedDatabaseService {
     userId: string | null
   ) {
     const operation = this.pendingOperation(row, 'create');
-    const direct = publishTcp ? await this.ensureDirectAccessCredentials(row, userId, false) : null;
+    const direct =
+      row.type === 'clickhouse' || !publishTcp ? null : await this.ensureDirectAccessCredentials(row, userId, false);
     const configJson = JSON.stringify(
       await daemonCreateConfig(row, credentials, publishTcp, publishNativeTcp, operation.id, this.databaseCA)
     );
@@ -1139,9 +1177,13 @@ export class ManagedDatabaseService {
     }
     if (!result.success) return this.markError(row, 'create', result.error);
     try {
-      if (direct) await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
-      await this.syncCanonicalConnectionCredentials(direct?.row ?? row, credentials, userId);
-      const current = direct?.row ?? row;
+      let current = direct?.row ?? row;
+      if (current.type === 'clickhouse') {
+        current = await this.ensureClickHouseQueryPrincipals(current, userId);
+      } else if (direct) {
+        await this.provisionDirectAccessPrincipal(current, credentials, direct.credentials);
+      }
+      await this.syncCanonicalConnectionCredentials(current, credentials, userId);
       const publishedPort = await this.resolvePublishedPort(current, publishTcp, result);
       const publishedNativePort = await this.resolvePublishedNativePort(current, publishNativeTcp, result);
       return this.markReady(current, userId, publishedPort, 'ready', publishedNativePort);
@@ -1158,7 +1200,8 @@ export class ManagedDatabaseService {
     userId: string | null
   ) {
     const operation = this.pendingOperation(row, 'update');
-    const direct = publishTcp ? await this.ensureDirectAccessCredentials(row, userId, false) : null;
+    const direct =
+      row.type === 'clickhouse' || !publishTcp ? null : await this.ensureDirectAccessCredentials(row, userId, false);
     const configJson = JSON.stringify(
       await daemonCreateConfig(row, credentials, publishTcp, publishNativeTcp, operation.id, this.databaseCA)
     );
@@ -1170,9 +1213,13 @@ export class ManagedDatabaseService {
     }
     if (!result.success) return this.markError(row, 'update', result.error);
     try {
-      if (direct) await this.provisionDirectAccessPrincipal(direct.row, credentials, direct.credentials);
-      await this.syncCanonicalConnectionCredentials(direct?.row ?? row, credentials, userId);
-      const current = direct?.row ?? row;
+      let current = direct?.row ?? row;
+      if (current.type === 'clickhouse') {
+        current = await this.ensureClickHouseQueryPrincipals(current, userId);
+      } else if (direct) {
+        await this.provisionDirectAccessPrincipal(current, credentials, direct.credentials);
+      }
+      await this.syncCanonicalConnectionCredentials(current, credentials, userId);
       const publishedPort = await this.resolvePublishedPort(current, publishTcp, result);
       const publishedNativePort = await this.resolvePublishedNativePort(current, publishNativeTcp, result);
       const [ready] = await this.db
@@ -1261,11 +1308,20 @@ export class ManagedDatabaseService {
       // A create/update may have reached Docker before the controller lost its
       // response. Direct principals are for published client access only;
       // Gateway's canonical connection always keeps the internal owner.
-      const direct = managedDatabasePublishTcp(row) ? await this.ensureDirectAccessCredentials(row, null) : null;
-      await this.syncCanonicalConnectionCredentials(direct?.row ?? row, this.ownerCredentials(row), null);
+      const direct =
+        row.type === 'clickhouse' || !managedDatabasePublishTcp(row)
+          ? null
+          : await this.ensureDirectAccessCredentials(row, null);
+      let current = direct?.row ?? row;
+      if (current.type === 'clickhouse') {
+        current = await this.ensureClickHouseQueryPrincipals(current, null);
+      } else if (direct) {
+        await this.provisionDirectAccessPrincipal(current, this.ownerCredentials(row), direct.credentials);
+      }
+      await this.syncCanonicalConnectionCredentials(current, this.ownerCredentials(row), null);
       // Inspect is also the recovery source of truth for an auto-assigned
       // host port when the original create/update response was lost.
-      await this.markReady(direct?.row ?? row, null, allocatedPublishedPort(result) ?? row.publishedPort, state.status);
+      await this.markReady(current, null, allocatedPublishedPort(result) ?? row.publishedPort, state.status);
     } catch {
       // The node is offline or the inspect response is still unavailable.
       // Keep the durable pending operation for the next scheduled pass.
@@ -1406,6 +1462,8 @@ export class ManagedDatabaseService {
     status: 'ready' | 'paused',
     action: 'pause' | 'unpause'
   ) {
+    const principalCurrent =
+      action === 'unpause' && row.type === 'clickhouse' ? await this.ensureClickHouseQueryPrincipals(row, userId) : row;
     const [updated] = await this.db
       .update(managedDatabaseInstances)
       .set({
@@ -1415,20 +1473,21 @@ export class ManagedDatabaseService {
         ...(userId ? { updatedById: userId } : {}),
         updatedAt: new Date(),
       })
-      .where(eq(managedDatabaseInstances.id, row.id))
+      .where(eq(managedDatabaseInstances.id, principalCurrent.id))
       .returning();
+    const current = updated!;
     if (userId) {
       await this.auditService.log({
         userId,
         action: `database.managed.${action}`,
         resourceType: 'managed_database',
         resourceId: row.id,
-        details: { name: updated!.name, type: updated!.type },
+        details: { name: current.name, type: current.type },
       });
     }
-    await this.warmPostgresExtensionCatalog(updated!);
-    this.emit(updated!, status);
-    return safeManagedDatabaseView(updated!);
+    await this.warmPostgresExtensionCatalog(current);
+    this.emit(current, status);
+    return safeManagedDatabaseView(current);
   }
 
   private async markReady(
@@ -1493,7 +1552,8 @@ export class ManagedDatabaseService {
     try {
       const result = await this.nodeDispatch.sendDockerDatabaseCommand(row.nodeId, 'restart', row.id, configJson);
       if (!result.success) return this.markError(row, 'restart', result.error);
-      return this.markReady(row, userId, row.publishedPort, 'ready', row.publishedNativePort);
+      const current = row.type === 'clickhouse' ? await this.ensureClickHouseQueryPrincipals(row, userId) : row;
+      return this.markReady(current, userId, current.publishedPort, 'ready', current.publishedNativePort);
     } catch {
       return this.markOutcomeUnknown(row);
     }
@@ -1662,6 +1722,75 @@ export class ManagedDatabaseService {
     ) as OwnerCredentials;
   }
 
+  private queryCredentials(row: ManagedDatabaseRow): OwnerCredentials | null {
+    if (!row.encryptedQueryCredentials) return null;
+    return JSON.parse(
+      this.cryptoService.decryptString(parseEncryptedCredentials(row.encryptedQueryCredentials))
+    ) as OwnerCredentials;
+  }
+
+  /**
+   * Creates or reapplies the two non-owner ClickHouse principals. The marker
+   * is deliberately restored only after the daemon has accepted both actions:
+   * API requests with read/write scopes can therefore never fall back to the
+   * canonical owner during a mixed-version rollout or a transient failure.
+   */
+  private async ensureClickHouseQueryPrincipals(row: ManagedDatabaseRow, userId: string | null) {
+    if (row.type !== 'clickhouse') return row;
+
+    const owner = this.ownerCredentials(row);
+    const writer = this.directAccessCredentials(row) ?? newDirectAccessCredentials(row.type, owner.databaseName);
+    const reader = this.queryCredentials(row) ?? newClickHouseQueryCredentials(owner.databaseName);
+    const credentialsChanged = !row.encryptedDirectCredentials || !row.encryptedQueryCredentials;
+    let current = row;
+
+    // Persist generated credentials before dispatching. If the daemon is not
+    // yet compatible, a later node-online reconciliation uses the same
+    // identity rather than minting an unbounded set of orphan accounts.
+    if (credentialsChanged || row.clickhouseQueryPrincipalVersion === CLICKHOUSE_QUERY_PRINCIPAL_VERSION) {
+      const [updated] = await this.db
+        .update(managedDatabaseInstances)
+        .set({
+          ...(row.encryptedDirectCredentials
+            ? {}
+            : { encryptedDirectCredentials: JSON.stringify(this.cryptoService.encryptString(JSON.stringify(writer))) }),
+          ...(row.encryptedQueryCredentials
+            ? {}
+            : { encryptedQueryCredentials: JSON.stringify(this.cryptoService.encryptString(JSON.stringify(reader))) }),
+          // Clear the readiness marker before the first daemon action. A
+          // partial apply after a daemon replacement must disable scoped API
+          // access rather than let it attempt a potentially stale identity.
+          clickhouseQueryPrincipalVersion: null,
+          ...(userId ? { updatedById: userId } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(managedDatabaseInstances.id, row.id))
+        .returning();
+      current = updated!;
+    }
+
+    await this.provisionClickHousePrincipal(current, owner, writer, 'writer');
+    await this.provisionClickHousePrincipal(current, owner, reader, 'reader');
+
+    if (current.clickhouseQueryPrincipalVersion !== CLICKHOUSE_QUERY_PRINCIPAL_VERSION) {
+      const [updated] = await this.db
+        .update(managedDatabaseInstances)
+        .set({
+          clickhouseQueryPrincipalVersion: CLICKHOUSE_QUERY_PRINCIPAL_VERSION,
+          ...(userId ? { updatedById: userId } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(managedDatabaseInstances.id, current.id))
+        .returning();
+      current = updated!;
+    }
+
+    if (credentialsChanged && current.databaseConnectionId && this.databaseConnectionService) {
+      await this.databaseConnectionService.disposeClient(current.databaseConnectionId);
+    }
+    return current;
+  }
+
   private async ensureDirectAccessCredentials(
     row: ManagedDatabaseRow,
     userId: string | null,
@@ -1692,9 +1821,11 @@ export class ManagedDatabaseService {
   private async provisionDirectAccessPrincipal(
     row: ManagedDatabaseRow,
     owner: OwnerCredentials,
-    credentials: OwnerCredentials,
-    options: { reconcileOnly?: boolean } = {}
+    credentials: OwnerCredentials
   ) {
+    if (row.type === 'clickhouse') {
+      return this.provisionClickHousePrincipal(row, owner, credentials, 'writer');
+    }
     const result = await this.nodeDispatch.sendDockerDatabaseCommand(
       row.nodeId,
       'binding_create',
@@ -1706,7 +1837,6 @@ export class ManagedDatabaseService {
         databaseName: credentials.databaseName ?? 'redis',
         ownerUsername: owner.username,
         ownerPassword: owner.password,
-        ...(options.reconcileOnly ? { reconcileOnly: true } : {}),
       })
     );
     if (!result.success) {
@@ -1714,6 +1844,34 @@ export class ManagedDatabaseService {
         503,
         'MANAGED_DATABASE_DIRECT_ACCESS_UNAVAILABLE',
         'Direct-access credentials could not be configured'
+      );
+    }
+  }
+
+  private async provisionClickHousePrincipal(
+    row: ManagedDatabaseRow,
+    owner: OwnerCredentials,
+    credentials: OwnerCredentials,
+    principalType: 'reader' | 'writer'
+  ) {
+    const result = await this.nodeDispatch.sendDockerDatabaseCommand(
+      row.nodeId,
+      'clickhouse_principal_apply_v1',
+      row.id,
+      JSON.stringify({
+        principalType,
+        username: credentials.username,
+        password: credentials.password,
+        databaseName: credentials.databaseName ?? 'app',
+        ownerUsername: owner.username,
+        ownerPassword: owner.password,
+      })
+    );
+    if (!result.success) {
+      throw new AppError(
+        503,
+        'MANAGED_CLICKHOUSE_QUERY_PRINCIPAL_UNAVAILABLE',
+        'Managed ClickHouse query access is unavailable until the database daemon supports secure query principals'
       );
     }
   }

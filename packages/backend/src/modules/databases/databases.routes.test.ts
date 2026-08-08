@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
-import { assertManagedDatabaseBindingTargetAccess, requireManagedDatabaseScopes } from './databases.routes.js';
+import {
+  assertManagedDatabaseBindingTargetAccess,
+  requireManagedDatabaseScopes,
+  resolveSqlQueryAccess,
+} from './databases.routes.js';
 
 const MANAGED_DATABASE_ID = '44444444-4444-4444-8444-444444444444';
 const CANONICAL_DATABASE_ID = '55555555-5555-4555-8555-555555555555';
@@ -67,5 +71,30 @@ describe('managed database route scopes', () => {
     ).resolves.toBeUndefined();
 
     expect(inspectContainer).not.toHaveBeenCalled();
+  });
+});
+
+describe('SQL query principal selection', () => {
+  const context = (scopes: string[]) => ({ get: vi.fn(() => scopes) }) as never;
+
+  it('keeps read-only SQL on the dedicated reader even when the caller can also write', () => {
+    expect(
+      resolveSqlQueryAccess(context([`databases:query:read:${CANONICAL_DATABASE_ID}`]), CANONICAL_DATABASE_ID, 'read')
+    ).toBe('read');
+    expect(
+      resolveSqlQueryAccess(context([`databases:query:write:${CANONICAL_DATABASE_ID}`]), CANONICAL_DATABASE_ID, 'read')
+    ).toBe('read');
+    expect(
+      resolveSqlQueryAccess(context([`databases:query:write:${CANONICAL_DATABASE_ID}`]), CANONICAL_DATABASE_ID, 'write')
+    ).toBe('write');
+  });
+
+  it('reserves the owner principal for explicitly administrative SQL', () => {
+    expect(
+      resolveSqlQueryAccess(context([`databases:query:admin:${CANONICAL_DATABASE_ID}`]), CANONICAL_DATABASE_ID, 'read')
+    ).toBe('admin');
+    expect(() =>
+      resolveSqlQueryAccess(context([`databases:query:write:${CANONICAL_DATABASE_ID}`]), CANONICAL_DATABASE_ID, 'admin')
+    ).toThrow('Missing required scope');
   });
 });
