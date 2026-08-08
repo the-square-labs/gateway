@@ -4,52 +4,12 @@
     {
       "from_id": "adzvqx6l",
       "to_id": "b3glzfjy",
-      "relation": "related_to",
-      "weight": 0.3811,
-      "reason": "The memories are similar enough to be useful related context.",
+      "relation": "same_area",
+      "weight": 0.72,
+      "reason": "Both define Gateway security boundaries and least-privilege handling for Docker-related capabilities.",
       "source": "auto",
-      "created_at": 1786064967488,
-      "updated_at": 1786064967488
-    },
-    {
-      "from_id": "adzvqx6l",
-      "to_id": "qz6ixfnq",
-      "relation": "related_to",
-      "weight": 0.3595,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967488,
-      "updated_at": 1786064967488
-    },
-    {
-      "from_id": "adzvqx6l",
-      "to_id": "kk05lizc",
-      "relation": "related_to",
-      "weight": 0.3471,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967488,
-      "updated_at": 1786064967488
-    },
-    {
-      "from_id": "adzvqx6l",
-      "to_id": "7rchqhpz",
-      "relation": "related_to",
-      "weight": 0.3185,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967488,
-      "updated_at": 1786064967488
-    },
-    {
-      "from_id": "adzvqx6l",
-      "to_id": "c8ql9nhv",
-      "relation": "related_to",
-      "weight": 0.3158,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967488,
-      "updated_at": 1786064967488
+      "created_at": 1786221139636,
+      "updated_at": 1786221139636
     }
   ]
 }
