@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { asc, count as countFn, desc, eq, gte, inArray, isNull, lte, notInArray, or } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
@@ -29,6 +30,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere } from '@/lib/utils.js';
 import type { PaginatedResponse } from '@/types.js';
 import { getAuditRequestContext, markAuditEmitted } from './audit-request-context.js';
+import type { SiemAuditOutboxService } from './siem-outbox.service.js';
 
 const logger = createChildLogger('AuditService');
 
@@ -63,7 +65,10 @@ interface AuditLogRow {
 
 @injectable()
 export class AuditService {
-  constructor(@inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient) {}
+  constructor(
+    @inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient,
+    private readonly siemOutboxService?: SiemAuditOutboxService
+  ) {}
   private eventBus?: import('@/services/event-bus.service.js').EventBusService;
 
   setEventBus(eventBus: import('@/services/event-bus.service.js').EventBusService): void {
@@ -73,6 +78,9 @@ export class AuditService {
   async log(entry: AuditEntry, options: AuditLogOptions = {}): Promise<boolean> {
     try {
       const requestContext = getAuditRequestContext();
+      const id = randomUUID();
+      const createdAt = new Date();
+      const ipAddress = entry.ipAddress ?? requestContext?.ipAddress ?? null;
       const mcpDetails = requestContext?.mcp
         ? {
             source: 'mcp',
@@ -85,15 +93,50 @@ export class AuditService {
             clientId: requestContext.mcp.clientId,
           }
         : undefined;
-      await this.db.insert(auditLog).values({
-        userId: entry.userId,
-        action: entry.action,
-        resourceType: entry.resourceType,
-        resourceId: entry.resourceId,
-        details: mcpDetails ? { ...entry.details, ...mcpDetails } : entry.details,
-        ipAddress: entry.ipAddress ?? requestContext?.ipAddress,
-        userAgent: entry.userAgent ?? requestContext?.userAgent,
-      });
+      const siemEnabled = this.siemOutboxService ? await this.siemOutboxService.isEnabled() : false;
+      const actorEmail = siemEnabled ? await this.getActorEmail(entry.userId) : null;
+      const siemEvent =
+        siemEnabled && this.siemOutboxService
+          ? await this.siemOutboxService.buildEvent({
+              auditLogId: id,
+              createdAt,
+              action: entry.action,
+              actorId: entry.userId,
+              actorEmail,
+              resourceType: entry.resourceType,
+              resourceId: entry.resourceId ?? null,
+              sourceIp: ipAddress,
+            })
+          : null;
+      const persist = async (writer: Pick<DrizzleClient, 'insert'> & { select?: DrizzleClient['select'] }) => {
+        await writer.insert(auditLog).values({
+          id,
+          userId: entry.userId,
+          action: entry.action,
+          resourceType: entry.resourceType,
+          resourceId: entry.resourceId,
+          details: mcpDetails ? { ...entry.details, ...mcpDetails } : entry.details,
+          ipAddress,
+          userAgent: entry.userAgent ?? requestContext?.userAgent,
+          createdAt,
+        });
+        if (siemEvent && this.siemOutboxService) {
+          await this.siemOutboxService.enqueue(
+            writer as Pick<DrizzleClient, 'select' | 'insert'>,
+            id,
+            siemEvent,
+            createdAt
+          );
+        }
+      };
+      const transactionalDb = this.db as DrizzleClient & {
+        transaction?: (callback: (tx: Pick<DrizzleClient, 'select' | 'insert'>) => Promise<void>) => Promise<void>;
+      };
+      if (transactionalDb.transaction) {
+        await transactionalDb.transaction((tx) => persist(tx));
+      } else {
+        await persist(this.db);
+      }
       this.eventBus?.publish('audit.changed', {});
       if (options.markRequest ?? true) {
         markAuditEmitted();
@@ -107,6 +150,22 @@ export class AuditService {
         resourceId: entry.resourceId,
       });
       return false;
+    }
+  }
+
+  private async getActorEmail(userId: string | null): Promise<string | null> {
+    if (!userId) return null;
+    try {
+      const [actor] = await this.db.select({ email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
+      return actor?.email ?? null;
+    } catch (error) {
+      // Exporting an optional actor e-mail must never make the local audit
+      // record unavailable. The stable actor ID remains in the SIEM event.
+      logger.warn('Unable to resolve audit actor email for SIEM export', {
+        userId,
+        errorType: error instanceof Error ? error.name : 'unknown',
+      });
+      return null;
     }
   }
 

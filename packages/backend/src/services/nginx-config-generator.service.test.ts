@@ -45,16 +45,35 @@ describe('NginxConfigGenerator proxy TLS and ACL rendering', () => {
     );
   });
 
-  it('emits IP deny fallback only inside the upstream location', () => {
+  it('adds the host ACL to advanced locations without applying it to ACME challenges', () => {
     const rendered = new NginxConfigGenerator({} as never).generateConfig({
       ...proxyHost,
-      accessList: { id: 'ip-only', ipRules: [{ type: 'allow', value: '192.0.2.0/24' }], basicAuthEnabled: false },
+      advancedConfig: `location /api/ {
+    proxy_pass http://127.0.0.1:9000;
+}`,
+      accessList: { id: 'ip-only', ipRules: [{ type: 'allow', value: '192.0.2.0/24' }], basicAuthEnabled: true },
     });
-    const upstreamLocation = rendered.indexOf('location / {');
+    const upstreamLocation = rendered.lastIndexOf('location / {');
+    const advancedLocation = rendered.indexOf('location /api/ {');
+    const acmeLocation = rendered.indexOf('location /.well-known/acme-challenge/ {');
     const denyAll = rendered.indexOf('deny all;');
+    const rootEnd = rendered.indexOf('\n    }', upstreamLocation);
+    const advancedEnd = rendered.indexOf('\n    }', advancedLocation);
+    const acmeEnd = rendered.indexOf('\n    }', acmeLocation);
+    const rootConfig = rendered.slice(upstreamLocation, rootEnd);
+    const advancedConfig = rendered.slice(advancedLocation, advancedEnd);
+    const acmeConfig = rendered.slice(acmeLocation, acmeEnd);
 
     expect(denyAll).toBeGreaterThan(upstreamLocation);
+    expect(upstreamLocation).toBeLessThan(advancedLocation);
     expect(rendered.slice(0, upstreamLocation)).not.toContain('deny all;');
+    for (const config of [rootConfig, advancedConfig]) {
+      expect(config).toContain('allow 192.0.2.0/24;');
+      expect(config).toContain('deny all;');
+      expect(config).toContain('auth_basic "Restricted Access";');
+    }
+    expect(acmeConfig).toContain('auth_basic off;');
+    expect(acmeConfig).not.toContain('deny all;');
   });
 
   it.each(['redirect', '404'] as const)('uses the same shared TLS policy for %s hosts', (type) => {

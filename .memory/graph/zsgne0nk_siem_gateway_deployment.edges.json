@@ -1,0 +1,15 @@
+{
+  "file_name": "zsgne0nk_siem_gateway_deployment",
+  "edges": [
+    {
+      "from_id": "zsgne0nk",
+      "to_id": "43cdn720",
+      "relation": "supersedes",
+      "weight": 0.98,
+      "reason": "The new memory is a later deployment snapshot that updates the current image from r4 to r5, changes rollback status, and adds the latest SIEM UI state while retaining the same deployment context.",
+      "source": "auto",
+      "created_at": 1786152132956,
+      "updated_at": 1786152132956
+    }
+  ]
+}

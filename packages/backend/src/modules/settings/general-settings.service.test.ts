@@ -18,7 +18,7 @@ describe('normalizePublicUrl', () => {
   });
 });
 
-describe('GeneralSettingsService inference feature', () => {
+describe('GeneralSettingsService feature settings', () => {
   it('backfills disabled and applies persisted updates without a restart', async () => {
     const limit = vi.fn().mockResolvedValue([
       {
@@ -40,6 +40,7 @@ describe('GeneralSettingsService inference feature', () => {
     };
     const service = new GeneralSettingsService(db as never);
 
+    expect((await service.getConfig()).features.siemEnabled).toBe(true);
     expect((await service.getConfig()).features.inferenceEnabled).toBe(false);
     expect((await service.getConfig()).inference.harnessSpecificEndpointsEnabled).toBe(false);
     expect(
@@ -50,6 +51,7 @@ describe('GeneralSettingsService inference feature', () => {
       ).features.inferenceEnabled
     ).toBe(true);
     expect((await service.getConfig()).features.inferenceEnabled).toBe(true);
+    expect((await service.updateConfig({ features: { siemEnabled: false } })).features.siemEnabled).toBe(false);
     expect(
       (
         await service.updateInferenceSettings({
@@ -57,7 +59,7 @@ describe('GeneralSettingsService inference feature', () => {
         })
       ).harnessSpecificEndpointsEnabled
     ).toBe(true);
-    expect(onConflictDoUpdate).toHaveBeenCalledTimes(2);
+    expect(onConflictDoUpdate).toHaveBeenCalledTimes(3);
   });
 
   it('invokes the assistant fallback when inference is turned off', async () => {

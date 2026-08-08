@@ -33,16 +33,6 @@
     },
     {
       "from_id": "qz6ixfnq",
-      "to_id": "rzidwe4n",
-      "relation": "same_area",
-      "weight": 0.3725,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1786064968048,
-      "updated_at": 1786064968048
-    },
-    {
-      "from_id": "qz6ixfnq",
       "to_id": "adzvqx6l",
       "relation": "related_to",
       "weight": 0.3595,

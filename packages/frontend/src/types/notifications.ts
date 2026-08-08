@@ -82,6 +82,68 @@ export interface WebhookPreset {
   bodyTemplate: string;
 }
 
+// ── SIEM audit export ──────────────────────────────────────────────
+
+export type SiemAuthType = "bearer" | "hmac_sha256" | "custom_header";
+
+export type SiemDeliveryStatus =
+  | "queued"
+  | "delivering"
+  | "retrying"
+  | "delivered"
+  | "failed"
+  | "paused"
+  | "discarded";
+
+export interface SiemDestination {
+  id: string;
+  name: string;
+  url: string;
+  authType: SiemAuthType;
+  /** Header name is returned only for custom-header authentication. */
+  customHeaderName: string | null;
+  /** The plaintext secret is never returned. */
+  secretConfigured: boolean;
+  enabled: boolean;
+  pendingDeliveries: number;
+  lastDeliveryStatus: SiemDeliveryStatus | null;
+  lastDeliveryAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SiemAuditEvent {
+  id: string;
+  source: string;
+  type: "com.wiolett.gateway.audit.v1";
+  time: string;
+  data: {
+    action: string;
+    actor: { id: string; email: string | null } | null;
+    resource: { type: string; id: string | null };
+    sourceIp: string | null;
+  };
+}
+
+export interface SiemDelivery {
+  id: string;
+  destinationId: string;
+  destinationName: string | null;
+  destinationUrl: string | null;
+  auditLogId: string;
+  action?: string | null;
+  payload?: SiemAuditEvent;
+  status: SiemDeliveryStatus;
+  attempt: number;
+  maxAttempts: number;
+  nextRetryAt: string | null;
+  responseStatus: number | null;
+  responseTimeMs: number | null;
+  error: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
 export interface AlertCategoryDef {
   id: string;
   label: string;

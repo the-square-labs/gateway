@@ -65,4 +65,43 @@ describe('AuditService MCP context', () => {
       })
     );
   });
+
+  it('writes a matching SIEM outbox record in the audit transaction', async () => {
+    const values = vi.fn().mockResolvedValue(undefined);
+    const tx = { insert: vi.fn(() => ({ values })), select: vi.fn() };
+    const db = {
+      transaction: vi.fn((callback: (writer: typeof tx) => Promise<void>) => callback(tx)),
+      insert: vi.fn(() => ({ values })),
+    } as any;
+    const siemOutbox = {
+      isEnabled: vi.fn().mockResolvedValue(true),
+      buildEvent: vi.fn().mockResolvedValue({ id: 'event-1' }),
+      enqueue: vi.fn().mockResolvedValue(undefined),
+    };
+    const service = new AuditService(db, siemOutbox as any);
+
+    await service.log({ userId: null, action: 'node.update', resourceType: 'node', resourceId: 'node-1' });
+
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+    expect(siemOutbox.buildEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'node.update', resourceType: 'node', resourceId: 'node-1' })
+    );
+    expect(siemOutbox.enqueue).toHaveBeenCalledWith(tx, expect.any(String), { id: 'event-1' }, expect.any(Date));
+  });
+
+  it('keeps local audit records but skips SIEM event construction while SIEM is disabled', async () => {
+    const values = vi.fn().mockResolvedValue(undefined);
+    const siemOutbox = {
+      isEnabled: vi.fn().mockResolvedValue(false),
+      buildEvent: vi.fn(),
+      enqueue: vi.fn(),
+    };
+    const service = new AuditService({ insert: vi.fn(() => ({ values })) } as any, siemOutbox as any);
+
+    await service.log({ userId: 'user-1', action: 'node.update', resourceType: 'node' });
+
+    expect(values).toHaveBeenCalledOnce();
+    expect(siemOutbox.buildEvent).not.toHaveBeenCalled();
+    expect(siemOutbox.enqueue).not.toHaveBeenCalled();
+  });
 });

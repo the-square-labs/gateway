@@ -2,6 +2,10 @@ import type {
   AlertCategoryDef,
   AlertRule,
   NotificationWebhook,
+  SiemAuthType,
+  SiemDelivery,
+  SiemDeliveryStatus,
+  SiemDestination,
   WebhookDelivery,
   WebhookPreset,
 } from "@/types";
@@ -174,6 +178,125 @@ export function withNotificationApi<TBase extends ApiClientBaseConstructor>(Base
     ): Promise<{ total: number; success: number; failed: number; retrying: number }> {
       const qs = webhookId ? `?webhookId=${webhookId}` : "";
       return this.unwrapData(this.request(`/notifications/deliveries/stats${qs}`));
+    }
+
+    // ── SIEM Audit Export ────────────────────────────────────────────
+
+    async listSiemDestinations(params?: {
+      page?: number;
+      limit?: number;
+      enabled?: boolean;
+      search?: string;
+    }): Promise<{
+      data: SiemDestination[];
+      total: number;
+      page: number;
+      limit: number;
+      totalPages: number;
+    }> {
+      const query = new URLSearchParams();
+      if (params?.page) query.set("page", String(params.page));
+      if (params?.limit) query.set("limit", String(params.limit));
+      if (params?.enabled !== undefined) query.set("enabled", String(params.enabled));
+      if (params?.search) query.set("search", params.search);
+      const qs = query.toString();
+      return this.request(`/audit/siem/destinations${qs ? `?${qs}` : ""}`);
+    }
+
+    async getSiemDestination(id: string): Promise<SiemDestination> {
+      return this.unwrapData(
+        this.request<{ data: SiemDestination }>(`/audit/siem/destinations/${id}`)
+      );
+    }
+
+    async createSiemDestination(data: {
+      name: string;
+      url: string;
+      authType: SiemAuthType;
+      customHeaderName?: string;
+      secret: string;
+      enabled?: boolean;
+    }): Promise<SiemDestination> {
+      return this.unwrapData(
+        this.request<{ data: SiemDestination }>("/audit/siem/destinations", {
+          method: "POST",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async updateSiemDestination(
+      id: string,
+      data: Partial<{
+        name: string;
+        url: string;
+        authType: SiemAuthType;
+        customHeaderName: string;
+        secret: string;
+        enabled: boolean;
+      }>
+    ): Promise<SiemDestination> {
+      return this.unwrapData(
+        this.request<{ data: SiemDestination }>(`/audit/siem/destinations/${id}`, {
+          method: "PUT",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async deleteSiemDestination(id: string): Promise<{ discardedDeliveries: number }> {
+      return this.unwrapData(
+        this.request<{ data: { discardedDeliveries: number } }>(`/audit/siem/destinations/${id}`, {
+          method: "DELETE",
+        })
+      );
+    }
+
+    async testSiemDestination(id: string): Promise<{
+      success: boolean;
+      statusCode?: number;
+      responseTimeMs: number;
+      error?: string;
+    }> {
+      return this.unwrapData(
+        this.request(`/audit/siem/destinations/${id}/test`, { method: "POST" })
+      );
+    }
+
+    async listSiemDeliveries(params?: {
+      page?: number;
+      limit?: number;
+      destinationId?: string;
+      status?: SiemDeliveryStatus;
+    }): Promise<{
+      data: SiemDelivery[];
+      total: number;
+      page: number;
+      limit: number;
+      totalPages: number;
+    }> {
+      const query = new URLSearchParams();
+      if (params?.page) query.set("page", String(params.page));
+      if (params?.limit) query.set("limit", String(params.limit));
+      if (params?.destinationId) query.set("destinationId", params.destinationId);
+      if (params?.status) query.set("status", params.status);
+      const qs = query.toString();
+      return this.request(`/audit/siem/deliveries${qs ? `?${qs}` : ""}`);
+    }
+
+    async getSiemDelivery(id: string): Promise<SiemDelivery> {
+      return this.unwrapData(this.request<{ data: SiemDelivery }>(`/audit/siem/deliveries/${id}`));
+    }
+
+    async requeueSiemDelivery(
+      id: string
+    ): Promise<{ id: string; destinationId: string; status: SiemDeliveryStatus }> {
+      return this.unwrapData(
+        this.request<{ data: { id: string; destinationId: string; status: SiemDeliveryStatus } }>(
+          `/audit/siem/deliveries/${id}/requeue`,
+          { method: "POST", body: JSON.stringify({}) }
+        )
+      );
     }
   };
 }

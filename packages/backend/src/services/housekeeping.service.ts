@@ -10,6 +10,7 @@ import { nodes } from '@/db/schema/nodes.js';
 import { settings } from '@/db/schema/settings.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { AISandboxArtifactService } from '@/modules/ai/ai.sandbox-artifact.service.js';
+import type { SiemDeliveryService } from '@/modules/audit/siem-delivery.service.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
 import type { LoggingMaintenanceService } from '@/modules/logging/logging-maintenance.service.js';
 import type { NotificationDeliveryService } from '@/modules/notifications/notification-delivery.service.js';
@@ -433,12 +434,12 @@ export class HousekeepingService {
     const threshold = new Date();
     threshold.setDate(threshold.getDate() - retentionDays);
 
-    const result = await this.db
-      .delete(auditLog)
-      .where(lt(auditLog.createdAt, threshold))
-      .returning({ id: auditLog.id });
+    const [result, siemItemsCleaned] = await Promise.all([
+      this.db.delete(auditLog).where(lt(auditLog.createdAt, threshold)).returning({ id: auditLog.id }),
+      this.siemDeliveryService?.cleanOldEntries(retentionDays) ?? Promise.resolve(0),
+    ]);
 
-    return { itemsCleaned: result.length };
+    return { itemsCleaned: result.length + siemItemsCleaned };
   }
 
   private async cleanDismissedAlerts(retentionDays: number): Promise<{ itemsCleaned: number }> {
@@ -456,6 +457,11 @@ export class HousekeepingService {
   private notifDeliveryService?: NotificationDeliveryService;
   setNotifDeliveryService(svc: NotificationDeliveryService) {
     this.notifDeliveryService = svc;
+  }
+
+  private siemDeliveryService?: SiemDeliveryService;
+  setSiemDeliveryService(svc: SiemDeliveryService) {
+    this.siemDeliveryService = svc;
   }
 
   private loggingMaintenanceService?: LoggingMaintenanceService;

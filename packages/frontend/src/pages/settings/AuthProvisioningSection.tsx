@@ -47,6 +47,7 @@ const DEFAULT_FILE_OPEN_MAX_BYTES = 10 * BYTES_PER_MEGABYTE;
 const DEFAULT_GENERAL_FEATURES = {
   pkiEnabled: DEFAULT_GATEWAY_FEATURES.pkiEnabled,
   domainsEnabled: DEFAULT_GATEWAY_FEATURES.domainsEnabled,
+  siemEnabled: DEFAULT_GATEWAY_FEATURES.siemEnabled,
   inferenceEnabled: DEFAULT_GATEWAY_FEATURES.inferenceEnabled,
 };
 const DEFAULT_GENERAL_SETTINGS = {
@@ -225,6 +226,11 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
         ?.features?.pkiEnabled ?? DEFAULT_GATEWAY_FEATURES.pkiEnabled
   );
+  const [siemEnabled, setSiemEnabled] = useState(
+    () =>
+      api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
+        ?.features?.siemEnabled ?? DEFAULT_GATEWAY_FEATURES.siemEnabled
+  );
   const [inferenceEnabled, setInferenceEnabled] = useState(
     () =>
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
@@ -278,6 +284,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       setGatewayGrpcPublicTarget(settingsData.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(settingsData.generalSettings.gatewayGrpcLocalIp ?? "");
       setPkiEnabled(settingsData.generalSettings.features?.pkiEnabled ?? true);
+      setSiemEnabled(settingsData.generalSettings.features?.siemEnabled ?? true);
       setInferenceEnabled(settingsData.generalSettings.features?.inferenceEnabled ?? false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to load Gateway settings");
@@ -466,6 +473,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       setGatewayGrpcLocalIp(updated.generalSettings.gatewayGrpcLocalIp ?? "");
       setPublicUrl(updated.generalSettings.publicUrl ?? "");
       setPkiEnabled(nextSettings.generalSettings.features.pkiEnabled);
+      setSiemEnabled(nextSettings.generalSettings.features.siemEnabled);
       setInferenceEnabled(nextSettings.generalSettings.features.inferenceEnabled);
       const currentFeatures = useSystemConfigStore.getState().config.features;
       useSystemConfigStore.getState().setConfig(
@@ -489,6 +497,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       setGatewayGrpcLocalIp(previous.generalSettings.gatewayGrpcLocalIp ?? "");
       setPublicUrl(previous.generalSettings.publicUrl ?? "");
       setPkiEnabled(previous.generalSettings.features.pkiEnabled);
+      setSiemEnabled(previous.generalSettings.features.siemEnabled);
       setInferenceEnabled(previous.generalSettings.features.inferenceEnabled);
       toast.error(err instanceof Error ? err.message : "Failed to update Gateway settings");
     } finally {
@@ -529,6 +538,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
     draftGatewayGrpcPublicTarget !== settings?.generalSettings.gatewayGrpcPublicTarget ||
     draftGatewayGrpcLocalIp !== settings?.generalSettings.gatewayGrpcLocalIp ||
     pkiEnabled !== settings?.generalSettings.features.pkiEnabled ||
+    siemEnabled !== settings?.generalSettings.features.siemEnabled ||
     inferenceEnabled !== settings?.generalSettings.features.inferenceEnabled;
 
   const saveGeneralSettings = () => {
@@ -563,6 +573,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       draftGatewayGrpcPublicTarget === settings.generalSettings.gatewayGrpcPublicTarget &&
       draftGatewayGrpcLocalIp === settings.generalSettings.gatewayGrpcLocalIp &&
       pkiEnabled === settings.generalSettings.features.pkiEnabled &&
+      siemEnabled === settings.generalSettings.features.siemEnabled &&
       inferenceEnabled === settings.generalSettings.features.inferenceEnabled
     ) {
       return;
@@ -574,7 +585,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       gatewayPublicIps: draftGatewayPublicIps,
       gatewayGrpcPublicTarget: draftGatewayGrpcPublicTarget,
       gatewayGrpcLocalIp: draftGatewayGrpcLocalIp,
-      features: { ...settings.generalSettings.features, pkiEnabled, inferenceEnabled },
+      features: { ...settings.generalSettings.features, pkiEnabled, siemEnabled, inferenceEnabled },
     });
   };
 
@@ -962,6 +973,20 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
               checked={pkiEnabled}
               disabled={!canEdit || isSavingGeneral}
               onChange={setPkiEnabled}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-4 px-4 py-3">
+            <div>
+              <p className="text-sm font-medium">SIEM audit export</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Show SIEM screens and deliver privacy-reduced audit events to configured collectors
+              </p>
+            </div>
+            <Switch
+              checked={siemEnabled}
+              disabled={!canEdit || isSavingGeneral}
+              ariaLabel="Enable SIEM audit export"
+              onChange={setSiemEnabled}
             />
           </div>
           <div className="flex items-center justify-between gap-4 px-4 py-3">

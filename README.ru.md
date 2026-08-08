@@ -157,6 +157,7 @@ Gateway уже ориентирован на production operations, а не на
 - [x] Internal PKI, ACME SSL, certificate templates, domain tracking, and expiry alerts.
 - [x] PostgreSQL, Redis и ClickHouse database explorer с encrypted saved credentials, а также private-by-default managed Postgres, Redis и ClickHouse database nodes с secure application bindings.
 - [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
+- [x] Управляемый в настройках Gateway экспорт audit events в SIEM с зашифрованной аутентификацией bearer, HMAC-SHA256 или custom header.
 - [x] Optional ClickHouse-backed structured logging and optional AI assistant.
 - [x] Опциональный multi-provider inference gateway с OpenAI-compatible и harness-specific APIs.
 - [x] View-based, resource-scoped permission model with filtered list visibility.

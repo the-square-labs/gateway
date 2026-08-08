@@ -21,6 +21,7 @@ export interface SystemConfig {
 export interface GatewayFeatureConfig {
   pkiEnabled: boolean;
   domainsEnabled: boolean;
+  siemEnabled: boolean;
   loggingEnabled: boolean;
   inferenceEnabled: boolean;
 }

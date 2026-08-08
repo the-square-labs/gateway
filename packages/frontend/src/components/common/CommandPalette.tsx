@@ -64,8 +64,8 @@ import { api } from "@/services/api";
 import { useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
 import { useCommandPalettePageActions } from "@/stores/command-palette-page-actions";
-import { useResolvedPageContext } from "@/stores/resolved-page-context";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
+import { useResolvedPageContext } from "@/stores/resolved-page-context";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
@@ -249,6 +249,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const { user, hasScope, hasAnyScope, hasScopedAccess, logout } = useAuthStore();
   const { setTheme, theme, toggleSidebar } = useUIStore();
   const pkiEnabled = useSystemConfigStore((state) => state.config.features.pkiEnabled);
+  const siemEnabled = useSystemConfigStore((state) => state.config.features.siemEnabled);
   const loggingEnabled = useSystemConfigStore((state) => state.config.features.loggingEnabled);
   const inferenceEnabled = useSystemConfigStore((state) => state.config.features.inferenceEnabled);
   const statusPageEnabled = useUIBootstrapStore(
@@ -279,7 +280,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   );
   const waitForDashboardBootstrap = !dashboardBootstrapStarted || dashboardBootstrapLoading;
   const inferenceQuota = useInferenceQuotaSnapshot(
-    gatewayInferenceMode && canViewInferenceUsage && inferenceEnabled && hasScope("inference:use") && !waitForDashboardBootstrap,
+    gatewayInferenceMode &&
+      canViewInferenceUsage &&
+      inferenceEnabled &&
+      hasScope("inference:use") &&
+      !waitForDashboardBootstrap,
     dashboardInferenceUsage
   );
   const isCommandMode = search.startsWith(">");
@@ -432,6 +437,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       visibleNavigationGroups({
         scopes: user?.scopes ?? [],
         pkiEnabled,
+        siemEnabled,
         loggingEnabled,
         inferenceEnabled,
         hasLowInferenceUsage: hasLowInferenceUsage(dashboardInferenceUsage ?? null),
@@ -444,6 +450,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       inferenceEnabled,
       loggingEnabled,
       pkiEnabled,
+      siemEnabled,
       statusPageEnabled,
       user?.scopes,
     ]

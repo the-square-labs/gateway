@@ -112,13 +112,38 @@ describe('canonical Gateway nginx pages', () => {
     );
   });
 
-  it('keeps IP ACL fallback inside the upstream location only', async () => {
-    const rendered = await service().renderForHost(host, null);
+  it('adds the host ACL to advanced locations without applying it to ACME challenges', async () => {
+    const rendered = await service().renderForHost(
+      {
+        ...host,
+        sslForced: false,
+        advancedConfig: `location /api/ {
+    proxy_pass http://127.0.0.1:9000;
+}`,
+      },
+      null
+    );
     const upstreamLocation = rendered.lastIndexOf('location / {');
+    const advancedLocation = rendered.indexOf('location /api/ {');
+    const acmeLocation = rendered.indexOf('location /.well-known/acme-challenge/ {');
     const denyAll = rendered.indexOf('deny all;');
+    const rootEnd = rendered.indexOf('\n    }', upstreamLocation);
+    const advancedEnd = rendered.indexOf('\n    }', advancedLocation);
+    const acmeEnd = rendered.indexOf('\n    }', acmeLocation);
+    const rootConfig = rendered.slice(upstreamLocation, rootEnd);
+    const advancedConfig = rendered.slice(advancedLocation, advancedEnd);
+    const acmeConfig = rendered.slice(acmeLocation, acmeEnd);
 
     expect(denyAll).toBeGreaterThan(upstreamLocation);
+    expect(upstreamLocation).toBeLessThan(advancedLocation);
     expect(rendered.slice(0, upstreamLocation)).not.toContain('deny all;');
+    for (const config of [rootConfig, advancedConfig]) {
+      expect(config).toContain('allow 10.0.0.0/8;');
+      expect(config).toContain('deny all;');
+      expect(config).toContain('auth_basic "Restricted Access";');
+    }
+    expect(acmeConfig).toContain('auth_basic off;');
+    expect(acmeConfig).not.toContain('deny all;');
   });
 
   it('preserves custom listen and certificate directives byte-for-byte', () => {

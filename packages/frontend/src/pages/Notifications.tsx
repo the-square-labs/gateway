@@ -1,26 +1,39 @@
-import { AlertTriangle, Plus, Send, Webhook } from "lucide-react";
+import { AlertTriangle, Plus, Send, ShieldCheck, Webhook } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AlertsTab } from "@/pages/notifications/AlertsTab";
 import { DELIVERY_PAGE_SIZE, DeliveryLogTab } from "@/pages/notifications/DeliveryLogTab";
+import {
+  SIEM_DELIVERY_PAGE_SIZE,
+  SiemDeliveryLogTab,
+} from "@/pages/notifications/SiemDeliveryLogTab";
+import {
+  SIEM_DESTINATION_CACHE_KEY,
+  SiemDestinationsTab,
+} from "@/pages/notifications/SiemDestinationsTab";
 import { WebhooksTab } from "@/pages/notifications/WebhooksTab";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { useSystemConfigStore } from "@/stores/system-config";
 
 const TABS = [
   { value: "alerts", label: "Alerts", icon: AlertTriangle },
   { value: "webhooks", label: "Webhooks", icon: Webhook },
   { value: "deliveries", label: "Delivery Log", icon: Send },
+  { value: "siem", label: "SIEM", icon: ShieldCheck },
+  { value: "siem-deliveries", label: "SIEM Delivery Log", icon: Send },
 ] as const;
 
 export function Notifications() {
   const { tab: tabParam } = useParams<{ tab?: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { hasAnyScope } = useAuthStore();
+  const siemEnabled = useSystemConfigStore((state) => state.config.features.siemEnabled);
   const canReadAlerts = hasAnyScope(
     "notifications:alerts:view",
     "notifications:alerts:view",
@@ -69,10 +82,14 @@ export function Notifications() {
     "notifications:view",
     "notifications:manage"
   );
+  const canViewSiem = siemEnabled && hasAnyScope("audit:siem:view", "audit:siem:manage");
+  const canManageSiem = siemEnabled && hasAnyScope("audit:siem:manage");
   const visibleTabs = TABS.filter((tab) => {
     if (tab.value === "alerts") return canAccessAlerts;
     if (tab.value === "webhooks") return canAccessWebhooks;
     if (tab.value === "deliveries") return canViewDeliveries;
+    if (tab.value === "siem") return canViewSiem;
+    if (tab.value === "siem-deliveries") return canViewSiem;
     return false;
   });
   const activeTab =
@@ -82,6 +99,8 @@ export function Notifications() {
   const [openCreateAlertToken, setOpenCreateAlertToken] = useState(0);
   const [openCreateWebhookToken, setOpenCreateWebhookToken] = useState(0);
   const [refreshDeliveriesToken, setRefreshDeliveriesToken] = useState(0);
+  const [openCreateSiemToken, setOpenCreateSiemToken] = useState(0);
+  const [refreshSiemDeliveriesToken, setRefreshSiemDeliveriesToken] = useState(0);
 
   useEffect(() => {
     if (canReadAlerts) {
@@ -105,7 +124,20 @@ export function Notifications() {
         })
         .catch(() => {});
     }
-  }, [canReadAlerts, canReadWebhooks, canViewDeliveries]);
+    if (canViewSiem) {
+      api
+        .listSiemDestinations({ limit: 100 })
+        .then((result) => api.setCache(SIEM_DESTINATION_CACHE_KEY, result.data ?? []))
+        .catch(() => {});
+      api
+        .listSiemDeliveries({ page: 1, limit: SIEM_DELIVERY_PAGE_SIZE })
+        .then((result) => {
+          api.setCache("audit:siem:deliveries:all", result.data ?? []);
+          api.setCache("audit:siem:deliveries:all:has-more", (result.totalPages ?? 1) > 1);
+        })
+        .catch(() => {});
+    }
+  }, [canReadAlerts, canReadWebhooks, canViewDeliveries, canViewSiem]);
 
   const headerAction =
     activeTab === "alerts" && canManageAlerts ? (
@@ -118,6 +150,14 @@ export function Notifications() {
       </Button>
     ) : activeTab === "deliveries" && canViewDeliveries ? (
       <Button variant="outline" onClick={() => setRefreshDeliveriesToken((v) => v + 1)}>
+        Refresh
+      </Button>
+    ) : activeTab === "siem" && canManageSiem ? (
+      <Button onClick={() => setOpenCreateSiemToken((v) => v + 1)}>
+        <Plus className="h-4 w-4" /> New SIEM Destination
+      </Button>
+    ) : activeTab === "siem-deliveries" && canViewSiem ? (
+      <Button variant="outline" onClick={() => setRefreshSiemDeliveriesToken((v) => v + 1)}>
         Refresh
       </Button>
     ) : null;
@@ -145,7 +185,22 @@ export function Notifications() {
                 onClick: () => setRefreshDeliveriesToken((v) => v + 1),
               },
             ]
-          : [];
+          : activeTab === "siem" && canManageSiem
+            ? [
+                {
+                  label: "New SIEM Destination",
+                  icon: <Plus className="h-4 w-4" />,
+                  onClick: () => setOpenCreateSiemToken((v) => v + 1),
+                },
+              ]
+            : activeTab === "siem-deliveries" && canViewSiem
+              ? [
+                  {
+                    label: "Refresh",
+                    onClick: () => setRefreshSiemDeliveriesToken((v) => v + 1),
+                  },
+                ]
+              : [];
 
   useEffect(() => {
     if (visibleTabs.length === 0) return;
@@ -154,7 +209,7 @@ export function Notifications() {
     }
   }, [activeTab, navigate, tabParam, visibleTabs]);
 
-  const usesFillLayout = activeTab === "deliveries";
+  const usesFillLayout = activeTab === "deliveries" || activeTab === "siem-deliveries";
 
   return (
     <div
@@ -170,7 +225,9 @@ export function Notifications() {
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold">Notifications</h1>
             <p className="text-sm text-muted-foreground">
-              Manage alert rules, webhooks, and delivery activity
+              {siemEnabled
+                ? "Manage alert rules, webhooks, SIEM audit export, and delivery activity"
+                : "Manage alert rules, webhooks, and delivery activity"}
             </p>
           </div>
         </div>
@@ -213,6 +270,43 @@ export function Notifications() {
             className="mt-4 flex flex-col flex-1 min-h-0 overflow-hidden"
           >
             <DeliveryLogTab refreshToken={refreshDeliveriesToken} />
+          </TabsContent>
+        )}
+        {canViewSiem && (
+          <TabsContent value="siem" className="mt-4">
+            <SiemDestinationsTab
+              canManage={canManageSiem}
+              canRead={canViewSiem}
+              openCreateToken={openCreateSiemToken}
+              onViewDeliveryLog={(destination) =>
+                navigate(
+                  `/notifications/siem-deliveries?destinationId=${encodeURIComponent(destination.id)}`
+                )
+              }
+            />
+          </TabsContent>
+        )}
+        {canViewSiem && (
+          <TabsContent
+            value="siem-deliveries"
+            className="mt-4 flex flex-col flex-1 min-h-0 overflow-hidden"
+          >
+            <SiemDeliveryLogTab
+              canManage={canManageSiem}
+              initialDestinationId={searchParams.get("destinationId")}
+              onDestinationFilterChange={(destinationId) => {
+                setSearchParams(
+                  (current) => {
+                    const next = new URLSearchParams(current);
+                    if (destinationId) next.set("destinationId", destinationId);
+                    else next.delete("destinationId");
+                    return next;
+                  },
+                  { replace: true }
+                );
+              }}
+              refreshToken={refreshSiemDeliveriesToken}
+            />
           </TabsContent>
         )}
       </Tabs>

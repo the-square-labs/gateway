@@ -159,6 +159,7 @@ Completed foundations:
 - [x] Internal PKI, ACME SSL, certificate templates, domain tracking, and expiry alerts.
 - [x] PostgreSQL, Redis, and ClickHouse database explorer with encrypted saved credentials, plus private-by-default managed Postgres, Redis, and ClickHouse database nodes with secure application bindings.
 - [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
+- [x] SIEM audit export, enabled in Gateway settings, with encrypted bearer, HMAC-SHA256, or custom-header authentication.
 - [x] Optional ClickHouse-backed structured logging and optional AI assistant.
 - [x] Optional multi-provider inference gateway with OpenAI-compatible and harness-specific APIs.
 - [x] View-based, resource-scoped permission model with filtered list visibility.

@@ -44,6 +44,7 @@ const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Record<string, readonly string[]> = {
   "notifications:alerts:view": ["notifications:alerts:edit"],
   "notifications:webhooks:view": ["notifications:webhooks:edit"],
   "notifications:view": ["notifications:manage"],
+  "audit:siem:view": ["audit:siem:manage"],
   "logs:environments:view": ["logs:environments:edit", "logs:read"],
   "logs:tokens:view": ["logs:manage"],
   "logs:schemas:view": ["logs:schemas:edit"],

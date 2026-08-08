@@ -1,6 +1,7 @@
 import { createChildLogger } from '@/lib/logger.js';
 import { formatHostPort, isValidUpstreamHost } from '@/lib/network-endpoint.js';
 import type { ConfigValidatorService } from './config-validator.service.js';
+import { injectAccessListIntoAdvancedLocations } from './nginx-advanced-location.js';
 
 const logger = createChildLogger('NginxConfigGenerator');
 
@@ -59,6 +60,24 @@ export class NginxConfigGenerator {
 
   private sanitizeNginxValue(value: string): string {
     return value.replace(/[\n\r;'"{}`$#]/g, '');
+  }
+
+  private buildAccessListDirectives(accessList: ProxyHostConfig['accessList']): string[] {
+    if (!accessList) return [];
+
+    const directives = accessList.ipRules.map((rule) => {
+      const safeType = this.sanitizeNginxValue(rule.type);
+      const safeValue = this.sanitizeNginxValue(rule.value);
+      return `${safeType} ${safeValue};`;
+    });
+    if (accessList.ipRules.length > 0) directives.push('deny all;');
+    if (accessList.basicAuthEnabled) {
+      directives.push('auth_basic "Restricted Access";');
+      directives.push(
+        `auth_basic_user_file /etc/nginx/gateway/htpasswd/access-list-${this.sanitizeNginxValue(accessList.id)};`
+      );
+    }
+    return directives;
   }
 
   private validateForwardHost(host: string): string {
@@ -174,21 +193,10 @@ export class NginxConfigGenerator {
 
     lines.push('    location / {');
 
-    if (host.accessList) {
-      for (const rule of host.accessList.ipRules) {
-        const safeType = this.sanitizeNginxValue(rule.type);
-        const safeValue = this.sanitizeNginxValue(rule.value);
-        lines.push(`        ${safeType} ${safeValue};`);
-      }
-      if (host.accessList.ipRules.length > 0) {
-        lines.push('        deny all;');
-      }
-      if (host.accessList.basicAuthEnabled) {
-        lines.push('        auth_basic "Restricted Access";');
-        lines.push(`        auth_basic_user_file /etc/nginx/gateway/htpasswd/access-list-${host.accessList.id};`);
-      }
-      lines.push('');
+    for (const directive of this.buildAccessListDirectives(host.accessList)) {
+      lines.push(`        ${directive}`);
     }
+    if (host.accessList) lines.push('');
 
     if (host.rateLimitEnabled && host.rateLimitOptions) {
       lines.push(`        limit_req zone=ratelimit_${host.id} burst=${rateLimitBurst} nodelay;`);
@@ -252,7 +260,11 @@ export class NginxConfigGenerator {
     if (host.advancedConfig) {
       lines.push('');
       lines.push('    # Advanced custom config');
-      for (const line of host.advancedConfig.split('\n')) {
+      const protectedAdvancedConfig = injectAccessListIntoAdvancedLocations(
+        host.advancedConfig,
+        this.buildAccessListDirectives(host.accessList)
+      );
+      for (const line of protectedAdvancedConfig.split('\n')) {
         lines.push(`    ${line}`);
       }
     }

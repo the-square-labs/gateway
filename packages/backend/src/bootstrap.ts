@@ -11,6 +11,7 @@ import { ExpiryAlertJob } from '@/jobs/expiry-alert.job.js';
 import { HealthCheckJob } from '@/jobs/health-check.job.js';
 import { HousekeepingJob } from '@/jobs/housekeeping.job.js';
 import { NotificationRetryJob } from '@/jobs/notification-retry.job.js';
+import { SiemDeliveryJob } from '@/jobs/siem-delivery.job.js';
 import { UpdateCheckJob } from '@/jobs/update-check.job.js';
 import { logger } from '@/lib/logger.js';
 import { AccessListService } from '@/modules/access-lists/access-list.service.js';
@@ -28,6 +29,10 @@ import { AIProviderRuntimeService } from '@/modules/ai/ai-provider-runtime.servi
 import { AIRunService } from '@/modules/ai/ai-run.service.js';
 import { AlertService } from '@/modules/audit/alert.service.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
+import { SiemDeliveryService } from '@/modules/audit/siem-delivery.service.js';
+import { SiemDestinationService } from '@/modules/audit/siem-destination.service.js';
+import { SiemAuditOutboxService } from '@/modules/audit/siem-outbox.service.js';
+import { SiemTransportService } from '@/modules/audit/siem-transport.service.js';
 import { AuthService } from '@/modules/auth/auth.service.js';
 import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import { AuthEmailQueueService } from '@/modules/auth/auth-email-queue.service.js';
@@ -235,6 +240,13 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(GeneralSettingsService, generalSettingsService);
   await generalSettingsService.importLegacyPublicUrl(process.env.APP_URL);
 
+  // SIEM reuses the existing installation identifier only as a non-secret
+  // source label. It does not participate in licensing or tier checks.
+  const licenseService = new LicenseService(db, cryptoService, env, fetch, generalSettingsService);
+  container.registerInstance(LicenseService, licenseService);
+  const siemOutboxService = new SiemAuditOutboxService(licenseService, generalSettingsService);
+  container.registerInstance(SiemAuditOutboxService, siemOutboxService);
+
   const webTransportSettingsService = new WebTransportSettingsService(db, env.WEB_TLS_BOOTSTRAP_MODE);
   await webTransportSettingsService.initialize();
   container.registerInstance(WebTransportSettingsService, webTransportSettingsService);
@@ -245,7 +257,7 @@ export async function initializeContainer(): Promise<void> {
   const outboundWebhookPolicyService = new OutboundWebhookPolicyService(db);
   container.registerInstance(OutboundWebhookPolicyService, outboundWebhookPolicyService);
 
-  const auditService = new AuditService(db);
+  const auditService = new AuditService(db, siemOutboxService);
   auditService.setEventBus(eventBus);
   container.registerInstance(AuditService, auditService);
 
@@ -996,9 +1008,6 @@ export async function initializeContainer(): Promise<void> {
   const updateService = new UpdateService(db, dockerService, env);
   container.registerInstance(UpdateService, updateService);
 
-  const licenseService = new LicenseService(db, cryptoService, env, fetch, generalSettingsService);
-  container.registerInstance(LicenseService, licenseService);
-
   const loggingSettingsService = new LoggingSettingsService(db, cryptoService);
   await loggingSettingsService.importLegacyEnv(env);
   container.registerInstance(LoggingSettingsService, loggingSettingsService);
@@ -1118,6 +1127,20 @@ export async function initializeContainer(): Promise<void> {
   );
   container.registerInstance(NotificationDispatcherService, notifDispatcherService);
 
+  const siemTransportService = new SiemTransportService(
+    env,
+    cryptoService,
+    outboundWebhookPolicyService,
+    generalSettingsService
+  );
+  container.registerInstance(SiemTransportService, siemTransportService);
+  const siemDeliveryService = new SiemDeliveryService(db, siemTransportService, generalSettingsService);
+  siemDeliveryService.setEventBus(eventBus);
+  container.registerInstance(SiemDeliveryService, siemDeliveryService);
+  const siemDestinationService = new SiemDestinationService(db, auditService, cryptoService, siemTransportService);
+  siemDestinationService.setEventBus(eventBus);
+  container.registerInstance(SiemDestinationService, siemDestinationService);
+
   // AI Service (depends on many services above)
   const aiService = new AIService(
     aiSettingsService,
@@ -1143,7 +1166,10 @@ export async function initializeContainer(): Promise<void> {
     aiSandboxService,
     aiSandboxArtifactService,
     aiConversationSearchService,
-    aiProviderRuntimeService
+    aiProviderRuntimeService,
+    siemDestinationService,
+    siemDeliveryService,
+    generalSettingsService
   );
   container.registerInstance(AIService, aiService);
 
@@ -1173,6 +1199,7 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(NotificationEvaluatorService, notifEvaluatorService);
 
   housekeepingService.setNotifDeliveryService(notifDeliveryService);
+  housekeepingService.setSiemDeliveryService(siemDeliveryService);
 
   // Seed built-in templates
   await templatesService.seedBuiltinTemplates();
@@ -1252,6 +1279,8 @@ export async function initializeContainer(): Promise<void> {
   // Notification webhook retry job (every 30 seconds)
   const notifRetryJob = new NotificationRetryJob(notifDeliveryService, notifDispatcherService);
   scheduler.registerInterval('notification-retry', 30000, () => notifRetryJob.run());
+  const siemDeliveryJob = new SiemDeliveryJob(siemDeliveryService, generalSettingsService);
+  scheduler.registerInterval('siem-delivery', 30000, () => siemDeliveryJob.run());
   scheduler.registerInterval('gitlab-integration-sync', 60000, () => integrationsService.runDueGitLabSyncs());
   scheduler.registerInterval('cloudflare-integration-sync', 60000, () => integrationsService.runDueCloudflareSyncs());
 

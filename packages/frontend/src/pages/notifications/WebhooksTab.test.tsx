@@ -65,7 +65,9 @@ describe("WebhooksTab", () => {
       expect(screen.getByText("Ops Discord")).toBeInTheDocument();
     });
     expect(listWebhooks).toHaveBeenCalledWith({ limit: 100 });
-    expect(screen.getByText("https://hooks.example.test/ops")).toBeInTheDocument();
+    const endpoint = screen.getByText("https://hooks.example.test/ops");
+    expect(endpoint).toHaveAttribute("title", "https://hooks.example.test/ops");
+    expect(endpoint).not.toHaveClass("max-w-[300px]");
     expect(screen.getByText("discord")).toBeInTheDocument();
 
     const row = screen.getByText("Ops Discord").closest("tr");

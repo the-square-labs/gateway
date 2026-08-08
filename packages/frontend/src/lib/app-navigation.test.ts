@@ -9,6 +9,7 @@ function context(overrides: Partial<AppNavigationVisibility> = {}): AppNavigatio
   return {
     scopes: [],
     pkiEnabled: false,
+    siemEnabled: false,
     loggingEnabled: false,
     inferenceEnabled: false,
     ...overrides,
@@ -104,5 +105,17 @@ describe("app navigation registry", () => {
     expect(ids).not.toContain("certificates");
     expect(ids).not.toContain("logging");
     expect(ids).not.toContain("status-page");
+  });
+
+  it("hides Notifications from SIEM-only users while SIEM is disabled", () => {
+    const disabledIds = visibleNavigationGroups(
+      context({ scopes: ["audit:siem:view"], siemEnabled: false })
+    ).flatMap((group) => group.items.map((item) => item.id));
+    const enabledIds = visibleNavigationGroups(
+      context({ scopes: ["audit:siem:view"], siemEnabled: true })
+    ).flatMap((group) => group.items.map((item) => item.id));
+
+    expect(disabledIds).not.toContain("notifications");
+    expect(enabledIds).toContain("notifications");
   });
 });

@@ -15,6 +15,7 @@ describe('AI internal docs registry', () => {
       'acme',
       'users',
       'audit',
+      'siem',
       'nginx',
       'nodes',
       'housekeeping',
@@ -58,7 +59,8 @@ describe('AI internal docs registry', () => {
       'gateway-settings': ['settings:gateway:view', 'settings:gateway:edit'],
       'licensing-updates': ['license:view', 'license:manage', 'admin:update'],
       gitlab: 'integrations:gitlab:view',
-      notifications: 'notifications:view',
+      notifications: ['notifications:view', 'audit:siem:view'],
+      siem: 'audit:siem:view',
       overview: 'feat:ai:use',
       installation: 'feat:ai:use',
       authentication: 'feat:ai:use',
@@ -189,6 +191,8 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('status-page', ['status-page:view']).content).toContain(
       'status-page:incidents:create'
     );
+    expect(getInternalDocumentation('siem', ['audit:siem:view']).content).toContain('custom HTTP header');
+    expect(getInternalDocumentation('siem', ['audit:siem:view']).content).toContain('X-Gateway-Signature-256');
     expect(getInternalDocumentation('gitlab', ['integrations:gitlab:view']).content).toContain(
       'gitlab_update_ci_config'
     );

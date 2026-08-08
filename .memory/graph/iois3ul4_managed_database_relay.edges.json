@@ -20,16 +20,6 @@
       "source": "auto",
       "created_at": 1786119407723,
       "updated_at": 1786119407723
-    },
-    {
-      "from_id": "iois3ul4",
-      "to_id": "rzidwe4n",
-      "relation": "same_area",
-      "weight": 0.52,
-      "reason": "Both cover Docker-based Gateway operations on host 172.20.0.131, including deployment and stateful workload handling.",
-      "source": "auto",
-      "created_at": 1786119407723,
-      "updated_at": 1786119407723
     }
   ]
 }

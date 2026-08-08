@@ -283,6 +283,170 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
     requiredScope: 'notifications:view',
     invalidateStores: [],
   },
+  {
+    name: 'list_siem_destinations',
+    description:
+      'List configured SIEM audit export destinations. Returns safe configuration metadata and delivery state; secrets are never returned.',
+    parameters: {
+      type: 'object',
+      properties: {
+        enabled: { type: 'boolean', description: 'Filter by enabled/disabled state' },
+        search: { type: 'string', description: 'Filter by destination name' },
+        limit: { type: 'number', description: 'Max results (default 50)' },
+      },
+    },
+    destructive: false,
+    category: 'Notifications',
+    requiredScope: 'audit:siem:view',
+    invalidateStores: [],
+  },
+  {
+    name: 'get_siem_destination',
+    description:
+      'Get safe details and current delivery state for a SIEM audit export destination. The configured secret is never returned.',
+    parameters: {
+      type: 'object',
+      properties: { destinationId: { type: 'string', description: 'SIEM destination UUID' } },
+      required: ['destinationId'],
+    },
+    destructive: false,
+    category: 'Notifications',
+    requiredScope: 'audit:siem:view',
+    invalidateStores: [],
+  },
+  {
+    name: 'create_siem_destination',
+    description:
+      'Create a SIEM audit export destination. The URL must be HTTPS without credentials, query parameters, or fragments. The bearer token, HMAC secret, or custom header value is encrypted at rest and never returned. This sends Gateway audit metadata, never full audit details.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Operator-facing destination name' },
+        url: { type: 'string', description: 'HTTPS collector endpoint without query parameters' },
+        authType: {
+          type: 'string',
+          enum: ['bearer', 'hmac_sha256', 'custom_header'],
+          description: 'Authentication mechanism',
+        },
+        customHeaderName: {
+          type: 'string',
+          description: 'HTTP header field name for custom_header authentication only',
+        },
+        secret: {
+          type: 'string',
+          description: 'One-time bearer token, HMAC secret, or custom header value; never repeat it in responses',
+        },
+        enabled: { type: 'boolean', description: 'Start delivery immediately (default true)' },
+      },
+      required: ['name', 'url', 'authType', 'secret'],
+    },
+    destructive: true,
+    category: 'Notifications',
+    requiredScope: 'audit:siem:manage',
+    invalidateStores: [],
+  },
+  {
+    name: 'update_siem_destination',
+    description:
+      'Update a SIEM destination. Include secret only to replace it. Changing authType requires a new secret. custom_header requires customHeaderName. Disabling pauses queued and retrying deliveries; re-enabling resumes them.',
+    parameters: {
+      type: 'object',
+      properties: {
+        destinationId: { type: 'string', description: 'SIEM destination UUID' },
+        name: { type: 'string' },
+        url: { type: 'string', description: 'HTTPS collector endpoint without query parameters' },
+        authType: { type: 'string', enum: ['bearer', 'hmac_sha256', 'custom_header'] },
+        customHeaderName: {
+          type: 'string',
+          description: 'HTTP header field name for custom_header authentication only',
+        },
+        secret: { type: 'string', description: 'One-time replacement secret; never repeat it in responses' },
+        enabled: { type: 'boolean', description: 'Enable or pause delivery' },
+      },
+      required: ['destinationId'],
+    },
+    destructive: true,
+    category: 'Notifications',
+    requiredScope: 'audit:siem:manage',
+    invalidateStores: [],
+  },
+  {
+    name: 'delete_siem_destination',
+    description:
+      'Soft-delete a SIEM destination and discard any outstanding deliveries. Historical terminal delivery records remain until audit retention cleanup.',
+    parameters: {
+      type: 'object',
+      properties: { destinationId: { type: 'string', description: 'SIEM destination UUID' } },
+      required: ['destinationId'],
+    },
+    destructive: true,
+    category: 'Notifications',
+    requiredScope: 'audit:siem:manage',
+    invalidateStores: [],
+  },
+  {
+    name: 'test_siem_destination',
+    description:
+      'Send one synthetic SIEM test event to verify a destination. It creates no audit-log row and no queued delivery, and never exposes collector response bodies.',
+    parameters: {
+      type: 'object',
+      properties: { destinationId: { type: 'string', description: 'SIEM destination UUID' } },
+      required: ['destinationId'],
+    },
+    destructive: true,
+    category: 'Notifications',
+    requiredScope: 'audit:siem:manage',
+    invalidateStores: [],
+  },
+  {
+    name: 'list_siem_deliveries',
+    description:
+      'List SIEM audit-export delivery records and safe delivery diagnostics. Payloads are only available through get_siem_delivery and never include audit details or secrets.',
+    parameters: {
+      type: 'object',
+      properties: {
+        destinationId: { type: 'string', description: 'Filter by SIEM destination UUID' },
+        status: {
+          type: 'string',
+          enum: ['queued', 'delivering', 'retrying', 'delivered', 'failed', 'paused', 'discarded'],
+          description: 'Filter by delivery lifecycle state',
+        },
+        limit: { type: 'number', description: 'Max results (default 50)' },
+      },
+    },
+    destructive: false,
+    category: 'Notifications',
+    requiredScope: 'audit:siem:view',
+    invalidateStores: [],
+  },
+  {
+    name: 'get_siem_delivery',
+    description:
+      'Get a SIEM delivery record, including its frozen privacy-reduced event and safe response metadata. It never returns secrets, full audit details, or collector response bodies.',
+    parameters: {
+      type: 'object',
+      properties: { deliveryId: { type: 'string', description: 'SIEM delivery UUID' } },
+      required: ['deliveryId'],
+    },
+    destructive: false,
+    category: 'Notifications',
+    requiredScope: 'audit:siem:view',
+    invalidateStores: [],
+  },
+  {
+    name: 'requeue_siem_delivery',
+    description:
+      'Requeue one terminal failed SIEM delivery from attempt zero. It cannot requeue deliveries that were delivered, paused, or discarded.',
+    parameters: {
+      type: 'object',
+      properties: { deliveryId: { type: 'string', description: 'Failed SIEM delivery UUID' } },
+      required: ['deliveryId'],
+    },
+    destructive: true,
+    category: 'Notifications',
+    requiredScope: 'audit:siem:manage',
+    invalidateStores: [],
+  },
 ];
 
 export const WEB_SEARCH_AI_TOOL: AIToolDefinition = {

@@ -5,10 +5,13 @@ import { authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js'
 import type { AppEnv } from '@/types.js';
 import { listAuditLogRoute, listAuditUsersRoute } from './audit.docs.js';
 import { AuditService } from './audit.service.js';
+import { siemRoutes } from './siem.routes.js';
 
 export const auditRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
 auditRoutes.use('*', authMiddleware);
+
+auditRoutes.route('/siem', siemRoutes);
 
 auditRoutes.openapi({ ...listAuditUsersRoute, middleware: requireScope('admin:audit') }, async (c) => {
   const auditService = container.resolve(AuditService);

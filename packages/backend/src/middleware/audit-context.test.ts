@@ -109,6 +109,7 @@ describe('shouldSkipFallbackAudit', () => {
       '/api/integrations/cloudflare/connectors/preview-test',
       '/api/integrations/gitlab/connectors/connector-1/allowlist/options/refresh',
       '/api/notifications/webhooks/preview',
+      '/api/audit/siem/destinations/11111111-1111-4111-8111-111111111111/test',
       '/api/docker/nodes/node-1/containers/app/health-check/test',
       '/api/docker/nodes/node-1/deployments/app/health-check/test',
     ];

@@ -1573,7 +1573,7 @@ export const AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'internal_documentation',
     description:
-      'Get detailed internal documentation about a specific topic in this system. Use this whenever you need deeper knowledge about how something works, what fields mean, or what the correct workflow is. Topics: discovery, pki, ssl, proxy, domains, access-lists, templates, acme, users, audit, nginx, nodes, housekeeping, permissions, docker, databases, postgres, redis, logging, folders, node-files, sandbox, conversations, ai-settings, status-page, api, gateway-settings, licensing-updates, inference, gitlab, notifications, overview, installation, authentication, cloudflare, docker-registries, clickhouse, troubleshooting.',
+      'Get detailed internal documentation about a specific topic in this system. Use this whenever you need deeper knowledge about how something works, what fields mean, or what the correct workflow is. Topics: discovery, pki, ssl, proxy, domains, access-lists, templates, acme, users, audit, siem, nginx, nodes, housekeeping, permissions, docker, databases, postgres, redis, logging, folders, node-files, sandbox, conversations, ai-settings, status-page, api, gateway-settings, licensing-updates, inference, gitlab, notifications, overview, installation, authentication, cloudflare, docker-registries, clickhouse, troubleshooting.',
     parameters: {
       type: 'object',
       properties: {
@@ -1590,6 +1590,7 @@ export const AI_TOOLS: AIToolDefinition[] = [
             'acme',
             'users',
             'audit',
+            'siem',
             'nginx',
             'nodes',
             'housekeeping',

@@ -82,6 +82,7 @@ describe("Logging UI", () => {
         features: {
           pkiEnabled: true,
           domainsEnabled: true,
+          siemEnabled: true,
           loggingEnabled: true,
           inferenceEnabled: false,
         },

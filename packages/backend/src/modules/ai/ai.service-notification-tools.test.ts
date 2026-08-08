@@ -18,11 +18,17 @@ function createService({
   notifWebhookService,
   notifDeliveryService,
   notifDispatcherService,
+  siemDestinationService,
+  siemDeliveryService,
+  generalSettingsService = { isFeatureEnabled: vi.fn().mockResolvedValue(true) },
 }: {
   notifRuleService?: Record<string, unknown>;
   notifWebhookService?: Record<string, unknown>;
   notifDeliveryService?: Record<string, unknown>;
   notifDispatcherService?: Record<string, unknown>;
+  siemDestinationService?: Record<string, unknown>;
+  siemDeliveryService?: Record<string, unknown>;
+  generalSettingsService?: Record<string, unknown>;
 } = {}) {
   return new AIService(
     {} as never,
@@ -44,7 +50,14 @@ function createService({
     notifRuleService as never,
     notifWebhookService as never,
     notifDeliveryService as never,
-    notifDispatcherService as never
+    notifDispatcherService as never,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    siemDestinationService as never,
+    siemDeliveryService as never,
+    generalSettingsService as never
   );
 }
 
@@ -169,5 +182,101 @@ describe('AIService notification tool routing', () => {
       webhookId: 'webhook-1',
       status: 'failed',
     });
+  });
+
+  it('creates SIEM destinations with a one-time secret and returns only safe service output', async () => {
+    const siemDestinationService = {
+      create: vi.fn().mockResolvedValue({ id: 'siem-1', secretConfigured: true }),
+    };
+    const service = createService({ siemDestinationService });
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['audit:siem:manage'] }, 'create_siem_destination', {
+        name: 'Security Operations',
+        url: 'https://siem.example.test/gateway/audit',
+        authType: 'custom_header',
+        customHeaderName: 'X-API-Key',
+        secret: 'one-time-secret',
+      })
+    ).resolves.toMatchObject({
+      result: { id: 'siem-1', secretConfigured: true },
+      invalidateStores: [],
+    });
+    expect(siemDestinationService.create).toHaveBeenCalledWith(
+      {
+        name: 'Security Operations',
+        url: 'https://siem.example.test/gateway/audit',
+        authType: 'custom_header',
+        customHeaderName: 'X-API-Key',
+        secret: 'one-time-secret',
+        enabled: true,
+      },
+      'user-1'
+    );
+  });
+
+  it('validates AI SIEM destination mutations with the HTTP route schema', async () => {
+    const siemDestinationService = {
+      create: vi.fn(),
+      update: vi.fn(),
+    };
+    const service = createService({ siemDestinationService });
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['audit:siem:manage'] }, 'create_siem_destination', {
+        name: 'Security Operations',
+        url: 'https://siem.example.test/gateway/audit',
+        authType: 'custom_header',
+        customHeaderName: 'Host',
+        secret: 'one-time-secret',
+      })
+    ).resolves.toMatchObject({
+      error: expect.stringContaining('Custom header name cannot override a Gateway transport header'),
+    });
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['audit:siem:manage'] }, 'update_siem_destination', {
+        destinationId: 'siem-1',
+      })
+    ).resolves.toMatchObject({
+      error: expect.stringContaining('Provide at least one destination field to update'),
+    });
+
+    expect(siemDestinationService.create).not.toHaveBeenCalled();
+    expect(siemDestinationService.update).not.toHaveBeenCalled();
+  });
+
+  it('lists SIEM deliveries with a clamped page size', async () => {
+    const siemDeliveryService = { list: vi.fn().mockResolvedValue({ data: [], total: 0 }) };
+    const service = createService({ siemDeliveryService });
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['audit:siem:view'] }, 'list_siem_deliveries', {
+        status: 'failed',
+        limit: 999,
+      })
+    ).resolves.toMatchObject({ result: { data: [], total: 0 } });
+    expect(siemDeliveryService.list).toHaveBeenCalledWith({
+      page: 1,
+      limit: 100,
+      destinationId: undefined,
+      status: 'failed',
+    });
+  });
+
+  it('does not invoke SIEM tools while the Gateway SIEM feature is disabled', async () => {
+    const siemDestinationService = { list: vi.fn() };
+    const generalSettingsService = { isFeatureEnabled: vi.fn().mockResolvedValue(false) };
+    const service = createService({ siemDestinationService, generalSettingsService });
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['audit:siem:view'] }, 'list_siem_destinations', {})
+    ).resolves.toEqual({
+      result: { error: 'SIEM feature is disabled' },
+      invalidateStores: [],
+    });
+
+    expect(generalSettingsService.isFeatureEnabled).toHaveBeenCalledWith('siemEnabled');
+    expect(siemDestinationService.list).not.toHaveBeenCalled();
   });
 });

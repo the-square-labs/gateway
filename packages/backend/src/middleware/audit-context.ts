@@ -34,6 +34,9 @@ const FALLBACK_AUDIT_SKIP_ROUTES: Array<{ method: string; pattern: RegExp }> = [
     pattern: /^\/api\/integrations\/gitlab\/connectors\/[^/]+\/allowlist\/options\/refresh$/,
   },
   { method: 'POST', pattern: /^\/api\/notifications\/webhooks\/preview$/ },
+  // A SIEM test is a synthetic collector probe. It must never enter the
+  // regular audit stream or create a durable SIEM delivery of its own.
+  { method: 'POST', pattern: /^\/api\/audit\/siem\/destinations\/[^/]+\/test$/ },
   { method: 'POST', pattern: /^\/api\/docker\/snapshots\/refresh$/ },
   {
     method: 'POST',

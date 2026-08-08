@@ -110,4 +110,20 @@ describe("DeliveryLogTab", () => {
       });
     });
   });
+
+  it("keeps the end-of-log sentinel compact and centered after the final page", async () => {
+    vi.spyOn(api, "listDeliveries").mockResolvedValue({
+      data: [makeDelivery()],
+      total: 1,
+      page: 1,
+      limit: 100,
+      totalPages: 1,
+    });
+
+    renderWithRouter(<DeliveryLogTab refreshToken={0} />);
+
+    const footer = await screen.findByText("End of logs");
+    expect(footer).toHaveClass("h-8", "w-full", "justify-center");
+    expect(footer).not.toHaveClass("min-h-12");
+  });
 });

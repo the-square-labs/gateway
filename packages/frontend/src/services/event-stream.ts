@@ -212,6 +212,13 @@ class EventStream {
           api.invalidateCache("req:/api/notifications/alert-rules");
         } else if (msg.channel === "notification.webhook.changed") {
           api.invalidateCache("req:/api/notifications/webhooks");
+        } else if (msg.channel === "siem.destination.changed") {
+          api.invalidateCache("req:/api/audit/siem/destinations");
+          api.invalidateCache("audit:siem:destinations");
+          api.invalidateCache("audit:siem:deliveries");
+        } else if (msg.channel === "siem.delivery.changed") {
+          api.invalidateCache("req:/api/audit/siem/deliveries");
+          api.invalidateCache("audit:siem:deliveries");
         } else if (msg.channel === "database.changed") {
           api.invalidateCache("req:/api/databases");
           const payload = msg.payload as { action?: string; id?: string } | undefined;

@@ -3,53 +3,23 @@
   "edges": [
     {
       "from_id": "rzidwe4n",
-      "to_id": "7rchqhpz",
-      "relation": "related_to",
-      "weight": 0.5076,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967349,
-      "updated_at": 1786064967349
-    },
-    {
-      "from_id": "rzidwe4n",
       "to_id": "vrch49nc",
-      "relation": "related_to",
-      "weight": 0.478,
-      "reason": "The memories are similar enough to be useful related context.",
+      "relation": "same_workflow",
+      "weight": 0.74,
+      "reason": "Both describe Gateway image updates followed by compose-based application recreation while preserving host configuration and stateful services.",
       "source": "auto",
-      "created_at": 1786064967349,
-      "updated_at": 1786064967349
+      "created_at": 1786135099925,
+      "updated_at": 1786135099925
     },
     {
       "from_id": "rzidwe4n",
-      "to_id": "nr9hvzr3",
-      "relation": "related_to",
-      "weight": 0.4739,
-      "reason": "The memories are similar enough to be useful related context.",
+      "to_id": "iois3ul4",
+      "relation": "same_area",
+      "weight": 0.58,
+      "reason": "Both document Gateway deployment infrastructure and stateful-service handling on the test gateway host.",
       "source": "auto",
-      "created_at": 1786064967349,
-      "updated_at": 1786064967349
-    },
-    {
-      "from_id": "rzidwe4n",
-      "to_id": "wlju46pr",
-      "relation": "related_to",
-      "weight": 0.4237,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967349,
-      "updated_at": 1786064967349
-    },
-    {
-      "from_id": "rzidwe4n",
-      "to_id": "kufbu8qt",
-      "relation": "related_to",
-      "weight": 0.4134,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967349,
-      "updated_at": 1786064967349
+      "created_at": 1786135099925,
+      "updated_at": 1786135099925
     }
   ]
 }

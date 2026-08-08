@@ -80,6 +80,8 @@ describe('canonical scope definitions', () => {
     expect(ADMIN_SCOPES).not.toContain('docker:registries:delete');
     expect(ADMIN_SCOPES).toContain('docker:containers:mounts');
     expect(ADMIN_SCOPES).toContain('proxy:raw:bypass');
+    expect(ADMIN_SCOPES).toContain('audit:siem:view');
+    expect(ADMIN_SCOPES).toContain('audit:siem:manage');
     expect(ADMIN_SCOPES).not.toContain('nodes:console');
     expect(OPERATOR_SCOPES).not.toContain('proxy:raw:bypass');
     expect(OPERATOR_SCOPES).not.toContain('nodes:console');
@@ -239,10 +241,18 @@ describe('canonical scope definitions', () => {
       'integrations:cloudflare:dns:delete',
       'logs:tokens:create',
       'admin:audit',
+      'audit:siem:manage',
       'admin:details:certificates',
       'admin:update',
     ]);
     expect(MANUAL_APPROVAL_SCOPES).not.toContain('docker:containers:environment');
+  });
+
+  it('keeps SIEM read and configuration scopes distinct while allowing management to imply read', () => {
+    expect(ALL_SCOPES).toContain('audit:siem:view');
+    expect(ALL_SCOPES).toContain('audit:siem:manage');
+    expect(MANUAL_APPROVAL_SCOPES).toContain('audit:siem:manage');
+    expect(MANUAL_APPROVAL_SCOPES).not.toContain('audit:siem:view');
   });
 
   it('keeps backend and frontend resource-scopable lists aligned', () => {

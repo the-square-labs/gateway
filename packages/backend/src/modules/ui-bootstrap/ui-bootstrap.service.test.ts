@@ -40,7 +40,7 @@ const configData = {
   gatewayGrpcPublicTarget: null,
   gatewayGrpcLocalIp: null,
   relayAutoRecovery: false,
-  features: { pkiEnabled: true, domainsEnabled: true, inferenceEnabled: true },
+  features: { pkiEnabled: true, domainsEnabled: true, siemEnabled: true, inferenceEnabled: true },
 };
 
 const configSnapshot = { ...nodeSnapshot, data: configData };
@@ -109,6 +109,7 @@ describe('UIBootstrapService', () => {
     expect(shell.systemConfig.features).toEqual({
       pkiEnabled: true,
       domainsEnabled: true,
+      siemEnabled: true,
       loggingEnabled: true,
       inferenceEnabled: true,
     });

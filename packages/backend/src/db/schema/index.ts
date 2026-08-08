@@ -51,6 +51,7 @@ export * from './proxy-host-folders.js';
 export * from './proxy-hosts.js';
 export * from './sandbox-jobs.js';
 export * from './settings.js';
+export * from './siem.js';
 export * from './ssl-certificates.js';
 export * from './status-page.js';
 export * from './user-auth.js';
