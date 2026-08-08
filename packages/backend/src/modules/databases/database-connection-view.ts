@@ -135,6 +135,19 @@ export function hashDatabasePreview(input: string): string {
   return createHash('sha256').update(input).digest('hex').slice(0, 16);
 }
 
+function redactClickHouseUrlCredentials(url: string): string {
+  try {
+    const redacted = new URL(url);
+    redacted.username = '';
+    redacted.password = '';
+    redacted.search = '';
+    redacted.hash = '';
+    return redacted.toString();
+  } catch {
+    return '';
+  }
+}
+
 export function buildDatabaseConnectionString(config: DatabaseConnectionConfig): string {
   if (config.type === 'postgres') {
     const protocol = 'postgresql';
@@ -227,7 +240,7 @@ export function toDatabaseConnectionView(
           }
         : config.type === 'clickhouse'
           ? {
-              url: config.url,
+              url: revealCredentials ? config.url : redactClickHouseUrlCredentials(config.url),
               host: config.host,
               port: config.port,
               database: config.database,
