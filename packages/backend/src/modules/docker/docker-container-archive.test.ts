@@ -131,16 +131,26 @@ describe('GWCA v1', () => {
     expect(ContainerArchiveExportQuerySchema.parse({})).toEqual({
       imageMode: 'portable',
       includeWritableLayer: false,
+      includeEnvironment: true,
       includeSecrets: false,
     });
-    expect(ContainerArchiveExportQuerySchema.parse({ includeWritableLayer: 'false', includeSecrets: 'false' })).toEqual(
-      { imageMode: 'portable', includeWritableLayer: false, includeSecrets: false }
-    );
-    expect(ContainerArchiveExportQuerySchema.parse({ includeWritableLayer: 'true', includeSecrets: 'true' })).toEqual({
-      imageMode: 'portable',
-      includeWritableLayer: true,
-      includeSecrets: true,
-    });
+    expect(
+      ContainerArchiveExportQuerySchema.parse({
+        includeWritableLayer: 'false',
+        includeEnvironment: 'false',
+        includeSecrets: 'false',
+      })
+    ).toEqual({ imageMode: 'portable', includeWritableLayer: false, includeEnvironment: false, includeSecrets: false });
+    expect(
+      ContainerArchiveExportQuerySchema.parse({
+        includeWritableLayer: 'true',
+        includeEnvironment: 'true',
+        includeSecrets: 'true',
+      })
+    ).toEqual({ imageMode: 'portable', includeWritableLayer: true, includeEnvironment: true, includeSecrets: true });
+    expect(() =>
+      ContainerArchiveExportQuerySchema.parse({ includeEnvironment: 'false', includeSecrets: 'true' })
+    ).toThrow('Secrets can only be included when environment is included');
   });
 
   it('parses a streamed manifest and verifies manifest, image, and footer integrity', async () => {
@@ -190,9 +200,40 @@ describe('GWCA v1', () => {
     for await (const chunk of reader.imageChunks()) chunks.push(Buffer.from(chunk));
     expect(Buffer.concat(chunks)).toEqual(image);
     expect(dispatch.openArchiveExport).toHaveBeenCalledWith(
-      expect.objectContaining({ environment: { PUBLIC_VALUE: 'visible' }, secrets: {} })
+      expect.objectContaining({ environment: { PUBLIC_VALUE: 'visible' }, secrets: {}, includeEnvironment: true })
     );
     expect(dispatch.abort).not.toHaveBeenCalled();
+  });
+
+  it('passes an explicit environment exclusion to the daemon', async () => {
+    const dispatch = {
+      openArchiveExport: vi.fn().mockResolvedValue({
+        manifest: containerManifest({ name: 'portable-app', environment: {} }),
+        imageId: `sha256:${'d'.repeat(64)}`,
+        imageTags: [],
+        captureMode: 'image',
+        imageEmbedded: true,
+      }),
+      readArchiveImage: vi.fn().mockReturnValue(streamBytes(Buffer.from('image'))),
+      abort: vi.fn().mockResolvedValue({}),
+    } as unknown as DockerMigrationDispatchAdapter;
+    const archive = await openGwcaExport({
+      dispatch,
+      nodeId: 'node-1',
+      containerId: 'container-1',
+      includeWritableLayer: true,
+      imageMode: 'portable',
+      environment: {},
+      includeEnvironment: false,
+    });
+    const reader = new GwcaImportReader(archive.stream);
+    expect(await reader.readManifest()).toMatchObject({ container: { environment: {} } });
+    for await (const _chunk of reader.imageChunks()) {
+      // Consume the stream to close the archive session normally.
+    }
+    expect(dispatch.openArchiveExport).toHaveBeenCalledWith(
+      expect.objectContaining({ environment: {}, secrets: {}, includeEnvironment: false })
+    );
   });
 
   it('aborts a daemon export when its manifest is incompatible', async () => {

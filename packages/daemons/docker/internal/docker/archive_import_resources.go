@@ -425,7 +425,7 @@ func (p *DockerPlugin) cleanupGwcaImportResources(ctx context.Context, archiveID
 	return nil
 }
 
-func (p *DockerPlugin) prepareArchiveCreateImageReference(ctx context.Context, imageID, sourceReference string) (string, string) {
+func (p *DockerPlugin) prepareArchiveCreateImageReference(imageID, sourceReference string) (string, string) {
 	sourceReference = strings.TrimSpace(sourceReference)
 	if sourceReference == "" || dockerSHA256Digest.MatchString(sourceReference) {
 		return imageID, ""
@@ -436,34 +436,7 @@ func (p *DockerPlugin) prepareArchiveCreateImageReference(ctx context.Context, i
 		return imageID, ""
 	}
 	if _, digested := named.(reference.Digested); digested {
-		canonical := named.String()
-		inspected, inspectErr := p.client.cli.ImageInspect(ctx, canonical)
-		if inspectErr == nil && inspected.ID == imageID {
-			return canonical, canonical
-		}
-		return imageID, canonical
+		return imageID, named.String()
 	}
-	tagged := reference.TagNameOnly(named).String()
-	existing, inspectErr := p.client.cli.ImageInspect(ctx, tagged)
-	if inspectErr == nil {
-		if existing.ID == imageID {
-			return tagged, tagged
-		}
-		p.logger.Warn("preserve conflicting archive image tag as metadata", "image_id", imageID, "image_reference", tagged)
-		return imageID, tagged
-	}
-	if !isNotFoundErr(inspectErr) {
-		p.logger.Warn("inspect archive image tag", "image_reference", tagged, "error", inspectErr)
-		return imageID, tagged
-	}
-	if _, err := p.client.cli.ImageTag(ctx, mobyclient.ImageTagOptions{Source: imageID, Target: tagged}); err != nil {
-		p.logger.Warn("preserve archive image tag", "image_id", imageID, "image_reference", tagged, "error", err)
-		return imageID, tagged
-	}
-	inspected, err := p.client.cli.ImageInspect(ctx, tagged)
-	if err != nil || inspected.ID != imageID {
-		p.logger.Warn("verify preserved archive image tag", "image_id", imageID, "image_reference", tagged, "error", err)
-		return imageID, tagged
-	}
-	return tagged, tagged
+	return imageID, reference.TagNameOnly(named).String()
 }

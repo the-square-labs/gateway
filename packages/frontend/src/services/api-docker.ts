@@ -564,12 +564,14 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       containerId: string,
       includeWritableLayer = false,
       imageMode: "portable" | "registry" = "portable",
-      includeSecrets = false
+      includeSecrets = false,
+      includeEnvironment = true
     ): string {
       const query = new URLSearchParams({
         includeWritableLayer: String(includeWritableLayer),
         imageMode,
         includeSecrets: String(includeSecrets),
+        includeEnvironment: String(includeEnvironment),
       });
       return `${API_BASE}/docker/nodes/${nodeId}/containers/${containerId}/archive?${query}`;
     }
@@ -580,6 +582,7 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       includeWritableLayer = false,
       imageMode: "portable" | "registry" = "portable",
       includeSecrets = false,
+      includeEnvironment = true,
       onProgress?: (progress: { loaded: number; total: number }) => void
     ): Promise<Blob> {
       const bytes = await this.requestBinary(
@@ -588,7 +591,8 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
           containerId,
           includeWritableLayer,
           imageMode,
-          includeSecrets
+          includeSecrets,
+          includeEnvironment
         ),
         {},
         onProgress

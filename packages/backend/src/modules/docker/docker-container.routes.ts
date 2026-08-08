@@ -431,7 +431,16 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
         );
       }
       const scopeResourceId = String(inspected?.scopeResourceId ?? '');
-      if (!hasDockerResourceScope(actorScopes, 'docker:containers:environment', nodeId, scopeResourceId)) {
+      if (
+        query.imageMode === 'portable' &&
+        !hasDockerResourceScope(actorScopes, 'docker:containers:files', nodeId, scopeResourceId)
+      ) {
+        throw new AppError(403, 'FORBIDDEN', 'Exporting a portable container archive requires files access');
+      }
+      if (
+        query.includeEnvironment &&
+        !hasDockerResourceScope(actorScopes, 'docker:containers:environment', nodeId, scopeResourceId)
+      ) {
         throw new AppError(403, 'FORBIDDEN', 'Exporting a container archive requires environment access');
       }
       if (
@@ -440,12 +449,20 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       ) {
         throw new AppError(403, 'FORBIDDEN', 'Exporting archive secrets is not permitted for this container');
       }
-      const containerName = String(inspected?.Name ?? '').replace(/^\/+/, '');
-      if (!containerName) throw new AppError(409, 'GWCA_SOURCE_INVALID', 'Could not resolve container name');
-      const environment = envListToMap(await docker.getContainerEnv(nodeId, containerId));
-      const secretService = container.resolve(DockerSecretService);
-      const secretKeys = [...(await secretService.getSecretKeys(nodeId, containerName))];
-      const secrets = query.includeSecrets ? await secretService.getDecryptedMap(nodeId, containerName) : {};
+      let environment: Record<string, string> = {};
+      let secrets: Record<string, string> = {};
+      let secretKeys: string[] = [];
+      if (query.includeEnvironment) {
+        environment = envListToMap(await docker.getContainerEnv(nodeId, containerId));
+        const containerName = String(inspected?.Name ?? '').replace(/^\/+/, '');
+        if (!containerName) throw new AppError(409, 'GWCA_SOURCE_INVALID', 'Could not resolve container name');
+        const secretService = container.resolve(DockerSecretService);
+        if (query.includeSecrets) {
+          secrets = await secretService.getDecryptedMap(nodeId, containerName);
+        } else {
+          secretKeys = [...(await secretService.getSecretKeys(nodeId, containerName))];
+        }
+      }
       const dispatch = container.resolve(DockerMigrationDispatchAdapter);
       const archive = await openGwcaExport({
         dispatch,
@@ -456,6 +473,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
         environment,
         secrets,
         secretKeys,
+        includeEnvironment: query.includeEnvironment,
         includeSecrets: query.includeSecrets,
       });
       await container.resolve(AuditService).log({
@@ -466,6 +484,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
         details: {
           nodeId,
           includeWritableLayer: query.includeWritableLayer,
+          includeEnvironment: query.includeEnvironment,
           includeSecrets: query.includeSecrets,
           imageMode: query.imageMode,
         },
@@ -536,7 +555,10 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
               readOnly: mount.readOnly,
             })),
           });
-          if (!hasDockerResourceScope(actorScopes, 'docker:containers:environment', nodeId, '')) {
+          if (
+            Object.keys(archiveContainer.environment ?? {}).length > 0 &&
+            !hasDockerResourceScope(actorScopes, 'docker:containers:environment', nodeId, '')
+          ) {
             throw new AppError(403, 'FORBIDDEN', 'Importing archive environment is not permitted on the target node');
           }
           if (

@@ -1,6 +1,10 @@
 package docker
 
 import (
+	"archive/tar"
+	"bytes"
+	"encoding/json"
+	"io"
 	"reflect"
 	"testing"
 
@@ -44,6 +48,139 @@ func TestStripArchiveSecretEnvRemovesOnlyManagedSecrets(t *testing.T) {
 		if got[index] != want[index] {
 			t.Fatalf("filtered environment = %#v, want %#v", got, want)
 		}
+	}
+}
+
+func TestArchiveCommitEnvironmentUsesBaseImageEnvWhenRuntimeEnvironmentIsExcluded(t *testing.T) {
+	got := archiveCommitEnvironment(
+		false,
+		false,
+		[]string{"PATH=/runtime", "DATABASE_PASSWORD=secret", "RUNTIME_ONLY=value"},
+		[]string{"PATH=/image", "LANG=C"},
+		[]string{"DATABASE_PASSWORD"},
+	)
+	want := []string{"PATH=/image", "LANG=C"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("commit environment = %#v, want %#v", got, want)
+	}
+}
+
+func TestStripDockerArchiveRepoTagsRemovesAllTagMetadata(t *testing.T) {
+	var source bytes.Buffer
+	writer := tar.NewWriter(&source)
+	manifest, err := json.Marshal([]map[string]any{{
+		"Config":   "config.json",
+		"RepoTags": []string{"registry.example/app:stable", "registry.example/app:previous"},
+		"Layers":   []string{"layer.tar"},
+	}})
+	if err != nil {
+		t.Fatalf("marshal image manifest: %v", err)
+	}
+	for _, entry := range []struct {
+		name string
+		data []byte
+	}{
+		{name: "manifest.json", data: manifest},
+		{name: "repositories", data: []byte(`{"registry.example":{"app":"sha256:poisoned"}}`)},
+		{name: "layer.tar", data: []byte("layer contents")},
+	} {
+		if err := writer.WriteHeader(&tar.Header{Name: entry.name, Mode: 0o600, Size: int64(len(entry.data))}); err != nil {
+			t.Fatalf("write %s header: %v", entry.name, err)
+		}
+		if _, err := writer.Write(entry.data); err != nil {
+			t.Fatalf("write %s: %v", entry.name, err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close source archive: %v", err)
+	}
+
+	var sanitized bytes.Buffer
+	if err := stripDockerArchiveRepoTags(bytes.NewReader(source.Bytes()), &sanitized); err != nil {
+		t.Fatalf("strip archive tags: %v", err)
+	}
+
+	entries := map[string][]byte{}
+	reader := tar.NewReader(bytes.NewReader(sanitized.Bytes()))
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read sanitized archive: %v", err)
+		}
+		content, err := io.ReadAll(reader)
+		if err != nil {
+			t.Fatalf("read sanitized entry %s: %v", header.Name, err)
+		}
+		entries[header.Name] = content
+	}
+
+	var rewritten []struct {
+		RepoTags []string `json:"RepoTags"`
+	}
+	if err := json.Unmarshal(entries["manifest.json"], &rewritten); err != nil {
+		t.Fatalf("parse sanitized image manifest: %v", err)
+	}
+	if len(rewritten) != 1 || len(rewritten[0].RepoTags) != 0 {
+		t.Fatalf("sanitized RepoTags = %#v, want empty", rewritten)
+	}
+	if got := string(entries["repositories"]); got != "{}" {
+		t.Fatalf("sanitized repositories = %q, want empty object", got)
+	}
+	if got := string(entries["layer.tar"]); got != "layer contents" {
+		t.Fatalf("layer contents = %q", got)
+	}
+}
+
+func TestStripDockerArchiveRepoTagsRejectsMetadataPathAliasesAndDuplicates(t *testing.T) {
+	for _, entries := range [][]string{
+		{"/manifest.json"},
+		{"/../manifest.json"},
+		{"./manifest.json"},
+		{"//repositories"},
+		{"../../repositories"},
+		{"nested/../repositories"},
+		{"manifest.json", "manifest.json"},
+		{"repositories", "repositories"},
+	} {
+		t.Run(entries[0], func(t *testing.T) {
+			var source bytes.Buffer
+			writer := tar.NewWriter(&source)
+			for _, name := range entries {
+				if err := writer.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: 2}); err != nil {
+					t.Fatalf("write %s header: %v", name, err)
+				}
+				if _, err := writer.Write([]byte("{}")); err != nil {
+					t.Fatalf("write %s: %v", name, err)
+				}
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatalf("close source archive: %v", err)
+			}
+
+			var sanitized bytes.Buffer
+			if err := stripDockerArchiveRepoTags(bytes.NewReader(source.Bytes()), &sanitized); err == nil {
+				t.Fatalf("strip archive tags accepted metadata entries %#v", entries)
+			}
+		})
+	}
+}
+
+func TestStripDockerArchiveRepoTagsRejectsNonRegularMetadata(t *testing.T) {
+	var source bytes.Buffer
+	writer := tar.NewWriter(&source)
+	if err := writer.WriteHeader(&tar.Header{Name: "manifest.json", Typeflag: tar.TypeSymlink, Linkname: "payload.json"}); err != nil {
+		t.Fatalf("write symlink header: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close source archive: %v", err)
+	}
+
+	var sanitized bytes.Buffer
+	if err := stripDockerArchiveRepoTags(bytes.NewReader(source.Bytes()), &sanitized); err == nil {
+		t.Fatal("strip archive tags accepted a non-regular manifest entry")
 	}
 }
 
@@ -180,6 +317,27 @@ func TestConfiguredArchiveImageReferencePrefersPreservedRegistryReference(t *tes
 	})
 	if got != "registry.example/team/app:stable" {
 		t.Fatalf("image reference = %q", got)
+	}
+}
+
+func TestPrepareArchiveCreateImageReferenceKeepsTagOnlyAsMetadata(t *testing.T) {
+	imageID := "sha256:" + repeatHex("a")
+	createImage, preservedReference := (&DockerPlugin{}).prepareArchiveCreateImageReference(
+		imageID,
+		"registry.example/team/app:stable",
+	)
+	if createImage != imageID {
+		t.Fatalf("create image = %q, want immutable image ID %q", createImage, imageID)
+	}
+	if preservedReference != "registry.example/team/app:stable" {
+		t.Fatalf("preserved image reference = %q", preservedReference)
+	}
+	config := &container.Config{Labels: sanitizeGwcaLabels(map[string]string{
+		archiveImageReferenceLabel: "registry.example/attacker/image:poisoned",
+	})}
+	setArchiveImageReferenceLabel(config, preservedReference)
+	if got := configuredArchiveImageReference(createImage, config.Labels); got != preservedReference {
+		t.Fatalf("update image reference = %q, want %q", got, preservedReference)
 	}
 }
 
