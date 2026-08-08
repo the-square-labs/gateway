@@ -67,6 +67,25 @@ describe('DockerManagementService env operations', () => {
     expect(environmentService.seedFromRuntimeIfMissing).not.toHaveBeenCalled();
   });
 
+  it('filters secret keys from stored decrypted environment', async () => {
+    const dispatch = {
+      sendDockerContainerCommand: vi.fn().mockResolvedValue(inspectResult(['PUBLIC=runtime', 'SECRET=runtime-secret'])),
+    };
+    const secretService = {
+      getSecretKeys: vi.fn().mockResolvedValue(new Set(['SECRET'])),
+    };
+    const environmentService = {
+      getDecryptedMap: vi.fn().mockResolvedValue({ PUBLIC: 'stored', SECRET: 'stored-secret' }),
+      seedFromRuntimeIfMissing: vi.fn(),
+    };
+    const service = createService(dispatch);
+    service.setSecretService(secretService as never);
+    service.setEnvironmentService(environmentService as never);
+
+    await expect(service.getContainerEnv('node-1', 'container-1')).resolves.toEqual(['PUBLIC=stored']);
+    expect(environmentService.seedFromRuntimeIfMissing).not.toHaveBeenCalled();
+  });
+
   it('filters secret keys before seeding missing stored environment from runtime env', async () => {
     const dispatch = {
       sendDockerContainerCommand: vi.fn().mockResolvedValue(inspectResult(['PUBLIC=1', 'SECRET=hidden', 'NO_EQUALS'])),
