@@ -69,6 +69,35 @@ describe('ProxyService helpers', () => {
     ).toBe(false);
   });
 
+  it('validates stored raw config when an update newly enables raw mode', () => {
+    const existing = { type: 'proxy', rawConfigEnabled: false, rawConfig: 'server { deny all; }' };
+
+    expect(
+      __testOnly.storedRawConfigForRawModeEnablement(existing, { rawConfigEnabled: true })
+    ).toBe('server { deny all; }');
+    expect(__testOnly.storedRawConfigForRawModeEnablement(existing, { type: 'raw' })).toBe('server { deny all; }');
+  });
+
+  it('does not revalidate a stored raw config for unrelated updates or a supplied replacement', () => {
+    const existing = { type: 'proxy', rawConfigEnabled: false, rawConfig: 'server { deny all; }' };
+
+    expect(
+      __testOnly.storedRawConfigForRawModeEnablement(existing, { enabled: false } as any)
+    ).toBeUndefined();
+    expect(
+      __testOnly.storedRawConfigForRawModeEnablement(existing, {
+        rawConfigEnabled: true,
+        rawConfig: 'server { return 200; }',
+      })
+    ).toBeUndefined();
+    expect(
+      __testOnly.storedRawConfigForRawModeEnablement(
+        { ...existing, type: 'raw', rawConfigEnabled: true },
+        { rawConfigEnabled: true }
+      )
+    ).toBeUndefined();
+  });
+
   it('does not block unrelated updates when an existing host has stale SSL state without a certificate', () => {
     expect(() =>
       __testOnly.assertSslPrerequisitesForUpdate(
