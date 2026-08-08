@@ -16,6 +16,7 @@ import type { AISandboxRunnerService } from './ai.sandbox-runner.service.js';
 const logger = createChildLogger('AISandboxService');
 const SANDBOX_RECONCILE_INTERVAL_MS = 60_000;
 const SANDBOX_ARTIFACT_CHUNK_BYTES = 256 * 1024;
+const SANDBOX_CREATION_GRACE_MS = 2 * 60_000;
 
 export interface SandboxExecuteScriptInput {
   runtime?: unknown;
@@ -83,6 +84,7 @@ export interface SandboxSendArtifactInput {
 
 export class AISandboxService {
   private reconcileInterval: ReturnType<typeof setInterval> | null = null;
+  private readonly creatingJobIds = new Set<string>();
   private readonly monitoredJobIds = new Set<string>();
 
   constructor(
@@ -115,6 +117,7 @@ export class AISandboxService {
       workspaceReservationBytes: policy.tierPolicy.workspaceBytes,
     });
 
+    this.creatingJobIds.add(job.id);
     try {
       const result = await this.runner.executeScript({
         policy: {
@@ -157,6 +160,8 @@ export class AISandboxService {
       const normalized = this.toSandboxAppError(error);
       await this.jobs.markFinished(job.id, 'failed', { error: normalized.message });
       throw normalized;
+    } finally {
+      this.creatingJobIds.delete(job.id);
     }
   }
 
@@ -178,6 +183,7 @@ export class AISandboxService {
       workspaceReservationBytes: policy.tierPolicy.workspaceBytes,
     });
 
+    this.creatingJobIds.add(job.id);
     try {
       const result = await this.runner.runProcess({
         policy: {
@@ -212,6 +218,8 @@ export class AISandboxService {
       const normalized = this.toSandboxAppError(error);
       await this.jobs.markFinished(job.id, 'failed', { error: normalized.message });
       throw normalized;
+    } finally {
+      this.creatingJobIds.delete(job.id);
     }
   }
 
@@ -364,9 +372,7 @@ export class AISandboxService {
         const timeoutMs = Number.isFinite(expiresAtMs) ? Math.max(1_000, expiresAtMs - Date.now() + 10_000) : undefined;
         const result = await this.runner.waitProcess({ processId: containerId, timeoutMs });
         const status = Number.isFinite(expiresAtMs) && Date.now() >= expiresAtMs ? 'timeout' : 'exited';
-        await this.runner.killProcess({ processId: containerId }).catch((error) => {
-          logger.warn('Failed to clean up completed sandbox process', { jobId, containerId, error });
-        });
+        await this.runner.killProcess({ processId: containerId });
         await this.jobs.markFinishedIfActive(jobId, status, {
           exitCode: result.exitCode,
           outputBytes: result.outputBytes,
@@ -466,23 +472,36 @@ export class AISandboxService {
         continue;
       }
 
+      const discovered = await this.runner.findJobContainer({ jobId: row.job.id }).catch((error) => {
+        logger.warn('Failed to recover sandbox container from job label', { jobId: row.job.id, error });
+        return undefined;
+      });
       let containerId = row.job.containerId;
       let recoveredExpiresAt: string | null = null;
-      if (!containerId) {
-        const recovered = await this.runner.findJobContainer({ jobId: row.job.id }).catch((error) => {
-          logger.warn('Failed to recover sandbox container from job label', { jobId: row.job.id, error });
-          return null;
+      if (discovered && !discovered.containerId && containerId) {
+        await this.jobs.markFinishedIfActive(row.job.id, 'failed', {
+          error: 'Sandbox container is no longer available',
         });
-        if (recovered?.containerId) {
-          containerId = recovered.containerId;
-          recoveredExpiresAt = recovered.expiresAt;
-          await this.jobs.markRunning(row.job.id, containerId).catch((error) => {
-            logger.warn('Failed to restore sandbox job container reference', {
-              jobId: row.job.id,
-              containerId,
-              error,
-            });
+        continue;
+      }
+      if (!containerId && discovered?.containerId) {
+        containerId = discovered.containerId;
+        recoveredExpiresAt = discovered.expiresAt;
+        await this.jobs.markRunning(row.job.id, containerId).catch((error) => {
+          logger.warn('Failed to restore sandbox job container reference', {
+            jobId: row.job.id,
+            containerId,
+            error,
           });
+        });
+      }
+      if (!containerId && discovered && !this.creatingJobIds.has(row.job.id)) {
+        const createdAtMs = row.job.createdAt?.getTime();
+        if (createdAtMs !== undefined && now - createdAtMs >= SANDBOX_CREATION_GRACE_MS) {
+          await this.jobs.markFinishedIfActive(row.job.id, 'failed', {
+            error: 'Sandbox container was not created',
+          });
+          continue;
         }
       }
 
@@ -568,9 +587,12 @@ export class AISandboxService {
 
   private async expireJob(job: SandboxJob) {
     if (job.containerId) {
-      await this.runner.killProcess({ processId: job.containerId }).catch((error) => {
+      try {
+        await this.runner.killProcess({ processId: job.containerId });
+      } catch (error) {
         logger.warn('Failed to kill expired sandbox job', { jobId: job.id, containerId: job.containerId, error });
-      });
+        return;
+      }
     }
     await this.jobs.markFinished(job.id, 'expired').catch((error) => {
       logger.warn('Failed to mark sandbox job expired', { jobId: job.id, error });

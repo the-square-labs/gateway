@@ -159,7 +159,8 @@ export class AISandboxRunnerService {
 
   async waitProcess(params: SandboxRunnerWaitProcessParams) {
     await this.ensureStarted();
-    return this.callRunner<SandboxRunnerWaitProcessResult>('waitProcess', params);
+    const timeoutMs = (params.timeoutMs ?? 25 * 60 * 1000) + 30_000;
+    return this.callRunner<SandboxRunnerWaitProcessResult>('waitProcess', params, timeoutMs);
   }
 
   async writeProcessStdin(params: SandboxRunnerWriteStdinParams) {
@@ -221,18 +222,19 @@ export class AISandboxRunnerService {
     throw new Error('Sandbox runner socket did not become ready');
   }
 
-  private callRunner<TResult>(method: SandboxRunnerRequest['method'], params: unknown): Promise<TResult> {
+  private callRunner<TResult>(
+    method: SandboxRunnerRequest['method'],
+    params: unknown,
+    timeoutMs = 25 * 60 * 1000
+  ): Promise<TResult> {
     return new Promise((resolve, reject) => {
       const id = randomUUID();
       const socket = net.createConnection({ path: this.socketPath });
       let buffer = '';
-      const timeout = setTimeout(
-        () => {
-          socket.destroy();
-          reject(new Error(`Sandbox runner call timed out: ${method}`));
-        },
-        25 * 60 * 1000
-      );
+      const timeout = setTimeout(() => {
+        socket.destroy();
+        reject(new Error(`Sandbox runner call timed out: ${method}`));
+      }, timeoutMs);
 
       socket.on('connect', () => {
         socket.write(`${JSON.stringify({ id, method, params } satisfies SandboxRunnerRequest)}\n`);

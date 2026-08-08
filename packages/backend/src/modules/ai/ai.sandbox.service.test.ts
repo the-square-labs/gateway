@@ -88,6 +88,9 @@ describe('AISandboxService', () => {
       markFinishedIfActive: vi.fn().mockResolvedValue({ id: job.id, status: 'exited' }),
     };
     const runner = {
+      findJobContainer: vi
+        .fn()
+        .mockResolvedValue({ containerId: job.containerId, expiresAt: job.expiresAt.toISOString() }),
       getWorkspaceUsage: vi
         .fn()
         .mockResolvedValue({ workspaceUsageBytes: 512, workspaceReservationBytes: 1024, overReservation: false }),
@@ -121,6 +124,9 @@ describe('AISandboxService', () => {
       markFinishedIfActive: vi.fn().mockResolvedValue({ id: job.id, status: 'failed' }),
     };
     const runner = {
+      findJobContainer: vi
+        .fn()
+        .mockResolvedValue({ containerId: job.containerId, expiresAt: job.expiresAt.toISOString() }),
       getWorkspaceUsage: vi
         .fn()
         .mockResolvedValue({ workspaceUsageBytes: 2048, workspaceReservationBytes: 1024, overReservation: true }),
@@ -134,6 +140,49 @@ describe('AISandboxService', () => {
       error: 'Sandbox workspace exceeded its reserved capacity',
       workspaceUsageBytes: 2048,
     });
+  });
+
+  it('fails an active job when its recorded container has vanished', async () => {
+    const job = {
+      id: 'job-missing-container',
+      containerId: 'container-missing',
+      expiresAt: new Date(Date.now() + 60_000),
+      requiredScopes: [],
+    };
+    const jobs = {
+      listActiveWithEffectiveScopes: vi.fn().mockResolvedValue([{ job, userId: 'user-1', currentScopes: [] }]),
+      markFinishedIfActive: vi.fn().mockResolvedValue({ id: job.id, status: 'failed' }),
+    };
+    const runner = {
+      findJobContainer: vi.fn().mockResolvedValue({ containerId: null, expiresAt: null }),
+    };
+    const service = new AISandboxService(jobs as never, runner as never, {} as never);
+
+    await expect(service.reconcileActiveJobs()).resolves.toEqual({ checked: 1, expired: 0, revoked: 0 });
+    expect(jobs.markFinishedIfActive).toHaveBeenCalledWith(job.id, 'failed', {
+      error: 'Sandbox container is no longer available',
+    });
+  });
+
+  it('keeps a newly-created unbound job within the creation grace period', async () => {
+    const job = {
+      id: 'job-creating',
+      containerId: null,
+      createdAt: new Date(Date.now() - 1_000),
+      expiresAt: new Date(Date.now() + 60_000),
+      requiredScopes: [],
+    };
+    const jobs = {
+      listActiveWithEffectiveScopes: vi.fn().mockResolvedValue([{ job, userId: 'user-1', currentScopes: [] }]),
+      markFinishedIfActive: vi.fn(),
+    };
+    const runner = {
+      findJobContainer: vi.fn().mockResolvedValue({ containerId: null, expiresAt: null }),
+    };
+    const service = new AISandboxService(jobs as never, runner as never, {} as never);
+
+    await expect(service.reconcileActiveJobs()).resolves.toEqual({ checked: 1, expired: 0, revoked: 0 });
+    expect(jobs.markFinishedIfActive).not.toHaveBeenCalled();
   });
 
   it('returns a capacity error instead of an internal error when runner admission rejects a sandbox', async () => {

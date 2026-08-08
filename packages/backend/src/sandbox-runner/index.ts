@@ -94,7 +94,6 @@ const runningTimeouts = new Map<string, NodeJS.Timeout>();
 const imageEnsurePromises = new Map<string, Promise<string>>();
 const workspaceDirs = new Map<string, string>();
 const workspaceReservations = new Map<string, number>();
-const pendingWorkspaceCleanupDirs = new Set<string>();
 let workspaceAdmissionLock = Promise.resolve();
 
 interface RuntimeImageSpec {
@@ -291,18 +290,25 @@ async function createWorkspaceDir(): Promise<string> {
   return workspaceDir;
 }
 
-async function cleanupWorkspaceDir(workspaceDir: string | undefined): Promise<void> {
-  if (!workspaceDir) return;
+async function cleanupWorkspaceDir(workspaceDir: string | undefined): Promise<boolean> {
+  if (!workspaceDir) return true;
   const root = await fs.realpath(WORKSPACE_HOST_ROOT).catch(() => WORKSPACE_HOST_ROOT);
   const target = await fs.realpath(workspaceDir).catch(() => workspaceDir);
-  if (target !== root && target.startsWith(`${root}${path.sep}`)) {
-    try {
-      await fs.rm(target, { recursive: true, force: true });
-      pendingWorkspaceCleanupDirs.delete(target);
-    } catch (error) {
-      pendingWorkspaceCleanupDirs.add(target);
-      logger.warn('Failed to remove sandbox workspace; cleanup will be retried', { workspaceDir: target, error });
-    }
+  if (target === root || !target.startsWith(`${root}${path.sep}`)) {
+    logger.warn('Sandbox workspace is outside the managed root; retaining its stopped container for inspection', {
+      workspaceDir: target,
+    });
+    return false;
+  }
+  try {
+    await fs.rm(target, { recursive: true, force: true });
+    return true;
+  } catch (error) {
+    logger.warn('Failed to remove sandbox workspace; retaining its stopped container for retry', {
+      workspaceDir: target,
+      error,
+    });
+    return false;
   }
 }
 
@@ -333,17 +339,18 @@ async function allowSandboxFileHandleAccess(file: fs.FileHandle): Promise<void> 
   }
 }
 
-async function removeContainerAndWorkspace(containerId: string): Promise<void> {
+async function removeContainerAndWorkspace(containerId: string): Promise<boolean> {
   let workspaceDir = workspaceDirs.get(containerId);
   if (!workspaceDir) {
     const inspect = (await docker.inspectContainer(containerId).catch(() => null)) as any;
     const label = inspect?.Config?.Labels?.['gateway.sandbox.workspace_dir'];
     workspaceDir = typeof label === 'string' ? label : undefined;
   }
+  if (!(await cleanupWorkspaceDir(workspaceDir))) return false;
   await docker.removeContainer(containerId).catch(() => {});
   workspaceDirs.delete(containerId);
   workspaceReservations.delete(containerId);
-  await cleanupWorkspaceDir(workspaceDir);
+  return true;
 }
 
 async function workspaceDirForProcess(processId: string): Promise<string> {
@@ -971,7 +978,9 @@ async function writeProcessStdin(params: SandboxRunnerWriteStdinParams): Promise
 async function killProcess(params: SandboxRunnerProcessParams): Promise<SandboxRunnerKillResult> {
   await killContainerIfRunning(params.processId);
   clearKill(params.processId);
-  await removeContainerAndWorkspace(params.processId);
+  if (!(await removeContainerAndWorkspace(params.processId))) {
+    throw new Error('Sandbox workspace cleanup is pending');
+  }
   return { processId: params.processId, killed: true };
 }
 
@@ -993,56 +1002,27 @@ async function revokeUserSandboxAccess(params: SandboxRunnerRevokeUserParams): P
 
 async function reconcileSandboxContainers(): Promise<{ removed: number }> {
   const containers = await docker.listContainersByLabel('gateway.sandbox=true');
-  await retryPendingWorkspaceCleanup();
-  await sweepOrphanWorkspaceDirs(containers);
   const now = Date.now();
   let removed = 0;
 
   for (const container of containers) {
     const expiresAt = container.Labels?.['gateway.sandbox.expires_at'];
+    const expired = !expiresAt || Date.parse(expiresAt) <= now;
+    const stopped = container.State !== 'running';
     if (!expiresAt) {
       logger.warn('Removing sandbox container without expiry label', { containerId: container.Id });
-    } else if (Date.parse(expiresAt) > now) {
+    } else if (!expired && !stopped) {
       continue;
     }
 
     await killContainerIfRunning(container.Id).catch(() => {});
-    await removeContainerAndWorkspace(container.Id);
-    clearKill(container.Id);
-    removed += 1;
+    if (await removeContainerAndWorkspace(container.Id)) {
+      clearKill(container.Id);
+      removed += 1;
+    }
   }
 
   return { removed };
-}
-
-const SANDBOX_WORKSPACE_DIR_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-/i;
-
-async function retryPendingWorkspaceCleanup(): Promise<void> {
-  for (const workspaceDir of pendingWorkspaceCleanupDirs) {
-    await cleanupWorkspaceDir(workspaceDir);
-  }
-}
-
-async function sweepOrphanWorkspaceDirs(
-  containers: Awaited<ReturnType<typeof docker.listContainersByLabel>>
-): Promise<void> {
-  const root = await fs.realpath(WORKSPACE_HOST_ROOT).catch(() => null);
-  if (!root) return;
-  const referenced = new Set(
-    await Promise.all(
-      containers
-        .map((container) => container.Labels?.['gateway.sandbox.workspace_dir'])
-        .filter((workspaceDir): workspaceDir is string => typeof workspaceDir === 'string')
-        .map((workspaceDir) => fs.realpath(workspaceDir).catch(() => workspaceDir))
-    )
-  );
-  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.isSymbolicLink() || !SANDBOX_WORKSPACE_DIR_NAME.test(entry.name)) continue;
-    const workspaceDir = path.join(root, entry.name);
-    if (referenced.has(workspaceDir)) continue;
-    await cleanupWorkspaceDir(workspaceDir);
-  }
 }
 
 async function handle(request: SandboxRunnerRequest): Promise<unknown> {
