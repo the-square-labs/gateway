@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { afterEach, type vi } from 'vitest';
 import { container } from '@/container.js';
+import { ALL_SCOPES } from '@/lib/scopes.js';
 import { AIService } from '@/modules/ai/ai.service.js';
 import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
 import { DockerRegistryService } from '@/modules/docker/docker-registry.service.js';
@@ -40,6 +41,7 @@ export function createService({
   databaseService = {},
   templatesService = {},
   caService = {},
+  authService = { getUserById: async () => ({ ...USER, scopes: [...ALL_SCOPES] }) },
   auditService,
 }: {
   nodesService: { list?: ReturnType<typeof vi.fn>; create?: ReturnType<typeof vi.fn> };
@@ -48,6 +50,7 @@ export function createService({
   databaseService?: Record<string, ReturnType<typeof vi.fn>>;
   templatesService?: Record<string, ReturnType<typeof vi.fn>>;
   caService?: Record<string, ReturnType<typeof vi.fn>>;
+  authService?: { getUserById: (userId: string) => Promise<User | null> };
   auditService: { log: ReturnType<typeof vi.fn> };
 }) {
   return new AIService(
@@ -60,7 +63,7 @@ export function createService({
     {} as never,
     {} as never,
     {} as never,
-    {} as never,
+    authService as never,
     auditService as never,
     {} as never,
     nodesService as never,
