@@ -10,7 +10,12 @@ export const SANDBOX_AI_TOOLS: AIToolDefinition[] = [
       properties: {
         runtime: { type: 'string', enum: ['alpine', 'node', 'python'], description: 'Sandbox runtime image family.' },
         script: { type: 'string', description: 'Script body to execute inside the sandbox.' },
-        resourceTier: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Resource tier. Default: low.' },
+        resourceTier: {
+          type: 'string',
+          enum: ['low', 'medium', 'high', 'max'],
+          description:
+            'Resource tier. Default: low. Workspace capacity is a soft quota and host-disk admission stops at 80%.',
+        },
         ttlSeconds: { type: 'number', description: 'Requested TTL in seconds. Clamped to tier max.' },
       },
       required: ['script'],
@@ -30,7 +35,12 @@ export const SANDBOX_AI_TOOLS: AIToolDefinition[] = [
       properties: {
         runtime: { type: 'string', enum: ['alpine', 'node', 'python'], description: 'Sandbox runtime image family.' },
         command: { type: 'array', items: { type: 'string' }, description: 'Command argv to run in the sandbox.' },
-        resourceTier: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Resource tier. Default: low.' },
+        resourceTier: {
+          type: 'string',
+          enum: ['low', 'medium', 'high', 'max'],
+          description:
+            'Resource tier. Default: low. Workspace capacity is a soft quota and host-disk admission stops at 80%.',
+        },
         ttlSeconds: { type: 'number', description: 'Requested TTL in seconds. Clamped to tier max.' },
       },
       required: ['command'],

@@ -1232,7 +1232,7 @@ AI assistant settings control the provider, request limits, tool exposure, web s
 
 ## Sandbox Runner
 - sandboxEnabled: expose sandbox execution and artifact tools to the assistant.
-- sandboxDefaultTier: default resource tier. The agent may request a tier only if the user has the required scope.
+- sandboxDefaultTier: default resource tier. The agent may request a tier only if the user has the required scope. Tier workspace sizes are soft quotas; the runner refuses new reservations at 80% host-disk use and removes workspaces at terminal cleanup.
 - Sandbox tools are intentionally excluded from MCP exposure and are available only to the assistant when enabled and permitted.`,
 
   gitlab: `# GitLab Integrations

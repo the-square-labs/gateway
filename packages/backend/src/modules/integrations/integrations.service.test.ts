@@ -200,6 +200,57 @@ function vcsProvider<T extends Record<string, unknown>>(overrides: T) {
 }
 
 describe('IntegrationsService', () => {
+  it('streams GitLab archives into the sandbox without materializing or base64-encoding the archive', async () => {
+    const auditService = { log: vi.fn() };
+    const service = new IntegrationsService({} as never, auditService as never, {} as never);
+    const streamedChunks = [Buffer.alloc(256 * 1024, 1), Buffer.alloc(4 * 1024, 2)];
+    async function* archiveChunks() {
+      for (const chunk of streamedChunks) yield chunk;
+    }
+    const provider = {
+      streamRepositoryArchive: vi.fn().mockResolvedValue({
+        filename: 'app.tar.gz',
+        contentType: 'application/gzip',
+        chunks: archiveChunks(),
+      }),
+    };
+    (service as any).resolveGitLabProjectContext = vi.fn().mockResolvedValue({
+      connector: connectorRow({ capabilities: { repoRead: true } }),
+      project: projectRow(),
+      auth: { baseUrl: 'https://gitlab.example.com', token: 'glpat-never-exposed' },
+      provider,
+    });
+    (service as any).auditGitLabTool = vi.fn().mockResolvedValue(undefined);
+    const sandboxService = {
+      runProcess: vi.fn().mockResolvedValue({ processId: 'process-1', jobId: 'job-1' }),
+      uploadArtifactStream: vi.fn().mockResolvedValue({ sizeBytes: 260 * 1024 }),
+      killProcess: vi.fn(),
+    };
+    const user = {
+      ...BASE_USER,
+      scopes: ['integrations:gitlab:sandbox:clone', 'ai:sandbox:use'],
+    };
+
+    await expect(
+      service.gitLabCloneRepositoryToSandbox(
+        user as never,
+        { connectorId: 'connector-1', project: 'general/balanceify', ref: 'main' },
+        sandboxService as never,
+        'conversation-1'
+      )
+    ).resolves.toMatchObject({
+      processId: 'process-1',
+      archiveBytes: 260 * 1024,
+      status: 'extracting',
+    });
+
+    expect(sandboxService.uploadArtifactStream).toHaveBeenCalledWith(
+      user,
+      expect.objectContaining({ chunks: expect.anything(), maxBytes: 1024 * 1024 * 1024 })
+    );
+    expect(sandboxService.runProcess.mock.calls[0][1].command.join(' ')).not.toContain('glpat-never-exposed');
+  });
+
   it('proves Cloudflare DNS edit capability with a temporary TXT record during preview test', async () => {
     const originalFetch = globalThis.fetch;
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {

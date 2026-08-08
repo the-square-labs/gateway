@@ -1,4 +1,4 @@
-import { index, integer, jsonb, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { bigint, index, integer, jsonb, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
 import { aiConversations } from './ai-conversations.js';
 import { users } from './users.js';
 
@@ -20,6 +20,9 @@ export const sandboxJobs = pgTable(
     containerId: varchar('container_id', { length: 128 }),
     exitCode: integer('exit_code'),
     outputBytes: integer('output_bytes').notNull().default(0),
+    workspaceReservationBytes: bigint('workspace_reservation_bytes', { mode: 'number' }).notNull().default(0),
+    workspaceUsageBytes: bigint('workspace_usage_bytes', { mode: 'number' }).notNull().default(0),
+    workspaceReservationReleasedAt: timestamp('workspace_reservation_released_at', { withTimezone: true }),
     stdoutCursor: varchar('stdout_cursor', { length: 128 }),
     stderrCursor: varchar('stderr_cursor', { length: 128 }),
     revocationReason: text('revocation_reason'),

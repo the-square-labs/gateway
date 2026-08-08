@@ -218,6 +218,31 @@ describe('GitLabProvider', () => {
     });
   });
 
+  it('streams repository archives through the same authenticated endpoint', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      expect(url.pathname).toBe('/api/v4/projects/42/repository/archive.tar.gz');
+      expect(url.searchParams.get('sha')).toBe('main');
+      return new Response(Buffer.alloc(300 * 1024, 3), {
+        status: 200,
+        headers: { 'content-type': 'application/gzip' },
+      });
+    });
+
+    const provider = new GitLabProvider(fetchImpl as typeof fetch);
+    const archive = await provider.streamRepositoryArchive(
+      { baseUrl: 'https://gitlab.test', token: 'token' },
+      { remoteId: '42', fullPath: 'org/app', name: 'app' },
+      'main'
+    );
+    const chunks: Buffer[] = [];
+    for await (const chunk of archive.chunks) chunks.push(chunk);
+
+    expect(archive.filename).toBe('app.tar.gz');
+    expect(chunks.every((chunk) => chunk.byteLength <= 256 * 1024)).toBe(true);
+    expect(Buffer.concat(chunks)).toHaveLength(300 * 1024);
+  });
+
   it('skips forbidden project registries without failing the whole registry discovery', async () => {
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = new URL(String(input));

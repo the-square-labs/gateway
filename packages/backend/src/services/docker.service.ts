@@ -547,6 +547,8 @@ export interface DockerCreateContainerConfig {
     MemorySwap?: number;
     CpuPeriod?: number;
     CpuQuota?: number;
+    CpuShares?: number;
+    BlkioWeight?: number;
     Tmpfs?: Record<string, string>;
     LogConfig?: {
       Type: string;

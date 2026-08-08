@@ -27,10 +27,13 @@ import type {
   SandboxRunnerRunProcessParams,
   SandboxRunnerSendArtifactParams,
   SandboxRunnerSendArtifactResult,
+  SandboxRunnerUploadArtifactChunkParams,
+  SandboxRunnerUploadArtifactChunkResult,
   SandboxRunnerUploadArtifactParams,
   SandboxRunnerUploadArtifactResult,
   SandboxRunnerWaitProcessParams,
   SandboxRunnerWaitProcessResult,
+  SandboxRunnerWorkspaceUsageResult,
   SandboxRunnerWriteStdinParams,
   SandboxRunnerWriteStdinResult,
 } from './ai.sandbox-runner.protocol.js';
@@ -117,6 +120,11 @@ export class AISandboxRunnerService {
     return this.callRunner<SandboxRunnerUploadArtifactResult>('uploadArtifact', params);
   }
 
+  async uploadArtifactChunk(params: SandboxRunnerUploadArtifactChunkParams) {
+    await this.ensureStarted();
+    return this.callRunner<SandboxRunnerUploadArtifactChunkResult>('uploadArtifactChunk', params);
+  }
+
   async listArtifactFiles(params: SandboxRunnerListArtifactFilesParams) {
     await this.ensureStarted();
     return this.callRunner<SandboxRunnerListArtifactFilesResult>('listArtifactFiles', params);
@@ -125,6 +133,11 @@ export class AISandboxRunnerService {
   async readArtifact(params: SandboxRunnerReadArtifactParams) {
     await this.ensureStarted();
     return this.callRunner<SandboxRunnerReadArtifactResult>('readArtifact', params);
+  }
+
+  async getWorkspaceUsage(params: SandboxRunnerProcessParams) {
+    await this.ensureStarted();
+    return this.callRunner<SandboxRunnerWorkspaceUsageResult>('getWorkspaceUsage', params);
   }
 
   async sendArtifact(params: SandboxRunnerSendArtifactParams) {

@@ -45,6 +45,7 @@ describe('AISandboxService', () => {
         expiresAt,
       }),
       waitProcess: vi.fn().mockResolvedValue({ processId: 'container-1', exitCode: 2, outputBytes: 56 }),
+      killProcess: vi.fn().mockResolvedValue({ processId: 'container-1', killed: true }),
     };
     const service = new AISandboxService(jobs as never, runner as never, {} as never);
 
@@ -65,6 +66,32 @@ describe('AISandboxService', () => {
     expect(jobs.markFinishedIfActive).toHaveBeenCalledWith('job-1', 'exited', {
       exitCode: 2,
       outputBytes: 56,
+      workspaceUsageBytes: undefined,
+    });
+    expect(runner.killProcess).toHaveBeenCalledWith({ processId: 'container-1' });
+  });
+
+  it('returns a capacity error instead of an internal error when runner admission rejects a sandbox', async () => {
+    const user = { id: 'user-1', scopes: ['ai:sandbox:use'] };
+    const jobs = {
+      create: vi.fn().mockResolvedValue({ id: 'job-1' }),
+      markFinished: vi.fn().mockResolvedValue({}),
+    };
+    const runner = {
+      runProcess: vi
+        .fn()
+        .mockRejectedValue(
+          new Error('sandbox workspace admission denied: projected 800 bytes reaches the 80% host-disk limit')
+        ),
+    };
+    const service = new AISandboxService(jobs as never, runner as never, {} as never);
+
+    await expect(service.runProcess(user as never, { command: ['true'] })).rejects.toMatchObject({
+      statusCode: 507,
+      code: 'SANDBOX_DISK_ADMISSION_DENIED',
+    });
+    expect(jobs.markFinished).toHaveBeenCalledWith('job-1', 'failed', {
+      error: 'sandbox workspace admission denied: projected 800 bytes reaches the 80% host-disk limit',
     });
   });
 
@@ -94,5 +121,62 @@ describe('AISandboxService', () => {
       path: 'repo/archive.tar.gz',
       contentBase64: Buffer.from('archive-body').toString('base64'),
     });
+  });
+
+  it('streams a backend-managed archive into an owned sandbox in bounded chunks', async () => {
+    const user = { id: 'user-1', scopes: ['ai:sandbox:use'] };
+    const jobs = {
+      get: vi.fn().mockRejectedValue(new Error('not found')),
+      findByContainerId: vi.fn().mockResolvedValue({ id: 'job-1', userId: 'user-1', containerId: 'container-1' }),
+    };
+    let storedBytes = 0;
+    const runner = {
+      uploadArtifactChunk: vi.fn(async (input: { contentBase64: string }) => {
+        storedBytes += Buffer.from(input.contentBase64, 'base64').byteLength;
+        return { processId: 'container-1', path: '.gateway/archive.tar.gz', sizeBytes: storedBytes };
+      }),
+    };
+    const service = new AISandboxService(jobs as never, runner as never, {} as never);
+
+    async function* archiveChunks() {
+      yield Buffer.alloc(300 * 1024, 1);
+      yield Buffer.alloc(12 * 1024, 2);
+    }
+
+    await expect(
+      service.uploadArtifactStream(user as never, {
+        processId: 'container-1',
+        path: '.gateway/archive.tar.gz',
+        chunks: archiveChunks(),
+        maxBytes: 512 * 1024,
+      })
+    ).resolves.toEqual({ processId: 'container-1', path: '.gateway/archive.tar.gz', sizeBytes: 312 * 1024 });
+
+    expect(runner.uploadArtifactChunk).toHaveBeenCalledTimes(3);
+    for (const call of runner.uploadArtifactChunk.mock.calls) {
+      expect(Buffer.from(call[0].contentBase64, 'base64').byteLength).toBeLessThanOrEqual(256 * 1024);
+    }
+  });
+
+  it('rejects an empty backend-managed archive instead of leaving a sandbox waiting forever', async () => {
+    const user = { id: 'user-1', scopes: ['ai:sandbox:use'] };
+    const jobs = {
+      get: vi.fn().mockRejectedValue(new Error('not found')),
+      findByContainerId: vi.fn().mockResolvedValue({ id: 'job-1', userId: 'user-1', containerId: 'container-1' }),
+    };
+    const service = new AISandboxService(jobs as never, { uploadArtifactChunk: vi.fn() } as never, {} as never);
+
+    async function* emptyArchive() {
+      // The provider yielded no bytes.
+    }
+
+    await expect(
+      service.uploadArtifactStream(user as never, {
+        processId: 'container-1',
+        path: '.gateway/archive.tar.gz',
+        chunks: emptyArchive(),
+        maxBytes: 512 * 1024,
+      })
+    ).rejects.toMatchObject({ code: 'GITLAB_ARCHIVE_EMPTY' });
   });
 });

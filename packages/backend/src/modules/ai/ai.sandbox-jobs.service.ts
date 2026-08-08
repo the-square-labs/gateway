@@ -17,6 +17,7 @@ export interface CreateSandboxJobInput {
   requestedTtlSeconds: number;
   effectiveTtlSeconds: number;
   requiredScopes: string[];
+  workspaceReservationBytes: number;
 }
 
 export interface ListSandboxJobsInput {
@@ -50,6 +51,7 @@ export class AISandboxJobsService {
         requestedTtlSeconds: input.requestedTtlSeconds,
         effectiveTtlSeconds: input.effectiveTtlSeconds,
         requiredScopes: input.requiredScopes,
+        workspaceReservationBytes: input.workspaceReservationBytes,
         status: 'queued',
         expiresAt,
         updatedAt: now,
@@ -115,6 +117,7 @@ export class AISandboxJobsService {
       error?: string | null;
       revocationReason?: string | null;
       outputBytes?: number;
+      workspaceUsageBytes?: number;
     } = {}
   ) {
     return this.update(id, {
@@ -123,6 +126,8 @@ export class AISandboxJobsService {
       error: updates.error ?? null,
       revocationReason: updates.revocationReason ?? null,
       outputBytes: updates.outputBytes,
+      workspaceUsageBytes: updates.workspaceUsageBytes,
+      workspaceReservationReleasedAt: new Date(),
       finishedAt: new Date(),
       updatedAt: new Date(),
     });
@@ -136,6 +141,7 @@ export class AISandboxJobsService {
       error?: string | null;
       revocationReason?: string | null;
       outputBytes?: number;
+      workspaceUsageBytes?: number;
     } = {}
   ) {
     const now = new Date();
@@ -147,6 +153,8 @@ export class AISandboxJobsService {
         error: updates.error ?? null,
         revocationReason: updates.revocationReason ?? null,
         outputBytes: updates.outputBytes,
+        workspaceUsageBytes: updates.workspaceUsageBytes,
+        workspaceReservationReleasedAt: now,
         finishedAt: now,
         updatedAt: now,
       })

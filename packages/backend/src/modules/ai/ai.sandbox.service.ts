@@ -15,6 +15,7 @@ import type { AISandboxRunnerService } from './ai.sandbox-runner.service.js';
 
 const logger = createChildLogger('AISandboxService');
 const SANDBOX_RECONCILE_INTERVAL_MS = 60_000;
+const SANDBOX_ARTIFACT_CHUNK_BYTES = 256 * 1024;
 
 export interface SandboxExecuteScriptInput {
   runtime?: unknown;
@@ -46,6 +47,13 @@ export interface SandboxUploadArtifactInput {
   processId: string;
   path: string;
   contentBase64: string;
+}
+
+export interface SandboxUploadArtifactStreamInput {
+  processId: string;
+  path: string;
+  chunks: AsyncIterable<Uint8Array>;
+  maxBytes: number;
 }
 
 export interface SandboxReadArtifactInput {
@@ -103,6 +111,7 @@ export class AISandboxService {
       requestedTtlSeconds: policy.requestedTtlSeconds,
       effectiveTtlSeconds: policy.effectiveTtlSeconds,
       requiredScopes: policy.requiredScopes,
+      workspaceReservationBytes: policy.tierPolicy.workspaceBytes,
     });
 
     try {
@@ -123,10 +132,15 @@ export class AISandboxService {
         },
         script: input.script,
       });
-      await this.jobs.update(job.id, { containerId: result.containerId, outputBytes: result.outputBytes });
+      await this.jobs.update(job.id, {
+        containerId: result.containerId,
+        outputBytes: result.outputBytes,
+        workspaceUsageBytes: result.workspaceUsageBytes,
+      });
       await this.jobs.markFinished(job.id, result.timedOut ? 'timeout' : 'exited', {
         exitCode: result.exitCode,
         outputBytes: result.outputBytes,
+        workspaceUsageBytes: result.workspaceUsageBytes,
       });
       return {
         jobId: job.id,
@@ -139,8 +153,9 @@ export class AISandboxService {
         timedOut: result.timedOut,
       };
     } catch (error) {
-      await this.jobs.markFinished(job.id, 'failed', { error: error instanceof Error ? error.message : String(error) });
-      throw error;
+      const normalized = this.toSandboxAppError(error);
+      await this.jobs.markFinished(job.id, 'failed', { error: normalized.message });
+      throw normalized;
     }
   }
 
@@ -159,6 +174,7 @@ export class AISandboxService {
       requestedTtlSeconds: policy.requestedTtlSeconds,
       effectiveTtlSeconds: policy.effectiveTtlSeconds,
       requiredScopes: policy.requiredScopes,
+      workspaceReservationBytes: policy.tierPolicy.workspaceBytes,
     });
 
     try {
@@ -192,8 +208,9 @@ export class AISandboxService {
         expiresAt: result.expiresAt,
       };
     } catch (error) {
-      await this.jobs.markFinished(job.id, 'failed', { error: error instanceof Error ? error.message : String(error) });
-      throw error;
+      const normalized = this.toSandboxAppError(error);
+      await this.jobs.markFinished(job.id, 'failed', { error: normalized.message });
+      throw normalized;
     }
   }
 
@@ -211,53 +228,95 @@ export class AISandboxService {
   async downloadArtifact(user: User, input: SandboxDownloadArtifactInput) {
     const job = await this.resolveOwnedJob(user, input.processId);
     const containerId = job.containerId ?? input.processId;
-    return this.runner.downloadArtifact({ processId: containerId, url: input.url, path: input.path });
+    return this.runnerOperation(() =>
+      this.runner.downloadArtifact({ processId: containerId, url: input.url, path: input.path })
+    );
   }
 
   async uploadArtifact(user: User, input: SandboxUploadArtifactInput) {
     const job = await this.resolveOwnedJob(user, input.processId);
     const containerId = job.containerId ?? input.processId;
-    return this.runner.uploadArtifact({
-      processId: containerId,
-      path: input.path,
-      contentBase64: input.contentBase64,
-    });
+    return this.runnerOperation(() =>
+      this.runner.uploadArtifact({
+        processId: containerId,
+        path: input.path,
+        contentBase64: input.contentBase64,
+      })
+    );
+  }
+
+  async uploadArtifactStream(user: User, input: SandboxUploadArtifactStreamInput) {
+    const job = await this.resolveOwnedJob(user, input.processId);
+    const containerId = job.containerId ?? input.processId;
+    const maxBytes = Math.max(1, Math.floor(input.maxBytes));
+    let offset = 0;
+
+    for await (const rawChunk of input.chunks) {
+      const chunk = Buffer.from(rawChunk);
+      for (let start = 0; start < chunk.byteLength; start += SANDBOX_ARTIFACT_CHUNK_BYTES) {
+        const part = chunk.subarray(start, start + SANDBOX_ARTIFACT_CHUNK_BYTES);
+        if (offset + part.byteLength > maxBytes) {
+          throw new AppError(413, 'GITLAB_ARCHIVE_TOO_LARGE', 'Repository archive exceeds connector clone size limit');
+        }
+        const result = await this.runnerOperation(() =>
+          this.runner.uploadArtifactChunk({
+            processId: containerId,
+            path: input.path,
+            offset,
+            contentBase64: part.toString('base64'),
+          })
+        );
+        offset = result.sizeBytes;
+      }
+    }
+
+    if (offset === 0) {
+      throw new AppError(502, 'GITLAB_ARCHIVE_EMPTY', 'GitLab returned an empty repository archive');
+    }
+
+    return { processId: containerId, path: input.path, sizeBytes: offset };
   }
 
   async listArtifactFiles(user: User, input: SandboxListArtifactFilesInput) {
     const job = await this.resolveOwnedJob(user, input.processId);
     const containerId = job.containerId ?? input.processId;
-    return this.runner.listArtifactFiles({
-      processId: containerId,
-      path: input.path,
-      maxDepth: input.maxDepth,
-      limit: input.limit,
-      includeFiles: input.includeFiles,
-      includeDirectories: input.includeDirectories,
-    });
+    return this.runnerOperation(() =>
+      this.runner.listArtifactFiles({
+        processId: containerId,
+        path: input.path,
+        maxDepth: input.maxDepth,
+        limit: input.limit,
+        includeFiles: input.includeFiles,
+        includeDirectories: input.includeDirectories,
+      })
+    );
   }
 
   async readArtifact(user: User, input: SandboxReadArtifactInput) {
     const job = await this.resolveOwnedJob(user, input.processId);
     const containerId = job.containerId ?? input.processId;
-    return this.runner.readArtifact({
-      processId: containerId,
-      path: input.path,
-      offset: input.offset,
-      length: input.length,
-      encoding: input.encoding,
-    });
+    return this.runnerOperation(() =>
+      this.runner.readArtifact({
+        processId: containerId,
+        path: input.path,
+        offset: input.offset,
+        length: input.length,
+        encoding: input.encoding,
+      })
+    );
   }
 
   async sendArtifact(user: User, input: SandboxSendArtifactInput) {
     const job = await this.resolveOwnedJob(user, input.processId);
     const containerId = job.containerId ?? input.processId;
-    const result = await this.runner.sendArtifact({
-      processId: containerId,
-      path: input.path,
-      filename: input.filename,
-      mediaType: input.mediaType,
-    });
+    const result = await this.runnerOperation(() =>
+      this.runner.sendArtifact({
+        processId: containerId,
+        path: input.path,
+        filename: input.filename,
+        mediaType: input.mediaType,
+      })
+    );
     const artifact = await this.artifacts.saveFromTempFile({
       userId: user.id,
       conversationId: input.conversationId ?? job.conversationId,
@@ -302,9 +361,13 @@ export class AISandboxService {
         const timeoutMs = Number.isFinite(expiresAtMs) ? Math.max(1_000, expiresAtMs - Date.now() + 10_000) : undefined;
         const result = await this.runner.waitProcess({ processId: containerId, timeoutMs });
         const status = Number.isFinite(expiresAtMs) && Date.now() >= expiresAtMs ? 'timeout' : 'exited';
+        await this.runner.killProcess({ processId: containerId }).catch((error) => {
+          logger.warn('Failed to clean up completed sandbox process', { jobId, containerId, error });
+        });
         await this.jobs.markFinishedIfActive(jobId, status, {
           exitCode: result.exitCode,
           outputBytes: result.outputBytes,
+          workspaceUsageBytes: result.workspaceUsageBytes,
         });
       } catch (error) {
         logger.warn('Failed to monitor sandbox process completion', { jobId, containerId, error });
@@ -395,6 +458,29 @@ export class AISandboxService {
         continue;
       }
 
+      if (row.job.containerId) {
+        await this.runner
+          .getWorkspaceUsage({ processId: row.job.containerId })
+          .then(({ workspaceUsageBytes, overReservation }) => {
+            if (overReservation) {
+              logger.warn('Sandbox workspace exceeds its soft reservation; artifact operations remain blocked', {
+                jobId: row.job.id,
+                containerId: row.job.containerId,
+                workspaceUsageBytes,
+                workspaceReservationBytes: row.job.workspaceReservationBytes,
+              });
+            }
+            return this.jobs.update(row.job.id, { workspaceUsageBytes });
+          })
+          .catch((error) => {
+            logger.warn('Failed to reconcile sandbox workspace usage', {
+              jobId: row.job.id,
+              containerId: row.job.containerId,
+              error,
+            });
+          });
+      }
+
       if (sandboxScopesSatisfied(row.currentScopes, row.job.requiredScopes)) continue;
       const group = unauthorizedByUser.get(row.userId) ?? { currentScopes: row.currentScopes, jobIds: [] };
       group.jobIds.push(row.job.id);
@@ -448,5 +534,25 @@ export class AISandboxService {
       throw new AppError(403, 'SANDBOX_JOB_FORBIDDEN', 'You cannot access this sandbox job');
     }
     return job;
+  }
+
+  private async runnerOperation<T>(work: () => Promise<T>): Promise<T> {
+    try {
+      return await work();
+    } catch (error) {
+      throw this.toSandboxAppError(error);
+    }
+  }
+
+  private toSandboxAppError(error: unknown): Error {
+    if (error instanceof AppError) return error;
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.startsWith('sandbox workspace admission denied:')) {
+      return new AppError(507, 'SANDBOX_DISK_ADMISSION_DENIED', message);
+    }
+    if (message.startsWith('sandbox workspace soft quota exceeded:')) {
+      return new AppError(413, 'SANDBOX_WORKSPACE_QUOTA_EXCEEDED', message);
+    }
+    return error instanceof Error ? error : new Error(message);
   }
 }

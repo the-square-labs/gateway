@@ -123,6 +123,7 @@ export const ALL_SCOPES = [
   'ai:sandbox:use',
   'ai:sandbox:tier:medium',
   'ai:sandbox:tier:high',
+  'ai:sandbox:tier:max',
   'ai:sandbox:manage',
   'mcp:use',
   // ── Inference ────────────────────────────────────────────────────
@@ -229,6 +230,7 @@ export const USER_ONLY_SCOPES = [
   'ai:sandbox:use',
   'ai:sandbox:tier:medium',
   'ai:sandbox:tier:high',
+  'ai:sandbox:tier:max',
   'ai:sandbox:manage',
   'mcp:use',
   'inference:use',
@@ -365,6 +367,7 @@ export const ADMIN_SCOPES: readonly string[] = [
   'ai:sandbox:use',
   'ai:sandbox:tier:medium',
   'ai:sandbox:tier:high',
+  'ai:sandbox:tier:max',
   'ai:sandbox:manage',
   'mcp:use',
   'inference:use',
