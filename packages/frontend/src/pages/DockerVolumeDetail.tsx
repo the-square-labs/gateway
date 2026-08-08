@@ -118,6 +118,8 @@ export function DockerVolumeDetail({
     hasScope("docker:volumes:create") || !!(nodeId && hasScope(`docker:volumes:create:${nodeId}`));
   const canDeleteVolume =
     hasScope("docker:volumes:delete") || !!(nodeId && hasScope(`docker:volumes:delete:${nodeId}`));
+  const canExportVolume =
+    hasScope("docker:volumes:export") || !!(nodeId && hasScope(`docker:volumes:export:${nodeId}`));
   const canRenameVolume = canCreateVolume && canDeleteVolume;
   const isAnonymousVolume = /^[a-f0-9]{64}$/i.test(decodedVolumeName);
   const isCleanupProtected = volume?.labels?.[VOLUME_CLEANUP_PROTECTED_LABEL] === "true";
@@ -336,7 +338,7 @@ export function DockerVolumeDetail({
   );
 
   const handleExport = useCallback(async () => {
-    if (!nodeId || !decodedVolumeName) return;
+    if (!canExportVolume || !nodeId || !decodedVolumeName) return;
     setExporting(true);
     try {
       const blob = await api.exportDockerVolume(nodeId, decodedVolumeName);
@@ -352,7 +354,7 @@ export function DockerVolumeDetail({
     } finally {
       setExporting(false);
     }
-  }, [decodedVolumeName, nodeId]);
+  }, [canExportVolume, decodedVolumeName, nodeId]);
 
   const openRename = useCallback(() => {
     setRenameValue(decodedVolumeName);
@@ -643,17 +645,19 @@ export function DockerVolumeDetail({
                   }
                 />
 
-                <PanelShell
-                  title="Export"
-                  description="Download a tar.gz archive with the current volume contents."
-                  headerBorder={false}
-                  actions={
-                    <Button onClick={handleExport} disabled={exporting || unavailable}>
-                      <Download className="h-3.5 w-3.5" />
-                      {exporting ? "Exporting..." : "Export"}
-                    </Button>
-                  }
-                />
+                {canExportVolume ? (
+                  <PanelShell
+                    title="Export"
+                    description="Download a tar.gz archive with the current volume contents."
+                    headerBorder={false}
+                    actions={
+                      <Button onClick={handleExport} disabled={exporting || unavailable}>
+                        <Download className="h-3.5 w-3.5" />
+                        {exporting ? "Exporting..." : "Export"}
+                      </Button>
+                    }
+                  />
+                ) : null}
               </div>
             </TabsContent>
           </Tabs>
