@@ -110,6 +110,7 @@ function setup(
   } as any;
   const auditService = { log: vi.fn().mockResolvedValue(undefined) } as any;
   const configGenerator = {
+    validateAdvancedConfig: vi.fn().mockReturnValue({ valid: true, errors: [] }),
     getCertPaths: vi.fn((certId: string) => ({
       certPath: `/etc/nginx/certs/${certId}/fullchain.pem`,
       keyPath: `/etc/nginx/certs/${certId}/privkey.pem`,
@@ -217,6 +218,48 @@ describe('ProxyService maintenance lifecycle', () => {
         '33333333-3333-4333-8333-333333333333'
       )
     ).rejects.toMatchObject({ code: 'MAINTENANCE_UNSUPPORTED_HOST' });
+  });
+
+  it('validates stored raw config before an update newly enables raw mode', async () => {
+    const { service, configGenerator, db } = setup(
+      { success: true },
+      { rawConfig: 'include /etc/nginx/conf.d/private.conf;' }
+    );
+    configGenerator.validateAdvancedConfig.mockReturnValue({ valid: false, errors: ['forbidden include'] });
+
+    await expect(
+      service.updateProxyHost(
+        '11111111-1111-4111-8111-111111111111',
+        { rawConfigEnabled: true },
+        '33333333-3333-4333-8333-333333333333',
+        { bypassRawValidation: false }
+      )
+    ).rejects.toMatchObject({ code: 'INVALID_RAW_CONFIG' });
+
+    expect(configGenerator.validateAdvancedConfig).toHaveBeenCalledWith(
+      'include /etc/nginx/conf.d/private.conf;',
+      true,
+      false
+    );
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it('preserves the scoped raw-validation bypass when enabling stored raw config', async () => {
+    const rawConfig = 'include /etc/nginx/conf.d/private.conf;';
+    const { service, configGenerator } = setup(
+      { success: true },
+      { rawConfig },
+      { rawConfig, rawConfigEnabled: true }
+    );
+
+    await service.updateProxyHost(
+      '11111111-1111-4111-8111-111111111111',
+      { rawConfigEnabled: true },
+      '33333333-3333-4333-8333-333333333333',
+      { bypassRawValidation: true }
+    );
+
+    expect(configGenerator.validateAdvancedConfig).toHaveBeenCalledWith(rawConfig, true, true);
   });
 
   it('is idempotent when the requested maintenance state is already active', async () => {

@@ -1055,10 +1055,14 @@ export class AIService {
           })
         );
       }
-      case 'toggle_proxy_raw_mode':
+      case 'toggle_proxy_raw_mode': {
+        const bypassRawValidation = hasScope(user.scopes, `proxy:raw:bypass:${a.proxyHostId}`);
         return compactProxyHostForAgent(
-          await this.proxyService.updateProxyHost(a.proxyHostId, { rawConfigEnabled: a.enabled } as any, user.id)
+          await this.proxyService.updateProxyHost(a.proxyHostId, { rawConfigEnabled: a.enabled } as any, user.id, {
+            bypassRawValidation,
+          })
         );
+      }
 
       // ── Administration ──
       case 'list_users':

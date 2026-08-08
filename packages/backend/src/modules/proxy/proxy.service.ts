@@ -27,6 +27,7 @@ import {
   normalizeProxyValidationOptions,
   type ProxyValidationInput,
   rawConfigAuditDetails,
+  storedRawConfigForRawModeEnablement,
   stripProxyHealthHistory,
   updateUsesRawMode,
 } from './proxy.service-helpers.js';
@@ -411,6 +412,19 @@ export class ProxyService {
         'Exit maintenance mode before changing the host type or enabling raw config'
       );
     }
+
+    const storedRawConfig = storedRawConfigForRawModeEnablement(existing, input);
+    if (storedRawConfig) {
+      const validation = this.configGenerator.validateAdvancedConfig(
+        storedRawConfig as string,
+        true,
+        options.bypassRawValidation === true
+      );
+      if (!validation.valid) {
+        throw new AppError(400, 'INVALID_RAW_CONFIG', `Raw config is invalid: ${validation.errors.join(', ')}`);
+      }
+    }
+
     if (input.nodeId && input.nodeId !== existing.nodeId) {
       await assertNodeAllowsServiceCreation(this.db, input.nodeId, 'nginx');
     }

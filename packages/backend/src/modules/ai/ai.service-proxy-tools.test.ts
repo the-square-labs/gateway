@@ -262,6 +262,31 @@ describe('AIService proxy tool routing', () => {
     ).resolves.toEqual({ error: 'Raw config changes require dedicated raw config tools', invalidateStores: [] });
   });
 
+  it('preserves the scoped raw-validation bypass when enabling raw mode', async () => {
+    const proxyService = {
+      updateProxyHost: vi.fn().mockResolvedValue(FULL_HOST),
+    };
+    const service = createService(proxyService);
+
+    await expect(
+      service.executeTool(
+        {
+          ...BASE_USER,
+          scopes: [`proxy:raw:toggle:${COMPACT_HOST.id}`, `proxy:raw:bypass:${COMPACT_HOST.id}`],
+        },
+        'toggle_proxy_raw_mode',
+        { proxyHostId: COMPACT_HOST.id, enabled: true }
+      )
+    ).resolves.toEqual({ result: COMPACT_HOST, invalidateStores: ['proxy'] });
+
+    expect(proxyService.updateProxyHost).toHaveBeenCalledWith(
+      COMPACT_HOST.id,
+      { rawConfigEnabled: true },
+      'user-1',
+      { bypassRawValidation: true }
+    );
+  });
+
   it('routes proxy folder operations and enforces per-host move scopes', async () => {
     const folderService = {
       createFolder: vi.fn().mockResolvedValue({ id: 'folder-1', name: 'Apps' }),
