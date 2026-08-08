@@ -13,7 +13,7 @@ IFS=$'\n\t'
 #   bash setup-docker-node.sh --gateway gateway.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<HEX>
 # ──────────────────────────────────────────────────────────────────────
 
-LOG_FILE="/tmp/gateway_docker_setup.log"
+LOG_FILE="/dev/null"
 
 # ── Colors ───────────────────────────────────────────────────────────
 BRAND_MINT='\033[38;2;140;176;132m'
@@ -888,6 +888,10 @@ fi
 
 # ── Validate ─────────────────────────────────────────────────────────
 need_root
+if [[ "$DRY_RUN" -eq 0 ]]; then
+    LOG_FILE=$(mktemp /tmp/gateway_docker_setup.XXXXXX) || die "Could not create installer log file"
+    chmod 600 "$LOG_FILE" || die "Could not secure installer log file"
+fi
 detect_os
 detect_arch
 check_dependencies
@@ -902,10 +906,6 @@ if [[ -z "$GATEWAY_ADDR" && -n "$EXISTING_GATEWAY_ADDR" ]]; then
         GATEWAY_PORT="9443"
         GATEWAY_ADDR="${GATEWAY_HOST}:${GATEWAY_PORT}"
     fi
-fi
-
-if [[ "$DRY_RUN" -eq 0 ]]; then
-    : > "$LOG_FILE"
 fi
 
 if command_exists docker; then

@@ -73,6 +73,9 @@ variables:
         - packages/backend/**/*
         - config/update-trust/**/*
         - scripts/sync-update-trust-anchor.sh
+        - scripts/setup-node.sh
+        - scripts/setup-docker-node.sh
+        - scripts/setup-monitoring-node.sh
 
 .logging-sdk-rules: &logging-sdk-rules
   rules:
