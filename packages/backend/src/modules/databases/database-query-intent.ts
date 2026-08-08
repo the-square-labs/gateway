@@ -17,7 +17,7 @@ export function splitSqlStatements(sql: string): string[] {
 
     if (inLineComment) {
       current += char;
-      if (char === '\n') inLineComment = false;
+      if (char === '\n' || char === '\r') inLineComment = false;
       i += 1;
       continue;
     }
