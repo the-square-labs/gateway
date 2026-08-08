@@ -10,6 +10,39 @@ import {
 } from './mcp-ai-audit.test-helpers.js';
 
 describe('AIService MCP delegated scope audit behavior', () => {
+  it('rechecks live account access without expanding an OAuth token scope', async () => {
+    const auditService = { log: vi.fn().mockResolvedValue(undefined) };
+    const nodesService = { create: vi.fn() };
+    const service = createService({
+      nodesService,
+      auditService,
+      authService: { getUserById: vi.fn().mockResolvedValue({ ...USER, scopes: ['nodes:details'] }) },
+    });
+
+    const revoked = await service.executeTool(
+      USER,
+      'create_node',
+      { hostname: 'node-1', type: 'docker' },
+      { source: 'mcp', scopes: ['nodes:create'] }
+    );
+    expect(revoked.error).toContain('PERMISSION_DENIED');
+    expect(nodesService.create).not.toHaveBeenCalled();
+
+    const tokenBoundService = createService({
+      nodesService,
+      auditService,
+      authService: { getUserById: vi.fn().mockResolvedValue({ ...USER, scopes: ['nodes:create', 'nodes:details'] }) },
+    });
+    const stillBound = await tokenBoundService.executeTool(
+      { ...USER, scopes: ['nodes:create', 'nodes:details'] },
+      'create_node',
+      { hostname: 'node-1', type: 'docker' },
+      { source: 'mcp', scopes: ['nodes:details'] }
+    );
+    expect(stillBound.error).toContain('PERMISSION_DENIED');
+    expect(nodesService.create).not.toHaveBeenCalled();
+  });
+
   it('filters find_resource logging matches to delegated resource-scoped grants', async () => {
     const auditService = { log: vi.fn().mockResolvedValue(undefined) };
     const envList = vi.fn().mockResolvedValue([{ id: 'env-1', name: 'prod logs', slug: 'prod' }]);
