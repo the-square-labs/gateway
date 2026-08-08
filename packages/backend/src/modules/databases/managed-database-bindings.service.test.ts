@@ -39,6 +39,65 @@ describe('managed database binding provisioning guardrails', () => {
     );
   });
 
+  it('reconciles ready ClickHouse bindings through the versioned secure-principal action', async () => {
+    const database = {
+      id: '44444444-4444-4444-8444-444444444444',
+      nodeId: '22222222-2222-4222-8222-222222222222',
+      type: 'clickhouse',
+      status: 'ready',
+      pendingOperation: null,
+      encryptedOwnerCredentials: JSON.stringify({ encryptedKey: 'owner-key', encryptedDek: 'owner-dek' }),
+    };
+    const binding = {
+      id: '55555555-5555-4555-8555-555555555555',
+      status: 'ready',
+      encryptedCredentials: JSON.stringify({ encryptedKey: 'binding-key', encryptedDek: 'binding-dek' }),
+    };
+    const sendDockerDatabaseCommand = vi.fn().mockResolvedValue({ success: true });
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({ innerJoin: vi.fn().mockResolvedValue([{ database, binding }]) })),
+      })),
+    };
+    const instance = new ManagedDatabaseBindingService(
+      db as never,
+      {} as never,
+      {
+        decryptString: vi.fn((encrypted: { encryptedKey: string }) =>
+          JSON.stringify(
+            encrypted.encryptedKey === 'binding-key'
+              ? { username: 'gw_clickhouse_binding_123', password: 'binding-password', databaseName: 'app' }
+              : { username: 'clickhouse_owner', password: 'owner-password', databaseName: 'app' }
+          )
+        ),
+      } as never,
+      { sendDockerDatabaseCommand } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      DEVELOPMENT_DATABASE_CONNECTOR_IMAGE,
+      true
+    );
+
+    await instance.reconcileClickHousePrincipals();
+
+    expect(sendDockerDatabaseCommand).toHaveBeenCalledTimes(1);
+    expect(sendDockerDatabaseCommand).toHaveBeenCalledWith(
+      database.nodeId,
+      'clickhouse_principal_apply_v1',
+      database.id,
+      expect.any(String)
+    );
+    const command = JSON.parse(sendDockerDatabaseCommand.mock.calls[0]![3]) as Record<string, unknown>;
+    expect(command).toMatchObject({
+      principalType: 'binding',
+      username: 'gw_clickhouse_binding_123',
+      password: 'binding-password',
+      ownerUsername: 'clickhouse_owner',
+    });
+    expect(JSON.stringify(command)).not.toContain('reconcileOnly');
+  });
+
   it('allows only the fixed local connector image with the explicit development flag', () => {
     const development = service(DEVELOPMENT_DATABASE_CONNECTOR_IMAGE, true) as any;
     const production = service(DEVELOPMENT_DATABASE_CONNECTOR_IMAGE, false) as any;

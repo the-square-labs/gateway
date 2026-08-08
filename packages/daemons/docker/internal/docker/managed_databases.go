@@ -185,6 +185,18 @@ type managedDatabaseBindingCommand struct {
 	OwnerPassword string `json:"ownerPassword"`
 }
 
+// clickHousePrincipalCommand is a versioned, ClickHouse-only principal
+// contract. It must not be folded into binding_create: old daemons ignore
+// unknown JSON fields on that action and could recreate the legacy grant set.
+type clickHousePrincipalCommand struct {
+	PrincipalType string `json:"principalType"`
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+	DatabaseName  string `json:"databaseName"`
+	OwnerUsername string `json:"ownerUsername"`
+	OwnerPassword string `json:"ownerPassword"`
+}
+
 type managedDatabaseOperationCommand struct {
 	OperationID string `json:"operationId"`
 }
@@ -477,6 +489,22 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 			return "", err
 		}
 		return m.runtimeStats(ctx, record)
+	case "clickhouse_principal_apply_v1":
+		var input clickHousePrincipalCommand
+		if err := json.Unmarshal([]byte(configJSON), &input); err != nil {
+			return "", fmt.Errorf("parse ClickHouse principal config: %w", err)
+		}
+		record, err := m.loadRecord(id)
+		if err != nil {
+			return "", err
+		}
+		if err := validateClickHousePrincipalInput(input); err != nil {
+			return "", err
+		}
+		if err := m.applyClickHousePrincipal(ctx, record, input); err != nil {
+			return "", err
+		}
+		return `{"status":"ok"}`, nil
 	case "binding_create", "binding_remove":
 		var input managedDatabaseBindingCommand
 		if err := json.Unmarshal([]byte(configJSON), &input); err != nil {
@@ -525,6 +553,19 @@ func validateManagedDatabaseBindingInput(input managedDatabaseBindingCommand) er
 	return nil
 }
 
+func validateClickHousePrincipalInput(input clickHousePrincipalCommand) error {
+	if input.PrincipalType != "reader" && input.PrincipalType != "writer" && input.PrincipalType != "binding" {
+		return errors.New("unsupported ClickHouse principal type")
+	}
+	if !managedDatabaseName.MatchString(input.Username) || !managedDatabaseName.MatchString(input.OwnerUsername) || !managedDatabaseName.MatchString(input.DatabaseName) {
+		return errors.New("ClickHouse principal names must be safe SQL identifiers")
+	}
+	if len(input.Password) < 16 || len(input.Password) > 512 || len(input.OwnerPassword) < 16 || len(input.OwnerPassword) > 512 {
+		return errors.New("ClickHouse principal passwords must be between 16 and 512 characters")
+	}
+	return nil
+}
+
 func (m *managedDatabaseManager) createBindingPrincipal(ctx context.Context, record managedDatabaseRecord, input managedDatabaseBindingCommand) error {
 	var command []string
 	var stdin string
@@ -552,6 +593,19 @@ func (m *managedDatabaseManager) createBindingPrincipal(ctx context.Context, rec
 		return errors.New("unsupported managed database engine")
 	}
 	return m.runManagedDatabaseExec(ctx, record.ContainerID, command, stdin, env)
+}
+
+func (m *managedDatabaseManager) applyClickHousePrincipal(ctx context.Context, record managedDatabaseRecord, input clickHousePrincipalCommand) error {
+	if record.Type != "clickhouse" {
+		return errors.New("ClickHouse principals are unsupported for this database engine")
+	}
+	return m.runManagedDatabaseExec(
+		ctx,
+		record.ContainerID,
+		[]string{"clickhouse-client", "--user", input.OwnerUsername, "--database", input.DatabaseName, "--multiquery"},
+		clickHousePrincipalSQL(input)+"\n",
+		[]string{"CLICKHOUSE_PASSWORD=" + input.OwnerPassword},
+	)
 }
 
 func redisBindingACLCommand() string {
@@ -594,10 +648,68 @@ func postgresBindingRemoveSQL(input managedDatabaseBindingCommand) string {
 }
 
 func clickHouseBindingCreateSQL(input managedDatabaseBindingCommand) string {
+	return clickHousePrincipalSQL(clickHousePrincipalCommand{
+		PrincipalType: "binding",
+		Username:      input.Username,
+		Password:      input.Password,
+		DatabaseName:  input.DatabaseName,
+		OwnerUsername: input.OwnerUsername,
+		OwnerPassword: input.OwnerPassword,
+	}) + "\n"
+}
+
+func clickHousePrincipalSQL(input clickHousePrincipalCommand) string {
+	if input.PrincipalType == "reader" {
+		return clickHouseReaderPrincipalSQL(input)
+	}
+	return clickHouseWriterPrincipalSQL(input)
+}
+
+func clickHouseReaderPrincipalSQL(input clickHousePrincipalCommand) string {
+	principal := quoteSQLIdentifier(input.Username)
 	return fmt.Sprintf(
-		"CREATE USER IF NOT EXISTS %s IDENTIFIED WITH sha256_password BY %s; ALTER USER %s IDENTIFIED WITH sha256_password BY %s; GRANT ALL ON %s.* TO %s; GRANT SELECT ON system.parts TO %s; GRANT SELECT ON system.processes TO %s; GRANT SELECT ON system.merges TO %s; GRANT SELECT ON system.mutations TO %s; GRANT SELECT ON system.events TO %s; GRANT SELECT ON system.disks TO %s;\n",
-		quoteSQLIdentifier(input.Username), quoteSQLLiteral(input.Password), quoteSQLIdentifier(input.Username), quoteSQLLiteral(input.Password), quoteSQLIdentifier(input.DatabaseName), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username), quoteSQLIdentifier(input.Username),
+		"CREATE USER IF NOT EXISTS %s IDENTIFIED WITH sha256_password BY %s; ALTER USER %s IDENTIFIED WITH sha256_password BY %s; REVOKE ALL ON *.* FROM %s; GRANT SELECT ON %s.* TO %s; GRANT SELECT ON information_schema.* TO %s; GRANT SELECT(name) ON system.databases TO %s; GRANT SELECT(name, engine, total_rows, total_bytes, database, sorting_key, primary_key, partition_key, create_table_query) ON system.tables TO %s; GRANT SELECT(name, type, default_kind, default_expression, comment, is_in_primary_key, is_in_sorting_key, is_in_partition_key, database, table, position) ON system.columns TO %s;",
+		principal,
+		quoteSQLLiteral(input.Password),
+		principal,
+		quoteSQLLiteral(input.Password),
+		principal,
+		quoteSQLIdentifier(input.DatabaseName),
+		principal,
+		principal,
+		principal,
+		principal,
+		principal,
 	)
+}
+
+func clickHouseWriterPrincipalSQL(input clickHousePrincipalCommand) string {
+	principal := quoteSQLIdentifier(input.Username)
+	return fmt.Sprintf(
+		"CREATE USER IF NOT EXISTS %s IDENTIFIED WITH sha256_password BY %s; ALTER USER %s IDENTIFIED WITH sha256_password BY %s; REVOKE ALL ON *.* FROM %s; GRANT ALL ON %s.* TO %s; GRANT SELECT ON information_schema.* TO %s; GRANT SELECT(name) ON system.databases TO %s; GRANT SELECT(name, engine, total_rows, total_bytes, database, sorting_key, primary_key, partition_key, create_table_query) ON system.tables TO %s; GRANT SELECT(name, type, default_kind, default_expression, comment, is_in_primary_key, is_in_sorting_key, is_in_partition_key, database, table, position) ON system.columns TO %s; GRANT SELECT ON system.parts TO %s; %s GRANT SELECT ON system.merges TO %s; GRANT SELECT ON system.mutations TO %s; GRANT SELECT ON system.events TO %s; GRANT SELECT ON system.disks TO %s;",
+		principal,
+		quoteSQLLiteral(input.Password),
+		principal,
+		quoteSQLLiteral(input.Password),
+		principal,
+		quoteSQLIdentifier(input.DatabaseName),
+		principal,
+		principal,
+		principal,
+		principal,
+		principal,
+		principal,
+		clickHouseBindingProcessPrivilegesSQL(input.Username),
+		principal,
+		principal,
+		principal,
+		principal,
+	)
+}
+
+func clickHouseBindingProcessPrivilegesSQL(username string) string {
+	principal := quoteSQLIdentifier(username)
+	return fmt.Sprintf("REVOKE SELECT ON system.processes FROM %s; GRANT SELECT(memory_usage) ON system.processes TO %s;", principal, principal)
 }
 
 func clickHouseBindingRemoveSQL(input managedDatabaseBindingCommand) string {

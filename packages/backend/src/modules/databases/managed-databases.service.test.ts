@@ -368,6 +368,8 @@ describe('managed database catalog and input guardrails', () => {
       type: 'clickhouse' as const,
       status: 'updating' as const,
       engineConfig: { ...managedRow.engineConfig, publishTcp: true },
+      encryptedQueryCredentials: JSON.stringify({ encryptedKey: 'query-key', encryptedDek: 'query-dek' }),
+      clickhouseQueryPrincipalVersion: 1,
       pendingOperation: { id: 'operation_direct_user', action: 'update' as const },
     };
     const set = vi.fn((values: Record<string, unknown>) => ({
@@ -426,7 +428,7 @@ describe('managed database catalog and input guardrails', () => {
       expect.objectContaining({
         status: 'error',
         pendingOperation: null,
-        lastError: expect.stringContaining('Direct-access credentials could not be configured'),
+        lastError: expect.stringContaining('secure query principals'),
       })
     );
     expect(set).not.toHaveBeenCalledWith(
@@ -772,6 +774,82 @@ describe('managed database catalog and input guardrails', () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it('reconciles reader and writer ClickHouse principals without a legacy binding fallback', async () => {
+    const published = {
+      ...managedRow,
+      type: 'clickhouse' as const,
+      status: 'ready' as const,
+      pendingOperation: null,
+      engineConfig: { databaseName: 'app', publishTcp: true },
+      publishedPort: 32768,
+      encryptedOwnerCredentials: JSON.stringify({ encryptedKey: 'owner-key', encryptedDek: 'owner-dek' }),
+      encryptedDirectCredentials: JSON.stringify({ encryptedKey: 'direct-key', encryptedDek: 'direct-dek' }),
+      encryptedQueryCredentials: JSON.stringify({ encryptedKey: 'query-key', encryptedDek: 'query-dek' }),
+      clickhouseQueryPrincipalVersion: 1,
+    };
+    const privateDatabase = {
+      ...published,
+      id: '66666666-6666-4666-8666-666666666666',
+      engineConfig: { databaseName: 'app', publishTcp: false },
+      publishedPort: null,
+    };
+    const dispatch = { sendDockerDatabaseCommand: vi.fn().mockResolvedValue({ success: true }) };
+    const update = vi.fn(() => ({
+      set: vi.fn((values: Record<string, unknown>) => ({
+        where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ ...published, ...values }]) })),
+      })),
+    }));
+    const service = new ManagedDatabaseService(
+      {
+        select: vi.fn(() => ({ from: vi.fn().mockResolvedValue([published, privateDatabase]) })),
+        update,
+      } as never,
+      { log: vi.fn() } as never,
+      {
+        decryptString: vi.fn((encrypted: { encryptedKey: string }) =>
+          JSON.stringify(
+            encrypted.encryptedKey === 'direct-key'
+              ? { username: 'gw_clickhouse_direct_123', password: 'direct-password', databaseName: 'app' }
+              : encrypted.encryptedKey === 'query-key'
+                ? { username: 'gw_clickhouse_query_123', password: 'query-password', databaseName: 'app' }
+                : { username: 'clickhouse_owner', password: 'owner-password', databaseName: 'app' }
+          )
+        ),
+      } as never,
+      dispatch as never
+    );
+
+    await service.reconcileClickHouseQueryPrincipals();
+
+    expect(dispatch.sendDockerDatabaseCommand).toHaveBeenCalledTimes(4);
+    expect(dispatch.sendDockerDatabaseCommand.mock.calls.map((call) => call[1])).toEqual([
+      'clickhouse_principal_apply_v1',
+      'clickhouse_principal_apply_v1',
+      'clickhouse_principal_apply_v1',
+      'clickhouse_principal_apply_v1',
+    ]);
+    const commands = dispatch.sendDockerDatabaseCommand.mock.calls.map(
+      (call) => JSON.parse(call[3]) as Record<string, unknown>
+    );
+    expect(commands).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          principalType: 'writer',
+          username: 'gw_clickhouse_direct_123',
+          password: 'direct-password',
+          ownerUsername: 'clickhouse_owner',
+        }),
+        expect.objectContaining({
+          principalType: 'reader',
+          username: 'gw_clickhouse_query_123',
+          password: 'query-password',
+          ownerUsername: 'clickhouse_owner',
+        }),
+      ])
+    );
+    expect(JSON.stringify(commands)).not.toContain('reconcileOnly');
   });
 
   it('restores owner credentials for an existing published database connection', async () => {

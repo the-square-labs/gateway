@@ -673,6 +673,13 @@
       "when": 1786140433725,
       "tag": "0095_light_jean_grey",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1786197657474,
+      "tag": "0096_lovely_firedrake",
+      "breakpoints": true
     }
   ]
 }

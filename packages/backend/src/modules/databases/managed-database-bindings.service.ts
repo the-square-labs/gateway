@@ -79,6 +79,7 @@ function isMissingContainerError(error: unknown) {
 
 export class ManagedDatabaseBindingService {
   private eventBus?: EventBusService;
+  private readonly clickHousePrincipalReconciliationNodes = new Set<string>();
 
   constructor(
     private readonly db: DrizzleClient,
@@ -95,6 +96,16 @@ export class ManagedDatabaseBindingService {
 
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
+    bus.subscribe('node.changed', (payload) => {
+      const event = payload as { id?: unknown; status?: unknown } | null;
+      if (typeof event?.id !== 'string' || event.status !== 'online') return;
+      this.reconcileClickHousePrincipalsForNode(event.id).catch((error) => {
+        logger.warn('Failed to reconcile ClickHouse binding principals after daemon connect', {
+          nodeId: event.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    });
   }
 
   async list(managedDatabaseId: string) {
@@ -114,6 +125,46 @@ export class ManagedDatabaseBindingService {
       targetType: binding.targetType,
       targetResourceId: binding.targetResourceId,
     };
+  }
+
+  /** Reapply secure ClickHouse binding principals after a daemon reconnect. */
+  async reconcileClickHousePrincipals(nodeId?: string) {
+    const rows = await this.db
+      .select({ database: managedDatabaseInstances, binding: managedDatabaseBindings })
+      .from(managedDatabaseBindings)
+      .innerJoin(managedDatabaseInstances, eq(managedDatabaseInstances.id, managedDatabaseBindings.managedDatabaseId));
+    let failures = 0;
+    for (const { database, binding } of rows) {
+      if (
+        database.type !== 'clickhouse' ||
+        database.status !== 'ready' ||
+        database.pendingOperation ||
+        binding.status !== 'ready' ||
+        (nodeId !== undefined && database.nodeId !== nodeId)
+      ) {
+        continue;
+      }
+      try {
+        const credentials = this.bindingCredentials(binding);
+        const owner = this.ownerCredentials(database);
+        await this.provisionClickHouseBindingPrincipal(database, owner, credentials);
+      } catch {
+        failures += 1;
+      }
+    }
+    if (failures > 0) {
+      throw new Error(`Failed to reconcile ${failures} ClickHouse binding principal(s)`);
+    }
+  }
+
+  private async reconcileClickHousePrincipalsForNode(nodeId: string) {
+    if (this.clickHousePrincipalReconciliationNodes.has(nodeId)) return;
+    this.clickHousePrincipalReconciliationNodes.add(nodeId);
+    try {
+      await this.reconcileClickHousePrincipals(nodeId);
+    } finally {
+      this.clickHousePrincipalReconciliationNodes.delete(nodeId);
+    }
   }
 
   async create(managedDatabaseId: string, input: CreateManagedDatabaseBindingInput, userId: string) {
@@ -295,21 +346,25 @@ export class ManagedDatabaseBindingService {
     try {
       const credentials = this.bindingCredentials(binding);
       const owner = this.ownerCredentials(database);
-      this.requireSuccess(
-        await this.nodeDispatch.sendDockerDatabaseCommand(
-          database.nodeId,
-          'binding_create',
-          database.id,
-          JSON.stringify({
-            bindingId: binding.id,
-            username: credentials.username,
-            password: credentials.password,
-            databaseName: credentials.databaseName ?? 'app',
-            ownerUsername: owner.username,
-            ownerPassword: owner.password,
-          })
-        )
-      );
+      if (database.type === 'clickhouse') {
+        await this.provisionClickHouseBindingPrincipal(database, owner, credentials);
+      } else {
+        this.requireSuccess(
+          await this.nodeDispatch.sendDockerDatabaseCommand(
+            database.nodeId,
+            'binding_create',
+            database.id,
+            JSON.stringify({
+              bindingId: binding.id,
+              username: credentials.username,
+              password: credentials.password,
+              databaseName: credentials.databaseName ?? 'app',
+              ownerUsername: owner.username,
+              ownerPassword: owner.password,
+            })
+          )
+        );
+      }
       principalCreated = true;
 
       // A data lane is pre-registered on both nodes before the connector can
@@ -396,6 +451,28 @@ export class ManagedDatabaseBindingService {
       .returning();
     this.emitBinding(database, ready!, 'binding.ready');
     return bindingView(ready!);
+  }
+
+  private async provisionClickHouseBindingPrincipal(
+    database: ManagedDatabaseRow,
+    owner: OwnerCredentials,
+    credentials: BindingCredentials
+  ) {
+    this.requireSuccess(
+      await this.nodeDispatch.sendDockerDatabaseCommand(
+        database.nodeId,
+        'clickhouse_principal_apply_v1',
+        database.id,
+        JSON.stringify({
+          principalType: 'binding',
+          username: credentials.username,
+          password: credentials.password,
+          databaseName: credentials.databaseName ?? 'app',
+          ownerUsername: owner.username,
+          ownerPassword: owner.password,
+        })
+      )
+    );
   }
 
   private async deprovisionBinding(
