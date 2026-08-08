@@ -7,6 +7,7 @@ import {
   inferRedisIntent,
   mapDatabaseDriverError,
 } from './databases.service.js';
+import { splitSqlStatements } from './database-query-intent.js';
 
 describe('mapDatabaseDriverError', () => {
   it('maps postgres authentication failures to 401', () => {
@@ -110,6 +111,13 @@ describe('database query intent inference', () => {
     expect(inferPostgresIntent("select ';' as semi; show all")).toBe('read');
     expect(inferPostgresIntent('select * from users; update users set role = $1')).toBe('write');
     expect(inferPostgresIntent('with deleted as (delete from users returning *) select * from deleted')).toBe('admin');
+    expect(inferPostgresIntent('select 1 -- harmless\r; set role app_admin')).toBe('admin');
+  });
+
+  it('keeps lone CR inside ClickHouse line comments when using the shared splitter', () => {
+    expect(splitSqlStatements('SELECT 1 -- intentionally disabled\r; DROP TABLE events')).toEqual([
+      'SELECT 1 -- intentionally disabled\r; DROP TABLE events',
+    ]);
   });
 
   it('infers the strongest Redis command intent across quoted and batched commands', () => {
