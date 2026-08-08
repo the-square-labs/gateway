@@ -11,6 +11,15 @@ import type { CreateWebhookInput, UpdateWebhookInput, WebhookListQuery } from '.
 
 const logger = createChildLogger('WebhookService');
 
+type WebhookViewOptions = {
+  revealHeaders?: boolean;
+};
+
+export function redactWebhookHeaders(headers: unknown): unknown {
+  if (!headers || typeof headers !== 'object' || Array.isArray(headers)) return headers;
+  return Object.fromEntries(Object.keys(headers).map((key) => [key, '********']));
+}
+
 export class NotificationWebhookService {
   private eventBus?: EventBusService;
 
@@ -28,7 +37,7 @@ export class NotificationWebhookService {
     this.eventBus?.publish('notification.webhook.changed', { id, action });
   }
 
-  async list(query: WebhookListQuery) {
+  async list(query: WebhookListQuery, options: WebhookViewOptions = {}) {
     const conditions: SQL[] = [];
 
     if (query.search) {
@@ -54,6 +63,7 @@ export class NotificationWebhookService {
     const data = rows.map((r) => ({
       ...r,
       signingSecret: r.signingSecret ? '********' : null,
+      headers: options.revealHeaders ? r.headers : redactWebhookHeaders(r.headers),
     }));
 
     return {
@@ -65,12 +75,13 @@ export class NotificationWebhookService {
     };
   }
 
-  async getById(id: string) {
+  async getById(id: string, options: WebhookViewOptions = {}) {
     const [webhook] = await this.db.select().from(notificationWebhooks).where(eq(notificationWebhooks.id, id)).limit(1);
     if (!webhook) throw new AppError(404, 'NOT_FOUND', 'Webhook not found');
     return {
       ...webhook,
       signingSecret: webhook.signingSecret ? '********' : null,
+      headers: options.revealHeaders ? webhook.headers : redactWebhookHeaders(webhook.headers),
     };
   }
 
