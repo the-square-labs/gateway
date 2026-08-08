@@ -3,12 +3,12 @@
   "id": "nasa6q19",
   "file_name": "nasa6q19_siem_gateway_test",
   "tags": [
+    "delivery",
     "deployment",
-    "docker-compose",
     "gateway",
-    "siem",
-    "test-stand",
-    "ui"
+    "review",
+    "security",
+    "siem"
   ],
   "layer": "lite",
   "ref": "zsgne0nk",
@@ -16,7 +16,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1786139242396,
-  "updated_at": 1786150233627
+  "updated_at": 1786152127983
 }
 ---
-[→ zsgne0nk] SIEM test stand 172.20.0.134 is now on r5 with the destination-form spacing and audit-style delivery-details dialog visually verified.
+[→ zsgne0nk] Gateway SIEM deployment, feature flag, authentication, audit hardening, and verification context

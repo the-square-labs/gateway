@@ -5,11 +5,11 @@
       "from_id": "zsgne0nk",
       "to_id": "43cdn720",
       "relation": "supersedes",
-      "weight": 0.96,
-      "reason": "The new memory updates the same SIEM test-stand deployment from image r4 to r5 and provides newer deployment/UI status for the same host and services.",
+      "weight": 0.98,
+      "reason": "The new memory is a later deployment snapshot that updates the current image from r4 to r5, changes rollback status, and adds the latest SIEM UI state while retaining the same deployment context.",
       "source": "auto",
-      "created_at": 1786150237032,
-      "updated_at": 1786150237032
+      "created_at": 1786152132956,
+      "updated_at": 1786152132956
     }
   ]
 }
