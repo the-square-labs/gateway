@@ -56,9 +56,11 @@ const AUDIT_EXPORT_HEADERS = [
 ];
 
 function escapeDelimitedValue(value: string, delimiter: "," | "\t"): string {
-  if (delimiter === "\t") return value.replace(/[\t\r\n]+/g, " ");
-  if (!/[",\r\n]/.test(value)) return value;
-  return `"${value.replace(/"/g, '""')}"`;
+  const normalized = delimiter === "\t" ? value.replace(/[\t\r\n]+/g, " ") : value;
+  const safeValue = /^[\t\r\n ]*[=+\-@]/.test(normalized) ? `'${normalized}` : normalized;
+  if (delimiter === "\t") return safeValue;
+  if (!/[",\r\n]/.test(safeValue)) return safeValue;
+  return `"${safeValue.replace(/"/g, '""')}"`;
 }
 
 function formatDelimitedAuditExport(entries: AuditLogEntry[], delimiter: "," | "\t"): string {
