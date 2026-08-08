@@ -34,6 +34,11 @@ export class ConfigValidatorService {
     'ssl_certificate_key',
     'internal',
     'satisfy',
+    // Advanced location blocks receive the host access policy during rendering.
+    // User directives here could replace or disable that protection.
+    'allow',
+    'deny',
+    'auth_basic',
     'auth_basic_user_file',
     'content_by_lua',
   ];

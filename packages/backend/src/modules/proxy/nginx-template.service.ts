@@ -9,6 +9,7 @@ import { formatHostPort } from '@/lib/network-endpoint.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
+import { injectAccessListIntoAdvancedLocations } from '@/services/nginx-advanced-location.js';
 import type { ProxyHostConfig } from '@/services/nginx-config-generator.service.js';
 import type { CreateNginxTemplateInput, UpdateNginxTemplateInput } from './nginx-template.schemas.js';
 
@@ -39,6 +40,30 @@ Handlebars.registerHelper('indent', (value: unknown, spaces: unknown) => {
       .join('\n')
   );
 });
+
+Handlebars.registerHelper('applyAccessListToAdvancedLocations', (advancedConfig: unknown, accessList: unknown) => {
+  if (typeof advancedConfig !== 'string') return '';
+  return injectAccessListIntoAdvancedLocations(
+    advancedConfig,
+    buildAccessListDirectives(accessList as ProxyHostConfig['accessList'])
+  );
+});
+
+function buildAccessListDirectives(accessList: ProxyHostConfig['accessList']): string[] {
+  if (!accessList) return [];
+
+  const directives = accessList.ipRules.map(
+    (rule) => `${rule.type.replace(DANGEROUS_CHARS, '')} ${rule.value.replace(DANGEROUS_CHARS, '')};`
+  );
+  if (accessList.ipRules.length > 0) directives.push('deny all;');
+  if (accessList.basicAuthEnabled) {
+    directives.push('auth_basic "Restricted Access";');
+    directives.push(
+      `auth_basic_user_file /etc/nginx/gateway/htpasswd/access-list-${accessList.id.replace(DANGEROUS_CHARS, '')};`
+    );
+  }
+  return directives;
+}
 
 // ---------------------------------------------------------------------------
 // Built-in template content
@@ -153,7 +178,7 @@ server {
     }
 
 {{#if advancedConfig}}
-    {{{indent advancedConfig 4}}}
+    {{{indent (applyAccessListToAdvancedLocations advancedConfig accessList) 4}}}
 {{/if}}
 }
 `;
