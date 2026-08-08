@@ -1,0 +1,15 @@
+{
+  "file_name": "x7unpgb6_nginx_access_control",
+  "edges": [
+    {
+      "from_id": "x7unpgb6",
+      "to_id": "asy6c7bj",
+      "relation": "same_workflow",
+      "weight": 0.72,
+      "reason": "Both cover managed proxy-host access-list/advanced-config changes and required resynchronization after saves.",
+      "source": "auto",
+      "created_at": 1786184529021,
+      "updated_at": 1786184529021
+    }
+  ]
+}

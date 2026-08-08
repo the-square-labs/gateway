@@ -38,6 +38,22 @@ location /api/ {
     expect(result.errors).toEqual([]);
   });
 
+  it.each([
+    ['allow', 'allow all;'],
+    ['deny', 'deny all;'],
+    ['auth_basic', 'auth_basic off;'],
+  ])('rejects %s overrides inside custom locations', (directive, statement) => {
+    const result = service.validate(
+      `location /api/ {
+  ${statement}
+  proxy_pass http://127.0.0.1:3000/api/;
+}`
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain(`Forbidden directive "${directive}" found on line 2`);
+  });
+
   it('rejects forbidden directives even when chained after safe directives on one line', () => {
     const result = service.validate('proxy_http_version 1.1; proxy_pass http://127.0.0.1:3000;');
 
