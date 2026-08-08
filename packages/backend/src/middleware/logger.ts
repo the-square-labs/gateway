@@ -2,11 +2,17 @@ import type { MiddlewareHandler } from 'hono';
 import { logger } from '@/lib/logger.js';
 import type { AppEnv } from '@/types.js';
 
+const DOCKER_WEBHOOK_TOKEN_PATH = /^(\/api\/webhooks\/docker\/)[^/]+(?=\/|$)/;
+
+export function redactRequestPath(path: string): string {
+  return path.replace(DOCKER_WEBHOOK_TOKEN_PATH, '$1[REDACTED]');
+}
+
 export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
   const start = Date.now();
   const requestId = c.get('requestId');
   const method = c.req.method;
-  const path = c.req.path;
+  const path = redactRequestPath(c.req.path);
 
   logger.info('Incoming request', {
     requestId,
