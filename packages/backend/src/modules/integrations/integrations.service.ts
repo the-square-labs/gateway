@@ -1230,10 +1230,7 @@ export class IntegrationsService {
       requiredCapability: 'repoWrite',
     });
     const createdBranch = await this.assertPersonalGitLabWriteAccess(context, input.branch, input.startBranch);
-    const executionAuth =
-      context.credentialSource === 'personal' ? this.systemAuthFor(context.connector) : context.auth;
-    const executionProvider = this.getVcsProvider(context.connector.provider);
-    const result = await executionProvider.commitFiles(executionAuth, {
+    const result = await context.provider.commitFiles(context.auth, {
       project: this.toProviderProject(context.project),
       branch: input.branch,
       commitMessage: input.commitMessage,
@@ -1297,11 +1294,8 @@ export class IntegrationsService {
       requiredScope: 'integrations:gitlab:ci:edit',
       requiredCapability: 'ciEdit',
     });
-    const executionAuth =
-      context.credentialSource === 'personal' ? this.systemAuthFor(context.connector) : context.auth;
-    const executionProvider = this.getVcsProvider(context.connector.provider);
-    const lint = await executionProvider.lintCiConfig(
-      executionAuth,
+    const lint = await context.provider.lintCiConfig(
+      context.auth,
       this.toProviderProject(context.project),
       input.content
     );
@@ -1324,7 +1318,7 @@ export class IntegrationsService {
       );
     }
     const createdBranch = await this.assertPersonalGitLabWriteAccess(context, input.branch, input.startBranch);
-    const result = await executionProvider.commitFiles(executionAuth, {
+    const result = await context.provider.commitFiles(context.auth, {
       project: this.toProviderProject(context.project),
       branch: input.branch,
       startBranch: createdBranch ? undefined : input.startBranch,
