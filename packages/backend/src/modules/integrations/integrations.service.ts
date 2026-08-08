@@ -1657,6 +1657,7 @@ export class IntegrationsService {
     });
     const targetPath = this.safeRelativePath(input.targetPath || this.slugPath(context.project.name || 'repository'));
     const archivePath = `.gateway/gitlab-${Date.now()}.tar.gz`;
+    const archiveReadyPath = `${archivePath}.ready`;
     if (!('streamRepositoryArchive' in context.provider)) {
       throw new AppError(
         501,
@@ -1673,10 +1674,10 @@ export class IntegrationsService {
       '-lc',
       [
         'set -eu',
-        `while [ ! -f ${this.shellQuote(`/workspace/${archivePath}`)} ]; do sleep 0.2; done`,
+        `while [ ! -f ${this.shellQuote(`/workspace/${archiveReadyPath}`)} ]; do sleep 0.2; done`,
         `mkdir -p ${this.shellQuote(`/workspace/${targetPath}`)}`,
         `tar -xzf ${this.shellQuote(`/workspace/${archivePath}`)} -C ${this.shellQuote(`/workspace/${targetPath}`)} --strip-components=1`,
-        `rm -f ${this.shellQuote(`/workspace/${archivePath}`)}`,
+        `rm -f ${this.shellQuote(`/workspace/${archivePath}`)} ${this.shellQuote(`/workspace/${archiveReadyPath}`)}`,
         'echo CLONE_READY',
         `sleep ${effectiveTtlSeconds}`,
       ].join('; '),
@@ -1703,6 +1704,11 @@ export class IntegrationsService {
         path: archivePath,
         chunks: archive.chunks,
         maxBytes: connectorSettings.cloneMaxSizeMb * 1024 * 1024,
+      });
+      await sandboxService.uploadArtifact(user, {
+        processId: process.processId,
+        path: archiveReadyPath,
+        contentBase64: '',
       });
       archiveBytes = uploaded.sizeBytes;
     } catch (error) {

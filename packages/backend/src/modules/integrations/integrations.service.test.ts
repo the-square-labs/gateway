@@ -224,6 +224,7 @@ describe('IntegrationsService', () => {
     const sandboxService = {
       runProcess: vi.fn().mockResolvedValue({ processId: 'process-1', jobId: 'job-1' }),
       uploadArtifactStream: vi.fn().mockResolvedValue({ sizeBytes: 260 * 1024 }),
+      uploadArtifact: vi.fn().mockResolvedValue({ sizeBytes: 0 }),
       killProcess: vi.fn(),
     };
     const user = {
@@ -248,7 +249,17 @@ describe('IntegrationsService', () => {
       user,
       expect.objectContaining({ chunks: expect.anything(), maxBytes: 1024 * 1024 * 1024 })
     );
-    expect(sandboxService.runProcess.mock.calls[0][1].command.join(' ')).not.toContain('glpat-never-exposed');
+    expect(sandboxService.uploadArtifact).toHaveBeenCalledWith(
+      user,
+      expect.objectContaining({
+        processId: 'process-1',
+        path: expect.stringMatching(/\.tar\.gz\.ready$/),
+        contentBase64: '',
+      })
+    );
+    const command = sandboxService.runProcess.mock.calls[0][1].command.join(' ');
+    expect(command).toContain('.tar.gz.ready');
+    expect(command).not.toContain('glpat-never-exposed');
   });
 
   it('proves Cloudflare DNS edit capability with a temporary TXT record during preview test', async () => {

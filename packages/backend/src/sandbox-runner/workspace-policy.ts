@@ -66,7 +66,7 @@ export async function measureWorkspaceUsageBytes(directory: string): Promise<num
       }
       if (stat.isFile()) {
         const allocatedBytes = typeof stat.blocks === 'number' && stat.blocks > 0 ? stat.blocks * 512 : stat.size;
-        total += allocatedBytes;
+        total += Math.max(stat.size, allocatedBytes);
       }
     }
   };
