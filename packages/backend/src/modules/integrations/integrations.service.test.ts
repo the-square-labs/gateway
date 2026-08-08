@@ -429,7 +429,7 @@ describe('IntegrationsService', () => {
     expect(provider.listProjects).toHaveBeenCalledWith(expect.objectContaining({ token: 'glpat-personal-token' }));
   });
 
-  it('checks personal write access but creates commits with the system PAT', async () => {
+  it('creates commits with the personal PAT after checking its write access', async () => {
     const connector = connectorRow({
       allowlistMode: 'all_visible',
       capabilities: { projectsView: true, repoWrite: true },
@@ -478,12 +478,12 @@ describe('IntegrationsService', () => {
       'main'
     );
     expect(provider.commitFiles).toHaveBeenCalledWith(
-      expect.objectContaining({ token: 'glpat-system-token' }),
+      expect.objectContaining({ token: 'glpat-personal-token' }),
       expect.objectContaining({ commitMessage: 'Update file' })
     );
   });
 
-  it('refuses system-attributed commits without personal push access to an existing branch', async () => {
+  it('refuses personal commits without push access to an existing branch', async () => {
     const branchAccess = { exists: true, canPush: false };
     const branch = 'main';
     const connector = connectorRow({
@@ -528,7 +528,7 @@ describe('IntegrationsService', () => {
     expect(provider.commitFiles).not.toHaveBeenCalled();
   });
 
-  it('creates a missing branch with the personal PAT before committing with the system PAT', async () => {
+  it('creates a missing branch and commits with the personal PAT', async () => {
     const connector = connectorRow({
       allowlistMode: 'all_visible',
       capabilities: { projectsView: true, repoWrite: true },
@@ -576,9 +576,135 @@ describe('IntegrationsService', () => {
       'main'
     );
     expect(provider.commitFiles).toHaveBeenCalledWith(
-      expect.objectContaining({ token: 'glpat-system-token' }),
+      expect.objectContaining({ token: 'glpat-personal-token' }),
       expect.objectContaining({ branch: 'feature/new', startBranch: undefined })
     );
+  });
+
+  it('commits a valid CI configuration with the personal PAT', async () => {
+    const connector = connectorRow({
+      allowlistMode: 'all_visible',
+      capabilities: { projectsView: true, ciEdit: true },
+      encryptedToken: JSON.stringify('encrypted-token'),
+    });
+    const db = createProjectActionDb({ connector, project: projectRow(), allowlistEntries: [] });
+    const provider = vcsProvider({
+      getProjectAccess: vi.fn().mockResolvedValue({ accessLevel: 30 }),
+      getBranchAccess: vi.fn().mockResolvedValue({ exists: true, canPush: true }),
+      lintCiConfig: vi.fn().mockResolvedValue({ valid: true, errors: [], warnings: [], mergedYaml: null }),
+      commitFiles: vi.fn().mockResolvedValue({ commitSha: 'abc123', branch: 'main', webUrl: null }),
+    });
+    const decryptString = vi.fn(() => 'glpat-system-token');
+    const service = new IntegrationsService(db as never, { log: vi.fn() } as never, { decryptString } as never);
+    service.registerProvider(provider as never);
+    const credentials = (
+      service as unknown as { gitLabUserCredentials: { resolveAuth: (...args: unknown[]) => Promise<unknown> } }
+    ).gitLabUserCredentials;
+    vi.spyOn(credentials, 'resolveAuth').mockResolvedValue({
+      auth: { baseUrl: 'https://gitlab.example.com', token: 'glpat-personal-token' },
+      scopes: ['api'],
+      gitlabUserId: '42',
+      gitlabUsername: 'alice',
+    });
+
+    await service.gitLabUpdateCiConfig(
+      { ...BASE_USER, scopes: ['integrations:gitlab:ci:edit'] },
+      {
+        connectorId: '11111111-1111-4111-8111-111111111111',
+        project: 'general/balanceify',
+        branch: 'main',
+        content: 'stages: [test]\n',
+        commitMessage: 'Update CI',
+      }
+    );
+
+    expect(provider.lintCiConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ token: 'glpat-personal-token' }),
+      expect.objectContaining({ fullPath: 'general/balanceify' }),
+      'stages: [test]\n'
+    );
+    expect(provider.commitFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ token: 'glpat-personal-token' }),
+      expect.objectContaining({ changes: [{ action: 'update', path: '.gitlab-ci.yml', content: 'stages: [test]\n' }] })
+    );
+    expect(decryptString).not.toHaveBeenCalled();
+  });
+
+  it('uses the system PAT for a commit only when the caller has the explicit system scope', async () => {
+    const connector = connectorRow({
+      allowlistMode: 'all_visible',
+      capabilities: { projectsView: true, repoWrite: true },
+      encryptedToken: JSON.stringify('encrypted-token'),
+    });
+    const db = createProjectActionDb({ connector, project: projectRow(), allowlistEntries: [] });
+    const provider = vcsProvider({
+      getProjectAccess: vi.fn().mockResolvedValue({ accessLevel: 40 }),
+      commitFiles: vi.fn().mockResolvedValue({ commitSha: 'abc123', branch: 'main', webUrl: null }),
+    });
+    const decryptString = vi.fn(() => 'glpat-system-token');
+    const service = new IntegrationsService(db as never, { log: vi.fn() } as never, { decryptString } as never);
+    service.registerProvider(provider as never);
+
+    await service.gitLabCommitFiles(
+      { ...BASE_USER, scopes: ['integrations:gitlab:repo:write', 'integrations:gitlab:system'] },
+      {
+        connectorId: '11111111-1111-4111-8111-111111111111',
+        project: 'general/balanceify',
+        branch: 'main',
+        commitMessage: 'Update file',
+        changes: [{ action: 'update', path: 'README.md', content: 'updated' }],
+      }
+    );
+
+    expect(provider.commitFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ token: 'glpat-system-token' }),
+      expect.objectContaining({ commitMessage: 'Update file' })
+    );
+  });
+
+  it('invalidates a personal PAT when a GitLab write returns 401', async () => {
+    const connector = connectorRow({
+      allowlistMode: 'all_visible',
+      capabilities: { projectsView: true, repoWrite: true },
+      encryptedToken: JSON.stringify('encrypted-token'),
+    });
+    const db = createProjectActionDb({ connector, project: projectRow(), allowlistEntries: [] });
+    const provider = vcsProvider({
+      getProjectAccess: vi.fn().mockResolvedValue({ accessLevel: 30 }),
+      getBranchAccess: vi.fn().mockResolvedValue({ exists: true, canPush: true }),
+      commitFiles: vi.fn().mockRejectedValue(new AppError(401, 'GITLAB_API_ERROR', 'Unauthorized')),
+    });
+    const service = new IntegrationsService(db as never, { log: vi.fn() } as never, {} as never);
+    service.registerProvider(provider as never);
+    const credentials = (
+      service as unknown as {
+        gitLabUserCredentials: {
+          resolveAuth: (...args: unknown[]) => Promise<unknown>;
+          markInvalid: (...args: unknown[]) => Promise<void>;
+        };
+      }
+    ).gitLabUserCredentials;
+    vi.spyOn(credentials, 'resolveAuth').mockResolvedValue({
+      auth: { baseUrl: 'https://gitlab.example.com', token: 'glpat-personal-token' },
+      scopes: ['api'],
+      gitlabUserId: '42',
+      gitlabUsername: 'alice',
+    });
+    const markInvalid = vi.spyOn(credentials, 'markInvalid').mockResolvedValue(undefined);
+
+    await expect(
+      service.gitLabCommitFiles(
+        { ...BASE_USER, scopes: ['integrations:gitlab:repo:write'] },
+        {
+          connectorId: '11111111-1111-4111-8111-111111111111',
+          project: 'general/balanceify',
+          branch: 'main',
+          commitMessage: 'Update file',
+          changes: [{ action: 'update', path: 'README.md', content: 'updated' }],
+        }
+      )
+    ).rejects.toMatchObject({ statusCode: 428, code: 'GITLAB_CREDENTIAL_REQUIRED' });
+    expect(markInvalid).toHaveBeenCalledWith('user-1', '11111111-1111-4111-8111-111111111111');
   });
 
   it('requires startBranch when a personal PAT targets a missing branch', async () => {
