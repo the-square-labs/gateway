@@ -1,6 +1,7 @@
 MODULE := github.com/wiolett-industries/gateway/nginx-daemon
 SHARED_MODULE := github.com/wiolett-industries/gateway/daemon-shared
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+export VERSION
 PROTO_DIR := ../../../proto
 SHARED_OUT_DIR := ../shared/gatewayv1
 BINARY := bin/nginx-daemon
@@ -23,7 +24,7 @@ proto:
 		gateway/v1/nginx-daemon.proto
 
 build: trust-anchor
-	CGO_ENABLED=0 go build -ldflags "-s -w -X $(MODULE)/internal/daemon.Version=$(VERSION)" -o $(BINARY) ./cmd/nginx-daemon
+	CGO_ENABLED=0 go build -ldflags "-s -w -X $(MODULE)/internal/daemon.Version=$$VERSION" -o $(BINARY) ./cmd/nginx-daemon
 
 test: trust-anchor
 	go test ./...
