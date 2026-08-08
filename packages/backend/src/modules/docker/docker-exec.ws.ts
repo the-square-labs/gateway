@@ -13,6 +13,11 @@ import { DockerManagementService } from './docker.service.js';
 import { dockerScopedNodeIds, hasDockerResourceScope } from './docker-access-resource.service.js';
 
 const logger = createChildLogger('DockerExec');
+export const DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES = 16 * 1024;
+
+export function isDockerExecPreauthMessageTooLarge(raw: string): boolean {
+  return Buffer.byteLength(raw, 'utf8') > DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES;
+}
 
 async function authorizeExecAccess(
   credential: WebSocketCredential | null,
@@ -153,6 +158,20 @@ export function createDockerExecWSHandlers(
       if (!state) return;
 
       const raw = typeof event.data === 'string' ? event.data : String(event.data);
+
+      // The credential is supplied during the WebSocket handshake, so no
+      // legitimate pre-auth client command needs a large payload. Avoid JSON
+      // parsing attacker-controlled megabyte payloads while authentication is
+      // still in flight; authenticated terminal input keeps its existing flow.
+      if (!state.authenticated && isDockerExecPreauthMessageTooLarge(raw)) {
+        send(ws, { type: 'error', message: 'Message too large before authentication' });
+        try {
+          ws.close(1009, 'Message too large');
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
 
       let msg: Record<string, unknown>;
       try {

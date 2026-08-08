@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { parseDockerExecTerminalSize, resizeDockerExec, resolveDockerExecUser } from './docker-exec.ws.js';
+import {
+  DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES,
+  isDockerExecPreauthMessageTooLarge,
+  parseDockerExecTerminalSize,
+  resizeDockerExec,
+  resolveDockerExecUser,
+} from './docker-exec.ws.js';
 
 describe('resolveDockerExecUser', () => {
   it('uses the configured container execution user when present', async () => {
@@ -73,5 +79,14 @@ describe('Docker exec terminal resize', () => {
     await expect(
       resizeDockerExec({ sendDockerExecCommand } as never, 'node-1', 'exec-1', { rows: 24, cols: 80 })
     ).rejects.toThrow('resize rejected');
+  });
+});
+
+describe('Docker exec unauthenticated message limit', () => {
+  it('limits only oversized UTF-8 payloads before authentication', () => {
+    expect(isDockerExecPreauthMessageTooLarge('{"type":"resize","rows":24,"cols":120}')).toBe(false);
+    expect(isDockerExecPreauthMessageTooLarge('x'.repeat(DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES))).toBe(false);
+    expect(isDockerExecPreauthMessageTooLarge('x'.repeat(DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES + 1))).toBe(true);
+    expect(isDockerExecPreauthMessageTooLarge('€'.repeat(Math.ceil(DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES / 3)))).toBe(true);
   });
 });
