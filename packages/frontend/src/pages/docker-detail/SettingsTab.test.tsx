@@ -1,10 +1,12 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, vi } from "vitest";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import { makeUser } from "@/test/fixtures";
 import { SettingsTab, WebhookSection } from "./SettingsTab";
+
+vi.mock("@/components/common/ConfirmDialog", () => ({ confirm: vi.fn().mockResolvedValue(true) }));
 
 vi.mock("@/hooks/use-realtime", () => ({
   useRealtime: vi.fn(),
@@ -58,7 +60,13 @@ vi.mock("./VolumeMountsSection", () => ({
 }));
 
 vi.mock("./LabelsSection", () => ({
-  LabelsSection: () => null,
+  LabelsSection: ({ labels }: { labels: Array<{ key: string }> }) => (
+    <div data-testid="labels-section">
+      {labels.map((label) => (
+        <span key={label.key}>{label.key}</span>
+      ))}
+    </div>
+  ),
 }));
 
 vi.mock("@/components/docker/DockerHealthCheckSection", () => ({
@@ -66,6 +74,27 @@ vi.mock("@/components/docker/DockerHealthCheckSection", () => ({
 }));
 
 describe("docker detail SettingsTab", () => {
+  beforeEach(() => {
+    vi.spyOn(api, "getNode").mockResolvedValue({
+      id: "node-1",
+      liveHealthReport: { gpuDevices: [] },
+      lastHealthReport: null,
+    } as never);
+    vi.spyOn(api, "listDockerGpuUsage").mockResolvedValue([]);
+    vi.spyOn(api, "getContainerWebhook").mockResolvedValue(null);
+    vi.spyOn(api, "getContainerImageCleanup").mockResolvedValue({
+      id: null,
+      targetType: "container",
+      nodeId: "node-1",
+      containerName: "app",
+      deploymentId: null,
+      enabled: false,
+      retentionCount: 2,
+      createdAt: null,
+      updatedAt: null,
+    });
+  });
+
   it("clears the local mutation lock through refresh callbacks when saving runtime settings for a stopped container", async () => {
     vi.spyOn(api, "liveUpdateContainer").mockResolvedValue({});
     const invalidate = vi.fn().mockResolvedValue(undefined);
@@ -164,6 +193,47 @@ describe("docker detail SettingsTab", () => {
     expect(screen.getByLabelText("Loading webhook")).toBeInTheDocument();
   });
 
+  it("does not expose daemon-owned GPU group provenance labels", () => {
+    render(
+      <SettingsTab
+        nodeId="node-1"
+        containerId="container-1"
+        data={{
+          Id: "container-1",
+          Name: "/app",
+          State: { Status: "exited", Running: false },
+          Config: {
+            Image: "registry.example.com/team/app:latest",
+            Entrypoint: [],
+            Cmd: [],
+            Labels: {
+              "example.com/visible": "yes",
+              "wiolett.gateway.gpu.group-ids": "105",
+              "wiolett.gateway.gpu.group-ids-version": "1",
+            },
+          },
+          HostConfig: {
+            RestartPolicy: { Name: "no", MaximumRetryCount: 0 },
+            Memory: 0,
+            MemorySwap: 0,
+            NanoCPUs: 0,
+            CpuShares: 0,
+            PidsLimit: 0,
+            PortBindings: {},
+          },
+          Mounts: [],
+        }}
+      />
+    );
+
+    const labels = screen.getByTestId("labels-section");
+    expect(within(labels).getByText("example.com/visible")).toBeInTheDocument();
+    expect(within(labels).queryByText("wiolett.gateway.gpu.group-ids")).not.toBeInTheDocument();
+    expect(
+      within(labels).queryByText("wiolett.gateway.gpu.group-ids-version")
+    ).not.toBeInTheDocument();
+  });
+
   it("renders attached Docker networks in settings", async () => {
     vi.spyOn(api, "listDockerNetworks").mockResolvedValue([
       {
@@ -220,6 +290,161 @@ describe("docker detail SettingsTab", () => {
     expect(screen.getByText("172.20.0.5")).toBeInTheDocument();
     expect(screen.getByText("app, backend")).toBeInTheDocument();
     expect(api.listDockerNetworks).toHaveBeenCalledWith("node-1");
+  });
+
+  it("adds a shared physical GPU through the standard table and dialog", async () => {
+    vi.mocked(api.listDockerGpuUsage).mockResolvedValue([
+      {
+        deviceId: "nvidia:gpu-1",
+        containerCount: 1,
+        containers: [{ name: "gateway-gpu-ui-e2e" }],
+      },
+    ]);
+    vi.mocked(api.getNode).mockResolvedValue({
+      id: "node-1",
+      liveHealthReport: {
+        gpuDevices: [
+          {
+            id: "nvidia:gpu-1",
+            vendor: "nvidia",
+            model: "RTX 3050",
+            pciAddress: "0000:01:00.0",
+            renderNode: "/dev/dri/renderD128",
+            deviceIndex: 0,
+            attachable: true,
+            unavailableReason: "",
+            partitioned: false,
+            availableMetrics: ["utilization_percent"],
+          },
+        ],
+      },
+      lastHealthReport: null,
+    } as never);
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["docker:containers:edit"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+
+    render(
+      <SettingsTab
+        nodeId="node-1"
+        containerId="container-1"
+        data={{
+          Id: "container-1",
+          Name: "/app",
+          State: { Status: "running", Running: true },
+          Config: { Image: "registry.example.com/team/app:latest", Entrypoint: [], Cmd: [] },
+          HostConfig: {
+            RestartPolicy: { Name: "no", MaximumRetryCount: 0 },
+            Memory: 0,
+            MemorySwap: 0,
+            NanoCPUs: 0,
+            CpuShares: 0,
+            PidsLimit: 0,
+            PortBindings: {},
+          },
+          Mounts: [],
+        }}
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "GPU" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Add" }));
+    expect(screen.getByRole("dialog", { name: "Add GPU" })).toBeInTheDocument();
+    expect(
+      screen.getByText(/Physical GPUs are shared with other containers on this node/i)
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "GPU" }));
+    fireEvent.click(await screen.findByRole("option", { name: /NVIDIA · RTX 3050/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Add GPU" }));
+
+    expect(await screen.findByText("NVIDIA · RTX 3050")).toBeInTheDocument();
+    expect(screen.getByText("VRAM", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("Containers", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("1 container")).toBeInTheDocument();
+    expect(screen.queryByText("gateway-gpu-ui-e2e")).not.toBeInTheDocument();
+    expect(screen.getByText("nvidia:gpu-1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Remove NVIDIA · RTX 3050/i })).toHaveClass(
+      "h-9",
+      "w-9",
+      "rounded-none",
+      "border-l"
+    );
+    expect(screen.getAllByText("Requires container recreation")).toHaveLength(2);
+  });
+
+  it("keeps an explicit GPU removal through transient container snapshots", async () => {
+    vi.spyOn(api, "recreateWithConfig").mockResolvedValue({});
+    vi.mocked(api.getNode).mockResolvedValue({
+      id: "node-1",
+      liveHealthReport: {
+        gpuDevices: [
+          {
+            id: "nvidia:gpu-1",
+            vendor: "nvidia",
+            model: "RTX 3050",
+            pciAddress: "0000:01:00.0",
+            renderNode: "/dev/dri/renderD128",
+            deviceIndex: 0,
+            attachable: true,
+            unavailableReason: "",
+            partitioned: false,
+            availableMetrics: ["utilization_percent"],
+          },
+        ],
+      },
+      lastHealthReport: null,
+    } as never);
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["docker:containers:edit"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+
+    const data = {
+      Id: "container-1",
+      Name: "/app",
+      State: { Status: "running", Running: true },
+      Config: { Image: "registry.example.com/team/app:latest", Entrypoint: [], Cmd: [] },
+      HostConfig: {
+        RestartPolicy: { Name: "no", MaximumRetryCount: 0 },
+        Memory: 0,
+        MemorySwap: 0,
+        NanoCPUs: 0,
+        CpuShares: 0,
+        PidsLimit: 0,
+        PortBindings: {},
+      },
+      Mounts: [],
+      gpuAttachment: { mode: "managed" as const, deviceIds: ["nvidia:gpu-1"] },
+    };
+    const { rerender } = render(
+      <SettingsTab nodeId="node-1" containerId="container-1" data={data} />
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /Remove NVIDIA · RTX 3050/i }));
+    expect(screen.getByRole("button", { name: "Save & Recreate" })).toBeEnabled();
+
+    rerender(
+      <SettingsTab
+        nodeId="node-1"
+        containerId="container-1"
+        data={{ ...data, gpuAttachment: { mode: "none", deviceIds: [] } }}
+      />
+    );
+    rerender(<SettingsTab nodeId="node-1" containerId="container-1" data={data} />);
+
+    const save = screen.getByRole("button", { name: "Save & Recreate" });
+    await waitFor(() => expect(save).toBeEnabled());
+    fireEvent.click(save);
+
+    await waitFor(() => {
+      expect(api.recreateWithConfig).toHaveBeenCalledWith("node-1", "container-1", {
+        gpu: { deviceIds: [] },
+      });
+    });
   });
 
   it("saves network-only changes without recreating the container", async () => {
@@ -293,8 +518,12 @@ describe("docker detail SettingsTab", () => {
       />
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Add" }));
-    fireEvent.click(screen.getByRole("combobox"));
+    const networksPanel = screen.getByRole("heading", { name: "Networks" }).closest(".border");
+    expect(networksPanel).not.toBeNull();
+    const addNetwork = within(networksPanel as HTMLElement).getByRole("button", { name: "Add" });
+    await waitFor(() => expect(addNetwork).toBeEnabled());
+    fireEvent.click(addNetwork);
+    fireEvent.click(within(networksPanel as HTMLElement).getByRole("combobox"));
     fireEvent.click(await screen.findByText("other-net"));
 
     const saveButton = screen.getByRole("button", { name: "Save" });

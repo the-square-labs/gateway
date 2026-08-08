@@ -13,6 +13,7 @@ export interface RecreateBaseline {
   user: string;
   hostname: string;
   labels: string;
+  gpuDeviceIds: string;
 }
 
 export interface RecreatePayloadInputs {
@@ -31,6 +32,8 @@ export interface RecreatePayloadInputs {
   hostname: string;
   labelsChanged: boolean;
   labels: Array<{ key: string; value: string }>;
+  gpuChanged: boolean;
+  gpuDeviceIds: string[];
   hasRuntimeChanges: boolean;
   runtimePayload: Record<string, unknown> | null;
   recreateBaseline: RecreateBaseline;
@@ -52,6 +55,8 @@ export function buildRecreatePayloadFromForm({
   hostname,
   labelsChanged,
   labels,
+  gpuChanged,
+  gpuDeviceIds,
   hasRuntimeChanges,
   runtimePayload,
   recreateBaseline,
@@ -100,6 +105,9 @@ export function buildRecreatePayloadFromForm({
       if (label.key.trim()) labelMap[label.key.trim()] = label.value;
     }
     payload.labels = labelMap;
+  }
+  if (gpuChanged) {
+    payload.gpu = { deviceIds: gpuDeviceIds };
   }
   if (hasRuntimeChanges && runtimePayload) {
     Object.assign(payload, runtimePayload);

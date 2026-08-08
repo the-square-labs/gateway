@@ -64,6 +64,7 @@ async function setup() {
   const docker = {
     decorateContainerSnapshot: vi.fn(async (_nodeId, data) => data),
     listContainers: vi.fn(),
+    listGpuAttachmentUsers: vi.fn(),
   };
   const dispatch = {
     sendDockerContainerCommand: vi.fn(),
@@ -118,6 +119,39 @@ describe('Docker snapshot routes', () => {
     expect(body.data[0]).toMatchObject({ nodeId: NODE_1, name: 'one', availability: 'available' });
     expect(docker.listContainers).not.toHaveBeenCalled();
     expect(dispatch.sendDockerContainerCommand).not.toHaveBeenCalled();
+  });
+
+  it('returns GPU users only for containers visible to the caller', async () => {
+    const { docker } = await setup();
+    docker.listGpuAttachmentUsers.mockResolvedValue([
+      {
+        containerId: 'visible-runtime-id',
+        name: 'visible',
+        scopeResourceId: 'resource-visible',
+        deviceIds: ['nvidia:GPU-1'],
+      },
+      {
+        containerId: 'hidden-runtime-id',
+        name: 'hidden',
+        scopeResourceId: 'resource-hidden',
+        deviceIds: ['nvidia:GPU-1'],
+      },
+    ]);
+    const app = appWithScopes([`docker:containers:view:${NODE_1}/resource-visible`]);
+    registerContainerRoutes(app);
+
+    const response = await app.request(`/nodes/${NODE_1}/containers/gpu-usage`);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: [
+        {
+          deviceId: 'nvidia:GPU-1',
+          containerCount: 1,
+          containers: [{ name: 'visible' }],
+        },
+      ],
+    });
   });
 
   it('manual refresh submits an urgent deduplicated hint', async () => {

@@ -20,6 +20,8 @@ GWCA v1 contains a Gateway-owned, versioned manifest with only settings that Gat
 
 The manifest is deliberately not a serialized Docker inspect response. Containers using unsupported or host-sensitive settings, such as privileged mode, devices or GPUs, host namespaces, capabilities, custom runtimes, custom log drivers, health checks, or unsupported resource controls, are rejected during export with an explicit reason instead of producing an incomplete archive.
 
+A Gateway-managed GPU attachment is therefore not portable in GWCA v1: the UI disables export and the API rejects it. GPU-attached standalone containers and blue/green deployments also cannot use cross-node migration in this version. Detach the GPU through the normal recreate flow before using either portability workflow.
+
 Ordinary environment values are always included. Secrets are excluded by default and are included only when **Include secrets** is enabled by a user with secret access. Secret values inside a `.gwca` file are plaintext archive data; the downloaded file must be handled as sensitive. On import, Gateway encrypts them again with the destination Gateway key.
 
 ## Image modes

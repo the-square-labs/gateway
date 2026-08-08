@@ -26,6 +26,7 @@ export type {
   Node,
   NodeAppearanceColor,
   NodeDetail,
+  NodeGpuDevice,
   NodeHealthReport,
   NodeStatsReport,
   NodeStatus,
@@ -34,6 +35,9 @@ export type {
 export {
   effectiveNodeStatus,
   getNodeUpdateTargetVersion,
+  gpuDeviceLabel,
+  hasGpuMetric,
+  hasGpuMonitoringMetrics,
   isNodeIncompatible,
   isNodeUpdating,
 } from "./nodes";

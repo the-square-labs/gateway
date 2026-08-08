@@ -79,6 +79,29 @@ export interface CommandResult {
   data: Buffer;
 }
 
+export interface GpuDevice {
+  id: string;
+  vendor: string;
+  model: string;
+  pciAddress: string;
+  renderNode: string;
+  deviceIndex: number;
+  attachable: boolean;
+  unavailableReason: string;
+  partitioned: boolean;
+  utilizationPercent: number;
+  memoryTotalBytes: string;
+  memoryUsedBytes: string;
+  temperatureCelsius: number;
+  powerWatts: number;
+  powerLimitWatts: number;
+  throttled: boolean;
+  eccCorrectedErrors: string;
+  eccUncorrectedErrors: string;
+  health: string;
+  availableMetrics: string[];
+}
+
 export interface HealthReport {
   nginxRunning: boolean;
   configValid: boolean;
@@ -132,6 +155,7 @@ export interface HealthReport {
   containersRunning: number;
   containersStopped: number;
   containersTotal: number;
+  gpuDevices: GpuDevice[];
 }
 
 export interface StatsReport {

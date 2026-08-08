@@ -138,6 +138,11 @@ function makeDeployment(overrides: Partial<DockerDeployment> = {}): DockerDeploy
 describe("DockerDeploymentDetail", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.spyOn(api, "getNode").mockResolvedValue({
+      id: "node-1",
+      liveHealthReport: { gpuDevices: [] },
+      lastHealthReport: null,
+    } as never);
     useAuthStore.setState({
       user: makeUser({
         scopes: [

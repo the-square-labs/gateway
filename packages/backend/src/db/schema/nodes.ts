@@ -12,6 +12,29 @@ export interface NodeCapabilities {
   [key: string]: unknown;
 }
 
+export interface NodeGpuDevice {
+  id: string;
+  vendor: string;
+  model: string;
+  pciAddress: string;
+  renderNode: string;
+  deviceIndex: number;
+  attachable: boolean;
+  unavailableReason: string;
+  partitioned: boolean;
+  availableMetrics: string[];
+  utilizationPercent?: number;
+  memoryTotalBytes?: number;
+  memoryUsedBytes?: number;
+  temperatureCelsius?: number;
+  powerWatts?: number;
+  powerLimitWatts?: number;
+  throttled?: boolean;
+  eccCorrectedErrors?: number;
+  eccUncorrectedErrors?: number;
+  health?: string;
+}
+
 export interface NodeHealthReport {
   nginxRunning: boolean;
   configValid: boolean;
@@ -62,6 +85,9 @@ export interface NodeHealthReport {
   nginxRssBytes: number;
   errorRate4xx: number;
   errorRate5xx: number;
+  // Physical GPU inventory. Optional telemetry fields are only present when
+  // the daemon explicitly reports the corresponding available metric.
+  gpuDevices?: NodeGpuDevice[];
 }
 
 export interface NodeStatsReport {

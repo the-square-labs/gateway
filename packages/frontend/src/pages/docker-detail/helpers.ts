@@ -1,4 +1,5 @@
 import { toast } from "sonner";
+import type { DockerGpuAttachment } from "@/types";
 
 export const STATUS_BADGE: Record<
   string,
@@ -74,4 +75,5 @@ export function copyToClipboard(text: string) {
 export type InspectData = Record<string, any> & {
   nodeId?: string;
   availability?: "available" | "unavailable";
+  gpuAttachment?: DockerGpuAttachment;
 };

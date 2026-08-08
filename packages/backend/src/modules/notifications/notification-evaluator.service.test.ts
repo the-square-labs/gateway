@@ -404,6 +404,54 @@ describe('NotificationEvaluatorService node health evaluation', () => {
     });
   });
 
+  it('keeps GPU threshold states separate for each physical device', async () => {
+    const gpuRule = {
+      ...BASE_RULE,
+      id: 'gpu-utilization-rule',
+      name: 'High GPU utilization',
+      category: 'node',
+      metric: 'gpu_utilization_percent',
+      operator: '>',
+      thresholdValue: 90,
+      severity: 'warning',
+    };
+    const { evaluator, states } = createEvaluator([], [gpuRule], [], {
+      'node-1': { hostname: 'gpu-worker' },
+    });
+
+    await evaluator.evaluateHealthReport('node-1', {
+      gpuDevices: [
+        { id: 'nvidia:gpu-a', availableMetrics: ['utilization_percent'], utilizationPercent: 95 },
+        { id: 'nvidia:gpu-b', availableMetrics: ['utilization_percent'], utilizationPercent: 97 },
+      ],
+    });
+
+    expect(states).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          resourceType: 'node',
+          resourceId: 'node-1:nvidia:gpu-a',
+          resourceName: 'gpu-worker · nvidia:gpu-a',
+        }),
+        expect.objectContaining({
+          resourceType: 'node',
+          resourceId: 'node-1:nvidia:gpu-b',
+          resourceName: 'gpu-worker · nvidia:gpu-b',
+        }),
+      ])
+    );
+
+    await evaluator.evaluateHealthReport('node-1', {
+      gpuDevices: [
+        { id: 'nvidia:gpu-a', availableMetrics: ['utilization_percent'], utilizationPercent: 10 },
+        { id: 'nvidia:gpu-b', availableMetrics: ['utilization_percent'], utilizationPercent: 97 },
+      ],
+    });
+
+    expect(states.find((state) => state.resourceId === 'node-1:nvidia:gpu-a')).toMatchObject({ status: 'resolved' });
+    expect(states.find((state) => state.resourceId === 'node-1:nvidia:gpu-b')).toMatchObject({ status: 'firing' });
+  });
+
   it('keeps the container name for resolved container metric alerts', async () => {
     const containerRule = {
       ...BASE_RULE,

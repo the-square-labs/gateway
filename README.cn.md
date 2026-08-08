@@ -99,11 +99,11 @@ npx -y @wiolett/gateway-inference@latest setup claude-code
 | 领域 | 摘要 |
 |------|------|
 | Reverse proxy | Multi-node nginx management, proxy hosts, Docker container/deployment upstreams, maintenance mode, redirects, WebSockets, access lists, health checks, host folders, templates, logs 和 stats。 |
-| Docker | Container lifecycle, deployments, rollout/rollback, cross-node container 和 volume migrations, offline inventory snapshots, registries, images, networks, volumes, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, mounts 和 cleanup。 |
+| Docker | Container lifecycle, deployments, rollout/rollback, shared physical NVIDIA/AMD/Intel GPU attachment, eligible cross-node container 和 volume migrations, offline inventory snapshots, registries, images, networks, volumes, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, mounts 和 cleanup。GPU-attached workloads 在 v1 中不能迁移或导出。 |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports 和 proxy binding。 |
 | Domains | Central domain registry, DNS checks, record validation 和 usage tracking。 |
 | Databases | Saved PostgreSQL、Redis 和 ClickHouse connections，含 encrypted credentials、health history、browsing、scoped query consoles 和 capability-aware write operations；private-by-default managed Postgres、Redis 和 ClickHouse instances 可安全绑定到 Docker workloads。 |
-| Monitoring | Node CPU, memory, disk, network, service status, daemon runtime details, log streaming 和 update checks。 |
+| Monitoring | Node CPU, memory, disk, network, service status, capability-aware physical GPU telemetry, daemon runtime details, log streaming 和 update checks。 |
 | Logging | 可选的 ClickHouse-backed structured log ingestion，包含 schemas、retention、ingest tokens、rate limits 和 search。 |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages 和 optional AI assistant。 |
 | Inference | 可选的 multi-provider model gateway，包含独立 tokens、usage controls、OpenAI-compatible APIs，以及通过 `@wiolett/gateway-inference` 管理的 Codex 或 Claude Code 配置。 |

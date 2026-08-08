@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
-import { createControlHandlers, diffDockerContainerStateReports } from './control.js';
+import { createControlHandlers, diffDockerContainerStateReports, mapGpuHealthDevices } from './control.js';
 
 vi.mock('@/config/env.js', () => ({
   getEnv: () => ({ APP_VERSION: 'dev' }),
@@ -288,6 +288,56 @@ describe('diffDockerContainerStateReports', () => {
   });
 });
 
+describe('mapGpuHealthDevices', () => {
+  it('preserves reported zero GPU values and drops fields not explicitly reported', () => {
+    const devices = mapGpuHealthDevices([
+      {
+        id: 'nvidia:gpu-1',
+        vendor: 'nvidia',
+        model: 'RTX 3050',
+        pciAddress: '0000:01:00.0',
+        deviceIndex: 0,
+        attachable: true,
+        availableMetrics: ['utilization_percent', 'memory_total_bytes', 'memory_used_bytes', 'throttled'],
+        utilizationPercent: 0,
+        memoryTotalBytes: '8589934592',
+        memoryUsedBytes: '0',
+        throttled: false,
+        temperatureCelsius: 0,
+      },
+    ]);
+
+    expect(devices).toEqual([
+      expect.objectContaining({
+        id: 'nvidia:gpu-1',
+        utilizationPercent: 0,
+        memoryTotalBytes: 8_589_934_592,
+        memoryUsedBytes: 0,
+        throttled: false,
+        availableMetrics: ['utilization_percent', 'memory_total_bytes', 'memory_used_bytes', 'throttled'],
+      }),
+    ]);
+    expect(devices[0]).not.toHaveProperty('temperatureCelsius');
+  });
+
+  it('does not persist a proto scalar when its metric marker is missing or invalid', () => {
+    const [device] = mapGpuHealthDevices([
+      {
+        id: 'intel:0000:00:02.0',
+        availableMetrics: ['utilization_percent', 'temperature_celsius'],
+        utilizationPercent: 61,
+        temperatureCelsius: 'not-a-number',
+      },
+    ]);
+
+    expect(device).toMatchObject({
+      utilizationPercent: 61,
+      availableMetrics: ['utilization_percent'],
+    });
+    expect(device).not.toHaveProperty('temperatureCelsius');
+  });
+});
+
 describe('CommandStream daemon certificate identity', () => {
   it('stores docker daemon engine version under dockerVersion capabilities', async () => {
     const setMetadata = vi.fn((_metadata: { capabilities: Record<string, unknown> }) => ({
@@ -315,7 +365,7 @@ describe('CommandStream daemon certificate identity', () => {
         architecture: 'x64',
         kernelVersion: '6.0',
         daemonType: 'docker',
-        capabilities: ['docker_deployments_v1'],
+        capabilities: ['docker_deployments_v1', 'docker_gpu_v1'],
       },
     });
 
@@ -326,6 +376,7 @@ describe('CommandStream daemon certificate identity', () => {
       daemonType: 'docker',
       dockerVersion: '27.5.1',
       dockerDeploymentsV1: true,
+      dockerGpuV1: true,
     });
     expect(metadata.capabilities).not.toHaveProperty('nginxVersion');
   });

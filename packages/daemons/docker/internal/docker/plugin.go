@@ -182,7 +182,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 			if p.cfg.Docker.Mode == "databases" {
 				return []string{"managed_databases_v1", "managed_database_storage_images_v1", "database_tunnel_v2", "docker_database_bindings_v1"}
 			}
-			return []string{"docker_deployments_v1", "docker_migration_v1", "docker_archive_v1", "database_tunnel_v2", "docker_database_bindings_v1"}
+			return []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "database_tunnel_v2", "docker_database_bindings_v1"}
 		}(),
 	}
 }
@@ -1459,6 +1459,12 @@ func (p *DockerPlugin) CollectHealth(base *pb.HealthReport) *pb.HealthReport {
 	// Include per-container resource stats if available
 	if p.statsCollector != nil {
 		base.ContainerStats = p.statsCollector.GetStats()
+	}
+	// GPU inventory is daemon-authoritative. The Docker client adds runtime
+	// readiness (notably NVIDIA Container Toolkit) before it reaches Gateway.
+	base.GpuDevices = make([]*pb.GpuDevice, 0)
+	for _, device := range p.client.GPUDevices(ctx) {
+		base.GpuDevices = append(base.GpuDevices, device.ToProto())
 	}
 
 	return base

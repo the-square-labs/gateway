@@ -615,13 +615,19 @@ export function DockerContainerDetail({
   const labels = (container?.Config?.Labels ?? container?.Labels ?? {}) as Record<string, string>;
   const composeManaged = Boolean(labels["com.docker.compose.project"]);
   const deploymentManaged = labels["wiolett.gateway.deployment.managed"] === "true";
-  const migrationDisabledReason = composeManaged
-    ? "Docker Compose resources cannot be migrated"
-    : deploymentManaged
-      ? "Migrate this container through its Gateway deployment"
-      : actionDisabled
-        ? "Container is unavailable or changing state"
-        : undefined;
+  const gpuMapped =
+    container?.gpuAttachment?.mode === "managed" || container?.gpuAttachment?.mode === "external";
+  const gpuPortabilityReason =
+    "GPU-attached containers cannot be migrated or exported in this version";
+  const migrationDisabledReason = gpuMapped
+    ? gpuPortabilityReason
+    : composeManaged
+      ? "Docker Compose resources cannot be migrated"
+      : deploymentManaged
+        ? "Migrate this container through its Gateway deployment"
+        : actionDisabled
+          ? "Container is unavailable or changing state"
+          : undefined;
   const currentTransition = effectiveTransition;
   const currentBaseState = baseState;
 
@@ -753,7 +759,8 @@ export function DockerContainerDetail({
               setArchiveDevPreview(false);
               setArchiveOpen(true);
             },
-            disabled: actionDisabled,
+            disabled: actionDisabled || gpuMapped,
+            disabledReason: gpuMapped ? gpuPortabilityReason : undefined,
           },
         ]
       : []),

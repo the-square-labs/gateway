@@ -29,6 +29,7 @@ import {
   inspectContainerRoute,
   killContainerRoute,
   listContainerFilesRoute,
+  listContainerGpuUsageRoute,
   listContainerSecretsRoute,
   listContainersRoute,
   liveUpdateContainerRoute,
@@ -81,6 +82,7 @@ import { importGwca, openGwcaExport } from './docker-container-archive.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
 import { envListToMap } from './docker-env-operations.js';
 import { DockerEnvironmentService } from './docker-environment.service.js';
+import { dockerGpuAttachmentFromInspect } from './docker-gpu-attachment.js';
 import { DockerMigrationDispatchAdapter } from './docker-migration-dispatch.js';
 import { DockerRegistryService } from './docker-registry.service.js';
 import { resolveDockerContainerByName } from './docker-route-resolvers.js';
@@ -213,6 +215,39 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       truncated,
     });
   });
+
+  router.openapi(
+    { ...listContainerGpuUsageRoute, middleware: requireScopeBase('docker:containers:view') },
+    async (c) => {
+      const service = container.resolve(DockerManagementService);
+      const nodeId = c.req.param('nodeId')!;
+      const scopes = c.get('effectiveScopes') ?? [];
+      assertDockerNodeScope(scopes, 'docker:containers:view', nodeId);
+
+      const users = filterDockerResourcesForScope(
+        await service.listGpuAttachmentUsers(nodeId, scopes),
+        scopes,
+        'docker:containers:view',
+        nodeId
+      );
+      const byDeviceId = new Map<string, Array<{ name: string }>>();
+      for (const user of users) {
+        for (const deviceId of user.deviceIds) {
+          const containers = byDeviceId.get(deviceId) ?? [];
+          containers.push({ name: user.name });
+          byDeviceId.set(deviceId, containers);
+        }
+      }
+
+      const data = [...byDeviceId.entries()]
+        .map(([deviceId, containers]) => {
+          const sorted = containers.sort((a, b) => a.name.localeCompare(b.name));
+          return { deviceId, containerCount: sorted.length, containers: sorted };
+        })
+        .sort((a, b) => a.deviceId.localeCompare(b.deviceId));
+      return c.json({ data });
+    }
+  );
 
   // Create container
   router.openapi(
@@ -388,6 +423,13 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const actorScopes = c.get('effectiveScopes') || [];
       const docker = container.resolve(DockerManagementService);
       const inspected = await docker.inspectContainer(nodeId, containerId);
+      if (dockerGpuAttachmentFromInspect(inspected).mode !== 'none') {
+        throw new AppError(
+          409,
+          'GPU_ARCHIVE_UNSUPPORTED',
+          'Containers with GPU mappings cannot be exported as portable archives.'
+        );
+      }
       const scopeResourceId = String(inspected?.scopeResourceId ?? '');
       if (!hasDockerResourceScope(actorScopes, 'docker:containers:environment', nodeId, scopeResourceId)) {
         throw new AppError(403, 'FORBIDDEN', 'Exporting a container archive requires environment access');

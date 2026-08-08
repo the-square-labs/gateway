@@ -5,6 +5,7 @@ import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creatio
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { DockerAccessResourceService } from './docker-access-resource.service.js';
 import { normalizeEnvRecord } from './docker-env-operations.js';
+import { dockerGpuAttachmentFromInspect, hasRequestedGpuChange } from './docker-gpu-attachment.js';
 import type { ContainerAction } from './docker-lifecycle-watch.js';
 import { assertContainerNotUsedByProxy } from './docker-proxy-link.guard.js';
 import type { DockerRegistryAuthCandidate, DockerRegistryService } from './docker-registry.service.js';
@@ -43,6 +44,7 @@ export interface DockerContainerMutationContext {
   taskService?: DockerTaskService;
   longDockerOperationTimeoutMs: number;
   validateDockerNode(nodeId: string): Promise<unknown>;
+  assertDockerGpuCapability(nodeId: string): Promise<void>;
   assertNameAvailable(nodeId: string, name: string): Promise<void>;
   assertNotManagedDeploymentInternal(nodeId: string, containerId: string): Promise<void>;
   translateNameConflict(err: unknown, name: string): never;
@@ -112,6 +114,7 @@ export async function createContainer(
 ) {
   await assertNodeAllowsServiceCreation(ctx.db, nodeId, 'docker');
   await ctx.validateDockerNode(nodeId);
+  if (hasRequestedGpuChange(config)) await ctx.assertDockerGpuCapability(nodeId);
   assertDockerMountChangeAllowed({ nodeId, actorScopes, nextConfig: config, currentDefinitions: [] });
   const registryId = typeof config.registryId === 'string' ? config.registryId : null;
   delete config.registryId;
@@ -611,6 +614,7 @@ export async function recreateWithConfig(
 ) {
   await ctx.validateDockerNode(nodeId);
   await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
+  if (hasRequestedGpuChange(config)) await ctx.assertDockerGpuCapability(nodeId);
   const name = await ctx.resolveContainerName(nodeId, containerId);
   const expectedState = await ctx.resolveExpectedRecreateState(nodeId, containerId);
   ctx.requireNoTransition(nodeId, name);
@@ -622,6 +626,13 @@ export async function recreateWithConfig(
     delete config.env;
   }
   const inspect = await ctx.inspectContainer(nodeId, containerId);
+  if (hasRequestedGpuChange(config) && dockerGpuAttachmentFromInspect(inspect).mode === 'external') {
+    throw new AppError(
+      409,
+      'GPU_ATTACHMENT_UNMANAGED',
+      'This container has an unsupported GPU mapping. Gateway will preserve it but cannot replace it.'
+    );
+  }
   const recreateStopTimeout = ctx.resolveStopTimeoutFromInspect(inspect as Record<string, any>, config);
   assertDockerMountChangeAllowed({
     nodeId,

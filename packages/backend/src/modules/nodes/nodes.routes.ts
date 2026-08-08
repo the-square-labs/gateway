@@ -180,7 +180,7 @@ function compactDockerNodeForDockerAccess(node: Record<string, unknown>) {
   };
 }
 
-function compactMonitoringHistorySnapshot(snapshot: any) {
+export function compactMonitoringHistorySnapshot(snapshot: any) {
   const health = snapshot?.health ?? {};
   const stats = snapshot?.stats ?? {};
   const traffic = snapshot?.traffic ?? null;
@@ -209,6 +209,7 @@ function compactMonitoringHistorySnapshot(snapshot: any) {
       networkRxBytes: health.networkRxBytes,
       networkTxBytes: health.networkTxBytes,
       networkInterfaces: health.networkInterfaces,
+      gpuDevices: Array.isArray(health.gpuDevices) ? health.gpuDevices : undefined,
     },
     stats: {
       activeConnections: stats.activeConnections,

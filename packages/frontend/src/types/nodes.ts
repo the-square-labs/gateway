@@ -9,6 +9,54 @@ export type NodeAppearanceColor =
   | "pink"
   | "orange";
 
+export interface NodeGpuDevice {
+  id: string;
+  vendor: string;
+  model: string;
+  pciAddress: string;
+  renderNode: string;
+  deviceIndex: number;
+  attachable: boolean;
+  unavailableReason: string;
+  partitioned: boolean;
+  availableMetrics: string[];
+  utilizationPercent?: number;
+  memoryTotalBytes?: number;
+  memoryUsedBytes?: number;
+  temperatureCelsius?: number;
+  powerWatts?: number;
+  powerLimitWatts?: number;
+  throttled?: boolean;
+  eccCorrectedErrors?: number;
+  eccUncorrectedErrors?: number;
+  health?: string;
+}
+
+export function hasGpuMetric(device: NodeGpuDevice, metric: string): boolean {
+  return device.availableMetrics.includes(metric);
+}
+
+const GPU_MONITORING_METRICS = [
+  "utilization_percent",
+  "memory_total_bytes",
+  "memory_used_bytes",
+  "temperature_celsius",
+  "power_watts",
+  "power_limit_watts",
+];
+
+/** A GPU section is useful only when the node actually reported a displayable metric. */
+export function hasGpuMonitoringMetrics(device: NodeGpuDevice): boolean {
+  return GPU_MONITORING_METRICS.some((metric) => hasGpuMetric(device, metric));
+}
+
+export function gpuDeviceLabel(
+  device: Pick<NodeGpuDevice, "id" | "vendor" | "model" | "pciAddress">
+): string {
+  const vendor = device.vendor.trim() ? device.vendor.toUpperCase() : "GPU";
+  return `${vendor} · ${device.model || device.pciAddress || device.id}`;
+}
+
 export interface NodeHealthReport {
   nginxRunning: boolean;
   configValid: boolean;
@@ -59,6 +107,7 @@ export interface NodeHealthReport {
   nginxRssBytes: number;
   errorRate4xx: number;
   errorRate5xx: number;
+  gpuDevices?: NodeGpuDevice[];
 }
 
 export interface NodeStatsReport {

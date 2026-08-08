@@ -9,8 +9,10 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PanelShell } from "@/components/common/PanelShell";
+import { GpuMonitoringSection } from "@/components/docker/GpuMonitoringSection";
 import { StatCard } from "@/components/ui/stat-card";
 import { api } from "@/services/api";
+import { hasGpuMetric, hasGpuMonitoringMetrics, type NodeGpuDevice } from "@/types";
 import { formatBytes, type InspectData } from "./helpers";
 
 const MAX_HISTORY = 30;
@@ -47,6 +49,27 @@ function hasMemoryStats(stats: ContainerStats | null): stats is ContainerStats {
   return !!stats && (stats.memoryUsageBytes > 0 || stats.memoryLimitBytes > 0);
 }
 
+function attachedGpuDevices(data: InspectData, gpuDevices: NodeGpuDevice[]) {
+  if (data.gpuAttachment?.mode !== "managed") return [];
+  const attachedIds = new Set(data.gpuAttachment.deviceIds);
+  return gpuDevices.filter(
+    (device) => attachedIds.has(device.id) && hasGpuMonitoringMetrics(device)
+  );
+}
+
+function gpuMetricHistory(
+  snapshots: NodeGpuDevice[][],
+  deviceId: string,
+  metric: string,
+  value: (device: NodeGpuDevice) => number | undefined
+) {
+  return snapshots.flatMap((devices) => {
+    const device = devices.find((candidate) => candidate.id === deviceId);
+    const current = device && hasGpuMetric(device, metric) ? value(device) : undefined;
+    return typeof current === "number" && Number.isFinite(current) ? [current] : [];
+  });
+}
+
 export function StatsTab({
   nodeId,
   containerId,
@@ -57,6 +80,8 @@ export function StatsTab({
   data: InspectData;
 }) {
   const [current, setCurrent] = useState<ContainerStats | null>(null);
+  const [gpuDevices, setGpuDevices] = useState<NodeGpuDevice[]>([]);
+  const [gpuHistory, setGpuHistory] = useState<NodeGpuDevice[][]>([]);
   const [processes, setProcesses] = useState<{
     Titles: string[];
     Processes: string[][];
@@ -174,15 +199,32 @@ export function StatsTab({
       );
       return match ? normalizeStats(match) : null;
     };
+    const updateGpuDevices = (snapshot: any) => {
+      const devices = snapshot?.health?.gpuDevices;
+      if (!Array.isArray(devices)) return;
+      const next = devices as NodeGpuDevice[];
+      setGpuDevices(next);
+      setGpuHistory((previous) => [...previous.slice(-(MAX_HISTORY - 1)), next]);
+    };
+    const updateGpuDevicesFromHistory = (snapshots: any[]) => {
+      const samples = snapshots.flatMap((snapshot) => {
+        const devices = snapshot?.health?.gpuDevices;
+        return Array.isArray(devices) ? [devices as NodeGpuDevice[]] : [];
+      });
+      setGpuHistory(samples.slice(-MAX_HISTORY));
+      setGpuDevices(samples.at(-1) ?? []);
+    };
 
     es.addEventListener("connected", (e: MessageEvent) => {
       const msg = JSON.parse(e.data);
       // Extract container stats from history snapshots
       if (msg.history) {
-        for (const snap of msg.history as any[]) {
+        const snapshots = msg.history as any[];
+        for (const snap of snapshots) {
           const s = findContainerStats(snap);
           if (s) pushStats(s);
         }
+        updateGpuDevicesFromHistory(snapshots);
       }
     });
 
@@ -190,6 +232,7 @@ export function StatsTab({
       const snapshot = JSON.parse(e.data);
       const s = findContainerStats(snapshot);
       if (s) pushStats(s);
+      updateGpuDevices(snapshot);
     });
 
     return () => es.close();
@@ -246,6 +289,7 @@ export function StatsTab({
   const pids = current?.pids ?? 0;
   const memPercent = memLimit > 0 ? (memUsage / memLimit) * 100 : 0;
   const memoryAvailable = hasMemoryStats(current);
+  const sharedGpuDevices = attachedGpuDevices(data, gpuDevices);
 
   // Filter out TTY column from process list
   const ttIdx = processes?.Titles?.findIndex((t) => t === "TTY" || t === "TT") ?? -1;
@@ -325,6 +369,15 @@ export function StatsTab({
             />
             <StatCard label="Uptime" value={uptime} icon={Clock} color="#a855f7" />
           </div>
+
+          {sharedGpuDevices.map((gpu, index) => (
+            <GpuMonitoringSection
+              key={gpu.id}
+              gpu={gpu}
+              index={index}
+              history={(metric, value) => gpuMetricHistory(gpuHistory, gpu.id, metric, value)}
+            />
+          ))}
 
           {/* Process List */}
           {filteredProcesses.length > 0 && (

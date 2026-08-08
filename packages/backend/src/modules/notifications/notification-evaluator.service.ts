@@ -12,6 +12,7 @@ import {
   eventSupportsThreshold,
   extractMetricFromDatabaseSnapshot,
   extractMetricFromHealthReport,
+  isPerDeviceNodeMetric,
   type Severity,
   type WindowProbeSample,
 } from './notification.constants.js';
@@ -118,11 +119,9 @@ export class NotificationEvaluatorService {
         }
 
         const compositeResourceId =
-          rule.category === 'container'
+          rule.category === 'container' || rule.metric === 'disk' || isPerDeviceNodeMetric(rule.metric)
             ? `${nodeId}:${resourceId}`
-            : rule.metric === 'disk'
-              ? `${nodeId}:${resourceId}`
-              : nodeId;
+            : nodeId;
 
         if (Number.isNaN(value)) {
           logger.warn('Skipping NaN metric value', { ruleId: rule.id, metric: rule.metric, resourceId });
@@ -1137,6 +1136,9 @@ export class NotificationEvaluatorService {
 
   private getThresholdResourceName(rule: any, sourceId: string, rawResourceId?: string): string {
     const nodeName = rule.category === 'node' || rule.category === 'container' ? this.getNodeName(sourceId) : undefined;
+    if (rule.category === 'node' && isPerDeviceNodeMetric(rule.metric) && rawResourceId) {
+      return `${nodeName || sourceId} · ${rawResourceId}`;
+    }
     if (rule.category === 'node') return nodeName || sourceId;
     if (rawResourceId && rawResourceId !== 'system') return rawResourceId;
     return nodeName || rawResourceId || sourceId;

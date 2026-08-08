@@ -26,11 +26,20 @@ import { dockerContainerRoute, dockerDeploymentRoute } from "@/lib/resource-rout
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
-import type { ContainerCreateConfig, DockerRegistry, Node } from "@/types";
-import { isNodeIncompatible } from "@/types";
+import {
+  type ContainerCreateConfig,
+  type DockerRegistry,
+  gpuDeviceLabel,
+  isNodeIncompatible,
+  type Node,
+} from "@/types";
 
 const tabContentTransition = { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] as const };
 const EMPTY_DOCKER_NODES: Node[] = [];
+
+function normalizeGpuDeviceIds(ids: readonly string[]) {
+  return [...new Set(ids.map((id) => id.trim()).filter(Boolean))].sort();
+}
 
 interface DockerDeployDialogProps {
   open: boolean;
@@ -67,11 +76,17 @@ export function DockerDeployDialog({
   const [routeContainerPort, setRouteContainerPort] = useState("80");
   const [healthPath, setHealthPath] = useState("/");
   const [drainSeconds, setDrainSeconds] = useState("30");
+  const [deployGpuDeviceIds, setDeployGpuDeviceIds] = useState<string[]>([]);
   const storeDockerNodes = useDockerStore((state) => state.dockerNodes);
   const allNodes = useMemo(() => {
     return storeDockerNodes.length > 0 ? storeDockerNodes : dockerNodes;
   }, [dockerNodes, storeDockerNodes]);
   const availableNodes = useMemo(() => allNodes.filter((n) => !isNodeIncompatible(n)), [allNodes]);
+  const selectedDeployNode = useMemo(
+    () => allNodes.find((node) => node.id === deployNodeId),
+    [allNodes, deployNodeId]
+  );
+  const deployGpuDevices = selectedDeployNode?.lastHealthReport?.gpuDevices ?? [];
   const initialNodeLocked = !!(
     nodeId && allNodes.find((candidate) => candidate.id === nodeId)?.serviceCreationLocked
   );
@@ -134,6 +149,7 @@ export function DockerDeployDialog({
       setRouteContainerPort("80");
       setHealthPath("/");
       setDrainSeconds("30");
+      setDeployGpuDeviceIds([]);
     }
   }, [initialNodeLocked, open, nodeId]);
 
@@ -219,6 +235,7 @@ export function DockerDeployDialog({
     setDeployName("");
     setDeployRestart("no");
     setDeployMode("container");
+    setDeployGpuDeviceIds([]);
   };
 
   const handleDeploy = async () => {
@@ -266,6 +283,7 @@ export function DockerDeployDialog({
             deployTimeoutSeconds: 300,
           },
           drainSeconds: Number(drainSeconds) || 0,
+          ...(deployGpuDeviceIds.length > 0 ? { gpu: { deviceIds: deployGpuDeviceIds } } : {}),
         });
         toast.success("Deployment created");
         closeDeploy();
@@ -279,6 +297,7 @@ export function DockerDeployDialog({
           image: imageRef,
           registryId: deployRegistryId || undefined,
           restartPolicy: deployRestart,
+          ...(deployGpuDeviceIds.length > 0 ? { gpu: { deviceIds: deployGpuDeviceIds } } : {}),
         };
         if (deployName.trim()) config.name = deployName.trim();
         const result = await api.createContainer(deployNodeId, config);
@@ -339,11 +358,70 @@ export function DockerDeployDialog({
                 setDeployNodeId(value);
                 setDeployImage("");
                 setDeployRegistryId("");
+                setDeployGpuDeviceIds([]);
               }}
               placeholder="Select a node"
               searchPlaceholder="Search nodes..."
               emptyMessage="No nodes found."
             />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">GPU</label>
+            <p className="text-xs text-muted-foreground">
+              Selected physical GPUs are shared with other containers. No capacity is reserved.
+            </p>
+            {!deployNodeId ? (
+              <p className="text-sm text-muted-foreground">Select a node to see its GPUs.</p>
+            ) : deployGpuDevices.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No GPUs are currently reported by this node.
+              </p>
+            ) : (
+              <>
+                <div className="border border-border">
+                  {deployGpuDevices.map((gpu) => {
+                    const checked = deployGpuDeviceIds.includes(gpu.id);
+                    const disabled = !gpu.attachable && !checked;
+                    return (
+                      <label
+                        key={gpu.id}
+                        className={`flex min-w-0 items-center gap-2 border-b border-border px-3 py-2 text-sm last:border-b-0 ${disabled ? "opacity-60" : "cursor-pointer"}`}
+                      >
+                        <input
+                          type="checkbox"
+                          className="form-checkbox shrink-0"
+                          checked={checked}
+                          disabled={disabled}
+                          onChange={() =>
+                            setDeployGpuDeviceIds((current) =>
+                              normalizeGpuDeviceIds(
+                                checked
+                                  ? current.filter((deviceId) => deviceId !== gpu.id)
+                                  : [...current, gpu.id]
+                              )
+                            )
+                          }
+                        />
+                        <span className="min-w-0">
+                          <span className="block font-medium">{gpuDeviceLabel(gpu)}</span>
+                          <span className="block break-all text-xs text-muted-foreground">
+                            {gpu.attachable
+                              ? `Shared physical device · ${gpu.id}`
+                              : gpu.unavailableReason || "Unavailable for container attachment"}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {deployGpuDeviceIds.length > 0
+                    ? `${deployGpuDeviceIds.length} physical GPU${deployGpuDeviceIds.length === 1 ? "" : "s"} selected`
+                    : "No GPU selected"}
+                </p>
+              </>
+            )}
           </div>
 
           {/* Registry */}

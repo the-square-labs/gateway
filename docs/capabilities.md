@@ -43,9 +43,10 @@ Container workflows:
 - List containers across managed Docker nodes.
 - Grant container permissions for an entire Docker node or narrow them to one standalone container or blue/green deployment.
 - Start, stop, restart, recreate, duplicate, rename, and remove containers.
+- Attach one or more node-discovered physical NVIDIA, AMD, or Intel GPUs to standalone containers and blue/green deployments. GPU devices are shared rather than reserved; changing a selection recreates the workload, duplicates preserve it, and both blue/green slots receive the same selection.
 - Stream `.gwca` exports and imports in either self-contained portable mode or smaller registry-backed mode. Export is protected by the dedicated, resource-scopable `docker:containers:export` permission in addition to file and environment access. Archives use a Gateway-supported configuration whitelist, always carry ordinary environment values, can optionally carry secrets, and can optionally capture the writable layer without pausing. Registry-backed archives pull and verify an immutable digest. Volume contents are never included; local volumes are recreated empty, while bind paths, external volumes, networks, and occupied ports can be remapped for the target node.
 - Create, inspect, and remove images, volumes, and networks across managed nodes.
-- Run durable cross-node migrations for containers and blue/green deployments, including image and volume transfer, capacity preflight, verification, cutover, cancellation, and cleanup recovery.
+- Run durable cross-node migrations for eligible containers and blue/green deployments, including image and volume transfer, capacity preflight, verification, cutover, cancellation, and cleanup recovery. GPU-attached workloads are intentionally not portable in v1.
 - Move resource-scoped grants with a container or deployment during migration. Recreates preserve the stable access identity; explicit deletion removes its grants so a later same-name resource starts without inherited access.
 - Edit image, command, environment variables, secrets, labels, ports, restart policy, and runtime limits.
 - Edit mounts only with the dedicated `docker:containers:mounts` scope. Existing mounts are preserved during normal image, environment, and webhook updates.
@@ -172,6 +173,7 @@ Node features:
 - Stream node logs.
 - Open scoped host consoles and browse or edit node files when explicitly permitted.
 - Collect CPU, memory, disk, and network metrics.
+- Report capability-aware physical GPU inventory and telemetry. Container monitoring shows a selected GPU's shared physical metrics, never fabricated per-container usage.
 - Report local/public IP addresses and allow an explicit Docker service address for cross-node and proxy-upstream traffic.
 - Remotely update daemon binaries with SHA256 verification and atomic replacement.
 
@@ -206,7 +208,7 @@ Gateway includes connector and operational communication surfaces:
 - GitLab connectors with project/group allowlists, scheduled synchronization, repository and CI operations, variables, webhooks, registry access, and sandbox clone support.
 - Webhook notification targets with custom headers, templates, HMAC signing, retries, and delivery history.
 - SIEM audit export, when enabled in Gateway settings, to up to five active HTTPS collectors, with encrypted bearer, HMAC-SHA256, or validated custom-header authentication, durable batched delivery, retry history, and least-privilege `audit:siem:*` scopes.
-- Threshold and event alert rules for nodes, containers, proxies, certificates, PostgreSQL, and Redis resources.
+- Threshold and event alert rules for nodes, containers, proxies, certificates, PostgreSQL, and Redis resources. GPU node rules evaluate only metrics reported by each physical device and can target a selected GPU on one scoped node.
 - Public status pages with managed services, incidents, incident updates, proxy templates, and preview.
 
 Connector credentials are encrypted at rest. GitLab access is split between connector administration and per-user credentials unless the caller has the explicit system credential scope.

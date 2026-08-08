@@ -185,6 +185,88 @@ describe("AlertDialog", () => {
     expect(screen.queryByText("node-1")).not.toBeInTheDocument();
   });
 
+  it("targets a reported physical GPU when a GPU node alert is scoped to one node", async () => {
+    const user = userEvent.setup();
+    const gpuRule: AlertRule = {
+      ...makeRule(),
+      name: "GPU Utilization High",
+      metric: "gpu_utilization_percent",
+      metricTarget: "nvidia:gpu-1",
+      resourceIds: ["node-1"],
+    };
+    vi.spyOn(api, "getAlertCategories").mockResolvedValue([
+      {
+        ...makeCategory(),
+        metrics: [
+          {
+            id: "gpu_utilization_percent",
+            label: "GPU Utilization (%)",
+            unit: "%",
+            defaultOperator: ">",
+            defaultValue: 90,
+            defaultDurationSeconds: 300,
+            defaultResolveAfterSeconds: 60,
+          },
+        ],
+      },
+    ]);
+    vi.mocked(api.listNodes).mockResolvedValue({
+      data: [
+        {
+          id: "node-1",
+          type: "docker",
+          hostname: "gpu-node",
+          displayName: "GPU Node",
+          lastHealthReport: {
+            gpuDevices: [
+              {
+                id: "nvidia:gpu-1",
+                vendor: "nvidia",
+                model: "RTX 3050",
+                pciAddress: "0000:01:00.0",
+                renderNode: "/dev/dri/renderD128",
+                deviceIndex: 0,
+                attachable: true,
+                unavailableReason: "",
+                partitioned: false,
+                availableMetrics: ["utilization_percent"],
+              },
+            ],
+          },
+        },
+      ] as never,
+      total: 1,
+      page: 1,
+      limit: 100,
+      totalPages: 1,
+    });
+    const updateAlertRule = vi.spyOn(api, "updateAlertRule").mockResolvedValue(gpuRule);
+
+    renderWithRouter(
+      <AlertDialog open={true} onOpenChange={vi.fn()} rule={gpuRule} onSaved={vi.fn()} />,
+      { path: "/notifications", route: "/notifications" }
+    );
+
+    await screen.findByDisplayValue("GPU Utilization High");
+    await user.click(screen.getByRole("button", { name: /next/i }));
+    expect(await screen.findByText("GPU To Watch")).toBeInTheDocument();
+    expect(screen.getByText("NVIDIA · RTX 3050")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /next/i }));
+    await user.click(screen.getByRole("button", { name: /update/i }));
+
+    await waitFor(() => {
+      expect(updateAlertRule).toHaveBeenCalledWith(
+        "alert-1",
+        expect.objectContaining({
+          metric: "gpu_utilization_percent",
+          metricTarget: "nvidia:gpu-1",
+          resourceIds: ["node-1"],
+        })
+      );
+    });
+  });
+
   it("does not replay a stale create token when the alerts tab mounts", async () => {
     vi.spyOn(api, "listAlertRules").mockResolvedValue({
       data: [makeRule()],

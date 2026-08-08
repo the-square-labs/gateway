@@ -12,12 +12,33 @@ const ContainerNameSchema = z
   );
 const DOCKER_CONTAINER_PORTS_MAX = 256;
 const DOCKER_STOP_TIMEOUT_MAX_SECONDS = 300;
+const DOCKER_GPU_DEVICE_IDS_MAX = 32;
 const DockerStopTimeoutSchema = z.number().int().min(0).max(DOCKER_STOP_TIMEOUT_MAX_SECONDS);
 const DockerFilePathSchema = z
   .string()
   .min(1)
   .refine((path) => path.startsWith('/'), 'Path must be absolute')
   .refine((path) => !path.split('/').includes('..'), "Path must not contain '..'");
+
+export const DockerGpuSelectionSchema = z
+  .object({
+    // An empty list is an intentional detach during a container recreation.
+    // The daemon resolves every supplied ID against its own host inventory;
+    // clients never submit host paths or Docker device requests directly.
+    deviceIds: z
+      .array(z.string().trim().min(1).max(256))
+      .max(DOCKER_GPU_DEVICE_IDS_MAX)
+      .superRefine((deviceIds, ctx) => {
+        const seen = new Set<string>();
+        for (const [index, deviceId] of deviceIds.entries()) {
+          if (seen.has(deviceId)) {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'GPU device IDs must be unique', path: [index] });
+          }
+          seen.add(deviceId);
+        }
+      }),
+  })
+  .strict();
 
 // Container create
 export const ContainerCreateSchema = z.object({
@@ -48,6 +69,7 @@ export const ContainerCreateSchema = z.object({
   networks: z.array(z.string()).optional(),
   restartPolicy: z.enum(['no', 'always', 'unless-stopped', 'on-failure']).default('no'),
   stopTimeout: DockerStopTimeoutSchema.optional(),
+  gpu: DockerGpuSelectionSchema.optional(),
   labels: z.record(z.string()).optional(),
   command: z.array(z.string()).optional(),
 });
@@ -107,6 +129,7 @@ export const ContainerRecreateSchema = z.object({
   nanoCPUs: z.number().int().min(0).optional(),
   cpuShares: z.number().int().min(0).optional(),
   pidsLimit: z.number().int().min(0).optional(),
+  gpu: DockerGpuSelectionSchema.optional(),
 });
 
 // Container action params

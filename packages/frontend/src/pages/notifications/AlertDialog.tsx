@@ -23,7 +23,12 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/services/api";
-import type { AlertCategoryDef, AlertRule, NotificationWebhook } from "@/types";
+import {
+  type AlertCategoryDef,
+  type AlertRule,
+  gpuDeviceLabel,
+  type NotificationWebhook,
+} from "@/types";
 import {
   AnimatedHeight,
   STEP_ANIMATION,
@@ -35,12 +40,47 @@ import {
 
 const ROOT_DISK_TARGET = "/";
 const CERTIFICATE_EXPIRY_METRIC = "days_until_expiry";
+const GPU_NODE_METRICS = new Set([
+  "gpu_utilization_percent",
+  "gpu_memory_used_percent",
+  "gpu_temperature_celsius",
+  "gpu_power_percent_of_limit",
+  "gpu_throttled",
+  "gpu_health_degraded",
+  "gpu_ecc_corrected_errors",
+  "gpu_ecc_uncorrected_errors",
+]);
 
 type AlertResourceOption = {
   id: string;
   label: string;
   diskOptions?: Array<{ id: string; label: string }>;
+  gpuOptions?: Array<{ id: string; label: string; availableMetrics: string[] }>;
 };
+
+function supportsGpuAlertMetric(availableMetrics: readonly string[], metric: string): boolean {
+  const available = new Set(availableMetrics);
+  switch (metric) {
+    case "gpu_utilization_percent":
+      return available.has("utilization_percent");
+    case "gpu_memory_used_percent":
+      return available.has("memory_total_bytes") && available.has("memory_used_bytes");
+    case "gpu_temperature_celsius":
+      return available.has("temperature_celsius");
+    case "gpu_power_percent_of_limit":
+      return available.has("power_watts") && available.has("power_limit_watts");
+    case "gpu_throttled":
+      return available.has("throttled");
+    case "gpu_health_degraded":
+      return available.has("health");
+    case "gpu_ecc_corrected_errors":
+      return available.has("ecc_corrected_errors");
+    case "gpu_ecc_uncorrected_errors":
+      return available.has("ecc_uncorrected_errors");
+    default:
+      return false;
+  }
+}
 
 const STEP_LABELS = ["Configuration", "Scope & Webhooks", "Message"];
 
@@ -145,6 +185,11 @@ export function AlertDialog({
                 .filter((mountPoint) => mountPoint && mountPoint !== ROOT_DISK_TARGET)
                 .map((mountPoint) => ({ id: mountPoint, label: mountPoint })) ?? []),
             ],
+            gpuOptions: (node.lastHealthReport?.gpuDevices ?? []).map((gpu) => ({
+              id: gpu.id,
+              label: gpuDeviceLabel(gpu),
+              availableMetrics: gpu.availableMetrics,
+            })),
           }))
         );
         return;
@@ -339,6 +384,8 @@ export function AlertDialog({
     metric === "disk" &&
     scopeEnabled &&
     resourceIds.length === 1;
+  const isNodeGpuThreshold =
+    type === "threshold" && category === "node" && GPU_NODE_METRICS.has(metric);
 
   const selectedScopedNode = useMemo(
     () => availableResources.find((resource) => resource.id === resourceIds[0]),
@@ -350,11 +397,30 @@ export function AlertDialog({
     [selectedScopedNode]
   );
 
+  const gpuTargetOptions = useMemo(
+    () =>
+      (selectedScopedNode?.gpuOptions ?? []).filter((option) =>
+        supportsGpuAlertMetric(option.availableMetrics, metric)
+      ),
+    [metric, selectedScopedNode]
+  );
+  const canSelectNodeGpuTarget =
+    isNodeGpuThreshold && scopeEnabled && resourceIds.length === 1 && gpuTargetOptions.length > 0;
+
   useEffect(() => {
-    if (!diskTargetOptions.some((option) => option.id === metricTarget)) {
+    if (
+      canSelectNodeDiskTarget &&
+      !diskTargetOptions.some((option) => option.id === metricTarget)
+    ) {
       setMetricTarget(ROOT_DISK_TARGET);
     }
-  }, [diskTargetOptions, metricTarget]);
+  }, [canSelectNodeDiskTarget, diskTargetOptions, metricTarget]);
+
+  useEffect(() => {
+    if (canSelectNodeGpuTarget && !gpuTargetOptions.some((option) => option.id === metricTarget)) {
+      setMetricTarget(gpuTargetOptions[0].id);
+    }
+  }, [canSelectNodeGpuTarget, gpuTargetOptions, metricTarget]);
 
   const canProceedFromStep1 = () => {
     if (!name.trim()) return false;
@@ -419,7 +485,7 @@ export function AlertDialog({
       };
       if (type === "threshold") {
         data.metric = metric;
-        data.metricTarget = canSelectNodeDiskTarget ? metricTarget : null;
+        data.metricTarget = canSelectNodeDiskTarget || canSelectNodeGpuTarget ? metricTarget : null;
         data.operator = operator;
         data.thresholdValue = Number(thresholdValue);
         data.durationSeconds = isCertificateExpiryThreshold ? 0 : Number(durationMinutes) * 60;
@@ -879,6 +945,35 @@ export function AlertDialog({
                       {canSelectNodeDiskTarget
                         ? "Choose which disk mount on the selected node should trigger this alert."
                         : "Select exactly one node above to watch a specific disk. Otherwise the alert evaluates all disks."}
+                    </p>
+                  </div>
+                )}
+
+                {isNodeGpuThreshold && (
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">GPU To Watch</label>
+                    <Select
+                      value={canSelectNodeGpuTarget ? metricTarget : undefined}
+                      onValueChange={setMetricTarget}
+                      disabled={!canSelectNodeGpuTarget}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select a GPU" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {gpuTargetOptions.map((option) => (
+                          <SelectItem key={option.id} value={option.id}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      {canSelectNodeGpuTarget
+                        ? "Choose a physical GPU on the selected node. The alert uses only metrics reported by that GPU."
+                        : scopeEnabled && resourceIds.length === 1
+                          ? "This node has no GPU that reports the selected metric."
+                          : "Select exactly one node above to watch a specific GPU. Otherwise the alert evaluates every GPU that reports this metric."}
                     </p>
                   </div>
                 )}

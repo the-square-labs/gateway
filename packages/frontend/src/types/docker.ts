@@ -124,7 +124,14 @@ export interface DockerDeploymentDesiredConfig {
   image: string;
   env?: Record<string, string>;
   restartPolicy?: string;
+  gpu?: { deviceIds: string[] };
   [key: string]: unknown;
+}
+
+export interface DockerGpuAttachment {
+  mode: "none" | "managed" | "external";
+  deviceIds: string[];
+  reason?: string;
 }
 
 export interface DockerDeploymentSlot {
@@ -349,6 +356,7 @@ export interface ContainerCreateConfig {
   restartPolicy?: string;
   labels?: Record<string, string>;
   command?: string[];
+  gpu?: { deviceIds: string[] };
 }
 
 export interface DockerWebhook {

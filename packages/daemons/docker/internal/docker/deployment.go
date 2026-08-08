@@ -54,6 +54,7 @@ type deploymentDesiredConfig struct {
 	Networks      []string          `json:"networks"`
 	RestartPolicy string            `json:"restartPolicy"`
 	Runtime       map[string]any    `json:"runtime"`
+	GPU           *GPUConfig        `json:"gpu"`
 }
 
 type deploymentMount struct {
@@ -179,6 +180,10 @@ func (c *Client) CreateDeployment(ctx context.Context, payload deploymentCommand
 	if payload.DesiredConfig.Image == "" {
 		return nil, fmt.Errorf("deployment image is required")
 	}
+	gpuSelection, err := c.resolveGPUConfig(ctx, payload.DesiredConfig.GPU)
+	if err != nil {
+		return nil, err
+	}
 	if err := c.pullImageIfNeeded(ctx, payload.DesiredConfig.Image, payload.RegistryAuthJSON); err != nil {
 		return nil, err
 	}
@@ -195,7 +200,7 @@ func (c *Client) CreateDeployment(ctx context.Context, payload deploymentCommand
 		if slotName == "" {
 			return nil, fmt.Errorf("%s slot container name is required", slot)
 		}
-		slotID, err := c.createDeploymentSlot(ctx, payload.DeploymentID, payload.NetworkName, slot, slotName, payload.DesiredConfig, slot == payload.ActiveSlot)
+		slotID, err := c.createDeploymentSlot(ctx, payload.DeploymentID, payload.NetworkName, slot, slotName, payload.DesiredConfig, slot == payload.ActiveSlot, gpuSelection)
 		if err != nil {
 			return nil, err
 		}
@@ -228,11 +233,15 @@ func (c *Client) DeployDeploymentSlot(ctx context.Context, payload deploymentCom
 		desired = dep.DesiredConfig
 		desired.Image = payload.Image
 	}
+	gpuSelection, err := c.resolveGPUConfig(ctx, desired.GPU)
+	if err != nil {
+		return nil, err
+	}
 	if err := c.pullImageIfNeeded(ctx, desired.Image, payload.RegistryAuthJSON); err != nil {
 		return nil, err
 	}
 	_ = c.removeContainerByName(ctx, slotName, true)
-	id, err := c.createDeploymentSlot(ctx, dep.ID, dep.NetworkName, payload.ToSlot, slotName, desired, true)
+	id, err := c.createDeploymentSlot(ctx, dep.ID, dep.NetworkName, payload.ToSlot, slotName, desired, true, gpuSelection)
 	if err != nil {
 		return nil, err
 	}
@@ -257,11 +266,15 @@ func (c *Client) SwitchDeployment(ctx context.Context, payload deploymentCommand
 	}
 	containerID := ""
 	if payload.DesiredConfig.Image != "" {
+		gpuSelection, err := c.resolveGPUConfig(ctx, payload.DesiredConfig.GPU)
+		if err != nil {
+			return nil, err
+		}
 		if err := c.pullImageIfNeeded(ctx, payload.DesiredConfig.Image, payload.RegistryAuthJSON); err != nil {
 			return nil, err
 		}
 		_ = c.removeContainerByName(ctx, slotName, true)
-		id, err := c.createDeploymentSlot(ctx, dep.ID, dep.NetworkName, activeSlot, slotName, payload.DesiredConfig, true)
+		id, err := c.createDeploymentSlot(ctx, dep.ID, dep.NetworkName, activeSlot, slotName, payload.DesiredConfig, true, gpuSelection)
 		if err != nil {
 			return nil, err
 		}
@@ -502,7 +515,7 @@ func (c *Client) ensureDeploymentNetwork(ctx context.Context, name string, deplo
 	return nil
 }
 
-func (c *Client) createDeploymentSlot(ctx context.Context, deploymentID, networkName, slot, name string, desired deploymentDesiredConfig, start bool) (string, error) {
+func (c *Client) createDeploymentSlot(ctx context.Context, deploymentID, networkName, slot, name string, desired deploymentDesiredConfig, start bool, gpuSelection *gpuSelection) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("slot container name is required")
 	}
@@ -532,6 +545,7 @@ func (c *Client) createDeploymentSlot(ctx context.Context, deploymentID, network
 		hostCfg.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyMode(desired.RestartPolicy)}
 	}
 	applyDeploymentRuntime(hostCfg, desired)
+	c.applyResolvedGPUSelection(cfg, hostCfg, gpuSelection)
 	resp, err := c.cli.ContainerCreate(ctx, mobyclient.ContainerCreateOptions{
 		Config:     cfg,
 		HostConfig: hostCfg,

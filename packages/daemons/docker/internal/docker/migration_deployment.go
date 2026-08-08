@@ -49,7 +49,11 @@ func (c *Client) CreateDeploymentStopped(ctx context.Context, payload deployment
 			return nil, err
 		}
 		if !exists {
-			id, err = c.createDeploymentSlot(ctx, payload.DeploymentID, payload.NetworkName, slot, name, config, false)
+			gpuSelection, resolveErr := c.resolveGPUConfig(ctx, config.GPU)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			id, err = c.createDeploymentSlot(ctx, payload.DeploymentID, payload.NetworkName, slot, name, config, false, gpuSelection)
 		}
 		if err != nil {
 			return nil, err
