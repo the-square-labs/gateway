@@ -1051,7 +1051,7 @@ export class DatabaseConnectionService {
     }
     const endpoint = await this.managedTunnelProxy.getEndpoint(managed.id, lane);
     if (config.type === 'postgres') {
-      return { ...config, host: endpoint.host, port: endpoint.port, sslEnabled: false };
+      return { ...config, host: endpoint.host, port: endpoint.port };
     }
     if (config.type === 'redis') {
       return { ...config, host: endpoint.host, port: endpoint.port, tlsEnabled: false };

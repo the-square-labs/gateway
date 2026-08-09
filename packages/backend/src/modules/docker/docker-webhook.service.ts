@@ -15,6 +15,7 @@ import type { DockerRegistryService } from './docker-registry.service.js';
 import type { DockerTaskService } from './docker-task.service.js';
 
 const logger = createChildLogger('DockerWebhookService');
+const WEBHOOK_TOKEN_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export class DockerWebhookService {
   private eventBus?: EventBusService;
@@ -52,6 +53,10 @@ export class DockerWebhookService {
   }
 
   async getByToken(token: string) {
+    // The token column is UUID-typed. Reject malformed bearer values before
+    // PostgreSQL sees them so database parameter/error logs never receive the
+    // raw secret path segment.
+    if (!WEBHOOK_TOKEN_RE.test(token)) return null;
     const [row] = await this.db.select().from(dockerWebhooks).where(eq(dockerWebhooks.token, token)).limit(1);
     return row ?? null;
   }

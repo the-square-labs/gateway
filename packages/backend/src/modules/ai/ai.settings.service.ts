@@ -210,7 +210,7 @@ export class AISettingsService {
       if (field === 'apiKey') {
         const plainKey = value as string;
         if (plainKey === '') {
-          await this.setSetting('ai:api_key_encrypted', null);
+          await this.deleteSetting('ai:api_key_encrypted');
         } else {
           const encrypted = this.cryptoService.encryptString(plainKey);
           await this.setSetting('ai:api_key_encrypted', encrypted);
@@ -222,7 +222,7 @@ export class AISettingsService {
       if (field === 'webSearchApiKey') {
         const plainKey = value as string;
         if (plainKey === '') {
-          await this.setSetting('ai:web_search_api_key_encrypted', null);
+          await this.deleteSetting('ai:web_search_api_key_encrypted');
         } else {
           const encrypted = this.cryptoService.encryptString(plainKey);
           await this.setSetting('ai:web_search_api_key_encrypted', encrypted);
@@ -295,5 +295,9 @@ export class AISettingsService {
         target: settings.key,
         set: { value, updatedAt: new Date() },
       });
+  }
+
+  private async deleteSetting(key: string): Promise<void> {
+    await this.db.delete(settings).where(eq(settings.key, key));
   }
 }

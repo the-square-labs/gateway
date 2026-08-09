@@ -196,11 +196,22 @@ export class DatabaseMonitoringService extends EventEmitter {
       const message = error instanceof Error ? error.message : 'Monitoring failed';
       logger.debug('Database monitoring poll failed', { databaseId, error: message });
       const connection = await this.databaseService.get(databaseId).catch(() => null);
-      await this.databaseService.updateHealth(databaseId, {
-        status: 'offline',
-        lastError: message,
-        forceHistory: true,
-      });
+      if (!connection) {
+        this.stopPolling(databaseId);
+        return;
+      }
+      await this.databaseService
+        .updateHealth(databaseId, {
+          status: 'offline',
+          lastError: message,
+          forceHistory: true,
+        })
+        .catch((updateError) => {
+          logger.debug('Database monitoring health update skipped', {
+            databaseId,
+            error: updateError instanceof Error ? updateError.message : String(updateError),
+          });
+        });
       if (connection) {
         await this.evaluator?.observeStatefulEvent(
           this.notificationCategory(connection.type),

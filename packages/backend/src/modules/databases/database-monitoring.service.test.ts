@@ -76,6 +76,19 @@ describe('redisPersistedSizeBytes', () => {
 });
 
 describe('database monitoring poll scheduling', () => {
+  it('stops cleanly when a connection is deleted during an in-flight poll', async () => {
+    const databaseService = {
+      get: vi.fn().mockRejectedValue(new Error('Connection not found')),
+      updateHealth: vi.fn(),
+    };
+    const service = new DatabaseMonitoringService(databaseService as never, null);
+    const poll = service as unknown as { pollOnce(databaseId: string): Promise<void> };
+
+    await expect(poll.pollOnce('deleted-clickhouse')).resolves.toBeUndefined();
+    expect(databaseService.updateHealth).not.toHaveBeenCalled();
+    service.destroy();
+  });
+
   it('does not run overlapping polls for the same database', async () => {
     let resolveConnection!: (value: { managed: { status: 'paused' } }) => void;
     const connection = new Promise<{ managed: { status: 'paused' } }>((resolve) => {

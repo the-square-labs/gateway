@@ -723,7 +723,7 @@ func (p *DockerPlugin) handleVolumeCommand(cmd *pb.DockerVolumeCommand, result *
 			result.Error = err.Error()
 			return
 		}
-		result.Detail = encodeBase64(content)
+		result.Data = content
 
 	case "read-file":
 		if cmd.Name == "" || cmd.Path == "" {

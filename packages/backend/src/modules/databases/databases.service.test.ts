@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AppError } from '@/middleware/error-handler.js';
+import { splitSqlStatements } from './database-query-intent.js';
 import {
   DatabaseConnectionService,
   inferClickHouseIntent,
@@ -7,7 +8,6 @@ import {
   inferRedisIntent,
   mapDatabaseDriverError,
 } from './databases.service.js';
-import { splitSqlStatements } from './database-query-intent.js';
 
 describe('mapDatabaseDriverError', () => {
   it('maps postgres authentication failures to 401', () => {
@@ -544,6 +544,37 @@ describe('managed ClickHouse query principals', () => {
 
     await expect(service.getDecryptedConfig('db-1', 'interactive', 'read')).rejects.toMatchObject({
       code: 'MANAGED_CLICKHOUSE_QUERY_ACCESS_UNAVAILABLE',
+    });
+  });
+});
+
+describe('managed PostgreSQL tunnel TLS', () => {
+  it('preserves PostgreSQL SSL negotiation through the opaque managed tunnel', async () => {
+    const config = {
+      type: 'postgres' as const,
+      host: 'managed.gateway.internal',
+      port: 5432,
+      database: 'app',
+      username: 'postgres_owner',
+      password: 'owner-password',
+      sslEnabled: true,
+    };
+    const service = new DatabaseConnectionService(
+      {} as never,
+      { log: vi.fn() } as never,
+      { decryptString: vi.fn((payload: { payload: string }) => payload.payload) } as never,
+      { getEndpoint: vi.fn().mockResolvedValue({ host: '127.0.0.1', port: 15432 }) } as never
+    );
+    const internal = service as any;
+    vi.spyOn(internal, 'getRow').mockResolvedValue({
+      encryptedConfig: JSON.stringify({ payload: JSON.stringify(config) }),
+    });
+    vi.spyOn(internal, 'getManagedMetadata').mockResolvedValue({ id: 'managed-postgres-1' });
+
+    await expect(service.getDecryptedConfig('db-1', 'monitoring')).resolves.toMatchObject({
+      host: '127.0.0.1',
+      port: 15432,
+      sslEnabled: true,
     });
   });
 });

@@ -230,7 +230,7 @@ export class NginxConfigGenerator {
       lines.push('        # WebSocket support');
       lines.push('        proxy_http_version 1.1;');
       lines.push('        proxy_set_header Upgrade $http_upgrade;');
-      lines.push('        proxy_set_header Connection $connection_upgrade;');
+      lines.push('        proxy_set_header Connection "upgrade";');
       lines.push('');
     }
 
@@ -270,15 +270,6 @@ export class NginxConfigGenerator {
     }
 
     lines.push('}');
-
-    if (host.websocketSupport) {
-      lines.push('');
-      lines.push('# Note: The following map should be in the http block of nginx.conf:');
-      lines.push('# map $http_upgrade $connection_upgrade {');
-      lines.push('#     default upgrade;');
-      lines.push("#     ''      close;");
-      lines.push('# }');
-    }
 
     return `${lines.join('\n')}\n`;
   }

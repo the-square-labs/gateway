@@ -272,9 +272,10 @@ function safeManagedDatabaseView(row: ManagedDatabaseRow) {
   };
 }
 
-function managedConnectionConfig(
+export function managedConnectionConfig(
   type: ManagedDatabaseRow['type'],
-  credentials: OwnerCredentials
+  credentials: OwnerCredentials,
+  tlsEnabled = false
 ): DatabaseConnectionConfig {
   if (type === 'postgres') {
     return {
@@ -284,7 +285,7 @@ function managedConnectionConfig(
       database: credentials.databaseName ?? 'app',
       username: credentials.username,
       password: credentials.password,
-      sslEnabled: false,
+      sslEnabled: tlsEnabled,
     };
   }
   if (type === 'clickhouse') {
@@ -525,7 +526,9 @@ export class ManagedDatabaseService {
           row.type,
           ownerCredentials,
           row.storageSizeBytes,
-          row.createdById
+          row.createdById,
+          [],
+          row.tlsEnabled
         );
         await this.db
           .update(managedDatabaseInstances)
@@ -656,7 +659,8 @@ export class ManagedDatabaseService {
       credentials,
       storageSizeBytesFromGb(input.storageSizeGb),
       userId,
-      input.tags
+      input.tags,
+      input.tlsEnabled
     );
     let row: ManagedDatabaseRow;
     try {
@@ -1676,9 +1680,10 @@ export class ManagedDatabaseService {
     credentials: OwnerCredentials,
     storageSizeBytes: number,
     userId: string,
-    tags: string[] = []
+    tags: string[] = [],
+    tlsEnabled = false
   ) {
-    const config = managedConnectionConfig(type, credentials);
+    const config = managedConnectionConfig(type, credentials, tlsEnabled);
     const encryptedConfig = JSON.stringify(this.cryptoService.encryptString(JSON.stringify(config)));
     return writeWithAllocatedSlug({
       source: name,
@@ -1928,7 +1933,7 @@ export class ManagedDatabaseService {
     userId: string | null
   ) {
     if (!row.databaseConnectionId) return;
-    const config = managedConnectionConfig(row.type, credentials);
+    const config = managedConnectionConfig(row.type, credentials, row.tlsEnabled);
     await this.db
       .update(databaseConnections)
       .set({

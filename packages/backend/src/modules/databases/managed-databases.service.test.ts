@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CreateManagedDatabaseBindingSchema, CreateManagedDatabaseSchema } from './databases.schemas.js';
-import { daemonCreateConfig, MANAGED_DATABASE_CATALOG, ManagedDatabaseService } from './managed-databases.service.js';
+import {
+  daemonCreateConfig,
+  MANAGED_DATABASE_CATALOG,
+  ManagedDatabaseService,
+  managedConnectionConfig,
+} from './managed-databases.service.js';
 
 const managedRow = {
   id: '44444444-4444-4444-8444-444444444444',
@@ -50,6 +55,17 @@ function reconciliationService(row: Record<string, unknown>, result: { success: 
 }
 
 describe('managed database catalog and input guardrails', () => {
+  it('persists TLS in the canonical PostgreSQL config while keeping internal Redis and ClickHouse lanes plaintext', () => {
+    const credentials = { username: 'owner', password: 'secret-password-123', databaseName: 'app' };
+
+    expect(managedConnectionConfig('postgres', credentials, true)).toMatchObject({ sslEnabled: true });
+    expect(managedConnectionConfig('redis', credentials, true)).toMatchObject({ tlsEnabled: false, port: 6379 });
+    expect(managedConnectionConfig('clickhouse', credentials, true)).toMatchObject({
+      tlsEnabled: false,
+      port: 8123,
+    });
+  });
+
   it('exposes only immutable curated images', () => {
     for (const versions of Object.values(MANAGED_DATABASE_CATALOG)) {
       for (const imageRef of Object.values(versions)) {
