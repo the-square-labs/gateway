@@ -14,4 +14,17 @@ describe('daemonContainerCreateConfig', () => {
     });
     expect(input.env).toEqual({ APP_ENV: 'e2e', EMPTY: '' });
   });
+
+  it('keeps the structured port contract and adds the legacy daemon mapping', () => {
+    const ports = [
+      { hostIp: '127.0.0.1', hostPort: 8080, containerPort: 80, protocol: 'tcp' },
+      { hostIp: '0.0.0.0', hostPort: 5353, containerPort: 53, protocol: 'udp' },
+    ];
+
+    expect(daemonContainerCreateConfig({ image: 'nginx:alpine', ports })).toEqual({
+      image: 'nginx:alpine',
+      ports,
+      port_bindings: { '80/tcp': '8080', '53/udp': '5353' },
+    });
+  });
 });

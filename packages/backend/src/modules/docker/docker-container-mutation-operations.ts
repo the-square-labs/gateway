@@ -7,6 +7,7 @@ import type { DockerAccessResourceService } from './docker-access-resource.servi
 import { envMapToList, normalizeEnvRecord } from './docker-env-operations.js';
 import { dockerGpuAttachmentFromInspect, hasRequestedGpuChange } from './docker-gpu-attachment.js';
 import type { ContainerAction } from './docker-lifecycle-watch.js';
+import { hasRequestedSpecificPortBindIp } from './docker-port-bindings.js';
 import { assertContainerNotUsedByProxy } from './docker-proxy-link.guard.js';
 import type { DockerRegistryAuthCandidate, DockerRegistryService } from './docker-registry.service.js';
 import {
@@ -45,6 +46,7 @@ export interface DockerContainerMutationContext {
   longDockerOperationTimeoutMs: number;
   validateDockerNode(nodeId: string): Promise<unknown>;
   assertDockerGpuCapability(nodeId: string): Promise<void>;
+  assertDockerPortBindIpCapability(nodeId: string): Promise<void>;
   assertNameAvailable(nodeId: string, name: string): Promise<void>;
   assertNotManagedDeploymentInternal(nodeId: string, containerId: string): Promise<void>;
   translateNameConflict(err: unknown, name: string): never;
@@ -107,9 +109,21 @@ export interface DockerContainerMutationContext {
 
 export function daemonContainerCreateConfig(config: Record<string, unknown>): Record<string, unknown> {
   const normalizedEnv = normalizeEnvRecord(config.env);
+  const legacyPortBindings = Array.isArray(config.ports)
+    ? Object.fromEntries(
+        config.ports.flatMap((value) => {
+          if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+          const port = value as Record<string, unknown>;
+          if (typeof port.containerPort !== 'number' || typeof port.hostPort !== 'number') return [];
+          const protocol = port.protocol === 'udp' ? 'udp' : 'tcp';
+          return [[`${port.containerPort}/${protocol}`, String(port.hostPort)]];
+        })
+      )
+    : null;
   return {
     ...config,
     ...(normalizedEnv ? { env: envMapToList(normalizedEnv) } : {}),
+    ...(legacyPortBindings && Object.keys(legacyPortBindings).length > 0 ? { port_bindings: legacyPortBindings } : {}),
   };
 }
 
@@ -123,6 +137,7 @@ export async function createContainer(
   await assertNodeAllowsServiceCreation(ctx.db, nodeId, 'docker');
   await ctx.validateDockerNode(nodeId);
   if (hasRequestedGpuChange(config)) await ctx.assertDockerGpuCapability(nodeId);
+  if (hasRequestedSpecificPortBindIp(config)) await ctx.assertDockerPortBindIpCapability(nodeId);
   assertDockerMountChangeAllowed({ nodeId, actorScopes, nextConfig: config, currentDefinitions: [] });
   const registryId = typeof config.registryId === 'string' ? config.registryId : null;
   delete config.registryId;
@@ -623,6 +638,7 @@ export async function recreateWithConfig(
   await ctx.validateDockerNode(nodeId);
   await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
   if (hasRequestedGpuChange(config)) await ctx.assertDockerGpuCapability(nodeId);
+  if (hasRequestedSpecificPortBindIp(config)) await ctx.assertDockerPortBindIpCapability(nodeId);
   const name = await ctx.resolveContainerName(nodeId, containerId);
   const expectedState = await ctx.resolveExpectedRecreateState(nodeId, containerId);
   ctx.requireNoTransition(nodeId, name);

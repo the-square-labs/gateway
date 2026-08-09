@@ -399,7 +399,7 @@ describe('CommandStream daemon certificate identity', () => {
     );
   });
 
-  it('preserves local and public IP addresses from daemon health reports', async () => {
+  it('preserves interface, local, and public IP addresses from daemon health reports', async () => {
     const db = makeDbNode({ certificateSerial: 'AA:01' });
     const deps = makeDeps(db);
     const stream = makeStream({ serialNumber: 'aa01' });
@@ -410,7 +410,18 @@ describe('CommandStream daemon certificate identity', () => {
       healthReport: {
         timestamp: '1',
         diskMounts: [],
-        networkInterfaces: [],
+        networkInterfaces: [
+          {
+            name: 'eth0',
+            rxBytes: '1',
+            txBytes: '2',
+            rxPackets: '3',
+            txPackets: '4',
+            rxErrors: '0',
+            txErrors: '0',
+            ipAddresses: ['10.0.0.8', '2001:db8::10'],
+          },
+        ],
         localIpAddresses: ['10.0.0.8', 'fd00::10'],
         publicIpAddresses: ['203.0.113.10', '2001:db8::10'],
       },
@@ -422,6 +433,12 @@ describe('CommandStream daemon certificate identity', () => {
         expect.objectContaining({
           localIpAddresses: ['10.0.0.8', 'fd00::10'],
           publicIpAddresses: ['203.0.113.10', '2001:db8::10'],
+          networkInterfaces: [
+            expect.objectContaining({
+              name: 'eth0',
+              ipAddresses: ['10.0.0.8', '2001:db8::10'],
+            }),
+          ],
         })
       );
     });

@@ -14,6 +14,7 @@ const DOCKER_CONTAINER_PORTS_MAX = 256;
 const DOCKER_STOP_TIMEOUT_MAX_SECONDS = 300;
 const DOCKER_GPU_DEVICE_IDS_MAX = 32;
 const DockerStopTimeoutSchema = z.number().int().min(0).max(DOCKER_STOP_TIMEOUT_MAX_SECONDS);
+const DockerPortBindIpSchema = z.string().ip().default('0.0.0.0');
 const DockerFilePathSchema = z
   .string()
   .min(1)
@@ -48,9 +49,10 @@ export const ContainerCreateSchema = z.object({
   ports: z
     .array(
       z.object({
-        hostPort: z.number(),
-        containerPort: z.number(),
+        hostPort: z.number().int().min(0).max(65535),
+        containerPort: z.number().int().min(1).max(65535),
         protocol: z.enum(['tcp', 'udp']).default('tcp'),
+        hostIp: DockerPortBindIpSchema,
       })
     )
     .max(DOCKER_CONTAINER_PORTS_MAX)
@@ -101,6 +103,7 @@ export const ContainerRecreateSchema = z.object({
         hostPort: z.number().int().min(0).max(65535),
         containerPort: z.number().int().min(1).max(65535),
         protocol: z.enum(['tcp', 'udp']).default('tcp'),
+        hostIp: DockerPortBindIpSchema,
       })
     )
     .max(DOCKER_CONTAINER_PORTS_MAX)

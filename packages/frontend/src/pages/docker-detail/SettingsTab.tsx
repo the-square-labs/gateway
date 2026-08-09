@@ -13,8 +13,12 @@ import {
   resolveContainerImageReference,
 } from "@/lib/docker-image-ref";
 import {
+  DEFAULT_DOCKER_PORT_BIND_ADDRESS_OPTIONS,
+  deriveDockerPortBindAddressOptions,
+} from "@/lib/docker-port-bindings";
+import {
   type DockerRuntimeCapacity,
-  loadDockerRuntimeCapacity,
+  deriveDockerRuntimeCapacity,
   UNKNOWN_DOCKER_RUNTIME_CAPACITY,
 } from "@/lib/docker-runtime-capacity";
 import { formatBytes } from "@/lib/utils";
@@ -200,6 +204,9 @@ export function SettingsTab({
   const [runtimeCapacity, setRuntimeCapacity] = useState<DockerRuntimeCapacity>(
     UNKNOWN_DOCKER_RUNTIME_CAPACITY
   );
+  const [bindAddressOptions, setBindAddressOptions] = useState(
+    DEFAULT_DOCKER_PORT_BIND_ADDRESS_OPTIONS
+  );
 
   // Baseline snapshot — updated after successful live apply
   const baselineRef = useRef<RuntimeFormValues>(runtimeServerBaseline);
@@ -208,7 +215,7 @@ export function SettingsTab({
   // ── Recreate settings state ──
   const portBindings = (hostConfig.PortBindings ?? {}) as Record<
     string,
-    Array<{ HostIp: string; HostPort: string }> | null
+    Array<{ HostIp?: string; HostIP?: string; HostPort: string }> | null
   >;
   const initialPorts = useMemo(() => {
     const ports: PortMapping[] = [];
@@ -217,6 +224,7 @@ export function SettingsTab({
       const [port, proto] = containerPort.split("/");
       for (const binding of bindings) {
         ports.push({
+          hostIp: binding.HostIp || binding.HostIP || "0.0.0.0",
           hostPort: binding.HostPort ?? "",
           containerPort: port,
           protocol: (proto as "tcp" | "udp") ?? "tcp",
@@ -451,9 +459,25 @@ export function SettingsTab({
 
   useEffect(() => {
     let cancelled = false;
-    void loadDockerRuntimeCapacity(nodeId).then((capacity) => {
-      if (!cancelled) setRuntimeCapacity(capacity);
-    });
+    void api
+      .getNode(nodeId)
+      .then((node) => {
+        if (cancelled) return;
+        setRuntimeCapacity(deriveDockerRuntimeCapacity(node));
+        setBindAddressOptions(deriveDockerPortBindAddressOptions(node));
+      })
+      .catch(async () => {
+        let node = null;
+        try {
+          const nodes = await api.listNodes({ type: "docker", limit: 100 });
+          node = nodes.data.find((candidate) => candidate.id === nodeId) ?? null;
+        } catch {
+          // Keep the safe defaults when neither node endpoint is available.
+        }
+        if (cancelled) return;
+        setRuntimeCapacity(deriveDockerRuntimeCapacity(node));
+        setBindAddressOptions(deriveDockerPortBindAddressOptions(node));
+      });
 
     return () => {
       cancelled = true;
@@ -990,6 +1014,7 @@ export function SettingsTab({
         setPorts={setPorts}
         portsChanged={portsChanged}
         inputCell={inputCell}
+        bindAddressOptions={bindAddressOptions}
       />
 
       {/* ─── Volume Mounts ────────────────────────────────────────── */}

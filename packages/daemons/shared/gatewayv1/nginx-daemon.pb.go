@@ -1250,6 +1250,7 @@ type NetworkInterface struct {
 	TxPackets     int64                  `protobuf:"varint,5,opt,name=tx_packets,json=txPackets,proto3" json:"tx_packets,omitempty"`
 	RxErrors      int64                  `protobuf:"varint,6,opt,name=rx_errors,json=rxErrors,proto3" json:"rx_errors,omitempty"`
 	TxErrors      int64                  `protobuf:"varint,7,opt,name=tx_errors,json=txErrors,proto3" json:"tx_errors,omitempty"`
+	IpAddresses   []string               `protobuf:"bytes,8,rep,name=ip_addresses,json=ipAddresses,proto3" json:"ip_addresses,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1331,6 +1332,13 @@ func (x *NetworkInterface) GetTxErrors() int64 {
 		return x.TxErrors
 	}
 	return 0
+}
+
+func (x *NetworkInterface) GetIpAddresses() []string {
+	if x != nil {
+		return x.IpAddresses
+	}
+	return nil
 }
 
 // Messages FROM Gateway TO daemon
@@ -6370,7 +6378,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"used_bytes\x18\x05 \x01(\x03R\tusedBytes\x12\x1d\n" +
 	"\n" +
 	"free_bytes\x18\x06 \x01(\x03R\tfreeBytes\x12#\n" +
-	"\rusage_percent\x18\a \x01(\x01R\fusagePercent\"\xd4\x01\n" +
+	"\rusage_percent\x18\a \x01(\x01R\fusagePercent\"\xf7\x01\n" +
 	"\x10NetworkInterface\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
 	"\brx_bytes\x18\x02 \x01(\x03R\arxBytes\x12\x19\n" +
@@ -6380,7 +6388,8 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\n" +
 	"tx_packets\x18\x05 \x01(\x03R\ttxPackets\x12\x1b\n" +
 	"\trx_errors\x18\x06 \x01(\x03R\brxErrors\x12\x1b\n" +
-	"\ttx_errors\x18\a \x01(\x03R\btxErrors\"\xa5\x16\n" +
+	"\ttx_errors\x18\a \x01(\x03R\btxErrors\x12!\n" +
+	"\fip_addresses\x18\b \x03(\tR\vipAddresses\"\xa5\x16\n" +
 	"\x0eGatewayCommand\x12\x1d\n" +
 	"\n" +
 	"command_id\x18\x01 \x01(\tR\tcommandId\x12C\n" +

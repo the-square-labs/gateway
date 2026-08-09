@@ -143,6 +143,7 @@ export interface HealthReport {
     txPackets: string;
     rxErrors: string;
     txErrors: string;
+    ipAddresses: string[];
   }>;
   localIpAddresses: string[];
   publicIpAddresses: string[];

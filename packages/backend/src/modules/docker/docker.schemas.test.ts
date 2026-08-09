@@ -57,3 +57,35 @@ describe('docker GPU selection schemas', () => {
     ).toBe(false);
   });
 });
+
+describe('docker port binding schemas', () => {
+  it('defaults legacy mappings to all interfaces and accepts a specific publish address', () => {
+    expect(
+      ContainerCreateSchema.parse({ image: 'nginx:alpine', ports: [{ hostPort: 8080, containerPort: 80 }] }).ports
+    ).toEqual([{ hostPort: 8080, containerPort: 80, protocol: 'tcp', hostIp: '0.0.0.0' }]);
+    expect(
+      ContainerRecreateSchema.parse({
+        ports: [{ hostIp: '127.0.0.1', hostPort: 8080, containerPort: 80, protocol: 'tcp' }],
+      }).ports
+    ).toEqual([{ hostIp: '127.0.0.1', hostPort: 8080, containerPort: 80, protocol: 'tcp' }]);
+  });
+
+  it('rejects a non-IP publish address', () => {
+    expect(
+      ContainerRecreateSchema.safeParse({
+        ports: [{ hostIp: 'docker-node.internal', hostPort: 8080, containerPort: 80, protocol: 'tcp' }],
+      }).success
+    ).toBe(false);
+  });
+
+  it('rejects port numbers that the daemon uint16 contract cannot represent', () => {
+    for (const ports of [
+      [{ hostPort: -1, containerPort: 80 }],
+      [{ hostPort: 8080.5, containerPort: 80 }],
+      [{ hostPort: 8080, containerPort: 0 }],
+      [{ hostPort: 8080, containerPort: 65536 }],
+    ]) {
+      expect(ContainerCreateSchema.safeParse({ image: 'nginx:alpine', ports }).success).toBe(false);
+    }
+  });
+});

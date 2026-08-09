@@ -52,19 +52,33 @@ func GetNetworkInterfaces() []*pb.NetworkInterface {
 		txBytes, _ := strconv.ParseInt(fields[8], 10, 64)
 		txPackets, _ := strconv.ParseInt(fields[9], 10, 64)
 		txErrors, _ := strconv.ParseInt(fields[10], 10, 64)
+		ipAddresses := interfaceIPAddresses(name)
 
 		ifaces = append(ifaces, &pb.NetworkInterface{
-			Name:      name,
-			RxBytes:   rxBytes,
-			TxBytes:   txBytes,
-			RxPackets: rxPackets,
-			TxPackets: txPackets,
-			RxErrors:  rxErrors,
-			TxErrors:  txErrors,
+			Name:        name,
+			RxBytes:     rxBytes,
+			TxBytes:     txBytes,
+			RxPackets:   rxPackets,
+			TxPackets:   txPackets,
+			RxErrors:    rxErrors,
+			TxErrors:    txErrors,
+			IpAddresses: ipAddresses,
 		})
 	}
 
 	return ifaces
+}
+
+func interfaceIPAddresses(name string) []string {
+	iface, err := net.InterfaceByName(name)
+	if err != nil || iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 || !isLocalAddressInterface(name) {
+		return nil
+	}
+	addresses, err := iface.Addrs()
+	if err != nil {
+		return nil
+	}
+	return normalizeLocalIPAddresses(addresses)
 }
 
 // GetInterfaceIPAddresses returns usable addresses assigned to active,

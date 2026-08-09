@@ -86,6 +86,35 @@ describe("buildRecreatePayloadFromForm", () => {
     ).toEqual({ gpu: { deviceIds: [] } });
   });
 
+  it("preserves the selected publish address in recreated port mappings", () => {
+    expect(
+      buildRecreatePayloadFromForm({
+        parsedImageName: "nginx",
+        imageTag: "latest",
+        imageTagChanged: false,
+        portsChanged: true,
+        ports: [{ hostIp: "127.0.0.1", hostPort: "8080", containerPort: "80", protocol: "tcp" }],
+        mountsChanged: false,
+        mounts: [],
+        entrypoint: "",
+        command: "",
+        stopTimeout: "10",
+        workingDir: "/app",
+        user: "node",
+        hostname: "gateway",
+        labelsChanged: false,
+        labels: [],
+        gpuChanged: false,
+        gpuDeviceIds: [],
+        hasRuntimeChanges: false,
+        runtimePayload: null,
+        recreateBaseline,
+      })
+    ).toEqual({
+      ports: [{ hostIp: "127.0.0.1", hostPort: 8080, containerPort: 80, protocol: "tcp" }],
+    });
+  });
+
   it("removes the tag suffix and clears entrypoint/command when values are blanked", () => {
     expect(
       buildRecreatePayloadFromForm({

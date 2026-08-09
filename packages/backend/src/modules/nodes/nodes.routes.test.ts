@@ -99,7 +99,7 @@ describe('nodesRoutes list access', () => {
     });
   });
 
-  it('keeps node appearance color in compact Docker node discovery rows', async () => {
+  it('keeps safe Docker runtime metadata in compact node discovery rows', async () => {
     mocks.scopes = ['docker:containers:view'];
     mocks.nodesService.list.mockResolvedValue({
       data: [
@@ -114,9 +114,21 @@ describe('nodesRoutes list access', () => {
           daemonVersion: '1.2.3',
           osInfo: 'linux',
           configVersionHash: 'hash',
-          capabilities: {},
+          capabilities: {
+            capabilities: ['docker_gpu_v1', 'docker_port_bind_ip_v1'],
+          },
           lastSeenAt: null,
-          lastHealthReport: null,
+          lastHealthReport: {
+            systemMemoryTotalBytes: 1024,
+            swapTotalBytes: 512,
+            networkInterfaces: [
+              {
+                name: 'eth0',
+                rxBytes: 100,
+                ipAddresses: ['192.168.1.20'],
+              },
+            ],
+          },
           lastStatsReport: null,
           metadata: {},
           isConnected: true,
@@ -131,10 +143,21 @@ describe('nodesRoutes list access', () => {
     });
 
     const response = await createApp().request('/?type=docker&limit=100');
-    const body = (await response.json()) as { data: Array<{ appearanceColor?: string }> };
+    const body = (await response.json()) as { data: Array<Record<string, any>> };
 
     expect(response.status).toBe(200);
-    expect(body.data[0]).toMatchObject({ id: 'node-1', appearanceColor: 'blue' });
+    expect(body.data[0]).toMatchObject({
+      id: 'node-1',
+      appearanceColor: 'blue',
+      capabilities: { dockerPortBindIpV1: true },
+      lastHealthReport: {
+        systemMemoryTotalBytes: 1024,
+        swapTotalBytes: 512,
+        networkInterfaces: [{ name: 'eth0', ipAddresses: ['192.168.1.20'] }],
+      },
+    });
+    expect(body.data[0].capabilities).not.toHaveProperty('capabilities');
+    expect(body.data[0].lastHealthReport.networkInterfaces[0]).not.toHaveProperty('rxBytes');
   });
 
   it('still rejects node listing without node or Docker access', async () => {

@@ -344,7 +344,7 @@ export interface ContainerCreateConfig {
   image: string;
   registryId?: string;
   name?: string;
-  ports?: Array<{ hostPort: number; containerPort: number; protocol?: string }>;
+  ports?: Array<{ hostPort: number; containerPort: number; protocol?: string; hostIp?: string }>;
   volumes?: Array<{
     hostPath?: string;
     containerPath: string;

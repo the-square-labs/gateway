@@ -46,6 +46,7 @@ import {
   watchDockerTransition,
 } from './docker-lifecycle-watch.js';
 import type { DockerMigrationGuard } from './docker-migration-guard.js';
+import { hasDockerPortBindIpV1Capability } from './docker-port-bindings.js';
 import {
   abortFileUpload as abortDockerFileUpload,
   appendFileUploadChunk as appendDockerFileUploadChunk,
@@ -579,6 +580,17 @@ export class DockerManagementService {
     }
   }
 
+  private async assertDockerPortBindIpCapability(nodeId: string): Promise<void> {
+    const node = await this.validateDockerNode(nodeId);
+    if (!hasDockerPortBindIpV1Capability(node.capabilities)) {
+      throw new AppError(
+        409,
+        'UNSUPPORTED_DAEMON',
+        'Docker node does not support interface-specific port publishing. Update the Docker daemon before changing the publish address.'
+      );
+    }
+  }
+
   private parseResult(result: { success: boolean; error?: string; detail?: string }) {
     if (!result.success) {
       throw new AppError(502, 'DISPATCH_ERROR', dockerDispatchErrorMessage(result, 'Command failed on daemon'));
@@ -853,6 +865,7 @@ export class DockerManagementService {
       longDockerOperationTimeoutMs: DockerManagementService.LONG_DOCKER_OPERATION_TIMEOUT_MS,
       validateDockerNode: (nodeId) => this.validateDockerNode(nodeId),
       assertDockerGpuCapability: (nodeId) => this.assertDockerGpuCapability(nodeId),
+      assertDockerPortBindIpCapability: (nodeId) => this.assertDockerPortBindIpCapability(nodeId),
       assertNameAvailable: (nodeId, name) => this.assertNameAvailable(nodeId, name),
       assertNotManagedDeploymentInternal: (nodeId, containerId) =>
         this.assertNotManagedDeploymentInternal(nodeId, containerId),

@@ -633,6 +633,9 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                   txPackets: Number(n.txPackets ?? 0),
                   rxErrors: Number(n.rxErrors ?? 0),
                   txErrors: Number(n.txErrors ?? 0),
+                  ipAddresses: (n.ipAddresses ?? []).filter(
+                    (address: unknown): address is string => typeof address === 'string' && address.length > 0
+                  ),
                 })),
                 localIpAddresses: (msg.healthReport.localIpAddresses ?? []).filter(
                   (address: unknown): address is string => typeof address === 'string' && address.length > 0

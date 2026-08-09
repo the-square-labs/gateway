@@ -6,23 +6,12 @@ import { useDockerStore } from "@/stores/docker";
 import { makeUser } from "@/test/fixtures";
 import { SettingsTab, WebhookSection } from "./SettingsTab";
 
+const portMappingsSectionSpy = vi.hoisted(() => vi.fn());
+
 vi.mock("@/components/common/ConfirmDialog", () => ({ confirm: vi.fn().mockResolvedValue(true) }));
 
 vi.mock("@/hooks/use-realtime", () => ({
   useRealtime: vi.fn(),
-}));
-
-vi.mock("@/lib/docker-runtime-capacity", () => ({
-  loadDockerRuntimeCapacity: vi.fn().mockResolvedValue({
-    maxCpuCount: null,
-    maxMemoryBytes: null,
-    maxSwapBytes: null,
-  }),
-  UNKNOWN_DOCKER_RUNTIME_CAPACITY: {
-    maxCpuCount: null,
-    maxMemoryBytes: null,
-    maxSwapBytes: null,
-  },
 }));
 
 vi.mock("./RuntimeSection", () => ({
@@ -52,7 +41,10 @@ vi.mock("./RuntimeSection", () => ({
 }));
 
 vi.mock("./PortMappingsSection", () => ({
-  PortMappingsSection: () => null,
+  PortMappingsSection: (props: unknown) => {
+    portMappingsSectionSpy(props);
+    return null;
+  },
 }));
 
 vi.mock("./VolumeMountsSection", () => ({
@@ -75,11 +67,19 @@ vi.mock("@/components/docker/DockerHealthCheckSection", () => ({
 
 describe("docker detail SettingsTab", () => {
   beforeEach(() => {
+    portMappingsSectionSpy.mockClear();
     vi.spyOn(api, "getNode").mockResolvedValue({
       id: "node-1",
       liveHealthReport: { gpuDevices: [] },
       lastHealthReport: null,
     } as never);
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [],
+      total: 0,
+      page: 1,
+      limit: 100,
+      totalPages: 0,
+    });
     vi.spyOn(api, "listDockerGpuUsage").mockResolvedValue([]);
     vi.spyOn(api, "getContainerWebhook").mockResolvedValue(null);
     vi.spyOn(api, "getContainerImageCleanup").mockResolvedValue({
@@ -92,6 +92,57 @@ describe("docker detail SettingsTab", () => {
       retentionCount: 2,
       createdAt: null,
       updatedAt: null,
+    });
+  });
+
+  it("loads publish addresses through Docker-scoped node discovery when node details are forbidden", async () => {
+    vi.mocked(api.getNode).mockRejectedValue(new Error("Forbidden"));
+    vi.mocked(api.listNodes).mockResolvedValueOnce({
+      data: [
+        {
+          id: "node-1",
+          capabilities: { dockerPortBindIpV1: true },
+          lastHealthReport: {
+            networkInterfaces: [{ name: "eth0", ipAddresses: ["192.168.1.20"] }],
+          },
+        } as never,
+      ],
+      total: 1,
+      page: 1,
+      limit: 100,
+      totalPages: 1,
+    });
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["docker:containers:edit"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+
+    render(
+      <SettingsTab
+        nodeId="node-1"
+        containerId="container-1"
+        data={{
+          Id: "container-1",
+          Name: "/app",
+          State: { Status: "exited", Running: false },
+          Config: { Image: "nginx:latest", Entrypoint: [], Cmd: [] },
+          HostConfig: { PortBindings: {} },
+          Mounts: [],
+        }}
+      />
+    );
+
+    await waitFor(() => {
+      expect(portMappingsSectionSpy).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          bindAddressOptions: [
+            { value: "0.0.0.0", label: "All interfaces (0.0.0.0)" },
+            { value: "127.0.0.1", label: "Loopback (127.0.0.1)" },
+            { value: "192.168.1.20", label: "eth0 (192.168.1.20)" },
+          ],
+        })
+      );
     });
   });
 

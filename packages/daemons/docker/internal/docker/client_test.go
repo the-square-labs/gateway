@@ -21,6 +21,38 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/gpu"
 )
 
+func TestDockerPortMappingsPreservesPublishAddress(t *testing.T) {
+	exposed, bindings, err := dockerPortMappings([]containerPortMapping{
+		{HostIP: "127.0.0.1", HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
+		{HostIP: "192.168.1.20", HostPort: 5353, ContainerPort: 53, Protocol: "udp"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected mapping error: %v", err)
+	}
+	if len(exposed) != 2 || len(bindings) != 2 {
+		t.Fatalf("expected two exposed ports and bindings, got %d and %d", len(exposed), len(bindings))
+	}
+	httpPort, _ := network.ParsePort("80/tcp")
+	if got := bindings[httpPort][0].HostIP.String(); got != "127.0.0.1" {
+		t.Fatalf("expected loopback binding, got %q", got)
+	}
+	dnsPort, _ := network.ParsePort("53/udp")
+	if got := bindings[dnsPort][0].HostIP.String(); got != "192.168.1.20" {
+		t.Fatalf("expected interface binding, got %q", got)
+	}
+}
+
+func TestDockerPortMappingsDefaultsToAllInterfaces(t *testing.T) {
+	_, bindings, err := dockerPortMappings([]containerPortMapping{{HostPort: 8080, ContainerPort: 80}})
+	if err != nil {
+		t.Fatalf("unexpected mapping error: %v", err)
+	}
+	httpPort, _ := network.ParsePort("80/tcp")
+	if got := bindings[httpPort][0].HostIP.String(); got != "0.0.0.0" {
+		t.Fatalf("expected all-interface binding, got %q", got)
+	}
+}
+
 func writeDockerLogFrame(t *testing.T, buf *bytes.Buffer, payload string) {
 	t.Helper()
 	header := make([]byte, 8)
