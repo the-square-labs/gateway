@@ -38,7 +38,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import { proxyHostRoute } from "@/lib/resource-routes";
-import { cn, formatDateTime } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
@@ -902,61 +902,6 @@ export function ProxyHostDetail({
           <HealthBars history={healthHistory} currentStatus={host.healthStatus} />
         )}
 
-        {host.sslEnabled && host.tlsDistribution && (
-          <div
-            className={cn(
-              "flex flex-wrap items-center justify-between gap-3 border p-3 text-sm",
-              host.tlsDistribution.status === "ready"
-                ? "border-success/40 bg-success/10"
-                : host.tlsDistribution.status === "failed"
-                  ? "border-destructive/40 bg-destructive/10"
-                  : "border-warning bg-warning/10"
-            )}
-          >
-            <div className="min-w-0 space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">TLS distribution</span>
-                <Badge
-                  size="inline"
-                  variant={
-                    host.tlsDistribution.status === "ready"
-                      ? "success"
-                      : host.tlsDistribution.status === "failed"
-                        ? "destructive"
-                        : "warning"
-                  }
-                >
-                  {host.tlsDistribution.status.replaceAll("_", " ")}
-                </Badge>
-                <span className="text-muted-foreground">
-                  {host.tlsDistribution.readyReplicaCount}/{host.tlsDistribution.replicaCount}{" "}
-                  replicas ready
-                </span>
-              </div>
-              {host.tlsDistribution.lastVerifiedAt && (
-                <p className="text-muted-foreground">
-                  Last verified {formatDateTime(host.tlsDistribution.lastVerifiedAt)}
-                </p>
-              )}
-              {host.tlsDistribution.error && (
-                <p className="break-words text-destructive">{host.tlsDistribution.error}</p>
-              )}
-            </div>
-            {canResyncTls && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleTlsResync}
-                disabled={isTlsResyncing}
-                aria-label={`Retry TLS sync for ${host.domainNames[0] || "proxy host"}`}
-              >
-                <RefreshCw className={cn("h-4 w-4", isTlsResyncing && "animate-spin")} />
-                Retry TLS Sync
-              </Button>
-            )}
-          </div>
-        )}
-
         {host.maintenanceEnabled && (
           <div className="border border-warning bg-warning/10 p-3 text-sm text-warning-foreground">
             Maintenance mode is active. User requests receive HTTP 503 and managed health checks are
@@ -1078,6 +1023,9 @@ export function ProxyHostDetail({
                 setHealthCheckBodyMatchMode={setHealthCheckBodyMatchMode}
                 healthCheckSlowThreshold={healthCheckSlowThreshold}
                 setHealthCheckSlowThreshold={setHealthCheckSlowThreshold}
+                canResyncTls={canResyncTls}
+                isTlsResyncing={isTlsResyncing}
+                onTlsResync={handleTlsResync}
               />
             </TabsContent>
           )}

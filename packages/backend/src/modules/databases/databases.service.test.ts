@@ -90,14 +90,18 @@ describe('mapDatabaseDriverError', () => {
     expect(mapped?.message).toContain('invalid input value for enum');
   });
 
-  it('does not remap operational postgres query failures as client query errors', () => {
+  it('preserves operational query error text for the database console', () => {
     const error = Object.assign(new Error('terminating connection due to administrator command'), {
       code: '57P01',
       severity: 'FATAL',
     });
     const mapped = mapDatabaseDriverError(error, 'postgres', 'query');
 
-    expect(mapped).toBeNull();
+    expect(mapped).toMatchObject({
+      statusCode: 400,
+      code: 'DATABASE_QUERY_FAILED',
+      message: 'terminating connection due to administrator command',
+    });
   });
 
   it('returns null for unknown errors', () => {

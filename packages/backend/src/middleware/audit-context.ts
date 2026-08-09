@@ -419,9 +419,28 @@ function resolveFallbackAuditTarget(method: string, path: string): FallbackAudit
     };
   }
 
+  const authTarget = resolveAuthFallbackAuditTarget(method, path);
+  if (authTarget) return authTarget;
+
   return {
     action: `route.${method.toLowerCase()}`,
     resourceType: 'http-route',
+  };
+}
+
+function resolveAuthFallbackAuditTarget(method: string, path: string): FallbackAuditTarget | null {
+  if (!path.startsWith('/auth/')) return null;
+  const routeName = sanitizeAuditPath(path)
+    .split('/')
+    .slice(2)
+    .filter((segment) => segment && !segment.startsWith(':'))
+    .join('_')
+    .replaceAll('-', '_');
+  if (!routeName) return null;
+  const mutation = method === 'DELETE' ? '.delete' : method === 'PATCH' || method === 'PUT' ? '.update' : '';
+  return {
+    action: `auth.${routeName}${mutation}`,
+    resourceType: path.startsWith('/auth/me/') ? 'user' : 'session',
   };
 }
 

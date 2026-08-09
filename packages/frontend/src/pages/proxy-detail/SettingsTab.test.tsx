@@ -77,6 +77,9 @@ function makeProps(overrides: Partial<SettingsTabProps> = {}): SettingsTabProps 
     setHealthCheckBodyMatchMode: vi.fn(),
     healthCheckSlowThreshold: 3,
     setHealthCheckSlowThreshold: vi.fn(),
+    canResyncTls: false,
+    isTlsResyncing: false,
+    onTlsResync: vi.fn(),
     ...overrides,
   };
 }
@@ -86,6 +89,40 @@ describe("proxy detail SettingsTab", () => {
     render(<SettingsTab {...makeProps()} />);
 
     expect(screen.getByText("Access List").closest("div.border")).toHaveClass("overflow-visible");
+  });
+
+  it("lays out WebSocket and Access List panels by their available container width", () => {
+    render(<SettingsTab {...makeProps({ host: { ...host, type: "proxy" } })} />);
+
+    expect(screen.getByText("WebSocket Support").closest("div.grid")).toHaveStyle(
+      "grid-template-columns: repeat(auto-fit, minmax(min(100%, 32rem), 1fr))"
+    );
+  });
+
+  it("renders TLS distribution as a neutral settings panel with only the status badge colored", () => {
+    render(
+      <SettingsTab
+        {...makeProps({
+          host: {
+            ...host,
+            sslEnabled: true,
+            tlsDistribution: {
+              status: "ready",
+              replicaCount: 2,
+              readyReplicaCount: 2,
+              lastVerifiedAt: "2026-08-09T12:00:00.000Z",
+              error: null,
+            },
+          } as ProxyHost,
+        })}
+      />
+    );
+
+    const panel = screen.getByText("TLS distribution").closest("div.border");
+    expect(panel).toHaveClass("border-border", "bg-card");
+    expect(panel).not.toHaveClass("bg-success/10", "border-success/40");
+    expect(panel?.querySelector(".border-t")).toBeNull();
+    expect(screen.getByText("ready").parentElement).toHaveClass("bg-emerald-500/15");
   });
 
   it("allows selecting an SSL certificate before SSL is enabled", () => {

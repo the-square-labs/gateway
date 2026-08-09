@@ -65,6 +65,23 @@ describe('resolveFallbackAuditTarget', () => {
     });
   });
 
+  it('maps authentication endpoints to stable named audit actions', () => {
+    expect(__testOnly.resolveFallbackAuditTarget('POST', '/auth/email/continue')).toEqual({
+      action: 'auth.email_continue',
+      resourceType: 'session',
+    });
+    expect(__testOnly.resolveFallbackAuditTarget('POST', '/auth/password/login')).toEqual({
+      action: 'auth.password_login',
+      resourceType: 'session',
+    });
+    expect(
+      __testOnly.resolveFallbackAuditTarget('DELETE', '/auth/me/passkeys/11111111-1111-4111-8111-111111111111')
+    ).toEqual({
+      action: 'auth.me_passkeys.delete',
+      resourceType: 'user',
+    });
+  });
+
   it('keeps a generic fallback for unknown mutating routes', () => {
     expect(__testOnly.resolveFallbackAuditTarget('POST', '/api/unknown')).toEqual({
       action: 'route.post',

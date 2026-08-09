@@ -1,9 +1,10 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { Minus, Plus, Save } from "lucide-react";
+import { Minus, Plus, RefreshCw, Save } from "lucide-react";
 import type { ReactNode } from "react";
 import { Combobox } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
 import { ProxyUpstreamPanel } from "@/components/proxy/ProxyUpstreamEditor";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NumericInput } from "@/components/ui/numeric-input";
@@ -15,7 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { cn } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 import type {
   AccessList,
   CustomHeader,
@@ -114,6 +115,9 @@ export interface SettingsTabProps {
   setHealthCheckBodyMatchMode: (v: "includes" | "exact" | "starts_with" | "ends_with") => void;
   healthCheckSlowThreshold: number;
   setHealthCheckSlowThreshold: (v: number) => void;
+  canResyncTls: boolean;
+  isTlsResyncing: boolean;
+  onTlsResync: () => void;
 }
 
 export function SettingsTab({
@@ -173,6 +177,9 @@ export function SettingsTab({
   setHealthCheckBodyMatchMode,
   healthCheckSlowThreshold,
   setHealthCheckSlowThreshold,
+  canResyncTls,
+  isTlsResyncing,
+  onTlsResync,
 }: SettingsTabProps) {
   const accessListOptions = [
     { value: "", label: "None" },
@@ -199,8 +206,62 @@ export function SettingsTab({
 
   return (
     <div className="space-y-4">
+      {host.sslEnabled && host.tlsDistribution && (
+        <PanelShell
+          title={
+            <div className="flex flex-wrap items-center gap-2">
+              <span>TLS distribution</span>
+              <Badge
+                size="inline"
+                variant={
+                  host.tlsDistribution.status === "ready"
+                    ? "success"
+                    : host.tlsDistribution.status === "failed"
+                      ? "destructive"
+                      : "warning"
+                }
+              >
+                {host.tlsDistribution.status.replaceAll("_", " ")}
+              </Badge>
+            </div>
+          }
+          description={
+            <div className="flex flex-wrap gap-x-3 gap-y-1">
+              <span>
+                {host.tlsDistribution.readyReplicaCount}/{host.tlsDistribution.replicaCount}{" "}
+                replicas ready
+              </span>
+              {host.tlsDistribution.lastVerifiedAt && (
+                <span>Last verified {formatDateTime(host.tlsDistribution.lastVerifiedAt)}</span>
+              )}
+              {host.tlsDistribution.error && (
+                <span className="break-words">{host.tlsDistribution.error}</span>
+              )}
+            </div>
+          }
+          actions={
+            canResyncTls ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onTlsResync}
+                disabled={isTlsResyncing}
+                aria-label={`Retry TLS sync for ${host.domainNames[0] || "proxy host"}`}
+              >
+                <RefreshCw className={cn("h-4 w-4", isTlsResyncing && "animate-spin")} />
+                Retry TLS Sync
+              </Button>
+            ) : null
+          }
+          wrapHeader
+        />
+      )}
+
       {/* WebSocket + Access List -- side by side */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div
+        className="grid gap-4"
+        style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 32rem), 1fr))" }}
+      >
         {host.type === "proxy" && (
           <TogglePanelShell
             title="WebSocket Support"
@@ -213,7 +274,7 @@ export function SettingsTab({
         <PanelShell
           title="Access List"
           description="Restrict access via IP rules or basic authentication"
-          className={cn("overflow-visible", host.type !== "proxy" && "md:col-span-2")}
+          className="overflow-visible"
           actions={
             <Combobox
               value={accessListId}
