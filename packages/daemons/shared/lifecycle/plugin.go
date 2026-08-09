@@ -77,10 +77,9 @@ type MigrationStreamPlugin interface {
 	RunMigrationStream(ctx context.Context, conn *grpc.ClientConn, nodeID string)
 }
 
-// DatabaseTunnelPlugin is implemented by daemons that maintain the separately
-// authenticated managed-database TCP tunnel. The plugin receives a dedicated
-// process-lifetime mTLS ClientConn; connector sidecars never receive node
-// certificate material.
-type DatabaseTunnelPlugin interface {
-	RunDatabaseTunnel(ctx context.Context, conn *grpc.ClientConn, nodeID string)
+// RelayTunnelPlugin is implemented by daemons that consume generic, signed
+// relay assignments using their process-lifetime mTLS connection.
+type RelayTunnelPlugin interface {
+	RunRelayTunnels(ctx context.Context, conn *grpc.ClientConn, nodeID string)
+	SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (detail string, err error)
 }

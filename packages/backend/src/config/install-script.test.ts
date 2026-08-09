@@ -64,9 +64,11 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('IMAGE_REF="$image_ref"');
     expect(source).toContain('databaseConnectorImage');
     expect(source).toContain('DATABASE_CONNECTOR_IMAGE_REF="$connector_image_ref"');
-    expect(source).toContain('RELAY_VERSION="$relay_version"');
+    expect(source).toContain('RELAY_BUILD_VERSION="$relay_build_version"');
+    expect(source).toContain('RELAY_PROTOCOL_MAJOR="$relay_protocol_major"');
     expect(source).toContain('GATEWAY_RELAY_IMAGE_REF');
-    expect(source).toContain('gateway_relay_identity:/var/lib/gateway-relay:ro');
+    expect(source).toContain('gateway_relay_identity:/var/lib/gateway-relay/identity:ro');
+    expect(source).toContain('gateway_relay_state:/var/lib/gateway-relay/state');
     expect(source).toContain('      - "9443:9443"');
     expect(source).toContain('Gateway recovery helper image pull');
     expect(source).toContain('--database-connector-image "$DATABASE_CONNECTOR_IMAGE_REF"');

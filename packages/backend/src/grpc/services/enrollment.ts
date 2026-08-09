@@ -1,3 +1,4 @@
+import { createHash, X509Certificate } from 'node:crypto';
 import type { ServerUnaryCall, sendUnaryData } from '@grpc/grpc-js';
 import bcrypt from 'bcryptjs';
 import { and, eq, isNull } from 'drizzle-orm';
@@ -9,6 +10,11 @@ import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '..
 import type { GrpcServerDeps } from '../server.js';
 
 const logger = createChildLogger('GrpcEnrollment');
+
+function certificateFingerprint(certificatePem: string): string {
+  const certificate = new X509Certificate(certificatePem);
+  return `sha256:${createHash('sha256').update(certificate.raw).digest('hex')}`;
+}
 
 async function findPendingNodeByEnrollmentToken(deps: GrpcServerDeps, token: string) {
   const parsedToken = parseNodeEnrollmentToken(token);
@@ -86,6 +92,7 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
               enrollmentTokenSelector: null,
               enrollmentTokenHash: null,
               certificateSerial: certificate.serialNumber,
+              certificateFingerprint: certificateFingerprint(certificate.certificatePem),
               certificateExpiresAt: certificate.notAfter,
               updatedAt: new Date(),
             })
@@ -101,7 +108,6 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
         });
 
         logger.info('Node enrolled with PKI cert', { nodeId, hostname: req.hostname, serial: certResult.serial });
-
         callback(null, {
           nodeId,
           caCertificate: Buffer.from(certResult.caCertPem),
@@ -109,6 +115,14 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
           clientKey: Buffer.from(certResult.keyPem),
           certExpiresAt: String(Math.floor(certResult.expiresAt.getTime() / 1000)),
         });
+        await deps.relayPolicy
+          ?.refreshNodeIdentity(nodeId, certificateFingerprint(certResult.certPem))
+          .catch((error) => {
+            logger.warn('Relay policy identity refresh deferred after enrollment', {
+              nodeId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
       } catch (err) {
         logger.error('Enrollment failed', { error: (err as Error).message });
         callback({ code: 13, message: `Enrollment failed: ${(err as Error).message}` });
@@ -157,17 +171,22 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
           return;
         }
 
-        if (certIdentity.nodeType && certIdentity.nodeType !== node.type) {
-          callback({ code: 7, message: 'Client certificate node type does not match requested node' });
-          return;
-        }
-
         const storedSerial = normalizeCertificateSerial(node.certificateSerial);
         if (storedSerial !== certIdentity.serialNumber) {
           logger.warn('Certificate renewal rejected: certificate serial does not match enrolled node', {
             nodeId: req.nodeId,
             presentedSerial: certIdentity.serialNumber,
             storedSerial,
+          });
+          callback({ code: 7, message: 'Client certificate is not the current enrolled certificate for this node' });
+          return;
+        }
+        if (
+          certIdentity.certificateFingerprint &&
+          node.certificateFingerprint !== certIdentity.certificateFingerprint
+        ) {
+          logger.warn('Certificate renewal rejected: certificate fingerprint does not match enrolled node', {
+            nodeId: req.nodeId,
           });
           callback({ code: 7, message: 'Client certificate is not the current enrolled certificate for this node' });
           return;
@@ -201,6 +220,7 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
             .update(nodes)
             .set({
               certificateSerial: certificate.serialNumber,
+              certificateFingerprint: certificateFingerprint(certificate.certificatePem),
               certificateExpiresAt: certificate.notAfter,
               updatedAt: new Date(),
             })
@@ -208,12 +228,19 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
         });
 
         logger.info('Node cert renewed', { nodeId: req.nodeId, serial: certResult.serial });
-
         callback(null, {
           clientCertificate: Buffer.from(certResult.certPem),
           clientKey: Buffer.from(certResult.keyPem),
           certExpiresAt: String(Math.floor(certResult.expiresAt.getTime() / 1000)),
         });
+        await deps.relayPolicy
+          ?.refreshNodeIdentity(req.nodeId, certificateFingerprint(certResult.certPem))
+          .catch((error) => {
+            logger.warn('Relay policy identity refresh deferred after certificate renewal', {
+              nodeId: req.nodeId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
 
         // The active CommandStream was authenticated with the old certificate.
         // Remove and close it after returning the renewed cert so the daemon reconnects

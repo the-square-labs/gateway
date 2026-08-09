@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { DashboardReadModelService, dashboardStatsFromSourceSnapshots } from './dashboard-read-model.service.js';
 
 function makeService() {
-  const definitions: Array<{ id: string; refresh: () => Promise<void> }> = [];
+  const definitions: Array<{
+    id: string;
+    refresh: () => Promise<void>;
+    events?: Array<{ channel: string; matches?: (payload: unknown) => boolean }>;
+  }> = [];
   const snapshots = {
     withLease: vi.fn(
       async (kind: string, id: string, work: (lease: { kind: string; id: string; token: string }) => Promise<void>) => {
@@ -68,6 +72,16 @@ describe('DashboardReadModelService', () => {
       'dashboard-source:stats-user',
       'dashboard-source:stats-system',
     ]);
+  });
+
+  it('refreshes the database projection only for actual database state changes', () => {
+    const { definitions } = makeService();
+    const definition = definitions.find((item) => item.id === 'dashboard-source:databases');
+    const databaseChanged = definition?.events?.find((event) => event.channel === 'database.changed');
+
+    expect(databaseChanged?.matches?.({ action: 'health.sampled' })).toBe(false);
+    expect(databaseChanged?.matches?.({ action: 'health.offline' })).toBe(true);
+    expect(databaseChanged?.matches?.({ action: 'updated' })).toBe(true);
   });
 
   it('only replaces the proxy projection after its complete source succeeds', async () => {

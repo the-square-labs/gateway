@@ -166,9 +166,9 @@ import { NginxConfigGenerator } from '@/services/nginx-config-generator.service.
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import { ReadModelCoordinator } from '@/services/read-model-coordinator.service.js';
-import { RelayDatabaseRoleProvisionerService } from '@/services/relay-database-role-provisioner.service.js';
 import { RelayDockerRecoveryService } from '@/services/relay-docker-recovery.service.js';
 import { RelayIdentityProvisionerService } from '@/services/relay-identity-provisioner.service.js';
+import { RelayPolicyService } from '@/services/relay-policy.service.js';
 import { RelayStartupFinalizerService } from '@/services/relay-startup-finalizer.service.js';
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
@@ -523,11 +523,6 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(GrpcIdentityService, grpcIdentityService);
   await grpcIdentityService.resolve();
 
-  const relayDatabaseRoleProvisioner = new RelayDatabaseRoleProvisionerService(
-    env.DATABASE_URL,
-    env.GATEWAY_RELAY_DB_PASSWORD
-  );
-  container.registerInstance(RelayDatabaseRoleProvisionerService, relayDatabaseRoleProvisioner);
   const relayIdentityProvisioner = new RelayIdentityProvisionerService(
     db,
     certService,
@@ -538,9 +533,11 @@ export async function initializeContainer(): Promise<void> {
   );
   container.registerInstance(RelayIdentityProvisionerService, relayIdentityProvisioner);
   let relayControlClient: RelayControlClient | undefined;
+  let relayPolicyService: RelayPolicyService | undefined;
+  let appRelayClientFingerprint: string | undefined;
   if (env.GATEWAY_RELAY_REQUIRED) {
-    await relayDatabaseRoleProvisioner.ensure();
     const identity = await relayIdentityProvisioner.ensure();
+    appRelayClientFingerprint = identity.appClientFingerprint;
     relayControlClient = new RelayControlClient({
       target: env.GATEWAY_RELAY_TARGET,
       systemCaPath: `${env.GATEWAY_RELAY_IDENTITY_DIR}/system-ca.crt`,
@@ -548,6 +545,9 @@ export async function initializeContainer(): Promise<void> {
       privateKeyPath: identity.appClientKeyPath,
     });
     container.registerInstance(RelayControlClient, relayControlClient);
+    relayPolicyService = new RelayPolicyService(db, cryptoService, generalSettingsService, relayControlClient);
+    container.registerInstance(RelayPolicyService, relayPolicyService);
+    await relayPolicyService.ensureInitialized();
   }
 
   const webIdentityService = new WebIdentityService(env, systemCA);
@@ -572,6 +572,8 @@ export async function initializeContainer(): Promise<void> {
 
   const nodeDispatch = new NodeDispatchService(nodeRegistry, db);
   container.registerInstance(NodeDispatchService, nodeDispatch);
+  relayPolicyService?.setNodeDispatch(nodeDispatch);
+  relayPolicyService?.setEventBus(eventBus);
 
   const nginxCertificateDistribution = new NginxCertificateDistributionService(
     db,
@@ -692,7 +694,7 @@ export async function initializeContainer(): Promise<void> {
   nginxTemplateService.setEventBus(eventBus);
   dockerRegistryService.setEventBus(eventBus);
 
-  const managedDatabaseTunnelProxy = new ManagedDatabaseTunnelProxy(relayControlClient);
+  const managedDatabaseTunnelProxy = new ManagedDatabaseTunnelProxy(relayPolicyService, appRelayClientFingerprint);
   container.registerInstance(ManagedDatabaseTunnelProxy, managedDatabaseTunnelProxy);
   const databaseConnectionService = new DatabaseConnectionService(
     db,
@@ -738,7 +740,7 @@ export async function initializeContainer(): Promise<void> {
     dockerSecretService,
     getEnv().DATABASE_CONNECTOR_IMAGE,
     getEnv().NODE_ENV === 'development',
-    relayControlClient
+    relayPolicyService
   );
   managedDatabaseBindingService.setEventBus(eventBus);
   container.registerInstance(ManagedDatabaseBindingService, managedDatabaseBindingService);
@@ -976,9 +978,12 @@ export async function initializeContainer(): Promise<void> {
           systemCA
         );
         try {
-          if (await relayControlClient?.reloadIdentity()) commitRelayTrust();
+          if (await relayControlClient?.reloadIdentity()) {
+            managedDatabaseTunnelProxy.setAppCertificateFingerprint(relayIdentity.appClientFingerprint);
+            commitRelayTrust();
+          }
         } catch (error) {
-          logger.warn('Relay identity refresh will be applied by the relay poller', {
+          logger.warn('Relay identity refresh was not acknowledged; retaining both trusted relay identities', {
             error: error instanceof Error ? error.message : String(error),
           });
         }
@@ -997,7 +1002,8 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(RelayDockerRecoveryService, relayDockerRecovery);
   const relayStartupFinalizer = new RelayStartupFinalizerService(relayControlClient ?? null, relayDockerRecovery, {
     required: env.GATEWAY_RELAY_REQUIRED,
-    expectedVersion: env.GATEWAY_RELAY_VERSION,
+    expectedVersion: env.GATEWAY_RELAY_BUILD_VERSION,
+    expectedProtocolMajor: env.GATEWAY_RELAY_PROTOCOL_MAJOR,
   });
   container.registerInstance(RelayStartupFinalizerService, relayStartupFinalizer);
   const relaySupervisor = new RelaySupervisorService(
@@ -1013,7 +1019,8 @@ export async function initializeContainer(): Promise<void> {
       managed: env.GATEWAY_RELAY_MANAGED,
       expectedImage: env.GATEWAY_RELAY_IMAGE_REF ?? null,
       expectedService: env.GATEWAY_RELAY_SERVICE_NAME,
-      expectedVersion: env.GATEWAY_RELAY_VERSION,
+      expectedVersion: env.GATEWAY_RELAY_BUILD_VERSION,
+      expectedProtocolMajor: env.GATEWAY_RELAY_PROTOCOL_MAJOR,
     }
   );
   container.registerInstance(RelaySupervisorService, relaySupervisor);
@@ -1225,6 +1232,17 @@ export async function initializeContainer(): Promise<void> {
   scheduler.registerInterval('system-certificate-crl-retry', 5 * 60 * 1000, async () => {
     await systemCertificateLifecycleService.retryPendingCRLs();
   });
+  if (relayPolicyService) {
+    scheduler.registerInterval('relay-policy-sync', 30_000, () =>
+      relayPolicyService!.reconcileAndSync().then(() => undefined)
+    );
+    scheduler.registerInterval('relay-grant-refresh', 15 * 60 * 1000, () =>
+      relayPolicyService!.refreshAllNodeGrantsIfDue().then(() => undefined)
+    );
+    scheduler.registerInterval('relay-signing-key-rotation', 60 * 60 * 1000, () =>
+      relayPolicyService!.rotateIfDue().then(() => undefined)
+    );
+  }
   scheduler.registerInterval('nginx-tls-certificate-integrity', 6 * 60 * 60 * 1000, async () => {
     await nginxCertificateDistribution.reconcileIntegrity();
     await nginxCertificateDistribution.cleanupDueReplicas();

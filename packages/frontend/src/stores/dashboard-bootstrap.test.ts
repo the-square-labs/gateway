@@ -46,9 +46,26 @@ describe("dashboard bootstrap store", () => {
 
     useDashboardBootstrapStore.getState().invalidate();
     expect(useDashboardBootstrapStore.getState().snapshot).toBe(SNAPSHOT);
-    await useDashboardBootstrapStore.getState().load("user:scope:pins", {});
+    await vi.waitFor(() => expect(api.getDashboardBootstrap).toHaveBeenCalledTimes(2));
 
     expect(api.getDashboardBootstrap).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces a burst of realtime invalidations into one refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(api.getDashboardBootstrap).mockResolvedValue(SNAPSHOT);
+      await useDashboardBootstrapStore.getState().load("user:scope:pins", {});
+
+      useDashboardBootstrapStore.getState().invalidate();
+      useDashboardBootstrapStore.getState().invalidate();
+      useDashboardBootstrapStore.getState().invalidate();
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(api.getDashboardBootstrap).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("clears a critical relay attention state after the realtime refresh becomes healthy", async () => {
@@ -104,7 +121,10 @@ describe("dashboard bootstrap store", () => {
     const request = { pins: { dashboard: { nodeIds: [] }, sidebar: { nodeIds: [] } } };
     await useDashboardBootstrapStore.getState().load("user:scope:pins", request);
     useDashboardBootstrapStore.getState().invalidate();
+    await vi.waitFor(() => expect(api.getDashboardBootstrap).toHaveBeenCalledTimes(2));
     useDashboardBootstrapStore.getState().invalidate();
+    useDashboardBootstrapStore.getState().invalidate();
+    await new Promise((resolve) => setTimeout(resolve, 300));
     resolveRefresh!(SNAPSHOT);
     await vi.waitFor(() => expect(api.getDashboardBootstrap).toHaveBeenCalledTimes(3));
 

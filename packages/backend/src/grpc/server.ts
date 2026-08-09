@@ -11,6 +11,7 @@ import type { CryptoService } from '@/services/crypto.service.js';
 import { validateGrpcServerCertificate } from '@/services/grpc-server-certificate.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
+import type { RelayPolicyService } from '@/services/relay-policy.service.js';
 import type { SystemCAService } from '@/services/system-ca.service.js';
 import {
   configureRelayForwardedIdentityTrust,
@@ -18,7 +19,6 @@ import {
   stageRelayForwardedIdentityTrust,
 } from './interceptors/auth.js';
 import { createControlHandlers } from './services/control.js';
-import { createDatabaseTunnelHandlers } from './services/database-tunnel.js';
 import { createEnrollmentHandlers } from './services/enrollment.js';
 import { createLogStreamHandlers } from './services/log-stream.js';
 import { createMigrationTransferHandlers } from './services/migration-transfer.js';
@@ -100,6 +100,7 @@ export interface GrpcServerDeps {
   cryptoService: CryptoService;
   systemCA: SystemCAService;
   relayPeerFingerprint?: string;
+  relayPolicy?: RelayPolicyService;
 }
 
 let server: grpc.Server | null = null;
@@ -230,8 +231,6 @@ export async function startGrpcServer(
     gatewayV1.MigrationTransfer.service,
     relayOnly ? { Transfer: protectStream(migration.Transfer) } : migration
   );
-  if (!relayOnly) server.addService(gatewayV1.DatabaseTunnel.service, createDatabaseTunnelHandlers(deps));
-
   const credentials = await createGrpcServerCredentials(tlsCertPath, tlsKeyPath, deps.systemCA, relayOnly);
   logger.info('gRPC server using TLS with Gateway system CA client certificate validation', { relayOnly });
 

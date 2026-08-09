@@ -47,6 +47,7 @@ import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import { ReadModelCoordinator } from '@/services/read-model-coordinator.service.js';
 import { RelayIdentityProvisionerService } from '@/services/relay-identity-provisioner.service.js';
+import { RelayPolicyService } from '@/services/relay-policy.service.js';
 import { RelayStartupFinalizerService } from '@/services/relay-startup-finalizer.service.js';
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
@@ -168,6 +169,7 @@ async function main() {
     const relayIdentity = env.GATEWAY_RELAY_REQUIRED
       ? await container.resolve(RelayIdentityProvisionerService).ensure()
       : null;
+    const relayPolicy = env.GATEWAY_RELAY_REQUIRED ? container.resolve(RelayPolicyService) : undefined;
 
     await startGrpcServer(
       env.GRPC_PORT,
@@ -182,6 +184,7 @@ async function main() {
         cryptoService,
         systemCA,
         relayPeerFingerprint: relayIdentity?.relayClientFingerprint,
+        relayPolicy,
       }
     );
     const relayFinalization = await container.resolve(RelayStartupFinalizerService).finalize();

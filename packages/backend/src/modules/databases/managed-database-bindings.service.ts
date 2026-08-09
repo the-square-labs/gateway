@@ -4,8 +4,6 @@ import { and, asc, eq } from 'drizzle-orm';
 import { DEVELOPMENT_DATABASE_CONNECTOR_IMAGE } from '@/config/env.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { managedDatabaseBindings, managedDatabaseInstances, nodes } from '@/db/schema/index.js';
-import type { RelayControlClient } from '@/grpc/relay-control.client.js';
-import { revokeDatabaseTunnelBinding } from '@/grpc/services/database-tunnel.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -15,6 +13,7 @@ import type { DockerSecretService } from '@/modules/docker/docker-secret.service
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
+import type { RelayPolicyService } from '@/services/relay-policy.service.js';
 import type { CreateManagedDatabaseBindingInput } from './databases.schemas.js';
 
 type ManagedDatabaseRow = typeof managedDatabaseInstances.$inferSelect;
@@ -91,7 +90,7 @@ export class ManagedDatabaseBindingService {
     private readonly dockerSecrets: DockerSecretService,
     private readonly connectorImage: string,
     private readonly allowDevelopmentConnectorImage = false,
-    private readonly relayClient?: Pick<RelayControlClient, 'revokeBinding'>
+    private readonly relayPolicy?: Pick<RelayPolicyService, 'ensureBindingRoute' | 'getNodeGrantBundle' | 'revokeOwner'>
   ) {}
 
   setEventBus(bus: EventBusService) {
@@ -257,10 +256,9 @@ export class ManagedDatabaseBindingService {
     // Close existing relay sessions before any fallible cleanup. The status
     // transition prevents new opens while the source daemon persists revocation.
     try {
-      if (this.relayClient) await this.relayClient.revokeBinding(deleting!.id, 1_000);
-      else revokeDatabaseTunnelBinding(deleting!.id);
+      await this.relayPolicy?.revokeOwner('managed_database_binding', deleting!.id);
     } catch (error) {
-      // The five-second relay reconciliation is the durable fallback. Cleanup
+      // Periodic canonical relay reconciliation is the durable fallback. Cleanup
       // must continue after the committed deleting transition.
       logger.warn('Direct relay binding revocation failed; reconciliation will retry', {
         bindingId: deleting!.id,
@@ -338,8 +336,7 @@ export class ManagedDatabaseBindingService {
     options: { replaceExistingEnvironment?: boolean; targetEnvironment?: Record<string, string> } = {}
   ) {
     let principalCreated = false;
-    let databaseAdmissionPrepared = false;
-    let admissionPrepared = false;
+    let policyPrepared = false;
     let networkCreated = false;
     let connectorCreated = false;
     let targetApplyAttempted = false;
@@ -367,28 +364,23 @@ export class ManagedDatabaseBindingService {
       }
       principalCreated = true;
 
-      // A data lane is pre-registered on both nodes before the connector can
-      // accept workload traffic. Each binding therefore gets an isolated
-      // stream instead of competing with monitoring or other applications.
-      this.requireSuccess(
-        await this.nodeDispatch.sendDockerDatabaseBindingCommand(
-          database.nodeId,
-          'prepare',
-          binding.id,
-          binding.managedDatabaseId
-        )
-      );
-      databaseAdmissionPrepared = true;
-
-      const prepared = await this.nodeDispatch.sendDockerDatabaseBindingCommand(
-        binding.targetNodeId,
-        'prepare',
+      if (!this.relayPolicy) throw new Error('Gateway relay policy is unavailable');
+      await this.relayPolicy.ensureBindingRoute(
         binding.id,
-        binding.managedDatabaseId
+        binding.managedDatabaseId,
+        binding.targetNodeId,
+        database.nodeId
+      );
+      policyPrepared = true;
+      // The command ACK proves that the source daemon persisted its connect
+      // grant. Its detail also exposes the daemon-owned Unix socket mounted by
+      // the first-party connector.
+      const prepared = await this.nodeDispatch.sendRelayGrantBundle(
+        binding.targetNodeId,
+        await this.relayPolicy.getNodeGrantBundle(binding.targetNodeId)
       );
       this.requireSuccess(prepared);
       const socketMount = this.tunnelSocketMount(prepared.detail);
-      admissionPrepared = true;
 
       this.requireSuccess(
         await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'create', {
@@ -435,8 +427,7 @@ export class ManagedDatabaseBindingService {
     } catch (error) {
       await this.compensateProvisioning(database, binding, {
         principalCreated,
-        databaseAdmissionPrepared,
-        admissionPrepared,
+        policyPrepared,
         networkCreated,
         connectorCreated,
         targetApplyAttempted,
@@ -483,24 +474,6 @@ export class ManagedDatabaseBindingService {
   ) {
     const credentials = this.bindingCredentials(binding);
     const owner = this.ownerCredentials(database);
-    // Admission closes the sidecar's existing sockets before target teardown.
-    // It is idempotent when a failed create never reached prepare.
-    this.requireSuccess(
-      await this.nodeDispatch.sendDockerDatabaseBindingCommand(
-        binding.targetNodeId,
-        'remove',
-        binding.id,
-        binding.managedDatabaseId
-      )
-    );
-    this.requireSuccess(
-      await this.nodeDispatch.sendDockerDatabaseBindingCommand(
-        database.nodeId,
-        'remove',
-        binding.id,
-        binding.managedDatabaseId
-      )
-    );
     await this.removeTargetBinding(database, binding, userId, options);
     this.requireSuccessOrMissing(
       await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'remove', {
@@ -669,8 +642,7 @@ export class ManagedDatabaseBindingService {
     binding: ManagedDatabaseBindingRow,
     state: {
       principalCreated: boolean;
-      databaseAdmissionPrepared: boolean;
-      admissionPrepared: boolean;
+      policyPrepared: boolean;
       networkCreated: boolean;
       connectorCreated: boolean;
       targetApplyAttempted: boolean;
@@ -687,15 +659,8 @@ export class ManagedDatabaseBindingService {
         .sendDockerNetworkCommand(binding.targetNodeId, 'remove', { networkId: binding.networkName })
         .catch(() => undefined);
     }
-    if (state.admissionPrepared) {
-      await this.nodeDispatch
-        .sendDockerDatabaseBindingCommand(binding.targetNodeId, 'remove', binding.id, binding.managedDatabaseId)
-        .catch(() => undefined);
-    }
-    if (state.databaseAdmissionPrepared) {
-      await this.nodeDispatch
-        .sendDockerDatabaseBindingCommand(database.nodeId, 'remove', binding.id, binding.managedDatabaseId)
-        .catch(() => undefined);
+    if (state.policyPrepared) {
+      await this.relayPolicy?.revokeOwner('managed_database_binding', binding.id).catch(() => undefined);
     }
     if (state.principalCreated) {
       const credentials = this.bindingCredentials(binding);
@@ -990,6 +955,7 @@ export class ManagedDatabaseBindingService {
     action: 'binding.created' | 'binding.ready' | 'binding.error' | 'binding.deleted'
   ) {
     const payload = {
+      resourceKind: 'managed_database_binding',
       managedDatabaseId: database.id,
       bindingId: binding.id,
       name: database.name,

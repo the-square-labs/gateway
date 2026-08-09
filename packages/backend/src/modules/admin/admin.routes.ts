@@ -29,6 +29,7 @@ import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
 import { LocalAuthService } from '@/modules/auth/local-auth.service.js';
 import { MfaService } from '@/modules/auth/mfa.service.js';
 import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
+import { ManagedDatabaseTunnelProxy } from '@/modules/databases/managed-database-tunnel-proxy.js';
 import { GroupService } from '@/modules/groups/group.service.js';
 import { LoggingRuntimeService } from '@/modules/logging/logging-runtime.service.js';
 import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
@@ -124,9 +125,12 @@ async function refreshActiveGrpcServerIdentity(): Promise<void> {
     systemCA
   );
   try {
-    if (await container.resolve(RelayControlClient).reloadIdentity()) commitRelayTrust();
+    if (await container.resolve(RelayControlClient).reloadIdentity()) {
+      container.resolve(ManagedDatabaseTunnelProxy).setAppCertificateFingerprint(relayIdentity.appClientFingerprint);
+      commitRelayTrust();
+    }
   } catch (error) {
-    logger.warn('Relay identity refresh will be applied by the relay poller', {
+    logger.warn('Relay identity refresh was not acknowledged; retaining both trusted relay identities', {
       error: error instanceof Error ? error.message : String(error),
     });
   }

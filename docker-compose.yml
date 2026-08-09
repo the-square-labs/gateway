@@ -66,10 +66,10 @@ services:
       - GATEWAY_RELAY_MANAGED=${GATEWAY_RELAY_MANAGED:-false}
       - GATEWAY_RELAY_TARGET=${GATEWAY_RELAY_TARGET:-relay:9443}
       - GATEWAY_RELAY_IDENTITY_DIR=/var/lib/gateway-relay
-      - GATEWAY_RELAY_DB_PASSWORD=${GATEWAY_RELAY_DB_PASSWORD}
-      - GATEWAY_RELAY_IMAGE_REF=${GATEWAY_RELAY_IMAGE_REF:-gateway:local}
+      - GATEWAY_RELAY_IMAGE_REF=${GATEWAY_RELAY_IMAGE_REF:-gateway-relay:local}
       - GATEWAY_RELAY_SERVICE_NAME=relay
-      - GATEWAY_RELAY_VERSION=${GATEWAY_RELAY_VERSION:-1}
+      - GATEWAY_RELAY_BUILD_VERSION=${GATEWAY_RELAY_BUILD_VERSION:-dev}
+      - GATEWAY_RELAY_PROTOCOL_MAJOR=${GATEWAY_RELAY_PROTOCOL_MAJOR:-1}
       - PUBLIC_IPV4=${PUBLIC_IPV4:-}
       - PUBLIC_IPV6=${PUBLIC_IPV6:-}
       - APP_VERSION=${GATEWAY_VERSION:-dev}
@@ -93,25 +93,22 @@ services:
       start_period: 15s
 
   relay:
-    image: ${GATEWAY_RELAY_IMAGE_REF:-gateway:local}
-    command: ["node", "dist/relay/index.js"]
+    image: ${GATEWAY_RELAY_IMAGE_REF:-gateway-relay:local}
+    entrypoint: ["/gateway-relay"]
     restart: unless-stopped
     labels:
       com.wiolett.gateway.managed-service: relay
     environment:
-      - RELAY_DATABASE_URL=postgres://gateway_relay:${GATEWAY_RELAY_DB_PASSWORD}@postgres:5432/gateway
-      - RELAY_IDENTITY_DIR=/var/lib/gateway-relay
+      - RELAY_IDENTITY_DIR=/var/lib/gateway-relay/identity
+      - RELAY_STATE_DIR=/var/lib/gateway-relay/state
       - RELAY_APP_GRPC_TARGET=app:9443
-      - GATEWAY_RELAY_VERSION=${GATEWAY_RELAY_VERSION:-1}
     ports:
       - "9443:9443"
     volumes:
-      - gateway_relay_identity:/var/lib/gateway-relay:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
+      - gateway_relay_identity:/var/lib/gateway-relay/identity:ro
+      - gateway_relay_state:/var/lib/gateway-relay/state
     healthcheck:
-      test: ["CMD", "node", "dist/relay/healthcheck.js"]
+      test: ["CMD", "/gateway-relay", "healthcheck"]
       interval: 5s
       timeout: 3s
       retries: 2
@@ -147,5 +144,6 @@ services:
 volumes:
   gateway_data:
   gateway_relay_identity:
+  gateway_relay_state:
   postgres_data:
   redis_data:

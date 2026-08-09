@@ -29,19 +29,19 @@ type DockerPlugin struct {
 	client  *Client
 	version string // Docker engine version
 
-	allowlist        *AllowlistChecker
-	envStore         *EnvStore
-	taskMgr          *TaskManager
-	registryMu       sync.RWMutex
-	registryCreds    map[string]string // registry URL -> base64-encoded auth
-	statsCollector   *StatsCollector
-	execMgr          *ExecManager
-	migrationStore   *migrationArtifactStore
-	archiveStreams   *archiveLiveStore
-	databaseManager  *managedDatabaseManager
-	databaseBindings *databaseBindingRegistry
-	databaseTunnelMu sync.Mutex
-	databaseTunnel   *databaseTunnelRouter
+	allowlist       *AllowlistChecker
+	envStore        *EnvStore
+	taskMgr         *TaskManager
+	registryMu      sync.RWMutex
+	registryCreds   map[string]string // registry URL -> base64-encoded auth
+	statsCollector  *StatsCollector
+	execMgr         *ExecManager
+	migrationStore  *migrationArtifactStore
+	archiveStreams  *archiveLiveStore
+	databaseManager *managedDatabaseManager
+	relayGrants     *relayGrantStore
+	relayTunnelMu   sync.Mutex
+	relayTunnel     *relayTunnelRouter
 
 	// Log stream follow support
 	writer          *stream.Writer
@@ -124,24 +124,9 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		p.logger.Warn("stale migration artifact cleanup failed", "error", err)
 	}
 	p.archiveStreams = newArchiveLiveStore()
-	p.databaseBindings, err = newDatabaseBindingRegistry(p.cfg.StateDir)
+	p.relayGrants, err = newRelayGrantStore(p.cfg.StateDir)
 	if err != nil {
-		return fmt.Errorf("initialize managed database binding registry: %w", err)
-	}
-	if p.cfg.Docker.Mode != "databases" {
-		// This migration is deliberately local and runs before enrollment or a
-		// Gateway tunnel is required. A failed migration keeps the daemon from
-		// advertising a healthy node with connectors pinned to a closed inode.
-		if err := prepareDatabaseTunnelSocketDirectory(p.cfg.StateDir); err != nil {
-			return err
-		}
-		migrated, migrateErr := p.reconcileLegacyDatabaseConnectorMounts(ctx)
-		if migrateErr != nil {
-			return fmt.Errorf("migrate legacy database connector mounts: %w", migrateErr)
-		}
-		if migrated > 0 {
-			p.logger.Info("legacy database connector mounts migrated", "count", migrated)
-		}
+		return fmt.Errorf("initialize relay grant store: %w", err)
 	}
 	if p.cfg.Docker.Mode == "databases" {
 		p.databaseManager, err = newManagedDatabaseManager(p.cfg, p.client, p.logger)
@@ -183,12 +168,11 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 				return []string{
 					"managed_databases_v1",
 					"managed_database_storage_images_v1",
-					"database_tunnel_v2",
-					"docker_database_bindings_v1",
+					"generic_relay_tunnel_v1",
 					"managed_clickhouse_principals_v1",
 				}
 			}
-			return []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "database_tunnel_v2", "docker_database_bindings_v1"}
+			return []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "generic_relay_tunnel_v1"}
 		}(),
 	}
 }
@@ -200,23 +184,14 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 		switch payload := cmd.Payload.(type) {
 		case *pb.GatewayCommand_DockerDatabase:
 			p.handleManagedDatabaseCommand(payload.DockerDatabase, result)
-		case *pb.GatewayCommand_DockerDatabaseBinding:
-			// Binding preparation is intentionally supported by both Docker
-			// profiles: the database-profile daemon owns the remote end of a
-			// private database tunnel, while the general profile owns the local
-			// sidecar socket.
-			p.handleDatabaseBindingCommand(payload.DockerDatabaseBinding, result)
 		default:
 			result.Success = false
-			result.Error = "database-profile daemon accepts only docker_database and docker_database_binding commands"
+			result.Error = "database-profile daemon accepts only docker_database commands"
 		}
 		return result
 	}
 
 	switch payload := cmd.Payload.(type) {
-	case *pb.GatewayCommand_DockerDatabaseBinding:
-		p.handleDatabaseBindingCommand(payload.DockerDatabaseBinding, result)
-
 	case *pb.GatewayCommand_DockerContainer:
 		p.handleContainerCommand(payload.DockerContainer, result)
 

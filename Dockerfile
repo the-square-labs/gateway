@@ -1,4 +1,14 @@
 ARG NODE_IMAGE=docker.io/library/node:24-alpine@sha256:d1b3b4da11eefd5941e7f0b9cf17783fc99d9c6fc34884a665f40a06dbdfc94f
+ARG GO_IMAGE=docker.io/library/golang:1.24@sha256:d2d2bc1c84f7e60d7d2438a3836ae7d0c847f4888464e7ec9ba3a1339a1ee804
+ARG APP_VERSION=dev
+
+FROM ${GO_IMAGE} AS relay-bridge-builder
+ARG APP_VERSION
+WORKDIR /src
+COPY packages/daemons/shared ./packages/daemons/shared
+COPY packages/relay ./packages/relay
+WORKDIR /src/packages/relay
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.buildVersion=${APP_VERSION}-relay" -o /gateway-relay ./cmd/gateway-relay
 
 FROM ${NODE_IMAGE} AS base
 
@@ -67,6 +77,9 @@ COPY --from=frontend-builder /app/packages/frontend/dist ./public
 
 # Copy public status page build into status-public/
 COPY --from=status-page-builder /app/packages/status-page/dist ./status-public
+# Pre-generic Gateway releases pass the signed app image to the relay service
+# during the first self-update, so keep a one-hop relay binary in that image.
+COPY --from=relay-bridge-builder /gateway-relay /gateway-relay
 
 ENV NODE_ENV=production
 ENV PORT=3000

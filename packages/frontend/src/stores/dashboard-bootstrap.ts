@@ -24,6 +24,9 @@ let pendingRefresh: { key: string; request: DashboardBootstrapRequest } | null =
 let requestToken = 0;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let retryAttempts = 0;
+let invalidationTimer: ReturnType<typeof setTimeout> | null = null;
+
+const DASHBOARD_INVALIDATION_DEBOUNCE_MS = 250;
 
 /**
  * The shell owns the request so Sidebar and Dashboard consume exactly the
@@ -85,18 +88,22 @@ export const useDashboardBootstrapStore = create<DashboardBootstrapState>()((set
     return promise;
   },
   invalidate: () => {
-    const { key, request } = get();
-    const refreshKey = key ?? inFlight?.key;
-    if (!refreshKey || !request) return;
-    if (inFlight?.key === refreshKey) {
-      // The in-flight response may predate this event. Ignore it and fetch again once it settles.
-      pendingRefresh = { key: refreshKey, request };
-      requestToken += 1;
+    if (invalidationTimer) return;
+    invalidationTimer = setTimeout(() => {
+      invalidationTimer = null;
+      const { key, request } = get();
+      const refreshKey = key ?? inFlight?.key;
+      if (!refreshKey || !request) return;
+      if (inFlight?.key === refreshKey) {
+        // The in-flight response may predate this event. Ignore it and fetch again once it settles.
+        pendingRefresh = { key: refreshKey, request };
+        requestToken += 1;
+        set({ key: null });
+        return;
+      }
       set({ key: null });
-      return;
-    }
-    set({ key: null });
-    void get().load(refreshKey, request);
+      void get().load(refreshKey, request);
+    }, DASHBOARD_INVALIDATION_DEBOUNCE_MS);
   },
   clear: () => {
     inFlight = null;
@@ -105,6 +112,8 @@ export const useDashboardBootstrapStore = create<DashboardBootstrapState>()((set
     retryAttempts = 0;
     if (retryTimer) clearTimeout(retryTimer);
     retryTimer = null;
+    if (invalidationTimer) clearTimeout(invalidationTimer);
+    invalidationTimer = null;
     set({ snapshot: null, key: null, request: null, loading: false, error: false });
   },
 }));

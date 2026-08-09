@@ -14,7 +14,7 @@ From the UI:
 2. Click **Check for updates** and review the available version.
 3. Click **Update**.
 
-Gateway verifies the signed release manifest, pulls the selected image by its immutable digest, runs the target image's foundation migrator, updates `GATEWAY_IMAGE_REF`, and recreates its own container. The daemon relay has an independent `GATEWAY_RELAY_IMAGE_REF`; it is recreated only when the signed manifest changes `relayVersion`. Automatic gateway updates fail closed when the signed manifest is missing, invalid, or does not match the requested version and running image repository.
+Gateway verifies the signed release manifest, pulls the selected image by its immutable digest, runs the target image's foundation migrator, updates `GATEWAY_IMAGE_REF`, and recreates its own container. Relay has an independent immutable `GATEWAY_RELAY_IMAGE_REF`; Compose leaves it running when the digest is unchanged and replaces it when the signed `relayImageRef` changes. Automatic gateway updates fail closed when the signed manifest is missing, invalid, or does not match the requested version and running image repository.
 
 App-only updates leave established managed-database binding streams on the relay running. Updating the relay itself is an explicit data-plane maintenance event and may interrupt those streams. The one-time migration from a pre-relay deployment also has an expected interruption while public `9443/tcp` ownership moves from `app` to `relay`.
 
@@ -51,9 +51,9 @@ The installer writes infrastructure/bootstrap values to `.env`. Product settings
 | `DATABASE_URL` | PostgreSQL connection URL. |
 | `REDIS_URL` | Redis connection URL. |
 | `GATEWAY_IMAGE_REF` | Gateway image reference used by Compose. The installer writes the selected release tag; signed self-updates replace it with `image@sha256:<digest>`. |
-| `GATEWAY_RELAY_IMAGE_REF` | Independently pinned image reference used by the relay service. It advances only when the signed release changes `relayVersion`. |
-| `GATEWAY_RELAY_VERSION` | Signed relay contract version used to decide whether an update must recreate the relay. |
-| `GATEWAY_RELAY_DB_PASSWORD` | Dedicated PostgreSQL password for the relay's read-only authorization role. Treat it as a secret. |
+| `GATEWAY_RELAY_IMAGE_REF` | Independently pinned immutable image reference used by relay. Only a digest change updates relay. |
+| `GATEWAY_RELAY_BUILD_VERSION` | Expected build version reported by the pinned relay image. |
+| `GATEWAY_RELAY_PROTOCOL_MAJOR` | Supported relay wire-protocol major. |
 | `SETUP_BOOTSTRAP` | Installer-only flag that permits a fresh empty database to enter first-run setup. |
 | `WEB_TLS_BOOTSTRAP_MODE` | Seeds `http` or `https` only when no persisted web-transport choice exists. |
 | `WEB_TLS_AUTO_DIR` | Persistent directory for the native web TLS leaf and private key. |

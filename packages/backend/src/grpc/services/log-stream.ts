@@ -62,17 +62,17 @@ export function createLogStreamHandlers(deps: GrpcServerDeps) {
         }
 
         const [node] = await deps.db
-          .select({ certificateSerial: nodes.certificateSerial, status: nodes.status, type: nodes.type })
+          .select({
+            certificateSerial: nodes.certificateSerial,
+            certificateFingerprint: nodes.certificateFingerprint,
+            status: nodes.status,
+            type: nodes.type,
+          })
           .from(nodes)
           .where(eq(nodes.id, authenticatedNodeId))
           .limit(1);
 
-        if (
-          !node ||
-          node.status === 'pending' ||
-          !node.certificateSerial ||
-          (certIdentity.nodeType && certIdentity.nodeType !== node.type)
-        ) {
+        if (!node || node.status === 'pending' || !node.certificateSerial) {
           logger.warn('Log stream rejected: node is not enrolled', { nodeId });
           stream.end();
           return;
@@ -84,6 +84,14 @@ export function createLogStreamHandlers(deps: GrpcServerDeps) {
             presentedSerial: certIdentity.serialNumber,
             storedSerial,
           });
+          stream.end();
+          return;
+        }
+        if (
+          certIdentity.certificateFingerprint &&
+          node.certificateFingerprint !== certIdentity.certificateFingerprint
+        ) {
+          logger.warn('Log stream rejected: certificate fingerprint does not match enrolled node', { nodeId });
           stream.end();
           return;
         }

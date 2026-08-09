@@ -70,7 +70,9 @@ func sign(args []string) {
 	image := fs.String("image", "", "gateway image repository")
 	digest := fs.String("digest", "", "gateway image digest")
 	databaseConnectorImage := fs.String("database-connector-image", "", "digest-pinned database connector image reference")
-	relayVersion := fs.String("relay-version", "", "standalone relay contract version")
+	relayBuildVersion := fs.String("relay-build-version", "", "standalone relay build version")
+	relayProtocolMajor := fs.Int("relay-protocol-major", 0, "standalone relay protocol major")
+	relayImageRef := fs.String("relay-image-ref", "", "digest-pinned standalone relay image")
 	commitSHA := fs.String("git-commit-sha", "", "Git commit SHA")
 	pipelineID := fs.String("git-pipeline-id", "", "GitLab pipeline ID")
 	must(fs.Parse(args))
@@ -109,23 +111,29 @@ func sign(args []string) {
 		}
 	case "gateway-image":
 		required(map[string]string{
-			"--version":       *version,
-			"--tag":           *tag,
-			"--image":         *image,
-			"--digest":        *digest,
-			"--relay-version": *relayVersion,
+			"--version":             *version,
+			"--tag":                 *tag,
+			"--image":               *image,
+			"--digest":              *digest,
+			"--relay-build-version": *relayBuildVersion,
+			"--relay-image-ref":     *relayImageRef,
 		})
-		payloadMap := map[string]string{
-			"kind":          "gateway-image",
-			"version":       *version,
-			"tag":           *tag,
-			"image":         *image,
-			"digest":        *digest,
-			"imageRef":      fmt.Sprintf("%s@%s", *image, *digest),
-			"relayVersion":  *relayVersion,
-			"createdAt":     createdAt,
-			"gitCommitSha":  *commitSHA,
-			"gitPipelineId": *pipelineID,
+		if *relayProtocolMajor < 1 {
+			die("--relay-protocol-major must be positive")
+		}
+		payloadMap := map[string]any{
+			"kind":               "gateway-image",
+			"version":            *version,
+			"tag":                *tag,
+			"image":              *image,
+			"digest":             *digest,
+			"imageRef":           fmt.Sprintf("%s@%s", *image, *digest),
+			"relayBuildVersion":  *relayBuildVersion,
+			"relayProtocolMajor": *relayProtocolMajor,
+			"relayImageRef":      *relayImageRef,
+			"createdAt":          createdAt,
+			"gitCommitSha":       *commitSHA,
+			"gitPipelineId":      *pipelineID,
 		}
 		if *databaseConnectorImage != "" {
 			payloadMap["databaseConnectorImage"] = *databaseConnectorImage

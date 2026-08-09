@@ -15,6 +15,9 @@ export const FILE_UPLOAD_MAX_BYTES = 500 * 1024 * 1024;
 export const FILE_OPEN_MIN_BYTES = 1 * 1024 * 1024;
 export const FILE_OPEN_DEFAULT_BYTES = 10 * 1024 * 1024;
 export const FILE_OPEN_MAX_BYTES = 100 * 1024 * 1024;
+export const RELAY_GRANT_TTL_DEFAULT_HOURS = 4;
+export const RELAY_GRANT_TTL_MIN_HOURS = 1;
+export const RELAY_GRANT_TTL_MAX_HOURS = 48;
 export const SHUTDOWN_USER_DRAIN_MAX_SECONDS = 40;
 export const SHUTDOWN_LOG_DRAIN_MAX_SECONDS = 10;
 export const SHUTDOWN_FINALIZATION_MIN_SECONDS = 5;
@@ -30,6 +33,7 @@ export interface GeneralSettings {
   gatewayGrpcLocalIp: string | null;
   relayAutoRecovery: boolean;
   shutdown: GeneralShutdownSettings;
+  relayGrantTtlHours: number;
   features: GeneralFeatureSettings;
   inference: GeneralInferenceSettings;
 }
@@ -59,6 +63,7 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   gatewayGrpcPublicTarget: null,
   gatewayGrpcLocalIp: null,
   relayAutoRecovery: true,
+  relayGrantTtlHours: RELAY_GRANT_TTL_DEFAULT_HOURS,
   shutdown: {
     userRequestDrainSeconds: 30,
     structuredLogDrainSeconds: 5,
@@ -336,6 +341,10 @@ export class GeneralSettingsService {
       : DEFAULT_GENERAL_SETTINGS.fileOpenMaxBytes;
     const gatewayPublicIps = splitConfiguredIps(record.gatewayPublicIps);
     const invalidGatewayPublicIp = gatewayPublicIps.find((ip) => !isValidGatewayIp(ip));
+    const rawRelayGrantTtlHours = Number(record.relayGrantTtlHours);
+    const relayGrantTtlHours = Number.isInteger(rawRelayGrantTtlHours)
+      ? rawRelayGrantTtlHours
+      : DEFAULT_GENERAL_SETTINGS.relayGrantTtlHours;
 
     if (fileUploadMaxBytes < FILE_UPLOAD_MIN_BYTES || fileUploadMaxBytes > FILE_UPLOAD_MAX_BYTES) {
       throw new Error(`File upload limit must be between ${FILE_UPLOAD_MIN_BYTES} and ${FILE_UPLOAD_MAX_BYTES} bytes`);
@@ -346,6 +355,11 @@ export class GeneralSettingsService {
     }
     if (invalidGatewayPublicIp) {
       throw new Error(`Gateway public IP must be an IPv4 or IPv6 address: ${invalidGatewayPublicIp}`);
+    }
+    if (relayGrantTtlHours < RELAY_GRANT_TTL_MIN_HOURS || relayGrantTtlHours > RELAY_GRANT_TTL_MAX_HOURS) {
+      throw new Error(
+        `Relay grant TTL must be between ${RELAY_GRANT_TTL_MIN_HOURS} and ${RELAY_GRANT_TTL_MAX_HOURS} hours`
+      );
     }
 
     const features =
@@ -370,6 +384,7 @@ export class GeneralSettingsService {
           ? record.relayAutoRecovery
           : DEFAULT_GENERAL_SETTINGS.relayAutoRecovery,
       shutdown,
+      relayGrantTtlHours,
       features: {
         pkiEnabled:
           typeof features.pkiEnabled === 'boolean' ? features.pkiEnabled : DEFAULT_GENERAL_SETTINGS.features.pkiEnabled,

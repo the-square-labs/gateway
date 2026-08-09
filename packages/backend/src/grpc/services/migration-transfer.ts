@@ -501,7 +501,12 @@ export function createMigrationTransferHandlers(deps: GrpcServerDeps) {
         const connected = deps.registry.getNode(identity.nodeId);
         if (!connected || connected.type !== 'docker') throw new Error('Docker node is not connected');
         const [node] = await deps.db
-          .select({ certificateSerial: nodes.certificateSerial, status: nodes.status, type: nodes.type })
+          .select({
+            certificateSerial: nodes.certificateSerial,
+            certificateFingerprint: nodes.certificateFingerprint,
+            status: nodes.status,
+            type: nodes.type,
+          })
           .from(nodes)
           .where(eq(nodes.id, identity.nodeId))
           .limit(1);
@@ -509,9 +514,10 @@ export function createMigrationTransferHandlers(deps: GrpcServerDeps) {
           !node ||
           node.status === 'pending' ||
           node.type !== 'docker' ||
-          (identity.nodeType && identity.nodeType !== node.type) ||
           !node.certificateSerial ||
-          normalizeCertificateSerial(node.certificateSerial) !== identity.serialNumber
+          normalizeCertificateSerial(node.certificateSerial) !== identity.serialNumber ||
+          (identity.certificateFingerprint !== undefined &&
+            node.certificateFingerprint !== identity.certificateFingerprint)
         ) {
           throw new Error('daemon certificate does not match the enrolled Docker node');
         }

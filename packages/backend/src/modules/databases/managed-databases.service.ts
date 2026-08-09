@@ -2005,6 +2005,7 @@ export class ManagedDatabaseService {
     action: string
   ) {
     this.eventBus?.publish('database.changed', {
+      resourceKind: 'managed_database',
       id: row.databaseConnectionId ?? row.id,
       managedDatabaseId: row.id,
       name: row.name,

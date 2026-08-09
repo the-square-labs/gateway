@@ -19,6 +19,22 @@ describe('normalizePublicUrl', () => {
 });
 
 describe('GeneralSettingsService feature settings', () => {
+  it('uses a four-hour relay grant TTL and enforces the 1-48 hour range', async () => {
+    const limit = vi.fn().mockResolvedValue([{ value: {} }]);
+    const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
+    const db = {
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit })) })) })),
+      insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate })) })),
+    };
+    const service = new GeneralSettingsService(db as never);
+
+    expect((await service.getConfig()).relayGrantTtlHours).toBe(4);
+    await expect(service.updateConfig({ relayGrantTtlHours: 1 })).resolves.toMatchObject({ relayGrantTtlHours: 1 });
+    await expect(service.updateConfig({ relayGrantTtlHours: 48 })).resolves.toMatchObject({ relayGrantTtlHours: 48 });
+    await expect(service.updateConfig({ relayGrantTtlHours: 0 })).rejects.toThrow();
+    await expect(service.updateConfig({ relayGrantTtlHours: 49 })).rejects.toThrow();
+  });
+
   it('backfills disabled and applies persisted updates without a restart', async () => {
     const limit = vi.fn().mockResolvedValue([
       {

@@ -165,10 +165,25 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 			*pb.GatewayCommand_DockerFile,
 			*pb.GatewayCommand_DockerExec,
 			*pb.GatewayCommand_DockerMigration,
-			*pb.GatewayCommand_DockerDatabase,
-			*pb.GatewayCommand_DockerDatabaseBinding:
+			*pb.GatewayCommand_DockerDatabase:
 			// Long-running Docker I/O must not block the command receive loop.
 			sendAsyncCommandResult(cmd, d.plugin.HandleCommand)
+			continue
+		case *pb.GatewayCommand_SyncRelayGrants:
+			result := &pb.CommandResult{CommandId: cmd.CommandId, Success: true}
+			relayPlugin, ok := d.plugin.(RelayTunnelPlugin)
+			if !ok {
+				result.Success = false
+				result.Error = "daemon does not support relay grants"
+			} else if detail, err := relayPlugin.SyncRelayGrants(cmd.GetSyncRelayGrants()); err != nil {
+				result.Success = false
+				result.Error = err.Error()
+			} else {
+				result.Detail = detail
+			}
+			if err := writer.Send(&pb.DaemonMessage{Payload: &pb.DaemonMessage_CommandResult{CommandResult: result}}); err != nil {
+				return err
+			}
 			continue
 		case *pb.GatewayCommand_UpdateDaemon:
 			// Self-update: download new binary, replace it on disk, acknowledge the

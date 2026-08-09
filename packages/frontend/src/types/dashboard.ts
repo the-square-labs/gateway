@@ -52,9 +52,8 @@ export interface DashboardRelaySnapshot {
     action?: "start" | "restart" | "compose_up";
     result: "running" | "failed" | "healthy";
   }>;
-  relayVersion?: string | null;
-  protocolVersion?: number | null;
-  databaseContractVersion?: number | null;
+  relayBuildVersion?: string | null;
+  protocolMajor?: number | null;
   expectedService?: string;
   expectedImage?: string | null;
   expectedVersion?: string | null;

@@ -4,15 +4,15 @@ import { RelaySupervisorService } from './relay-supervisor.service.js';
 
 function healthy() {
   return {
-    relayVersion: '1',
-    protocolVersion: 1,
-    databaseContractVersion: 1,
+    buildVersion: '1',
+    protocolMajor: 1,
+    appliedRevision: '1',
+    keyIds: ['key-1'],
+    registeredEndpoints: '0',
+    activeTunnels: '0',
     liveness: true,
     readiness: true,
-    dataPlaneHealthy: true,
-    appProxyHealthy: true,
     reason: '',
-    lastHealthyAtUnixMs: String(Date.now()),
   };
 }
 
@@ -45,6 +45,7 @@ function harness(options: { getHealth?: ReturnType<typeof vi.fn>; recover?: Retu
       expectedImage: `gateway@sha256:${'a'.repeat(64)}`,
       expectedService: 'relay',
       expectedVersion: '1',
+      expectedProtocolMajor: 1,
       probeIntervalMs: 60_000,
       recoveryDelaysMs: [0, 0, 0],
       readinessWaitMs: 1,
@@ -110,9 +111,8 @@ describe('RelaySupervisorService', () => {
       ],
       lastHealthyAt: null,
       lastProbeAt: '2026-08-07T12:00:00.000Z',
-      relayVersion: '1',
-      protocolVersion: 1,
-      databaseContractVersion: 1,
+      relayBuildVersion: '1',
+      protocolMajor: 1,
     });
 
     await supervisor.start();
@@ -124,7 +124,17 @@ describe('RelaySupervisorService', () => {
 
   it('treats a healthy but obsolete relay version as a non-recoverable contract mismatch', async () => {
     const { supervisor, recover } = harness({
-      getHealth: vi.fn().mockResolvedValue({ ...healthy(), relayVersion: '0' }),
+      getHealth: vi.fn().mockResolvedValue({ ...healthy(), buildVersion: '0' }),
+    });
+    await supervisor.probeNow();
+    await supervisor.probeNow();
+    expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'critical', reason: 'contract_mismatch' });
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it('treats an incompatible relay protocol major as a non-recoverable contract mismatch', async () => {
+    const { supervisor, recover } = harness({
+      getHealth: vi.fn().mockResolvedValue({ ...healthy(), protocolMajor: 2 }),
     });
     await supervisor.probeNow();
     await supervisor.probeNow();
@@ -137,7 +147,7 @@ describe('RelaySupervisorService', () => {
     await supervisor.probeNow();
     expect(supervisor.getSnapshot(false)).not.toHaveProperty('expectedImage');
     expect(supervisor.getSnapshot(false)).not.toHaveProperty('reason');
-    expect(supervisor.getSnapshot(true)).toMatchObject({ expectedService: 'relay', relayVersion: '1' });
+    expect(supervisor.getSnapshot(true)).toMatchObject({ expectedService: 'relay', relayBuildVersion: '1' });
   });
 
   it('does not start manual recovery while the relay is healthy or only suspect', async () => {

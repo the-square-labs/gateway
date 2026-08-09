@@ -118,6 +118,7 @@ export const nodes = pgTable(
     enrollmentTokenSelector: varchar('enrollment_token_selector', { length: 32 }),
     enrollmentTokenHash: varchar('enrollment_token_hash', { length: 255 }),
     certificateSerial: varchar('certificate_serial', { length: 255 }),
+    certificateFingerprint: varchar('certificate_fingerprint', { length: 71 }),
     certificateExpiresAt: timestamp('certificate_expires_at', { withTimezone: true }),
 
     // Daemon info

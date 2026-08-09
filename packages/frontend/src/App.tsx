@@ -778,7 +778,10 @@ function RealtimeBridge() {
 
   useEffect(() => {
     if (!user || !canViewDatabases) return;
-    return eventStream.subscribe("database.changed", invalidateDashboardBootstrap);
+    return eventStream.subscribe("database.changed", (payload) => {
+      if ((payload as { action?: string } | null)?.action === "health.sampled") return;
+      invalidateDashboardBootstrap();
+    });
   }, [canViewDatabases, invalidateDashboardBootstrap, user]);
 
   useEffect(() => {

@@ -15,6 +15,7 @@ trust-anchor:
 
 proto:
 	@mkdir -p $(SHARED_OUT_DIR)
+	@mkdir -p ../shared/relayv1
 	protoc \
 		--proto_path=$(PROTO_DIR) \
 		--go_out=$(SHARED_OUT_DIR) \
@@ -22,6 +23,13 @@ proto:
 		--go-grpc_out=$(SHARED_OUT_DIR) \
 		--go-grpc_opt=module=$(SHARED_MODULE)/gatewayv1 \
 		gateway/v1/nginx-daemon.proto
+	protoc \
+		--proto_path=$(PROTO_DIR) \
+		--go_out=../shared/relayv1 \
+		--go_opt=module=$(SHARED_MODULE)/relayv1 \
+		--go-grpc_out=../shared/relayv1 \
+		--go-grpc_opt=module=$(SHARED_MODULE)/relayv1 \
+		relay/v1/relay.proto
 
 build: trust-anchor
 	CGO_ENABLED=0 go build -ldflags "-s -w -X $(MODULE)/internal/daemon.Version=$$VERSION" -o $(BINARY) ./cmd/nginx-daemon

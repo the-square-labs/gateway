@@ -77,14 +77,14 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 	// Step 3: Start background cert renewal
 	go runCertRenewal(ctx, d)
 	go d.sysReporter.RunPublicIPDiscovery(ctx)
-	if databaseTunnel, ok := d.plugin.(DatabaseTunnelPlugin); ok {
+	if relayTunnel, ok := d.plugin.(RelayTunnelPlugin); ok {
 		// The tunnel owns one process-lifetime ClientConn. It is intentionally
 		// outside runSessionCycle: control reconnects must not cancel tunnel
 		// streams or the TCP sessions multiplexed through them.
-		go runProcessDatabaseTunnel(
+		go runProcessRelayTunnel(
 			ctx,
 			d.connector.ConnectWithRetry,
-			databaseTunnel,
+			relayTunnel,
 			d.state.NodeID,
 			d.tunnelIdentityChanged,
 			d.logger,
@@ -111,12 +111,12 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 	}
 }
 
-type databaseTunnelConnect func(context.Context) (*grpc.ClientConn, error)
+type relayTunnelConnect func(context.Context) (*grpc.ClientConn, error)
 
-func runProcessDatabaseTunnel(
+func runProcessRelayTunnel(
 	ctx context.Context,
-	connect databaseTunnelConnect,
-	plugin DatabaseTunnelPlugin,
+	connect relayTunnelConnect,
+	plugin RelayTunnelPlugin,
 	nodeID string,
 	identityChanged <-chan struct{},
 	logger *slog.Logger,
@@ -125,14 +125,14 @@ func runProcessDatabaseTunnel(
 		conn, err := connect(ctx)
 		if err != nil {
 			if ctx.Err() == nil {
-				logger.Warn("database tunnel connection failed", "error", err)
+				logger.Warn("relay tunnel connection failed", "error", err)
 			}
 			return
 		}
 		tunnelCtx, cancelTunnel := context.WithCancel(ctx)
 		tunnelEnded := make(chan struct{})
 		go func() {
-			plugin.RunDatabaseTunnel(tunnelCtx, conn, nodeID)
+			plugin.RunRelayTunnels(tunnelCtx, conn, nodeID)
 			close(tunnelEnded)
 		}()
 		rotated := false
@@ -140,7 +140,7 @@ func runProcessDatabaseTunnel(
 		case <-ctx.Done():
 		case <-identityChanged:
 			rotated = true
-			logger.Info("database tunnel identity changed, reconnecting")
+			logger.Info("relay tunnel identity changed, reconnecting")
 		case <-tunnelEnded:
 		}
 		cancelTunnel()
@@ -157,7 +157,7 @@ func runProcessDatabaseTunnel(
 		if rotated {
 			continue
 		}
-		logger.Warn("database tunnel lifecycle ended unexpectedly, restarting")
+		logger.Warn("relay tunnel lifecycle ended unexpectedly, restarting")
 		select {
 		case <-ctx.Done():
 			return

@@ -14,9 +14,8 @@ const critical: DashboardRelaySnapshot = {
   attemptHistory: [
     { attempt: 3, startedAt: "2026-08-07T11:59:00.000Z", action: "restart", result: "failed" },
   ],
-  relayVersion: "1",
-  protocolVersion: 1,
-  databaseContractVersion: 1,
+  relayBuildVersion: "1",
+  protocolMajor: 1,
   expectedService: "relay",
   expectedImage: `registry.example/gateway@sha256:${"a".repeat(64)}`,
   canRetry: true,
