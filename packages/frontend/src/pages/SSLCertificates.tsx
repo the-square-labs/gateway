@@ -697,7 +697,7 @@ export function SSLCertificates() {
               onRowClick={openCertificatePreview}
               scrollRef={scrollRef}
               horizontalScroll
-              minWidth="1040px"
+              minWidth="1128px"
               footer={
                 hasMore ? (
                   <div

@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Minus, Plus, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { DomainAutocompleteInput } from "@/components/domains/DomainAutocompleteInput";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,6 +41,12 @@ export interface SSLCertificateCreateDialogDevPreview {
 }
 
 const DEV_PREVIEW_CERT_ID = "__dev_ssl_preview__";
+const FORM_ANIMATION = {
+  initial: { opacity: 0, y: 8 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -8 },
+  transition: { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] as const },
+};
 
 export function SSLCertificateCreateDialog({
   open,
@@ -268,197 +275,211 @@ export function SSLCertificateCreateDialog({
             <TabsTrigger value="internal">Internal CA</TabsTrigger>
           </TabsList>
 
-          {/* ACME / Let's Encrypt Tab */}
-          <TabsContent value="acme">
-            <div className="space-y-4">
-              {dnsChallenges ? (
-                <DNSChallengeVerification
-                  challenges={dnsChallenges}
-                  onVerify={handleVerifyDNS}
-                  isVerifying={isVerifying}
-                  showAction={false}
-                />
-              ) : (
+          <AnimatedHeight>
+            <div className="pt-4">
+              {/* ACME / Let's Encrypt Tab */}
+              <TabsContent value="acme" className="mt-0">
+                <AnimatePresence initial={false} mode="wait">
+                  {dnsChallenges ? (
+                    <motion.div key="dns-verification" {...FORM_ANIMATION}>
+                      <DNSChallengeVerification
+                        challenges={dnsChallenges}
+                        onVerify={handleVerifyDNS}
+                        isVerifying={isVerifying}
+                        showAction={false}
+                      />
+                    </motion.div>
+                  ) : (
+                    <motion.div key="acme-form" {...FORM_ANIMATION} className="space-y-4">
+                      <div className="space-y-1.5">
+                        <label className="text-sm font-medium">Domains</label>
+                        <div className="space-y-2">
+                          <AnimatePresence initial={false}>
+                            {acmeDomains.map((domain, i) => (
+                              <motion.div
+                                key={`acme-domain-${i}`}
+                                initial={{ opacity: 0, y: 4 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: 4 }}
+                                transition={{
+                                  opacity: { duration: 0.12 },
+                                  y: { duration: 0.12, ease: [0.25, 0.1, 0.25, 1] },
+                                }}
+                                className="flex border border-input bg-background"
+                              >
+                                <DomainAutocompleteInput
+                                  value={domain}
+                                  onChange={(v) => {
+                                    const next = [...acmeDomains];
+                                    next[i] = v;
+                                    setAcmeDomains(next);
+                                  }}
+                                  placeholder="example.com"
+                                  inputClassName="border-0 shadow-none"
+                                />
+                                {acmeDomains.length > 1 && (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                                    onClick={() =>
+                                      setAcmeDomains(acmeDomains.filter((_, j) => j !== i))
+                                    }
+                                  >
+                                    <Minus className="h-4 w-4" />
+                                  </Button>
+                                )}
+                                {i === acmeDomains.length - 1 && (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                                    onClick={() => setAcmeDomains([...acmeDomains, ""])}
+                                  >
+                                    <Plus className="h-4 w-4" />
+                                  </Button>
+                                )}
+                              </motion.div>
+                            ))}
+                          </AnimatePresence>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium">Challenge Type</label>
+                          <Select
+                            value={challengeType}
+                            onValueChange={(v) => setChallengeType(v as ACMEChallengeType)}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="http-01">HTTP-01</SelectItem>
+                              <SelectItem value="dns-01">DNS-01</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium">Provider</label>
+                          <Select value={acmeProvider} onValueChange={setAcmeProvider}>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="letsencrypt">Let's Encrypt</SelectItem>
+                              <SelectItem value="letsencrypt-staging">
+                                Let's Encrypt (Staging)
+                              </SelectItem>
+                              <SelectItem value="zerossl">ZeroSSL</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+
+                      <AnimatePresence initial={false}>
+                        {challengeType === "dns-01" && (
+                          <motion.p
+                            initial={{ height: 0, opacity: 0, y: 4 }}
+                            animate={{ height: "auto", opacity: 1, y: 0 }}
+                            exit={{ height: 0, opacity: 0, y: 4 }}
+                            transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
+                            className="overflow-hidden text-xs text-muted-foreground"
+                          >
+                            DNS-01 challenges require you to create TXT records. After requesting,
+                            you'll be shown the records to add.
+                          </motion.p>
+                        )}
+                      </AnimatePresence>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </TabsContent>
+
+              {/* Upload Tab */}
+              <TabsContent value="upload" className="mt-0">
                 <div className="space-y-4">
                   <div className="space-y-1.5">
-                    <label className="text-sm font-medium">Domains</label>
-                    <div className="space-y-2">
-                      <AnimatePresence initial={false}>
-                        {acmeDomains.map((domain, i) => (
-                          <motion.div
-                            key={`acme-domain-${i}`}
-                            initial={{ opacity: 0, y: 4 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: 4 }}
-                            transition={{
-                              opacity: { duration: 0.12 },
-                              y: { duration: 0.12, ease: [0.25, 0.1, 0.25, 1] },
-                            }}
-                            className="flex border border-input bg-background"
-                          >
-                            <DomainAutocompleteInput
-                              value={domain}
-                              onChange={(v) => {
-                                const next = [...acmeDomains];
-                                next[i] = v;
-                                setAcmeDomains(next);
-                              }}
-                              placeholder="example.com"
-                              inputClassName="border-0 shadow-none"
-                            />
-                            {acmeDomains.length > 1 && (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
-                                onClick={() =>
-                                  setAcmeDomains(acmeDomains.filter((_, j) => j !== i))
-                                }
-                              >
-                                <Minus className="h-4 w-4" />
-                              </Button>
-                            )}
-                            {i === acmeDomains.length - 1 && (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
-                                onClick={() => setAcmeDomains([...acmeDomains, ""])}
-                              >
-                                <Plus className="h-4 w-4" />
-                              </Button>
-                            )}
-                          </motion.div>
-                        ))}
-                      </AnimatePresence>
-                    </div>
+                    <label className="text-sm font-medium">Name</label>
+                    <Input
+                      value={uploadName}
+                      onChange={(e) => setUploadName(e.target.value)}
+                      placeholder="My Certificate"
+                    />
                   </div>
-
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium">Challenge Type</label>
-                      <Select
-                        value={challengeType}
-                        onValueChange={(v) => setChallengeType(v as ACMEChallengeType)}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="http-01">HTTP-01</SelectItem>
-                          <SelectItem value="dns-01">DNS-01</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium">Provider</label>
-                      <Select value={acmeProvider} onValueChange={setAcmeProvider}>
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="letsencrypt">Let's Encrypt</SelectItem>
-                          <SelectItem value="letsencrypt-staging">
-                            Let's Encrypt (Staging)
-                          </SelectItem>
-                          <SelectItem value="zerossl">ZeroSSL</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Certificate PEM</label>
+                    <Textarea
+                      className="h-32"
+                      value={certPem}
+                      onChange={(e) => setCertPem(e.target.value)}
+                      placeholder={"-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"}
+                    />
                   </div>
-
-                  {challengeType === "dns-01" && (
-                    <p className="text-xs text-muted-foreground">
-                      DNS-01 challenges require you to create TXT records. After requesting, you'll
-                      be shown the records to add.
-                    </p>
-                  )}
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Private Key PEM</label>
+                    <Textarea
+                      className="h-32"
+                      value={keyPem}
+                      onChange={(e) => setKeyPem(e.target.value)}
+                      placeholder={"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Chain PEM (optional)</label>
+                    <Textarea
+                      className="h-24"
+                      value={chainPem}
+                      onChange={(e) => setChainPem(e.target.value)}
+                      placeholder={"-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"}
+                    />
+                  </div>
                 </div>
-              )}
-            </div>
-          </TabsContent>
+              </TabsContent>
 
-          {/* Upload Tab */}
-          <TabsContent value="upload">
-            <div className="space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Name</label>
-                <Input
-                  value={uploadName}
-                  onChange={(e) => setUploadName(e.target.value)}
-                  placeholder="My Certificate"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Certificate PEM</label>
-                <Textarea
-                  className="h-32"
-                  value={certPem}
-                  onChange={(e) => setCertPem(e.target.value)}
-                  placeholder={"-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Private Key PEM</label>
-                <Textarea
-                  className="h-32"
-                  value={keyPem}
-                  onChange={(e) => setKeyPem(e.target.value)}
-                  placeholder={"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Chain PEM (optional)</label>
-                <Textarea
-                  className="h-24"
-                  value={chainPem}
-                  onChange={(e) => setChainPem(e.target.value)}
-                  placeholder={"-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"}
-                />
-              </div>
+              {/* Internal CA Tab */}
+              <TabsContent value="internal" className="mt-0">
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    Link an existing PKI certificate from your internal Certificate Authorities for
+                    use as an SSL certificate.
+                  </p>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">PKI Certificate</label>
+                    <Select value={selectedPkiCertId} onValueChange={setSelectedPkiCertId}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select a certificate..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {pkiCerts.length === 0 ? (
+                          <SelectItem value="__none__" disabled>
+                            No active TLS server certificates
+                          </SelectItem>
+                        ) : (
+                          pkiCerts.map((cert) => (
+                            <SelectItem key={cert.id} value={cert.id}>
+                              {cert.commonName}
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Name Override (optional)</label>
+                    <Input
+                      value={internalName}
+                      onChange={(e) => setInternalName(e.target.value)}
+                      placeholder="Auto-generated from certificate"
+                    />
+                  </div>
+                </div>
+              </TabsContent>
             </div>
-          </TabsContent>
-
-          {/* Internal CA Tab */}
-          <TabsContent value="internal">
-            <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                Link an existing PKI certificate from your internal Certificate Authorities for use
-                as an SSL certificate.
-              </p>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">PKI Certificate</label>
-                <Select value={selectedPkiCertId} onValueChange={setSelectedPkiCertId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a certificate..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {pkiCerts.length === 0 ? (
-                      <SelectItem value="__none__" disabled>
-                        No active TLS server certificates
-                      </SelectItem>
-                    ) : (
-                      pkiCerts.map((cert) => (
-                        <SelectItem key={cert.id} value={cert.id}>
-                          {cert.commonName}
-                        </SelectItem>
-                      ))
-                    )}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Name Override (optional)</label>
-                <Input
-                  value={internalName}
-                  onChange={(e) => setInternalName(e.target.value)}
-                  placeholder="Auto-generated from certificate"
-                />
-              </div>
-            </div>
-          </TabsContent>
+          </AnimatedHeight>
         </Tabs>
         <DialogFooter>
           {activeTab === "acme" &&
