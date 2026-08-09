@@ -203,10 +203,18 @@ export function SettingsTab({
 
   const showCustomHeaders = canManage || customHeaders.length > 0;
   const showCustomRewrites = canManage || customRewrites.length > 0;
+  const tlsDistributionProblem =
+    host.sslEnabled &&
+    host.tlsDistribution &&
+    (host.tlsDistribution.status !== "ready" ||
+      host.tlsDistribution.readyReplicaCount < host.tlsDistribution.replicaCount ||
+      Boolean(host.tlsDistribution.error))
+      ? host.tlsDistribution
+      : null;
 
   return (
     <div className="space-y-4">
-      {host.sslEnabled && host.tlsDistribution && (
+      {tlsDistributionProblem && (
         <PanelShell
           title={
             <div className="flex flex-wrap items-center gap-2">
@@ -214,30 +222,30 @@ export function SettingsTab({
               <Badge
                 size="inline"
                 variant={
-                  host.tlsDistribution.status === "ready"
+                  tlsDistributionProblem.status === "ready"
                     ? "success"
-                    : host.tlsDistribution.status === "failed"
+                    : tlsDistributionProblem.status === "failed"
                       ? "destructive"
                       : "warning"
                 }
               >
-                {host.tlsDistribution.status.replaceAll("_", " ")}
+                {tlsDistributionProblem.status.replaceAll("_", " ")}
               </Badge>
             </div>
           }
           description={
-            <div className="flex flex-wrap gap-x-3 gap-y-1">
+            <span className="flex flex-wrap gap-x-3 gap-y-1">
               <span>
-                {host.tlsDistribution.readyReplicaCount}/{host.tlsDistribution.replicaCount}{" "}
+                {tlsDistributionProblem.readyReplicaCount}/{tlsDistributionProblem.replicaCount}{" "}
                 replicas ready
               </span>
-              {host.tlsDistribution.lastVerifiedAt && (
-                <span>Last verified {formatDateTime(host.tlsDistribution.lastVerifiedAt)}</span>
+              {tlsDistributionProblem.lastVerifiedAt && (
+                <span>Last verified {formatDateTime(tlsDistributionProblem.lastVerifiedAt)}</span>
               )}
-              {host.tlsDistribution.error && (
-                <span className="break-words">{host.tlsDistribution.error}</span>
+              {tlsDistributionProblem.error && (
+                <span className="break-words">{tlsDistributionProblem.error}</span>
               )}
-            </div>
+            </span>
           }
           actions={
             canResyncTls ? (

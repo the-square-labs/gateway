@@ -99,7 +99,7 @@ describe("proxy detail SettingsTab", () => {
     );
   });
 
-  it("renders TLS distribution as a neutral settings panel with only the status badge colored", () => {
+  it("hides TLS distribution when every replica is ready", () => {
     render(
       <SettingsTab
         {...makeProps({
@@ -118,11 +118,33 @@ describe("proxy detail SettingsTab", () => {
       />
     );
 
+    expect(screen.queryByText("TLS distribution")).not.toBeInTheDocument();
+  });
+
+  it("renders TLS distribution problems as a neutral settings panel", () => {
+    render(
+      <SettingsTab
+        {...makeProps({
+          host: {
+            ...host,
+            sslEnabled: true,
+            tlsDistribution: {
+              status: "failed",
+              replicaCount: 2,
+              readyReplicaCount: 1,
+              lastVerifiedAt: "2026-08-09T12:00:00.000Z",
+              error: "Replica unavailable",
+            },
+          } as ProxyHost,
+        })}
+      />
+    );
+
     const panel = screen.getByText("TLS distribution").closest("div.border");
     expect(panel).toHaveClass("border-border", "bg-card");
     expect(panel).not.toHaveClass("bg-success/10", "border-success/40");
     expect(panel?.querySelector(".border-t")).toBeNull();
-    expect(screen.getByText("ready").parentElement).toHaveClass("bg-emerald-500/15");
+    expect(screen.getByText("failed").parentElement).toHaveClass("bg-red-500/15");
   });
 
   it("allows selecting an SSL certificate before SSL is enabled", () => {
