@@ -1,0 +1,25 @@
+{
+  "file_name": "loolos87_gateway_binary_export",
+  "edges": [
+    {
+      "from_id": "loolos87",
+      "to_id": "adzvqx6l",
+      "relation": "same_workflow",
+      "weight": 0.88,
+      "reason": "Both define the Gateway Docker volume archive export workflow: raw archive transport and the required resource-scoped export permissions.",
+      "source": "auto",
+      "created_at": 1786281301039,
+      "updated_at": 1786281301039
+    },
+    {
+      "from_id": "loolos87",
+      "to_id": "gnonxe58",
+      "relation": "same_area",
+      "weight": 0.67,
+      "reason": "Both address Docker log transport hazards; the export workflow specifically avoids text-oriented logs because large or invalid log data can corrupt or destabilize binary handling.",
+      "source": "auto",
+      "created_at": 1786281301039,
+      "updated_at": 1786281301039
+    }
+  ]
+}
