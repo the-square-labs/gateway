@@ -43,6 +43,7 @@ const SYNC_RUNNING_RECOVERY_MS = 2 * SYNC_FRESH_MS;
 @injectable()
 export class InferenceProviderService {
   private timer: NodeJS.Timeout | null = null;
+  private activeSync: Promise<void> | null = null;
 
   constructor(
     @inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient,
@@ -337,9 +338,10 @@ export class InferenceProviderService {
     this.runDueSync();
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    await this.activeSync;
   }
 
   async syncDue(now = new Date()): Promise<void> {
@@ -369,7 +371,13 @@ export class InferenceProviderService {
   }
 
   private runDueSync(): void {
-    void this.syncDue().catch(() => undefined);
+    if (this.activeSync) return;
+    const active = this.syncDue()
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.activeSync === active) this.activeSync = null;
+      });
+    this.activeSync = active;
   }
 
   private async persistModels(

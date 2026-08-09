@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GeneralSettingsService, normalizePublicUrl } from './general-settings.service.js';
+import { GeneralSettingsService, normalizePublicUrl, normalizeShutdownSettings } from './general-settings.service.js';
 
 describe('normalizePublicUrl', () => {
   it('stores only a canonical http(s) origin', () => {
@@ -107,5 +107,52 @@ describe('GeneralSettingsService feature settings', () => {
     await service.updateConfig({ features: { inferenceEnabled: true } });
 
     expect(eventBus.publish).toHaveBeenCalledWith('system.config.changed', {});
+  });
+});
+
+describe('graceful shutdown settings', () => {
+  it('backfills defaults and merges a complete shutdown update', async () => {
+    const limit = vi.fn().mockResolvedValue([{ value: {} }]);
+    const db = {
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit })) })) })),
+      insert: vi.fn(() => ({
+        values: vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) })),
+      })),
+    };
+    const service = new GeneralSettingsService(db as never);
+
+    expect((await service.getConfig()).shutdown).toEqual({
+      userRequestDrainSeconds: 30,
+      structuredLogDrainSeconds: 5,
+      finalizationTimeoutSeconds: 10,
+    });
+    expect(
+      (
+        await service.updateConfig({
+          shutdown: {
+            userRequestDrainSeconds: 20,
+            structuredLogDrainSeconds: 5,
+            finalizationTimeoutSeconds: 10,
+          },
+        })
+      ).shutdown
+    ).toEqual({ userRequestDrainSeconds: 20, structuredLogDrainSeconds: 5, finalizationTimeoutSeconds: 10 });
+  });
+
+  it('rejects invalid ranges and totals', () => {
+    expect(() =>
+      normalizeShutdownSettings({
+        userRequestDrainSeconds: 40,
+        structuredLogDrainSeconds: 10,
+        finalizationTimeoutSeconds: 15,
+      })
+    ).toThrow('must not exceed 50 seconds');
+    expect(() =>
+      normalizeShutdownSettings({
+        userRequestDrainSeconds: 30,
+        structuredLogDrainSeconds: 5,
+        finalizationTimeoutSeconds: 4,
+      })
+    ).toThrow('between 5 and 15 seconds');
   });
 });

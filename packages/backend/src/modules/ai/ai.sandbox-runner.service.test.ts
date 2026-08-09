@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { SandboxRunnerJobPolicy } from './ai.sandbox-runner.protocol.js';
 import { AISandboxRunnerService } from './ai.sandbox-runner.service.js';
 
@@ -19,6 +20,34 @@ function dockerAvailable(): boolean {
 }
 
 const describeIfDocker = dockerAvailable() ? describe : describe.skip;
+
+describe('AISandboxRunnerService shutdown', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('kills only the runner process when its bounded IPC shutdown stalls', async () => {
+    vi.useFakeTimers();
+    const runner = new AISandboxRunnerService('/tmp/gateway-sandbox-runner-shutdown-test.sock');
+    const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    (runner as any).child = child;
+    (runner as any).statusValue = 'running';
+
+    const stopping = runner.stop(100);
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    await vi.advanceTimersByTimeAsync(100);
+    await stopping;
+
+    expect(child.kill).toHaveBeenLastCalledWith('SIGKILL');
+    await expect(runner.ensureStarted()).rejects.toThrow('Sandbox runner is shutting down');
+  });
+
+  it('cannot start after shutdown even when no runner process existed', async () => {
+    const runner = new AISandboxRunnerService('/tmp/gateway-sandbox-runner-never-started-test.sock');
+
+    await runner.stop();
+
+    await expect(runner.ensureStarted()).rejects.toThrow('Sandbox runner is shutting down');
+  });
+});
 
 describeIfDocker('AISandboxRunnerService docker smoke', () => {
   let tempDir = '';

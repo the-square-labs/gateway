@@ -15,6 +15,11 @@ export const FILE_UPLOAD_MAX_BYTES = 500 * 1024 * 1024;
 export const FILE_OPEN_MIN_BYTES = 1 * 1024 * 1024;
 export const FILE_OPEN_DEFAULT_BYTES = 10 * 1024 * 1024;
 export const FILE_OPEN_MAX_BYTES = 100 * 1024 * 1024;
+export const SHUTDOWN_USER_DRAIN_MAX_SECONDS = 40;
+export const SHUTDOWN_LOG_DRAIN_MAX_SECONDS = 10;
+export const SHUTDOWN_FINALIZATION_MIN_SECONDS = 5;
+export const SHUTDOWN_FINALIZATION_MAX_SECONDS = 15;
+export const SHUTDOWN_TOTAL_MAX_SECONDS = 50;
 
 export interface GeneralSettings {
   publicUrl: string | null;
@@ -24,8 +29,15 @@ export interface GeneralSettings {
   gatewayGrpcPublicTarget: string | null;
   gatewayGrpcLocalIp: string | null;
   relayAutoRecovery: boolean;
+  shutdown: GeneralShutdownSettings;
   features: GeneralFeatureSettings;
   inference: GeneralInferenceSettings;
+}
+
+export interface GeneralShutdownSettings {
+  userRequestDrainSeconds: number;
+  structuredLogDrainSeconds: number;
+  finalizationTimeoutSeconds: number;
 }
 
 export interface GeneralFeatureSettings {
@@ -47,6 +59,11 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   gatewayGrpcPublicTarget: null,
   gatewayGrpcLocalIp: null,
   relayAutoRecovery: true,
+  shutdown: {
+    userRequestDrainSeconds: 30,
+    structuredLogDrainSeconds: 5,
+    finalizationTimeoutSeconds: 10,
+  },
   features: {
     pkiEnabled: true,
     domainsEnabled: true,
@@ -58,9 +75,10 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   },
 };
 
-export type GeneralSettingsUpdate = Omit<Partial<GeneralSettings>, 'features' | 'inference'> & {
+export type GeneralSettingsUpdate = Omit<Partial<GeneralSettings>, 'features' | 'inference' | 'shutdown'> & {
   features?: Partial<GeneralFeatureSettings>;
   inference?: Partial<GeneralInferenceSettings>;
+  shutdown?: GeneralShutdownSettings;
 };
 
 export function normalizePublicUrl(value: string | null | undefined): string | null {
@@ -221,6 +239,7 @@ export class GeneralSettingsService {
         ...current.inference,
         ...updates.inference,
       },
+      shutdown: updates.shutdown ?? current.shutdown,
     });
     await this.db
       .insert(settings)
@@ -297,6 +316,10 @@ export class GeneralSettingsService {
     return (await this.getConfig()).inference;
   }
 
+  getCachedShutdownSettings(): GeneralShutdownSettings {
+    return { ...(this.cached?.shutdown ?? DEFAULT_GENERAL_SETTINGS.shutdown) };
+  }
+
   async updateInferenceSettings(updates: Partial<GeneralInferenceSettings>): Promise<GeneralInferenceSettings> {
     return (await this.updateConfig({ inference: updates })).inference;
   }
@@ -333,6 +356,7 @@ export class GeneralSettingsService {
       typeof record.inference === 'object' && record.inference !== null
         ? (record.inference as Record<string, unknown>)
         : {};
+    const shutdown = normalizeShutdownSettings(record.shutdown);
 
     return {
       publicUrl: normalizePublicUrl(record.publicUrl as string | null | undefined),
@@ -345,6 +369,7 @@ export class GeneralSettingsService {
         typeof record.relayAutoRecovery === 'boolean'
           ? record.relayAutoRecovery
           : DEFAULT_GENERAL_SETTINGS.relayAutoRecovery,
+      shutdown,
       features: {
         pkiEnabled:
           typeof features.pkiEnabled === 'boolean' ? features.pkiEnabled : DEFAULT_GENERAL_SETTINGS.features.pkiEnabled,
@@ -369,4 +394,50 @@ export class GeneralSettingsService {
       },
     };
   }
+}
+
+export function normalizeShutdownSettings(value: unknown): GeneralShutdownSettings {
+  const record = typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+  const normalized = {
+    userRequestDrainSeconds: numberOrDefault(
+      record.userRequestDrainSeconds,
+      DEFAULT_GENERAL_SETTINGS.shutdown.userRequestDrainSeconds
+    ),
+    structuredLogDrainSeconds: numberOrDefault(
+      record.structuredLogDrainSeconds,
+      DEFAULT_GENERAL_SETTINGS.shutdown.structuredLogDrainSeconds
+    ),
+    finalizationTimeoutSeconds: numberOrDefault(
+      record.finalizationTimeoutSeconds,
+      DEFAULT_GENERAL_SETTINGS.shutdown.finalizationTimeoutSeconds
+    ),
+  };
+
+  if (normalized.userRequestDrainSeconds < 0 || normalized.userRequestDrainSeconds > SHUTDOWN_USER_DRAIN_MAX_SECONDS) {
+    throw new Error(`User request drain must be between 0 and ${SHUTDOWN_USER_DRAIN_MAX_SECONDS} seconds`);
+  }
+  if (
+    normalized.structuredLogDrainSeconds < 0 ||
+    normalized.structuredLogDrainSeconds > SHUTDOWN_LOG_DRAIN_MAX_SECONDS
+  ) {
+    throw new Error(`Structured log drain must be between 0 and ${SHUTDOWN_LOG_DRAIN_MAX_SECONDS} seconds`);
+  }
+  if (
+    normalized.finalizationTimeoutSeconds < SHUTDOWN_FINALIZATION_MIN_SECONDS ||
+    normalized.finalizationTimeoutSeconds > SHUTDOWN_FINALIZATION_MAX_SECONDS
+  ) {
+    throw new Error(
+      `Shutdown finalization must be between ${SHUTDOWN_FINALIZATION_MIN_SECONDS} and ${SHUTDOWN_FINALIZATION_MAX_SECONDS} seconds`
+    );
+  }
+  const total =
+    normalized.userRequestDrainSeconds + normalized.structuredLogDrainSeconds + normalized.finalizationTimeoutSeconds;
+  if (total > SHUTDOWN_TOTAL_MAX_SECONDS) {
+    throw new Error(`Total graceful shutdown deadline must not exceed ${SHUTDOWN_TOTAL_MAX_SECONDS} seconds`);
+  }
+  return normalized;
+}
+
+function numberOrDefault(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isInteger(value) ? value : fallback;
 }

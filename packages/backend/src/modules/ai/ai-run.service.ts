@@ -866,6 +866,32 @@ export class AIRunService {
     throw new AppError(409, 'AI_RUN_NOT_ACTIVE', 'AI run is no longer active');
   }
 
+  async stopAllForShutdown(): Promise<void> {
+    const activeRuns = await this.db
+      .select({ id: aiRuns.id, conversationId: aiRuns.conversationId, userId: aiRuns.userId })
+      .from(aiRuns)
+      .where(inArray(aiRuns.status, ACTIVE_RUN_STATUSES));
+    await Promise.allSettled(
+      activeRuns.map(async (run) => {
+        try {
+          await this.stopRun({ conversationId: run.conversationId, runId: run.id, userId: run.userId });
+        } catch (error) {
+          if (!(error instanceof AppError) || error.code !== 'AI_COMPACTION_ACTIVE') throw error;
+          this.executor.abortRun(run.id);
+          await this.db
+            .update(aiRuns)
+            .set({ status: 'stopped', error: null, stoppedAt: new Date(), completedAt: null, updatedAt: new Date() })
+            .where(and(eq(aiRuns.id, run.id), inArray(aiRuns.status, ACTIVE_RUN_STATUSES)));
+          this.publishConversationChanged(run.userId, run.conversationId);
+        }
+      })
+    );
+  }
+
+  waitForIdle(deadline: number): Promise<void> {
+    return this.executor.waitForIdle(deadline);
+  }
+
   async stopActiveRunForRollback(input: {
     conversationId: string;
     userId: string;

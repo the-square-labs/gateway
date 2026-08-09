@@ -202,7 +202,7 @@ export function AssistantSetupWizard({
                 </p>
                 <p className="mt-1 text-sm text-muted-foreground">
                   Users need an enabled Inference policy before the Assistant is available to them.
-                  Review this in Settings → Gateway Inference → Limits.
+                  Review this in Settings → Inference → Limits.
                 </p>
               </div>
             </div>

@@ -36,3 +36,19 @@ export const logger = winston.createLogger({
 export function createChildLogger(context: string) {
   return logger.child({ context });
 }
+
+export async function closeApplicationLogger(timeoutMs = 250): Promise<void> {
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      logger.off('finish', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, Math.max(0, timeoutMs));
+    logger.once('finish', finish);
+    logger.end();
+  });
+}

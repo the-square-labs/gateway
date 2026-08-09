@@ -2,6 +2,32 @@ import { describe, expect, it, vi } from 'vitest';
 import { AISandboxService } from './ai.sandbox.service.js';
 
 describe('AISandboxService', () => {
+  it('waits for active policy reconciliation and cannot schedule more work after stopping', async () => {
+    let resolveRows!: (rows: never[]) => void;
+    const rows = new Promise<never[]>((resolve) => {
+      resolveRows = resolve;
+    });
+    const jobs = {
+      listActiveWithEffectiveScopes: vi.fn().mockReturnValue(rows),
+    };
+    const service = new AISandboxService(jobs as never, {} as never, {} as never);
+
+    service.startPolicyReconciliation();
+    expect(jobs.listActiveWithEffectiveScopes).toHaveBeenCalledOnce();
+
+    let stopped = false;
+    const stopping = service.stopPolicyReconciliation().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+
+    resolveRows([]);
+    await stopping;
+    service.startPolicyReconciliation();
+    expect(jobs.listActiveWithEffectiveScopes).toHaveBeenCalledOnce();
+  });
+
   it('kills and expires active jobs whose TTL has passed during reconciliation', async () => {
     const expiredJob = {
       id: 'job-1',
@@ -72,11 +98,12 @@ describe('AISandboxService', () => {
   });
 
   it('reattaches terminal monitoring to an active container after backend restart', async () => {
+    const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000);
     const job = {
       id: 'job-recovered',
       kind: 'process',
       containerId: 'container-recovered',
-      expiresAt: new Date(Date.now() + 60_000),
+      expiresAt,
       requiredScopes: ['ai:sandbox:use'],
       workspaceReservationBytes: 2 * 1024 * 1024 * 1024,
     };
@@ -102,7 +129,11 @@ describe('AISandboxService', () => {
     await service.reconcileActiveJobs();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(runner.waitProcess).toHaveBeenCalledWith({ processId: job.containerId, timeoutMs: expect.any(Number) });
+    expect(runner.findJobContainer).toHaveBeenCalledWith({ jobId: job.id });
+    const recoveredWait = runner.waitProcess.mock.calls[0]?.[0];
+    expect(recoveredWait?.processId).toBe(job.containerId);
+    expect(recoveredWait?.timeoutMs).toBeGreaterThan(11 * 60 * 60 * 1000);
+    expect(recoveredWait?.timeoutMs).toBeLessThanOrEqual(12 * 60 * 60 * 1000 + 10_000);
     expect(runner.killProcess).toHaveBeenCalledWith({ processId: job.containerId });
     expect(jobs.markFinishedIfActive).toHaveBeenCalledWith(job.id, 'exited', {
       exitCode: 0,

@@ -70,6 +70,31 @@ describe('UpdateAuthProvisioningSettingsSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('accepts bounded graceful shutdown settings and rejects an excessive total', () => {
+    expect(
+      UpdateAuthProvisioningSettingsSchema.safeParse({
+        generalSettings: {
+          shutdown: {
+            userRequestDrainSeconds: 30,
+            structuredLogDrainSeconds: 5,
+            finalizationTimeoutSeconds: 10,
+          },
+        },
+      }).success
+    ).toBe(true);
+    expect(
+      UpdateAuthProvisioningSettingsSchema.safeParse({
+        generalSettings: {
+          shutdown: {
+            userRequestDrainSeconds: 40,
+            structuredLogDrainSeconds: 10,
+            finalizationTimeoutSeconds: 15,
+          },
+        },
+      }).success
+    ).toBe(false);
+  });
+
   it('accepts gateway endpoint settings', () => {
     const result = UpdateAuthProvisioningSettingsSchema.safeParse({
       generalSettings: {

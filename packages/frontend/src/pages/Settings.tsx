@@ -1,4 +1,4 @@
-import { Bot, Network, Plug, ServerCog, Sparkles } from "lucide-react";
+import { Bot, Network, Plug, ServerCog, SlidersHorizontal, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
@@ -19,7 +19,14 @@ import { LicenseSection } from "./settings/LicenseSection";
 import { StatusPageSection } from "./settings/StatusPageSection";
 import { UpdateSection } from "./settings/UpdateSection";
 
-const SETTINGS_TABS = ["gateway", "features", "integrations", "inference", "ai"] as const;
+const SETTINGS_TABS = [
+  "general",
+  "advanced",
+  "features",
+  "integrations",
+  "inference",
+  "ai",
+] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 function isSettingsTab(value: string | null | undefined): value is SettingsTab {
@@ -60,12 +67,13 @@ export function Settings() {
     hasScope("integrations:cloudflare:dns:view") ||
     hasScope("integrations:cloudflare:dns:edit") ||
     hasScope("integrations:cloudflare:dns:delete");
-  const canAccessGatewayTab =
-    canViewGatewaySettings || canManageRegistries || canUpdate || canViewLicense;
+  const canAccessGeneralTab = canViewGatewaySettings || canUpdate || canViewLicense;
+  const canAccessAdvancedTab = canViewGatewaySettings || canManageRegistries;
   const canAccessFeaturesTab = canViewStatusPage || canViewHousekeeping;
   const availableTabs = useMemo<SettingsTab[]>(() => {
     const tabs: SettingsTab[] = [];
-    if (canAccessGatewayTab) tabs.push("gateway");
+    if (canAccessGeneralTab) tabs.push("general");
+    if (canAccessAdvancedTab) tabs.push("advanced");
     if (canAccessFeaturesTab) tabs.push("features");
     if (canViewIntegrations) tabs.push("integrations");
     if (canConfigInference) tabs.push("inference");
@@ -73,7 +81,8 @@ export function Settings() {
     return tabs;
   }, [
     canAccessFeaturesTab,
-    canAccessGatewayTab,
+    canAccessAdvancedTab,
+    canAccessGeneralTab,
     canConfigAI,
     canConfigInference,
     canViewIntegrations,
@@ -81,7 +90,7 @@ export function Settings() {
   const currentTab = activeTab && availableTabs.includes(activeTab) ? activeTab : availableTabs[0];
 
   useEffect(() => {
-    if (currentTab !== "gateway" && currentTab !== "features") {
+    if (currentTab !== "advanced" && currentTab !== "features") {
       setNodesList([]);
       return;
     }
@@ -118,10 +127,16 @@ export function Settings() {
 
         <Tabs value={currentTab} onValueChange={handleTabChange} className="flex flex-col">
           <TabsList className="shrink-0">
-            {canAccessGatewayTab && (
-              <TabsTrigger value="gateway" className="gap-1.5">
+            {canAccessGeneralTab && (
+              <TabsTrigger value="general" className="gap-1.5">
                 <ServerCog className="h-3.5 w-3.5" />
-                Gateway settings
+                General
+              </TabsTrigger>
+            )}
+            {canAccessAdvancedTab && (
+              <TabsTrigger value="advanced" className="gap-1.5">
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                Advanced
               </TabsTrigger>
             )}
             {canAccessFeaturesTab && (
@@ -150,15 +165,12 @@ export function Settings() {
             )}
           </TabsList>
 
-          {canAccessGatewayTab && (
-            <TabsContent value="gateway" className="pb-0">
+          {canAccessGeneralTab && (
+            <TabsContent value="general" className="pb-0">
               <div className="space-y-4">
                 {canViewGatewaySettings && (
-                  <AuthProvisioningSection canEdit={canEditGatewaySettings} />
+                  <AuthProvisioningSection canEdit={canEditGatewaySettings} section="general" />
                 )}
-
-                {canManageRegistries && <DockerRegistriesSection nodesList={nodesList} />}
-
                 {canViewLicense ? (
                   <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                     {canUpdate && <UpdateSection canUpdate={canUpdate} />}
@@ -167,6 +179,17 @@ export function Settings() {
                 ) : (
                   canUpdate && <UpdateSection canUpdate={canUpdate} />
                 )}
+              </div>
+            </TabsContent>
+          )}
+
+          {canAccessAdvancedTab && (
+            <TabsContent value="advanced" className="pb-0">
+              <div className="space-y-4">
+                {canViewGatewaySettings && (
+                  <AuthProvisioningSection canEdit={canEditGatewaySettings} section="advanced" />
+                )}
+                {canManageRegistries && <DockerRegistriesSection nodesList={nodesList} />}
               </div>
             </TabsContent>
           )}

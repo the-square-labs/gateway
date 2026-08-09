@@ -64,7 +64,7 @@ For flags, non-interactive installs, custom SSL, OIDC details, updates, and node
 
 ## Configure AI Harnesses
 
-The [`@wiolett/gateway-inference`](packages/gateway-inference) companion configures supported AI harnesses without copying a Gateway inference token into their config files. Enable **Inference** under **Settings > Gateway settings > General settings**, then enable **Harness-specific endpoints** under **Settings > Inference** and run one of:
+The [`@wiolett/gateway-inference`](packages/gateway-inference) companion configures supported AI harnesses without copying a Gateway inference token into their config files. Enable **Inference** under **Settings > General > General settings**, then enable **Harness-specific endpoints** under **Settings > Inference** and run one of:
 
 ```bash
 npx -y @wiolett/gateway-inference@latest setup codex
@@ -199,7 +199,7 @@ Yes. Install the nginx daemon in `integrate` mode. Gateway keeps your existing `
 <details>
 <summary><strong>Can Gateway run without ClickHouse?</strong></summary>
 
-Yes. Choose **Disabled** for structured logging in the first-run wizard or **Settings → Gateway**. The rest of Gateway continues to work. Managed local ClickHouse can be disabled without deleting its data volume.
+Yes. Choose **Disabled** for structured logging in the first-run wizard or **Settings > Advanced**. The rest of Gateway continues to work. Managed local ClickHouse can be disabled without deleting its data volume.
 </details>
 
 <details>

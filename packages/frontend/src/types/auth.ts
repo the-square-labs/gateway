@@ -130,6 +130,11 @@ export interface AuthProvisioningSettings {
     gatewayGrpcPublicTarget: string | null;
     gatewayGrpcLocalIp: string | null;
     relayAutoRecovery: boolean;
+    shutdown: {
+      userRequestDrainSeconds: number;
+      structuredLogDrainSeconds: number;
+      finalizationTimeoutSeconds: number;
+    };
     features: {
       pkiEnabled: boolean;
       domainsEnabled: boolean;

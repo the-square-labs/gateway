@@ -298,7 +298,7 @@ Let's Encrypt integration for free, automated SSL certificates.
 ## Authentication
 Gateway can enable OIDC, password, and email one-time-code sign-in independently. Email-based sign-in requires verified SMTP. Users can add passkeys after they sign in; passkeys are not a first-run primary method.
 - The browser setup wizard creates exactly one deliberate first administrator in the built-in system-admin group. It does not promote an arbitrary first OIDC login.
-- OIDC is configured in Gateway settings with an issuer URL, client ID, client secret, auto-provisioning policy, default group, and optional verified-email requirement.
+- OIDC is configured under Settings > Advanced with an issuer URL, client ID, client secret, auto-provisioning policy, default group, and optional verified-email requirement.
 - When OIDC auto-provisioning is enabled, later valid OIDC logins can create users in the configured default group. Existing OIDC users are bound to the provider subject; Gateway may refresh their name and avatar from the provider.
 - Password and email-code configuration, recovery flows, passkeys, and first-run choices are described in the authentication topic. Do not claim that OIDC is the only sign-in method.
 
@@ -1050,7 +1050,7 @@ Use \`get_gateway_settings\` before changing control-plane settings and \`update
 - mcpExtendedCompatibility is enabled by default. It returns every OAuth-scoped tool in the initial \`tools/list\` response and omits \`discover_tools\`. Disable it only when a harness loads every tool schema into its context at once and exhausts that context; disabling it can leave that harness unable to use some Gateway tools.
 
 ## General And Network Settings
-- generalSettings contains feature flags and shared limits. Inference is disabled by default under Settings > Gateway settings > General settings, and its harness-specific endpoints are configured separately under Settings > Inference.
+- generalSettings contains feature flags and shared limits. Inference is disabled by default under Settings > General > General settings, and its harness-specific endpoints are configured separately under Settings > Inference.
 - networkSecurity controls trusted private destinations and outbound request restrictions.
 - outboundWebhookPolicy controls allowed webhook destinations.
 

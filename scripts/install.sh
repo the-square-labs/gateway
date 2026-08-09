@@ -717,6 +717,7 @@ services:
   app:
     image: ${GATEWAY_IMAGE_REF}
     restart: unless-stopped
+    stop_grace_period: 60s
     labels:
       com.wiolett.gateway.managed-service: app
     env_file: .env

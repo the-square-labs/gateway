@@ -6,7 +6,7 @@ The server-side connector baseline is OpenCodex commit `357acee62458684bc027e9d5
 
 ## Enable inference
 
-Inference is disabled by default. An administrator with Gateway settings access enables it under **Settings > Gateway settings > General settings > Inference**. No process restart is required.
+Inference is disabled by default. An administrator with Gateway settings access enables it under **Settings > General > General settings > Inference**. No process restart is required.
 
 When disabled, management and data-plane routes return `INFERENCE_DISABLED`, and the frontend omits Inference usage, token management, and administration surfaces. Connected provider credentials, model configuration, and accounting history remain stored.
 
@@ -129,7 +129,7 @@ Back up the PostgreSQL inference tables with the normal database backup and pres
 
 To disable inference:
 
-1. Turn off **Settings > Gateway settings > General settings > Inference**. The change applies immediately.
+1. Turn off **Settings > General > General settings > Inference**. The change applies immediately.
 2. Revoke routing/user scopes or individual `gwi_` tokens if required.
 3. Keep provider credentials and immutable accounting/audit rows unless an administrator explicitly disconnects a provider.
 4. Do not delete inference tables as part of rollback.

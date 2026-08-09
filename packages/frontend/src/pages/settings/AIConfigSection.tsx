@@ -862,10 +862,10 @@ export function AIConfigSection() {
                     {" "}
                     To use Gateway Inference and subscription providers,{" "}
                     <Link
-                      to="/settings/gateway"
+                      to="/settings/general"
                       className="underline underline-offset-2 hover:text-foreground"
                     >
-                      enable and configure Inference in Gateway settings
+                      enable and configure Inference in General settings
                     </Link>
                     .
                   </>

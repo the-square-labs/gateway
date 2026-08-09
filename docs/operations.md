@@ -10,7 +10,7 @@ This guide covers day-two operation: updates, configuration, programmatic access
 
 From the UI:
 
-1. Go to **Settings > Gateway settings > About**.
+1. Go to **Settings > General > About**.
 2. Click **Check for updates** and review the available version.
 3. Click **Update**.
 
@@ -43,7 +43,7 @@ Existing daemons from before signed-manifest support can perform one transition 
 
 ## Configuration Reference
 
-The installer writes infrastructure/bootstrap values to `.env`. Product settings such as canonical public URL, OIDC, SMTP, authentication methods, internal web TLS, and ClickHouse are stored in Gateway and edited in **Settings → Gateway**.
+The installer writes infrastructure/bootstrap values to `.env`. Product settings are stored in Gateway: canonical public URL and internal web TLS are edited in **Settings > General**, while OIDC, SMTP, authentication methods, and ClickHouse are edited in **Settings > Advanced**.
 
 | Variable | Purpose |
 |----------|---------|
@@ -80,7 +80,7 @@ OIDC scopes should normally include `openid email profile`. The `email` scope re
 
 ## Local authentication operations
 
-Email/password and email-OTP sign-in require a verified SMTP configuration in **Settings → Gateway**. Do not enable either method until a test message succeeds. Gateway encrypts SMTP credentials using `PKI_MASTER_KEY`; losing or rotating that key without re-entering the SMTP password prevents delivery.
+Email/password and email-OTP sign-in require a verified SMTP configuration in **Settings > Advanced**. Do not enable either method until a test message succeeds. Gateway encrypts SMTP credentials using `PKI_MASTER_KEY`; losing or rotating that key without re-entering the SMTP password prevents delivery.
 
 For local accounts, group MFA policy is enforced after the primary credential. TOTP recovery codes are one-use. If an account loses all MFA factors, a system administrator must reset MFA from the user administration screen; that action also revokes its browser sessions. Users and administrators can independently view and revoke browser sessions, but session cookies themselves are never exposed.
 
@@ -156,7 +156,7 @@ The `mcp:use` scope is a user-account capability gate. The owning user must have
 
 By default, MCP starts with a compact core toolset. Clients call `discover_tools` to activate a domain toolset in the current MCP session. Gateway then sends `notifications/tools/list_changed`, and a compliant client refreshes `tools/list` so the newly activated tools become callable.
 
-Some MCP clients do not refresh their tool list after that notification. Enable **Extended MCP compatibility** in Gateway settings for those clients. In compatibility mode, the first `tools/list` response contains every tool allowed by the OAuth grant and `discover_tools` is omitted. This can expose hundreds of schemas, so keep the default discovery mode for clients that support list-change notifications.
+Some MCP clients do not refresh their tool list after that notification. Enable **Extended MCP compatibility** in **Settings > Advanced** for those clients. In compatibility mode, the first `tools/list` response contains every tool allowed by the OAuth grant and `discover_tools` is omitted. This can expose hundreds of schemas, so keep the default discovery mode for clients that support list-change notifications.
 
 ### Scope Rules
 
@@ -166,7 +166,7 @@ For the complete scope list, implication behavior, delegability, and manual OAut
 
 ## Structured Logging
 
-Logging is optional and is configured in **Settings → Gateway** as disabled, managed local, or external. Connection secrets are encrypted in Gateway settings. Legacy `CLICKHOUSE_*` env values are accepted only for migration and are removed by managed updates after a successful import.
+Logging is optional and is configured in **Settings > Advanced** as disabled, managed local, or external. Connection secrets are encrypted in Gateway settings. Legacy `CLICKHOUSE_*` env values are accepted only for migration and are removed by managed updates after a successful import.
 
 ### ClickHouse Image Upgrades
 
@@ -305,7 +305,7 @@ Use status pages for externally visible service health and incidents. Use notifi
 
 Configure SIEM collectors in **Notifications → SIEM**. Gateway keeps delivery in the main app process: no separate Compose service or worker container is required. A scheduler claims durable outbox rows every 30 seconds with database leases, so more than one Gateway replica can run safely.
 
-The feature is enabled by default. Use **Settings → Gateway → General settings → SIEM audit export** to turn it off installation-wide: this hides the SIEM screens, makes the SIEM API and AI tools unavailable, stops new outbox rows, and pauses delivery without restarting Gateway. Existing destinations, terminal history, and queued records stay in PostgreSQL; queued records resume after re-enabling the feature.
+The feature is enabled by default. Use **Settings > General > General settings > SIEM audit export** to turn it off installation-wide: this hides the SIEM screens, makes the SIEM API and AI tools unavailable, stops new outbox rows, and pauses delivery without restarting Gateway. Existing destinations, terminal history, and queued records stay in PostgreSQL; queued records resume after re-enabling the feature.
 
 Each request sends `{ "schemaVersion": 1, "events": [...] }` to an HTTPS endpoint using either `Authorization: Bearer <token>`, one validated custom request header, or HMAC headers `X-Gateway-Timestamp` and `X-Gateway-Signature-256`. The HMAC is `sha256=<hex>` over `timestamp + "." + exact raw JSON request body`; the collector should reject stale timestamps and use constant-time comparison. A successful `2xx` completes the batch. Network errors, `408`, `429`, and `5xx` retry after 30 seconds, 2 minutes, 8 minutes, 30 minutes, 2 hours, 6 hours, and 12 hours, with at most eight attempts. Other `4xx` responses are terminal failures.
 
@@ -372,6 +372,6 @@ If Dashboard shows the red **Gateway relay is unavailable** state:
 If OAuth or OIDC fails:
 
 - Verify redirect URI exact match.
-- Verify the canonical public URL and OIDC redirect URI in **Settings → Gateway**.
+- Verify the canonical public URL in **Settings > General** and the OIDC redirect URI in **Settings > Advanced**.
 - Verify the provider exposes discovery metadata.
 - Check Gateway app logs for callback errors.

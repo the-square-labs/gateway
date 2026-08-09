@@ -1,4 +1,5 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import { vi } from "vitest";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -27,6 +28,17 @@ vi.mock("@/pages/settings/DockerRegistriesSection", () => ({
   DockerRegistriesSection: ({ nodesList }: { nodesList: unknown[] }) => (
     <div>Registry nodes: {nodesList.length}</div>
   ),
+}));
+vi.mock("@/pages/settings/AuthProvisioningSection", () => ({
+  AuthProvisioningSection: ({ section }: { section: string }) => (
+    <div>Gateway configuration: {section}</div>
+  ),
+}));
+vi.mock("@/pages/settings/UpdateSection", () => ({
+  UpdateSection: () => <div>About Gateway</div>,
+}));
+vi.mock("@/pages/settings/LicenseSection", () => ({
+  LicenseSection: () => <div>Gateway license</div>,
 }));
 
 describe("Settings inference bootstrap", () => {
@@ -128,7 +140,7 @@ describe("Settings inference bootstrap", () => {
     });
 
     render(
-      <MemoryRouter initialEntries={["/settings/gateway"]}>
+      <MemoryRouter initialEntries={["/settings/advanced"]}>
         <Routes>
           <Route path="/settings/:tab?" element={<Settings />} />
         </Routes>
@@ -137,6 +149,93 @@ describe("Settings inference bootstrap", () => {
 
     expect(await screen.findByText("Registry nodes: 0")).toBeInTheDocument();
     expect(listNodes).not.toHaveBeenCalled();
+  });
+
+  it("redirects the legacy Gateway settings URL to General", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["settings:gateway:view"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    useSystemConfigStore.setState({
+      config: DEFAULT_SYSTEM_CONFIG,
+      loaded: true,
+      isLoading: false,
+    });
+    useUIBootstrapStore.setState({ snapshot: makeShell(false) });
+
+    render(
+      <MemoryRouter initialEntries={["/settings/gateway"]}>
+        <Routes>
+          <Route
+            path="/settings/:tab?"
+            element={
+              <>
+                <Settings />
+                <LocationProbe />
+              </>
+            }
+          />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("Gateway configuration: general")).toBeInTheDocument();
+    expect(screen.getByTestId("location")).toHaveTextContent("/settings/general");
+  });
+
+  it("separates General settings from Advanced configuration", async () => {
+    useAuthStore.setState({
+      user: makeUser({
+        scopes: [
+          "settings:gateway:view",
+          "settings:gateway:edit",
+          "docker:registries:view",
+          "admin:update",
+          "license:view",
+          "license:manage",
+        ],
+      }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    useSystemConfigStore.setState({
+      config: DEFAULT_SYSTEM_CONFIG,
+      loaded: true,
+      isLoading: false,
+    });
+    useUIBootstrapStore.setState({ snapshot: makeShell(false) });
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={["/settings/general"]}>
+        <Routes>
+          <Route
+            path="/settings/:tab?"
+            element={
+              <>
+                <Settings />
+                <LocationProbe />
+              </>
+            }
+          />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("Gateway configuration: general")).toBeInTheDocument();
+    expect(screen.getByText("About Gateway")).toBeInTheDocument();
+    expect(screen.getByText("Gateway license")).toBeInTheDocument();
+    expect(screen.queryByText("Gateway configuration: advanced")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Registry nodes:/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Advanced" }));
+
+    expect(await screen.findByText("Gateway configuration: advanced")).toBeInTheDocument();
+    expect(screen.getByText("Registry nodes: 0")).toBeInTheDocument();
+    expect(screen.queryByText("About Gateway")).not.toBeInTheDocument();
+    expect(screen.queryByText("Gateway license")).not.toBeInTheDocument();
+    expect(screen.getByTestId("location")).toHaveTextContent("/settings/advanced");
   });
 });
 

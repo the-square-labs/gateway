@@ -440,6 +440,38 @@ describe("CommandPalette", () => {
   });
 
   it.each([
+    ["General settings", "settings:gateway:view", "/settings/general"],
+    ["Advanced settings", "docker:registries:view", "/settings/advanced"],
+  ])("routes %s to its dedicated tab", async (label, scope, path) => {
+    act(() => {
+      useAuthStore.setState({
+        user: {
+          id: "user-1",
+          email: "user@example.com",
+          name: "User One",
+          groupName: "admin",
+          scopes: [scope],
+          isBlocked: false,
+        } as never,
+        isAuthenticated: true,
+        isLoading: false,
+      });
+      useAIStore.setState({ isEnabled: false });
+    });
+
+    renderWithRouter(
+      <>
+        <CommandPalette open onOpenChange={vi.fn()} />
+        <LocationProbe />
+      </>
+    );
+    await userEvent.type(screen.getByPlaceholderText("Search or type > for commands..."), label);
+    await userEvent.click(await screen.findByRole("option", { name: label }));
+
+    expect(screen.getByTestId("location-path")).toHaveTextContent(path);
+  });
+
+  it.each([
     "/docker/containers",
     "/logging",
   ])("keeps command mode global and limited to resource commands from %s", async (route) => {

@@ -47,6 +47,9 @@ export class DockerMigrationService {
   private readonly lease: DockerMigrationLease;
   private readonly queued = new Set<string>();
   private recoveryTimer?: ReturnType<typeof setInterval>;
+  private recoveryPromise: Promise<void> | null = null;
+  private stopping = false;
+  private readonly stopWaiters = new Set<() => void>();
 
   constructor(
     private db: DrizzleClient,
@@ -62,9 +65,19 @@ export class DockerMigrationService {
 
   start(): void {
     if (this.recoveryTimer) return;
-    void this.recoverOnStartup();
-    this.recoveryTimer = setInterval(() => void this.recoverOnStartup(), DOCKER_MIGRATION_LEASE_HEARTBEAT_MS);
+    this.stopping = false;
+    this.runRecovery();
+    this.recoveryTimer = setInterval(() => this.runRecovery(), DOCKER_MIGRATION_LEASE_HEARTBEAT_MS);
     this.recoveryTimer.unref?.();
+  }
+
+  async stop(): Promise<void> {
+    this.stopping = true;
+    if (this.recoveryTimer) clearInterval(this.recoveryTimer);
+    this.recoveryTimer = undefined;
+    await this.recoveryPromise;
+    if (this.queued.size === 0) return;
+    await new Promise<void>((resolve) => this.stopWaiters.add(resolve));
   }
 
   async preflightMigration(input: DockerMigrationPreflightInput, scopes: string[]) {
@@ -249,17 +262,38 @@ export class DockerMigrationService {
     return recoverable.length;
   }
 
+  private runRecovery(): void {
+    if (this.stopping || this.recoveryPromise) return;
+    const active = this.recoverOnStartup()
+      .then(() => undefined)
+      .catch((error) => {
+        logger.warn('Docker migration recovery failed', { error });
+      })
+      .finally(() => {
+        if (this.recoveryPromise === active) this.recoveryPromise = null;
+      });
+    this.recoveryPromise = active;
+  }
+
   private queue(id: string): void {
+    if (this.stopping) return;
     if (this.queued.has(id)) return;
     this.queued.add(id);
     setImmediate(() => {
       void this.run(id)
         .catch((error) => logger.error('Docker migration runner failed', { migrationId: id, error }))
-        .finally(() => this.queued.delete(id));
+        .finally(() => {
+          this.queued.delete(id);
+          if (this.stopping && this.queued.size === 0) {
+            for (const resolve of this.stopWaiters) resolve();
+            this.stopWaiters.clear();
+          }
+        });
     });
   }
 
   private async run(id: string): Promise<void> {
+    if (this.stopping) return;
     let row = await this.getRow(id);
     if (TERMINAL_STATUSES.includes(row.status)) return;
     if (!(await this.lease.claim(id))) return;
@@ -276,6 +310,14 @@ export class DockerMigrationService {
       });
       await this.log(row, 'docker_migration.started', row.createdById);
       while (!TERMINAL_STATUSES.includes(row.status)) {
+        if (this.stopping) {
+          await this.lease.release(row.id);
+          logger.info('Paused Docker migration at phase boundary for Gateway shutdown', {
+            migrationId: row.id,
+            phase: row.phase,
+          });
+          return;
+        }
         await this.lease.heartbeat(row.id);
         if (row.cancellationRequestedAt && !row.cutoverAt) {
           await this.rollback(row, true);

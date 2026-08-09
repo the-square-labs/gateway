@@ -24,6 +24,11 @@ const SETTINGS: AuthProvisioningSettings = {
     gatewayGrpcPublicTarget: null,
     gatewayGrpcLocalIp: null,
     relayAutoRecovery: true,
+    shutdown: {
+      userRequestDrainSeconds: 30,
+      structuredLogDrainSeconds: 5,
+      finalizationTimeoutSeconds: 10,
+    },
     features: {
       pkiEnabled: true,
       domainsEnabled: true,
@@ -81,6 +86,73 @@ describe("AuthProvisioningSection inference setting", () => {
     await waitFor(() =>
       expect(update).toHaveBeenCalledWith({ mfaExistingSessionGracePeriodDays: 5 })
     );
+  });
+
+  it("persists graceful shutdown settings in the separate Gateway panel", async () => {
+    api.setCache("settings:auth-provisioning", SETTINGS);
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(SETTINGS);
+    const update = vi
+      .spyOn(api, "updateAuthProvisioningSettings")
+      .mockImplementation(async (input) => ({
+        ...SETTINGS,
+        generalSettings: {
+          ...SETTINGS.generalSettings,
+          shutdown: input.generalSettings?.shutdown ?? SETTINGS.generalSettings.shutdown,
+        },
+      }));
+    const user = userEvent.setup();
+
+    render(<AuthProvisioningSection canEdit />);
+
+    const input = await screen.findByRole("spinbutton", { name: "User request drain in seconds" });
+    const save = screen.getByRole("button", { name: "Save graceful shutdown settings" });
+    expect(save).toBeDisabled();
+    await user.clear(input);
+    await user.type(input, "25");
+    expect(save).toBeEnabled();
+    await user.click(save);
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith({
+        generalSettings: {
+          shutdown: {
+            userRequestDrainSeconds: 25,
+            structuredLogDrainSeconds: 5,
+            finalizationTimeoutSeconds: 10,
+          },
+        },
+      })
+    );
+  });
+
+  it("rejects a graceful shutdown total above the Docker safety budget", async () => {
+    api.setCache("settings:auth-provisioning", SETTINGS);
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(SETTINGS);
+    const user = userEvent.setup();
+
+    render(<AuthProvisioningSection canEdit />);
+
+    const input = await screen.findByRole("spinbutton", { name: "User request drain in seconds" });
+    await user.clear(input);
+    await user.type(input, "40");
+
+    expect(screen.getByText("55 seconds")).toHaveClass("text-destructive");
+    expect(
+      screen.getByText("The combined deadline must not exceed 50 seconds.")
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save graceful shutdown settings" })).toBeDisabled();
+  });
+
+  it("disables graceful shutdown editing for read-only viewers", async () => {
+    api.setCache("settings:auth-provisioning", SETTINGS);
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(SETTINGS);
+
+    render(<AuthProvisioningSection canEdit={false} />);
+
+    expect(
+      await screen.findByRole("spinbutton", { name: "User request drain in seconds" })
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save graceful shutdown settings" })).toBeDisabled();
   });
 
   it("persists inference beside the other Gateway feature settings", async () => {

@@ -61,7 +61,7 @@ Native HTTPS and HTTP use the same port, `3000`. Native HTTPS uses a dedicated `
 
 A reverse proxy can connect to either internal protocol. Configure the proxy to trust the Gateway System CA when it verifies the native HTTPS upstream. Public certificates, DNS, Cloudflare, and ACME remain outside the installer and wizard.
 
-Administrators can enable or disable internal HTTPS later in **Settings → Gateway**. Gateway restarts after the change. When the browser directly addresses an IP, the UI changes `http`/`https` to follow the listener. With a domain or reverse proxy, the browser keeps its external URL and only reloads.
+Administrators can enable or disable internal HTTPS later in **Settings > General**. Gateway restarts after the change. When the browser directly addresses an IP, the UI changes `http`/`https` to follow the listener. With a domain or reverse proxy, the browser keeps its external URL and only reloads.
 
 ## Structured Logging
 

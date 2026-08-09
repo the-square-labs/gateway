@@ -24,7 +24,7 @@ Today, product license tiers are informational and do not gate features. Future 
 Gateway currently treats license tiers as no-op product entitlements:
 
 - Community works without a license key.
-- Homelab and Enterprise keys can be activated in **Settings > Gateway settings > License**.
+- Homelab and Enterprise keys can be activated in **Settings > General > License**.
 - Current releases do not block features by tier.
 - License status is displayed so installations can be prepared for future tiered behavior.
 
@@ -96,7 +96,7 @@ https://gw-license-server.wiolett.net
 
 Activation flow:
 
-1. An admin enters a license key in **Settings > Gateway settings > License**.
+1. An admin enters a license key in **Settings > General > License**.
 2. Gateway sends an activation request to the license server.
 3. The license server returns license status, tier, license name, expiration, and active installation details.
 4. Gateway stores the license key encrypted.
@@ -139,7 +139,7 @@ Gateway stores:
 - The encrypted license key, if one is installed.
 - Cached license status returned by the license server.
 
-The license key is encrypted through Gateway's crypto service before storage. Admins can remove the active key from **Settings > Gateway settings > License**.
+The license key is encrypted through Gateway's crypto service before storage. Admins can remove the active key from **Settings > General > License**.
 
 ## Source License
 

@@ -84,6 +84,8 @@ export interface SandboxSendArtifactInput {
 
 export class AISandboxService {
   private reconcileInterval: ReturnType<typeof setInterval> | null = null;
+  private activeReconciliation: Promise<unknown> | null = null;
+  private reconciliationStopping = false;
   private readonly creatingJobIds = new Set<string>();
   private readonly monitoredJobIds = new Set<string>();
 
@@ -439,22 +441,34 @@ export class AISandboxService {
   }
 
   startPolicyReconciliation() {
-    if (this.reconcileInterval) return;
-    void this.reconcileActiveJobs().catch((error) => {
-      logger.warn('Initial sandbox policy reconciliation failed', { error });
-    });
+    if (this.reconcileInterval || this.reconciliationStopping) return;
+    this.runPolicyReconciliation('Initial sandbox policy reconciliation failed');
     this.reconcileInterval = setInterval(() => {
-      this.reconcileActiveJobs().catch((error) => {
-        logger.warn('Sandbox policy reconciliation failed', { error });
-      });
+      this.runPolicyReconciliation('Sandbox policy reconciliation failed');
     }, SANDBOX_RECONCILE_INTERVAL_MS);
     this.reconcileInterval.unref();
   }
 
-  stopPolicyReconciliation() {
-    if (!this.reconcileInterval) return;
-    clearInterval(this.reconcileInterval);
-    this.reconcileInterval = null;
+  async stopPolicyReconciliation(): Promise<void> {
+    this.reconciliationStopping = true;
+    if (this.reconcileInterval) {
+      clearInterval(this.reconcileInterval);
+      this.reconcileInterval = null;
+    }
+    await this.activeReconciliation?.catch(() => undefined);
+  }
+
+  private runPolicyReconciliation(errorMessage: string): void {
+    if (this.reconciliationStopping || this.activeReconciliation) return;
+    const reconciliation = this.reconcileActiveJobs();
+    this.activeReconciliation = reconciliation;
+    void reconciliation
+      .catch((error) => {
+        logger.warn(errorMessage, { error });
+      })
+      .finally(() => {
+        if (this.activeReconciliation === reconciliation) this.activeReconciliation = null;
+      });
   }
 
   async reconcileActiveJobs() {

@@ -291,6 +291,48 @@ describe('StatusPageService settings validation', () => {
   });
 });
 
+describe('StatusPageService shutdown snapshot', () => {
+  it('primes and updates the synchronous public-host cache used by raw HTTP tracking', async () => {
+    const db = dbForSettingsConfig(
+      { enabled: true, domain: 'Status.Example.com' },
+      {
+        id: '22222222-2222-4222-8222-222222222222',
+        type: 'nginx',
+        status: 'online',
+      }
+    );
+    const service = createService(db);
+
+    await service.primePublicHost();
+    expect(service.isCachedStatusHost('status.example.com:443')).toBe(true);
+
+    await service.updateSettings({ enabled: false }, USER_ID);
+    expect(service.isCachedStatusHost('status.example.com')).toBe(false);
+  });
+
+  it('freezes the public host and DTO for the rest of the process lifetime', async () => {
+    let config = { enabled: true, title: 'Before update', description: '', domain: 'status.example.com' };
+    const db = {
+      query: {
+        settings: { findFirst: vi.fn(async () => ({ value: config })) },
+        statusPageServices: { findMany: vi.fn().mockResolvedValue([]) },
+        statusPageIncidents: { findMany: vi.fn().mockResolvedValue([]) },
+        statusPageIncidentUpdates: { findMany: vi.fn().mockResolvedValue([]) },
+      },
+    };
+    const service = createService(db);
+
+    await service.freezePublicSnapshot();
+    const frozen = await service.getPublicDto();
+    config = { enabled: true, title: 'After update', description: '', domain: 'other.example.com' };
+
+    expect((await service.getPublicDto())?.title).toBe('Before update');
+    expect((await service.getPublicDto())?.generatedAt).toBe(frozen?.generatedAt);
+    expect(await service.isStatusHost('status.example.com')).toBe(true);
+    expect(await service.isStatusHost('other.example.com')).toBe(false);
+  });
+});
+
 describe('StatusPageService safe DTO', () => {
   it('does not expose source identifiers or internal upstream fields', async () => {
     const historyTs = new Date().toISOString();

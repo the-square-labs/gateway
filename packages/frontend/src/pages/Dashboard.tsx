@@ -777,7 +777,7 @@ export function Dashboard() {
                     </span>
                   </div>
                   <Link
-                    to="/settings/gateway"
+                    to="/settings/general"
                     className="flex items-center gap-1 text-sm font-medium text-warning hover:underline"
                   >
                     Go to Settings

@@ -175,6 +175,9 @@ function sanitizeHistory(
 
 export class StatusPageService {
   private eventBus?: EventBusService;
+  private frozen = false;
+  private frozenHost: string | null = null;
+  private lastPublicDto: PublicStatusPageDto | null = null;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -197,9 +200,21 @@ export class StatusPageService {
     return { ...DEFAULT_CONFIG, ...((row?.value as Partial<StatusPageConfig> | undefined) ?? {}) };
   }
 
-  async isStatusHost(hostHeader: string | undefined): Promise<boolean> {
+  async primePublicHost(): Promise<void> {
     const config = await this.getConfig();
-    return !!config.enabled && !!config.domain && normalizeHost(hostHeader) === normalizeHost(config.domain);
+    this.frozenHost = config.enabled && config.domain ? normalizeHost(config.domain) : null;
+  }
+
+  isCachedStatusHost(hostHeader: string | undefined): boolean {
+    return this.frozenHost !== null && normalizeHost(hostHeader) === this.frozenHost;
+  }
+
+  async isStatusHost(hostHeader: string | undefined): Promise<boolean> {
+    if (this.frozen) return this.isCachedStatusHost(hostHeader);
+    const config = await this.getConfig();
+    const configuredHost = config.enabled && config.domain ? normalizeHost(config.domain) : null;
+    this.frozenHost = configuredHost;
+    return configuredHost !== null && normalizeHost(hostHeader) === configuredHost;
   }
 
   async updateSettings(input: StatusPageSettingsInput, userId: string): Promise<StatusPageConfig> {
@@ -249,6 +264,7 @@ export class StatusPageService {
       .insert(settings)
       .values({ key: CONFIG_KEY, value: next, updatedAt: new Date() })
       .onConflictDoUpdate({ target: settings.key, set: { value: next, updatedAt: new Date() } });
+    this.frozenHost = next.enabled && next.domain ? normalizeHost(next.domain) : null;
 
     if (input.autoCreateThresholdSeconds !== undefined || input.autoResolveThresholdSeconds !== undefined) {
       const thresholdUpdate: Partial<typeof statusPageServices.$inferInsert> = { updatedAt: new Date() };
@@ -649,9 +665,28 @@ export class StatusPageService {
   }
 
   async getPublicDto(): Promise<PublicStatusPageDto | null> {
+    if (this.frozen) return this.lastPublicDto;
     const config = await this.getConfig();
     if (!config.enabled) return null;
-    return this.buildSafeDto(config);
+    const dto = await this.buildSafeDto(config);
+    this.lastPublicDto = dto;
+    this.frozenHost = config.domain ? normalizeHost(config.domain) : null;
+    return dto;
+  }
+
+  async freezePublicSnapshot(): Promise<void> {
+    if (this.frozen) return;
+    try {
+      const config = await this.getConfig();
+      this.frozenHost = config.enabled && config.domain ? normalizeHost(config.domain) : null;
+      this.lastPublicDto = config.enabled ? await this.buildSafeDto(config) : null;
+    } catch (error) {
+      logger.warn('Failed to refresh public status snapshot before shutdown; using last successful snapshot', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      this.frozen = true;
+    }
   }
 
   async getPreviewDto(): Promise<PublicStatusPageDto> {

@@ -29,6 +29,7 @@ import {
   withDefaultSystemConfig,
 } from "@/stores/system-config";
 import type { AuthProvisioningSettings } from "@/types";
+import { GracefulShutdownSettingsPanel } from "./GracefulShutdownSettingsPanel";
 import {
   applySmtpPreset,
   DEFAULT_SMTP_DRAFT,
@@ -40,6 +41,7 @@ import {
 
 interface AuthProvisioningSectionProps {
   canEdit: boolean;
+  section?: "all" | "general" | "advanced";
 }
 
 const BYTES_PER_MEGABYTE = 1024 * 1024;
@@ -51,6 +53,11 @@ const DEFAULT_GENERAL_FEATURES = {
   siemEnabled: DEFAULT_GATEWAY_FEATURES.siemEnabled,
   inferenceEnabled: DEFAULT_GATEWAY_FEATURES.inferenceEnabled,
 };
+const DEFAULT_SHUTDOWN_SETTINGS = {
+  userRequestDrainSeconds: 30,
+  structuredLogDrainSeconds: 5,
+  finalizationTimeoutSeconds: 10,
+};
 const DEFAULT_GENERAL_SETTINGS = {
   publicUrl: null as string | null,
   fileUploadMaxBytes: DEFAULT_FILE_UPLOAD_MAX_BYTES,
@@ -59,6 +66,7 @@ const DEFAULT_GENERAL_SETTINGS = {
   gatewayGrpcPublicTarget: null as string | null,
   gatewayGrpcLocalIp: null as string | null,
   relayAutoRecovery: true,
+  shutdown: DEFAULT_SHUTDOWN_SETTINGS,
   features: DEFAULT_GENERAL_FEATURES,
 };
 const DEFAULT_AUTH_METHODS = { oidc: true, password: false, emailOtp: false, passkeyLogin: false };
@@ -144,6 +152,10 @@ function withDefaultGeneralSettings(settings: AuthProvisioningSettings | null) {
         ...DEFAULT_GENERAL_FEATURES,
         ...settings.generalSettings?.features,
       },
+      shutdown: {
+        ...DEFAULT_SHUTDOWN_SETTINGS,
+        ...settings.generalSettings?.shutdown,
+      },
     },
   };
 }
@@ -156,7 +168,10 @@ function getMfaExistingSessionGracePeriodDays(
   );
 }
 
-export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProps) {
+export function AuthProvisioningSection({
+  canEdit,
+  section = "all",
+}: AuthProvisioningSectionProps) {
   const [settings, setSettings] = useState<AuthProvisioningSettings | null>(() =>
     withDefaultGeneralSettings(
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning") ?? null
@@ -621,6 +636,17 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
     });
   };
 
+  const saveShutdownSettings = async (
+    shutdown: AuthProvisioningSettings["generalSettings"]["shutdown"]
+  ) => {
+    const updated = await api.updateAuthProvisioningSettings({
+      generalSettings: { shutdown },
+    });
+    const normalized = withDefaultGeneralSettings(updated)!;
+    applySettings(normalized);
+    return normalized.generalSettings.shutdown;
+  };
+
   const handleToggleMcpServer = async (checked: boolean) => {
     if (!settings || !canEdit) return;
     setIsSavingMcp(true);
@@ -874,6 +900,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
   return (
     <div className="space-y-4">
       <PanelShell
+        hidden={section === "advanced"}
         title="General settings"
         description="Gateway-wide behavior and operational limits"
         actions={
@@ -1084,7 +1111,15 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
         </div>
       </PanelShell>
 
+      <GracefulShutdownSettingsPanel
+        hidden={section === "general"}
+        value={settings.generalSettings.shutdown}
+        canEdit={canEdit}
+        onSave={saveShutdownSettings}
+      />
+
       <PanelShell
+        hidden={section === "general"}
         title="OIDC provider"
         description={
           settings.oidc?.configured
@@ -1176,6 +1211,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       </PanelShell>
 
       <PanelShell
+        hidden={section === "general"}
         title="Structured logging storage"
         description="Keep logging disabled, let Gateway manage a local ClickHouse, or use an external ClickHouse"
         actions={
@@ -1311,6 +1347,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       </PanelShell>
 
       <PanelShell
+        hidden={section === "general"}
         title="Identity provisioning"
         description="OIDC sign-in behavior for Gateway users"
       >
@@ -1372,6 +1409,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       </PanelShell>
 
       <PanelShell
+        hidden={section === "general"}
         title="Sign-in methods"
         description="Enable the primary methods available to Gateway accounts"
       >
@@ -1412,6 +1450,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       </PanelShell>
 
       <PanelShell
+        hidden={section === "general"}
         title="Multi-factor authentication"
         description="Controls how Gateway enforces MFA for local browser sessions"
         actions={
@@ -1453,6 +1492,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       </PanelShell>
 
       <PanelShell
+        hidden={section === "general"}
         title="Authentication email (SMTP)"
         description={
           settings.smtp?.verifiedAt
@@ -1686,6 +1726,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       </Dialog>
 
       <PanelShell
+        hidden={section === "general"}
         title="OAuth and MCP access"
         description="Remote client compatibility and tool access"
       >
@@ -1736,6 +1777,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       </PanelShell>
 
       <PanelShell
+        hidden={section === "general"}
         title="Network trust"
         description="Client address detection for rate limits and audit records"
       >
@@ -1852,6 +1894,7 @@ export function AuthProvisioningSection({ canEdit }: AuthProvisioningSectionProp
       </PanelShell>
 
       <PanelShell
+        hidden={section === "general"}
         title="Outbound webhook policy"
         description="Private-network delivery rules for notification webhooks"
       >

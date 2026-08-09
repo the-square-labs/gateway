@@ -247,18 +247,36 @@ export async function startGrpcServer(
   });
 }
 
-export function stopGrpcServer(): Promise<void> {
-  return new Promise((resolve) => {
-    if (!server) {
-      resolve();
-      return;
-    }
-    server.tryShutdown(() => {
-      logger.info('gRPC server stopped');
-      server = null;
-      certificateProvider = null;
-      configureRelayForwardedIdentityTrust(null);
-      resolve();
-    });
+export async function stopGrpcServer(timeoutMs = 3000): Promise<void> {
+  const current = server;
+  if (!current) return;
+  const forced = await shutdownGrpcServerInstance(current, timeoutMs);
+  if (server === current) server = null;
+  certificateProvider = null;
+  configureRelayForwardedIdentityTrust(null);
+  logger.info(forced ? 'gRPC server force-stopped' : 'gRPC server stopped');
+}
+
+export function shutdownGrpcServerInstance(
+  current: Pick<grpc.Server, 'tryShutdown' | 'forceShutdown'>,
+  timeoutMs: number
+): Promise<boolean> {
+  return new Promise((resolvePromise) => {
+    let settled = false;
+    const finish = (forced: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolvePromise(forced);
+    };
+    const timer = setTimeout(
+      () => {
+        current.forceShutdown();
+        finish(true);
+      },
+      Math.max(0, timeoutMs)
+    );
+    timer.unref?.();
+    current.tryShutdown(() => finish(false));
   });
 }

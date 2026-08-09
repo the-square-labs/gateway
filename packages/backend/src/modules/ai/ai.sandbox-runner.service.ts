@@ -48,6 +48,7 @@ export class AISandboxRunnerService {
   private child: ChildProcess | null = null;
   private statusValue: SandboxRunnerStatus = 'stopped';
   private startPromise: Promise<void> | null = null;
+  private stopping = false;
 
   constructor(
     private readonly socketPath = process.env.SANDBOX_RUNNER_SOCKET || `/tmp/gateway-sandbox-${process.pid}.sock`
@@ -62,6 +63,7 @@ export class AISandboxRunnerService {
   }
 
   async ensureStarted(): Promise<void> {
+    if (this.stopping) throw new Error('Sandbox runner is shutting down');
     if (this.statusValue === 'running') return;
     if (this.startPromise) return this.startPromise;
     this.startPromise = this.start();
@@ -72,7 +74,8 @@ export class AISandboxRunnerService {
     }
   }
 
-  async stop(): Promise<void> {
+  async stop(timeoutMs = 5_000): Promise<void> {
+    this.stopping = true;
     if (!this.child) return;
     const child = this.child;
     let exited = false;
@@ -80,9 +83,12 @@ export class AISandboxRunnerService {
     this.statusValue = 'stopped';
     child.kill('SIGTERM');
     await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        resolve();
-      }, 5_000);
+      const timeout = setTimeout(
+        () => {
+          resolve();
+        },
+        Math.max(0, Math.min(5_000, timeoutMs))
+      );
       child.once('exit', () => {
         exited = true;
         clearTimeout(timeout);

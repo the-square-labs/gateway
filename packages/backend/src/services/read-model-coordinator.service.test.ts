@@ -41,6 +41,23 @@ describe('ReadModelCoordinator', () => {
     release();
 
     await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(2));
-    coordinator.stop();
+    await coordinator.stop();
+  });
+
+  it('waits for active refreshes and ignores new events after stop', async () => {
+    const eventBus = makeEventBus();
+    const coordinator = new ReadModelCoordinator(eventBus as never);
+    let release!: () => void;
+    const refresh = vi.fn(() => new Promise<void>((resolve) => (release = resolve)));
+    coordinator.register({ id: 'nodes', refresh, initial: false, events: [{ channel: 'node.changed' }] });
+    coordinator.start();
+    eventBus.emit('node.changed', {});
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+
+    const stopping = coordinator.stop();
+    eventBus.emit('node.changed', {});
+    release();
+    await stopping;
+    expect(refresh).toHaveBeenCalledOnce();
   });
 });

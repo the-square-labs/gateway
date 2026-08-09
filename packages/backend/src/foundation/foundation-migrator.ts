@@ -160,13 +160,59 @@ export function patchCompose(content: string): string {
   if (!appBlock) throw new Error('foundation migration failed: services.app block not found in docker-compose.yml');
 
   const imagePatched = patchAppImage(lines, appBlock);
-  const volumesPatched = patchAppSandboxVolume(imagePatched, findServiceBlock(imagePatched, 'app') ?? appBlock);
+  const gracePatched = patchAppStopGracePeriod(imagePatched);
+  const volumesPatched = patchAppSandboxVolume(gracePatched, findServiceBlock(gracePatched, 'app') ?? appBlock);
   const runtimePatched = patchAppRuntimeStorageAndSocket(volumesPatched);
   const healthcheckPatched = patchAppHealthcheck(runtimePatched);
   const environmentPatched = removeLegacyAppEnvironment(healthcheckPatched);
   const clickHousePatched = removeLegacyClickHouseService(environmentPatched);
   const relayPatched = patchRelayFoundation(clickHousePatched);
   return `${relayPatched.join('\n')}${hadTrailingNewline ? '\n' : ''}`;
+}
+
+function patchAppStopGracePeriod(lines: string[]): string[] {
+  const app = findServiceBlock(lines, 'app');
+  if (!app) return lines;
+  const directIndent = ' '.repeat(app.indent + 2);
+  for (let index = app.start + 1; index < app.end; index += 1) {
+    const match = /^(\s*)stop_grace_period\s*:\s*(.*?)\s*$/.exec(lines[index] ?? '');
+    if (!match || match[1] !== directIndent) continue;
+    const seconds = parseComposeDurationSeconds(match[2] ?? '');
+    if (seconds !== null && seconds >= 60) return lines;
+    const next = [...lines];
+    next[index] = `${directIndent}stop_grace_period: 60s`;
+    return next;
+  }
+
+  let insertAt = app.start + 1;
+  for (let index = app.start + 1; index < app.end; index += 1) {
+    if (/^\s*restart\s*:/.test(lines[index] ?? '')) {
+      insertAt = index + 1;
+      break;
+    }
+  }
+  return [...lines.slice(0, insertAt), `${directIndent}stop_grace_period: 60s`, ...lines.slice(insertAt)];
+}
+
+function parseComposeDurationSeconds(value: string): number | null {
+  const normalized = value.trim().replace(/^['"]|['"]$/g, '');
+  if (!normalized) return null;
+  const unitSeconds: Record<string, number> = {
+    h: 3600,
+    m: 60,
+    s: 1,
+    ms: 0.001,
+    us: 0.000001,
+    ns: 0.000000001,
+  };
+  const token = /(\d+(?:\.\d+)?)(ms|us|ns|h|m|s)/gy;
+  let seconds = 0;
+  let consumed = 0;
+  for (let match = token.exec(normalized); match; match = token.exec(normalized)) {
+    seconds += Number(match[1]) * unitSeconds[match[2]!]!;
+    consumed = token.lastIndex;
+  }
+  return consumed === normalized.length ? seconds : null;
 }
 
 function patchAppRuntimeStorageAndSocket(lines: string[]): string[] {

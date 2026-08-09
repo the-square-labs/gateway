@@ -13,6 +13,7 @@ const RESERVATION_MAX_AGE_MS = 15 * 60_000;
 @injectable()
 export class InferenceReservationReconciler {
   private timer: NodeJS.Timeout | null = null;
+  private activeReconcile: Promise<void> | null = null;
 
   constructor(
     @inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient,
@@ -22,18 +23,29 @@ export class InferenceReservationReconciler {
 
   start(): void {
     if (this.timer) return;
-    void this.reconcile().catch((error) =>
-      logger.warn('Initial inference reservation reconciliation failed', { error })
-    );
+    this.runReconcile('Initial inference reservation reconciliation failed');
     this.timer = setInterval(() => {
-      void this.reconcile().catch((error) => logger.warn('Inference reservation reconciliation failed', { error }));
+      this.runReconcile('Inference reservation reconciliation failed');
     }, 60_000);
     this.timer.unref();
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    await this.activeReconcile;
+  }
+
+  private runReconcile(message: string): void {
+    if (this.activeReconcile) return;
+    const active = this.reconcile()
+      .catch((error) => {
+        logger.warn(message, { error });
+      })
+      .finally(() => {
+        if (this.activeReconcile === active) this.activeReconcile = null;
+      });
+    this.activeReconcile = active;
   }
 
   async reconcile(now = new Date()): Promise<void> {

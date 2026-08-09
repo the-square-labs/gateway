@@ -339,7 +339,7 @@ export function SidebarContent({
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 bg-warning text-black hover:bg-warning/90"
-                    onClick={() => navigate("/settings/gateway")}
+                    onClick={() => navigate("/settings/general")}
                   >
                     <ArrowUpCircle className="h-4 w-4" />
                   </Button>
@@ -503,7 +503,7 @@ export function SidebarContent({
               <>
                 <div className="px-2 py-2">
                   <Link
-                    to="/settings/gateway"
+                    to="/settings/general"
                     onClick={onNavigate}
                     className="flex w-full items-center gap-2 bg-warning px-3 py-2 text-left text-sm font-medium text-black transition-colors hover:bg-warning/90"
                   >

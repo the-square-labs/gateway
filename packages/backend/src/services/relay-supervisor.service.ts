@@ -98,6 +98,7 @@ export class RelaySupervisorService {
   private probing = false;
   private recoveryCycle: Promise<void> | null = null;
   private manualRetryStarting = false;
+  private stopping = false;
   private readonly probeIntervalMs: number;
   private readonly recoveryDelaysMs: readonly [number, number, number];
   private readonly readinessWaitMs: number;
@@ -123,6 +124,7 @@ export class RelaySupervisorService {
 
   async start(): Promise<void> {
     if (!this.options.required || !this.relayClient) return;
+    this.stopping = false;
     const persisted = await this.cache.get<RelaySupervisorState>(CONTROL_STATE_KEY).catch(() => null);
     if (persisted?.maxAttempts === MAX_ATTEMPTS) this.state = persisted;
     const resumeRecovery = this.state.state === 'recovering';
@@ -136,9 +138,12 @@ export class RelaySupervisorService {
     this.timer.unref();
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
+    this.stopping = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    await this.recoveryCycle;
+    while (this.probing) await this.sleep(25);
   }
 
   getSnapshot(admin: boolean) {
@@ -177,7 +182,14 @@ export class RelaySupervisorService {
   }
 
   async probeNow(): Promise<void> {
-    if (!this.options.required || !this.relayClient || this.probing || this.state.state === 'maintenance') return;
+    if (
+      this.stopping ||
+      !this.options.required ||
+      !this.relayClient ||
+      this.probing ||
+      this.state.state === 'maintenance'
+    )
+      return;
     this.probing = true;
     try {
       const result = await this.checkRelay();
@@ -303,8 +315,10 @@ export class RelaySupervisorService {
     }
     const startAttempt = Math.max(1, this.state.attempt + 1);
     for (let attempt = startAttempt; attempt <= MAX_ATTEMPTS; attempt += 1) {
+      if (this.stopping) return;
       const delay = this.recoveryDelaysMs[attempt - 1] ?? 0;
       if (delay > 0) await this.sleep(delay);
+      if (this.stopping) return;
       const startedAt = new Date().toISOString();
       await this.allocateAttempt(attempt, startedAt);
       let action: RelayRecoveryAction;

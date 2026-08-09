@@ -30,6 +30,7 @@ describe('/health', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
       status: 'ok',
+      lifecycleState: 'running',
       version: 'dev',
       dependencies: { redis: 'ok' },
     });

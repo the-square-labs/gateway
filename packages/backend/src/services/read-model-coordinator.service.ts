@@ -32,6 +32,7 @@ export class ReadModelCoordinator {
   private readonly states = new Map<string, RefreshState>();
   private readonly unsubscribers: Array<() => void> = [];
   private readonly timers: Array<ReturnType<typeof setInterval>> = [];
+  private readonly activeRuns = new Set<Promise<void>>();
   private started = false;
 
   constructor(private readonly eventBus: EventBusService) {}
@@ -51,13 +52,20 @@ export class ReadModelCoordinator {
     for (const definition of this.definitions.values()) this.startDefinition(definition);
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     for (const unsubscribe of this.unsubscribers.splice(0)) unsubscribe();
     for (const timer of this.timers.splice(0)) clearInterval(timer);
     this.started = false;
+    for (const state of this.states.values()) {
+      state.queued = false;
+      state.dirty = false;
+      state.notify = false;
+    }
+    await Promise.allSettled([...this.activeRuns]);
   }
 
   enqueue(id: string, notify = false): void {
+    if (!this.started) return;
     const definition = this.definitions.get(id);
     const state = this.states.get(id);
     if (!definition || !state) return;
@@ -72,7 +80,14 @@ export class ReadModelCoordinator {
     }
     state.queued = true;
     state.notify ||= notify;
-    queueMicrotask(() => void this.run(definition));
+    queueMicrotask(() => {
+      if (!this.started) {
+        state.queued = false;
+        return;
+      }
+      const promise = this.run(definition).finally(() => this.activeRuns.delete(promise));
+      this.activeRuns.add(promise);
+    });
   }
 
   private startDefinition(definition: ReadModelRefreshDefinition): void {
@@ -106,7 +121,7 @@ export class ReadModelCoordinator {
       });
     } finally {
       state.active = false;
-      if (state.dirty) {
+      if (state.dirty && this.started) {
         state.dirty = false;
         this.enqueue(definition.id, state.notify);
       }

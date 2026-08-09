@@ -41,7 +41,7 @@ describe("AIConfigSection provider guidance", () => {
     useSystemConfigStore.getState().reset();
   });
 
-  it("links to Gateway settings only while inference is disabled", async () => {
+  it("links to General settings only while inference is disabled", async () => {
     api.setCache("settings:ai-config", AI_CONFIG);
     vi.spyOn(api, "getAIConfig").mockResolvedValue(AI_CONFIG);
     vi.spyOn(api, "listAISandboxJobs").mockResolvedValue([]);
@@ -54,9 +54,9 @@ describe("AIConfigSection provider guidance", () => {
     );
 
     const guidance = screen.getByRole("link", {
-      name: "enable and configure Inference in Gateway settings",
+      name: "enable and configure Inference in General settings",
     });
-    expect(guidance).toHaveAttribute("href", "/settings/gateway");
+    expect(guidance).toHaveAttribute("href", "/settings/general");
 
     act(() => {
       useSystemConfigStore.getState().setConfig({
@@ -71,7 +71,7 @@ describe("AIConfigSection provider guidance", () => {
     await waitFor(() =>
       expect(
         screen.queryByRole("link", {
-          name: "enable and configure Inference in Gateway settings",
+          name: "enable and configure Inference in General settings",
         })
       ).not.toBeInTheDocument()
     );

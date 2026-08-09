@@ -75,6 +75,8 @@ export class DockerSnapshotReconciler {
   private activeCount = 0;
   private retryTimer?: ReturnType<typeof setTimeout>;
   private unsubscribers: Array<() => void> = [];
+  private running = true;
+  private readonly stopWaiters = new Set<() => void>();
 
   constructor(
     private readonly snapshots: DockerSnapshotService,
@@ -85,6 +87,7 @@ export class DockerSnapshotReconciler {
 
   start(): void {
     if (this.unsubscribers.length > 0) return;
+    this.running = true;
     this.unsubscribers.push(
       this.eventBus.subscribe('node.changed', (payload) => this.onNodeChanged(payload)),
       this.eventBus.subscribe('docker.container.changed', (payload) =>
@@ -105,12 +108,25 @@ export class DockerSnapshotReconciler {
     }
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
+    this.running = false;
     for (const unsubscribe of this.unsubscribers.splice(0)) unsubscribe();
-    if (this.retryTimer) clearTimeout(this.retryTimer);
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = undefined;
+    }
+    this.queue.splice(0);
+    for (const [id, state] of this.states) {
+      state.dirty = false;
+      state.dirtyPriority = undefined;
+      if (state.status === 'queued') this.states.delete(id);
+    }
+    if (this.activeCount === 0) return;
+    await new Promise<void>((resolve) => this.stopWaiters.add(resolve));
   }
 
   enqueue(job: RefreshJob, options: { urgent?: boolean } = {}): boolean {
+    if (!this.running) return false;
     if (this.snapshots.isNodeDeleted(job.nodeId)) return false;
     const id = jobId(job);
     this.cancelledJobs.delete(id);
@@ -284,6 +300,7 @@ export class DockerSnapshotReconciler {
   }
 
   private drain(): void {
+    if (!this.running) return;
     if (this.retryTimer) {
       clearTimeout(this.retryTimer);
       this.retryTimer = undefined;
@@ -318,6 +335,7 @@ export class DockerSnapshotReconciler {
   }
 
   private scheduleRetry() {
+    if (!this.running) return;
     const retryAt = this.queue
       .map((id) => this.failures.get(id)?.retryAt ?? 0)
       .filter((value) => value > Date.now())
@@ -338,6 +356,14 @@ export class DockerSnapshotReconciler {
     if (!state) return;
     this.activeCount -= 1;
     this.activeNodes.delete(state.job.nodeId);
+    if (!this.running) {
+      this.states.delete(id);
+      if (this.activeCount === 0) {
+        for (const resolve of this.stopWaiters) resolve();
+        this.stopWaiters.clear();
+      }
+      return;
+    }
     if (this.snapshots.isNodeDeleted(state.job.nodeId)) {
       this.states.delete(id);
       this.failures.delete(id);

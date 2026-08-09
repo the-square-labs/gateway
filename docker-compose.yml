@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
     image: ${GATEWAY_IMAGE_REF:-gateway:local}
     restart: unless-stopped
+    stop_grace_period: 60s
     labels:
       com.wiolett.gateway.managed-service: app
     ports:

@@ -197,7 +197,7 @@ export function InferenceSetupWizard({
     if (!source) return;
     if (selectedSourceNeedsPricing && !source.model.pricing) {
       toast.error(
-        "Gateway could not discover pricing for this API model. Add it from Settings → Gateway Inference."
+        "Gateway could not discover pricing for this API model. Add it from Settings → Inference."
       );
       return;
     }
@@ -337,7 +337,7 @@ export function InferenceSetupWizard({
         {completed ? (
           <FinalizeSetupCompletion
             title="Gateway Inference is ready"
-            continueIn="Continue from Settings → Gateway Inference to connect more providers, configure models, and refine access rules."
+            continueIn="Continue from Settings → Inference to connect more providers, configure models, and refine access rules."
           >
             Gateway has at least one selectable model and can route approved model requests through
             its centrally managed catalog.
@@ -378,7 +378,7 @@ export function InferenceSetupWizard({
             {models.filter((model) => model.enabled && model.defaultAccessAllowed).length === 1
               ? ""
               : "s"}
-            . You can manage providers and models later in Settings → Gateway Inference.
+            . You can manage providers and models later in Settings → Inference.
           </div>
         ) : sources.length === 0 ? (
           <PanelShell

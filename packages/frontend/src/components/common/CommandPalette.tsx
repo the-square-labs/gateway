@@ -217,7 +217,7 @@ function resourceHref(result: ResourceSearchResult): string {
     case "docker_network":
       return "/docker/networks";
     case "docker_registry":
-      return "/settings/gateway";
+      return "/settings/advanced";
     case "database":
       return databaseRoute(summaryString(result, "slug") ?? result.id);
     case "logging_environment":
@@ -660,18 +660,29 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         visible: hasScope("admin:audit"),
       },
       {
-        id: "settings-gateway",
-        label: "Gateway settings",
-        href: "/settings/gateway",
+        id: "settings-general",
+        label: "General settings",
+        href: "/settings/general",
         icon: Settings,
         parentId: "settings",
         visible: hasAnyScope(
           "settings:gateway:view",
           "settings:gateway:edit",
-          "docker:registries:view",
           "admin:update",
           "license:view",
           "license:manage"
+        ),
+      },
+      {
+        id: "settings-advanced",
+        label: "Advanced settings",
+        href: "/settings/advanced",
+        icon: Settings,
+        parentId: "settings",
+        visible: hasAnyScope(
+          "settings:gateway:view",
+          "settings:gateway:edit",
+          "docker:registries:view"
         ),
       },
       {

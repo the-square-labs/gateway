@@ -4,7 +4,7 @@ import { networkInterfaces } from 'node:os';
 import { resolve } from 'node:path';
 import { domainToASCII } from 'node:url';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { createNodeWebSocket } from '@hono/node-ws';
+import { createNodeWebSocket, type NodeWebSocket } from '@hono/node-ws';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { apiReference } from '@scalar/hono-api-reference';
 import type { MiddlewareHandler } from 'hono';
@@ -93,6 +93,7 @@ import { systemRoutes } from '@/modules/system/system.routes.js';
 import { tokensRoutes } from '@/modules/tokens/tokens.routes.js';
 import { uiBootstrapRoutes } from '@/modules/ui-bootstrap/ui-bootstrap.routes.js';
 import type { RedisClient } from '@/services/cache.service.js';
+import { GatewayLifecycleService } from '@/services/gateway-lifecycle.service.js';
 import type { AppEnv } from '@/types.js';
 import { authenticateEventsConnection, createEventsWSHandlers } from '@/ws/events.ws.js';
 
@@ -362,7 +363,13 @@ async function getRedisHealth(): Promise<'ok' | 'unavailable'> {
   }
 }
 
-export function createApp() {
+export interface GatewayAppRuntime {
+  app: OpenAPIHono<AppEnv>;
+  injectWebSocket: NodeWebSocket['injectWebSocket'];
+  wss: NodeWebSocket['wss'];
+}
+
+export function createApp(): GatewayAppRuntime {
   const app = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
   const env = getEnv();
 
@@ -428,6 +435,24 @@ export function createApp() {
       maxAge: 86400,
     })
   );
+
+  app.use('*', async (c, next) => {
+    const lifecycle = container.resolve(GatewayLifecycleService);
+    if (lifecycle.getState() === 'running') {
+      await next();
+      return;
+    }
+    const path = new URL(c.req.url).pathname;
+    const statusHost = await container.resolve(StatusPageService).isStatusHost(c.req.header('host'));
+    const trafficClass = lifecycle.classifyRequest(c.req.method, path, statusHost);
+    if (lifecycle.shouldAdmit(trafficClass)) {
+      await next();
+      return;
+    }
+    c.header('Retry-After', '1');
+    c.header('Connection', 'close');
+    return c.json({ code: 'SERVICE_RESTARTING', message: 'Gateway is restarting' }, 503);
+  });
 
   app.use('*', async (c, next) => {
     if (await isSetupComplete()) {
@@ -565,6 +590,7 @@ export function createApp() {
     return c.json(
       {
         status: healthy ? 'ok' : 'unavailable',
+        lifecycleState: container.resolve(GatewayLifecycleService).getState(),
         version: getEnv().APP_VERSION,
         timestamp: new Date().toISOString(),
         dependencies: { redis },
@@ -941,5 +967,5 @@ export function createApp() {
     app.get('/*', serveStatic({ path: './public/index.html' }));
   }
 
-  return { app, injectWebSocket };
+  return { app, injectWebSocket, wss };
 }

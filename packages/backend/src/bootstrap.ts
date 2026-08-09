@@ -158,6 +158,7 @@ import { DaemonUpdateService } from '@/services/daemon-update.service.js';
 import { DatabaseCAService } from '@/services/database-ca.service.js';
 import { DockerService } from '@/services/docker.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
+import { GatewayLifecycleService } from '@/services/gateway-lifecycle.service.js';
 import { GrpcIdentityService } from '@/services/grpc-identity.service.js';
 import { HousekeepingService } from '@/services/housekeeping.service.js';
 import { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
@@ -240,6 +241,7 @@ export async function initializeContainer(): Promise<void> {
   const generalSettingsService = new GeneralSettingsService(db, inferenceSetupEvents, eventBus);
   container.registerInstance(GeneralSettingsService, generalSettingsService);
   await generalSettingsService.importLegacyPublicUrl(process.env.APP_URL);
+  container.registerInstance(GatewayLifecycleService, new GatewayLifecycleService());
 
   // SIEM reuses the existing installation identifier only as a non-secret
   // source label. It does not participate in licensing or tier checks.

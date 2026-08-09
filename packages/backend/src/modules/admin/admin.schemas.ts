@@ -9,6 +9,11 @@ import {
   isValidGatewayIp,
   isValidGatewayIpPortTarget,
   normalizePublicUrl,
+  SHUTDOWN_FINALIZATION_MAX_SECONDS,
+  SHUTDOWN_FINALIZATION_MIN_SECONDS,
+  SHUTDOWN_LOG_DRAIN_MAX_SECONDS,
+  SHUTDOWN_TOTAL_MAX_SECONDS,
+  SHUTDOWN_USER_DRAIN_MAX_SECONDS,
 } from '@/modules/settings/general-settings.service.js';
 import { CLIENT_IP_SOURCE_VALUES } from '@/modules/settings/network-settings.service.js';
 
@@ -70,6 +75,23 @@ const SmtpConfigSchema = z.object({
   testRecipient: z.string().email().max(255).optional(),
   testEmailKind: z.enum(['smtp_configuration', 'password_setup', 'password_reset', 'email_otp']).optional(),
 });
+
+const ShutdownSettingsSchema = z
+  .object({
+    userRequestDrainSeconds: z.number().int().min(0).max(SHUTDOWN_USER_DRAIN_MAX_SECONDS),
+    structuredLogDrainSeconds: z.number().int().min(0).max(SHUTDOWN_LOG_DRAIN_MAX_SECONDS),
+    finalizationTimeoutSeconds: z
+      .number()
+      .int()
+      .min(SHUTDOWN_FINALIZATION_MIN_SECONDS)
+      .max(SHUTDOWN_FINALIZATION_MAX_SECONDS),
+  })
+  .refine(
+    (value) =>
+      value.userRequestDrainSeconds + value.structuredLogDrainSeconds + value.finalizationTimeoutSeconds <=
+      SHUTDOWN_TOTAL_MAX_SECONDS,
+    { message: `Total graceful shutdown deadline must not exceed ${SHUTDOWN_TOTAL_MAX_SECONDS} seconds` }
+  );
 
 export const UpdateAuthProvisioningSettingsSchema = z.object({
   oidcAutoCreateUsers: z.boolean().optional(),
@@ -138,6 +160,7 @@ export const UpdateAuthProvisioningSettingsSchema = z.object({
         .nullable()
         .optional(),
       relayAutoRecovery: z.boolean().optional(),
+      shutdown: ShutdownSettingsSchema.optional(),
       features: z
         .object({
           pkiEnabled: z.boolean().optional(),

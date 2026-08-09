@@ -64,7 +64,7 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 
 ## 配置 AI Harnesses
 
-[`@wiolett/gateway-inference`](packages/gateway-inference) companion 可以配置受支持的 AI harnesses，而不会把 Gateway inference token 写入它们的配置文件。先在 **Settings > Gateway settings > General settings** 中启用 **Inference**，再在 **Settings > Inference** 中启用 **Harness-specific endpoints**，然后运行：
+[`@wiolett/gateway-inference`](packages/gateway-inference) companion 可以配置受支持的 AI harnesses，而不会把 Gateway inference token 写入它们的配置文件。先在 **Settings > General > General settings** 中启用 **Inference**，再在 **Settings > Inference** 中启用 **Harness-specific endpoints**，然后运行：
 
 ```bash
 npx -y @wiolett/gateway-inference@latest setup codex
@@ -196,7 +196,7 @@ Gateway 已经面向 production operations，而不是狭窄的 MVP。当前方�
 <details>
 <summary><strong>Gateway 可以不使用 ClickHouse 吗？</strong></summary>
 
-可以。在 first-run wizard 或 **Settings → Gateway** 中为 structured logging 选择 **Disabled**。Gateway 的其他部分会继续工作；managed local ClickHouse 可以在不删除 data volume 的情况下关闭。
+可以。在 first-run wizard 或 **Settings > Advanced** 中为 structured logging 选择 **Disabled**。Gateway 的其他部分会继续工作；managed local ClickHouse 可以在不删除 data volume 的情况下关闭。
 </details>
 
 <details>

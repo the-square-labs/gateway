@@ -39,6 +39,22 @@ const BUILD_ONLY_APP_COMPOSE = `services:
 `;
 
 describe('foundation migrator patches', () => {
+  it('ensures at least sixty seconds of app stop grace', () => {
+    const added = patchCompose(OLD_COMPOSE);
+    expect(added).toContain('    stop_grace_period: 60s');
+    expect(patchCompose(added)).toBe(added);
+
+    const raised = patchCompose(
+      OLD_COMPOSE.replace('    restart: unless-stopped', '    restart: unless-stopped\n    stop_grace_period: 30s')
+    );
+    expect(raised).toContain('    stop_grace_period: 60s');
+
+    const preserved = patchCompose(
+      OLD_COMPOSE.replace('    restart: unless-stopped', '    restart: unless-stopped\n    stop_grace_period: 2m')
+    );
+    expect(preserved).toContain('    stop_grace_period: 2m');
+  });
+
   it('adds the managed sandbox volume and normalizes the app image reference', () => {
     const patched = patchCompose(OLD_COMPOSE);
 

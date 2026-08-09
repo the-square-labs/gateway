@@ -170,6 +170,15 @@ export class AIRunExecutor {
     this.toolBoundaryMessageIds.delete(runId);
   }
 
+  async waitForIdle(deadline: number): Promise<void> {
+    while (this.executingRuns.size > 0 && Date.now() < deadline) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, Math.min(100, Math.max(1, deadline - Date.now())));
+        timer.unref?.();
+      });
+    }
+  }
+
   getAssistantDraft(runId: string): AssistantLiveDraft | null {
     return this.assistantLiveDrafts.get(runId);
   }

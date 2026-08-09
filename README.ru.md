@@ -64,7 +64,7 @@ Installer запускает Gateway и выводит одноразовый к
 
 ## Настройка AI harnesses
 
-Пакет [`@wiolett/gateway-inference`](packages/gateway-inference) настраивает поддерживаемые AI harnesses, не записывая Gateway inference token в их конфигурационные файлы. Сначала включите **Inference** в **Settings > Gateway settings > General settings**, затем включите **Harness-specific endpoints** в **Settings > Inference** и выполните одну из команд:
+Пакет [`@wiolett/gateway-inference`](packages/gateway-inference) настраивает поддерживаемые AI harnesses, не записывая Gateway inference token в их конфигурационные файлы. Сначала включите **Inference** в **Settings > General > General settings**, затем включите **Harness-specific endpoints** в **Settings > Inference** и выполните одну из команд:
 
 ```bash
 npx -y @wiolett/gateway-inference@latest setup codex
@@ -197,7 +197,7 @@ Gateway уже ориентирован на production operations, а не на
 <details>
 <summary><strong>Может ли Gateway работать без ClickHouse?</strong></summary>
 
-Да. Выберите **Disabled** для structured logging в first-run wizard или **Settings → Gateway**. Остальная часть Gateway продолжает работать; managed local ClickHouse можно отключить без удаления data volume.
+Да. Выберите **Disabled** для structured logging в first-run wizard или **Settings > Advanced**. Остальная часть Gateway продолжает работать; managed local ClickHouse можно отключить без удаления data volume.
 </details>
 
 <details>

@@ -44,6 +44,7 @@ export class NotificationEvaluatorService {
   private eventBus?: EventBusService;
   private redis: RedisClient | null = null;
   private unsubscribers: Array<() => void> = [];
+  private readonly activeHandlers = new Set<Promise<void>>();
 
   private thresholdRulesCache: any[] = [];
   private eventRulesCache: any[] = [];
@@ -73,9 +74,12 @@ export class NotificationEvaluatorService {
 
     for (const channel of Object.keys(EVENT_BUS_MAPPINGS)) {
       const unsub = this.eventBus.subscribe(channel, (payload: unknown) => {
-        this.handleBusEvent(channel, payload).catch((err) => {
-          logger.error('Error handling event', { channel, error: err instanceof Error ? err.message : String(err) });
-        });
+        const active = this.handleBusEvent(channel, payload)
+          .catch((err) => {
+            logger.error('Error handling event', { channel, error: err instanceof Error ? err.message : String(err) });
+          })
+          .finally(() => this.activeHandlers.delete(active));
+        this.activeHandlers.add(active);
       });
       this.unsubscribers.push(unsub);
     }
@@ -83,9 +87,10 @@ export class NotificationEvaluatorService {
     logger.info('Notification evaluator started', { channels: Object.keys(EVENT_BUS_MAPPINGS).length });
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     for (const unsub of this.unsubscribers) unsub();
     this.unsubscribers = [];
+    await Promise.allSettled([...this.activeHandlers]);
   }
 
   // ── Health Report Evaluation ────────────────────────────────────────

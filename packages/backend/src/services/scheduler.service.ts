@@ -20,6 +20,8 @@ interface IntervalJob {
 export class SchedulerService {
   private jobs: ScheduledJob[] = [];
   private intervals: IntervalJob[] = [];
+  private activeTasks = new Set<Promise<void>>();
+  private running = false;
 
   register(name: string, schedule: string, task: () => Promise<void>): void {
     this.jobs.push({ name, schedule, task });
@@ -30,28 +32,18 @@ export class SchedulerService {
   }
 
   start(): void {
+    this.running = true;
     for (const job of this.jobs) {
       logger.info(`Starting scheduled job: ${job.name} (${job.schedule})`);
-      job.handle = cron.schedule(job.schedule, async () => {
-        logger.debug(`Running job: ${job.name}`);
-        try {
-          await job.task();
-        } catch (error) {
-          logger.error(`Job ${job.name} failed`, { error });
-        }
-      });
+      job.handle = cron.schedule(job.schedule, () => this.runTask('Job', job.name, job.task));
     }
 
     for (const interval of this.intervals) {
       logger.info(`Starting interval job: ${interval.name} (every ${interval.intervalMs}ms)`);
-      interval.handle = setInterval(async () => {
-        logger.debug(`Running interval job: ${interval.name}`);
-        try {
-          await interval.task();
-        } catch (error) {
-          logger.error(`Interval job ${interval.name} failed`, { error });
-        }
-      }, interval.intervalMs);
+      interval.handle = setInterval(
+        () => this.runTask('Interval job', interval.name, interval.task),
+        interval.intervalMs
+      );
     }
   }
 
@@ -60,18 +52,12 @@ export class SchedulerService {
     if (!job) return;
     job.handle?.stop();
     job.schedule = newCron;
-    job.handle = cron.schedule(newCron, async () => {
-      logger.debug(`Running job: ${job.name}`);
-      try {
-        await job.task();
-      } catch (error) {
-        logger.error(`Job ${job.name} failed`, { error });
-      }
-    });
+    job.handle = cron.schedule(newCron, () => this.runTask('Job', job.name, job.task));
     logger.info(`Updated schedule for ${name}: ${newCron}`);
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
+    this.running = false;
     for (const job of this.jobs) {
       job.handle?.stop();
       logger.info(`Stopped job: ${job.name}`);
@@ -83,5 +69,18 @@ export class SchedulerService {
       }
       logger.info(`Stopped interval job: ${interval.name}`);
     }
+    await Promise.allSettled([...this.activeTasks]);
+  }
+
+  private runTask(kind: string, name: string, task: () => Promise<void>): void {
+    if (!this.running) return;
+    logger.debug(`Running ${kind.toLowerCase()}: ${name}`);
+    const promise = Promise.resolve()
+      .then(task)
+      .catch((error) => {
+        logger.error(`${kind} ${name} failed`, { error });
+      })
+      .finally(() => this.activeTasks.delete(promise));
+    this.activeTasks.add(promise);
   }
 }
