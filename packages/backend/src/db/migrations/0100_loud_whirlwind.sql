@@ -1,0 +1,1 @@
+ALTER TABLE "relay_endpoints" ADD COLUMN "status" varchar(32) DEFAULT 'active' NOT NULL;

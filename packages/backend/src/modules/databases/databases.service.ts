@@ -4,7 +4,6 @@ import Redis from 'ioredis';
 import pg from 'pg';
 import type { DrizzleClient } from '@/db/client.js';
 import { type DatabaseHealthEntry, databaseConnections, managedDatabaseInstances, nodes } from '@/db/schema/index.js';
-import type { ManagedDatabaseTunnelLane } from '@/grpc/services/database-tunnel.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
@@ -39,7 +38,7 @@ import type {
   DatabaseListQuery,
   UpdateDatabaseConnectionInput,
 } from './databases.schemas.js';
-import type { ManagedDatabaseTunnelProxy } from './managed-database-tunnel-proxy.js';
+import type { ManagedDatabaseTunnelLane, ManagedDatabaseTunnelProxy } from './managed-database-tunnel-proxy.js';
 import {
   ensurePostgresBaseTable,
   normalizePostgresColumnType,

@@ -155,7 +155,7 @@ export function RelayHealthNotice({
     },
     {
       label: "Versions",
-      value: `relay ${relay.relayVersion ?? "?"}, protocol ${relay.protocolVersion ?? "?"}, contract ${relay.databaseContractVersion ?? "?"}`,
+      value: `relay ${relay.relayBuildVersion ?? "?"}, protocol ${relay.protocolMajor ?? "?"}`,
     },
     { label: "Service", value: relay.expectedService ?? "relay" },
     {

@@ -9,6 +9,8 @@ import {
   isValidGatewayIp,
   isValidGatewayIpPortTarget,
   normalizePublicUrl,
+  RELAY_GRANT_TTL_MAX_HOURS,
+  RELAY_GRANT_TTL_MIN_HOURS,
   SHUTDOWN_FINALIZATION_MAX_SECONDS,
   SHUTDOWN_FINALIZATION_MIN_SECONDS,
   SHUTDOWN_LOG_DRAIN_MAX_SECONDS,
@@ -161,6 +163,7 @@ export const UpdateAuthProvisioningSettingsSchema = z.object({
         .optional(),
       relayAutoRecovery: z.boolean().optional(),
       shutdown: ShutdownSettingsSchema.optional(),
+      relayGrantTtlHours: z.number().int().min(RELAY_GRANT_TTL_MIN_HOURS).max(RELAY_GRANT_TTL_MAX_HOURS).optional(),
       features: z
         .object({
           pkiEnabled: z.boolean().optional(),

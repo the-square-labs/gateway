@@ -46,7 +46,9 @@ export interface GatewayImageManifestPayload {
   image: string;
   digest: string;
   imageRef: string;
-  relayVersion?: string;
+  relayBuildVersion: string;
+  relayProtocolMajor: number;
+  relayImageRef: string;
   databaseConnectorImage?: string;
   createdAt: string;
   gitCommitSha?: string;
@@ -65,7 +67,9 @@ export interface TrustedGatewayUpdateArtifact {
   signedManifest: string;
   imageRef: string;
   digest: string;
-  relayVersion: string;
+  relayBuildVersion: string;
+  relayProtocolMajor: number;
+  relayImageRef: string;
   databaseConnectorImage?: string;
 }
 
@@ -125,8 +129,14 @@ export function verifyGatewayImageManifest(
   if (payload.imageRef !== `${payload.image}@${payload.digest}`) {
     throw new UpdateArtifactTrustError('Gateway update image reference is not digest pinned');
   }
-  if (payload.relayVersion !== undefined && !/^[1-9][0-9]*$/.test(payload.relayVersion)) {
-    throw new UpdateArtifactTrustError('Gateway update relay version is invalid');
+  if (!/^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(payload.relayBuildVersion)) {
+    throw new UpdateArtifactTrustError('Gateway update relay build version is invalid');
+  }
+  if (!Number.isInteger(payload.relayProtocolMajor) || payload.relayProtocolMajor < 1) {
+    throw new UpdateArtifactTrustError('Gateway update relay protocol major is invalid');
+  }
+  if (!isDigestPinnedImageRef(payload.relayImageRef, `${payload.image}/relay`)) {
+    throw new UpdateArtifactTrustError('Gateway update relay image reference is not digest pinned');
   }
   if (
     payload.databaseConnectorImage !== undefined &&
@@ -141,9 +151,9 @@ export function verifyGatewayImageManifest(
     signedManifest,
     imageRef: payload.imageRef,
     digest: payload.digest,
-    // Signed manifests published before relay extraction did not carry this
-    // field. They map to the initial relay contract for compatibility.
-    relayVersion: payload.relayVersion ?? '1',
+    relayBuildVersion: payload.relayBuildVersion,
+    relayProtocolMajor: payload.relayProtocolMajor,
+    relayImageRef: payload.relayImageRef,
     ...(payload.databaseConnectorImage ? { databaseConnectorImage: payload.databaseConnectorImage } : {}),
   };
 }

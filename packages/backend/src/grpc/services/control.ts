@@ -338,6 +338,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 type: nodes.type,
                 configVersionHash: nodes.configVersionHash,
                 certificateSerial: nodes.certificateSerial,
+                certificateFingerprint: nodes.certificateFingerprint,
                 status: nodes.status,
               })
               .from(nodes)
@@ -359,15 +360,6 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               stream.end();
               return;
             }
-            if (certIdentity.nodeType && certIdentity.nodeType !== node.type) {
-              logger.error('Node registration rejected: forwarded node type does not match database state', {
-                nodeId: claimedNodeId,
-              });
-              registering = false;
-              clearPendingCommandRegistration(claimedNodeId, registrationToken);
-              stream.end();
-              return;
-            }
             if (!node.certificateSerial) {
               logger.error('Node registration rejected: node has no stored certificate serial', {
                 nodeId: claimedNodeId,
@@ -383,6 +375,18 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 nodeId: claimedNodeId,
                 presentedSerial: certIdentity.serialNumber,
                 storedSerial,
+              });
+              registering = false;
+              clearPendingCommandRegistration(claimedNodeId, registrationToken);
+              stream.end();
+              return;
+            }
+            if (
+              certIdentity.certificateFingerprint &&
+              node.certificateFingerprint !== certIdentity.certificateFingerprint
+            ) {
+              logger.error('Node registration rejected: certificate fingerprint does not match enrolled node', {
+                nodeId: claimedNodeId,
               });
               registering = false;
               clearPendingCommandRegistration(claimedNodeId, registrationToken);
@@ -504,6 +508,21 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               stream.write({ commandId: '', setDaemonLogStream: { enabled: true, minLevel: 'info', tailLines: 0 } });
             } catch {
               // stream may not be ready yet
+            }
+
+            if (deps.relayPolicy && msg.register.capabilities?.includes('generic_relay_tunnel_v1')) {
+              setImmediate(async () => {
+                try {
+                  if (!isClaimedStreamCurrent(claimedNodeId)) return;
+                  const bundle = await deps.relayPolicy!.getNodeGrantBundle(claimedNodeId);
+                  await deps.dispatch.sendRelayGrantBundle(claimedNodeId, bundle);
+                } catch (error) {
+                  logger.warn('Failed to sync relay grants after daemon reconnect', {
+                    nodeId: claimedNodeId,
+                    error: error instanceof Error ? error.message : String(error),
+                  });
+                }
+              });
             }
 
             // A v2 Nginx daemon reconciles on every reconnect; an older daemon

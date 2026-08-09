@@ -1,21 +1,15 @@
 import net from 'node:net';
 import { describe, expect, it, vi } from 'vitest';
-import { openGatewayManagedDatabaseTunnel } from '@/grpc/services/database-tunnel.js';
 import { ManagedDatabaseTunnelProxy } from './managed-database-tunnel-proxy.js';
-
-vi.mock('@/grpc/services/database-tunnel.js', () => ({
-  openGatewayManagedDatabaseTunnel: vi.fn(),
-}));
 
 const MANAGED_DATABASE_ID = '44444444-4444-4444-8444-444444444444';
 
 describe('ManagedDatabaseTunnelProxy', () => {
   it('contains a transient tunnel-open failure on its local socket', async () => {
-    vi.mocked(openGatewayManagedDatabaseTunnel).mockRejectedValueOnce(
-      new Error('Managed database node is unavailable')
-    );
-    const proxy = new ManagedDatabaseTunnelProxy();
+    const openGatewayTunnel = vi.fn().mockRejectedValueOnce(new Error('Managed database node is unavailable'));
+    const proxy = new ManagedDatabaseTunnelProxy({ openGatewayTunnel } as never, 'sha256:test');
     const endpoint = await proxy.getEndpoint(MANAGED_DATABASE_ID);
+    proxy.setAppCertificateFingerprint('sha256:rotated');
 
     await new Promise<void>((resolve, reject) => {
       const socket = net.connect(endpoint.port, endpoint.host);
@@ -27,12 +21,15 @@ describe('ManagedDatabaseTunnelProxy', () => {
       });
     });
 
-    expect(openGatewayManagedDatabaseTunnel).toHaveBeenCalledWith(MANAGED_DATABASE_ID, 'interactive');
+    expect(openGatewayTunnel).toHaveBeenCalledWith(MANAGED_DATABASE_ID, 'sha256:rotated');
     await proxy.shutdown();
   });
 
   it('closes all local listeners for a deleted managed database', async () => {
-    const proxy = new ManagedDatabaseTunnelProxy();
+    const proxy = new ManagedDatabaseTunnelProxy(
+      { openGatewayTunnel: vi.fn().mockRejectedValue(new Error('unavailable')) } as never,
+      'sha256:test'
+    );
     const endpoint = await proxy.getEndpoint(MANAGED_DATABASE_ID);
 
     await proxy.disposeDatabase(MANAGED_DATABASE_ID);

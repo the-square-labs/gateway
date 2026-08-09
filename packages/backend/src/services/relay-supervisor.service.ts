@@ -20,9 +20,8 @@ const MAX_ATTEMPTS = 3;
 export const RELAY_HEALTH_REASONS = [
   'unreachable',
   'tls_unavailable',
-  'database_unavailable',
   'listener_unavailable',
-  'app_grpc_unavailable',
+  'policy_snapshot_required',
   'contract_mismatch',
   'unexpected_image',
   'docker_unavailable',
@@ -52,9 +51,8 @@ export interface RelaySupervisorState {
   attemptHistory: RelayAttemptRecord[];
   lastHealthyAt: string | null;
   lastProbeAt: string | null;
-  relayVersion: string | null;
-  protocolVersion: number | null;
-  databaseContractVersion: number | null;
+  relayBuildVersion: string | null;
+  protocolMajor: number | null;
 }
 
 export interface RelaySupervisorOptions {
@@ -63,6 +61,7 @@ export interface RelaySupervisorOptions {
   expectedImage: string | null;
   expectedService: string;
   expectedVersion?: string;
+  expectedProtocolMajor?: number;
   probeIntervalMs?: number;
   recoveryDelaysMs?: readonly [number, number, number];
   readinessWaitMs?: number;
@@ -85,9 +84,8 @@ function defaultState(): RelaySupervisorState {
     attemptHistory: [],
     lastHealthyAt: null,
     lastProbeAt: null,
-    relayVersion: null,
-    protocolVersion: null,
-    databaseContractVersion: null,
+    relayBuildVersion: null,
+    protocolMajor: null,
   };
 }
 
@@ -166,9 +164,8 @@ export class RelaySupervisorService {
       reason: this.state.reason,
       lastProbeAt: this.state.lastProbeAt,
       attemptHistory: this.state.attemptHistory,
-      relayVersion: this.state.relayVersion,
-      protocolVersion: this.state.protocolVersion,
-      databaseContractVersion: this.state.databaseContractVersion,
+      relayBuildVersion: this.state.relayBuildVersion,
+      protocolMajor: this.state.protocolMajor,
       expectedService: this.options.expectedService,
       expectedVersion: this.options.expectedVersion ?? null,
       expectedImage: this.options.expectedImage,
@@ -196,15 +193,10 @@ export class RelaySupervisorService {
       this.state.lastProbeAt = new Date().toISOString();
       if (result.healthy) {
         this.failureCount = 0;
-        const lastHealthyMs = Number(result.response.lastHealthyAtUnixMs);
         const healthyUpdate = {
-          lastHealthyAt:
-            Number.isFinite(lastHealthyMs) && lastHealthyMs > 0
-              ? new Date(lastHealthyMs).toISOString()
-              : new Date().toISOString(),
-          relayVersion: result.response.relayVersion,
-          protocolVersion: Number(result.response.protocolVersion),
-          databaseContractVersion: Number(result.response.databaseContractVersion),
+          lastHealthyAt: new Date().toISOString(),
+          relayBuildVersion: result.response.buildVersion,
+          protocolMajor: Number(result.response.protocolMajor),
         };
         if (this.state.state === 'healthy') {
           this.state = { ...this.state, ...healthyUpdate };
@@ -267,19 +259,14 @@ export class RelaySupervisorService {
       this.state.lastProbeAt = new Date().toISOString();
       if (current.healthy) {
         this.failureCount = 0;
-        const lastHealthyMs = Number(current.response.lastHealthyAtUnixMs);
         await this.transition({
           state: 'healthy',
           reason: null,
           attempt: 0,
           attemptHistory: [],
-          lastHealthyAt:
-            Number.isFinite(lastHealthyMs) && lastHealthyMs > 0
-              ? new Date(lastHealthyMs).toISOString()
-              : new Date().toISOString(),
-          relayVersion: current.response.relayVersion,
-          protocolVersion: Number(current.response.protocolVersion),
-          databaseContractVersion: Number(current.response.databaseContractVersion),
+          lastHealthyAt: new Date().toISOString(),
+          relayBuildVersion: current.response.buildVersion,
+          protocolMajor: Number(current.response.protocolMajor),
         });
         return this.getSnapshot(true);
       }
@@ -399,14 +386,19 @@ export class RelaySupervisorService {
     try {
       const response = await this.relayClient.getHealth(2_000);
       if (!response.liveness) return { healthy: false, reason: 'listener_unavailable' };
-      if (!response.readiness || !response.dataPlaneHealthy) {
+      if (!response.readiness) {
         return {
           healthy: false,
-          reason: isRelayHealthReason(response.reason) ? response.reason : 'database_unavailable',
+          reason: isRelayHealthReason(response.reason) ? response.reason : 'policy_snapshot_required',
         };
       }
-      if (!response.appProxyHealthy) return { healthy: false, reason: 'app_grpc_unavailable' };
-      if (this.options.expectedVersion && response.relayVersion !== this.options.expectedVersion) {
+      if (this.options.expectedVersion && response.buildVersion !== this.options.expectedVersion) {
+        return { healthy: false, reason: 'contract_mismatch' };
+      }
+      if (
+        this.options.expectedProtocolMajor !== undefined &&
+        response.protocolMajor !== this.options.expectedProtocolMajor
+      ) {
         return { healthy: false, reason: 'contract_mismatch' };
       }
       return { healthy: true, response };

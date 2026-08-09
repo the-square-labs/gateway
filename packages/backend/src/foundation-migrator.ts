@@ -5,8 +5,10 @@ interface CliOptions {
   targetVersion?: string;
   imageRef?: string;
   databaseConnectorImage?: string;
-  relayVersion?: string;
+  relayBuildVersion?: string;
+  relayProtocolMajor?: number;
   relayImageRef?: string;
+  legacyRelayVersion?: string;
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -34,8 +36,13 @@ function parseArgs(argv: string[]): CliOptions {
       index += 1;
       continue;
     }
-    if (arg === '--relay-version' && next) {
-      options.relayVersion = next;
+    if (arg === '--relay-build-version' && next) {
+      options.relayBuildVersion = next;
+      index += 1;
+      continue;
+    }
+    if (arg === '--relay-protocol-major' && next) {
+      options.relayProtocolMajor = Number(next);
       index += 1;
       continue;
     }
@@ -44,7 +51,17 @@ function parseArgs(argv: string[]): CliOptions {
       index += 1;
       continue;
     }
+    if (arg === '--relay-version' && next) {
+      options.legacyRelayVersion = next;
+      index += 1;
+      continue;
+    }
     throw new Error(`Unknown or incomplete foundation migrator argument: ${arg}`);
+  }
+  if (options.legacyRelayVersion) {
+    if (!/^[1-9][0-9]*$/.test(options.legacyRelayVersion)) throw new Error('Legacy relay version is invalid');
+    options.relayBuildVersion ??= `${options.targetVersion ?? 'dev'}-relay`;
+    options.relayProtocolMajor ??= 1;
   }
   return options;
 }

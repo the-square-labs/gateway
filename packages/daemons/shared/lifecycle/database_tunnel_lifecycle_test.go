@@ -8,24 +8,29 @@ import (
 	"testing"
 	"time"
 
+	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"google.golang.org/grpc"
 )
 
-type blockingDatabaseTunnelPlugin struct {
+type blockingRelayTunnelPlugin struct {
 	starts atomic.Int32
 	ended  chan int32
 }
 
-func (p *blockingDatabaseTunnelPlugin) RunDatabaseTunnel(ctx context.Context, _ *grpc.ClientConn, _ string) {
+func (p *blockingRelayTunnelPlugin) RunRelayTunnels(ctx context.Context, _ *grpc.ClientConn, _ string) {
 	start := p.starts.Add(1)
 	<-ctx.Done()
 	p.ended <- start
 }
 
-func TestProcessDatabaseTunnelIgnoresControlSessionCancellation(t *testing.T) {
+func (p *blockingRelayTunnelPlugin) SyncRelayGrants(*pb.SyncRelayGrantsCommand) (string, error) {
+	return "", nil
+}
+
+func TestProcessRelayTunnelIgnoresControlSessionCancellation(t *testing.T) {
 	processCtx, cancelProcess := context.WithCancel(context.Background())
 	defer cancelProcess()
-	plugin := &blockingDatabaseTunnelPlugin{ended: make(chan int32, 2)}
+	plugin := &blockingRelayTunnelPlugin{ended: make(chan int32, 2)}
 	identityChanged := make(chan struct{}, 1)
 	var connections atomic.Int32
 	connect := func(context.Context) (*grpc.ClientConn, error) {
@@ -33,7 +38,7 @@ func TestProcessDatabaseTunnelIgnoresControlSessionCancellation(t *testing.T) {
 		return nil, nil
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	go runProcessDatabaseTunnel(processCtx, connect, plugin, "node-1", identityChanged, logger)
+	go runProcessRelayTunnel(processCtx, connect, plugin, "node-1", identityChanged, logger)
 
 	deadline := time.After(time.Second)
 	for plugin.starts.Load() != 1 {
@@ -68,10 +73,10 @@ func TestProcessDatabaseTunnelIgnoresControlSessionCancellation(t *testing.T) {
 	}
 }
 
-func TestProcessDatabaseTunnelReconnectsAfterCredentialRotation(t *testing.T) {
+func TestProcessRelayTunnelReconnectsAfterCredentialRotation(t *testing.T) {
 	processCtx, cancelProcess := context.WithCancel(context.Background())
 	defer cancelProcess()
-	plugin := &blockingDatabaseTunnelPlugin{ended: make(chan int32, 2)}
+	plugin := &blockingRelayTunnelPlugin{ended: make(chan int32, 2)}
 	identityChanged := make(chan struct{}, 1)
 	var connections atomic.Int32
 	connect := func(context.Context) (*grpc.ClientConn, error) {
@@ -79,7 +84,7 @@ func TestProcessDatabaseTunnelReconnectsAfterCredentialRotation(t *testing.T) {
 		return nil, nil
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	go runProcessDatabaseTunnel(processCtx, connect, plugin, "node-1", identityChanged, logger)
+	go runProcessRelayTunnel(processCtx, connect, plugin, "node-1", identityChanged, logger)
 
 	deadline := time.After(time.Second)
 	for plugin.starts.Load() != 1 {

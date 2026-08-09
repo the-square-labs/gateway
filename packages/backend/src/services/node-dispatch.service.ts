@@ -6,6 +6,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { DaemonUpdateService } from './daemon-update.service.js';
 import type { NodeRegistryService } from './node-registry.service.js';
+import type { RelayGrantBundle } from './relay-policy.service.js';
 
 const logger = createChildLogger('NodeDispatch');
 
@@ -321,28 +322,40 @@ export class NodeDispatchService {
     });
   }
 
-  async sendDockerDatabaseBindingCommand(
-    nodeId: string,
-    action: 'prepare' | 'remove',
-    bindingId: string,
-    managedDatabaseId: string,
-    timeoutMs?: number
-  ): Promise<CommandResult> {
-    await this.assertDatabaseTunnelNode(nodeId);
+  async sendRelayGrantBundle(nodeId: string, bundle: RelayGrantBundle, timeoutMs = 30_000): Promise<CommandResult> {
+    await this.assertGenericRelayNode(nodeId);
     await this.assertNodeMutable(nodeId);
     return this.registry.sendCommand(
       nodeId,
-      { dockerDatabaseBinding: { action, bindingId, managedDatabaseId } as any },
+      {
+        syncRelayGrants: {
+          policyRevision: bundle.revision,
+          generatedAtUnixMs: bundle.generatedAtUnixMs,
+          grants: bundle.grants.map((assignment) => ({
+            role: assignment.role,
+            ownerKind: assignment.ownerKind,
+            ownerId: assignment.ownerId,
+            endpointId: assignment.endpointId,
+            routeId: assignment.routeId,
+            targetEndpointId: assignment.targetEndpointId,
+            grant: assignment.grant,
+          })),
+        },
+      },
       timeoutMs
     );
   }
 
-  /** Both application Docker nodes and databases nodes own one side of a managed database tunnel binding. */
-  private async assertDatabaseTunnelNode(nodeId: string) {
-    const [node] = await this.db.select({ type: nodes.type }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+  private async assertGenericRelayNode(nodeId: string) {
+    const [node] = await this.db
+      .select({ capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
     if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
-    if (node.type !== 'docker' && node.type !== 'databases') {
-      throw new AppError(409, 'NODE_TYPE_MISMATCH', 'Managed database tunnels require a Docker or databases node');
+    const reported = (node.capabilities as Record<string, unknown> | null)?.capabilities;
+    if (!Array.isArray(reported) || !reported.includes('generic_relay_tunnel_v1')) {
+      throw new AppError(409, 'NODE_CAPABILITY_MISMATCH', 'Node daemon does not support generic relay grants');
     }
   }
 

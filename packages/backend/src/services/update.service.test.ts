@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
 import type { TrustedGatewayUpdateArtifact } from '@/lib/update-artifact-trust.js';
 import {
@@ -90,6 +91,7 @@ describe('UpdateService foundation migration', () => {
     await service.performUpdate('v2.4.3', artifact);
 
     expect(dockerService.pullImageRef).toHaveBeenNthCalledWith(1, artifact.imageRef);
+    expect(dockerService.pullImageRef).toHaveBeenNthCalledWith(2, artifact.relayImageRef);
     expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
@@ -111,10 +113,12 @@ describe('UpdateService foundation migration', () => {
           'v2.4.3',
           '--image-ref',
           artifact.imageRef,
-          '--relay-version',
+          '--relay-build-version',
+          artifact.relayBuildVersion,
+          '--relay-protocol-major',
           '1',
           '--relay-image-ref',
-          artifact.imageRef,
+          artifact.relayImageRef,
         ],
         HostConfig: expect.objectContaining({
           Binds: expect.arrayContaining([
@@ -152,13 +156,20 @@ describe('UpdateService foundation migration', () => {
     );
     expect(dockerService.runDetached).toHaveBeenCalledWith(
       expect.objectContaining({
-        Cmd: [
-          'sh',
-          '-c',
-          'sleep 2 && docker compose --project-name gateway -f /project/docker-compose.yml up -d --force-recreate app',
-        ],
+        Cmd: ['sh', '-c', expect.stringContaining('compose up -d --force-recreate app')],
+        Env: ['FOUNDATION_BACKUP_DIR=/project/.gateway-foundation-backups/test'],
       })
     );
+    const sidecarCommand = dockerService.runDetached.mock.calls[0]?.[0]?.Cmd?.[2];
+    if (typeof sidecarCommand !== 'string') throw new Error('Update sidecar command was not recorded');
+    expect(sidecarCommand).toContain('docker inspect --format');
+    expect(sidecarCommand).toContain('rollback');
+    expect(sidecarCommand).toContain('trap on_exit EXIT');
+    expect(sidecarCommand).toContain('cp -p "$FOUNDATION_BACKUP_DIR/.env" /project/.env');
+    expect(sidecarCommand).toContain('CREATE OR REPLACE VIEW "public"."gateway_relay_bindings_v1"');
+    const syntax = spawnSync('/bin/sh', ['-n'], { input: sidecarCommand, encoding: 'utf8' });
+    expect(syntax.stderr).toBe('');
+    expect(syntax.status).toBe(0);
   });
 
   it('does not recreate the app when migrated compose validation fails', async () => {
@@ -264,7 +275,9 @@ function makeArtifact(imageRef: string, databaseConnectorImage?: string): Truste
   return {
     imageRef,
     digest: 'sha256:new',
-    relayVersion: '1',
+    relayBuildVersion: 'v2.4.3-relay',
+    relayProtocolMajor: 1,
+    relayImageRef: `registry.example.com/wiolett/gateway/relay@sha256:${'a'.repeat(64)}`,
     signedManifest: 'signed',
     payload: {
       kind: 'gateway-image',
@@ -273,6 +286,9 @@ function makeArtifact(imageRef: string, databaseConnectorImage?: string): Truste
       image: 'registry.example.com/wiolett/gateway',
       digest: 'sha256:new',
       imageRef,
+      relayBuildVersion: 'v2.4.3-relay',
+      relayProtocolMajor: 1,
+      relayImageRef: `registry.example.com/wiolett/gateway/relay@sha256:${'a'.repeat(64)}`,
       ...(databaseConnectorImage ? { databaseConnectorImage } : {}),
       createdAt: '2026-06-30T00:00:00.000Z',
     },

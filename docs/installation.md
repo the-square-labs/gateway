@@ -77,7 +77,7 @@ Disabling managed local logging stops the ClickHouse container and preserves its
 
 Running the installer again updates an existing installer-managed deployment to the latest release without repeating product configuration.
 
-The relay is the sole public owner of the existing `9443/tcp`; the application keeps only an internal gRPC listener for relay-to-app control-plane proxying. App and relay use independent image references even though both entrypoints come from the same signed Gateway image. A normal app-only update therefore does not recreate the relay. The relay image reference advances only when the signed release manifest changes `relayVersion`.
+The relay is the sole public owner of the existing `9443/tcp`; the application keeps only an internal gRPC listener for relay-to-app control-plane proxying. Gateway and relay use independent immutable image references. A normal Gateway update does not recreate relay when the signed manifest keeps the same `relayImageRef` digest.
 
 The first update from a pre-relay installer-managed foundation runs the target image's foundation migrator before the new app starts. It backs up `.env` and `docker-compose.yml`, adds the relay service and identity volume, moves the existing public `9443/tcp` mapping from `app` to `relay`, and preserves the existing data volumes and daemon identity. This ownership cutover causes one expected interruption to daemon connections. If migration fails, the updater restores the foundation backup instead of starting a partial topology.
 
@@ -93,6 +93,7 @@ Back up together:
 - Redis if active browser/setup sessions matter;
 - the `gateway_data` volume containing auto-issued TLS material;
 - the `gateway_relay_identity` volume containing relay service identity material;
+- the `gateway_relay_state` volume containing the durable relay policy and signing-key keyring;
 - the managed ClickHouse volume when local structured logging is enabled;
 - `.env`, especially `PKI_MASTER_KEY` and database credentials.
 

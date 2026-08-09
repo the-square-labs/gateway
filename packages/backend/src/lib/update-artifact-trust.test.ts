@@ -18,12 +18,28 @@ const daemonManifest = `{
   "payload": "eyJraW5kIjoiZGFlbW9uLWJpbmFyeSIsInZlcnNpb24iOiJ2OS45LjkiLCJ0YWciOiJ2OS45LjktbmdpbngiLCJkYWVtb25UeXBlIjoibmdpbngiLCJhcmNoIjoiYW1kNjQiLCJhcnRpZmFjdE5hbWUiOiJuZ2lueC1kYWVtb24tbGludXgtYW1kNjQiLCJkb3dubG9hZFVybCI6Imh0dHBzOi8vZ2l0bGFiLndpb2xldHQubmV0L2FwaS92NC9wcm9qZWN0cy93aW9sZXR0JTJGZ2F0ZXdheS9wYWNrYWdlcy9nZW5lcmljL25naW54LWRhZW1vbi92OS45LjktbmdpbngvbmdpbngtZGFlbW9uLWxpbnV4LWFtZDY0Iiwic2hhMjU2IjoiMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZiIsImNyZWF0ZWRBdCI6IjIwMjYtMDUtMDJUMTQ6Mzk6MDNaIiwiZ2l0Q29tbWl0U2hhIjoidGVzdCIsImdpdFBpcGVsaW5lSWQiOiIxIn0",
   "signature": "sNy92HOZyOUMyGJkXQ1nRmTSFm3BosuaAUaInP_Svo0cWGx50jvMlnsfU64FyubGDXK4ihvpgtlcNCfqN61ABw"
 }`;
-const gatewayManifest = `{
-  "schemaVersion": 1,
-  "keyId": "wiolett-update-v1",
-  "payload": "eyJjcmVhdGVkQXQiOiIyMDI2LTA1LTAyVDE0OjM5OjEwWiIsImRpZ2VzdCI6InNoYTI1NjowMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIiwiZ2l0Q29tbWl0U2hhIjoidGVzdCIsImdpdFBpcGVsaW5lSWQiOiIxIiwiaW1hZ2UiOiJyZWdpc3RyeS5naXRsYWIud2lvbGV0dC5uZXQvd2lvbGV0dC9nYXRld2F5IiwiaW1hZ2VSZWYiOiJyZWdpc3RyeS5naXRsYWIud2lvbGV0dC5uZXQvd2lvbGV0dC9nYXRld2F5QHNoYTI1NjowMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIiwia2luZCI6ImdhdGV3YXktaW1hZ2UiLCJ0YWciOiJ2OS45LjkiLCJ2ZXJzaW9uIjoidjkuOS45In0",
-  "signature": "XzPUEo8jVZHkeKwTqkrRQ0NqcOPj39TOPUwxTGXJ686Z7-R1UHhjZu67ROl2GZemuk77tY-t2dD1T8EH1bxEDw"
-}`;
+const gatewaySigningKey = generateKeyPairSync('ed25519');
+const gatewayPayload = Buffer.from(
+  JSON.stringify({
+    kind: 'gateway-image',
+    version: 'v9.9.9',
+    tag: 'v9.9.9',
+    image: 'registry.gitlab.wiolett.net/wiolett/gateway',
+    digest: `sha256:${checksum}`,
+    imageRef: `registry.gitlab.wiolett.net/wiolett/gateway@sha256:${checksum}`,
+    relayBuildVersion: 'v9.9.9-relay',
+    relayProtocolMajor: 1,
+    relayImageRef: `registry.gitlab.wiolett.net/wiolett/gateway/relay@sha256:${checksum}`,
+    createdAt: '2026-05-02T14:39:10Z',
+  })
+);
+const gatewayManifest = JSON.stringify({
+  schemaVersion: 1,
+  keyId: 'wiolett-update-v1',
+  payload: gatewayPayload.toString('base64url'),
+  signature: sign(null, gatewayPayload, gatewaySigningKey.privateKey).toString('base64url'),
+});
+const gatewayPublicKey = gatewaySigningKey.publicKey.export({ type: 'spki', format: 'pem' });
 
 describe('update artifact trust', () => {
   it('normalizes GitLab API base URLs for exact signed URL comparisons', () => {
@@ -80,23 +96,32 @@ describe('update artifact trust', () => {
   });
 
   it('verifies a gateway image manifest with a digest-pinned image reference', () => {
-    const artifact = verifyGatewayImageManifest(gatewayManifest, {
-      version: 'v9.9.9',
-      tag: 'v9.9.9',
-      image: 'registry.gitlab.wiolett.net/wiolett/gateway',
-    });
+    const artifact = verifyGatewayImageManifest(
+      gatewayManifest,
+      {
+        version: 'v9.9.9',
+        tag: 'v9.9.9',
+        image: 'registry.gitlab.wiolett.net/wiolett/gateway',
+      },
+      gatewayPublicKey
+    );
 
     expect(artifact.imageRef).toBe(`registry.gitlab.wiolett.net/wiolett/gateway@sha256:${checksum}`);
-    expect(artifact.relayVersion).toBe('1');
+    expect(artifact.relayProtocolMajor).toBe(1);
+    expect(artifact.relayImageRef).toContain('/relay@sha256:');
   });
 
   it('rejects gateway manifests for a different image repository', () => {
     expect(() =>
-      verifyGatewayImageManifest(gatewayManifest, {
-        version: 'v9.9.9',
-        tag: 'v9.9.9',
-        image: 'registry.example.com/wiolett/gateway',
-      })
+      verifyGatewayImageManifest(
+        gatewayManifest,
+        {
+          version: 'v9.9.9',
+          tag: 'v9.9.9',
+          image: 'registry.example.com/wiolett/gateway',
+        },
+        gatewayPublicKey
+      )
     ).toThrow(UpdateArtifactTrustError);
   });
 
@@ -117,7 +142,9 @@ describe('update artifact trust', () => {
         image: 'registry.example/gateway',
         digest: `sha256:${checksum}`,
         imageRef: `registry.example/gateway@sha256:${checksum}`,
-        relayVersion: '../mutable',
+        relayBuildVersion: '../mutable',
+        relayProtocolMajor: 1,
+        relayImageRef: `registry.example/gateway/relay@sha256:${checksum}`,
         createdAt: '2026-08-07T00:00:00.000Z',
       })
     );
@@ -134,6 +161,6 @@ describe('update artifact trust', () => {
         { version: 'v9.9.9', tag: 'v9.9.9', image: 'registry.example/gateway' },
         publicKey.export({ type: 'spki', format: 'pem' })
       )
-    ).toThrow('Gateway update relay version is invalid');
+    ).toThrow('Gateway update relay build version is invalid');
   });
 });

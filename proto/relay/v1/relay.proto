@@ -1,0 +1,129 @@
+syntax = "proto3";
+
+package relay.v1;
+
+option go_package = "github.com/wiolett-industries/gateway/daemon-shared/relayv1";
+
+// TunnelBroker is deliberately resource agnostic. Gateway is the only
+// component that maps endpoint and route identifiers to product resources.
+service TunnelBroker {
+  rpc RegisterEndpoint(stream EndpointControl) returns (stream EndpointControl);
+  rpc OpenTunnel(stream TunnelFrame) returns (stream TunnelFrame);
+  rpc AcceptTunnel(stream TunnelFrame) returns (stream TunnelFrame);
+}
+
+// RelayAdmin is reachable on the same listener but only by the pinned Gateway
+// app service identity.
+service RelayAdmin {
+  rpc GetHealth(HealthRequest) returns (HealthResponse);
+  rpc ApplySnapshot(ApplySnapshotRequest) returns (ApplySnapshotResponse);
+  rpc ReloadIdentity(ReloadIdentityRequest) returns (ReloadIdentityResponse);
+  rpc CommitIdentityRotation(CommitIdentityRotationRequest) returns (CommitIdentityRotationResponse);
+}
+
+message SignedGrant {
+  string key_id = 1;
+  bytes payload = 2;
+  bytes signature = 3;
+}
+
+message EndpointControl {
+  oneof payload {
+    RegisterEndpoint register = 1;
+    RenewEndpoint renew = 2;
+    EndpointRegistered registered = 3;
+    IncomingTunnel incoming = 4;
+    RelayError error = 5;
+  }
+}
+
+message RegisterEndpoint { SignedGrant grant = 1; }
+message RenewEndpoint { SignedGrant grant = 1; }
+message EndpointRegistered {
+  string endpoint_id = 1;
+  int64 grant_expires_at_unix = 2;
+}
+message IncomingTunnel {
+  string session_id = 1;
+  string accept_token = 2;
+  int64 accept_expires_at_unix = 3;
+}
+
+message TunnelFrame {
+  oneof payload {
+    OpenTunnel open = 1;
+    AcceptTunnel accept = 2;
+    TunnelReady ready = 3;
+    TunnelData data = 4;
+    TunnelHalfClose half_close = 5;
+    TunnelClose close = 6;
+    RelayError error = 7;
+  }
+}
+
+message OpenTunnel { SignedGrant grant = 1; }
+message AcceptTunnel { string accept_token = 1; }
+message TunnelReady { uint32 max_frame_bytes = 1; }
+message TunnelData { bytes data = 1; }
+message TunnelHalfClose {}
+message TunnelClose {}
+message RelayError {
+  string code = 1;
+  string message = 2;
+}
+
+message PublicKey {
+  string key_id = 1;
+  bytes public_key = 2;
+}
+
+message EndpointPolicy {
+  string endpoint_id = 1;
+  uint64 generation = 2;
+  string subject_kind = 3;
+  string subject_id = 4;
+  string certificate_sha256 = 5;
+  uint32 max_concurrent_sessions = 6;
+}
+
+message RoutePolicy {
+  string route_id = 1;
+  uint64 generation = 2;
+  string source_kind = 3;
+  string source_id = 4;
+  string source_certificate_sha256 = 5;
+  string target_endpoint_id = 6;
+  uint32 max_concurrent_sessions = 7;
+  uint32 max_frame_bytes = 8;
+}
+
+message ApplySnapshotRequest {
+  uint64 revision = 1;
+  string gateway_instance_id = 2;
+  repeated PublicKey public_keys = 3;
+  repeated EndpointPolicy endpoints = 4;
+  repeated RoutePolicy routes = 5;
+}
+
+message ApplySnapshotResponse {
+  uint64 applied_revision = 1;
+  bool unchanged = 2;
+}
+
+message HealthRequest {}
+message HealthResponse {
+  string build_version = 1;
+  uint32 protocol_major = 2;
+  uint64 applied_revision = 3;
+  repeated string key_ids = 4;
+  uint64 registered_endpoints = 5;
+  uint64 active_tunnels = 6;
+  bool liveness = 7;
+  bool readiness = 8;
+  string reason = 9;
+}
+
+message ReloadIdentityRequest { string operation_id = 1; }
+message ReloadIdentityResponse { bool reloaded = 1; }
+message CommitIdentityRotationRequest { string operation_id = 1; }
+message CommitIdentityRotationResponse { bool committed = 1; }

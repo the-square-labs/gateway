@@ -89,7 +89,7 @@ describe('relay-forwarded daemon identity', () => {
     const metadata = new grpc.Metadata();
     metadata.set('x-wiolett-relay-node-id', nodeId);
     metadata.set('x-wiolett-relay-cert-serial', 'AA:01');
-    metadata.set('x-wiolett-relay-node-type', 'docker');
+    metadata.set('x-wiolett-relay-cert-sha256', `sha256:${'ab'.repeat(32)}`);
     return {
       metadata,
       handler: {
@@ -110,7 +110,7 @@ describe('relay-forwarded daemon identity', () => {
     expect(extractDaemonCertificateIdentity(forwardedCall())).toEqual({
       nodeId,
       serialNumber: 'aa01',
-      nodeType: 'docker',
+      certificateFingerprint: `sha256:${'ab'.repeat(32)}`,
     });
   });
 

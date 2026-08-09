@@ -5,14 +5,12 @@ import { createChildLogger } from '@/lib/logger.js';
 const logger = createChildLogger('GrpcAuth');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const RELAY_NODE_TYPES = new Set(['nginx', 'bastion', 'monitoring', 'docker', 'databases']);
 const RELAY_METADATA = {
   nodeId: 'x-wiolett-relay-node-id',
   certificateSerial: 'x-wiolett-relay-cert-serial',
-  nodeType: 'x-wiolett-relay-node-type',
+  certificateFingerprint: 'x-wiolett-relay-cert-sha256',
 } as const;
 let trustedRelayFingerprints = new Set<string>();
-let relayTrustRotationTimer: ReturnType<typeof setTimeout> | null = null;
 let relayTrustGeneration = 0;
 
 function getPeerCertificateSocket(call: unknown): {
@@ -55,24 +53,20 @@ function getPeerCertificateSocket(call: unknown): {
 export interface DaemonCertificateIdentity {
   nodeId: string;
   serialNumber: string;
-  nodeType?: 'nginx' | 'bastion' | 'monitoring' | 'docker' | 'databases';
+  certificateFingerprint?: string;
 }
 
 export function configureRelayForwardedIdentityTrust(fingerprint: string | null): void {
   relayTrustGeneration += 1;
-  if (relayTrustRotationTimer) clearTimeout(relayTrustRotationTimer);
-  relayTrustRotationTimer = null;
   trustedRelayFingerprints = fingerprint ? new Set([fingerprint]) : new Set();
 }
 
 /**
  * Trust both the current and next relay leaf during a bounded live-rotation
- * window. The returned commit drops the old fingerprint immediately after the
- * relay confirms its reload; the timer is a fail-closed fallback when that RPC
- * cannot be confirmed and the relay must pick up files through its poller.
+ * window. The returned commit drops the old fingerprint only after the relay
+ * explicitly confirms that the new identity files were loaded.
  */
-export function stageRelayForwardedIdentityTrust(nextFingerprint: string, graceMs = 30_000): () => void {
-  if (relayTrustRotationTimer) clearTimeout(relayTrustRotationTimer);
+export function stageRelayForwardedIdentityTrust(nextFingerprint: string): () => void {
   const generation = ++relayTrustGeneration;
   trustedRelayFingerprints = new Set([...trustedRelayFingerprints, nextFingerprint]);
   let committed = false;
@@ -81,8 +75,6 @@ export function stageRelayForwardedIdentityTrust(nextFingerprint: string, graceM
     committed = true;
     configureRelayForwardedIdentityTrust(nextFingerprint);
   };
-  relayTrustRotationTimer = setTimeout(commit, graceMs);
-  relayTrustRotationTimer.unref?.();
   return commit;
 }
 
@@ -146,15 +138,20 @@ export function extractDaemonCertificateIdentity(
       };
       const nodeId = readOne(RELAY_METADATA.nodeId);
       const serialNumber = readOne(RELAY_METADATA.certificateSerial);
-      const nodeType = readOne(RELAY_METADATA.nodeType);
-      if (!nodeId || !UUID_RE.test(nodeId) || !serialNumber || !nodeType || !RELAY_NODE_TYPES.has(nodeType)) {
+      const certificateFingerprint = readOne(RELAY_METADATA.certificateFingerprint);
+      if (
+        !nodeId ||
+        !UUID_RE.test(nodeId) ||
+        !serialNumber ||
+        !certificateFingerprint?.match(/^sha256:[0-9a-f]{64}$/)
+      ) {
         logger.warn('Forwarded daemon identity rejected: metadata is missing or invalid');
         return null;
       }
       return {
         nodeId,
         serialNumber: normalizeCertificateSerial(serialNumber),
-        nodeType: nodeType as DaemonCertificateIdentity['nodeType'],
+        certificateFingerprint,
       };
     }
 

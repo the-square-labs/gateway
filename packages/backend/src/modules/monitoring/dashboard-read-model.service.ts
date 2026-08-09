@@ -3,7 +3,10 @@ import type { CAService } from '@/modules/pki/ca.service.js';
 import type { CertService } from '@/modules/pki/cert.service.js';
 import type { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { SSLService } from '@/modules/ssl/ssl.service.js';
-import type { ReadModelCoordinator } from '@/services/read-model-coordinator.service.js';
+import type {
+  ReadModelCoordinator,
+  ReadModelEventSubscription,
+} from '@/services/read-model-coordinator.service.js';
 import type { ResourceSnapshotEnvelope, ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import type { DashboardStats, HealthOverviewEntry, MonitoringService } from './monitoring.service.js';
 
@@ -72,7 +75,10 @@ export class DashboardReadModelService {
       ['proxy.host.changed']
     );
     this.register('databases', () => this.listAll((page) => this.databases.list({ page, limit: 1_000 } as never)), [
-      'database.changed',
+      {
+        channel: 'database.changed',
+        matches: (payload) => (payload as { action?: string } | null)?.action !== 'health.sampled',
+      },
     ]);
     this.register(
       'ssl',
@@ -106,11 +112,17 @@ export class DashboardReadModelService {
     return this.snapshots.get<T>(DASHBOARD_READ_MODEL_KIND, name);
   }
 
-  private register<T>(name: DashboardReadModelName, source: () => Promise<T>, channels: string[]): void {
+  private register<T>(
+    name: DashboardReadModelName,
+    source: () => Promise<T>,
+    subscriptions: Array<string | ReadModelEventSubscription>
+  ): void {
     this.coordinator.register({
       id: `dashboard-source:${name}`,
       refresh: () => this.refresh(name, source),
-      events: channels.map((channel) => ({ channel })),
+      events: subscriptions.map((subscription) =>
+        typeof subscription === 'string' ? { channel: subscription } : subscription
+      ),
       fallbackIntervalMs: 10_000,
     });
   }

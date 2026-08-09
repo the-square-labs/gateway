@@ -65,6 +65,27 @@ function createNode(): NodeDetail {
 }
 
 describe("NodeDetailsTab", () => {
+  it("keeps daemon update available across a Gateway version mismatch", () => {
+    const node = {
+      ...createNode(),
+      status: "online" as const,
+      isConnected: true,
+      capabilities: { versionMismatch: true },
+    };
+    render(
+      <MemoryRouter>
+        <NodeDetailsTab
+          node={node}
+          daemonUpdate={{ available: true, latestVersion: "2.0.0" }}
+          refreshNode={vi.fn().mockResolvedValue(undefined)}
+          refreshDaemonUpdateStatus={vi.fn().mockResolvedValue(undefined)}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole("button", { name: "Update to 2.0.0" })).toBeEnabled();
+  });
+
   it("shows the last known public and local IP addresses for an offline node", async () => {
     render(
       <MemoryRouter>

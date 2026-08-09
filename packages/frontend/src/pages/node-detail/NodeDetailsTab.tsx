@@ -68,8 +68,9 @@ export function NodeDetailsTab({
   const h: NodeHealthReport | null = node.liveHealthReport ?? node.lastHealthReport;
   const caps = (node.capabilities ?? {}) as Record<string, unknown>;
   const nodeUpdating = isNodeUpdating(node);
-  const canTriggerDaemonUpdate =
-    node.status === "online" && node.isConnected && caps.versionMismatch !== true;
+  // A live NodeControl stream is sufficient to deliver the update even when
+  // the daemon and the new generic tunnel protocol do not match yet.
+  const canTriggerDaemonUpdate = node.status === "online" && node.isConnected;
   const updateTargetVersion = getNodeUpdateTargetVersion(node);
   const localIpAddresses = Array.from(new Set(h?.localIpAddresses ?? [])).sort();
   const publicIpAddresses = Array.from(new Set(h?.publicIpAddresses ?? [])).sort();

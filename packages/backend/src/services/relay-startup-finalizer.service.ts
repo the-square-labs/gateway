@@ -1,5 +1,4 @@
 import type { RelayControlClient, RelayHealthResponse } from '@/grpc/relay-control.client.js';
-import { RELAY_VERSION } from '@/relay/version.js';
 import {
   type RelayDockerRecoveryService,
   RelayRecoverySafetyError,
@@ -9,6 +8,7 @@ import {
 export interface RelayStartupFinalizerOptions {
   required: boolean;
   expectedVersion?: string;
+  expectedProtocolMajor?: number;
   readinessWaitMs?: number;
   readinessPollMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -16,11 +16,12 @@ export interface RelayStartupFinalizerOptions {
 
 export type RelayStartupFinalizerResult =
   | { status: 'disabled'; action: null }
-  | { status: 'active'; action: RelayStartupAction | null; relayVersion: string }
+  | { status: 'active'; action: RelayStartupAction | null; buildVersion: string }
   | { status: 'degraded'; action: RelayStartupAction | null; reason: string };
 
 export class RelayStartupFinalizerService {
   private readonly expectedVersion: string;
+  private readonly expectedProtocolMajor: number;
   private readonly readinessWaitMs: number;
   private readonly readinessPollMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -30,7 +31,8 @@ export class RelayStartupFinalizerService {
     private readonly recovery: Pick<RelayDockerRecoveryService, 'ensureStarted' | 'recreateExpected'>,
     private readonly options: RelayStartupFinalizerOptions
   ) {
-    this.expectedVersion = options.expectedVersion ?? RELAY_VERSION;
+    this.expectedVersion = options.expectedVersion ?? 'dev';
+    this.expectedProtocolMajor = options.expectedProtocolMajor ?? 1;
     this.readinessWaitMs = options.readinessWaitMs ?? 20_000;
     this.readinessPollMs = options.readinessPollMs ?? 1_000;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -47,11 +49,11 @@ export class RelayStartupFinalizerService {
       // handled by the normal start/recreate path below.
       await this.client.reloadIdentity().catch(() => false);
       const initial = await this.probe();
-      if (initial && initial.relayVersion === this.expectedVersion) {
-        return { status: 'active', action: null, relayVersion: initial.relayVersion };
+      if (initial && this.isExpected(initial)) {
+        return { status: 'active', action: null, buildVersion: initial.buildVersion };
       }
 
-      if (initial && initial.relayVersion !== this.expectedVersion) {
+      if (initial && !this.isExpected(initial)) {
         action = await this.recovery.recreateExpected();
       } else {
         try {
@@ -65,15 +67,19 @@ export class RelayStartupFinalizerService {
       }
 
       let ready = await this.waitForReadiness();
-      if (ready && ready.relayVersion !== this.expectedVersion && action !== 'recreate') {
+      if (!ready && action === 'already_running') {
+        action = await this.recovery.recreateExpected();
+        ready = await this.waitForReadiness();
+      }
+      if (ready && !this.isExpected(ready) && action !== 'recreate') {
         action = await this.recovery.recreateExpected();
         ready = await this.waitForReadiness();
       }
       if (!ready) return { status: 'degraded', action, reason: 'unreachable' };
-      if (ready.relayVersion !== this.expectedVersion) {
+      if (!this.isExpected(ready)) {
         return { status: 'degraded', action, reason: 'contract_mismatch' };
       }
-      return { status: 'active', action, relayVersion: ready.relayVersion };
+      return { status: 'active', action, buildVersion: ready.buildVersion };
     } catch (error) {
       return {
         status: 'degraded',
@@ -81,6 +87,10 @@ export class RelayStartupFinalizerService {
         reason: error instanceof RelayRecoverySafetyError ? error.reason : 'unreachable',
       };
     }
+  }
+
+  private isExpected(response: RelayHealthResponse): boolean {
+    return response.buildVersion === this.expectedVersion && response.protocolMajor === this.expectedProtocolMajor;
   }
 
   private async waitForReadiness(): Promise<RelayHealthResponse | null> {
@@ -96,9 +106,7 @@ export class RelayStartupFinalizerService {
   private async probe(): Promise<RelayHealthResponse | null> {
     try {
       const response = await this.client!.getHealth(2_000);
-      return response.liveness && response.readiness && response.dataPlaneHealthy && response.appProxyHealthy
-        ? response
-        : null;
+      return response.liveness && response.readiness ? response : null;
     } catch {
       return null;
     }

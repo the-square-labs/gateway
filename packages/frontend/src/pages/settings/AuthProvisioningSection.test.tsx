@@ -25,6 +25,7 @@ const SETTINGS: AuthProvisioningSettings = {
     gatewayGrpcPublicTarget: null,
     gatewayGrpcLocalIp: null,
     relayAutoRecovery: true,
+    relayGrantTtlHours: 4,
     shutdown: {
       userRequestDrainSeconds: 30,
       structuredLogDrainSeconds: 5,
@@ -302,6 +303,43 @@ describe("AuthProvisioningSection inference setting", () => {
     await waitFor(() =>
       expect(update).toHaveBeenCalledWith({
         generalSettings: expect.objectContaining({ relayAutoRecovery: false }),
+      })
+    );
+  });
+
+  it("shows the existing informational modal only when saving a changed relay TTL above 24 hours", async () => {
+    api.setCache("settings:auth-provisioning", SETTINGS);
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(SETTINGS);
+    const update = vi
+      .spyOn(api, "updateAuthProvisioningSettings")
+      .mockImplementation(async (input) => ({
+        ...SETTINGS,
+        generalSettings: { ...SETTINGS.generalSettings, ...input.generalSettings },
+      }));
+    const user = userEvent.setup();
+    render(
+      <>
+        <AuthProvisioningSection canEdit />
+        <ConfirmDialog />
+      </>
+    );
+
+    const input = await screen.findByRole("spinbutton", { name: "Relay grant lifetime hours" });
+    await user.clear(input);
+    await user.type(input, "25");
+    const save = screen
+      .getAllByRole("button", { name: "Save" })
+      .find((button) => !(button as HTMLButtonElement).disabled);
+    if (!save) throw new Error("General settings save action not found");
+    await user.click(save);
+
+    expect(await screen.findByText("Use a long relay grant lifetime?")).toBeInTheDocument();
+    expect(update).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith({
+        generalSettings: expect.objectContaining({ relayGrantTtlHours: 25 }),
       })
     );
   });

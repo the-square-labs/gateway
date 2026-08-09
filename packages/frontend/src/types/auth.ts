@@ -130,6 +130,7 @@ export interface AuthProvisioningSettings {
     gatewayGrpcPublicTarget: string | null;
     gatewayGrpcLocalIp: string | null;
     relayAutoRecovery: boolean;
+    relayGrantTtlHours: number;
     shutdown: {
       userRequestDrainSeconds: number;
       structuredLogDrainSeconds: number;

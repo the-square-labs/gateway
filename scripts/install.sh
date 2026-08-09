@@ -353,6 +353,11 @@ json_string_field() {
   sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$file" | head -n1
 }
 
+json_number_field() {
+  local file="$1" key="$2"
+  sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" "$file" | head -n1
+}
+
 decode_base64url() {
   local value="$1" output="$2"
   value="${value//-/+}"
@@ -369,7 +374,7 @@ decode_base64url() {
 verify_signed_release() {
   local version="$1" encoded_project="$2"
   local tmp_dir manifest_file payload_file signature_file key_file
-  local payload signature kind manifest_version tag image digest image_ref relay_version connector_image_ref connector_image connector_digest
+  local payload signature kind manifest_version tag image digest image_ref relay_build_version relay_protocol_major relay_image_ref relay_digest connector_image_ref connector_image connector_digest
 
   tmp_dir="$(mktemp -d)"
   manifest_file="${tmp_dir}/gateway-image.update.json"
@@ -406,8 +411,9 @@ verify_signed_release() {
   image="$(json_string_field "$payload_file" image)"
   digest="$(json_string_field "$payload_file" digest)"
   image_ref="$(json_string_field "$payload_file" imageRef)"
-  relay_version="$(json_string_field "$payload_file" relayVersion)"
-  [[ -n "$relay_version" ]] || relay_version=1
+  relay_build_version="$(json_string_field "$payload_file" relayBuildVersion)"
+  relay_protocol_major="$(json_number_field "$payload_file" relayProtocolMajor)"
+  relay_image_ref="$(json_string_field "$payload_file" relayImageRef)"
   connector_image_ref="$(json_string_field "$payload_file" databaseConnectorImage)"
   if [[ "$kind" != "gateway-image" || "$manifest_version" != "$version" || "$tag" != "$version" ||
     "$image" != "$IMAGE" || ! "$digest" =~ ^sha256:[a-f0-9]{64}$ || "$image_ref" != "${IMAGE}@${digest}" ]]; then
@@ -422,14 +428,19 @@ verify_signed_release() {
       die "Signed release manifest contains an invalid database connector image."
     fi
   fi
-  if [[ ! "$relay_version" =~ ^[1-9][0-9]*$ ]]; then
+  relay_digest="${relay_image_ref##*@}"
+  if [[ ! "$relay_build_version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ||
+    ! "$relay_protocol_major" =~ ^[1-9][0-9]*$ || "$relay_image_ref" != "${IMAGE}/relay@${relay_digest}" ||
+    ! "$relay_digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
     rm -rf "$tmp_dir"
-    die "Signed release manifest contains an invalid relay version."
+    die "Signed release manifest contains invalid relay metadata."
   fi
   rm -rf "$tmp_dir"
 
   IMAGE_REF="$image_ref"
-  RELAY_VERSION="$relay_version"
+  RELAY_BUILD_VERSION="$relay_build_version"
+  RELAY_PROTOCOL_MAJOR="$relay_protocol_major"
+  RELAY_IMAGE_REF="$relay_image_ref"
   DATABASE_CONNECTOR_IMAGE_REF="$connector_image_ref"
   ok "Release ${version} verified (SHA-256: $(short_digest "$digest"))"
 }
@@ -459,8 +470,9 @@ prepare_install_metadata() {
     [[ "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ]] || die "Could not calculate the local source checksum"
     ARTIFACT_KIND="local source checksum"
     DATABASE_CONNECTOR_IMAGE_REF=""
-    RELAY_VERSION="$(sed -nE "s/^export const RELAY_VERSION = '([1-9][0-9]*)';$/\1/p" "$SOURCE_DIR/packages/backend/src/relay/version.ts")"
-    [[ "$RELAY_VERSION" =~ ^[1-9][0-9]*$ ]] || die "Local source contains an invalid relay version"
+    RELAY_BUILD_VERSION="$VERSION"
+    RELAY_PROTOCOL_MAJOR=1
+    RELAY_IMAGE_REF="${IMAGE}/relay:${VERSION}"
     return
   fi
 
@@ -599,6 +611,7 @@ fi
 if [[ -n "$SOURCE_DIR" ]]; then
   info "Building Gateway from local source: ${SOURCE_DIR}"
   run_quiet "Gateway image build" "${DOCKER[@]}" build --build-arg "APP_VERSION=${VERSION}" --tag "$IMAGE_REF" "$SOURCE_DIR"
+  run_quiet "Relay image build" "${DOCKER[@]}" build -f "$SOURCE_DIR/packages/relay/Dockerfile" --build-arg "RELAY_BUILD_VERSION=${VERSION}" --tag "$RELAY_IMAGE_REF" "$SOURCE_DIR"
 fi
 
 env_value() {
@@ -687,15 +700,15 @@ if [[ -n "${DATABASE_CONNECTOR_IMAGE_REF:-}" ]]; then
   ensure_env DATABASE_CONNECTOR_IMAGE "$DATABASE_CONNECTOR_IMAGE_REF"
 fi
 ensure_env DB_PASSWORD "$(openssl rand -hex 24)"
-ensure_env GATEWAY_RELAY_DB_PASSWORD "$(openssl rand -hex 24)"
 ensure_env PKI_MASTER_KEY "$(openssl rand -hex 32)"
 ensure_env SETUP_BOOTSTRAP "$([[ "$FRESH" == 1 ]] && printf true || printf false)"
 ensure_env WEB_TLS_BOOTSTRAP_MODE "${TRANSPORT:-http}"
 ensure_env SANDBOX_RUNNER_WORKSPACE_DIR "/var/lib/gateway/sandbox-workspaces"
 ensure_env GATEWAY_RELAY_MANAGED "$([[ -z "$SOURCE_DIR" ]] && printf true || printf false)"
 if [[ "$FRESH" == 1 ]]; then
-  ensure_env GATEWAY_RELAY_IMAGE_REF "$IMAGE_REF"
-  ensure_env GATEWAY_RELAY_VERSION "$RELAY_VERSION"
+  ensure_env GATEWAY_RELAY_IMAGE_REF "$RELAY_IMAGE_REF"
+  ensure_env GATEWAY_RELAY_BUILD_VERSION "$RELAY_BUILD_VERSION"
+  ensure_env GATEWAY_RELAY_PROTOCOL_MAJOR "$RELAY_PROTOCOL_MAJOR"
 fi
 local_host_addresses="$(detect_local_host_addresses)"
 if [[ -n "$local_host_addresses" ]]; then
@@ -733,10 +746,10 @@ services:
       GATEWAY_RELAY_MANAGED: "${GATEWAY_RELAY_MANAGED:-true}"
       GATEWAY_RELAY_TARGET: relay:9443
       GATEWAY_RELAY_IDENTITY_DIR: /var/lib/gateway-relay
-      GATEWAY_RELAY_DB_PASSWORD: ${GATEWAY_RELAY_DB_PASSWORD}
       GATEWAY_RELAY_IMAGE_REF: ${GATEWAY_RELAY_IMAGE_REF}
       GATEWAY_RELAY_SERVICE_NAME: relay
-      GATEWAY_RELAY_VERSION: ${GATEWAY_RELAY_VERSION}
+      GATEWAY_RELAY_BUILD_VERSION: ${GATEWAY_RELAY_BUILD_VERSION}
+      GATEWAY_RELAY_PROTOCOL_MAJOR: ${GATEWAY_RELAY_PROTOCOL_MAJOR}
       SANDBOX_RUNNER_WORKSPACE_DIR: ${SANDBOX_RUNNER_WORKSPACE_DIR:-/var/lib/gateway/sandbox-workspaces}
     ports:
       - "3000:3000"
@@ -761,24 +774,21 @@ services:
 
   relay:
     image: ${GATEWAY_RELAY_IMAGE_REF}
-    command: ["node", "dist/relay/index.js"]
+    entrypoint: ["/gateway-relay"]
     restart: unless-stopped
     labels:
       com.wiolett.gateway.managed-service: relay
     environment:
-      RELAY_DATABASE_URL: postgres://gateway_relay:${GATEWAY_RELAY_DB_PASSWORD}@postgres:5432/gateway
-      RELAY_IDENTITY_DIR: /var/lib/gateway-relay
+      RELAY_IDENTITY_DIR: /var/lib/gateway-relay/identity
+      RELAY_STATE_DIR: /var/lib/gateway-relay/state
       RELAY_APP_GRPC_TARGET: app:9443
-      GATEWAY_RELAY_VERSION: ${GATEWAY_RELAY_VERSION}
     ports:
       - "9443:9443"
     volumes:
-      - gateway_relay_identity:/var/lib/gateway-relay:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
+      - gateway_relay_identity:/var/lib/gateway-relay/identity:ro
+      - gateway_relay_state:/var/lib/gateway-relay/state
     healthcheck:
-      test: ["CMD", "node", "dist/relay/healthcheck.js"]
+      test: ["CMD", "/gateway-relay", "healthcheck"]
       interval: 5s
       timeout: 3s
       retries: 2
@@ -814,13 +824,14 @@ services:
 volumes:
   gateway_data:
   gateway_relay_identity:
+  gateway_relay_state:
   postgres_data:
   redis_data:
 COMPOSE
 else
   info "Migrating the existing installer-managed Compose foundation"
   run_quiet "Gateway image pull" "${DOCKER[@]}" pull "$IMAGE_REF"
-  foundation_args=(node dist/foundation-migrator.js --host-dir /host --target-version "$VERSION" --image-ref "$IMAGE_REF" --relay-version "$RELAY_VERSION" --relay-image-ref "$IMAGE_REF")
+  foundation_args=(node dist/foundation-migrator.js --host-dir /host --target-version "$VERSION" --image-ref "$IMAGE_REF" --relay-build-version "$RELAY_BUILD_VERSION" --relay-protocol-major "$RELAY_PROTOCOL_MAJOR" --relay-image-ref "$RELAY_IMAGE_REF")
   if [[ -n "${DATABASE_CONNECTOR_IMAGE_REF:-}" ]]; then
     foundation_args+=(--database-connector-image "$DATABASE_CONNECTOR_IMAGE_REF")
   fi

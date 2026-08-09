@@ -204,11 +204,11 @@ export interface GatewayCommand {
   nodeFile?: NodeFileCommand;
   dockerMigration?: DockerMigrationCommand;
   dockerDatabase?: DockerDatabaseCommand;
-  dockerDatabaseBinding?: DockerDatabaseBindingCommand;
   applyTlsBundle?: ApplyTlsBundleCommand;
   inspectCertificates?: InspectCertificatesCommand;
   exportLegacyCertificates?: ExportLegacyCertificatesCommand;
   removeCertificateReplica?: RemoveCertificateReplicaCommand;
+  syncRelayGrants?: SyncRelayGrantsCommand;
 }
 
 export interface ApplyConfigCommand {
@@ -423,10 +423,26 @@ export interface DockerDatabaseCommand {
 }
 
 /** Admission control for a first-party database connector sidecar on a Docker node. */
-export interface DockerDatabaseBindingCommand {
-  action: string;
-  bindingId: string;
-  managedDatabaseId: string;
+export interface SyncRelayGrantsCommand {
+  policyRevision: string;
+  generatedAtUnixMs: string;
+  grants: RelayGrantAssignment[];
+}
+
+export interface RelayGrantAssignment {
+  role: string;
+  ownerKind: string;
+  ownerId: string;
+  endpointId?: string;
+  routeId?: string;
+  targetEndpointId?: string;
+  grant: RelaySignedGrant;
+}
+
+export interface RelaySignedGrant {
+  keyId: string;
+  payload: Buffer;
+  signature: Buffer;
 }
 
 export interface NodeExecCommand {

@@ -294,6 +294,7 @@ export class UpdateService {
     }
 
     await this.dockerService.pullImageRef(artifact.imageRef);
+    await this.dockerService.pullImageRef(artifact.relayImageRef);
 
     await this.dockerService.pullImageRef(DOCKER_COMPOSE_CLI_IMAGE_REF);
 
@@ -315,7 +316,9 @@ export class UpdateService {
       composeDir,
       envTag: tag,
       imageRef: artifact.imageRef,
-      relayVersion: artifact.relayVersion,
+      relayBuildVersion: artifact.relayBuildVersion,
+      relayProtocolMajor: artifact.relayProtocolMajor,
+      relayImageRef: artifact.relayImageRef,
     });
     const foundationCommand = [
       'node',
@@ -326,10 +329,12 @@ export class UpdateService {
       tag,
       '--image-ref',
       artifact.imageRef,
-      '--relay-version',
-      artifact.relayVersion,
+      '--relay-build-version',
+      artifact.relayBuildVersion,
+      '--relay-protocol-major',
+      String(artifact.relayProtocolMajor),
       '--relay-image-ref',
-      artifact.imageRef,
+      artifact.relayImageRef,
       ...(artifact.databaseConnectorImage ? ['--database-connector-image', artifact.databaseConnectorImage] : []),
     ];
     const migrationResult = await this.dockerService.runOneShot({
@@ -385,13 +390,82 @@ export class UpdateService {
 
     logger.info('Foundation files migrated, launching compose sidecar');
 
+    const sidecarBackupDir = migrationOutput.backupDir?.replace(/^\/host(?=\/)/, '/project') ?? '';
+    if (sidecarBackupDir && !/^\/project\/.gateway-foundation-backups\/[a-zA-Z0-9_.-]+$/.test(sidecarBackupDir)) {
+      throw new Error(`Refusing to launch update with unexpected foundation backup path: ${sidecarBackupDir}`);
+    }
+
     await this.dockerService.runDetached({
       Image: DOCKER_COMPOSE_CLI_IMAGE_REF,
       Cmd: [
         'sh',
         '-c',
-        `sleep 2 && docker compose --project-name ${composeProject} -f /project/docker-compose.yml up -d --force-recreate app`,
+        `set -eu
+compose() { docker compose --project-name ${composeProject} -f /project/docker-compose.yml "$@"; }
+rollback() {
+  if [ -n "$FOUNDATION_BACKUP_DIR" ]; then
+    if [ -f "$FOUNDATION_BACKUP_DIR/.env" ]; then
+      cp -p "$FOUNDATION_BACKUP_DIR/.env" /project/.env
+    fi
+    if [ -f "$FOUNDATION_BACKUP_DIR/docker-compose.yml" ]; then
+      cp -p "$FOUNDATION_BACKUP_DIR/docker-compose.yml" /project/docker-compose.yml
+    fi
+  fi
+  compose stop app relay
+  compose up -d postgres
+  attempt=0
+  until compose exec -T postgres pg_isready -U gateway -d gateway; do
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 60 ]
+    sleep 2
+  done
+  attempt=0
+  until compose exec -T postgres psql -v ON_ERROR_STOP=1 -U gateway -d gateway -c 'BEGIN; CREATE OR REPLACE VIEW "public"."gateway_relay_node_identities_v1" WITH (security_barrier = true) AS SELECT "id" AS "node_id", "type"::text AS "node_type", "status"::text AS "node_status", "certificate_serial" FROM "public"."nodes"; CREATE OR REPLACE VIEW "public"."gateway_relay_managed_databases_v1" WITH (security_barrier = true) AS SELECT "id" AS "managed_database_id", "node_id" AS "database_node_id", "status"::text AS "database_status" FROM "public"."managed_database_instances"; CREATE OR REPLACE VIEW "public"."gateway_relay_bindings_v1" WITH (security_barrier = true) AS SELECT binding."id" AS "binding_id", binding."managed_database_id", binding."target_node_id" AS "source_node_id", binding."status"::text AS "binding_status", managed."node_id" AS "database_node_id", managed."status"::text AS "database_status" FROM "public"."managed_database_bindings" binding INNER JOIN "public"."managed_database_instances" managed ON managed."id" = binding."managed_database_id"; COMMIT;'; do
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 10 ]
+    sleep 2
+  done
+  compose up -d app relay
+  attempt=0
+  while [ "$attempt" -lt 150 ]; do
+    app_id="$(compose ps -q app)"
+    relay_id="$(compose ps -q relay)"
+    if [ -n "$app_id" ] && [ -n "$relay_id" ]; then
+      app_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$app_id")"
+      relay_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$relay_id")"
+      if [ "$app_health" = healthy ] && [ "$relay_health" = healthy ]; then return 0; fi
+    fi
+    attempt=$((attempt + 1))
+    sleep 2
+  done
+  return 1
+}
+on_exit() {
+  code=$?
+  trap - EXIT
+  if [ "$code" -ne 0 ]; then rollback; fi
+  exit "$code"
+}
+trap on_exit EXIT
+sleep 2
+compose up -d relay
+compose up -d --force-recreate app
+attempt=0
+while [ "$attempt" -lt 150 ]; do
+  app_id="$(compose ps -q app)"
+  relay_id="$(compose ps -q relay)"
+  if [ -n "$app_id" ] && [ -n "$relay_id" ]; then
+    app_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$app_id")"
+    relay_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$relay_id")"
+    if [ "$app_health" = healthy ] && [ "$relay_health" = healthy ]; then exit 0; fi
+    if [ "$app_health" = unhealthy ] || [ "$relay_health" = unhealthy ]; then break; fi
+  fi
+  attempt=$((attempt + 1))
+  sleep 2
+done
+exit 1`,
       ],
+      Env: [`FOUNDATION_BACKUP_DIR=${sidecarBackupDir}`],
       HostConfig: { Binds: [`${composeDir}:/project`, '/var/run/docker.sock:/var/run/docker.sock'] },
     });
 

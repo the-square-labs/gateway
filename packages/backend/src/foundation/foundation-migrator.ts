@@ -1,7 +1,5 @@
-import { randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { RELAY_VERSION } from '@/relay/version.js';
 
 export const DEFAULT_SANDBOX_WORKSPACE_DIR = '/var/lib/gateway/sandbox-workspaces';
 
@@ -15,7 +13,8 @@ export interface FoundationMigrationOptions {
   targetVersion?: string;
   imageRef?: string;
   databaseConnectorImage?: string;
-  relayVersion?: string;
+  relayBuildVersion?: string;
+  relayProtocolMajor?: number;
   relayImageRef?: string;
   sandboxWorkspaceDir?: string;
 }
@@ -45,27 +44,35 @@ export async function runFoundationMigrations(options: FoundationMigrationOption
   const defaultSandboxWorkspaceDir = options.sandboxWorkspaceDir ?? DEFAULT_SANDBOX_WORKSPACE_DIR;
 
   const envContent = await fs.readFile(envPath, 'utf8');
-  const requestedRelayVersion = options.relayVersion ?? RELAY_VERSION;
-  if (requestedRelayVersion !== RELAY_VERSION) {
-    throw new Error(
-      `foundation migration relay version ${requestedRelayVersion} does not match target image relay version ${RELAY_VERSION}`
-    );
-  }
-  const currentRelayVersion = envValue(envContent, 'GATEWAY_RELAY_VERSION');
   const currentRelayImageRef = envValue(envContent, 'GATEWAY_RELAY_IMAGE_REF');
-  const targetRelayImageRef = options.relayImageRef ?? options.imageRef;
-  const effectiveRelayImageRef =
-    currentRelayVersion === requestedRelayVersion && currentRelayImageRef ? currentRelayImageRef : targetRelayImageRef;
+  const effectiveRelayImageRef = options.relayImageRef ?? currentRelayImageRef;
   if (!effectiveRelayImageRef) {
     throw new Error('foundation migration requires a relay image reference');
   }
-  const envPatch = patchEnv(envContent, {
+  if (options.relayProtocolMajor !== undefined && options.relayProtocolMajor !== 1) {
+    throw new Error(`foundation migration does not support relay protocol major ${options.relayProtocolMajor}`);
+  }
+  const relayImageChanged = currentRelayImageRef !== effectiveRelayImageRef;
+  const effectiveRelayBuildVersion =
+    relayImageChanged || !envValue(envContent, 'GATEWAY_RELAY_BUILD_VERSION')
+      ? options.relayBuildVersion
+      : envValue(envContent, 'GATEWAY_RELAY_BUILD_VERSION');
+  const effectiveRelayProtocolMajor =
+    relayImageChanged || !envValue(envContent, 'GATEWAY_RELAY_PROTOCOL_MAJOR')
+      ? (options.relayProtocolMajor ?? 1)
+      : Number(envValue(envContent, 'GATEWAY_RELAY_PROTOCOL_MAJOR'));
+  const sanitizedEnvContent = removeEnvKeys(envContent, [
+    'GATEWAY_RELAY_DB_PASSWORD',
+    'GATEWAY_RELAY_VERSION',
+    'RELAY_DATABASE_URL',
+  ]);
+  const envPatch = patchEnv(sanitizedEnvContent, {
     ...(options.targetVersion ? { GATEWAY_VERSION: options.targetVersion } : {}),
     ...(options.imageRef ? { GATEWAY_IMAGE_REF: options.imageRef } : {}),
     ...(options.databaseConnectorImage ? { DATABASE_CONNECTOR_IMAGE: options.databaseConnectorImage } : {}),
     GATEWAY_RELAY_IMAGE_REF: effectiveRelayImageRef,
-    GATEWAY_RELAY_VERSION: requestedRelayVersion,
-    GATEWAY_RELAY_DB_PASSWORD: envValue(envContent, 'GATEWAY_RELAY_DB_PASSWORD') ?? randomBytes(24).toString('hex'),
+    ...(effectiveRelayBuildVersion ? { GATEWAY_RELAY_BUILD_VERSION: effectiveRelayBuildVersion } : {}),
+    GATEWAY_RELAY_PROTOCOL_MAJOR: String(effectiveRelayProtocolMajor),
     SANDBOX_RUNNER_WORKSPACE_DIR: envValue(envContent, 'SANDBOX_RUNNER_WORKSPACE_DIR') ?? defaultSandboxWorkspaceDir,
   });
 
@@ -149,6 +156,18 @@ export function patchEnv(content: string, values: Record<string, string>): EnvPa
     content: `${nextLines.join('\n')}${hadTrailingNewline || nextLines.length > 0 ? '\n' : ''}`,
     values: nextValues,
   };
+}
+
+function removeEnvKeys(content: string, keys: string[]): string {
+  const removed = new Set(keys);
+  return content
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .filter((line) => {
+      const key = envLineKey(line);
+      return !key || !removed.has(key);
+    })
+    .join('\n');
 }
 
 export function patchCompose(content: string): string {
@@ -294,7 +313,8 @@ function patchRelayFoundation(lines: string[]): string[] {
   next = upsertAppRelayIdentityVolume(next);
   next = upsertAppGrpcExpose(next);
   next = upsertRelayService(next);
-  return ensureTopLevelVolume(next, 'gateway_relay_identity');
+  next = ensureTopLevelVolume(next, 'gateway_relay_identity');
+  return ensureTopLevelVolume(next, 'gateway_relay_state');
 }
 
 function removeAppPublicGrpcPort(lines: string[]): string[] {
@@ -323,20 +343,22 @@ function upsertAppRelayEnvironment(lines: string[]): string[] {
       'GATEWAY_RELAY_MANAGED',
       'GATEWAY_RELAY_TARGET',
       'GATEWAY_RELAY_IDENTITY_DIR',
-      'GATEWAY_RELAY_DB_PASSWORD',
       'GATEWAY_RELAY_IMAGE_REF',
       'GATEWAY_RELAY_SERVICE_NAME',
+      'GATEWAY_RELAY_DB_PASSWORD',
       'GATEWAY_RELAY_VERSION',
+      'GATEWAY_RELAY_BUILD_VERSION',
+      'GATEWAY_RELAY_PROTOCOL_MAJOR',
     ],
     [
       'GATEWAY_RELAY_REQUIRED: "true"',
       'GATEWAY_RELAY_MANAGED: "true"',
       'GATEWAY_RELAY_TARGET: relay:9443',
       'GATEWAY_RELAY_IDENTITY_DIR: /var/lib/gateway-relay',
-      `GATEWAY_RELAY_DB_PASSWORD: \${GATEWAY_RELAY_DB_PASSWORD}`,
       `GATEWAY_RELAY_IMAGE_REF: \${GATEWAY_RELAY_IMAGE_REF}`,
       'GATEWAY_RELAY_SERVICE_NAME: relay',
-      `GATEWAY_RELAY_VERSION: \${GATEWAY_RELAY_VERSION}`,
+      `GATEWAY_RELAY_BUILD_VERSION: \${GATEWAY_RELAY_BUILD_VERSION}`,
+      `GATEWAY_RELAY_PROTOCOL_MAJOR: \${GATEWAY_RELAY_PROTOCOL_MAJOR}`,
     ]
   );
 }
@@ -471,24 +493,21 @@ function relayServiceBlock(): string[] {
     `  ${RELAY_SERVICE_START}`,
     '  relay:',
     `    image: \${GATEWAY_RELAY_IMAGE_REF}`,
-    '    command: ["node", "dist/relay/index.js"]',
+    '    entrypoint: ["/gateway-relay"]',
     '    restart: unless-stopped',
     '    labels:',
     '      com.wiolett.gateway.managed-service: relay',
     '    environment:',
-    `      RELAY_DATABASE_URL: postgres://gateway_relay:\${GATEWAY_RELAY_DB_PASSWORD}@postgres:5432/gateway`,
-    '      RELAY_IDENTITY_DIR: /var/lib/gateway-relay',
+    '      RELAY_IDENTITY_DIR: /var/lib/gateway-relay/identity',
+    '      RELAY_STATE_DIR: /var/lib/gateway-relay/state',
     '      RELAY_APP_GRPC_TARGET: app:9443',
-    `      GATEWAY_RELAY_VERSION: \${GATEWAY_RELAY_VERSION}`,
     '    ports:',
     '      - "9443:9443"',
     '    volumes:',
-    '      - gateway_relay_identity:/var/lib/gateway-relay:ro',
-    '    depends_on:',
-    '      postgres:',
-    '        condition: service_healthy',
+    '      - gateway_relay_identity:/var/lib/gateway-relay/identity:ro',
+    '      - gateway_relay_state:/var/lib/gateway-relay/state',
     '    healthcheck:',
-    '      test: ["CMD", "node", "dist/relay/healthcheck.js"]',
+    '      test: ["CMD", "/gateway-relay", "healthcheck"]',
     '      interval: 5s',
     '      timeout: 3s',
     '      retries: 2',

@@ -1,7 +1,7 @@
 import net from 'node:net';
-import type { RelayControlClient } from '@/grpc/relay-control.client.js';
-import { openGatewayManagedDatabaseTunnel } from '@/grpc/services/database-tunnel.js';
-import type { RelayManagedDatabaseLane } from '@/relay/protocol.js';
+import type { RelayPolicyService } from '@/services/relay-policy.service.js';
+
+export type ManagedDatabaseTunnelLane = 'interactive' | 'monitoring';
 
 export interface ManagedDatabaseTunnelEndpoint {
   host: '127.0.0.1';
@@ -18,11 +18,18 @@ export class ManagedDatabaseTunnelProxy {
   private readonly servers = new Map<string, net.Server>();
   private readonly sockets = new Map<string, Set<net.Socket>>();
 
-  constructor(private readonly relayClient?: Pick<RelayControlClient, 'openManagedDatabaseTunnel'>) {}
+  constructor(
+    private readonly relayPolicy?: Pick<RelayPolicyService, 'openGatewayTunnel'>,
+    private appCertificateFingerprint?: string
+  ) {}
+
+  setAppCertificateFingerprint(fingerprint: string): void {
+    this.appCertificateFingerprint = fingerprint;
+  }
 
   getEndpoint(
     managedDatabaseId: string,
-    lane: RelayManagedDatabaseLane = 'interactive'
+    lane: ManagedDatabaseTunnelLane = 'interactive'
   ): Promise<ManagedDatabaseTunnelEndpoint> {
     const key = `${managedDatabaseId}:${lane}`;
     const existing = this.endpoints.get(key);
@@ -49,7 +56,7 @@ export class ManagedDatabaseTunnelProxy {
   private async createEndpoint(
     key: string,
     managedDatabaseId: string,
-    lane: RelayManagedDatabaseLane
+    _lane: ManagedDatabaseTunnelLane
   ): Promise<ManagedDatabaseTunnelEndpoint> {
     const sockets = new Set<net.Socket>();
     const server = net.createServer((socket) => {
@@ -60,9 +67,10 @@ export class ManagedDatabaseTunnelProxy {
       // Node promotes it to an uncaughtException and can take down the API.
       socket.on('error', () => {});
       socket.pause();
-      const openTunnel = this.relayClient
-        ? this.relayClient.openManagedDatabaseTunnel(managedDatabaseId, lane)
-        : openGatewayManagedDatabaseTunnel(managedDatabaseId, lane);
+      const openTunnel =
+        this.relayPolicy && this.appCertificateFingerprint
+          ? this.relayPolicy.openGatewayTunnel(managedDatabaseId, this.appCertificateFingerprint)
+          : Promise.reject(new Error('Gateway relay is unavailable'));
       void openTunnel
         .then((tunnel) => {
           const closePeer = () => {

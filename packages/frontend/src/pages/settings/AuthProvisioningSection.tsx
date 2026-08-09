@@ -67,6 +67,7 @@ const DEFAULT_GENERAL_SETTINGS = {
   gatewayGrpcPublicTarget: null as string | null,
   gatewayGrpcLocalIp: null as string | null,
   relayAutoRecovery: true,
+  relayGrantTtlHours: 4,
   shutdown: DEFAULT_SHUTDOWN_SETTINGS,
   features: DEFAULT_GENERAL_FEATURES,
 };
@@ -263,6 +264,12 @@ export function AuthProvisioningSection({
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
         ?.gatewayGrpcLocalIp ?? ""
   );
+  const [relayGrantTtlHours, setRelayGrantTtlHours] = useState(() =>
+    String(
+      api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
+        ?.relayGrantTtlHours ?? 4
+    )
+  );
   const [pkiEnabled, setPkiEnabled] = useState(
     () =>
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
@@ -330,6 +337,7 @@ export function AuthProvisioningSection({
       setGatewayPublicIps(settingsData.generalSettings.gatewayPublicIps.join(", "));
       setGatewayGrpcPublicTarget(settingsData.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(settingsData.generalSettings.gatewayGrpcLocalIp ?? "");
+      setRelayGrantTtlHours(String(settingsData.generalSettings.relayGrantTtlHours));
       setPkiEnabled(settingsData.generalSettings.features?.pkiEnabled ?? true);
       setSiemEnabled(settingsData.generalSettings.features?.siemEnabled ?? true);
       setInferenceEnabled(settingsData.generalSettings.features?.inferenceEnabled ?? false);
@@ -523,6 +531,7 @@ export function AuthProvisioningSection({
       setGatewayPublicIps(updated.generalSettings.gatewayPublicIps.join(", "));
       setGatewayGrpcPublicTarget(updated.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(updated.generalSettings.gatewayGrpcLocalIp ?? "");
+      setRelayGrantTtlHours(String(updated.generalSettings.relayGrantTtlHours));
       setPublicUrl(updated.generalSettings.publicUrl ?? "");
       setPkiEnabled(nextSettings.generalSettings.features.pkiEnabled);
       setSiemEnabled(nextSettings.generalSettings.features.siemEnabled);
@@ -547,6 +556,7 @@ export function AuthProvisioningSection({
       setGatewayPublicIps(previous.generalSettings.gatewayPublicIps.join(", "));
       setGatewayGrpcPublicTarget(previous.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(previous.generalSettings.gatewayGrpcLocalIp ?? "");
+      setRelayGrantTtlHours(String(previous.generalSettings.relayGrantTtlHours));
       setPublicUrl(previous.generalSettings.publicUrl ?? "");
       setPkiEnabled(previous.generalSettings.features.pkiEnabled);
       setSiemEnabled(previous.generalSettings.features.siemEnabled);
@@ -580,6 +590,7 @@ export function AuthProvisioningSection({
   const draftGatewayGrpcPublicTarget = gatewayGrpcPublicTarget.trim() || null;
   const draftGatewayGrpcLocalIp = gatewayGrpcLocalIp.trim() || null;
   const draftPublicUrl = publicUrl.trim().replace(/\/$/, "");
+  const draftRelayGrantTtlHours = Number(relayGrantTtlHours);
   const generalHasChanges =
     draftPublicUrl !== (settings?.generalSettings.publicUrl ?? "") ||
     (draftFileUploadLimitBytes != null &&
@@ -589,11 +600,13 @@ export function AuthProvisioningSection({
     draftGatewayPublicIps.join(",") !== settings?.generalSettings.gatewayPublicIps.join(",") ||
     draftGatewayGrpcPublicTarget !== settings?.generalSettings.gatewayGrpcPublicTarget ||
     draftGatewayGrpcLocalIp !== settings?.generalSettings.gatewayGrpcLocalIp ||
+    (Number.isInteger(draftRelayGrantTtlHours) &&
+      draftRelayGrantTtlHours !== settings?.generalSettings.relayGrantTtlHours) ||
     pkiEnabled !== settings?.generalSettings.features.pkiEnabled ||
     siemEnabled !== settings?.generalSettings.features.siemEnabled ||
     inferenceEnabled !== settings?.generalSettings.features.inferenceEnabled;
 
-  const saveGeneralSettings = () => {
+  const saveGeneralSettings = async () => {
     if (!settings) return;
     const nextBytes = getDraftFileUploadLimitBytes();
     const nextOpenBytes = getDraftFileOpenLimitBytes();
@@ -613,6 +626,14 @@ export function AuthProvisioningSection({
       toast.error("File open limit must be between 1 MB and 100 MB");
       return;
     }
+    if (
+      !Number.isInteger(draftRelayGrantTtlHours) ||
+      draftRelayGrantTtlHours < 1 ||
+      draftRelayGrantTtlHours > 48
+    ) {
+      toast.error("Relay grant lifetime must be between 1 and 48 hours");
+      return;
+    }
     if (!/^https?:\/\/[^/]+$/i.test(draftPublicUrl)) {
       toast.error("Public URL must be an HTTP(S) origin without a path");
       return;
@@ -624,19 +645,34 @@ export function AuthProvisioningSection({
       draftGatewayPublicIps.join(",") === settings.generalSettings.gatewayPublicIps.join(",") &&
       draftGatewayGrpcPublicTarget === settings.generalSettings.gatewayGrpcPublicTarget &&
       draftGatewayGrpcLocalIp === settings.generalSettings.gatewayGrpcLocalIp &&
+      draftRelayGrantTtlHours === settings.generalSettings.relayGrantTtlHours &&
       pkiEnabled === settings.generalSettings.features.pkiEnabled &&
       siemEnabled === settings.generalSettings.features.siemEnabled &&
       inferenceEnabled === settings.generalSettings.features.inferenceEnabled
     ) {
       return;
     }
-    updateGeneralSettings({
+    if (
+      draftRelayGrantTtlHours > 24 &&
+      draftRelayGrantTtlHours !== settings.generalSettings.relayGrantTtlHours
+    ) {
+      const ok = await confirm({
+        title: "Use a long relay grant lifetime?",
+        description:
+          "If Gateway is unavailable, new relay connections may remain authorized for this many hours. Existing tunnels are still controlled by explicit policy revocation.",
+        confirmLabel: "Save",
+        variant: "default",
+      });
+      if (!ok) return;
+    }
+    await updateGeneralSettings({
       publicUrl: draftPublicUrl,
       fileUploadMaxBytes: nextBytes,
       fileOpenMaxBytes: nextOpenBytes,
       gatewayPublicIps: draftGatewayPublicIps,
       gatewayGrpcPublicTarget: draftGatewayGrpcPublicTarget,
       gatewayGrpcLocalIp: draftGatewayGrpcLocalIp,
+      relayGrantTtlHours: draftRelayGrantTtlHours,
       features: { ...settings.generalSettings.features, pkiEnabled, siemEnabled, inferenceEnabled },
     });
   };
@@ -935,6 +971,28 @@ export function AuthProvisioningSection({
               }}
             />
           </SettingsControlRow>
+          <div className="flex items-center justify-between gap-4 px-4 py-3">
+            <div>
+              <p className="text-sm font-medium">Relay grant lifetime</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Lifetime of newly issued endpoint and connection grants, in hours (1–48)
+              </p>
+            </div>
+            <Input
+              className="w-28 shrink-0"
+              type="number"
+              min={1}
+              max={48}
+              step={1}
+              value={relayGrantTtlHours}
+              disabled={!canEdit || isSavingGeneral}
+              aria-label="Relay grant lifetime hours"
+              onChange={(event) => setRelayGrantTtlHours(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void saveGeneralSettings();
+              }}
+            />
+          </div>
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <div>
               <p className="text-sm font-medium">Internal HTTPS on port 3000</p>
