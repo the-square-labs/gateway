@@ -70,6 +70,27 @@ describeIfDocker('AISandboxRunnerService docker smoke', () => {
     expect(readResult.content).toBe('process-ready\n');
     expect(readResult.contentBase64).toBeUndefined();
 
+    await runner.uploadArtifactChunk({
+      processId: processResult.processId,
+      path: 'streamed.bin',
+      offset: 0,
+      contentBase64: Buffer.from('first-').toString('base64'),
+    });
+    const streamed = await runner.uploadArtifactChunk({
+      processId: processResult.processId,
+      path: 'streamed.bin',
+      offset: 6,
+      contentBase64: Buffer.from('second').toString('base64'),
+    });
+    expect(streamed.sizeBytes).toBe(12);
+    await expect(
+      runner.readArtifact({ processId: processResult.processId, path: 'streamed.bin', encoding: 'utf8' })
+    ).resolves.toMatchObject({ content: 'first-second' });
+    await expect(runner.getWorkspaceUsage({ processId: processResult.processId })).resolves.toMatchObject({
+      workspaceReservationBytes: 64 * 1024 * 1024,
+      overReservation: false,
+    });
+
     const listResult = await runner.listArtifactFiles({
       processId: processResult.processId,
       path: '.',

@@ -101,12 +101,27 @@ describe("DockerContainerDetail lifecycle actions", () => {
 });
 
 describe("DockerContainerDetail archive permissions", () => {
-  it("requires export, files, and environment access while keeping secrets optional", () => {
+  it("allows a registry archive with export access and gates portable data independently", () => {
     expect(
       containerArchiveCapabilities({ export: true, files: true, environment: true, secrets: false })
-    ).toEqual({ canExport: true, canIncludeSecrets: false });
+    ).toEqual({
+      canExport: true,
+      canExportPortable: true,
+      canIncludeEnvironment: true,
+      canIncludeSecrets: false,
+    });
     expect(
-      containerArchiveCapabilities({ export: false, files: true, environment: true, secrets: true })
-    ).toEqual({ canExport: false, canIncludeSecrets: true });
+      containerArchiveCapabilities({
+        export: true,
+        files: false,
+        environment: false,
+        secrets: true,
+      })
+    ).toEqual({
+      canExport: true,
+      canExportPortable: false,
+      canIncludeEnvironment: false,
+      canIncludeSecrets: false,
+    });
   });
 });

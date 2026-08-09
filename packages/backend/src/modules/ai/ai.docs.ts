@@ -189,7 +189,7 @@ Domains are Cloudflare-backed DNS records used across Gateway.
 - Domains used by proxy hosts cannot be deleted (remove from proxy first)
 - isSystem domains (management domains) cannot be deleted
 - Wildcard domains (*.example.com) can be registered
-- delete_domain requires domains:delete. Cloudflare DNS records are deleted only when the caller also has integrations:cloudflare:dns:delete
+- create_domain requires domains:create, and delete_domain requires domains:delete. Those domain permissions include the managed DNS records for the domain
 - For matched_existing domains, pass deleteDns=false to keep DNS and remove only the Gateway mapping, or deleteDns=true to remove the adopted Cloudflare records`,
 
   'access-lists': `# Access Lists
@@ -1232,7 +1232,7 @@ AI assistant settings control the provider, request limits, tool exposure, web s
 
 ## Sandbox Runner
 - sandboxEnabled: expose sandbox execution and artifact tools to the assistant.
-- sandboxDefaultTier: default resource tier. The agent may request a tier only if the user has the required scope.
+- sandboxDefaultTier: default resource tier. The agent may request a tier only if the user has the required scope. Tier workspace sizes are soft quotas; the runner refuses new reservations at 80% host-disk use and removes workspaces at terminal cleanup.
 - Sandbox tools are intentionally excluded from MCP exposure and are available only to the assistant when enabled and permitted.`,
 
   gitlab: `# GitLab Integrations

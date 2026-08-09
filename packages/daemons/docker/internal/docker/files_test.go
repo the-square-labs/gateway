@@ -3,7 +3,9 @@ package docker
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"encoding/binary"
+	"io"
 	"testing"
 )
 
@@ -108,6 +110,38 @@ func TestReadSingleRegularFileFromTarHonorsMaxBytes(t *testing.T) {
 	}
 	if string(got) != "abc" {
 		t.Fatalf("payload = %q, expected %q", string(got), "abc")
+	}
+}
+
+func TestGzipTarArchivePreservesBinaryTarStream(t *testing.T) {
+	raw := []byte{0x00, 0xff, 0x8b, 0x80, 't', 'a', 'r', 0x00}
+	compressed, err := gzipTarArchive(bytes.NewReader(raw), 1024)
+	if err != nil {
+		t.Fatalf("gzipTarArchive returned error: %v", err)
+	}
+	if len(compressed) < 2 || compressed[0] != 0x1f || compressed[1] != 0x8b {
+		t.Fatalf("archive does not have gzip magic bytes: %x", compressed)
+	}
+
+	zr, err := gzip.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		t.Fatalf("gzip.NewReader returned error: %v", err)
+	}
+	decompressed, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("io.ReadAll returned error: %v", err)
+	}
+	if err := zr.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if !bytes.Equal(decompressed, raw) {
+		t.Fatalf("payload = %x, expected %x", decompressed, raw)
+	}
+}
+
+func TestGzipTarArchiveHonorsCompressedSizeLimit(t *testing.T) {
+	if _, err := gzipTarArchive(bytes.NewReader(bytes.Repeat([]byte{0xff}, 1024)), 8); err == nil {
+		t.Fatal("expected gzipTarArchive to reject an oversized compressed archive")
 	}
 }
 

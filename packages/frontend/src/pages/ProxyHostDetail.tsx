@@ -4,6 +4,7 @@ import {
   Info,
   Pencil,
   Pin,
+  RefreshCw,
   ScrollText,
   Settings as SettingsIcon,
   SlidersHorizontal,
@@ -97,6 +98,7 @@ export function ProxyHostDetail({
   const [healthHistory, setHealthHistory] = useState<NonNullable<ProxyHost["healthHistory"]>>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isMaintenanceToggling, setIsMaintenanceToggling] = useState(false);
+  const [isTlsResyncing, setIsTlsResyncing] = useState(false);
 
   const [activeTab, setActiveTab] = useUrlTab(visibleTabs, "details", (tab) =>
     proxyHostRoute(routeSlug, tab)
@@ -611,6 +613,20 @@ export function ProxyHostDetail({
     }
   };
 
+  const handleTlsResync = async () => {
+    if (!host || !hasScope("admin:update")) return;
+    setIsTlsResyncing(true);
+    try {
+      await api.resyncProxyHostTls(host.id);
+      await loadHost(true);
+      toast.success("TLS synchronization completed");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to synchronize TLS configuration");
+    } finally {
+      setIsTlsResyncing(false);
+    }
+  };
+
   // ── Derived values ────────────────────────────────────────────
   const isRawMode = host?.rawConfigEnabled ?? false;
   const isSystemHost = host?.isSystem ?? false;
@@ -618,6 +634,12 @@ export function ProxyHostDetail({
     !!host &&
     (host.maintenanceEnabled ||
       (host.enabled && host.type === "proxy" && !host.rawConfigEnabled && !host.isSystem));
+  const canResyncTls =
+    !!host &&
+    host.sslEnabled &&
+    host.enabled &&
+    hasScope("admin:update") &&
+    host.tlsDistribution?.status !== "ready";
 
   const handleAccessListChange = useCallback(
     async (value: string) => {
@@ -803,6 +825,18 @@ export function ProxyHostDetail({
                     },
                   ]
                 : []),
+              ...(canResyncTls
+                ? [
+                    {
+                      label: "Retry TLS Sync",
+                      icon: (
+                        <RefreshCw className={cn("h-4 w-4", isTlsResyncing && "animate-spin")} />
+                      ),
+                      onClick: handleTlsResync,
+                      disabled: isTlsResyncing,
+                    },
+                  ]
+                : []),
               ...(!isSystemHost && hasScope("proxy:delete")
                 ? [
                     {
@@ -825,7 +859,7 @@ export function ProxyHostDetail({
                 Edit
               </Button>
             )}
-            {(canEditProxyHost || (!isSystemHost && hasScope("proxy:delete"))) && (
+            {(canEditProxyHost || canResyncTls || (!isSystemHost && hasScope("proxy:delete"))) && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="icon" aria-label="More proxy host actions">
@@ -840,6 +874,12 @@ export function ProxyHostDetail({
                     >
                       <Wrench className="mr-2 h-4 w-4" />
                       {host.maintenanceEnabled ? "Disable Maintenance" : "Enable Maintenance"}
+                    </DropdownMenuItem>
+                  )}
+                  {canResyncTls && (
+                    <DropdownMenuItem onClick={handleTlsResync} disabled={isTlsResyncing}>
+                      <RefreshCw className={cn("mr-2 h-4 w-4", isTlsResyncing && "animate-spin")} />
+                      Retry TLS Sync
                     </DropdownMenuItem>
                   )}
                   {!isSystemHost && hasScope("proxy:delete") && (
@@ -983,6 +1023,9 @@ export function ProxyHostDetail({
                 setHealthCheckBodyMatchMode={setHealthCheckBodyMatchMode}
                 healthCheckSlowThreshold={healthCheckSlowThreshold}
                 setHealthCheckSlowThreshold={setHealthCheckSlowThreshold}
+                canResyncTls={canResyncTls}
+                isTlsResyncing={isTlsResyncing}
+                onTlsResync={handleTlsResync}
               />
             </TabsContent>
           )}

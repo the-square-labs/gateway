@@ -354,12 +354,7 @@ export class DomainsService {
     return row;
   }
 
-  async deleteDomain(
-    id: string,
-    userId: string,
-    input: DeleteDomainInput = {},
-    options: { canDeleteDns?: boolean } = {}
-  ) {
+  async deleteDomain(id: string, userId: string, input: DeleteDomainInput = {}) {
     const [row] = await this.db.select().from(domains).where(eq(domains.id, id)).limit(1);
     if (!row) throw new AppError(404, 'NOT_FOUND', 'Domain not found');
     if (row.isSystem) throw new AppError(409, 'SYSTEM_DOMAIN', 'System domains cannot be deleted');
@@ -387,9 +382,6 @@ export class DomainsService {
     }
 
     if (shouldDeleteDns) {
-      if (!options.canDeleteDns) {
-        throw new AppError(403, 'FORBIDDEN', 'Missing required scope: integrations:cloudflare:dns:delete');
-      }
       if (!this.integrationsService || !row.integrationConnectorId || !row.providerZoneId) {
         throw new AppError(409, 'CLOUDFLARE_DNS_NOT_CONFIGURED', 'Cloudflare DNS integration is not configured');
       }

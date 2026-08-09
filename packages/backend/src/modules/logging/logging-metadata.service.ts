@@ -8,6 +8,12 @@ type MetadataKind = 'service' | 'source' | 'label_key' | 'label_value' | 'field_
 type MetadataEntry = { kind: MetadataKind; key: string; value: string; count: number };
 type PendingMetadataEntry = MetadataEntry & { environmentId: string };
 
+export const LOGGING_METADATA_KEY_MAX_LENGTH = 255;
+
+export function isSupportedLoggingMetadataKey(key: string): boolean {
+  return Array.from(key).length <= LOGGING_METADATA_KEY_MAX_LENGTH;
+}
+
 export interface LoggingMetadataView {
   services: string[];
   sources: string[];
@@ -35,7 +41,7 @@ export class LoggingMetadataService {
     const add = (kind: MetadataKind, key: string, value: string | null = null) => {
       const normalizedKey = key.trim();
       const normalizedValue = value?.trim() || '';
-      if (!normalizedKey) return;
+      if (!normalizedKey || !isSupportedLoggingMetadataKey(normalizedKey)) return;
       const mapKey = `${kind}\0${normalizedKey}\0${normalizedValue ?? ''}`;
       const current = counts.get(mapKey);
       if (current) current.count += 1;

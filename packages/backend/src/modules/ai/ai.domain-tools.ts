@@ -1,4 +1,3 @@
-import { hasScope } from '@/lib/permissions.js';
 import { UpdateDomainSchema } from '@/modules/domains/domain.schemas.js';
 import type { DomainsService } from '@/modules/domains/domain.service.js';
 import type { User } from '@/types.js';
@@ -41,8 +40,7 @@ export async function executeDomainTool(
       await context.domainsService.deleteDomain(
         a.domainId,
         user.id,
-        { deleteDns: typeof a.deleteDns === 'boolean' ? a.deleteDns : undefined },
-        { canDeleteDns: hasScope(user.scopes, 'integrations:cloudflare:dns:delete') }
+        { deleteDns: typeof a.deleteDns === 'boolean' ? a.deleteDns : undefined }
       );
       return { success: true };
     case 'manage_domain':

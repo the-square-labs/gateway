@@ -27,11 +27,27 @@ function createHarness(initial: Record<string, unknown> = {}) {
     setSetting: async (key: string, value: unknown) => {
       values.set(key, value);
     },
+    deleteSetting: async (key: string) => {
+      values.delete(key);
+    },
   });
   return { service, values };
 }
 
 describe('AISettingsService provider selection', () => {
+  it('deletes stored API keys when an explicit empty value is submitted', async () => {
+    const { service, values } = createHarness({
+      'ai:api_key_encrypted': { encryptedKey: 'provider-secret', encryptedDek: 'dek' },
+      'ai:web_search_api_key_encrypted': { encryptedKey: 'search-secret', encryptedDek: 'dek' },
+    });
+
+    await service.updateConfig({ apiKey: '', webSearchApiKey: '' });
+
+    expect(values.has('ai:api_key_encrypted')).toBe(false);
+    expect(values.has('ai:web_search_api_key_encrypted')).toBe(false);
+    await expect(service.getConfigForAdmin()).resolves.toMatchObject({ hasApiKey: false, hasWebSearchKey: false });
+  });
+
   it('keeps OpenAI-compatible as the default provider', async () => {
     const { service } = createHarness();
     await expect(service.getConfig()).resolves.toMatchObject({

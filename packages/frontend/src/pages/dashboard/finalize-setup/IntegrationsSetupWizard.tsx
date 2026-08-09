@@ -1,11 +1,11 @@
 import { Check, Cloud, GitBranch, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { PanelShell } from "@/components/common/PanelShell";
+import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { PanelShell } from "@/components/common/PanelShell";
-import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { api } from "@/services/api";
 import type { FinalizeSetupState, FinalizeSetupStepStatus } from "@/types";
 import { FinalizeSetupCompletion } from "./FinalizeSetupCompletion";

@@ -38,6 +38,38 @@ describe('GitLabClient', () => {
     });
   });
 
+  it('bounds native error response buffering while preserving the error preview', async () => {
+    const baseUrl = await listen((_request, response) => {
+      response.writeHead(502, { 'content-type': 'text/plain' });
+      response.write('upstream failure: ');
+      response.end('x'.repeat(512 * 1024));
+    });
+    const client = new GitLabClient(baseUrl, 'glpat-token');
+
+    await expect(client.requestBuffer('/projects/28/repository/archive.tar.gz', { maxBytes: 1024 })).rejects.toMatchObject({
+      code: 'GITLAB_API_ERROR',
+      details: expect.objectContaining({ body: expect.stringContaining('upstream failure:') }),
+    });
+  });
+
+  it('streams archive responses in bounded chunks without materializing a full Buffer', async () => {
+    const payload = Buffer.alloc(600 * 1024, 7);
+    const baseUrl = await listen((request, response) => {
+      expect(request.headers['private-token']).toBe('glpat-token');
+      response.writeHead(200, { 'content-type': 'application/gzip', 'content-length': String(payload.byteLength) });
+      response.write(payload.subarray(0, 300 * 1024));
+      response.end(payload.subarray(300 * 1024));
+    });
+
+    const client = new GitLabClient(baseUrl, 'glpat-token');
+    const archive = await client.requestStream('/projects/28/repository/archive.tar.gz', { maxBytes: 1024 * 1024 });
+    const chunks: Buffer[] = [];
+    for await (const chunk of archive.chunks) chunks.push(chunk);
+
+    expect(chunks.every((chunk) => chunk.byteLength <= 256 * 1024)).toBe(true);
+    expect(Buffer.concat(chunks)).toEqual(payload);
+  });
+
   it('preserves the token across same-origin archive redirects', async () => {
     const baseUrl = await listen((request, response) => {
       expect(request.headers['private-token']).toBe('glpat-token');

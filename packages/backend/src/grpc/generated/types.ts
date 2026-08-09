@@ -205,6 +205,10 @@ export interface GatewayCommand {
   dockerMigration?: DockerMigrationCommand;
   dockerDatabase?: DockerDatabaseCommand;
   dockerDatabaseBinding?: DockerDatabaseBindingCommand;
+  applyTlsBundle?: ApplyTlsBundleCommand;
+  inspectCertificates?: InspectCertificatesCommand;
+  exportLegacyCertificates?: ExportLegacyCertificatesCommand;
+  removeCertificateReplica?: RemoveCertificateReplicaCommand;
 }
 
 export interface ApplyConfigCommand {
@@ -222,6 +226,36 @@ export interface DeployCertCommand {
   certPem: Buffer;
   keyPem: Buffer;
   chainPem: Buffer;
+}
+
+export interface ApplyTlsBundleCommand {
+  hostId: string;
+  configContent: string;
+  certificates: VersionedCertBundle[];
+  generation: string;
+}
+
+export interface VersionedCertBundle {
+  certId: string;
+  certPem: Buffer;
+  keyPem: Buffer;
+  chainPem: Buffer;
+  version: string;
+  replicaGeneration: string;
+}
+
+export interface InspectCertificatesCommand {
+  certIds: string[];
+}
+
+export interface ExportLegacyCertificatesCommand {
+  certIds: string[];
+}
+
+export interface RemoveCertificateReplicaCommand {
+  certId: string;
+  expectedVersion: string;
+  expectedReplicaGeneration: string;
 }
 
 export interface RemoveCertCommand {

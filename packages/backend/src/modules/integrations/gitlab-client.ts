@@ -1,9 +1,11 @@
 import http from 'node:http';
 import https from 'node:https';
+import { Readable } from 'node:stream';
 import { AppError } from '@/middleware/error-handler.js';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_REDIRECTS = 5;
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
 
 export interface GitLabRequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -15,6 +17,11 @@ export interface GitLabRequestOptions {
 
 export interface GitLabBufferRequestOptions extends Omit<GitLabRequestOptions, 'allowNotFound'> {
   maxBytes: number;
+}
+
+export interface GitLabStreamResponse {
+  contentType: string | null;
+  chunks: AsyncIterable<Buffer>;
 }
 
 export interface GitLabPage<T> {
@@ -108,6 +115,110 @@ export class GitLabClient {
       return this.requestBufferNative(url, path, options);
     }
     return this.requestBufferWithFetch(url, path, options);
+  }
+
+  async requestStream(path: string, options: GitLabBufferRequestOptions): Promise<GitLabStreamResponse> {
+    let url = this.buildUrl(path, options.query);
+    let sendCredential = true;
+    let redirectCount = 0;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+
+    try {
+      while (true) {
+        const response = await this.fetchImpl(url, {
+          method: options.method ?? 'GET',
+          headers: {
+            Accept: '*/*',
+            ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+            ...(sendCredential ? { 'PRIVATE-TOKEN': this.token } : {}),
+            'User-Agent': 'Gateway GitLab Connector',
+          },
+          body: options.body === undefined ? undefined : JSON.stringify(options.body),
+          redirect: 'manual',
+          signal: controller.signal,
+        });
+
+        if (response.status >= 300 && response.status < 400) {
+          const location = response.headers.get('location');
+          if (!location) throw this.apiError(response.status, path);
+          if (redirectCount >= MAX_REDIRECTS) throw this.tooManyRedirectsError(path);
+          const redirect = this.resolveRedirect(
+            url,
+            location,
+            sendCredential,
+            path,
+            this.isSafeCrossOriginRequest(options)
+          );
+          url = redirect.url;
+          sendCredential = redirect.sendCredential;
+          redirectCount += 1;
+          continue;
+        }
+
+        if (!response.ok) throw this.apiError(response.status, path);
+        const declaredLength = Number(response.headers.get('content-length'));
+        if (Number.isFinite(declaredLength) && declaredLength > options.maxBytes) {
+          throw new AppError(413, 'GITLAB_RESPONSE_TOO_LARGE', 'GitLab response exceeds configured size limit', {
+            path,
+            maxBytes: options.maxBytes,
+          });
+        }
+        if (!response.body)
+          throw new AppError(502, 'GITLAB_API_UNAVAILABLE', 'GitLab API returned an empty response body', { path });
+
+        return {
+          contentType: response.headers.get('content-type'),
+          chunks: this.streamResponseBody(Readable.fromWeb(response.body as never), options.maxBytes, path, timeout),
+        };
+      }
+    } catch (error) {
+      clearTimeout(timeout);
+      if (error instanceof AppError) throw error;
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new AppError(504, 'GITLAB_API_TIMEOUT', 'GitLab API request timed out', { path });
+      }
+      throw new AppError(502, 'GITLAB_API_UNAVAILABLE', 'GitLab API request failed', {
+        path,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async *streamResponseBody(
+    stream: Readable,
+    maxBytes: number,
+    path: string,
+    timeout: ReturnType<typeof setTimeout>
+  ): AsyncGenerator<Buffer> {
+    let totalBytes = 0;
+    try {
+      for await (const sourceChunk of stream) {
+        const chunk = Buffer.isBuffer(sourceChunk) ? sourceChunk : Buffer.from(sourceChunk);
+        totalBytes += chunk.byteLength;
+        if (totalBytes > maxBytes) {
+          throw new AppError(413, 'GITLAB_RESPONSE_TOO_LARGE', 'GitLab response exceeds configured size limit', {
+            path,
+            maxBytes,
+          });
+        }
+        for (let offset = 0; offset < chunk.byteLength; offset += 256 * 1024) {
+          yield chunk.subarray(offset, offset + 256 * 1024);
+        }
+      }
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new AppError(504, 'GITLAB_API_TIMEOUT', 'GitLab API request timed out', { path });
+      }
+      throw new AppError(502, 'GITLAB_API_UNAVAILABLE', 'GitLab API request failed', {
+        path,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      clearTimeout(timeout);
+      stream.destroy();
+    }
   }
 
   private async requestBufferWithFetch(
@@ -240,7 +351,15 @@ export class GitLabClient {
 
           if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
             const errorChunks: Buffer[] = [];
-            response.on('data', (chunk: Buffer) => errorChunks.push(chunk));
+            let errorBytes = 0;
+            response.on('data', (chunk: Buffer) => {
+              const remaining = MAX_ERROR_BODY_BYTES - errorBytes;
+              if (remaining <= 0) return;
+              const boundedChunk = chunk.subarray(0, remaining);
+              errorChunks.push(boundedChunk);
+              errorBytes += boundedChunk.byteLength;
+            });
+            response.on('error', reject);
             response.on('end', () => {
               reject(
                 new AppError(

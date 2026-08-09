@@ -39,9 +39,9 @@ export async function executePkiCertificateTool(
     case 'audit_system_pki_leaves': {
       context.ensureToolScope(user, 'pki:cert:view');
       context.ensureToolScope(user, 'admin:details:certificates');
-      return container.resolve(SystemCertificateLifecycleService).auditSystemLeaves(
-        typeof a.caId === 'string' ? a.caId : undefined
-      );
+      return container
+        .resolve(SystemCertificateLifecycleService)
+        .auditSystemLeaves(typeof a.caId === 'string' ? a.caId : undefined);
     }
     case 'list_certificates':
       return context.certService.listCertificates(

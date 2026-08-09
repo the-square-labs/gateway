@@ -1116,8 +1116,7 @@ export class DockerManagementService {
 
   async exportVolume(nodeId: string, name: string) {
     await this.validateDockerNode(nodeId);
-    const base64 = await exportDockerVolume(this.volumeNetworkOperationContext(), nodeId, name);
-    return Buffer.from(String(base64 ?? ''), 'base64');
+    return exportDockerVolume(this.volumeNetworkOperationContext(), nodeId, name);
   }
 
   async renameVolume(nodeId: string, name: string, newName: string, userId: string) {

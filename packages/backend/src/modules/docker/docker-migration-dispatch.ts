@@ -55,9 +55,10 @@ export class DockerMigrationDispatchAdapter {
     environment: Record<string, string>;
     secrets: Record<string, string>;
     secretKeys: string[];
+    includeEnvironment: boolean;
     includeSecrets: boolean;
   }): Promise<Record<string, unknown>> {
-    return this.command(args.nodeId, 'open_archive_export', {
+    return this.command(args.nodeId, args.includeEnvironment ? 'open_archive_export' : 'open_archive_export_v2', {
       migrationId: args.archiveId,
       artifactId: args.artifactId,
       resourceId: args.containerId,
@@ -67,6 +68,7 @@ export class DockerMigrationDispatchAdapter {
         environment: args.environment,
         secrets: args.secrets,
         secretKeys: args.secretKeys,
+        includeEnvironment: args.includeEnvironment,
         includeSecrets: args.includeSecrets,
       }),
     });
@@ -87,7 +89,7 @@ export class DockerMigrationDispatchAdapter {
       registryAuthCandidates?: string[];
     }
   ): Promise<void> {
-    await this.command(nodeId, 'open_archive_import', {
+    await this.command(nodeId, 'open_archive_import_v2', {
       migrationId: archiveId,
       artifactId,
       configJson: JSON.stringify(config),

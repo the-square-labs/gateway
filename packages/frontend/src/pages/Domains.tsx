@@ -20,6 +20,7 @@ import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderAct
 import { AddDomainDialog } from "@/components/domains/AddDomainDialog";
 import { DnsStatusBadge } from "@/components/domains/DnsStatusBadge";
 import { DomainDetailDialog } from "@/components/domains/DomainDetailDialog";
+import { getDomainPermissions } from "@/components/domains/domain-permissions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -47,9 +48,7 @@ const DOMAIN_FOLDER_LIST_CACHE_KEY = "domains:list:folder-view";
 
 export function Domains() {
   const { hasScope } = useAuthStore();
-  const canCreateDomain = hasScope("integrations:cloudflare:dns:edit");
-  const canDeleteDns = hasScope("integrations:cloudflare:dns:delete");
-  const canDeleteDomain = hasScope("domains:delete") || canDeleteDns;
+  const { canCreateDomain, canDeleteDomain, canInspectCloudflare } = getDomainPermissions(hasScope);
   const canCheckDns = hasScope("domains:edit");
   const canIssueCert = canCheckDns && hasScope("ssl:cert:issue");
 
@@ -72,15 +71,19 @@ export function Domains() {
           page: 1,
           limit: 1000,
         }),
-        api.listCloudflareConnectors({ enabled: true }).catch(() => []),
+        canInspectCloudflare
+          ? api.listCloudflareConnectors({ enabled: true }).catch(() => [])
+          : Promise.resolve(null),
       ]);
       setCloudflareReady(
-        connectors.some(
-          (connector) =>
-            connector.enabled &&
-            connector.syncStatus !== "error" &&
-            (connector.zones?.length ?? 0) > 0
-        )
+        connectors === null
+          ? null
+          : connectors.some(
+              (connector) =>
+                connector.enabled &&
+                connector.syncStatus !== "error" &&
+                (connector.zones?.length ?? 0) > 0
+            )
       );
       setDomains(result.data);
       api.setCache(DOMAIN_FOLDER_LIST_CACHE_KEY, result);
@@ -89,7 +92,7 @@ export function Domains() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [canInspectCloudflare]);
 
   useEffect(() => {
     loadDomains();
@@ -267,11 +270,7 @@ export function Domains() {
       align: "right",
       width: "5rem",
       renderCell: (d) => {
-        const canDeleteRow =
-          !d.isSystem &&
-          (d.dnsProvider !== "cloudflare" || d.dnsOwnership === "matched_existing"
-            ? canDeleteDomain
-            : canDeleteDns);
+        const canDeleteRow = !d.isSystem && canDeleteDomain;
         if (!canCheckDns && !canIssueCert && !canDeleteRow) return null;
         return (
           <div

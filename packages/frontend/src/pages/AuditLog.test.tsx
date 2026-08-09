@@ -79,6 +79,20 @@ describe("AuditLog helpers", () => {
     expect(html.content).toContain("count(*) from users");
   });
 
+  it("neutralizes spreadsheet formulas in delimited audit exports", () => {
+    const entry = {
+      ...baseEntry,
+      action: '=HYPERLINK("https://attacker.example")',
+      userName: "\t+SUM(1,1)",
+    };
+
+    const csv = formatAuditExport([entry], "csv");
+    expect(csv.content).toContain("'=HYPERLINK");
+
+    const tsv = formatAuditExport([entry], "tsv");
+    expect(tsv.content).toContain("' +SUM(1,1)");
+  });
+
   it("builds timestamped export filenames", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-21T08:30:00.123Z"));

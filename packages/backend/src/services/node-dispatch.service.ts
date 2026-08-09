@@ -88,6 +88,60 @@ export class NodeDispatchService {
     });
   }
 
+  async applyTlsBundle(
+    nodeId: string,
+    input: {
+      hostId: string;
+      configContent: string;
+      generation: string;
+      certificates: Array<{
+        certId: string;
+        certPem: Buffer;
+        keyPem: Buffer;
+        chainPem: Buffer;
+        version: string;
+        replicaGeneration: string;
+      }>;
+    }
+  ): Promise<CommandResult> {
+    await this.assertNodeMutable(nodeId);
+    return this.registry.sendCommand(
+      nodeId,
+      {
+        applyTlsBundle: {
+          hostId: input.hostId,
+          configContent: input.configContent,
+          generation: input.generation,
+          certificates: input.certificates,
+        },
+      },
+      60_000
+    );
+  }
+
+  async inspectCertificates(nodeId: string, certIds: string[]): Promise<CommandResult> {
+    return this.registry.sendCommand(nodeId, { inspectCertificates: { certIds } }, 30_000);
+  }
+
+  async exportLegacyCertificates(nodeId: string, certIds: string[]): Promise<CommandResult> {
+    await this.assertNodeMutable(nodeId);
+    return this.registry.sendCommand(nodeId, { exportLegacyCertificates: { certIds } }, 60_000);
+  }
+
+  async removeCertificateReplica(
+    nodeId: string,
+    certId: string,
+    expectedVersion: string,
+    expectedReplicaGeneration: string
+  ): Promise<CommandResult> {
+    await this.assertNodeMutable(nodeId);
+    return this.registry.sendCommand(
+      nodeId,
+      { removeCertificateReplica: { certId, expectedVersion, expectedReplicaGeneration } },
+      30_000
+    );
+  }
+
   async deployHtpasswd(nodeId: string, accessListId: string, content: string): Promise<CommandResult> {
     await this.assertNodeMutable(nodeId);
     return this.registry.sendCommand(nodeId, {

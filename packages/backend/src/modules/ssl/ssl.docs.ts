@@ -79,6 +79,15 @@ export const verifyDnsSslCertificateRoute = appRoute({
   responses: okJson(UnknownDataResponseSchema),
 });
 
+export const resyncSslCertificateDistributionRoute = appRoute({
+  method: 'post',
+  path: '/{id}/distribution/resync',
+  tags: ['SSL Certificates'],
+  summary: 'Resynchronize SSL certificate distribution',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const deleteSslCertificateRoute = appRoute({
   method: 'delete',
   path: '/{id}',

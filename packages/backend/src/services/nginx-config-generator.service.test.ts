@@ -29,6 +29,17 @@ const proxyHost: ProxyHostConfig = {
 };
 
 describe('NginxConfigGenerator proxy TLS and ACL rendering', () => {
+  it('renders websocket support without requiring an http-scope connection_upgrade map', () => {
+    const rendered = new NginxConfigGenerator({} as never).generateConfig({
+      ...proxyHost,
+      websocketSupport: true,
+    });
+
+    expect(rendered).toContain('proxy_set_header Upgrade $http_upgrade;');
+    expect(rendered).toContain('proxy_set_header Connection "upgrade";');
+    expect(rendered).not.toContain('$connection_upgrade');
+  });
+
   it('uses shared TLS policy and scopes a basic-auth-only ACL to the upstream', () => {
     const rendered = new NginxConfigGenerator({} as never).generateConfig(proxyHost);
 

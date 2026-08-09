@@ -4,10 +4,12 @@ import { DashboardReadModelService, dashboardStatsFromSourceSnapshots } from './
 function makeService() {
   const definitions: Array<{ id: string; refresh: () => Promise<void> }> = [];
   const snapshots = {
-    withLease: vi.fn(async (kind: string, id: string, work: (lease: { kind: string; id: string; token: string }) => Promise<void>) => {
-      await work({ kind, id, token: 'lease-token' });
-      return { acquired: true as const, value: undefined };
-    }),
+    withLease: vi.fn(
+      async (kind: string, id: string, work: (lease: { kind: string; id: string; token: string }) => Promise<void>) => {
+        await work({ kind, id, token: 'lease-token' });
+        return { acquired: true as const, value: undefined };
+      }
+    ),
     markRefreshing: vi.fn(async () => undefined),
     replace: vi.fn(async () => undefined),
     markError: vi.fn(async () => undefined),

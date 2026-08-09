@@ -297,13 +297,13 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Export volume
   router.openapi(
-    { ...exportVolumeRoute, middleware: requireScopeForResource('docker:volumes:view', 'nodeId') },
+    { ...exportVolumeRoute, middleware: requireScopeForResource('docker:volumes:export', 'nodeId') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
       const data = await service.exportVolume(nodeId, name);
-      return new Response(data, {
+      return new Response(new Uint8Array(data), {
         headers: {
           'Content-Type': 'application/gzip',
           'Content-Disposition': `attachment; filename="${sanitizeFilename(name)}.tar.gz"`,

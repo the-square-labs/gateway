@@ -37,11 +37,18 @@ import {
 } from "@/components/ui/select";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
-import { cn, daysUntil, formatDate, hoursUntil } from "@/lib/utils";
+import { cn, daysUntil, formatDate, formatDateTime, hoursUntil } from "@/lib/utils";
+import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useSSLStore } from "@/stores/ssl";
 import { useUIStore } from "@/stores/ui";
-import type { DNSChallenge, SSLCertificate, SSLCertStatus, SSLCertType } from "@/types";
+import type {
+  CertificateDistributionState,
+  DNSChallenge,
+  SSLCertificate,
+  SSLCertStatus,
+  SSLCertType,
+} from "@/types";
 
 const typeOptions: { value: SSLCertType | "all"; label: string }[] = [
   { value: "all", label: "All types" },
@@ -84,6 +91,19 @@ function SSLStatusBadge({ status }: { status: SSLCertStatus }) {
     default:
       return <Badge variant="secondary">{status}</Badge>;
   }
+}
+
+function TLSDistributionBadge({ distribution }: { distribution?: CertificateDistributionState }) {
+  if (!distribution || distribution.status === "pending") {
+    return <Badge variant="secondary">TLS pending</Badge>;
+  }
+  if (distribution.status === "ready") {
+    return <Badge variant="success">TLS ready ({distribution.readyReplicaCount})</Badge>;
+  }
+  if (distribution.status === "daemon_update_required") {
+    return <Badge variant="warning">Daemon update needed</Badge>;
+  }
+  return <Badge variant="destructive">TLS failed</Badge>;
 }
 
 export function SSLCertificates() {
@@ -197,6 +217,7 @@ export function SSLCertificates() {
   const [previewCert, setPreviewCert] = useState<SSLCertificate | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [isVerifyingRenewal, setIsVerifyingRenewal] = useState(false);
+  const [resyncingCertId, setResyncingCertId] = useState<string | null>(null);
   type RenewingCertificate = {
     id: string;
     name: string;
@@ -273,6 +294,19 @@ export function SSLCertificates() {
       toast.error(err instanceof Error ? err.message : "Failed to renew certificate");
     } finally {
       setRenewingCert(null);
+    }
+  };
+
+  const handleResyncDistribution = async (cert: SSLCertificate) => {
+    setResyncingCertId(cert.id);
+    try {
+      await api.resyncSSLCertificateDistribution(cert.id);
+      toast.success(`TLS synchronization requested for ${cert.name}`);
+      await fetchCertificates();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to synchronize TLS certificate");
+    } finally {
+      setResyncingCertId(null);
     }
   };
 
@@ -411,6 +445,12 @@ export function SSLCertificates() {
       render: (cert) => <SSLStatusBadge status={cert.status} />,
     },
     {
+      key: "tls",
+      header: "TLS",
+      width: "minmax(150px, 0.9fr)",
+      render: (cert) => <TLSDistributionBadge distribution={cert.distribution} />,
+    },
+    {
       key: "expires",
       header: "Expires",
       width: "150px",
@@ -490,11 +530,14 @@ export function SSLCertificates() {
           cert.autoRenew &&
           cert.autoRenewProvider === "cloudflare";
         const canDeleteCert = !cert.isSystem && hasScope("ssl:cert:delete");
+        const canResyncDistribution =
+          hasScope("admin:update") && cert.distribution?.status !== "ready";
         const hasActions =
           canContinueDNSVerification ||
           canRenewCert ||
           canEnableCloudflareAutoRenew ||
           canDisableCloudflareAutoRenew ||
+          canResyncDistribution ||
           canDeleteCert;
         if (!hasActions) return null;
         return (
@@ -528,6 +571,18 @@ export function SSLCertificates() {
                   <DropdownMenuItem onClick={() => handleSetCloudflareAutoRenew(cert, false)}>
                     <Cloud className="h-4 w-4" />
                     Disable Auto-Renew
+                  </DropdownMenuItem>
+                )}
+                {canResyncDistribution && (
+                  <DropdownMenuItem
+                    onClick={() => handleResyncDistribution(cert)}
+                    disabled={resyncingCertId === cert.id}
+                    aria-label={`Retry TLS sync for ${cert.name}`}
+                  >
+                    <RefreshCw
+                      className={cn("h-4 w-4", resyncingCertId === cert.id && "animate-spin")}
+                    />
+                    Retry TLS Sync
                   </DropdownMenuItem>
                 )}
                 {canDeleteCert && (
@@ -642,7 +697,7 @@ export function SSLCertificates() {
               onRowClick={openCertificatePreview}
               scrollRef={scrollRef}
               horizontalScroll
-              minWidth="1040px"
+              minWidth="1128px"
               footer={
                 hasMore ? (
                   <div
@@ -694,6 +749,20 @@ export function SSLCertificates() {
                 ["Domains", previewCert.domainNames.join(", ") || "-"],
                 ["Type", previewCert.type],
                 ["Status", previewCert.status],
+                ["TLS Distribution", previewCert.distribution?.status ?? "pending"],
+                [
+                  "TLS Replicas",
+                  previewCert.distribution
+                    ? `${previewCert.distribution.readyReplicaCount}/${previewCert.distribution.replicaCount} ready`
+                    : "0/0 ready",
+                ],
+                [
+                  "TLS Last Checked",
+                  previewCert.distribution?.lastVerifiedAt
+                    ? formatDateTime(previewCert.distribution.lastVerifiedAt)
+                    : "-",
+                ],
+                ["TLS Issue", previewCert.distribution?.error ?? "-"],
                 ["Provider", previewCert.acmeProvider ?? "-"],
                 ["Challenge", previewCert.acmeChallengeType ?? "-"],
                 ["Valid From", previewCert.notBefore ? formatDate(previewCert.notBefore) : "-"],

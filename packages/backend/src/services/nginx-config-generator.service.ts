@@ -230,7 +230,7 @@ export class NginxConfigGenerator {
       lines.push('        # WebSocket support');
       lines.push('        proxy_http_version 1.1;');
       lines.push('        proxy_set_header Upgrade $http_upgrade;');
-      lines.push('        proxy_set_header Connection $connection_upgrade;');
+      lines.push('        proxy_set_header Connection "upgrade";');
       lines.push('');
     }
 
@@ -270,15 +270,6 @@ export class NginxConfigGenerator {
     }
 
     lines.push('}');
-
-    if (host.websocketSupport) {
-      lines.push('');
-      lines.push('# Note: The following map should be in the http block of nginx.conf:');
-      lines.push('# map $http_upgrade $connection_upgrade {');
-      lines.push('#     default upgrade;');
-      lines.push("#     ''      close;");
-      lines.push('# }');
-    }
 
     return `${lines.join('\n')}\n`;
   }
@@ -411,6 +402,20 @@ export class NginxConfigGenerator {
       certPath: `${NGINX_CERTS_PREFIX}/${certId}/fullchain.pem`,
       keyPath: `${NGINX_CERTS_PREFIX}/${certId}/privkey.pem`,
       chainPath: `${NGINX_CERTS_PREFIX}/${certId}/chain.pem`,
+    };
+  }
+
+  /**
+   * v2 distribution never points a proxy config at a mutable certificate
+   * file. The daemon switches this `current` symlink only after staging the
+   * complete certificate/key pair, so an Nginx reload cannot observe a half
+   * written certificate.
+   */
+  getVersionedCertPaths(certId: string): { certPath: string; keyPath: string; chainPath: string } {
+    return {
+      certPath: `${NGINX_CERTS_PREFIX}/${certId}/current/fullchain.pem`,
+      keyPath: `${NGINX_CERTS_PREFIX}/${certId}/current/privkey.pem`,
+      chainPath: `${NGINX_CERTS_PREFIX}/${certId}/current/chain.pem`,
     };
   }
 }

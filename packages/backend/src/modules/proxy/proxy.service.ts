@@ -11,8 +11,11 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
-import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
+import type {
+  NginxCertificateDistributionService,
+  PreparedTlsCertificate,
+} from '@/services/nginx-certificate-distribution.service.js';
 import type { NginxConfigGenerator, ProxyHostConfig } from '@/services/nginx-config-generator.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { PaginatedResponse } from '@/types.js';
@@ -27,6 +30,7 @@ import {
   normalizeProxyValidationOptions,
   type ProxyValidationInput,
   rawConfigAuditDetails,
+  storedRawConfigForRawModeEnablement,
   stripProxyHealthHistory,
   updateUsesRawMode,
 } from './proxy.service-helpers.js';
@@ -66,9 +70,9 @@ export class ProxyService {
     private readonly db: DrizzleClient,
     private readonly nginxTemplateService: NginxTemplateService,
     private readonly auditService: AuditService,
-    private readonly cryptoService: CryptoService,
     private readonly configGenerator: NginxConfigGenerator,
     private readonly nodeDispatch: NodeDispatchService,
+    private readonly certificateDistribution: NginxCertificateDistributionService,
     private readonly dockerUpstreams?: ProxyDockerUpstreamService
   ) {}
 
@@ -104,11 +108,20 @@ export class ProxyService {
     this.eventBus?.publish('proxy.host.changed', { id, action, domain, ...extra });
   }
 
-  private async applyConfigToNode(hostId: string, config: string, nodeId: string | null): Promise<void> {
-    const resolvedNodeId = await this.nodeDispatch.resolveNodeId(nodeId);
-    const result = await this.nodeDispatch.applyConfig(resolvedNodeId, hostId, config);
-    if (!result.success) {
-      throw new Error(result.error || 'Daemon config apply failed');
+  private async applyConfigToNode(
+    hostId: string,
+    config: string,
+    nodeId: string | null,
+    preparedTls?: PreparedTlsCertificate | null
+  ): Promise<void> {
+    const resolvedNodeId = preparedTls?.nodeId ?? (await this.nodeDispatch.resolveNodeId(nodeId));
+    if (preparedTls) {
+      await this.certificateDistribution.applyHostBundle({ id: hostId, nodeId }, config, preparedTls);
+    } else {
+      const result = await this.nodeDispatch.applyConfig(resolvedNodeId, hostId, config);
+      if (!result.success) {
+        throw new Error(result.error || 'Daemon config apply failed');
+      }
     }
     await this.auditService.log({
       userId: null,
@@ -120,12 +133,10 @@ export class ProxyService {
   }
 
   private async restoreConfigOnNode(host: ProxyHostRow): Promise<void> {
-    const certPaths = await this.resolveCertPaths(host);
+    const certPaths = await this.resolveCertPaths(host, { preserveLegacyOnUnsupported: true });
     const accessList = await this.resolveAccessList(host.accessListId);
     const config = await this.buildNginxConfig(host, certPaths, accessList);
-    const resolvedNodeId = await this.nodeDispatch.resolveNodeId(host.nodeId);
-    const result = await this.nodeDispatch.applyConfig(resolvedNodeId, host.id, config);
-    if (!result.success) throw new Error(result.error || 'Daemon config rollback failed');
+    await this.applyConfigToNode(host.id, config, host.nodeId, certPaths.preparedTls);
   }
 
   private async removeConfigFromNode(hostId: string, nodeId: string | null): Promise<void> {
@@ -325,7 +336,7 @@ export class ProxyService {
       const config = await this.buildNginxConfig(host, certPaths, accessList);
 
       // 3. Apply config via daemon or legacy docker
-      await this.applyConfigToNode(host.id, config, host.nodeId);
+      await this.applyConfigToNode(host.id, config, host.nodeId, certPaths.preparedTls);
     } catch (error) {
       // 4. If nginx fails, delete the DB row and throw
       logger.error('Failed to apply nginx config for new proxy host, rolling back DB insert', {
@@ -333,6 +344,7 @@ export class ProxyService {
         error,
       });
       await this.db.delete(proxyHosts).where(eq(proxyHosts.id, host.id));
+      if (error instanceof AppError && error.code === 'NGINX_TLS_DAEMON_UPDATE_REQUIRED') throw error;
       throw new AppError(
         500,
         'NGINX_CONFIG_FAILED',
@@ -411,6 +423,19 @@ export class ProxyService {
         'Exit maintenance mode before changing the host type or enabling raw config'
       );
     }
+
+    const storedRawConfig = storedRawConfigForRawModeEnablement(existing, input);
+    if (storedRawConfig) {
+      const validation = this.configGenerator.validateAdvancedConfig(
+        storedRawConfig as string,
+        true,
+        options.bypassRawValidation === true
+      );
+      if (!validation.valid) {
+        throw new AppError(400, 'INVALID_RAW_CONFIG', `Raw config is invalid: ${validation.errors.join(', ')}`);
+      }
+    }
+
     if (input.nodeId && input.nodeId !== existing.nodeId) {
       await assertNodeAllowsServiceCreation(this.db, input.nodeId, 'nginx');
     }
@@ -462,20 +487,65 @@ export class ProxyService {
         })
       : await updateHost();
 
+    // The UI can submit a complete form on an unrelated edit. Gate old
+    // daemons on an actual TLS or placement change, not on field presence,
+    // so existing HTTPS hosts remain editable during a mixed-fleet rollout.
+    const tlsReferenceChanged =
+      updated.sslEnabled !== existing.sslEnabled ||
+      updated.sslCertificateId !== existing.sslCertificateId ||
+      updated.internalCertificateId !== existing.internalCertificateId ||
+      updated.nodeId !== existing.nodeId;
+    const nodeChanged = updated.nodeId !== existing.nodeId;
+    let appliedOnTargetNode = false;
+
     // 3. Regenerate nginx config
     try {
-      const certPaths = await this.resolveCertPaths(updated);
-      const accessList = await this.resolveAccessList(updated.accessListId);
-      const config = await this.buildNginxConfig(updated, certPaths, accessList);
-
       if (updated.enabled) {
+        const certPaths = await this.resolveCertPaths(updated, {
+          preserveLegacyOnUnsupported: existing.sslEnabled && !tlsReferenceChanged,
+        });
+        const accessList = await this.resolveAccessList(updated.accessListId);
+        const config = await this.buildNginxConfig(updated, certPaths, accessList);
         // 4. Apply config with rollback on failure
-        await this.applyConfigToNode(id, config, updated.nodeId);
+        await this.applyConfigToNode(id, config, updated.nodeId, certPaths.preparedTls);
+        appliedOnTargetNode = true;
+
+        // The new target is now known-good. Only then retire the former
+        // node's config and begin its certificate replica grace period.
+        if (nodeChanged && existing.enabled) {
+          await this.removeConfigFromNode(id, existing.nodeId);
+          await this.certificateDistribution.deactivateHost(id, existing.nodeId);
+        }
       } else {
         // If disabled, remove config and reload
-        await this.removeConfigFromNode(id, updated.nodeId);
+        const deployedNodeId = nodeChanged ? existing.nodeId : updated.nodeId;
+        await this.removeConfigFromNode(id, deployedNodeId);
+        await this.certificateDistribution.deactivateHost(id, deployedNodeId);
       }
     } catch (error) {
+      if (nodeChanged && appliedOnTargetNode) {
+        try {
+          await this.removeConfigFromNode(id, updated.nodeId);
+          await this.certificateDistribution.deactivateHost(id, updated.nodeId);
+        } catch (cleanupError) {
+          logger.warn('Failed to remove new-node config after proxy host move rollback', {
+            hostId: id,
+            nodeId: updated.nodeId,
+            cleanupError,
+          });
+        }
+        if (existing.enabled) {
+          try {
+            await this.restoreConfigOnNode(existing);
+          } catch (restoreError) {
+            logger.error('Failed to restore former-node config after proxy host move rollback', {
+              hostId: id,
+              nodeId: existing.nodeId,
+              restoreError,
+            });
+          }
+        }
+      }
       // Roll back every field changed by the request or by upstream resolution.
       logger.error('Failed to apply nginx config during update, rolling back DB', {
         hostId: id,
@@ -495,6 +565,7 @@ export class ProxyService {
           rollbackError,
         });
       }
+      if (error instanceof AppError && error.code === 'NGINX_TLS_DAEMON_UPDATE_REQUIRED') throw error;
       throw new AppError(
         500,
         'NGINX_CONFIG_FAILED',
@@ -539,15 +610,21 @@ export class ProxyService {
     if (!existing) throw new AppError(404, 'PROXY_HOST_NOT_FOUND', 'Proxy host not found');
     if (existing.isSystem) throw new AppError(403, 'SYSTEM_HOST', 'System proxy hosts cannot be deleted');
 
-    // 2. Delete from DB first (safer — lingering config is less harmful than zombie DB record)
-    await this.db.delete(proxyHosts).where(eq(proxyHosts.id, id));
-
-    // 3. Remove nginx config and reload (non-fatal if it fails after DB delete)
+    // 2. Preserve the currently active deployment until Nginx has confirmed
+    // the config removal. This avoids GCing a certificate for a still-serving host.
     try {
       await this.removeConfigFromNode(id, existing.nodeId);
-    } catch (err) {
-      logger.warn('Failed to remove nginx config after DB delete', { hostId: id, error: (err as Error).message });
+      await this.certificateDistribution.deactivateHost(id, existing.nodeId);
+    } catch (error) {
+      throw new AppError(
+        500,
+        'NGINX_CONFIG_FAILED',
+        `Failed to remove Nginx config: ${error instanceof Error ? error.message : 'unknown error'}`
+      );
     }
+
+    // 3. Delete the database row only after the active deployment is safely gone.
+    await this.db.delete(proxyHosts).where(eq(proxyHosts.id, id));
 
     // 5. Audit log
     await this.auditService.log({
@@ -592,6 +669,7 @@ export class ProxyService {
           where: eq(accessLists.id, host.accessListId),
         })
       : null;
+    const tlsDistribution = await this.certificateDistribution.getStatusForHost(host);
 
     const [displayHost] = await attachDockerUpstreamDisplay(this.db, [host]);
     return {
@@ -620,6 +698,7 @@ export class ProxyService {
             name: accessList.name,
           }
         : null,
+      tlsDistribution,
     };
   }
 
@@ -764,10 +843,11 @@ export class ProxyService {
         const certPaths = await this.resolveCertPaths(updated);
         const accessList = await this.resolveAccessList(updated.accessListId);
         const config = await this.buildNginxConfig(updated, certPaths, accessList);
-        await this.applyConfigToNode(id, config, updated.nodeId);
+        await this.applyConfigToNode(id, config, updated.nodeId, certPaths.preparedTls);
       } else {
         // Disable: remove config and reload
         await this.removeConfigFromNode(id, updated.nodeId);
+        await this.certificateDistribution.deactivateHost(id, updated.nodeId);
       }
     } catch (error) {
       // Rollback DB to previous enabled state
@@ -785,6 +865,7 @@ export class ProxyService {
           updatedAt: existing.updatedAt,
         })
         .where(eq(proxyHosts.id, id));
+      if (error instanceof AppError && error.code === 'NGINX_TLS_DAEMON_UPDATE_REQUIRED') throw error;
       throw new AppError(
         500,
         'NGINX_CONFIG_FAILED',
@@ -846,10 +927,10 @@ export class ProxyService {
 
     try {
       if (updated.enabled) {
-        const certPaths = await this.resolveCertPaths(updated);
+        const certPaths = await this.resolveCertPaths(updated, { preserveLegacyOnUnsupported: true });
         const accessList = await this.resolveAccessList(updated.accessListId);
         const config = await this.buildNginxConfig(updated, certPaths, accessList);
-        await this.applyConfigToNode(id, config, updated.nodeId);
+        await this.applyConfigToNode(id, config, updated.nodeId, certPaths.preparedTls);
       }
     } catch (error) {
       logger.error('Failed to apply nginx config during maintenance transition, rolling back DB', {
@@ -970,10 +1051,10 @@ export class ProxyService {
         if (updated === host) continue;
         if (updated.enabled) {
           try {
-            const certPaths = await this.resolveCertPaths(updated);
+            const certPaths = await this.resolveCertPaths(updated, { preserveLegacyOnUnsupported: true });
             const accessList = await this.resolveAccessList(updated.accessListId);
             const config = await this.buildNginxConfig(updated, certPaths, accessList);
-            await this.applyConfigToNode(updated.id, config, updated.nodeId);
+            await this.applyConfigToNode(updated.id, config, updated.nodeId, certPaths.preparedTls);
           } catch (error) {
             // Keep the newly resolved endpoint. A disconnected Nginx node will
             // receive it through the existing resync path after reconnecting.
@@ -1008,14 +1089,17 @@ export class ProxyService {
     }
 
     logger.info('Resyncing all hosts on node', { nodeId, hostCount: hosts.length });
+    const supportsDistribution = await this.certificateDistribution.supportsNode(nodeId);
 
     for (const storedHost of hosts) {
       try {
         const host = await this.resolveStoredDockerUpstream(storedHost).catch(() => storedHost);
-        const certPaths = await this.resolveCertPaths(host);
+        // Existing hosts on an old daemon retain their legacy config and
+        // certificate paths. A new bundle is never initiated for that fleet.
+        const certPaths = await this.resolveCertPaths(host, supportsDistribution ? {} : { legacy: true });
         const accessList = await this.resolveAccessList(host.accessListId);
         const config = await this.buildNginxConfig(host, certPaths, accessList);
-        await this.applyConfigToNode(host.id, config, host.nodeId ?? nodeId);
+        await this.applyConfigToNode(host.id, config, host.nodeId ?? nodeId, certPaths.preparedTls);
       } catch (err) {
         logger.error('Failed to resync host config', {
           hostId: storedHost.id,
@@ -1026,6 +1110,36 @@ export class ProxyService {
     }
 
     logger.info('Node resync complete', { nodeId, hostCount: hosts.length });
+  }
+
+  async resyncTlsHost(id: string, userId: string) {
+    const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) });
+    if (!host) throw new AppError(404, 'PROXY_HOST_NOT_FOUND', 'Proxy host not found');
+    if (!host.sslEnabled || !this.certificateDistribution.referenceForHost(host)) {
+      throw new AppError(409, 'TLS_NOT_CONFIGURED', 'This proxy host has no TLS certificate to synchronize');
+    }
+    if (!host.enabled) {
+      throw new AppError(
+        409,
+        'PROXY_HOST_DISABLED',
+        'Enable the proxy host before synchronizing its TLS configuration'
+      );
+    }
+
+    const certPaths = await this.resolveCertPaths(host);
+    const accessList = await this.resolveAccessList(host.accessListId);
+    const config = await this.buildNginxConfig(host, certPaths, accessList);
+    await this.applyConfigToNode(host.id, config, host.nodeId, certPaths.preparedTls);
+    const distribution = await this.certificateDistribution.getStatusForHost(host);
+    await this.auditService.log({
+      userId,
+      action: 'proxy_host.tls_resync',
+      resourceType: 'proxy_host',
+      resourceId: host.id,
+      details: { nodeId: host.nodeId },
+    });
+    this.emitHost(host.id, 'tls_distribution_resynced', host.domainNames?.[0]);
+    return { distribution };
   }
 
   // -----------------------------------------------------------------------
@@ -1039,7 +1153,7 @@ export class ProxyService {
     if (!host) throw new AppError(404, 'PROXY_HOST_NOT_FOUND', 'Proxy host not found');
     if (host.isSystem) throw new AppError(403, 'SYSTEM_HOST', 'System proxy host config cannot be rendered here');
 
-    const certPaths = await this.resolveCertPaths(host);
+    const certPaths = await this.resolveCertPaths(host, { prepare: false });
     const accessList = await this.resolveAccessList(host.accessListId);
     return this.buildNginxConfig(host, certPaths, accessList);
   }
@@ -1131,7 +1245,7 @@ export class ProxyService {
     try {
       const certPaths = await this.resolveCertPaths(host);
       const config = await this.buildNginxConfig(host, certPaths, null);
-      await this.applyConfigToNode(host.id, config, host.nodeId);
+      await this.applyConfigToNode(host.id, config, host.nodeId, certPaths.preparedTls);
     } catch (error) {
       logger.error('Failed to apply status page system proxy host config', {
         hostId: host.id,
@@ -1171,6 +1285,7 @@ export class ProxyService {
 
     try {
       await this.removeConfigFromNode(existing.id, existing.nodeId);
+      await this.certificateDistribution.deactivateHost(existing.id, existing.nodeId);
       await this.db.delete(proxyHosts).where(eq(proxyHosts.id, existing.id));
     } catch (error) {
       logger.error('Failed to remove status page system proxy host config', {
@@ -1237,122 +1352,25 @@ export class ProxyService {
   // Helpers — cert path resolution
   // -----------------------------------------------------------------------
 
-  private async resolveCertPaths(host: ProxyHostRow): Promise<CertPaths> {
-    const empty: CertPaths = { sslCertPath: null, sslKeyPath: null, sslChainPath: null };
-
-    if (!host.sslEnabled) return empty;
-
-    // SSL certificate from the ssl_certificates table (ACME / upload)
-    if (host.sslCertificateId) {
-      const sslCert = await this.db.query.sslCertificates.findFirst({
-        where: eq(sslCertificates.id, host.sslCertificateId),
-      });
-
-      if (sslCert?.certificatePem && sslCert.privateKeyPem) {
-        // Decrypt the private key
-        let keyPem: string;
-        if (sslCert.encryptedDek) {
-          keyPem = this.cryptoService.decryptPrivateKey({
-            encryptedPrivateKey: sslCert.privateKeyPem,
-            encryptedDek: sslCert.encryptedDek,
-            dekIv: sslCert.dekIv || '',
-          });
-        } else {
-          keyPem = sslCert.privateKeyPem;
-        }
-
-        if (!keyPem.includes('-----BEGIN')) {
-          logger.error('SSL key decryption produced invalid PEM', {
-            certId: sslCert.id,
-            starts: keyPem.substring(0, 20),
-          });
-          throw new Error('Failed to decrypt SSL certificate private key');
-        }
-
-        // Deploy cert to the node via daemon
-        const resolvedNodeId = await this.nodeDispatch.resolveNodeId(host.nodeId);
-        await this.nodeDispatch.deployCertificate(
-          resolvedNodeId,
-          sslCert.id,
-          Buffer.from(sslCert.certificatePem),
-          Buffer.from(keyPem),
-          sslCert.chainPem ? Buffer.from(sslCert.chainPem) : undefined
-        );
-
-        await this.auditService.log({
-          userId: null,
-          action: 'node.cert_deploy',
-          resourceType: 'ssl_certificate',
-          resourceId: sslCert.id,
-          details: { nodeId: resolvedNodeId },
-        });
-
-        const paths = this.configGenerator.getCertPaths(sslCert.id);
-        return {
-          sslCertPath: paths.certPath,
-          sslKeyPath: paths.keyPath,
-          sslChainPath: sslCert.chainPem ? paths.chainPath : null,
-        };
-      }
-
-      // Older/imported certificate rows may not retain decryptable PEM data even
-      // though the certificate is already deployed on the Nginx node. Keep the
-      // stable daemon paths so config-only transitions do not silently drop TLS.
-      const paths = this.configGenerator.getCertPaths(host.sslCertificateId);
-      return {
-        sslCertPath: paths.certPath,
-        sslKeyPath: paths.keyPath,
-        sslChainPath: sslCert?.chainPem ? paths.chainPath : null,
-      };
+  private async resolveCertPaths(
+    host: ProxyHostRow,
+    options: { prepare?: boolean; legacy?: boolean; preserveLegacyOnUnsupported?: boolean } = {}
+  ): Promise<CertPaths> {
+    if (!host.sslEnabled) return { sslCertPath: null, sslKeyPath: null, sslChainPath: null };
+    if (options.legacy) return this.certificateDistribution.legacyPathsForHost(host);
+    if (options.preserveLegacyOnUnsupported && !(await this.certificateDistribution.supportsNode(host.nodeId))) {
+      return this.certificateDistribution.legacyPathsForHost(host);
     }
+    if (options.prepare === false) return this.certificateDistribution.peekPathsForHost(host);
 
-    // Internal certificate from PKI certificates table
-    if (host.internalCertificateId) {
-      const cert = await this.db.query.certificates.findFirst({
-        where: eq(certificates.id, host.internalCertificateId),
-      });
-
-      if (cert?.certificatePem && cert.encryptedPrivateKey && cert.encryptedDek && cert.dekIv) {
-        const keyPem = this.cryptoService.decryptPrivateKey({
-          encryptedPrivateKey: cert.encryptedPrivateKey,
-          encryptedDek: cert.encryptedDek,
-          dekIv: cert.dekIv,
-        });
-
-        const certId = `internal-${cert.id}`;
-        const resolvedNodeId = await this.nodeDispatch.resolveNodeId(host.nodeId);
-        await this.nodeDispatch.deployCertificate(
-          resolvedNodeId,
-          certId,
-          Buffer.from(cert.certificatePem),
-          Buffer.from(keyPem)
-        );
-
-        await this.auditService.log({
-          userId: null,
-          action: 'node.cert_deploy',
-          resourceType: 'certificate',
-          resourceId: cert.id,
-          details: { nodeId: resolvedNodeId, internal: true },
-        });
-
-        const paths = this.configGenerator.getCertPaths(certId);
-        return {
-          sslCertPath: paths.certPath,
-          sslKeyPath: paths.keyPath,
-          sslChainPath: null,
-        };
-      }
-
-      const paths = this.configGenerator.getCertPaths(`internal-${host.internalCertificateId}`);
-      return {
-        sslCertPath: paths.certPath,
-        sslKeyPath: paths.keyPath,
-        sslChainPath: null,
-      };
-    }
-
-    return empty;
+    const preparedTls = await this.certificateDistribution.prepareForHost(host);
+    if (!preparedTls) return { sslCertPath: null, sslKeyPath: null, sslChainPath: null };
+    return {
+      sslCertPath: preparedTls.sslCertPath,
+      sslKeyPath: preparedTls.sslKeyPath,
+      sslChainPath: preparedTls.sslChainPath,
+      preparedTls,
+    };
   }
 
   // -----------------------------------------------------------------------

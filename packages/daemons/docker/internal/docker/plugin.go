@@ -180,7 +180,13 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		NginxVersion: p.version,
 		Capabilities: func() []string {
 			if p.cfg.Docker.Mode == "databases" {
-				return []string{"managed_databases_v1", "managed_database_storage_images_v1", "database_tunnel_v2", "docker_database_bindings_v1"}
+				return []string{
+					"managed_databases_v1",
+					"managed_database_storage_images_v1",
+					"database_tunnel_v2",
+					"docker_database_bindings_v1",
+					"managed_clickhouse_principals_v1",
+				}
 			}
 			return []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "database_tunnel_v2", "docker_database_bindings_v1"}
 		}(),
@@ -717,7 +723,7 @@ func (p *DockerPlugin) handleVolumeCommand(cmd *pb.DockerVolumeCommand, result *
 			result.Error = err.Error()
 			return
 		}
-		result.Detail = encodeBase64(content)
+		result.Data = content
 
 	case "read-file":
 		if cmd.Name == "" || cmd.Path == "" {

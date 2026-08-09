@@ -4,7 +4,14 @@ import OpenAI from 'openai';
 import { container, TOKENS } from '@/container.js';
 import { nodes as nodesTable } from '@/db/schema/nodes.js';
 import { createChildLogger } from '@/lib/logger.js';
-import { canManageUser, hasScope, hasScopeBase, hasScopeForResource, isScopeSubset } from '@/lib/permissions.js';
+import {
+  boundScopes,
+  canManageUser,
+  hasScope,
+  hasScopeBase,
+  hasScopeForResource,
+  isScopeSubset,
+} from '@/lib/permissions.js';
 import { canonicalizeScopes } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AccessListService } from '@/modules/access-lists/access-list.service.js';
@@ -576,7 +583,25 @@ export class AIService {
       return { error: `Unknown tool: ${toolName}`, invalidateStores: [] };
     }
 
-    const executionUser = options.scopes ? { ...user, scopes: options.scopes } : user;
+    let executionUser = options.scopes ? { ...user, scopes: options.scopes } : user;
+    if (options.source === 'mcp') {
+      try {
+        const currentUser = await this.authService.getUserById(user.id);
+        if (!currentUser || currentUser.isBlocked) {
+          return {
+            error: 'PERMISSION_DENIED: Your current account access no longer allows this action.',
+            invalidateStores: [],
+          };
+        }
+        executionUser = { ...currentUser, scopes: boundScopes(options.scopes ?? [], currentUser.scopes) };
+      } catch (error) {
+        logger.warn('Failed to refresh current access before MCP tool execution', { userId: user.id, error });
+        return {
+          error: 'PERMISSION_DENIED: Current account access could not be verified.',
+          invalidateStores: [],
+        };
+      }
+    }
 
     // Permission check — tools with empty requiredScope are blocked (must be explicit)
     if (!hasToolExecutionScope(executionUser.scopes, toolName, toolDef.requiredScope, args)) {
@@ -1055,10 +1080,14 @@ export class AIService {
           })
         );
       }
-      case 'toggle_proxy_raw_mode':
+      case 'toggle_proxy_raw_mode': {
+        const bypassRawValidation = hasScope(user.scopes, `proxy:raw:bypass:${a.proxyHostId}`);
         return compactProxyHostForAgent(
-          await this.proxyService.updateProxyHost(a.proxyHostId, { rawConfigEnabled: a.enabled } as any, user.id)
+          await this.proxyService.updateProxyHost(a.proxyHostId, { rawConfigEnabled: a.enabled } as any, user.id, {
+            bypassRawValidation,
+          })
         );
+      }
 
       // ── Administration ──
       case 'list_users':

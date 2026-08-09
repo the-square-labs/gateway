@@ -106,6 +106,15 @@ export const toggleProxyMaintenanceRoute = appRoute({
   responses: okJson(UnknownDataResponseSchema),
 });
 
+export const resyncProxyHostTlsRoute = appRoute({
+  method: 'post',
+  path: '/{id}/tls/resync',
+  tags: ['Proxy Hosts'],
+  summary: 'Resynchronize a proxy host TLS certificate',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const renderedProxyConfigRoute = appRoute({
   method: 'get',
   path: '/{id}/rendered-config',

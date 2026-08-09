@@ -2,6 +2,22 @@ import { describe, expect, it, vi } from 'vitest';
 import { DockerWebhookService } from './docker-webhook.service.js';
 
 describe('DockerWebhookService', () => {
+  it('rejects malformed bearer tokens before issuing a UUID database query', async () => {
+    const select = vi.fn();
+    const service = new DockerWebhookService(
+      { select } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never
+    );
+
+    await expect(service.getByToken('raw-secret-that-is-not-a-uuid')).resolves.toBeNull();
+    expect(select).not.toHaveBeenCalled();
+  });
+
   function createService(inspectConfig: Record<string, unknown> = {}) {
     const docker = {
       inspectContainer: vi.fn().mockResolvedValue({

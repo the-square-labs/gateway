@@ -1,6 +1,7 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
+import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, requireAnyScope } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
@@ -22,6 +23,11 @@ import { NotificationWebhookService } from './notification-webhook.service.js';
 export const webhookRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
 webhookRoutes.use('*', authMiddleware);
+
+function canRevealWebhookHeaders(c: { get(key: 'effectiveScopes'): string[] | undefined }): boolean {
+  const scopes = c.get('effectiveScopes') ?? [];
+  return hasScope(scopes, 'notifications:webhooks:edit') || hasScope(scopes, 'notifications:manage');
+}
 
 // GET /presets — list template presets
 webhookRoutes.openapi(
@@ -56,7 +62,7 @@ webhookRoutes.openapi(
   async (c) => {
     const service = container.resolve(NotificationWebhookService);
     const query = WebhookListQuerySchema.parse(c.req.query());
-    const result = await service.list(query);
+    const result = await service.list(query, { revealHeaders: canRevealWebhookHeaders(c) });
     return c.json(result);
   }
 );
@@ -74,7 +80,7 @@ webhookRoutes.openapi(
   },
   async (c) => {
     const service = container.resolve(NotificationWebhookService);
-    const webhook = await service.getById(c.req.param('id')!);
+    const webhook = await service.getById(c.req.param('id')!, { revealHeaders: canRevealWebhookHeaders(c) });
     return c.json({ data: webhook });
   }
 );

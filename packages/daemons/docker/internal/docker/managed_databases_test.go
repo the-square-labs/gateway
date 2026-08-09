@@ -532,23 +532,144 @@ func TestClickHouseBindingPrincipalGrantsMonitoringViews(t *testing.T) {
 		OwnerUsername: "app_owner",
 		OwnerPassword: "owner-secret",
 	})
-	for _, table := range []string{"parts", "processes", "merges", "mutations", "events", "disks"} {
+	for _, table := range []string{"parts", "merges", "mutations", "events", "disks"} {
 		grant := `GRANT SELECT ON system.` + table + ` TO "app_user"`
 		if !strings.Contains(sql, grant) {
 			t.Fatalf("ClickHouse binding SQL must grant monitoring view %s: %q", table, sql)
 		}
 	}
+	if !strings.Contains(sql, `REVOKE SELECT ON system.processes FROM "app_user"`) {
+		t.Fatalf("ClickHouse binding SQL must revoke broad live-query access: %q", sql)
+	}
+	if !strings.Contains(sql, `GRANT SELECT(memory_usage) ON system.processes TO "app_user"`) {
+		t.Fatalf("ClickHouse binding SQL must preserve process memory monitoring: %q", sql)
+	}
+	if strings.Contains(sql, `GRANT SELECT ON system.processes TO "app_user"`) {
+		t.Fatalf("ClickHouse binding SQL must not grant live query text access: %q", sql)
+	}
+}
+
+func TestClickHouseReaderPrincipalExcludesLiveQueryText(t *testing.T) {
+	sql := clickHousePrincipalSQL(clickHousePrincipalCommand{
+		PrincipalType: "reader",
+		Username:      "query_reader",
+		Password:      "replacement-long-random-secret",
+		DatabaseName:  "app_database",
+		OwnerUsername: "app_owner",
+		OwnerPassword: "owner-secret",
+	})
+	for _, expected := range []string{
+		`REVOKE ALL ON *.* FROM "query_reader"`,
+		`GRANT SELECT ON "app_database".* TO "query_reader"`,
+		`GRANT SELECT(name) ON system.databases TO "query_reader"`,
+		`GRANT SELECT(name, engine, total_rows, total_bytes, database, sorting_key, primary_key, partition_key, create_table_query) ON system.tables TO "query_reader"`,
+		`GRANT SELECT(name, type, default_kind, default_expression, comment, is_in_primary_key, is_in_sorting_key, is_in_partition_key, database, table, position) ON system.columns TO "query_reader"`,
+	} {
+		if !strings.Contains(sql, expected) {
+			t.Fatalf("reader principal SQL must contain %q: %q", expected, sql)
+		}
+	}
+	if strings.Contains(sql, "system.processes") || strings.Contains(sql, "GRANT ALL") {
+		t.Fatalf("reader principal must not receive process or broad privileges: %q", sql)
+	}
+}
+
+func TestClickHouseWriterPrincipalRevokesLegacyLiveQueryAccess(t *testing.T) {
+	sql := clickHousePrincipalSQL(clickHousePrincipalCommand{
+		PrincipalType: "writer",
+		Username:      "query_writer",
+		Password:      "replacement-long-random-secret",
+		DatabaseName:  "app_database",
+		OwnerUsername: "app_owner",
+		OwnerPassword: "owner-secret",
+	})
+	for _, expected := range []string{
+		`REVOKE ALL ON *.* FROM "query_writer"`,
+		`GRANT ALL ON "app_database".* TO "query_writer"`,
+		`REVOKE SELECT ON system.processes FROM "query_writer"`,
+		`GRANT SELECT(memory_usage) ON system.processes TO "query_writer"`,
+	} {
+		if !strings.Contains(sql, expected) {
+			t.Fatalf("writer principal SQL must contain %q: %q", expected, sql)
+		}
+	}
+	if strings.Contains(sql, `GRANT SELECT ON system.processes TO "query_writer"`) {
+		t.Fatalf("writer principal must not receive live query text access: %q", sql)
+	}
+}
+
+func TestValidateClickHousePrincipalInputRejectsUnsafeValues(t *testing.T) {
+	input := clickHousePrincipalCommand{
+		PrincipalType: "reader",
+		Username:      "query_reader",
+		Password:      "a-long-random-secret-password",
+		DatabaseName:  "app_database",
+		OwnerUsername: "app_owner",
+		OwnerPassword: "another-long-owner-secret",
+	}
+	if err := validateClickHousePrincipalInput(input); err != nil {
+		t.Fatalf("expected valid ClickHouse principal input: %v", err)
+	}
+	input.PrincipalType = "owner"
+	if err := validateClickHousePrincipalInput(input); err == nil {
+		t.Fatal("expected unsupported principal type to be rejected")
+	}
+}
+
+func TestClickHouseBindingProcessPrivilegesReconcileWithoutPasswordMutation(t *testing.T) {
+	sql := clickHouseBindingProcessPrivilegesSQL("app_user")
+	if strings.Contains(sql, "IDENTIFIED") || strings.Contains(sql, "CREATE USER") || strings.Contains(sql, "ALTER USER") {
+		t.Fatalf("ClickHouse process privilege reconciliation must not mutate credentials: %q", sql)
+	}
+	if !strings.Contains(sql, `REVOKE SELECT ON system.processes FROM "app_user"`) {
+		t.Fatalf("ClickHouse process privilege reconciliation must remove broad access: %q", sql)
+	}
+	if !strings.Contains(sql, `GRANT SELECT(memory_usage) ON system.processes TO "app_user"`) {
+		t.Fatalf("ClickHouse process privilege reconciliation must retain memory monitoring: %q", sql)
+	}
 }
 
 func TestRedisBindingACLCannotAdministerTheServer(t *testing.T) {
 	command := redisBindingACLCommand()
-	for _, allowed := range []string{"'+@read'", "'+@write'", "'+@connection'", "'+@transaction'", "'+@pubsub'", "'+eval'", "'+evalsha'", "'+fcall'", "'+script|load'", "'-function'", "'-script|flush'", "'-@dangerous'"} {
+	for _, allowed := range []string{"'+@read'", "'+@write'", "'+@connection'", "'+@transaction'", "'+@pubsub'", "'+eval'", "'+evalsha'", "'-script'", "'-@dangerous'"} {
 		if !strings.Contains(command, allowed) {
 			t.Fatalf("Redis binding ACL must include %s", allowed)
 		}
 	}
+	for _, modern := range []string{"'+eval_ro'", "'+evalsha_ro'", "'+fcall'", "'+fcall_ro'", "'+script|load'", "'+script|exists'", "'-function'", "'-script|flush'"} {
+		if !strings.Contains(command, modern) {
+			t.Fatalf("Redis 7+ binding ACL must include %s", modern)
+		}
+	}
+	if !strings.Contains(command, "redis_version:") || !strings.Contains(command, "[7-9]|[1-9][0-9]*") {
+		t.Fatal("Redis binding ACL must detect Redis 7+ before granting Redis-7-only commands")
+	}
 	if strings.Contains(command, "+@all") || strings.Contains(command, "+@admin") || strings.Contains(command, "+@scripting") {
 		t.Fatal("Redis binding ACL must not grant all, administrative, or scripting command categories")
+	}
+}
+
+func TestRedisBindingACLRulesKeepRedis62Compatible(t *testing.T) {
+	baseRules := redisBindingACLBaseRules()
+	hasScriptDeny := false
+	for _, unsupported := range []string{"+eval_ro", "+evalsha_ro", "+fcall", "+fcall_ro", "-function"} {
+		for _, baseRule := range baseRules {
+			if baseRule == unsupported {
+				t.Fatalf("Redis 6.2 base ACL must not include Redis-7-only rule %s", unsupported)
+			}
+		}
+	}
+	for _, baseRule := range baseRules {
+		if strings.Contains(baseRule, "|") {
+			t.Fatalf("Redis 6.2 base ACL must not include Redis-7-only subcommand rule %s", baseRule)
+		}
+		hasScriptDeny = hasScriptDeny || baseRule == "-script"
+	}
+	if !hasScriptDeny {
+		t.Fatalf("Redis 6.2 base ACL must deny SCRIPT because it cannot safely allow only selected subcommands: %v", baseRules)
+	}
+	if len(redisBindingACLModernRules()) != 10 {
+		t.Fatalf("expected all Redis-7-only ACL rules to be gated, got %v", redisBindingACLModernRules())
 	}
 }
 

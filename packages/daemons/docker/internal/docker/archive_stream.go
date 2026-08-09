@@ -1,18 +1,21 @@
 package docker
 
 import (
+	"archive/tar"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"path"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/distribution/reference"
+	"github.com/moby/moby/api/types/container"
 	mobyclient "github.com/moby/moby/client"
 )
 
@@ -22,6 +25,7 @@ type archiveExportRequest struct {
 	Environment          map[string]string `json:"environment"`
 	Secrets              map[string]string `json:"secrets"`
 	SecretKeys           []string          `json:"secretKeys"`
+	IncludeEnvironment   *bool             `json:"includeEnvironment"`
 	IncludeSecrets       bool              `json:"includeSecrets"`
 }
 
@@ -55,6 +59,8 @@ type archiveImportFinishRequest struct {
 	ExpectedArtifactDigest string                `json:"expectedArtifactDigest"`
 }
 
+const maxDockerArchiveManifestBytes int64 = 4 * 1024 * 1024
+
 type archiveExportReader struct {
 	io.ReadCloser
 	cleanup func()
@@ -77,6 +83,7 @@ func (p *DockerPlugin) openArchiveExport(ctx context.Context, archiveID, artifac
 			return archiveExportDetail{}, fmt.Errorf("parse archive export request: %w", err)
 		}
 	}
+	includeEnvironment := req.IncludeEnvironment == nil || *req.IncludeEnvironment
 	manifest, err := buildGwcaContainerManifest(ctx, p, containerID, req.Environment, req.Secrets)
 	if err != nil {
 		return archiveExportDetail{}, err
@@ -100,9 +107,23 @@ func (p *DockerPlugin) openArchiveExport(ctx context.Context, archiveID, artifac
 	cleanup := func() {}
 	if req.IncludeWritableLayer {
 		commitConfig := *containerInspect.Container.Config
-		if !req.IncludeSecrets {
-			commitConfig.Env = stripArchiveSecretEnv(commitConfig.Env, req.SecretKeys)
+		baseImageEnv := []string(nil)
+		if !includeEnvironment {
+			sourceImage, err := p.client.cli.ImageInspect(ctx, imageID)
+			if err != nil {
+				return archiveExportDetail{}, fmt.Errorf("inspect archive source image environment: %w", err)
+			}
+			if sourceImage.Config != nil {
+				baseImageEnv = sourceImage.Config.Env
+			}
 		}
+		commitConfig.Env = archiveCommitEnvironment(
+			includeEnvironment,
+			req.IncludeSecrets,
+			commitConfig.Env,
+			baseImageEnv,
+			req.SecretKeys,
+		)
 		committed, err := p.client.cli.ContainerCommit(ctx, containerID, mobyclient.ContainerCommitOptions{
 			NoPause: true,
 			Comment: "Gateway portable container archive",
@@ -150,6 +171,22 @@ func (p *DockerPlugin) openArchiveExport(ctx context.Context, archiveID, artifac
 		Manifest: manifest, ImageID: inspected.ID, ImageTags: append([]string(nil), inspected.RepoTags...),
 		CaptureMode: captureMode, ImageEmbedded: true,
 	}, nil
+}
+
+func archiveCommitEnvironment(
+	includeEnvironment bool,
+	includeSecrets bool,
+	containerEnvironment []string,
+	baseImageEnvironment []string,
+	secretKeys []string,
+) []string {
+	if !includeEnvironment {
+		return append([]string(nil), baseImageEnvironment...)
+	}
+	if !includeSecrets {
+		return stripArchiveSecretEnv(containerEnvironment, secretKeys)
+	}
+	return append([]string(nil), containerEnvironment...)
 }
 
 func stripArchiveSecretEnv(environment, secretKeys []string) []string {
@@ -252,13 +289,27 @@ func (p *DockerPlugin) openArchiveImport(ctx context.Context, archiveID, artifac
 	go func() {
 		hasher := sha256.New()
 		counter := &countingWriter{}
-		loadResult, err := p.client.cli.ImageLoad(context.Background(), io.TeeReader(reader, io.MultiWriter(hasher, counter)))
+		loadReader, loadWriter := io.Pipe()
+		sanitizeDone := make(chan error, 1)
+		go func() {
+			err := stripDockerArchiveRepoTags(
+				io.TeeReader(reader, io.MultiWriter(hasher, counter)),
+				loadWriter,
+			)
+			_ = loadWriter.CloseWithError(err)
+			sanitizeDone <- err
+		}()
+		loadResult, err := p.client.cli.ImageLoad(context.Background(), loadReader)
 		if err == nil {
 			_, err = io.Copy(io.Discard, loadResult)
 			closeErr := loadResult.Close()
 			if err == nil {
 				err = closeErr
 			}
+		}
+		_ = loadReader.Close()
+		if sanitizeErr := <-sanitizeDone; sanitizeErr != nil && err == nil {
+			err = fmt.Errorf("strip archive image tags: %w", sanitizeErr)
 		}
 		_ = reader.Close()
 		if imagesAfter, listErr := p.archiveImageIDs(context.Background()); listErr != nil && err == nil {
@@ -360,6 +411,133 @@ type countingWriter struct{ n int64 }
 
 func (w *countingWriter) Write(p []byte) (int, error) { w.n += int64(len(p)); return len(p), nil }
 
+func stripDockerArchiveRepoTags(source io.Reader, destination io.Writer) (err error) {
+	input := tar.NewReader(source)
+	output := tar.NewWriter(destination)
+	seenMetadata := make(map[string]struct{}, 2)
+	defer func() {
+		if closeErr := output.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("finish archive image stream: %w", closeErr)
+		}
+	}()
+
+	for {
+		header, nextErr := input.Next()
+		if nextErr == io.EOF {
+			return nil
+		}
+		if nextErr != nil {
+			return fmt.Errorf("read archive image stream: %w", nextErr)
+		}
+
+		metadataName, metadataErr := dockerArchiveTagMetadataEntryName(header)
+		if metadataErr != nil {
+			return metadataErr
+		}
+		if metadataName != "" {
+			if _, seen := seenMetadata[metadataName]; seen {
+				return fmt.Errorf("archive image contains duplicate %s entry", metadataName)
+			}
+			seenMetadata[metadataName] = struct{}{}
+		}
+
+		switch metadataName {
+		case "manifest.json":
+			manifest, readErr := readDockerArchiveManifest(input, header.Size)
+			if readErr != nil {
+				return readErr
+			}
+			sanitized, sanitizeErr := sanitizeDockerArchiveManifest(manifest)
+			if sanitizeErr != nil {
+				return sanitizeErr
+			}
+			if writeErr := writeDockerArchiveEntry(output, header, sanitized); writeErr != nil {
+				return writeErr
+			}
+		case "repositories":
+			if _, copyErr := io.Copy(io.Discard, input); copyErr != nil {
+				return fmt.Errorf("read archive repositories: %w", copyErr)
+			}
+			if writeErr := writeDockerArchiveEntry(output, header, []byte("{}")); writeErr != nil {
+				return writeErr
+			}
+		default:
+			copyHeader := *header
+			if writeErr := output.WriteHeader(&copyHeader); writeErr != nil {
+				return fmt.Errorf("write archive image header: %w", writeErr)
+			}
+			if _, copyErr := io.Copy(output, input); copyErr != nil {
+				return fmt.Errorf("copy archive image entry %q: %w", header.Name, copyErr)
+			}
+		}
+	}
+}
+
+// dockerArchiveTagMetadataEntryName identifies the two root metadata entries
+// Docker consumes for image tags. Reject aliases instead of copying them: the
+// Docker loader normalizes tar paths during extraction, so an absolute or
+// otherwise non-canonical name could become root metadata after this stream
+// has already decided it was an ordinary file.
+func dockerArchiveTagMetadataEntryName(header *tar.Header) (string, error) {
+	// Normalize against an extraction root. This catches aliases such as
+	// "/../manifest.json" and "../../repositories" as well as leading slashes.
+	cleanName := strings.TrimPrefix(path.Clean("/"+header.Name), "/")
+	if cleanName != "manifest.json" && cleanName != "repositories" {
+		return "", nil
+	}
+	if header.Name != cleanName {
+		return "", fmt.Errorf("archive image metadata entry %q has a non-canonical path", header.Name)
+	}
+	if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+		return "", fmt.Errorf("archive image metadata entry %q must be a regular file", header.Name)
+	}
+	return cleanName, nil
+}
+
+func readDockerArchiveManifest(reader io.Reader, size int64) ([]byte, error) {
+	if size < 0 || size > maxDockerArchiveManifestBytes {
+		return nil, fmt.Errorf("archive image manifest exceeds the allowed size")
+	}
+	manifest, err := io.ReadAll(io.LimitReader(reader, maxDockerArchiveManifestBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read archive image manifest: %w", err)
+	}
+	if int64(len(manifest)) > maxDockerArchiveManifestBytes {
+		return nil, fmt.Errorf("archive image manifest exceeds the allowed size")
+	}
+	return manifest, nil
+}
+
+func sanitizeDockerArchiveManifest(manifest []byte) ([]byte, error) {
+	var entries []map[string]json.RawMessage
+	if err := json.Unmarshal(manifest, &entries); err != nil {
+		return nil, fmt.Errorf("parse archive image manifest: %w", err)
+	}
+	for index, entry := range entries {
+		if entry == nil {
+			return nil, fmt.Errorf("archive image manifest entry %d is invalid", index)
+		}
+		entry["RepoTags"] = json.RawMessage("[]")
+	}
+	sanitized, err := json.Marshal(entries)
+	if err != nil {
+		return nil, fmt.Errorf("encode archive image manifest: %w", err)
+	}
+	return sanitized, nil
+}
+
+func writeDockerArchiveEntry(writer *tar.Writer, header *tar.Header, content []byte) error {
+	copyHeader := *header
+	copyHeader.Size = int64(len(content))
+	if err := writer.WriteHeader(&copyHeader); err != nil {
+		return fmt.Errorf("write archive image header: %w", err)
+	}
+	if _, err := writer.Write(content); err != nil {
+		return fmt.Errorf("write archive image entry %q: %w", header.Name, err)
+	}
+	return nil
+}
+
 func (p *DockerPlugin) finishArchiveImport(ctx context.Context, archiveID, artifactID, configJSON string) (map[string]string, error) {
 	var req archiveImportFinishRequest
 	if err := json.Unmarshal([]byte(configJSON), &req); err != nil {
@@ -403,13 +581,7 @@ func (p *DockerPlugin) finishArchiveImport(ctx context.Context, archiveID, artif
 	if err := p.assertGwcaHostPortsAvailable(ctx, req.Manifest); err != nil {
 		return nil, err
 	}
-	imageReference, preservedReference := p.prepareArchiveCreateImageReference(ctx, loaded.ID, req.Manifest.ImageReference)
-	if preservedReference != "" {
-		if req.Manifest.Labels == nil {
-			req.Manifest.Labels = map[string]string{}
-		}
-		req.Manifest.Labels[archiveImageReferenceLabel] = preservedReference
-	}
+	imageReference, preservedReference := p.prepareArchiveCreateImageReference(loaded.ID, req.Manifest.ImageReference)
 	createdNetworks, err := p.prepareGwcaNetworks(ctx, archiveID, &req.Manifest)
 	if err != nil {
 		p.cleanupGwcaCreatedNetworks(createdNetworks)
@@ -427,6 +599,7 @@ func (p *DockerPlugin) finishArchiveImport(ctx context.Context, archiveID, artif
 		p.cleanupGwcaCreatedNetworks(createdNetworks)
 		return nil, err
 	}
+	setArchiveImageReferenceLabel(createRequest.Manifest.Config, preservedReference)
 	containerID, err := p.client.CreateContainerStopped(ctx, createRequest)
 	if err != nil {
 		p.cleanupGwcaCreatedVolumes(createdVolumes)
@@ -435,6 +608,19 @@ func (p *DockerPlugin) finishArchiveImport(ctx context.Context, archiveID, artif
 	}
 	completed = true
 	return map[string]string{"containerId": containerID, "containerName": name, "imageId": loaded.ID}, nil
+}
+
+// setArchiveImageReferenceLabel adds the update source only after the archive
+// manifest labels have been sanitized. The source reference is trusted only
+// after prepareArchiveCreateImageReference has normalized it.
+func setArchiveImageReferenceLabel(config *container.Config, sourceReference string) {
+	if config == nil || sourceReference == "" {
+		return
+	}
+	if config.Labels == nil {
+		config.Labels = map[string]string{}
+	}
+	config.Labels[archiveImageReferenceLabel] = sourceReference
 }
 
 func (p *DockerPlugin) cleanupGwcaCreatedNetworks(networks []string) {

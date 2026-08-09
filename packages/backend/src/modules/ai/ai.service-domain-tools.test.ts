@@ -55,6 +55,13 @@ describe('AIService domain tool routing', () => {
     await expect(
       service.executeTool({ ...BASE_USER, scopes: ['integrations:cloudflare:dns:edit'] }, 'create_domain', {
         domain: 'example.com',
+      })
+    ).resolves.toMatchObject({ error: expect.stringContaining('domains:create'), invalidateStores: [] });
+    expect(domainsService.createDomain).not.toHaveBeenCalled();
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['domains:create'] }, 'create_domain', {
+        domain: 'example.com',
         ttl: 60,
         proxied: false,
         overwriteDns: true,
@@ -77,13 +84,12 @@ describe('AIService domain tool routing', () => {
     expect(domainsService.deleteDomain).toHaveBeenCalledWith(
       'domain-1',
       'user-1',
-      { deleteDns: false },
-      { canDeleteDns: false }
+      { deleteDns: false }
     );
 
     await expect(
       service.executeTool(
-        { ...BASE_USER, scopes: ['domains:delete', 'integrations:cloudflare:dns:delete'] },
+        { ...BASE_USER, scopes: ['domains:delete'] },
         'delete_domain',
         {
           domainId: 'domain-1',
@@ -94,8 +100,7 @@ describe('AIService domain tool routing', () => {
     expect(domainsService.deleteDomain).toHaveBeenLastCalledWith(
       'domain-1',
       'user-1',
-      { deleteDns: true },
-      { canDeleteDns: true }
+      { deleteDns: true }
     );
   });
 
@@ -106,6 +111,15 @@ describe('AIService domain tool routing', () => {
       checkDns: vi.fn().mockResolvedValue({ id: 'domain-1', dnsStatus: 'valid' }),
     };
     const service = createService(domainsService);
+
+    await expect(
+      service.executeTool(
+        { ...BASE_USER, scopes: ['integrations:cloudflare:dns:view'] },
+        'manage_domain',
+        { operation: 'get', domainId: 'domain-1' }
+      )
+    ).resolves.toMatchObject({ error: expect.stringContaining('domains:view'), invalidateStores: [] });
+    expect(domainsService.getDomain).not.toHaveBeenCalled();
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: ['domains:view', 'domains:view:domain-1'] }, 'manage_domain', {

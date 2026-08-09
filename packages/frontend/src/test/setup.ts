@@ -10,6 +10,19 @@ class MockResizeObserver {
   disconnect() {}
 }
 
+class MockIntersectionObserver {
+  readonly root = null;
+  readonly rootMargin = "0px";
+  readonly thresholds = [];
+
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() {
+    return [];
+  }
+}
+
 class MockBroadcastChannel {
   constructor(readonly name: string) {}
   close() {}
@@ -53,6 +66,12 @@ Object.defineProperty(window, "ResizeObserver", {
   configurable: true,
   writable: true,
   value: MockResizeObserver,
+});
+
+Object.defineProperty(window, "IntersectionObserver", {
+  configurable: true,
+  writable: true,
+  value: MockIntersectionObserver,
 });
 
 Object.defineProperty(window, "BroadcastChannel", {

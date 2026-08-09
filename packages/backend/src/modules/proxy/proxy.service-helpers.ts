@@ -1,5 +1,6 @@
 import { getEnv } from '@/config/env.js';
 import { AppError } from '@/middleware/error-handler.js';
+import type { PreparedTlsCertificate } from '@/services/nginx-certificate-distribution.service.js';
 
 export type HealthCheckBodyMatchMode = 'includes' | 'exact' | 'starts_with' | 'ends_with';
 
@@ -15,6 +16,7 @@ export interface CertPaths {
   sslCertPath: string | null;
   sslKeyPath: string | null;
   sslChainPath: string | null;
+  preparedTls?: PreparedTlsCertificate | null;
 }
 
 export interface SslPrerequisiteState {
@@ -116,6 +118,24 @@ export function updateUsesRawMode(
   return (input.type ?? existing.type) === 'raw' || (input.rawConfigEnabled ?? existing.rawConfigEnabled);
 }
 
+/**
+ * Returns a persisted raw config only when this update newly opts into raw
+ * mode without supplying replacement config. Existing raw-mode hosts must
+ * remain editable, but a stored config must not gain a new raw-mode consumer
+ * without the same validation applied to newly submitted raw config.
+ */
+export function storedRawConfigForRawModeEnablement(
+  existing: { type: string; rawConfigEnabled: boolean; rawConfig?: unknown },
+  input: { type?: string; rawConfigEnabled?: boolean; rawConfig?: unknown }
+): unknown {
+  const newlyEnablesRawMode =
+    (input.rawConfigEnabled === true && !existing.rawConfigEnabled) || (input.type === 'raw' && existing.type !== 'raw');
+  if (input.rawConfig !== undefined || !newlyEnablesRawMode) {
+    return undefined;
+  }
+  return existing.rawConfig;
+}
+
 export function assertSslPrerequisites(input: SslPrerequisiteState) {
   if (input.sslEnabled && !input.sslCertificateId && !input.internalCertificateId) {
     throw new AppError(400, 'SSL_CERTIFICATE_REQUIRED', 'An SSL certificate must be selected before enabling HTTPS');
@@ -174,6 +194,7 @@ export const __testOnly = {
   matchesExpectedBody,
   normalizeProxyValidationOptions,
   rawConfigAuditDetails,
+  storedRawConfigForRawModeEnablement,
   stripProxyHealthHistory,
   updateUsesRawMode,
 };

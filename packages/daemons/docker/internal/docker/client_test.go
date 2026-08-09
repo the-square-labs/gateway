@@ -48,6 +48,25 @@ func TestContainerCreateConfigParsesRestartPolicyFromCamelCase(t *testing.T) {
 	}
 }
 
+func TestImportedArchiveUsesImageIDForEnvOnlyRecreateAndLabelForTagUpdate(t *testing.T) {
+	imageID := "sha256:" + repeatHex("a")
+	insp := &container.InspectResponse{
+		Image: imageID,
+		Config: &container.Config{
+			Image: imageID,
+			Labels: map[string]string{
+				archiveImageReferenceLabel: "registry.example/team/app:stable",
+			},
+		},
+	}
+	if got := containerRecreateImageReference(insp); got != imageID {
+		t.Fatalf("env-only recreate image = %q, want image ID %q", got, imageID)
+	}
+	if got := containerTagUpdateImageReference(insp); got != "registry.example/team/app:stable" {
+		t.Fatalf("tag update source = %q", got)
+	}
+}
+
 func TestApplyGPUSelectionReplacesOnlyManagedGPUEntries(t *testing.T) {
 	hostCfg := &container.HostConfig{
 		Runtime: "nvidia",

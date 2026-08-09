@@ -159,6 +159,7 @@ export const ALL_SCOPES = [
   'docker:volumes:view',
   'docker:volumes:create',
   'docker:volumes:delete',
+  'docker:volumes:export',
   'docker:volumes:files:read',
   'docker:volumes:files:write',
   // ── Docker: Networks ─────────────────────────────────────────────
@@ -396,6 +397,7 @@ export const ADMIN_SCOPES: readonly string[] = [
   'docker:volumes:view',
   'docker:volumes:create',
   'docker:volumes:delete',
+  'docker:volumes:export',
   'docker:volumes:files:read',
   'docker:volumes:files:write',
   'docker:networks:view',
@@ -652,6 +654,7 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'docker:volumes:view',
   'docker:volumes:create',
   'docker:volumes:delete',
+  'docker:volumes:export',
   'docker:volumes:files:read',
   'docker:volumes:files:write',
   // Docker networks
@@ -708,6 +711,7 @@ export const MANUAL_APPROVAL_SCOPES = [
   'docker:containers:secrets',
   'docker:containers:mounts',
   'docker:containers:migrate',
+  'docker:volumes:export',
   'docker:volumes:files:read',
   'docker:volumes:files:write',
   'databases:query:read',

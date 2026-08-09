@@ -159,6 +159,13 @@ export const managedDatabaseInstances = pgTable(
     // Direct TCP access uses its own least-privileged database principal.
     // The internal owner is never returned to clients.
     encryptedDirectCredentials: text('encrypted_direct_credentials'),
+    // Managed ClickHouse Explorer/Console reads use a separate internal
+    // principal. It is never included in a connection view or reveal flow.
+    encryptedQueryCredentials: text('encrypted_query_credentials'),
+    // Set only after the database daemon has converged the versioned
+    // ClickHouse reader and writer principals. Non-admin access fails closed
+    // until this marker is present.
+    clickhouseQueryPrincipalVersion: integer('clickhouse_query_principal_version'),
     storageSizeBytes: bigint('storage_size_bytes', { mode: 'number' }).notNull(),
     runtimeConfig: jsonb('runtime_config').$type<ManagedDatabaseRuntimeConfig>().notNull().default({}),
     // Database TLS material exists independently from the direct-publication

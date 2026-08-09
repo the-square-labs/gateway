@@ -208,6 +208,13 @@ function SandboxJobsPanel() {
       render: (job) => <Badge variant="secondary">{job.resourceTier}</Badge>,
     },
     {
+      id: "disk",
+      header: "Disk",
+      className: "w-28",
+      cellClassName: "w-28 whitespace-nowrap",
+      render: (job) => `${formatBytes(job.workspaceReservationBytes)} soft`,
+    },
+    {
       id: "status",
       header: "Status",
       className: "w-32",
@@ -272,7 +279,7 @@ function SandboxJobsPanel() {
     <>
       <PanelShell
         title="Running Sandbox Jobs"
-        description="Active resource-capped Docker sandboxes launched by the assistant"
+        description="Low-priority Docker sandboxes. Workspace reservations are soft; new jobs stop at 80% host-disk use."
         actions={<RefreshButton minDurationMs={1400} onClick={() => loadJobs({ silent: true })} />}
       >
         <SimpleTable
@@ -1136,9 +1143,9 @@ export function AIConfigSection() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="low">Low — 0.1 CPU, 256 MB, 5 min</SelectItem>
-              <SelectItem value="medium">Medium — 0.5 CPU, 512 MB, 10 min</SelectItem>
-              <SelectItem value="high">High — 1 CPU, 1 GB, 20 min</SelectItem>
+              <SelectItem value="low">Low — 0.25 CPU, 256 MB, 4 h max, 2 GB disk</SelectItem>
+              <SelectItem value="medium">Medium — 0.5 CPU, 512 MB, 12 h max, 4 GB disk</SelectItem>
+              <SelectItem value="high">High — 1 CPU, 1 GB, 24 h max, 6 GB disk</SelectItem>
             </SelectContent>
           </Select>
         </SettingsControlRow>

@@ -31,6 +31,17 @@ function createService(dispatch: {
 }
 
 describe('DockerManagementService volume and network operations', () => {
+  it('returns exported volume bytes without decoding them a second time', async () => {
+    const archive = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0xff, 0x00]);
+    const dispatch = {
+      sendDockerVolumeCommand: vi.fn().mockResolvedValue({ success: true, data: archive }),
+    };
+    const { service } = createService(dispatch);
+
+    await expect(service.exportVolume('node-1', 'data')).resolves.toEqual(archive);
+    expect(dispatch.sendDockerVolumeCommand).toHaveBeenCalledWith('node-1', 'export', { name: 'data' });
+  });
+
   it('creates volumes with audit and volume change events', async () => {
     const dispatch = {
       sendDockerVolumeCommand: vi.fn().mockResolvedValue({

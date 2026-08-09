@@ -69,6 +69,7 @@ import type { SqlDatabaseAdapter } from './sql-database-adapter.js';
 
 const { Pool } = pg;
 const DATABASE_HEALTH_HISTORY_MIN_INTERVAL_MS = 30_000;
+const MANAGED_CLICKHOUSE_QUERY_PRINCIPAL_VERSION = 1;
 const logger = createChildLogger('DatabaseConnectionService');
 
 export type {
@@ -83,6 +84,7 @@ export type { DatabaseOperation, DatabaseType } from './database-error-mapping.j
 export { mapDatabaseDriverError } from './database-error-mapping.js';
 
 type PostgresRowSearchOperation = 'like' | 'equals' | 'notEquals' | 'greaterThan' | 'lessThan';
+export type SqlQueryAccess = 'read' | 'write' | 'admin';
 
 interface PostgresRowSearchFilter {
   column: string;
@@ -233,24 +235,24 @@ export class DatabaseConnectionService {
     };
   }
 
-  async getSqlCapabilities(id: string) {
-    return (await this.getSqlAdapter(id)).capabilities;
+  async getSqlCapabilities(id: string, access: SqlQueryAccess = 'admin') {
+    return (await this.getSqlAdapter(id, access)).capabilities;
   }
 
   async inferSqlIntent(id: string, sql: string) {
     return (await this.getSqlAdapter(id)).inferIntent(sql);
   }
 
-  async listSqlNamespaces(id: string) {
-    return (await this.getSqlAdapter(id)).listNamespaces(id);
+  async listSqlNamespaces(id: string, access: SqlQueryAccess = 'admin') {
+    return (await this.getSqlAdapter(id, access)).listNamespaces(id);
   }
 
-  async listSqlObjects(id: string, namespace: string) {
-    return (await this.getSqlAdapter(id)).listObjects(id, namespace);
+  async listSqlObjects(id: string, namespace: string, access: SqlQueryAccess = 'admin') {
+    return (await this.getSqlAdapter(id, access)).listObjects(id, namespace);
   }
 
-  async getSqlTableMetadata(id: string, namespace: string, table: string) {
-    return (await this.getSqlAdapter(id)).getTableMetadata(id, namespace, table);
+  async getSqlTableMetadata(id: string, namespace: string, table: string, access: SqlQueryAccess = 'admin') {
+    return (await this.getSqlAdapter(id, access)).getTableMetadata(id, namespace, table);
   }
 
   async browseSqlRows(
@@ -263,17 +265,31 @@ export class DatabaseConnectionService {
       sortBy?: string;
       sortOrder?: 'asc' | 'desc';
       search?: PostgresRowSearchFilter;
-    }
+    },
+    access: SqlQueryAccess = 'admin'
   ) {
-    return (await this.getSqlAdapter(id)).browseRows(id, namespace, table, page, limit, options);
+    return (await this.getSqlAdapter(id, access)).browseRows(id, namespace, table, page, limit, options);
   }
 
-  async executeSql(id: string, sql: string, userId: string, options: { maxRows?: number } = {}) {
-    return (await this.getSqlAdapter(id)).executeSql(id, sql, userId, options);
+  async executeSql(
+    id: string,
+    sql: string,
+    userId: string,
+    options: { maxRows?: number } = {},
+    access: SqlQueryAccess = 'admin'
+  ) {
+    return (await this.getSqlAdapter(id, access)).executeSql(id, sql, userId, options);
   }
 
-  async insertSqlRow(id: string, namespace: string, table: string, values: Record<string, unknown>, userId: string) {
-    return (await this.getSqlAdapter(id)).insertRow(id, namespace, table, values, userId);
+  async insertSqlRow(
+    id: string,
+    namespace: string,
+    table: string,
+    values: Record<string, unknown>,
+    userId: string,
+    access: SqlQueryAccess = 'admin'
+  ) {
+    return (await this.getSqlAdapter(id, access)).insertRow(id, namespace, table, values, userId);
   }
 
   async updateSqlRow(
@@ -282,13 +298,21 @@ export class DatabaseConnectionService {
     table: string,
     locator: Record<string, unknown>,
     values: Record<string, unknown>,
-    userId: string
+    userId: string,
+    access: SqlQueryAccess = 'admin'
   ) {
-    return (await this.getSqlAdapter(id)).updateRow(id, namespace, table, locator, values, userId);
+    return (await this.getSqlAdapter(id, access)).updateRow(id, namespace, table, locator, values, userId);
   }
 
-  async deleteSqlRow(id: string, namespace: string, table: string, locator: Record<string, unknown>, userId: string) {
-    return (await this.getSqlAdapter(id)).deleteRow(id, namespace, table, locator, userId);
+  async deleteSqlRow(
+    id: string,
+    namespace: string,
+    table: string,
+    locator: Record<string, unknown>,
+    userId: string,
+    access: SqlQueryAccess = 'admin'
+  ) {
+    return (await this.getSqlAdapter(id, access)).deleteRow(id, namespace, table, locator, userId);
   }
 
   async list(
@@ -1004,18 +1028,30 @@ export class DatabaseConnectionService {
 
   async getDecryptedConfig(
     id: string,
-    lane: ManagedDatabaseTunnelLane = 'interactive'
+    lane: ManagedDatabaseTunnelLane = 'interactive',
+    queryAccess: SqlQueryAccess = 'admin'
   ): Promise<DatabaseConnectionConfig> {
     const row = await this.getRow(id);
-    const config = this.decryptConfig(row.encryptedConfig);
+    let config = this.decryptConfig(row.encryptedConfig);
     const managed = await this.getManagedMetadata(id);
     if (!managed) return config;
+    if (config.type === 'clickhouse' && queryAccess !== 'admin') {
+      const principal = await this.getManagedClickHouseQueryPrincipal(id, queryAccess);
+      if (!principal) {
+        throw new AppError(
+          503,
+          'MANAGED_CLICKHOUSE_QUERY_ACCESS_UNAVAILABLE',
+          'Secure query access is being configured for this managed ClickHouse database'
+        );
+      }
+      config = { ...config, username: principal.username, password: principal.password };
+    }
     if (!this.managedTunnelProxy) {
       throw new AppError(503, 'MANAGED_DATABASE_TUNNEL_UNAVAILABLE', 'Managed database tunnel is unavailable');
     }
     const endpoint = await this.managedTunnelProxy.getEndpoint(managed.id, lane);
     if (config.type === 'postgres') {
-      return { ...config, host: endpoint.host, port: endpoint.port, sslEnabled: false };
+      return { ...config, host: endpoint.host, port: endpoint.port };
     }
     if (config.type === 'redis') {
       return { ...config, host: endpoint.host, port: endpoint.port, tlsEnabled: false };
@@ -1323,6 +1359,44 @@ export class DatabaseConnectionService {
     };
   }
 
+  private async getManagedClickHouseQueryPrincipal(
+    databaseConnectionId: string,
+    access: Exclude<SqlQueryAccess, 'admin'>
+  ): Promise<{ username: string; password: string } | undefined> {
+    const [managed] = await this.db
+      .select({
+        type: managedDatabaseInstances.type,
+        clickhouseQueryPrincipalVersion: managedDatabaseInstances.clickhouseQueryPrincipalVersion,
+        encryptedDirectCredentials: managedDatabaseInstances.encryptedDirectCredentials,
+        encryptedQueryCredentials: managedDatabaseInstances.encryptedQueryCredentials,
+      })
+      .from(managedDatabaseInstances)
+      .where(eq(managedDatabaseInstances.databaseConnectionId, databaseConnectionId))
+      .limit(1);
+    if (
+      !managed ||
+      managed.type !== 'clickhouse' ||
+      managed.clickhouseQueryPrincipalVersion !== MANAGED_CLICKHOUSE_QUERY_PRINCIPAL_VERSION
+    ) {
+      return undefined;
+    }
+    const encrypted = access === 'read' ? managed.encryptedQueryCredentials : managed.encryptedDirectCredentials;
+    if (!encrypted) return undefined;
+    try {
+      const decrypted = JSON.parse(this.cryptoService.decryptString(JSON.parse(encrypted))) as {
+        username?: unknown;
+        password?: unknown;
+      };
+      if (typeof decrypted.username === 'string' && typeof decrypted.password === 'string') {
+        return { username: decrypted.username, password: decrypted.password };
+      }
+    } catch {
+      // A generic unavailability response keeps encrypted payload details out
+      // of the API while allowing a later daemon reconciliation to recover.
+    }
+    return undefined;
+  }
+
   private emitChange(id: string, action: string, extra: Record<string, unknown> = {}) {
     this.eventBus?.publish('database.changed', { id, action, ...extra });
   }
@@ -1620,11 +1694,15 @@ export class DatabaseConnectionService {
     return client;
   }
 
-  async getClickHouseClient(id: string, lane: ManagedDatabaseTunnelLane = 'interactive'): Promise<ClickHouseClient> {
-    const key = this.databaseClientKey(id, lane);
+  async getClickHouseClient(
+    id: string,
+    lane: ManagedDatabaseTunnelLane = 'interactive',
+    queryAccess: SqlQueryAccess = 'admin'
+  ): Promise<ClickHouseClient> {
+    const key = this.databaseClientKey(id, lane, queryAccess);
     const existing = this.clickHouseClients.get(key);
     if (existing) return existing;
-    const config = await this.getDecryptedConfig(id, lane);
+    const config = await this.getDecryptedConfig(id, lane, queryAccess);
     if (config.type !== 'clickhouse') throw new AppError(400, 'INVALID_PROVIDER', 'Database is not ClickHouse');
     const client = createClickHouseDatabaseClient(config, 10);
     try {
@@ -1666,8 +1744,12 @@ export class DatabaseConnectionService {
     }
   }
 
-  private databaseClientKey(id: string, lane: ManagedDatabaseTunnelLane): string {
-    return `${id}:${lane}`;
+  private databaseClientKey(
+    id: string,
+    lane: ManagedDatabaseTunnelLane,
+    queryAccess: SqlQueryAccess = 'admin'
+  ): string {
+    return `${id}:${lane}:${queryAccess}`;
   }
 
   private async withPostgresPool<T>(
@@ -1699,9 +1781,10 @@ export class DatabaseConnectionService {
   private async withClickHouseClient<T>(
     id: string,
     operation: DatabaseOperation,
-    run: (client: ClickHouseClient) => Promise<T>
+    run: (client: ClickHouseClient) => Promise<T>,
+    queryAccess: SqlQueryAccess = 'admin'
   ): Promise<T> {
-    const client = await this.getClickHouseClient(id);
+    const client = await this.getClickHouseClient(id, 'interactive', queryAccess);
     try {
       return await run(client);
     } catch (error) {
@@ -1709,10 +1792,23 @@ export class DatabaseConnectionService {
     }
   }
 
-  private async getSqlAdapter(id: string): Promise<SqlDatabaseAdapter> {
-    const config = await this.getDecryptedConfig(id);
+  private clickHouseSqlAdapter(queryAccess: SqlQueryAccess): SqlDatabaseAdapter {
+    return new ClickHouseSqlAdapter({
+      withClient: (id, operation, fn) => this.withClickHouseClient(id, operation, fn, queryAccess),
+      auditLog: async (entry) => {
+        await this.auditService.log(entry);
+      },
+      emitChange: (id, action, extra) => this.emitChange(id, action, extra),
+    });
+  }
+
+  private async getSqlAdapter(id: string, queryAccess: SqlQueryAccess = 'admin'): Promise<SqlDatabaseAdapter> {
+    const config = await this.getDecryptedConfig(id, 'interactive', queryAccess);
     if (config.type === 'redis') {
       throw new AppError(400, 'INVALID_PROVIDER', 'Database does not support SQL operations');
+    }
+    if (config.type === 'clickhouse') {
+      return queryAccess === 'admin' ? this.sqlAdapters.get('clickhouse')! : this.clickHouseSqlAdapter(queryAccess);
     }
     return this.sqlAdapters.get(config.type)!;
   }

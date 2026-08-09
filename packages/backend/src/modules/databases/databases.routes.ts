@@ -110,7 +110,12 @@ import {
   UpdatePostgresColumnTypeSchema,
   UpdateSqlRowSchema,
 } from './databases.schemas.js';
-import { DatabaseConnectionService, inferPostgresIntent, inferRedisIntent } from './databases.service.js';
+import {
+  DatabaseConnectionService,
+  inferPostgresIntent,
+  inferRedisIntent,
+  type SqlQueryAccess,
+} from './databases.service.js';
 import { ManagedDatabaseBindingService } from './managed-database-bindings.service.js';
 import { ManagedDatabaseService } from './managed-databases.service.js';
 
@@ -124,6 +129,20 @@ function ensureQueryScope(c: any, databaseId: string, intent: 'read' | 'write' |
         ? ['databases:query:write', 'databases:query:admin']
         : ['databases:query:admin'];
   ensureAnyDatabaseScope(c, databaseId, scopeSets);
+}
+
+export function resolveSqlQueryAccess(c: any, databaseId: string, intent: 'read' | 'write' | 'admin'): SqlQueryAccess {
+  const scopes = c.get('effectiveScopes') ?? [];
+  if (hasScope(scopes, `databases:query:admin:${databaseId}`)) return 'admin';
+  if (intent === 'write' && hasScope(scopes, `databases:query:write:${databaseId}`)) return 'write';
+  if (
+    intent === 'read' &&
+    (hasScope(scopes, `databases:query:read:${databaseId}`) || hasScope(scopes, `databases:query:write:${databaseId}`))
+  ) {
+    return 'read';
+  }
+  ensureQueryScope(c, databaseId, intent);
+  throw new AppError(403, 'FORBIDDEN', `Missing required scope for database ${databaseId}`);
 }
 
 function ensureAnyDatabaseScope(c: any, databaseId: string, scopeBases: string[]) {
@@ -357,12 +376,13 @@ databaseRoutes.openapi(
     ...revealManagedDatabaseBindingCredentialsRoute,
     middleware: requireManagedDatabaseScopes('databases:credentials:reveal'),
   },
-  async (c) =>
-    c.json({
-      data: await container
-        .resolve(ManagedDatabaseBindingService)
-        .revealCredentials(c.req.param('id')!, c.req.param('bindingId')!),
-    })
+  async (c) => {
+    const bindings = container.resolve(ManagedDatabaseBindingService);
+    const managedDatabaseId = c.req.param('id')!;
+    const bindingId = c.req.param('bindingId')!;
+    await assertManagedDatabaseBindingTargetAccess(c, await bindings.getTarget(managedDatabaseId, bindingId));
+    return c.json({ data: await bindings.revealCredentials(managedDatabaseId, bindingId) });
+  }
 );
 
 databaseRoutes.openapi(listDatabaseFoldersRoute, async (c) => {
@@ -605,13 +625,10 @@ databaseRoutes.openapi(
 databaseRoutes.openapi(
   { ...listSqlNamespacesRoute, middleware: requireScopeForResource('databases:view', 'id') },
   async (c) => {
-    ensureAnyDatabaseScope(c, c.req.param('id')!, [
-      'databases:query:read',
-      'databases:query:write',
-      'databases:query:admin',
-    ]);
+    const databaseId = c.req.param('id')!;
+    const access = resolveSqlQueryAccess(c, databaseId, 'read');
     const service = container.resolve(DatabaseConnectionService);
-    const data = await service.listSqlNamespaces(c.req.param('id')!);
+    const data = await service.listSqlNamespaces(databaseId, access);
     return c.json({ data });
   }
 );
@@ -619,15 +636,12 @@ databaseRoutes.openapi(
 databaseRoutes.openapi(
   { ...listSqlObjectsRoute, middleware: requireScopeForResource('databases:view', 'id') },
   async (c) => {
-    ensureAnyDatabaseScope(c, c.req.param('id')!, [
-      'databases:query:read',
-      'databases:query:write',
-      'databases:query:admin',
-    ]);
+    const databaseId = c.req.param('id')!;
+    const access = resolveSqlQueryAccess(c, databaseId, 'read');
     const service = container.resolve(DatabaseConnectionService);
     const namespace = c.req.query('namespace');
     if (!namespace) throw new AppError(400, 'VALIDATION_ERROR', 'namespace is required');
-    const data = await service.listSqlObjects(c.req.param('id')!, namespace);
+    const data = await service.listSqlObjects(databaseId, namespace, access);
     return c.json({ data });
   }
 );
@@ -635,14 +649,11 @@ databaseRoutes.openapi(
 databaseRoutes.openapi(
   { ...sqlTableMetadataRoute, middleware: requireScopeForResource('databases:view', 'id') },
   async (c) => {
-    ensureAnyDatabaseScope(c, c.req.param('id')!, [
-      'databases:query:read',
-      'databases:query:write',
-      'databases:query:admin',
-    ]);
+    const databaseId = c.req.param('id')!;
+    const access = resolveSqlQueryAccess(c, databaseId, 'read');
     const service = container.resolve(DatabaseConnectionService);
     const query = SqlTableQuerySchema.parse(c.req.query());
-    const data = await service.getSqlTableMetadata(c.req.param('id')!, query.namespace, query.table);
+    const data = await service.getSqlTableMetadata(databaseId, query.namespace, query.table, access);
     return c.json({ data });
   }
 );
@@ -650,15 +661,12 @@ databaseRoutes.openapi(
 databaseRoutes.openapi(
   { ...browseSqlRowsRoute, middleware: requireScopeForResource('databases:view', 'id') },
   async (c) => {
-    ensureAnyDatabaseScope(c, c.req.param('id')!, [
-      'databases:query:read',
-      'databases:query:write',
-      'databases:query:admin',
-    ]);
+    const databaseId = c.req.param('id')!;
+    const access = resolveSqlQueryAccess(c, databaseId, 'read');
     const service = container.resolve(DatabaseConnectionService);
     const query = BrowseSqlRowsQuerySchema.parse(c.req.query());
     const data = await service.browseSqlRows(
-      c.req.param('id')!,
+      databaseId,
       query.namespace,
       query.table,
       query.page,
@@ -670,7 +678,8 @@ databaseRoutes.openapi(
           query.searchColumn && query.searchOperation && query.searchValue
             ? { column: query.searchColumn, operation: query.searchOperation, value: query.searchValue }
             : undefined,
-      }
+      },
+      access
     );
     return c.json({ data });
   }
@@ -680,11 +689,11 @@ databaseRoutes.openapi(
   { ...insertSqlRowRoute, middleware: requireScopeForResource('databases:view', 'id') },
   async (c) => {
     const databaseId = c.req.param('id')!;
-    ensureAnyDatabaseScope(c, databaseId, ['databases:query:write', 'databases:query:admin']);
+    const access = resolveSqlQueryAccess(c, databaseId, 'write');
     const service = container.resolve(DatabaseConnectionService);
     const user = c.get('user')!;
     const input = InsertSqlRowSchema.parse(await c.req.json());
-    const data = await service.insertSqlRow(databaseId, input.namespace, input.table, input.values, user.id);
+    const data = await service.insertSqlRow(databaseId, input.namespace, input.table, input.values, user.id, access);
     return c.json({ data }, 201);
   }
 );
@@ -693,7 +702,7 @@ databaseRoutes.openapi(
   { ...updateSqlRowRoute, middleware: requireScopeForResource('databases:view', 'id') },
   async (c) => {
     const databaseId = c.req.param('id')!;
-    ensureAnyDatabaseScope(c, databaseId, ['databases:query:write', 'databases:query:admin']);
+    const access = resolveSqlQueryAccess(c, databaseId, 'write');
     const service = container.resolve(DatabaseConnectionService);
     const user = c.get('user')!;
     const input = UpdateSqlRowSchema.parse(await c.req.json());
@@ -703,7 +712,8 @@ databaseRoutes.openapi(
       input.table,
       input.locator,
       input.values,
-      user.id
+      user.id,
+      access
     );
     return c.json({ data });
   }
@@ -713,11 +723,11 @@ databaseRoutes.openapi(
   { ...deleteSqlRowRoute, middleware: requireScopeForResource('databases:view', 'id') },
   async (c) => {
     const databaseId = c.req.param('id')!;
-    ensureAnyDatabaseScope(c, databaseId, ['databases:query:write', 'databases:query:admin']);
+    const access = resolveSqlQueryAccess(c, databaseId, 'write');
     const service = container.resolve(DatabaseConnectionService);
     const user = c.get('user')!;
     const input = DeleteSqlRowSchema.parse(await c.req.json());
-    const data = await service.deleteSqlRow(databaseId, input.namespace, input.table, input.locator, user.id);
+    const data = await service.deleteSqlRow(databaseId, input.namespace, input.table, input.locator, user.id, access);
     return c.json({ data });
   }
 );
@@ -728,8 +738,9 @@ databaseRoutes.openapi(
     const service = container.resolve(DatabaseConnectionService);
     const user = c.get('user')!;
     const { sql, maxRows } = ExecuteSqlSchema.parse(await c.req.json());
-    ensureQueryScope(c, c.req.param('id')!, await service.inferSqlIntent(c.req.param('id')!, sql));
-    const data = await service.executeSql(c.req.param('id')!, sql, user.id, { maxRows });
+    const databaseId = c.req.param('id')!;
+    const access = resolveSqlQueryAccess(c, databaseId, await service.inferSqlIntent(databaseId, sql));
+    const data = await service.executeSql(databaseId, sql, user.id, { maxRows }, access);
     return c.json({ data });
   }
 );

@@ -42,6 +42,7 @@ import {
   DockerDeploymentUpdateSchema,
 } from './docker-deployment.schemas.js';
 import { DockerDeploymentService } from './docker-deployment.service.js';
+import { redactDeploymentWebhookToken } from './docker-deployment-helpers.js';
 import { ImageCleanupUpsertSchema } from './docker-image-cleanup.schemas.js';
 import { DockerImageCleanupService } from './docker-image-cleanup.service.js';
 import { resolveDockerDeploymentIdByName } from './docker-route-resolvers.js';
@@ -191,7 +192,13 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
     const availability = container.resolve(NodeRegistryService).getNode(c.req.param('nodeId')!)
       ? 'available'
       : 'unavailable';
-    return c.json({ data: { ...data, availability } });
+    const canRevealWebhookToken = hasDockerResourceScope(
+      c.get('effectiveScopes') || [],
+      'docker:containers:webhooks',
+      c.req.param('nodeId')!,
+      deploymentId
+    );
+    return c.json({ data: { ...redactDeploymentWebhookToken(data, canRevealWebhookToken), availability } });
   });
 
   router.openapi(
@@ -199,9 +206,16 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const nodeId = c.req.param('nodeId')!;
-      const data = await service.get(nodeId, c.req.param('deploymentId')!);
+      const deploymentId = c.req.param('deploymentId')!;
+      const data = await service.get(nodeId, deploymentId);
       const availability = container.resolve(NodeRegistryService).getNode(nodeId) ? 'available' : 'unavailable';
-      return c.json({ data: { ...data, availability } });
+      const canRevealWebhookToken = hasDockerResourceScope(
+        c.get('effectiveScopes') || [],
+        'docker:containers:webhooks',
+        nodeId,
+        deploymentId
+      );
+      return c.json({ data: { ...redactDeploymentWebhookToken(data, canRevealWebhookToken), availability } });
     }
   );
 

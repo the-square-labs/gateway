@@ -140,6 +140,9 @@ export interface AISandboxJob {
   containerId: string | null;
   exitCode: number | null;
   outputBytes: number;
+  workspaceReservationBytes: number;
+  workspaceUsageBytes: number;
+  workspaceReservationReleasedAt: string | null;
   revocationReason: string | null;
   error: string | null;
   createdAt: string;

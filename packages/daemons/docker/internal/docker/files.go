@@ -3,6 +3,7 @@ package docker
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -68,11 +69,69 @@ func ExportVolume(ctx context.Context, c *Client, volumeName string, maxBytes in
 	if maxBytes <= 0 {
 		maxBytes = 512 * 1024 * 1024
 	}
-	data, err := runVolumeHelper(ctx, c, volumeName, []string{"tar", "-czf", "-", "-C", "/volume", "."}, maxBytes)
+	if err := ensureVolumeHelperImage(ctx, c); err != nil {
+		return nil, err
+	}
+
+	createCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	created, err := c.cli.ContainerCreate(createCtx, client.ContainerCreateOptions{
+		Config: &container.Config{
+			Image: volumeHelperImage,
+			Cmd:   []string{"sleep", "60"},
+		},
+		HostConfig: &container.HostConfig{
+			Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: volumeName, Target: "/volume", ReadOnly: true}},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create export helper container: %w", err)
+	}
+	containerID := created.ID
+	defer func() {
+		_, _ = c.cli.ContainerRemove(context.Background(), containerID, client.ContainerRemoveOptions{Force: true})
+	}()
+
+	if _, err := c.cli.ContainerStart(ctx, containerID, client.ContainerStartOptions{}); err != nil {
+		return nil, fmt.Errorf("start export helper container: %w", err)
+	}
+
+	archiveResult, err := c.cli.CopyFromContainer(ctx, containerID, client.CopyFromContainerOptions{SourcePath: "/volume/."})
+	if err != nil {
+		return nil, fmt.Errorf("archive volume: %w", err)
+	}
+	defer archiveResult.Content.Close()
+
+	data, err := gzipTarArchive(archiveResult.Content, maxBytes)
 	if err != nil {
 		return nil, fmt.Errorf("export volume: %w", err)
 	}
 	return data, nil
+}
+
+type limitedBuffer struct {
+	bytes.Buffer
+	limit int64
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if int64(b.Len()+len(p)) > b.limit {
+		return 0, fmt.Errorf("compressed archive exceeds maximum size of %d bytes", b.limit)
+	}
+	return b.Buffer.Write(p)
+}
+
+func gzipTarArchive(reader io.Reader, maxBytes int64) ([]byte, error) {
+	out := &limitedBuffer{limit: maxBytes}
+	zw := gzip.NewWriter(out)
+	if _, err := io.Copy(zw, reader); err != nil {
+		_ = zw.Close()
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }
 
 func ReadVolumeFile(ctx context.Context, c *Client, volumeName string, path string, maxBytes int64) ([]byte, error) {

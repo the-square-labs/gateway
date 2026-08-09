@@ -939,23 +939,18 @@ func (c *Client) UpdateContainer(ctx context.Context, id string, newTag string, 
 		return fmt.Errorf("clone container for rollback: %w", err)
 	}
 
-	imageRef := ""
-	if insp.Config != nil {
-		imageRef = configuredArchiveImageReference(insp.Config.Image, insp.Config.Labels)
-	}
-	if imageRef == "" {
-		imageRef = insp.Image
-	}
+	imageRef := containerRecreateImageReference(&insp)
 	if imageRef == "" {
 		return fmt.Errorf("could not determine image for container")
-	}
-	if !strings.Contains(imageRef, ":") {
-		imageRef += ":latest"
 	}
 
 	// Only talk to the registry when the requested image tag changes.
 	if newTag != "" {
-		named, err := reference.ParseNormalizedNamed(imageRef)
+		updateReference := containerTagUpdateImageReference(&insp)
+		if !strings.Contains(updateReference, ":") {
+			updateReference += ":latest"
+		}
+		named, err := reference.ParseNormalizedNamed(updateReference)
 		if err != nil {
 			return fmt.Errorf("parse image reference: %w", err)
 		}
@@ -986,6 +981,30 @@ func (c *Client) UpdateContainer(ctx context.Context, id string, newTag string, 
 	}
 
 	return c.recreateContainer(ctx, &insp, imageRef, envOverrides, envRemovals, rollbackSnapshot)
+}
+
+// containerRecreateImageReference deliberately prefers Config.Image. Imported
+// GWCA containers use an immutable image ID there, while their preserved source
+// tag is only suitable for an explicit tag-changing update after a pull.
+func containerRecreateImageReference(insp *container.InspectResponse) string {
+	if insp != nil && insp.Config != nil {
+		if imageReference := strings.TrimSpace(insp.Config.Image); imageReference != "" {
+			return imageReference
+		}
+	}
+	if insp == nil {
+		return ""
+	}
+	return strings.TrimSpace(insp.Image)
+}
+
+func containerTagUpdateImageReference(insp *container.InspectResponse) string {
+	if insp != nil && insp.Config != nil {
+		if imageReference := configuredArchiveImageReference(insp.Config.Image, insp.Config.Labels); imageReference != "" {
+			return imageReference
+		}
+	}
+	return containerRecreateImageReference(insp)
 }
 
 // LiveUpdateContainer applies resource limits and restart policy to an existing container

@@ -49,9 +49,9 @@ func (p *DockerPlugin) handleMigrationCommand(cmd *pb.DockerMigrationCommand, re
 		err = p.migrationStore.heartbeat(cmd.MigrationId)
 	case "capture_manifest":
 		detail, err = p.client.CaptureMigrationManifest(ctx, cmd.ResourceId)
-	case "open_archive_export":
+	case "open_archive_export", "open_archive_export_v2":
 		detail, err = p.openArchiveExport(ctx, cmd.MigrationId, cmd.ArtifactId, cmd.ResourceId, cmd.ConfigJson)
-	case "open_archive_import":
+	case "open_archive_import", "open_archive_import_v2":
 		err = p.openArchiveImport(ctx, cmd.MigrationId, cmd.ArtifactId, cmd.ConfigJson)
 	case "plan_archive_import":
 		detail, err = p.planGwcaArchiveImport(ctx, cmd.ConfigJson)

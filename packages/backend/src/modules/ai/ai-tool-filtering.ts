@@ -50,7 +50,7 @@ const ANY_SCOPE_TOOL_REQUIREMENTS: Record<string, string[]> = {
     'proxy:templates:delete',
   ],
   manage_ssl_certificate: ['ssl:cert:view', 'ssl:cert:issue', 'ssl:cert:delete'],
-  manage_domain: ['domains:view', 'domains:edit', 'integrations:cloudflare:dns:view'],
+  manage_domain: ['domains:view', 'domains:edit'],
   manage_access_list: ['acl:view', 'acl:edit'],
   manage_docker_registry: [
     'docker:registries:view',

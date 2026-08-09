@@ -22,6 +22,7 @@ import { CAService } from '@/modules/pki/ca.service.js';
 import { CertService } from '@/modules/pki/cert.service.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
+import { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
@@ -406,6 +407,9 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
         .getAuditLog({ page: 1, limit: 6 })
         .then((result) => result.data)
     : Promise.resolve([]);
+  const tlsRepairFailuresPromise = canViewSsl
+    ? container.resolve(NginxCertificateDistributionService).getActiveRepairFailureCount()
+    : Promise.resolve(0);
   const dashboardPinNodeIds = [...new Set(request.pins.dashboard.nodeIds)];
   const sidebarPinNodeIds = [...new Set(request.pins.sidebar.nodeIds)];
   const dashboardPinProxyIds = [...new Set(request.pins.dashboard.proxyHostIds)];
@@ -511,6 +515,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     pinnedProxyResponse,
     pinnedDatabaseResponse,
     pinnedDockerResources,
+    tlsRepairFailures,
   ] = await Promise.all([
     statsPromise,
     healthPromise,
@@ -528,6 +533,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     pinnedProxyPromise,
     pinnedDatabasePromise,
     pinnedDockerPromise,
+    tlsRepairFailuresPromise,
   ]);
   const now = Date.now();
   const expiring = [
@@ -610,6 +616,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
         : null;
   const notices = [
     ...(relayNotice ? [relayNotice] : []),
+    ...(tlsRepairFailures > 0 ? [{ id: 'tls-certificate-distribution', severity: 'critical' as const }] : []),
     ...(canViewSsl && stats.sslCertificates.expiringSoon > 0
       ? [{ id: 'ssl-certificates-expiring', severity: 'warning' as const }]
       : []),

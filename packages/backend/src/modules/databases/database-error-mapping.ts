@@ -140,5 +140,12 @@ export function mapDatabaseDriverError(
     return new AppError(400, 'DATABASE_QUERY_FAILED', searchableMessage);
   }
 
+  // Console requests must preserve the driver's actionable error text. The
+  // global production handler intentionally hides unknown exceptions, so any
+  // remaining query error is normalized here before it reaches that boundary.
+  if (operation === 'query') {
+    return new AppError(400, 'DATABASE_QUERY_FAILED', searchableMessage);
+  }
+
   return null;
 }

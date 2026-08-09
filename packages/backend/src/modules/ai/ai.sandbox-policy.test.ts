@@ -9,11 +9,11 @@ import {
 
 describe('sandbox policy', () => {
   it('allows low tier with the base sandbox scope and clamps TTL to the tier cap', () => {
-    const policy = resolveSandboxPolicy([SANDBOX_USE_SCOPE], 'low', 999);
+    const policy = resolveSandboxPolicy([SANDBOX_USE_SCOPE], 'low', 99_999);
 
     expect(policy.tier).toBe('low');
-    expect(policy.requestedTtlSeconds).toBe(999);
-    expect(policy.effectiveTtlSeconds).toBe(300);
+    expect(policy.requestedTtlSeconds).toBe(99_999);
+    expect(policy.effectiveTtlSeconds).toBe(4 * 60 * 60);
     expect(policy.requiredScopes).toEqual([SANDBOX_USE_SCOPE]);
   });
 
@@ -24,7 +24,9 @@ describe('sandbox policy', () => {
     expect(
       resolveSandboxPolicy([SANDBOX_USE_SCOPE, SANDBOX_MEDIUM_SCOPE], 'medium', undefined).effectiveTtlSeconds
     ).toBe(180);
-    expect(resolveSandboxPolicy([SANDBOX_USE_SCOPE, SANDBOX_HIGH_SCOPE], 'high', 2000).effectiveTtlSeconds).toBe(1200);
+    expect(resolveSandboxPolicy([SANDBOX_USE_SCOPE, SANDBOX_HIGH_SCOPE], 'high', 90_000).effectiveTtlSeconds).toBe(
+      24 * 60 * 60
+    );
   });
 
   it('checks persisted required scopes during revocation/reconciliation decisions', () => {

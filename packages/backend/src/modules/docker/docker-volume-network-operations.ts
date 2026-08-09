@@ -101,7 +101,16 @@ export async function listVolumeFiles(
 
 export async function exportVolume(context: DockerVolumeNetworkOperationContext, nodeId: string, name: string) {
   const result = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'export', { name });
-  return context.parseResult(result);
+  if (!result.success) return context.parseResult(result);
+  const data = commandResultDataToBuffer(result.data);
+  if (data.byteLength === 0 && result.detail) {
+    throw new AppError(
+      409,
+      'DOCKER_DAEMON_PROTOCOL_MISMATCH',
+      'Docker daemon returned a legacy volume export payload. Update and restart the Docker daemon.'
+    );
+  }
+  return data;
 }
 
 export async function readVolumeFile(

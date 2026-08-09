@@ -4,6 +4,7 @@ import { GitLabClient } from './gitlab-client.js';
 import type {
   VcsAllowlistSearchResult,
   VcsArchiveResult,
+  VcsArchiveStream,
   VcsBranchAccess,
   VcsCiLintResult,
   VcsCommitRequest,
@@ -615,6 +616,24 @@ export class GitLabProvider implements VcsConnectorProvider {
       filename: `${project.name || project.remoteId}.tar.gz`,
       contentType,
       bytes: buffer,
+    };
+  }
+
+  async streamRepositoryArchive(
+    auth: VcsConnectorAuth,
+    project: VcsProjectRef,
+    ref?: string,
+    options: { maxBytes?: number; timeoutMs?: number } = {}
+  ): Promise<VcsArchiveStream> {
+    const archive = await this.client(auth).requestStream(this.projectPath(project, '/repository/archive.tar.gz'), {
+      query: { sha: ref },
+      timeoutMs: options.timeoutMs ?? 120_000,
+      maxBytes: options.maxBytes ?? 200 * 1024 * 1024,
+    });
+    return {
+      filename: `${project.name || project.remoteId}.tar.gz`,
+      contentType: archive.contentType,
+      chunks: archive.chunks,
     };
   }
 

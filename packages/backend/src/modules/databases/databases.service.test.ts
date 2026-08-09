@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AppError } from '@/middleware/error-handler.js';
+import { splitSqlStatements } from './database-query-intent.js';
 import {
   DatabaseConnectionService,
   inferClickHouseIntent,
@@ -89,14 +90,18 @@ describe('mapDatabaseDriverError', () => {
     expect(mapped?.message).toContain('invalid input value for enum');
   });
 
-  it('does not remap operational postgres query failures as client query errors', () => {
+  it('preserves operational query error text for the database console', () => {
     const error = Object.assign(new Error('terminating connection due to administrator command'), {
       code: '57P01',
       severity: 'FATAL',
     });
     const mapped = mapDatabaseDriverError(error, 'postgres', 'query');
 
-    expect(mapped).toBeNull();
+    expect(mapped).toMatchObject({
+      statusCode: 400,
+      code: 'DATABASE_QUERY_FAILED',
+      message: 'terminating connection due to administrator command',
+    });
   });
 
   it('returns null for unknown errors', () => {
@@ -110,6 +115,13 @@ describe('database query intent inference', () => {
     expect(inferPostgresIntent("select ';' as semi; show all")).toBe('read');
     expect(inferPostgresIntent('select * from users; update users set role = $1')).toBe('write');
     expect(inferPostgresIntent('with deleted as (delete from users returning *) select * from deleted')).toBe('admin');
+    expect(inferPostgresIntent('select 1 -- harmless\r; set role app_admin')).toBe('admin');
+  });
+
+  it('keeps lone CR inside ClickHouse line comments when using the shared splitter', () => {
+    expect(splitSqlStatements('SELECT 1 -- intentionally disabled\r; DROP TABLE events')).toEqual([
+      'SELECT 1 -- intentionally disabled\r; DROP TABLE events',
+    ]);
   });
 
   it('infers the strongest Redis command intent across quoted and batched commands', () => {
@@ -482,6 +494,91 @@ describe('DatabaseConnectionService connection views', () => {
     await expect(service.revealCredentials('db-managed-1')).rejects.toMatchObject({
       statusCode: 409,
       code: 'MANAGED_DATABASE_CREDENTIALS_REQUIRE_DIRECT_ACCESS',
+    });
+  });
+});
+
+describe('managed ClickHouse query principals', () => {
+  const canonicalConfig = {
+    type: 'clickhouse' as const,
+    url: 'https://owner.internal/',
+    host: 'owner.internal',
+    port: 8443,
+    database: 'app',
+    username: 'clickhouse_owner',
+    password: 'owner-password',
+    tlsEnabled: true,
+  };
+
+  function createManagedClickHouseService() {
+    const service = new DatabaseConnectionService(
+      {} as never,
+      { log: vi.fn() } as never,
+      { decryptString: vi.fn((payload: { payload: string }) => payload.payload) } as never,
+      { getEndpoint: vi.fn().mockResolvedValue({ host: '127.0.0.1', port: 19443 }) } as never
+    );
+    const internal = service as any;
+    vi.spyOn(internal, 'getRow').mockResolvedValue({
+      encryptedConfig: JSON.stringify({ payload: JSON.stringify(canonicalConfig) }),
+    });
+    vi.spyOn(internal, 'getManagedMetadata').mockResolvedValue({ id: 'managed-clickhouse-1' });
+    return { service, internal };
+  }
+
+  it('uses the reader identity instead of the canonical owner for read-scoped ClickHouse SQL', async () => {
+    const { service, internal } = createManagedClickHouseService();
+    const principal = vi.spyOn(internal, 'getManagedClickHouseQueryPrincipal').mockResolvedValue({
+      username: 'gw_clickhouse_query_reader',
+      password: 'reader-password',
+    });
+
+    await expect(service.getDecryptedConfig('db-1', 'interactive', 'read')).resolves.toMatchObject({
+      username: 'gw_clickhouse_query_reader',
+      password: 'reader-password',
+      host: '127.0.0.1',
+      port: 19443,
+      tlsEnabled: false,
+    });
+    expect(principal).toHaveBeenCalledWith('db-1', 'read');
+  });
+
+  it('fails closed instead of falling back to the owner when the secure reader is unavailable', async () => {
+    const { service, internal } = createManagedClickHouseService();
+    vi.spyOn(internal, 'getManagedClickHouseQueryPrincipal').mockResolvedValue(undefined);
+
+    await expect(service.getDecryptedConfig('db-1', 'interactive', 'read')).rejects.toMatchObject({
+      code: 'MANAGED_CLICKHOUSE_QUERY_ACCESS_UNAVAILABLE',
+    });
+  });
+});
+
+describe('managed PostgreSQL tunnel TLS', () => {
+  it('preserves PostgreSQL SSL negotiation through the opaque managed tunnel', async () => {
+    const config = {
+      type: 'postgres' as const,
+      host: 'managed.gateway.internal',
+      port: 5432,
+      database: 'app',
+      username: 'postgres_owner',
+      password: 'owner-password',
+      sslEnabled: true,
+    };
+    const service = new DatabaseConnectionService(
+      {} as never,
+      { log: vi.fn() } as never,
+      { decryptString: vi.fn((payload: { payload: string }) => payload.payload) } as never,
+      { getEndpoint: vi.fn().mockResolvedValue({ host: '127.0.0.1', port: 15432 }) } as never
+    );
+    const internal = service as any;
+    vi.spyOn(internal, 'getRow').mockResolvedValue({
+      encryptedConfig: JSON.stringify({ payload: JSON.stringify(config) }),
+    });
+    vi.spyOn(internal, 'getManagedMetadata').mockResolvedValue({ id: 'managed-postgres-1' });
+
+    await expect(service.getDecryptedConfig('db-1', 'monitoring')).resolves.toMatchObject({
+      host: '127.0.0.1',
+      port: 15432,
+      sslEnabled: true,
     });
   });
 });

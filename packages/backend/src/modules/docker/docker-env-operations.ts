@@ -18,8 +18,9 @@ export async function getContainerEnv(context: DockerEnvOperationContext, nodeId
   const name = (inspect?.Name ?? '').replace(/^\//, '');
 
   let visibleEnv = allEnv;
+  let secretKeys = new Set<string>();
   if (context.secretService && name) {
-    const secretKeys = await context.secretService.getSecretKeys(nodeId, name);
+    secretKeys = await context.secretService.getSecretKeys(nodeId, name);
     if (secretKeys.size > 0) {
       visibleEnv = allEnv.filter((entry) => {
         const key = entry.split('=')[0];
@@ -31,7 +32,7 @@ export async function getContainerEnv(context: DockerEnvOperationContext, nodeId
   if (context.environmentService && name) {
     const storedEnv = await context.environmentService.getDecryptedMap(nodeId, name);
     if (Object.keys(storedEnv).length > 0) {
-      return envMapToList(storedEnv);
+      return envMapToList(Object.fromEntries(Object.entries(storedEnv).filter(([key]) => !secretKeys.has(key))));
     }
 
     await context.environmentService.seedFromRuntimeIfMissing(nodeId, name, envListToMap(visibleEnv));

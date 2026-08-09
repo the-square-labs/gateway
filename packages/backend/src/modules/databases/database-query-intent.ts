@@ -1,6 +1,6 @@
 import { AppError } from '@/middleware/error-handler.js';
 
-export function splitSqlStatements(sql: string): string[] {
+function splitSqlStatementsForDialect(sql: string, carriageReturnEndsLineComment: boolean): string[] {
   const statements: string[] = [];
   let current = '';
   let i = 0;
@@ -17,7 +17,7 @@ export function splitSqlStatements(sql: string): string[] {
 
     if (inLineComment) {
       current += char;
-      if (char === '\n') inLineComment = false;
+      if (char === '\n' || (carriageReturnEndsLineComment && char === '\r')) inLineComment = false;
       i += 1;
       continue;
     }
@@ -148,7 +148,18 @@ export function splitSqlStatements(sql: string): string[] {
   return statements;
 }
 
-export const splitPostgresStatements = splitSqlStatements;
+/**
+ * ClickHouse terminates `--` comments with LF only. Keep that behavior for
+ * the shared/default splitter used by its adapter.
+ */
+export function splitSqlStatements(sql: string): string[] {
+  return splitSqlStatementsForDialect(sql, false);
+}
+
+/** PostgreSQL treats both CR and LF as line-comment terminators. */
+export function splitPostgresStatements(sql: string): string[] {
+  return splitSqlStatementsForDialect(sql, true);
+}
 
 export function splitRedisCommands(commandText: string): string[] {
   const commands: string[] = [];
@@ -310,7 +321,7 @@ function inferPostgresStatementIntent(sql: string): 'read' | 'write' | 'admin' {
 }
 
 export function inferPostgresIntent(sql: string): 'read' | 'write' | 'admin' {
-  const intents = splitSqlStatements(sql).map(inferPostgresStatementIntent);
+  const intents = splitPostgresStatements(sql).map(inferPostgresStatementIntent);
   if (intents.includes('admin')) return 'admin';
   if (intents.includes('write')) return 'write';
   return 'read';

@@ -146,16 +146,18 @@ function makeDeps(db: any, connected = true) {
       deregister: vi.fn(async () => undefined),
     },
     systemCA: {
-      issueNodeCert: vi.fn(async (_nodeId: string, _hostname: string, bindCurrent?: (tx: unknown, cert: any) => Promise<void>) => {
-        if (bindCurrent) await bindCurrent(db, { id: 'cert-1', serialNumber: 'new01', notAfter: expiresAt });
-        return {
-          serial: 'new01',
-          expiresAt,
-          caCertPem: 'ca-cert-pem',
-          certPem: 'cert-pem',
-          keyPem: 'key-pem',
-        };
-      }),
+      issueNodeCert: vi.fn(
+        async (_nodeId: string, _hostname: string, bindCurrent?: (tx: unknown, cert: any) => Promise<void>) => {
+          if (bindCurrent) await bindCurrent(db, { id: 'cert-1', serialNumber: 'new01', notAfter: expiresAt });
+          return {
+            serial: 'new01',
+            expiresAt,
+            caCertPem: 'ca-cert-pem',
+            certPem: 'cert-pem',
+            keyPem: 'key-pem',
+          };
+        }
+      ),
     },
     dispatch: {},
     auditService: {

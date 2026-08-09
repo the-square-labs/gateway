@@ -1,5 +1,5 @@
 import type { NodeAppearanceColor } from "./nodes";
-import type { SSLCertificate } from "./ssl";
+import type { CertificateDistributionState, SSLCertificate } from "./ssl";
 
 // Proxy Host Types
 export type ProxyHostType = "proxy" | "redirect" | "404" | "raw";
@@ -89,6 +89,7 @@ export interface ProxyHost {
   updatedAt: string;
   // Relations (populated in detail views)
   sslCertificate?: SSLCertificate;
+  tlsDistribution?: CertificateDistributionState | null;
   accessList?: AccessList;
 }
 

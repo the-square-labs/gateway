@@ -4,7 +4,7 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { DockerAccessResourceService } from './docker-access-resource.service.js';
-import { normalizeEnvRecord } from './docker-env-operations.js';
+import { envMapToList, normalizeEnvRecord } from './docker-env-operations.js';
 import { dockerGpuAttachmentFromInspect, hasRequestedGpuChange } from './docker-gpu-attachment.js';
 import type { ContainerAction } from './docker-lifecycle-watch.js';
 import { assertContainerNotUsedByProxy } from './docker-proxy-link.guard.js';
@@ -105,6 +105,14 @@ export interface DockerContainerMutationContext {
   parseResult(result: { success: boolean; error?: string; detail?: string }): any;
 }
 
+export function daemonContainerCreateConfig(config: Record<string, unknown>): Record<string, unknown> {
+  const normalizedEnv = normalizeEnvRecord(config.env);
+  return {
+    ...config,
+    ...(normalizedEnv ? { env: envMapToList(normalizedEnv) } : {}),
+  };
+}
+
 export async function createContainer(
   ctx: DockerContainerMutationContext,
   nodeId: string,
@@ -129,7 +137,7 @@ export async function createContainer(
       await pullConfigImage(ctx, nodeId, config, registryId, actorScopes);
     }
     const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'create', {
-      configJson: JSON.stringify(config),
+      configJson: JSON.stringify(daemonContainerCreateConfig(config)),
     });
     data = ctx.parseResult(result);
   } catch (err) {

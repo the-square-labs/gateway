@@ -112,7 +112,7 @@ async function manageDatabaseConnection(context: DatabaseToolContext, user: User
     return { success: true };
   }
   if (operation === 'test') {
-    ensureDirectDatabaseScope(user, 'databases:view', databaseId);
+    ensureDirectDatabaseScope(user, 'databases:edit', databaseId);
     return context.databaseService.testSavedConnection(databaseId, user.id);
   }
   if (operation === 'reveal_credentials') {

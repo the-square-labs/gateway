@@ -7,8 +7,11 @@ export type SandboxRunnerMethod =
   | 'fetch'
   | 'uploadArtifact'
   | 'downloadArtifact'
+  | 'findJobContainer'
   | 'listArtifactFiles'
   | 'readArtifact'
+  | 'getWorkspaceUsage'
+  | 'uploadArtifactChunk'
   | 'sendArtifact'
   | 'readProcessOutput'
   | 'waitProcess'
@@ -58,6 +61,15 @@ export interface SandboxRunnerProcessParams {
   processId: string;
 }
 
+export interface SandboxRunnerFindJobContainerParams {
+  jobId: string;
+}
+
+export interface SandboxRunnerFindJobContainerResult extends SandboxRunnerFindJobContainerParams {
+  containerId: string | null;
+  expiresAt: string | null;
+}
+
 export interface SandboxRunnerFetchParams {
   url: string;
 }
@@ -72,7 +84,19 @@ export interface SandboxRunnerUploadArtifactParams extends SandboxRunnerProcessP
   contentBase64: string;
 }
 
+export interface SandboxRunnerUploadArtifactChunkParams extends SandboxRunnerProcessParams {
+  path: string;
+  offset: number;
+  contentBase64: string;
+}
+
 export interface SandboxRunnerUploadArtifactResult {
+  processId: string;
+  path: string;
+  sizeBytes: number;
+}
+
+export interface SandboxRunnerUploadArtifactChunkResult {
   processId: string;
   path: string;
   sizeBytes: number;
@@ -125,6 +149,7 @@ export interface SandboxRunnerExecutionResult {
   output: string;
   outputBytes: number;
   timedOut: boolean;
+  workspaceUsageBytes: number;
 }
 
 export interface SandboxRunnerProcessResult {
@@ -144,6 +169,7 @@ export interface SandboxRunnerWaitProcessResult {
   processId: string;
   exitCode: number;
   outputBytes: number;
+  workspaceUsageBytes: number;
 }
 
 export interface SandboxRunnerFetchResult {
@@ -175,6 +201,12 @@ export interface SandboxRunnerReadArtifactResult {
   encoding: 'utf8' | 'base64';
   content?: string;
   contentBase64?: string;
+}
+
+export interface SandboxRunnerWorkspaceUsageResult extends SandboxRunnerProcessParams {
+  workspaceUsageBytes: number;
+  workspaceReservationBytes: number;
+  overReservation: boolean;
 }
 
 export interface SandboxRunnerListArtifactFilesEntry {

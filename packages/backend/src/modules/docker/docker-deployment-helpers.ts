@@ -70,3 +70,20 @@ export function imageWithTag(image: string, tag?: string) {
   const repo = colon > slash ? ref.slice(0, colon) : ref;
   return `${repo}:${tag}${digestSuffix}`;
 }
+
+type DeploymentWithWebhook = {
+  webhook?: { token?: string; [key: string]: unknown } | null;
+};
+
+/**
+ * A deployment detail is also used by the regular view endpoint. Keep webhook
+ * metadata useful there, but reserve its bearer token for the webhook-scoped
+ * endpoint.
+ */
+export function redactDeploymentWebhookToken<T extends DeploymentWithWebhook>(deployment: T, canReveal: boolean): T {
+  if (canReveal || !deployment.webhook) return deployment;
+  return {
+    ...deployment,
+    webhook: { ...deployment.webhook, token: '[REDACTED]' },
+  };
+}

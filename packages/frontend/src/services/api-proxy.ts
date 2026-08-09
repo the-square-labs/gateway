@@ -1,4 +1,5 @@
 import type {
+  CertificateDistributionState,
   CreateProxyHostRequest,
   FolderTreeNode,
   GroupedProxyHostsResponse,
@@ -94,6 +95,17 @@ export function withProxyApi<TBase extends ApiClientBaseConstructor>(Base: TBase
           method: "POST",
           body: JSON.stringify({ enabled }),
         })
+      );
+    }
+
+    async resyncProxyHostTls(
+      id: string
+    ): Promise<{ distribution: CertificateDistributionState | null }> {
+      return this.unwrapData(
+        this.request<{ data: { distribution: CertificateDistributionState | null } }>(
+          `/proxy-hosts/${id}/tls/resync`,
+          { method: "POST" }
+        )
       );
     }
 
