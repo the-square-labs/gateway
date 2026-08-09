@@ -100,6 +100,7 @@ export interface NodeHealthReport {
     txPackets: number;
     rxErrors: number;
     txErrors: number;
+    ipAddresses?: string[];
   }>;
   localIpAddresses: string[];
   publicIpAddresses?: string[];

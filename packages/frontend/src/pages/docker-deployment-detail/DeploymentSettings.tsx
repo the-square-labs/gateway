@@ -664,6 +664,7 @@ export function DeploymentSettings({
         portsChanged={portsChanged}
         inputCell={inputCell}
         showProtocol={false}
+        showBindAddress={false}
       />
 
       <VolumeMountsSection

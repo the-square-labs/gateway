@@ -147,6 +147,8 @@ function hasBroadDockerNodeListAccess(scopes: string[]) {
 function compactDockerNodeForDockerAccess(node: Record<string, unknown>) {
   const capabilities = node.capabilities as Record<string, unknown> | null | undefined;
   const health = node.lastHealthReport as Record<string, unknown> | null | undefined;
+  const advertisedCapabilities = Array.isArray(capabilities?.capabilities) ? capabilities.capabilities : [];
+  const networkInterfaces = Array.isArray(health?.networkInterfaces) ? health.networkInterfaces : [];
   return {
     id: node.id,
     slug: node.slug,
@@ -164,12 +166,26 @@ function compactDockerNodeForDockerAccess(node: Record<string, unknown>) {
     capabilities: {
       ...(capabilities?.versionMismatch ? { versionMismatch: true } : {}),
       ...(capabilities?.cpuCores !== undefined ? { cpuCores: capabilities.cpuCores } : {}),
+      ...(advertisedCapabilities.includes('docker_port_bind_ip_v1') ? { dockerPortBindIpV1: true } : {}),
     },
     lastSeenAt: node.lastSeenAt,
     lastHealthReport: health
       ? {
           systemMemoryTotalBytes: health.systemMemoryTotalBytes,
           swapTotalBytes: health.swapTotalBytes,
+          networkInterfaces: networkInterfaces.flatMap((value) => {
+            if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+            const networkInterface = value as Record<string, unknown>;
+            if (typeof networkInterface.name !== 'string') return [];
+            return [
+              {
+                name: networkInterface.name,
+                ipAddresses: Array.isArray(networkInterface.ipAddresses)
+                  ? networkInterface.ipAddresses.filter((address): address is string => typeof address === 'string')
+                  : [],
+              },
+            ];
+          }),
         }
       : null,
     lastStatsReport: null,

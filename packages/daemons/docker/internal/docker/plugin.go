@@ -172,7 +172,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 					"managed_clickhouse_principals_v1",
 				}
 			}
-			return []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "generic_relay_tunnel_v1"}
+			return []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1"}
 		}(),
 	}
 }

@@ -443,9 +443,10 @@ type ContainerCreateConfig struct {
 	OpenStdin   bool              `json:"open_stdin,omitempty"`
 
 	// Host config
-	Binds        []string          `json:"binds,omitempty"`
-	PortBindings map[string]string `json:"port_bindings,omitempty"` // "80/tcp": "8080"
-	NetworkMode  string            `json:"network_mode,omitempty"`
+	Binds        []string               `json:"binds,omitempty"`
+	PortBindings map[string]string      `json:"port_bindings,omitempty"` // "80/tcp": "8080"
+	Ports        []containerPortMapping `json:"ports,omitempty"`
+	NetworkMode  string                 `json:"network_mode,omitempty"`
 	// NetworkAliases are scoped to NetworkMode. They are used by first-party
 	// database connector sidecars so application containers never need a host
 	// port or a daemon address.
@@ -458,6 +459,47 @@ type ContainerCreateConfig struct {
 	CapDrop             []string   `json:"cap_drop,omitempty"`
 	ExtraHosts          []string   `json:"extra_hosts,omitempty"`
 	GPU                 *GPUConfig `json:"gpu,omitempty"`
+}
+
+type containerPortMapping struct {
+	HostIP        string `json:"hostIp,omitempty"`
+	HostPort      uint16 `json:"hostPort"`
+	ContainerPort uint16 `json:"containerPort"`
+	Protocol      string `json:"protocol"`
+}
+
+func dockerPortMappings(mappings []containerPortMapping) (network.PortSet, network.PortMap, error) {
+	exposedPorts := make(network.PortSet)
+	portBindings := make(network.PortMap)
+	for _, mapping := range mappings {
+		protocol := strings.ToLower(strings.TrimSpace(mapping.Protocol))
+		if protocol == "" {
+			protocol = "tcp"
+		}
+		if protocol != "tcp" && protocol != "udp" {
+			return nil, nil, fmt.Errorf("unsupported port protocol %q", mapping.Protocol)
+		}
+		if mapping.ContainerPort == 0 {
+			return nil, nil, fmt.Errorf("container port must be greater than zero")
+		}
+		containerPort, err := network.ParsePort(fmt.Sprintf("%d/%s", mapping.ContainerPort, protocol))
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse port %d/%s: %w", mapping.ContainerPort, protocol, err)
+		}
+		hostIP := strings.TrimSpace(mapping.HostIP)
+		if hostIP == "" {
+			hostIP = "0.0.0.0"
+		}
+		parsedHostIP, err := netip.ParseAddr(hostIP)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse host IP %q: %w", hostIP, err)
+		}
+		exposedPorts[containerPort] = struct{}{}
+		portBindings[containerPort] = append(portBindings[containerPort], network.PortBinding{
+			HostIP: parsedHostIP, HostPort: fmt.Sprintf("%d", mapping.HostPort),
+		})
+	}
+	return exposedPorts, portBindings, nil
 }
 
 // GPUConfig is a node-scoped, Gateway-owned selection. Empty deviceIds is an
@@ -772,8 +814,15 @@ func (c *Client) CreateContainer(ctx context.Context, configJSON string) (string
 		}
 	}
 
-	// Parse port bindings: "80/tcp" -> "8080"
-	if len(cfg.PortBindings) > 0 {
+	if cfg.Ports != nil {
+		exposedPorts, portMap, err := dockerPortMappings(cfg.Ports)
+		if err != nil {
+			return "", "", err
+		}
+		containerCfg.ExposedPorts = exposedPorts
+		hostCfg.PortBindings = portMap
+	} else if len(cfg.PortBindings) > 0 {
+		// Backward-compatible daemon-local create format: "80/tcp" -> "8080".
 		portMap := make(network.PortMap)
 		for containerPort, hostPort := range cfg.PortBindings {
 			port, err := network.ParsePort(containerPort)
@@ -1074,15 +1123,11 @@ func (c *Client) LiveUpdateContainer(ctx context.Context, id string, configJSON 
 // overrides for ports, mounts, entrypoint, command, working directory, user, hostname, and labels.
 func (c *Client) RecreateWithConfig(ctx context.Context, id string, configJSON string) error {
 	var params struct {
-		Image     string            `json:"image"`
-		Env       map[string]string `json:"env"`
-		RemoveEnv []string          `json:"removeEnv"`
-		Ports     []struct {
-			HostPort      uint16 `json:"hostPort"`
-			ContainerPort uint16 `json:"containerPort"`
-			Protocol      string `json:"protocol"`
-		} `json:"ports"`
-		Mounts []struct {
+		Image     string                 `json:"image"`
+		Env       map[string]string      `json:"env"`
+		RemoveEnv []string               `json:"removeEnv"`
+		Ports     []containerPortMapping `json:"ports"`
+		Mounts    []struct {
 			HostPath      string `json:"hostPath"`
 			ContainerPath string `json:"containerPath"`
 			Name          string `json:"name"`
@@ -1120,22 +1165,9 @@ func (c *Client) RecreateWithConfig(ctx context.Context, id string, configJSON s
 
 	// Apply port binding overrides
 	if params.Ports != nil {
-		portBindings := make(network.PortMap)
-		exposedPorts := make(network.PortSet)
-		for _, p := range params.Ports {
-			proto := p.Protocol
-			if proto == "" {
-				proto = "tcp"
-			}
-			containerPort, parseErr := network.ParsePort(fmt.Sprintf("%d/%s", p.ContainerPort, proto))
-			if parseErr != nil {
-				return fmt.Errorf("parse port %d/%s: %w", p.ContainerPort, proto, parseErr)
-			}
-			exposedPorts[containerPort] = struct{}{}
-			portBindings[containerPort] = append(portBindings[containerPort], network.PortBinding{
-				HostIP:   netip.MustParseAddr("0.0.0.0"),
-				HostPort: fmt.Sprintf("%d", p.HostPort),
-			})
+		exposedPorts, portBindings, mappingErr := dockerPortMappings(params.Ports)
+		if mappingErr != nil {
+			return mappingErr
 		}
 		insp.HostConfig.PortBindings = portBindings
 		insp.Config.ExposedPorts = exposedPorts

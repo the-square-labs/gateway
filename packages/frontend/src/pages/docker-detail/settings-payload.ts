@@ -70,6 +70,7 @@ export function buildRecreatePayloadFromForm({
     payload.ports = ports
       .filter((port) => port.containerPort)
       .map((port) => ({
+        hostIp: port.hostIp || "0.0.0.0",
         hostPort: Number(port.hostPort) || 0,
         containerPort: Number(port.containerPort),
         protocol: port.protocol,
