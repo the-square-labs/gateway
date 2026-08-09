@@ -44,4 +44,46 @@ describe('Gateway lifecycle admission middleware', () => {
     expect(response.status).toBe(404);
     expect(await response.text()).not.toContain('SERVICE_RESTARTING');
   });
+
+  it('serves a self-contained restart screen for browser navigation while preserving JSON for APIs', async () => {
+    const lifecycle = new GatewayLifecycleService();
+    lifecycle.transition('draining_user');
+    container.registerInstance(GatewayLifecycleService, lifecycle);
+    container.registerInstance(StatusPageService, { isStatusHost: vi.fn().mockResolvedValue(false) } as never);
+    const app = createApp().app;
+
+    const documentResponse = await app.request('/settings/general', {
+      headers: {
+        accept: 'text/html,application/xhtml+xml',
+        host: 'gateway.test',
+        'sec-fetch-dest': 'document',
+      },
+    });
+    expect(documentResponse.status).toBe(503);
+    expect(documentResponse.headers.get('content-type')).toContain('text/html');
+    expect(documentResponse.headers.get('cache-control')).toBe('no-store');
+    const documentBody = await documentResponse.text();
+    expect(documentBody).toContain('Restarting Gateway');
+    expect(documentBody).not.toContain('Finishing active requests and jobs');
+    expect(documentBody).not.toContain('This page will reload automatically');
+    expect(documentBody).toContain(
+      'Powered by <a href="https://wiolett.net" rel="noopener noreferrer">Wiolett Industries</a>'
+    );
+
+    const scriptResponse = await app.request('/gateway-restarting.js', {
+      headers: { host: 'gateway.test' },
+    });
+    expect(scriptResponse.status).toBe(200);
+    expect(scriptResponse.headers.get('content-type')).toContain('text/javascript');
+    expect(await scriptResponse.text()).toContain("fetch('/health'");
+
+    const apiResponse = await app.request('/api/users', {
+      headers: { accept: 'application/json', host: 'gateway.test' },
+    });
+    expect(apiResponse.status).toBe(503);
+    expect(await apiResponse.json()).toEqual({
+      code: 'SERVICE_RESTARTING',
+      message: 'Gateway is restarting',
+    });
+  });
 });

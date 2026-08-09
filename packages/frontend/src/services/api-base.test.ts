@@ -243,6 +243,28 @@ describe("ApiClientBase", () => {
     expect(useAppStatusStore.getState().maintenanceActive).toBe(false);
   });
 
+  it("opens the restart screen for SERVICE_RESTARTING responses", async () => {
+    const client = new TestApiClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          code: "SERVICE_RESTARTING",
+          message: "Gateway is restarting",
+        }),
+        { status: 503, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    await expect(client.getThing()).rejects.toMatchObject({
+      status: 503,
+      code: "SERVICE_RESTARTING",
+    } satisfies Partial<ApiRequestError>);
+    expect(useAppStatusStore.getState()).toMatchObject({
+      gatewayRestartingActive: true,
+      gatewayRestartTargetUrl: null,
+    });
+  });
+
   it("enters maintenance mode on a real network-level fetch failure", async () => {
     const client = new TestApiClient();
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new TypeError("fetch failed"));

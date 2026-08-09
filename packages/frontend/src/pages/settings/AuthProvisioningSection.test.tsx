@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfirmDialog, useConfirmDialog } from "@/components/common/ConfirmDialog";
 import { api } from "@/services/api";
+import { useAppStatusStore } from "@/stores/app-status";
 import { useSystemConfigStore } from "@/stores/system-config";
 import type { AuthProvisioningSettings } from "@/types";
 import { AuthProvisioningSection } from "./AuthProvisioningSection";
@@ -53,6 +54,7 @@ describe("AuthProvisioningSection inference setting", () => {
   afterEach(() => {
     api.invalidateCache("settings:auth-provisioning");
     useConfirmDialog.getState().close();
+    useAppStatusStore.getState().clearGatewayRestarting();
   });
 
   it("persists the existing-session MFA grace period", async () => {
@@ -121,6 +123,40 @@ describe("AuthProvisioningSection inference setting", () => {
             finalizationTimeoutSeconds: 10,
           },
         },
+      })
+    );
+  });
+
+  it("shows the restart screen instead of reloading on a fixed timer", async () => {
+    const settings = {
+      ...SETTINGS,
+      webTransport: {
+        tlsEnabled: false,
+        restartRequired: false,
+        directAccess: false,
+        targetUrl: null,
+      },
+    };
+    api.setCache("settings:auth-provisioning", settings);
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(settings);
+    vi.spyOn(api, "updateAuthProvisioningSettings").mockResolvedValue({
+      ...settings,
+      webTransport: {
+        tlsEnabled: true,
+        restartRequired: true,
+        directAccess: false,
+        targetUrl: null,
+      },
+    });
+    const user = userEvent.setup();
+
+    render(<AuthProvisioningSection canEdit section="general" />);
+    await user.click(await screen.findByRole("button", { name: "Enable internal HTTPS" }));
+
+    await waitFor(() =>
+      expect(useAppStatusStore.getState()).toMatchObject({
+        gatewayRestartingActive: true,
+        gatewayRestartTargetUrl: null,
       })
     );
   });

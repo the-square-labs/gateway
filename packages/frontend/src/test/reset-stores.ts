@@ -22,6 +22,8 @@ export function resetTestStores() {
     maintenanceActive: false,
     gatewayUpdatingActive: false,
     gatewayUpdatingTargetVersion: null,
+    gatewayRestartingActive: false,
+    gatewayRestartTargetUrl: null,
     gatewayUpdateError: null,
     rateLimitedUntil: null,
   });

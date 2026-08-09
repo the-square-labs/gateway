@@ -15,7 +15,11 @@ import { requestId } from 'hono/request-id';
 
 import { getEnv, isDevelopment } from '@/config/env.js';
 import { container, TOKENS } from '@/container.js';
-import { GATEWAY_NOT_FOUND_HTML } from '@/lib/gateway-error-pages.js';
+import {
+  GATEWAY_NOT_FOUND_HTML,
+  GATEWAY_RESTARTING_HTML,
+  GATEWAY_RESTARTING_SCRIPT,
+} from '@/lib/gateway-error-pages.js';
 import { tags as openApiTags, openApiValidationHook, securitySchemes } from '@/lib/openapi.js';
 import { auditContextMiddleware } from '@/middleware/audit-context.js';
 import { errorHandler } from '@/middleware/error-handler.js';
@@ -100,6 +104,7 @@ import { authenticateEventsConnection, createEventsWSHandlers } from '@/ws/event
 const STATUS_PREVIEW_PREFIX = '/_status-preview';
 const OPENAPI_DOCUMENT_PATH = '/api/openapi.json';
 const HEALTH_REDIS_TIMEOUT_MS = 1000;
+const GATEWAY_RESTARTING_SCRIPT_PATH = '/gateway-restarting.js';
 const DOCKER_FILE_BODY_LIMIT_PATH =
   /^\/api\/docker\/nodes\/[^/]+\/(?:containers\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks)|volumes\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks))$/;
 const NODE_FILE_BODY_LIMIT_PATH = /^\/api\/nodes\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks)$/;
@@ -108,6 +113,18 @@ const INFERENCE_DATA_PLANE_PREFIX = /^\/api\/inference\/(?:(?:anthropic|codex)\/
 
 function isInferenceDataPlanePath(path: string): boolean {
   return INFERENCE_DATA_PLANE_PREFIX.test(path);
+}
+
+function isBrowserDocumentRequest(
+  method: string,
+  path: string,
+  accept: string | undefined,
+  destination: string | undefined
+) {
+  const normalizedMethod = method.toUpperCase();
+  if (normalizedMethod !== 'GET' && normalizedMethod !== 'HEAD') return false;
+  if (path === '/api' || path.startsWith('/api/') || path === '/auth' || path.startsWith('/auth/')) return false;
+  return destination === 'document' || accept?.toLowerCase().includes('text/html') === true;
 }
 
 function requestBodyLimit(maxSize: number): MiddlewareHandler<AppEnv> {
@@ -451,6 +468,13 @@ export function createApp(): GatewayAppRuntime {
     }
     c.header('Retry-After', '1');
     c.header('Connection', 'close');
+    c.header('Cache-Control', 'no-store');
+    if (path === GATEWAY_RESTARTING_SCRIPT_PATH && c.req.method.toUpperCase() === 'GET') {
+      return c.body(GATEWAY_RESTARTING_SCRIPT, 200, { 'Content-Type': 'text/javascript; charset=UTF-8' });
+    }
+    if (isBrowserDocumentRequest(c.req.method, path, c.req.header('accept'), c.req.header('sec-fetch-dest'))) {
+      return c.html(GATEWAY_RESTARTING_HTML, 503);
+    }
     return c.json({ code: 'SERVICE_RESTARTING', message: 'Gateway is restarting' }, 503);
   });
 

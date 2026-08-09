@@ -911,7 +911,9 @@ export default function App() {
   const maintenanceActive = useAppStatusStore((s) => s.maintenanceActive);
   const setMaintenanceActive = useAppStatusStore((s) => s.setMaintenanceActive);
   const setGatewayUpdatingActive = useAppStatusStore((s) => s.setGatewayUpdatingActive);
+  const setGatewayRestartingActive = useAppStatusStore((s) => s.setGatewayRestartingActive);
   const clearGatewayUpdating = useAppStatusStore((s) => s.clearGatewayUpdating);
+  const clearGatewayRestarting = useAppStatusStore((s) => s.clearGatewayRestarting);
   const authRouteKey = user
     ? `${user.id}:${[...user.scopes].sort().join(",")}:${user.isBlocked ? "blocked" : "active"}`
     : "anonymous";
@@ -930,8 +932,16 @@ export default function App() {
         const setup = setupResponse.ok
           ? ((await setupResponse.json()) as { data?: { state?: string } })
           : null;
+        const health = response.ok
+          ? ((await response.json()) as { lifecycleState?: string })
+          : null;
         if (!cancelled) {
           setMaintenanceActive(!response.ok);
+          if (health?.lifecycleState && health.lifecycleState !== "running") {
+            setGatewayRestartingActive(true);
+          } else if (health?.lifecycleState === "running") {
+            clearGatewayRestarting();
+          }
           setSetupPending(setup?.data?.state === "pending");
           setStartupChecked(true);
         }
@@ -948,7 +958,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [setMaintenanceActive]);
+  }, [clearGatewayRestarting, setGatewayRestartingActive, setMaintenanceActive]);
 
   useEffect(() => {
     const handleStorage = (event: StorageEvent) => {
@@ -964,12 +974,17 @@ export default function App() {
           state?: {
             gatewayUpdatingActive?: boolean;
             gatewayUpdatingTargetVersion?: string | null;
+            gatewayRestartingActive?: boolean;
+            gatewayRestartTargetUrl?: string | null;
           };
         };
         if (parsed.state?.gatewayUpdatingActive) {
           setGatewayUpdatingActive(true, parsed.state.gatewayUpdatingTargetVersion ?? null);
+        } else if (parsed.state?.gatewayRestartingActive) {
+          setGatewayRestartingActive(true, parsed.state.gatewayRestartTargetUrl ?? null);
         } else {
           clearGatewayUpdating();
+          clearGatewayRestarting();
         }
       } catch {
         // Ignore malformed storage updates.
@@ -978,7 +993,12 @@ export default function App() {
 
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
-  }, [clearGatewayUpdating, setGatewayUpdatingActive]);
+  }, [
+    clearGatewayRestarting,
+    clearGatewayUpdating,
+    setGatewayRestartingActive,
+    setGatewayUpdatingActive,
+  ]);
 
   if (!startupChecked) {
     return (

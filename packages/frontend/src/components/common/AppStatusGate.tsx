@@ -81,38 +81,108 @@ function MaintenanceScreen() {
   );
 }
 
-function GatewayUpdatingScreen() {
-  const targetVersion = useAppStatusStore((s) => s.gatewayUpdatingTargetVersion);
-  const clearGatewayUpdating = useAppStatusStore((s) => s.clearGatewayUpdating);
+interface GatewayHealthSnapshot {
+  lifecycleState?: "running" | "draining_user" | "draining_logs" | "terminating";
+  version?: string | null;
+}
 
+export function buildGatewayRestartTargetUrl(targetBase: string, currentHref: string): string {
+  const target = new URL(targetBase, currentHref);
+  const current = new URL(currentHref);
+  target.pathname = current.pathname;
+  target.search = current.search;
+  target.hash = current.hash;
+  return target.toString();
+}
+
+function GatewayOperationScreen() {
+  const updatingActive = useAppStatusStore((s) => s.gatewayUpdatingActive);
+  const targetVersion = useAppStatusStore((s) => s.gatewayUpdatingTargetVersion);
+  const restartTargetUrl = useAppStatusStore((s) => s.gatewayRestartTargetUrl);
+  const clearGatewayUpdating = useAppStatusStore((s) => s.clearGatewayUpdating);
+  const clearGatewayRestarting = useAppStatusStore((s) => s.clearGatewayRestarting);
   useEffect(() => {
-    let seenUnavailable = false;
+    let restartObserved = false;
+    let targetProbeActive = false;
+    let targetProbeStartedAt = 0;
+    let navigating = false;
+
+    const completeSameOriginRestart = (version: string | null, reason: string) => {
+      if (navigating) return;
+      navigating = true;
+      publishGatewayReload(version, reason);
+      if (updatingActive) clearGatewayUpdating();
+      else clearGatewayRestarting();
+      reloadGatewayClient();
+    };
+
+    const navigateToRestartTarget = () => {
+      if (navigating || !restartTargetUrl) return;
+      navigating = true;
+      clearGatewayRestarting();
+      window.location.assign(buildGatewayRestartTargetUrl(restartTargetUrl, window.location.href));
+    };
+
+    const probeRestartTarget = async () => {
+      if (!restartTargetUrl) return;
+      const target = new URL(restartTargetUrl, window.location.href);
+      const isHttpsDowngrade = window.location.protocol === "https:" && target.protocol === "http:";
+
+      if (isHttpsDowngrade) {
+        if (Date.now() - targetProbeStartedAt >= 2500) navigateToRestartTarget();
+        return;
+      }
+
+      try {
+        await fetch(new URL("/health", target).toString(), {
+          cache: "no-store",
+          credentials: "omit",
+          mode: "no-cors",
+        });
+        navigateToRestartTarget();
+      } catch {
+        // Keep the current screen rendered until the new listener is reachable.
+      }
+    };
 
     const checkHealth = async () => {
+      if (targetProbeActive) {
+        await probeRestartTarget();
+        return;
+      }
+
       try {
         const response = await fetch("/health", { cache: "no-store" });
         if (!response.ok) {
-          seenUnavailable = true;
+          restartObserved = true;
+          return;
+        }
+
+        const health = (await response.json()) as GatewayHealthSnapshot;
+        const lifecycleState = health.lifecycleState ?? "running";
+        if (lifecycleState !== "running") {
+          restartObserved = true;
           return;
         }
 
         if (targetVersion) {
-          const currentVersion = await fetchGatewayCurrentVersion();
-          if (isGatewayUpdateTargetVersion(currentVersion, targetVersion)) {
-            publishGatewayReload(currentVersion, "gateway-update-target-ready");
-            clearGatewayUpdating();
-            reloadGatewayClient();
+          if (isGatewayUpdateTargetVersion(health.version, targetVersion)) {
+            completeSameOriginRestart(health.version ?? null, "gateway-update-target-ready");
             return;
           }
+          return;
         }
 
-        if (seenUnavailable) {
-          publishGatewayReload(null, "gateway-update-recovered");
-          clearGatewayUpdating();
-          reloadGatewayClient();
+        if (restartObserved) {
+          if (restartTargetUrl) navigateToRestartTarget();
+          else completeSameOriginRestart(health.version ?? null, "gateway-restart-recovered");
         }
       } catch {
-        seenUnavailable = true;
+        restartObserved = true;
+        if (restartTargetUrl) {
+          targetProbeActive = true;
+          targetProbeStartedAt = Date.now();
+        }
       }
     };
 
@@ -122,26 +192,38 @@ function GatewayUpdatingScreen() {
     void checkHealth();
 
     return () => window.clearInterval(interval);
-  }, [clearGatewayUpdating, targetVersion]);
+  }, [
+    clearGatewayRestarting,
+    clearGatewayUpdating,
+    restartTargetUrl,
+    targetVersion,
+    updatingActive,
+  ]);
 
   return (
-    <div className="fixed inset-0 z-[205] flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-sm space-y-8 text-center">
-        <div className="flex flex-col items-center gap-4">
-          <div className="flex h-12 w-12 items-center justify-center border border-warning/30 bg-warning/5 text-warning-foreground">
-            <RotateCw className="h-6 w-6 animate-spin" />
-          </div>
-          <h2 className="text-lg font-semibold text-foreground">Updating Gateway</h2>
-          <p className="text-sm text-muted-foreground">
-            {targetVersion
-              ? `Gateway is updating to ${targetVersion}.`
-              : "Gateway is applying an update."}{" "}
-            All actions are temporarily locked until the restart completes.
-          </p>
+    <div className="fixed inset-0 z-[205] flex min-h-screen items-center justify-center bg-[#090909] px-6 text-[#f4f4f5]">
+      <div className="w-full max-w-sm text-center">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center border border-[rgba(234,179,8,0.35)] bg-[rgba(234,179,8,0.06)] text-[#facc15]">
+          <RotateCw className="h-6 w-6 animate-spin motion-reduce:[animation-duration:1.8s]" />
         </div>
-
-        <div className="space-y-3">
-          <p className="text-xs text-muted-foreground">This page will reload automatically.</p>
+        <h2 className="m-0 text-lg font-semibold leading-[1.4]">
+          {updatingActive ? "Updating Gateway" : "Restarting Gateway"}
+        </h2>
+        <p className="mt-2 text-sm leading-[1.55] text-[#a1a1aa]">
+          {updatingActive && targetVersion
+            ? `Gateway is updating to ${targetVersion}. New actions are temporarily locked.`
+            : "Gateway is finishing active work before restarting. New actions are temporarily locked."}
+        </p>
+        <div className="mt-7 text-xs text-[#71717a]">
+          Powered by{" "}
+          <a
+            href="https://wiolett.net"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[#a1a1aa] hover:underline"
+          >
+            Wiolett Industries
+          </a>
         </div>
       </div>
     </div>
@@ -150,6 +232,7 @@ function GatewayUpdatingScreen() {
 
 function GatewayReloadCoordinator() {
   const gatewayUpdatingActive = useAppStatusStore((s) => s.gatewayUpdatingActive);
+  const gatewayRestartingActive = useAppStatusStore((s) => s.gatewayRestartingActive);
   const rateLimitedUntil = useAppStatusStore((s) => s.rateLimitedUntil);
 
   useEffect(() => {
@@ -158,7 +241,7 @@ function GatewayReloadCoordinator() {
   }, [rateLimitedUntil]);
 
   useEffect(() => {
-    if (gatewayUpdatingActive || rateLimitedUntil != null) return;
+    if (gatewayUpdatingActive || gatewayRestartingActive || rateLimitedUntil != null) return;
 
     let cancelled = false;
     let baselineVersion: string | null = null;
@@ -194,7 +277,7 @@ function GatewayReloadCoordinator() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [gatewayUpdatingActive, rateLimitedUntil]);
+  }, [gatewayRestartingActive, gatewayUpdatingActive, rateLimitedUntil]);
 
   return null;
 }
@@ -285,6 +368,7 @@ function RateLimitScreen() {
 export function AppStatusGate() {
   const maintenanceActive = useAppStatusStore((s) => s.maintenanceActive);
   const gatewayUpdatingActive = useAppStatusStore((s) => s.gatewayUpdatingActive);
+  const gatewayRestartingActive = useAppStatusStore((s) => s.gatewayRestartingActive);
   const gatewayUpdateError = useAppStatusStore((s) => s.gatewayUpdateError);
   const rateLimitedUntil = useAppStatusStore((s) => s.rateLimitedUntil);
   const [showMaintenanceScreen, setShowMaintenanceScreen] = useState(false);
@@ -309,8 +393,8 @@ export function AppStatusGate() {
         <RateLimitScreen />
       ) : gatewayUpdateError ? (
         <GatewayUpdateErrorScreen />
-      ) : gatewayUpdatingActive ? (
-        <GatewayUpdatingScreen />
+      ) : gatewayUpdatingActive || gatewayRestartingActive ? (
+        <GatewayOperationScreen />
       ) : showMaintenanceScreen ? (
         <MaintenanceScreen />
       ) : null}

@@ -25,6 +25,8 @@ describe("useUpdateStore", () => {
     useAppStatusStore.setState({
       gatewayUpdatingActive: false,
       gatewayUpdatingTargetVersion: null,
+      gatewayRestartingActive: false,
+      gatewayRestartTargetUrl: null,
       gatewayUpdateError: null,
     });
   });

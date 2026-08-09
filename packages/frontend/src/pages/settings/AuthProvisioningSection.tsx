@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/services/api";
+import { useAppStatusStore } from "@/stores/app-status";
 import {
   DEFAULT_GATEWAY_FEATURES,
   useSystemConfigStore,
@@ -364,7 +365,12 @@ export function AuthProvisioningSection({
       toast.success("Gateway settings updated");
       if (updated.webTransport?.restartRequired) {
         toast.success("Gateway is restarting with the refreshed web certificate");
-        window.setTimeout(() => window.location.reload(), 1500);
+        useAppStatusStore
+          .getState()
+          .setGatewayRestartingActive(
+            true,
+            updated.webTransport.directAccess ? updated.webTransport.targetUrl : null
+          );
       }
     } catch (err) {
       setSettings(previous);
@@ -420,13 +426,12 @@ export function AuthProvisioningSection({
       applySettings(withDefaultGeneralSettings(updated)!);
       if (updated.webTransport?.restartRequired) {
         toast.success("Gateway is restarting with the new internal protocol");
-        window.setTimeout(() => {
-          if (updated.webTransport?.directAccess && updated.webTransport.targetUrl) {
-            window.location.assign(updated.webTransport.targetUrl);
-          } else {
-            window.location.reload();
-          }
-        }, 1500);
+        useAppStatusStore
+          .getState()
+          .setGatewayRestartingActive(
+            true,
+            updated.webTransport.directAccess ? updated.webTransport.targetUrl : null
+          );
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to update internal HTTPS");
