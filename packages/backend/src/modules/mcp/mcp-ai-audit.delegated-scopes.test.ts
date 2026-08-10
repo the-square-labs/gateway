@@ -350,7 +350,7 @@ describe('AIService MCP delegated scope audit behavior', () => {
         userId: USER.id,
         action: 'mcp.start_docker_deployment',
         resourceType: 'docker',
-        resourceId: 'node-1',
+        resourceId: 'dep-1',
         details: expect.objectContaining({
           source: 'mcp',
           success: true,

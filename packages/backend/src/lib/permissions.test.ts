@@ -181,6 +181,12 @@ describe('Scope-based permissions', () => {
       ]);
     });
 
+    it('does not expand a delegated scope with permissions it merely implies', () => {
+      expect(boundScopes(['databases:query:read'], ['databases:view', 'databases:query:read'])).toEqual([
+        'databases:query:read',
+      ]);
+    });
+
     it('keeps a resource-scoped token when the current user still has the broad permission', () => {
       expect(boundScopes(['nodes:details:node-1'], ['nodes:details'])).toEqual(['nodes:details:node-1']);
     });

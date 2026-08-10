@@ -170,6 +170,13 @@ test-backend:
     - pnpm --filter backend test
   <<: *gateway-backend-rules
 
+test-assistant-docker-contract:
+  stage: test
+  extends: .pnpm-job
+  script:
+    - pnpm --filter backend test -- src/modules/ai/ai.assistant-docker.e2e.test.ts
+  <<: *gateway-backend-rules
+
 test-logging-sdk:
   stage: test
   extends: .pnpm-job

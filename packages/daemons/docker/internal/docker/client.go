@@ -779,7 +779,9 @@ func appendUniqueStrings(values []string, additions ...string) []string {
 // Returns the container ID and name.
 func (c *Client) CreateContainer(ctx context.Context, configJSON string) (string, string, error) {
 	var cfg ContainerCreateConfig
-	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(configJSON))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cfg); err != nil {
 		return "", "", fmt.Errorf("parse container config: %w", err)
 	}
 
@@ -968,7 +970,10 @@ func (c *Client) DuplicateContainer(ctx context.Context, id string, newName stri
 		return "", fmt.Errorf("create duplicate container: %w", err)
 	}
 
-	c.connectContainerToAdditionalNetworks(ctx, result.ID, newName, &insp, netNames)
+	if err := c.connectContainerToAdditionalNetworks(ctx, result.ID, &insp, netNames); err != nil {
+		_, _ = c.cli.ContainerRemove(ctx, result.ID, client.ContainerRemoveOptions{Force: true})
+		return "", fmt.Errorf("connect duplicate container networks: %w", err)
+	}
 
 	return result.ID, nil
 }
@@ -1366,7 +1371,10 @@ func (c *Client) createContainerFromInspect(
 		return "", err
 	}
 
-	c.connectContainerToAdditionalNetworks(ctx, createResult.ID, name, insp, netNames)
+	if err := c.connectContainerToAdditionalNetworks(ctx, createResult.ID, insp, netNames); err != nil {
+		_, _ = c.cli.ContainerRemove(ctx, createResult.ID, client.ContainerRemoveOptions{Force: true})
+		return "", fmt.Errorf("connect container networks: %w", err)
+	}
 
 	// Preserve the original running state. A stopped container should stay stopped.
 	if wasRunning {
@@ -1411,12 +1419,11 @@ func networkingConfigForInspectNetwork(
 func (c *Client) connectContainerToAdditionalNetworks(
 	ctx context.Context,
 	containerID string,
-	containerName string,
 	insp *container.InspectResponse,
 	netNames []string,
-) {
+) error {
 	if insp == nil || insp.NetworkSettings == nil {
-		return
+		return nil
 	}
 
 	for _, netName := range netNames[1:] {
@@ -1425,9 +1432,10 @@ func (c *Client) connectContainerToAdditionalNetworks(
 			Container:      containerID,
 			EndpointConfig: ep,
 		}); err != nil {
-			c.logger.Warn("reconnect container to network failed", "container", containerName, "network", netName, "error", err)
+			return fmt.Errorf("connect network %q: %w", netName, err)
 		}
 	}
+	return nil
 }
 
 func cloneInspectResponse(src *container.InspectResponse) (*container.InspectResponse, error) {

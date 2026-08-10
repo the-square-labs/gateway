@@ -54,7 +54,7 @@ import type {
   AIToolCall,
   PageContext,
 } from "@/types/ai";
-import { AIComposer } from "./AIComposer";
+import { AIComposer, AIComposerDisclaimer } from "./AIComposer";
 import { AIConversationBlockedBlock } from "./AIConversationBlockedBlock";
 import { AIMessageList } from "./AIMessageList";
 import { ApprovalBlock, QuestionBlock } from "./AIToolCallBlock";
@@ -206,7 +206,9 @@ interface AIChatSurfaceProps {
 export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AIChatSurfaceProps) {
   const {
     messages,
+    resourceReferences,
     isStreaming,
+    isStartingConversation,
     isConnected,
     isConnecting,
     connectionError,
@@ -216,8 +218,10 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     savedName,
     activeConversationId,
     activeRunId,
+    canContinueConversation,
     isCompactingContext,
     sendMessage,
+    continueConversation,
     approveTool,
     rejectTool,
     answerQuestion,
@@ -259,14 +263,17 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
   } = useUIStore();
   const approvalModeLabel = formatAIApprovalModeLabel(approvalMode);
   const conversationBlock = getConversationBlock(messages);
-  const isNewConversationDraft = messages.length === 0;
-  const currentConversationStreaming = !isNewConversationDraft && isStreaming;
+  const isNewConversationDraft = activeConversationId === null || messages.length === 0;
+  const currentConversationStreaming =
+    isStartingConversation || (!isNewConversationDraft && isStreaming);
   const currentConversation = activeConversationId
     ? recentConversations.find((conversation) => conversation.id === activeConversationId)
     : null;
-  const currentChatTitle = activeConversationId
-    ? (savedName ?? currentConversation?.title ?? "New chat")
-    : "New chat";
+  const currentChatTitle = isStartingConversation
+    ? "Starting chat..."
+    : activeConversationId
+      ? (savedName ?? currentConversation?.title ?? "New chat")
+      : "New chat";
   const isCurrentChatPinned = activeConversationId
     ? pinnedAIConversationIds.includes(activeConversationId)
     : false;
@@ -367,9 +374,10 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
   }, [scrollSignature]);
 
   useEffect(() => {
-    const timer = setTimeout(() => textareaRef.current?.focus(), 150);
+    if (!isNewConversationDraft) return;
+    const timer = setTimeout(() => textareaRef.current?.focus(), 0);
     return () => clearTimeout(timer);
-  }, []);
+  }, [isNewConversationDraft]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: input changes must re-measure restored composer drafts.
   useLayoutEffect(() => {
@@ -576,8 +584,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
       const pendingApproval = msg.toolCalls.find(
         (tc): tc is AIToolCall =>
           tc.name !== "ask_question" &&
-          (tc.status === "awaiting_approval" ||
-            (tc.status === "running" && tc.approvalPolicy === "requires_approval"))
+          (tc.status === "awaiting_approval" || tc.approvalDecisionPending === true)
       );
       if (pendingApproval) return pendingApproval;
     }
@@ -594,7 +601,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
       {/* Header */}
       <div className="flex h-[49px] shrink-0 items-center justify-between border-b border-border px-3">
         <span
-          className="min-w-0 flex-1 truncate pr-2 text-sm font-semibold"
+          className={`min-w-0 flex-1 truncate pr-2 text-sm font-semibold ${isStartingConversation ? "thinking-shimmer text-muted-foreground" : ""}`}
           title={currentChatTitle}
         >
           {currentChatTitle}
@@ -617,7 +624,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
             size="icon"
             className="h-9 w-9"
             onClick={clearMessages}
-            disabled={!activeConversationId && isNewConversationDraft}
+            disabled={!activeConversationId && messages.length === 0}
             title="New chat"
             aria-label="New chat"
           >
@@ -713,7 +720,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
 
       {/* Messages */}
       {messages.length === 0 ? (
-        <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-3">
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-3">
           <Sparkles className="h-8 w-8 text-muted-foreground" />
           <p className="max-w-sm text-center text-sm text-foreground/70">
             Ask questions, investigate issues, and manage your infrastructure with permission-aware
@@ -794,6 +801,8 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
           <div className="space-y-3">
             <AIMessageList
               messages={messages}
+              resourceReferences={resourceReferences}
+              isStreaming={currentConversationStreaming}
               onApprove={approveTool}
               onReject={rejectTool}
               onAnswer={answerQuestion}
@@ -822,74 +831,77 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
       )}
 
       {/* Bottom area: question UI or input */}
-      {activeQuestion ? (
-        <div className="shrink-0 border-t border-border">
-          {questionsTotal > 1 && (
-            <div className="px-3 py-1 text-[11px] text-muted-foreground bg-muted/50 border-b border-border">
-              Question {questionIndex} of {questionsTotal}
-            </div>
-          )}
-          <QuestionBlock toolCall={activeQuestion} onAnswer={answerQuestion} />
-        </div>
-      ) : activeApproval ? (
-        <div className="shrink-0">
+      <div className="shrink-0">
+        {activeQuestion ? (
+          <div className="border-t border-border">
+            {questionsTotal > 1 && (
+              <div className="px-3 py-1 text-[11px] text-muted-foreground bg-muted/50 border-b border-border">
+                Question {questionIndex} of {questionsTotal}
+              </div>
+            )}
+            <QuestionBlock toolCall={activeQuestion} onAnswer={answerQuestion} />
+          </div>
+        ) : activeApproval ? (
           <ApprovalBlock toolCall={activeApproval} onApprove={approveTool} onReject={rejectTool} />
-        </div>
-      ) : conversationBlock ? (
-        <AIConversationBlockedBlock block={conversationBlock} onNewChat={clearMessages} />
-      ) : (
-        <div className="relative shrink-0">
-          <AIComposer
-            textareaRef={textareaRef}
-            input={input}
-            onInputChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            onSend={() => void handleSend()}
-            onStop={stopStreaming}
-            onSlashCommandSelect={(command) => {
-              void handleSlashCommand(`/${command.name}`);
-              setInput("");
-              setAttachments([]);
-              setSlashResults([]);
-            }}
-            slashResults={slashResults}
-            slashIndex={slashIndex}
-            messages={messages}
-            context={context}
-            conversationId={activeConversationId}
-            isStreaming={currentConversationStreaming}
-            stopDisabled={isCompactingContext}
-            isConnected={isConnected}
-            retryAfter={retryAfter}
-            approvalMode={approvalMode}
-            approvalModeLabel={approvalModeLabel}
-            setApprovalMode={setApprovalMode}
-            modelOptions={
-              providerStatus?.allowUserModelSelection ? providerStatus.models : undefined
-            }
-            selectedModel={selectedModel}
-            onModelChange={setSelectedModel}
-            reasoningOptions={selectedProviderModel?.reasoningEfforts}
-            selectedReasoningEffort={selectedReasoningEffort}
-            onReasoningEffortChange={setSelectedReasoningEffort}
-            gatewayInferenceMode={providerStatus?.providerType === "gateway_inference"}
-            attachments={attachments}
-            canAttachImages={canAttachImages}
-            uploadingAttachments={uploadingAttachments}
-            onAttachFiles={handleAttachFiles}
-            onRemoveAttachment={(artifactId) =>
-              setAttachments(
-                attachments.filter(
-                  (attachment) => getComposerAttachmentId(attachment) !== artifactId
+        ) : conversationBlock ? (
+          <AIConversationBlockedBlock block={conversationBlock} onNewChat={clearMessages} />
+        ) : (
+          <div className="relative">
+            <AIComposer
+              textareaRef={textareaRef}
+              input={input}
+              onInputChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              onSend={() => void handleSend()}
+              onContinue={() => continueConversation(context)}
+              onStop={stopStreaming}
+              onSlashCommandSelect={(command) => {
+                void handleSlashCommand(`/${command.name}`);
+                setInput("");
+                setAttachments([]);
+                setSlashResults([]);
+              }}
+              slashResults={slashResults}
+              slashIndex={slashIndex}
+              messages={messages}
+              context={context}
+              conversationId={activeConversationId}
+              isStreaming={currentConversationStreaming}
+              canContinue={canContinueConversation}
+              stopDisabled={isCompactingContext || isStartingConversation}
+              isConnected={isConnected}
+              retryAfter={retryAfter}
+              approvalMode={approvalMode}
+              approvalModeLabel={approvalModeLabel}
+              setApprovalMode={setApprovalMode}
+              modelOptions={
+                providerStatus?.allowUserModelSelection ? providerStatus.models : undefined
+              }
+              selectedModel={selectedModel}
+              onModelChange={setSelectedModel}
+              reasoningOptions={selectedProviderModel?.reasoningEfforts}
+              selectedReasoningEffort={selectedReasoningEffort}
+              onReasoningEffortChange={setSelectedReasoningEffort}
+              gatewayInferenceMode={providerStatus?.providerType === "gateway_inference"}
+              attachments={attachments}
+              canAttachImages={canAttachImages}
+              uploadingAttachments={uploadingAttachments}
+              onAttachFiles={handleAttachFiles}
+              onRemoveAttachment={(artifactId) =>
+                setAttachments(
+                  attachments.filter(
+                    (attachment) => getComposerAttachmentId(attachment) !== artifactId
+                  )
                 )
-              )
-            }
-            onPreviewAttachment={previewAttachment}
-            surfaceClassName="border-x-0 border-b-0 focus-within:ring-0"
-            slashPaletteClassName="border-x-0"
-          />
-        </div>
-      )}
+              }
+              onPreviewAttachment={previewAttachment}
+              surfaceClassName="border-x-0 border-b-0 focus-within:ring-0"
+              slashPaletteClassName="border-x-0"
+            />
+          </div>
+        )}
+        <AIComposerDisclaimer className="pb-2" />
+      </div>
       <GitLabAuthorizationModal />
     </div>
   );

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import type { AIMessage as AIMessageType, AIToolCall } from "@/types/ai";
 import { AIMessage } from "./AIMessage";
@@ -40,6 +41,47 @@ function artifactToolCall(): AIToolCall {
 }
 
 describe("AIMessage tool call groups", () => {
+  it("prefers a canonical conversation resource label over a message hash fallback", () => {
+    const refId = "gwr_0123456789abcdef01234567";
+    render(
+      <MemoryRouter>
+        <AIMessage
+          message={{
+            id: "assistant-resource",
+            role: "assistant",
+            content: `Контейнер [[resource:${refId}|527b02985e9b37cf9252b29f01de321f]].`,
+            resourceReferences: [
+              {
+                refId,
+                type: "docker_container",
+                resourceId: "527b02985e9b37cf9252b29f01de321f",
+                label: "527b02985e9b37cf9252b29f01de321f",
+                relation: "verified",
+                nodeSlug: "docker-src",
+              },
+            ],
+          }}
+          resourceReferences={[
+            {
+              refId,
+              type: "docker_container",
+              resourceId: "527b02985e9b37cf9252b29f01de321f",
+              label: "ai-e2e-restart",
+              relation: "read",
+              nodeSlug: "docker-src",
+            },
+          ]}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole("link", { name: "Container: ai-e2e-restart" })).toHaveAttribute(
+      "href",
+      "/docker/containers/docker-src/ai-e2e-restart"
+    );
+    expect(screen.queryByText("527b02985e9b37cf9252b29f01de321f")).not.toBeInTheDocument();
+  });
+
   it("does not crash when a restored user message has no generated id timestamp", () => {
     render(
       <AIMessage
@@ -121,6 +163,42 @@ describe("AIMessage tool call groups", () => {
     );
 
     expect(screen.getAllByRole("button", { name: /find resource/i })).toHaveLength(2);
+    expect(screen.getByRole("button", { name: /read process output/i })).toBeInTheDocument();
+  });
+
+  it("keeps questions separate and does not group a single regular durable-round call", () => {
+    render(
+      <AIMessage
+        message={message([
+          {
+            ...toolCall("question-1", "awaiting_approval"),
+            roundId: "round-1",
+            position: 0,
+            name: "ask_question",
+            arguments: { question: "Which target?" },
+          },
+          {
+            ...toolCall("approval-1", "awaiting_approval"),
+            roundId: "round-1",
+            position: 1,
+            name: "restart_docker_container",
+          },
+        ])}
+      />
+    );
+
+    expect(screen.queryByRole("button", { name: /called 2 tools/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /ask question/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /restart docker container/i })).toBeInTheDocument();
+    expect(screen.queryByText("Which target?")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
+  });
+
+  it("renders a single running tool directly without a one-item group", () => {
+    render(<AIMessage message={message([toolCall("tool-3", "running")])} />);
+
+    expect(screen.queryByRole("button", { name: /called 1 tool/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /read process output/i })).toBeInTheDocument();
   });
 
@@ -255,5 +333,66 @@ describe("AIMessage tool call groups", () => {
 
     expect(screen.getByText("Проверяю конфигурацию.")).toBeInTheDocument();
     expect(screen.getByText("Thinking")).toBeInTheDocument();
+  });
+
+  it("shows waiting for approval instead of hiding the activity indicator", () => {
+    render(
+      <AIMessage
+        message={{
+          id: "assistant-approval",
+          role: "assistant",
+          content: "",
+          isStreaming: true,
+          toolCalls: [
+            {
+              id: "approval-1",
+              name: "manage_docker_volume",
+              arguments: { operation: "create", name: "data" },
+              status: "awaiting_approval",
+            },
+          ],
+        }}
+      />
+    );
+
+    expect(screen.getByText("Waiting for approval")).toBeInTheDocument();
+    expect(screen.queryByText("Thinking")).not.toBeInTheDocument();
+  });
+
+  it("keeps thinking visible while a tool is running", () => {
+    render(<AIMessage message={message([toolCall("tool-3", "running")])} />);
+
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
+  });
+
+  it("never renders send_comment as a user-visible tool or waiting state", () => {
+    render(
+      <AIMessage
+        message={{
+          id: "assistant-comment-control",
+          role: "assistant",
+          content: "Проверяю конфигурацию.",
+          isStreaming: false,
+          toolCalls: [
+            {
+              id: "tool-visible",
+              name: "get_current_context",
+              arguments: {},
+              status: "completed",
+            },
+            {
+              id: "tool-comment",
+              name: "send_comment",
+              arguments: { message: "Проверяю конфигурацию." },
+              status: "running",
+            },
+          ],
+        }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: /Get Current Context/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Send Comment/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Thinking")).not.toBeInTheDocument();
   });
 });

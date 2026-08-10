@@ -72,20 +72,34 @@ const CATEGORY_ICONS: Record<string, React.ElementType> = {
   download_artifact: Download,
   read_artifact: FileText,
   send_artifact: Download,
+  read_tool_output: FileText,
+  search_tool_output: Search,
 };
+
+interface ToolOutputArtifactManifest {
+  outputOffloaded: true;
+  artifactId: string;
+  format: "json" | "text";
+  sizeBytes: number;
+  estimatedTokens: number;
+  preview: string;
+  downloadUrl: string;
+}
 
 interface AIToolCallBlockProps {
   toolCall: AIToolCall;
   compactSummary?: string;
+  /** Interaction controls are rendered by the chat surface next to the composer. */
   onApprove?: (toolCallId: string) => void;
   onReject?: (toolCallId: string) => void;
   onAnswer?: (toolCallId: string, answer: string) => void;
 }
 
 export function AIToolCallBlock({ toolCall, compactSummary }: AIToolCallBlockProps) {
-  const [expanded, setExpanded] = useState(false);
   const safeToolCall =
     toolCall && typeof toolCall === "object" ? toolCall : ({} as Partial<AIToolCall>);
+  const toolCallKey = typeof safeToolCall.id === "string" ? safeToolCall.id : "unknown-tool-call";
+  const [expanded, setExpanded] = useState(() => expandedToolCallKeys.has(toolCallKey));
   const toolName =
     typeof safeToolCall.name === "string" && safeToolCall.name ? safeToolCall.name : "unknown_tool";
   const isCompactContextTool = toolName === "compact_context";
@@ -96,7 +110,10 @@ export function AIToolCallBlock({ toolCall, compactSummary }: AIToolCallBlockPro
       ? safeToolCall.arguments
       : {};
   const toolStatus = safeToolCall.status ?? "failed";
-  const Icon = toolStatus === "failed" ? X : CATEGORY_ICONS[toolName] || ShieldCheck;
+  const Icon =
+    toolStatus === "failed" || toolStatus === "rejected"
+      ? X
+      : CATEGORY_ICONS[toolName] || ShieldCheck;
 
   const statusIcon = () => {
     switch (toolStatus) {
@@ -109,7 +126,7 @@ export function AIToolCallBlock({ toolCall, compactSummary }: AIToolCallBlockPro
       case "awaiting_approval":
         return null;
       case "rejected":
-        return <X className="h-3.5 w-3.5 text-muted-foreground" />;
+        return null;
     }
   };
 
@@ -123,29 +140,52 @@ export function AIToolCallBlock({ toolCall, compactSummary }: AIToolCallBlockPro
 
   const hasArgs = !isCompactContextTool && Object.keys(toolArguments).length > 0;
   const shouldHideResult = toolName === "send_artifact";
+  const toolOutputArtifact = getToolOutputArtifact(safeToolCall.result);
   const hasResult =
-    !isCompactContextTool && safeToolCall.result !== undefined && !isSkipped && !shouldHideResult;
+    !isCompactContextTool &&
+    safeToolCall.result !== undefined &&
+    !isSkipped &&
+    !shouldHideResult &&
+    !toolOutputArtifact;
   const compactSummaryText = isCompactContextTool
     ? getCompactSummaryText(compactSummary, safeToolCall.result)
+    : "";
+  const compactMetadataText = isCompactContextTool
+    ? getCompactMetadataText(safeToolCall.result)
     : "";
   const hasCompactSummary = toolStatus === "completed" && compactSummaryText.length > 0;
   const hasError = !!safeToolCall.error;
   const hasContent =
-    hasArgs || hasResult || hasCompactSummary || hasError || toolStatus === "rejected";
+    hasArgs ||
+    hasResult ||
+    !!toolOutputArtifact ||
+    hasCompactSummary ||
+    hasError ||
+    toolStatus === "rejected";
   const canToggle = hasContent && !(isCompactContextTool && toolStatus === "running");
   const isExpandedChevronVisible = expanded || toolStatus === "running" || toolStatus === "failed";
 
   return (
     <div className="my-0.5 text-sm">
       <button
-        onClick={canToggle ? () => setExpanded(!expanded) : undefined}
+        onClick={
+          canToggle
+            ? () =>
+                setExpanded((value) => {
+                  const next = !value;
+                  setToolCallExpanded(toolCallKey, next);
+                  return next;
+                })
+            : undefined
+        }
+        aria-expanded={canToggle ? expanded : undefined}
         className={`group flex items-center gap-2 py-0.5 text-left text-muted-foreground transition-colors ${canToggle ? "cursor-pointer hover:text-foreground focus-visible:text-foreground focus-visible:outline-none" : "cursor-default"}`}
       >
         <Icon
           className={`h-3.5 w-3.5 shrink-0 ${
             toolStatus === "running"
               ? "opacity-70"
-              : toolStatus === "failed"
+              : toolStatus === "failed" || toolStatus === "rejected"
                 ? "text-destructive"
                 : "opacity-70"
           }`}
@@ -180,6 +220,9 @@ export function AIToolCallBlock({ toolCall, compactSummary }: AIToolCallBlockPro
         <div className="overflow-hidden">
           {hasCompactSummary && (
             <div className="border border-border bg-muted/50 px-2.5 py-1.5">
+              {compactMetadataText && (
+                <p className="mb-1 text-xs text-muted-foreground">{compactMetadataText}</p>
+              )}
               <div className="prose dark:prose-invert !max-w-none break-words text-sm prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-pre:my-2 prose-table:my-0 prose-code:text-xs prose-pre:text-xs prose-pre:rounded-none prose-code:rounded-none prose-code:before:content-none prose-code:after:content-none [&>*:first-child]:!mt-0 [&>*:last-child]:!mb-0">
                 <Markdown remarkPlugins={[remarkGfm]} components={compactMarkdownComponents}>
                   {compactSummaryText}
@@ -199,6 +242,36 @@ export function AIToolCallBlock({ toolCall, compactSummary }: AIToolCallBlockPro
                 : JSON.stringify(safeToolCall.result, null, 2)}
             </pre>
           )}
+          {toolOutputArtifact && (
+            <div className="border border-t-0 border-border bg-muted/50 px-2.5 py-2 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="font-medium text-foreground">Large output saved to this chat</div>
+                  <div className="text-muted-foreground">
+                    {formatBytes(toolOutputArtifact.sizeBytes)} ·{" "}
+                    {toolOutputArtifact.format.toUpperCase()} · ~
+                    {toolOutputArtifact.estimatedTokens.toLocaleString()} tokens
+                  </div>
+                </div>
+                <Button
+                  asChild
+                  variant="outline"
+                  size="sm"
+                  className="h-7 rounded-none px-2 text-xs"
+                >
+                  <a href={toolOutputArtifact.downloadUrl} download>
+                    <Download className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                    Download
+                  </a>
+                </Button>
+              </div>
+              {toolOutputArtifact.preview && (
+                <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap border border-border bg-background p-2 text-[11px]">
+                  {toolOutputArtifact.preview}
+                </pre>
+              )}
+            </div>
+          )}
           {hasError && (
             <p
               className={`border border-border px-2.5 py-1.5 text-destructive ${
@@ -217,6 +290,16 @@ export function AIToolCallBlock({ toolCall, compactSummary }: AIToolCallBlockPro
       </div>
     </div>
   );
+}
+
+const expandedToolCallKeys = new Set<string>();
+
+function setToolCallExpanded(toolCallKey: string, expanded: boolean): void {
+  if (expanded) {
+    expandedToolCallKeys.add(toolCallKey);
+  } else {
+    expandedToolCallKeys.delete(toolCallKey);
+  }
 }
 
 const compactMarkdownComponents = {
@@ -264,6 +347,52 @@ function getCompactSummaryText(compactSummary: string | undefined, result: unkno
   return typeof summary === "string" ? summary.trim() : "";
 }
 
+function getCompactMetadataText(result: unknown): string {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return "";
+  const value = result as Record<string, unknown>;
+  const trigger =
+    value.trigger === "auto" || value.compactTrigger === "automatic" ? "Automatic" : "Manual";
+  const sourceTokens =
+    typeof value.sourceTokenEstimate === "number" ? value.sourceTokenEstimate : null;
+  const resultTokens =
+    typeof value.resultTokenEstimate === "number" ? value.resultTokenEstimate : null;
+  const count =
+    typeof value.compactedMessageCount === "number" ? value.compactedMessageCount : null;
+  return [
+    `${trigger} compaction`,
+    count !== null ? `${count.toLocaleString()} messages summarized` : null,
+    sourceTokens !== null && resultTokens !== null
+      ? `~${sourceTokens.toLocaleString()} → ~${resultTokens.toLocaleString()} tokens`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function getToolOutputArtifact(result: unknown): ToolOutputArtifactManifest | null {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return null;
+  const value = result as Record<string, unknown>;
+  if (
+    value.outputOffloaded !== true ||
+    typeof value.artifactId !== "string" ||
+    (value.format !== "json" && value.format !== "text") ||
+    typeof value.sizeBytes !== "number" ||
+    typeof value.estimatedTokens !== "number" ||
+    typeof value.preview !== "string" ||
+    typeof value.downloadUrl !== "string"
+  ) {
+    return null;
+  }
+  return value as unknown as ToolOutputArtifactManifest;
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
 export function ApprovalBlock({
   toolCall,
   onApprove,
@@ -273,7 +402,7 @@ export function ApprovalBlock({
   onApprove?: (toolCallId: string) => void;
   onReject?: (toolCallId: string) => void;
 }) {
-  const isSending = toolCall.status === "running";
+  const isSending = toolCall.approvalDecisionPending === true;
   const hasError = !!toolCall.error;
   const label = hasError
     ? `Could not send decision: ${toolCall.error}`

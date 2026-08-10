@@ -643,9 +643,13 @@ function collectConversationArtifactIds(messages: unknown[]): string[] {
     if (Array.isArray(record.toolCalls)) {
       for (const toolCall of record.toolCalls) {
         const toolRecord = toRecord(toolCall);
-        if (toolRecord?.name !== 'send_artifact') continue;
-        const result = toRecord(toolRecord.result);
-        if (typeof result?.artifactId === 'string') ids.push(result.artifactId);
+        const result = toRecord(toolRecord?.result);
+        if (
+          typeof result?.artifactId === 'string' &&
+          (toolRecord?.name === 'send_artifact' || result.outputOffloaded === true)
+        ) {
+          ids.push(result.artifactId);
+        }
       }
     }
   }

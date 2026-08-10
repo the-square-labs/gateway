@@ -19,6 +19,7 @@ import {
   removeContainer as removeDockerContainerMutation,
   renameContainer as renameDockerContainer,
   restartContainer as restartDockerContainer,
+  rollbackCreatedContainer as rollbackDockerCreatedContainer,
   startContainer as startDockerContainer,
   stopContainer as stopDockerContainer,
   updateContainer as updateDockerContainer,
@@ -547,7 +548,8 @@ export class DockerManagementService {
     taskId: string | undefined,
     progress: string,
     expectedState: string,
-    timeoutMs = 60000
+    timeoutMs = 60000,
+    onComplete?: (newContainerId: string) => Promise<void>
   ) {
     watchDockerRecreateByName(
       this.lifecycleWatchContext(),
@@ -557,7 +559,8 @@ export class DockerManagementService {
       taskId,
       progress,
       expectedState,
-      timeoutMs
+      timeoutMs,
+      onComplete
     );
   }
 
@@ -909,8 +912,26 @@ export class DockerManagementService {
           timeoutMs,
           isComplete
         ),
-      watchRecreateByName: (nodeId, containerName, oldContainerId, taskId, progress, expectedState, timeoutMs) =>
-        this.watchRecreateByName(nodeId, containerName, oldContainerId, taskId, progress, expectedState, timeoutMs),
+      watchRecreateByName: (
+        nodeId,
+        containerName,
+        oldContainerId,
+        taskId,
+        progress,
+        expectedState,
+        timeoutMs,
+        onComplete
+      ) =>
+        this.watchRecreateByName(
+          nodeId,
+          containerName,
+          oldContainerId,
+          taskId,
+          progress,
+          expectedState,
+          timeoutMs,
+          onComplete
+        ),
       parseResult: (result) => this.parseResult(result),
     };
   }
@@ -921,6 +942,10 @@ export class DockerManagementService {
     return createDockerContainer(this.containerMutationContext(), nodeId, config, userId, actorScopes);
   }
 
+  async rollbackCreatedContainer(nodeId: string, containerId: string, name: string | undefined, userId: string) {
+    return rollbackDockerCreatedContainer(this.containerMutationContext(), nodeId, containerId, name, userId);
+  }
+
   async startContainer(nodeId: string, containerId: string, userId: string) {
     await this.assertContainerMigrationAllowed(nodeId, containerId);
     await startDockerContainer(this.containerMutationContext(), nodeId, containerId, userId);
@@ -928,17 +953,17 @@ export class DockerManagementService {
 
   async stopContainer(nodeId: string, containerId: string, timeout: number | undefined, userId: string) {
     await this.assertContainerMigrationAllowed(nodeId, containerId);
-    await stopDockerContainer(this.containerMutationContext(), nodeId, containerId, timeout, userId);
+    return stopDockerContainer(this.containerMutationContext(), nodeId, containerId, timeout, userId);
   }
 
   async restartContainer(nodeId: string, containerId: string, timeout: number | undefined, userId: string) {
     await this.assertContainerMigrationAllowed(nodeId, containerId);
-    await restartDockerContainer(this.containerMutationContext(), nodeId, containerId, timeout, userId);
+    return restartDockerContainer(this.containerMutationContext(), nodeId, containerId, timeout, userId);
   }
 
   async killContainer(nodeId: string, containerId: string, signal: string, userId: string) {
     await this.assertContainerMigrationAllowed(nodeId, containerId);
-    await killDockerContainer(this.containerMutationContext(), nodeId, containerId, signal, userId);
+    return killDockerContainer(this.containerMutationContext(), nodeId, containerId, signal, userId);
   }
 
   async removeContainer(nodeId: string, containerId: string, force: boolean, userId: string) {

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, ChevronDown, Plus, Send, Square, X } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, Play, Plus, Square, X } from "lucide-react";
 import type { ChangeEvent, KeyboardEvent, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -42,6 +42,7 @@ interface AIComposerProps {
   onInputChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onSend: () => void;
+  onContinue?: () => void;
   onStop: () => void;
   onSlashCommandSelect: (command: AISlashCommand) => void;
   slashResults: AISlashCommand[];
@@ -51,6 +52,7 @@ interface AIComposerProps {
   conversationId?: string | null;
   isStreaming: boolean;
   isConnected: boolean;
+  canContinue?: boolean;
   stopDisabled?: boolean;
   retryAfter?: number | null;
   approvalMode: AIApprovalMode;
@@ -157,6 +159,7 @@ export function AIComposer({
   onInputChange,
   onKeyDown,
   onSend,
+  onContinue,
   onStop,
   onSlashCommandSelect,
   slashResults,
@@ -166,6 +169,7 @@ export function AIComposer({
   conversationId,
   isStreaming,
   isConnected,
+  canContinue = false,
   stopDisabled = false,
   retryAfter,
   approvalMode,
@@ -221,6 +225,8 @@ export function AIComposer({
     isStreaming,
   });
   const disabled = !isConnected || !!retryAfter;
+  const hasDraft = input.trim().length > 0 || attachments.length > 0;
+  const canResume = !hasDraft && canContinue && Boolean(onContinue) && !disabled;
 
   const changeModel = async (model: string) => {
     if (!onModelChange || model === selectedModel || updatingProvider) return;
@@ -448,26 +454,37 @@ export function AIComposer({
               <ContextRing usage={usage} />
               <button
                 type="button"
-                className="flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground disabled:opacity-30"
-                onClick={isStreaming ? onStop : onSend}
-                disabled={
-                  isStreaming
-                    ? stopDisabled
-                    : (!input.trim() && attachments.length === 0) || disabled
+                className={cn(
+                  "flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground disabled:opacity-30",
+                  canResume && "text-foreground"
+                )}
+                onClick={isStreaming ? onStop : canResume ? onContinue : onSend}
+                disabled={isStreaming ? stopDisabled : (!hasDraft && !canResume) || disabled}
+                aria-label={
+                  isStreaming ? "Stop response" : canResume ? "Continue response" : "Send message"
                 }
-                aria-label={isStreaming ? "Stop response" : "Send message"}
               >
-                {isStreaming ? <Square className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+                {isStreaming ? (
+                  <Square className="h-4 w-4" />
+                ) : canResume ? (
+                  <Play className="h-4 w-4 fill-current" />
+                ) : (
+                  <ArrowUp className="h-4 w-4" />
+                )}
               </button>
             </div>
           </div>
         </div>
       )}
-      {showDisclaimer && !inferenceQuota.exhausted && (
-        <p className="pt-2 text-center text-[11px] text-muted-foreground">
-          AI can make mistakes. Check important information.
-        </p>
-      )}
+      {showDisclaimer && !inferenceQuota.exhausted && <AIComposerDisclaimer />}
     </div>
+  );
+}
+
+export function AIComposerDisclaimer({ className }: { className?: string }) {
+  return (
+    <p className={cn("pt-2 text-center text-[11px] text-muted-foreground", className)}>
+      AI can make mistakes. Check important information.
+    </p>
   );
 }

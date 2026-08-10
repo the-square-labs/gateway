@@ -1,16 +1,23 @@
 import type { AIToolDefinition } from './ai.types.js';
 
+const STABLE_CONTAINER_REFERENCE_DESCRIPTION =
+  'Exact stable container name returned by find_resource or inspect (preferred). A runtime ID is also accepted, but never manually shorten or retype one.';
+
 export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'create_docker_container',
     description:
-      'Create and start a new Docker container on a node. Specify image, ports, volumes, env vars, networks, restart policy, and labels.',
+      'Create and start a new Docker container on a node from an image already present on that node. Before first creation, use list_docker_images and pull_docker_image when the requested image is absent, then wait for the pull task to complete. Specify image, ports, volumes, env vars, networks, restart policy, and labels. For public Docker Hub images such as nginx:alpine, omit registryId; a saved registry is not required.',
     parameters: {
       type: 'object',
       properties: {
         nodeId: { type: 'string', description: 'Docker node ID' },
         image: { type: 'string', description: 'Image reference (e.g. nginx:latest, ubuntu:24.04)' },
-        registryId: { type: 'string', description: 'Optional Docker registry UUID for pulling the image' },
+        registryId: {
+          type: 'string',
+          description:
+            'Optional saved private/custom registry UUID. Omit for public Docker Hub images; never pass an empty string.',
+        },
         name: { type: 'string', description: 'Container name (optional, auto-generated if omitted)' },
         ports: {
           type: 'array',
@@ -37,6 +44,10 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
               readOnly: { type: 'boolean' },
             },
             required: ['containerPath'],
+            oneOf: [
+              { properties: { hostPath: {} }, required: ['hostPath'] },
+              { properties: { name: {} }, required: ['name'] },
+            ],
           },
         },
         env: { type: 'object', description: 'Environment variables as key-value pairs' },
@@ -86,7 +97,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
       type: 'object',
       properties: {
         nodeId: { type: 'string', description: 'Docker node ID' },
-        containerId: { type: 'string', description: 'Container ID' },
+        containerId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
       },
       required: ['nodeId', 'containerId'],
     },
@@ -103,7 +114,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
       type: 'object',
       properties: {
         nodeId: { type: 'string', description: 'Docker node ID' },
-        containerId: { type: 'string', description: 'Container ID' },
+        containerId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
         command: {
           type: 'array',
           items: { type: 'string' },
@@ -302,7 +313,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
       type: 'object',
       properties: {
         nodeId: { type: 'string', description: 'Docker node ID' },
-        containerId: { type: 'string', description: 'Container ID' },
+        containerId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
       },
       required: ['nodeId', 'containerId'],
     },
@@ -318,7 +329,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
       type: 'object',
       properties: {
         nodeId: { type: 'string', description: 'Docker node ID' },
-        containerId: { type: 'string', description: 'Container ID' },
+        containerId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
         timeout: {
           type: 'integer',
           minimum: 0,
@@ -340,7 +351,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
       type: 'object',
       properties: {
         nodeId: { type: 'string', description: 'Docker node ID' },
-        containerId: { type: 'string', description: 'Container ID' },
+        containerId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
         timeout: {
           type: 'integer',
           minimum: 0,
@@ -362,7 +373,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
       type: 'object',
       properties: {
         nodeId: { type: 'string', description: 'Docker node ID' },
-        containerId: { type: 'string', description: 'Container ID' },
+        containerId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
         force: {
           type: 'boolean',
           description: 'Force removal of a stopped container if Docker requires it (default false)',
@@ -383,7 +394,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
       type: 'object',
       properties: {
         nodeId: { type: 'string', description: 'Docker node ID' },
-        containerId: { type: 'string', description: 'Container ID' },
+        containerId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
         imageTag: { type: 'string', description: 'New image tag (e.g. "1.25", "latest", "v2.0.0")' },
       },
       required: ['nodeId', 'containerId', 'imageTag'],
@@ -400,7 +411,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
       type: 'object',
       properties: {
         nodeId: { type: 'string', description: 'Docker node ID' },
-        containerId: { type: 'string', description: 'Container ID' },
+        containerId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
         name: { type: 'string', description: 'New container name' },
       },
       required: ['nodeId', 'containerId', 'name'],
@@ -417,7 +428,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
       type: 'object',
       properties: {
         nodeId: { type: 'string', description: 'Docker node ID' },
-        containerId: { type: 'string', description: 'Container ID to clone' },
+        containerId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
         name: { type: 'string', description: 'Name for the new container' },
       },
       required: ['nodeId', 'containerId', 'name'],
@@ -425,6 +436,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
     destructive: true,
     category: 'Docker',
     requiredScope: 'docker:containers:create',
+    requiredScopes: ['docker:containers:view', 'docker:containers:environment', 'docker:containers:secrets'],
     invalidateStores: ['containers'],
   },
   {
@@ -434,7 +446,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
       type: 'object',
       properties: {
         nodeId: { type: 'string', description: 'Docker node ID' },
-        containerId: { type: 'string', description: 'Container ID' },
+        containerId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
       },
       required: ['nodeId', 'containerId'],
     },
@@ -450,7 +462,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
       type: 'object',
       properties: {
         nodeId: { type: 'string', description: 'Docker node ID' },
-        containerId: { type: 'string', description: 'Container ID' },
+        containerId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
         tail: { type: 'number', description: 'Number of lines from the end (default 100)' },
         timestamps: { type: 'boolean', description: 'Include timestamps (default false)' },
       },
@@ -482,13 +494,18 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'pull_docker_image',
-    description: 'Pull a Docker image from a registry onto a node.',
+    description:
+      'Pull a Docker image onto a node. Public Docker Hub images such as nginx:alpine are pulled directly with registryId omitted; never create a saved Docker Hub registry just to pull a public image.',
     parameters: {
       type: 'object',
       properties: {
         nodeId: { type: 'string', description: 'Docker node ID' },
         imageRef: { type: 'string', description: 'Image reference (e.g. nginx:latest, ghcr.io/org/app:v2)' },
-        registryId: { type: 'string', description: 'Optional Docker registry UUID for pulling the image' },
+        registryId: {
+          type: 'string',
+          description:
+            'Optional saved private/custom registry UUID. Omit for public Docker Hub images; never pass an empty string.',
+        },
       },
       required: ['nodeId', 'imageRef'],
     },
@@ -567,7 +584,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_registry',
     description:
-      'Manage saved Docker registries. Operations: list, get, create, update, delete, test, test_direct. Mutating operations require the corresponding docker:registries:* scope.',
+      'Manage saved private or custom Docker registries. Operations: list, get, create, update, delete, test, test_direct. Do not create a registry for public Docker Hub images; pull those directly without registryId. Mutating operations require the corresponding docker:registries:* scope.',
     parameters: {
       type: 'object',
       properties: {
@@ -626,7 +643,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         driver: { type: 'string' },
         subnet: { type: 'string' },
         gateway: { type: 'string' },
-        containerId: { type: 'string' },
+        containerId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
       },
       required: ['operation', 'nodeId'],
     },
@@ -684,7 +701,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         },
         targetType: { type: 'string', enum: ['container', 'deployment'], description: 'Defaults to container' },
         nodeId: { type: 'string' },
-        containerId: { type: 'string' },
+        containerId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
         containerName: { type: 'string' },
         deploymentId: { type: 'string' },
         secretId: { type: 'string' },
@@ -694,7 +711,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         env: { type: 'object', description: 'Environment key/value map for update_env' },
         removeEnv: { type: 'array', items: { type: 'string' } },
         path: { type: 'string', description: 'Container file path' },
-        content: { type: 'string', description: 'Base64-encoded file content for write_file' },
+        content: { type: 'string', description: 'UTF-8 text file content for write_file' },
         enabled: { type: 'boolean', description: 'Webhook or health check enabled state' },
         healthCheck: { type: 'object', description: 'Docker health check configuration' },
       },

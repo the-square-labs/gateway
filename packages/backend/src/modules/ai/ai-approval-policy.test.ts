@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { AI_TOOLS } from './ai.tools.js';
 import { classifyAIToolForApproval, getAIToolApprovalDecision } from './ai-approval-policy.js';
 
 describe('AI backend approval policy', () => {
@@ -74,8 +75,77 @@ describe('AI backend approval policy', () => {
     });
   });
 
-  it('classifies mutating manage tools from registry metadata', () => {
-    expect(classifyAIToolForApproval('manage_license')).toBe('update');
+  it('classifies multi-operation tools from validated arguments and fails closed without a discriminator', () => {
+    expect(classifyAIToolForApproval('manage_license', { operation: 'check' })).toBe('destructive');
+    expect(classifyAIToolForApproval('manage_license', { operation: 'activate' })).toBe('destructive');
+    expect(classifyAIToolForApproval('manage_license', { operation: 'clear' })).toBe('delete');
+    expect(classifyAIToolForApproval('manage_license')).toBe('destructive');
     expect(classifyAIToolForApproval('find_resource')).toBe('read');
+  });
+
+  it('declares an approval policy for every advertised operation', () => {
+    const operationTools = AI_TOOLS.filter((tool) => {
+      const properties = tool.parameters.properties as Record<string, unknown> | undefined;
+      const operation = properties?.operation as { enum?: unknown } | undefined;
+      return Array.isArray(operation?.enum);
+    });
+
+    expect(operationTools.length).toBeGreaterThan(20);
+    for (const tool of operationTools) {
+      const properties = tool.parameters.properties as Record<string, unknown>;
+      const advertised = ((properties.operation as { enum: string[] }).enum ?? []).slice().sort();
+      if (tool.operationDiscriminator?.arguments.length === 1) {
+        const declared = Object.keys(tool.operationDiscriminator.operations).sort();
+        expect(declared, tool.name).toEqual(advertised);
+      } else {
+        expect(tool.operationDiscriminator?.arguments, tool.name).toEqual(['resource', 'operation']);
+        expect(Object.keys(tool.operationDiscriminator?.operations ?? {}).length, tool.name).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('applies every operation policy in normal and bypass modes', () => {
+    for (const tool of AI_TOOLS.filter((candidate) => candidate.operationDiscriminator)) {
+      for (const [operation, policy] of Object.entries(tool.operationDiscriminator!.operations)) {
+        const discriminatorValues = operation.split('.');
+        const args = Object.fromEntries(
+          tool.operationDiscriminator!.arguments.map((argument, index) => [argument, discriminatorValues[index]])
+        );
+        const label = `${tool.name}.${operation}`;
+        expect(getAIToolApprovalDecision(tool.name, 'always-ask', args).requiresApproval, label).toBe(true);
+        expect(getAIToolApprovalDecision(tool.name, 'normal', args).requiresApproval, label).toBe(
+          policy.approvalClass !== 'read'
+        );
+        expect(getAIToolApprovalDecision(tool.name, 'bypass-non-destructive', args).requiresApproval, label).toBe(
+          policy.approvalClass === 'delete' ||
+            policy.approvalClass === 'destructive' ||
+            policy.approvalClass === 'execute'
+        );
+        expect(getAIToolApprovalDecision(tool.name, 'bypass-everything', args).requiresApproval, label).toBe(false);
+      }
+    }
+  });
+
+  it('requires approval for outbound test side effects even in bypass-non-destructive mode', () => {
+    for (const toolName of ['test_webhook', 'test_siem_destination', 'download_artifact']) {
+      expect(getAIToolApprovalDecision(toolName, 'normal'), toolName).toMatchObject({
+        classification: 'destructive',
+        requiresApproval: true,
+      });
+      expect(getAIToolApprovalDecision(toolName, 'bypass-non-destructive'), toolName).toMatchObject({
+        classification: 'destructive',
+        requiresApproval: true,
+      });
+    }
+    expect(
+      getAIToolApprovalDecision('manage_domain', 'bypass-non-destructive', {
+        operation: 'check_dns',
+      }).requiresApproval
+    ).toBe(true);
+    expect(
+      getAIToolApprovalDecision('manage_system_updates', 'bypass-non-destructive', {
+        operation: 'check_gateway',
+      }).requiresApproval
+    ).toBe(true);
   });
 });

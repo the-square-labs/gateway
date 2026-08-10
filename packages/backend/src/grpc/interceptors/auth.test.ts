@@ -142,6 +142,11 @@ describe('normalizeCertificateSerial', () => {
   it('trims whitespace', () => {
     expect(normalizeCertificateSerial('  aa01  ')).toBe('aa01');
   });
+
+  it('treats certificate serials as integers when TLS omits leading zeroes', () => {
+    expect(normalizeCertificateSerial('04:EC:C1')).toBe('4ecc1');
+    expect(normalizeCertificateSerial('0000')).toBe('0');
+  });
 });
 
 describe('extractNodeIdFromCert', () => {

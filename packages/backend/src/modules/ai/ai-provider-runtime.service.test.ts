@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { User } from '@/types.js';
 import type { AIConfig } from './ai.types.js';
-import { AIProviderRuntimeService } from './ai-provider-runtime.service.js';
+import { AIProviderRuntimeService, normalizeGeneratedConversationTitle } from './ai-provider-runtime.service.js';
 
 const USER: User = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -45,6 +45,8 @@ const MODELS = [
     id: 'gateway-default',
     display_name: 'Gateway Default',
     input_modalities: ['text'],
+    context_window: 128_000,
+    max_input_tokens: 112_000,
     auto_compact_token_limit: 100_000,
     max_output_tokens: 16_000,
     supported_reasoning_efforts: ['low', 'high'],
@@ -54,6 +56,8 @@ const MODELS = [
     id: 'gateway-vision',
     display_name: 'Gateway Vision',
     input_modalities: ['text', 'image'],
+    context_window: 160_000,
+    max_input_tokens: 136_000,
     auto_compact_token_limit: 120_000,
     max_output_tokens: 24_000,
     supported_reasoning_efforts: ['low', 'high', 'max'],
@@ -97,9 +101,15 @@ describe('AIProviderRuntimeService', () => {
     expect(session.config).toMatchObject({
       model: 'gateway-vision',
       supportsImages: true,
-      maxContextTokens: 120_000,
+      maxContextTokens: 136_000,
       maxCompletionTokens: 24_000,
       maxToolRounds: 20,
+    });
+    expect(session.contextLimits).toEqual({
+      contextWindow: 160_000,
+      maxInputTokens: 136_000,
+      autoCompactTokenLimit: 120_000,
+      outputReserveTokens: 24_000,
     });
     expect(session.reasoningEffort).toBe('max');
     for await (const _event of session.stream([{ role: 'user', content: 'Hello' }], [])) {
@@ -113,6 +123,74 @@ describe('AIProviderRuntimeService', () => {
       }),
       expect.objectContaining({ userId: USER.id, tokenId: null })
     );
+  });
+
+  it('generates conversation titles with the selected model and its minimum reasoning effort', async () => {
+    const { service, execute } = createService();
+    execute.mockResolvedValueOnce({
+      responseId: 'response-title',
+      resolvedModel: 'gateway-vision',
+      events: (async function* () {
+        yield { type: 'output_text.delta' as const, delta: 'Docker ' };
+        yield { type: 'output_text.delta' as const, delta: 'restart audit' };
+        yield { type: 'completed' as const, status: 'completed' as const };
+      })(),
+    });
+
+    await expect(
+      service.generateConversationTitle(USER, {
+        requestId: 'title-1',
+        content: 'Audit the Docker restart behavior',
+        requestedModel: 'gateway-vision',
+        signal: new AbortController().signal,
+      })
+    ).resolves.toBe('Docker restart audit');
+
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'gateway-vision',
+        reasoningEffort: 'low',
+        maxOutputTokens: 512,
+        tools: [],
+      }),
+      expect.objectContaining({ existingThread: false })
+    );
+    expect(JSON.stringify(execute.mock.calls[0]?.[0])).toContain(
+      'Do not analyze, reason through the request, or explain anything; answer immediately.'
+    );
+  });
+
+  it('disables optional reasoning for direct-provider title generation', async () => {
+    const directConfig: AIConfig = {
+      ...CONFIG,
+      providerType: 'openai_compatible',
+      reasoningEffort: 'high',
+    };
+    const service = new AIProviderRuntimeService(
+      {
+        getConfig: vi.fn().mockResolvedValue(directConfig),
+        getDecryptedApiKey: vi.fn().mockResolvedValue('test-key'),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never
+    );
+
+    const session = await service.resolveSession(USER, {
+      requestId: 'title-direct',
+      preferMinimumReasoning: true,
+      signal: new AbortController().signal,
+    });
+
+    expect(session.config.model).toBe('preserved-oai-model');
+    expect(session.config.reasoningEffort).toBe('none');
+    expect(session.reasoningEffort).toBeNull();
+  });
+
+  it('normalizes model-generated conversation titles', () => {
+    expect(normalizeGeneratedConversationTitle('  **Title:** «Проверка Docker.»\nExtra text')).toBe('Проверка Docker');
+    expect(normalizeGeneratedConversationTitle('Название: "Проверка Docker."')).toBe('Проверка Docker');
   });
 
   it('rejects changing the model when user selection is disabled', async () => {

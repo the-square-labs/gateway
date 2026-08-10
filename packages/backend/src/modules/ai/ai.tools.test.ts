@@ -4,6 +4,7 @@ import {
   getOpenAITools,
   inferDiscoveredToolsetsFromText,
   isDestructiveTool,
+  parseAndValidateAIToolArguments,
   TOOL_STORE_INVALIDATION_MAP,
 } from './ai.tools.js';
 
@@ -36,11 +37,58 @@ function sandboxToolNamesForScopes(scopes: string[], sandboxEnabled: boolean): s
 }
 
 describe('AI tool scope filtering', () => {
+  it('compiles every registered JSON schema and rejects malformed or non-object arguments', () => {
+    expect(parseAndValidateAIToolArguments('get_current_context', '{}')).toEqual({ ok: true, arguments: {} });
+    expect(parseAndValidateAIToolArguments('get_current_context', '{')).toEqual({
+      ok: false,
+      error: 'Invalid tool arguments: malformed JSON',
+    });
+    expect(parseAndValidateAIToolArguments('get_current_context', 'null')).toEqual({
+      ok: false,
+      error: 'Invalid tool arguments: expected a JSON object',
+    });
+    expect(parseAndValidateAIToolArguments('get_current_context', '[]')).toEqual({
+      ok: false,
+      error: 'Invalid tool arguments: expected a JSON object',
+    });
+  });
+
+  it('returns path-only schema failures and rejects unknown tools', () => {
+    expect(parseAndValidateAIToolArguments('send_comment', '{}')).toEqual({
+      ok: false,
+      error: 'Invalid tool arguments at $/message',
+    });
+    expect(parseAndValidateAIToolArguments('does_not_exist', '{}')).toEqual({
+      ok: false,
+      error: 'Unknown AI tool: does_not_exist',
+    });
+  });
+
+  it('rejects unsupported composite resource and operation pairs before dispatch', () => {
+    expect(
+      parseAndValidateAIToolArguments(
+        'manage_status_page',
+        JSON.stringify({ resource: 'proxy_templates', operation: 'delete' })
+      )
+    ).toEqual({
+      ok: false,
+      error: 'Invalid tool arguments at $/resource, $/operation',
+    });
+    expect(
+      parseAndValidateAIToolArguments(
+        'manage_status_page',
+        JSON.stringify({ resource: 'proxy_templates', operation: 'list' })
+      )
+    ).toMatchObject({ ok: true });
+  });
+
   it('keeps core registry ordering, uniqueness, and invalidation contracts stable', () => {
     expect(new Set(AI_TOOLS.map((tool) => tool.name)).size).toBe(AI_TOOLS.length);
-    expect(AI_TOOLS.slice(0, 84).map((tool) => tool.name)).toEqual([
+    expect(AI_TOOLS.slice(0, 86).map((tool) => tool.name)).toEqual([
       'discover_tools',
       'get_current_context',
+      'read_tool_output',
+      'search_tool_output',
       'wait',
       'send_comment',
       'end_conversation',
@@ -136,6 +184,15 @@ describe('AI tool scope filtering', () => {
     expect(TOOL_STORE_INVALIDATION_MAP.manage_license).toEqual(['settings']);
     expect(TOOL_STORE_INVALIDATION_MAP.manage_housekeeping).toEqual(['settings']);
     expect(toolNames(['feat:ai:use'])).toContain('set_resource_pin');
+    expect(toolNames(['feat:ai:use'])).toEqual(expect.arrayContaining(['read_tool_output', 'search_tool_output']));
+    expect(
+      getOpenAITools([], ['feat:ai:use'], false, { discoveredToolsets: [] }).map((tool) => tool.function.name)
+    ).toEqual(expect.arrayContaining(['read_tool_output', 'search_tool_output']));
+    expect(
+      getOpenAITools(['read_tool_output', 'search_tool_output'], ['feat:ai:use'], false).map(
+        (tool) => tool.function.name
+      )
+    ).toEqual(expect.arrayContaining(['read_tool_output', 'search_tool_output']));
     expect(TOOL_STORE_INVALIDATION_MAP.update_gateway_settings).toEqual(['settings']);
     expect(isDestructiveTool('find_resource')).toBe(false);
     expect(isDestructiveTool('list_proxy_hosts')).toBe(false);
@@ -330,6 +387,25 @@ describe('AI tool scope filtering', () => {
     expect(loggingToolNames).toContain('manage_logging');
     expect(loggingToolNames).not.toContain('list_docker_containers');
     expect(loggingToolNames).not.toContain('web_search');
+  });
+
+  it('does not advertise ask_question as a duplicate approval mechanism', () => {
+    const askQuestion = AI_TOOLS.find((tool) => tool.name === 'ask_question');
+
+    expect(askQuestion?.description).toContain('Never use this tool to confirm or approve an action');
+    expect(askQuestion?.description).toContain("Gateway's approval UI handles policy-required confirmations");
+    expect(askQuestion?.description).toContain('choose automatically/use defaults');
+  });
+
+  it('advertises direct public Docker Hub pulls without a saved registry', () => {
+    const pullImage = AI_TOOLS.find((tool) => tool.name === 'pull_docker_image');
+    const createContainer = AI_TOOLS.find((tool) => tool.name === 'create_docker_container');
+    const manageRegistry = AI_TOOLS.find((tool) => tool.name === 'manage_docker_registry');
+
+    expect(createContainer?.description).toContain('use list_docker_images and pull_docker_image');
+    expect(pullImage?.description).toContain('registryId omitted');
+    expect(pullImage?.description).toContain('never create a saved Docker Hub registry');
+    expect(manageRegistry?.description).toContain('Do not create a registry for public Docker Hub images');
   });
 
   it('exposes fetch as a base tool for direct URLs when sandbox access is enabled', () => {

@@ -13,6 +13,11 @@ const ContainerNameSchema = z
 const DOCKER_CONTAINER_PORTS_MAX = 256;
 const DOCKER_STOP_TIMEOUT_MAX_SECONDS = 300;
 const DOCKER_GPU_DEVICE_IDS_MAX = 32;
+const DOCKER_MOUNTS_MAX = 128;
+const DOCKER_NETWORKS_MAX = 32;
+const DOCKER_ENV_MAX = 1024;
+const DOCKER_LABELS_MAX = 256;
+const DOCKER_COMMAND_ARGS_MAX = 256;
 const DockerStopTimeoutSchema = z.number().int().min(0).max(DOCKER_STOP_TIMEOUT_MAX_SECONDS);
 const DockerPortBindIpSchema = z.string().ip().default('0.0.0.0');
 const DockerFilePathSchema = z
@@ -42,39 +47,63 @@ export const DockerGpuSelectionSchema = z
   .strict();
 
 // Container create
-export const ContainerCreateSchema = z.object({
-  image: z.string().min(1),
-  registryId: z.string().uuid().optional(),
-  name: ContainerNameSchema.optional(),
-  ports: z
-    .array(
-      z.object({
-        hostPort: z.number().int().min(0).max(65535),
-        containerPort: z.number().int().min(1).max(65535),
-        protocol: z.enum(['tcp', 'udp']).default('tcp'),
-        hostIp: DockerPortBindIpSchema,
-      })
-    )
-    .max(DOCKER_CONTAINER_PORTS_MAX)
-    .optional(),
-  volumes: z
-    .array(
-      z.object({
-        hostPath: z.string().optional(),
-        containerPath: z.string(),
-        name: z.string().optional(),
-        readOnly: z.boolean().default(false),
-      })
-    )
-    .optional(),
-  env: z.record(z.string()).optional(),
-  networks: z.array(z.string()).optional(),
-  restartPolicy: z.enum(['no', 'always', 'unless-stopped', 'on-failure']).default('no'),
-  stopTimeout: DockerStopTimeoutSchema.optional(),
-  gpu: DockerGpuSelectionSchema.optional(),
-  labels: z.record(z.string()).optional(),
-  command: z.array(z.string()).optional(),
-});
+export const ContainerCreateSchema = z
+  .object({
+    image: z.string().min(1),
+    registryId: z.string().uuid().optional(),
+    name: ContainerNameSchema.optional(),
+    ports: z
+      .array(
+        z.object({
+          hostPort: z.number().int().min(0).max(65535),
+          containerPort: z.number().int().min(1).max(65535),
+          protocol: z.enum(['tcp', 'udp']).default('tcp'),
+          hostIp: DockerPortBindIpSchema,
+        })
+      )
+      .max(DOCKER_CONTAINER_PORTS_MAX)
+      .optional(),
+    volumes: z
+      .array(
+        z
+          .object({
+            hostPath: z
+              .string()
+              .min(1)
+              .refine((path) => path.startsWith('/'), 'Host path must be absolute')
+              .optional(),
+            containerPath: DockerFilePathSchema,
+            name: z.string().trim().min(1).optional(),
+            readOnly: z.boolean().default(false),
+          })
+          .superRefine((mount, ctx) => {
+            if (Boolean(mount.hostPath) === Boolean(mount.name)) {
+              ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Exactly one of hostPath or name is required' });
+            }
+          })
+      )
+      .max(DOCKER_MOUNTS_MAX)
+      .optional(),
+    env: z.record(z.string()).optional(),
+    networks: z.array(z.string().trim().min(1)).max(DOCKER_NETWORKS_MAX).optional(),
+    restartPolicy: z.enum(['no', 'always', 'unless-stopped', 'on-failure']).default('no'),
+    stopTimeout: DockerStopTimeoutSchema.optional(),
+    gpu: DockerGpuSelectionSchema.optional(),
+    labels: z.record(z.string()).optional(),
+    command: z.array(z.string()).max(DOCKER_COMMAND_ARGS_MAX).optional(),
+  })
+  .strict()
+  .superRefine((config, ctx) => {
+    if (config.env && Object.keys(config.env).length > DOCKER_ENV_MAX) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['env'], message: `At most ${DOCKER_ENV_MAX} variables` });
+    }
+    if (config.labels && Object.keys(config.labels).length > DOCKER_LABELS_MAX) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['labels'], message: `At most ${DOCKER_LABELS_MAX} labels` });
+    }
+    if (config.networks && new Set(config.networks).size !== config.networks.length) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['networks'], message: 'Network names must be unique' });
+    }
+  });
 
 // Container update (pull + redeploy)
 export const ContainerUpdateSchema = z.object({

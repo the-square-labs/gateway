@@ -101,6 +101,13 @@ describe('AIService system prompt', () => {
     expect(prompt).toContain('Use get_current_context');
     expect(prompt).toContain('Use discover_tools');
     expect(prompt).toContain('Use find_resource FIRST');
+    expect(prompt).toContain('Public Docker Hub images such as nginx:alpine require no saved registry');
+    expect(prompt).toContain('never create or manage a Docker registry merely to make a public image pull work');
+    expect(prompt).toContain('do not use a failed create as an image-existence probe');
+    expect(prompt).toContain('do not call ask_question merely because the action is mutating');
+    expect(prompt).toContain('NEVER use ask_question as confirmation or approval');
+    expect(prompt).toContain("Gateway's approval policy and approval UI");
+    expect(prompt).not.toContain('For destructive actions, ask "Are you sure?"');
     expect(prompt).toContain('Never call GitLab read/write/lint/commit tools with a blank');
     expect(prompt).toContain('Managed databases are private by default');
     expect(prompt).toContain('authenticated private connector-and-tunnel path');
@@ -329,15 +336,15 @@ describe('AIService system prompt', () => {
     );
 
     expect(estimate.systemTokens).toBeGreaterThan(0);
-    expect(estimate.toolsTokens).toBe(1);
+    expect(estimate.toolsTokens).toBeGreaterThan(1);
     expect(estimate.totalOverhead).toBe(estimate.systemTokens + estimate.toolsTokens);
     expect(estimate.limit).toBe(12345);
     expect(estimate.reasoningEffort).toBe('low');
-    expect(estimate.toolCount).toBe(0);
+    expect(estimate.toolCount).toBe(2);
     expect(estimate.systemBreakdown).toEqual(
       expect.arrayContaining([expect.objectContaining({ label: 'Base instructions' })])
     );
-    expect(estimate.toolBreakdown).toEqual([]);
+    expect(estimate.toolBreakdown.map((tool) => tool.label)).toEqual(['Artifact']);
   });
 
   it('keeps new conversations on base tools until a category is discovered', async () => {

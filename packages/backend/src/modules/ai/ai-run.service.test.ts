@@ -15,8 +15,12 @@ function createTransitionDb<T>(updateRows: T[], selectRows: unknown[][] = [[{ id
   const from = vi.fn(() => ({ where: selectWhere }));
   const select = vi.fn(() => ({ from }));
 
+  const tx = { update, select };
+  const transaction = vi.fn((callback: (txArg: typeof tx) => unknown) => callback(tx));
+
   return {
-    db: { update, select },
+    db: { update, select, transaction },
+    transaction,
     returning,
     updateWhere,
     set,
@@ -91,7 +95,7 @@ function createRuntimeSnapshotDb() {
   const orderByQuestions = vi.fn(async () => []);
   const where = vi.fn(() => {
     whereCall += 1;
-    return whereCall === 2 || whereCall === 3 ? { orderBy: orderByQuestions } : Promise.resolve([]);
+    return whereCall === 2 || whereCall === 3 || whereCall === 4 ? { orderBy: orderByQuestions } : Promise.resolve([]);
   });
   const from = vi.fn(() => ({ where }));
   const select = vi.fn(() => ({ from }));
@@ -380,7 +384,100 @@ describe('AIRunService startUserRun', () => {
   });
 });
 
+describe('AIRunService startContinuationRun', () => {
+  it('creates a queued continuation after a stopped run without inserting another user message', async () => {
+    const conversation = {
+      id: 'conversation-1',
+      lastContext: { route: '/nodes' },
+      model: 'pinned-model',
+      reasoningEffort: 'low',
+    };
+    const run = {
+      id: 'run-2',
+      conversationId: 'conversation-1',
+      activeMessageId: 'message-1',
+      clientCommandId: 'continue:cmd-continue',
+      status: 'queued',
+    };
+    const harness = createStartRunDb({
+      selectRows: [[], [conversation], [], [], [], [{ status: 'stopped' }], [{ id: 'message-1' }]],
+      insertRows: [[run]],
+    });
+    const service = new AIRunService(harness.db as never);
+
+    await expect(
+      service.startContinuationRun({
+        conversationId: 'conversation-1',
+        userId: 'user-1',
+        clientCommandId: 'cmd-continue',
+        lastContext: { route: '/docker/containers' },
+      })
+    ).resolves.toEqual({
+      conversationId: 'conversation-1',
+      userMessageId: 'message-1',
+      run,
+      duplicate: false,
+    });
+
+    expect(harness.insert).toHaveBeenCalledTimes(1);
+    expect(harness.insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientCommandId: 'continue:cmd-continue',
+        activeMessageId: 'message-1',
+        model: 'pinned-model',
+        reasoningEffort: 'low',
+        status: 'queued',
+      })
+    );
+  });
+
+  it('rejects continuation when the previous run completed normally', async () => {
+    const harness = createStartRunDb({
+      selectRows: [
+        [],
+        [{ id: 'conversation-1', lastContext: null, model: null, reasoningEffort: null }],
+        [],
+        [],
+        [],
+        [{ status: 'completed' }],
+      ],
+    });
+    const service = new AIRunService(harness.db as never);
+
+    await expect(
+      service.startContinuationRun({
+        conversationId: 'conversation-1',
+        userId: 'user-1',
+        clientCommandId: 'cmd-continue',
+      })
+    ).rejects.toMatchObject({
+      code: 'AI_CONTINUATION_UNAVAILABLE',
+      statusCode: 409,
+    });
+
+    expect(harness.insert).not.toHaveBeenCalled();
+  });
+});
+
 describe('AIRunService tool approval decisions', () => {
+  it('keeps a durable round gated while its credential challenge is pending', async () => {
+    const rows = [[{ status: 'approved' }], [], [{ id: 'credential-1' }]];
+    const where = vi.fn(async () => rows.shift() ?? []);
+    const select = vi.fn(() => ({ from: vi.fn(() => ({ where })) }));
+    const updateWhere = vi.fn(async () => undefined);
+    const set = vi.fn(() => ({ where: updateWhere }));
+    const service = new AIRunService({ select, update: vi.fn(() => ({ set })) } as never);
+
+    await expect(
+      (
+        service as unknown as {
+          markRoundReadyIfUngated(db: unknown, roundId: string): Promise<boolean>;
+        }
+      ).markRoundReadyIfUngated({ select, update: vi.fn(() => ({ set })) }, 'round-1')
+    ).resolves.toBe(false);
+    expect(set).toHaveBeenCalledWith(expect.objectContaining({ status: 'executing' }));
+  });
+
   it('atomically approves a pending tool call', async () => {
     const approved = {
       id: 'tool-1',
@@ -400,7 +497,7 @@ describe('AIRunService tool approval decisions', () => {
         clientCommandId: 'cmd-1',
         decision: 'approved',
       })
-    ).resolves.toEqual({ toolCall: approved, duplicate: false });
+    ).resolves.toEqual({ toolCall: approved, duplicate: false, continuationReady: true });
 
     expect(harness.set).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -436,7 +533,7 @@ describe('AIRunService tool approval decisions', () => {
         clientCommandId: 'cmd-1',
         decision: 'approved',
       })
-    ).resolves.toEqual({ toolCall: existing, duplicate: true });
+    ).resolves.toEqual({ toolCall: existing, duplicate: true, continuationReady: true });
   });
 
   it('rejects conflicting tool decisions', async () => {
@@ -495,7 +592,12 @@ describe('AIRunService question answers', () => {
         clientCommandId: 'cmd-1',
         answer: 'Use production',
       })
-    ).resolves.toEqual({ question: answered, duplicate: false, remainingPendingQuestions: [] });
+    ).resolves.toEqual({
+      question: answered,
+      duplicate: false,
+      remainingPendingQuestions: [],
+      continuationReady: true,
+    });
 
     expect(harness.set).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -531,7 +633,12 @@ describe('AIRunService question answers', () => {
         clientCommandId: 'cmd-1',
         answer: 'Use production',
       })
-    ).resolves.toEqual({ question: existing, duplicate: true, remainingPendingQuestions: [] });
+    ).resolves.toEqual({
+      question: existing,
+      duplicate: true,
+      remainingPendingQuestions: [],
+      continuationReady: true,
+    });
   });
 
   it('treats original tool call ids as valid question ids', async () => {
@@ -556,7 +663,12 @@ describe('AIRunService question answers', () => {
         clientCommandId: 'cmd-1',
         answer: 'Use production',
       })
-    ).resolves.toEqual({ question: existing, duplicate: true, remainingPendingQuestions: [] });
+    ).resolves.toEqual({
+      question: existing,
+      duplicate: true,
+      remainingPendingQuestions: [],
+      continuationReady: true,
+    });
   });
 
   it('rejects conflicting answers', async () => {
@@ -635,23 +747,23 @@ describe('AIRunService stopRun', () => {
     );
   });
 
-  it('rejects stopping a context compaction run', async () => {
-    const harness = createTransitionDb(
-      [],
-      [
-        [{ id: 'conversation-1' }],
-        [
-          {
-            id: 'run-1',
-            conversationId: 'conversation-1',
-            userId: 'user-1',
-            status: 'running',
-            activeMessageId: null,
-          },
-        ],
-      ]
-    );
+  it('stops a context compaction run through the ordinary stop path', async () => {
+    const current = {
+      id: 'run-1',
+      conversationId: 'conversation-1',
+      userId: 'user-1',
+      status: 'running',
+      activeMessageId: null,
+      assistantDraftContent: null,
+    };
+    const stopped = { ...current, status: 'stopped' };
+    const harness = createTransitionDb([stopped], [[{ id: 'conversation-1' }], [current]]);
     const service = new AIRunService(harness.db as never);
+    const executor = {
+      abortRun: vi.fn(),
+      flushAssistantDraftToMessage: vi.fn().mockResolvedValue(null),
+    };
+    (service as unknown as { executor: typeof executor }).executor = executor;
 
     await expect(
       service.stopRun({
@@ -659,11 +771,8 @@ describe('AIRunService stopRun', () => {
         runId: 'run-1',
         userId: 'user-1',
       })
-    ).rejects.toMatchObject({
-      statusCode: 409,
-      code: 'AI_COMPACTION_ACTIVE',
-    });
-    expect(harness.update).not.toHaveBeenCalled();
+    ).resolves.toEqual({ run: stopped, duplicate: false });
+    expect(executor.abortRun).toHaveBeenCalledWith('run-1');
   });
 
   it('stops the current active run before rollback without trusting a client run id', async () => {
@@ -697,38 +806,50 @@ describe('AIRunService stopRun', () => {
     expect(executor.abortRun).toHaveBeenCalledWith('run-1');
   });
 
-  it('rejects rollback cancellation while the current active run is context compaction', async () => {
+  it('allows rollback cancellation while the current active run is context compaction', async () => {
+    const activeRun = {
+      id: 'run-1',
+      conversationId: 'conversation-1',
+      userId: 'user-1',
+      status: 'running',
+      activeMessageId: null,
+      assistantDraftContent: null,
+    };
+    const stopped = { ...activeRun, status: 'stopped' };
     const harness = createStopActiveRunDb(
-      [],
-      [
-        [{ id: 'conversation-1' }],
-        [
-          {
-            id: 'run-1',
-            conversationId: 'conversation-1',
-            userId: 'user-1',
-            status: 'running',
-            activeMessageId: null,
-          },
-        ],
-      ]
+      [stopped],
+      [[{ id: 'conversation-1' }], [activeRun], [{ id: 'conversation-1' }], [activeRun]]
     );
     const service = new AIRunService(harness.db as never);
+    const executor = {
+      abortRun: vi.fn(),
+      flushAssistantDraftToMessage: vi.fn().mockResolvedValue(null),
+    };
+    (service as unknown as { executor: typeof executor }).executor = executor;
 
     await expect(
       service.stopActiveRunForRollback({
         conversationId: 'conversation-1',
         userId: 'user-1',
       })
-    ).rejects.toMatchObject({
-      statusCode: 409,
-      code: 'AI_COMPACTION_ACTIVE',
-    });
-    expect(harness.update).not.toHaveBeenCalled();
+    ).resolves.toEqual({ run: stopped, duplicate: false });
+    expect(executor.abortRun).toHaveBeenCalledWith('run-1');
   });
 });
 
 describe('AIRunService runtime snapshots', () => {
+  it('does not load runtime tool arguments for a conversation the user does not own', async () => {
+    const limit = vi.fn(async () => []);
+    const where = vi.fn(() => ({ limit }));
+    const from = vi.fn(() => ({ where }));
+    const service = new AIRunService({ select: vi.fn(() => ({ from })) } as never);
+    const getRuntimeSnapshot = vi.fn();
+    (service as unknown as { getRuntimeSnapshot: typeof getRuntimeSnapshot }).getRuntimeSnapshot = getRuntimeSnapshot;
+
+    await expect(service.getConversationSnapshot('user-2', 'conversation-1')).resolves.toBeNull();
+    expect(getRuntimeSnapshot).not.toHaveBeenCalled();
+  });
+
   it('derives ended status from hidden conversation status messages', async () => {
     const now = new Date('2026-06-26T10:00:00.000Z');
     let whereCall = 0;
@@ -829,7 +950,26 @@ describe('AIRunService runtime snapshots', () => {
         pendingApprovals: [],
         pendingQuestion: null,
         pendingQuestions: [],
-        toolCalls: [],
+        toolCalls: [
+          {
+            id: 'tool-row-1',
+            toolCallId: 'call-1',
+            toolName: 'create_docker_container',
+            toolArgs: { env: { API_KEY: 'owner-visible-value' } },
+            status: 'completed',
+            resourceReferences: [
+              {
+                refId: 'gwr_0123456789abcdef01234567',
+                type: 'docker_container',
+                resourceId: 'container-1',
+                label: 'runtime-container',
+                relation: 'created',
+                nodeId: 'node-1',
+                nodeSlug: 'docker-src',
+              },
+            ],
+          },
+        ],
       });
 
     const snapshot = await service.getConversationSnapshot('user-1', 'conversation-1');
@@ -841,6 +981,46 @@ describe('AIRunService runtime snapshots', () => {
       queuedApprovals: [{ id: 'call-2', name: 'restart_docker_container', arguments: { containerId: 'abc' } }],
     });
     expect(JSON.stringify(snapshot)).not.toContain('server-only system prompt');
+    expect(snapshot?.runtime.toolCalls).toEqual([
+      expect.objectContaining({
+        toolName: 'create_docker_container',
+        toolArgs: { env: { API_KEY: 'owner-visible-value' } },
+      }),
+    ]);
+    expect(snapshot?.resourceReferences).toEqual([
+      expect.objectContaining({
+        refId: 'gwr_0123456789abcdef01234567',
+        type: 'docker_container',
+        label: 'runtime-container',
+      }),
+    ]);
+  });
+
+  it('offers continuation only when the most recent run stopped before a final response', async () => {
+    const limit = vi.fn().mockResolvedValue([{ status: 'stopped' }]);
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({ orderBy: vi.fn(() => ({ limit })) })),
+        })),
+      })),
+    };
+    const service = new AIRunService(db as never);
+    (service as unknown as { getActiveRun: (conversationId: string) => Promise<unknown> }).getActiveRun = vi
+      .fn()
+      .mockResolvedValue(null);
+    (
+      service as unknown as { listConversationToolCalls: (conversationId: string) => Promise<unknown[]> }
+    ).listConversationToolCalls = vi.fn().mockResolvedValue([]);
+
+    await expect(
+      (service as unknown as { getRuntimeSnapshot: (conversationId: string) => Promise<unknown> }).getRuntimeSnapshot(
+        'conversation-1'
+      )
+    ).resolves.toMatchObject({
+      activeRun: null,
+      canContinue: true,
+    });
   });
 
   it('uses the in-memory live draft and version when an active run is streaming', async () => {
@@ -865,7 +1045,11 @@ describe('AIRunService runtime snapshots', () => {
       })),
     };
 
-    await expect(service.getRuntimeSnapshot('conversation-1')).resolves.toMatchObject({
+    await expect(
+      (service as unknown as { getRuntimeSnapshot: (conversationId: string) => Promise<unknown> }).getRuntimeSnapshot(
+        'conversation-1'
+      )
+    ).resolves.toMatchObject({
       activeRun: run,
       assistantDraftContent: 'Live draft',
       assistantDraftVersion: 7,
@@ -889,7 +1073,11 @@ describe('AIRunService runtime snapshots', () => {
       getAssistantDraft: vi.fn(() => null),
     };
 
-    await expect(service.getRuntimeSnapshot('conversation-1')).resolves.toMatchObject({
+    await expect(
+      (service as unknown as { getRuntimeSnapshot: (conversationId: string) => Promise<unknown> }).getRuntimeSnapshot(
+        'conversation-1'
+      )
+    ).resolves.toMatchObject({
       activeRun: run,
       assistantDraftContent: 'Persisted draft',
       assistantDraftVersion: 0,
@@ -987,5 +1175,63 @@ describe('AIRunService runtime snapshots', () => {
       })
     ).resolves.toEqual({ challenge: current, additionalChallenges: [additional], duplicate: false });
     expect(harness.update).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('AIRunService restart reconciliation', () => {
+  it('marks an interrupted in-flight tool effect as unknown instead of replaying it', async () => {
+    const selectWhere = vi.fn().mockResolvedValue([{ id: 'call-row-1', roundId: 'round-1' }]);
+    const select = vi.fn(() => ({ from: vi.fn(() => ({ where: selectWhere })) }));
+    const updateWhere = vi.fn().mockResolvedValue(undefined);
+    const updateSet = vi.fn(() => ({ where: updateWhere }));
+    const update = vi.fn(() => ({ set: updateSet }));
+    const service = new AIRunService({ select, update } as never);
+
+    await (
+      service as unknown as {
+        reconcileInterruptedRunningRun(run: { id: string; conversationId: string; userId: string }): Promise<void>;
+      }
+    ).reconcileInterruptedRunningRun({
+      id: 'run-1',
+      conversationId: 'conversation-1',
+      userId: 'user-1',
+    });
+
+    expect(updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'effect_unknown',
+        error: expect.stringContaining('AI_TOOL_EFFECT_UNKNOWN'),
+      })
+    );
+    expect(updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'failed',
+        error: expect.stringContaining('AI_TOOL_EFFECT_UNKNOWN'),
+      })
+    );
+    expect(updateSet).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'queued' }));
+  });
+
+  it('requeues interrupted provider streaming when no tool effect was in flight', async () => {
+    const selectWhere = vi.fn().mockResolvedValue([]);
+    const select = vi.fn(() => ({ from: vi.fn(() => ({ where: selectWhere })) }));
+    const updateWhere = vi.fn().mockResolvedValue(undefined);
+    const updateSet = vi.fn(() => ({ where: updateWhere }));
+    const update = vi.fn(() => ({ set: updateSet }));
+    const service = new AIRunService({ select, update } as never);
+
+    await (
+      service as unknown as {
+        reconcileInterruptedRunningRun(run: { id: string; conversationId: string; userId: string }): Promise<void>;
+      }
+    ).reconcileInterruptedRunningRun({
+      id: 'run-1',
+      conversationId: 'conversation-1',
+      userId: 'user-1',
+    });
+
+    expect(updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'queued', leaseOwner: null, leaseExpiresAt: null })
+    );
   });
 });

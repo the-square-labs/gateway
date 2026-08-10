@@ -9,7 +9,6 @@ const {
   getToolAuthorizationResourceId,
   hasRegistryHost,
   redactToolArgs,
-  trimToTokenBudget,
 } = aiServiceTestHelpers;
 
 describe('AI service helpers', () => {
@@ -79,20 +78,5 @@ describe('AI service helpers', () => {
     expect(hasRegistryHost('localhost/team/app:tag')).toBe(true);
     expect(hasRegistryHost('registry:5000/team/app:tag')).toBe(true);
     expect(hasRegistryHost('team/app:tag')).toBe(false);
-  });
-
-  it('trims old chat messages while preserving the system prompt and latest user context', () => {
-    const messages = [
-      { role: 'system', content: 'system prompt' },
-      { role: 'user', content: 'old user message '.repeat(50) },
-      { role: 'assistant', content: 'old assistant message '.repeat(50) },
-      { role: 'tool', content: 'orphaned tool result' },
-      { role: 'user', content: 'latest question' },
-    ];
-
-    expect(trimToTokenBudget(messages, 20)).toEqual([
-      { role: 'system', content: 'system prompt' },
-      { role: 'user', content: 'latest question' },
-    ]);
   });
 });

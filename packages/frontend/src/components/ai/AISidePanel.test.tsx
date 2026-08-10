@@ -52,11 +52,13 @@ describe("AISidePanel autoscroll", () => {
         messages: [],
         isConnected: false,
         isStreaming: false,
+        isStartingConversation: false,
         retryAfter: null,
         recentConversations: [],
         isLoadingRecentConversations: false,
         activeConversationId: null,
         activeRunId: null,
+        canContinueConversation: false,
         providerStatus: null,
         selectedModel: null,
         selectedReasoningEffort: null,
@@ -164,6 +166,142 @@ describe("AISidePanel autoscroll", () => {
 
     const panelContent = screen.getByText("New chat").closest<HTMLDivElement>("div[style]");
     expect(panelContent).toHaveStyle({ width: "360px" });
+  });
+
+  it("shows the starting title shimmer and Thinking before a new chat snapshot arrives", () => {
+    act(() => {
+      useAIStore.setState({
+        messages: [
+          {
+            id: "starting:command-1:user",
+            role: "user",
+            content: "Check Docker",
+            localOnly: true,
+          },
+          {
+            id: "starting:command-1:assistant",
+            role: "assistant",
+            content: "",
+            isStreaming: true,
+          },
+        ],
+        isConnected: true,
+        isStreaming: true,
+        isStartingConversation: true,
+        retryAfter: null,
+        connect: vi.fn().mockResolvedValue(true),
+        refreshProviderStatus: vi.fn().mockResolvedValue(undefined),
+        fetchRecentConversations: vi.fn().mockResolvedValue(undefined),
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    renderAISidePanel();
+
+    expect(screen.getByText("Starting chat...")).toHaveClass(
+      "thinking-shimmer",
+      "text-muted-foreground"
+    );
+    const log = screen.getByRole("log", { name: "AI messages" });
+    expect(within(log).getByText("Check Docker")).toBeInTheDocument();
+    expect(within(log).getByText("Thinking")).toBeInTheDocument();
+    expect(log.textContent?.indexOf("Check Docker")).toBeLessThan(
+      log.textContent?.indexOf("Thinking") ?? -1
+    );
+  });
+
+  it("shows an active resume action for an interrupted turn and switches to send after typing", async () => {
+    const user = userEvent.setup();
+    const continueConversation = vi.fn();
+    act(() => {
+      useAIStore.setState({
+        messages: [{ id: "user-1", role: "user", content: "Finish checking Docker" }],
+        activeConversationId: "conversation-1",
+        savedName: "Docker check",
+        isConnected: true,
+        isStreaming: false,
+        isStartingConversation: false,
+        canContinueConversation: true,
+        retryAfter: null,
+        continueConversation,
+        connect: vi.fn().mockResolvedValue(true),
+        refreshProviderStatus: vi.fn().mockResolvedValue(undefined),
+        fetchRecentConversations: vi.fn().mockResolvedValue(undefined),
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    renderAISidePanel();
+
+    const resume = screen.getByRole("button", { name: "Continue response" });
+    expect(resume).toHaveClass("text-foreground");
+    await user.click(resume);
+    expect(continueConversation).toHaveBeenCalledTimes(1);
+
+    await user.type(
+      screen.getByPlaceholderText("Ask anything... (/ commands)"),
+      "Use another check"
+    );
+    expect(screen.getByRole("button", { name: "Send message" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Continue response" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the AI disclaimer visible while approval replaces the composer", () => {
+    act(() => {
+      useAIStore.setState({
+        messages: [
+          {
+            id: "assistant-approval",
+            role: "assistant",
+            content: "",
+            toolCalls: [
+              {
+                id: "tool-approval",
+                name: "remove_docker_container",
+                arguments: { containerId: "container-1" },
+                status: "awaiting_approval",
+              },
+            ],
+          },
+        ],
+        activeConversationId: "conversation-1",
+        activeRunId: "run-1",
+        isConnected: true,
+        isStreaming: true,
+        retryAfter: null,
+        connect: vi.fn().mockResolvedValue(true),
+        refreshProviderStatus: vi.fn().mockResolvedValue(undefined),
+        fetchRecentConversations: vi.fn().mockResolvedValue(undefined),
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    renderAISidePanel();
+
+    expect(screen.getByText("AI can make mistakes. Check important information.")).toBeVisible();
+    expect(screen.queryByPlaceholderText("AI is responding...")).not.toBeInTheDocument();
+  });
+
+  it("focuses the composer when a new chat opens", async () => {
+    act(() => {
+      useAIStore.setState({
+        messages: [],
+        activeConversationId: null,
+        isConnected: true,
+        isStreaming: false,
+        retryAfter: null,
+        connect: vi.fn().mockResolvedValue(true),
+        refreshProviderStatus: vi.fn().mockResolvedValue(undefined),
+        fetchRecentConversations: vi.fn().mockResolvedValue(undefined),
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    renderAISidePanel();
+
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText("Ask anything... (/ commands)")).toHaveFocus()
+    );
   });
 
   it("loads and shows only the five most recent chats in an empty normal panel", async () => {
@@ -479,7 +617,7 @@ describe("AISidePanel autoscroll", () => {
     });
   });
 
-  it("keeps the composer visible for auto-approved running tool calls", () => {
+  it("keeps the composer visible after an approved tool starts running", () => {
     act(() => {
       useAIStore.setState({
         messages: [
@@ -489,7 +627,7 @@ describe("AISidePanel autoscroll", () => {
               name: "run_process",
               arguments: { command: ["sh", "-lc", "pwd"] },
               status: "running",
-              approvalPolicy: "auto_approved",
+              approvalPolicy: "requires_approval",
             },
           ]),
         ],
@@ -504,6 +642,74 @@ describe("AISidePanel autoscroll", () => {
 
     expect(screen.queryByText("Sending approval decision...")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /run process/i })).toBeInTheDocument();
+  });
+
+  it("renders a durable-round question next to the composer instead of in message history", () => {
+    act(() => {
+      useAIStore.setState({
+        messages: [
+          assistantMessage([
+            {
+              id: "question-1",
+              runId: "run-1",
+              roundId: "round-1",
+              position: 0,
+              name: "ask_question",
+              arguments: { question: "Create the container?", options: ["Yes", "No"] },
+              status: "awaiting_approval",
+            },
+          ]),
+        ],
+        activeConversationId: "conversation-1",
+        activeRunId: "run-1",
+        isConnected: true,
+        isStreaming: true,
+        retryAfter: null,
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    renderAISidePanel();
+
+    const log = screen.getByRole("log", { name: "AI messages" });
+    expect(within(log).queryByText("Create the container?")).not.toBeInTheDocument();
+    expect(screen.getByText("Create the container?")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Ask anything... (/ commands)")).not.toBeInTheDocument();
+  });
+
+  it("renders a durable-round approval next to the composer instead of in message history", () => {
+    act(() => {
+      useAIStore.setState({
+        messages: [
+          assistantMessage([
+            {
+              id: "approval-1",
+              runId: "run-1",
+              roundId: "round-1",
+              position: 0,
+              name: "restart_docker_container",
+              arguments: { containerId: "container-1" },
+              status: "awaiting_approval",
+              approvalPolicy: "requires_approval",
+            },
+          ]),
+        ],
+        activeConversationId: "conversation-1",
+        activeRunId: "run-1",
+        isConnected: true,
+        isStreaming: true,
+        retryAfter: null,
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    renderAISidePanel();
+
+    const log = screen.getByRole("log", { name: "AI messages" });
+    expect(within(log).queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Ask anything... (/ commands)")).not.toBeInTheDocument();
   });
 
   it("shows the selected model reasoning levels even when model selection is locked", async () => {
@@ -889,7 +1095,74 @@ describe("AISidePanel autoscroll", () => {
     expect(await screen.findByText("Administration")).toBeInTheDocument();
   });
 
-  it("shows Dashboard and Sidebar-pinned resources in lite mode", () => {
+  it("keeps lite sidebar dates mounted and exposes actions without pointer state after deletion", async () => {
+    const timestamp = new Date().toISOString();
+    const deleteConversation = vi.fn(async (conversationId: string) => {
+      useAIStore.setState((state) => ({
+        recentConversations: state.recentConversations.filter(
+          (conversation) => conversation.id !== conversationId
+        ),
+      }));
+    });
+    const conversations = ["First chat", "Second chat"].map((title, index) => ({
+      id: `conversation-${index + 1}`,
+      title,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      lastUserMessageAt: timestamp,
+      folderId: null,
+      messageCount: 1,
+      status: "active" as const,
+      blockReason: null,
+      activeRunStatus: null,
+    }));
+
+    act(() => {
+      useAuthStore.setState({
+        user: {
+          id: "user-1",
+          email: "user@example.com",
+          name: "User One",
+          groupName: "admin",
+          scopes: ["feat:ai:use"],
+          isBlocked: false,
+        } as any,
+        isAuthenticated: true,
+        isLoading: false,
+      });
+      useAIStore.setState({
+        messages: [],
+        recentConversations: conversations,
+        conversationFolders: [],
+        isLoadingRecentConversations: false,
+        fetchRecentConversations: vi.fn(),
+        fetchConversationFolders: vi.fn(),
+        deleteConversation,
+      });
+      useUIStore.setState({ sidebarOpen: true });
+    });
+
+    renderWithRouter(
+      <TooltipProvider>
+        <AILiteSidebar />
+      </TooltipProvider>
+    );
+
+    const secondRowBefore = screen.getByText("Second chat").closest(".group") as HTMLElement;
+    const secondDateBefore = within(secondRowBefore).getByText("now");
+    const firstDelete = screen.getByRole("button", { name: "Delete First chat" });
+    expect(firstDelete.parentElement).toHaveClass("group-hover:visible", "z-20");
+
+    fireEvent.click(firstDelete);
+
+    await waitFor(() => expect(screen.queryByText("First chat")).not.toBeInTheDocument());
+    const secondRowAfter = screen.getByText("Second chat").closest(".group") as HTMLElement;
+    expect(within(secondRowAfter).getByText("now")).toBe(secondDateBefore);
+    expect(screen.getByRole("button", { name: "Delete Second chat" })).toBeInTheDocument();
+  });
+
+  it("shows Dashboard, shared navigation, and Sidebar-pinned resources in lite mode", async () => {
+    const user = userEvent.setup();
     act(() => {
       useAuthStore.setState({
         user: {
@@ -937,11 +1210,13 @@ describe("AISidePanel autoscroll", () => {
     );
 
     expect(screen.getByRole("link", { name: /dashboard/i })).toHaveAttribute("href", "/dashboard");
-    expect((screen.getByPlaceholderText("Search...") as HTMLInputElement).readOnly).toBe(true);
     expect(screen.getByRole("link", { name: /edge node/i })).toHaveAttribute(
       "href",
       "/nodes/edge-1"
     );
+    expect((screen.getByPlaceholderText("Search...") as HTMLInputElement).readOnly).toBe(true);
+    await user.click(screen.getByRole("button", { name: "All sections" }));
+    expect(await screen.findByRole("menuitem", { name: "Nodes" })).toBeInTheDocument();
   });
 
   it("clears the active lite sidebar conversation when starting a new chat", async () => {
@@ -1080,5 +1355,31 @@ describe("AISidePanel autoscroll", () => {
 
     await user.click(screen.getByRole("button", { name: /User One/i }));
     expect(screen.queryByText("Administration")).not.toBeInTheDocument();
+  });
+
+  it("shows a shimmering starting chat item in the lite sidebar", () => {
+    act(() => {
+      useAIStore.setState({
+        messages: [],
+        recentConversations: [],
+        isStartingConversation: true,
+        isLoadingRecentConversations: false,
+        fetchRecentConversations: vi.fn(),
+        fetchConversationFolders: vi.fn(),
+      });
+      useUIStore.setState({ sidebarOpen: true });
+    });
+
+    renderWithRouter(
+      <TooltipProvider>
+        <AILiteSidebar />
+      </TooltipProvider>
+    );
+
+    expect(screen.getByText("Starting chat...")).toHaveClass(
+      "thinking-shimmer",
+      "text-muted-foreground"
+    );
+    expect(screen.queryByText("New chat")).not.toBeInTheDocument();
   });
 });

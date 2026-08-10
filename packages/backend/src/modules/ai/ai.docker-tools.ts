@@ -88,7 +88,7 @@ export async function executeDockerTool(
     case 'create_docker_container': {
       const input = ContainerCreateSchema.parse({
         image: a.image,
-        registryId: a.registryId,
+        registryId: optionalNonEmptyString(a.registryId),
         name: a.name,
         ports: a.ports,
         volumes: a.volumes,
@@ -99,8 +99,35 @@ export async function executeDockerTool(
         labels: a.labels,
         command: a.command,
       });
+      if (input.networks?.length) context.ensureToolScopeForResource(user, 'docker:networks:edit', a.nodeId);
       const data = await context.dockerService.createContainer(a.nodeId, input, user.id, user.scopes);
-      return { success: true, message: 'Container created', data };
+      const containerId = String((data as any)?.id ?? (data as any)?.Id ?? '');
+      if (!containerId) throw new Error('Docker daemon did not return the created container ID');
+      try {
+        for (const network of input.networks?.slice(1) ?? []) {
+          await context.dockerService.connectContainerToNetwork(a.nodeId, network, containerId, user.id);
+        }
+        await context.dockerService.startContainer(a.nodeId, containerId, user.id);
+        const inspect = await context.dockerService.inspectContainer(a.nodeId, containerId);
+        const name = String((inspect as any)?.Name ?? (data as any)?.name ?? '').replace(/^\//, '');
+        return {
+          success: true,
+          message: 'Container created and started',
+          data: { ...(data as object), id: containerId, name, state: (inspect as any)?.State?.Status ?? 'running' },
+        };
+      } catch (error) {
+        try {
+          await context.dockerService.rollbackCreatedContainer(
+            a.nodeId,
+            containerId,
+            String((data as any)?.name ?? '') || undefined,
+            user.id
+          );
+        } catch {
+          // Preserve the primary orchestration error. Cleanup failures are surfaced by Docker audit/task state.
+        }
+        throw error;
+      }
     }
     case 'list_docker_containers': {
       assertDockerNodeScope(user.scopes, 'docker:containers:view', a.nodeId);
@@ -206,22 +233,28 @@ export async function executeDockerTool(
       return { success: true };
     case 'stop_docker_container':
       await ensureDockerContainerScope(context, user, 'docker:containers:manage', a.nodeId, a.containerId);
-      await context.dockerService.stopContainer(
-        a.nodeId,
-        a.containerId,
-        ContainerStopSchema.parse({ timeout: a.timeout }).timeout,
-        user.id
-      );
-      return { success: true, message: 'Container stopping' };
+      return {
+        success: true,
+        message: 'Container stopping',
+        data: await context.dockerService.stopContainer(
+          a.nodeId,
+          a.containerId,
+          ContainerStopSchema.parse({ timeout: a.timeout }).timeout,
+          user.id
+        ),
+      };
     case 'restart_docker_container':
       await ensureDockerContainerScope(context, user, 'docker:containers:manage', a.nodeId, a.containerId);
-      await context.dockerService.restartContainer(
-        a.nodeId,
-        a.containerId,
-        ContainerStopSchema.parse({ timeout: a.timeout }).timeout,
-        user.id
-      );
-      return { success: true, message: 'Container restarting' };
+      return {
+        success: true,
+        message: 'Container restarting',
+        data: await context.dockerService.restartContainer(
+          a.nodeId,
+          a.containerId,
+          ContainerStopSchema.parse({ timeout: a.timeout }).timeout,
+          user.id
+        ),
+      };
     case 'remove_docker_container':
       await ensureDockerContainerScope(context, user, 'docker:containers:delete', a.nodeId, a.containerId);
       await context.dockerService.removeContainer(a.nodeId, a.containerId, a.force ?? false, user.id);
@@ -232,6 +265,8 @@ export async function executeDockerTool(
       return { success: true };
     case 'duplicate_docker_container': {
       await ensureDockerContainerScope(context, user, 'docker:containers:view', a.nodeId, a.containerId);
+      await ensureDockerContainerScope(context, user, 'docker:containers:environment', a.nodeId, a.containerId);
+      await ensureDockerContainerScope(context, user, 'docker:containers:secrets', a.nodeId, a.containerId);
       const dupData = await context.dockerService.duplicateContainer(
         a.nodeId,
         a.containerId,
@@ -249,14 +284,25 @@ export async function executeDockerTool(
       const inspectData = await context.dockerService.inspectContainer(a.nodeId, a.containerId);
       const currentImage: string = (inspectData as any)?.Config?.Image ?? '';
       if (!currentImage) return { error: 'Cannot determine current container image' };
+      if (currentImage.includes('@') || /^[a-f0-9]{64}$/i.test(currentImage)) {
+        return {
+          error: 'Digest and image-ID references cannot be retagged safely; provide a tagged image reference instead',
+        };
+      }
       const lastColon = currentImage.lastIndexOf(':');
       const lastSlash = currentImage.lastIndexOf('/');
       const imageName = lastColon > lastSlash ? currentImage.slice(0, lastColon) : currentImage;
       const targetRef = `${imageName}:${a.imageTag}`;
-      await context.dockerService.recreateWithConfig(a.nodeId, a.containerId, { image: targetRef }, user.id, {
-        actorScopes: user.scopes,
-      });
-      return { success: true, message: `Container updating to ${targetRef}` };
+      const data = await context.dockerService.recreateWithConfig(
+        a.nodeId,
+        a.containerId,
+        { image: targetRef },
+        user.id,
+        {
+          actorScopes: user.scopes,
+        }
+      );
+      return { success: true, message: `Container updating to ${targetRef}`, data };
     }
     case 'get_docker_container_logs':
       await ensureDockerContainerScope(context, user, 'docker:containers:view', a.nodeId, a.containerId);
@@ -272,7 +318,10 @@ export async function executeDockerTool(
         : images;
     }
     case 'pull_docker_image': {
-      const input = ImagePullSchema.parse({ imageRef: a.imageRef, registryId: a.registryId });
+      const input = ImagePullSchema.parse({
+        imageRef: a.imageRef,
+        registryId: optionalNonEmptyString(a.registryId),
+      });
       const { DockerRegistryService } = await import('@/modules/docker/docker-registry.service.js');
       const registryService = container.resolve(DockerRegistryService);
       const auth = await registryService.resolveAuthForImagePull(a.nodeId, input.imageRef, input.registryId, {
@@ -403,20 +452,35 @@ async function manageDockerRegistry(context: DockerToolContext, user: User, args
       context.ensureToolScope(user, 'docker:registries:view');
       return registryService.list(typeof a.nodeId === 'string' ? a.nodeId : undefined);
     case 'get':
-      context.ensureToolScope(user, 'docker:registries:view');
+      context.ensureToolScopeForResource(user, 'docker:registries:view', String(a.registryId));
       return registryService.get(String(a.registryId));
     case 'create':
       context.ensureToolScope(user, 'docker:registries:create');
-      return registryService.create(RegistryCreateSchema.parse(args), user.id);
+      if (
+        isPublicDockerHubRegistryUrl(a.url) &&
+        !optionalNonEmptyString(a.username) &&
+        !optionalNonEmptyString(a.password)
+      ) {
+        throw new Error(
+          'PUBLIC_DOCKER_HUB_REGISTRY_NOT_REQUIRED: Pull public Docker Hub images without registryId; do not create a saved registry'
+        );
+      }
+      return registryService.create(
+        RegistryCreateSchema.parse({
+          ...args,
+          nodeId: optionalNonEmptyString(a.nodeId),
+        }),
+        user.id
+      );
     case 'update':
-      context.ensureToolScope(user, 'docker:registries:edit');
+      context.ensureToolScopeForResource(user, 'docker:registries:edit', String(a.registryId));
       return registryService.update(String(a.registryId), RegistryUpdateSchema.parse(args), user.id);
     case 'delete':
-      context.ensureToolScope(user, 'docker:registries:delete');
+      context.ensureToolScopeForResource(user, 'docker:registries:delete', String(a.registryId));
       await registryService.delete(String(a.registryId), user.id);
       return { success: true };
     case 'test':
-      context.ensureToolScope(user, 'docker:registries:edit');
+      context.ensureToolScopeForResource(user, 'docker:registries:edit', String(a.registryId));
       return registryService.testConnection(String(a.registryId), { actorScopes: user.scopes });
     case 'test_direct':
       context.ensureToolScope(user, 'docker:registries:edit');
@@ -428,6 +492,23 @@ async function manageDockerRegistry(context: DockerToolContext, user: User, args
       );
     default:
       throw new Error(`Unsupported Docker registry operation: ${operation}`);
+  }
+}
+
+function optionalNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function isPublicDockerHubRegistryUrl(value: unknown): boolean {
+  const raw = optionalNonEmptyString(value);
+  if (!raw) return false;
+  try {
+    const hostname = new URL(raw.includes('://') ? raw : `https://${raw}`).hostname.toLowerCase();
+    return hostname === 'docker.io' || hostname === 'index.docker.io' || hostname === 'registry-1.docker.io';
+  } catch {
+    return false;
   }
 }
 

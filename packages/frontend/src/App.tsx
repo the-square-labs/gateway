@@ -1115,6 +1115,7 @@ export default function App() {
             />
             <Route element={<DashboardLayout key={authRouteKey} />}>
               <Route path="/" element={<Dashboard />} />
+              <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/proxy-hosts" element={<ProxyHostsPageGuard />} />
               <Route path="/proxy-hosts/new" element={<ProxyHostsPageGuard create />} />
               <Route path="/proxy-hosts/:proxySlug/:tab?" element={<ProxyHostDetailGuard />} />

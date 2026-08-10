@@ -18,7 +18,9 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  ChevronRight,
   CircleAlert,
+  Compass,
   Folder,
   FolderOpen,
   LayoutDashboard,
@@ -57,6 +59,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -65,13 +69,18 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
+import { visibleNavigationGroups } from "@/lib/app-navigation";
+import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
 import { cn, getInitials } from "@/lib/utils";
 import type { AIConversationFolder, AIConversationSummary } from "@/services/ai-conversations";
 import { api } from "@/services/api";
 import { useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
+import { useDockerStore } from "@/stores/docker";
+import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 
 const EXPANDED_PROJECT_IDS_STORAGE_KEY = "gateway-ai-lite-expanded-project-ids";
 
@@ -126,7 +135,7 @@ export function AILiteSidebar({
 }: AILiteSidebarProps) {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, hasAnyScope, logout } = useAuthStore();
+  const { user, hasAnyScope, hasScopedAccess, logout } = useAuthStore();
   const {
     sidebarOpen,
     toggleSidebar,
@@ -136,15 +145,21 @@ export function AILiteSidebar({
     setAILiteMode,
     setCommandPaletteOpen: openPalette,
   } = useUIStore();
-  const dashboardAttention = useDashboardBootstrapStore(
-    (s) => s.snapshot?.attention.severity ?? null
-  );
+  const dashboardBootstrap = useDashboardBootstrapStore((s) => s.snapshot);
+  const dashboardAttention = dashboardBootstrap?.attention.severity ?? null;
+  const pkiEnabled = useSystemConfigStore((s) => s.config.features.pkiEnabled);
+  const siemEnabled = useSystemConfigStore((s) => s.config.features.siemEnabled);
+  const loggingEnabled = useSystemConfigStore((s) => s.config.features.loggingEnabled);
+  const inferenceEnabled = useSystemConfigStore((s) => s.config.features.inferenceEnabled);
+  const navigationBootstrap = useUIBootstrapStore((s) => s.snapshot?.navigation);
+  const dockerNodes = useDockerStore((s) => s.dockerNodes);
   const {
     messages,
     sidebarActiveConversationId,
     recentConversations,
     conversationFolders,
     isLoadingRecentConversations,
+    isStartingConversation,
     clearMessages,
     createConversationFolder,
     deleteConversation,
@@ -166,6 +181,36 @@ export function AILiteSidebar({
   } = useDeferredDialogState<FolderDialogState>();
   const [dragOverlayConversationId, setDragOverlayConversationId] = useState<string | null>(null);
   const canAccessAdministration = hasAnyScope("admin:audit", "admin:users", "admin:groups");
+  const navigateToGroups = visibleNavigationGroups({
+    scopes: user?.scopes ?? [],
+    pkiEnabled,
+    siemEnabled,
+    loggingEnabled,
+    inferenceEnabled,
+    hasLowInferenceUsage: hasLowInferenceUsage(dashboardBootstrap?.inferenceUsage ?? null),
+    statusPageEnabled: navigationBootstrap?.statusPageEnabled ?? false,
+    hasNginxNodes: navigationBootstrap?.hasNginxNodes ?? true,
+    hasCloudflareIntegration: navigationBootstrap?.hasCloudflareIntegration ?? false,
+    hasDockerNodes:
+      dockerNodes.length > 0 ||
+      [
+        "docker:containers:view",
+        "docker:images:view",
+        "docker:volumes:view",
+        "docker:networks:view",
+      ].some(hasScopedAccess),
+  })
+    .map((group) => ({
+      ...group,
+      items: group.items.filter(
+        (item) =>
+          item.id !== "dashboard" &&
+          item.id !== "profile" &&
+          item.id !== "settings" &&
+          item.id !== "administration"
+      ),
+    }))
+    .filter((group) => group.items.length > 0);
   const isExpanded = sidebarOpen;
   const pinnedConversationSet = new Set(pinnedAIConversationIds);
   const pinnedConversations = pinnedAIConversationIds
@@ -495,7 +540,6 @@ export function AILiteSidebar({
                             conversation={conversation}
                             active={visibleActiveConversationId === conversation.id}
                             pinned
-                            disableLayoutAnimation={isResizing}
                             onLoad={() => void handleLoadConversation(conversation.id)}
                             onTogglePin={() => togglePinnedAIConversation(conversation.id)}
                             onDelete={() => void deleteConversation(conversation.id)}
@@ -561,7 +605,6 @@ export function AILiteSidebar({
                                                   visibleActiveConversationId === conversation.id
                                                 }
                                                 pinned={false}
-                                                disableLayoutAnimation={isResizing}
                                                 onLoad={() =>
                                                   void handleLoadConversation(conversation.id)
                                                 }
@@ -589,7 +632,20 @@ export function AILiteSidebar({
                         <p className="px-3 py-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
                           Chats
                         </p>
-                        {recentConversations.length === 0 && sortedFolders.length === 0 ? (
+                        {isStartingConversation && (
+                          <div
+                            aria-current="page"
+                            className="flex w-full items-center gap-3 overflow-hidden whitespace-nowrap bg-sidebar-accent px-3 py-2 text-left text-sm font-medium text-sidebar-accent-foreground"
+                          >
+                            <MessageSquare className="h-4 w-4 shrink-0" />
+                            <span className="thinking-shimmer truncate text-muted-foreground">
+                              Starting chat...
+                            </span>
+                          </div>
+                        )}
+                        {recentConversations.length === 0 &&
+                        sortedFolders.length === 0 &&
+                        !isStartingConversation ? (
                           <button
                             type="button"
                             className="flex w-full items-center gap-3 overflow-hidden whitespace-nowrap bg-sidebar-accent px-3 py-2 text-left text-sm font-medium text-sidebar-accent-foreground"
@@ -607,7 +663,6 @@ export function AILiteSidebar({
                                 folderId={null}
                                 active={visibleActiveConversationId === conversation.id}
                                 pinned={false}
-                                disableLayoutAnimation={isResizing}
                                 onLoad={() => void handleLoadConversation(conversation.id)}
                                 onTogglePin={() => togglePinnedAIConversation(conversation.id)}
                                 onDelete={() => void deleteConversation(conversation.id)}
@@ -631,6 +686,45 @@ export function AILiteSidebar({
             </div>
 
             <div className="border-t border-border">
+              {navigateToGroups.length > 0 && (
+                <>
+                  <div className="px-2 py-2">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        >
+                          <Compass className="h-4 w-4 shrink-0" />
+                          <span className="min-w-0 flex-1 truncate">All sections</span>
+                          <ChevronRight className="h-4 w-4 shrink-0" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent
+                        side="right"
+                        align="end"
+                        className="max-h-[min(70vh,34rem)] w-60 overflow-y-auto"
+                      >
+                        {navigateToGroups.map((group, groupIndex) => (
+                          <div key={group.id}>
+                            {groupIndex > 0 && <DropdownMenuSeparator />}
+                            <DropdownMenuLabel className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                              {group.label}
+                            </DropdownMenuLabel>
+                            {group.items.map((item) => (
+                              <DropdownMenuItem key={item.id} onSelect={() => navigate(item.href)}>
+                                <item.icon className="h-4 w-4" />
+                                <span>{item.name}</span>
+                              </DropdownMenuItem>
+                            ))}
+                          </div>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                  <Separator />
+                </>
+              )}
               {showAILiteModeCTA && (
                 <>
                   <div className="px-2 py-2">
@@ -882,7 +976,6 @@ function DraggableConversationMenuItem({
   folderId,
   active,
   pinned,
-  disableLayoutAnimation,
   onLoad,
   onTogglePin,
   onDelete,
@@ -891,7 +984,6 @@ function DraggableConversationMenuItem({
   folderId: string | null;
   active: boolean;
   pinned: boolean;
-  disableLayoutAnimation?: boolean;
   onLoad: () => void;
   onTogglePin: () => void;
   onDelete: () => void;
@@ -912,7 +1004,6 @@ function DraggableConversationMenuItem({
         conversation={conversation}
         active={active}
         pinned={pinned}
-        disableLayoutAnimation={disableLayoutAnimation}
         onLoad={onLoad}
         onTogglePin={onTogglePin}
         onDelete={onDelete}
@@ -955,7 +1046,6 @@ function ConversationMenuItem({
   conversation,
   active,
   pinned,
-  disableLayoutAnimation,
   onLoad,
   onTogglePin,
   onDelete,
@@ -963,12 +1053,10 @@ function ConversationMenuItem({
   conversation: AIConversationSummary;
   active: boolean;
   pinned: boolean;
-  disableLayoutAnimation?: boolean;
   onLoad: () => void;
   onTogglePin: () => void;
   onDelete: () => void;
 }) {
-  const [isHovered, setIsHovered] = useState(false);
   const StatusIcon = getConversationStatusIcon(conversation);
   const statusIconClassName = cn(
     "h-4 w-4 shrink-0",
@@ -983,10 +1071,8 @@ function ConversationMenuItem({
 
   return (
     <div
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
       className={cn(
-        "group flex max-w-full items-center overflow-hidden whitespace-nowrap transition-colors",
+        "group relative flex min-h-9 max-w-full items-center overflow-hidden whitespace-nowrap transition-colors",
         active
           ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
           : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
@@ -994,66 +1080,41 @@ function ConversationMenuItem({
     >
       <button
         type="button"
-        className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden px-3 py-2 pr-1 text-left text-sm"
+        className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden px-3 py-2 pr-20 text-left text-sm"
         onClick={onLoad}
       >
         <StatusIcon className={statusIconClassName} />
         <span className="min-w-0 flex-1 truncate">{conversation.title}</span>
       </button>
-      <motion.div
-        layout={!disableLayoutAnimation}
-        className="mr-2 flex h-6 shrink-0 items-center justify-end overflow-hidden"
-        transition={{ duration: 0.16, ease: "easeOut" }}
-      >
-        <AnimatePresence initial={false} mode="popLayout">
-          {isHovered ? (
-            <motion.div
-              key="actions"
-              layout={!disableLayoutAnimation}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.12, ease: "easeOut" }}
-              className="flex items-center gap-0.5"
-            >
-              <button
-                type="button"
-                aria-label={`${pinned ? "Unpin" : "Pin"} ${conversation.title}`}
-                className="flex h-6 w-6 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-sidebar-accent-foreground"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onTogglePin();
-                }}
-              >
-                {pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
-              </button>
-              <button
-                type="button"
-                aria-label={`Delete ${conversation.title}`}
-                className="flex h-6 w-6 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-destructive"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDelete();
-                }}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </motion.div>
-          ) : (
-            <motion.span
-              key="time"
-              layout={!disableLayoutAnimation}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.12, ease: "easeOut" }}
-              className="text-xs text-muted-foreground"
-            >
-              {formatConversationDate(conversation.lastUserMessageAt ?? conversation.createdAt)}
-            </motion.span>
-          )}
-        </AnimatePresence>
-      </motion.div>
+      <span className="pointer-events-none absolute inset-y-0 right-2 flex w-14 items-center justify-end text-xs text-muted-foreground group-hover:invisible group-focus-within:invisible">
+        {formatConversationDate(conversation.lastUserMessageAt ?? conversation.createdAt)}
+      </span>
+      <div className="pointer-events-none invisible absolute inset-y-0 right-2 z-20 flex w-14 items-center justify-end gap-0.5 group-hover:pointer-events-auto group-hover:visible group-focus-within:pointer-events-auto group-focus-within:visible">
+        <button
+          type="button"
+          aria-label={`${pinned ? "Unpin" : "Pin"} ${conversation.title}`}
+          className="flex h-7 w-7 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-sidebar-accent-foreground"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onTogglePin();
+          }}
+        >
+          {pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+        </button>
+        <button
+          type="button"
+          aria-label={`Delete ${conversation.title}`}
+          className="flex h-7 w-7 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-destructive"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      </div>
     </div>
   );
 }

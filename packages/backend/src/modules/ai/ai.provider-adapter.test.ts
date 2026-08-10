@@ -90,6 +90,7 @@ describe('AI provider adapter', () => {
         name: 'manage_docker_container_config',
         arguments: '{"containerId":"container-1"}',
       };
+      yield { type: 'response.completed', response: { status: 'completed' } };
     }
     const create = vi.fn().mockResolvedValue(responseStream());
     const events = await collectEvents({ responses: { create } });
@@ -139,6 +140,7 @@ describe('AI provider adapter', () => {
           },
         ],
       };
+      yield { choices: [{ delta: {}, finish_reason: 'tool_calls' }] };
       yield {
         choices: [
           {
@@ -160,7 +162,7 @@ describe('AI provider adapter', () => {
       { ...BASE_CONFIG, endpointMode: 'chat_completions' }
     );
 
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ stream: true }));
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ stream: true }), expect.any(Object));
     expect(events).toEqual([
       { type: 'text_delta', content: 'Checking ' },
       {
@@ -182,6 +184,7 @@ describe('AI provider adapter', () => {
   it('omits orphan tool outputs before sending Responses input', async () => {
     async function* responseStream() {
       yield { type: 'response.output_text.delta', delta: 'ok' };
+      yield { type: 'response.completed', response: { status: 'completed' } };
     }
     const create = vi.fn().mockResolvedValue(responseStream());
 
@@ -203,6 +206,7 @@ describe('AI provider adapter', () => {
   it('omits tool outputs when the matching tool call cannot be converted for Responses', async () => {
     async function* responseStream() {
       yield { type: 'response.output_text.delta', delta: 'ok' };
+      yield { type: 'response.completed', response: { status: 'completed' } };
     }
     const create = vi.fn().mockResolvedValue(responseStream());
 
@@ -235,6 +239,7 @@ describe('AI provider adapter', () => {
         name: 'manage_docker_container_config',
         arguments: '{"containerId":"container-1"}',
       };
+      yield { type: 'response.completed', response: { status: 'completed' } };
     }
     const create = vi.fn().mockResolvedValue(responseStream());
     const events = await collectEvents({ responses: { create } });
@@ -274,6 +279,7 @@ describe('AI provider adapter', () => {
         item_id: 'fc-item-1',
         arguments: '{"category":"Docker","includeTools":true}',
       };
+      yield { type: 'response.completed', response: { status: 'completed' } };
     }
     const create = vi.fn().mockResolvedValue(responseStream());
     const events = await collectEvents({ responses: { create } });
@@ -298,6 +304,7 @@ describe('AI provider adapter', () => {
   it('omits orphan tool outputs before sending Chat Completions messages', async () => {
     async function* chatStream() {
       yield { choices: [{ delta: { content: 'ok' } }] };
+      yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
     }
     const create = vi.fn().mockResolvedValue(chatStream());
 
@@ -314,7 +321,33 @@ describe('AI provider adapter', () => {
           { role: 'system', content: 'You are helpful.' },
           { role: 'user', content: 'continue' },
         ],
-      })
+      }),
+      expect.any(Object)
     );
+  });
+
+  it('rejects incomplete Responses terminal states', async () => {
+    async function* responseStream() {
+      yield {
+        type: 'response.incomplete',
+        response: { incomplete_details: { reason: 'max_output_tokens' } },
+      };
+    }
+    const create = vi.fn().mockResolvedValue(responseStream());
+
+    await expect(collectEvents({ responses: { create } })).rejects.toMatchObject({
+      code: 'AI_PROVIDER_INCOMPLETE',
+    });
+  });
+
+  it('rejects Chat Completions length terminals', async () => {
+    async function* chatStream() {
+      yield { choices: [{ delta: { content: 'partial' }, finish_reason: 'length' }] };
+    }
+    const create = vi.fn().mockResolvedValue(chatStream());
+
+    await expect(
+      collectEvents({ chat: { completions: { create } } }, { ...BASE_CONFIG, endpointMode: 'chat_completions' })
+    ).rejects.toMatchObject({ code: 'AI_PROVIDER_INCOMPLETE' });
   });
 });

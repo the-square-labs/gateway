@@ -9,7 +9,8 @@ import type { User } from '@/types.js';
 import { streamGatewayInferenceResponse } from './ai.gateway-inference-adapter.js';
 import { type AIModelTool, type ModelProviderEvent, streamModelResponse } from './ai.provider-adapter.js';
 import type { AISettingsService } from './ai.settings.service.js';
-import type { AIConfig } from './ai.types.js';
+import type { AIConfig, AIContextLimits } from './ai.types.js';
+import { directProviderContextLimits, normalizeAIContextLimits } from './ai-context-limits.js';
 
 const GATEWAY_INFERENCE_MAX_TOOL_ROUNDS = 20;
 
@@ -34,8 +35,13 @@ export interface AIProviderStatus {
 
 export interface AIProviderSession {
   config: AIConfig;
+  contextLimits: AIContextLimits;
   reasoningEffort: string | null;
-  stream: (messages: Record<string, unknown>[], tools: AIModelTool[]) => AsyncGenerator<ModelProviderEvent>;
+  stream: (
+    messages: Record<string, unknown>[],
+    tools: AIModelTool[],
+    options?: { maxOutputTokens?: number }
+  ) => AsyncGenerator<ModelProviderEvent>;
 }
 
 interface ResolveSessionOptions {
@@ -43,9 +49,25 @@ interface ResolveSessionOptions {
   conversationId?: string;
   requestedModel?: string;
   requestedReasoningEffort?: string;
+  preferMinimumReasoning?: boolean;
   signal: AbortSignal;
   isCompaction?: boolean;
 }
+
+interface GenerateConversationTitleOptions {
+  requestId: string;
+  content: string;
+  requestedModel?: string;
+  signal: AbortSignal;
+}
+
+const CONVERSATION_TITLE_SYSTEM_PROMPT = [
+  'Generate a concise title for this chat.',
+  'Use the same language as the user.',
+  'Do not analyze, reason through the request, or explain anything; answer immediately.',
+  'Return only the title: 3 to 7 words, no quotes, no markdown, no trailing punctuation.',
+].join(' ');
+const CONVERSATION_TITLE_MAX_OUTPUT_TOKENS = 512;
 
 export class AIProviderRuntimeService {
   constructor(
@@ -117,10 +139,25 @@ export class AIProviderRuntimeService {
         throw new AppError(503, 'AI_NOT_CONFIGURED', 'AI is not configured. An admin must set up the API key.');
       }
       const client = new OpenAI({ apiKey, baseURL: config.providerUrl || undefined });
+      const contextLimits = directProviderContextLimits(config.maxContextTokens, config.maxCompletionTokens);
+      const effectiveConfig = options.preferMinimumReasoning ? { ...config, reasoningEffort: 'none' as const } : config;
       return {
-        config,
-        reasoningEffort: config.reasoningEffort === 'none' ? null : config.reasoningEffort,
-        stream: (messages, tools) => streamModelResponse({ client, config, messages, tools, signal: options.signal }),
+        config: effectiveConfig,
+        contextLimits,
+        reasoningEffort: effectiveConfig.reasoningEffort === 'none' ? null : effectiveConfig.reasoningEffort,
+        stream: (messages, tools, streamOptions) =>
+          streamModelResponse({
+            client,
+            config: streamOptions?.maxOutputTokens
+              ? {
+                  ...effectiveConfig,
+                  maxCompletionTokens: Math.min(effectiveConfig.maxCompletionTokens, streamOptions.maxOutputTokens),
+                }
+              : effectiveConfig,
+            messages,
+            tools,
+            signal: options.signal,
+          }),
       };
     }
 
@@ -154,21 +191,30 @@ export class AIProviderRuntimeService {
         'The selected reasoning effort is unavailable for this model'
       );
     }
-    const reasoningEffort = requestedReasoningEffort || selected.default_reasoning_effort || null;
+    const reasoningEffort = options.preferMinimumReasoning
+      ? minimumReasoningEffort(selected.supported_reasoning_efforts)
+      : requestedReasoningEffort || selected.default_reasoning_effort || null;
+    const contextLimits = normalizeAIContextLimits({
+      contextWindow: selected.context_window,
+      maxInputTokens: selected.max_input_tokens,
+      autoCompactTokenLimit: selected.auto_compact_token_limit,
+      maxOutputTokens: selected.max_output_tokens,
+    });
 
     const effectiveConfig: AIConfig = {
       ...config,
       model: selected.id,
       supportsImages: selected.input_modalities.includes('image'),
-      maxContextTokens: selected.auto_compact_token_limit,
+      maxContextTokens: contextLimits.maxInputTokens,
       maxCompletionTokens: selected.max_output_tokens ?? config.maxCompletionTokens,
       maxToolRounds: GATEWAY_INFERENCE_MAX_TOOL_ROUNDS,
     };
 
     return {
       config: effectiveConfig,
+      contextLimits,
       reasoningEffort,
-      stream: (messages, tools) =>
+      stream: (messages, tools, streamOptions) =>
         streamGatewayInferenceResponse({
           runtime: this.inferenceRuntime,
           userId: user.id,
@@ -177,20 +223,82 @@ export class AIProviderRuntimeService {
           model: selected.id,
           messages,
           tools,
-          maxOutputTokens: selected.max_output_tokens ?? undefined,
+          maxOutputTokens: streamOptions?.maxOutputTokens
+            ? Math.min(selected.max_output_tokens ?? streamOptions.maxOutputTokens, streamOptions.maxOutputTokens)
+            : (selected.max_output_tokens ?? undefined),
           reasoningEffort: reasoningEffort ?? undefined,
           signal: options.signal,
           isCompaction: options.isCompaction,
         }),
     };
   }
+
+  async generateConversationTitle(user: User, options: GenerateConversationTitleOptions): Promise<string> {
+    const session = await this.resolveSession(user, {
+      requestId: options.requestId,
+      requestedModel: options.requestedModel,
+      preferMinimumReasoning: true,
+      signal: options.signal,
+    });
+    let streamedContent = '';
+    let finalContent = '';
+    for await (const event of session.stream(
+      [
+        { role: 'system', content: CONVERSATION_TITLE_SYSTEM_PROMPT },
+        { role: 'user', content: options.content },
+      ],
+      [],
+      { maxOutputTokens: CONVERSATION_TITLE_MAX_OUTPUT_TOKENS }
+    )) {
+      if (event.type === 'text_delta') streamedContent += event.content;
+      if (event.type === 'model_response') finalContent = event.response.content;
+    }
+    const title = normalizeGeneratedConversationTitle(finalContent || streamedContent);
+    if (!title) {
+      throw new AppError(502, 'AI_CONVERSATION_TITLE_EMPTY', 'The AI model returned an empty conversation title');
+    }
+    return title;
+  }
+}
+
+function minimumReasoningEffort(efforts: string[]): string | null {
+  if (efforts.length === 0) return null;
+  const rank = new Map([
+    ['none', 0],
+    ['minimal', 1],
+    ['low', 2],
+    ['medium', 3],
+    ['high', 4],
+    ['xhigh', 5],
+    ['max', 6],
+    ['ultra', 7],
+  ]);
+  return efforts.reduce((minimum, candidate) => {
+    const minimumRank = rank.get(minimum.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+    const candidateRank = rank.get(candidate.toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+    return candidateRank < minimumRank ? candidate : minimum;
+  });
+}
+
+export function normalizeGeneratedConversationTitle(value: string): string {
+  const title = value
+    .trim()
+    .split(/\r?\n/, 1)[0]
+    ?.replace(/^#{1,6}\s*/, '')
+    .replace(/^\*{0,2}(?:title|название)\s*:\*{0,2}\s*/i, '')
+    .replace(/^[`"'«“]+|[`"'»”]+$/g, '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/[.!?;:]+$/u, '')
+    .trim();
+  return title?.slice(0, 80).trim() ?? '';
 }
 
 function toAdminModelOption(model: {
   publicId: string;
   displayName: string;
   modalities: string[];
-  autoCompactTokenLimit: number;
+  maxInputTokens: number;
   maxOutputTokens: number | null;
   reasoningEfforts: string[];
   defaultReasoningEffort: string | null;
@@ -199,7 +307,7 @@ function toAdminModelOption(model: {
     id: model.publicId,
     displayName: model.displayName,
     supportsImages: model.modalities.includes('image'),
-    maxContextTokens: model.autoCompactTokenLimit,
+    maxContextTokens: model.maxInputTokens,
     maxOutputTokens: model.maxOutputTokens,
     reasoningEfforts: model.reasoningEfforts,
     defaultReasoningEffort: model.defaultReasoningEffort,
@@ -210,7 +318,7 @@ function toPublicModelOption(model: {
   id: string;
   display_name: string;
   input_modalities: string[];
-  auto_compact_token_limit: number;
+  max_input_tokens: number;
   max_output_tokens?: number;
   supported_reasoning_efforts: string[];
   default_reasoning_effort: string | null;
@@ -219,7 +327,7 @@ function toPublicModelOption(model: {
     id: model.id,
     displayName: model.display_name,
     supportsImages: model.input_modalities.includes('image'),
-    maxContextTokens: model.auto_compact_token_limit,
+    maxContextTokens: model.max_input_tokens,
     maxOutputTokens: model.max_output_tokens ?? null,
     reasoningEfforts: model.supported_reasoning_efforts,
     defaultReasoningEffort: model.default_reasoning_effort,

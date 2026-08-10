@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { eq } from 'drizzle-orm';
 import OpenAI from 'openai';
@@ -75,20 +76,26 @@ import {
   allowedResourceIdsForScopes,
   compactProxyHostForAgent,
   dashboardStatsOptionsForScopes,
-  estimateMessagesTokens,
-  estimateTokens,
   getToolResourceId,
   hasToolExecutionScope,
   isMutatingTool,
   redactToolArgs,
-  trimToTokenBudget,
 } from './ai.service-helpers.js';
 import type { AISettingsService } from './ai.settings.service.js';
 import { manageStatusPageTool } from './ai.status-page-tools.js';
 import { buildAISystemPromptDetailed, type SystemPromptBreakdownItem } from './ai.system-prompt.js';
-import { AI_TOOLS, getOpenAITools, inferDiscoveredToolsetsFromText, TOOL_STORE_INVALIDATION_MAP } from './ai.tools.js';
+import {
+  AI_TOOLS,
+  getOpenAITools,
+  inferDiscoveredToolsetsFromText,
+  parseAndValidateAIToolArguments,
+  TOOL_STORE_INVALIDATION_MAP,
+  validateAIToolArguments,
+} from './ai.tools.js';
 import type {
+  AIContextLimits,
   AIMessageAttachment,
+  AIResourceReference,
   ChatMessage,
   PageContext,
   ToolExecutionOptions,
@@ -96,11 +103,19 @@ import type {
   WSServerMessage,
 } from './ai.types.js';
 import { executeWebSearch } from './ai.web-search.js';
-import { getAIToolApprovalDecision } from './ai-approval-policy.js';
+import { type AIApprovalMode, getAIToolApprovalDecision } from './ai-approval-policy.js';
+import { directProviderContextLimits, toolOutputInlineLimits } from './ai-context-limits.js';
 import { AIConversationService } from './ai-conversation.service.js';
 import { type AIChatSearchScope, AIConversationSearchService } from './ai-conversation-search.service.js';
 import type { AIProviderRuntimeService, AIProviderSession } from './ai-provider-runtime.service.js';
+import { appendAIResourceReferencesToModelResult, extractAIResourceReferences } from './ai-resource-references.js';
 import { redactOneTimeSecretToolResult } from './ai-secret-result-redaction.js';
+import {
+  assertProviderInputWithinLimits,
+  estimateProviderMessagesTokens,
+  estimateTextTokens,
+  estimateToolSchemaTokens,
+} from './ai-token-estimator.js';
 
 const logger = createChildLogger('AIService');
 const SANDBOX_TOOL_NAMES = new Set([
@@ -136,14 +151,14 @@ export interface AIContextCompactionResult {
   compacted: boolean;
   summary: string;
   compactedMessageCount: number;
-  tailMessageCount: number;
-  omittedSourceChars: number;
+  compactVersion: 2;
+  compactEpoch: number;
+  compactBoundaryMessageId: string | null;
+  sourceTokenEstimate: number;
+  resultTokenEstimate: number;
   trigger: AIContextCompactionTrigger;
 }
 
-const COMPACTION_TAIL_MESSAGES = 8;
-const COMPACTION_AUTO_THRESHOLD = 0.86;
-const COMPACTION_SOURCE_RESERVE_TOKENS = 6000;
 const SEND_COMMENT_TOOL_NAME = 'send_comment';
 const TOOL_COMMENT_REQUIRED_MESSAGE =
   'You have reached the maximum number of sequential tool-call rounds without a user-visible progress comment. Call only send_comment now with a concise, useful progress update in the user language, then continue the task after that comment. Do not call any other tool in this response.';
@@ -151,14 +166,28 @@ const SEND_COMMENT_EMPTY_ERROR =
   'send_comment requires a real, non-empty progress comment for the user. Call send_comment again with a concise update in the user language.';
 const SEND_COMMENT_MIXED_ERROR =
   'send_comment must be called by itself. First send the progress comment, then call other tools in the next assistant turn.';
+
+function isAIResourceAppearanceColor(value: unknown): value is NonNullable<AIResourceReference['appearanceColor']> {
+  return (
+    value === 'blue' ||
+    value === 'red' ||
+    value === 'green' ||
+    value === 'yellow' ||
+    value === 'purple' ||
+    value === 'pink' ||
+    value === 'orange'
+  );
+}
 const SEND_COMMENT_REPAIR_LIMIT = 3;
 
 type ModelTool = ReturnType<typeof getOpenAITools>[number];
-type PendingToolCall = { id: string; name: string; arguments: string; parsedArgs: Record<string, unknown> };
-
-function messageBudgetForTools(maxContextTokens: number, tools: unknown[]): number {
-  return Math.max(1, maxContextTokens - estimateTokens(safeStringify(tools)));
-}
+type PendingToolCall = {
+  id: string;
+  name: string;
+  arguments: string;
+  parsedArgs: Record<string, unknown>;
+  validationError?: string;
+};
 
 function isContextWindowError(error: unknown): boolean {
   const message =
@@ -181,73 +210,148 @@ function compactToolResultForModel(toolName: string, value: unknown): unknown {
   if (value == null) return value;
   const redactedValue = redactOneTimeSecretToolResult(toolName, value);
   if (redactedValue !== value) return redactedValue;
-  if (toolName === 'get_docker_container_logs') return compactLogLikeResult(value, 'Docker container logs');
   if (toolName === 'send_artifact' && isRecord(value)) {
     const { artifactId, filename, mediaType, sizeBytes, sourcePath, downloadUrl } = value;
     return { artifactId, filename, mediaType, sizeBytes, sourcePath, downloadUrl };
   }
-  if ((toolName === 'fetch' || toolName === 'read_artifact') && isRecord(value)) {
-    const content = typeof value.content === 'string' ? value.content : undefined;
-    if (content && content.length > 4000) {
-      return {
-        ...value,
-        content: undefined,
-        contentPreview: content.slice(0, 2000),
-        contentOmitted: true,
-      };
-    }
-  }
-  if (toolName === 'manage_logging' && isRecord(value) && Array.isArray(value.rows)) {
-    return compactLogLikeResult(value.rows, 'Structured log search results');
-  }
-  if (typeof value === 'string' && value.length > 4000) {
-    return compactLogText(value, 'Large text tool output');
-  }
-  if (Array.isArray(value) && value.length > 25) {
-    return {
-      summary: `Large array tool output omitted from model context (${value.length} items).`,
-      count: value.length,
-      sample: [...value.slice(0, 5), ...value.slice(-5)],
-      fullOutputOmitted: true,
-    };
-  }
   return value;
 }
 
-function compactLogLikeResult(value: unknown, label: string): unknown {
-  if (typeof value === 'string') return compactLogText(value, label);
-  if (!Array.isArray(value)) return value;
+function splitToolControlMetadata(
+  toolName: string,
+  value: unknown
+): { modelVisible: unknown; clientAction?: Record<string, unknown> } {
+  const compacted = compactToolResultForModel(toolName, value);
+  if (!isRecord(compacted) || !isRecord(compacted.clientAction)) return { modelVisible: compacted };
+  const { clientAction, ...modelVisible } = compacted;
+  return { modelVisible, clientAction };
+}
+
+function toolOutputPreview(serialized: string): string {
+  return serialized.length <= 2_048 ? serialized : `${serialized.slice(0, 2_048)}\n…`;
+}
+
+function createToolRoundStartEvent(
+  requestId: string,
+  calls: PendingToolCall[],
+  approvalMode: User['aiApprovalMode'],
+  providerMessages: Record<string, unknown>[]
+): Extract<WSServerMessage, { type: 'tool_round_start' }> {
   return {
-    summary: `${label} omitted from model context (${value.length} entries).`,
-    count: value.length,
-    sample: [...value.slice(0, 3), ...value.slice(-5)],
-    fullOutputOmitted: true,
+    type: 'tool_round_start',
+    requestId,
+    roundId: randomUUID(),
+    calls: calls.map((call, position) => {
+      const decision = getAIToolApprovalDecision(call.name, approvalMode, call.parsedArgs);
+      const definition = AI_TOOLS.find((tool) => tool.name === call.name);
+      return {
+        id: call.id,
+        name: call.name,
+        arguments: call.parsedArgs,
+        position,
+        gate: call.name === 'ask_question' ? 'question' : decision.requiresApproval ? 'approval' : 'immediate',
+        classification: decision.classification,
+        approvalPolicy: decision.approvalPolicy,
+        requiredScopes: definition?.requiredScopes ?? (definition?.requiredScope ? [definition.requiredScope] : []),
+      };
+    }),
+    providerMessages,
   };
 }
 
-function compactLogText(value: string, label: string): unknown {
-  const lines = value.split(/\r?\n/).filter(Boolean);
-  return {
-    summary: `${label} omitted from model context (${lines.length} lines, ${value.length} chars).`,
-    lineCount: lines.length,
-    sample: [...lines.slice(0, 3), ...lines.slice(-5)],
-    fullOutputOmitted: true,
-  };
+interface CompactionMessageUnit {
+  start: number;
+  end: number;
 }
 
-function selectCompactionSource(messages: ChatMessage[]): { source: ChatMessage[]; tail: ChatMessage[] } {
-  if (messages.length <= COMPACTION_TAIL_MESSAGES + 1) {
-    return { source: [], tail: messages };
+function compactionMessageUnits(messages: ChatMessage[]): CompactionMessageUnit[] {
+  const units: CompactionMessageUnit[] = [];
+  let index = 0;
+  while (index < messages.length) {
+    const start = index;
+    if (messages[index]?.role === 'user') {
+      index += 1;
+      while (index < messages.length && messages[index]?.role !== 'user') index += 1;
+      units.push({ start, end: index });
+      continue;
+    }
+    if (messages[index]?.role === 'assistant' && messages[index]?.tool_calls?.length) {
+      const callIds = new Set(messages[index].tool_calls?.map((call) => call.id));
+      index += 1;
+      while (index < messages.length && messages[index]?.role === 'tool') {
+        const callId = messages[index]?.tool_call_id;
+        if (callId && !callIds.has(callId)) break;
+        index += 1;
+      }
+      units.push({ start, end: index });
+      continue;
+    }
+    index += 1;
+    units.push({ start, end: index });
   }
-  const splitAt = Math.max(1, messages.length - COMPACTION_TAIL_MESSAGES);
+  return units;
+}
+
+function selectCompactionBoundary(
+  messages: ChatMessage[],
+  providerMessages: Record<string, unknown>[],
+  recentBudget: number
+): { source: ChatMessage[]; recent: ChatMessage[]; sourceTokens: number; recentTokens: number } {
+  const units = compactionMessageUnits(messages);
+  if (units.length <= 1) {
+    return {
+      source: [],
+      recent: messages,
+      sourceTokens: 0,
+      recentTokens: estimateProviderMessagesTokens(providerMessages),
+    };
+  }
+
+  let recentStart = units[units.length - 1].start;
+  let recentTokens = estimateProviderMessagesTokens(providerMessages.slice(recentStart));
+  for (let unitIndex = units.length - 2; unitIndex >= 0; unitIndex -= 1) {
+    const candidateStart = units[unitIndex].start;
+    const candidateTokens = estimateProviderMessagesTokens(providerMessages.slice(candidateStart));
+    if (candidateTokens > recentBudget) break;
+    recentStart = candidateStart;
+    recentTokens = candidateTokens;
+  }
+
   return {
-    source: messages.slice(0, splitAt),
-    tail: messages.slice(splitAt),
+    source: messages.slice(0, recentStart),
+    recent: messages.slice(recentStart),
+    sourceTokens: estimateProviderMessagesTokens(providerMessages.slice(0, recentStart)),
+    recentTokens,
   };
 }
 
 function providerMessagesToClientMessages(messages: Record<string, unknown>[]): ChatMessage[] {
   return messages.map(providerMessageToClientMessage).filter((message): message is ChatMessage => message !== null);
+}
+
+function orderLatestToolRoundResults(messages: Record<string, unknown>[]): Record<string, unknown>[] {
+  let assistantIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === 'assistant' && Array.isArray(messages[index]?.tool_calls)) {
+      assistantIndex = index;
+      break;
+    }
+  }
+  if (assistantIndex < 0) return messages;
+  const toolCalls = messages[assistantIndex].tool_calls as Array<{ id?: unknown }>;
+  const order = toolCalls
+    .map((call) => (typeof call.id === 'string' ? call.id : null))
+    .filter((id): id is string => id !== null);
+  if (order.length === 0) return messages;
+  const suffix = messages.slice(assistantIndex + 1);
+  const results = new Map(
+    suffix
+      .filter((message) => message.role === 'tool' && typeof message.tool_call_id === 'string')
+      .map((message) => [message.tool_call_id as string, message])
+  );
+  if (order.some((id) => !results.has(id))) return messages;
+  const nonResults = suffix.filter((message) => message.role !== 'tool' || typeof message.tool_call_id !== 'string');
+  return [...messages.slice(0, assistantIndex + 1), ...order.map((id) => results.get(id)!), ...nonResults];
 }
 
 function providerMessageToClientMessage(message: Record<string, unknown>): ChatMessage | null {
@@ -267,31 +371,34 @@ function serializeMessagesForCompaction(messages: ChatMessage[]): string {
   return messages
     .map((message, index) => {
       const heading = `#${index + 1} ${message.role}`;
-      const content = typeof message.content === 'string' ? message.content : JSON.stringify(message.content ?? '');
+      let content = typeof message.content === 'string' ? message.content : JSON.stringify(message.content ?? '');
+      if (message.role === 'tool' && message.name) {
+        try {
+          const parsed = JSON.parse(content) as unknown;
+          content = safeStringify(redactToolArgs(redactOneTimeSecretToolResult(message.name, parsed)));
+        } catch {
+          // Non-JSON legacy tool output has no structured keys to redact.
+        }
+      }
       const attachments = message.attachments?.length
         ? `\nAttachments: ${message.attachments.map((attachment) => attachment.filename).join(', ')}`
         : '';
       const toolCalls = message.tool_calls?.length
         ? `\nTool calls: ${message.tool_calls
-            .map((toolCall) => `${toolCall.function.name}(${toolCall.function.arguments || '{}'})`)
+            .map((toolCall) => {
+              let args: unknown = {};
+              try {
+                args = JSON.parse(toolCall.function.arguments || '{}');
+              } catch {
+                args = {};
+              }
+              return `${toolCall.function.name}(${safeStringify(redactToolArgs(args))})`;
+            })
             .join('\n')}`
         : '';
       return `${heading}\n${content}${attachments}${toolCalls}`;
     })
     .join('\n\n---\n\n');
-}
-
-function limitCompactionSourceText(value: string, maxChars: number): { text: string; omittedChars: number } {
-  if (value.length <= maxChars) return { text: value, omittedChars: 0 };
-  const headChars = Math.floor(maxChars * 0.45);
-  const tailChars = Math.floor(maxChars * 0.45);
-  const omittedChars = value.length - headChars - tailChars;
-  return {
-    text: `${value.slice(0, headChars)}\n\n[... ${omittedChars} chars omitted from the middle of compaction source ...]\n\n${value.slice(
-      -tailChars
-    )}`,
-    omittedChars,
-  };
 }
 
 function buildCompactionSystemPrompt(trigger: AIContextCompactionTrigger): string {
@@ -307,21 +414,9 @@ function buildCompactionSystemPrompt(trigger: AIContextCompactionTrigger): strin
   ].join('\n');
 }
 
-function buildCompactionUserPrompt(input: {
-  sourceText: string;
-  tailText: string;
-  sourceMessageCount: number;
-  tailMessageCount: number;
-  omittedSourceChars: number;
-}): string {
+function buildCompactionUserPrompt(input: { sourceText: string; sourceMessageCount: number }): string {
   return [
-    `Summarize the older chat context below. ${input.tailMessageCount} latest messages are intentionally kept verbatim and are not included here.`,
-    input.tailText
-      ? `Use this latest preserved tail only to infer the active language, tone, and immediate continuity. Do not repeat it in the summary:\n\n${input.tailText}`
-      : '',
-    input.omittedSourceChars > 0
-      ? `${input.omittedSourceChars} characters from the middle of the source were omitted before summarization because the source was too large.`
-      : '',
+    'Summarize all older chat context below. Newer complete turns and tool rounds are retained verbatim outside this request.',
     `Older message count: ${input.sourceMessageCount}.`,
     '',
     input.sourceText,
@@ -332,6 +427,10 @@ function buildCompactionUserPrompt(input: {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function clampIntegerValue(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.trunc(value)));
 }
 
 function stringArg(value: unknown): string | undefined {
@@ -427,7 +526,7 @@ function estimateToolBreakdown(
     const serialized = safeStringify(tool);
     const current = byCategory.get(category) ?? { chars: 0, tokens: 0 };
     current.chars += serialized.length;
-    current.tokens += estimateTokens(serialized);
+    current.tokens += estimateTextTokens(serialized);
     byCategory.set(category, current);
   }
   return [...byCategory.entries()]
@@ -485,6 +584,7 @@ function redactGitLabToolArgs(value: unknown, depth = 0): unknown {
 }
 
 export class AIService {
+  private readonly roundInlineTokens = new Map<string, number>();
   constructor(
     private readonly settingsService: AISettingsService,
     private readonly caService: CAService,
@@ -515,6 +615,23 @@ export class AIService {
     private readonly generalSettingsService?: import('@/modules/settings/general-settings.service.js').GeneralSettingsService
   ) {}
 
+  private async resolveCurrentApprovalMode(user: User): Promise<AIApprovalMode> {
+    const refreshUser = this.authService?.getUserById?.bind(this.authService);
+    if (!refreshUser) return user.aiApprovalMode ?? 'normal';
+
+    try {
+      const currentUser = await refreshUser(user.id);
+      if (!currentUser || currentUser.isBlocked) return 'normal';
+      return currentUser.aiApprovalMode ?? 'normal';
+    } catch (error) {
+      logger.warn('Failed to refresh AI approval mode before tool round; requiring normal approvals', {
+        userId: user.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return 'normal';
+    }
+  }
+
   private async resolveProviderSession(
     user: User,
     options: Parameters<AIProviderRuntimeService['resolveSession']>[1]
@@ -531,13 +648,176 @@ export class AIService {
     const client = new OpenAI({ apiKey, baseURL: config.providerUrl || undefined });
     return {
       config,
+      contextLimits: directProviderContextLimits(config.maxContextTokens, config.maxCompletionTokens),
       reasoningEffort: config.reasoningEffort === 'none' ? null : config.reasoningEffort,
-      stream: (messages, tools) => streamModelResponse({ client, config, messages, tools, signal: options.signal }),
+      stream: (messages, tools, streamOptions) =>
+        streamModelResponse({
+          client,
+          config: streamOptions?.maxOutputTokens
+            ? { ...config, maxCompletionTokens: Math.min(config.maxCompletionTokens, streamOptions.maxOutputTokens) }
+            : config,
+          messages,
+          tools,
+          signal: options.signal,
+        }),
     };
   }
 
   private async getAdminInferenceModels() {
     return this.providerRuntimeService ? this.providerRuntimeService.adminModels() : [];
+  }
+
+  private async prepareToolOutput(input: {
+    userId: string;
+    conversationId?: string;
+    sourceRunId: string;
+    sourceToolCallId: string;
+    toolName: string;
+    result: unknown;
+    error?: string;
+    contextLimits: AIContextLimits;
+    systemPrompt: string;
+    tools: ModelTool[];
+    resourceReferences?: AIResourceReference[];
+  }): Promise<{
+    modelResult: unknown;
+    eventResult: unknown;
+    error?: string;
+    clientAction?: Record<string, unknown>;
+    resourceReferences: AIResourceReference[];
+  }> {
+    const resourceReferences = input.resourceReferences ?? [];
+    if (input.error) {
+      const errorResult = { error: input.error };
+      return { modelResult: errorResult, eventResult: undefined, error: input.error, resourceReferences: [] };
+    }
+
+    const { modelVisible, clientAction } = splitToolControlMetadata(input.toolName, input.result);
+    const format: 'json' | 'text' = typeof modelVisible === 'string' ? 'text' : 'json';
+    const serialized = format === 'text' ? (modelVisible as string) : safeStringify(modelVisible);
+    const estimatedTokens = estimateTextTokens(serialized);
+    const limits = toolOutputInlineLimits(
+      input.contextLimits,
+      estimateTextTokens(input.systemPrompt),
+      estimateToolSchemaTokens(input.tools)
+    );
+
+    const currentRoundTokens = this.roundInlineTokens.get(input.sourceRunId) ?? 0;
+    if (
+      estimatedTokens <= limits.perToolInlineLimit &&
+      currentRoundTokens + estimatedTokens <= limits.roundInlineLimit
+    ) {
+      this.roundInlineTokens.set(input.sourceRunId, currentRoundTokens + estimatedTokens);
+      return {
+        modelResult: appendAIResourceReferencesToModelResult(modelVisible, resourceReferences),
+        eventResult: modelVisible,
+        clientAction,
+        resourceReferences,
+      };
+    }
+
+    if (input.toolName === 'read_tool_output' || input.toolName === 'search_tool_output') {
+      const error = `TOOL_OUTPUT_INLINE_LIMIT_EXCEEDED: This bounded artifact read/search result is ${estimatedTokens} estimated tokens, above the ${limits.perToolInlineLimit} token inline limit. Retry with a smaller limitBytes or maxMatches value.`;
+      return { modelResult: { error }, eventResult: undefined, error, clientAction, resourceReferences: [] };
+    }
+
+    if (!this.artifactService || !input.conversationId) {
+      const error =
+        'TOOL_OUTPUT_OFFLOAD_UNAVAILABLE: This result is too large to place in context and no conversation artifact store is available. Retry with pagination or narrower filters.';
+      return { modelResult: { error }, eventResult: undefined, error, clientAction, resourceReferences: [] };
+    }
+
+    try {
+      const descriptor = await this.artifactService.saveToolOutput({
+        userId: input.userId,
+        conversationId: input.conversationId,
+        sourceRunId: input.sourceRunId,
+        sourceToolCallId: input.sourceToolCallId,
+        format,
+        estimatedTokens,
+        preview: toolOutputPreview(serialized),
+        buffer: Buffer.from(serialized, 'utf8'),
+      });
+      return {
+        modelResult: appendAIResourceReferencesToModelResult(descriptor, resourceReferences),
+        eventResult: descriptor,
+        clientAction,
+        resourceReferences,
+      };
+    } catch (error) {
+      if (
+        error instanceof AppError &&
+        (error.code === 'TOOL_OUTPUT_TOO_LARGE' || error.code === 'TOOL_OUTPUT_ARTIFACT_QUOTA_EXCEEDED')
+      ) {
+        const message = `${error.code}: ${error.message}`;
+        return {
+          modelResult: {
+            error: {
+              code: error.code,
+              message: error.message,
+              retry: 'Narrow, filter, or paginate the request. Do not repeat the same unbounded call.',
+            },
+          },
+          eventResult: undefined,
+          error: message,
+          clientAction,
+          resourceReferences: [],
+        };
+      }
+      throw error;
+    }
+  }
+
+  private async toolResourceReferences(
+    toolName: string,
+    args: Record<string, unknown>,
+    result: unknown,
+    error?: string
+  ): Promise<AIResourceReference[]> {
+    if (error) return [];
+    let nodeSlug: string | undefined;
+    let nodeLabel: string | undefined;
+    let nodeAppearanceColor: AIResourceReference['appearanceColor'];
+    const nodeId = typeof args.nodeId === 'string' ? args.nodeId : undefined;
+    if (nodeId) {
+      try {
+        const node = await this.nodesService.get(nodeId);
+        nodeSlug = typeof node.slug === 'string' ? node.slug : undefined;
+        nodeLabel =
+          (typeof node.displayName === 'string' && node.displayName.trim()) ||
+          (typeof node.hostname === 'string' && node.hostname.trim()) ||
+          nodeSlug;
+        nodeAppearanceColor = isAIResourceAppearanceColor(node.appearanceColor) ? node.appearanceColor : undefined;
+      } catch {
+        // The resource result remains usable even when its parent node can no longer be resolved.
+      }
+    }
+    const references = extractAIResourceReferences(toolName, args, result, {
+      nodeSlug,
+      nodeLabel,
+      nodeAppearanceColor,
+    });
+    const unresolvedContainer = references.find(
+      (reference) =>
+        reference.type === 'docker_container' &&
+        (reference.label === reference.resourceId || /^[a-f0-9]{12,64}$/i.test(reference.label))
+    );
+    const containerId = typeof args.containerId === 'string' ? args.containerId : undefined;
+    if (!unresolvedContainer || !nodeId || !containerId) return references;
+    try {
+      const inspected = (await this.dockerService.inspectContainer(nodeId, containerId)) as Record<string, unknown>;
+      const canonicalName = String(inspected.Name ?? inspected.name ?? '')
+        .trim()
+        .replace(/^\/+/, '');
+      if (!canonicalName) return references;
+      return extractAIResourceReferences(toolName, { ...args, containerName: canonicalName }, result, {
+        nodeSlug,
+        nodeLabel,
+        nodeAppearanceColor,
+      });
+    } catch {
+      return references;
+    }
   }
 
   async buildSystemPrompt(user: User, pageContext?: PageContext, conversationId?: string): Promise<string> {
@@ -583,19 +863,26 @@ export class AIService {
       return { error: `Unknown tool: ${toolName}`, invalidateStores: [] };
     }
 
-    let executionUser = options.scopes ? { ...user, scopes: options.scopes } : user;
-    if (options.source === 'mcp') {
+    let executionUser: User;
+    const refreshUser = this.authService?.getUserById?.bind(this.authService);
+    if (!refreshUser) {
+      // Lightweight unit-test service constructors may omit AuthService; production DI always supplies it.
+      executionUser = options.scopes ? { ...user, scopes: options.scopes } : user;
+    } else {
       try {
-        const currentUser = await this.authService.getUserById(user.id);
+        const currentUser = await refreshUser(user.id);
         if (!currentUser || currentUser.isBlocked) {
           return {
             error: 'PERMISSION_DENIED: Your current account access no longer allows this action.',
             invalidateStores: [],
           };
         }
-        executionUser = { ...currentUser, scopes: boundScopes(options.scopes ?? [], currentUser.scopes) };
+        executionUser =
+          options.source === 'mcp'
+            ? { ...currentUser, scopes: boundScopes(options.scopes ?? [], currentUser.scopes) }
+            : currentUser;
       } catch (error) {
-        logger.warn('Failed to refresh current access before MCP tool execution', { userId: user.id, error });
+        logger.warn('Failed to refresh current access before AI tool execution', { userId: user.id, error });
         return {
           error: 'PERMISSION_DENIED: Current account access could not be verified.',
           invalidateStores: [],
@@ -604,7 +891,7 @@ export class AIService {
     }
 
     // Permission check — tools with empty requiredScope are blocked (must be explicit)
-    if (!hasToolExecutionScope(executionUser.scopes, toolName, toolDef.requiredScope, args)) {
+    if (!hasToolExecutionScope(executionUser.scopes, toolName, toolDef.requiredScope, args, toolDef)) {
       return {
         error: `PERMISSION_DENIED: You do not have the "${toolDef.requiredScope || 'unknown'}" scope required for this action. Tell the user they lack this permission and suggest contacting an administrator. Do NOT ask follow-up questions or retry.`,
         invalidateStores: [],
@@ -632,7 +919,7 @@ export class AIService {
     const auditBase = {
       userId: user.id,
       resourceType: toolDef.category.toLowerCase().replace(/\s+/g, '_'),
-      resourceId: getToolResourceId(args),
+      resourceId: getToolResourceId(toolDef, args),
     };
 
     try {
@@ -786,6 +1073,32 @@ export class AIService {
     // Tool args come from LLM JSON — use explicit casts to match service input types.
     // The services themselves validate the data, so loose typing here is acceptable.
     const a = args as any; // shorthand for repeated casts
+
+    if (toolName === 'read_tool_output' || toolName === 'search_tool_output') {
+      if (!this.artifactService || !runtimeContext.conversationId) {
+        throw new AppError(
+          409,
+          'TOOL_OUTPUT_CONTEXT_REQUIRED',
+          'Tool-output artifacts can only be accessed from their originating conversation'
+        );
+      }
+      if (toolName === 'read_tool_output') {
+        return this.artifactService.readToolOutput({
+          userId: user.id,
+          conversationId: runtimeContext.conversationId,
+          artifactId: String(a.artifactId ?? ''),
+          offset: typeof a.offset === 'number' ? a.offset : undefined,
+          limitBytes: typeof a.limitBytes === 'number' ? a.limitBytes : undefined,
+        });
+      }
+      return this.artifactService.searchToolOutput({
+        userId: user.id,
+        conversationId: runtimeContext.conversationId,
+        artifactId: String(a.artifactId ?? ''),
+        query: String(a.query ?? ''),
+        maxMatches: typeof a.maxMatches === 'number' ? a.maxMatches : undefined,
+      });
+    }
 
     if (DATABASE_TOOL_NAMES.has(toolName)) {
       return executeDatabaseTool({ databaseService: this.databaseService }, user, toolName, args);
@@ -1787,22 +2100,14 @@ export class AIService {
     selectedModel?: string,
     selectedReasoningEffort?: string
   ): Promise<boolean> {
-    if (selectCompactionSource(clientMessages).source.length === 0) return false;
-
-    let config: Awaited<ReturnType<AISettingsService['getConfig']>>;
-    try {
-      config = (
-        await this.resolveProviderSession(user, {
-          requestId: `context-estimate:${conversationId ?? 'new'}`,
-          conversationId,
-          requestedModel: selectedModel,
-          requestedReasoningEffort: selectedReasoningEffort,
-          signal: new AbortController().signal,
-        })
-      ).config;
-    } catch {
-      return false;
-    }
+    const provider = await this.resolveProviderSession(user, {
+      requestId: `context-estimate:${conversationId ?? 'new'}`,
+      conversationId,
+      requestedModel: selectedModel,
+      requestedReasoningEffort: selectedReasoningEffort,
+      signal: new AbortController().signal,
+    });
+    const { config } = provider;
     const systemPrompt = await this.buildSystemPrompt(user, pageContext, conversationId);
     const discoveredToolsets = mergeToolsets(
       (await this.getConversationDiscoveredToolsets(user, conversationId)) ?? [],
@@ -1811,44 +2116,23 @@ export class AIService {
     const tools = this.buildModelTools(config, user, discoveredToolsets);
     const providerMessages = [
       { role: 'system', content: systemPrompt },
-      ...clientMessages.map((message) => ({
-        role: message.role,
-        content: message.content,
-        ...(message.tool_calls ? { tool_calls: message.tool_calls } : {}),
-        ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {}),
-        ...(message.name ? { name: message.name } : {}),
-      })),
+      ...(await Promise.all(clientMessages.map((message) => this.toProviderMessage(user, message, config)))),
     ];
-    const toolsTokens = estimateTokens(safeStringify(tools));
-    const messageBudget = Math.max(1, config.maxContextTokens - toolsTokens);
-    const totalTokens = estimateMessagesTokens(providerMessages) + toolsTokens;
-    if (totalTokens < config.maxContextTokens * COMPACTION_AUTO_THRESHOLD) return false;
-
-    return trimToTokenBudget(providerMessages, messageBudget).length < providerMessages.length;
+    const toolsTokens = estimateToolSchemaTokens(tools);
+    const totalTokens = estimateProviderMessagesTokens(providerMessages) + toolsTokens;
+    return totalTokens >= provider.contextLimits.autoCompactTokenLimit;
   }
 
   async compactConversationContext(
     user: User,
     clientMessages: ChatMessage[],
-    _pageContext: PageContext | undefined,
+    pageContext: PageContext | undefined,
     signal: AbortSignal,
     trigger: AIContextCompactionTrigger,
     selectedModel?: string,
     conversationId?: string,
     selectedReasoningEffort?: string
   ): Promise<AIContextCompactionResult> {
-    const { source, tail } = selectCompactionSource(clientMessages);
-    if (source.length === 0) {
-      return {
-        compacted: false,
-        summary: 'There is not enough older context to compact yet.',
-        compactedMessageCount: 0,
-        tailMessageCount: tail.length,
-        omittedSourceChars: 0,
-        trigger,
-      };
-    }
-
     const provider = await this.resolveProviderSession(user, {
       requestId: `compact:${conversationId ?? 'new'}`,
       conversationId,
@@ -1858,28 +2142,64 @@ export class AIService {
       isCompaction: true,
     });
     const { config } = provider;
+    const providerConversationMessages = await Promise.all(
+      clientMessages.map((message) => this.toProviderMessage(user, message, config))
+    );
+    const recentBudget = clampIntegerValue(
+      Math.floor(provider.contextLimits.autoCompactTokenLimit * 0.2),
+      8_000,
+      32_000
+    );
+    const selection = selectCompactionBoundary(clientMessages, providerConversationMessages, recentBudget);
+    if (selection.source.length === 0) {
+      if (trigger === 'auto') {
+        throw new AppError(
+          409,
+          'AI_CONTEXT_TOO_LARGE',
+          'The active context exceeds the automatic compaction threshold, but its minimal atomic turn cannot be compacted safely'
+        );
+      }
+      return {
+        compacted: false,
+        summary: 'There is not enough older context to compact yet.',
+        compactedMessageCount: 0,
+        compactVersion: 2,
+        compactEpoch: Math.max(0, ...clientMessages.map((message) => message.compactEpoch ?? 0)),
+        compactBoundaryMessageId: null,
+        sourceTokenEstimate: 0,
+        resultTokenEstimate: 0,
+        trigger,
+      };
+    }
+    const compactBoundaryMessageId = selection.source.at(-1)?.id;
+    if (!compactBoundaryMessageId) {
+      throw new AppError(
+        409,
+        'AI_COMPACTION_BOUNDARY_UNKNOWN',
+        'The durable compaction boundary could not be identified; reload the conversation and retry'
+      );
+    }
 
-    const rawSourceText = serializeMessagesForCompaction(source);
-    const rawTailText = serializeMessagesForCompaction(tail);
-    const maxSourceChars = Math.max(8000, (config.maxContextTokens - COMPACTION_SOURCE_RESERVE_TOKENS) * 4);
-    const { text: sourceText, omittedChars } = limitCompactionSourceText(rawSourceText, maxSourceChars);
-    const { text: tailText } = limitCompactionSourceText(rawTailText, 4000);
+    const sourceText = serializeMessagesForCompaction(selection.source);
     const messages = [
       { role: 'system', content: buildCompactionSystemPrompt(trigger) },
       {
         role: 'user',
         content: buildCompactionUserPrompt({
           sourceText,
-          tailText,
-          sourceMessageCount: source.length,
-          tailMessageCount: tail.length,
-          omittedSourceChars: omittedChars,
+          sourceMessageCount: selection.source.length,
         }),
       },
     ];
+    assertProviderInputWithinLimits(messages, [], provider.contextLimits);
+    const summaryOutputBudget = clampIntegerValue(
+      Math.floor(provider.contextLimits.autoCompactTokenLimit * 0.05),
+      2_000,
+      12_000
+    );
 
     let summary = '';
-    for await (const event of provider.stream(messages, [])) {
+    for await (const event of provider.stream(messages, [], { maxOutputTokens: summaryOutputBudget })) {
       if (event.type === 'text_delta') {
         summary += event.content;
       } else {
@@ -1889,12 +2209,45 @@ export class AIService {
 
     const cleanedSummary =
       summary.trim() || 'Older context was compacted, but the compaction model returned an empty summary.';
+    const resultTokenEstimate = estimateTextTokens(cleanedSummary);
+    if (resultTokenEstimate > summaryOutputBudget) {
+      throw new AppError(
+        409,
+        'AI_COMPACTION_SUMMARY_TOO_LARGE',
+        `Compaction returned ${resultTokenEstimate} estimated tokens, above its ${summaryOutputBudget} token output budget`
+      );
+    }
+
+    const systemPrompt = await this.buildSystemPrompt(user, pageContext, conversationId);
+    const discoveredToolsets = mergeToolsets(
+      (await this.getConversationDiscoveredToolsets(user, conversationId)) ?? [],
+      inferDiscoveredToolsetsFromMessages(selection.recent)
+    );
+    const tools = this.buildModelTools(config, user, discoveredToolsets);
+    const reconstructedMessages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'assistant', content: cleanedSummary },
+      ...providerConversationMessages.slice(selection.source.length),
+    ];
+    const reconstructedTokens = estimateProviderMessagesTokens(reconstructedMessages) + estimateToolSchemaTokens(tools);
+    assertProviderInputWithinLimits(reconstructedMessages, tools, provider.contextLimits);
+    if (reconstructedTokens > provider.contextLimits.autoCompactTokenLimit) {
+      throw new AppError(
+        409,
+        'AI_CONTEXT_TOO_LARGE',
+        `Compacted context still requires ${reconstructedTokens} estimated tokens, above the ${provider.contextLimits.autoCompactTokenLimit} token soft limit`
+      );
+    }
+
     return {
       compacted: true,
       summary: cleanedSummary,
-      compactedMessageCount: source.length,
-      tailMessageCount: tail.length,
-      omittedSourceChars: omittedChars,
+      compactedMessageCount: selection.source.length,
+      compactVersion: 2,
+      compactEpoch: Math.max(0, ...clientMessages.map((message) => message.compactEpoch ?? 0)) + 1,
+      compactBoundaryMessageId,
+      sourceTokenEstimate: selection.sourceTokens,
+      resultTokenEstimate,
       trigger,
     };
   }
@@ -1952,7 +2305,6 @@ export class AIService {
     ];
     let messages: Record<string, unknown>[] = [];
 
-    const maxContextTokens = config.maxContextTokens;
     const maxRounds = config.maxToolRounds;
     let roundsSinceComment = 0;
     let commentRepairAttempts = 0;
@@ -1961,24 +2313,29 @@ export class AIService {
       if (signal.aborted) return;
 
       if (autoCompactContext) {
-        runtimeMessages = await autoCompactContext(runtimeMessages);
+        try {
+          runtimeMessages = await autoCompactContext(runtimeMessages);
+        } catch (error) {
+          if (error instanceof AppError && error.code === 'AI_CONTEXT_TOO_LARGE') {
+            yield { type: 'context_blocked', requestId, reason: error.message };
+            yield { type: 'done', requestId };
+            return;
+          }
+          throw error;
+        }
       }
       const commentRequired = roundsSinceComment >= maxRounds;
       const activeTools = commentRequired ? commentToolFrom(tools) : tools;
       if (commentRequired && activeTools.length === 0) {
         messages = await buildProviderMessages();
-        messages = trimToTokenBudget(
-          [...messages, { role: 'system', content: TOOL_COMMENT_REQUIRED_MESSAGE }],
-          maxContextTokens
-        );
+        messages = [...messages, { role: 'system', content: TOOL_COMMENT_REQUIRED_MESSAGE }];
+        assertProviderInputWithinLimits(messages, [], provider.contextLimits);
         yield* this.streamFinalTextResponse({ provider, messages, requestId, signal });
         return;
       }
       messages = await buildProviderMessages();
-      messages = trimToTokenBudget(
-        commentRequired ? [...messages, { role: 'system', content: TOOL_COMMENT_REQUIRED_MESSAGE }] : messages,
-        messageBudgetForTools(maxContextTokens, activeTools)
-      );
+      messages = commentRequired ? [...messages, { role: 'system', content: TOOL_COMMENT_REQUIRED_MESSAGE }] : messages;
+      assertProviderInputWithinLimits(messages, activeTools, provider.contextLimits);
 
       let contentBuffer = '';
       let toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
@@ -2033,6 +2390,7 @@ export class AIService {
           return;
         }
         runtimeMessages.push({ role: 'assistant', content: contentBuffer });
+        this.roundInlineTokens.delete(requestId);
         yield { type: 'done', requestId };
         return;
       }
@@ -2056,16 +2414,12 @@ export class AIService {
       });
 
       // Parse all tool args first
-      const parsedToolCalls = toolCalls.map((tc) => {
-        let parsedArgs: Record<string, unknown> = {};
-        try {
-          parsedArgs = JSON.parse(tc.arguments || '{}');
-        } catch {
-          /* empty */
-        }
-        return { ...tc, parsedArgs };
+      let parsedToolCalls: PendingToolCall[] = toolCalls.map((tc) => {
+        const validation = parseAndValidateAIToolArguments(tc.name, tc.arguments);
+        return validation.ok
+          ? { ...tc, parsedArgs: validation.arguments }
+          : { ...tc, parsedArgs: {}, validationError: validation.error };
       });
-
       if (parsedToolCalls.some((tc) => tc.name === SEND_COMMENT_TOOL_NAME)) {
         const result = this.processCommentToolCalls({ parsedToolCalls, messages, runtimeMessages, requestId });
         for (const event of result.events) yield event;
@@ -2082,23 +2436,41 @@ export class AIService {
         }
         continue;
       }
+      this.roundInlineTokens.set(requestId, 0);
+      const approvalMode = await this.resolveCurrentApprovalMode(user);
+      const toolRound = createToolRoundStartEvent(requestId, parsedToolCalls, approvalMode, messages);
+      yield toolRound;
+
+      for (const tc of parsedToolCalls.filter((call) => call.validationError)) {
+        const error = tc.validationError!;
+        yield { type: 'tool_call_start', requestId, id: tc.id, name: tc.name, arguments: {} };
+        messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error }) });
+        runtimeMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error }) });
+        yield { type: 'tool_result', requestId, id: tc.id, name: tc.name, result: undefined, error };
+      }
+      parsedToolCalls = parsedToolCalls.filter((call) => !call.validationError);
+      if (parsedToolCalls.length === 0) continue;
 
       roundsSinceComment += 1;
 
       // Separate questions, tools that require approval, and immediate tools.
       const questionTools: typeof parsedToolCalls = [];
       const approvalTools: typeof parsedToolCalls = [];
+      const immediateTools: typeof parsedToolCalls = [];
 
       for (const tc of parsedToolCalls) {
         if (tc.name === 'ask_question') {
           questionTools.push(tc);
           continue;
         }
-        if (getAIToolApprovalDecision(tc.name, user.aiApprovalMode).requiresApproval) {
+        if (getAIToolApprovalDecision(tc.name, approvalMode, tc.parsedArgs).requiresApproval) {
           approvalTools.push(tc);
           continue;
         }
+        immediateTools.push(tc);
+      }
 
+      for (const tc of immediateTools) {
         yield { type: 'tool_call_start', requestId, id: tc.id, name: tc.name, arguments: tc.parsedArgs };
 
         const result = await this.executeTool(user, tc.name, tc.parsedArgs, { pageContext, conversationId });
@@ -2111,6 +2483,7 @@ export class AIService {
             provider: result.credentialChallenge.provider,
             connectorId: result.credentialChallenge.connectorId,
             arguments: tc.parsedArgs,
+            roundId: toolRound.roundId,
             _rawArguments: tc.parsedArgs,
             _pendingMessages: messages,
             _queuedApprovals: approvalTools.map((approval) => ({
@@ -2126,23 +2499,44 @@ export class AIService {
           discoveredToolsets = mergeToolsets(discoveredToolsets ?? [], discoveredToolsetsFromResult(result.result));
           tools = this.buildModelTools(config, user, discoveredToolsets);
         }
+        const resourceReferences = await this.toolResourceReferences(
+          tc.name,
+          tc.parsedArgs,
+          result.result,
+          result.error
+        );
+        const prepared = await this.prepareToolOutput({
+          userId: user.id,
+          conversationId,
+          sourceRunId: requestId,
+          sourceToolCallId: tc.id,
+          toolName: tc.name,
+          result: result.result,
+          error: result.error,
+          contextLimits: provider.contextLimits,
+          systemPrompt,
+          tools,
+          resourceReferences,
+        });
         messages.push({
           role: 'tool',
           tool_call_id: tc.id,
-          content: JSON.stringify(result.error || compactToolResultForModel(tc.name, result.result)),
+          content: safeStringify(prepared.modelResult),
         });
         runtimeMessages.push({
           role: 'tool',
           tool_call_id: tc.id,
-          content: JSON.stringify(result.error || compactToolResultForModel(tc.name, result.result)),
+          content: safeStringify(prepared.modelResult),
         });
         yield {
           type: 'tool_result',
           requestId,
           id: tc.id,
           name: tc.name,
-          result: result.result,
-          error: result.error,
+          result: prepared.eventResult,
+          error: prepared.error,
+          clientAction: prepared.clientAction,
+          resourceReferences: prepared.resourceReferences,
         };
         if (result.invalidateStores.length > 0) {
           yield { type: 'invalidate_stores', requestId, stores: result.invalidateStores };
@@ -2171,8 +2565,15 @@ export class AIService {
           id: first.id,
           name: 'ask_question',
           arguments: first.parsedArgs,
+          roundId: toolRound.roundId,
           _pendingMessages: messages,
           _allQuestions: questionTools.map((q) => ({ id: q.id, args: q.parsedArgs })),
+          _queuedApprovals: approvalTools.map((approval) => ({
+            id: approval.id,
+            name: approval.name,
+            arguments: approvalDisplayArgs(approval.name, approval.parsedArgs),
+            rawArguments: approval.parsedArgs,
+          })),
         } as any;
         return;
       }
@@ -2193,6 +2594,7 @@ export class AIService {
           id: approvalTool.id,
           name: approvalTool.name,
           arguments: approvalDisplayArgs(approvalTool.name, approvalTool.parsedArgs),
+          roundId: toolRound.roundId,
           _rawArguments: approvalTool.parsedArgs,
           _pendingMessages: messages,
           _queuedApprovals: queued.map((tc) => ({
@@ -2229,8 +2631,10 @@ export class AIService {
     autoCompactContext?: AutoCompactContextHook,
     rejectionError?: string,
     selectedModel?: string,
-    selectedReasoningEffort?: string
+    selectedReasoningEffort?: string,
+    approvalDecisions: Record<string, boolean> = {}
   ): AsyncGenerator<WSServerMessage> {
+    let continuationProvider: AIProviderSession | undefined;
     if (toolName === 'ask_question') {
       // Batch answers: { toolCallId: answer, ... }
       const allAnswers: Record<string, string> = { ...answers };
@@ -2259,53 +2663,128 @@ export class AIService {
         name: toolName,
         result: undefined,
         error: rejectedMessage,
+        rejected: true,
       };
     } else {
-      const result = await this.executeTool(user, toolName, toolArgs, { pageContext, conversationId });
-      if (result.credentialChallenge) {
+      const validation = validateAIToolArguments(toolName, toolArgs);
+      if (!validation.ok) {
+        pendingMessages.push({
+          role: 'tool',
+          tool_call_id: toolCallId,
+          content: JSON.stringify({ error: validation.error }),
+        });
         yield {
-          type: 'credential_authorization_required',
+          type: 'tool_result',
           requestId,
           id: toolCallId,
           name: toolName,
-          provider: result.credentialChallenge.provider,
-          connectorId: result.credentialChallenge.connectorId,
-          arguments: approvalDisplayArgs(toolName, toolArgs),
-          _rawArguments: toolArgs,
-          _pendingMessages: pendingMessages,
-          _queuedApprovals: queuedApprovalDisplayArgs(queuedApprovals),
-        } as any;
-        return;
-      }
-      pendingMessages.push({
-        role: 'tool',
-        tool_call_id: toolCallId,
-        content: JSON.stringify(result.error || compactToolResultForModel(toolName, result.result)),
-      });
-      yield {
-        type: 'tool_result',
-        requestId,
-        id: toolCallId,
-        name: toolName,
-        result: result.result,
-        error: result.error,
-      };
-      if (result.invalidateStores.length > 0) {
-        yield { type: 'invalidate_stores', requestId, stores: result.invalidateStores };
-      }
-      if (toolName === 'end_conversation' && !result.error) {
-        yield {
-          type: 'conversation_ended',
-          requestId,
-          reason: conversationEndReason(result.result, 'This conversation has been ended.'),
+          result: undefined,
+          error: validation.error,
         };
-        yield { type: 'done', requestId };
-        return;
+      } else {
+        const result = await this.executeTool(user, toolName, validation.arguments, { pageContext, conversationId });
+        if (result.credentialChallenge) {
+          yield {
+            type: 'credential_authorization_required',
+            requestId,
+            id: toolCallId,
+            name: toolName,
+            provider: result.credentialChallenge.provider,
+            connectorId: result.credentialChallenge.connectorId,
+            arguments: approvalDisplayArgs(toolName, validation.arguments),
+            _rawArguments: validation.arguments,
+            _pendingMessages: pendingMessages,
+            _queuedApprovals: queuedApprovalDisplayArgs(queuedApprovals),
+          } as any;
+          return;
+        }
+        continuationProvider = await this.resolveProviderSession(user, {
+          requestId,
+          conversationId,
+          requestedModel: selectedModel,
+          requestedReasoningEffort: selectedReasoningEffort,
+          signal,
+        });
+        const continuationSystemPrompt = await this.buildSystemPrompt(user, pageContext, conversationId);
+        const continuationTools = this.buildModelTools(
+          continuationProvider.config,
+          user,
+          await this.getConversationDiscoveredToolsets(user, conversationId)
+        );
+        const resourceReferences = await this.toolResourceReferences(
+          toolName,
+          validation.arguments,
+          result.result,
+          result.error
+        );
+        const prepared = await this.prepareToolOutput({
+          userId: user.id,
+          conversationId,
+          sourceRunId: requestId,
+          sourceToolCallId: toolCallId,
+          toolName,
+          result: result.result,
+          error: result.error,
+          contextLimits: continuationProvider.contextLimits,
+          systemPrompt: continuationSystemPrompt,
+          tools: continuationTools,
+          resourceReferences,
+        });
+        pendingMessages.push({
+          role: 'tool',
+          tool_call_id: toolCallId,
+          content: safeStringify(prepared.modelResult),
+        });
+        yield {
+          type: 'tool_result',
+          requestId,
+          id: toolCallId,
+          name: toolName,
+          result: prepared.eventResult,
+          error: prepared.error,
+          clientAction: prepared.clientAction,
+          resourceReferences: prepared.resourceReferences,
+        };
+        if (result.invalidateStores.length > 0) {
+          yield { type: 'invalidate_stores', requestId, stores: result.invalidateStores };
+        }
+        if (toolName === 'end_conversation' && !result.error) {
+          yield {
+            type: 'conversation_ended',
+            requestId,
+            reason: conversationEndReason(result.result, 'This conversation has been ended.'),
+          };
+          yield { type: 'done', requestId };
+          return;
+        }
       }
     }
 
     if (queuedApprovals.length > 0) {
       const [nextApproval, ...remainingApprovals] = queuedApprovals;
+      if (Object.hasOwn(approvalDecisions, nextApproval.id)) {
+        yield* this.resumeAfterApproval(
+          user,
+          nextApproval.id,
+          nextApproval.name,
+          nextApproval.arguments,
+          approvalDecisions[nextApproval.id],
+          pendingMessages,
+          pageContext,
+          signal,
+          requestId,
+          undefined,
+          undefined,
+          remainingApprovals,
+          conversationId,
+          autoCompactContext,
+          undefined,
+          selectedModel,
+          selectedReasoningEffort,
+          approvalDecisions
+        );
+        return;
+      }
       yield {
         type: 'tool_call_start',
         requestId,
@@ -2329,13 +2808,15 @@ export class AIService {
     // Continue streaming with the updated messages
     let provider: AIProviderSession;
     try {
-      provider = await this.resolveProviderSession(user, {
-        requestId,
-        conversationId,
-        requestedModel: selectedModel,
-        requestedReasoningEffort: selectedReasoningEffort,
-        signal,
-      });
+      provider =
+        continuationProvider ??
+        (await this.resolveProviderSession(user, {
+          requestId,
+          conversationId,
+          requestedModel: selectedModel,
+          requestedReasoningEffort: selectedReasoningEffort,
+          signal,
+        }));
     } catch (error) {
       yield {
         type: 'error',
@@ -2347,6 +2828,7 @@ export class AIService {
     }
     const { config } = provider;
 
+    pendingMessages = orderLatestToolRoundResults(pendingMessages);
     let discoveredToolsets = await this.getConversationDiscoveredToolsets(user, conversationId);
     let tools = this.buildModelTools(config, user, discoveredToolsets);
     let runtimeMessages = providerMessagesToClientMessages(pendingMessages);
@@ -2365,24 +2847,29 @@ export class AIService {
       if (signal.aborted) return;
 
       if (autoCompactContext) {
-        runtimeMessages = await autoCompactContext(runtimeMessages);
+        try {
+          runtimeMessages = await autoCompactContext(runtimeMessages);
+        } catch (error) {
+          if (error instanceof AppError && error.code === 'AI_CONTEXT_TOO_LARGE') {
+            yield { type: 'context_blocked', requestId, reason: error.message };
+            yield { type: 'done', requestId };
+            return;
+          }
+          throw error;
+        }
       }
       const commentRequired = roundsSinceComment >= maxRounds;
       const activeTools = commentRequired ? commentToolFrom(tools) : tools;
       if (commentRequired && activeTools.length === 0) {
         messages = await buildProviderMessages();
-        messages = trimToTokenBudget(
-          [...messages, { role: 'system', content: TOOL_COMMENT_REQUIRED_MESSAGE }],
-          config.maxContextTokens
-        );
+        messages = [...messages, { role: 'system', content: TOOL_COMMENT_REQUIRED_MESSAGE }];
+        assertProviderInputWithinLimits(messages, [], provider.contextLimits);
         yield* this.streamFinalTextResponse({ provider, messages, requestId, signal });
         return;
       }
       messages = await buildProviderMessages();
-      messages = trimToTokenBudget(
-        commentRequired ? [...messages, { role: 'system', content: TOOL_COMMENT_REQUIRED_MESSAGE }] : messages,
-        messageBudgetForTools(config.maxContextTokens, activeTools)
-      );
+      messages = commentRequired ? [...messages, { role: 'system', content: TOOL_COMMENT_REQUIRED_MESSAGE }] : messages;
+      assertProviderInputWithinLimits(messages, activeTools, provider.contextLimits);
 
       let contentBuffer = '';
       let toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
@@ -2435,6 +2922,7 @@ export class AIService {
           yield { type: 'done', requestId };
           return;
         }
+        this.roundInlineTokens.delete(requestId);
         yield { type: 'done', requestId };
         return;
       }
@@ -2449,16 +2937,12 @@ export class AIService {
       messages.push({ role: 'assistant', content: contentBuffer || null, tool_calls: rawToolCalls });
       runtimeMessages.push({ role: 'assistant', content: contentBuffer || null, tool_calls: rawToolCalls });
 
-      const parsedToolCalls = toolCalls.map((tc) => {
-        let parsedArgs: Record<string, unknown> = {};
-        try {
-          parsedArgs = JSON.parse(tc.arguments || '{}');
-        } catch {
-          /* empty */
-        }
-        return { ...tc, parsedArgs };
+      let parsedToolCalls: PendingToolCall[] = toolCalls.map((tc) => {
+        const validation = parseAndValidateAIToolArguments(tc.name, tc.arguments);
+        return validation.ok
+          ? { ...tc, parsedArgs: validation.arguments }
+          : { ...tc, parsedArgs: {}, validationError: validation.error };
       });
-
       if (parsedToolCalls.some((tc) => tc.name === SEND_COMMENT_TOOL_NAME)) {
         const result = this.processCommentToolCalls({ parsedToolCalls, messages, runtimeMessages, requestId });
         for (const event of result.events) yield event;
@@ -2475,22 +2959,40 @@ export class AIService {
         }
         continue;
       }
+      this.roundInlineTokens.set(requestId, 0);
+      const approvalMode = await this.resolveCurrentApprovalMode(user);
+      const toolRound = createToolRoundStartEvent(requestId, parsedToolCalls, approvalMode, messages);
+      yield toolRound;
+
+      for (const tc of parsedToolCalls.filter((call) => call.validationError)) {
+        const error = tc.validationError!;
+        yield { type: 'tool_call_start', requestId, id: tc.id, name: tc.name, arguments: {} };
+        messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error }) });
+        runtimeMessages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ error }) });
+        yield { type: 'tool_result', requestId, id: tc.id, name: tc.name, result: undefined, error };
+      }
+      parsedToolCalls = parsedToolCalls.filter((call) => !call.validationError);
+      if (parsedToolCalls.length === 0) continue;
 
       roundsSinceComment += 1;
 
       const questionTools2: typeof parsedToolCalls = [];
       const approvalTools2: typeof parsedToolCalls = [];
+      const immediateTools2: typeof parsedToolCalls = [];
 
       for (const tc of parsedToolCalls) {
         if (tc.name === 'ask_question') {
           questionTools2.push(tc);
           continue;
         }
-        if (getAIToolApprovalDecision(tc.name, user.aiApprovalMode).requiresApproval) {
+        if (getAIToolApprovalDecision(tc.name, approvalMode, tc.parsedArgs).requiresApproval) {
           approvalTools2.push(tc);
           continue;
         }
+        immediateTools2.push(tc);
+      }
 
+      for (const tc of immediateTools2) {
         yield { type: 'tool_call_start', requestId, id: tc.id, name: tc.name, arguments: tc.parsedArgs };
         const result = await this.executeTool(user, tc.name, tc.parsedArgs, { pageContext, conversationId });
         if (result.credentialChallenge) {
@@ -2502,6 +3004,7 @@ export class AIService {
             provider: result.credentialChallenge.provider,
             connectorId: result.credentialChallenge.connectorId,
             arguments: tc.parsedArgs,
+            roundId: toolRound.roundId,
             _rawArguments: tc.parsedArgs,
             _pendingMessages: messages,
             _queuedApprovals: approvalTools2.map((approval) => ({
@@ -2517,23 +3020,44 @@ export class AIService {
           discoveredToolsets = mergeToolsets(discoveredToolsets ?? [], discoveredToolsetsFromResult(result.result));
           tools = this.buildModelTools(config, user, discoveredToolsets);
         }
+        const resourceReferences = await this.toolResourceReferences(
+          tc.name,
+          tc.parsedArgs,
+          result.result,
+          result.error
+        );
+        const prepared = await this.prepareToolOutput({
+          userId: user.id,
+          conversationId,
+          sourceRunId: requestId,
+          sourceToolCallId: tc.id,
+          toolName: tc.name,
+          result: result.result,
+          error: result.error,
+          contextLimits: provider.contextLimits,
+          systemPrompt,
+          tools,
+          resourceReferences,
+        });
         messages.push({
           role: 'tool',
           tool_call_id: tc.id,
-          content: JSON.stringify(result.error || compactToolResultForModel(tc.name, result.result)),
+          content: safeStringify(prepared.modelResult),
         });
         runtimeMessages.push({
           role: 'tool',
           tool_call_id: tc.id,
-          content: JSON.stringify(result.error || compactToolResultForModel(tc.name, result.result)),
+          content: safeStringify(prepared.modelResult),
         });
         yield {
           type: 'tool_result',
           requestId,
           id: tc.id,
           name: tc.name,
-          result: result.result,
-          error: result.error,
+          result: prepared.eventResult,
+          error: prepared.error,
+          clientAction: prepared.clientAction,
+          resourceReferences: prepared.resourceReferences,
         };
         if (result.invalidateStores.length > 0) {
           yield { type: 'invalidate_stores', requestId, stores: result.invalidateStores };
@@ -2560,8 +3084,15 @@ export class AIService {
           id: first.id,
           name: 'ask_question',
           arguments: first.parsedArgs,
+          roundId: toolRound.roundId,
           _pendingMessages: messages,
           _allQuestions: questionTools2.map((q) => ({ id: q.id, args: q.parsedArgs })),
+          _queuedApprovals: approvalTools2.map((approval) => ({
+            id: approval.id,
+            name: approval.name,
+            arguments: approvalDisplayArgs(approval.name, approval.parsedArgs),
+            rawArguments: approval.parsedArgs,
+          })),
         } as any;
         return;
       }
@@ -2581,6 +3112,7 @@ export class AIService {
           id: approvalTool2.id,
           name: approvalTool2.name,
           arguments: approvalDisplayArgs(approvalTool2.name, approvalTool2.parsedArgs),
+          roundId: toolRound.roundId,
           _rawArguments: approvalTool2.parsedArgs,
           _pendingMessages: messages,
           _queuedApprovals: queued.map((tc) => ({
@@ -2666,8 +3198,8 @@ export class AIService {
     const { prompt, breakdown } = await this.buildSystemPromptDetailed(user, pageContext, conversationId);
     const discoveredToolsets = await this.getConversationDiscoveredToolsets(user, conversationId);
     const tools = this.buildModelTools(config, user, discoveredToolsets);
-    const systemTokens = estimateTokens(prompt);
-    const toolsTokens = estimateTokens(safeStringify(tools));
+    const systemTokens = estimateTextTokens(prompt);
+    const toolsTokens = estimateToolSchemaTokens(tools);
     const totalOverhead = systemTokens + toolsTokens;
     const toolBreakdown = estimateToolBreakdown(tools);
 

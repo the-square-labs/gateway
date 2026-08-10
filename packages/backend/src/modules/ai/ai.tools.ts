@@ -9,9 +9,11 @@ import { OPERATION_AI_TOOLS } from './ai.tools.operations.js';
 import { PKI_AI_TOOLS } from './ai.tools.pki.js';
 import { SANDBOX_AI_TOOLS } from './ai.tools.sandbox.js';
 import type { AIToolDefinition } from './ai.types.js';
+import { createAIToolArgumentValidator } from './ai-tool-contract.js';
 import { canUseAiTool } from './ai-tool-filtering.js';
+import { withAIToolPolicyMetadata } from './ai-tool-policy-metadata.js';
 
-export const AI_TOOLS: AIToolDefinition[] = [
+const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   // ── Discovery ──
   {
     name: 'discover_tools',
@@ -55,6 +57,42 @@ export const AI_TOOLS: AIToolDefinition[] = [
     requiredScope: 'feat:ai:use',
     invalidateStores: [],
     historyRetention: { mode: 'persistent_context' },
+  },
+  {
+    name: 'read_tool_output',
+    description:
+      'Read a bounded byte range from a large output previously offloaded by Gateway. Use the artifactId from the tool-result manifest and advance with nextOffset until eof. Do not retry the original producer just to recover offloaded content.',
+    parameters: {
+      type: 'object',
+      properties: {
+        artifactId: { type: 'string', description: 'Tool-output artifact UUID from the result manifest.' },
+        offset: { type: 'number', description: 'Zero-based byte offset. Default: 0.' },
+        limitBytes: { type: 'number', description: 'Bytes to read. Default: 32768, maximum: 65536.' },
+      },
+      required: ['artifactId'],
+    },
+    destructive: false,
+    category: 'Artifact',
+    requiredScope: 'feat:ai:use',
+    invalidateStores: [],
+  },
+  {
+    name: 'search_tool_output',
+    description:
+      'Search literal text inside a large output previously offloaded by Gateway. The search is case-insensitive and returns bounded snippets; regex is not supported.',
+    parameters: {
+      type: 'object',
+      properties: {
+        artifactId: { type: 'string', description: 'Tool-output artifact UUID from the result manifest.' },
+        query: { type: 'string', description: 'Literal text to find. Must contain 1 to 512 characters.' },
+        maxMatches: { type: 'number', description: 'Maximum snippets to return. Default: 20, maximum: 50.' },
+      },
+      required: ['artifactId', 'query'],
+    },
+    destructive: false,
+    category: 'Artifact',
+    requiredScope: 'feat:ai:use',
+    invalidateStores: [],
   },
   {
     name: 'wait',
@@ -1538,7 +1576,7 @@ export const AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'ask_question',
     description:
-      'Ask the user a clarifying question before proceeding. Use this only when requirements are unclear, ambiguous, or missing critical details that cannot be inferred from context or tool results. You can provide options for the user to pick from, allow free text input, or both. Do not ask when there is exactly one valid applicable option.',
+      "Ask the user a clarifying question before proceeding. Use this only when a material requirement is unclear, ambiguous, or missing and cannot be inferred from context, tool results, or a standard default. Never use this tool to confirm or approve an action the user already requested; Gateway's approval UI handles policy-required confirmations. Do not ask when there is exactly one valid applicable option or the user asked you to choose automatically/use defaults. You can provide options for the user to pick from, allow free text input, or both.",
     parameters: {
       type: 'object',
       properties: {
@@ -1656,10 +1694,15 @@ export const AI_TOOLS: AIToolDefinition[] = [
   WEB_SEARCH_AI_TOOL,
 ];
 
+export const AI_TOOLS: AIToolDefinition[] = withAIToolPolicyMetadata(AI_TOOL_DEFINITIONS);
+
 const destructiveSet = new Set(AI_TOOLS.filter((t) => t.destructive).map((t) => t.name));
+const REQUIRED_RUNTIME_AI_TOOL_NAMES = new Set(['read_tool_output', 'search_tool_output']);
 const BASE_AI_TOOL_NAMES = new Set([
   'discover_tools',
   'get_current_context',
+  'read_tool_output',
+  'search_tool_output',
   'wait',
   'send_comment',
   'end_conversation',
@@ -1708,6 +1751,16 @@ export const TOOL_STORE_INVALIDATION_MAP: Record<string, string[]> = Object.from
   AI_TOOLS.filter((t) => t.invalidateStores.length > 0).map((t) => [t.name, t.invalidateStores])
 );
 
+const AI_TOOL_ARGUMENT_VALIDATOR = createAIToolArgumentValidator(AI_TOOLS);
+
+export function parseAndValidateAIToolArguments(toolName: string, rawArguments: string) {
+  return AI_TOOL_ARGUMENT_VALIDATOR.parseAndValidate(toolName, rawArguments);
+}
+
+export function validateAIToolArguments(toolName: string, argumentsValue: unknown) {
+  return AI_TOOL_ARGUMENT_VALIDATOR.validate(toolName, argumentsValue);
+}
+
 /**
  * Get tools in OpenAI function-calling format, filtered by:
  * - Disabled tools (admin config)
@@ -1722,13 +1775,13 @@ export function getOpenAITools(
 ): Array<{ type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } }> {
   const discoveredToolsets = options.discoveredToolsets === undefined ? undefined : new Set(options.discoveredToolsets);
   return AI_TOOLS.filter((t) => {
-    if (disabledTools.includes(t.name)) return false;
+    if (disabledTools.includes(t.name) && !REQUIRED_RUNTIME_AI_TOOL_NAMES.has(t.name)) return false;
     if (t.name === 'web_search' && !webSearchEnabled) return false;
     if (t.category === 'Sandbox' && options.sandboxEnabled !== true) return false;
     if (discoveredToolsets && !BASE_AI_TOOL_NAMES.has(t.name) && !discoveredToolsets.has(t.category)) return false;
     // Every tool must have a requiredScope — reject tools without one
     if (!t.requiredScope) return false;
-    return canUseAiTool(t.name, t.requiredScope, userScopes);
+    return canUseAiTool(t.name, t.requiredScope, userScopes, t.requiredScopes);
   }).map((t) => ({
     type: 'function' as const,
     function: {

@@ -4,7 +4,7 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { DockerAccessResourceService } from './docker-access-resource.service.js';
-import { envMapToList, normalizeEnvRecord } from './docker-env-operations.js';
+import { envListToMap, envMapToList, normalizeEnvRecord } from './docker-env-operations.js';
 import { dockerGpuAttachmentFromInspect, hasRequestedGpuChange } from './docker-gpu-attachment.js';
 import type { ContainerAction } from './docker-lifecycle-watch.js';
 import { hasRequestedSpecificPortBindIp } from './docker-port-bindings.js';
@@ -27,6 +27,7 @@ export interface DockerContainerMutationContext {
   nodeDispatch: NodeDispatchService;
   environmentService?: {
     replace(nodeId: string, containerName: string, env: Record<string, string>): Promise<unknown>;
+    deleteImported(nodeId: string, containerName: string): Promise<unknown>;
     rename(nodeId: string, oldName: string, newName: string): Promise<unknown>;
     copy(nodeId: string, sourceName: string, targetName: string): Promise<unknown>;
     getDecryptedMap(nodeId: string, containerName: string): Promise<Record<string, string>>;
@@ -102,13 +103,24 @@ export interface DockerContainerMutationContext {
     taskId: string | undefined,
     progress: string,
     expectedState: string,
-    timeoutMs?: number
+    timeoutMs?: number,
+    onComplete?: (newContainerId: string) => Promise<void>
   ): void;
   parseResult(result: { success: boolean; error?: string; detail?: string }): any;
 }
 
 export function daemonContainerCreateConfig(config: Record<string, unknown>): Record<string, unknown> {
+  const { volumes, networks, command, ...daemonConfig } = config;
   const normalizedEnv = normalizeEnvRecord(config.env);
+  const binds = Array.isArray(volumes)
+    ? volumes.map((value) => {
+        const mount = value as Record<string, unknown>;
+        const source = typeof mount.hostPath === 'string' ? mount.hostPath : mount.name;
+        const suffix = mount.readOnly === true ? ':ro' : '';
+        return `${String(source)}:${String(mount.containerPath)}${suffix}`;
+      })
+    : undefined;
+  const primaryNetwork = Array.isArray(networks) && typeof networks[0] === 'string' ? networks[0] : undefined;
   const legacyPortBindings = Array.isArray(config.ports)
     ? Object.fromEntries(
         config.ports.flatMap((value) => {
@@ -121,8 +133,11 @@ export function daemonContainerCreateConfig(config: Record<string, unknown>): Re
       )
     : null;
   return {
-    ...config,
+    ...daemonConfig,
     ...(normalizedEnv ? { env: envMapToList(normalizedEnv) } : {}),
+    ...(binds ? { binds } : {}),
+    ...(Array.isArray(command) ? { cmd: command } : {}),
+    ...(primaryNetwork ? { network_mode: primaryNetwork } : {}),
     ...(legacyPortBindings && Object.keys(legacyPortBindings).length > 0 ? { port_bindings: legacyPortBindings } : {}),
   };
 }
@@ -161,30 +176,96 @@ export async function createContainer(
   } finally {
     if (requestedName) ctx.clearTransition(nodeId, requestedName);
   }
-  await ctx.auditService.log({
-    action: 'docker.container.create',
-    userId,
-    resourceType: 'docker-container',
-    details: { nodeId, name: config.name, image: config.image },
-  });
-  const createdName = (requestedName || data?.name || data?.Name || '') as string;
+  let createdName = (requestedName || data?.name || data?.Name || '') as string;
   const newId = (data?.Id ?? data?.id ?? '') as string;
-  if (createdName && newId) {
-    await ctx.accessResourceService?.ensureContainer(nodeId, createdName, newId, false);
-  }
-  if (createdName && ctx.environmentService) {
-    const env = normalizeEnvRecord(config.env);
-    if (env) {
-      await ctx.environmentService.replace(nodeId, createdName, env);
+  try {
+    if (!createdName && newId) {
+      const inspect = await ctx.inspectContainer(nodeId, newId);
+      createdName = String(inspect?.Name ?? inspect?.name ?? '').replace(/^\//, '');
     }
-  }
-  if (typeof config.image === 'string') {
-    await ctx.registryService?.rememberImageRegistry?.(nodeId, config.image, registryId);
+    await ctx.auditService.log({
+      action: 'docker.container.create',
+      userId,
+      resourceType: 'docker-container',
+      resourceId: newId,
+      details: { nodeId, name: createdName, image: config.image },
+    });
+    if (createdName && newId) {
+      await ctx.accessResourceService?.ensureContainer(nodeId, createdName, newId, false);
+    }
+    if (createdName && ctx.environmentService) {
+      const env = normalizeEnvRecord(config.env);
+      if (env) {
+        await ctx.environmentService.replace(nodeId, createdName, env);
+      }
+    }
+    if (typeof config.image === 'string') {
+      await ctx.registryService?.rememberImageRegistry?.(nodeId, config.image, registryId);
+    }
+  } catch (error) {
+    try {
+      await rollbackCreatedContainer(
+        ctx,
+        nodeId,
+        newId || createdName || requestedName || '',
+        createdName || requestedName
+      );
+    } catch (rollbackError) {
+      const primaryMessage = error instanceof Error ? error.message : String(error);
+      const rollbackMessage = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+      throw new Error(`${primaryMessage} (container rollback failed: ${rollbackMessage})`);
+    }
+    throw error;
   }
   if (requestedName && newId) {
     ctx.emitContainer(nodeId, requestedName, newId, 'created');
   }
-  return data;
+  return data && typeof data === 'object' ? { ...data, id: newId, name: createdName } : data;
+}
+
+export async function rollbackCreatedContainer(
+  ctx: DockerContainerMutationContext,
+  nodeId: string,
+  containerId: string,
+  knownName?: string,
+  userId?: string
+) {
+  if (!containerId) throw new Error('Created Docker container identity is unavailable for rollback');
+  let name = knownName?.replace(/^\//, '') ?? '';
+  if (!name) {
+    try {
+      name = await ctx.resolveContainerName(nodeId, containerId);
+    } catch {
+      name = '';
+    }
+  }
+  const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'remove', {
+    containerId,
+    force: true,
+  });
+  ctx.parseResult(result);
+  if (name) {
+    await Promise.allSettled([
+      ctx.environmentService?.deleteImported(nodeId, name),
+      ctx.runtimeSettingsService?.delete(nodeId, name),
+      ctx.secretService?.deleteImported(nodeId, name),
+      ctx.folderService?.deleteContainerAssignment(nodeId, name),
+      ctx.accessResourceService?.removeContainer(nodeId, name),
+    ]);
+  }
+  if (userId) {
+    await ctx.auditService
+      .log({
+        action: 'docker.container.create.rollback',
+        userId,
+        resourceType: 'docker-container',
+        resourceId: containerId,
+        details: { nodeId, name },
+      })
+      .catch(() => undefined);
+  }
+  if (name) ctx.emitContainer(nodeId, name, containerId, 'removed');
+  return { id: containerId, name };
 }
 
 export async function startContainer(
@@ -268,6 +349,7 @@ export async function stopContainer(
     resourceId: containerId,
     details: { nodeId, name, containerName: name },
   });
+  return { taskId: task?.id, containerId, name };
 }
 
 export async function restartContainer(
@@ -340,6 +422,7 @@ export async function restartContainer(
     resourceId: containerId,
     details: { nodeId, name, containerName: name },
   });
+  return { taskId: task?.id, containerId, name };
 }
 
 export async function killContainer(
@@ -371,6 +454,7 @@ export async function killContainer(
     resourceId: containerId,
     details: { nodeId, name, containerName: name, signal },
   });
+  return { taskId: task?.id, containerId, name };
 }
 
 export async function removeContainer(
@@ -492,33 +576,55 @@ export async function duplicateContainer(
     });
     data = ctx.parseResult(result);
   } catch (err) {
-    ctx.translateNameConflict(err, name);
-  } finally {
     ctx.clearTransition(nodeId, name);
+    ctx.translateNameConflict(err, name);
+  }
+  let newId = String(data?.Id ?? data?.id ?? '');
+  if (!newId) {
+    try {
+      const duplicateInspect = await ctx.inspectContainer(nodeId, name);
+      newId = String(duplicateInspect?.Id ?? duplicateInspect?.id ?? '');
+    } catch {
+      newId = '';
+    }
+  }
+  if (!newId) {
+    await ctx.nodeDispatch
+      .sendDockerContainerCommand(nodeId, 'remove', { containerId: name, force: true })
+      .then((result) => ctx.parseResult(result))
+      .catch(() => undefined);
+    ctx.clearTransition(nodeId, name);
+    throw new Error('Docker daemon did not return the duplicated container ID');
   }
 
-  // Copy secrets from source container to the new one (keyed by name)
-  if (ctx.environmentService) {
-    await ctx.environmentService.copy(nodeId, sourceName, name);
-  }
-  if (ctx.runtimeSettingsService) {
-    await ctx.runtimeSettingsService.copy(nodeId, sourceName, name);
-  }
-  if (ctx.secretService) {
-    await ctx.secretService.copySecrets(nodeId, sourceName, name, userId);
+  try {
+    await ctx.accessResourceService?.ensureContainer(nodeId, name, newId, false);
+    await ctx.environmentService?.copy(nodeId, sourceName, name);
+    await ctx.runtimeSettingsService?.copy(nodeId, sourceName, name);
+    await ctx.secretService?.copySecrets(nodeId, sourceName, name, userId);
+    await ctx.auditService.log({
+      action: 'docker.container.duplicate',
+      userId,
+      resourceType: 'docker-container',
+      resourceId: newId,
+      details: { nodeId, sourceId: containerId, sourceName, name, containerName: name },
+    });
+  } catch (error) {
+    await ctx.nodeDispatch
+      .sendDockerContainerCommand(nodeId, 'remove', { containerId: newId, force: true })
+      .then((result) => ctx.parseResult(result))
+      .catch(() => undefined);
+    await ctx.environmentService?.deleteImported(nodeId, name).catch(() => undefined);
+    await ctx.runtimeSettingsService?.delete(nodeId, name).catch(() => undefined);
+    await ctx.secretService?.deleteImported(nodeId, name).catch(() => undefined);
+    await ctx.accessResourceService?.removeContainer(nodeId, name).catch(() => undefined);
+    ctx.clearTransition(nodeId, name);
+    throw error;
   }
 
-  await ctx.auditService.log({
-    action: 'docker.container.duplicate',
-    userId,
-    resourceType: 'docker-container',
-    resourceId: containerId,
-    details: { nodeId, sourceName, name, containerName: name },
-  });
-  const newId = (data?.Id ?? data?.id ?? '') as string;
-  if (newId) await ctx.accessResourceService?.ensureContainer(nodeId, name, newId, false);
-  if (newId) ctx.emitContainer(nodeId, name, newId, 'duplicated', { sourceName });
-  return data;
+  ctx.clearTransition(nodeId, name);
+  ctx.emitContainer(nodeId, name, newId, 'duplicated', { sourceName });
+  return data && typeof data === 'object' ? { ...data, id: newId, name } : { id: newId, name };
 }
 
 export async function updateContainer(
@@ -597,7 +703,9 @@ export async function updateContainer(
     );
     ctx.imageCleanupService?.scheduleCleanupForContainer(nodeId, name, imageRef).catch(() => {});
   }
-  return data;
+  return data && typeof data === 'object'
+    ? { ...data, taskId: task?.id, containerId, name }
+    : { taskId: task?.id, containerId, name };
 }
 
 export async function liveUpdateContainer(
@@ -724,7 +832,9 @@ export async function recreateWithConfig(
       expectedState,
       ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60)
     );
-    return data;
+    return data && typeof data === 'object'
+      ? { ...data, taskId: task?.id, containerId, name }
+      : { taskId: task?.id, containerId, name };
   } catch (err) {
     ctx.clearTransition(nodeId, name);
     if (task && ctx.taskService) {
@@ -813,12 +923,18 @@ export async function updateContainerEnv(
   const updateStopTimeout = await ctx.resolveContainerStopTimeout(nodeId, containerId, undefined);
   ctx.requireNoTransition(nodeId, name);
 
-  // Merge decrypted secrets into the env update so secrets persist across recreate
-  let mergedEnv = env;
+  const inspect = await ctx.inspectContainer(nodeId, containerId);
+  const runtimeEnv = envListToMap(Array.isArray(inspect?.Config?.Env) ? inspect.Config.Env : []);
+  const storedEnv = ctx.environmentService ? await ctx.environmentService.getDecryptedMap(nodeId, name) : {};
+  const desiredVisibleEnv = { ...runtimeEnv, ...storedEnv, ...(env ?? {}) };
+  for (const key of removeEnv ?? []) delete desiredVisibleEnv[key];
+
+  // Merge decrypted secrets into the full desired env so secrets persist across recreate.
+  let mergedEnv = desiredVisibleEnv;
   if (ctx.secretService) {
     const secrets = await ctx.secretService.getDecryptedMap(nodeId, name);
     if (Object.keys(secrets).length > 0) {
-      mergedEnv = { ...(env || {}), ...secrets };
+      mergedEnv = { ...desiredVisibleEnv, ...secrets };
       // Never allow removing a secret key via removeEnv
       if (removeEnv) {
         const secretKeys = new Set(Object.keys(secrets));
@@ -839,9 +955,6 @@ export async function updateContainerEnv(
       Math.max(60000, ctx.lifecycleWatchTimeoutMs(updateStopTimeout, 60))
     );
     data = ctx.parseResult(result);
-    if (ctx.environmentService) {
-      await ctx.environmentService.replace(nodeId, name, env || {});
-    }
   } catch (err) {
     ctx.clearTransition(nodeId, name);
     if (task && ctx.taskService) {
@@ -862,7 +975,10 @@ export async function updateContainerEnv(
     task?.id,
     'Container env updated',
     expectedState,
-    ctx.lifecycleWatchTimeoutMs(updateStopTimeout, 60)
+    ctx.lifecycleWatchTimeoutMs(updateStopTimeout, 60),
+    async () => {
+      await ctx.environmentService?.replace(nodeId, name, desiredVisibleEnv);
+    }
   );
   await ctx.auditService.log({
     action: 'docker.container.env.update',
@@ -872,5 +988,7 @@ export async function updateContainerEnv(
     details: { nodeId, name, containerName: name },
   });
 
-  return data;
+  return data && typeof data === 'object'
+    ? { ...data, taskId: task?.id, containerId, name }
+    : { taskId: task?.id, containerId, name };
 }

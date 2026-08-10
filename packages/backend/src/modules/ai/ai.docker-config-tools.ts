@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { container } from '@/container.js';
-import { hasScopeForResource } from '@/lib/permissions.js';
+import { hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
 import {
   DockerHealthCheckUpsertSchema,
   EnvUpdateSchema,
@@ -10,11 +10,15 @@ import {
 } from '@/modules/docker/docker.schemas.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { dockerScopedNodeIds } from '@/modules/docker/docker-access-resource.service.js';
+import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from '@/modules/docker/docker-deployment-labels.js';
+import { FILE_UPLOAD_MAX_BYTES } from '@/modules/settings/general-settings.service.js';
 import type { User } from '@/types.js';
 
 const FileWriteToolSchema = z.object({
-  path: z.string().min(1),
-  content: z.string(),
+  path: FileBrowseSchema.shape.path,
+  content: z
+    .string()
+    .refine((content) => Buffer.byteLength(content, 'utf8') <= FILE_UPLOAD_MAX_BYTES, 'File is too large'),
 });
 
 export interface DockerConfigToolContext {
@@ -30,15 +34,53 @@ export async function manageDockerContainerConfigTool(
   const nodeId = String(args.nodeId);
   const targetType = args.targetType === 'deployment' ? 'deployment' : 'container';
   const deploymentId = String(args.deploymentId ?? '');
-  const containerName = String(args.containerName ?? '');
-  const containerId = String(args.containerId ?? '');
+  let containerName = String(args.containerName ?? '');
+  let containerId = String(args.containerId ?? '');
+  const requiredOperationScope = dockerConfigOperationScope(operation);
+  if (requiredOperationScope && !hasScopeBase(user.scopes, requiredOperationScope)) {
+    throw new Error(`PERMISSION_DENIED: Missing required scope ${requiredOperationScope}`);
+  }
+  if (
+    targetType === 'deployment' &&
+    ['get_env', 'update_env', 'list_files', 'read_file', 'write_file'].includes(operation)
+  ) {
+    throw new Error(`Docker config operation ${operation} does not support deployment targets`);
+  }
+  let inspectedContainer: Record<string, any> | undefined;
+  if (targetType === 'container') {
+    if (!containerId && !containerName) throw new Error('Exactly one containerId or containerName target is required');
+    let refreshedStaleId = false;
+    try {
+      inspectedContainer = await context.dockerService.inspectContainer(nodeId, containerId || containerName);
+    } catch (error) {
+      if (!containerId || !containerName) throw error;
+      inspectedContainer = await context.dockerService.inspectContainer(nodeId, containerName);
+      refreshedStaleId = true;
+    }
+    const resolvedId = String(inspectedContainer?.Id ?? inspectedContainer?.id ?? '');
+    const resolvedName = String(inspectedContainer?.Name ?? inspectedContainer?.name ?? '').replace(/^\//, '');
+    if (!resolvedId || !resolvedName) throw new Error('Docker container identity could not be resolved');
+    if (containerId && !refreshedStaleId && containerId !== resolvedId && !resolvedId.startsWith(containerId)) {
+      throw new Error('containerId and resolved Docker identity do not match');
+    }
+    if (containerName && containerName.replace(/^\//, '') !== resolvedName) {
+      throw new Error('containerName and resolved Docker identity do not match');
+    }
+    const labels = inspectedContainer?.Config?.Labels ?? inspectedContainer?.Labels ?? inspectedContainer?.labels ?? {};
+    if (labels[DOCKER_DEPLOYMENT_MANAGED_LABEL] === 'true') {
+      throw new Error(
+        'MANAGED_DEPLOYMENT_CONTAINER: This container is managed by a blue/green deployment. Use deployment actions instead.'
+      );
+    }
+    containerId = resolvedId;
+    containerName = resolvedName;
+  }
   const secretContainerName = targetType === 'deployment' ? `deployment:${deploymentId}` : containerName;
   const authorizationResourceId = async (baseScope: string) => {
     if (targetType === 'deployment') return `${nodeId}/${deploymentId}`;
     if (hasScopeForResource(user.scopes, baseScope, nodeId)) return nodeId;
     if (!dockerScopedNodeIds(user.scopes, [baseScope]).includes(nodeId)) return nodeId;
-    const inspected = await context.dockerService.inspectContainer(nodeId, containerId || containerName);
-    const resourceId = String(inspected?.scopeResourceId ?? '');
+    const resourceId = String(inspectedContainer?.scopeResourceId ?? '');
     if (!resourceId) throw new Error('PERMISSION_DENIED: Container authorization identity is unavailable');
     return `${nodeId}/${resourceId}`;
   };
@@ -193,6 +235,18 @@ export async function manageDockerContainerConfigTool(
   }
 
   throw new Error(`Unsupported Docker container config operation: ${operation}`);
+}
+
+function dockerConfigOperationScope(operation: string): string | undefined {
+  if (operation === 'get_env' || operation === 'update_env') return 'docker:containers:environment';
+  if (operation === 'list_files' || operation === 'read_file' || operation === 'write_file') {
+    return 'docker:containers:files';
+  }
+  if (operation.endsWith('_secret') || operation === 'list_secrets') return 'docker:containers:secrets';
+  if (operation.includes('webhook')) return 'docker:containers:webhooks';
+  if (operation === 'get_health_check') return 'docker:containers:view';
+  if (operation === 'upsert_health_check' || operation === 'test_health_check') return 'docker:containers:edit';
+  return undefined;
 }
 
 function ensureToolScopeForResource(user: User, baseScope: string, resourceId: string) {

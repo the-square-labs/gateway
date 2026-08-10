@@ -175,7 +175,14 @@ export function boundScopes(delegatedScopes: string[], principalScopes: string[]
   }
 
   for (const scope of principalScopes) {
-    if (hasScope(delegatedScopes, scope)) bounded.add(scope);
+    const scopeBase = extractBaseScope(scope);
+    if (
+      delegatedScopes.some(
+        (delegatedScope) => extractBaseScope(delegatedScope) === scopeBase && hasScope([delegatedScope], scope)
+      )
+    ) {
+      bounded.add(scope);
+    }
   }
 
   for (const delegatedScope of delegatedScopes) {
@@ -185,7 +192,6 @@ export function boundScopes(delegatedScopes: string[], principalScopes: string[]
     for (const principalScope of principalScopes) {
       const principalBase = extractBaseScope(principalScope);
       if (principalScope === principalBase) continue;
-
       const resourceId = principalScope.slice(principalBase.length + 1);
       const narrowedDelegatedScope = `${delegatedBase}:${resourceId}`;
       if (hasScope([principalScope], narrowedDelegatedScope)) bounded.add(narrowedDelegatedScope);

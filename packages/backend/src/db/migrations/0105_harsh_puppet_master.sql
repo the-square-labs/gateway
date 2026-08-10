@@ -1,0 +1,1 @@
+ALTER TABLE "ai_run_tool_calls" ADD COLUMN "resource_references" jsonb DEFAULT '[]'::jsonb NOT NULL;

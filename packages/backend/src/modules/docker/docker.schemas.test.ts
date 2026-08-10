@@ -9,6 +9,26 @@ import {
 } from './docker.schemas.js';
 import { DockerDeploymentDesiredConfigSchema } from './docker-deployment.schemas.js';
 
+describe('docker container create schemas', () => {
+  it('requires exactly one mount source and absolute mount paths', () => {
+    expect(
+      ContainerCreateSchema.safeParse({ image: 'nginx:alpine', volumes: [{ containerPath: '/data' }] }).success
+    ).toBe(false);
+    expect(
+      ContainerCreateSchema.safeParse({
+        image: 'nginx:alpine',
+        volumes: [{ hostPath: '/srv/data', name: 'data', containerPath: '/data' }],
+      }).success
+    ).toBe(false);
+    expect(
+      ContainerCreateSchema.safeParse({
+        image: 'nginx:alpine',
+        volumes: [{ name: 'data', containerPath: '/data', readOnly: true }],
+      }).success
+    ).toBe(true);
+  });
+});
+
 describe('docker file path schemas', () => {
   it('accepts absolute file paths with dots inside a filename', () => {
     expect(FileBrowseSchema.parse({ path: '/tmp/file..txt' })).toEqual({ path: '/tmp/file..txt' });

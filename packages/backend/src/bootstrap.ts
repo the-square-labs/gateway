@@ -913,6 +913,9 @@ export async function initializeContainer(): Promise<void> {
   );
   container.registerInstance(AIProviderRuntimeService, aiProviderRuntimeService);
   const aiSandboxArtifactService = new AISandboxArtifactService(env);
+  await aiSandboxArtifactService.cleanInterruptedFiles().catch((error) => {
+    logger.warn('Failed to clean interrupted AI artifact writes during bootstrap', { error });
+  });
   container.registerInstance(AISandboxArtifactService, aiSandboxArtifactService);
   const aiSandboxJobsService = new AISandboxJobsService(db);
   container.registerInstance(AISandboxJobsService, aiSandboxJobsService);
@@ -1199,6 +1202,10 @@ export async function initializeContainer(): Promise<void> {
     generalSettingsService
   );
   container.registerInstance(AIService, aiService);
+  if (!container.isRegistered(AIService)) {
+    throw new Error('AIService must be registered before interrupted AI runs are recovered');
+  }
+  await aiRunService.recoverInterruptedRuns((userId) => authService.getUserById(userId));
 
   // Configure DNS resolvers and detect public IP
   initDnsResolver(

@@ -1,4 +1,5 @@
-import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { container } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import {
@@ -12,16 +13,24 @@ import {
   aiRunQuestions,
   aiRuns,
   aiRunToolCalls,
+  aiRunToolRounds,
 } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { User } from '@/types.js';
 import { type AIContextCompactionResult, type AIContextCompactionTrigger, AIService } from './ai.service.js';
-import type { ChatMessage, WSServerMessage } from './ai.types.js';
+import type { AIResourceReference, ChatMessage, WSServerMessage } from './ai.types.js';
 import { classifyAIToolForApproval } from './ai-approval-policy.js';
 import type { AIConversationSearchService } from './ai-conversation-search.service.js';
 import { type AssistantLiveDraft, AssistantLiveDraftStore } from './ai-live-draft-store.js';
 import {
+  appendAIResourceReferencesToModelResult,
+  formatAIResourceMarker,
+  mergeAIResourceReference,
+  referencedAIResourceIds,
+} from './ai-resource-references.js';
+import {
+  isAIContinuationCommand,
   normalizeCheckpoint,
   questionTextFromArgs,
   toChatMessage,
@@ -31,22 +40,12 @@ import {
 import { redactOneTimeSecretToolResult } from './ai-secret-result-redaction.js';
 
 const logger = createChildLogger('AI-Run-Executor');
-const COMPACTION_TAIL_MESSAGES = 8;
-const AUTO_COMPACTION_RETRY_PREFIX = 'auto-compact-retry-';
-const AUTO_COMPACTION_RETRY_ANSWER = 'Retry';
 
 function getClientAction(result: unknown): Record<string, unknown> | null {
   if (!result || typeof result !== 'object') return null;
   const action = (result as { clientAction?: unknown }).clientAction;
   if (!action || typeof action !== 'object' || Array.isArray(action)) return null;
   return action as Record<string, unknown>;
-}
-
-class AutoCompactionPausedError extends Error {
-  constructor() {
-    super('Automatic context compaction is waiting for retry');
-    this.name = 'AutoCompactionPausedError';
-  }
 }
 
 type PublishConversationChanged = (userId: string, conversationId: string, invalidatedStores?: string[]) => void;
@@ -102,12 +101,16 @@ interface ResumeInput {
   pendingMessages: Record<string, unknown>[];
   answers?: Record<string, string>;
   queuedApprovals: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
+  approvalDecisions?: Record<string, boolean>;
   rejectionError?: string;
 }
 
 export class AIRunExecutor {
+  private readonly leaseOwner = `gateway-ai-${process.pid}-${randomUUID()}`;
   private readonly abortControllers = new Map<string, AbortController>();
   private readonly executingRuns = new Set<string>();
+  private readonly executionEpochs = new Map<string, number>();
+  private readonly heartbeatTimers = new Map<string, NodeJS.Timeout>();
   private readonly assistantLiveDrafts = new AssistantLiveDraftStore();
   private readonly toolBoundaryMessageIds = new Map<string, string>();
 
@@ -134,6 +137,15 @@ export class AIRunExecutor {
     if (this.executingRuns.has(input.runId)) return;
     this.executingRuns.add(input.runId);
     void this.executeApprovalContinuation(user, input).catch((error) => {
+      this.logExecutionError(input.runId, error);
+    });
+  }
+
+  startToolRoundContinuation(user: User, input: { conversationId: string; runId: string; roundId: string }): void {
+    if (this.executingRuns.has(input.runId)) return;
+    this.executingRuns.add(input.runId);
+    void this.executeToolRoundContinuation(user, input).catch((error) => {
+      this.executingRuns.delete(input.runId);
       this.logExecutionError(input.runId, error);
     });
   }
@@ -168,6 +180,7 @@ export class AIRunExecutor {
     this.abortControllers.delete(runId);
     this.executingRuns.delete(runId);
     this.toolBoundaryMessageIds.delete(runId);
+    void this.releaseLease(runId);
   }
 
   async waitForIdle(deadline: number): Promise<void> {
@@ -190,7 +203,7 @@ export class AIRunExecutor {
     fallbackContent?: string | null
   ): Promise<string | null> {
     const content = this.assistantLiveDrafts.getContent(runId, fallbackContent);
-    const assistantMessageId = await this.persistAssistantMessageIfNeeded(userId, conversationId, content);
+    const assistantMessageId = await this.persistAssistantMessageIfNeeded(userId, conversationId, runId, content);
     if (assistantMessageId) await this.linkRunToolCallsToAssistantMessage(runId, assistantMessageId);
     this.assistantLiveDrafts.forget(runId);
     await this.clearAssistantDraft(runId);
@@ -205,9 +218,9 @@ export class AIRunExecutor {
     const conversation = await getOwnedConversation(this.db, user.id, run.conversationId);
     if (!conversation) throw new AppError(404, 'AI_CONVERSATION_NOT_FOUND', 'AI conversation not found');
 
+    if (!(await this.claimRun(run, ['queued']))) return;
     const abortController = new AbortController();
     this.abortControllers.set(run.id, abortController);
-    await this.updateRunStatus(run.id, 'running');
     this.publishConversationChanged(user.id, run.conversationId);
 
     const pageContext = toPageContext(conversation.lastContext);
@@ -215,6 +228,13 @@ export class AIRunExecutor {
     const messages = await this.loadConversationMessages(run.conversationId, {
       includeHistoricalToolOutcomes: true,
     });
+    if (isAIContinuationCommand(run.clientCommandId)) {
+      messages.push({
+        role: 'user',
+        content:
+          'Continue the interrupted task from the current durable state. Do not repeat successful side effects. Verify uncertain effects before acting, then complete the task and provide the final response.',
+      });
+    }
     let assistantContent = '';
     let assistantMessageWritten = false;
 
@@ -245,18 +265,6 @@ export class AIRunExecutor {
       }
     } catch (error) {
       if (abortController.signal.aborted) return;
-      if (error instanceof AutoCompactionPausedError) {
-        const assistantMessageId = await this.persistAssistantBoundary(
-          user.id,
-          run.conversationId,
-          run.id,
-          assistantContent
-        );
-        if (assistantMessageId) await this.linkRunToolCallsToAssistantMessage(run.id, assistantMessageId);
-        this.forgetAssistantDraftState(run.id);
-        this.publishConversationChanged(user.id, run.conversationId);
-        return;
-      }
       const assistantMessageId = await this.persistAssistantBoundary(
         user.id,
         run.conversationId,
@@ -273,6 +281,7 @@ export class AIRunExecutor {
       this.abortControllers.delete(run.id);
       this.executingRuns.delete(run.id);
       this.toolBoundaryMessageIds.delete(run.id);
+      await this.releaseLease(run.id);
     }
   }
 
@@ -295,6 +304,103 @@ export class AIRunExecutor {
     });
   }
 
+  private async executeToolRoundContinuation(
+    user: User,
+    input: { conversationId: string; runId: string; roundId: string }
+  ): Promise<void> {
+    const [round] = await this.db
+      .select()
+      .from(aiRunToolRounds)
+      .where(
+        and(
+          eq(aiRunToolRounds.id, input.roundId),
+          eq(aiRunToolRounds.runId, input.runId),
+          eq(aiRunToolRounds.conversationId, input.conversationId)
+        )
+      )
+      .limit(1);
+    if (!round || round.status !== 'ready') {
+      this.executingRuns.delete(input.runId);
+      return;
+    }
+    const calls = await this.db
+      .select()
+      .from(aiRunToolCalls)
+      .where(eq(aiRunToolCalls.roundId, input.roundId))
+      .orderBy(asc(aiRunToolCalls.position));
+    const questions = await this.db
+      .select()
+      .from(aiRunQuestions)
+      .where(eq(aiRunQuestions.roundId, input.roundId))
+      .orderBy(asc(aiRunQuestions.position));
+    const credentialChallenges = await this.db
+      .select()
+      .from(aiRunCredentialChallenges)
+      .where(eq(aiRunCredentialChallenges.roundId, input.roundId));
+    const answers = Object.fromEntries(
+      questions.map((question) => [question.toolCallId, question.answer ?? 'No answer provided'])
+    );
+    const terminalStatuses = new Set(['completed', 'failed', 'stopped', 'effect_unknown']);
+    const remainingCalls = calls.filter((call) => !terminalStatuses.has(call.status));
+    const firstQuestion = questions.find((question) => question.status === 'answered');
+    const firstCall = firstQuestion
+      ? remainingCalls.find((call) => call.toolCallId === firstQuestion.toolCallId)
+      : remainingCalls[0];
+    const credentialDecisions = new Map(
+      credentialChallenges.map((challenge) => [challenge.toolCallId, challenge.status === 'authorized'])
+    );
+    const approvalDecisions = Object.fromEntries(
+      remainingCalls.map((call) => [
+        call.toolCallId,
+        call.status === 'rejected'
+          ? false
+          : credentialDecisions.has(call.toolCallId)
+            ? credentialDecisions.get(call.toolCallId) === true
+            : true,
+      ])
+    );
+    const first = firstQuestion
+      ? {
+          id: firstQuestion.toolCallId,
+          name: 'ask_question',
+          args: firstCall?.toolArgs ?? {
+            question: firstQuestion.question,
+          },
+          approved: true,
+        }
+      : firstCall
+        ? {
+            id: firstCall.toolCallId,
+            name: firstCall.toolName,
+            args: firstCall.toolArgs,
+            approved: approvalDecisions[firstCall.toolCallId] !== false,
+          }
+        : null;
+    if (!first) {
+      this.executingRuns.delete(input.runId);
+      return;
+    }
+    const queuedApprovals = remainingCalls
+      .filter((call) => call.toolCallId !== first.id && call.toolName !== 'ask_question')
+      .map((call) => ({ id: call.toolCallId, name: call.toolName, arguments: call.toolArgs }));
+    await this.db
+      .update(aiRunToolRounds)
+      .set({ status: 'executing', startedAt: round.startedAt ?? new Date(), updatedAt: new Date() })
+      .where(and(eq(aiRunToolRounds.id, input.roundId), eq(aiRunToolRounds.status, 'ready')));
+    await this.executeResume(user, {
+      conversationId: input.conversationId,
+      runId: input.runId,
+      toolCallId: first.id,
+      toolName: first.name,
+      toolArgs: first.args,
+      approved: first.approved,
+      pendingMessages: round.providerMessages,
+      answers: firstQuestion ? answers : undefined,
+      queuedApprovals,
+      approvalDecisions,
+    });
+  }
+
   private async executeQuestionContinuation(user: User, input: QuestionContinuationInput): Promise<void> {
     const checkpoint = await this.loadCheckpoint(user.id, input.conversationId);
     const answeredQuestions = await this.listAnsweredQuestions(input.runId);
@@ -308,23 +414,6 @@ export class AIRunExecutor {
       id: input.question.toolCallId,
       args: { question: input.question.question },
     };
-    if (firstQuestion.args._compactionRetry === true) {
-      await this.finishToolCall(
-        input.runId,
-        input.question.toolCallId,
-        'ask_question',
-        {
-          answer: input.question.answer ?? AUTO_COMPACTION_RETRY_ANSWER,
-        },
-        null
-      );
-      await this.executeAutoCompactionRetry(user, {
-        conversationId: input.conversationId,
-        runId: input.runId,
-        pendingMessages: checkpoint.pendingMessages,
-      });
-      return;
-    }
     await this.executeResume(user, {
       conversationId: input.conversationId,
       runId: input.runId,
@@ -349,6 +438,10 @@ export class AIRunExecutor {
     ) {
       throw new AppError(409, 'AI_CREDENTIAL_CHECKPOINT_MISMATCH', 'Credential challenge is no longer active');
     }
+    const decidedApprovals = await this.db
+      .select({ toolCallId: aiRunToolCalls.toolCallId, status: aiRunToolCalls.status })
+      .from(aiRunToolCalls)
+      .where(and(eq(aiRunToolCalls.runId, input.runId), inArray(aiRunToolCalls.status, ['approved', 'rejected'])));
     await this.executeResume(user, {
       conversationId: input.conversationId,
       runId: input.runId,
@@ -358,6 +451,9 @@ export class AIRunExecutor {
       approved: input.authorized,
       pendingMessages: checkpoint.pendingMessages,
       queuedApprovals: checkpoint.queuedApprovals,
+      approvalDecisions: Object.fromEntries(
+        decidedApprovals.map((call) => [call.toolCallId, call.status === 'approved'])
+      ),
       rejectionError: input.authorized
         ? undefined
         : 'GITLAB_AUTHORIZATION_REJECTED: User rejected GitLab authorization.',
@@ -378,9 +474,13 @@ export class AIRunExecutor {
     const conversation = await getOwnedConversation(this.db, user.id, input.conversationId);
     if (!conversation) throw new AppError(404, 'AI_CONVERSATION_NOT_FOUND', 'AI conversation not found');
 
+    if (
+      !(await this.claimRun(run, ['waiting_for_approval', 'waiting_for_answer', 'waiting_for_credential', 'queued']))
+    ) {
+      return;
+    }
     const abortController = new AbortController();
     this.abortControllers.set(input.runId, abortController);
-    await this.updateRunStatus(input.runId, 'running');
     this.publishConversationChanged(user.id, input.conversationId);
 
     const aiService = container.resolve(AIService);
@@ -406,7 +506,8 @@ export class AIRunExecutor {
         (currentMessages) => this.maybeAutoCompactContext(user, run, currentMessages, pageContext, abortController),
         input.rejectionError,
         run.model ?? undefined,
-        run.reasoningEffort ?? undefined
+        run.reasoningEffort ?? undefined,
+        input.approvalDecisions
       )) {
         if (abortController.signal.aborted) return;
 
@@ -423,18 +524,6 @@ export class AIRunExecutor {
       }
     } catch (error) {
       if (abortController.signal.aborted) return;
-      if (error instanceof AutoCompactionPausedError) {
-        const assistantMessageId = await this.persistAssistantBoundary(
-          user.id,
-          input.conversationId,
-          input.runId,
-          assistantContent
-        );
-        if (assistantMessageId) await this.linkRunToolCallsToAssistantMessage(input.runId, assistantMessageId);
-        this.forgetAssistantDraftState(input.runId);
-        this.publishConversationChanged(user.id, input.conversationId);
-        return;
-      }
       const assistantMessageId = await this.persistAssistantBoundary(
         user.id,
         input.conversationId,
@@ -451,88 +540,7 @@ export class AIRunExecutor {
       this.abortControllers.delete(input.runId);
       this.executingRuns.delete(input.runId);
       this.toolBoundaryMessageIds.delete(input.runId);
-    }
-  }
-
-  private async executeAutoCompactionRetry(
-    user: User,
-    input: { conversationId: string; runId: string; pendingMessages: Record<string, unknown>[] }
-  ): Promise<void> {
-    const run = await this.getOwnedRun(user.id, input.runId);
-    if (!run) throw new AppError(404, 'AI_RUN_NOT_FOUND', 'AI run not found');
-    if (run.status !== 'waiting_for_answer') return;
-
-    const conversation = await getOwnedConversation(this.db, user.id, input.conversationId);
-    if (!conversation) throw new AppError(404, 'AI_CONVERSATION_NOT_FOUND', 'AI conversation not found');
-
-    const abortController = new AbortController();
-    this.abortControllers.set(input.runId, abortController);
-    await this.updateRunStatus(input.runId, 'running');
-    this.publishConversationChanged(user.id, input.conversationId);
-
-    const aiService = container.resolve(AIService);
-    const pageContext = toPageContext(conversation.lastContext);
-    const messages = input.pendingMessages
-      .map(toChatMessage)
-      .filter((message): message is ChatMessage => message !== null && message.role !== 'system');
-    let assistantContent = '';
-    let assistantMessageWritten = false;
-
-    try {
-      for await (const event of aiService.streamChat(
-        user,
-        messages,
-        pageContext,
-        abortController.signal,
-        input.runId,
-        input.conversationId,
-        (currentMessages) => this.maybeAutoCompactContext(user, run, currentMessages, pageContext, abortController),
-        run.model ?? undefined,
-        run.reasoningEffort ?? undefined
-      )) {
-        if (abortController.signal.aborted) return;
-
-        const result = await this.applyRuntimeEvent({
-          user,
-          run,
-          event,
-          assistantContent,
-          assistantMessageWritten,
-        });
-        assistantContent = result.assistantContent;
-        assistantMessageWritten = result.assistantMessageWritten;
-        if (result.done) return;
-      }
-    } catch (error) {
-      if (abortController.signal.aborted) return;
-      if (error instanceof AutoCompactionPausedError) {
-        const assistantMessageId = await this.persistAssistantBoundary(
-          user.id,
-          input.conversationId,
-          input.runId,
-          assistantContent
-        );
-        if (assistantMessageId) await this.linkRunToolCallsToAssistantMessage(input.runId, assistantMessageId);
-        this.forgetAssistantDraftState(input.runId);
-        this.publishConversationChanged(user.id, input.conversationId);
-        return;
-      }
-      const assistantMessageId = await this.persistAssistantBoundary(
-        user.id,
-        input.conversationId,
-        input.runId,
-        assistantContent
-      );
-      if (assistantMessageId) await this.linkRunToolCallsToAssistantMessage(input.runId, assistantMessageId);
-      const errorMessage = error instanceof Error ? error.message : 'AI run failed';
-      await this.updateRunStatus(input.runId, 'failed', errorMessage);
-      await this.persistRunErrorMessage(user.id, input.conversationId, input.runId, errorMessage);
-      this.forgetAssistantDraftState(input.runId);
-      this.publishConversationChanged(user.id, input.conversationId);
-    } finally {
-      this.abortControllers.delete(input.runId);
-      this.executingRuns.delete(input.runId);
-      this.toolBoundaryMessageIds.delete(input.runId);
+      await this.releaseLease(input.runId);
     }
   }
 
@@ -548,9 +556,9 @@ export class AIRunExecutor {
     const conversation = await getOwnedConversation(this.db, user.id, run.conversationId);
     if (!conversation) throw new AppError(404, 'AI_CONVERSATION_NOT_FOUND', 'AI conversation not found');
 
+    if (!(await this.claimRun(run, ['queued']))) return;
     const abortController = new AbortController();
     this.abortControllers.set(run.id, abortController);
-    await this.updateRunStatus(run.id, 'running');
     this.publishConversationChanged(user.id, run.conversationId);
 
     try {
@@ -572,6 +580,7 @@ export class AIRunExecutor {
       this.abortControllers.delete(run.id);
       this.executingRuns.delete(run.id);
       this.toolBoundaryMessageIds.delete(run.id);
+      await this.releaseLease(run.id);
     }
   }
 
@@ -610,6 +619,12 @@ export class AIRunExecutor {
       return { assistantContent: '', assistantMessageWritten: false, done: false };
     }
 
+    if (event.type === 'tool_round_start') {
+      await this.persistToolRound(run, event);
+      this.publishConversationChanged(user.id, run.conversationId);
+      return { assistantContent, assistantMessageWritten, done: false };
+    }
+
     if (event.type === 'tool_call_start') {
       if (assistantContent.trim()) {
         await this.persistAssistantBoundary(user.id, run.conversationId, run.id, assistantContent);
@@ -631,8 +646,16 @@ export class AIRunExecutor {
     }
 
     if (event.type === 'tool_result') {
-      await this.finishToolCall(run.id, event.id, event.name, event.result, event.error ?? null);
-      const clientAction = getClientAction(event.result);
+      await this.finishToolCall(
+        run.id,
+        event.id,
+        event.name,
+        event.result,
+        event.error ?? null,
+        event.rejected === true,
+        event.resourceReferences ?? []
+      );
+      const clientAction = event.clientAction ?? getClientAction(event.result);
       if (clientAction) this.publishClientAction?.(user.id, run.conversationId, run.id, clientAction);
       this.publishConversationChanged(user.id, run.conversationId);
       return { assistantContent, assistantMessageWritten, done: false };
@@ -653,7 +676,8 @@ export class AIRunExecutor {
       assistantMessageWritten = true;
       await this.persistPendingInteraction(run, event, assistantMessageId);
       this.conversationSearchService?.rebuildConversationIndexBestEffort(user.id, run.conversationId);
-      await this.setConversationCheckpoint(run.conversationId, event);
+      const roundId = event.roundId ?? (await this.findToolCallRoundId(run.id, event.id));
+      if (!roundId) await this.setConversationCheckpoint(run.conversationId, event);
       await this.updateRunStatus(run.id, event.name === 'ask_question' ? 'waiting_for_answer' : 'waiting_for_approval');
       this.publishConversationChanged(user.id, run.conversationId);
       return { assistantContent, assistantMessageWritten, done: true };
@@ -669,7 +693,7 @@ export class AIRunExecutor {
       assistantMessageWritten = true;
       const challenge = await this.persistCredentialChallenge(run, user.id, event);
       if (assistantMessageId) await this.linkRunToolCallsToAssistantMessage(run.id, assistantMessageId);
-      await this.setConversationCheckpoint(run.conversationId, event);
+      if (!challenge.roundId) await this.setConversationCheckpoint(run.conversationId, event);
       await this.updateRunStatus(run.id, 'waiting_for_credential');
       this.publishCredentialChallenge?.(user.id, run.conversationId, run.id, challenge);
       this.publishConversationChanged(user.id, run.conversationId);
@@ -716,7 +740,8 @@ export class AIRunExecutor {
           user.id,
           run.conversationId,
           run.id,
-          assistantContent
+          assistantContent,
+          true
         );
         if (assistantMessageId) await this.linkRunToolCallsToAssistantMessage(run.id, assistantMessageId);
       } else {
@@ -749,13 +774,7 @@ export class AIRunExecutor {
       run.reasoningEffort ?? undefined
     );
     if (!shouldCompact) return messages;
-    try {
-      return await this.performContextCompaction(user, run, messages, pageContext, abortController, 'auto', false);
-    } catch (error) {
-      if (abortController.signal.aborted) throw error;
-      await this.pauseForAutoCompactionRetry(user, run, messages, error);
-      throw new AutoCompactionPausedError();
-    }
+    return this.performContextCompaction(user, run, messages, pageContext, abortController, 'auto', false);
   }
 
   private async performContextCompaction(
@@ -802,6 +821,7 @@ export class AIRunExecutor {
       if (!result.compacted) return this.loadConversationMessages(run.conversationId);
       return compactedRuntimeMessages(messages, result);
     } catch (error) {
+      if (abortController.signal.aborted) throw error;
       await this.finishToolCall(
         run.id,
         toolCallId,
@@ -812,52 +832,6 @@ export class AIRunExecutor {
       this.publishConversationChanged(user.id, run.conversationId);
       throw error;
     }
-  }
-
-  private async pauseForAutoCompactionRetry(
-    user: User,
-    run: AIRun,
-    messages: ChatMessage[],
-    error: unknown
-  ): Promise<void> {
-    const retryQuestionId = `${AUTO_COMPACTION_RETRY_PREFIX}${run.id}-${Date.now()}`;
-    const question = 'Context compaction failed. Retry compaction to continue this chat.';
-    const args = {
-      question,
-      options: [{ label: AUTO_COMPACTION_RETRY_ANSWER }],
-      allowFreeText: false,
-      _compactionRetry: true,
-    };
-
-    await this.recordToolCall({
-      runId: run.id,
-      conversationId: run.conversationId,
-      toolCallId: retryQuestionId,
-      toolName: 'ask_question',
-      toolArgs: args,
-      status: 'running',
-    });
-    await this.db.insert(aiRunQuestions).values({
-      runId: run.id,
-      conversationId: run.conversationId,
-      toolCallId: retryQuestionId,
-      question,
-    });
-    await this.setConversationCheckpoint(run.conversationId, {
-      type: 'tool_approval_required',
-      requestId: run.id,
-      id: retryQuestionId,
-      name: 'ask_question',
-      arguments: args,
-      _pendingMessages: messages,
-      _allQuestions: [{ id: retryQuestionId, args }],
-    } as WSServerMessage);
-    await this.updateRunStatus(
-      run.id,
-      'waiting_for_answer',
-      error instanceof Error ? error.message : 'Context compaction failed'
-    );
-    this.publishConversationChanged(user.id, run.conversationId);
   }
 
   private async getOwnedRun(userId: string, runId: string): Promise<AIRun | null> {
@@ -884,7 +858,7 @@ export class AIRunExecutor {
     const messages: Array<{ id: string | null; message: ChatMessage }> = [];
     for (const row of activeRows) {
       const message = toChatMessage(row.uiMessage);
-      if (message) messages.push({ id: row.id, message });
+      if (message) messages.push({ id: row.id, message: { ...message, id: row.id } });
     }
 
     if (!options.includeHistoricalToolOutcomes) return messages.map((entry) => entry.message);
@@ -894,9 +868,18 @@ export class AIRunExecutor {
   private async persistAssistantMessageIfNeeded(
     userId: string,
     conversationId: string,
-    content: string
+    runId: string,
+    content: string,
+    includeChangedResources = false
   ): Promise<string | null> {
-    if (!content.trim()) return null;
+    if (!content.trim() && !includeChangedResources) return null;
+    const messageReferences = await this.resolveMessageResourceReferences(
+      conversationId,
+      runId,
+      content,
+      includeChangedResources
+    );
+    if (!content.trim() && messageReferences.changed.length === 0) return null;
     const sequence = await nextMessageSequence(this.db, conversationId);
     const [message] = await this.db
       .insert(aiConversationMessages)
@@ -906,6 +889,8 @@ export class AIRunExecutor {
           {
             role: 'assistant',
             content,
+            ...(messageReferences.referenced.length > 0 ? { resourceReferences: messageReferences.referenced } : {}),
+            ...(messageReferences.changed.length > 0 ? { changedResourceReferences: messageReferences.changed } : {}),
           },
           sequence
         )
@@ -978,10 +963,17 @@ export class AIRunExecutor {
     userId: string,
     conversationId: string,
     runId: string,
-    fallbackContent: string
+    fallbackContent: string,
+    includeChangedResources = false
   ): Promise<string | null> {
     const content = this.assistantLiveDrafts.getContent(runId, fallbackContent);
-    const assistantMessageId = await this.persistAssistantMessageIfNeeded(userId, conversationId, content);
+    const assistantMessageId = await this.persistAssistantMessageIfNeeded(
+      userId,
+      conversationId,
+      runId,
+      content,
+      includeChangedResources
+    );
     await this.clearAssistantDraftState(runId);
     return assistantMessageId;
   }
@@ -1022,10 +1014,14 @@ export class AIRunExecutor {
             role: 'assistant',
             content: result.summary,
             compactMarker: true,
+            compactVersion: 2,
+            compactEpoch: result.compactEpoch,
+            compactBoundaryMessageId: result.compactBoundaryMessageId,
             compactedAt: new Date().toISOString(),
             compactedMessageCount: result.compactedMessageCount,
-            compactTailMessageCount: result.tailMessageCount,
-            compactTrigger: result.trigger,
+            sourceTokenEstimate: result.sourceTokenEstimate,
+            resultTokenEstimate: result.resultTokenEstimate,
+            compactTrigger: result.trigger === 'auto' ? 'automatic' : 'manual',
           },
           sequence
         )
@@ -1065,7 +1061,7 @@ export class AIRunExecutor {
         toolCallId: input.toolCallId,
         toolName: input.toolName,
         toolArgs: input.toolArgs,
-        classification: classifyAIToolForApproval(input.toolName),
+        classification: classifyAIToolForApproval(input.toolName, input.toolArgs),
         approvalPolicy: input.status === 'pending_approval' ? 'requires_approval' : 'auto_approved',
         requiredScopes: [],
         status: input.status,
@@ -1076,7 +1072,7 @@ export class AIRunExecutor {
           toolName: input.toolName,
           toolArgs: input.toolArgs,
           ...(input.assistantMessageId ? { assistantMessageId: input.assistantMessageId } : {}),
-          classification: classifyAIToolForApproval(input.toolName),
+          classification: classifyAIToolForApproval(input.toolName, input.toolArgs),
           approvalPolicy: input.status === 'pending_approval' ? 'requires_approval' : 'auto_approved',
           status: input.status,
           updatedAt: new Date(),
@@ -1084,25 +1080,186 @@ export class AIRunExecutor {
       });
   }
 
+  private async persistToolRound(
+    run: AIRun,
+    event: Extract<WSServerMessage, { type: 'tool_round_start' }>
+  ): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      const [latest] = await tx
+        .select({ sequence: aiRunToolRounds.sequence })
+        .from(aiRunToolRounds)
+        .where(eq(aiRunToolRounds.runId, run.id))
+        .orderBy(desc(aiRunToolRounds.sequence))
+        .limit(1);
+      const hasQuestions = event.calls.some((call) => call.gate === 'question');
+      const hasApprovals = event.calls.some((call) => call.gate === 'approval');
+      await tx.insert(aiRunToolRounds).values({
+        id: event.roundId,
+        runId: run.id,
+        conversationId: run.conversationId,
+        sequence: (latest?.sequence ?? -1) + 1,
+        status: hasQuestions ? 'waiting_questions' : hasApprovals ? 'waiting_approvals' : 'executing',
+        providerMessages: event.providerMessages,
+        startedAt: hasQuestions || hasApprovals ? null : new Date(),
+      });
+      if (event.calls.length > 0) {
+        await tx.insert(aiRunToolCalls).values(
+          event.calls.map((call) => ({
+            runId: run.id,
+            roundId: event.roundId,
+            position: call.position,
+            conversationId: run.conversationId,
+            toolCallId: call.id,
+            toolName: call.name,
+            toolArgs: call.arguments,
+            classification: call.classification,
+            approvalPolicy: call.approvalPolicy,
+            requiredScopes: call.requiredScopes,
+            status: call.gate === 'approval' ? ('pending_approval' as const) : ('created' as const),
+          }))
+        );
+      }
+      const questions = event.calls.filter((call) => call.gate === 'question');
+      if (questions.length > 0) {
+        await tx.insert(aiRunQuestions).values(
+          questions.map((call) => ({
+            runId: run.id,
+            roundId: event.roundId,
+            position: call.position,
+            conversationId: run.conversationId,
+            toolCallId: call.id,
+            question: questionTextFromArgs(call.arguments),
+          }))
+        );
+      }
+    });
+  }
+
   private async finishToolCall(
     runId: string,
     toolCallId: string,
     toolName: string,
     result: unknown,
-    error: string | null
+    error: string | null,
+    rejected = false,
+    resourceReferences: AIResourceReference[] = []
   ): Promise<void> {
     const now = new Date();
-    const persistedResult = error ? result : redactOneTimeSecretToolResult(toolName, result);
+    const persistedResult = redactOneTimeSecretToolResult(toolName, result);
     await this.db
       .update(aiRunToolCalls)
       .set({
-        status: error ? 'failed' : 'completed',
+        status: rejected ? 'rejected' : error ? 'failed' : 'completed',
         result: persistedResult,
+        resourceReferences,
         error,
         completedAt: now,
         updatedAt: now,
       })
       .where(and(eq(aiRunToolCalls.runId, runId), eq(aiRunToolCalls.toolCallId, toolCallId)));
+    await this.updateToolRoundProgress(
+      runId,
+      toolCallId,
+      error ? { error } : appendAIResourceReferencesToModelResult(persistedResult, resourceReferences)
+    );
+  }
+
+  private async resolveMessageResourceReferences(
+    conversationId: string,
+    runId: string,
+    content: string,
+    includeChangedResources: boolean
+  ): Promise<{ referenced: AIResourceReference[]; changed: AIResourceReference[] }> {
+    const referencedIds = new Set(referencedAIResourceIds(content));
+    if (referencedIds.size === 0 && !includeChangedResources) {
+      return { referenced: [], changed: [] };
+    }
+    const rows = await this.db
+      .select({
+        runId: aiRunToolCalls.runId,
+        status: aiRunToolCalls.status,
+        resourceReferences: aiRunToolCalls.resourceReferences,
+      })
+      .from(aiRunToolCalls)
+      .where(eq(aiRunToolCalls.conversationId, conversationId))
+      .orderBy(asc(aiRunToolCalls.createdAt));
+    const registry = new Map<string, AIResourceReference>();
+    const changed = new Map<string, AIResourceReference>();
+    const changedNodeIds = new Set<string>();
+    for (const row of rows) {
+      if (row.status !== 'completed') continue;
+      for (const reference of row.resourceReferences ?? []) {
+        const resolvedReference = mergeAIResourceReference(registry.get(reference.refId), reference);
+        registry.set(reference.refId, resolvedReference);
+        if (
+          includeChangedResources &&
+          row.runId === runId &&
+          (reference.relation === 'created' || reference.relation === 'updated' || reference.relation === 'deleted')
+        ) {
+          changed.set(reference.refId, mergeAIResourceReference(changed.get(reference.refId), resolvedReference));
+          if (reference.nodeId) changedNodeIds.add(reference.nodeId);
+        }
+      }
+    }
+    if (includeChangedResources && changedNodeIds.size > 0) {
+      for (const reference of registry.values()) {
+        if (reference.type === 'node' && changedNodeIds.has(reference.resourceId)) {
+          changed.set(reference.refId, reference);
+        }
+      }
+    }
+    const referenced = [...referencedIds]
+      .map((refId) => registry.get(refId))
+      .filter((reference): reference is AIResourceReference => Boolean(reference));
+    for (const refId of referencedIds) changed.delete(refId);
+    return { referenced, changed: [...changed.values()] };
+  }
+
+  private async updateToolRoundProgress(runId: string, toolCallId: string, modelResult: unknown): Promise<void> {
+    const [current] = await this.db
+      .select({ roundId: aiRunToolCalls.roundId })
+      .from(aiRunToolCalls)
+      .where(and(eq(aiRunToolCalls.runId, runId), eq(aiRunToolCalls.toolCallId, toolCallId)))
+      .limit(1);
+    if (!current?.roundId) return;
+    const [round] = await this.db
+      .select({ providerMessages: aiRunToolRounds.providerMessages })
+      .from(aiRunToolRounds)
+      .where(eq(aiRunToolRounds.id, current.roundId))
+      .limit(1);
+    if (round) {
+      const alreadyRecorded = round.providerMessages.some(
+        (message) => message.role === 'tool' && message.tool_call_id === toolCallId
+      );
+      if (!alreadyRecorded) {
+        await this.db
+          .update(aiRunToolRounds)
+          .set({
+            providerMessages: [
+              ...round.providerMessages,
+              { role: 'tool', tool_call_id: toolCallId, content: JSON.stringify(modelResult ?? null) },
+            ],
+            updatedAt: new Date(),
+          })
+          .where(eq(aiRunToolRounds.id, current.roundId));
+      }
+    }
+    const calls = await this.db
+      .select({ status: aiRunToolCalls.status })
+      .from(aiRunToolCalls)
+      .where(eq(aiRunToolCalls.roundId, current.roundId));
+    const terminal = new Set(['completed', 'failed', 'rejected', 'stopped', 'effect_unknown']);
+    if (!calls.length || calls.some((call) => !terminal.has(call.status))) return;
+    const status = calls.some((call) => call.status === 'stopped')
+      ? 'stopped'
+      : calls.some((call) => call.status === 'failed' || call.status === 'effect_unknown')
+        ? 'failed'
+        : 'completed';
+    const now = new Date();
+    await this.db
+      .update(aiRunToolRounds)
+      .set({ status, completedAt: now, updatedAt: now })
+      .where(eq(aiRunToolRounds.id, current.roundId));
   }
 
   private async persistPendingInteraction(
@@ -1112,14 +1269,17 @@ export class AIRunExecutor {
   ): Promise<void> {
     if (event.name === 'ask_question') {
       const questions = getQuestionBatch(event);
-      await this.db.insert(aiRunQuestions).values(
-        questions.map((question) => ({
-          runId: run.id,
-          conversationId: run.conversationId,
-          toolCallId: question.id,
-          question: questionTextFromArgs(question.args),
-        }))
-      );
+      await this.db
+        .insert(aiRunQuestions)
+        .values(
+          questions.map((question) => ({
+            runId: run.id,
+            conversationId: run.conversationId,
+            toolCallId: question.id,
+            question: questionTextFromArgs(question.args),
+          }))
+        )
+        .onConflictDoNothing({ target: [aiRunQuestions.runId, aiRunQuestions.toolCallId] });
       return;
     }
 
@@ -1139,10 +1299,12 @@ export class AIRunExecutor {
     userId: string,
     event: Extract<WSServerMessage, { type: 'credential_authorization_required' }>
   ): Promise<AICredentialChallenge> {
+    const roundId = event.roundId ?? (await this.findToolCallRoundId(run.id, event.id));
     const [challenge] = await this.db
       .insert(aiRunCredentialChallenges)
       .values({
         runId: run.id,
+        roundId,
         conversationId: run.conversationId,
         userId,
         provider: event.provider,
@@ -1155,6 +1317,7 @@ export class AIRunExecutor {
         set: {
           connectorId: event.connectorId,
           toolName: event.name,
+          roundId,
           status: 'pending',
           decisionClientCommandId: null,
           resolvedAt: null,
@@ -1164,6 +1327,15 @@ export class AIRunExecutor {
       .returning();
     if (!challenge) throw new Error('Failed to persist AI credential challenge');
     return challenge;
+  }
+
+  private async findToolCallRoundId(runId: string, toolCallId: string): Promise<string | null> {
+    const [toolCall] = await this.db
+      .select({ roundId: aiRunToolCalls.roundId })
+      .from(aiRunToolCalls)
+      .where(and(eq(aiRunToolCalls.runId, runId), eq(aiRunToolCalls.toolCallId, toolCallId)))
+      .limit(1);
+    return toolCall?.roundId ?? null;
   }
 
   private async setConversationCheckpoint(conversationId: string, event: WSServerMessage | null): Promise<void> {
@@ -1217,6 +1389,7 @@ export class AIRunExecutor {
         status: aiRunToolCalls.status,
         decision: aiRunToolCalls.decision,
         result: aiRunToolCalls.result,
+        resourceReferences: aiRunToolCalls.resourceReferences,
         error: aiRunToolCalls.error,
       })
       .from(aiRunToolCalls)
@@ -1276,9 +1449,91 @@ export class AIRunExecutor {
         error: error ?? null,
         updatedAt: now,
         startedAt: status === 'running' ? now : undefined,
+        ...(status === 'running' ? {} : { leaseOwner: null, leaseExpiresAt: null }),
         ...terminal,
       })
-      .where(eq(aiRuns.id, runId));
+      .where(this.fencedRunWhere(runId));
+  }
+
+  private async claimRun(run: AIRun, allowedStatuses: AIRun['status'][]): Promise<boolean> {
+    const now = new Date();
+    const epoch = (run.executionEpoch ?? 0) + 1;
+    const leaseExpiresAt = new Date(now.getTime() + 30_000);
+    const query = this.db
+      .update(aiRuns)
+      .set({
+        status: 'running',
+        executionEpoch: sql`${aiRuns.executionEpoch} + 1`,
+        leaseOwner: this.leaseOwner,
+        leaseExpiresAt,
+        startedAt: run.startedAt ?? now,
+        completedAt: null,
+        stoppedAt: null,
+        error: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(aiRuns.id, run.id),
+          eq(aiRuns.userId, run.userId),
+          eq(aiRuns.executionEpoch, run.executionEpoch ?? 0),
+          inArray(aiRuns.status, allowedStatuses),
+          or(isNull(aiRuns.leaseExpiresAt), lt(aiRuns.leaseExpiresAt, now), eq(aiRuns.leaseOwner, this.leaseOwner))
+        )
+      );
+    const returning = (query as unknown as { returning?: () => Promise<Array<{ id: string }>> }).returning;
+    if (typeof returning === 'function') {
+      const claimed = await returning.call(query);
+      if (claimed.length === 0) return false;
+    } else {
+      await query;
+    }
+    this.executionEpochs.set(run.id, epoch);
+    this.startHeartbeat(run.id, epoch);
+    return true;
+  }
+
+  private startHeartbeat(runId: string, epoch: number): void {
+    this.stopHeartbeat(runId);
+    const timer = setInterval(() => {
+      void this.db
+        .update(aiRuns)
+        .set({ leaseExpiresAt: new Date(Date.now() + 30_000), updatedAt: new Date() })
+        .where(
+          and(
+            eq(aiRuns.id, runId),
+            eq(aiRuns.executionEpoch, epoch),
+            eq(aiRuns.leaseOwner, this.leaseOwner),
+            eq(aiRuns.status, 'running')
+          )
+        );
+    }, 10_000);
+    timer.unref?.();
+    this.heartbeatTimers.set(runId, timer);
+  }
+
+  private stopHeartbeat(runId: string): void {
+    const timer = this.heartbeatTimers.get(runId);
+    if (timer) clearInterval(timer);
+    this.heartbeatTimers.delete(runId);
+  }
+
+  private async releaseLease(runId: string): Promise<void> {
+    this.stopHeartbeat(runId);
+    const epoch = this.executionEpochs.get(runId);
+    this.executionEpochs.delete(runId);
+    if (epoch === undefined) return;
+    await this.db
+      .update(aiRuns)
+      .set({ leaseOwner: null, leaseExpiresAt: null, updatedAt: new Date() })
+      .where(and(eq(aiRuns.id, runId), eq(aiRuns.executionEpoch, epoch), eq(aiRuns.leaseOwner, this.leaseOwner)));
+  }
+
+  private fencedRunWhere(runId: string) {
+    const epoch = this.executionEpochs.get(runId);
+    return epoch === undefined
+      ? eq(aiRuns.id, runId)
+      : and(eq(aiRuns.id, runId), eq(aiRuns.executionEpoch, epoch), eq(aiRuns.leaseOwner, this.leaseOwner));
   }
 
   private logExecutionError(runId: string, error: unknown): void {
@@ -1306,11 +1561,17 @@ function findLastCompactMarkerIndex(messages: unknown[]): number {
   return -1;
 }
 
-function rowsForCompactMarkerBoundary<T extends { uiMessage: Record<string, unknown> }>(
+function rowsForCompactMarkerBoundary<T extends { id?: string | null; uiMessage: Record<string, unknown> }>(
   rows: T[],
   markerIndex: number
 ): T[] {
   const marker = rows[markerIndex];
+  if (marker.uiMessage.compactVersion === 2 && typeof marker.uiMessage.compactBoundaryMessageId === 'string') {
+    const boundaryIndex = rows.findIndex((row) => row.id === marker.uiMessage.compactBoundaryMessageId);
+    if (boundaryIndex >= 0 && boundaryIndex < markerIndex) {
+      return [marker, ...rows.slice(boundaryIndex + 1, markerIndex), ...rows.slice(markerIndex + 1)];
+    }
+  }
   const tailCount =
     typeof marker.uiMessage.compactTailMessageCount === 'number' &&
     Number.isFinite(marker.uiMessage.compactTailMessageCount)
@@ -1321,8 +1582,25 @@ function rowsForCompactMarkerBoundary<T extends { uiMessage: Record<string, unkn
 }
 
 function compactedRuntimeMessages(messages: ChatMessage[], result: AIContextCompactionResult): ChatMessage[] {
-  const tailStart = Math.max(0, messages.length - COMPACTION_TAIL_MESSAGES);
-  return [{ role: 'assistant', content: result.summary }, ...messages.slice(tailStart)];
+  const boundaryIndex = messages.findIndex((message) => message.id === result.compactBoundaryMessageId);
+  if (boundaryIndex < 0) {
+    throw new AppError(
+      409,
+      'AI_COMPACTION_BOUNDARY_UNKNOWN',
+      'The compacted message boundary is no longer present in runtime context'
+    );
+  }
+  return [
+    {
+      role: 'assistant',
+      content: result.summary,
+      compactMarker: true,
+      compactVersion: 2,
+      compactEpoch: result.compactEpoch,
+      compactBoundaryMessageId: result.compactBoundaryMessageId ?? undefined,
+    },
+    ...messages.slice(boundaryIndex + 1),
+  ];
 }
 
 function formatHistoricalToolOutcome(toolCall: {
@@ -1330,6 +1608,7 @@ function formatHistoricalToolOutcome(toolCall: {
   status: string;
   decision: string | null;
   result: unknown;
+  resourceReferences: AIResourceReference[];
   error: string | null;
 }): string {
   const parts = [`${toolCall.toolName} status=${toolCall.status}`];
@@ -1339,6 +1618,11 @@ function formatHistoricalToolOutcome(toolCall: {
   } else if (toolCall.result !== null && toolCall.result !== undefined) {
     const redactedResult = redactOneTimeSecretToolResult(toolCall.toolName, toolCall.result);
     parts.push(`result=${safeJsonPreview(redactedResult, 1200)}`);
+  }
+  if (toolCall.resourceReferences.length > 0) {
+    parts.push(
+      `resources=${toolCall.resourceReferences.map((reference) => formatAIResourceMarker(reference)).join(',')}`
+    );
   }
   return `- ${parts.join(' ')}`;
 }

@@ -1,4 +1,5 @@
 import {
+  bigint,
   boolean,
   index,
   integer,
@@ -26,6 +27,7 @@ export const aiConversations = pgTable(
     lastContext: jsonb('last_context').$type<Record<string, unknown> | null>(),
     discoveredToolsets: jsonb('discovered_toolsets').$type<string[]>().notNull().default([]),
     checkpoint: jsonb('checkpoint').$type<Record<string, unknown> | null>(),
+    revision: bigint('revision', { mode: 'number' }).notNull().default(0),
     folderId: uuid('folder_id').references(() => aiConversationFolders.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

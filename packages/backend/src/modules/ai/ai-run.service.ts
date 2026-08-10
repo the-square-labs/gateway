@@ -1,11 +1,12 @@
 import { and, asc, desc, eq, inArray, or } from 'drizzle-orm';
-import type { DrizzleClient } from '@/db/client.js';
+import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
 import {
   type AICredentialChallenge,
   type AIRun,
   type AIRunQuestion,
   type AIRunStatus,
   type AIRunToolCall,
+  type AIRunToolRound,
   type AIToolApprovalClass,
   type AIToolApprovalPolicy,
   type AIToolCallStatus,
@@ -15,14 +16,17 @@ import {
   aiRunQuestions,
   aiRuns,
   aiRunToolCalls,
+  aiRunToolRounds,
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
+import type { AIResourceReference } from './ai.types.js';
 import { countVisibleMessages, deriveConversationStatus, getLastUserMessageAt } from './ai-conversation.service.js';
 import type { AIConversationSearchService } from './ai-conversation-search.service.js';
+import { mergeAIResourceReference } from './ai-resource-references.js';
 import { AIRunExecutor } from './ai-run-executor.js';
-import { toClientCheckpoint } from './ai-run-runtime.helpers.js';
+import { AI_CONTINUATION_COMMAND_PREFIX, toClientCheckpoint } from './ai-run-runtime.helpers.js';
 
 const ACTIVE_RUN_STATUSES: AIRunStatus[] = [
   'queued',
@@ -112,6 +116,15 @@ export interface StartContextCompactionInput {
   reasoningEffort?: string | null;
 }
 
+export interface StartContinuationRunInput {
+  conversationId: string;
+  userId: string;
+  clientCommandId: string;
+  lastContext?: Record<string, unknown> | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
+}
+
 export interface StartUserRunResult {
   conversationId: string;
   userMessageId: string | null;
@@ -134,6 +147,7 @@ export interface RecordToolCallInput {
 
 export interface RuntimeSnapshot {
   activeRun: AIRun | null;
+  canContinue: boolean;
   assistantDraftContent: string | null;
   assistantDraftVersion: number | null;
   pendingApprovals: AIRunToolCall[];
@@ -141,9 +155,12 @@ export interface RuntimeSnapshot {
   pendingQuestions: AIRunQuestion[];
   pendingCredentialChallenge: AICredentialChallenge | null;
   toolCalls: AIRunToolCall[];
+  toolRounds: AIRunToolRound[];
 }
 
 export interface AIConversationRuntimeSnapshot {
+  revision: number;
+  resourceReferences: AIResourceReference[];
   conversation: {
     id: string;
     title: string;
@@ -359,6 +376,98 @@ export class AIRunService {
     return result;
   }
 
+  async startContinuationRun(input: StartContinuationRunInput): Promise<StartUserRunResult> {
+    const clientCommandId = `${AI_CONTINUATION_COMMAND_PREFIX}${input.clientCommandId}`;
+    const existingByCommand = await this.findRunByCommand(input.userId, input.conversationId, clientCommandId);
+    if (existingByCommand) {
+      return {
+        conversationId: existingByCommand.conversationId,
+        userMessageId: existingByCommand.activeMessageId,
+        run: existingByCommand,
+        duplicate: true,
+      };
+    }
+
+    const result = await this.db.transaction(async (tx) => {
+      const conversation = await getOwnedConversation(tx, input.userId, input.conversationId);
+      if (!conversation) throw new AppError(404, 'AI_CONVERSATION_NOT_FOUND', 'AI conversation not found');
+      await assertConversationCanAcceptUserTurn(tx, conversation.id);
+
+      const existingInTransaction = await findRunByCommand(tx, input.userId, conversation.id, clientCommandId);
+      if (existingInTransaction) {
+        return {
+          conversationId: existingInTransaction.conversationId,
+          userMessageId: existingInTransaction.activeMessageId,
+          run: existingInTransaction,
+          duplicate: true,
+        };
+      }
+
+      const activeRun = await getActiveRunForUpdate(tx, conversation.id);
+      if (activeRun) throw new AppError(409, 'AI_RUN_ACTIVE', 'Conversation already has an active AI run');
+
+      const [lastRun] = await tx
+        .select({ status: aiRuns.status })
+        .from(aiRuns)
+        .where(eq(aiRuns.conversationId, conversation.id))
+        .orderBy(desc(aiRuns.createdAt))
+        .limit(1);
+      if (lastRun?.status !== 'failed' && lastRun?.status !== 'stopped') {
+        throw new AppError(409, 'AI_CONTINUATION_UNAVAILABLE', 'There is no interrupted assistant turn to continue');
+      }
+
+      const [lastUserMessage] = await tx
+        .select({ id: aiConversationMessages.id })
+        .from(aiConversationMessages)
+        .where(and(eq(aiConversationMessages.conversationId, conversation.id), eq(aiConversationMessages.role, 'user')))
+        .orderBy(desc(aiConversationMessages.sequence))
+        .limit(1);
+      if (!lastUserMessage) {
+        throw new AppError(409, 'AI_CONTINUATION_UNAVAILABLE', 'There is no interrupted assistant turn to continue');
+      }
+
+      const now = new Date();
+      const hasPinnedProvider = conversation.model !== null;
+      const model = conversation.model ?? normalizeOptionalString(input.model);
+      const reasoningEffort = hasPinnedProvider
+        ? conversation.reasoningEffort
+        : normalizeOptionalString(input.reasoningEffort);
+      const [run] = await tx
+        .insert(aiRuns)
+        .values({
+          conversationId: conversation.id,
+          userId: input.userId,
+          clientCommandId,
+          activeMessageId: lastUserMessage.id,
+          model,
+          reasoningEffort,
+          status: 'queued',
+          updatedAt: now,
+        })
+        .returning();
+
+      await tx
+        .update(aiConversations)
+        .set({
+          model,
+          reasoningEffort,
+          lastContext: input.lastContext ?? conversation.lastContext,
+          updatedAt: now,
+        })
+        .where(eq(aiConversations.id, conversation.id));
+
+      return {
+        conversationId: conversation.id,
+        userMessageId: lastUserMessage.id,
+        run,
+        duplicate: false,
+      };
+    });
+
+    this.publishConversationChanged(input.userId, result.conversationId);
+    return result;
+  }
+
   async updateConversationProvider(input: {
     userId: string;
     conversationId: string;
@@ -507,44 +616,96 @@ export class AIRunService {
     userId: string;
     clientCommandId: string;
     decision: 'approved' | 'rejected';
-  }): Promise<{ toolCall: AIRunToolCall; duplicate: boolean }> {
-    await assertOwnedConversation(this.db, input.userId, input.conversationId);
-    const nextStatus = input.decision === 'approved' ? 'approved' : 'rejected';
-    const now = new Date();
-    const [updated] = await this.db
-      .update(aiRunToolCalls)
-      .set({
-        status: nextStatus,
-        decision: input.decision,
-        decisionUserId: input.userId,
-        decisionClientCommandId: input.clientCommandId,
-        decisionAt: now,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          toolCallIdentityWhere(input.toolCallId),
-          eq(aiRunToolCalls.runId, input.runId),
-          eq(aiRunToolCalls.conversationId, input.conversationId),
-          eq(aiRunToolCalls.status, 'pending_approval')
+  }): Promise<{
+    toolCall: AIRunToolCall;
+    duplicate: boolean;
+    continuationReady: boolean;
+  }> {
+    const result = await this.db.transaction(async (tx) => {
+      await assertOwnedConversation(tx, input.userId, input.conversationId);
+      const nextStatus = input.decision === 'approved' ? 'approved' : 'rejected';
+      const now = new Date();
+      const [updated] = await tx
+        .update(aiRunToolCalls)
+        .set({
+          status: nextStatus,
+          decision: input.decision,
+          decisionUserId: input.userId,
+          decisionClientCommandId: input.clientCommandId,
+          decisionAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            toolCallIdentityWhere(input.toolCallId),
+            eq(aiRunToolCalls.runId, input.runId),
+            eq(aiRunToolCalls.conversationId, input.conversationId),
+            eq(aiRunToolCalls.status, 'pending_approval')
+          )
         )
-      )
-      .returning();
+        .returning();
 
-    if (updated) {
-      this.publishConversationChanged(input.userId, input.conversationId);
-      return { toolCall: updated, duplicate: false };
-    }
+      if (updated) {
+        return {
+          toolCall: updated,
+          duplicate: false,
+          continuationReady: await this.markToolRoundReadyIfUngated(tx, updated),
+        };
+      }
 
-    const existing = await this.getToolCall(input.toolCallId);
-    if (!existing) throw new AppError(404, 'AI_TOOL_CALL_NOT_FOUND', 'AI tool call not found');
-    if (existing.runId !== input.runId || existing.conversationId !== input.conversationId) {
-      throw new AppError(404, 'AI_TOOL_CALL_NOT_FOUND', 'AI tool call not found');
+      const existing = await this.getToolCall(tx, input.toolCallId);
+      if (!existing) throw new AppError(404, 'AI_TOOL_CALL_NOT_FOUND', 'AI tool call not found');
+      if (existing.runId !== input.runId || existing.conversationId !== input.conversationId) {
+        throw new AppError(404, 'AI_TOOL_CALL_NOT_FOUND', 'AI tool call not found');
+      }
+      if (existing.decision === input.decision && (existing.status === 'approved' || existing.status === 'rejected')) {
+        return {
+          toolCall: existing,
+          duplicate: true,
+          continuationReady: await this.markToolRoundReadyIfUngated(tx, existing),
+        };
+      }
+      throw new AppError(409, 'AI_TOOL_CALL_DECISION_CONFLICT', 'Tool call is no longer pending approval');
+    });
+
+    if (!result.duplicate) this.publishConversationChanged(input.userId, input.conversationId);
+    return result;
+  }
+
+  private async markToolRoundReadyIfUngated(db: DrizzleExecutor, toolCall: AIRunToolCall): Promise<boolean> {
+    if (!toolCall.roundId) return true;
+    return this.markRoundReadyIfUngated(db, toolCall.roundId);
+  }
+
+  private async markRoundReadyIfUngated(db: DrizzleExecutor, roundId: string): Promise<boolean> {
+    const [calls, pendingQuestions, pendingCredentials] = await Promise.all([
+      db.select({ status: aiRunToolCalls.status }).from(aiRunToolCalls).where(eq(aiRunToolCalls.roundId, roundId)),
+      db
+        .select({ id: aiRunQuestions.id })
+        .from(aiRunQuestions)
+        .where(and(eq(aiRunQuestions.roundId, roundId), eq(aiRunQuestions.status, 'pending'))),
+      db
+        .select({ id: aiRunCredentialChallenges.id })
+        .from(aiRunCredentialChallenges)
+        .where(and(eq(aiRunCredentialChallenges.roundId, roundId), eq(aiRunCredentialChallenges.status, 'pending'))),
+    ]);
+    const hasPendingApprovals = calls.some((call) => call.status === 'pending_approval');
+    if (pendingQuestions.length > 0 || hasPendingApprovals || pendingCredentials.length > 0) {
+      await db
+        .update(aiRunToolRounds)
+        .set({
+          status:
+            pendingQuestions.length > 0 ? 'waiting_questions' : hasPendingApprovals ? 'waiting_approvals' : 'executing',
+          updatedAt: new Date(),
+        })
+        .where(eq(aiRunToolRounds.id, roundId));
+      return false;
     }
-    if (existing.decision === input.decision && (existing.status === 'approved' || existing.status === 'rejected')) {
-      return { toolCall: existing, duplicate: true };
-    }
-    throw new AppError(409, 'AI_TOOL_CALL_DECISION_CONFLICT', 'Tool call is no longer pending approval');
+    await db
+      .update(aiRunToolRounds)
+      .set({ status: 'ready', updatedAt: new Date() })
+      .where(eq(aiRunToolRounds.id, roundId));
+    return true;
   }
 
   async recordQuestion(input: {
@@ -572,51 +733,71 @@ export class AIRunService {
     userId: string;
     clientCommandId: string;
     answer: string;
-  }): Promise<{ question: AIRunQuestion; duplicate: boolean; remainingPendingQuestions: AIRunQuestion[] }> {
-    await assertOwnedConversation(this.db, input.userId, input.conversationId);
-    const now = new Date();
-    const [updated] = await this.db
-      .update(aiRunQuestions)
-      .set({
-        status: 'answered',
-        answer: input.answer,
-        answerUserId: input.userId,
-        answerClientCommandId: input.clientCommandId,
-        answeredAt: now,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          questionIdentityWhere(input.questionId),
-          eq(aiRunQuestions.runId, input.runId),
-          eq(aiRunQuestions.conversationId, input.conversationId),
-          eq(aiRunQuestions.status, 'pending')
+  }): Promise<{
+    question: AIRunQuestion;
+    duplicate: boolean;
+    remainingPendingQuestions: AIRunQuestion[];
+    continuationReady: boolean;
+  }> {
+    const result = await this.db.transaction(async (tx) => {
+      await assertOwnedConversation(tx, input.userId, input.conversationId);
+      const now = new Date();
+      const [updated] = await tx
+        .update(aiRunQuestions)
+        .set({
+          status: 'answered',
+          answer: input.answer,
+          answerUserId: input.userId,
+          answerClientCommandId: input.clientCommandId,
+          answeredAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            questionIdentityWhere(input.questionId),
+            eq(aiRunQuestions.runId, input.runId),
+            eq(aiRunQuestions.conversationId, input.conversationId),
+            eq(aiRunQuestions.status, 'pending')
+          )
         )
-      )
-      .returning();
+        .returning();
 
-    if (updated) {
-      this.publishConversationChanged(input.userId, input.conversationId);
-      return {
-        question: updated,
-        duplicate: false,
-        remainingPendingQuestions: await this.listPendingQuestions(input.runId),
-      };
-    }
+      if (updated) {
+        const remainingPendingQuestions = await this.listPendingQuestions(tx, input.runId);
+        return {
+          question: updated,
+          duplicate: false,
+          remainingPendingQuestions,
+          continuationReady:
+            remainingPendingQuestions.length === 0 ? await this.markQuestionRoundReadyIfUngated(tx, updated) : false,
+        };
+      }
 
-    const existing = await this.getQuestion(input.questionId, input.runId, input.conversationId);
-    if (!existing) throw new AppError(404, 'AI_QUESTION_NOT_FOUND', 'AI question not found');
-    if (existing.runId !== input.runId || existing.conversationId !== input.conversationId) {
-      throw new AppError(404, 'AI_QUESTION_NOT_FOUND', 'AI question not found');
-    }
-    if (existing.status === 'answered' && existing.answer === input.answer) {
-      return {
-        question: existing,
-        duplicate: true,
-        remainingPendingQuestions: await this.listPendingQuestions(input.runId),
-      };
-    }
-    throw new AppError(409, 'AI_QUESTION_ANSWER_CONFLICT', 'Question is no longer pending');
+      const existing = await this.getQuestion(tx, input.questionId, input.runId, input.conversationId);
+      if (!existing) throw new AppError(404, 'AI_QUESTION_NOT_FOUND', 'AI question not found');
+      if (existing.runId !== input.runId || existing.conversationId !== input.conversationId) {
+        throw new AppError(404, 'AI_QUESTION_NOT_FOUND', 'AI question not found');
+      }
+      if (existing.status === 'answered' && existing.answer === input.answer) {
+        const remainingPendingQuestions = await this.listPendingQuestions(tx, input.runId);
+        return {
+          question: existing,
+          duplicate: true,
+          remainingPendingQuestions,
+          continuationReady:
+            remainingPendingQuestions.length === 0 ? await this.markQuestionRoundReadyIfUngated(tx, existing) : false,
+        };
+      }
+      throw new AppError(409, 'AI_QUESTION_ANSWER_CONFLICT', 'Question is no longer pending');
+    });
+
+    if (!result.duplicate) this.publishConversationChanged(input.userId, input.conversationId);
+    return result;
+  }
+
+  private async markQuestionRoundReadyIfUngated(db: DrizzleExecutor, question: AIRunQuestion): Promise<boolean> {
+    if (!question.roundId) return true;
+    return this.markRoundReadyIfUngated(db, question.roundId);
   }
 
   startApprovalContinuation(
@@ -629,6 +810,10 @@ export class AIRunService {
     }
   ): void {
     this.executor.startApprovalContinuation(user, input);
+  }
+
+  startToolRoundContinuation(user: User, input: { conversationId: string; runId: string; roundId: string }): void {
+    this.executor.startToolRoundContinuation(user, input);
   }
 
   startQuestionContinuation(
@@ -654,71 +839,81 @@ export class AIRunService {
     additionalChallenges: AICredentialChallenge[];
     duplicate: boolean;
   }> {
-    await assertOwnedConversation(this.db, input.userId, input.conversationId);
-    const now = new Date();
-    const [updated] = await this.db
-      .update(aiRunCredentialChallenges)
-      .set({
-        status: input.decision,
-        decisionClientCommandId: input.clientCommandId,
-        resolvedAt: now,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(aiRunCredentialChallenges.id, input.challengeId),
-          eq(aiRunCredentialChallenges.runId, input.runId),
-          eq(aiRunCredentialChallenges.conversationId, input.conversationId),
-          eq(aiRunCredentialChallenges.userId, input.userId),
-          eq(aiRunCredentialChallenges.status, 'pending')
+    const result = await this.db.transaction(async (tx) => {
+      await assertOwnedConversation(tx, input.userId, input.conversationId);
+      const now = new Date();
+      const [updated] = await tx
+        .update(aiRunCredentialChallenges)
+        .set({
+          status: input.decision,
+          decisionClientCommandId: input.clientCommandId,
+          resolvedAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(aiRunCredentialChallenges.id, input.challengeId),
+            eq(aiRunCredentialChallenges.runId, input.runId),
+            eq(aiRunCredentialChallenges.conversationId, input.conversationId),
+            eq(aiRunCredentialChallenges.userId, input.userId),
+            eq(aiRunCredentialChallenges.status, 'pending')
+          )
         )
-      )
-      .returning();
-    if (updated) {
-      const additionalChallenges =
-        input.decision === 'authorized'
-          ? await this.db
-              .update(aiRunCredentialChallenges)
-              .set({
-                status: 'authorized',
-                decisionClientCommandId: input.clientCommandId,
-                resolvedAt: now,
-                updatedAt: now,
-              })
-              .where(
-                and(
-                  eq(aiRunCredentialChallenges.userId, input.userId),
-                  eq(aiRunCredentialChallenges.connectorId, updated.connectorId),
-                  eq(aiRunCredentialChallenges.status, 'pending')
+        .returning();
+      if (updated) {
+        const additionalChallenges =
+          input.decision === 'authorized'
+            ? await tx
+                .update(aiRunCredentialChallenges)
+                .set({
+                  status: 'authorized',
+                  decisionClientCommandId: input.clientCommandId,
+                  resolvedAt: now,
+                  updatedAt: now,
+                })
+                .where(
+                  and(
+                    eq(aiRunCredentialChallenges.userId, input.userId),
+                    eq(aiRunCredentialChallenges.connectorId, updated.connectorId),
+                    eq(aiRunCredentialChallenges.status, 'pending')
+                  )
                 )
-              )
-              .returning()
-          : [];
+                .returning()
+            : [];
+        for (const challenge of [updated, ...additionalChallenges]) {
+          if (challenge.roundId) await this.markRoundReadyIfUngated(tx, challenge.roundId);
+        }
+        return { challenge: updated, additionalChallenges, duplicate: false };
+      }
+
+      const [existing] = await tx
+        .select()
+        .from(aiRunCredentialChallenges)
+        .where(
+          and(
+            eq(aiRunCredentialChallenges.id, input.challengeId),
+            eq(aiRunCredentialChallenges.runId, input.runId),
+            eq(aiRunCredentialChallenges.conversationId, input.conversationId),
+            eq(aiRunCredentialChallenges.userId, input.userId)
+          )
+        )
+        .limit(1);
+      if (!existing) throw new AppError(404, 'AI_CREDENTIAL_CHALLENGE_NOT_FOUND', 'Credential challenge not found');
+      if (existing.status === input.decision) {
+        if (existing.roundId) await this.markRoundReadyIfUngated(tx, existing.roundId);
+        return { challenge: existing, additionalChallenges: [], duplicate: true };
+      }
+      throw new AppError(409, 'AI_CREDENTIAL_CHALLENGE_CONFLICT', 'Credential challenge is no longer pending');
+    });
+
+    if (!result.duplicate) {
       for (const conversationId of new Set(
-        [updated, ...additionalChallenges].map((challenge) => challenge.conversationId)
+        [result.challenge, ...result.additionalChallenges].map((challenge) => challenge.conversationId)
       )) {
         this.publishConversationChanged(input.userId, conversationId);
       }
-      return { challenge: updated, additionalChallenges, duplicate: false };
     }
-
-    const [existing] = await this.db
-      .select()
-      .from(aiRunCredentialChallenges)
-      .where(
-        and(
-          eq(aiRunCredentialChallenges.id, input.challengeId),
-          eq(aiRunCredentialChallenges.runId, input.runId),
-          eq(aiRunCredentialChallenges.conversationId, input.conversationId),
-          eq(aiRunCredentialChallenges.userId, input.userId)
-        )
-      )
-      .limit(1);
-    if (!existing) throw new AppError(404, 'AI_CREDENTIAL_CHALLENGE_NOT_FOUND', 'Credential challenge not found');
-    if (existing.status === input.decision) {
-      return { challenge: existing, additionalChallenges: [], duplicate: true };
-    }
-    throw new AppError(409, 'AI_CREDENTIAL_CHALLENGE_CONFLICT', 'Credential challenge is no longer pending');
+    return result;
   }
 
   startCredentialContinuation(
@@ -730,6 +925,14 @@ export class AIRunService {
       authorized: boolean;
     }
   ): void {
+    if (input.challenge.roundId) {
+      this.executor.startToolRoundContinuation(user, {
+        conversationId: input.conversationId,
+        runId: input.runId,
+        roundId: input.challenge.roundId,
+      });
+      return;
+    }
     this.executor.startCredentialContinuation(user, input);
   }
 
@@ -766,7 +969,7 @@ export class AIRunService {
       .limit(1);
     if (!challenge) return false;
 
-    this.executor.startCredentialContinuation(user, {
+    this.startCredentialContinuation(user, {
       conversationId: input.conversationId,
       runId: input.runId,
       challenge,
@@ -795,10 +998,6 @@ export class AIRunService {
       )
       .limit(1);
     if (!current) throw new AppError(404, 'AI_RUN_NOT_FOUND', 'AI run not found');
-    if (current.activeMessageId === null && ACTIVE_RUN_STATUSES.includes(current.status)) {
-      throw new AppError(409, 'AI_COMPACTION_ACTIVE', 'Context compaction cannot be stopped');
-    }
-
     const [stopped] = await this.db
       .update(aiRuns)
       .set({
@@ -827,6 +1026,21 @@ export class AIRunService {
         stopped.assistantDraftContent
       );
       await Promise.all([
+        this.db
+          .update(aiRunToolRounds)
+          .set({ status: 'stopped', completedAt: now, updatedAt: now })
+          .where(
+            and(
+              eq(aiRunToolRounds.runId, input.runId),
+              inArray(aiRunToolRounds.status, [
+                'collecting',
+                'waiting_questions',
+                'waiting_approvals',
+                'ready',
+                'executing',
+              ])
+            )
+          ),
         this.db
           .update(aiRunToolCalls)
           .set({ status: 'stopped', updatedAt: now })
@@ -868,24 +1082,141 @@ export class AIRunService {
 
   async stopAllForShutdown(): Promise<void> {
     const activeRuns = await this.db
-      .select({ id: aiRuns.id, conversationId: aiRuns.conversationId, userId: aiRuns.userId })
+      .select({
+        id: aiRuns.id,
+        conversationId: aiRuns.conversationId,
+        userId: aiRuns.userId,
+        status: aiRuns.status,
+        assistantDraftContent: aiRuns.assistantDraftContent,
+      })
       .from(aiRuns)
       .where(inArray(aiRuns.status, ACTIVE_RUN_STATUSES));
     await Promise.allSettled(
       activeRuns.map(async (run) => {
-        try {
-          await this.stopRun({ conversationId: run.conversationId, runId: run.id, userId: run.userId });
-        } catch (error) {
-          if (!(error instanceof AppError) || error.code !== 'AI_COMPACTION_ACTIVE') throw error;
-          this.executor.abortRun(run.id);
+        this.executor.abortRun(run.id);
+        await this.executor.flushAssistantDraftToMessage(
+          run.userId,
+          run.conversationId,
+          run.id,
+          run.assistantDraftContent
+        );
+        if (run.status === 'running') {
+          await this.reconcileInterruptedRunningRun(run);
+        } else {
           await this.db
             .update(aiRuns)
-            .set({ status: 'stopped', error: null, stoppedAt: new Date(), completedAt: null, updatedAt: new Date() })
-            .where(and(eq(aiRuns.id, run.id), inArray(aiRuns.status, ACTIVE_RUN_STATUSES)));
-          this.publishConversationChanged(run.userId, run.conversationId);
+            .set({ leaseOwner: null, leaseExpiresAt: null, updatedAt: new Date() })
+            .where(eq(aiRuns.id, run.id));
         }
+        this.publishConversationChanged(run.userId, run.conversationId);
       })
     );
+  }
+
+  async recoverInterruptedRuns(loadUser: (userId: string) => Promise<User | null>): Promise<void> {
+    const runs = await this.db.select().from(aiRuns).where(inArray(aiRuns.status, ACTIVE_RUN_STATUSES));
+    for (const run of runs) {
+      if (run.status === 'running') await this.reconcileInterruptedRunningRun(run);
+      const [current] = await this.db.select().from(aiRuns).where(eq(aiRuns.id, run.id)).limit(1);
+      if (!current) continue;
+      if (current.status === 'waiting_for_approval' || current.status === 'waiting_for_answer') {
+        const [readyRound] = await this.db
+          .select({ id: aiRunToolRounds.id })
+          .from(aiRunToolRounds)
+          .where(and(eq(aiRunToolRounds.runId, run.id), eq(aiRunToolRounds.status, 'ready')))
+          .orderBy(desc(aiRunToolRounds.sequence))
+          .limit(1);
+        if (!readyRound) continue;
+        const user = await loadUser(run.userId).catch(() => null);
+        if (user && !user.isBlocked) {
+          this.executor.startToolRoundContinuation(user, {
+            conversationId: run.conversationId,
+            runId: run.id,
+            roundId: readyRound.id,
+          });
+        }
+        continue;
+      }
+      if (current.status === 'waiting_for_credential') {
+        const user = await loadUser(run.userId).catch(() => null);
+        if (user && !user.isBlocked) {
+          await this.resumeResolvedCredentialContinuation(user, {
+            conversationId: run.conversationId,
+            runId: run.id,
+          });
+        }
+        continue;
+      }
+      if (current.status !== 'queued') continue;
+      const user = await loadUser(run.userId).catch(() => null);
+      if (!user || user.isBlocked) {
+        await this.db
+          .update(aiRuns)
+          .set({
+            status: 'failed',
+            error: 'PERMISSION_DENIED: Current account access could not be verified after restart.',
+            leaseOwner: null,
+            leaseExpiresAt: null,
+            completedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(aiRuns.id, run.id));
+        this.publishConversationChanged(run.userId, run.conversationId);
+        continue;
+      }
+      if (current.activeMessageId === null) {
+        this.executor.startContextCompaction(user, run.id, 'manual');
+      } else {
+        this.executor.startRunExecution(user, run.id);
+      }
+    }
+  }
+
+  private async reconcileInterruptedRunningRun(run: Pick<AIRun, 'id' | 'conversationId' | 'userId'>): Promise<void> {
+    const runningCalls = await this.db
+      .select({ id: aiRunToolCalls.id, roundId: aiRunToolCalls.roundId })
+      .from(aiRunToolCalls)
+      .where(and(eq(aiRunToolCalls.runId, run.id), eq(aiRunToolCalls.status, 'running')));
+    const now = new Date();
+    if (runningCalls.length > 0) {
+      const error =
+        'AI_TOOL_EFFECT_UNKNOWN: Gateway restarted while a tool was running. Verify the real resource state before retrying.';
+      await this.db
+        .update(aiRunToolCalls)
+        .set({ status: 'effect_unknown', error, completedAt: now, updatedAt: now })
+        .where(and(eq(aiRunToolCalls.runId, run.id), eq(aiRunToolCalls.status, 'running')));
+      const roundIds = runningCalls.flatMap((call) => (call.roundId ? [call.roundId] : []));
+      if (roundIds.length > 0) {
+        await this.db
+          .update(aiRunToolRounds)
+          .set({ status: 'failed', error, completedAt: now, updatedAt: now })
+          .where(inArray(aiRunToolRounds.id, roundIds));
+      }
+      await this.db
+        .update(aiRuns)
+        .set({
+          status: 'failed',
+          error,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          completedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(aiRuns.id, run.id));
+      return;
+    }
+    await this.db
+      .update(aiRuns)
+      .set({
+        status: 'queued',
+        error: null,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        completedAt: null,
+        stoppedAt: null,
+        updatedAt: now,
+      })
+      .where(eq(aiRuns.id, run.id));
   }
 
   waitForIdle(deadline: number): Promise<void> {
@@ -899,9 +1230,6 @@ export class AIRunService {
     await assertOwnedConversation(this.db, input.userId, input.conversationId);
     const activeRun = await this.getActiveRun(input.conversationId);
     if (!activeRun) return null;
-    if (activeRun.activeMessageId === null) {
-      throw new AppError(409, 'AI_COMPACTION_ACTIVE', 'Context compaction cannot be stopped');
-    }
     try {
       return await this.stopRun({
         conversationId: input.conversationId,
@@ -922,11 +1250,18 @@ export class AIRunService {
     this.executor.startContextCompaction(user, runId, trigger);
   }
 
-  async getRuntimeSnapshot(conversationId: string): Promise<RuntimeSnapshot> {
+  private async getRuntimeSnapshot(conversationId: string): Promise<RuntimeSnapshot> {
     const activeRun = await this.getActiveRun(conversationId);
     if (!activeRun) {
+      const [lastRun] = await this.db
+        .select({ status: aiRuns.status })
+        .from(aiRuns)
+        .where(eq(aiRuns.conversationId, conversationId))
+        .orderBy(desc(aiRuns.createdAt))
+        .limit(1);
       return {
         activeRun: null,
+        canContinue: lastRun?.status === 'failed' || lastRun?.status === 'stopped',
         assistantDraftContent: null,
         assistantDraftVersion: null,
         pendingApprovals: [],
@@ -934,10 +1269,11 @@ export class AIRunService {
         pendingQuestions: [],
         pendingCredentialChallenge: null,
         toolCalls: await this.listConversationToolCalls(conversationId),
+        toolRounds: [],
       };
     }
 
-    const [activeToolCalls, questions, challenges, toolCalls] = await Promise.all([
+    const [activeToolCalls, questions, challenges, toolCalls, toolRounds] = await Promise.all([
       this.db.select().from(aiRunToolCalls).where(eq(aiRunToolCalls.runId, activeRun.id)),
       this.db
         .select()
@@ -950,6 +1286,11 @@ export class AIRunService {
         .where(and(eq(aiRunCredentialChallenges.runId, activeRun.id), eq(aiRunCredentialChallenges.status, 'pending')))
         .orderBy(asc(aiRunCredentialChallenges.createdAt)),
       this.listConversationToolCalls(conversationId),
+      this.db
+        .select()
+        .from(aiRunToolRounds)
+        .where(eq(aiRunToolRounds.runId, activeRun.id))
+        .orderBy(asc(aiRunToolRounds.sequence)),
     ]);
     const pendingQuestions = questions.filter((question) => question.status === 'pending');
     const liveDraft = this.executor.getAssistantDraft(activeRun.id);
@@ -957,6 +1298,7 @@ export class AIRunService {
 
     return {
       activeRun,
+      canContinue: false,
       assistantDraftContent,
       assistantDraftVersion: liveDraft?.version ?? (assistantDraftContent ? 0 : null),
       pendingApprovals: activeToolCalls.filter((toolCall) => toolCall.status === 'pending_approval'),
@@ -964,6 +1306,7 @@ export class AIRunService {
       pendingQuestions,
       pendingCredentialChallenge: challenges[0] ?? null,
       toolCalls,
+      toolRounds,
     };
   }
 
@@ -996,6 +1339,8 @@ export class AIRunService {
     }));
 
     return {
+      revision: conversation.revision,
+      resourceReferences: collectResourceReferences(runtime.toolCalls),
       conversation: {
         id: conversation.id,
         title: conversation.title,
@@ -1028,13 +1373,18 @@ export class AIRunService {
     return findRunByUserCommand(this.db, userId, clientCommandId);
   }
 
-  private async getToolCall(toolCallId: string): Promise<AIRunToolCall | null> {
-    const rows = await this.db.select().from(aiRunToolCalls).where(toolCallIdentityWhere(toolCallId)).limit(1);
+  private async getToolCall(db: DrizzleExecutor, toolCallId: string): Promise<AIRunToolCall | null> {
+    const rows = await db.select().from(aiRunToolCalls).where(toolCallIdentityWhere(toolCallId)).limit(1);
     return rows[0] ?? null;
   }
 
-  private async getQuestion(questionId: string, runId: string, conversationId: string): Promise<AIRunQuestion | null> {
-    const rows = await this.db
+  private async getQuestion(
+    db: DrizzleExecutor,
+    questionId: string,
+    runId: string,
+    conversationId: string
+  ): Promise<AIRunQuestion | null> {
+    const rows = await db
       .select()
       .from(aiRunQuestions)
       .where(
@@ -1048,8 +1398,8 @@ export class AIRunService {
     return rows[0] ?? null;
   }
 
-  private async listPendingQuestions(runId: string): Promise<AIRunQuestion[]> {
-    return this.db
+  private async listPendingQuestions(db: DrizzleExecutor, runId: string): Promise<AIRunQuestion[]> {
+    return db
       .select()
       .from(aiRunQuestions)
       .where(and(eq(aiRunQuestions.runId, runId), eq(aiRunQuestions.status, 'pending')))
@@ -1057,11 +1407,12 @@ export class AIRunService {
   }
 
   private async listConversationToolCalls(conversationId: string): Promise<AIRunToolCall[]> {
-    return this.db
+    const toolCalls = await this.db
       .select()
       .from(aiRunToolCalls)
       .where(eq(aiRunToolCalls.conversationId, conversationId))
       .orderBy(asc(aiRunToolCalls.createdAt));
+    return toolCalls.filter((toolCall) => toolCall.toolName !== 'send_comment');
   }
 
   private publishConversationChanged(userId: string, conversationId: string, invalidatedStores?: string[]): void {
@@ -1271,6 +1622,17 @@ async function getActiveRunForUpdate(db: DbLike, conversationId: string): Promis
     .orderBy(desc(aiRuns.createdAt))
     .limit(1);
   return rows[0] ?? null;
+}
+
+function collectResourceReferences(toolCalls: AIRunToolCall[]): AIResourceReference[] {
+  const references = new Map<string, AIResourceReference>();
+  for (const toolCall of toolCalls) {
+    if (toolCall.status !== 'completed') continue;
+    for (const reference of toolCall.resourceReferences ?? []) {
+      references.set(reference.refId, mergeAIResourceReference(references.get(reference.refId), reference));
+    }
+  }
+  return [...references.values()].slice(-128);
 }
 
 async function assertConversationCanAcceptUserTurn(db: DbLike, conversationId: string): Promise<void> {

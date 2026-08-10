@@ -198,7 +198,7 @@ export class DockerSecretService {
     await this.migrationGuard?.assertContainerNameAvailable(nodeId, toName);
     const secrets = await this.getDecryptedMap(nodeId, fromName);
     for (const [key, value] of Object.entries(secrets)) {
-      await this.create(nodeId, toName, key, value, userId).catch(() => {});
+      await this.create(nodeId, toName, key, value, userId);
     }
   }
 

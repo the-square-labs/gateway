@@ -145,6 +145,12 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('docker-registries', ['docker:registries:view']).content).toContain(
       'trusted HTTPS token-service origin'
     );
+    expect(getInternalDocumentation('docker-registries', ['docker:registries:view']).content).toContain(
+      'Public Docker Hub images such as `nginx:alpine` do not require a saved registry'
+    );
+    expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
+      'do not use a failed create as an image-existence probe'
+    );
     expect(getInternalDocumentation('clickhouse', ['databases:view']).content).toContain('native TLS endpoint');
     expect(getInternalDocumentation('troubleshooting', ['feat:ai:use']).content).toContain('Start With Evidence');
     expect(getInternalDocumentation('ai-settings', ['feat:ai:configure']).content).toContain('update_ai_settings');

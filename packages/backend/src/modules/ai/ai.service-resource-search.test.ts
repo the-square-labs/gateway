@@ -130,14 +130,14 @@ describe('AIService resource search tool', () => {
     expect((result.result as { results: Array<{ id: string; nodeId: string; nodeSlug: string }> }).results).toEqual([
       expect.objectContaining({
         type: 'docker_container',
-        id: 'container-1',
+        id: 'api',
         name: 'api',
         nodeId: 'node-1',
         nodeSlug: 'node-one',
       }),
       expect.objectContaining({
         type: 'docker_container',
-        id: 'container-2',
+        id: 'worker',
         name: 'worker',
         nodeId: 'node-2',
         nodeSlug: 'node-two',
@@ -170,8 +170,8 @@ describe('AIService resource search tool', () => {
     expect(nodesService.list).toHaveBeenCalledWith({ type: 'docker', page: 1, limit: 100 }, { allowedIds: ['node-1'] });
     expect(dockerService.listContainers).toHaveBeenCalledWith('node-1');
     expect((result.result as { results: Array<{ id: string; nodeId: string }> }).results).toEqual([
-      expect.objectContaining({ type: 'docker_container', id: 'container-1', name: 'api', nodeId: 'node-1' }),
-      expect.objectContaining({ type: 'docker_container', id: 'container-2', name: 'db', nodeId: 'node-1' }),
+      expect.objectContaining({ type: 'docker_container', id: 'api', name: 'api', nodeId: 'node-1' }),
+      expect.objectContaining({ type: 'docker_container', id: 'db', name: 'db', nodeId: 'node-1' }),
     ]);
     expect(result.result).toMatchObject({ query: '', total: 2, truncated: false });
   });

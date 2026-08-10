@@ -3,6 +3,8 @@
 export interface AIToolCall {
   id: string;
   runId?: string;
+  roundId?: string | null;
+  position?: number;
   name: string;
   arguments: Record<string, unknown>;
   status: "running" | "completed" | "failed" | "awaiting_approval" | "rejected";
@@ -10,11 +12,49 @@ export interface AIToolCall {
   assistantMessageId?: string | null;
   result?: unknown;
   error?: string;
+  /** Client-only state while an approval decision is awaiting websocket acknowledgement. */
+  approvalDecisionPending?: boolean;
 }
 
 export type AIConversationStatus = "active" | "ended" | "context_blocked";
 
 // ── AI Message ──
+
+export type AIResourceReferenceType =
+  | "node"
+  | "proxy_host"
+  | "proxy_template"
+  | "ssl_certificate"
+  | "domain"
+  | "access_list"
+  | "ca"
+  | "pki_certificate"
+  | "pki_template"
+  | "docker_container"
+  | "docker_deployment"
+  | "docker_image"
+  | "docker_volume"
+  | "docker_network"
+  | "docker_registry"
+  | "database"
+  | "logging_environment"
+  | "logging_schema"
+  | "status_page_service"
+  | "status_page_incident"
+  | "notification_rule"
+  | "notification_webhook";
+
+export interface AIResourceReference {
+  refId: string;
+  type: AIResourceReferenceType;
+  resourceId: string;
+  label: string;
+  relation: "read" | "created" | "updated" | "deleted" | "verified";
+  nodeId?: string;
+  nodeSlug?: string;
+  slug?: string;
+  appearanceColor?: "blue" | "red" | "green" | "yellow" | "purple" | "pink" | "orange";
+}
 
 export interface AIMessage {
   id: string;
@@ -28,7 +68,16 @@ export interface AIMessage {
   localOnly?: boolean;
   runError?: boolean;
   runId?: string;
+  resourceReferences?: AIResourceReference[];
+  changedResourceReferences?: AIResourceReference[];
   compactMarker?: boolean;
+  compactVersion?: number;
+  compactEpoch?: number;
+  compactBoundaryMessageId?: string;
+  compactedMessageCount?: number;
+  sourceTokenEstimate?: number;
+  resultTokenEstimate?: number;
+  compactTrigger?: "automatic" | "manual";
   compactTailMessageCount?: number;
   conversationStatus?: Exclude<AIConversationStatus, "active">;
   blockReason?: string;
@@ -243,6 +292,9 @@ export interface AIRun {
   activeMessageId: string | null;
   clientCommandId: string;
   assistantDraftContent: string | null;
+  executionEpoch?: number;
+  leaseOwner?: string | null;
+  leaseExpiresAt?: string | null;
   error: string | null;
   startedAt: string | null;
   completedAt: string | null;
@@ -259,11 +311,39 @@ export type AIRunToolCallStatus =
   | "running"
   | "completed"
   | "failed"
+  | "effect_unknown"
   | "stopped";
+
+export type AIToolRoundStatus =
+  | "collecting"
+  | "waiting_questions"
+  | "waiting_approvals"
+  | "ready"
+  | "executing"
+  | "completed"
+  | "failed"
+  | "stopped";
+
+export interface AIRunToolRound {
+  id: string;
+  runId: string;
+  roundId?: string | null;
+  conversationId: string;
+  sequence: number;
+  status: AIToolRoundStatus;
+  providerMessages: Record<string, unknown>[];
+  error: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface AIRunToolCall {
   id: string;
   runId: string;
+  roundId?: string | null;
+  position?: number;
   conversationId: string;
   assistantMessageId: string | null;
   toolCallId: string;
@@ -281,6 +361,8 @@ export interface AIRunToolCall {
 export interface AIRunQuestion {
   id: string;
   runId: string;
+  roundId?: string | null;
+  position?: number;
   conversationId: string;
   toolCallId: string;
   question: string;
@@ -291,6 +373,7 @@ export interface AIRunQuestion {
 export interface AICredentialChallenge {
   id: string;
   runId: string;
+  roundId?: string | null;
   conversationId: string;
   userId: string;
   provider: "gitlab";
@@ -306,6 +389,7 @@ export interface AICredentialChallenge {
 
 export interface AIRuntimeSnapshot {
   activeRun: AIRun | null;
+  canContinue?: boolean;
   assistantDraftContent?: string | null;
   assistantDraftVersion?: number | null;
   pendingApprovals: AIRunToolCall[];
@@ -313,9 +397,12 @@ export interface AIRuntimeSnapshot {
   pendingQuestions: AIRunQuestion[];
   pendingCredentialChallenge?: AICredentialChallenge | null;
   toolCalls: AIRunToolCall[];
+  toolRounds?: AIRunToolRound[];
 }
 
 export interface AIConversationRuntimeSnapshot {
+  revision?: number;
+  resourceReferences?: AIResourceReference[];
   conversation: {
     id: string;
     title: string;
@@ -356,6 +443,14 @@ export type WSClientMessage =
       conversationId?: string;
       content: string;
       attachments?: AIMessageAttachment[];
+      context?: PageContext;
+      model?: string;
+      reasoningEffort?: string;
+    }
+  | {
+      type: "conversation.continue";
+      conversationId: string;
+      clientCommandId: string;
       context?: PageContext;
       model?: string;
       reasoningEffort?: string;
@@ -437,6 +532,7 @@ export type WSServerMessage =
       conversationId: string;
       runId: string;
       challenge: AICredentialChallenge;
+      revision?: number;
     }
   | {
       type: "client.action";
@@ -444,14 +540,15 @@ export type WSServerMessage =
       runId: string;
       action: Record<string, unknown>;
     }
-  | { type: "run.status_changed"; conversationId: string; run: AIRun | null }
-  | { type: "stores.invalidated"; conversationId: string; stores: string[] }
+  | { type: "run.status_changed"; conversationId: string; run: AIRun | null; revision?: number }
+  | { type: "stores.invalidated"; conversationId: string; stores: string[]; revision?: number }
   | {
       type: "approval.updated";
       conversationId: string;
       runId: string;
       approval: AIRunToolCall;
       duplicate: boolean;
+      revision?: number;
     }
   | {
       type: "question.answered";
@@ -459,6 +556,7 @@ export type WSServerMessage =
       runId: string;
       question: AIRunQuestion;
       duplicate: boolean;
+      revision?: number;
     }
   | {
       type: "credential.updated";
@@ -466,6 +564,7 @@ export type WSServerMessage =
       runId: string;
       challenge: AICredentialChallenge;
       duplicate: boolean;
+      revision?: number;
     }
   | { type: "pong" };
 

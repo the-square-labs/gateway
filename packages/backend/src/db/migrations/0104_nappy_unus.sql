@@ -1,0 +1,2 @@
+ALTER TABLE "ai_run_credential_challenges" ADD COLUMN "round_id" uuid;--> statement-breakpoint
+ALTER TABLE "ai_run_credential_challenges" ADD CONSTRAINT "ai_run_credential_challenges_round_id_ai_run_tool_rounds_id_fk" FOREIGN KEY ("round_id") REFERENCES "public"."ai_run_tool_rounds"("id") ON DELETE cascade ON UPDATE no action;

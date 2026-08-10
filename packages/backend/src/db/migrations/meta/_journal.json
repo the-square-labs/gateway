@@ -715,6 +715,34 @@
       "when": 1786314011888,
       "tag": "0101_skinny_warstar",
       "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1786367191215,
+      "tag": "0102_quick_ken_ellis",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1786369342970,
+      "tag": "0103_cute_terrax",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1786371452162,
+      "tag": "0104_nappy_unus",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1786379426138,
+      "tag": "0105_harsh_puppet_master",
+      "breakpoints": true
     }
   ]
 }

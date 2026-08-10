@@ -41,6 +41,19 @@ function createService({
 }
 
 describe('AIService admin user lifecycle tools', () => {
+  it('revalidates the actor scopes immediately before an assistant tool execution', async () => {
+    const authService = {
+      getUserById: vi.fn().mockResolvedValue({ ...BASE_USER, scopes: [] }),
+      blockUser: vi.fn(),
+    };
+    const service = createService({ authService });
+
+    await expect(
+      service.executeTool(BASE_USER, 'set_user_blocked', { userId: 'user-2', blocked: true })
+    ).resolves.toMatchObject({ error: expect.stringContaining('PERMISSION_DENIED') });
+    expect(authService.blockUser).not.toHaveBeenCalled();
+  });
+
   it('creates users only when the target group is inside the actor scope set', async () => {
     const authService = {
       createUser: vi.fn().mockResolvedValue({ id: 'user-2', email: 'ops@example.com' }),
@@ -76,7 +89,7 @@ describe('AIService admin user lifecycle tools', () => {
       scopes: ['proxy:view'],
     };
     const authService = {
-      getUserById: vi.fn().mockResolvedValue(targetUser),
+      getUserById: vi.fn(async (userId: string) => (userId === BASE_USER.id ? BASE_USER : targetUser)),
       blockUser: vi.fn().mockResolvedValue({ id: 'user-2', isBlocked: true }),
       unblockUser: vi.fn().mockResolvedValue({ id: 'user-2', isBlocked: false }),
       deleteUser: vi.fn().mockResolvedValue(undefined),
@@ -114,7 +127,7 @@ describe('AIService admin user lifecycle tools', () => {
     };
     const updatedUser = { ...targetUser, groupId: 'group-2' };
     const authService = {
-      getUserById: vi.fn().mockResolvedValue(targetUser),
+      getUserById: vi.fn(async (userId: string) => (userId === BASE_USER.id ? BASE_USER : targetUser)),
       assertCanUpdateUserGroup: vi.fn().mockResolvedValue(targetUser),
       updateUserGroup: vi.fn().mockResolvedValue(updatedUser),
     };
@@ -132,11 +145,15 @@ describe('AIService admin user lifecycle tools', () => {
 
   it('rejects self and system user lifecycle mutations', async () => {
     const authService = {
-      getUserById: vi.fn().mockResolvedValue({
-        id: 'system-user',
-        oidcSubject: 'system:gateway-setup',
-        scopes: [],
-      }),
+      getUserById: vi.fn(async (userId: string) =>
+        userId === BASE_USER.id
+          ? BASE_USER
+          : {
+              id: 'system-user',
+              oidcSubject: 'system:gateway-setup',
+              scopes: [],
+            }
+      ),
       blockUser: vi.fn(),
       deleteUser: vi.fn(),
     };

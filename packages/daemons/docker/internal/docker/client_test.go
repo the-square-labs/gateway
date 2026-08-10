@@ -80,6 +80,14 @@ func TestContainerCreateConfigParsesRestartPolicyFromCamelCase(t *testing.T) {
 	}
 }
 
+func TestCreateContainerRejectsUnknownConfigFields(t *testing.T) {
+	client := &Client{}
+	_, _, err := client.CreateContainer(context.Background(), `{"image":"nginx:alpine","volumes":[]}`)
+	if err == nil || !strings.Contains(err.Error(), `unknown field "volumes"`) {
+		t.Fatalf("expected unknown field error, got %v", err)
+	}
+}
+
 func TestImportedArchiveUsesImageIDForEnvOnlyRecreateAndLabelForTagUpdate(t *testing.T) {
 	imageID := "sha256:" + repeatHex("a")
 	insp := &container.InspectResponse{

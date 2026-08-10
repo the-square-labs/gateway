@@ -141,6 +141,35 @@ describe("AI backend runtime store", () => {
     );
   });
 
+  it("continues an interrupted run without adding a user message", async () => {
+    const socket = await connectAI();
+    useAIStore.setState({
+      messages: [{ id: "user-1", role: "user", content: "Check Docker" }],
+      activeConversationId: "conversation-1",
+      activeRunId: null,
+      canContinueConversation: true,
+      isStreaming: false,
+      lastContext: { route: "/nodes" },
+    });
+
+    useAIStore.getState().continueConversation({ route: "/docker/containers" });
+
+    expect(sentPayloads(socket)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "conversation.continue",
+          conversationId: "conversation-1",
+          context: { route: "/docker/containers" },
+        }),
+      ])
+    );
+    expect(useAIStore.getState()).toMatchObject({
+      messages: [{ id: "user-1", role: "user", content: "Check Docker" }],
+      canContinueConversation: false,
+      isStreaming: true,
+    });
+  });
+
   it("restores the model and reasoning pinned to a saved conversation", async () => {
     vi.mocked(getConversation).mockResolvedValue({
       id: "conversation-1",
@@ -490,6 +519,19 @@ describe("AI backend runtime store", () => {
     expect(payload).not.toHaveProperty("conversationId", "old-conversation");
     expect(useAIStore.getState().activeConversationId).toBeNull();
     expect(useAIStore.getState().sidebarActiveConversationId).toBeNull();
+    expect(useAIStore.getState().isStartingConversation).toBe(true);
+    expect(useAIStore.getState().messages).toMatchObject([
+      {
+        role: "user",
+        content: "Give me an overview of the system status",
+        localOnly: true,
+      },
+      {
+        role: "assistant",
+        content: "",
+        isStreaming: true,
+      },
+    ]);
   });
 
   it("allows starting a new conversation while a previous run is still streaming", async () => {
@@ -790,6 +832,7 @@ describe("AI backend runtime store", () => {
 
   it("projects backend runtime snapshots into messages and pending approval state", async () => {
     const socket = await connectAI();
+    useAIStore.setState({ isStartingConversation: true });
 
     socket.emit({
       type: "command.ack",
@@ -803,6 +846,17 @@ describe("AI backend runtime store", () => {
       type: "conversation.snapshot",
       conversationId: "conversation-1",
       snapshot: {
+        resourceReferences: [
+          {
+            refId: "gwr_0123456789abcdef01234567",
+            type: "docker_container",
+            resourceId: "container-1",
+            label: "runtime-container",
+            relation: "created",
+            nodeId: "node-1",
+            nodeSlug: "docker-src",
+          },
+        ],
         conversation: {
           id: "conversation-1",
           title: "Runtime chat",
@@ -842,6 +896,22 @@ describe("AI backend runtime store", () => {
           pendingQuestions: [],
           toolCalls: [
             {
+              id: "comment-row",
+              runId: "run-1",
+              conversationId: "conversation-1",
+              assistantMessageId: "message-1",
+              toolCallId: "comment-1",
+              toolName: "send_comment",
+              toolArgs: { message: "Checking..." },
+              classification: "system-never-ask",
+              approvalPolicy: "system_skipped",
+              requiredScopes: [],
+              status: "created",
+              decision: null,
+              result: null,
+              error: null,
+            },
+            {
               id: "approval-1",
               runId: "run-1",
               conversationId: "conversation-1",
@@ -867,6 +937,13 @@ describe("AI backend runtime store", () => {
       activeRunId: "run-1",
       pendingApprovalToolCallId: null,
       isStreaming: true,
+      isStartingConversation: false,
+      resourceReferences: [
+        expect.objectContaining({
+          refId: "gwr_0123456789abcdef01234567",
+          type: "docker_container",
+        }),
+      ],
     });
     expect(useAIStore.getState().messages[0].toolCalls).toEqual([
       expect.objectContaining({
@@ -1424,6 +1501,54 @@ describe("AI backend runtime store", () => {
       "user-1",
       "assistant-1",
     ]);
+  });
+
+  it("ignores a snapshot whose conversation revision is older than the applied snapshot", async () => {
+    const socket = await connectAI();
+    useAIStore.setState({ activeConversationId: "conversation-1" });
+    const snapshot = (revision: number, content: string) => ({
+      revision,
+      conversation: {
+        id: "conversation-1",
+        title: "Runtime chat",
+        createdAt: "2026-06-26T10:00:00.000Z",
+        updatedAt: "2026-06-26T10:00:01.000Z",
+        lastContext: null,
+        discoveredToolsets: [],
+        checkpoint: null,
+      },
+      messages: [{ id: `message-${revision}`, sequence: 0, role: "assistant", content }],
+      runtime: {
+        activeRun: null,
+        pendingApprovals: [],
+        pendingQuestion: null,
+        pendingQuestions: [],
+        toolCalls: [],
+      },
+    });
+
+    socket.emit({
+      type: "conversation.snapshot",
+      conversationId: "conversation-1",
+      snapshot: snapshot(12, "new state") as any,
+    });
+    socket.emit({
+      type: "conversation.snapshot",
+      conversationId: "conversation-1",
+      snapshot: snapshot(11, "stale state") as any,
+    });
+    socket.emit({
+      type: "run.status_changed",
+      conversationId: "conversation-1",
+      revision: 11,
+      run: { id: "stale-run", status: "running" } as any,
+    });
+
+    expect(useAIStore.getState().messages).toEqual([
+      expect.objectContaining({ content: "new state" }),
+    ]);
+    expect(useAIStore.getState().activeRunId).toBeNull();
+    expect(useAIStore.getState().isStreaming).toBe(false);
   });
 
   it("renders tool-only active turns in a runtime placeholder instead of the previous assistant reply", async () => {
@@ -2163,6 +2288,12 @@ describe("AI backend runtime store", () => {
 
     useAIStore.getState().approveTool("tool-1");
 
+    expect(getToolCall("tool-1")).toMatchObject({
+      status: "running",
+      approvalDecisionPending: true,
+    });
+
+    const command = sentPayloads(socket).find((payload) => payload.type === "approval.decide");
     expect(sentPayloads(socket)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -2174,6 +2305,50 @@ describe("AI backend runtime store", () => {
         }),
       ])
     );
+
+    socket.emit({
+      type: "command.ack",
+      commandType: "approval.decide",
+      clientCommandId: command?.clientCommandId as string,
+      conversationId: "conversation-1",
+      runId: "run-1",
+    });
+
+    expect(getToolCall("tool-1")).toMatchObject({
+      status: "running",
+      approvalDecisionPending: false,
+    });
+  });
+
+  it("installs a browser-only changed resources preview command", async () => {
+    await connectAI();
+
+    window.gatewayDev?.showChangedResources?.();
+
+    const preview = useAIStore
+      .getState()
+      .messages.find((message) => message.id === "dev-changed-resources-preview-message");
+    expect(preview?.changedResourceReferences).toEqual([
+      expect.objectContaining({ type: "node", label: "docker-src", relation: "updated" }),
+      expect.objectContaining({
+        type: "docker_container",
+        label: "ai-e2e-restart",
+        relation: "created",
+      }),
+      expect.objectContaining({
+        type: "docker_volume",
+        label: "ai-e2e-restart-data",
+        relation: "updated",
+        nodeSlug: "docker-src",
+      }),
+    ]);
+
+    window.gatewayDev?.hideChangedResources?.();
+    expect(
+      useAIStore
+        .getState()
+        .messages.some((message) => message.id === "dev-changed-resources-preview-message")
+    ).toBe(false);
   });
 
   it("leaves approval retryable when the websocket is closed before send", async () => {
@@ -2251,6 +2426,7 @@ describe("AI backend runtime store", () => {
     expect(useAIStore.getState().pendingApprovalToolCallId).toBe("tool-1");
     expect(getToolCall("tool-1")).toMatchObject({
       status: "awaiting_approval",
+      approvalDecisionPending: false,
       error: "Approval is no longer pending",
     });
   });

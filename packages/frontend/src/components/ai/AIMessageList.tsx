@@ -1,5 +1,9 @@
-import type { AIMessageAttachment, AIMessage as AIMessageType } from "@/types/ai";
-import { AIMessage } from "./AIMessage";
+import type {
+  AIMessageAttachment,
+  AIMessage as AIMessageType,
+  AIResourceReference,
+} from "@/types/ai";
+import { AIActivityIndicator, AIMessage } from "./AIMessage";
 
 interface AIMessageListProps {
   messages: AIMessageType[];
@@ -15,6 +19,8 @@ interface AIMessageListProps {
   onRetryUserMessage?: (messageId: string) => void;
   retryDisabled?: boolean;
   editUserMessageDisabled?: boolean;
+  resourceReferences?: AIResourceReference[];
+  isStreaming?: boolean;
 }
 
 export function AIMessageList({
@@ -27,33 +33,19 @@ export function AIMessageList({
   onRetryUserMessage,
   retryDisabled,
   editUserMessageDisabled,
+  resourceReferences = [],
+  isStreaming = false,
 }: AIMessageListProps) {
   const visibleMessages = collapseConsecutiveModelChanges(messages);
   const groups = groupAssistantTurns(visibleMessages);
   const retryTargets = buildRetryTargets(visibleMessages);
+  const activityLabel = runActivityLabel(visibleMessages, isStreaming);
 
   return (
     <>
-      {groups.map((group) =>
-        group.length === 1 ? (
-          <AIMessage
-            key={messageKey(group[0], 0)}
-            message={group[0]}
-            assistantMaxWidthClass={assistantMaxWidthClass}
-            onApprove={onApprove}
-            onReject={onReject}
-            onAnswer={onAnswer}
-            onEditUserMessage={onEditUserMessage}
-            onRetry={
-              onRetryUserMessage && retryTargets.has(group[0])
-                ? () => onRetryUserMessage(retryTargets.get(group[0])!)
-                : undefined
-            }
-            retryDisabled={retryDisabled}
-            editUserMessageDisabled={editUserMessageDisabled}
-          />
-        ) : (
-          <div key={group.map((message) => message.id).join(":")} className="space-y-1">
+      {groups.map((group, groupIndex) =>
+        activityLabel && groupIndex === groups.length - 1 ? (
+          <div key={messageKey(group[0], 0)} className="space-y-1">
             {group.map((message, index) => (
               <AIMessage
                 key={messageKey(message, index)}
@@ -70,6 +62,56 @@ export function AIMessageList({
                 }
                 retryDisabled={retryDisabled}
                 editUserMessageDisabled={editUserMessageDisabled}
+                resourceReferences={resourceReferences}
+                suppressActivityIndicator
+              />
+            ))}
+            <div
+              className={`${assistantMaxWidthClass ?? "max-w-[95%]"} min-h-7`}
+              data-testid="ai-run-activity"
+            >
+              <AIActivityIndicator label={activityLabel} />
+            </div>
+          </div>
+        ) : group.length === 1 ? (
+          <AIMessage
+            key={messageKey(group[0], 0)}
+            message={group[0]}
+            assistantMaxWidthClass={assistantMaxWidthClass}
+            onApprove={onApprove}
+            onReject={onReject}
+            onAnswer={onAnswer}
+            onEditUserMessage={onEditUserMessage}
+            onRetry={
+              onRetryUserMessage && retryTargets.has(group[0])
+                ? () => onRetryUserMessage(retryTargets.get(group[0])!)
+                : undefined
+            }
+            retryDisabled={retryDisabled}
+            editUserMessageDisabled={editUserMessageDisabled}
+            resourceReferences={resourceReferences}
+            suppressActivityIndicator
+          />
+        ) : (
+          <div key={messageKey(group[0], 0)} className="space-y-1">
+            {group.map((message, index) => (
+              <AIMessage
+                key={messageKey(message, index)}
+                message={message}
+                assistantMaxWidthClass={assistantMaxWidthClass}
+                onApprove={onApprove}
+                onReject={onReject}
+                onAnswer={onAnswer}
+                onEditUserMessage={onEditUserMessage}
+                onRetry={
+                  onRetryUserMessage && retryTargets.has(message)
+                    ? () => onRetryUserMessage(retryTargets.get(message)!)
+                    : undefined
+                }
+                retryDisabled={retryDisabled}
+                editUserMessageDisabled={editUserMessageDisabled}
+                resourceReferences={resourceReferences}
+                suppressActivityIndicator
               />
             ))}
           </div>
@@ -77,6 +119,50 @@ export function AIMessageList({
       )}
     </>
   );
+}
+
+function runActivityLabel(messages: AIMessageType[], isStreaming: boolean): string | null {
+  if (!isStreaming) return null;
+  const toolCalls = messages.flatMap((message) => message.toolCalls ?? []);
+  if (
+    toolCalls.some(
+      (toolCall) =>
+        toolCall.name === "ask_question" &&
+        (toolCall.status === "awaiting_approval" || toolCall.status === "running") &&
+        !(
+          toolCall.result &&
+          typeof toolCall.result === "object" &&
+          typeof (toolCall.result as { answer?: unknown }).answer === "string"
+        )
+    )
+  ) {
+    return "Waiting for response";
+  }
+  if (
+    toolCalls.some(
+      (toolCall) => toolCall.name !== "ask_question" && toolCall.status === "awaiting_approval"
+    )
+  ) {
+    return "Waiting for approval";
+  }
+  if (
+    messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        message.isStreaming &&
+        /^\*\*Error:\*\*/i.test(message.content.trim())
+    )
+  ) {
+    return "Retrying";
+  }
+  const finalTextStarted = messages.some(
+    (message) =>
+      message.role === "assistant" &&
+      message.isStreaming &&
+      /:(?:runtime|draft)$/.test(message.id) &&
+      message.content.trim().length > 0
+  );
+  return finalTextStarted ? null : "Thinking";
 }
 
 function collapseConsecutiveModelChanges(messages: AIMessageType[]): AIMessageType[] {
@@ -128,23 +214,55 @@ function groupAssistantTurns(messages: AIMessageType[]): AIMessageType[][] {
 
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
-    if (!isAssistantToolOnlyMessage(message)) {
+    if (message.role !== "assistant" || message.conversationStatus) {
       groups.push([message]);
       continue;
     }
 
-    const group = [message];
-    while (index + 1 < messages.length && messages[index + 1].role === "assistant") {
-      const next = messages[index + 1];
-      if (next.conversationStatus) break;
-      group.push(next);
+    const assistantTurn: AIMessageType[] = [];
+    while (index < messages.length) {
+      const next = messages[index];
+      if (next.role !== "assistant" || next.conversationStatus) break;
+      if (!isAssistantToolOnlyMessage(next)) {
+        assistantTurn.push(next);
+        index += 1;
+        continue;
+      }
+
+      const toolMessages = [next];
+      while (index + 1 < messages.length && isAssistantToolOnlyMessage(messages[index + 1])) {
+        toolMessages.push(messages[index + 1]);
+        index += 1;
+      }
+      assistantTurn.push(mergeToolOnlyMessages(toolMessages));
       index += 1;
-      if (!isAssistantToolOnlyMessage(next)) break;
     }
-    groups.push(group);
+    index -= 1;
+    groups.push(assistantTurn);
   }
 
   return groups;
+}
+
+function mergeToolOnlyMessages(messages: AIMessageType[]): AIMessageType {
+  if (messages.length === 1) return messages[0];
+
+  const toolCalls: NonNullable<AIMessageType["toolCalls"]> = [];
+  const seenToolCallIds = new Set<string>();
+  for (const message of messages) {
+    for (const toolCall of message.toolCalls ?? []) {
+      if (seenToolCallIds.has(toolCall.id)) continue;
+      seenToolCallIds.add(toolCall.id);
+      toolCalls.push(toolCall);
+    }
+  }
+
+  return {
+    ...messages[0],
+    toolCalls,
+    isStreaming: messages.some((message) => message.isStreaming),
+    localOnly: messages.every((message) => message.localOnly),
+  };
 }
 
 function isAssistantToolOnlyMessage(message: AIMessageType): boolean {

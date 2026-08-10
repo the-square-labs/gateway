@@ -79,6 +79,9 @@ importers:
       acme-client:
         specifier: ^5.4.0
         version: 5.4.0
+      ajv:
+        specifier: ^8.18.0
+        version: 8.18.0
       bcryptjs:
         specifier: ^3.0.3
         version: 3.0.3

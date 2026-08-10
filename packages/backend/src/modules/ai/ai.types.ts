@@ -46,6 +46,28 @@ export interface AIToolHistoryRetention {
   maxBytes?: number;
 }
 
+export type AIToolEffect = 'read' | 'write' | 'delete' | 'external';
+export type AIToolApprovalClass = 'read' | 'create' | 'update' | 'delete' | 'execute' | 'destructive';
+
+export interface AIToolTargetIdentity {
+  resourceType?: string;
+  /** Ordered argument names. The first non-empty value is the canonical audit/authorization target. */
+  arguments: string[];
+}
+
+export interface AIToolOperationPolicy {
+  effect: AIToolEffect;
+  approvalClass: AIToolApprovalClass;
+  requiredScopes?: string[];
+  targetIdentity?: AIToolTargetIdentity;
+}
+
+export interface AIToolOperationDiscriminator {
+  /** Ordered argument names joined with a dot to select an operation policy. */
+  arguments: string[];
+  operations: Record<string, AIToolOperationPolicy>;
+}
+
 export interface AIToolDefinition {
   name: string;
   description: string;
@@ -55,6 +77,57 @@ export interface AIToolDefinition {
   requiredScope: string;
   invalidateStores: string[];
   historyRetention?: AIToolHistoryRetention;
+  /** Backend-only policy metadata. Provider adapters intentionally do not expose these fields. */
+  effect?: AIToolEffect;
+  approvalClass?: AIToolApprovalClass;
+  requiredScopes?: string[];
+  targetIdentity?: AIToolTargetIdentity;
+  operationDiscriminator?: AIToolOperationDiscriminator;
+}
+
+export const AI_RESOURCE_REFERENCE_TYPES = [
+  'node',
+  'proxy_host',
+  'proxy_template',
+  'ssl_certificate',
+  'domain',
+  'access_list',
+  'ca',
+  'pki_certificate',
+  'pki_template',
+  'docker_container',
+  'docker_deployment',
+  'docker_image',
+  'docker_volume',
+  'docker_network',
+  'docker_registry',
+  'database',
+  'logging_environment',
+  'logging_schema',
+  'status_page_service',
+  'status_page_incident',
+  'notification_rule',
+  'notification_webhook',
+] as const;
+
+export type AIResourceReferenceType = (typeof AI_RESOURCE_REFERENCE_TYPES)[number];
+export type AIResourceReferenceRelation = 'read' | 'created' | 'updated' | 'deleted' | 'verified';
+export type AIResourceAppearanceColor = 'blue' | 'red' | 'green' | 'yellow' | 'purple' | 'pink' | 'orange';
+
+/**
+ * Server-issued identity for an internal Gateway resource mentioned by the model.
+ * The frontend derives href/icon/color from this allowlisted data; the model never supplies an href.
+ */
+export interface AIResourceReference {
+  refId: string;
+  type: AIResourceReferenceType;
+  resourceId: string;
+  label: string;
+  relation: AIResourceReferenceRelation;
+  nodeId?: string;
+  nodeSlug?: string;
+  slug?: string;
+  appearanceColor?: AIResourceAppearanceColor;
 }
 
 // ── Page Context (from frontend) ──
@@ -68,6 +141,8 @@ export interface PageContext {
 // ── Chat Messages (OpenAI-compatible) ──
 
 export interface ChatMessage {
+  /** Durable message id when reconstructed from conversation storage. */
+  id?: string;
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
   attachments?: AIMessageAttachment[];
@@ -78,6 +153,11 @@ export interface ChatMessage {
   }>;
   tool_call_id?: string;
   name?: string;
+  compactMarker?: boolean;
+  compactVersion?: number;
+  compactEpoch?: number;
+  compactBoundaryMessageId?: string;
+  compactTailMessageCount?: number;
 }
 
 export interface AIMessageAttachment {
@@ -87,6 +167,13 @@ export interface AIMessageAttachment {
   sizeBytes: number;
   downloadUrl: string;
   kind: 'image';
+}
+
+export interface AIContextLimits {
+  contextWindow: number;
+  maxInputTokens: number;
+  autoCompactTokenLimit: number;
+  outputReserveTokens: number;
 }
 
 export type AIConversationStatus = 'active' | 'ended' | 'context_blocked';
@@ -111,6 +198,14 @@ export type WSClientMessage =
       conversationId?: string;
       content: string;
       attachments?: AIMessageAttachment[];
+      context?: PageContext;
+      model?: string;
+      reasoningEffort?: string;
+    }
+  | {
+      type: 'conversation.continue';
+      conversationId: string;
+      clientCommandId: string;
       context?: PageContext;
       model?: string;
       reasoningEffort?: string;
@@ -148,9 +243,46 @@ export type WSServerMessage =
   | { type: 'text_delta'; requestId: string; content: string }
   | { type: 'assistant_comment_delta'; requestId: string; content: string }
   | { type: 'assistant_comment'; requestId: string; content: string }
+  | {
+      type: 'tool_round_start';
+      requestId: string;
+      roundId: string;
+      calls: Array<{
+        id: string;
+        name: string;
+        arguments: Record<string, unknown>;
+        position: number;
+        gate: 'immediate' | 'question' | 'approval';
+        classification: AIToolApprovalClass | 'system-never-ask';
+        approvalPolicy: 'system_skipped' | 'auto_approved' | 'requires_approval' | 'blocked';
+        requiredScopes: string[];
+      }>;
+      /** Provider continuation payload, persisted by the executor and never sent to clients. */
+      providerMessages: Record<string, unknown>[];
+    }
   | { type: 'tool_call_start'; requestId: string; id: string; name: string; arguments: Record<string, unknown> }
-  | { type: 'tool_approval_required'; requestId: string; id: string; name: string; arguments: Record<string, unknown> }
-  | { type: 'tool_result'; requestId: string; id: string; name: string; result: unknown; error?: string }
+  | {
+      type: 'tool_approval_required';
+      requestId: string;
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+      roundId?: string;
+    }
+  | {
+      type: 'tool_result';
+      requestId: string;
+      id: string;
+      name: string;
+      result: unknown;
+      error?: string;
+      /** Internal terminal classification for a user-rejected call. */
+      rejected?: boolean;
+      /** Internal control payload. Persisted/published separately from model-visible tool output. */
+      clientAction?: Record<string, unknown>;
+      /** Trusted internal Gateway resource identities derived from this tool result. */
+      resourceReferences?: AIResourceReference[];
+    }
   | {
       type: 'credential_authorization_required';
       requestId: string;
@@ -159,6 +291,7 @@ export type WSServerMessage =
       provider: 'gitlab';
       connectorId: string;
       arguments: Record<string, unknown>;
+      roundId?: string;
     }
   | { type: 'invalidate_stores'; requestId: string; stores: string[] }
   | { type: 'conversation_ended'; requestId: string; reason: string }
@@ -193,16 +326,23 @@ export type WSServerMessage =
       conversationId: string;
       runId: string;
       challenge: NonNullable<AIConversationRuntimeSnapshot['runtime']['pendingCredentialChallenge']>;
+      revision?: number;
     }
   | { type: 'client.action'; conversationId: string; runId: string; action: Record<string, unknown> }
-  | { type: 'run.status_changed'; conversationId: string; run: AIConversationRuntimeSnapshot['runtime']['activeRun'] }
-  | { type: 'stores.invalidated'; conversationId: string; stores: string[] }
+  | {
+      type: 'run.status_changed';
+      conversationId: string;
+      run: AIConversationRuntimeSnapshot['runtime']['activeRun'];
+      revision?: number;
+    }
+  | { type: 'stores.invalidated'; conversationId: string; stores: string[]; revision?: number }
   | {
       type: 'approval.updated';
       conversationId: string;
       runId: string;
       approval: AIConversationRuntimeSnapshot['runtime']['toolCalls'][number];
       duplicate: boolean;
+      revision?: number;
     }
   | {
       type: 'question.answered';
@@ -210,6 +350,7 @@ export type WSServerMessage =
       runId: string;
       question: NonNullable<AIConversationRuntimeSnapshot['runtime']['pendingQuestion']>;
       duplicate: boolean;
+      revision?: number;
     }
   | {
       type: 'credential.updated';
@@ -217,6 +358,7 @@ export type WSServerMessage =
       runId: string;
       challenge: AIConversationRuntimeSnapshot['runtime']['pendingCredentialChallenge'];
       duplicate: boolean;
+      revision?: number;
     }
   | { type: 'pong' };
 

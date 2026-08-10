@@ -1,5 +1,11 @@
 import type { ChatMessage, PageContext, WSServerMessage } from './ai.types.js';
 
+export const AI_CONTINUATION_COMMAND_PREFIX = 'continue:';
+
+export function isAIContinuationCommand(clientCommandId: string): boolean {
+  return clientCommandId.startsWith(AI_CONTINUATION_COMMAND_PREFIX);
+}
+
 export interface AIModelCheckpoint {
   pendingMessages: Record<string, unknown>[];
   pendingApproval: { id: string; name: string; arguments: Record<string, unknown> } | null;
@@ -29,12 +35,20 @@ export function toChatMessage(value: unknown): ChatMessage | null {
   const role = message.role;
   if (role !== 'system' && role !== 'user' && role !== 'assistant' && role !== 'tool') return null;
   return {
+    id: typeof message.id === 'string' ? message.id : undefined,
     role,
     content: typeof message.content === 'string' ? message.content : null,
     attachments: Array.isArray(message.attachments) ? (message.attachments as ChatMessage['attachments']) : undefined,
     tool_calls: Array.isArray(message.tool_calls) ? (message.tool_calls as ChatMessage['tool_calls']) : undefined,
     tool_call_id: typeof message.tool_call_id === 'string' ? message.tool_call_id : undefined,
     name: typeof message.name === 'string' ? message.name : undefined,
+    compactMarker: message.compactMarker === true,
+    compactVersion: typeof message.compactVersion === 'number' ? message.compactVersion : undefined,
+    compactEpoch: typeof message.compactEpoch === 'number' ? message.compactEpoch : undefined,
+    compactBoundaryMessageId:
+      typeof message.compactBoundaryMessageId === 'string' ? message.compactBoundaryMessageId : undefined,
+    compactTailMessageCount:
+      typeof message.compactTailMessageCount === 'number' ? message.compactTailMessageCount : undefined,
   };
 }
 

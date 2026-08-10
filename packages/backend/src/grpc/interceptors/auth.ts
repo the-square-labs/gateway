@@ -91,7 +91,8 @@ export function isTrustedRelayServiceCall(
 }
 
 export function normalizeCertificateSerial(serial: string): string {
-  return serial.trim().replace(/:/g, '').toLowerCase();
+  const normalized = serial.trim().replace(/:/g, '').toLowerCase();
+  return normalized.replace(/^0+(?=[0-9a-f])/, '');
 }
 
 /**

@@ -220,7 +220,9 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
       const nodeId = node.id;
       if (typeWanted('docker_container') && hasScopeBase(user.scopes, 'docker:containers:view')) {
         await collect('docker_container', 'list_docker_containers', { nodeId, search: query }, (container) => ({
-          id: container.id,
+          // Docker names are stable across inspect/exec calls and avoid forcing the
+          // model to manually reproduce a long, volatile runtime ID.
+          id: container.name,
           name: container.name,
           nodeId,
           nodeSlug: node.slug,

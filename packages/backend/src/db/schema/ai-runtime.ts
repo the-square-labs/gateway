@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import type { AIResourceReference } from '@/modules/ai/ai.types.js';
 import { aiConversationMessages, aiConversations } from './ai-conversations.js';
 import { integrationConnectors } from './integration-connectors.js';
 import { users } from './users.js';
@@ -33,6 +34,17 @@ export type AIToolCallStatus =
   | 'running'
   | 'completed'
   | 'failed'
+  | 'effect_unknown'
+  | 'stopped';
+
+export type AIToolRoundStatus =
+  | 'collecting'
+  | 'waiting_questions'
+  | 'waiting_approvals'
+  | 'ready'
+  | 'executing'
+  | 'completed'
+  | 'failed'
   | 'stopped';
 
 export type AIQuestionStatus = 'pending' | 'answered' | 'stopped';
@@ -54,6 +66,9 @@ export const aiRuns = pgTable(
     reasoningEffort: varchar('reasoning_effort', { length: 64 }),
     clientCommandId: varchar('client_command_id', { length: 128 }).notNull(),
     assistantDraftContent: text('assistant_draft_content'),
+    executionEpoch: integer('execution_epoch').notNull().default(0),
+    leaseOwner: varchar('lease_owner', { length: 255 }),
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
     error: text('error'),
     startedAt: timestamp('started_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
@@ -78,6 +93,31 @@ export const aiRuns = pgTable(
   })
 );
 
+export const aiRunToolRounds = pgTable(
+  'ai_run_tool_rounds',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => aiRuns.id, { onDelete: 'cascade' }),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => aiConversations.id, { onDelete: 'cascade' }),
+    sequence: integer('sequence').notNull(),
+    status: varchar('status', { length: 32 }).$type<AIToolRoundStatus>().notNull().default('collecting'),
+    providerMessages: jsonb('provider_messages').$type<Record<string, unknown>[]>().notNull().default([]),
+    error: text('error'),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    runSequenceIdx: uniqueIndex('ai_run_tool_rounds_run_sequence_idx').on(table.runId, table.sequence),
+    conversationStatusIdx: index('ai_run_tool_rounds_conversation_status_idx').on(table.conversationId, table.status),
+  })
+);
+
 export const aiRunToolCalls = pgTable(
   'ai_run_tool_calls',
   {
@@ -85,6 +125,8 @@ export const aiRunToolCalls = pgTable(
     runId: uuid('run_id')
       .notNull()
       .references(() => aiRuns.id, { onDelete: 'cascade' }),
+    roundId: uuid('round_id').references(() => aiRunToolRounds.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull().default(0),
     conversationId: uuid('conversation_id')
       .notNull()
       .references(() => aiConversations.id, { onDelete: 'cascade' }),
@@ -105,6 +147,7 @@ export const aiRunToolCalls = pgTable(
     startedAt: timestamp('started_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
     result: jsonb('result').$type<unknown>(),
+    resourceReferences: jsonb('resource_references').$type<AIResourceReference[]>().notNull().default([]),
     error: text('error'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -126,6 +169,8 @@ export const aiRunQuestions = pgTable(
     runId: uuid('run_id')
       .notNull()
       .references(() => aiRuns.id, { onDelete: 'cascade' }),
+    roundId: uuid('round_id').references(() => aiRunToolRounds.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull().default(0),
     conversationId: uuid('conversation_id')
       .notNull()
       .references(() => aiConversations.id, { onDelete: 'cascade' }),
@@ -140,6 +185,7 @@ export const aiRunQuestions = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
+    runToolCallIdx: uniqueIndex('ai_run_questions_run_tool_call_idx').on(table.runId, table.toolCallId),
     answerCommandIdx: uniqueIndex('ai_run_questions_answer_command_idx')
       .on(table.runId, table.answerClientCommandId)
       .where(sql`${table.answerClientCommandId} IS NOT NULL`),
@@ -155,6 +201,7 @@ export const aiRunCredentialChallenges = pgTable(
     runId: uuid('run_id')
       .notNull()
       .references(() => aiRuns.id, { onDelete: 'cascade' }),
+    roundId: uuid('round_id').references(() => aiRunToolRounds.id, { onDelete: 'cascade' }),
     conversationId: uuid('conversation_id')
       .notNull()
       .references(() => aiConversations.id, { onDelete: 'cascade' }),
@@ -189,6 +236,8 @@ export const aiRunCredentialChallenges = pgTable(
 
 export type AIRun = typeof aiRuns.$inferSelect;
 export type NewAIRun = typeof aiRuns.$inferInsert;
+export type AIRunToolRound = typeof aiRunToolRounds.$inferSelect;
+export type NewAIRunToolRound = typeof aiRunToolRounds.$inferInsert;
 export type AIRunToolCall = typeof aiRunToolCalls.$inferSelect;
 export type NewAIRunToolCall = typeof aiRunToolCalls.$inferInsert;
 export type AIRunQuestion = typeof aiRunQuestions.$inferSelect;

@@ -5,17 +5,12 @@ import {
   Bot,
   Box,
   Clock,
-  Database,
   FileText,
   FolderOpen,
-  Globe,
-  Globe2,
   HardDrive,
   Image,
   KeyRound,
-  Layers,
   ListTodo,
-  Lock,
   LogOut,
   Monitor,
   Moon,
@@ -24,10 +19,7 @@ import {
   PanelLeft,
   Plus,
   ScrollText,
-  Server,
   Settings,
-  ShieldAlert,
-  ShieldCheck,
   Sparkles,
   Sun,
   Terminal,
@@ -50,16 +42,8 @@ import {
 } from "@/components/ui/command";
 import { type AppNavigationItemId, visibleNavigationGroups } from "@/lib/app-navigation";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
-import {
-  databaseRoute,
-  dockerContainerRoute,
-  dockerDeploymentRoute,
-  dockerVolumeRoute,
-  loggingEnvironmentRoute,
-  loggingSchemaRoute,
-  nodeRoute,
-  proxyHostRoute,
-} from "@/lib/resource-routes";
+import { RESOURCE_ICONS, RESOURCE_LABELS, resourceSearchHref } from "@/lib/resource-presentation";
+import { dockerContainerRoute, dockerDeploymentRoute, nodeRoute } from "@/lib/resource-routes";
 import { api } from "@/services/api";
 import { useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
@@ -69,7 +53,7 @@ import { useResolvedPageContext } from "@/stores/resolved-page-context";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
-import type { DockerContainer, Node, ResourceSearchResult, ResourceSearchType } from "@/types";
+import type { DockerContainer, Node, ResourceSearchResult } from "@/types";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -99,56 +83,6 @@ interface DeepLinkDefinition {
   visible?: boolean;
 }
 
-const RESOURCE_LABELS: Record<ResourceSearchType, string> = {
-  node: "Node",
-  proxy_host: "Proxy host",
-  proxy_template: "Nginx template",
-  ssl_certificate: "SSL certificate",
-  domain: "Domain",
-  access_list: "Access list",
-  ca: "Certificate authority",
-  pki_certificate: "Certificate",
-  pki_template: "Certificate template",
-  docker_container: "Container",
-  docker_deployment: "Deployment",
-  docker_image: "Docker image",
-  docker_volume: "Docker volume",
-  docker_network: "Docker network",
-  docker_registry: "Docker registry",
-  database: "Database",
-  logging_environment: "Logging environment",
-  logging_schema: "Logging schema",
-  status_page_service: "Status page service",
-  status_page_incident: "Status page incident",
-  notification_rule: "Alert rule",
-  notification_webhook: "Notification webhook",
-};
-
-const RESOURCE_ICONS: Record<ResourceSearchType, React.ElementType> = {
-  node: Server,
-  proxy_host: Globe,
-  proxy_template: Award,
-  ssl_certificate: Lock,
-  domain: Globe2,
-  access_list: ShieldAlert,
-  ca: ShieldCheck,
-  pki_certificate: FileText,
-  pki_template: Award,
-  docker_container: Box,
-  docker_deployment: Layers,
-  docker_image: Image,
-  docker_volume: HardDrive,
-  docker_network: Network,
-  docker_registry: KeyRound,
-  database: Database,
-  logging_environment: ScrollText,
-  logging_schema: FileText,
-  status_page_service: Activity,
-  status_page_incident: Activity,
-  notification_rule: Bell,
-  notification_webhook: Webhook,
-};
-
 function fuzzyMatch(text: string, query: string): number {
   if (!query) return 1;
   const words = query.split(/\s+/).filter(Boolean);
@@ -173,66 +107,6 @@ function entryScore(entry: PaletteEntry, query: string): number {
     [entry.label, entry.detail, ...(entry.keywords ?? [])].filter(Boolean).join(" "),
     query
   );
-}
-
-function summaryString(result: ResourceSearchResult, key: string): string | undefined {
-  const value = result.summary[key];
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function resourceHref(result: ResourceSearchResult): string {
-  switch (result.type) {
-    case "node":
-      return nodeRoute(summaryString(result, "slug") ?? result.id);
-    case "proxy_host":
-      return summaryString(result, "slug")
-        ? proxyHostRoute(summaryString(result, "slug")!)
-        : "/proxy-hosts";
-    case "proxy_template":
-      return `/nginx-templates/${encodeURIComponent(result.id)}`;
-    case "ssl_certificate":
-      return "/ssl-certificates";
-    case "domain":
-      return "/domains";
-    case "access_list":
-      return "/access-lists";
-    case "ca":
-      return `/cas/${encodeURIComponent(result.id)}`;
-    case "pki_certificate":
-      return `/certificates/${encodeURIComponent(result.id)}`;
-    case "pki_template":
-      return "/templates/pki";
-    case "docker_container":
-      return result.nodeSlug
-        ? dockerContainerRoute(result.nodeSlug, result.name)
-        : "/docker/containers";
-    case "docker_deployment":
-      return result.nodeSlug
-        ? dockerDeploymentRoute(result.nodeSlug, result.name)
-        : "/docker/deployments";
-    case "docker_image":
-      return "/docker/images";
-    case "docker_volume":
-      return result.nodeSlug ? dockerVolumeRoute(result.nodeSlug, result.name) : "/docker/volumes";
-    case "docker_network":
-      return "/docker/networks";
-    case "docker_registry":
-      return "/settings/advanced";
-    case "database":
-      return databaseRoute(summaryString(result, "slug") ?? result.id);
-    case "logging_environment":
-      return loggingEnvironmentRoute(summaryString(result, "slug") ?? result.id);
-    case "logging_schema":
-      return loggingSchemaRoute(summaryString(result, "slug") ?? result.id);
-    case "status_page_service":
-      return "/status-page/services";
-    case "status_page_incident":
-      return "/status-page/incidents";
-    case "notification_rule":
-      return "/notifications/alerts";
-    case "notification_webhook":
-      return "/notifications/webhooks";
-  }
 }
 
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
@@ -1292,7 +1166,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                       <CommandItem
                         key={`${result.type}:${result.nodeId ?? ""}:${result.id}`}
                         value={`resource:${result.type}:${result.id}`}
-                        onSelect={() => handleSelect(() => navigate(resourceHref(result)))}
+                        onSelect={() => handleSelect(() => navigate(resourceSearchHref(result)))}
                       >
                         <Icon className="mr-2 h-4 w-4" />
                         <span className="min-w-0 truncate">{result.name}</span>

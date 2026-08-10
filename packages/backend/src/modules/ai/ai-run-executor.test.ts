@@ -24,7 +24,10 @@ async function* streamEvents(events: WSServerMessage[]) {
 
 function createExecutorHarness(
   events: WSServerMessage[],
-  options: { messageRows?: Array<{ uiMessage: Record<string, unknown> }> } = {}
+  options: {
+    messageRows?: Array<{ id?: string; uiMessage: Record<string, unknown> }>;
+    clientCommandId?: string;
+  } = {}
 ) {
   const streamChat = vi.fn((_user: User, _messages: ChatMessage[]) => streamEvents(events));
   const selectQueue = [
@@ -35,7 +38,7 @@ function createExecutorHarness(
         userId: USER.id,
         status: 'queued',
         activeMessageId: 'user-message-1',
-        clientCommandId: 'cmd-1',
+        clientCommandId: options.clientCommandId ?? 'cmd-1',
         assistantDraftContent: null,
         error: null,
         createdAt: new Date('2026-06-26T10:00:00.000Z'),
@@ -47,10 +50,11 @@ function createExecutorHarness(
     [],
   ];
   let orderByCalls = 0;
+  const directOrderByCalls = options.messageRows?.some((row) => row.id && row.uiMessage.role === 'assistant') ? 2 : 1;
   const selectLimit = vi.fn(async () => selectQueue.shift() ?? []);
   const selectOrderBy = vi.fn(() => {
     orderByCalls += 1;
-    return orderByCalls === 1 ? Promise.resolve(selectQueue.shift() ?? []) : { limit: selectLimit };
+    return orderByCalls <= directOrderByCalls ? Promise.resolve(selectQueue.shift() ?? []) : { limit: selectLimit };
   });
   const selectWhere = vi.fn(() => ({ limit: selectLimit, orderBy: selectOrderBy }));
   const selectFrom = vi.fn(() => ({ where: selectWhere }));
@@ -83,6 +87,9 @@ function createExecutorHarness(
   const updateWhere = vi.fn(async () => undefined);
   const updateSet = vi.fn(() => ({ where: updateWhere }));
   const update = vi.fn(() => ({ set: updateSet }));
+  const db = { select, insert, update } as Record<string, unknown>;
+  const transaction = vi.fn(async (callback: (tx: typeof db) => Promise<unknown>) => callback(db));
+  db.transaction = transaction;
 
   const publishConversationChanged = vi.fn();
   const publishAssistantDelta = vi.fn();
@@ -91,7 +98,7 @@ function createExecutorHarness(
   const publishCredentialChallenge = vi.fn();
   const publishClientAction = vi.fn();
   const executor = new AIRunExecutor(
-    { select, insert, update } as never,
+    db as never,
     publishConversationChanged,
     publishAssistantDelta,
     publishAssistantCommentDelta,
@@ -116,6 +123,7 @@ function createExecutorHarness(
     publishAssistantCommentDelta,
     publishCredentialChallenge,
     publishClientAction,
+    transaction,
   };
 }
 
@@ -128,8 +136,102 @@ afterEach(() => {
 });
 
 describe('AIRunExecutor live assistant draft streaming', () => {
+  it('restores changed resource and parent-node fallback from durable tool rows', async () => {
+    const resourceRows = [
+      {
+        runId: 'run-1',
+        status: 'completed',
+        resourceReferences: [
+          {
+            refId: 'gwr_0123456789abcdef01234567',
+            type: 'docker_container',
+            resourceId: 'container-1',
+            label: 'api',
+            relation: 'created',
+            nodeId: 'node-1',
+            nodeSlug: 'docker-src',
+          },
+          {
+            refId: 'gwr_fedcba9876543210fedcba98',
+            type: 'node',
+            resourceId: 'node-1',
+            label: 'docker-src',
+            relation: 'read',
+            slug: 'docker-src',
+          },
+        ],
+      },
+    ];
+    const orderBy = vi.fn(async () => resourceRows);
+    const where = vi.fn(() => ({ orderBy }));
+    const from = vi.fn(() => ({ where }));
+    const executor = new AIRunExecutor(
+      { select: vi.fn(() => ({ from })) } as never,
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn()
+    );
+
+    const result = await (
+      executor as unknown as {
+        resolveMessageResourceReferences(
+          conversationId: string,
+          runId: string,
+          content: string,
+          includeChangedResources: boolean
+        ): Promise<{ referenced: unknown[]; changed: Array<{ type: string }> }>;
+      }
+    ).resolveMessageResourceReferences('conversation-1', 'run-1', '', true);
+
+    expect(result.referenced).toEqual([]);
+    expect(result.changed.map((reference) => reference.type)).toEqual(['docker_container', 'node']);
+  });
+
+  it('does not report verified resources as modified', async () => {
+    const resourceRows = [
+      {
+        runId: 'run-1',
+        status: 'completed',
+        resourceReferences: [
+          {
+            refId: 'gwr_0123456789abcdef01234567',
+            type: 'node',
+            resourceId: 'node-1',
+            label: 'docker-src',
+            relation: 'verified',
+            slug: 'docker-src',
+          },
+        ],
+      },
+    ];
+    const orderBy = vi.fn(async () => resourceRows);
+    const where = vi.fn(() => ({ orderBy }));
+    const from = vi.fn(() => ({ where }));
+    const executor = new AIRunExecutor(
+      { select: vi.fn(() => ({ from })) } as never,
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn()
+    );
+
+    const result = await (
+      executor as unknown as {
+        resolveMessageResourceReferences(
+          conversationId: string,
+          runId: string,
+          content: string,
+          includeChangedResources: boolean
+        ): Promise<{ referenced: unknown[]; changed: unknown[] }>;
+      }
+    ).resolveMessageResourceReferences('conversation-1', 'run-1', '', true);
+
+    expect(result.changed).toEqual([]);
+  });
+
   it('publishes a persisted credential challenge after moving the run into the waiting state', async () => {
-    const { executor, publishCredentialChallenge, publishConversationChanged } = createExecutorHarness([
+    const { executor, publishCredentialChallenge, publishConversationChanged, updateSet } = createExecutorHarness([
       {
         type: 'credential_authorization_required',
         requestId: 'request-1',
@@ -138,6 +240,7 @@ describe('AIRunExecutor live assistant draft streaming', () => {
         provider: 'gitlab',
         connectorId: '22222222-2222-4222-8222-222222222222',
         arguments: { connectorId: '22222222-2222-4222-8222-222222222222' },
+        roundId: '11111111-1111-4111-8111-111111111111',
       },
     ]);
 
@@ -150,11 +253,13 @@ describe('AIRunExecutor live assistant draft streaming', () => {
       expect.objectContaining({
         id: 'challenge-1',
         runId: 'run-1',
+        roundId: '11111111-1111-4111-8111-111111111111',
         connectorId: '22222222-2222-4222-8222-222222222222',
         toolName: 'gitlab_list_projects',
         status: 'pending',
       })
     );
+    expect(updateSet).not.toHaveBeenCalledWith(expect.objectContaining({ checkpoint: expect.anything() }));
     expect(publishConversationChanged).toHaveBeenCalledWith(USER.id, 'conversation-1');
   });
 
@@ -172,6 +277,7 @@ describe('AIRunExecutor live assistant draft streaming', () => {
       challenge: {
         id: 'challenge-1',
         runId: 'run-1',
+        roundId: null,
         conversationId: 'conversation-1',
         userId: USER.id,
         provider: 'gitlab' as const,
@@ -210,6 +316,85 @@ describe('AIRunExecutor live assistant draft streaming', () => {
     expect(harness.updateSet).not.toHaveBeenCalledWith(expect.objectContaining({ assistantDraftContent: 'Hello' }));
   });
 
+  it('adds a provider-only continuation instruction without persisting another user message', async () => {
+    const harness = createExecutorHarness(
+      [
+        { type: 'text_delta', requestId: 'request-1', content: 'Done' },
+        { type: 'done', requestId: 'request-1' },
+      ],
+      { clientCommandId: 'continue:cmd-continue' }
+    );
+
+    await executeRun(harness.executor);
+
+    expect(harness.streamChat.mock.calls[0]?.[1]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'user',
+          content: expect.stringContaining('Continue the interrupted task from the current durable state'),
+        }),
+      ])
+    );
+    expect(harness.insertValues).not.toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'user', content: expect.stringContaining('Continue the interrupted task') })
+    );
+  });
+
+  it('persists every call in a provider response as one ordered durable round', async () => {
+    const harness = createExecutorHarness([
+      {
+        type: 'tool_round_start',
+        requestId: 'request-1',
+        roundId: '11111111-1111-4111-8111-111111111111',
+        providerMessages: [{ role: 'assistant', tool_calls: [] }],
+        calls: [
+          {
+            id: 'call-question',
+            name: 'ask_question',
+            arguments: { question: 'Which target?' },
+            position: 0,
+            gate: 'question',
+            classification: 'system-never-ask',
+            approvalPolicy: 'system_skipped',
+            requiredScopes: ['feat:ai:use'],
+          },
+          {
+            id: 'call-approval',
+            name: 'restart_docker_container',
+            arguments: { nodeId: 'node-1', containerId: 'container-1' },
+            position: 1,
+            gate: 'approval',
+            classification: 'update',
+            approvalPolicy: 'requires_approval',
+            requiredScopes: ['docker:containers:manage'],
+          },
+        ],
+      },
+      { type: 'done', requestId: 'request-1' },
+    ]);
+
+    await executeRun(harness.executor);
+
+    expect(harness.transaction).toHaveBeenCalledTimes(1);
+    expect(harness.insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: '11111111-1111-4111-8111-111111111111',
+        status: 'waiting_questions',
+      })
+    );
+    expect(harness.insertValues).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ toolCallId: 'call-question', position: 0, status: 'created' }),
+        expect.objectContaining({ toolCallId: 'call-approval', position: 1, status: 'pending_approval' }),
+      ])
+    );
+    expect(harness.insertValues).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ toolCallId: 'call-question', position: 0, question: 'Which target?' }),
+      ])
+    );
+  });
+
   it('sends compact summary plus preserved tail to the model while keeping UI order untouched', async () => {
     const harness = createExecutorHarness([{ type: 'done', requestId: 'request-1' }], {
       messageRows: [
@@ -237,6 +422,39 @@ describe('AIRunExecutor live assistant draft streaming', () => {
       ['user', 'tail user'],
       ['assistant', 'tail assistant'],
       ['user', 'new user after compact'],
+    ]);
+  });
+
+  it('reconstructs a v2 compacted context from the durable boundary message id', async () => {
+    const harness = createExecutorHarness([{ type: 'done', requestId: 'request-1' }], {
+      messageRows: [
+        { id: 'old-1', uiMessage: { role: 'user', content: 'old user' } },
+        { id: 'boundary-1', uiMessage: { role: 'assistant', content: 'old assistant' } },
+        { id: 'recent-1', uiMessage: { role: 'user', content: 'recent user' } },
+        { id: 'recent-2', uiMessage: { role: 'assistant', content: 'recent assistant' } },
+        {
+          id: 'marker-1',
+          uiMessage: {
+            role: 'assistant',
+            content: 'v2 summary',
+            compactMarker: true,
+            compactVersion: 2,
+            compactEpoch: 1,
+            compactBoundaryMessageId: 'boundary-1',
+          },
+        },
+        { id: 'new-1', uiMessage: { role: 'user', content: 'new user' } },
+      ],
+    });
+
+    await executeRun(harness.executor);
+
+    const messages = harness.streamChat.mock.calls[0]?.[1];
+    expect(messages?.map((message) => [message.role, message.content])).toEqual([
+      ['assistant', 'v2 summary'],
+      ['user', 'recent user'],
+      ['assistant', 'recent assistant'],
+      ['user', 'new user'],
     ]);
   });
 
@@ -624,6 +842,37 @@ describe('AIRunExecutor live assistant draft streaming', () => {
       expect.objectContaining({
         status: 'completed',
         result: { id: 'token-1', name: 'Deploy', token: '[REDACTED_ONE_TIME_SECRET]', tokenRedacted: true },
+      })
+    );
+  });
+
+  it('redacts one-time API token results even when the tool reports an error', async () => {
+    const harness = createExecutorHarness([
+      {
+        type: 'tool_call_start',
+        requestId: 'request-1',
+        id: 'call-1',
+        name: 'manage_api_token',
+        arguments: { operation: 'create', name: 'Deploy' },
+      },
+      {
+        type: 'tool_result',
+        requestId: 'request-1',
+        id: 'call-1',
+        name: 'manage_api_token',
+        result: { id: 'token-1', token: 'gw_secret' },
+        error: 'Token delivery failed',
+      },
+      { type: 'done', requestId: 'request-1' },
+    ]);
+
+    await executeRun(harness.executor);
+
+    expect(harness.updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'failed',
+        result: { id: 'token-1', token: '[REDACTED_ONE_TIME_SECRET]', tokenRedacted: true },
+        error: 'Token delivery failed',
       })
     );
   });

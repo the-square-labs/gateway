@@ -9,11 +9,21 @@ import {
   SquarePen,
   TerminalSquare,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
-import type { AIMessageAttachment, AIMessage as AIMessageType, AIToolCall } from "@/types/ai";
+import {
+  AIChangedResources,
+  resourceAwareMarkdown,
+  resourceMarkdownLinkComponent,
+} from "@/lib/ai-resource-links";
+import type {
+  AIMessageAttachment,
+  AIMessage as AIMessageType,
+  AIResourceReference,
+  AIToolCall,
+} from "@/types/ai";
 import { AIToolCallBlock } from "./AIToolCallBlock";
 
 interface AIMessageProps {
@@ -30,6 +40,8 @@ interface AIMessageProps {
   onRetry?: () => void;
   retryDisabled?: boolean;
   editUserMessageDisabled?: boolean;
+  resourceReferences?: AIResourceReference[];
+  suppressActivityIndicator?: boolean;
 }
 
 type ToolCallRenderItem =
@@ -48,7 +60,7 @@ interface ArtifactAttachment {
 type ArtifactPreviewKind = "image" | "text" | null;
 
 function isGroupableToolCall(toolCall: AIToolCall): boolean {
-  if (toolCall.name === "compact_context") return false;
+  if (toolCall.name === "compact_context" || toolCall.name === "ask_question") return false;
   return (
     toolCall.status === "completed" || toolCall.status === "failed" || toolCall.status === "running"
   );
@@ -59,11 +71,9 @@ function buildToolCallRenderItems(toolCalls: AIToolCall[]): ToolCallRenderItem[]
   let toolRun: AIToolCall[] = [];
 
   const flushToolRun = () => {
-    if (toolRun.length === 1 && toolRun[0].status !== "running") {
+    if (toolRun.length === 1) {
       items.push({ type: "single", toolCall: toolRun[0] });
     } else if (toolRun.length > 1) {
-      items.push({ type: "tool-group", key: toolRun[0].id, toolCalls: toolRun });
-    } else if (toolRun.length === 1) {
       items.push({ type: "tool-group", key: toolRun[0].id, toolCalls: toolRun });
     }
     toolRun = [];
@@ -86,23 +96,36 @@ function buildToolCallRenderItems(toolCalls: AIToolCall[]): ToolCallRenderItem[]
 export function AIMessage({
   message,
   assistantMaxWidthClass = "max-w-[95%]",
-  onApprove,
-  onReject,
-  onAnswer,
   onEditUserMessage,
   onRetry,
   retryDisabled = false,
   editUserMessageDisabled = false,
+  resourceReferences = [],
+  suppressActivityIndicator = false,
 }: AIMessageProps) {
   const content = typeof message.content === "string" ? message.content : "";
-  const toolCallItems = message.toolCalls ? buildToolCallRenderItems(message.toolCalls) : [];
+  const visibleToolCalls = message.toolCalls?.filter(
+    (toolCall) => toolCall.name !== "send_comment"
+  );
+  const toolCallItems = visibleToolCalls ? buildToolCallRenderItems(visibleToolCalls) : [];
   const hasCompactContextTool =
-    message.toolCalls?.some((tc) => tc.name === "compact_context") ?? false;
+    visibleToolCalls?.some((tc) => tc.name === "compact_context") ?? false;
   const visibleContent = message.compactMarker && hasCompactContextTool ? "" : content;
   const errorMessage = extractErrorMessage(visibleContent);
   const compactSummary = message.compactMarker ? content : undefined;
-  const artifacts = extractArtifactAttachments(message.toolCalls);
+  const artifacts = extractArtifactAttachments(visibleToolCalls);
   const showArtifacts = artifacts.length > 0 && !message.isStreaming;
+  const availableResourceReferences = useMemo(
+    () => mergeResourceReferences(resourceReferences, message.resourceReferences),
+    [resourceReferences, message.resourceReferences]
+  );
+  const assistantMarkdownComponents = useMemo(
+    () => ({
+      ...markdownComponents,
+      a: resourceMarkdownLinkComponent(availableResourceReferences),
+    }),
+    [availableResourceReferences]
+  );
 
   if (message.conversationStatus) return null;
 
@@ -175,7 +198,7 @@ export function AIMessage({
     );
   }
 
-  if (message.localOnly && !message.toolCalls?.length) {
+  if (message.localOnly && !visibleToolCalls?.length) {
     if (!content.trim()) return null;
     if (errorMessage) {
       return (
@@ -216,20 +239,28 @@ export function AIMessage({
   }
 
   const hasContent = !!visibleContent;
-  const hasToolCalls = !!message.toolCalls?.length;
+  const hasToolCalls = !!visibleToolCalls?.length;
   const allToolsDone =
     hasToolCalls &&
-    message.toolCalls!.every(
+    visibleToolCalls!.every(
       (tc) => tc.status === "completed" || tc.status === "failed" || tc.status === "rejected"
     );
   const hasError = errorMessage !== null;
 
   const hasActiveQuestion =
     hasToolCalls &&
-    message.toolCalls!.some(
+    visibleToolCalls!.some(
       (tc) =>
-        tc.name === "ask_question" && tc.status === "awaiting_approval" && !hasQuestionAnswer(tc)
+        tc.name === "ask_question" &&
+        (tc.status === "awaiting_approval" || tc.status === "running") &&
+        !hasQuestionAnswer(tc)
     );
+  const hasPendingApproval =
+    hasToolCalls &&
+    visibleToolCalls!.some((tc) => tc.name !== "ask_question" && tc.status === "awaiting_approval");
+  const hasRunningTool =
+    hasToolCalls &&
+    visibleToolCalls!.some((tc) => tc.name !== "ask_question" && tc.status === "running");
   const isLiveComment = message.id.includes(":comment:") && Boolean(message.isStreaming);
 
   // Show thinking when:
@@ -240,8 +271,21 @@ export function AIMessage({
     message.isStreaming &&
     !hasError &&
     !hasActiveQuestion &&
-    (isLiveComment || (!hasContent && !hasToolCalls) || (allToolsDone && !hasContent));
+    !hasPendingApproval &&
+    (isLiveComment ||
+      hasRunningTool ||
+      (!hasContent && !hasToolCalls) ||
+      (allToolsDone && !hasContent));
   const isRetrying = message.isStreaming && hasError;
+  const activityLabel = isRetrying
+    ? "Retrying"
+    : hasActiveQuestion
+      ? "Waiting for response"
+      : hasPendingApproval
+        ? "Waiting for approval"
+        : isThinking
+          ? "Thinking"
+          : null;
 
   return (
     <div className={assistantMaxWidthClass}>
@@ -254,9 +298,6 @@ export function AIMessage({
                 <AIToolCallBlock
                   key={item.toolCall.id}
                   toolCall={item.toolCall}
-                  onApprove={onApprove}
-                  onReject={onReject}
-                  onAnswer={onAnswer}
                   compactSummary={compactSummary}
                 />
               ) : (
@@ -269,11 +310,13 @@ export function AIMessage({
         {/* Text content */}
         {hasContent && (
           <div className="prose dark:prose-invert !max-w-none break-words text-sm prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-pre:my-2 prose-table:my-0 prose-code:text-xs prose-pre:text-xs prose-pre:rounded-none prose-code:rounded-none prose-code:before:content-none prose-code:after:content-none [&>*:first-child]:!mt-0 [&>*:last-child]:!mb-0">
-            <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-              {visibleContent}
+            <Markdown remarkPlugins={[remarkGfm]} components={assistantMarkdownComponents}>
+              {resourceAwareMarkdown(visibleContent, availableResourceReferences)}
             </Markdown>
           </div>
         )}
+
+        <AIChangedResources references={message.changedResourceReferences ?? []} />
 
         {showArtifacts && (
           <div className="mt-3 flex flex-wrap gap-2">
@@ -287,9 +330,9 @@ export function AIMessage({
         )}
 
         {/* Status indicators */}
-        {isThinking && <ThinkingIndicator label="Thinking" />}
-        {isRetrying && <ThinkingIndicator label="Retrying" />}
-        {hasActiveQuestion && <ThinkingIndicator label="Waiting for response" />}
+        {!suppressActivityIndicator && activityLabel && (
+          <AIActivityIndicator label={activityLabel} />
+        )}
       </div>
     </div>
   );
@@ -535,6 +578,7 @@ function ToolCallsGroup({ toolCalls }: { toolCalls: AIToolCall[] }) {
     <div className="my-0.5 text-sm">
       <button
         type="button"
+        aria-expanded={expanded}
         onClick={() => {
           setExpanded((value) => {
             const next = !value;
@@ -593,7 +637,7 @@ function setToolGroupExpanded(groupKey: string, expanded: boolean): void {
   }
 }
 
-function ThinkingIndicator({ label }: { label: string }) {
+export function AIActivityIndicator({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-1.5 py-1 text-sm text-muted-foreground">
       <span className="thinking-shimmer">{label}</span>
@@ -638,3 +682,39 @@ const markdownComponents = {
     </a>
   ),
 };
+
+function mergeResourceReferences(
+  conversationReferences: AIResourceReference[],
+  messageReferences: AIResourceReference[] | undefined
+): AIResourceReference[] {
+  const merged = new Map(
+    (messageReferences ?? []).map((reference) => [reference.refId, reference])
+  );
+  for (const current of conversationReferences) {
+    const historical = merged.get(current.refId);
+    if (!historical) {
+      merged.set(current.refId, current);
+      continue;
+    }
+    const label = isFallbackReferenceLabel(historical) ? current.label : historical.label;
+    merged.set(current.refId, {
+      ...current,
+      ...historical,
+      label,
+      nodeId: historical.nodeId || current.nodeId,
+      nodeSlug: historical.nodeSlug || current.nodeSlug,
+      slug: historical.slug || current.slug,
+      appearanceColor: current.appearanceColor ?? historical.appearanceColor,
+    });
+  }
+  return [...merged.values()];
+}
+
+function isFallbackReferenceLabel(reference: AIResourceReference): boolean {
+  const label = reference.label.trim();
+  return (
+    !label ||
+    label === reference.resourceId ||
+    (reference.type === "docker_container" && /^[a-f0-9]{12,64}$/i.test(label))
+  );
+}

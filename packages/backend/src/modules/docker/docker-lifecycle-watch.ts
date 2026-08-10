@@ -84,7 +84,8 @@ export function watchDockerRecreateByName(
   taskId: string | undefined,
   progress: string,
   expectedState: string,
-  timeoutMs = 60000
+  timeoutMs = 60000,
+  onComplete?: (newContainerId: string) => Promise<void>
 ) {
   const start = Date.now();
   const poll = setInterval(async () => {
@@ -103,9 +104,21 @@ export function watchDockerRecreateByName(
         const state = match.state ?? match.State ?? '';
 
         if (newId !== oldContainerId && state === expectedState) {
-          await context.preserveContainerIdentity?.(nodeId, containerName, newId);
-          context.clearTransition(nodeId, containerName);
           clearInterval(poll);
+          try {
+            await context.preserveContainerIdentity?.(nodeId, containerName, newId);
+            await onComplete?.(newId);
+          } catch (error) {
+            context.clearTransition(nodeId, containerName);
+            await context.failTask(
+              taskId,
+              error instanceof Error ? error.message : 'Failed to finalize recreated container',
+              nodeId,
+              containerName
+            );
+            return;
+          }
+          context.clearTransition(nodeId, containerName);
           if (taskId && context.taskService) {
             await context.taskService
               .update(taskId, { status: 'succeeded', progress, completedAt: new Date() })

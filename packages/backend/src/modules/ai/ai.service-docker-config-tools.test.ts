@@ -42,6 +42,7 @@ describe('AIService Docker container config tool routing', () => {
 
   it('routes environment reads and updates with resource-scoped environment permissions', async () => {
     const dockerService = {
+      inspectContainer: vi.fn().mockResolvedValue({ Id: 'container-1', Name: '/api' }),
       getContainerEnv: vi.fn().mockResolvedValue({ FOO: 'bar' }),
       updateContainerEnv: vi.fn().mockResolvedValue({ success: true }),
     };
@@ -83,6 +84,7 @@ describe('AIService Docker container config tool routing', () => {
 
   it('routes file writes with parsed path/content and returns a success envelope', async () => {
     const dockerService = {
+      inspectContainer: vi.fn().mockResolvedValue({ Id: 'container-1', Name: '/api' }),
       writeFile: vi.fn().mockResolvedValue(undefined),
     };
     const service = createService(dockerService);
@@ -113,7 +115,9 @@ describe('AIService Docker container config tool routing', () => {
   });
 
   it('delegates health-check reads through the health check service', async () => {
-    const dockerService = {};
+    const dockerService = {
+      inspectContainer: vi.fn().mockResolvedValue({ Id: 'container-1', Name: '/api' }),
+    };
     const healthService = {
       getContainer: vi.fn().mockResolvedValue({ enabled: true }),
     };
@@ -135,5 +139,89 @@ describe('AIService Docker container config tool routing', () => {
       invalidateStores: [],
     });
     expect(healthService.getContainer).toHaveBeenCalledWith('node-1', 'api');
+  });
+
+  it('resolves name-only targets to a canonical ID before env dispatch', async () => {
+    const dockerService = {
+      inspectContainer: vi.fn().mockResolvedValue({ Id: 'container-1', Name: '/api' }),
+      getContainerEnv: vi.fn().mockResolvedValue({ FOO: 'bar' }),
+    };
+    const service = createService(dockerService);
+
+    await expect(
+      service.executeTool(
+        { ...BASE_USER, scopes: ['docker:containers:environment:node-1'] },
+        'manage_docker_container_config',
+        { operation: 'get_env', nodeId: 'node-1', containerName: 'api' }
+      )
+    ).resolves.toMatchObject({ result: { FOO: 'bar' } });
+    expect(dockerService.getContainerEnv).toHaveBeenCalledWith('node-1', 'container-1');
+  });
+
+  it('refreshes a stale runtime ID once by exact container name', async () => {
+    const dockerService = {
+      inspectContainer: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('No such container: stale-id'))
+        .mockResolvedValueOnce({ Id: 'container-2', Name: '/api' }),
+      getContainerEnv: vi.fn().mockResolvedValue({ FOO: 'bar' }),
+    };
+    const service = createService(dockerService);
+
+    await expect(
+      service.executeTool(
+        { ...BASE_USER, scopes: ['docker:containers:environment:node-1'] },
+        'manage_docker_container_config',
+        {
+          operation: 'get_env',
+          nodeId: 'node-1',
+          containerId: 'stale-id',
+          containerName: 'api',
+        }
+      )
+    ).resolves.toMatchObject({ result: { FOO: 'bar' } });
+    expect(dockerService.inspectContainer).toHaveBeenNthCalledWith(2, 'node-1', 'api');
+    expect(dockerService.getContainerEnv).toHaveBeenCalledWith('node-1', 'container-2');
+  });
+
+  it('rejects deployment env and file operations before dispatch', async () => {
+    const dockerService = { getContainerEnv: vi.fn(), listDirectory: vi.fn() };
+    const service = createService(dockerService);
+
+    await expect(
+      service.executeTool(
+        { ...BASE_USER, scopes: ['docker:containers:environment:node-1'] },
+        'manage_docker_container_config',
+        { operation: 'get_env', nodeId: 'node-1', targetType: 'deployment', deploymentId: 'deployment-1' }
+      )
+    ).resolves.toMatchObject({ error: expect.stringContaining('does not support deployment targets') });
+    expect(dockerService.getContainerEnv).not.toHaveBeenCalled();
+  });
+
+  it('rejects managed blue-green containers for container-scoped config operations', async () => {
+    const dockerService = {
+      inspectContainer: vi.fn().mockResolvedValue({
+        Id: 'container-1',
+        Name: '/api-blue',
+        Config: { Labels: { 'wiolett.gateway.deployment.managed': 'true' } },
+      }),
+      writeFile: vi.fn(),
+    };
+    const service = createService(dockerService);
+
+    await expect(
+      service.executeTool(
+        { ...BASE_USER, scopes: ['docker:containers:files:node-1'] },
+        'manage_docker_container_config',
+        {
+          operation: 'write_file',
+          nodeId: 'node-1',
+          containerId: 'container-1',
+          path: '/etc/app.conf',
+          content: 'enabled=true',
+        }
+      )
+    ).resolves.toMatchObject({ error: expect.stringContaining('MANAGED_DEPLOYMENT_CONTAINER') });
+    expect(dockerService.writeFile).not.toHaveBeenCalled();
   });
 });

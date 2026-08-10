@@ -9,6 +9,7 @@ import { SessionService } from '@/services/session.service.js';
 import type { User } from '@/types.js';
 import { AISettingsService } from './ai.settings.service.js';
 import { authenticateWSConnection, createWSHandlers } from './ai.ws.js';
+import { AIProviderRuntimeService } from './ai-provider-runtime.service.js';
 import { AIRunService, aiUserConversationsChangedChannel } from './ai-run.service.js';
 
 const USER: User = {
@@ -45,6 +46,10 @@ function registerAiWsDependencies(user: User) {
       rateLimitWindowSeconds: 60,
     }),
   } as unknown as AISettingsService);
+  container.registerInstance(AIProviderRuntimeService, {
+    statusForUser: vi.fn().mockResolvedValue({ enabled: true }),
+    generateConversationTitle: vi.fn(async (_user, options: { content: string }) => options.content.slice(0, 80)),
+  } as unknown as AIProviderRuntimeService);
 }
 
 function allowingRedis() {
@@ -98,6 +103,7 @@ function createRun() {
 
 function createSnapshot(run: ReturnType<typeof createRun> | null = createRun()) {
   return {
+    revision: 7,
     conversation: {
       id: 'conversation-1',
       title: 'hello',
@@ -234,6 +240,11 @@ describe('AI websocket backend runtime commands', () => {
     });
     const getConversationSnapshot = vi.fn().mockResolvedValue(snapshot);
     const startRunExecution = vi.fn();
+    const generateConversationTitle = vi.fn().mockResolvedValue('Node inventory overview');
+    container.registerInstance(AIProviderRuntimeService, {
+      statusForUser: vi.fn().mockResolvedValue({ enabled: true }),
+      generateConversationTitle,
+    } as unknown as AIProviderRuntimeService);
     container.registerInstance(AIRunService, {
       startUserRun,
       getConversationSnapshot,
@@ -257,13 +268,24 @@ describe('AI websocket backend runtime commands', () => {
     expect(startUserRun).toHaveBeenCalledWith({
       conversationId: null,
       userId: USER.id,
-      title: 'hello',
+      title: 'Node inventory overview',
       userMessage: { role: 'user', content: 'hello' },
       clientCommandId: 'cmd-1',
       lastContext: { route: '/nodes' },
       model: 'gateway-model',
       reasoningEffort: 'high',
     });
+    expect(generateConversationTitle).toHaveBeenCalledWith(
+      USER,
+      expect.objectContaining({
+        requestId: 'conversation-title:cmd-1',
+        content: 'hello',
+        requestedModel: 'gateway-model',
+      })
+    );
+    expect(generateConversationTitle.mock.invocationCallOrder[0]).toBeLessThan(
+      startUserRun.mock.invocationCallOrder[0]!
+    );
     expect(getConversationSnapshot).toHaveBeenCalledWith(USER.id, 'conversation-1');
     expect(startRunExecution).toHaveBeenCalledWith(USER, 'run-1');
     expect(ws.send).toHaveBeenCalledWith(
@@ -289,7 +311,63 @@ describe('AI websocket backend runtime commands', () => {
     handlers.onClose(new Event('close'), ws as any);
   });
 
-  it('builds a new conversation title from user-visible content only', async () => {
+  it('continues an interrupted conversation without creating another visible user message', async () => {
+    const { ws, handlers } = await openAuthenticatedWs();
+    container.registerInstance(TOKENS.RedisClient, allowingRedis() as any);
+
+    const run = { ...createRun(), id: 'run-2', clientCommandId: 'continue:cmd-continue' };
+    const snapshot = createSnapshot(run);
+    const startContinuationRun = vi.fn().mockResolvedValue({
+      conversationId: 'conversation-1',
+      userMessageId: 'message-1',
+      run,
+      duplicate: false,
+    });
+    const getConversationSnapshot = vi.fn().mockResolvedValue(snapshot);
+    const startRunExecution = vi.fn();
+    container.registerInstance(AIRunService, {
+      startContinuationRun,
+      getConversationSnapshot,
+      startRunExecution,
+    } as unknown as AIRunService);
+
+    await handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          type: 'conversation.continue',
+          conversationId: 'conversation-1',
+          clientCommandId: 'cmd-continue',
+          context: { route: '/docker/containers' },
+          model: 'gateway-model',
+          reasoningEffort: 'low',
+        }),
+      }),
+      ws as any
+    );
+
+    expect(startContinuationRun).toHaveBeenCalledWith({
+      conversationId: 'conversation-1',
+      userId: USER.id,
+      clientCommandId: 'cmd-continue',
+      lastContext: { route: '/docker/containers' },
+      model: 'gateway-model',
+      reasoningEffort: 'low',
+    });
+    expect(startRunExecution).toHaveBeenCalledWith(USER, 'run-2');
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'command.ack',
+        commandType: 'conversation.continue',
+        clientCommandId: 'cmd-continue',
+        conversationId: 'conversation-1',
+        runId: 'run-2',
+        duplicate: false,
+      })
+    );
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
+  it('generates a new conversation title from user-visible content only', async () => {
     const { ws, handlers } = await openAuthenticatedWs();
     container.registerInstance(TOKENS.RedisClient, allowingRedis() as any);
 
@@ -306,6 +384,11 @@ describe('AI websocket backend runtime commands', () => {
       getConversationSnapshot: vi.fn().mockResolvedValue(snapshot),
       startRunExecution: vi.fn(),
     } as unknown as AIRunService);
+    const generateConversationTitle = vi.fn().mockResolvedValue('Container launch');
+    container.registerInstance(AIProviderRuntimeService, {
+      statusForUser: vi.fn().mockResolvedValue({ enabled: true }),
+      generateConversationTitle,
+    } as unknown as AIProviderRuntimeService);
 
     const content =
       '<system-instruction>The user typed "start container" in the command palette.</system-instruction>\nstart container';
@@ -322,9 +405,13 @@ describe('AI websocket backend runtime commands', () => {
 
     expect(startUserRun).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: 'start container',
+        title: 'Container launch',
         userMessage: { role: 'user', content },
       })
+    );
+    expect(generateConversationTitle).toHaveBeenCalledWith(
+      USER,
+      expect.objectContaining({ content: 'start container' })
     );
     handlers.onClose(new Event('close'), ws as any);
   });
@@ -359,7 +446,7 @@ describe('AI websocket backend runtime commands', () => {
     expect(startUserRun).toHaveBeenCalledWith({
       conversationId: 'conversation-1',
       userId: USER.id,
-      title: 'let me continue',
+      title: 'New chat',
       userMessage: { role: 'user', content: 'let me continue' },
       clientCommandId: 'cmd-locked',
       lastContext: null,
@@ -479,7 +566,7 @@ describe('AI websocket backend runtime commands', () => {
     );
   });
 
-  it('forwards credential challenges immediately without fetching a fresh conversation snapshot', async () => {
+  it('forwards credential challenges with the authoritative conversation revision', async () => {
     const { ws, handlers } = await openAuthenticatedWs();
     const getConversationSnapshot = vi.fn().mockResolvedValue(createSnapshot(createRun()));
     container.registerInstance(AIRunService, {
@@ -520,16 +607,26 @@ describe('AI websocket backend runtime commands', () => {
       runId: 'run-1',
       challenge,
     });
+    await vi.waitFor(() => expect(ws.send).toHaveBeenCalledTimes(2));
     handlers.onClose(new Event('close'), ws as any);
 
-    expect(getConversationSnapshot).toHaveBeenCalledTimes(1);
-    expect(ws.send).toHaveBeenCalledTimes(1);
-    expect(ws.send).toHaveBeenCalledWith(
+    expect(getConversationSnapshot).toHaveBeenCalledTimes(2);
+    expect(ws.send).toHaveBeenNthCalledWith(
+      1,
+      JSON.stringify({
+        type: 'conversation.snapshot',
+        conversationId: 'conversation-1',
+        snapshot: createSnapshot(createRun()),
+      })
+    );
+    expect(ws.send).toHaveBeenNthCalledWith(
+      2,
       JSON.stringify({
         type: 'credential.required',
         conversationId: 'conversation-1',
         runId: 'run-1',
         challenge,
+        revision: 7,
       })
     );
   });
@@ -653,6 +750,48 @@ describe('AI websocket backend runtime commands', () => {
       toolCall,
       approved: true,
     });
+  });
+
+  it('starts an approval continuation even when the follow-up snapshot fails', async () => {
+    const { ws, handlers } = await openAuthenticatedWs();
+    const toolCall = {
+      id: 'approval-1',
+      runId: 'run-1',
+      conversationId: 'conversation-1',
+      status: 'approved',
+      decision: 'approved',
+    };
+    const startApprovalContinuation = vi.fn();
+    container.registerInstance(AIRunService, {
+      decideToolCall: vi.fn().mockResolvedValue({ toolCall, duplicate: false }),
+      getConversationSnapshot: vi.fn().mockRejectedValue(new Error('snapshot unavailable')),
+      startApprovalContinuation,
+    } as unknown as AIRunService);
+
+    await handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          type: 'approval.decide',
+          conversationId: 'conversation-1',
+          runId: 'run-1',
+          approvalId: 'approval-1',
+          decision: 'approved',
+          clientCommandId: 'cmd-snapshot-failure',
+        }),
+      }),
+      ws as any
+    );
+    await vi.waitFor(() => expect(startApprovalContinuation).toHaveBeenCalledOnce());
+
+    const sentMessages = vi.mocked(ws.send).mock.calls.map(([payload]) => JSON.parse(String(payload)));
+    expect(sentMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'command.ack', clientCommandId: 'cmd-snapshot-failure' }),
+        expect.objectContaining({ type: 'approval.updated', approval: toolCall }),
+      ])
+    );
+    expect(sentMessages).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: 'command.error' })]));
+    handlers.onClose(new Event('close'), ws as any);
   });
 
   it('retries credential continuation for an idempotent duplicate decision', async () => {
@@ -842,6 +981,7 @@ describe('AI websocket backend runtime commands', () => {
         type: 'run.status_changed',
         conversationId: 'conversation-1',
         run: stoppedRun,
+        revision: 7,
       })
     );
   });

@@ -456,12 +456,7 @@ func (p *DockerPlugin) handleContainerCommand(cmd *pb.DockerContainerCommand, re
 					if applyErr != nil {
 						p.logger.Warn("envstore apply failed", "error", applyErr)
 					}
-					// Compute removals from previously applied env
-					removals, compErr := p.envStore.ComputeRemovals(containerName, params.Env)
-					if compErr != nil {
-						p.logger.Warn("envstore compute removals failed", "error", compErr)
-					}
-					envRemovals = append(explicitRemovals, removals...)
+					envRemovals = append(envRemovals, explicitRemovals...)
 				}
 				envOverrides = params.Env
 			}

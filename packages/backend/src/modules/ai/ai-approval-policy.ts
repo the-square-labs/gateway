@@ -34,22 +34,39 @@ export interface AIToolApprovalDecision {
   requiresApproval: boolean;
 }
 
-export function classifyAIToolForApproval(toolName: string): AIToolApprovalClass {
+export function classifyAIToolForApproval(
+  toolName: string,
+  toolArguments: Record<string, unknown> = {}
+): AIToolApprovalClass {
   if (SYSTEM_NEVER_ASK_TOOLS.has(toolName)) return 'system-never-ask';
   const gitLabClassification = classifyGitLabAIToolForApproval(toolName);
   if (gitLabClassification) return gitLabClassification;
+
+  const tool = AI_TOOLS.find((candidate) => candidate.name === toolName);
+  const operationMetadata = tool?.operationDiscriminator;
+  if (operationMetadata) {
+    const discriminatorValues = operationMetadata.arguments.map((argument) => toolArguments[argument]);
+    if (discriminatorValues.some((value) => typeof value !== 'string')) return 'destructive';
+    const operationKey = discriminatorValues.join('.');
+    return operationMetadata.operations[operationKey]?.approvalClass ?? 'destructive';
+  }
+  if (tool?.approvalClass) return tool.approvalClass;
+
   if (EXECUTE_PREFIXES.test(toolName)) return 'execute';
   if (DELETE_PREFIXES.test(toolName)) return 'delete';
   if (CREATE_PREFIXES.test(toolName)) return 'create';
   if (UPDATE_PREFIXES.test(toolName)) return 'update';
   if (READ_PREFIXES.test(toolName)) return 'read';
 
-  const tool = AI_TOOLS.find((candidate) => candidate.name === toolName);
   return tool?.destructive ? 'destructive' : 'read';
 }
 
-export function getAIToolApprovalDecision(toolName: string, mode: AIApprovalMode | undefined): AIToolApprovalDecision {
-  const classification = classifyAIToolForApproval(toolName);
+export function getAIToolApprovalDecision(
+  toolName: string,
+  mode: AIApprovalMode | undefined,
+  toolArguments: Record<string, unknown> = {}
+): AIToolApprovalDecision {
+  const classification = classifyAIToolForApproval(toolName, toolArguments);
   if (classification === 'system-never-ask') {
     return { classification, approvalPolicy: 'system_skipped', requiresApproval: false };
   }

@@ -559,6 +559,8 @@ Gateway provides Portainer-like Docker container management through a daemon run
 - **Duplicate**: Clone a container with a new name (secrets are copied too)
 - **Remove**: Delete container (must be stopped first)
 
+Before creating a container, list images on the selected node. If the requested image is absent, pull it and wait for the pull task to complete before calling create; do not use a failed create as an image-existence probe. Public Docker Hub images are pulled directly without a saved registry or \`registryId\`.
+
 ## Recreated Containers and Stale IDs
 Docker container IDs are volatile. Recreate, image update, webhook rollout, or config changes can remove the old
 container and create a new one with the same semantic workload/name. If a Docker tool returns "No such container",
@@ -1462,6 +1464,8 @@ If no enabled connector has a matching zone, DNS-01 cannot be automated. If seve
   'docker-registries': `# Docker Registries
 
 Gateway stores private Docker registry credentials encrypted at rest. A registry may be global or restricted to a specific Docker node; use only a registry available to the selected node when pulling, recreating, or deploying an image.
+
+Public Docker Hub images such as \`nginx:alpine\` do not require a saved registry. Pull them directly with \`registryId\` omitted. Never create a manual Docker Hub registry merely to pull a public image, and never pass an empty string as \`registryId\`.
 
 ## Configuration
 Use the Docker registry UI or REST API to create, test, edit, or remove a registry. Viewing requires docker:registries:view; create, edit, and delete operations require the corresponding docker:registries scope. Integration-managed registry records, such as GitLab-provided credentials, cannot be edited as ordinary registries.

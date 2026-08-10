@@ -1,10 +1,14 @@
 import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
 import { stripRawProxyConfigForProgrammatic } from '@/modules/proxy/raw-visibility.js';
-import { FOLDER_TOOL_REQUIREMENT_SCOPES } from './ai.folder-tool-scopes.js';
+import type { AIToolDefinition } from './ai.types.js';
+import { getAIToolResourceId } from './ai-tool-policy-metadata.js';
+import {
+  AI_TOOL_ANY_SCOPE_REQUIREMENTS as ANY_SCOPE_TOOL_REQUIREMENTS,
+  AI_BROAD_ONLY_TOOL_SCOPES as BROAD_ONLY_TOOL_SCOPES,
+  AI_DIRECT_DATABASE_VIEW_TOOLS as DIRECT_DATABASE_VIEW_TOOLS,
+  AI_DIRECT_RAW_READ_TOOLS as DIRECT_RAW_READ_TOOLS,
+} from './ai-tool-scope-policy.js';
 
-const BROAD_ONLY_TOOL_SCOPES = new Set<string>();
-const DIRECT_DATABASE_VIEW_TOOLS = new Set(['list_databases', 'get_database_connection']);
-const DIRECT_RAW_READ_TOOLS = new Set(['get_proxy_rendered_config']);
 const PROXY_HOST_UPDATE_FIELDS = [
   'type',
   'nodeId',
@@ -39,99 +43,6 @@ const PROXY_HOST_UPDATE_FIELDS = [
   'healthCheckSlowThreshold',
   'enabled',
 ] as const;
-const ANY_SCOPE_TOOL_REQUIREMENTS: Record<string, string[]> = {
-  find_resource: [
-    'feat:ai:use',
-    'nodes:details',
-    'proxy:view',
-    'proxy:templates:view',
-    'ssl:cert:view',
-    'domains:view',
-    'acl:view',
-    'pki:ca:view:root',
-    'pki:ca:view:intermediate',
-    'pki:cert:view',
-    'pki:templates:view',
-    'docker:containers:view',
-    'docker:images:view',
-    'docker:volumes:view',
-    'docker:networks:view',
-    'docker:registries:view',
-    'databases:view',
-    'logs:environments:view',
-    'logs:schemas:view',
-    'status-page:view',
-    'notifications:view',
-  ],
-  list_cas: ['pki:ca:view:root', 'pki:ca:view:intermediate'],
-  get_ca: ['pki:ca:view:root', 'pki:ca:view:intermediate'],
-  delete_ca: ['pki:ca:revoke:root', 'pki:ca:revoke:intermediate'],
-  manage_ca: ['pki:ca:create:root', 'pki:ca:create:intermediate'],
-  manage_certificate: ['pki:cert:view', 'pki:cert:issue', 'pki:cert:export'],
-  manage_template: ['pki:templates:view', 'pki:templates:edit'],
-  manage_proxy_template: [
-    'proxy:templates:view',
-    'proxy:templates:create',
-    'proxy:templates:edit',
-    'proxy:templates:delete',
-  ],
-  manage_ssl_certificate: ['ssl:cert:view', 'ssl:cert:issue', 'ssl:cert:delete'],
-  manage_domain: ['domains:view', 'domains:edit'],
-  manage_access_list: ['acl:view', 'acl:edit'],
-  manage_docker_registry: [
-    'docker:registries:view',
-    'docker:registries:create',
-    'docker:registries:edit',
-    'docker:registries:delete',
-  ],
-  manage_docker_volume: ['docker:volumes:create', 'docker:volumes:delete'],
-  manage_docker_network: ['docker:networks:create', 'docker:networks:edit', 'docker:networks:delete'],
-  manage_docker_container_config: [
-    'docker:containers:view',
-    'docker:containers:environment',
-    'docker:containers:files',
-    'docker:containers:secrets',
-    'docker:containers:webhooks',
-    'docker:containers:config',
-    'docker:containers:edit',
-  ],
-  manage_database_connection: [
-    'databases:view',
-    'databases:create',
-    'databases:edit',
-    'databases:delete',
-    'databases:credentials:reveal',
-  ],
-  manage_postgres_data: ['databases:query:read', 'databases:query:write'],
-  manage_redis_data: ['databases:query:read', 'databases:query:write', 'databases:query:admin'],
-  manage_logging: [
-    'logs:environments:view',
-    'logs:environments:create',
-    'logs:environments:edit',
-    'logs:environments:delete',
-    'logs:tokens:view',
-    'logs:tokens:create',
-    'logs:tokens:delete',
-    'logs:schemas:view',
-    'logs:schemas:create',
-    'logs:schemas:edit',
-    'logs:schemas:delete',
-    'logs:read',
-    'logs:manage',
-  ],
-  manage_status_page: [
-    'status-page:view',
-    'status-page:manage',
-    'status-page:incidents:create',
-    'status-page:incidents:update',
-    'status-page:incidents:resolve',
-    'status-page:incidents:delete',
-  ],
-  list_resource_folders: [...FOLDER_TOOL_REQUIREMENT_SCOPES],
-  manage_resource_folder: [...FOLDER_TOOL_REQUIREMENT_SCOPES],
-  manage_node_config: ['nodes:config:view', 'nodes:config:edit'],
-  manage_node_file: ['nodes:files:read', 'nodes:files:write'],
-};
 
 function caTypeViewScope(type: string): 'pki:ca:view:root' | 'pki:ca:view:intermediate' {
   return type === 'root' ? 'pki:ca:view:root' : 'pki:ca:view:intermediate';
@@ -187,28 +98,18 @@ function redactToolArgs(value: unknown, depth = 0): unknown {
   return redacted;
 }
 
-function getToolResourceId(args: Record<string, unknown>): string {
-  return String(
-    args.caId ||
-      args.parentCaId ||
-      args.certificateId ||
-      args.proxyHostId ||
-      args.domainId ||
-      args.accessListId ||
-      args.templateId ||
-      args.userId ||
-      args.nodeId ||
-      args.containerId ||
-      args.deploymentId ||
-      args.databaseId ||
-      args.ruleId ||
-      args.webhookId ||
-      ''
-  );
+function getToolResourceId(
+  tool: Pick<AIToolDefinition, 'targetIdentity'> | undefined,
+  args: Record<string, unknown>
+): string {
+  return getAIToolResourceId(tool, args);
 }
 
-function getToolAuthorizationResourceId(_toolName: string, args: Record<string, unknown>): string {
-  return getToolResourceId(args);
+function getToolAuthorizationResourceId(
+  tool: Pick<AIToolDefinition, 'targetIdentity'> | string | undefined,
+  args: Record<string, unknown>
+): string {
+  return getToolResourceId(typeof tool === 'string' ? undefined : tool, args);
 }
 
 function isMutatingTool(toolDef: { destructive: boolean; invalidateStores: string[] }): boolean {
@@ -219,9 +120,11 @@ function hasToolExecutionScope(
   scopes: string[],
   toolName: string,
   requiredScope: string | undefined,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  tool?: Pick<AIToolDefinition, 'targetIdentity' | 'requiredScopes'>
 ): boolean {
   if (!requiredScope) return false;
+  if (tool?.requiredScopes && !tool.requiredScopes.every((scope) => hasScopeBase(scopes, scope))) return false;
   if (
     requiredScope.startsWith('docker:containers:') &&
     requiredScope !== 'docker:containers:create' &&
@@ -236,13 +139,13 @@ function hasToolExecutionScope(
     return scopes.includes(requiredScope) || scopes.some((scope) => scope.startsWith(`${requiredScope}:`));
   }
   if (DIRECT_RAW_READ_TOOLS.has(toolName)) {
-    const resourceId = getToolAuthorizationResourceId(toolName, args);
+    const resourceId = getToolAuthorizationResourceId(tool, args);
     if (scopes.includes(requiredScope)) return true;
     return resourceId
       ? scopes.includes(`${requiredScope}:${resourceId}`)
       : scopes.some((scope) => scope.startsWith(`${requiredScope}:`));
   }
-  const resourceId = getToolAuthorizationResourceId(toolName, args);
+  const resourceId = getToolAuthorizationResourceId(tool, args);
   return resourceId ? hasScopeForResource(scopes, requiredScope, resourceId) : hasScopeBase(scopes, requiredScope);
 }
 
@@ -528,36 +431,6 @@ function dockerNetworkMatchesSearch(network: Record<string, any>, search: unknow
   );
 }
 
-function trimToTokenBudget(messages: Record<string, unknown>[], maxTokens: number): Record<string, unknown>[] {
-  const total = estimateMessagesTokens(messages);
-  if (total <= maxTokens) return messages;
-
-  const system = messages[0];
-  const systemTokens = estimateMessagesTokens([system]);
-  const budgetForConversation = maxTokens - systemTokens;
-
-  const kept: Record<string, unknown>[] = [];
-  let usedTokens = 0;
-
-  for (let i = messages.length - 1; i >= 1; i--) {
-    const msgTokens = estimateMessagesTokens([messages[i]]);
-    if (usedTokens + msgTokens > budgetForConversation) break;
-    kept.unshift(messages[i]);
-    usedTokens += msgTokens;
-  }
-
-  while (kept.length > 0 && kept[0].role === 'tool') {
-    kept.shift();
-  }
-
-  if (kept.length === 0) {
-    const lastUser = messages.filter((m) => m.role === 'user').pop();
-    if (lastUser) kept.push(lastUser);
-  }
-
-  return [system, ...kept];
-}
-
 export const aiServiceTestHelpers = {
   agentPage,
   agentPageLimit,
@@ -566,7 +439,6 @@ export const aiServiceTestHelpers = {
   getToolAuthorizationResourceId,
   hasRegistryHost,
   redactToolArgs,
-  trimToTokenBudget,
 };
 
 export {
@@ -598,5 +470,4 @@ export {
   PROXY_HOST_UPDATE_FIELDS,
   redactToolArgs,
   textMatchesSearch,
-  trimToTokenBudget,
 };

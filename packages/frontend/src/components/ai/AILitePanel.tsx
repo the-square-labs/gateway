@@ -28,7 +28,7 @@ import type {
   AIToolCall,
   PageContext,
 } from "@/types/ai";
-import { AIComposer } from "./AIComposer";
+import { AIComposer, AIComposerDisclaimer } from "./AIComposer";
 import { AIConversationBlockedBlock } from "./AIConversationBlockedBlock";
 import { AIMessageList } from "./AIMessageList";
 import { ApprovalBlock, QuestionBlock } from "./AIToolCallBlock";
@@ -123,7 +123,9 @@ function usePageContext(): PageContext {
 export function AILitePanel() {
   const {
     messages,
+    resourceReferences,
     isStreaming,
+    isStartingConversation,
     isConnected,
     isConnecting,
     connectionError,
@@ -131,9 +133,11 @@ export function AILitePanel() {
     savedName,
     activeConversationId,
     activeRunId,
+    canContinueConversation,
     isCompactingContext,
     recentConversations,
     sendMessage,
+    continueConversation,
     approveTool,
     rejectTool,
     answerQuestion,
@@ -174,14 +178,17 @@ export function AILitePanel() {
   const context = usePageContext();
   const approvalModeLabel = formatAIApprovalModeLabel(approvalMode);
   const conversationBlock = getConversationBlock(messages);
-  const isNewConversationDraft = messages.length === 0;
-  const currentConversationStreaming = !isNewConversationDraft && isStreaming;
+  const isNewConversationDraft = activeConversationId === null || messages.length === 0;
+  const currentConversationStreaming =
+    isStartingConversation || (!isNewConversationDraft && isStreaming);
   const currentConversation = activeConversationId
     ? recentConversations.find((conversation) => conversation.id === activeConversationId)
     : null;
-  const currentChatTitle = activeConversationId
-    ? (savedName ?? currentConversation?.title ?? "New chat")
-    : "New chat";
+  const currentChatTitle = isStartingConversation
+    ? "Starting chat..."
+    : activeConversationId
+      ? (savedName ?? currentConversation?.title ?? "New chat")
+      : "New chat";
   const isCurrentChatPinned = activeConversationId
     ? pinnedAIConversationIds.includes(activeConversationId)
     : false;
@@ -240,9 +247,10 @@ export function AILitePanel() {
   }, [providerStatus, selectedModel]);
 
   useEffect(() => {
-    const timer = setTimeout(() => textareaRef.current?.focus(), 150);
+    if (!isNewConversationDraft) return;
+    const timer = setTimeout(() => textareaRef.current?.focus(), 0);
     return () => clearTimeout(timer);
-  }, []);
+  }, [isNewConversationDraft]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: input changes must re-measure restored composer drafts.
   useLayoutEffect(() => {
@@ -477,8 +485,7 @@ export function AILitePanel() {
       const pendingApproval = msg.toolCalls.find(
         (tc): tc is AIToolCall =>
           tc.name !== "ask_question" &&
-          (tc.status === "awaiting_approval" ||
-            (tc.status === "running" && tc.approvalPolicy === "requires_approval"))
+          (tc.status === "awaiting_approval" || tc.approvalDecisionPending === true)
       );
       if (pendingApproval) return pendingApproval;
     }
@@ -494,7 +501,7 @@ export function AILitePanel() {
     <div className="flex h-full flex-col bg-background">
       <div className="flex h-[49px] shrink-0 items-center justify-between border-b border-border px-4">
         <span
-          className="min-w-0 flex-1 truncate pr-2 text-sm font-semibold"
+          className={`min-w-0 flex-1 truncate pr-2 text-sm font-semibold ${isStartingConversation ? "thinking-shimmer text-muted-foreground" : ""}`}
           title={currentChatTitle}
         >
           {currentChatTitle}
@@ -603,6 +610,8 @@ export function AILitePanel() {
             <div className="mx-auto w-full max-w-3xl space-y-4 px-4 pb-8">
               <AIMessageList
                 messages={messages}
+                resourceReferences={resourceReferences}
+                isStreaming={currentConversationStreaming}
                 assistantMaxWidthClass="max-w-[90%]"
                 onApprove={approveTool}
                 onReject={rejectTool}
@@ -629,8 +638,8 @@ export function AILitePanel() {
         </div>
       )}
 
-      {activeQuestion ? (
-        <div className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-4">
+      <div className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-4">
+        {activeQuestion ? (
           <div className="border border-border bg-background">
             {questionsTotal > 1 && (
               <div className="border-b border-border bg-muted/50 px-3 py-1 text-[11px] text-muted-foreground">
@@ -639,13 +648,9 @@ export function AILitePanel() {
             )}
             <QuestionBlock toolCall={activeQuestion} onAnswer={answerQuestion} />
           </div>
-        </div>
-      ) : activeApproval ? (
-        <div className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-4">
+        ) : activeApproval ? (
           <ApprovalBlock toolCall={activeApproval} onApprove={approveTool} onReject={rejectTool} />
-        </div>
-      ) : conversationBlock ? (
-        <div className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-4">
+        ) : conversationBlock ? (
           <div className="border border-border bg-background">
             <AIConversationBlockedBlock
               block={conversationBlock}
@@ -653,59 +658,61 @@ export function AILitePanel() {
               showTopBorder={false}
             />
           </div>
-        </div>
-      ) : (
-        <div className="relative mx-auto w-full max-w-3xl shrink-0 px-4 pb-4">
-          <AIComposer
-            textareaRef={textareaRef}
-            input={input}
-            onInputChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            onSend={() => void handleSend()}
-            onStop={stopStreaming}
-            onSlashCommandSelect={(command) => {
-              void handleSlashCommand(`/${command.name}`);
-              setInput("");
-              setAttachments([]);
-              setSlashResults([]);
-            }}
-            slashResults={slashResults}
-            slashIndex={slashIndex}
-            messages={messages}
-            context={context}
-            conversationId={activeConversationId}
-            isStreaming={currentConversationStreaming}
-            stopDisabled={isCompactingContext}
-            isConnected={isConnected}
-            retryAfter={retryAfter}
-            approvalMode={approvalMode}
-            approvalModeLabel={approvalModeLabel}
-            setApprovalMode={setApprovalMode}
-            modelOptions={
-              providerStatus?.allowUserModelSelection ? providerStatus.models : undefined
-            }
-            selectedModel={selectedModel}
-            onModelChange={setSelectedModel}
-            reasoningOptions={selectedProviderModel?.reasoningEfforts}
-            selectedReasoningEffort={selectedReasoningEffort}
-            onReasoningEffortChange={setSelectedReasoningEffort}
-            gatewayInferenceMode={providerStatus?.providerType === "gateway_inference"}
-            attachments={attachments}
-            canAttachImages={canAttachImages}
-            uploadingAttachments={uploadingAttachments}
-            onAttachFiles={handleAttachFiles}
-            onRemoveAttachment={(artifactId) =>
-              setAttachments(
-                attachments.filter(
-                  (attachment) => getComposerAttachmentId(attachment) !== artifactId
+        ) : (
+          <div className="relative">
+            <AIComposer
+              textareaRef={textareaRef}
+              input={input}
+              onInputChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              onSend={() => void handleSend()}
+              onContinue={() => continueConversation(context)}
+              onStop={stopStreaming}
+              onSlashCommandSelect={(command) => {
+                void handleSlashCommand(`/${command.name}`);
+                setInput("");
+                setAttachments([]);
+                setSlashResults([]);
+              }}
+              slashResults={slashResults}
+              slashIndex={slashIndex}
+              messages={messages}
+              context={context}
+              conversationId={activeConversationId}
+              isStreaming={currentConversationStreaming}
+              canContinue={canContinueConversation}
+              stopDisabled={isCompactingContext || isStartingConversation}
+              isConnected={isConnected}
+              retryAfter={retryAfter}
+              approvalMode={approvalMode}
+              approvalModeLabel={approvalModeLabel}
+              setApprovalMode={setApprovalMode}
+              modelOptions={
+                providerStatus?.allowUserModelSelection ? providerStatus.models : undefined
+              }
+              selectedModel={selectedModel}
+              onModelChange={setSelectedModel}
+              reasoningOptions={selectedProviderModel?.reasoningEfforts}
+              selectedReasoningEffort={selectedReasoningEffort}
+              onReasoningEffortChange={setSelectedReasoningEffort}
+              gatewayInferenceMode={providerStatus?.providerType === "gateway_inference"}
+              attachments={attachments}
+              canAttachImages={canAttachImages}
+              uploadingAttachments={uploadingAttachments}
+              onAttachFiles={handleAttachFiles}
+              onRemoveAttachment={(artifactId) =>
+                setAttachments(
+                  attachments.filter(
+                    (attachment) => getComposerAttachmentId(attachment) !== artifactId
+                  )
                 )
-              )
-            }
-            onPreviewAttachment={previewAttachment}
-            showDisclaimer
-          />
-        </div>
-      )}
+              }
+              onPreviewAttachment={previewAttachment}
+            />
+          </div>
+        )}
+        <AIComposerDisclaimer />
+      </div>
       <GitLabAuthorizationModal />
     </div>
   );

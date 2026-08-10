@@ -27,6 +27,7 @@ import type {
   AICredentialChallenge,
   AIMessage,
   AIProviderStatus,
+  AIResourceReference,
   AIRunToolCall,
   AIToolCall,
   ChatMessage,
@@ -174,8 +175,6 @@ function nowIso(): string {
 
 function compactToolResultForModel(toolName: string, value: unknown): unknown {
   if (value == null) return value;
-  if (toolName === "get_docker_container_logs")
-    return compactLogLikeResult(value, "Docker container logs");
   if (toolName === "send_artifact" && typeof value === "object" && value !== null) {
     const { artifactId, filename, mediaType, sizeBytes, sourcePath, downloadUrl } = value as Record<
       string,
@@ -183,65 +182,7 @@ function compactToolResultForModel(toolName: string, value: unknown): unknown {
     >;
     return { artifactId, filename, mediaType, sizeBytes, sourcePath, downloadUrl };
   }
-  if (
-    (toolName === "fetch" || toolName === "read_artifact") &&
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { content?: unknown }).content === "string" &&
-    (value as { content: string }).content.length > 4000
-  ) {
-    const content = (value as { content: string }).content;
-    return {
-      ...(value as Record<string, unknown>),
-      content: undefined,
-      contentPreview: content.slice(0, 2000),
-      contentOmitted: true,
-    };
-  }
-  if (
-    toolName === "manage_logging" &&
-    typeof value === "object" &&
-    value !== null &&
-    Array.isArray((value as { rows?: unknown }).rows)
-  ) {
-    return compactLogLikeResult(
-      (value as { rows: unknown[] }).rows,
-      "Structured log search results"
-    );
-  }
-  if (typeof value === "string" && value.length > 4000) {
-    return compactLogText(value, "Large text tool output");
-  }
-  if (Array.isArray(value) && value.length > 25) {
-    return {
-      summary: `Large array tool output omitted from model context (${value.length} items).`,
-      count: value.length,
-      sample: [...value.slice(0, 5), ...value.slice(-5)],
-      fullOutputOmitted: true,
-    };
-  }
   return value;
-}
-
-function compactLogLikeResult(value: unknown, label: string): unknown {
-  if (typeof value === "string") return compactLogText(value, label);
-  if (!Array.isArray(value)) return value;
-  return {
-    summary: `${label} omitted from model context (${value.length} entries).`,
-    count: value.length,
-    sample: [...value.slice(0, 3), ...value.slice(-5)],
-    fullOutputOmitted: true,
-  };
-}
-
-function compactLogText(value: string, label: string): unknown {
-  const lines = value.split(/\r?\n/).filter(Boolean);
-  return {
-    summary: `${label} omitted from model context (${lines.length} lines, ${value.length} chars).`,
-    lineCount: lines.length,
-    sample: [...lines.slice(0, 3), ...lines.slice(-5)],
-    fullOutputOmitted: true,
-  };
 }
 
 function invalidateStore(storeName: string): void {
@@ -328,11 +269,13 @@ function invalidateStore(storeName: string): void {
 
 interface AIState {
   messages: AIMessage[];
+  resourceReferences: AIResourceReference[];
   recentConversations: AIConversationSummary[];
   conversationFolders: AIConversationFolder[];
   isLoadingRecentConversations: boolean;
   isLoadingConversationFolders: boolean;
   isStreaming: boolean;
+  isStartingConversation: boolean;
   isConnected: boolean;
   isConnecting: boolean;
   connectionError: string | null;
@@ -342,6 +285,7 @@ interface AIState {
   activeConversationId: string | null;
   sidebarActiveConversationId: string | null;
   activeRunId: string | null;
+  canContinueConversation: boolean;
   isCompactingContext: boolean;
   lastContext: PageContext | null;
   pendingApprovalToolCallId: string | null;
@@ -360,6 +304,7 @@ interface AIState {
     attachments?: AIMessage["attachments"],
     options?: SendMessageOptions
   ) => void;
+  continueConversation: (context?: PageContext) => void;
   approveTool: (toolCallId: string) => void;
   rejectTool: (toolCallId: string) => void;
   answerQuestion: (toolCallId: string, answer: string) => void;
@@ -403,6 +348,7 @@ const pendingToolCommands = new Map<
     previousStatus: AIToolCall["status"];
     previousResult?: unknown;
     decision: "approval" | "question";
+    approvalDecision?: "approved" | "rejected";
   }
 >();
 
@@ -411,6 +357,8 @@ declare global {
     gatewayDev?: {
       showApprovalBlock?: () => void;
       hideApprovalBlock?: () => void;
+      showChangedResources?: () => void;
+      hideChangedResources?: () => void;
       [key: string]: unknown;
     };
   }
@@ -441,6 +389,22 @@ function appendLocalAssistantError(messages: AIMessage[], content: string): AIMe
   ];
 }
 
+function startingAssistantMessageId(clientCommandId: string): string {
+  return `starting:${clientCommandId}:assistant`;
+}
+
+function removeStartingAssistantMessage(
+  messages: AIMessage[],
+  clientCommandId?: string
+): AIMessage[] {
+  const exactId = clientCommandId ? startingAssistantMessageId(clientCommandId) : null;
+  return messages.filter(
+    (message) =>
+      message.id !== exactId &&
+      !(exactId === null && message.id.startsWith("starting:") && message.id.endsWith(":assistant"))
+  );
+}
+
 function sendWSMessage(msg: Parameters<AIWebSocketClient["send"]>[0]): void {
   if (!wsClient) throw new Error("AI connection is not open");
   wsClient.send(msg);
@@ -455,6 +419,15 @@ function trySendWSMessage(msg: Parameters<AIWebSocketClient["send"]>[0]): boolea
   }
 }
 const assistantDraftVersions = new Map<string, number>();
+const appliedConversationRevisions = new Map<string, number>();
+
+function acceptConversationRevision(conversationId: string, revision: number | undefined): boolean {
+  if (typeof revision !== "number") return true;
+  const appliedRevision = appliedConversationRevisions.get(conversationId);
+  if (appliedRevision !== undefined && revision < appliedRevision) return false;
+  appliedConversationRevisions.set(conversationId, revision);
+  return true;
+}
 
 export interface AIConversationBlock {
   status: Exclude<AIConversationStatus, "active">;
@@ -478,6 +451,14 @@ export function getConversationBlock(messages: AIMessage[]): AIConversationBlock
 function activeModelMessages(messages: AIMessage[]): AIMessage[] {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     if (messages[i].compactMarker) {
+      if (messages[i].compactVersion === 2 && messages[i].compactBoundaryMessageId) {
+        const boundaryIndex = messages.findIndex(
+          (message) => message.id === messages[i].compactBoundaryMessageId
+        );
+        if (boundaryIndex >= 0 && boundaryIndex < i) {
+          return [messages[i], ...messages.slice(boundaryIndex + 1, i), ...messages.slice(i + 1)];
+        }
+      }
       const tailCount = Math.max(0, Math.trunc(messages[i].compactTailMessageCount ?? 0));
       const tailStart = Math.max(0, i - tailCount);
       return [messages[i], ...messages.slice(tailStart, i), ...messages.slice(i + 1)];
@@ -716,11 +697,13 @@ export async function getAIContextUsage(
 
 export const useAIStore = create<AIState>()((set, get) => ({
   messages: [],
+  resourceReferences: [],
   recentConversations: [],
   conversationFolders: [],
   isLoadingRecentConversations: false,
   isLoadingConversationFolders: false,
   isStreaming: false,
+  isStartingConversation: false,
   isConnected: false,
   isConnecting: false,
   connectionError: null,
@@ -730,6 +713,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
   activeConversationId: null,
   sidebarActiveConversationId: null,
   activeRunId: null,
+  canContinueConversation: false,
   isCompactingContext: false,
   lastContext: null,
   pendingApprovalToolCallId: null,
@@ -779,7 +763,14 @@ export const useAIStore = create<AIState>()((set, get) => ({
       if (connected && activeConversationId) {
         trySendWSMessage({ type: "conversation.subscribe", conversationId: activeConversationId });
       }
-      if (!connected) set({ isStreaming: false, isCompactingContext: false });
+      if (!connected) {
+        set((state) => ({
+          isStreaming: false,
+          isStartingConversation: false,
+          isCompactingContext: false,
+          messages: removeStartingAssistantMessage(state.messages),
+        }));
+      }
     });
     wsClient.onConnectionError((message) => {
       set({ connectionError: message, isConnecting: false });
@@ -801,13 +792,15 @@ export const useAIStore = create<AIState>()((set, get) => ({
   disconnect: () => {
     wsClient?.disconnect();
     wsClient = null;
-    set({
+    set((state) => ({
       isConnected: false,
       isConnecting: false,
       connectionError: null,
       isStreaming: false,
+      isStartingConversation: false,
       isCompactingContext: false,
-    });
+      messages: removeStartingAssistantMessage(state.messages),
+    }));
   },
 
   sendMessage: (
@@ -827,16 +820,36 @@ export const useAIStore = create<AIState>()((set, get) => ({
       });
     }
     if (options.startNewConversation) conversationLoadGeneration += 1;
+    const clientCommandId = generateId();
 
     set({
       isStreaming: true,
+      canContinueConversation: false,
+      isStartingConversation: options.startNewConversation === true,
       isCompactingContext: false,
       lastContext: context ?? null,
       pendingApprovalToolCallId: null,
       pendingCredentialChallenge: null,
       ...(options.startNewConversation
         ? {
-            messages: [],
+            messages: [
+              {
+                id: `starting:${clientCommandId}:user`,
+                role: "user",
+                content,
+                attachments,
+                createdAt: nowIso(),
+                localOnly: true,
+              },
+              {
+                id: startingAssistantMessageId(clientCommandId),
+                role: "assistant",
+                content: "",
+                createdAt: nowIso(),
+                isStreaming: true,
+              },
+            ],
+            resourceReferences: [],
             savedName: null,
             activeConversationId: null,
             sidebarActiveConversationId: null,
@@ -846,7 +859,6 @@ export const useAIStore = create<AIState>()((set, get) => ({
         : {}),
     });
 
-    const clientCommandId = generateId();
     try {
       sendWSMessage({
         type: "conversation.send_message",
@@ -868,10 +880,57 @@ export const useAIStore = create<AIState>()((set, get) => ({
     } catch (error) {
       set((state) => ({
         isStreaming: false,
+        isStartingConversation: false,
         isCompactingContext: false,
         messages: appendLocalAssistantError(
-          state.messages,
+          removeStartingAssistantMessage(state.messages, clientCommandId),
           `**Error:** ${error instanceof Error ? error.message : "Failed to send message"}`
+        ),
+      }));
+    }
+  },
+
+  continueConversation: (context?: PageContext) => {
+    const state = get();
+    if (
+      !state.activeConversationId ||
+      state.isStreaming ||
+      state.isCompactingContext ||
+      !state.canContinueConversation ||
+      getConversationBlock(state.messages)
+    ) {
+      return;
+    }
+    const clientCommandId = generateId();
+    set({
+      isStreaming: true,
+      canContinueConversation: false,
+      activeRunId: null,
+      lastContext: context ?? state.lastContext,
+      pendingApprovalToolCallId: null,
+      pendingCredentialChallenge: null,
+    });
+    try {
+      sendWSMessage({
+        type: "conversation.continue",
+        conversationId: state.activeConversationId,
+        clientCommandId,
+        context: context ?? state.lastContext ?? undefined,
+        ...(state.providerStatus?.providerType === "gateway_inference" && state.selectedModel
+          ? { model: state.selectedModel }
+          : {}),
+        ...(state.providerStatus?.providerType === "gateway_inference" &&
+        state.selectedReasoningEffort
+          ? { reasoningEffort: state.selectedReasoningEffort }
+          : {}),
+      });
+    } catch (error) {
+      set((current) => ({
+        isStreaming: false,
+        canContinueConversation: true,
+        messages: appendLocalAssistantError(
+          current.messages,
+          `**Error:** ${error instanceof Error ? error.message : "Failed to continue conversation"}`
         ),
       }));
     }
@@ -890,6 +949,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
         ...tc,
         status: "running",
         approvalPolicy: "requires_approval",
+        approvalDecisionPending: true,
         error: undefined,
       })),
     }));
@@ -898,6 +958,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
       previousStatus: previous?.status ?? "awaiting_approval",
       previousResult: previous?.result,
       decision: "approval",
+      approvalDecision: "approved",
     });
     try {
       sendWSMessage({
@@ -914,6 +975,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
         messages: updateToolCallById(state.messages, toolCallId, (tc) => ({
           ...tc,
           status: "awaiting_approval",
+          approvalDecisionPending: false,
           result: previous?.result,
           error: error instanceof Error ? error.message : "Failed to send approval",
         })),
@@ -933,6 +995,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
       messages: updateToolCallById(state.messages, toolCallId, (tc) => ({
         ...tc,
         status: "rejected",
+        approvalDecisionPending: true,
         error: undefined,
       })),
     }));
@@ -941,6 +1004,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
       previousStatus: previous?.status ?? "awaiting_approval",
       previousResult: previous?.result,
       decision: "approval",
+      approvalDecision: "rejected",
     });
     try {
       sendWSMessage({
@@ -957,6 +1021,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
         messages: updateToolCallById(state.messages, toolCallId, (tc) => ({
           ...tc,
           status: "awaiting_approval",
+          approvalDecisionPending: false,
           result: previous?.result,
           error: error instanceof Error ? error.message : "Failed to send rejection",
         })),
@@ -1052,10 +1117,13 @@ export const useAIStore = create<AIState>()((set, get) => ({
     const draftSelection = resolveDraftProviderSelection(get().providerStatus);
     set({
       messages: [],
+      resourceReferences: [],
       savedName: null,
       activeConversationId: null,
       sidebarActiveConversationId: null,
       activeRunId: null,
+      canContinueConversation: false,
+      isStartingConversation: false,
       isCompactingContext: false,
       lastContext: null,
       contextUsageDialog: null,
@@ -1192,10 +1260,13 @@ export const useAIStore = create<AIState>()((set, get) => ({
       }
       set({
         messages: [],
+        resourceReferences: [],
         savedName: null,
         activeConversationId: conversationId,
         sidebarActiveConversationId: conversationId,
         activeRunId: null,
+        canContinueConversation: false,
+        isStartingConversation: false,
         isCompactingContext: false,
         lastContext: null,
         pendingApprovalToolCallId: null,
@@ -1214,6 +1285,8 @@ export const useAIStore = create<AIState>()((set, get) => ({
         activeConversationId: conversation.id,
         sidebarActiveConversationId: conversation.id,
         activeRunId: null,
+        canContinueConversation: false,
+        isStartingConversation: false,
         isCompactingContext: false,
         lastContext: conversation.lastContext,
         selectedModel: conversation.model ?? get().selectedModel,
@@ -1237,6 +1310,8 @@ export const useAIStore = create<AIState>()((set, get) => ({
         activeConversationId: null,
         sidebarActiveConversationId: null,
         activeRunId: null,
+        canContinueConversation: false,
+        isStartingConversation: false,
         isCompactingContext: false,
         lastContext: null,
         pendingApprovalToolCallId: null,
@@ -1258,10 +1333,13 @@ export const useAIStore = create<AIState>()((set, get) => ({
         ...(state.activeConversationId === conversationId
           ? {
               messages: [],
+              resourceReferences: [],
               savedName: null,
               activeConversationId: null,
               sidebarActiveConversationId: null,
               activeRunId: null,
+              canContinueConversation: false,
+              isStartingConversation: false,
               isCompactingContext: false,
               lastContext: null,
               ...resolveDraftProviderSelection(state.providerStatus),
@@ -1335,6 +1413,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
       pendingApprovalToolCallId: null,
       pendingCredentialChallenge: null,
       isStreaming: false,
+      isStartingConversation: false,
       recentConversations: sortConversationSummaries(
         state.recentConversations.map((item) =>
           item.id === result.conversation.id
@@ -1517,10 +1596,12 @@ export const useAIStore = create<AIState>()((set, get) => ({
       const draftSelection = resolveDraftProviderSelection(get().providerStatus);
       set({
         messages: [],
+        resourceReferences: [],
         savedName: null,
         activeConversationId: null,
         sidebarActiveConversationId: null,
         activeRunId: null,
+        isStartingConversation: false,
         isCompactingContext: false,
         lastContext: null,
         contextUsageDialog: null,
@@ -1610,14 +1691,17 @@ export function resetAIStateForAuthChange() {
   wsClient = null;
   conversationLoadGeneration += 1;
   assistantDraftVersions.clear();
+  appliedConversationRevisions.clear();
   pendingToolCommands.clear();
   useAIStore.setState({
     messages: [],
+    resourceReferences: [],
     recentConversations: [],
     conversationFolders: [],
     isLoadingRecentConversations: false,
     isLoadingConversationFolders: false,
     isStreaming: false,
+    isStartingConversation: false,
     isConnected: false,
     isConnecting: false,
     connectionError: null,
@@ -1626,6 +1710,7 @@ export function resetAIStateForAuthChange() {
     activeConversationId: null,
     sidebarActiveConversationId: null,
     activeRunId: null,
+    canContinueConversation: false,
     isCompactingContext: false,
     lastContext: null,
     pendingApprovalToolCallId: null,
@@ -1644,7 +1729,25 @@ function handleWSMessage(
 ) {
   switch (msg.type) {
     case "command.ack":
-      if (msg.clientCommandId) pendingToolCommands.delete(msg.clientCommandId);
+      {
+        const pending = msg.clientCommandId
+          ? pendingToolCommands.get(msg.clientCommandId)
+          : undefined;
+        if (msg.clientCommandId) pendingToolCommands.delete(msg.clientCommandId);
+        if (pending?.decision === "approval") {
+          set((state) => ({
+            messages: updateToolCallById(state.messages, pending.toolCallId, (tc) => ({
+              ...tc,
+              approvalDecisionPending: false,
+              status: pending.approvalDecision === "rejected" ? "rejected" : "running",
+            })),
+            pendingApprovalToolCallId:
+              state.pendingApprovalToolCallId === pending.toolCallId
+                ? null
+                : state.pendingApprovalToolCallId,
+          }));
+        }
+      }
       set((state) => {
         const selectsConversation = msg.commandType === "conversation.send_message";
         const matchesCurrentConversation =
@@ -1676,6 +1779,7 @@ function handleWSMessage(
             messages: updateToolCallById(state.messages, pending.toolCallId, (tc) => ({
               ...tc,
               status: pending.previousStatus,
+              approvalDecisionPending: false,
               result: pending.previousResult,
               error: msg.message,
             })),
@@ -1686,12 +1790,19 @@ function handleWSMessage(
       }
       set((state) => ({
         isStreaming: false,
+        isStartingConversation: false,
         isCompactingContext: false,
-        messages: appendLocalAssistantError(state.messages, `**Error:** ${msg.message}`),
+        messages: appendLocalAssistantError(
+          removeStartingAssistantMessage(state.messages, msg.clientCommandId),
+          `**Error:** ${msg.message}`
+        ),
+        ...(msg.commandType === "conversation.continue" ? { canContinueConversation: true } : {}),
       }));
       break;
 
-    case "conversation.snapshot":
+    case "conversation.snapshot": {
+      const revision = typeof msg.snapshot.revision === "number" ? msg.snapshot.revision : null;
+      if (!acceptConversationRevision(msg.conversationId, revision ?? undefined)) return;
       set((state) => ({
         recentConversations: patchRecentConversationFromSnapshot(
           state.recentConversations,
@@ -1699,10 +1810,16 @@ function handleWSMessage(
         ),
       }));
       if (get().activeConversationId !== msg.conversationId) return;
-      set((state) =>
-        projectConversationSnapshot(msg.snapshot, state.messages, state.pendingCredentialChallenge)
-      );
+      set((state) => ({
+        ...projectConversationSnapshot(
+          msg.snapshot,
+          state.messages,
+          state.pendingCredentialChallenge
+        ),
+        isStartingConversation: false,
+      }));
       break;
+    }
 
     case "client.action":
       if (get().activeConversationId !== msg.conversationId) return;
@@ -1715,6 +1832,7 @@ function handleWSMessage(
       set((state) => ({
         activeRunId: msg.runId,
         isStreaming: true,
+        isStartingConversation: false,
         isCompactingContext: false,
         messages: applyAssistantDeltaToMessages(state.messages, msg),
         recentConversations: patchRecentConversationRunStatus(
@@ -1750,6 +1868,7 @@ function handleWSMessage(
       break;
 
     case "credential.required":
+      if (!acceptConversationRevision(msg.conversationId, msg.revision)) return;
       if (get().activeConversationId !== msg.conversationId) return;
       set((state) => ({
         activeRunId: msg.runId,
@@ -1765,6 +1884,7 @@ function handleWSMessage(
       break;
 
     case "run.status_changed":
+      if (!acceptConversationRevision(msg.conversationId, msg.revision)) return;
       set((state) => ({
         recentConversations: patchRecentConversationRunStatus(
           state.recentConversations,
@@ -1784,10 +1904,12 @@ function handleWSMessage(
       break;
 
     case "stores.invalidated":
+      if (!acceptConversationRevision(msg.conversationId, msg.revision)) return;
       for (const storeName of msg.stores) invalidateStore(storeName);
       break;
 
     case "question.answered":
+      if (!acceptConversationRevision(msg.conversationId, msg.revision)) return;
       if (get().activeConversationId !== msg.conversationId) return;
       set((state) => ({
         activeRunId: msg.runId,
@@ -1806,6 +1928,7 @@ function handleWSMessage(
       break;
 
     case "credential.updated":
+      if (!acceptConversationRevision(msg.conversationId, msg.revision)) return;
       if (get().activeConversationId !== msg.conversationId) return;
       set((state) => ({
         activeRunId: msg.runId,
@@ -1818,6 +1941,23 @@ function handleWSMessage(
       break;
 
     case "approval.updated":
+      if (!acceptConversationRevision(msg.conversationId, msg.revision)) return;
+      for (const [clientCommandId, pending] of pendingToolCommands) {
+        if (pending.toolCallId === msg.approval.toolCallId) {
+          pendingToolCommands.delete(clientCommandId);
+        }
+      }
+      if (get().activeConversationId !== msg.conversationId) return;
+      set((state) => ({
+        activeRunId: msg.runId,
+        messages: updateToolCallById(state.messages, msg.approval.toolCallId, () =>
+          runtimeToolCallToUI(msg.approval)
+        ),
+        pendingApprovalToolCallId:
+          state.pendingApprovalToolCallId === msg.approval.toolCallId
+            ? null
+            : state.pendingApprovalToolCallId,
+      }));
       break;
   }
 }
@@ -1846,14 +1986,19 @@ function projectConversationSnapshot(
   if (activeRunId && typeof snapshotDraftVersion === "number" && !snapshotDraftIsStale) {
     assistantDraftVersions.set(activeRunId, snapshotDraftVersion);
   }
-  const runtimeToolCalls = snapshot.runtime.toolCalls.map(runtimeToolCallToUI);
+  const runtimeToolCalls = snapshot.runtime.toolCalls
+    .filter((toolCall) => toolCall.toolName !== "send_comment")
+    .map(runtimeToolCallToUI);
+  const runtimeToolCallsById = new Map(runtimeToolCalls.map((toolCall) => [toolCall.id, toolCall]));
   const pendingQuestions =
     snapshot.runtime.pendingQuestions.length > 0
       ? snapshot.runtime.pendingQuestions
       : snapshot.runtime.pendingQuestion
         ? [snapshot.runtime.pendingQuestion]
         : [];
-  const pendingQuestionToolCalls = pendingQuestions.map(pendingQuestionToToolCall);
+  const pendingQuestionToolCalls = pendingQuestions.map((question) =>
+    pendingQuestionToToolCall(question, runtimeToolCallsById.get(question.toolCallId))
+  );
   const attachedMessages = preserveFreshRuntimeDraft(
     attachRuntimeToolCallsToMessages(
       normalizeSnapshotMessages(snapshot),
@@ -1873,10 +2018,12 @@ function projectConversationSnapshot(
 
   return {
     messages,
+    resourceReferences: snapshot.resourceReferences ?? [],
     savedName: snapshot.conversation.title,
     activeConversationId: snapshot.conversation.id,
     sidebarActiveConversationId: snapshot.conversation.id,
     activeRunId: snapshot.runtime.activeRun?.id ?? null,
+    canContinueConversation: snapshot.runtime.canContinue === true,
     isCompactingContext: Boolean(
       snapshot.runtime.activeRun &&
         snapshot.runtime.activeRun.activeMessageId === null &&
@@ -1894,6 +2041,7 @@ function projectConversationSnapshot(
     pendingCredentialChallenge,
     isStreaming:
       Boolean(pendingCredentialChallenge) || isActiveRunStatus(snapshot.runtime.activeRun?.status),
+    isStartingConversation: false,
   };
 }
 
@@ -2118,7 +2266,46 @@ function normalizeConversationMessage(
     toolCalls: Array.isArray(message.toolCalls)
       ? normalizeMessageToolCalls(message.toolCalls, id)
       : undefined,
+    resourceReferences: Array.isArray(message.resourceReferences)
+      ? (message.resourceReferences as AIResourceReference[])
+      : undefined,
+    changedResourceReferences: Array.isArray(message.changedResourceReferences)
+      ? (message.changedResourceReferences as AIResourceReference[])
+      : undefined,
     compactMarker: message.compactMarker === true,
+    compactVersion:
+      typeof message.compactVersion === "number" && Number.isFinite(message.compactVersion)
+        ? Math.max(1, Math.trunc(message.compactVersion))
+        : undefined,
+    compactEpoch:
+      typeof message.compactEpoch === "number" && Number.isFinite(message.compactEpoch)
+        ? Math.max(0, Math.trunc(message.compactEpoch))
+        : undefined,
+    compactBoundaryMessageId:
+      typeof message.compactBoundaryMessageId === "string"
+        ? message.compactBoundaryMessageId
+        : undefined,
+    compactedMessageCount:
+      typeof message.compactedMessageCount === "number" &&
+      Number.isFinite(message.compactedMessageCount)
+        ? Math.max(0, Math.trunc(message.compactedMessageCount))
+        : undefined,
+    sourceTokenEstimate:
+      typeof message.sourceTokenEstimate === "number" &&
+      Number.isFinite(message.sourceTokenEstimate)
+        ? Math.max(0, Math.trunc(message.sourceTokenEstimate))
+        : undefined,
+    resultTokenEstimate:
+      typeof message.resultTokenEstimate === "number" &&
+      Number.isFinite(message.resultTokenEstimate)
+        ? Math.max(0, Math.trunc(message.resultTokenEstimate))
+        : undefined,
+    compactTrigger:
+      message.compactTrigger === "automatic" || message.compactTrigger === "manual"
+        ? message.compactTrigger
+        : message.compactTrigger === "auto"
+          ? "automatic"
+          : undefined,
     compactTailMessageCount:
       typeof message.compactTailMessageCount === "number" &&
       Number.isFinite(message.compactTailMessageCount)
@@ -2179,7 +2366,9 @@ function applyConversationStatus(
 function normalizeMessageToolCalls(value: unknown[], messageId: string): AIToolCall[] {
   return value
     .map((toolCall, index) => normalizeMessageToolCall(toolCall, messageId, index))
-    .filter((toolCall): toolCall is AIToolCall => toolCall !== null);
+    .filter(
+      (toolCall): toolCall is AIToolCall => toolCall !== null && toolCall.name !== "send_comment"
+    );
 }
 
 function normalizeMessageToolCall(
@@ -2235,6 +2424,8 @@ function runtimeToolCallToUI(toolCall: AIRunToolCall): AIToolCall {
   return {
     id: toolCall.toolCallId,
     runId: toolCall.runId,
+    roundId: toolCall.roundId,
+    position: toolCall.position,
     name: toolCall.toolName,
     arguments: toolCall.toolArgs,
     status: runtimeToolStatusToUI(toolCall.status),
@@ -2246,11 +2437,15 @@ function runtimeToolCallToUI(toolCall: AIRunToolCall): AIToolCall {
 }
 
 function pendingQuestionToToolCall(
-  question: AIConversationRuntimeSnapshot["runtime"]["pendingQuestions"][number]
+  question: AIConversationRuntimeSnapshot["runtime"]["pendingQuestions"][number],
+  runtimeToolCall?: AIToolCall
 ): AIToolCall {
   return {
     id: question.toolCallId || question.id,
     name: "ask_question",
+    runId: runtimeToolCall?.runId,
+    roundId: runtimeToolCall?.roundId,
+    position: runtimeToolCall?.position,
     arguments: { question: question.question },
     status: "awaiting_approval",
     result: question.answer ? { answer: question.answer } : undefined,
@@ -2573,6 +2768,62 @@ function isActiveRunStatus(status: string | null | undefined): boolean {
 
 const DEV_APPROVAL_MESSAGE_ID = "dev-approval-preview-message";
 const DEV_APPROVAL_TOOL_CALL_ID = "dev-approval-preview-tool";
+const DEV_CHANGED_RESOURCES_MESSAGE_ID = "dev-changed-resources-preview-message";
+
+function installAIResourcePreviewCommands(): void {
+  if (typeof window === "undefined") return;
+
+  window.gatewayDev = {
+    ...(window.gatewayDev ?? {}),
+    showChangedResources: () => {
+      useUIStore.setState({ aiPanelOpen: true });
+      useAIStore.setState((state) => ({
+        messages: [
+          ...state.messages.filter((message) => message.id !== DEV_CHANGED_RESOURCES_MESSAGE_ID),
+          {
+            id: DEV_CHANGED_RESOURCES_MESSAGE_ID,
+            role: "assistant",
+            content: "",
+            createdAt: nowIso(),
+            changedResourceReferences: [
+              {
+                refId: "gwr_000000000000000000000001",
+                type: "node",
+                resourceId: "dev-preview-node",
+                label: "docker-src",
+                relation: "updated",
+                slug: "docker-src",
+              },
+              {
+                refId: "gwr_000000000000000000000002",
+                type: "docker_container",
+                resourceId: "dev-preview-container",
+                label: "ai-e2e-restart",
+                relation: "created",
+                nodeSlug: "docker-src",
+              },
+              {
+                refId: "gwr_000000000000000000000003",
+                type: "docker_volume",
+                resourceId: "ai-e2e-restart-data",
+                label: "ai-e2e-restart-data",
+                relation: "updated",
+                nodeSlug: "docker-src",
+              },
+            ],
+          },
+        ],
+      }));
+    },
+    hideChangedResources: () => {
+      useAIStore.setState((state) => ({
+        messages: state.messages.filter(
+          (message) => message.id !== DEV_CHANGED_RESOURCES_MESSAGE_ID
+        ),
+      }));
+    },
+  };
+}
 
 function installAIDevCommands(): void {
   if (!import.meta.env.DEV || typeof window === "undefined") return;
@@ -2615,6 +2866,7 @@ function installAIDevCommands(): void {
   };
 }
 
+installAIResourcePreviewCommands();
 installAIDevCommands();
 
 // Auto-manage WS lifecycle based on visible AI surfaces.

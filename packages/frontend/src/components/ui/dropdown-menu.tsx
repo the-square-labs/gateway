@@ -3,8 +3,45 @@ import { Check, ChevronRight, Circle } from "lucide-react";
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
-const DropdownMenu = DropdownMenuPrimitive.Root;
-const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
+interface DropdownMenuInteractionContextValue {
+  keyboardInteractionRef: { current: boolean };
+}
+
+const DropdownMenuInteractionContext =
+  React.createContext<DropdownMenuInteractionContextValue | null>(null);
+
+function DropdownMenu(props: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
+  const keyboardInteractionRef = React.useRef(false);
+
+  return (
+    <DropdownMenuInteractionContext.Provider value={{ keyboardInteractionRef }}>
+      <DropdownMenuPrimitive.Root {...props} />
+    </DropdownMenuInteractionContext.Provider>
+  );
+}
+
+const DropdownMenuTrigger = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.Trigger>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Trigger>
+>(({ onKeyDown, onPointerDown, ...props }, ref) => {
+  const interaction = React.useContext(DropdownMenuInteractionContext);
+
+  return (
+    <DropdownMenuPrimitive.Trigger
+      ref={ref}
+      onKeyDown={(event) => {
+        if (interaction) interaction.keyboardInteractionRef.current = true;
+        onKeyDown?.(event);
+      }}
+      onPointerDown={(event) => {
+        if (interaction) interaction.keyboardInteractionRef.current = false;
+        onPointerDown?.(event);
+      }}
+      {...props}
+    />
+  );
+});
+DropdownMenuTrigger.displayName = DropdownMenuPrimitive.Trigger.displayName;
 const DropdownMenuGroup = DropdownMenuPrimitive.Group;
 const DropdownMenuPortal = DropdownMenuPrimitive.Portal;
 const DropdownMenuSub = DropdownMenuPrimitive.Sub;
@@ -49,19 +86,58 @@ DropdownMenuSubContent.displayName = DropdownMenuPrimitive.SubContent.displayNam
 const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
->(({ className, sideOffset = 4, ...props }, ref) => (
-  <DropdownMenuPrimitive.Portal>
-    <DropdownMenuPrimitive.Content
-      ref={ref}
-      sideOffset={sideOffset}
-      className={cn(
-        "dropdown-content z-50 min-w-[8rem] overflow-hidden  border bg-popover p-1 text-popover-foreground shadow-sm",
-        className
-      )}
-      {...props}
-    />
-  </DropdownMenuPrimitive.Portal>
-));
+>(
+  (
+    {
+      className,
+      sideOffset = 4,
+      onCloseAutoFocus,
+      onKeyDownCapture,
+      onPointerDownCapture,
+      onPointerDownOutside,
+      ...props
+    },
+    ref
+  ) => {
+    const interaction = React.useContext(DropdownMenuInteractionContext);
+
+    return (
+      <DropdownMenuPrimitive.Portal>
+        <DropdownMenuPrimitive.Content
+          ref={ref}
+          sideOffset={sideOffset}
+          className={cn(
+            "dropdown-content z-50 min-w-[8rem] overflow-hidden  border bg-popover p-1 text-popover-foreground shadow-sm",
+            className
+          )}
+          onKeyDownCapture={(event) => {
+            if (interaction) interaction.keyboardInteractionRef.current = true;
+            onKeyDownCapture?.(event);
+          }}
+          onPointerDownCapture={(event) => {
+            if (interaction) interaction.keyboardInteractionRef.current = false;
+            onPointerDownCapture?.(event);
+          }}
+          onPointerDownOutside={(event) => {
+            if (interaction) interaction.keyboardInteractionRef.current = false;
+            onPointerDownOutside?.(event);
+          }}
+          onCloseAutoFocus={(event) => {
+            onCloseAutoFocus?.(event);
+            if (
+              !event.defaultPrevented &&
+              interaction &&
+              !interaction.keyboardInteractionRef.current
+            ) {
+              event.preventDefault();
+            }
+          }}
+          {...props}
+        />
+      </DropdownMenuPrimitive.Portal>
+    );
+  }
+);
 DropdownMenuContent.displayName = DropdownMenuPrimitive.Content.displayName;
 
 const DropdownMenuItem = React.forwardRef<

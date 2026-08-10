@@ -9,18 +9,23 @@ describe('AIService MCP database audit behavior', () => {
     };
     const service = createService({ nodesService: {}, databaseService, auditService });
 
-    const denied = await service.executeTool({ ...USER, scopes: ['databases:query:read'] }, 'query_postgres_read', {
-      databaseId: 'db-1',
-      sql: 'select 1',
-    });
+    const deniedUser = { ...USER, scopes: ['databases:query:read'] };
+    const denied = await service.executeTool(
+      deniedUser,
+      'query_postgres_read',
+      { databaseId: 'db-1', sql: 'select 1' },
+      { source: 'mcp', scopes: deniedUser.scopes }
+    );
 
     expect(denied.error).toContain('PERMISSION_DENIED: Missing required scope databases:view:db-1');
     expect(databaseService.executePostgresSql).not.toHaveBeenCalled();
 
+    const allowedUser = { ...USER, scopes: ['databases:view', 'databases:query:read'] };
     const allowed = await service.executeTool(
-      { ...USER, scopes: ['databases:view', 'databases:query:read'] },
+      allowedUser,
       'query_postgres_read',
-      { databaseId: 'db-1', sql: 'select 1' }
+      { databaseId: 'db-1', sql: 'select 1' },
+      { source: 'mcp', scopes: allowedUser.scopes }
     );
 
     expect(allowed.error).toBeUndefined();
@@ -54,25 +59,29 @@ describe('AIService MCP database audit behavior', () => {
     };
     const service = createService({ nodesService: {}, databaseService, auditService });
 
+    const deniedUser = { ...USER, scopes: ['databases:view', 'databases:query:write'] };
     const denied = await service.executeTool(
-      { ...USER, scopes: ['databases:view', 'databases:query:write'] },
+      deniedUser,
       'execute_postgres_sql',
       {
         databaseId: 'db-1',
         sql: 'alter table users add column disabled boolean',
-      }
+      },
+      { source: 'mcp', scopes: deniedUser.scopes }
     );
 
     expect(denied.error).toContain('PERMISSION_DENIED: Missing required scope databases:query:admin:db-1');
     expect(databaseService.executePostgresSql).not.toHaveBeenCalled();
 
+    const allowedUser = { ...USER, scopes: ['databases:view', 'databases:query:admin'] };
     const allowed = await service.executeTool(
-      { ...USER, scopes: ['databases:view', 'databases:query:admin'] },
+      allowedUser,
       'execute_postgres_sql',
       {
         databaseId: 'db-1',
         sql: 'alter table users add column disabled boolean',
-      }
+      },
+      { source: 'mcp', scopes: allowedUser.scopes }
     );
 
     expect(allowed.error).toBeUndefined();

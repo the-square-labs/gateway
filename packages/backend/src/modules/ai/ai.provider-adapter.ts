@@ -64,26 +64,32 @@ async function* streamChatCompletionsModel({
   signal,
 }: StreamModelOptions): AsyncGenerator<ModelProviderEvent> {
   const normalizedMessages = filterOrphanToolMessages(messages);
-  const stream = await client.chat.completions.create({
-    model: config.model || 'gpt-4o',
-    messages: normalizedMessages as unknown as OpenAI.ChatCompletionMessageParam[],
-    tools: tools.length > 0 ? (tools as OpenAI.ChatCompletionTool[]) : undefined,
-    stream: true,
-    ...(config.maxTokensField === 'max_tokens'
-      ? { max_tokens: config.maxCompletionTokens }
-      : { max_completion_tokens: config.maxCompletionTokens }),
-    ...(config.reasoningEffort && config.reasoningEffort !== 'none'
-      ? ({ reasoning_effort: config.reasoningEffort } as Record<string, unknown>)
-      : {}),
-  });
+  const stream = await client.chat.completions.create(
+    {
+      model: config.model || 'gpt-4o',
+      messages: normalizedMessages as unknown as OpenAI.ChatCompletionMessageParam[],
+      tools: tools.length > 0 ? (tools as OpenAI.ChatCompletionTool[]) : undefined,
+      stream: true,
+      ...(config.maxTokensField === 'max_tokens'
+        ? { max_tokens: config.maxCompletionTokens }
+        : { max_completion_tokens: config.maxCompletionTokens }),
+      ...(config.reasoningEffort && config.reasoningEffort !== 'none'
+        ? ({ reasoning_effort: config.reasoningEffort } as Record<string, unknown>)
+        : {}),
+    },
+    { signal }
+  );
 
   let content = '';
   const toolCallAccumulators = new Map<number, NormalizedToolCall>();
+  let finishReason: string | null = null;
 
   for await (const chunk of stream) {
     if (signal.aborted) throw abortError();
 
-    const delta = chunk.choices[0]?.delta;
+    const choice = chunk.choices[0];
+    if (choice?.finish_reason) finishReason = choice.finish_reason;
+    const delta = choice?.delta;
     if (!delta) continue;
 
     if (delta.content) {
@@ -103,6 +109,16 @@ async function* streamChatCompletionsModel({
         if (tc.function?.arguments) acc.arguments += tc.function.arguments;
       }
     }
+  }
+
+  if (!finishReason) {
+    throw providerTerminalError('AI_PROVIDER_STREAM_INCOMPLETE', 'Chat Completions stream ended without a terminal');
+  }
+  if (finishReason === 'length') {
+    throw providerTerminalError('AI_PROVIDER_INCOMPLETE', 'Chat Completions stopped at the output token limit');
+  }
+  if (!['stop', 'tool_calls', 'function_call'].includes(finishReason)) {
+    throw providerTerminalError('AI_PROVIDER_FAILED', `Chat Completions ended with finish reason ${finishReason}`);
   }
 
   yield { type: 'model_response', response: { content, toolCalls: Array.from(toolCallAccumulators.values()) } };
@@ -218,12 +234,35 @@ async function* streamResponsesModel({
 
   let content = '';
   const byOutputIndex = new Map<number, NormalizedToolCall>();
+  let completed = false;
 
   for await (const event of stream) {
     if (signal.aborted) throw abortError();
     if (DEBUG_OPENAI_RESPONSES) {
       console.log('[AI DEBUG] OpenAI Responses stream event');
       console.log(inspect(event, { depth: null, colors: false, maxArrayLength: null, maxStringLength: null }));
+    }
+
+    const rawEvent = event as unknown as Record<string, any>;
+    if (rawEvent.type === 'response.completed') {
+      completed = true;
+      continue;
+    }
+    if (rawEvent.type === 'response.incomplete') {
+      const reason = rawEvent.response?.incomplete_details?.reason;
+      throw providerTerminalError(
+        'AI_PROVIDER_INCOMPLETE',
+        typeof reason === 'string' ? `Responses stream incomplete: ${reason}` : 'Responses stream incomplete'
+      );
+    }
+    if (rawEvent.type === 'response.failed') {
+      throw providerTerminalError(
+        'AI_PROVIDER_FAILED',
+        rawEvent.response?.error?.message || 'Responses provider reported a failed response'
+      );
+    }
+    if (rawEvent.type === 'error') {
+      throw providerTerminalError('AI_PROVIDER_FAILED', rawEvent.message || 'Responses provider stream failed');
     }
 
     if (event.type === 'response.output_text.delta') {
@@ -264,6 +303,10 @@ async function* streamResponsesModel({
     }
   }
 
+  if (!completed) {
+    throw providerTerminalError('AI_PROVIDER_STREAM_INCOMPLETE', 'Responses stream ended without response.completed');
+  }
+
   yield {
     type: 'model_response',
     response: {
@@ -276,6 +319,12 @@ async function* streamResponsesModel({
 function abortError(): Error {
   const error = new Error('Aborted');
   error.name = 'AbortError';
+  return error;
+}
+
+function providerTerminalError(code: string, message: string): Error & { code: string } {
+  const error = new Error(message) as Error & { code: string };
+  error.code = code;
   return error;
 }
 

@@ -15,6 +15,7 @@ import { AIRunService, aiUserConversationsChangedChannel } from './ai-run.servic
 
 const logger = createChildLogger('AI-WebSocket');
 const RATE_LIMIT_PIPELINE_RESULT_COUNT = 4;
+const CONVERSATION_TITLE_TIMEOUT_MS = 30_000;
 
 type RedisClient = ReturnType<typeof import('@/services/cache.service.js').createRedisClient>;
 
@@ -83,12 +84,11 @@ function getRunId(msg: WSClientMessage): string | undefined {
   return 'runId' in msg ? msg.runId : undefined;
 }
 
-function titleFromContent(content: string): string {
-  const title = content
+function userVisibleContent(content: string): string {
+  return content
     .replace(/<system-instruction>[\s\S]*?<\/system-instruction>\s*/gi, '')
     .trim()
     .replace(/\s+/g, ' ');
-  return title ? title.slice(0, 80) : 'New chat';
 }
 
 async function sendConversationSnapshot(ws: WSContext, userId: string, conversationId: string) {
@@ -97,6 +97,19 @@ async function sendConversationSnapshot(ws: WSContext, userId: string, conversat
   if (!snapshot) throw new AppError(404, 'AI_CONVERSATION_NOT_FOUND', 'AI conversation not found');
   send(ws, { type: 'conversation.snapshot', conversationId, snapshot });
   return snapshot;
+}
+
+function sendConversationSnapshotBestEffort(ws: WSContext, userId: string, conversationId: string): void {
+  void sendConversationSnapshot(ws, userId, conversationId).catch((error) => {
+    logger.warn('Failed to publish AI conversation snapshot after committed command', {
+      conversationId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
+function revisionPayload(snapshot: { revision?: number }): { revision?: number } {
+  return typeof snapshot.revision === 'number' ? { revision: snapshot.revision } : {};
 }
 
 async function resumeResolvedCredentialContinuation(
@@ -134,12 +147,22 @@ function subscribeToUserRuntime(ws: WSContext, state: WSConnectionState, userId:
         typeof event.runId === 'string' &&
         event.challenge
       ) {
-        send(ws, {
-          type: 'credential.required',
-          conversationId: event.conversationId,
-          runId: event.runId,
-          challenge: event.challenge,
-        });
+        void sendConversationSnapshot(ws, userId, event.conversationId)
+          .then((snapshot) => {
+            send(ws, {
+              type: 'credential.required',
+              conversationId: event.conversationId!,
+              runId: event.runId!,
+              challenge: event.challenge!,
+              ...revisionPayload(snapshot),
+            });
+          })
+          .catch((error) => {
+            logger.warn('Failed to send AI credential state', {
+              conversationId: event.conversationId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
       }
       return;
     }
@@ -185,19 +208,23 @@ function subscribeToUserRuntime(ws: WSContext, state: WSConnectionState, userId:
       }
       return;
     }
-    if (event.invalidatedStores?.length) {
-      send(ws, {
-        type: 'stores.invalidated',
-        conversationId: event.conversationId,
-        stores: event.invalidatedStores,
+    void sendConversationSnapshot(ws, userId, event.conversationId)
+      .then((snapshot) => {
+        if (event.invalidatedStores?.length) {
+          send(ws, {
+            type: 'stores.invalidated',
+            conversationId: event.conversationId!,
+            stores: event.invalidatedStores,
+            ...revisionPayload(snapshot),
+          });
+        }
+      })
+      .catch((error) => {
+        logger.warn('Failed to send AI conversation snapshot from event', {
+          conversationId: event.conversationId,
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
-    }
-    void sendConversationSnapshot(ws, userId, event.conversationId).catch((error) => {
-      logger.warn('Failed to send AI conversation snapshot from event', {
-        conversationId: event.conversationId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
   });
 }
 
@@ -415,10 +442,18 @@ export function createWSHandlers() {
           }
 
           const runService = container.resolve(AIRunService);
+          const title = msg.conversationId
+            ? 'New chat'
+            : await container.resolve(AIProviderRuntimeService).generateConversationTitle(user, {
+                requestId: `conversation-title:${msg.clientCommandId}`,
+                content: userVisibleContent(content),
+                ...(model ? { requestedModel: model } : {}),
+                signal: AbortSignal.timeout(CONVERSATION_TITLE_TIMEOUT_MS),
+              });
           const result = await runService.startUserRun({
             conversationId: msg.conversationId ?? null,
             userId: user.id,
-            title: titleFromContent(content),
+            title,
             userMessage: {
               role: 'user',
               content,
@@ -444,12 +479,67 @@ export function createWSHandlers() {
             type: 'run.status_changed',
             conversationId: result.conversationId,
             run: snapshot.runtime.activeRun,
+            ...revisionPayload(snapshot),
           });
           if (!result.duplicate) {
             runService.startRunExecution(user, result.run.id);
           }
         } catch (error) {
           sendCommandError(ws, msg, error, 'Failed to send AI message');
+        }
+        return;
+      }
+
+      if (msg.type === 'conversation.continue') {
+        try {
+          const model = msg.model?.trim();
+          if (model && model.length > 255) {
+            throw new AppError(400, 'AI_MODEL_INVALID', 'AI model identifier is too long');
+          }
+          const reasoningEffort = msg.reasoningEffort?.trim();
+          if (reasoningEffort && reasoningEffort.length > 64) {
+            throw new AppError(400, 'AI_REASONING_EFFORT_INVALID', 'AI reasoning effort is too long');
+          }
+          const rateCheck = await checkRateLimit(user.id);
+          if (!rateCheck.allowed) {
+            const code = rateCheck.unavailable ? 'RATE_LIMIT_UNAVAILABLE' : 'RATE_LIMITED';
+            throw new AppError(
+              rateCheck.unavailable ? 503 : 429,
+              code,
+              rateCheck.unavailable ? 'Gateway is temporarily unavailable' : 'AI rate limit exceeded',
+              rateCheck.unavailable ? undefined : { retryAfter: rateCheck.retryAfter }
+            );
+          }
+
+          const runService = container.resolve(AIRunService);
+          const result = await runService.startContinuationRun({
+            conversationId: msg.conversationId,
+            userId: user.id,
+            clientCommandId: msg.clientCommandId,
+            lastContext: msg.context ? { ...msg.context } : null,
+            ...(model ? { model } : {}),
+            ...(reasoningEffort ? { reasoningEffort } : {}),
+          });
+
+          send(ws, {
+            type: 'command.ack',
+            commandType: msg.type,
+            clientCommandId: msg.clientCommandId,
+            conversationId: result.conversationId,
+            runId: result.run.id,
+            duplicate: result.duplicate,
+          });
+          state.subscribedConversationIds.add(result.conversationId);
+          const snapshot = await sendConversationSnapshot(ws, user.id, result.conversationId);
+          send(ws, {
+            type: 'run.status_changed',
+            conversationId: result.conversationId,
+            run: snapshot.runtime.activeRun,
+            ...revisionPayload(snapshot),
+          });
+          if (!result.duplicate) runService.startRunExecution(user, result.run.id);
+        } catch (error) {
+          sendCommandError(ws, msg, error, 'Failed to continue AI conversation');
         }
         return;
       }
@@ -499,6 +589,7 @@ export function createWSHandlers() {
             type: 'run.status_changed',
             conversationId: result.conversationId,
             run: snapshot.runtime.activeRun,
+            ...revisionPayload(snapshot),
           });
           if (!result.duplicate) {
             runService.startContextCompaction(user, result.run.id, 'manual');
@@ -525,8 +616,13 @@ export function createWSHandlers() {
             runId: msg.runId,
             duplicate: result.duplicate,
           });
-          send(ws, { type: 'run.status_changed', conversationId: msg.conversationId, run: result.run });
-          await sendConversationSnapshot(ws, user.id, msg.conversationId);
+          const snapshot = await sendConversationSnapshot(ws, user.id, msg.conversationId);
+          send(ws, {
+            type: 'run.status_changed',
+            conversationId: msg.conversationId,
+            run: result.run,
+            ...revisionPayload(snapshot),
+          });
         } catch (error) {
           sendCommandError(ws, msg, error, 'Failed to stop AI run');
         }
@@ -559,15 +655,29 @@ export function createWSHandlers() {
             approval: result.toolCall,
             duplicate: result.duplicate,
           });
-          await sendConversationSnapshot(ws, user.id, msg.conversationId);
-          if (!result.duplicate) {
-            runService.startApprovalContinuation(user, {
+          try {
+            if (result.toolCall.roundId && result.continuationReady) {
+              runService.startToolRoundContinuation(user, {
+                conversationId: msg.conversationId,
+                runId: msg.runId,
+                roundId: result.toolCall.roundId,
+              });
+            } else if (!result.toolCall.roundId && result.continuationReady !== false) {
+              runService.startApprovalContinuation(user, {
+                conversationId: msg.conversationId,
+                runId: msg.runId,
+                toolCall: result.toolCall,
+                approved: msg.decision === 'approved',
+              });
+            }
+          } catch (error) {
+            logger.error('Failed to schedule AI approval continuation after committed decision', {
               conversationId: msg.conversationId,
               runId: msg.runId,
-              toolCall: result.toolCall,
-              approved: msg.decision === 'approved',
+              error: error instanceof Error ? error.message : String(error),
             });
           }
+          sendConversationSnapshotBestEffort(ws, user.id, msg.conversationId);
         } catch (error) {
           sendCommandError(ws, msg, error, 'Failed to decide AI tool approval');
         }
@@ -600,15 +710,23 @@ export function createWSHandlers() {
             challenge: result.challenge,
             duplicate: result.duplicate,
           });
-          await sendConversationSnapshot(ws, user.id, msg.conversationId);
-          for (const challenge of [result.challenge, ...result.additionalChallenges]) {
-            runService.startCredentialContinuation(user, {
-              conversationId: challenge.conversationId,
-              runId: challenge.runId,
-              challenge,
-              authorized: msg.decision === 'authorized',
+          try {
+            for (const challenge of [result.challenge, ...result.additionalChallenges]) {
+              runService.startCredentialContinuation(user, {
+                conversationId: challenge.conversationId,
+                runId: challenge.runId,
+                challenge,
+                authorized: msg.decision === 'authorized',
+              });
+            }
+          } catch (error) {
+            logger.error('Failed to schedule AI credential continuation after committed decision', {
+              conversationId: msg.conversationId,
+              runId: msg.runId,
+              error: error instanceof Error ? error.message : String(error),
             });
           }
+          sendConversationSnapshotBestEffort(ws, user.id, msg.conversationId);
         } catch (error) {
           sendCommandError(ws, msg, error, 'Failed to resolve GitLab authorization');
         }
@@ -641,14 +759,28 @@ export function createWSHandlers() {
             question: result.question,
             duplicate: result.duplicate,
           });
-          await sendConversationSnapshot(ws, user.id, msg.conversationId);
-          if (!result.duplicate && result.remainingPendingQuestions.length === 0) {
-            runService.startQuestionContinuation(user, {
+          try {
+            if (result.question.roundId && result.continuationReady) {
+              runService.startToolRoundContinuation(user, {
+                conversationId: msg.conversationId,
+                runId: msg.runId,
+                roundId: result.question.roundId,
+              });
+            } else if (!result.question.roundId && result.continuationReady !== false) {
+              runService.startQuestionContinuation(user, {
+                conversationId: msg.conversationId,
+                runId: msg.runId,
+                question: result.question,
+              });
+            }
+          } catch (error) {
+            logger.error('Failed to schedule AI question continuation after committed answer', {
               conversationId: msg.conversationId,
               runId: msg.runId,
-              question: result.question,
+              error: error instanceof Error ? error.message : String(error),
             });
           }
+          sendConversationSnapshotBestEffort(ws, user.id, msg.conversationId);
         } catch (error) {
           sendCommandError(ws, msg, error, 'Failed to answer AI question');
         }

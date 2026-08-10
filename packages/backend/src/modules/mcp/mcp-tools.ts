@@ -6,10 +6,17 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { container } from '@/container.js';
 import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
-import { FOLDER_TOOL_REQUIREMENT_SCOPES } from '@/modules/ai/ai.folder-tool-scopes.js';
 import { AIService } from '@/modules/ai/ai.service.js';
-import { AI_TOOLS } from '@/modules/ai/ai.tools.js';
+import { AI_TOOLS, validateAIToolArguments } from '@/modules/ai/ai.tools.js';
 import type { AIToolDefinition } from '@/modules/ai/ai.types.js';
+import { getAIToolResourceId } from '@/modules/ai/ai-tool-policy-metadata.js';
+import {
+  AI_TOOL_ANY_SCOPE_REQUIREMENTS as ANY_SCOPE_TOOL_REQUIREMENTS,
+  AI_BROAD_ONLY_TOOL_SCOPES as BROAD_ONLY_TOOL_SCOPES,
+  AI_DIRECT_DATABASE_VIEW_AND_QUERY_TOOLS as DIRECT_DATABASE_VIEW_AND_QUERY_TOOLS,
+  AI_DIRECT_DATABASE_VIEW_TOOLS as DIRECT_DATABASE_VIEW_TOOLS,
+  AI_DIRECT_RAW_READ_TOOLS as DIRECT_RAW_READ_TOOLS,
+} from '@/modules/ai/ai-tool-scope-policy.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { setAuditMcpContext } from '@/modules/audit/audit-request-context.js';
 import type { User } from '@/types.js';
@@ -18,6 +25,8 @@ import type { McpAuthContext } from './mcp-types.js';
 const MCP_EXCLUDED_TOOLS = new Set([
   'ask_question',
   'get_current_context',
+  'read_tool_output',
+  'search_tool_output',
   'end_conversation',
   'search_chats',
   'find_in_chat',
@@ -50,108 +59,6 @@ const MCP_EXCLUDED_TOOLS = new Set([
   'manage_node_file',
   'set_resource_pin',
 ]);
-const BROAD_ONLY_TOOL_SCOPES = new Set<string>();
-const DIRECT_DATABASE_VIEW_TOOLS = new Set(['list_databases', 'get_database_connection']);
-const DIRECT_RAW_READ_TOOLS = new Set(['get_proxy_rendered_config']);
-const DIRECT_DATABASE_VIEW_AND_QUERY_TOOLS = new Set([
-  'query_postgres_read',
-  'execute_postgres_sql',
-  'browse_redis_keys',
-  'get_redis_key',
-  'set_redis_key',
-  'execute_redis_command',
-  'manage_postgres_data',
-  'manage_redis_data',
-]);
-const ANY_SCOPE_TOOL_REQUIREMENTS: Record<string, string[]> = {
-  find_resource: [
-    'nodes:details',
-    'proxy:view',
-    'proxy:templates:view',
-    'ssl:cert:view',
-    'domains:view',
-    'acl:view',
-    'pki:ca:view:root',
-    'pki:ca:view:intermediate',
-    'pki:cert:view',
-    'pki:templates:view',
-    'docker:containers:view',
-    'docker:images:view',
-    'docker:volumes:view',
-    'docker:networks:view',
-    'docker:registries:view',
-    'databases:view',
-    'logs:environments:view',
-    'logs:schemas:view',
-    'status-page:view',
-    'notifications:view',
-  ],
-  list_cas: ['pki:ca:view:root', 'pki:ca:view:intermediate'],
-  get_ca: ['pki:ca:view:root', 'pki:ca:view:intermediate'],
-  delete_ca: ['pki:ca:revoke:root', 'pki:ca:revoke:intermediate'],
-  manage_ca: ['pki:ca:create:root', 'pki:ca:create:intermediate'],
-  manage_certificate: ['pki:cert:view', 'pki:cert:issue', 'pki:cert:export'],
-  manage_template: ['pki:templates:view', 'pki:templates:edit'],
-  manage_proxy_template: [
-    'proxy:templates:view',
-    'proxy:templates:create',
-    'proxy:templates:edit',
-    'proxy:templates:delete',
-  ],
-  manage_ssl_certificate: ['ssl:cert:view', 'ssl:cert:issue', 'ssl:cert:delete'],
-  manage_domain: ['domains:view', 'domains:edit'],
-  manage_access_list: ['acl:view', 'acl:edit'],
-  manage_docker_registry: [
-    'docker:registries:view',
-    'docker:registries:create',
-    'docker:registries:edit',
-    'docker:registries:delete',
-  ],
-  manage_docker_volume: ['docker:volumes:create', 'docker:volumes:delete'],
-  manage_docker_network: ['docker:networks:create', 'docker:networks:edit', 'docker:networks:delete'],
-  manage_docker_container_config: [
-    'docker:containers:view',
-    'docker:containers:environment',
-    'docker:containers:files',
-    'docker:containers:secrets',
-    'docker:containers:webhooks',
-    'docker:containers:config',
-    'docker:containers:edit',
-  ],
-  manage_database_connection: [
-    'databases:view',
-    'databases:create',
-    'databases:edit',
-    'databases:delete',
-    'databases:credentials:reveal',
-  ],
-  manage_logging: [
-    'logs:environments:view',
-    'logs:environments:create',
-    'logs:environments:edit',
-    'logs:environments:delete',
-    'logs:tokens:view',
-    'logs:tokens:create',
-    'logs:tokens:delete',
-    'logs:schemas:view',
-    'logs:schemas:create',
-    'logs:schemas:edit',
-    'logs:schemas:delete',
-    'logs:read',
-    'logs:manage',
-  ],
-  manage_status_page: [
-    'status-page:view',
-    'status-page:manage',
-    'status-page:incidents:create',
-    'status-page:incidents:update',
-    'status-page:incidents:resolve',
-    'status-page:incidents:delete',
-  ],
-  list_resource_folders: [...FOLDER_TOOL_REQUIREMENT_SCOPES],
-  manage_resource_folder: [...FOLDER_TOOL_REQUIREMENT_SCOPES],
-  manage_node_config: ['nodes:config:view', 'nodes:config:edit'],
-};
 const SENSITIVE_TOOL_ARG_RE =
   /(?:password|passwd|secret|signingsecret|privatekey|private_key|token|authorization|cookie|apikey|api_key|clientsecret|client_secret|refresh)/i;
 const MCP_ALWAYS_VISIBLE_AI_TOOLS = new Set(['find_resource']);
@@ -334,6 +241,7 @@ function hasDirectDatabaseViewForResource(scopes: string[], databaseId: string):
 
 function hasToolScope(scopes: string[], tool: AIToolDefinition): boolean {
   if (!tool.requiredScope) return false;
+  if (tool.requiredScopes && !tool.requiredScopes.every((scope) => hasScopeBase(scopes, scope))) return false;
   if (DIRECT_DATABASE_VIEW_AND_QUERY_TOOLS.has(tool.name)) {
     return hasDirectDatabaseViewForQueryTool(scopes, tool.requiredScope);
   }
@@ -352,8 +260,9 @@ function hasToolScope(scopes: string[], tool: AIToolDefinition): boolean {
 
 function hasToolScopeForArgs(scopes: string[], tool: AIToolDefinition, args: Record<string, unknown>): boolean {
   if (!tool.requiredScope) return false;
+  if (tool.requiredScopes && !tool.requiredScopes.every((scope) => hasScopeBase(scopes, scope))) return false;
   if (DIRECT_DATABASE_VIEW_AND_QUERY_TOOLS.has(tool.name)) {
-    const resourceId = getToolAuthorizationResourceId(tool.name, args);
+    const resourceId = getToolAuthorizationResourceId(tool, args);
     return resourceId
       ? hasDirectDatabaseViewForResource(scopes, resourceId) &&
           hasScopeForResource(scopes, tool.requiredScope, resourceId)
@@ -362,21 +271,21 @@ function hasToolScopeForArgs(scopes: string[], tool: AIToolDefinition, args: Rec
   const anyRequirements = ANY_SCOPE_TOOL_REQUIREMENTS[tool.name];
   if (anyRequirements) return anyRequirements.some((scope) => hasScopeBase(scopes, scope));
   if (DIRECT_DATABASE_VIEW_TOOLS.has(tool.name)) {
-    const resourceId = getToolAuthorizationResourceId(tool.name, args);
+    const resourceId = getToolAuthorizationResourceId(tool, args);
     if (scopes.includes(tool.requiredScope)) return true;
     return resourceId
       ? scopes.includes(`${tool.requiredScope}:${resourceId}`)
       : scopes.some((scope) => scope.startsWith(`${tool.requiredScope}:`));
   }
   if (DIRECT_RAW_READ_TOOLS.has(tool.name)) {
-    const resourceId = getToolAuthorizationResourceId(tool.name, args);
+    const resourceId = getToolAuthorizationResourceId(tool, args);
     if (scopes.includes(tool.requiredScope)) return true;
     return resourceId
       ? scopes.includes(`${tool.requiredScope}:${resourceId}`)
       : scopes.some((scope) => scope.startsWith(`${tool.requiredScope}:`));
   }
   if (BROAD_ONLY_TOOL_SCOPES.has(tool.name)) return hasScope(scopes, tool.requiredScope);
-  const resourceId = getToolAuthorizationResourceId(tool.name, args);
+  const resourceId = getToolAuthorizationResourceId(tool, args);
   return resourceId
     ? hasScopeForResource(scopes, tool.requiredScope, resourceId)
     : hasScopeBase(scopes, tool.requiredScope);
@@ -480,28 +389,8 @@ function redactToolArgs(value: unknown, depth = 0): unknown {
   return redacted;
 }
 
-function getToolResourceId(args: Record<string, unknown>): string {
-  return String(
-    args.caId ||
-      args.parentCaId ||
-      args.certificateId ||
-      args.proxyHostId ||
-      args.domainId ||
-      args.accessListId ||
-      args.templateId ||
-      args.userId ||
-      args.nodeId ||
-      args.containerId ||
-      args.deploymentId ||
-      args.databaseId ||
-      args.ruleId ||
-      args.webhookId ||
-      ''
-  );
-}
-
-function getToolAuthorizationResourceId(_toolName: string, args: Record<string, unknown>): string {
-  return getToolResourceId(args);
+function getToolAuthorizationResourceId(tool: AIToolDefinition, args: Record<string, unknown>): string {
+  return getAIToolResourceId(tool, args);
 }
 
 async function auditDeniedMcpTool(
@@ -528,7 +417,7 @@ async function auditDeniedMcpTool(
     userId: user.id,
     action: tool ? `mcp.${toolName}` : 'mcp.tool.denied',
     resourceType: tool ? category.toLowerCase().replace(/\s+/g, '_') : 'mcp_tool',
-    resourceId: getToolResourceId(args),
+    resourceId: getAIToolResourceId(tool, args),
     details: {
       source: 'mcp',
       success: false,
@@ -643,19 +532,26 @@ export function registerMcpToolHandlers(server: McpAuthContext['server'], auth: 
     }
 
     const tool = AI_TOOLS.find((candidate) => candidate.name === toolName);
-    if (!tool || !isEligibleMcpTool(tool) || !hasToolScopeForArgs(auth.scopes, tool, args)) {
+    const validation = tool ? validateAIToolArguments(toolName, args) : null;
+    if (
+      !tool ||
+      !isEligibleMcpTool(tool) ||
+      !validation?.ok ||
+      !hasToolScopeForArgs(auth.scopes, tool, validation.arguments)
+    ) {
       await auditDeniedMcpTool(
         tool,
         toolName,
         auth,
         user,
         args,
-        tool && isEligibleMcpTool(tool) ? 'missing_scope' : 'unavailable_tool'
+        tool && isEligibleMcpTool(tool) ? (validation?.ok ? 'missing_scope' : 'invalid_arguments') : 'unavailable_tool'
       );
+      if (tool && isEligibleMcpTool(tool) && validation && !validation.ok) return toolError(validation.error);
       return toolError(`Tool "${toolName}" is unavailable for this MCP token`);
     }
 
-    const result = await container.resolve(AIService).executeTool(user, toolName, args, {
+    const result = await container.resolve(AIService).executeTool(user, toolName, validation.arguments, {
       source: 'mcp',
       scopes: auth.scopes,
       tokenId: auth.tokenId,
