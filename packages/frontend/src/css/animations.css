@@ -25,6 +25,19 @@
   animation: shimmer 1.5s linear infinite;
 }
 
+@keyframes ai-chat-content-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.ai-chat-content-fade-in {
+  animation: ai-chat-content-fade-in 260ms cubic-bezier(0.25, 0.1, 0.25, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-chat-content-fade-in { animation: none; }
+}
+
 /* Sheet/Drawer animations */
 @keyframes sheet-slide-in-from-left {
   from { transform: translateX(-100%); }

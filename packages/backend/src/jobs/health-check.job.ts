@@ -25,6 +25,7 @@ interface HealthEntry {
 export class HealthCheckJob {
   private eventBus?: EventBusService;
   private evaluator?: NotificationEvaluatorService;
+  private relayUnavailable = false;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -33,6 +34,9 @@ export class HealthCheckJob {
 
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
+    (bus as Partial<EventBusService>).subscribe?.('system.relay.health.changed', (payload) => {
+      this.relayUnavailable = (payload as { state?: unknown } | null)?.state === 'critical';
+    });
   }
 
   setEvaluator(evaluator: NotificationEvaluatorService) {
@@ -116,16 +120,19 @@ export class HealthCheckJob {
           return { hostId: host.id, status: 'skipped' as const };
         }
 
-        await this.evaluator?.observeStatefulEvent(
-          'proxy',
-          newStatus === 'online' ? 'health.online' : newStatus === 'offline' ? 'health.offline' : 'health.degraded',
-          {
-            type: 'proxy',
-            id: host.id,
-            name: host.domainNames?.[0] ?? host.id,
-          },
-          { health_status: newStatus }
-        );
+        const relayBacked = host.upstreamKind !== 'manual' && host.secureLinkMigratedAt != null;
+        if (!(relayBacked && this.relayUnavailable)) {
+          await this.evaluator?.observeStatefulEvent(
+            'proxy',
+            newStatus === 'online' ? 'health.online' : newStatus === 'offline' ? 'health.offline' : 'health.degraded',
+            {
+              type: 'proxy',
+              id: host.id,
+              name: host.domainNames?.[0] ?? host.id,
+            },
+            { health_status: newStatus }
+          );
+        }
 
         // Log status transitions and publish event
         if (previousStatus !== newStatus) {
@@ -184,16 +191,20 @@ export class HealthCheckJob {
   ): Promise<{ status: 'online' | 'offline'; responseMs?: number }> {
     if (host.upstreamKind !== 'manual' && host.secureLinkMigratedAt != null) {
       if (!host.nodeId || !this.nodeDispatch) return { status: 'offline' };
-      const result = await this.nodeDispatch.probeProxySecureLink(host.nodeId, {
-        linkId: host.id,
-        scheme: host.forwardScheme ?? 'http',
-        path: host.healthCheckUrl || '/',
-        expectedStatus: host.healthCheckExpectedStatus,
-        expectedBody: host.healthCheckExpectedBody,
-        bodyMatchMode: host.healthCheckBodyMatchMode,
-        timeoutSeconds: Math.ceil(HEALTH_CHECK_TIMEOUT_MS / 1000),
-      });
-      return { status: result.ok ? 'online' : 'offline', responseMs: result.responseMs };
+      try {
+        const result = await this.nodeDispatch.probeProxySecureLink(host.nodeId, {
+          linkId: host.id,
+          scheme: host.forwardScheme ?? 'http',
+          path: host.healthCheckUrl || '/',
+          expectedStatus: host.healthCheckExpectedStatus,
+          expectedBody: host.healthCheckExpectedBody,
+          bodyMatchMode: host.healthCheckBodyMatchMode,
+          timeoutSeconds: Math.ceil(HEALTH_CHECK_TIMEOUT_MS / 1000),
+        });
+        return { status: result.ok ? 'online' : 'offline', responseMs: result.responseMs };
+      } catch {
+        return { status: 'offline' };
+      }
     }
     if (!host.forwardHost || !host.forwardPort) {
       return { status: 'offline' };

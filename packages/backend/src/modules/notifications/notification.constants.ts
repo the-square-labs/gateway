@@ -35,6 +35,9 @@ export type AlertCategory =
   | 'node'
   | 'container'
   | 'proxy'
+  | 'gateway'
+  | 'logging'
+  | 'integration'
   | 'certificate'
   | 'security'
   | 'database_postgres'
@@ -175,6 +178,20 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { id: 'health.offline', label: 'Health Offline', defaultSeverity: 'critical', supportsThreshold: true },
       { id: 'health.degraded', label: 'Health Degraded', defaultSeverity: 'warning', supportsThreshold: true },
       { id: 'health.online', label: 'Health Online', defaultSeverity: 'info', supportsThreshold: true },
+      {
+        id: 'dependency.database_offline',
+        label: 'Database Secure Link Offline',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
+      { id: 'deployment.failed', label: 'Deployment Failed', defaultSeverity: 'critical', supportsThreshold: true },
+      { id: 'migration.failed', label: 'Migration Failed', defaultSeverity: 'critical' },
+      {
+        id: 'migration.needs_attention',
+        label: 'Migration Needs Attention',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
     ],
     variables: [
       { name: '{{resource.name}}', description: 'Container name' },
@@ -201,6 +218,13 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { id: 'maintenance.active', label: 'Maintenance Active', defaultSeverity: 'warning', supportsThreshold: true },
       { id: 'created', label: 'Proxy Created', defaultSeverity: 'info' },
       { id: 'deleted', label: 'Proxy Deleted', defaultSeverity: 'info' },
+      { id: 'secure_link.provisioning_failed', label: 'Secure Link Provisioning Failed', defaultSeverity: 'critical' },
+      {
+        id: 'secure_link.reconciliation_failed',
+        label: 'Secure Link Reconciliation Failed',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
     ],
     variables: [
       { name: '{{resource.name}}', description: 'Domain name(s)' },
@@ -209,6 +233,69 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { name: '{{health.status}}', description: 'Health status' },
       { name: '{{event.name}}', description: 'Event pattern/name' },
       { name: '{{state.current}}', description: 'Current state for stateful events' },
+    ],
+  },
+  {
+    id: 'gateway',
+    label: 'Gateway',
+    metrics: [],
+    events: [
+      { id: 'relay.recovering', label: 'Relay Recovering', defaultSeverity: 'warning', supportsThreshold: true },
+      { id: 'relay.unavailable', label: 'Relay Unavailable', defaultSeverity: 'critical', supportsThreshold: true },
+    ],
+    variables: [
+      { name: '{{resource.name}}', description: 'Gateway component name' },
+      { name: '{{state.current}}', description: 'Current relay state' },
+      { name: '{{failure.code}}', description: 'Stable failure code' },
+      { name: '{{details.attempt}}', description: 'Recovery attempt' },
+    ],
+  },
+  {
+    id: 'logging',
+    label: 'Logging',
+    metrics: [
+      {
+        id: 'error_fatal_ratio_percent',
+        label: 'Error + Fatal Ratio (%)',
+        unit: '%',
+        defaultOperator: '>',
+        defaultValue: 10,
+      },
+      {
+        id: 'fatal_ratio_percent',
+        label: 'Fatal Ratio (%)',
+        unit: '%',
+        defaultOperator: '>',
+        defaultValue: 1,
+      },
+    ],
+    events: [
+      { id: 'storage.pressure', label: 'Storage Pressure', defaultSeverity: 'warning', supportsThreshold: true },
+      { id: 'storage.degraded', label: 'Storage Degraded', defaultSeverity: 'warning', supportsThreshold: true },
+      { id: 'storage.exhausted', label: 'Storage Exhausted', defaultSeverity: 'critical', supportsThreshold: true },
+      { id: 'storage.unavailable', label: 'Storage Unavailable', defaultSeverity: 'critical', supportsThreshold: true },
+    ],
+    variables: [
+      { name: '{{resource.name}}', description: 'Logging environment or storage' },
+      { name: '{{metric.name}}', description: 'Logging metric name' },
+      { name: '{{metric.value}}', description: 'Current ratio' },
+      { name: '{{metric.threshold}}', description: 'Configured threshold' },
+      { name: '{{state.current}}', description: 'Current storage state' },
+    ],
+  },
+  {
+    id: 'integration',
+    label: 'Integration',
+    metrics: [],
+    events: [
+      { id: 'sync.failed', label: 'Connector Sync Failed', defaultSeverity: 'warning', supportsThreshold: true },
+    ],
+    variables: [
+      { name: '{{resource.name}}', description: 'Integration connector' },
+      { name: '{{state.current}}', description: 'Current connector state' },
+      { name: '{{failure.code}}', description: 'Stable failure code' },
+      { name: '{{details.provider}}', description: 'Connector provider' },
+      { name: '{{details.failure_count}}', description: 'Consecutive failures' },
     ],
   },
   {
@@ -283,6 +370,18 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { id: 'health.offline', label: 'Database Offline', defaultSeverity: 'critical', supportsThreshold: true },
       { id: 'health.degraded', label: 'Database Degraded', defaultSeverity: 'warning', supportsThreshold: true },
       { id: 'health.online', label: 'Database Online', defaultSeverity: 'info', supportsThreshold: true },
+      {
+        id: 'binding.provisioning_failed',
+        label: 'Database Binding Provisioning Failed',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
+      {
+        id: 'binding.reconciliation_failed',
+        label: 'Database Binding Reconciliation Failed',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
     ],
     variables: [
       { name: '{{resource.name}}', description: 'Database connection name' },
@@ -326,6 +425,18 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { id: 'health.offline', label: 'Database Offline', defaultSeverity: 'critical', supportsThreshold: true },
       { id: 'health.degraded', label: 'Database Degraded', defaultSeverity: 'warning', supportsThreshold: true },
       { id: 'health.online', label: 'Database Online', defaultSeverity: 'info', supportsThreshold: true },
+      {
+        id: 'binding.provisioning_failed',
+        label: 'Database Binding Provisioning Failed',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
+      {
+        id: 'binding.reconciliation_failed',
+        label: 'Database Binding Reconciliation Failed',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
     ],
     variables: [
       { name: '{{resource.name}}', description: 'Database connection name' },
@@ -354,6 +465,18 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { id: 'health.offline', label: 'Database Offline', defaultSeverity: 'critical', supportsThreshold: true },
       { id: 'health.degraded', label: 'Database Degraded', defaultSeverity: 'warning', supportsThreshold: true },
       { id: 'health.online', label: 'Database Online', defaultSeverity: 'info', supportsThreshold: true },
+      {
+        id: 'binding.provisioning_failed',
+        label: 'Database Binding Provisioning Failed',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
+      {
+        id: 'binding.reconciliation_failed',
+        label: 'Database Binding Reconciliation Failed',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
     ],
     variables: [
       { name: '{{resource.name}}', description: 'Database connection name' },
@@ -382,9 +505,64 @@ export interface EventMapping {
   match: (payload: any) => boolean;
   extractResource: (payload: any) => { type: string; id: string; name?: string };
   extractData?: (payload: any) => Record<string, unknown>;
+  stateful?: {
+    currentState: (payload: any) => string;
+    observedPatterns: string[];
+  };
 }
 
 export const EVENT_BUS_MAPPINGS: Record<string, EventMapping[]> = {
+  'system.relay.health.changed': [
+    {
+      category: 'gateway',
+      eventId: 'relay.unavailable',
+      match: () => true,
+      extractResource: () => ({ type: 'gateway', id: 'gateway-relay', name: 'Gateway relay' }),
+      extractData: (p) => ({ failure_code: p.reason ?? null, attempt: p.attempt ?? 0 }),
+      stateful: {
+        currentState: (p) =>
+          p.state === 'critical'
+            ? 'relay.unavailable'
+            : p.state === 'recovering'
+              ? 'relay.recovering'
+              : 'relay.healthy',
+        observedPatterns: ['relay.recovering', 'relay.unavailable'],
+      },
+    },
+  ],
+  'logging.health.changed': [
+    {
+      category: 'logging',
+      eventId: 'storage.unavailable',
+      match: () => true,
+      extractResource: () => ({ type: 'logging', id: 'logging-storage', name: 'Logging storage' }),
+      extractData: (p) => ({ failure_code: typeof p.status === 'string' ? p.status : null }),
+      stateful: {
+        currentState: (p) =>
+          ['pressure', 'degraded', 'exhausted', 'unavailable'].includes(p.status)
+            ? `storage.${p.status}`
+            : 'storage.healthy',
+        observedPatterns: ['storage.pressure', 'storage.degraded', 'storage.exhausted', 'storage.unavailable'],
+      },
+    },
+  ],
+  'integration.connector.changed': [
+    {
+      category: 'integration',
+      eventId: 'sync.failed',
+      match: (p) => ['sync-failed', 'synced', 'tested'].includes(p.action),
+      extractResource: (p) => ({ type: 'integration_connector', id: p.id, name: p.name ?? p.id }),
+      extractData: (p) => ({
+        failure_code: p.failureCode ?? null,
+        provider: p.provider ?? null,
+        failure_count: p.failureCount ?? 0,
+      }),
+      stateful: {
+        currentState: (p) => (p.action === 'sync-failed' ? 'sync.failed' : 'sync.healthy'),
+        observedPatterns: ['sync.failed'],
+      },
+    },
+  ],
   'group.mfa.required': [
     {
       category: 'security',
@@ -468,6 +646,74 @@ export const EVENT_BUS_MAPPINGS: Record<string, EventMapping[]> = {
       extractData: (p) => ({ health_status: p.health_status }),
     },
   ],
+  'proxy.secure-link.changed': [
+    {
+      category: 'proxy',
+      eventId: 'secure_link.provisioning_failed',
+      match: (p) => p.phase === 'provisioning' && p.state === 'failed',
+      extractResource: (p) => ({ type: 'proxy', id: p.id, name: p.domain ?? p.id }),
+      extractData: (p) => ({ failure_code: p.failureCode ?? null, operation_phase: p.phase }),
+    },
+    {
+      category: 'proxy',
+      eventId: 'secure_link.reconciliation_failed',
+      match: (p) => p.phase === 'reconciliation',
+      extractResource: (p) => ({ type: 'proxy', id: p.id, name: p.domain ?? p.id }),
+      extractData: (p) => ({ failure_code: p.failureCode ?? null, operation_phase: p.phase }),
+      stateful: {
+        currentState: (p) =>
+          p.state === 'failed' ? 'secure_link.reconciliation_failed' : 'secure_link.reconciliation_healthy',
+        observedPatterns: ['secure_link.reconciliation_failed'],
+      },
+    },
+  ],
+  'docker.deployment.changed': [
+    {
+      category: 'container',
+      eventId: 'deployment.failed',
+      match: (p) =>
+        ['failed', 'created', 'updated', 'switched', 'started', 'stopped', 'restarted', 'killed', 'deleted'].includes(
+          p.action
+        ),
+      extractResource: (p) => ({ type: 'docker_deployment', id: p.deploymentId, name: p.name ?? p.deploymentId }),
+      extractData: (p) => ({
+        nodeId: p.nodeId,
+        failure_code: p.failureCode ?? (p.action === 'failed' ? 'deployment_failed' : null),
+        operation_kind: p.operation ?? p.action,
+        operation_trigger: p.trigger ?? null,
+      }),
+      stateful: {
+        currentState: (p) => (p.action === 'failed' ? 'deployment.failed' : 'deployment.healthy'),
+        observedPatterns: ['deployment.failed'],
+      },
+    },
+  ],
+  'docker.migration.changed': [
+    {
+      category: 'container',
+      eventId: 'migration.failed',
+      match: (p) => p.status === 'failed',
+      extractResource: (p) => ({ type: 'docker_migration', id: p.id, name: p.resourceName ?? p.id }),
+      extractData: (p) => ({
+        failure_code: p.errorCode ?? 'migration_failed',
+        operation_phase: p.phase,
+        source_node_id: p.sourceNodeId,
+        target_node_id: p.targetNodeId,
+      }),
+    },
+    {
+      category: 'container',
+      eventId: 'migration.needs_attention',
+      match: () => true,
+      extractResource: (p) => ({ type: 'docker_migration', id: p.id, name: p.resourceName ?? p.id }),
+      extractData: (p) => ({ failure_code: p.errorCode ?? null, operation_phase: p.phase }),
+      stateful: {
+        currentState: (p) =>
+          p.status === 'needs_attention' ? 'migration.needs_attention' : 'migration.attention_cleared',
+        observedPatterns: ['migration.needs_attention'],
+      },
+    },
+  ],
   'docker.container.changed': [
     {
       category: 'container',
@@ -527,6 +773,57 @@ export const EVENT_BUS_MAPPINGS: Record<string, EventMapping[]> = {
     },
   ],
   'database.changed': [
+    ...(['postgres', 'clickhouse', 'redis'] as const).map(
+      (type): EventMapping => ({
+        category: `database_${type}` as AlertCategory,
+        eventId: 'binding.provisioning_failed',
+        match: (p) =>
+          p.resourceKind === 'managed_database_binding' &&
+          p.type === type &&
+          ['binding.error', 'binding.ready', 'binding.deleted'].includes(p.action) &&
+          (p.failurePhase === 'provisioning' || p.action !== 'binding.error'),
+        extractResource: (p) => ({ type: 'managed_database_binding', id: p.bindingId, name: p.name ?? p.bindingId }),
+        extractData: (p) => ({
+          failure_code: p.failureCode ?? null,
+          operation_phase: p.failurePhase ?? 'provisioning',
+          database_id: p.managedDatabaseId,
+          target_node_id: p.targetNodeId,
+          target_type: p.targetType,
+          target_id: p.targetResourceId,
+        }),
+        stateful: {
+          currentState: (p) =>
+            p.action === 'binding.error' ? 'binding.provisioning_failed' : 'binding.provisioning_healthy',
+          observedPatterns: ['binding.provisioning_failed'],
+        },
+      })
+    ),
+    ...(['postgres', 'clickhouse', 'redis'] as const).map(
+      (type): EventMapping => ({
+        category: `database_${type}` as AlertCategory,
+        eventId: 'binding.reconciliation_failed',
+        match: (p) =>
+          p.resourceKind === 'managed_database_binding' &&
+          p.type === type &&
+          ['binding.reconciliation_failed', 'binding.reconciliation_ready'].includes(p.action),
+        extractResource: (p) => ({ type: 'managed_database_binding', id: p.bindingId, name: p.name ?? p.bindingId }),
+        extractData: (p) => ({
+          failure_code: p.failureCode ?? null,
+          operation_phase: 'reconciliation',
+          database_id: p.managedDatabaseId,
+          target_node_id: p.targetNodeId,
+          target_type: p.targetType,
+          target_id: p.targetResourceId,
+        }),
+        stateful: {
+          currentState: (p) =>
+            p.action === 'binding.reconciliation_failed'
+              ? 'binding.reconciliation_failed'
+              : 'binding.reconciliation_healthy',
+          observedPatterns: ['binding.reconciliation_failed'],
+        },
+      })
+    ),
     ...(['postgres', 'clickhouse', 'redis'] as const).flatMap((type) => {
       const category = `database_${type}` as AlertCategory;
       return ['created', 'ready', 'stopped', 'error', 'deleted'].map(

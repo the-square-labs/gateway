@@ -1,5 +1,6 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useConfirmDialog } from "@/components/common/ConfirmDialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -22,6 +23,10 @@ function renderAISidePanel() {
       <AISidePanel />
     </TooltipProvider>
   );
+}
+
+function LocationProbe() {
+  return <span data-testid="location-path">{useLocation().pathname}</span>;
 }
 
 function setScrollMetrics(node: HTMLElement, scrollHeight: number, clientHeight: number) {
@@ -147,7 +152,7 @@ describe("AISidePanel autoscroll", () => {
     await waitFor(() => expect(log.scrollTop).toBe(300));
   });
 
-  it("uses a 360px minimum width for the normal side panel", async () => {
+  it("uses the 480px default when the stored width is below the minimum", async () => {
     localStorage.setItem("gateway-ai-panel-width", "320");
     act(() => {
       useAIStore.setState({
@@ -165,7 +170,7 @@ describe("AISidePanel autoscroll", () => {
     renderAISidePanel();
 
     const panelContent = screen.getByText("New chat").closest<HTMLDivElement>("div[style]");
-    expect(panelContent).toHaveStyle({ width: "360px" });
+    expect(panelContent).toHaveStyle({ width: "480px" });
   });
 
   it("shows the starting title shimmer and Thinking before a new chat snapshot arrives", () => {
@@ -246,7 +251,7 @@ describe("AISidePanel autoscroll", () => {
     expect(screen.queryByRole("button", { name: "Continue response" })).not.toBeInTheDocument();
   });
 
-  it("keeps the AI disclaimer visible while approval replaces the composer", () => {
+  it("does not show the Lite workspace disclaimer in the regular side panel", () => {
     act(() => {
       useAIStore.setState({
         messages: [
@@ -278,7 +283,9 @@ describe("AISidePanel autoscroll", () => {
 
     renderAISidePanel();
 
-    expect(screen.getByText("AI can make mistakes. Check important information.")).toBeVisible();
+    expect(
+      screen.queryByText("AI can make mistakes. Check important information.")
+    ).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("AI is responding...")).not.toBeInTheDocument();
   });
 
@@ -1085,7 +1092,7 @@ describe("AISidePanel autoscroll", () => {
 
     expect(fetchRecentConversations).toHaveBeenCalled();
     fireEvent.click(screen.getByText("Recent chat"));
-    expect(loadConversation).toHaveBeenCalledWith("conversation-1");
+    expect(loadConversation).not.toHaveBeenCalled();
 
     await user.hover(screen.getByText("Recent chat"));
     fireEvent.click(screen.getByRole("button", { name: "Delete Recent chat" }));
@@ -1095,7 +1102,7 @@ describe("AISidePanel autoscroll", () => {
     expect(await screen.findByText("Administration")).toBeInTheDocument();
   });
 
-  it("keeps lite sidebar dates mounted and exposes actions without pointer state after deletion", async () => {
+  it("preserves lite sidebar row geometry and refreshes hover after deletion", async () => {
     const timestamp = new Date().toISOString();
     const deleteConversation = vi.fn(async (conversationId: string) => {
       useAIStore.setState((state) => ({
@@ -1148,16 +1155,29 @@ describe("AISidePanel autoscroll", () => {
       </TooltipProvider>
     );
 
+    const firstRow = screen.getByText("First chat").closest(".group") as HTMLElement;
     const secondRowBefore = screen.getByText("Second chat").closest(".group") as HTMLElement;
+    vi.spyOn(secondRowBefore, "getBoundingClientRect").mockReturnValue({
+      left: 0,
+      right: 260,
+      top: 0,
+      bottom: 36,
+    } as DOMRect);
     const secondDateBefore = within(secondRowBefore).getByText("now");
-    const firstDelete = screen.getByRole("button", { name: "Delete First chat" });
-    expect(firstDelete.parentElement).toHaveClass("group-hover:visible", "z-20");
+    const firstTitleButton = screen.getByText("First chat").closest("button");
+    expect(firstTitleButton).toHaveClass("pr-1");
+    expect(firstTitleButton).not.toHaveClass("pr-20");
 
-    fireEvent.click(firstDelete);
+    fireEvent.mouseEnter(firstRow);
+    const firstDelete = screen.getByRole("button", { name: "Delete First chat" });
+    expect(firstDelete).toHaveClass("h-6", "w-6");
+
+    fireEvent.click(firstDelete, { clientX: 100, clientY: 18, detail: 1 });
 
     await waitFor(() => expect(screen.queryByText("First chat")).not.toBeInTheDocument());
     const secondRowAfter = screen.getByText("Second chat").closest(".group") as HTMLElement;
-    expect(within(secondRowAfter).getByText("now")).toBe(secondDateBefore);
+    await waitFor(() => expect(secondDateBefore).not.toBeInTheDocument());
+    expect(within(secondRowAfter).queryByText("now")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete Second chat" })).toBeInTheDocument();
   });
 
@@ -1255,6 +1275,13 @@ describe("AISidePanel autoscroll", () => {
         isLoadingRecentConversations: false,
         fetchRecentConversations: vi.fn(),
         fetchConversationFolders: vi.fn(),
+        clearMessages: vi.fn(() => {
+          useAIStore.setState({
+            messages: [],
+            activeConversationId: null,
+            sidebarActiveConversationId: null,
+          });
+        }),
       });
       useUIStore.setState({ sidebarOpen: true });
     });
@@ -1262,7 +1289,9 @@ describe("AISidePanel autoscroll", () => {
     renderWithRouter(
       <TooltipProvider>
         <AILiteSidebar />
-      </TooltipProvider>
+        <LocationProbe />
+      </TooltipProvider>,
+      { route: "/ai/chats/conversation-1" }
     );
 
     const conversationRow = screen.getByText("Recent chat").closest(".group");
@@ -1272,6 +1301,8 @@ describe("AISidePanel autoscroll", () => {
     await user.click(await screen.findByRole("menuitem", { name: /New chat/ }));
 
     expect(useAIStore.getState().sidebarActiveConversationId).toBeNull();
+    expect(useAIStore.getState().activeConversationId).toBeNull();
+    expect(screen.getByTestId("location-path")).toHaveTextContent("/");
     expect(conversationRow).not.toHaveClass("bg-sidebar-accent");
   });
 
@@ -1381,5 +1412,59 @@ describe("AISidePanel autoscroll", () => {
       "text-muted-foreground"
     );
     expect(screen.queryByText("New chat")).not.toBeInTheDocument();
+  });
+
+  it("shows run status icons for chats in the collapsed lite sidebar", () => {
+    const timestamp = new Date().toISOString();
+    act(() => {
+      useAIStore.setState({
+        messages: [],
+        recentConversations: [
+          {
+            id: "conversation-running",
+            title: "Running chat",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            lastUserMessageAt: timestamp,
+            folderId: null,
+            messageCount: 1,
+            status: "active",
+            blockReason: null,
+            activeRunStatus: "running",
+          },
+          {
+            id: "conversation-waiting",
+            title: "Waiting chat",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            lastUserMessageAt: timestamp,
+            folderId: null,
+            messageCount: 1,
+            status: "active",
+            blockReason: null,
+            activeRunStatus: "waiting_for_approval",
+          },
+        ],
+        isStartingConversation: false,
+        isLoadingRecentConversations: false,
+        fetchRecentConversations: vi.fn(),
+        fetchConversationFolders: vi.fn(),
+      });
+      useUIStore.setState({ sidebarOpen: false });
+    });
+
+    renderWithRouter(
+      <TooltipProvider>
+        <AILiteSidebar />
+      </TooltipProvider>
+    );
+
+    expect(screen.getByRole("button", { name: "Running chat" }).querySelector("svg")).toHaveClass(
+      "animate-spin",
+      "text-primary"
+    );
+    expect(screen.getByRole("button", { name: "Waiting chat" }).querySelector("svg")).toHaveClass(
+      "text-warning-foreground"
+    );
   });
 });

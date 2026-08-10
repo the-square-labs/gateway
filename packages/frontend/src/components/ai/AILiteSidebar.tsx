@@ -37,7 +37,7 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AccountMenuContent } from "@/components/layout/AccountMenuContent";
 import {
@@ -67,8 +67,9 @@ import { Input } from "@/components/ui/input";
 import { ResizeHandle } from "@/components/ui/resize-handle";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
+import { aiConversationRoute } from "@/lib/ai-conversation-route";
 import { visibleNavigationGroups } from "@/lib/app-navigation";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
 import { cn, getInitials } from "@/lib/utils";
@@ -83,6 +84,11 @@ import { useUIStore } from "@/stores/ui";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 
 const EXPANDED_PROJECT_IDS_STORAGE_KEY = "gateway-ai-lite-expanded-project-ids";
+
+interface SidebarPointerPosition {
+  x: number;
+  y: number;
+}
 
 function formatConversationDate(value: string): string {
   const date = new Date(value);
@@ -172,6 +178,7 @@ export function AILiteSidebar({
     updateConversationFolder,
   } = useAIStore();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const pointerPositionRef = useRef<SidebarPointerPosition | null>(null);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(readExpandedProjectIds);
   const {
     open: folderDialogOpen,
@@ -250,13 +257,23 @@ export function AILiteSidebar({
 
   const handleNewChat = () => {
     useAIStore.setState({ sidebarActiveConversationId: null });
+    navigate("/", { flushSync: true });
     clearMessages();
-    navigate("/");
   };
 
   const handleLoadConversation = async (conversationId: string) => {
+    if (conversationId === sidebarActiveConversationId) {
+      navigate(aiConversationRoute(conversationId));
+      return;
+    }
     await loadConversation(conversationId);
-    navigate("/");
+    navigate(aiConversationRoute(conversationId));
+  };
+
+  const handleDeleteConversation = async (conversationId: string) => {
+    const deletingActiveConversation = conversationId === visibleActiveConversationId;
+    await deleteConversation(conversationId);
+    if (deletingActiveConversation) navigate("/");
   };
 
   const handleLogout = async () => {
@@ -336,6 +353,18 @@ export function AILiteSidebar({
   return (
     <aside
       style={{ width: isExpanded ? sidebarWidth : 48 }}
+      onPointerEnter={(event) => {
+        pointerPositionRef.current = { x: event.clientX, y: event.clientY };
+      }}
+      onPointerMove={(event) => {
+        pointerPositionRef.current = { x: event.clientX, y: event.clientY };
+      }}
+      onPointerDownCapture={(event) => {
+        pointerPositionRef.current = { x: event.clientX, y: event.clientY };
+      }}
+      onPointerLeave={() => {
+        pointerPositionRef.current = null;
+      }}
       className={cn(
         "relative flex h-full shrink-0 flex-col overflow-visible border-r border-sidebar-border bg-sidebar-background",
         !isResizing && "transition-[width] duration-200 ease-out"
@@ -351,69 +380,136 @@ export function AILiteSidebar({
             transition={{ duration: 0.15 }}
             className="flex h-full flex-col items-center gap-2 py-3"
           >
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleSidebar}>
-                  <PanelLeft className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="right">Open sidebar</TooltipContent>
-            </Tooltip>
+            <TooltipProvider delayDuration={0} skipDelayDuration={0}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleSidebar}>
+                    <PanelLeft className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">Open sidebar</TooltipContent>
+              </Tooltip>
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={handleNewChat}
-                  aria-label="New chat"
-                >
-                  <Plus className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="right">New chat</TooltipContent>
-            </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={handleNewChat}
+                    aria-label="New chat"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">New chat</TooltipContent>
+              </Tooltip>
 
-            <Separator className="my-1 w-6" />
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  asChild
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  aria-label="Dashboard"
-                >
-                  <Link to="/dashboard">
-                    <LayoutDashboard className="h-4 w-4" />
-                  </Link>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="right">Dashboard</TooltipContent>
-            </Tooltip>
-            <Separator className="my-1 w-6" />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    asChild
+                    variant="ghost"
+                    size="icon"
+                    className="relative h-8 w-8"
+                    aria-label="Dashboard"
+                  >
+                    <Link to="/dashboard">
+                      <LayoutDashboard className="h-4 w-4" />
+                      {dashboardAttention && (
+                        <span
+                          aria-label={dashboardAttentionLabel(dashboardAttention)}
+                          className={cn(
+                            "absolute right-1 top-1 h-2 w-2",
+                            dashboardAttentionDotClass(dashboardAttention)
+                          )}
+                        />
+                      )}
+                    </Link>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">Dashboard</TooltipContent>
+              </Tooltip>
+              <Separator className="my-1 w-6" />
 
-            <div className="flex-1" />
+              <nav className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto overflow-x-hidden dashboard-scrollbar">
+                {isStartingConversation && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 bg-sidebar-accent"
+                        aria-label="Starting chat..."
+                      >
+                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">Starting chat...</TooltipContent>
+                  </Tooltip>
+                )}
+                {recentConversations.map((conversation) => {
+                  const StatusIcon = getConversationStatusIcon(conversation);
+                  return (
+                    <Tooltip key={conversation.id}>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className={cn(
+                            "h-8 w-8",
+                            visibleActiveConversationId === conversation.id && "bg-sidebar-accent"
+                          )}
+                          aria-label={conversation.title}
+                          onClick={() => void handleLoadConversation(conversation.id)}
+                        >
+                          <StatusIcon
+                            className={getConversationStatusIconClassName(conversation)}
+                          />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="right">{conversation.title}</TooltipContent>
+                    </Tooltip>
+                  );
+                })}
+              </nav>
 
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
-                  <Avatar className="h-6 w-6">
-                    <AvatarImage src={user?.avatarUrl ?? undefined} />
-                    <AvatarFallback className="text-xs">
-                      {getInitials(user?.name || user?.email || "?")}
-                    </AvatarFallback>
-                  </Avatar>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" side="right" className="w-64">
-                <AccountMenuContent
-                  showAdministration={canAccessAdministration}
-                  onLogout={handleLogout}
-                />
-              </DropdownMenuContent>
-            </DropdownMenu>
+              {showAILiteModeCTA && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 bg-sidebar-accent text-sidebar-accent-foreground/80 hover:bg-muted hover:text-sidebar-accent-foreground"
+                      onClick={handleSwitchToDefaultMode}
+                      aria-label="Switch to default mode"
+                    >
+                      <PanelLeft className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">Switch to default mode</TooltipContent>
+                </Tooltip>
+              )}
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-8 w-8">
+                    <Avatar className="h-6 w-6">
+                      <AvatarImage src={user?.avatarUrl ?? undefined} />
+                      <AvatarFallback className="text-xs">
+                        {getInitials(user?.name || user?.email || "?")}
+                      </AvatarFallback>
+                    </Avatar>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" side="right" className="w-64">
+                  <AccountMenuContent
+                    showAdministration={canAccessAdministration}
+                    onLogout={handleLogout}
+                  />
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </TooltipProvider>
           </motion.div>
         ) : (
           <motion.div
@@ -540,9 +636,12 @@ export function AILiteSidebar({
                             conversation={conversation}
                             active={visibleActiveConversationId === conversation.id}
                             pinned
+                            disableLayoutAnimation={isResizing}
+                            hoverSyncRevision={recentConversations.length}
+                            pointerPositionRef={pointerPositionRef}
                             onLoad={() => void handleLoadConversation(conversation.id)}
                             onTogglePin={() => togglePinnedAIConversation(conversation.id)}
-                            onDelete={() => void deleteConversation(conversation.id)}
+                            onDelete={() => void handleDeleteConversation(conversation.id)}
                           />
                         ))}
                       </nav>
@@ -605,6 +704,9 @@ export function AILiteSidebar({
                                                   visibleActiveConversationId === conversation.id
                                                 }
                                                 pinned={false}
+                                                disableLayoutAnimation={isResizing}
+                                                hoverSyncRevision={recentConversations.length}
+                                                pointerPositionRef={pointerPositionRef}
                                                 onLoad={() =>
                                                   void handleLoadConversation(conversation.id)
                                                 }
@@ -612,7 +714,7 @@ export function AILiteSidebar({
                                                   togglePinnedAIConversation(conversation.id)
                                                 }
                                                 onDelete={() =>
-                                                  void deleteConversation(conversation.id)
+                                                  void handleDeleteConversation(conversation.id)
                                                 }
                                               />
                                             ))}
@@ -663,9 +765,12 @@ export function AILiteSidebar({
                                 folderId={null}
                                 active={visibleActiveConversationId === conversation.id}
                                 pinned={false}
+                                disableLayoutAnimation={isResizing}
+                                hoverSyncRevision={recentConversations.length}
+                                pointerPositionRef={pointerPositionRef}
                                 onLoad={() => void handleLoadConversation(conversation.id)}
                                 onTogglePin={() => togglePinnedAIConversation(conversation.id)}
-                                onDelete={() => void deleteConversation(conversation.id)}
+                                onDelete={() => void handleDeleteConversation(conversation.id)}
                               />
                             ))}
                           </RootConversationDropZone>
@@ -976,6 +1081,9 @@ function DraggableConversationMenuItem({
   folderId,
   active,
   pinned,
+  disableLayoutAnimation,
+  hoverSyncRevision,
+  pointerPositionRef,
   onLoad,
   onTogglePin,
   onDelete,
@@ -984,6 +1092,9 @@ function DraggableConversationMenuItem({
   folderId: string | null;
   active: boolean;
   pinned: boolean;
+  disableLayoutAnimation?: boolean;
+  hoverSyncRevision: number;
+  pointerPositionRef: { current: SidebarPointerPosition | null };
   onLoad: () => void;
   onTogglePin: () => void;
   onDelete: () => void;
@@ -1004,6 +1115,9 @@ function DraggableConversationMenuItem({
         conversation={conversation}
         active={active}
         pinned={pinned}
+        disableLayoutAnimation={disableLayoutAnimation}
+        hoverSyncRevision={hoverSyncRevision}
+        pointerPositionRef={pointerPositionRef}
         onLoad={onLoad}
         onTogglePin={onTogglePin}
         onDelete={onDelete}
@@ -1020,16 +1134,7 @@ function ConversationDragOverlayItem({
   width: number;
 }) {
   const StatusIcon = getConversationStatusIcon(conversation);
-  const statusIconClassName = cn(
-    "h-4 w-4 shrink-0",
-    conversation.activeRunStatus === "queued" || conversation.activeRunStatus === "running"
-      ? "animate-spin text-primary"
-      : conversation.activeRunStatus === "waiting_for_approval" ||
-          conversation.activeRunStatus === "waiting_for_answer" ||
-          conversation.activeRunStatus === "waiting_for_credential"
-        ? "text-warning-foreground"
-        : ""
-  );
+  const statusIconClassName = getConversationStatusIconClassName(conversation);
 
   return (
     <div
@@ -1046,6 +1151,9 @@ function ConversationMenuItem({
   conversation,
   active,
   pinned,
+  disableLayoutAnimation,
+  hoverSyncRevision,
+  pointerPositionRef,
   onLoad,
   onTogglePin,
   onDelete,
@@ -1053,26 +1161,49 @@ function ConversationMenuItem({
   conversation: AIConversationSummary;
   active: boolean;
   pinned: boolean;
+  disableLayoutAnimation?: boolean;
+  hoverSyncRevision: number;
+  pointerPositionRef: { current: SidebarPointerPosition | null };
   onLoad: () => void;
   onTogglePin: () => void;
   onDelete: () => void;
 }) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const hoverSyncRevisionRef = useRef(hoverSyncRevision);
+  const [isHovered, setIsHovered] = useState(false);
   const StatusIcon = getConversationStatusIcon(conversation);
-  const statusIconClassName = cn(
-    "h-4 w-4 shrink-0",
-    conversation.activeRunStatus === "queued" || conversation.activeRunStatus === "running"
-      ? "animate-spin text-primary"
-      : conversation.activeRunStatus === "waiting_for_approval" ||
-          conversation.activeRunStatus === "waiting_for_answer" ||
-          conversation.activeRunStatus === "waiting_for_credential"
-        ? "text-warning-foreground"
-        : ""
-  );
+  const statusIconClassName = getConversationStatusIconClassName(conversation);
+
+  useLayoutEffect(() => {
+    if (hoverSyncRevisionRef.current === hoverSyncRevision) return;
+    hoverSyncRevisionRef.current = hoverSyncRevision;
+    const frameId = window.requestAnimationFrame(() => {
+      const row = rowRef.current;
+      const pointer = pointerPositionRef.current;
+      if (!row || !pointer) {
+        setIsHovered(false);
+        return;
+      }
+      const bounds = row.getBoundingClientRect();
+      const hoveredAfterListUpdate =
+        pointer.x >= bounds.left &&
+        pointer.x <= bounds.right &&
+        pointer.y >= bounds.top &&
+        pointer.y <= bounds.bottom;
+      setIsHovered((current) =>
+        current === hoveredAfterListUpdate ? current : hoveredAfterListUpdate
+      );
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  });
 
   return (
     <div
+      ref={rowRef}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
       className={cn(
-        "group relative flex min-h-9 max-w-full items-center overflow-hidden whitespace-nowrap transition-colors",
+        "group flex max-w-full items-center overflow-hidden whitespace-nowrap transition-colors",
         active
           ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
           : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
@@ -1080,41 +1211,69 @@ function ConversationMenuItem({
     >
       <button
         type="button"
-        className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden px-3 py-2 pr-20 text-left text-sm"
+        className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden px-3 py-2 pr-1 text-left text-sm"
         onClick={onLoad}
       >
         <StatusIcon className={statusIconClassName} />
         <span className="min-w-0 flex-1 truncate">{conversation.title}</span>
       </button>
-      <span className="pointer-events-none absolute inset-y-0 right-2 flex w-14 items-center justify-end text-xs text-muted-foreground group-hover:invisible group-focus-within:invisible">
-        {formatConversationDate(conversation.lastUserMessageAt ?? conversation.createdAt)}
-      </span>
-      <div className="pointer-events-none invisible absolute inset-y-0 right-2 z-20 flex w-14 items-center justify-end gap-0.5 group-hover:pointer-events-auto group-hover:visible group-focus-within:pointer-events-auto group-focus-within:visible">
-        <button
-          type="button"
-          aria-label={`${pinned ? "Unpin" : "Pin"} ${conversation.title}`}
-          className="flex h-7 w-7 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-sidebar-accent-foreground"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            onTogglePin();
-          }}
-        >
-          {pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
-        </button>
-        <button
-          type="button"
-          aria-label={`Delete ${conversation.title}`}
-          className="flex h-7 w-7 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-destructive"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            onDelete();
-          }}
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
-      </div>
+      <motion.div
+        layout={!disableLayoutAnimation}
+        className="mr-2 flex h-6 shrink-0 items-center justify-end overflow-hidden"
+        transition={{ duration: 0.16, ease: "easeOut" }}
+      >
+        <AnimatePresence initial={false} mode="popLayout">
+          {isHovered ? (
+            <motion.div
+              key="actions"
+              layout={!disableLayoutAnimation}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.12, ease: "easeOut" }}
+              className="flex items-center gap-0.5"
+            >
+              <button
+                type="button"
+                aria-label={`${pinned ? "Unpin" : "Pin"} ${conversation.title}`}
+                className="flex h-6 w-6 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-sidebar-accent-foreground"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onTogglePin();
+                }}
+              >
+                {pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+              </button>
+              <button
+                type="button"
+                aria-label={`Delete ${conversation.title}`}
+                className="flex h-6 w-6 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-destructive"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (event.detail > 0) {
+                    pointerPositionRef.current = { x: event.clientX, y: event.clientY };
+                  }
+                  onDelete();
+                }}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </motion.div>
+          ) : (
+            <motion.span
+              key="time"
+              layout={!disableLayoutAnimation}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.12, ease: "easeOut" }}
+              className="text-xs text-muted-foreground"
+            >
+              {formatConversationDate(conversation.lastUserMessageAt ?? conversation.createdAt)}
+            </motion.span>
+          )}
+        </AnimatePresence>
+      </motion.div>
     </div>
   );
 }
@@ -1131,6 +1290,19 @@ function getConversationStatusIcon(conversation: AIConversationSummary) {
     default:
       return conversation.status === "active" ? MessageSquare : Lock;
   }
+}
+
+function getConversationStatusIconClassName(conversation: AIConversationSummary) {
+  return cn(
+    "h-4 w-4 shrink-0",
+    conversation.activeRunStatus === "queued" || conversation.activeRunStatus === "running"
+      ? "animate-spin text-primary"
+      : conversation.activeRunStatus === "waiting_for_approval" ||
+          conversation.activeRunStatus === "waiting_for_answer" ||
+          conversation.activeRunStatus === "waiting_for_credential"
+        ? "text-warning-foreground"
+        : ""
+  );
 }
 
 function getFolderStatusIcon(conversations: AIConversationSummary[], expanded: boolean) {

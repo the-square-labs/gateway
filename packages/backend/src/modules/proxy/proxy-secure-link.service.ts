@@ -2,6 +2,7 @@ import { and, eq, inArray, ne } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { dockerDeploymentRoutes, dockerDeployments, nodes, proxyHosts } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
+import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { RelayPolicyService } from '@/services/relay-policy.service.js';
 
@@ -15,6 +16,7 @@ interface BindingDetail {
 }
 
 export class ProxySecureLinkService {
+  private eventBus?: EventBusService;
   private readonly targetNodeSyncs = new Map<string, Promise<void>>();
   private readonly sourceNodeSyncs = new Map<string, Promise<void>>();
   private readonly linkOperations = new Map<string, Promise<unknown>>();
@@ -26,8 +28,24 @@ export class ProxySecureLinkService {
     private readonly connectorImage: string
   ) {}
 
-  async prepare(host: ProxyHostRow, requireCapabilities: boolean, force = false): Promise<ProxyHostRow> {
-    return this.withLinkOperation(host.id, () => this.prepareLocked(host, requireCapabilities, force));
+  setEventBus(eventBus: EventBusService): void {
+    this.eventBus = eventBus;
+  }
+
+  async prepare(
+    host: ProxyHostRow,
+    requireCapabilities: boolean,
+    force = false,
+    phase: 'provisioning' | 'reconciliation' = 'provisioning'
+  ): Promise<ProxyHostRow> {
+    try {
+      const result = await this.withLinkOperation(host.id, () => this.prepareLocked(host, requireCapabilities, force));
+      this.emitLinkState(result, phase, result.secureLinkLastError ? 'failed' : 'ready', result.secureLinkLastError);
+      return result;
+    } catch (error) {
+      this.emitLinkState(host, phase, 'failed', error);
+      throw error;
+    }
   }
 
   private async prepareLocked(host: ProxyHostRow, requireCapabilities: boolean, force: boolean): Promise<ProxyHostRow> {
@@ -263,7 +281,7 @@ export class ProxySecureLinkService {
   }
 
   async reconcileExisting(host: ProxyHostRow): Promise<ProxyHostRow> {
-    return this.prepare(host, false, true);
+    return this.prepare(host, false, true, 'reconciliation');
   }
 
   async reconcileTargetNode(nodeId: string): Promise<void> {
@@ -279,6 +297,30 @@ export class ProxySecureLinkService {
     } finally {
       if (this.linkOperations.get(linkId) === current) this.linkOperations.delete(linkId);
     }
+  }
+
+  private emitLinkState(
+    host: ProxyHostRow,
+    phase: 'provisioning' | 'reconciliation',
+    state: 'ready' | 'failed',
+    error?: unknown
+  ): void {
+    this.eventBus?.publish('proxy.secure-link.changed', {
+      id: host.id,
+      domain: host.domainNames?.[0] ?? host.id,
+      phase,
+      state,
+      failureCode: state === 'failed' ? this.failureCode(error) : null,
+    });
+  }
+
+  private failureCode(error: unknown): string {
+    if (error instanceof AppError) return error.code;
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    if (/timeout|timed out/i.test(message)) return 'timeout';
+    if (/offline|unavailable|disconnect/i.test(message)) return 'node_unavailable';
+    if (/probe|status|response/i.test(message)) return 'probe_failed';
+    return 'secure_link_failed';
   }
 
   private async nodesSupportSecureLinks(nodeIds: string[]): Promise<boolean> {

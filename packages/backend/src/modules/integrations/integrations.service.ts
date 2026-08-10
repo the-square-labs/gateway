@@ -480,7 +480,7 @@ export class IntegrationsService {
         });
       }
 
-      this.emitConnector(id, 'synced');
+      this.emitConnector(id, 'synced', 'gitlab', { name: row.name, failureCount: 0 });
       this.emitConnector(id, 'registries-synced');
       return {
         status: 'success',
@@ -502,7 +502,11 @@ export class IntegrationsService {
           updatedAt: new Date(),
         })
         .where(eq(integrationConnectors.id, id));
-      this.emitConnector(id, 'sync-failed');
+      this.emitConnector(id, 'sync-failed', 'gitlab', {
+        name: row.name,
+        failureCount,
+        failureCode: this.connectorFailureCode(error),
+      });
       throw error;
     } finally {
       this.syncLocks.delete(id);
@@ -773,7 +777,7 @@ export class IntegrationsService {
         });
       }
 
-      this.emitConnector(id, 'synced', 'cloudflare');
+      this.emitConnector(id, 'synced', 'cloudflare', { name: row.name, failureCount: 0 });
       return { status: 'success', zoneCount: zones.length };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown sync failure';
@@ -792,7 +796,11 @@ export class IntegrationsService {
           updatedAt: new Date(),
         })
         .where(eq(integrationConnectors.id, id));
-      this.emitConnector(id, 'sync-failed', 'cloudflare');
+      this.emitConnector(id, 'sync-failed', 'cloudflare', {
+        name: row.name,
+        failureCount,
+        failureCode: this.connectorFailureCode(error),
+      });
       throw error;
     } finally {
       this.syncLocks.delete(id);
@@ -2516,8 +2524,23 @@ export class IntegrationsService {
     return [...keyed.values()];
   }
 
-  private emitConnector(id: string, action: string, provider: IntegrationProvider = 'gitlab') {
-    this.eventBus?.publish('integration.connector.changed', { id, provider, action });
+  private emitConnector(
+    id: string,
+    action: string,
+    provider: IntegrationProvider = 'gitlab',
+    extra: { name?: string; failureCount?: number; failureCode?: string } = {}
+  ) {
+    this.eventBus?.publish('integration.connector.changed', { id, provider, action, ...extra });
+  }
+
+  private connectorFailureCode(error: unknown): string {
+    if (error instanceof AppError) return error.code;
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    if (/401|authentication|unauthorized|token/i.test(message)) return 'authentication_failed';
+    if (/403|forbidden|permission/i.test(message)) return 'authorization_failed';
+    if (/429|rate.?limit/i.test(message)) return 'rate_limited';
+    if (/timeout|network|unreachable|ECONN/i.test(message)) return 'provider_unreachable';
+    return 'provider_error';
   }
 }
 

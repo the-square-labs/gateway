@@ -158,6 +158,7 @@ export interface ChatMessage {
   compactEpoch?: number;
   compactBoundaryMessageId?: string;
   compactTailMessageCount?: number;
+  steer?: boolean;
 }
 
 export interface AIMessageAttachment {
@@ -209,6 +210,27 @@ export type WSClientMessage =
       context?: PageContext;
       model?: string;
       reasoningEffort?: string;
+    }
+  | {
+      type: 'conversation.queue_message';
+      conversationId: string;
+      inputId: string;
+      clientCommandId: string;
+      content: string;
+      attachments?: AIMessageAttachment[];
+      context?: PageContext;
+    }
+  | {
+      type: 'conversation.steer_message';
+      conversationId: string;
+      inputId: string;
+      clientCommandId: string;
+    }
+  | {
+      type: 'conversation.cancel_queued_message';
+      conversationId: string;
+      inputId: string;
+      clientCommandId: string;
     }
   | { type: 'run.stop'; conversationId: string; runId: string; clientCommandId: string }
   | {

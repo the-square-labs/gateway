@@ -582,10 +582,11 @@ export function DashboardLayout() {
   }
 
   const canUseAI = !!currentUser?.scopes?.includes(AI_SCOPE) && aiEnabled !== false;
-  const useLiteMode = aiLiteMode && canUseAI;
+  const isAIConversationRoute = /^\/ai\/chats\/[^/]+$/.test(location.pathname);
+  const useLiteMode = (aiLiteMode || isAIConversationRoute) && canUseAI;
 
   if (useLiteMode) {
-    const isAIHome = location.pathname === "/";
+    const isAIHome = location.pathname === "/" || isAIConversationRoute;
 
     return (
       <TooltipProvider>

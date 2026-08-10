@@ -48,13 +48,14 @@ import { useUIStore } from "@/stores/ui";
 import type {
   AIComposerAttachment,
   AIComposerLocalImageAttachment,
+  AIConversationInput,
   AIConversationStatus,
   AIMessageAttachment,
   AIRunStatus,
   AIToolCall,
   PageContext,
 } from "@/types/ai";
-import { AIComposer, AIComposerDisclaimer } from "./AIComposer";
+import { AIComposer, AIQueuedMessages } from "./AIComposer";
 import { AIConversationBlockedBlock } from "./AIConversationBlockedBlock";
 import { AIMessageList } from "./AIMessageList";
 import { ApprovalBlock, QuestionBlock } from "./AIToolCallBlock";
@@ -110,7 +111,7 @@ async function uploadLocalComposerAttachment(
 }
 
 const PANEL_WIDTH_KEY = "gateway-ai-panel-width";
-const DEFAULT_WIDTH = 360;
+const DEFAULT_WIDTH = 480;
 const MIN_WIDTH = 360;
 const MAX_WIDTH = 560;
 const NORMAL_RECENT_CONVERSATION_LIMIT = 5;
@@ -220,7 +221,11 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     activeRunId,
     canContinueConversation,
     isCompactingContext,
+    queuedInputs,
     sendMessage,
+    queueMessage,
+    steerQueuedMessage,
+    cancelQueuedMessage,
     continueConversation,
     approveTool,
     rejectTool,
@@ -414,9 +419,8 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
   const handleSend = useCallback(async () => {
     const text = input.trim();
     if (!text && attachments.length === 0) return;
-    if (currentConversationStreaming) return;
 
-    if (attachments.length === 0 && text.startsWith("/")) {
+    if (!currentConversationStreaming && attachments.length === 0 && text.startsWith("/")) {
       const handled = await handleSlashCommand(text);
       if (handled) {
         setInput("");
@@ -436,9 +440,13 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
       setAttachments([]);
       setSlashResults([]);
       if (textareaRef.current) textareaRef.current.style.height = "auto";
-      sendMessage(text, context, uploadedAttachments, {
-        startNewConversation: isNewConversationDraft,
-      });
+      if (currentConversationStreaming) {
+        queueMessage(text, context, uploadedAttachments);
+      } else {
+        sendMessage(text, context, uploadedAttachments, {
+          startNewConversation: isNewConversationDraft,
+        });
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to attach image");
     } finally {
@@ -452,10 +460,26 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     handleSlashCommand,
     input,
     isNewConversationDraft,
+    queueMessage,
     sendMessage,
     setAttachments,
     setInput,
   ]);
+
+  const handleEditQueued = useCallback(
+    (item: AIConversationInput) => {
+      cancelQueuedMessage(item.id);
+      setInput(item.content);
+      setAttachments(item.attachments);
+      requestAnimationFrame(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        textarea.focus();
+        autoResizeTextarea(textarea);
+      });
+    },
+    [cancelQueuedMessage, setAttachments, setInput]
+  );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // Slash command navigation
@@ -487,7 +511,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
 
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (!currentConversationStreaming) handleSend();
+      void handleSend();
     }
   };
 
@@ -846,7 +870,14 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
         ) : conversationBlock ? (
           <AIConversationBlockedBlock block={conversationBlock} onNewChat={clearMessages} />
         ) : (
-          <div className="relative">
+          <div className="relative space-y-2">
+            <AIQueuedMessages
+              items={queuedInputs}
+              onSendNow={steerQueuedMessage}
+              onEdit={handleEditQueued}
+              onRemove={cancelQueuedMessage}
+              className="border-x-0"
+            />
             <AIComposer
               textareaRef={textareaRef}
               input={input}
@@ -900,7 +931,6 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
             />
           </div>
         )}
-        <AIComposerDisclaimer className="pb-2" />
       </div>
       <GitLabAuthorizationModal />
     </div>

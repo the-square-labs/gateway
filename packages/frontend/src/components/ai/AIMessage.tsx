@@ -178,7 +178,10 @@ export function AIMessage({
             </div>
           )}
         </div>
-        <div className="absolute right-0 top-full z-10 mt-1 flex items-center gap-1 text-xs text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+        <div className="absolute right-0 top-full z-10 mt-1 flex items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+          {message.steer && (
+            <span>{message.steerPending ? "Steer · waiting for next step" : "Steer"}</span>
+          )}
           <span className="whitespace-nowrap">{formatMessageRelativeTime(message)}</span>
           {onEditUserMessage && (
             <button

@@ -139,6 +139,7 @@ type QueuedApproval = {
 };
 
 type AutoCompactContextHook = (messages: ChatMessage[]) => Promise<ChatMessage[]>;
+type ReceivePendingSteersHook = (messages: ChatMessage[]) => Promise<ChatMessage[]>;
 
 type ToolRuntimeContext = {
   pageContext?: PageContext;
@@ -2054,10 +2055,18 @@ export class AIService {
   }
 
   private async toProviderMessage(user: User, message: ChatMessage, config: { supportsImages: boolean }) {
-    const msg: Record<string, unknown> = { role: message.role, content: message.content };
+    const steerPrefix = message.steer
+      ? 'User clarification received while you were working. Apply it to the remaining work without stopping unless explicitly requested:\n\n'
+      : '';
+    const msg: Record<string, unknown> = {
+      role: message.role,
+      content: message.steer ? `${steerPrefix}${message.content ?? ''}` : message.content,
+    };
     if (message.role === 'user' && config.supportsImages && message.attachments?.length && this.artifactService) {
       const parts: Array<Record<string, unknown>> = [];
-      if (message.content) parts.push({ type: 'text', text: message.content });
+      if (message.content || message.steer) {
+        parts.push({ type: 'text', text: `${steerPrefix}${message.content ?? ''}` });
+      }
       const imageParts: Array<Record<string, unknown> | null> = await Promise.all(
         message.attachments
           .filter((attachment) => attachment.kind === 'image')
@@ -2265,7 +2274,8 @@ export class AIService {
     conversationId?: string,
     autoCompactContext?: AutoCompactContextHook,
     selectedModel?: string,
-    selectedReasoningEffort?: string
+    selectedReasoningEffort?: string,
+    receivePendingSteers?: ReceivePendingSteersHook
   ): AsyncGenerator<WSServerMessage> {
     let provider: AIProviderSession;
     try {
@@ -2311,6 +2321,8 @@ export class AIService {
 
     while (true) {
       if (signal.aborted) return;
+
+      if (receivePendingSteers) runtimeMessages = await receivePendingSteers(runtimeMessages);
 
       if (autoCompactContext) {
         try {
@@ -2632,7 +2644,8 @@ export class AIService {
     rejectionError?: string,
     selectedModel?: string,
     selectedReasoningEffort?: string,
-    approvalDecisions: Record<string, boolean> = {}
+    approvalDecisions: Record<string, boolean> = {},
+    receivePendingSteers?: ReceivePendingSteersHook
   ): AsyncGenerator<WSServerMessage> {
     let continuationProvider: AIProviderSession | undefined;
     if (toolName === 'ask_question') {
@@ -2781,7 +2794,8 @@ export class AIService {
           undefined,
           selectedModel,
           selectedReasoningEffort,
-          approvalDecisions
+          approvalDecisions,
+          receivePendingSteers
         );
         return;
       }
@@ -2845,6 +2859,8 @@ export class AIService {
     let commentRepairAttempts = 0;
     while (true) {
       if (signal.aborted) return;
+
+      if (receivePendingSteers) runtimeMessages = await receivePendingSteers(runtimeMessages);
 
       if (autoCompactContext) {
         try {

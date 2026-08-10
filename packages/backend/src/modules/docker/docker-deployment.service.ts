@@ -129,8 +129,27 @@ export class DockerDeploymentService {
   }
 
   private emit(action: string, deploymentId: string, nodeId: string, extra?: Record<string, unknown>) {
-    this.eventBus?.publish('docker.deployment.changed', { action, deploymentId, nodeId, ...(extra || {}) });
+    const eventData = { ...(extra ?? {}) };
+    if (action === 'failed') {
+      const error = eventData.error;
+      const legacyOperation = typeof eventData.action === 'string' ? eventData.action : undefined;
+      delete eventData.error;
+      delete eventData.action;
+      eventData.operation = eventData.operation ?? legacyOperation ?? 'deployment';
+      eventData.failureCode = eventData.failureCode ?? this.failureCode(error);
+    }
+    this.eventBus?.publish('docker.deployment.changed', { ...eventData, action, deploymentId, nodeId });
     this.eventBus?.publish('docker.container.changed', { action: 'deployment', deploymentId, nodeId });
+  }
+
+  private failureCode(error: unknown): string {
+    if (error instanceof AppError) return error.code;
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    if (/timeout|timed out/i.test(message)) return 'timeout';
+    if (/offline|unavailable|disconnect/i.test(message)) return 'node_unavailable';
+    if (/health|probe|status/i.test(message)) return 'health_check_failed';
+    if (/image|manifest|registry|pull/i.test(message)) return 'image_unavailable';
+    return 'deployment_failed';
   }
 
   private transitionKey(nodeId: string, deploymentId: string) {
@@ -577,8 +596,9 @@ export class DockerDeploymentService {
             .where(eq(dockerDeploymentSlots.deploymentId, deploymentId));
         });
         this.emit('failed', deploymentId, nodeId, {
-          action: 'update_router',
-          error: err instanceof Error ? err.message : err,
+          operation: 'update_router',
+          name: current.name,
+          failureCode: this.failureCode(err),
         });
         throw err;
       }
@@ -737,7 +757,11 @@ export class DockerDeploymentService {
           .set({ status: 'failed', updatedAt: new Date() })
           .where(eq(dockerDeployments.id, deploymentId)),
       ]);
-      this.emit('failed', deploymentId, nodeId, { error });
+      this.emit('failed', deploymentId, nodeId, {
+        operation: 'deploy',
+        name: deployment.name,
+        failureCode: this.failureCode(err),
+      });
       throw err;
     } finally {
       this.clearTransition(deployment);
@@ -826,7 +850,11 @@ export class DockerDeploymentService {
       }
       await this.registry.rememberImageRegistry(nodeId, successfulDesiredConfig.image, successfulRegistryId);
     } catch (err) {
-      this.emit('failed', deploymentId, nodeId, { action: 'switch', error: err instanceof Error ? err.message : err });
+      this.emit('failed', deploymentId, nodeId, {
+        operation: 'switch',
+        name: deployment.name,
+        failureCode: this.failureCode(err),
+      });
       if (managesTransition) this.clearTransition(deployment);
       throw err;
     }

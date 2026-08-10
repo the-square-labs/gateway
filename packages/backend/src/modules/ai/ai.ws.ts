@@ -490,6 +490,90 @@ export function createWSHandlers() {
         return;
       }
 
+      if (msg.type === 'conversation.queue_message') {
+        try {
+          const content = msg.content.trim();
+          if (!content && !msg.attachments?.length) {
+            throw new AppError(400, 'AI_MESSAGE_REQUIRED', 'Message content is required');
+          }
+          const rateCheck = await checkRateLimit(user.id);
+          if (!rateCheck.allowed) {
+            const code = rateCheck.unavailable ? 'RATE_LIMIT_UNAVAILABLE' : 'RATE_LIMITED';
+            throw new AppError(
+              rateCheck.unavailable ? 503 : 429,
+              code,
+              rateCheck.unavailable ? 'Gateway is temporarily unavailable' : 'AI rate limit exceeded',
+              rateCheck.unavailable ? undefined : { retryAfter: rateCheck.retryAfter }
+            );
+          }
+          const runService = container.resolve(AIRunService);
+          const result = await runService.queueConversationInput({
+            conversationId: msg.conversationId,
+            userId: user.id,
+            inputId: msg.inputId,
+            clientCommandId: msg.clientCommandId,
+            content,
+            attachments: msg.attachments,
+            context: msg.context ? { ...msg.context } : null,
+          });
+          send(ws, {
+            type: 'command.ack',
+            commandType: msg.type,
+            clientCommandId: msg.clientCommandId,
+            conversationId: msg.conversationId,
+            duplicate: result.duplicate,
+          });
+          await sendConversationSnapshot(ws, user.id, msg.conversationId);
+          runService.startPendingInputExecution(user, msg.conversationId);
+        } catch (error) {
+          sendCommandError(ws, msg, error, 'Failed to queue AI message');
+        }
+        return;
+      }
+
+      if (msg.type === 'conversation.steer_message') {
+        try {
+          const runService = container.resolve(AIRunService);
+          await runService.steerConversationInput({
+            conversationId: msg.conversationId,
+            inputId: msg.inputId,
+            userId: user.id,
+          });
+          send(ws, {
+            type: 'command.ack',
+            commandType: msg.type,
+            clientCommandId: msg.clientCommandId,
+            conversationId: msg.conversationId,
+          });
+          await sendConversationSnapshot(ws, user.id, msg.conversationId);
+          runService.startPendingInputExecution(user, msg.conversationId);
+        } catch (error) {
+          sendCommandError(ws, msg, error, 'Failed to steer AI message');
+        }
+        return;
+      }
+
+      if (msg.type === 'conversation.cancel_queued_message') {
+        try {
+          const runService = container.resolve(AIRunService);
+          await runService.cancelConversationInput({
+            conversationId: msg.conversationId,
+            inputId: msg.inputId,
+            userId: user.id,
+          });
+          send(ws, {
+            type: 'command.ack',
+            commandType: msg.type,
+            clientCommandId: msg.clientCommandId,
+            conversationId: msg.conversationId,
+          });
+          await sendConversationSnapshot(ws, user.id, msg.conversationId);
+        } catch (error) {
+          sendCommandError(ws, msg, error, 'Failed to cancel queued AI message');
+        }
+        return;
+      }
+
       if (msg.type === 'conversation.continue') {
         try {
           const model = msg.model?.trim();

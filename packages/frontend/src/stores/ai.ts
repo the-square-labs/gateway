@@ -22,6 +22,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useUIStore } from "@/stores/ui";
 import type {
   AIConfig,
+  AIConversationInput,
   AIConversationRuntimeSnapshot,
   AIConversationStatus,
   AICredentialChallenge,
@@ -169,6 +170,16 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function generateUuid(): string {
+  return (
+    globalThis.crypto?.randomUUID?.() ??
+    "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
+      const value = (Math.random() * 16) | 0;
+      return (char === "x" ? value : (value & 0x3) | 0x8).toString(16);
+    })
+  );
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -269,6 +280,7 @@ function invalidateStore(storeName: string): void {
 
 interface AIState {
   messages: AIMessage[];
+  queuedInputs: AIConversationInput[];
   resourceReferences: AIResourceReference[];
   recentConversations: AIConversationSummary[];
   conversationFolders: AIConversationFolder[];
@@ -304,6 +316,13 @@ interface AIState {
     attachments?: AIMessage["attachments"],
     options?: SendMessageOptions
   ) => void;
+  queueMessage: (
+    content: string,
+    context?: PageContext,
+    attachments?: AIMessage["attachments"]
+  ) => void;
+  steerQueuedMessage: (inputId: string) => void;
+  cancelQueuedMessage: (inputId: string) => void;
   continueConversation: (context?: PageContext) => void;
   approveTool: (toolCallId: string) => void;
   rejectTool: (toolCallId: string) => void;
@@ -351,6 +370,13 @@ const pendingToolCommands = new Map<
     approvalDecision?: "approved" | "rejected";
   }
 >();
+const pendingInputCommands = new Map<
+  string,
+  {
+    kind: "queue" | "steer" | "cancel";
+    input: AIConversationInput;
+  }
+>();
 
 declare global {
   interface Window {
@@ -387,6 +413,33 @@ function appendLocalAssistantError(messages: AIMessage[], content: string): AIMe
       localOnly: true,
     },
   ];
+}
+
+function appendPendingSteerMessage(messages: AIMessage[], input: AIConversationInput): AIMessage[] {
+  const id = `steer:${input.id}`;
+  if (messages.some((message) => message.id === id)) return messages;
+  return [
+    ...messages,
+    {
+      id,
+      role: "user",
+      content: input.content,
+      attachments: input.attachments,
+      createdAt: input.createdAt,
+      localOnly: true,
+      steer: true,
+      steerPending: true,
+    },
+  ];
+}
+
+function appendPendingSteerMessages(
+  messages: AIMessage[],
+  inputs: AIConversationInput[]
+): AIMessage[] {
+  return inputs
+    .filter((input) => input.mode === "steer" && input.status === "pending")
+    .reduce(appendPendingSteerMessage, messages);
 }
 
 function startingAssistantMessageId(clientCommandId: string): string {
@@ -697,6 +750,7 @@ export async function getAIContextUsage(
 
 export const useAIStore = create<AIState>()((set, get) => ({
   messages: [],
+  queuedInputs: [],
   resourceReferences: [],
   recentConversations: [],
   conversationFolders: [],
@@ -849,6 +903,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
                 isStreaming: true,
               },
             ],
+            queuedInputs: [],
             resourceReferences: [],
             savedName: null,
             activeConversationId: null,
@@ -887,6 +942,102 @@ export const useAIStore = create<AIState>()((set, get) => ({
           `**Error:** ${error instanceof Error ? error.message : "Failed to send message"}`
         ),
       }));
+    }
+  },
+
+  queueMessage: (
+    content: string,
+    context?: PageContext,
+    attachments: AIMessage["attachments"] = []
+  ) => {
+    const state = get();
+    const text = content.trim();
+    if (!state.activeConversationId || (!text && attachments.length === 0)) return;
+    const inputId = generateUuid();
+    const clientCommandId = generateId();
+    const createdAt = nowIso();
+    const input: AIConversationInput = {
+      id: inputId,
+      conversationId: state.activeConversationId,
+      targetRunId: state.activeRunId,
+      userId: "",
+      clientCommandId,
+      mode: "queued",
+      status: "pending",
+      content: text,
+      attachments,
+      context: context ?? null,
+      consumedAt: null,
+      createdAt,
+      updatedAt: createdAt,
+    };
+    pendingInputCommands.set(clientCommandId, { kind: "queue", input });
+    set((current) => ({ queuedInputs: [...current.queuedInputs, input] }));
+    try {
+      sendWSMessage({
+        type: "conversation.queue_message",
+        conversationId: state.activeConversationId,
+        inputId,
+        clientCommandId,
+        content: text,
+        attachments,
+        context,
+      });
+    } catch {
+      pendingInputCommands.delete(clientCommandId);
+      set((current) => ({
+        queuedInputs: current.queuedInputs.filter((item) => item.id !== inputId),
+      }));
+    }
+  },
+
+  steerQueuedMessage: (inputId: string) => {
+    const state = get();
+    if (!state.activeConversationId) return;
+    const input = state.queuedInputs.find((item) => item.id === inputId);
+    if (!input) return;
+    const clientCommandId = generateId();
+    pendingInputCommands.set(clientCommandId, { kind: "steer", input });
+    set((current) => ({
+      queuedInputs: current.queuedInputs.filter((item) => item.id !== inputId),
+      messages: appendPendingSteerMessage(current.messages, { ...input, mode: "steer" }),
+    }));
+    try {
+      sendWSMessage({
+        type: "conversation.steer_message",
+        conversationId: state.activeConversationId,
+        inputId,
+        clientCommandId,
+      });
+    } catch {
+      pendingInputCommands.delete(clientCommandId);
+      set((current) => ({
+        queuedInputs: [...current.queuedInputs, input],
+        messages: current.messages.filter((message) => message.id !== `steer:${inputId}`),
+      }));
+    }
+  },
+
+  cancelQueuedMessage: (inputId: string) => {
+    const state = get();
+    if (!state.activeConversationId) return;
+    const input = state.queuedInputs.find((item) => item.id === inputId);
+    if (!input) return;
+    const clientCommandId = generateId();
+    pendingInputCommands.set(clientCommandId, { kind: "cancel", input });
+    set((current) => ({
+      queuedInputs: current.queuedInputs.filter((item) => item.id !== inputId),
+    }));
+    try {
+      sendWSMessage({
+        type: "conversation.cancel_queued_message",
+        conversationId: state.activeConversationId,
+        inputId,
+        clientCommandId,
+      });
+    } catch {
+      pendingInputCommands.delete(clientCommandId);
+      set((current) => ({ queuedInputs: [...current.queuedInputs, input] }));
     }
   },
 
@@ -1117,6 +1268,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
     const draftSelection = resolveDraftProviderSelection(get().providerStatus);
     set({
       messages: [],
+      queuedInputs: [],
       resourceReferences: [],
       savedName: null,
       activeConversationId: null,
@@ -1258,20 +1410,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
           conversationId: previousConversationId,
         });
       }
-      set({
-        messages: [],
-        resourceReferences: [],
-        savedName: null,
-        activeConversationId: conversationId,
-        sidebarActiveConversationId: conversationId,
-        activeRunId: null,
-        canContinueConversation: false,
-        isStartingConversation: false,
-        isCompactingContext: false,
-        lastContext: null,
-        pendingApprovalToolCallId: null,
-        pendingCredentialChallenge: null,
-      });
+      set({ sidebarActiveConversationId: conversationId });
       const conversation = await getConversation(conversationId);
       if (loadGeneration !== conversationLoadGeneration) return;
       set({
@@ -1306,6 +1445,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
       };
       set({
         messages: [localMsg],
+        queuedInputs: [],
         savedName: null,
         activeConversationId: null,
         sidebarActiveConversationId: null,
@@ -1333,6 +1473,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
         ...(state.activeConversationId === conversationId
           ? {
               messages: [],
+              queuedInputs: [],
               resourceReferences: [],
               savedName: null,
               activeConversationId: null,
@@ -1596,6 +1737,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
       const draftSelection = resolveDraftProviderSelection(get().providerStatus);
       set({
         messages: [],
+        queuedInputs: [],
         resourceReferences: [],
         savedName: null,
         activeConversationId: null,
@@ -1693,8 +1835,10 @@ export function resetAIStateForAuthChange() {
   assistantDraftVersions.clear();
   appliedConversationRevisions.clear();
   pendingToolCommands.clear();
+  pendingInputCommands.clear();
   useAIStore.setState({
     messages: [],
+    queuedInputs: [],
     resourceReferences: [],
     recentConversations: [],
     conversationFolders: [],
@@ -1730,6 +1874,7 @@ function handleWSMessage(
   switch (msg.type) {
     case "command.ack":
       {
+        if (msg.clientCommandId) pendingInputCommands.delete(msg.clientCommandId);
         const pending = msg.clientCommandId
           ? pendingToolCommands.get(msg.clientCommandId)
           : undefined;
@@ -1768,6 +1913,33 @@ function handleWSMessage(
 
     case "command.error":
       {
+        const pendingInput = msg.clientCommandId
+          ? pendingInputCommands.get(msg.clientCommandId)
+          : undefined;
+        if (pendingInput) {
+          if (msg.clientCommandId) pendingInputCommands.delete(msg.clientCommandId);
+          set((state) => {
+            if (pendingInput.kind === "queue") {
+              return {
+                queuedInputs: state.queuedInputs.filter(
+                  (input) => input.id !== pendingInput.input.id
+                ),
+              };
+            }
+            return {
+              queuedInputs: state.queuedInputs.some((input) => input.id === pendingInput.input.id)
+                ? state.queuedInputs
+                : [...state.queuedInputs, pendingInput.input],
+              messages:
+                pendingInput.kind === "steer"
+                  ? state.messages.filter(
+                      (message) => message.id !== `steer:${pendingInput.input.id}`
+                    )
+                  : state.messages,
+            };
+          });
+          break;
+        }
         const pending = msg.clientCommandId
           ? pendingToolCommands.get(msg.clientCommandId)
           : undefined;
@@ -1999,9 +2171,10 @@ function projectConversationSnapshot(
   const pendingQuestionToolCalls = pendingQuestions.map((question) =>
     pendingQuestionToToolCall(question, runtimeToolCallsById.get(question.toolCallId))
   );
+  const pendingInputs = snapshot.runtime.pendingInputs ?? [];
   const attachedMessages = preserveFreshRuntimeDraft(
     attachRuntimeToolCallsToMessages(
-      normalizeSnapshotMessages(snapshot),
+      appendPendingSteerMessages(normalizeSnapshotMessages(snapshot), pendingInputs),
       [...runtimeToolCalls, ...pendingQuestionToolCalls],
       Boolean(snapshot.runtime.activeRun),
       snapshot.runtime.activeRun?.id ?? null
@@ -2018,6 +2191,7 @@ function projectConversationSnapshot(
 
   return {
     messages,
+    queuedInputs: pendingInputs.filter((input) => input.mode === "queued"),
     resourceReferences: snapshot.resourceReferences ?? [],
     savedName: snapshot.conversation.title,
     activeConversationId: snapshot.conversation.id,
@@ -2164,13 +2338,25 @@ function applyAssistantCommentDoneToMessages(
   messages: AIMessage[],
   event: Extract<WSServerMessage, { type: "assistant.comment_done" }>
 ): AIMessage[] {
-  const nextMessages = messages.map((message) =>
-    message.role === "assistant" &&
-    message.id.startsWith(`${event.runId}:comment:`) &&
-    message.isStreaming
-      ? { ...message, isStreaming: false }
-      : message
-  );
+  let completedBoundary = 0;
+  const nextMessages = messages.flatMap((message) => {
+    if (message.role !== "assistant") return [message];
+    if (message.id.startsWith(`${event.runId}:comment:`) && message.isStreaming) {
+      return [{ ...message, isStreaming: false }];
+    }
+    if (message.id !== `${event.runId}:runtime` && message.id !== `${event.runId}:draft`) {
+      return [message];
+    }
+    if (!message.content.trim() && !message.toolCalls?.length) return [];
+    completedBoundary += 1;
+    return [
+      {
+        ...message,
+        id: `${event.runId}:comment:completed:${message.sequence ?? completedBoundary}:${completedBoundary}`,
+        isStreaming: false,
+      },
+    ];
+  });
   return ensureActiveRuntimePlaceholder(nextMessages, event.runId);
 }
 
@@ -2314,6 +2500,8 @@ function normalizeConversationMessage(
     conversationStatus: normalizeConversationBlockStatus(message.conversationStatus),
     blockReason: typeof message.blockReason === "string" ? message.blockReason : undefined,
     modelChange: normalizeModelChange(message.modelChange),
+    steer: message.steer === true,
+    steerPending: message.steerPending === true,
     localOnly: message.localOnly === true,
     runError: message.runError === true,
     runId: typeof message.runId === "string" ? message.runId : undefined,

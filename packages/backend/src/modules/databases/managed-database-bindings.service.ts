@@ -147,8 +147,13 @@ export class ManagedDatabaseBindingService {
         const credentials = this.bindingCredentials(binding);
         const owner = this.ownerCredentials(database);
         await this.provisionClickHouseBindingPrincipal(database, owner, credentials);
-      } catch {
+        this.emitBinding(database, binding, 'binding.reconciliation_ready', { failurePhase: 'reconciliation' });
+      } catch (error) {
         failures += 1;
+        this.emitBinding(database, binding, 'binding.reconciliation_failed', {
+          failurePhase: 'reconciliation',
+          failureCode: this.failureCode(error),
+        });
       }
     }
     if (failures > 0) {
@@ -700,7 +705,10 @@ export class ManagedDatabaseBindingService {
       })
       .where(eq(managedDatabaseBindings.id, binding.id))
       .returning();
-    this.emitBinding(database, failed!, 'binding.error');
+    this.emitBinding(database, failed!, 'binding.error', {
+      failurePhase: operation === 'prepare' ? 'provisioning' : 'deprovisioning',
+      failureCode: this.failureCode(error),
+    });
     return bindingView(failed!);
   }
 
@@ -952,7 +960,14 @@ export class ManagedDatabaseBindingService {
   private emitBinding(
     database: ManagedDatabaseRow,
     binding: ManagedDatabaseBindingRow,
-    action: 'binding.created' | 'binding.ready' | 'binding.error' | 'binding.deleted'
+    action:
+      | 'binding.created'
+      | 'binding.ready'
+      | 'binding.error'
+      | 'binding.deleted'
+      | 'binding.reconciliation_failed'
+      | 'binding.reconciliation_ready',
+    extra: { failurePhase?: string; failureCode?: string } = {}
   ) {
     const payload = {
       resourceKind: 'managed_database_binding',
@@ -962,6 +977,10 @@ export class ManagedDatabaseBindingService {
       type: database.type,
       status: binding.status,
       action,
+      targetNodeId: binding.targetNodeId,
+      targetType: binding.targetType,
+      targetResourceId: binding.targetResourceId,
+      ...extra,
     };
     this.eventBus?.publish('database.changed', payload);
     this.eventBus?.publish('docker.container.changed', {
@@ -972,5 +991,14 @@ export class ManagedDatabaseBindingService {
       targetType: binding.targetType,
       targetResourceId: binding.targetResourceId,
     });
+  }
+
+  private failureCode(error: unknown): string {
+    if (error instanceof AppError) return error.code;
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    if (/timeout|timed out/i.test(message)) return 'timeout';
+    if (/offline|unavailable|disconnect/i.test(message)) return 'node_unavailable';
+    if (/credential|password|authentication|unauthorized/i.test(message)) return 'authentication_failed';
+    return 'binding_operation_failed';
   }
 }

@@ -181,6 +181,15 @@ export interface NotificationTemplateContext {
   event: {
     name: string | null;
   };
+  operation: {
+    kind: string | null;
+    phase: string | null;
+    trigger: string | null;
+  };
+  failure: {
+    code: string | null;
+  };
+  details: Record<string, string | number | boolean | null>;
   fired: {
     at: string | null;
     duration: number | null;
@@ -208,6 +217,9 @@ export type NotificationTemplateContextInput = {
   certificate?: Partial<NotificationTemplateContext['certificate']>;
   state?: Partial<NotificationTemplateContext['state']>;
   event?: Partial<NotificationTemplateContext['event']>;
+  operation?: Partial<NotificationTemplateContext['operation']>;
+  failure?: Partial<NotificationTemplateContext['failure']>;
+  details?: Record<string, string | number | boolean | null>;
   fired?: Partial<NotificationTemplateContext['fired']>;
   resolution?: Partial<NotificationTemplateContext['resolution']>;
   gateway?: Partial<NotificationTemplateContext['gateway']>;
@@ -275,6 +287,15 @@ export function buildNotificationTemplateContext(input: NotificationTemplateCont
     event: {
       name: input.event?.name ?? null,
     },
+    operation: {
+      kind: input.operation?.kind ?? null,
+      phase: input.operation?.phase ?? null,
+      trigger: input.operation?.trigger ?? null,
+    },
+    failure: {
+      code: input.failure?.code ?? null,
+    },
+    details: input.details ?? {},
     fired: {
       at: input.fired?.at ?? null,
       duration: input.fired?.duration ?? null,

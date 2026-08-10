@@ -49,6 +49,7 @@ export function toChatMessage(value: unknown): ChatMessage | null {
       typeof message.compactBoundaryMessageId === 'string' ? message.compactBoundaryMessageId : undefined,
     compactTailMessageCount:
       typeof message.compactTailMessageCount === 'number' ? message.compactTailMessageCount : undefined,
+    steer: message.steer === true,
   };
 }
 

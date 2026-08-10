@@ -89,6 +89,49 @@ describe('AIService tool round comments', () => {
     mocks.streamModelResponse.mockReset();
   });
 
+  it('injects pending steer messages only at the next provider boundary', async () => {
+    let providerMessages: Array<{ role?: string; content?: unknown }> = [];
+    mocks.streamModelResponse.mockImplementation(async function* ({ messages }) {
+      providerMessages = messages;
+      yield {
+        type: 'model_response',
+        response: { content: 'Готово.', toolCalls: [] },
+      };
+    });
+
+    const service = createService();
+    vi.spyOn(service, 'buildSystemPrompt').mockResolvedValue('System prompt');
+    const receivePendingSteers = vi.fn(async (messages: ChatMessage[]) => [
+      ...messages,
+      { role: 'user' as const, content: 'Используй другой порт', steer: true },
+    ]);
+
+    await collect(
+      service.streamChat(
+        BASE_USER,
+        [{ role: 'user', content: 'Создай контейнер' }],
+        undefined,
+        new AbortController().signal,
+        'request-steer',
+        'conversation-1',
+        undefined,
+        undefined,
+        undefined,
+        receivePendingSteers
+      )
+    );
+
+    expect(receivePendingSteers).toHaveBeenCalledTimes(1);
+    expect(providerMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'user',
+          content: expect.stringContaining('Используй другой порт'),
+        }),
+      ])
+    );
+  });
+
   it('returns a structured tool failure for malformed arguments without executing the tool', async () => {
     const responses: MockModelResponse[] = [
       { toolCalls: [{ id: 'tool-invalid', name: 'get_current_context', arguments: '{' }] },

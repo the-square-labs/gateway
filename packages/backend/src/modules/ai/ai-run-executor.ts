@@ -3,10 +3,12 @@ import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { container } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import {
+  type AIConversationInput,
   type AICredentialChallenge,
   type AIRun,
   type AIRunQuestion,
   type AIRunToolCall,
+  aiConversationInputs,
   aiConversationMessages,
   aiConversations,
   aiRunCredentialChallenges,
@@ -40,6 +42,15 @@ import {
 import { redactOneTimeSecretToolResult } from './ai-secret-result-redaction.js';
 
 const logger = createChildLogger('AI-Run-Executor');
+const ACTIVE_RUN_STATUSES: AIRun['status'][] = [
+  'queued',
+  'running',
+  'waiting_for_approval',
+  'waiting_for_answer',
+  'waiting_for_credential',
+];
+const STEER_DEBOUNCE_MS = 1_000;
+const STEER_MAX_WAIT_MS = 3_000;
 
 function getClientAction(result: unknown): Record<string, unknown> | null {
   if (!result || typeof result !== 'object') return null;
@@ -113,6 +124,8 @@ export class AIRunExecutor {
   private readonly heartbeatTimers = new Map<string, NodeJS.Timeout>();
   private readonly assistantLiveDrafts = new AssistantLiveDraftStore();
   private readonly toolBoundaryMessageIds = new Map<string, string>();
+  private readonly pendingInputDispatches = new Set<string>();
+  private readonly pendingInputRedispatches = new Set<string>();
 
   constructor(
     private readonly db: DrizzleClient,
@@ -131,6 +144,22 @@ export class AIRunExecutor {
     void this.executeRun(user, runId).catch((error) => {
       this.logExecutionError(runId, error);
     });
+  }
+
+  startPendingInputExecution(user: User, conversationId: string): void {
+    if (this.pendingInputDispatches.has(conversationId)) {
+      this.pendingInputRedispatches.add(conversationId);
+      return;
+    }
+    this.pendingInputDispatches.add(conversationId);
+    void this.dispatchNextPendingInput(user, conversationId)
+      .catch((error) => this.logExecutionError(`pending-input:${conversationId}`, error))
+      .finally(() => {
+        this.pendingInputDispatches.delete(conversationId);
+        if (this.pendingInputRedispatches.delete(conversationId)) {
+          this.startPendingInputExecution(user, conversationId);
+        }
+      });
   }
 
   startApprovalContinuation(user: User, input: ApprovalContinuationInput): void {
@@ -184,7 +213,7 @@ export class AIRunExecutor {
   }
 
   async waitForIdle(deadline: number): Promise<void> {
-    while (this.executingRuns.size > 0 && Date.now() < deadline) {
+    while ((this.executingRuns.size > 0 || this.pendingInputDispatches.size > 0) && Date.now() < deadline) {
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, Math.min(100, Math.max(1, deadline - Date.now())));
         timer.unref?.();
@@ -248,7 +277,8 @@ export class AIRunExecutor {
         run.conversationId,
         (currentMessages) => this.maybeAutoCompactContext(user, run, currentMessages, pageContext, abortController),
         run.model ?? undefined,
-        run.reasoningEffort ?? undefined
+        run.reasoningEffort ?? undefined,
+        (currentMessages) => this.receivePendingSteers(user, run, currentMessages, abortController.signal)
       )) {
         if (abortController.signal.aborted) return;
 
@@ -274,6 +304,7 @@ export class AIRunExecutor {
       if (assistantMessageId) await this.linkRunToolCallsToAssistantMessage(run.id, assistantMessageId);
       const errorMessage = error instanceof Error ? error.message : 'AI run failed';
       await this.updateRunStatus(run.id, 'failed', errorMessage);
+      await this.returnPendingSteersToQueue(run.id);
       await this.persistRunErrorMessage(user.id, run.conversationId, run.id, errorMessage);
       this.forgetAssistantDraftState(run.id);
       this.publishConversationChanged(user.id, run.conversationId);
@@ -507,7 +538,8 @@ export class AIRunExecutor {
         input.rejectionError,
         run.model ?? undefined,
         run.reasoningEffort ?? undefined,
-        input.approvalDecisions
+        input.approvalDecisions,
+        (currentMessages) => this.receivePendingSteers(user, run, currentMessages, abortController.signal)
       )) {
         if (abortController.signal.aborted) return;
 
@@ -533,6 +565,7 @@ export class AIRunExecutor {
       if (assistantMessageId) await this.linkRunToolCallsToAssistantMessage(input.runId, assistantMessageId);
       const errorMessage = error instanceof Error ? error.message : 'AI run failed';
       await this.updateRunStatus(input.runId, 'failed', errorMessage);
+      await this.returnPendingSteersToQueue(input.runId);
       await this.persistRunErrorMessage(user.id, input.conversationId, input.runId, errorMessage);
       this.forgetAssistantDraftState(input.runId);
       this.publishConversationChanged(user.id, input.conversationId);
@@ -714,6 +747,7 @@ export class AIRunExecutor {
       }
       const errorMessage = event.type === 'error' ? event.message : event.reason;
       await this.updateRunStatus(run.id, 'failed', errorMessage);
+      await this.returnPendingSteersToQueue(run.id);
       if (event.type === 'error') {
         await this.persistRunErrorMessage(user.id, run.conversationId, run.id, errorMessage);
       }
@@ -751,6 +785,7 @@ export class AIRunExecutor {
       await this.setConversationCheckpoint(run.conversationId, null);
       this.forgetAssistantDraftState(run.id);
       this.publishConversationChanged(user.id, run.conversationId);
+      this.startPendingInputExecution(user, run.conversationId);
       return { assistantContent, assistantMessageWritten, done: true };
     }
 
@@ -775,6 +810,197 @@ export class AIRunExecutor {
     );
     if (!shouldCompact) return messages;
     return this.performContextCompaction(user, run, messages, pageContext, abortController, 'auto', false);
+  }
+
+  private async receivePendingSteers(
+    user: User,
+    run: AIRun,
+    messages: ChatMessage[],
+    signal: AbortSignal
+  ): Promise<ChatMessage[]> {
+    let pending = await this.listPendingSteers(run.id);
+    if (pending.length === 0 || signal.aborted) return messages;
+
+    const firstSeenAt = Math.min(...pending.map((item) => item.updatedAt.getTime()));
+    while (!signal.aborted) {
+      const latestUpdateAt = Math.max(...pending.map((item) => item.updatedAt.getTime()));
+      const wakeAt = Math.min(latestUpdateAt + STEER_DEBOUNCE_MS, firstSeenAt + STEER_MAX_WAIT_MS);
+      const remaining = wakeAt - Date.now();
+      if (remaining <= 0) break;
+      await waitFor(Math.min(remaining, 200), signal);
+      pending = await this.listPendingSteers(run.id);
+      if (pending.length === 0) return messages;
+    }
+    if (signal.aborted) return messages;
+
+    const consumed = await this.consumePendingSteers(user.id, run.conversationId, run.id);
+    if (consumed.length === 0) return messages;
+    this.publishConversationChanged(user.id, run.conversationId);
+    this.conversationSearchService?.rebuildConversationIndexBestEffort(user.id, run.conversationId);
+    return [...messages, ...consumed];
+  }
+
+  private listPendingSteers(runId: string): Promise<AIConversationInput[]> {
+    return this.db
+      .select()
+      .from(aiConversationInputs)
+      .where(
+        and(
+          eq(aiConversationInputs.targetRunId, runId),
+          eq(aiConversationInputs.mode, 'steer'),
+          eq(aiConversationInputs.status, 'pending')
+        )
+      )
+      .orderBy(asc(aiConversationInputs.createdAt));
+  }
+
+  private async returnPendingSteersToQueue(runId: string): Promise<void> {
+    await this.db
+      .update(aiConversationInputs)
+      .set({ mode: 'queued', targetRunId: null, updatedAt: new Date() })
+      .where(
+        and(
+          eq(aiConversationInputs.targetRunId, runId),
+          eq(aiConversationInputs.mode, 'steer'),
+          eq(aiConversationInputs.status, 'pending')
+        )
+      );
+  }
+
+  private async consumePendingSteers(userId: string, conversationId: string, runId: string): Promise<ChatMessage[]> {
+    return this.db.transaction(async (tx) => {
+      const pending = await tx
+        .select()
+        .from(aiConversationInputs)
+        .where(
+          and(
+            eq(aiConversationInputs.targetRunId, runId),
+            eq(aiConversationInputs.mode, 'steer'),
+            eq(aiConversationInputs.status, 'pending')
+          )
+        )
+        .orderBy(asc(aiConversationInputs.createdAt));
+      if (pending.length === 0) return [];
+
+      let sequence = await nextMessageSequence(tx, conversationId);
+      const values = pending.map((item) =>
+        toConversationMessage(
+          conversationId,
+          {
+            role: 'user',
+            content: item.content,
+            attachments: item.attachments,
+            steer: true,
+          },
+          sequence++
+        )
+      );
+      const inserted = await tx
+        .insert(aiConversationMessages)
+        .values(values)
+        .returning({ id: aiConversationMessages.id, uiMessage: aiConversationMessages.uiMessage });
+      const now = new Date();
+      await tx
+        .update(aiConversationInputs)
+        .set({ status: 'consumed', consumedAt: now, updatedAt: now })
+        .where(
+          inArray(
+            aiConversationInputs.id,
+            pending.map((item) => item.id)
+          )
+        );
+      await tx
+        .update(aiConversations)
+        .set({
+          lastContext: pending.at(-1)?.context ?? undefined,
+          updatedAt: now,
+        })
+        .where(and(eq(aiConversations.id, conversationId), eq(aiConversations.userId, userId)));
+      return inserted
+        .map((row) => toChatMessage({ ...row.uiMessage, id: row.id }))
+        .filter((message): message is ChatMessage => Boolean(message));
+    });
+  }
+
+  private async dispatchNextPendingInput(user: User, conversationId: string): Promise<void> {
+    const next = await this.db.transaction(async (tx) => {
+      const [activeRun] = await tx
+        .select({ id: aiRuns.id })
+        .from(aiRuns)
+        .where(and(eq(aiRuns.conversationId, conversationId), inArray(aiRuns.status, ACTIVE_RUN_STATUSES)))
+        .limit(1);
+      if (activeRun) return null;
+
+      const pending = await tx
+        .select()
+        .from(aiConversationInputs)
+        .where(
+          and(
+            eq(aiConversationInputs.conversationId, conversationId),
+            eq(aiConversationInputs.userId, user.id),
+            eq(aiConversationInputs.status, 'pending')
+          )
+        )
+        .orderBy(asc(aiConversationInputs.createdAt));
+      if (pending.length === 0) return null;
+
+      const steerBatch = pending.filter((item) => item.mode === 'steer');
+      const selected = steerBatch.length > 0 ? steerBatch : [pending[0]];
+      const conversation = await getOwnedConversation(tx, user.id, conversationId);
+      if (!conversation) return null;
+      let sequence = await nextMessageSequence(tx, conversationId);
+      const inserted = await tx
+        .insert(aiConversationMessages)
+        .values(
+          selected.map((item) =>
+            toConversationMessage(
+              conversationId,
+              {
+                role: 'user',
+                content: item.content,
+                attachments: item.attachments,
+                ...(item.mode === 'steer' ? { steer: true } : {}),
+              },
+              sequence++
+            )
+          )
+        )
+        .returning({ id: aiConversationMessages.id });
+      const activeMessageId = inserted.at(-1)?.id;
+      if (!activeMessageId) return null;
+      const now = new Date();
+      const [run] = await tx
+        .insert(aiRuns)
+        .values({
+          conversationId,
+          userId: user.id,
+          clientCommandId: `input:${selected[0].id}`,
+          activeMessageId,
+          model: conversation.model,
+          reasoningEffort: conversation.reasoningEffort,
+          status: 'queued',
+          updatedAt: now,
+        })
+        .returning();
+      await tx
+        .update(aiConversationInputs)
+        .set({ status: 'consumed', consumedAt: now, updatedAt: now })
+        .where(
+          inArray(
+            aiConversationInputs.id,
+            selected.map((item) => item.id)
+          )
+        );
+      await tx
+        .update(aiConversations)
+        .set({ lastContext: selected.at(-1)?.context ?? conversation.lastContext, updatedAt: now })
+        .where(eq(aiConversations.id, conversationId));
+      return run;
+    });
+    if (!next) return;
+    this.publishConversationChanged(user.id, conversationId);
+    this.conversationSearchService?.rebuildConversationIndexBestEffort(user.id, conversationId);
+    this.startRunExecution(user, next.id);
   }
 
   private async performContextCompaction(
@@ -1686,6 +1912,19 @@ function estimateJsonSize(value: unknown): number {
   } catch {
     return 0;
   }
+}
+
+function waitFor(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted || delayMs <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, delayMs);
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    }
+    signal.addEventListener('abort', done, { once: true });
+  });
 }
 
 function getQuestionBatch(

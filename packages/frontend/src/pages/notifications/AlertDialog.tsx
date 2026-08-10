@@ -240,6 +240,30 @@ export function AlertDialog({
         return;
       }
 
+      if (category === "logging") {
+        const environments = await api.listLoggingEnvironments();
+        if (resourceLoadTokenRef.current !== loadToken) return;
+        setAvailableResources(
+          environments.map((environment) => ({ id: environment.id, label: environment.name }))
+        );
+        return;
+      }
+
+      if (category === "integration") {
+        const [gitlab, cloudflare] = await Promise.all([
+          api.listGitLabConnectors().catch(() => []),
+          api.listCloudflareConnectors().catch(() => []),
+        ]);
+        if (resourceLoadTokenRef.current !== loadToken) return;
+        setAvailableResources(
+          [...gitlab, ...cloudflare].map((connector) => ({
+            id: connector.id,
+            label: connector.name,
+          }))
+        );
+        return;
+      }
+
       if (
         category === "database_postgres" ||
         category === "database_clickhouse" ||
@@ -583,7 +607,10 @@ export function AlertDialog({
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent
+                        className="max-h-[min(24rem,var(--radix-select-content-available-height))]"
+                        overlayScrollControls
+                      >
                         {categories.map((c) => (
                           <SelectItem key={c.id} value={c.id}>
                             {c.label}

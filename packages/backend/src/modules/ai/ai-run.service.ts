@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, or } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
 import {
+  type AIConversationInput,
   type AICredentialChallenge,
   type AIRun,
   type AIRunQuestion,
@@ -10,6 +11,7 @@ import {
   type AIToolApprovalClass,
   type AIToolApprovalPolicy,
   type AIToolCallStatus,
+  aiConversationInputs,
   aiConversationMessages,
   aiConversations,
   aiRunCredentialChallenges,
@@ -132,6 +134,12 @@ export interface StartUserRunResult {
   duplicate: boolean;
 }
 
+export interface QueueConversationInputResult {
+  input: AIConversationInput;
+  duplicate: boolean;
+  executionStarted: boolean;
+}
+
 export interface RecordToolCallInput {
   runId: string;
   conversationId: string;
@@ -156,6 +164,7 @@ export interface RuntimeSnapshot {
   pendingCredentialChallenge: AICredentialChallenge | null;
   toolCalls: AIRunToolCall[];
   toolRounds: AIRunToolRound[];
+  pendingInputs: AIConversationInput[];
 }
 
 export interface AIConversationRuntimeSnapshot {
@@ -466,6 +475,124 @@ export class AIRunService {
 
     this.publishConversationChanged(input.userId, result.conversationId);
     return result;
+  }
+
+  async queueConversationInput(input: {
+    conversationId: string;
+    userId: string;
+    inputId: string;
+    clientCommandId: string;
+    content: string;
+    attachments?: AIConversationInput['attachments'];
+    context?: Record<string, unknown> | null;
+  }): Promise<QueueConversationInputResult> {
+    const existing = await this.db
+      .select()
+      .from(aiConversationInputs)
+      .where(
+        and(
+          eq(aiConversationInputs.userId, input.userId),
+          eq(aiConversationInputs.clientCommandId, input.clientCommandId)
+        )
+      )
+      .limit(1);
+    if (existing[0]) {
+      return { input: existing[0], duplicate: true, executionStarted: false };
+    }
+
+    const result = await this.db.transaction(async (tx) => {
+      const conversation = await getOwnedConversation(tx, input.userId, input.conversationId);
+      if (!conversation) throw new AppError(404, 'AI_CONVERSATION_NOT_FOUND', 'AI conversation not found');
+      await assertConversationCanAcceptUserTurn(tx, conversation.id);
+      const activeRun = await getActiveRunForUpdate(tx, conversation.id);
+      const [queued] = await tx
+        .insert(aiConversationInputs)
+        .values({
+          id: input.inputId,
+          conversationId: conversation.id,
+          targetRunId: activeRun?.id ?? null,
+          userId: input.userId,
+          clientCommandId: input.clientCommandId,
+          mode: 'queued',
+          status: 'pending',
+          content: input.content,
+          attachments: input.attachments ?? [],
+          context: input.context ?? null,
+        })
+        .onConflictDoNothing({ target: [aiConversationInputs.userId, aiConversationInputs.clientCommandId] })
+        .returning();
+      if (queued) return { input: queued, duplicate: false, shouldStart: !activeRun };
+      const [duplicate] = await tx
+        .select()
+        .from(aiConversationInputs)
+        .where(
+          and(
+            eq(aiConversationInputs.userId, input.userId),
+            eq(aiConversationInputs.clientCommandId, input.clientCommandId)
+          )
+        )
+        .limit(1);
+      if (!duplicate) throw new AppError(409, 'AI_INPUT_CONFLICT', 'Queued message could not be created');
+      return { input: duplicate, duplicate: true, shouldStart: false };
+    });
+
+    this.publishConversationChanged(input.userId, input.conversationId);
+    return { input: result.input, duplicate: result.duplicate, executionStarted: result.shouldStart };
+  }
+
+  async steerConversationInput(input: {
+    conversationId: string;
+    inputId: string;
+    userId: string;
+  }): Promise<{ input: AIConversationInput; executionStarted: boolean }> {
+    const result = await this.db.transaction(async (tx) => {
+      const conversation = await getOwnedConversation(tx, input.userId, input.conversationId);
+      if (!conversation) throw new AppError(404, 'AI_CONVERSATION_NOT_FOUND', 'AI conversation not found');
+      const activeRun = await getActiveRunForUpdate(tx, conversation.id);
+      const [updated] = await tx
+        .update(aiConversationInputs)
+        .set({
+          mode: activeRun ? 'steer' : 'queued',
+          targetRunId: activeRun?.id ?? null,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(aiConversationInputs.id, input.inputId),
+            eq(aiConversationInputs.conversationId, input.conversationId),
+            eq(aiConversationInputs.userId, input.userId),
+            eq(aiConversationInputs.status, 'pending')
+          )
+        )
+        .returning();
+      if (!updated) throw new AppError(409, 'AI_INPUT_NOT_PENDING', 'Queued message is no longer pending');
+      return { input: updated, shouldStart: !activeRun };
+    });
+    this.publishConversationChanged(input.userId, input.conversationId);
+    return { input: result.input, executionStarted: result.shouldStart };
+  }
+
+  async cancelConversationInput(input: {
+    conversationId: string;
+    inputId: string;
+    userId: string;
+  }): Promise<AIConversationInput> {
+    await assertOwnedConversation(this.db, input.userId, input.conversationId);
+    const [cancelled] = await this.db
+      .update(aiConversationInputs)
+      .set({ status: 'cancelled', updatedAt: new Date() })
+      .where(
+        and(
+          eq(aiConversationInputs.id, input.inputId),
+          eq(aiConversationInputs.conversationId, input.conversationId),
+          eq(aiConversationInputs.userId, input.userId),
+          eq(aiConversationInputs.status, 'pending')
+        )
+      )
+      .returning();
+    if (!cancelled) throw new AppError(409, 'AI_INPUT_NOT_PENDING', 'Queued message is no longer pending');
+    this.publishConversationChanged(input.userId, input.conversationId);
+    return cancelled;
   }
 
   async updateConversationProvider(input: {
@@ -1071,6 +1198,18 @@ export class AIRunService {
               eq(aiRunCredentialChallenges.status, 'pending')
             )
           ),
+        this.db
+          .update(aiConversationInputs)
+          .set({ mode: 'queued', targetRunId: null, updatedAt: now })
+          .where(
+            and(
+              eq(aiConversationInputs.conversationId, input.conversationId),
+              eq(aiConversationInputs.targetRunId, input.runId),
+              eq(aiConversationInputs.userId, input.userId),
+              eq(aiConversationInputs.mode, 'steer'),
+              eq(aiConversationInputs.status, 'pending')
+            )
+          ),
       ]);
       this.publishConversationChanged(input.userId, input.conversationId);
       return { run: stopped, duplicate: false };
@@ -1170,6 +1309,48 @@ export class AIRunService {
         this.executor.startRunExecution(user, run.id);
       }
     }
+
+    const pendingInputs = await this.db
+      .select({
+        conversationId: aiConversationInputs.conversationId,
+        userId: aiConversationInputs.userId,
+        targetRunId: aiConversationInputs.targetRunId,
+      })
+      .from(aiConversationInputs)
+      .where(eq(aiConversationInputs.status, 'pending'))
+      .orderBy(asc(aiConversationInputs.createdAt));
+    const recoveredConversations = new Set<string>();
+    for (const pending of pendingInputs) {
+      if (recoveredConversations.has(pending.conversationId)) continue;
+      if (await this.getActiveRun(pending.conversationId)) continue;
+      if (pending.targetRunId) {
+        const [targetRun] = await this.db
+          .select({ status: aiRuns.status })
+          .from(aiRuns)
+          .where(eq(aiRuns.id, pending.targetRunId))
+          .limit(1);
+        if (targetRun?.status !== 'completed') {
+          if (targetRun && (targetRun.status === 'failed' || targetRun.status === 'stopped')) {
+            await this.db
+              .update(aiConversationInputs)
+              .set({ mode: 'queued', targetRunId: null, updatedAt: new Date() })
+              .where(
+                and(
+                  eq(aiConversationInputs.conversationId, pending.conversationId),
+                  eq(aiConversationInputs.targetRunId, pending.targetRunId),
+                  eq(aiConversationInputs.mode, 'steer'),
+                  eq(aiConversationInputs.status, 'pending')
+                )
+              );
+          }
+          continue;
+        }
+      }
+      const user = await loadUser(pending.userId).catch(() => null);
+      if (!user || user.isBlocked) continue;
+      recoveredConversations.add(pending.conversationId);
+      this.executor.startPendingInputExecution(user, pending.conversationId);
+    }
   }
 
   private async reconcileInterruptedRunningRun(run: Pick<AIRun, 'id' | 'conversationId' | 'userId'>): Promise<void> {
@@ -1246,11 +1427,20 @@ export class AIRunService {
     this.executor.startRunExecution(user, runId);
   }
 
+  startPendingInputExecution(user: User, conversationId: string): void {
+    this.executor.startPendingInputExecution(user, conversationId);
+  }
+
   startContextCompaction(user: User, runId: string, trigger: 'manual' | 'auto'): void {
     this.executor.startContextCompaction(user, runId, trigger);
   }
 
   private async getRuntimeSnapshot(conversationId: string): Promise<RuntimeSnapshot> {
+    const pendingInputs = await this.db
+      .select()
+      .from(aiConversationInputs)
+      .where(and(eq(aiConversationInputs.conversationId, conversationId), eq(aiConversationInputs.status, 'pending')))
+      .orderBy(asc(aiConversationInputs.createdAt));
     const activeRun = await this.getActiveRun(conversationId);
     if (!activeRun) {
       const [lastRun] = await this.db
@@ -1270,6 +1460,7 @@ export class AIRunService {
         pendingCredentialChallenge: null,
         toolCalls: await this.listConversationToolCalls(conversationId),
         toolRounds: [],
+        pendingInputs,
       };
     }
 
@@ -1307,6 +1498,7 @@ export class AIRunService {
       pendingCredentialChallenge: challenges[0] ?? null,
       toolCalls,
       toolRounds,
+      pendingInputs,
     };
   }
 

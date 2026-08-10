@@ -68,6 +68,8 @@ export interface AIMessage {
   localOnly?: boolean;
   runError?: boolean;
   runId?: string;
+  steer?: boolean;
+  steerPending?: boolean;
   resourceReferences?: AIResourceReference[];
   changedResourceReferences?: AIResourceReference[];
   compactMarker?: boolean;
@@ -272,6 +274,22 @@ export interface AIComposerLocalImageAttachment {
 
 export type AIComposerAttachment = AIMessageAttachment | AIComposerLocalImageAttachment;
 
+export interface AIConversationInput {
+  id: string;
+  conversationId: string;
+  targetRunId: string | null;
+  userId: string;
+  clientCommandId: string;
+  mode: "queued" | "steer";
+  status: "pending" | "consumed" | "cancelled";
+  content: string;
+  attachments: AIMessageAttachment[];
+  context: PageContext | null;
+  consumedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ── Backend-owned AI Runtime ──
 
 export type AIRunStatus =
@@ -398,6 +416,7 @@ export interface AIRuntimeSnapshot {
   pendingCredentialChallenge?: AICredentialChallenge | null;
   toolCalls: AIRunToolCall[];
   toolRounds?: AIRunToolRound[];
+  pendingInputs?: AIConversationInput[];
 }
 
 export interface AIConversationRuntimeSnapshot {
@@ -454,6 +473,27 @@ export type WSClientMessage =
       context?: PageContext;
       model?: string;
       reasoningEffort?: string;
+    }
+  | {
+      type: "conversation.queue_message";
+      conversationId: string;
+      inputId: string;
+      clientCommandId: string;
+      content: string;
+      attachments?: AIMessageAttachment[];
+      context?: PageContext;
+    }
+  | {
+      type: "conversation.steer_message";
+      conversationId: string;
+      inputId: string;
+      clientCommandId: string;
+    }
+  | {
+      type: "conversation.cancel_queued_message";
+      conversationId: string;
+      inputId: string;
+      clientCommandId: string;
     }
   | { type: "run.stop"; conversationId: string; runId: string; clientCommandId: string }
   | {

@@ -1,6 +1,7 @@
 import { AlertTriangle, ArrowRight, Info, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { Button } from "@/components/ui/button";
 import {
@@ -302,7 +303,10 @@ function DashboardSkeleton({
     <PageTransition>
       <div className="h-full overflow-y-auto p-6">
         <div className="mb-4">
-          <h1 className="text-2xl font-bold">Dashboard</h1>
+          <div className="flex items-center gap-3">
+            <LiteModeBackButton />
+            <h1 className="text-2xl font-bold">Dashboard</h1>
+          </div>
           <p className="text-sm text-muted-foreground">Gateway and PKI infrastructure overview</p>
         </div>
         <div className="space-y-6" aria-busy="true" aria-label="Loading dashboard">
@@ -753,7 +757,10 @@ export function Dashboard() {
     <PageTransition>
       <div className="h-full overflow-y-auto p-6">
         <div className="mb-4">
-          <h1 className="text-2xl font-bold">Dashboard</h1>
+          <div className="flex items-center gap-3">
+            <LiteModeBackButton />
+            <h1 className="text-2xl font-bold">Dashboard</h1>
+          </div>
           <p className="text-sm text-muted-foreground">Gateway and PKI infrastructure overview</p>
         </div>
         <div className="space-y-6">

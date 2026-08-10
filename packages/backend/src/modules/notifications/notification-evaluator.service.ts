@@ -36,13 +36,32 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 type TemplateDetails = Partial<
   Pick<
     NotificationTemplateContextInput,
-    'metric' | 'node' | 'health' | 'certificate' | 'state' | 'event' | 'fired' | 'resolution'
+    | 'metric'
+    | 'node'
+    | 'health'
+    | 'certificate'
+    | 'state'
+    | 'event'
+    | 'operation'
+    | 'failure'
+    | 'details'
+    | 'fired'
+    | 'resolution'
   >
 > & { resourceId?: string | null };
 
 export class NotificationEvaluatorService {
   private eventBus?: EventBusService;
   private redis: RedisClient | null = null;
+  private loggingEnvironmentService?: {
+    list(): Promise<Array<{ id: string; name: string; enabled: boolean }>>;
+  };
+  private loggingClickHouseService?: {
+    getFacets(
+      environmentId: string,
+      range?: { from?: string; to?: string }
+    ): Promise<{ severities: Array<{ severity: string; count: number }> }>;
+  };
   private unsubscribers: Array<() => void> = [];
   private readonly activeHandlers = new Set<Promise<void>>();
 
@@ -64,6 +83,19 @@ export class NotificationEvaluatorService {
 
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
+  }
+
+  setLoggingServices(
+    environmentService: { list(): Promise<Array<{ id: string; name: string; enabled: boolean }>> },
+    clickHouseService: {
+      getFacets(
+        environmentId: string,
+        range?: { from?: string; to?: string }
+      ): Promise<{ severities: Array<{ severity: string; count: number }> }>;
+    }
+  ): void {
+    this.loggingEnvironmentService = environmentService;
+    this.loggingClickHouseService = clickHouseService;
   }
 
   start(): void {
@@ -199,6 +231,56 @@ export class NotificationEvaluatorService {
         } else {
           await this.handleThresholdClear(rule, resourceId, value, snapshot.databaseId, snapshot.name);
         }
+      }
+    }
+  }
+
+  async evaluateLoggingRatios(now = new Date()): Promise<void> {
+    if (!this.loggingEnvironmentService || !this.loggingClickHouseService) return;
+    const rules = (await this.getThresholdRules()).filter(
+      (rule) =>
+        rule.category === 'logging' &&
+        (rule.metric === 'error_fatal_ratio_percent' || rule.metric === 'fatal_ratio_percent')
+    );
+    if (rules.length === 0) return;
+
+    const environments = (await this.loggingEnvironmentService.list()).filter((environment) => environment.enabled);
+    const from = new Date(now.getTime() - 5 * 60 * 1000).toISOString();
+    for (const environment of environments) {
+      const matchingRules = rules.filter(
+        (rule) => !rule.resourceIds?.length || rule.resourceIds.includes(environment.id)
+      );
+      if (matchingRules.length === 0) continue;
+      try {
+        const facets = await this.loggingClickHouseService.getFacets(environment.id, {
+          from,
+          to: now.toISOString(),
+        });
+        const counts = new Map(facets.severities.map((item) => [item.severity, item.count]));
+        const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
+        if (total < 20) continue;
+        const fatal = counts.get('fatal') ?? 0;
+        const error = counts.get('error') ?? 0;
+        for (const rule of matchingRules) {
+          const value = ((rule.metric === 'fatal_ratio_percent' ? fatal : error + fatal) / total) * 100;
+          const breached = evaluateThreshold(value, rule.operator, rule.thresholdValue);
+          await this.recordProbeOutcome(
+            rule.id,
+            environment.id,
+            breached,
+            Math.max(rule.durationSeconds ?? 0, rule.resolveAfterSeconds ?? 0) * 1000
+          );
+          if (breached) {
+            await this.handleThresholdBreach(rule, environment.id, value, environment.id, environment.name);
+          } else {
+            await this.handleThresholdClear(rule, environment.id, value, environment.id, environment.name);
+          }
+        }
+      } catch (error) {
+        logger.warn('Failed to evaluate logging ratios', {
+          environmentId: environment.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   }
@@ -599,6 +681,17 @@ export class NotificationEvaluatorService {
 
       const resource = mapping.extractResource(payload);
       const extraData = mapping.extractData?.(payload) ?? {};
+
+      if (mapping.stateful) {
+        await this.observeStatefulEvent(
+          mapping.category,
+          mapping.stateful.currentState(payload),
+          resource,
+          extraData,
+          mapping.stateful.observedPatterns
+        );
+        continue;
+      }
 
       // Find event-type alert rules matching this category + event
       const eventRules = await this.getEventRules();
@@ -1115,6 +1208,11 @@ export class NotificationEvaluatorService {
         : typeof fallbackResourceId === 'string'
           ? fallbackResourceId
           : null;
+    const scalarDetails = Object.fromEntries(
+      Object.entries(context).filter(
+        ([, value]) => value === null || ['string', 'number', 'boolean'].includes(typeof value)
+      )
+    ) as Record<string, string | number | boolean | null>;
 
     return {
       resourceId,
@@ -1128,6 +1226,15 @@ export class NotificationEvaluatorService {
       event: {
         name: eventName,
       },
+      operation: {
+        kind: typeof context.operation_kind === 'string' ? context.operation_kind : null,
+        phase: typeof context.operation_phase === 'string' ? context.operation_phase : null,
+        trigger: typeof context.operation_trigger === 'string' ? context.operation_trigger : null,
+      },
+      failure: {
+        code: typeof context.failure_code === 'string' ? context.failure_code : null,
+      },
+      details: scalarDetails,
       state: {
         current: currentState ?? null,
       },
@@ -1155,7 +1262,8 @@ export class NotificationEvaluatorService {
       rule.category === 'node' ||
       rule.category === 'database_postgres' ||
       rule.category === 'database_clickhouse' ||
-      rule.category === 'database_redis'
+      rule.category === 'database_redis' ||
+      rule.category === 'logging'
     ) {
       return sourceId;
     }

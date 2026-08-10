@@ -6,6 +6,7 @@ import {
   dockerDeploymentRoutes,
   dockerDeployments,
   dockerHealthChecks,
+  managedDatabaseBindings,
 } from '@/db/schema/index.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -94,6 +95,7 @@ function parseDispatchResult(result: { success: boolean; error?: string; detail?
 export class DockerHealthCheckService {
   private eventBus?: EventBusService;
   private evaluator?: NotificationEvaluatorService;
+  private relayUnavailable = false;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -102,6 +104,28 @@ export class DockerHealthCheckService {
 
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
+    bus.subscribe('system.relay.health.changed', (payload) => {
+      const state = (payload as { state?: unknown } | null)?.state;
+      this.relayUnavailable = state === 'critical';
+      void this.recheckBindingTargets();
+    });
+    bus.subscribe('database.changed', (payload) => {
+      const event = payload as {
+        resourceKind?: unknown;
+        targetNodeId?: unknown;
+        targetType?: unknown;
+        targetResourceId?: unknown;
+      } | null;
+      if (
+        event?.resourceKind !== 'managed_database_binding' ||
+        typeof event.targetNodeId !== 'string' ||
+        (event.targetType !== 'container' && event.targetType !== 'deployment') ||
+        typeof event.targetResourceId !== 'string'
+      ) {
+        return;
+      }
+      void this.recheckTarget(event.targetNodeId, event.targetType, event.targetResourceId);
+    });
   }
 
   setEvaluator(evaluator: NotificationEvaluatorService) {
@@ -397,7 +421,8 @@ export class DockerHealthCheckService {
   private async checkAndStore(row: HealthRow) {
     const previousStatus = row.healthStatus as DockerHealthStatus;
     const probe = await this.probeRow(row);
-    const status = probe.status;
+    const dependency = await this.databaseDependencyState(row);
+    const status: DockerHealthStatus = dependency.offline ? 'offline' : probe.status;
     const entry: DockerHealthEntry = {
       ts: new Date().toISOString(),
       status,
@@ -415,13 +440,29 @@ export class DockerHealthCheckService {
     const resourceId = row.target === 'deployment' ? row.deploymentId! : row.containerName!;
     const resourceName =
       row.target === 'deployment' ? await this.getDeploymentName(row.deploymentId!) : row.containerName!;
-    await this.evaluator?.observeStatefulEvent(
-      'container',
-      healthAction(status),
-      { type: resourceType, id: resourceId, name: resourceName },
-      { health_status: status, nodeId: row.nodeId, resource_type: resourceType },
-      ['health.online', 'health.degraded', 'health.offline']
-    );
+    if (dependency.cause !== 'relay_unavailable') {
+      await this.evaluator?.observeStatefulEvent(
+        'container',
+        healthAction(status),
+        { type: resourceType, id: resourceId, name: resourceName },
+        {
+          health_status: status,
+          ...(dependency.cause ? { health_cause: dependency.cause } : {}),
+          nodeId: row.nodeId,
+          resource_type: resourceType,
+        },
+        ['health.online', 'health.degraded', 'health.offline']
+      );
+      if (dependency.hasBindings) {
+        await this.evaluator?.observeStatefulEvent(
+          'container',
+          dependency.offline ? 'dependency.database_offline' : 'dependency.database_online',
+          { type: resourceType, id: resourceId, name: resourceName },
+          { health_status: status, health_cause: dependency.cause, nodeId: row.nodeId, resource_type: resourceType },
+          ['dependency.database_offline']
+        );
+      }
+    }
 
     if (previousStatus !== status) {
       this.eventBus?.publish('docker.health.changed', {
@@ -436,8 +477,76 @@ export class DockerHealthCheckService {
         id: resourceId,
         name: resourceName,
         resourceType,
+        health_cause: dependency.cause,
       });
     }
+  }
+
+  private async databaseDependencyState(row: HealthRow): Promise<{
+    offline: boolean;
+    cause: 'relay_unavailable' | 'binding_error' | null;
+    hasBindings: boolean;
+  }> {
+    const targetResourceId = row.target === 'deployment' ? row.deploymentId : row.containerName;
+    if (!targetResourceId || typeof (this.db as { select?: unknown }).select !== 'function') {
+      return { offline: false, cause: null, hasBindings: false };
+    }
+    const bindings = await this.db
+      .select({ status: managedDatabaseBindings.status })
+      .from(managedDatabaseBindings)
+      .where(
+        and(
+          eq(managedDatabaseBindings.targetNodeId, row.nodeId),
+          eq(managedDatabaseBindings.targetType, row.target),
+          eq(managedDatabaseBindings.targetResourceId, targetResourceId)
+        )
+      );
+    if (bindings.length === 0) return { offline: false, cause: null, hasBindings: false };
+    if (this.relayUnavailable) return { offline: true, cause: 'relay_unavailable', hasBindings: true };
+    if (bindings.some((binding) => binding.status === 'error')) {
+      return { offline: true, cause: 'binding_error', hasBindings: true };
+    }
+    return { offline: false, cause: null, hasBindings: true };
+  }
+
+  private async recheckTarget(
+    nodeId: string,
+    target: 'container' | 'deployment',
+    targetResourceId: string
+  ): Promise<void> {
+    const row = await this.db.query.dockerHealthChecks.findFirst({
+      where:
+        target === 'deployment'
+          ? and(
+              eq(dockerHealthChecks.enabled, true),
+              eq(dockerHealthChecks.target, 'deployment'),
+              eq(dockerHealthChecks.nodeId, nodeId),
+              eq(dockerHealthChecks.deploymentId, targetResourceId)
+            )
+          : and(
+              eq(dockerHealthChecks.enabled, true),
+              eq(dockerHealthChecks.target, 'container'),
+              eq(dockerHealthChecks.nodeId, nodeId),
+              eq(dockerHealthChecks.containerName, targetResourceId)
+            ),
+    });
+    if (row) await this.checkAndStore(row);
+  }
+
+  private async recheckBindingTargets(): Promise<void> {
+    const bindings = await this.db
+      .select({
+        nodeId: managedDatabaseBindings.targetNodeId,
+        target: managedDatabaseBindings.targetType,
+        resourceId: managedDatabaseBindings.targetResourceId,
+      })
+      .from(managedDatabaseBindings);
+    const unique = new Map(
+      bindings.map((binding) => [`${binding.nodeId}:${binding.target}:${binding.resourceId}`, binding])
+    );
+    await Promise.allSettled(
+      [...unique.values()].map((binding) => this.recheckTarget(binding.nodeId, binding.target, binding.resourceId))
+    );
   }
 
   private async getDeploymentName(deploymentId: string) {

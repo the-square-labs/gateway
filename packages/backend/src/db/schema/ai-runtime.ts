@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
-import type { AIResourceReference } from '@/modules/ai/ai.types.js';
+import type { AIMessageAttachment, AIResourceReference } from '@/modules/ai/ai.types.js';
 import { aiConversationMessages, aiConversations } from './ai-conversations.js';
 import { integrationConnectors } from './integration-connectors.js';
 import { users } from './users.js';
@@ -49,6 +49,8 @@ export type AIToolRoundStatus =
 
 export type AIQuestionStatus = 'pending' | 'answered' | 'stopped';
 export type AICredentialChallengeStatus = 'pending' | 'authorized' | 'rejected' | 'stopped';
+export type AIConversationInputMode = 'queued' | 'steer';
+export type AIConversationInputStatus = 'pending' | 'consumed' | 'cancelled';
 
 export const aiRuns = pgTable(
   'ai_runs',
@@ -92,6 +94,40 @@ export const aiRuns = pgTable(
     userCreatedIdx: index('ai_runs_user_created_idx').on(table.userId, table.createdAt),
   })
 );
+
+export const aiConversationInputs = pgTable(
+  'ai_conversation_inputs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => aiConversations.id, { onDelete: 'cascade' }),
+    targetRunId: uuid('target_run_id').references(() => aiRuns.id, { onDelete: 'set null' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    clientCommandId: varchar('client_command_id', { length: 128 }).notNull(),
+    mode: varchar('mode', { length: 16 }).$type<AIConversationInputMode>().notNull().default('queued'),
+    status: varchar('status', { length: 16 }).$type<AIConversationInputStatus>().notNull().default('pending'),
+    content: text('content').notNull(),
+    attachments: jsonb('attachments').$type<AIMessageAttachment[]>().notNull().default([]),
+    context: jsonb('context').$type<Record<string, unknown> | null>(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userCommandIdx: uniqueIndex('ai_conversation_inputs_user_command_idx').on(table.userId, table.clientCommandId),
+    conversationPendingIdx: index('ai_conversation_inputs_conversation_pending_idx').on(
+      table.conversationId,
+      table.status,
+      table.createdAt
+    ),
+    runPendingIdx: index('ai_conversation_inputs_run_pending_idx').on(table.targetRunId, table.status, table.createdAt),
+  })
+);
+
+export type AIConversationInput = typeof aiConversationInputs.$inferSelect;
 
 export const aiRunToolRounds = pgTable(
   'ai_run_tool_rounds',

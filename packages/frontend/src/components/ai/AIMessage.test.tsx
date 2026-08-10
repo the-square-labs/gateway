@@ -97,6 +97,27 @@ describe("AIMessage tool call groups", () => {
     expect(screen.getByText("Show health summary")).toBeInTheDocument();
   });
 
+  it("marks a steer while it waits for the next model boundary", () => {
+    const { container } = render(
+      <AIMessage
+        message={{
+          id: "steer-1",
+          role: "user",
+          content: "Use port 8081 instead",
+          steer: true,
+          steerPending: true,
+        }}
+      />
+    );
+
+    expect(screen.getByText("Steer · waiting for next step")).toBeInTheDocument();
+    expect(screen.getByText("Steer · waiting for next step").parentElement).toHaveClass(
+      "opacity-0",
+      "group-hover:opacity-100"
+    );
+    expect(container.querySelectorAll(".absolute.right-0.top-full")).toHaveLength(1);
+  });
+
   it("does not render an empty local-only message bubble", () => {
     const { container } = render(
       <AIMessage

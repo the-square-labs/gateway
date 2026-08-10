@@ -1,5 +1,15 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUp, Check, ChevronDown, Play, Plus, Square, X } from "lucide-react";
+import {
+  ArrowRight,
+  ArrowUp,
+  Check,
+  ChevronDown,
+  Pencil,
+  Play,
+  Plus,
+  Square,
+  X,
+} from "lucide-react";
 import type { ChangeEvent, KeyboardEvent, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -22,6 +32,7 @@ import { type AIContextUsage, getAIContextUsage, useAIStore } from "@/stores/ai"
 import { useAuthStore } from "@/stores/auth";
 import type {
   AIComposerAttachment,
+  AIConversationInput,
   AIInferenceModelOption,
   AIMessage as AIMessageType,
   PageContext,
@@ -79,6 +90,59 @@ interface AIComposerProps {
 }
 
 const MAX_IMAGE_ATTACHMENTS = 3;
+
+interface AIQueuedMessagesProps {
+  items: AIConversationInput[];
+  onSendNow: (inputId: string) => void;
+  onEdit: (item: AIConversationInput) => void;
+  onRemove: (inputId: string) => void;
+  className?: string;
+}
+
+export function AIQueuedMessages({
+  items,
+  onSendNow,
+  onEdit,
+  onRemove,
+  className,
+}: AIQueuedMessagesProps) {
+  if (items.length === 0) return null;
+  return (
+    <div className={cn("divide-y divide-border border border-border bg-background", className)}>
+      {items.map((item) => (
+        <div key={item.id} className="flex min-h-11 items-center gap-2 px-3 py-2">
+          <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+            {item.content || `${item.attachments.length} attached image(s)`}
+          </span>
+          <button
+            type="button"
+            className="flex h-7 w-7 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground"
+            onClick={() => onEdit(item)}
+            aria-label="Edit queued message"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            className="flex h-7 w-7 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground"
+            onClick={() => onRemove(item.id)}
+            aria-label="Remove queued message"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            className="flex shrink-0 items-center gap-1 text-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:underline"
+            onClick={() => onSendNow(item.id)}
+          >
+            Send now
+            <ArrowRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function ContextRing({ usage }: { usage: AIContextUsage | null }) {
   const percent = Math.max(0, Math.min(100, usage?.percent ?? 0));
@@ -370,7 +434,7 @@ export function AIComposer({
             onChange={onInputChange}
             onKeyDown={onKeyDown}
             onPaste={(event) => attachFiles(event.clipboardData.files)}
-            placeholder={isStreaming ? "AI is responding..." : "Ask anything... (/ commands)"}
+            placeholder={isStreaming ? "Queue a message..." : "Ask anything... (/ commands)"}
             disabled={disabled}
             rows={1}
             className="block min-h-[42px] resize-none border-0 bg-transparent px-3 pb-1.5 pt-3 pr-3 leading-5 focus-visible:ring-0"
@@ -458,13 +522,27 @@ export function AIComposer({
                   "flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground disabled:opacity-30",
                   canResume && "text-foreground"
                 )}
-                onClick={isStreaming ? onStop : canResume ? onContinue : onSend}
-                disabled={isStreaming ? stopDisabled : (!hasDraft && !canResume) || disabled}
+                onClick={
+                  isStreaming ? (hasDraft ? onSend : onStop) : canResume ? onContinue : onSend
+                }
+                disabled={
+                  isStreaming
+                    ? hasDraft
+                      ? disabled
+                      : stopDisabled
+                    : (!hasDraft && !canResume) || disabled
+                }
                 aria-label={
-                  isStreaming ? "Stop response" : canResume ? "Continue response" : "Send message"
+                  isStreaming
+                    ? hasDraft
+                      ? "Queue message"
+                      : "Stop response"
+                    : canResume
+                      ? "Continue response"
+                      : "Send message"
                 }
               >
-                {isStreaming ? (
+                {isStreaming && !hasDraft ? (
                   <Square className="h-4 w-4" />
                 ) : canResume ? (
                   <Play className="h-4 w-4 fill-current" />

@@ -1,6 +1,6 @@
 import { Minimize2, Pencil, Pin, PinOff, Sparkles, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useLocation, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { type AIApprovalMode, formatAIApprovalModeLabel } from "@/lib/ai-approval-mode";
+import { aiConversationRoute } from "@/lib/ai-conversation-route";
 import {
   confirmBypassEverythingMode,
   updateAIApprovalModeOptimistically,
@@ -24,11 +25,12 @@ import { useUIStore } from "@/stores/ui";
 import type {
   AIComposerAttachment,
   AIComposerLocalImageAttachment,
+  AIConversationInput,
   AIMessageAttachment,
   AIToolCall,
   PageContext,
 } from "@/types/ai";
-import { AIComposer, AIComposerDisclaimer } from "./AIComposer";
+import { AIComposer, AIComposerDisclaimer, AIQueuedMessages } from "./AIComposer";
 import { AIConversationBlockedBlock } from "./AIConversationBlockedBlock";
 import { AIMessageList } from "./AIMessageList";
 import { ApprovalBlock, QuestionBlock } from "./AIToolCallBlock";
@@ -135,8 +137,12 @@ export function AILitePanel() {
     activeRunId,
     canContinueConversation,
     isCompactingContext,
+    queuedInputs,
     recentConversations,
     sendMessage,
+    queueMessage,
+    steerQueuedMessage,
+    cancelQueuedMessage,
     continueConversation,
     approveTool,
     rejectTool,
@@ -145,6 +151,7 @@ export function AILitePanel() {
     clearMessages,
     handleSlashCommand,
     deleteConversation,
+    loadConversation,
     renameConversation,
     rollbackToMessage,
     retryMessage,
@@ -163,8 +170,11 @@ export function AILitePanel() {
     togglePinnedAIConversation,
   } = useUIStore();
 
-  const [input, setInput] = useAIComposerDraft(activeConversationId);
-  const [attachments, setAttachments] = useAIComposerAttachmentsDraft(activeConversationId);
+  const navigate = useNavigate();
+  const { conversationId: routeConversationId } = useParams<{ conversationId?: string }>();
+  const draftConversationId = activeConversationId ?? routeConversationId ?? null;
+  const [input, setInput] = useAIComposerDraft(draftConversationId);
+  const [attachments, setAttachments] = useAIComposerAttachmentsDraft(draftConversationId);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const [canAttachImages, setCanAttachImages] = useState(false);
   const [slashResults, setSlashResults] = useState<typeof SLASH_COMMANDS>([]);
@@ -172,6 +182,7 @@ export function AILitePanel() {
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
   const [isRenaming, setIsRenaming] = useState(false);
+  const previousActiveConversationIdRef = useRef(activeConversationId);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const shouldStickToBottomRef = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -194,6 +205,29 @@ export function AILitePanel() {
     : false;
   const selectedProviderModel = providerStatus?.models.find((model) => model.id === selectedModel);
 
+  useEffect(() => {
+    if (
+      !routeConversationId ||
+      routeConversationId === useAIStore.getState().activeConversationId
+    ) {
+      return;
+    }
+    void loadConversation(routeConversationId);
+  }, [loadConversation, routeConversationId]);
+
+  useEffect(() => {
+    const previousActiveConversationId = previousActiveConversationIdRef.current;
+    previousActiveConversationIdRef.current = activeConversationId;
+    if (!activeConversationId || activeConversationId === routeConversationId) return;
+    if (!routeConversationId && previousActiveConversationId !== null) return;
+    navigate(aiConversationRoute(activeConversationId), { replace: routeConversationId == null });
+  }, [activeConversationId, navigate, routeConversationId]);
+
+  const handleNewChat = useCallback(() => {
+    navigate("/", { flushSync: true });
+    clearMessages();
+  }, [clearMessages, navigate]);
+
   const openRenameDialog = () => {
     if (!activeConversationId) return;
     setRenameDraft(currentChatTitle);
@@ -213,6 +247,12 @@ export function AILitePanel() {
     } finally {
       setIsRenaming(false);
     }
+  };
+
+  const handleDeleteCurrentConversation = async () => {
+    if (!activeConversationId) return;
+    await deleteConversation(activeConversationId);
+    navigate("/");
   };
 
   const setApprovalMode = useCallback(
@@ -320,11 +360,12 @@ export function AILitePanel() {
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if ((!text && attachments.length === 0) || currentConversationStreaming) return;
+    if (!text && attachments.length === 0) return;
 
-    if (attachments.length === 0 && text.startsWith("/")) {
+    if (!currentConversationStreaming && attachments.length === 0 && text.startsWith("/")) {
       const handled = await handleSlashCommand(text);
       if (handled) {
+        if (text === "/new") navigate("/");
         setInput("");
         setAttachments([]);
         setSlashResults([]);
@@ -342,9 +383,13 @@ export function AILitePanel() {
       setAttachments([]);
       setSlashResults([]);
       if (textareaRef.current) textareaRef.current.style.height = "auto";
-      sendMessage(text, context, uploadedAttachments, {
-        startNewConversation: isNewConversationDraft,
-      });
+      if (currentConversationStreaming) {
+        queueMessage(text, context, uploadedAttachments);
+      } else {
+        sendMessage(text, context, uploadedAttachments, {
+          startNewConversation: isNewConversationDraft,
+        });
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to attach image");
     } finally {
@@ -358,10 +403,27 @@ export function AILitePanel() {
     handleSlashCommand,
     input,
     isNewConversationDraft,
+    navigate,
+    queueMessage,
     sendMessage,
     setAttachments,
     setInput,
   ]);
+
+  const handleEditQueued = useCallback(
+    (item: AIConversationInput) => {
+      cancelQueuedMessage(item.id);
+      setInput(item.content);
+      setAttachments(item.attachments);
+      requestAnimationFrame(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        textarea.focus();
+        autoResizeTextarea(textarea);
+      });
+    },
+    [cancelQueuedMessage, setAttachments, setInput]
+  );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (slashResults.length > 0) {
@@ -533,7 +595,7 @@ export function AILitePanel() {
             variant="ghost"
             size="icon"
             className="h-9 w-9"
-            onClick={() => activeConversationId && void deleteConversation(activeConversationId)}
+            onClick={() => void handleDeleteCurrentConversation()}
             disabled={!activeConversationId}
             title="Delete chat"
             aria-label="Delete chat"
@@ -588,7 +650,10 @@ export function AILitePanel() {
       </Dialog>
 
       {messages.length === 0 ? (
-        <div className="flex min-h-0 flex-1 items-center justify-center px-4">
+        <div
+          key={activeConversationId ?? routeConversationId ?? "new-chat"}
+          className="ai-chat-content-fade-in flex min-h-0 flex-1 items-center justify-center px-4"
+        >
           <div className="flex w-full max-w-3xl flex-col items-center gap-3">
             <Sparkles className="h-8 w-8 text-muted-foreground" />
             <p className="max-w-md text-center text-sm text-foreground/70">
@@ -599,7 +664,10 @@ export function AILitePanel() {
           </div>
         </div>
       ) : (
-        <div className="relative min-h-0 flex-1">
+        <div
+          key={activeConversationId ?? routeConversationId ?? "new-chat"}
+          className="ai-chat-content-fade-in relative min-h-0 flex-1"
+        >
           <div
             ref={scrollViewportRef}
             role="log"
@@ -654,12 +722,18 @@ export function AILitePanel() {
           <div className="border border-border bg-background">
             <AIConversationBlockedBlock
               block={conversationBlock}
-              onNewChat={clearMessages}
+              onNewChat={handleNewChat}
               showTopBorder={false}
             />
           </div>
         ) : (
-          <div className="relative">
+          <div className="relative space-y-2">
+            <AIQueuedMessages
+              items={queuedInputs}
+              onSendNow={steerQueuedMessage}
+              onEdit={handleEditQueued}
+              onRemove={cancelQueuedMessage}
+            />
             <AIComposer
               textareaRef={textareaRef}
               input={input}

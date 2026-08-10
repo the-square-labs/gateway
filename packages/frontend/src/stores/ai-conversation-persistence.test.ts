@@ -571,9 +571,19 @@ describe("AI backend runtime store", () => {
         })
     );
 
+    useAIStore.setState({
+      messages: [{ id: "old-message", role: "user", content: "old chat" }],
+      activeConversationId: "old-conversation",
+      sidebarActiveConversationId: "old-conversation",
+      savedName: "Old chat",
+    });
+
     const loadPromise = useAIStore.getState().loadConversation("conversation-1");
-    expect(useAIStore.getState().activeConversationId).toBe("conversation-1");
+    expect(useAIStore.getState().activeConversationId).toBe("old-conversation");
     expect(useAIStore.getState().sidebarActiveConversationId).toBe("conversation-1");
+    expect(useAIStore.getState().messages).toEqual([
+      expect.objectContaining({ id: "old-message", content: "old chat" }),
+    ]);
 
     useAIStore.getState().clearMessages();
     expect(useAIStore.getState().activeConversationId).toBeNull();
@@ -1394,6 +1404,42 @@ describe("AI backend runtime store", () => {
         expect.objectContaining({
           id: "run-1:comment:2",
           content: "Второй комментарий.",
+          isStreaming: true,
+        }),
+      ])
+    );
+  });
+
+  it("restores Thinking when comment completion races with a runtime draft", async () => {
+    const socket = await connectAI();
+    useAIStore.setState({
+      activeConversationId: "conversation-1",
+      messages: [
+        {
+          id: "run-1:runtime",
+          role: "assistant",
+          content: "Учитываю уточнение пользователя.",
+          sequence: 1,
+          isStreaming: true,
+        },
+      ],
+    });
+
+    socket.emit({
+      type: "assistant.comment_done",
+      conversationId: "conversation-1",
+      runId: "run-1",
+    });
+
+    expect(useAIStore.getState().messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: "Учитываю уточнение пользователя.",
+          isStreaming: false,
+        }),
+        expect.objectContaining({
+          id: "run-1:runtime",
+          content: "",
           isStreaming: true,
         }),
       ])

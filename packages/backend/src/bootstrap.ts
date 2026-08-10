@@ -768,6 +768,7 @@ export async function initializeContainer(): Promise<void> {
   const proxySecureLinkService = relayPolicyService
     ? new ProxySecureLinkService(db, nodeDispatch, relayPolicyService, getEnv().SECURE_LINK_CONNECTOR_IMAGE)
     : undefined;
+  proxySecureLinkService?.setEventBus(eventBus);
   if (proxySecureLinkService) container.registerInstance(ProxySecureLinkService, proxySecureLinkService);
   const proxyService = new ProxyService(
     db,
@@ -1224,6 +1225,7 @@ export async function initializeContainer(): Promise<void> {
     nodeRegistry
   );
   notifEvaluatorService.setEventBus(eventBus);
+  notifEvaluatorService.setLoggingServices(loggingEnvironmentService, loggingClickHouseService);
   dockerManagementService.setEvaluator(notifEvaluatorService);
   dockerHealthCheckService.setEvaluator(notifEvaluatorService);
   databaseMonitoringService.setEvaluator(notifEvaluatorService);
@@ -1315,6 +1317,7 @@ export async function initializeContainer(): Promise<void> {
       config.enabled ? config.structuredLogs : undefined,
       config.enabled && config.clickHouseInternals.enabled
     );
+    await notifEvaluatorService.evaluateLoggingRatios();
   });
 
   // Stale node detection (every 60 seconds) + missed health report detection (every 30 seconds)

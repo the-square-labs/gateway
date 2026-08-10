@@ -95,7 +95,9 @@ function createRuntimeSnapshotDb() {
   const orderByQuestions = vi.fn(async () => []);
   const where = vi.fn(() => {
     whereCall += 1;
-    return whereCall === 2 || whereCall === 3 || whereCall === 4 ? { orderBy: orderByQuestions } : Promise.resolve([]);
+    return whereCall === 1 || whereCall === 3 || whereCall === 4 || whereCall === 5
+      ? { orderBy: orderByQuestions }
+      : Promise.resolve([]);
   });
   const from = vi.fn(() => ({ where }));
   const select = vi.fn(() => ({ from }));

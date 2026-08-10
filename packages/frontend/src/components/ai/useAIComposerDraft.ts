@@ -37,6 +37,7 @@ export function useAIComposerDraft(
   const [value, setValue] = useState(() => readDraft(key));
   const keyRef = useRef(key);
   const valueRef = useRef(value);
+  const conversationIdRef = useRef(conversationId);
 
   const setDraftValue = useCallback((nextValue: string) => {
     valueRef.current = nextValue;
@@ -47,18 +48,21 @@ export function useAIComposerDraft(
   useEffect(() => {
     if (keyRef.current === key) return;
 
-    writeDraft(keyRef.current, valueRef.current);
+    const previousKey = keyRef.current;
+    writeDraft(previousKey, valueRef.current);
     keyRef.current = key;
-    const nextValue = readDraft(key);
+    const savedValue = readDraft(key);
+    const shouldCarryNewChatDraft =
+      conversationIdRef.current === null && conversationId !== null && !savedValue;
+    const nextValue = shouldCarryNewChatDraft ? valueRef.current : savedValue;
+    if (shouldCarryNewChatDraft) {
+      writeDraft(key, nextValue);
+      writeDraft(previousKey, "");
+    }
+    conversationIdRef.current = conversationId;
     valueRef.current = nextValue;
     setValue(nextValue);
-  }, [key]);
-
-  useEffect(() => {
-    return () => {
-      writeDraft(keyRef.current, valueRef.current);
-    };
-  }, []);
+  }, [conversationId, key]);
 
   return [value, setDraftValue];
 }
@@ -117,6 +121,7 @@ export function useAIComposerAttachmentsDraft(
   const [value, setValue] = useState(() => readAttachmentDraft(key));
   const keyRef = useRef(key);
   const valueRef = useRef(value);
+  const conversationIdRef = useRef(conversationId);
 
   const setDraftValue = useCallback((nextValue: AIComposerAttachment[]) => {
     valueRef.current = nextValue;
@@ -127,18 +132,21 @@ export function useAIComposerAttachmentsDraft(
   useEffect(() => {
     if (keyRef.current === key) return;
 
-    writeAttachmentDraft(keyRef.current, valueRef.current);
+    const previousKey = keyRef.current;
+    writeAttachmentDraft(previousKey, valueRef.current);
     keyRef.current = key;
-    const nextValue = readAttachmentDraft(key);
+    const savedValue = readAttachmentDraft(key);
+    const shouldCarryNewChatDraft =
+      conversationIdRef.current === null && conversationId !== null && savedValue.length === 0;
+    const nextValue = shouldCarryNewChatDraft ? valueRef.current : savedValue;
+    if (shouldCarryNewChatDraft) {
+      writeAttachmentDraft(key, nextValue);
+      writeAttachmentDraft(previousKey, []);
+    }
+    conversationIdRef.current = conversationId;
     valueRef.current = nextValue;
     setValue(nextValue);
-  }, [key]);
-
-  useEffect(() => {
-    return () => {
-      writeAttachmentDraft(keyRef.current, valueRef.current);
-    };
-  }, []);
+  }, [conversationId, key]);
 
   return [value, setDraftValue];
 }

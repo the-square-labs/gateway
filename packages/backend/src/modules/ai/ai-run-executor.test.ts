@@ -136,6 +136,29 @@ afterEach(() => {
 });
 
 describe('AIRunExecutor live assistant draft streaming', () => {
+  it('re-dispatches pending input when a run finishes during an existing dispatch', async () => {
+    const executor = new AIRunExecutor({} as never, vi.fn(), vi.fn(), vi.fn(), vi.fn());
+    let releaseFirstDispatch!: () => void;
+    const firstDispatch = new Promise<void>((resolve) => {
+      releaseFirstDispatch = resolve;
+    });
+    const dispatchNextPendingInput = vi
+      .fn()
+      .mockImplementationOnce(() => firstDispatch)
+      .mockResolvedValueOnce(undefined);
+    (
+      executor as unknown as {
+        dispatchNextPendingInput: typeof dispatchNextPendingInput;
+      }
+    ).dispatchNextPendingInput = dispatchNextPendingInput;
+
+    executor.startPendingInputExecution(USER, 'conversation-1');
+    executor.startPendingInputExecution(USER, 'conversation-1');
+    releaseFirstDispatch();
+
+    await vi.waitFor(() => expect(dispatchNextPendingInput).toHaveBeenCalledTimes(2));
+  });
+
   it('restores changed resource and parent-node fallback from durable tool rows', async () => {
     const resourceRows = [
       {

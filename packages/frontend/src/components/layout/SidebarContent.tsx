@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input";
 import { ResizeHandle } from "@/components/ui/resize-handle";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { visibleNavigationGroups } from "@/lib/app-navigation";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
 import { isSidebarNavigationActive } from "@/lib/sidebar-navigation";
@@ -273,96 +273,99 @@ export function SidebarContent({
             transition={{ duration: 0.15 }}
             className="flex h-full flex-col items-center py-3 gap-2"
           >
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleSidebar}>
-                  <PanelLeft className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="right">Open sidebar</TooltipContent>
-            </Tooltip>
-
-            {allNavItems.map((item) => (
-              <Tooltip key={item.href}>
+            <TooltipProvider delayDuration={0} skipDelayDuration={0}>
+              <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={cn(
-                      "h-8 w-8",
-                      isSidebarNavigationActive(location.pathname, item.href) && "bg-sidebar-accent"
-                    )}
-                    onClick={() => navigate(item.href)}
-                  >
-                    <span className="relative flex">
-                      <item.icon className="h-4 w-4" />
-                      {item.id === "dashboard" && dashboardAttention && (
-                        <span
-                          aria-label={dashboardAttentionLabel(dashboardAttention)}
-                          className={cn(
-                            "absolute -right-2 -top-2 h-2 w-2",
-                            dashboardAttentionDotClass(dashboardAttention)
-                          )}
-                        />
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleSidebar}>
+                    <PanelLeft className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">Open sidebar</TooltipContent>
+              </Tooltip>
+
+              {allNavItems.map((item) => (
+                <Tooltip key={item.href}>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        "h-8 w-8",
+                        isSidebarNavigationActive(location.pathname, item.href) &&
+                          "bg-sidebar-accent"
                       )}
-                    </span>
+                      onClick={() => navigate(item.href)}
+                    >
+                      <span className="relative flex">
+                        <item.icon className="h-4 w-4" />
+                        {item.id === "dashboard" && dashboardAttention && (
+                          <span
+                            aria-label={dashboardAttentionLabel(dashboardAttention)}
+                            className={cn(
+                              "absolute -right-2 -top-2 h-2 w-2",
+                              dashboardAttentionDotClass(dashboardAttention)
+                            )}
+                          />
+                        )}
+                      </span>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">{item.name}</TooltipContent>
+                </Tooltip>
+              ))}
+
+              <div className="flex-1" />
+
+              {hasScope(AI_SCOPE) && <AIButton iconOnly />}
+
+              {canUseAI && showAILiteModeCTA && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 bg-sidebar-accent text-sidebar-accent-foreground/80 hover:bg-muted hover:text-sidebar-accent-foreground"
+                      onClick={handleTryLiteMode}
+                    >
+                      <Expand className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">Switch to lite mode</TooltipContent>
+                </Tooltip>
+              )}
+
+              {updateAvailable && hasScope("admin:update") && showUpdateNotifications && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 bg-warning text-black hover:bg-warning/90"
+                      onClick={() => navigate("/settings/general")}
+                    >
+                      <ArrowUpCircle className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">Update available</TooltipContent>
+                </Tooltip>
+              )}
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-8 w-8">
+                    <Avatar className="h-6 w-6">
+                      <AvatarImage src={user?.avatarUrl ?? undefined} />
+                      <AvatarFallback className="text-xs">
+                        {getInitials(user?.name ?? null)}
+                      </AvatarFallback>
+                    </Avatar>
                   </Button>
-                </TooltipTrigger>
-                <TooltipContent side="right">{item.name}</TooltipContent>
-              </Tooltip>
-            ))}
-
-            <div className="flex-1" />
-
-            {hasScope(AI_SCOPE) && <AIButton iconOnly />}
-
-            {canUseAI && showAILiteModeCTA && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 bg-sidebar-accent text-sidebar-accent-foreground/80 hover:bg-muted hover:text-sidebar-accent-foreground"
-                    onClick={handleTryLiteMode}
-                  >
-                    <Expand className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="right">Switch to lite mode</TooltipContent>
-              </Tooltip>
-            )}
-
-            {updateAvailable && hasScope("admin:update") && showUpdateNotifications && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 bg-warning text-black hover:bg-warning/90"
-                    onClick={() => navigate("/settings/general")}
-                  >
-                    <ArrowUpCircle className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="right">Update available</TooltipContent>
-              </Tooltip>
-            )}
-
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
-                  <Avatar className="h-6 w-6">
-                    <AvatarImage src={user?.avatarUrl ?? undefined} />
-                    <AvatarFallback className="text-xs">
-                      {getInitials(user?.name ?? null)}
-                    </AvatarFallback>
-                  </Avatar>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" side="right" className="w-64">
-                <AccountMenuContent onLogout={handleLogout} onNavigate={onNavigate} />
-              </DropdownMenuContent>
-            </DropdownMenu>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" side="right" className="w-64">
+                  <AccountMenuContent onLogout={handleLogout} onNavigate={onNavigate} />
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </TooltipProvider>
           </motion.div>
         ) : (
           <motion.div
