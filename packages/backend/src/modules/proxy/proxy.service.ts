@@ -40,6 +40,7 @@ import {
   type ProxyDockerUpstreamService,
 } from './proxy-docker-upstream.service.js';
 import { runImmediateProxyHealthCheck } from './proxy-health-check.js';
+import type { ProxySecureLinkService } from './proxy-secure-link.service.js';
 import { attachDockerUpstreamDisplay, type WithDockerUpstreamDisplay } from './proxy-upstream-display.js';
 
 export { __testOnly } from './proxy.service-helpers.js';
@@ -73,13 +74,16 @@ export class ProxyService {
     private readonly configGenerator: NginxConfigGenerator,
     private readonly nodeDispatch: NodeDispatchService,
     private readonly certificateDistribution: NginxCertificateDistributionService,
-    private readonly dockerUpstreams?: ProxyDockerUpstreamService
+    private readonly dockerUpstreams?: ProxyDockerUpstreamService,
+    private readonly secureLinks?: ProxySecureLinkService
   ) {}
 
   private eventBus?: EventBusService;
   private notificationEvaluator?: NotificationEvaluatorService;
   private dockerReconcileRunning = false;
   private dockerReconcileDirty = false;
+  private dockerReconcileRetry?: ReturnType<typeof setTimeout>;
+  private dockerReconcileBackoffMs = 5_000;
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
     bus.subscribe('docker.snapshot.changed', (payload) => {
@@ -87,6 +91,7 @@ export class ProxyService {
     });
     bus.subscribe('docker.deployment.changed', () => this.queueDockerReconciliation());
     bus.subscribe('node.service_address.changed', () => this.queueDockerReconciliation());
+    bus.subscribe('node.changed', () => this.queueDockerReconciliation());
     bus.subscribe('docker.container.changed', (payload) => {
       const event = payload as { action?: string; nodeId?: string; name?: string; oldName?: string };
       if (event.action === 'renamed' && event.nodeId && event.name && event.oldName) {
@@ -95,6 +100,7 @@ export class ProxyService {
         });
       }
     });
+    this.queueDockerReconciliation();
   }
   setEvaluator(evaluator: NotificationEvaluatorService) {
     this.notificationEvaluator = evaluator;
@@ -112,13 +118,19 @@ export class ProxyService {
     hostId: string,
     config: string,
     nodeId: string | null,
-    preparedTls?: PreparedTlsCertificate | null
+    preparedTls?: PreparedTlsCertificate | null,
+    configOwnership = 'user_owned'
   ): Promise<void> {
     const resolvedNodeId = preparedTls?.nodeId ?? (await this.nodeDispatch.resolveNodeId(nodeId));
     if (preparedTls) {
-      await this.certificateDistribution.applyHostBundle({ id: hostId, nodeId }, config, preparedTls);
+      await this.certificateDistribution.applyHostBundle(
+        { id: hostId, nodeId },
+        config,
+        preparedTls,
+        configOwnership
+      );
     } else {
-      const result = await this.nodeDispatch.applyConfig(resolvedNodeId, hostId, config);
+      const result = await this.nodeDispatch.applyConfig(resolvedNodeId, hostId, config, false, configOwnership);
       if (!result.success) {
         throw new Error(result.error || 'Daemon config apply failed');
       }
@@ -132,11 +144,26 @@ export class ProxyService {
     });
   }
 
+  private configOwnershipForHost(host: ProxyHostRow): 'managed_secure_link' | 'user_owned' {
+	const committedSecureConfig =
+	  host.secureLinkMigratedAt != null &&
+	  (host.secureLinkStatus === 'active' || host.secureLinkStatus === 'cutover_ready');
+    return host.type === 'proxy' && !host.rawConfigEnabled && host.upstreamKind !== 'manual' && committedSecureConfig
+      ? 'managed_secure_link'
+      : 'user_owned';
+  }
+
   private async restoreConfigOnNode(host: ProxyHostRow): Promise<void> {
     const certPaths = await this.resolveCertPaths(host, { preserveLegacyOnUnsupported: true });
     const accessList = await this.resolveAccessList(host.accessListId);
     const config = await this.buildNginxConfig(host, certPaths, accessList);
-    await this.applyConfigToNode(host.id, config, host.nodeId, certPaths.preparedTls);
+    await this.applyConfigToNode(
+      host.id,
+      config,
+      host.nodeId,
+      certPaths.preparedTls,
+      this.configOwnershipForHost(host)
+    );
   }
 
   private async removeConfigFromNode(hostId: string, nodeId: string | null): Promise<void> {
@@ -211,26 +238,22 @@ export class ProxyService {
       dockerHostPort: input.dockerHostPort === undefined ? existing.dockerHostPort : input.dockerHostPort,
       dockerProtocol: input.dockerProtocol === undefined ? existing.dockerProtocol : input.dockerProtocol,
     };
-    const targetKeys: Array<keyof UpdateProxyHostInput> = [
-      'upstreamKind',
-      'dockerNodeId',
-      'dockerContainerName',
-      'dockerDeploymentId',
-      'dockerContainerPort',
-      'dockerHostPort',
-      'dockerProtocol',
-      'forwardHost',
-      'forwardPort',
-    ];
     const targetChanged =
-      existing.upstreamKind !== effectiveKind || targetKeys.some((key) => Object.hasOwn(input, key));
+      existing.upstreamKind !== effectiveKind ||
+      existing.dockerNodeId !== reference.dockerNodeId ||
+      existing.dockerContainerName !== reference.dockerContainerName ||
+      existing.dockerDeploymentId !== reference.dockerDeploymentId ||
+      existing.dockerContainerPort !== reference.dockerContainerPort ||
+      (existing.dockerProtocol ?? 'tcp') !== (reference.dockerProtocol ?? 'tcp');
     if (!targetChanged) return {};
-    return {
-      ...(await this.requireDockerUpstreams().resolve(reference, {
-        actorScopes: normalized.actorScopes,
-        requireAvailable: true,
-      })),
-    };
+    const resolved = await this.requireDockerUpstreams().resolve(reference, {
+      actorScopes: normalized.actorScopes,
+      requireAvailable: true,
+    });
+    // Create-time Docker resolution uses loopback placeholders, but an update
+    // must retain the real legacy endpoint until Secure Link cutover commits.
+    const { forwardHost: _forwardHost, forwardPort: _forwardPort, ...candidate } = resolved;
+    return candidate;
   }
 
   // -----------------------------------------------------------------------
@@ -277,7 +300,7 @@ export class ProxyService {
     const upstreamData = await this.prepareCreateUpstream(input, options);
 
     // 1. Insert into DB
-    const host = await writeWithAllocatedSlug({
+    let host = await writeWithAllocatedSlug({
       source: input.domainNames[0] ?? '',
       fallback: 'proxy-host',
       reserved: ['new'],
@@ -331,20 +354,30 @@ export class ProxyService {
 
     // 2. Resolve SSL cert paths and build nginx config
     try {
+      if (host.upstreamKind !== 'manual') {
+        if (!this.secureLinks) throw new Error('Proxy Secure Links are unavailable');
+        host = await this.secureLinks.prepare(host, true);
+		await this.secureLinks.commitCutover(host.id);
+		host = (await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, host.id) })) ?? host;
+      }
       const certPaths = await this.resolveCertPaths(host);
       const accessList = await this.resolveAccessList(host.accessListId);
       const config = await this.buildNginxConfig(host, certPaths, accessList);
 
       // 3. Apply config via daemon or legacy docker
-      await this.applyConfigToNode(host.id, config, host.nodeId, certPaths.preparedTls);
+      await this.applyConfigToNode(host.id, config, host.nodeId, certPaths.preparedTls, this.configOwnershipForHost(host));
+      if (host.upstreamKind !== 'manual') await this.secureLinks?.activate(host.id);
     } catch (error) {
       // 4. If nginx fails, delete the DB row and throw
       logger.error('Failed to apply nginx config for new proxy host, rolling back DB insert', {
         hostId: host.id,
         error,
       });
+      await this.secureLinks?.cleanup(host).catch((cleanupError) => {
+        logger.warn('Failed to cleanup secure link after proxy create rollback', { hostId: host.id, cleanupError });
+      });
       await this.db.delete(proxyHosts).where(eq(proxyHosts.id, host.id));
-      if (error instanceof AppError && error.code === 'NGINX_TLS_DAEMON_UPDATE_REQUIRED') throw error;
+      if (error instanceof AppError) throw error;
       throw new AppError(
         500,
         'NGINX_CONFIG_FAILED',
@@ -477,7 +510,7 @@ export class ProxyService {
       return updated;
     };
     const primaryDomainChanged = input.domainNames !== undefined && input.domainNames[0] !== existing.domainNames[0];
-    const updated = primaryDomainChanged
+    let updated = primaryDomainChanged
       ? await writeWithAllocatedSlug({
           source: input.domainNames?.[0] ?? '',
           fallback: 'proxy-host',
@@ -496,10 +529,36 @@ export class ProxyService {
       updated.internalCertificateId !== existing.internalCertificateId ||
       updated.nodeId !== existing.nodeId;
     const nodeChanged = updated.nodeId !== existing.nodeId;
+    const existingUsesRawMode = existing.type === 'raw' || existing.rawConfigEnabled;
+    const updatedUsesRawMode = updated.type === 'raw' || updated.rawConfigEnabled;
+    const formerDockerNodeId =
+      existing.upstreamKind !== 'manual' &&
+      updated.upstreamKind !== 'manual' &&
+      existing.dockerNodeId &&
+      updated.dockerNodeId !== existing.dockerNodeId
+        ? existing.dockerNodeId
+        : null;
     let appliedOnTargetNode = false;
 
     // 3. Regenerate nginx config
     try {
+      if (updated.upstreamKind !== 'manual' && !updatedUsesRawMode) {
+        if (!this.secureLinks) throw new Error('Proxy Secure Links are unavailable');
+        const requiresSecureLink =
+          existing.upstreamKind === 'manual' ||
+          existingUsesRawMode ||
+          (existing.secureLinkGeneration < 1 && Object.keys(upstreamData).length > 0);
+        updated = await this.secureLinks.prepare(updated, requiresSecureLink);
+		if (updated.secureLinkGeneration > 0 && updated.secureLinkStatus !== 'active') {
+		  // Existing legacy/manual config must stop serving before the durable
+		  // no-fallback cutover marker is committed.
+		  if (existing.secureLinkGeneration === 0 && existing.enabled) {
+			await this.removeConfigFromNode(id, existing.nodeId);
+		  }
+		  await this.secureLinks.commitCutover(id);
+		  updated = (await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) })) ?? updated;
+		}
+      }
       if (updated.enabled) {
         const certPaths = await this.resolveCertPaths(updated, {
           preserveLegacyOnUnsupported: existing.sslEnabled && !tlsReferenceChanged,
@@ -507,7 +566,8 @@ export class ProxyService {
         const accessList = await this.resolveAccessList(updated.accessListId);
         const config = await this.buildNginxConfig(updated, certPaths, accessList);
         // 4. Apply config with rollback on failure
-        await this.applyConfigToNode(id, config, updated.nodeId, certPaths.preparedTls);
+        await this.applyConfigToNode(id, config, updated.nodeId, certPaths.preparedTls, this.configOwnershipForHost(updated));
+        if (updated.upstreamKind !== 'manual' && !updatedUsesRawMode) await this.secureLinks?.activate(id);
         appliedOnTargetNode = true;
 
         // The new target is now known-good. Only then retire the former
@@ -522,7 +582,39 @@ export class ProxyService {
         await this.removeConfigFromNode(id, deployedNodeId);
         await this.certificateDistribution.deactivateHost(id, deployedNodeId);
       }
+      const leavesManagedDocker =
+        existing.upstreamKind !== 'manual' && (updated.upstreamKind === 'manual' || updatedUsesRawMode);
+      if (leavesManagedDocker && existing.secureLinkGeneration > 0) {
+        try {
+          await this.secureLinks?.cleanup(existing);
+        } catch (cleanupError) {
+          // The manual/raw config is already committed. Keep it active and
+          // retry the independent Secure Link teardown.
+          logger.warn('Proxy left managed Docker mode; Secure Link cleanup will retry', {
+            hostId: id,
+            cleanupError,
+          });
+          this.queueDockerReconciliation();
+        }
+      }
+      if (formerDockerNodeId) await this.secureLinks?.reconcileTargetNode(formerDockerNodeId);
     } catch (error) {
+	  const currentSecureState = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) });
+      const mustRollForwardSecureLink =
+        currentSecureState?.secureLinkMigratedAt != null &&
+		(currentSecureState.secureLinkStatus === 'provisioning' ||
+		  currentSecureState.secureLinkStatus === 'updating' ||
+		  currentSecureState.secureLinkStatus === 'cutover_ready');
+	  if (mustRollForwardSecureLink) {
+		await this.secureLinks?.markCutoverError(id, error).catch(() => undefined);
+		this.queueDockerReconciliation();
+		if (error instanceof AppError) throw error;
+		throw new AppError(
+		  500,
+		  'NGINX_CONFIG_FAILED',
+		  `Secure Link cutover will retry: ${error instanceof Error ? error.message : 'unknown error'}`
+		);
+	  }
       if (nodeChanged && appliedOnTargetNode) {
         try {
           await this.removeConfigFromNode(id, updated.nodeId);
@@ -556,16 +648,50 @@ export class ProxyService {
         rollbackData[key] = (existing as Record<string, unknown>)[key];
       }
       if (primaryDomainChanged) rollbackData.slug = existing.slug;
+      if (existing.upstreamKind !== 'manual' || updated.upstreamKind !== 'manual') {
+        for (const key of [
+          'forwardHost',
+          'forwardPort',
+          'dockerHostPort',
+          'secureLinkGeneration',
+          'secureLinkStatus',
+          'secureLinkLastError',
+          'secureLinkTargetNetwork',
+          'secureLinkTargetContainer',
+          'secureLinkTargetHost',
+          'secureLinkListenerPort',
+          'secureLinkConnectorPort',
+          'secureLinkMigratedAt',
+        ] as const) {
+          rollbackData[key] = existing[key];
+        }
+      }
+      const rollbackSecureLinkGeneration =
+        existing.secureLinkGeneration > 0
+          ? Math.max(existing.secureLinkGeneration, updated.secureLinkGeneration) + 1
+          : existing.secureLinkGeneration;
+      rollbackData.secureLinkGeneration = rollbackSecureLinkGeneration;
       rollbackData.updatedAt = existing.updatedAt;
       try {
         await this.db.update(proxyHosts).set(rollbackData).where(eq(proxyHosts.id, id));
+        if (updated.secureLinkGeneration > 0 && existing.secureLinkGeneration === 0) {
+          await this.secureLinks?.cleanup(updated);
+        } else if (existing.secureLinkGeneration > 0) {
+          await this.secureLinks?.reconcileExisting({
+            ...existing,
+            secureLinkGeneration: rollbackSecureLinkGeneration,
+          });
+          if (formerDockerNodeId && updated.dockerNodeId) {
+            await this.secureLinks?.reconcileTargetNode(updated.dockerNodeId);
+          }
+        }
       } catch (rollbackError) {
         logger.error('Failed to rollback DB after nginx config failure', {
           hostId: id,
           rollbackError,
         });
       }
-      if (error instanceof AppError && error.code === 'NGINX_TLS_DAEMON_UPDATE_REQUIRED') throw error;
+      if (error instanceof AppError) throw error;
       throw new AppError(
         500,
         'NGINX_CONFIG_FAILED',
@@ -624,6 +750,7 @@ export class ProxyService {
     }
 
     // 3. Delete the database row only after the active deployment is safely gone.
+    await this.secureLinks?.cleanup(existing);
     await this.db.delete(proxyHosts).where(eq(proxyHosts.id, id));
 
     // 5. Audit log
@@ -843,7 +970,7 @@ export class ProxyService {
         const certPaths = await this.resolveCertPaths(updated);
         const accessList = await this.resolveAccessList(updated.accessListId);
         const config = await this.buildNginxConfig(updated, certPaths, accessList);
-        await this.applyConfigToNode(id, config, updated.nodeId, certPaths.preparedTls);
+        await this.applyConfigToNode(id, config, updated.nodeId, certPaths.preparedTls, this.configOwnershipForHost(updated));
       } else {
         // Disable: remove config and reload
         await this.removeConfigFromNode(id, updated.nodeId);
@@ -930,7 +1057,7 @@ export class ProxyService {
         const certPaths = await this.resolveCertPaths(updated, { preserveLegacyOnUnsupported: true });
         const accessList = await this.resolveAccessList(updated.accessListId);
         const config = await this.buildNginxConfig(updated, certPaths, accessList);
-        await this.applyConfigToNode(id, config, updated.nodeId, certPaths.preparedTls);
+        await this.applyConfigToNode(id, config, updated.nodeId, certPaths.preparedTls, this.configOwnershipForHost(updated));
       }
     } catch (error) {
       logger.error('Failed to apply nginx config during maintenance transition, rolling back DB', {
@@ -982,7 +1109,7 @@ export class ProxyService {
   // -----------------------------------------------------------------------
 
   private runImmediateHealthCheck(hostId: string): void {
-    runImmediateProxyHealthCheck({ db: this.db, hostId, logger });
+    runImmediateProxyHealthCheck({ db: this.db, hostId, logger, nodeDispatch: this.nodeDispatch });
   }
 
   private queueDockerReconciliation(): void {
@@ -998,11 +1125,22 @@ export class ProxyService {
         } while (this.dockerReconcileDirty);
       } catch (error) {
         logger.error('Docker proxy upstream reconciliation failed', { error });
+        this.scheduleDockerReconciliationRetry();
       } finally {
         this.dockerReconcileRunning = false;
         if (this.dockerReconcileDirty) this.queueDockerReconciliation();
       }
     })();
+  }
+
+  private scheduleDockerReconciliationRetry(): void {
+    if (this.dockerReconcileRetry) return;
+    const delay = this.dockerReconcileBackoffMs;
+    this.dockerReconcileBackoffMs = Math.min(this.dockerReconcileBackoffMs * 2, 5 * 60_000);
+    this.dockerReconcileRetry = setTimeout(() => {
+      this.dockerReconcileRetry = undefined;
+      this.queueDockerReconciliation();
+    }, delay);
   }
 
   private async updateRenamedContainerReferences(nodeId: string, oldName: string, newName: string): Promise<void> {
@@ -1023,38 +1161,95 @@ export class ProxyService {
 
   private async resolveStoredDockerUpstream(host: ProxyHostRow): Promise<ProxyHostRow> {
     if (host.upstreamKind === 'manual' || !this.dockerUpstreams) return host;
+    if (host.type === 'raw' || host.rawConfigEnabled) return host;
     const resolved = await this.dockerUpstreams.resolve(host, { allowPortRebind: true });
     const changed =
-      host.forwardHost !== resolved.forwardHost ||
-      host.forwardPort !== resolved.forwardPort ||
-      host.dockerHostPort !== resolved.dockerHostPort ||
       host.dockerContainerPort !== resolved.dockerContainerPort ||
       host.dockerNodeId !== resolved.dockerNodeId ||
       host.dockerContainerName !== resolved.dockerContainerName ||
       host.dockerDeploymentId !== resolved.dockerDeploymentId;
-    if (!changed) return host;
-    const [updated] = await this.db
-      .update(proxyHosts)
-      .set({ ...resolved, updatedAt: new Date() })
-      .where(eq(proxyHosts.id, host.id))
-      .returning();
-    return updated ?? host;
+    let updated = host;
+    if (changed) {
+      const [persisted] = await this.db
+        .update(proxyHosts)
+        .set({
+          upstreamKind: resolved.upstreamKind,
+          dockerNodeId: resolved.dockerNodeId,
+          dockerContainerName: resolved.dockerContainerName,
+          dockerDeploymentId: resolved.dockerDeploymentId,
+          dockerContainerPort: resolved.dockerContainerPort,
+          dockerProtocol: resolved.dockerProtocol,
+          updatedAt: new Date(),
+        })
+        .where(eq(proxyHosts.id, host.id))
+        .returning();
+      updated = persisted ?? host;
+    }
+    return this.secureLinks ? this.secureLinks.reconcileExisting(updated) : updated;
   }
 
   private async reconcileDockerUpstreams(): Promise<void> {
+    let retryNeeded = false;
+    const pendingCleanups = await this.db.query.proxyHosts.findMany({
+      where: eq(proxyHosts.secureLinkStatus, 'cleanup_pending'),
+    });
+    for (const host of pendingCleanups) {
+      try {
+        await this.secureLinks?.cleanup(host);
+      } catch (error) {
+        logger.debug('Secure Link cleanup is still pending', { hostId: host.id, error });
+        retryNeeded = true;
+      }
+    }
     const hosts = await this.db.query.proxyHosts.findMany({
-      where: and(eq(proxyHosts.type, 'proxy'), ne(proxyHosts.upstreamKind, 'manual')),
+      where: and(
+        eq(proxyHosts.type, 'proxy'),
+        ne(proxyHosts.upstreamKind, 'manual'),
+        ne(proxyHosts.secureLinkStatus, 'cleanup_pending')
+      ),
     });
     for (const host of hosts) {
       try {
+        if (host.type === 'raw' || host.rawConfigEnabled) {
+          if (host.secureLinkGeneration > 0) await this.secureLinks?.cleanup(host);
+          continue;
+        }
         const updated = await this.resolveStoredDockerUpstream(host);
-        if (updated === host) continue;
-        if (updated.enabled) {
+        const secureLinkChanged =
+          updated.forwardHost !== host.forwardHost ||
+          updated.forwardPort !== host.forwardPort ||
+          updated.secureLinkGeneration !== host.secureLinkGeneration ||
+          updated.secureLinkStatus !== host.secureLinkStatus ||
+          updated.secureLinkListenerPort !== host.secureLinkListenerPort ||
+          updated.secureLinkTargetNetwork !== host.secureLinkTargetNetwork ||
+          updated.secureLinkTargetContainer !== host.secureLinkTargetContainer;
+        const cutoverPending =
+          updated.secureLinkGeneration > 0 &&
+          (updated.secureLinkStatus === 'provisioning' ||
+            updated.secureLinkStatus === 'updating' ||
+            updated.secureLinkStatus === 'cutover_ready');
+        if (!secureLinkChanged && !cutoverPending) continue;
+		let cutoverHost = updated;
+		if (updated.secureLinkGeneration > 0 && updated.secureLinkStatus !== 'active') {
+		  if (host.secureLinkGeneration === 0 && host.enabled) {
+			await this.removeConfigFromNode(host.id, host.nodeId);
+		  }
+		  await this.secureLinks?.commitCutover(updated.id);
+		  cutoverHost = (await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, updated.id) })) ?? updated;
+		}
+        if (cutoverHost.enabled) {
           try {
-            const certPaths = await this.resolveCertPaths(updated, { preserveLegacyOnUnsupported: true });
-            const accessList = await this.resolveAccessList(updated.accessListId);
-            const config = await this.buildNginxConfig(updated, certPaths, accessList);
-            await this.applyConfigToNode(updated.id, config, updated.nodeId, certPaths.preparedTls);
+            const certPaths = await this.resolveCertPaths(cutoverHost, { preserveLegacyOnUnsupported: true });
+            const accessList = await this.resolveAccessList(cutoverHost.accessListId);
+            const config = await this.buildNginxConfig(cutoverHost, certPaths, accessList);
+            await this.applyConfigToNode(
+              cutoverHost.id,
+              config,
+              cutoverHost.nodeId,
+              certPaths.preparedTls,
+              this.configOwnershipForHost(cutoverHost)
+            );
+            if (cutoverHost.secureLinkGeneration > 0) await this.secureLinks?.activate(cutoverHost.id);
           } catch (error) {
             // Keep the newly resolved endpoint. A disconnected Nginx node will
             // receive it through the existing resync path after reconnecting.
@@ -1062,15 +1257,21 @@ export class ProxyService {
               hostId: updated.id,
               error,
             });
+            retryNeeded = true;
           }
+        } else if (cutoverPending) {
+          await this.secureLinks?.activate(cutoverHost.id);
         }
         this.emitHost(updated.id, 'updated', updated.domainNames?.[0]);
       } catch (error) {
         // External disappearance/offline state intentionally keeps the last
         // resolved endpoint and the existing Nginx configuration intact.
         logger.debug('Keeping last resolved Docker proxy upstream', { hostId: host.id, error });
+        retryNeeded = true;
       }
     }
+    if (retryNeeded) this.scheduleDockerReconciliationRetry();
+    else this.dockerReconcileBackoffMs = 5_000;
   }
 
   // -----------------------------------------------------------------------
@@ -1093,13 +1294,35 @@ export class ProxyService {
 
     for (const storedHost of hosts) {
       try {
-        const host = await this.resolveStoredDockerUpstream(storedHost).catch(() => storedHost);
+        let host = storedHost;
+        try {
+          host = await this.resolveStoredDockerUpstream(storedHost);
+        } catch (error) {
+          // A node reconnect can race the background Docker reconciler. Never
+          // render the stale pre-cutover row captured above: it could restore a
+          // published-IP upstream after the Secure Link was already committed.
+          const current = await this.db.query.proxyHosts.findFirst({
+            where: eq(proxyHosts.id, storedHost.id),
+          });
+          if (!current || !current.enabled || current.nodeId !== nodeId) continue;
+          host = current;
+          logger.debug('Using current proxy state after Docker resync resolution failed', {
+            hostId: storedHost.id,
+            error,
+          });
+        }
         // Existing hosts on an old daemon retain their legacy config and
         // certificate paths. A new bundle is never initiated for that fleet.
         const certPaths = await this.resolveCertPaths(host, supportsDistribution ? {} : { legacy: true });
         const accessList = await this.resolveAccessList(host.accessListId);
         const config = await this.buildNginxConfig(host, certPaths, accessList);
-        await this.applyConfigToNode(host.id, config, host.nodeId ?? nodeId, certPaths.preparedTls);
+        await this.applyConfigToNode(
+          host.id,
+          config,
+          host.nodeId ?? nodeId,
+          certPaths.preparedTls,
+          this.configOwnershipForHost(host)
+        );
       } catch (err) {
         logger.error('Failed to resync host config', {
           hostId: storedHost.id,
@@ -1129,7 +1352,13 @@ export class ProxyService {
     const certPaths = await this.resolveCertPaths(host);
     const accessList = await this.resolveAccessList(host.accessListId);
     const config = await this.buildNginxConfig(host, certPaths, accessList);
-    await this.applyConfigToNode(host.id, config, host.nodeId, certPaths.preparedTls);
+    await this.applyConfigToNode(
+      host.id,
+      config,
+      host.nodeId,
+      certPaths.preparedTls,
+      this.configOwnershipForHost(host)
+    );
     const distribution = await this.certificateDistribution.getStatusForHost(host);
     await this.auditService.log({
       userId,
@@ -1245,7 +1474,7 @@ export class ProxyService {
     try {
       const certPaths = await this.resolveCertPaths(host);
       const config = await this.buildNginxConfig(host, certPaths, null);
-      await this.applyConfigToNode(host.id, config, host.nodeId, certPaths.preparedTls);
+      await this.applyConfigToNode(host.id, config, host.nodeId, certPaths.preparedTls, this.configOwnershipForHost(host));
     } catch (error) {
       logger.error('Failed to apply status page system proxy host config', {
         hostId: host.id,
@@ -1402,14 +1631,26 @@ export class ProxyService {
     certPaths: CertPaths,
     accessList: ProxyHostConfig['accessList']
   ): Promise<string> {
+    // Raw mode is an explicit user-owned escape hatch and is never rewritten.
+    if ((host.type === 'raw' || host.rawConfigEnabled) && host.rawConfig) return host.rawConfig;
+
+	const usesSecureLink =
+	  host.upstreamKind !== 'manual' &&
+	  host.secureLinkGeneration > 0 &&
+	  host.secureLinkMigratedAt != null &&
+	  (host.secureLinkStatus === 'active' || host.secureLinkStatus === 'cutover_ready');
+    if (usesSecureLink && !host.secureLinkListenerPort) {
+      throw new Error('Secure Link listener port is unavailable');
+    }
     const config: ProxyHostConfig = {
       id: host.id,
       type: host.type,
       domainNames: host.domainNames,
       enabled: host.enabled,
-      forwardHost: host.forwardHost,
-      forwardPort: host.forwardPort,
+      forwardHost: usesSecureLink ? '127.0.0.1' : host.forwardHost,
+      forwardPort: usesSecureLink ? host.secureLinkListenerPort : host.forwardPort,
       forwardScheme: host.forwardScheme ?? 'http',
+      secureLinkUpstream: usesSecureLink,
       sslEnabled: host.sslEnabled && !!certPaths.sslCertPath && !!certPaths.sslKeyPath,
       sslForced: host.sslForced,
       http2Support: host.http2Support,
@@ -1429,9 +1670,6 @@ export class ProxyService {
       sslChainPath: certPaths.sslChainPath,
       templateVariables: (host.templateVariables ?? {}) as Record<string, string | number | boolean>,
     };
-
-    // Raw config mode — bypass template rendering entirely
-    if (host.rawConfigEnabled && host.rawConfig) return host.rawConfig;
 
     const rendered = await this.nginxTemplateService.renderForHost(config, host.nginxTemplateId ?? null);
     return host.maintenanceEnabled ? this.nginxTemplateService.applyMaintenanceGuard(rendered) : rendered;

@@ -10,6 +10,9 @@ function setRequiredEnv(overrides: NodeJS.ProcessEnv = {}) {
   if (!Object.hasOwn(overrides, 'DATABASE_CONNECTOR_IMAGE')) {
     delete inheritedEnv.DATABASE_CONNECTOR_IMAGE;
   }
+  if (!Object.hasOwn(overrides, 'SECURE_LINK_CONNECTOR_IMAGE')) {
+    delete inheritedEnv.SECURE_LINK_CONNECTOR_IMAGE;
+  }
 
   process.env = {
     ...inheritedEnv,
@@ -75,6 +78,21 @@ describe('getEnv gRPC TLS config', () => {
     const production = await loadEnv({ NODE_ENV: 'production' });
 
     expect(development.DATABASE_CONNECTOR_IMAGE).toBe('gateway-database-connector:dev');
+    expect(development.SECURE_LINK_CONNECTOR_IMAGE).toBe('gateway-secure-link-connector:dev');
     expect(production.DATABASE_CONNECTOR_IMAGE).toBe('');
+    expect(production.SECURE_LINK_CONNECTOR_IMAGE).toBe('');
+  });
+
+  it('rejects mutable secure-link connector images in production', async () => {
+    await expect(
+      loadEnv({ NODE_ENV: 'production', SECURE_LINK_CONNECTOR_IMAGE: 'gateway-secure-link-connector:dev' })
+    ).rejects.toThrow('SECURE_LINK_CONNECTOR_IMAGE must use an immutable sha256 digest in production');
+  });
+
+  it('accepts an immutable secure-link connector image in production', async () => {
+    const image = `registry.example/gateway/secure-link-connector@sha256:${'a'.repeat(64)}`;
+    const production = await loadEnv({ NODE_ENV: 'production', SECURE_LINK_CONNECTOR_IMAGE: image });
+
+    expect(production.SECURE_LINK_CONNECTOR_IMAGE).toBe(image);
   });
 });

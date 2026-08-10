@@ -35,7 +35,19 @@ describe('RelayPolicyService snapshots', () => {
         [
           {
             id: 'route-1',
+            ownerKind: 'managed_database_binding',
             generation: 4,
+            sourceKind: 'daemon',
+            sourceId: 'node-source',
+            sourceCertificateSha256: `sha256:${'b'.repeat(64)}`,
+            targetEndpointId: 'endpoint-1',
+            maxConcurrentSessions: 6,
+            maxFrameBytes: 1024,
+          },
+          {
+            id: 'route-2',
+            ownerKind: 'proxy_host_secure_link',
+            generation: 1,
             sourceKind: 'daemon',
             sourceId: 'node-source',
             sourceCertificateSha256: `sha256:${'b'.repeat(64)}`,
@@ -77,7 +89,10 @@ describe('RelayPolicyService snapshots', () => {
         revision: '7',
         gatewayInstanceId: 'gateway-1',
         endpoints: [expect.objectContaining({ endpointId: 'endpoint-1', generation: '3' })],
-        routes: [expect.objectContaining({ routeId: 'route-1', generation: '4' })],
+        routes: [
+          expect.objectContaining({ routeId: 'route-1', generation: '4', disableIdleTimeout: false }),
+          expect.objectContaining({ routeId: 'route-2', generation: '1', disableIdleTimeout: true }),
+        ],
       })
     );
   });

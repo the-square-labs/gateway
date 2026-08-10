@@ -17,6 +17,7 @@ import (
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
+	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
 	"github.com/wiolett-industries/gateway/daemon-shared/sysmetrics"
 	"github.com/wiolett-industries/gateway/docker-daemon/internal/config"
@@ -42,6 +43,8 @@ type DockerPlugin struct {
 	relayGrants     *relayGrantStore
 	relayTunnelMu   sync.Mutex
 	relayTunnel     *relayTunnelRouter
+	secureLinks     *dockerSecureLinkManager
+	secureLinkState *securelink.StateStore
 
 	// Log stream follow support
 	writer          *stream.Writer
@@ -49,6 +52,8 @@ type DockerPlugin struct {
 	logStreamMu     sync.Mutex
 	logStreamCancel map[string]context.CancelFunc // containerId -> cancel
 }
+
+var _ lifecycle.ProxySecureLinkPlugin = (*DockerPlugin)(nil)
 
 const dockerLogsCommandTimeout = 15 * time.Second
 
@@ -137,6 +142,46 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 			return fmt.Errorf("reconcile managed database storage: %w", err)
 		}
 	}
+	if p.cfg.Docker.Mode != "databases" {
+		p.secureLinks, err = newDockerSecureLinkManager(p)
+		if err != nil {
+			return fmt.Errorf("initialize proxy secure links: %w", err)
+		}
+		p.secureLinkState, err = securelink.NewStateStore(p.cfg.StateDir)
+		if err != nil {
+			return fmt.Errorf("initialize proxy secure-link state: %w", err)
+		}
+		pending, hasPending, pendingErr := p.secureLinkState.Pending()
+		if pendingErr != nil {
+			return fmt.Errorf("read pending proxy secure-link state: %w", pendingErr)
+		}
+		restored := p.secureLinkState.Get()
+		if hasPending && len(pending.Bindings) == 0 {
+			// An interrupted last-link teardown must win over the older committed
+			// snapshot; otherwise restart would recreate the connector that the
+			// cleanup had already removed.
+			if cleanupErr := p.secureLinks.removeConnector(context.Background()); cleanupErr != nil {
+				p.logger.Warn("proxy secure-link pending cleanup deferred", "error", cleanupErr)
+			} else if commitErr := p.secureLinkState.Commit(pending); commitErr != nil {
+				return fmt.Errorf("commit pending proxy secure-link cleanup: %w", commitErr)
+			}
+		} else if len(restored.Bindings) > 0 {
+			statuses, restoreErr := p.secureLinks.sync(restored)
+			if restoreErr != nil {
+				p.logger.Warn("proxy secure-link restore deferred", "error", restoreErr)
+			} else if saveErr := p.secureLinkState.Commit(normalizeTargetBindings(restored, statuses)); saveErr != nil {
+				return fmt.Errorf("persist restored proxy secure links: %w", saveErr)
+			}
+		} else if hasPending {
+			// No committed bindings means an interrupted first apply or teardown.
+			// Empty cleanup discovers any surviving managed connector by name.
+			if cleanupErr := p.secureLinks.removeConnector(context.Background()); cleanupErr != nil {
+				p.logger.Warn("proxy secure-link pending cleanup deferred", "error", cleanupErr)
+			} else if discardErr := p.secureLinkState.DiscardPending(); discardErr != nil {
+				return fmt.Errorf("clear proxy secure-link pending state: %w", discardErr)
+			}
+		}
+	}
 
 	// Initialize registry credentials map
 	p.registryCreds = make(map[string]string)
@@ -172,7 +217,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 					"managed_clickhouse_principals_v1",
 				}
 			}
-			return []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1"}
+			return []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1", "proxy_secure_links_v1"}
 		}(),
 	}
 }

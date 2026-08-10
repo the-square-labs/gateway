@@ -13,6 +13,7 @@ export interface FoundationMigrationOptions {
   targetVersion?: string;
   imageRef?: string;
   databaseConnectorImage?: string;
+  secureLinkConnectorImage?: string;
   relayBuildVersion?: string;
   relayProtocolMajor?: number;
   relayImageRef?: string;
@@ -70,6 +71,7 @@ export async function runFoundationMigrations(options: FoundationMigrationOption
     ...(options.targetVersion ? { GATEWAY_VERSION: options.targetVersion } : {}),
     ...(options.imageRef ? { GATEWAY_IMAGE_REF: options.imageRef } : {}),
     ...(options.databaseConnectorImage ? { DATABASE_CONNECTOR_IMAGE: options.databaseConnectorImage } : {}),
+    ...(options.secureLinkConnectorImage ? { SECURE_LINK_CONNECTOR_IMAGE: options.secureLinkConnectorImage } : {}),
     GATEWAY_RELAY_IMAGE_REF: effectiveRelayImageRef,
     ...(effectiveRelayBuildVersion ? { GATEWAY_RELAY_BUILD_VERSION: effectiveRelayBuildVersion } : {}),
     GATEWAY_RELAY_PROTOCOL_MAJOR: String(effectiveRelayProtocolMajor),

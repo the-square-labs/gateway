@@ -22,7 +22,7 @@ function container(overrides: Partial<DockerContainer> = {}): DockerContainer {
 }
 
 describe("proxy Docker upstream selection", () => {
-  it("automatically selects a single published TCP mapping", () => {
+  it("automatically selects a single declared TCP application port", () => {
     const selected = proxyUpstreamForDockerTarget(DEFAULT_PROXY_UPSTREAM, container());
 
     expect(selected).toMatchObject({
@@ -30,7 +30,6 @@ describe("proxy Docker upstream selection", () => {
       dockerNodeId: "node-1",
       containerName: "api",
       containerPort: 80,
-      hostPort: 18080,
     });
     expect(isProxyUpstreamValid(selected)).toBe(true);
     expect(proxyUpstreamRequest(selected)).toMatchObject({
@@ -38,9 +37,9 @@ describe("proxy Docker upstream selection", () => {
       dockerNodeId: "node-1",
       dockerContainerName: "api",
       dockerContainerPort: 80,
-      dockerHostPort: 18080,
       dockerProtocol: "tcp",
     });
+    expect(proxyUpstreamRequest(selected)).not.toHaveProperty("dockerHostPort");
   });
 
   it("requires an explicit choice when multiple mappings exist", () => {
@@ -55,11 +54,10 @@ describe("proxy Docker upstream selection", () => {
     );
 
     expect(selected.containerPort).toBeNull();
-    expect(selected.hostPort).toBeNull();
     expect(isProxyUpstreamValid(selected)).toBe(false);
   });
 
-  it("does not offer a mapping published only on loopback", () => {
+  it("uses a declared application port even when the old host mapping is loopback-only", () => {
     const selected = proxyUpstreamForDockerTarget(
       DEFAULT_PROXY_UPSTREAM,
       container({
@@ -67,9 +65,16 @@ describe("proxy Docker upstream selection", () => {
       })
     );
 
-    expect(selected.containerPort).toBeNull();
-    expect(selected.hostPort).toBeNull();
-    expect(isProxyUpstreamValid(selected)).toBe(false);
+    expect(selected.containerPort).toBe(80);
+    expect(isProxyUpstreamValid(selected)).toBe(true);
+  });
+
+  it("allows a manual application port without any published mapping", () => {
+    const selected = proxyUpstreamForDockerTarget(DEFAULT_PROXY_UPSTREAM, container({ ports: [] }));
+    const manual = { ...selected, containerPort: 8080 };
+
+    expect(isProxyUpstreamValid(manual)).toBe(true);
+    expect(proxyUpstreamRequest(manual)).toMatchObject({ dockerContainerPort: 8080 });
   });
 
   it("stores a deployment reference instead of a slot container", () => {

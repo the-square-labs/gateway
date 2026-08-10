@@ -23,6 +23,7 @@ export interface ProxyHostConfig {
   forwardHost: string | null;
   forwardPort: number | null;
   forwardScheme: 'http' | 'https';
+  secureLinkUpstream?: boolean;
   sslEnabled: boolean;
   sslForced: boolean;
   http2Support: boolean;
@@ -212,6 +213,7 @@ export class NginxConfigGenerator {
       lines.push('        add_header X-Cache-Status $upstream_cache_status;');
     }
 
+    if (host.secureLinkUpstream) lines.push(`        # gateway-managed-secure-link-upstream ${host.id}`);
     lines.push(`        proxy_pass ${upstream};`);
     lines.push('');
     lines.push('        proxy_set_header Host $host;');
@@ -222,8 +224,9 @@ export class NginxConfigGenerator {
     lines.push('        proxy_set_header X-Forwarded-Port $server_port;');
     lines.push('');
     lines.push('        proxy_connect_timeout 60s;');
-    lines.push('        proxy_send_timeout 60s;');
-    lines.push('        proxy_read_timeout 60s;');
+    const proxyInactivityTimeout = host.secureLinkUpstream ? '2h' : '60s';
+    lines.push(`        proxy_send_timeout ${proxyInactivityTimeout};`);
+    lines.push(`        proxy_read_timeout ${proxyInactivityTimeout};`);
     lines.push('');
 
     if (host.websocketSupport) {

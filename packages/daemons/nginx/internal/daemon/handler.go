@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 	sharedstate "github.com/wiolett-industries/gateway/daemon-shared/state"
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
 	"github.com/wiolett-industries/gateway/nginx-daemon/internal/config"
@@ -36,14 +38,37 @@ func isValidCertificateID(s string) bool {
 }
 
 type Handler struct {
-	cfg    *config.Config
-	mgr    *nginx.Manager
-	state  *sharedstate.State
-	logger *slog.Logger
+	cfg             *config.Config
+	mgr             *nginx.Manager
+	state           *sharedstate.State
+	logger          *slog.Logger
+	secureLinkState *securelink.StateStore
 }
 
-func NewHandler(cfg *config.Config, mgr *nginx.Manager, st *sharedstate.State, logger *slog.Logger) *Handler {
-	return &Handler{cfg: cfg, mgr: mgr, state: st, logger: logger}
+func NewHandler(cfg *config.Config, mgr *nginx.Manager, st *sharedstate.State, logger *slog.Logger, secureLinkState *securelink.StateStore) *Handler {
+	return &Handler{cfg: cfg, mgr: mgr, state: st, logger: logger, secureLinkState: secureLinkState}
+}
+
+const (
+	configOwnershipManagedSecureLink = "managed_secure_link"
+	configOwnershipUserOwned         = "user_owned"
+)
+
+func (h *Handler) setConfigOwnership(hostID, ownership string) (func(), error) {
+	if ownership == "" || h.secureLinkState == nil {
+		return func() {}, nil
+	}
+	if ownership != configOwnershipManagedSecureLink && ownership != configOwnershipUserOwned {
+		return nil, errors.New("invalid config ownership")
+	}
+	managed := ownership == configOwnershipManagedSecureLink
+	previous, found, err := h.secureLinkState.SetSourceConfigManaged(hostID, managed)
+	if err != nil || !found {
+		return func() {}, err
+	}
+	return func() {
+		_, _, _ = h.secureLinkState.SetSourceConfigManaged(hostID, previous)
+	}, nil
 }
 
 // HandleCommand processes a GatewayCommand and returns a CommandResult.
@@ -100,8 +125,15 @@ func (h *Handler) handleApplyConfig(cmd *pb.ApplyConfigCommand, result *pb.Comma
 
 	// Read old config for rollback
 	oldConfig, _ := nginx.ReadFile(path)
+	restoreOwnership, err := h.setConfigOwnership(cmd.HostId, cmd.ConfigOwnership)
+	if err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("persist config ownership: %v", err)
+		return
+	}
 
 	if err := nginx.WriteAtomic(path, []byte(cmd.ConfigContent)); err != nil {
+		restoreOwnership()
 		result.Success = false
 		result.Error = fmt.Sprintf("write config: %v", err)
 		return
@@ -117,6 +149,7 @@ func (h *Handler) handleApplyConfig(cmd *pb.ApplyConfigCommand, result *pb.Comma
 		} else {
 			nginx.RemoveFile(path)
 		}
+		restoreOwnership()
 		result.Success = false
 		result.Error = fmt.Sprintf("nginx config test failed: %s", output)
 		return
@@ -129,6 +162,7 @@ func (h *Handler) handleApplyConfig(cmd *pb.ApplyConfigCommand, result *pb.Comma
 		} else {
 			nginx.RemoveFile(path)
 		}
+		restoreOwnership()
 		return
 	}
 
@@ -138,7 +172,6 @@ func (h *Handler) handleApplyConfig(cmd *pb.ApplyConfigCommand, result *pb.Comma
 		result.Error = fmt.Sprintf("nginx reload failed: %v", err)
 		return
 	}
-
 	h.logger.Info("config applied", "host_id", cmd.HostId)
 }
 
@@ -239,6 +272,7 @@ func (h *Handler) handleApplyTlsBundle(cmd *pb.ApplyTlsBundleCommand, result *pb
 	configPath := h.mgr.ConfigPath(cmd.HostId)
 	oldConfig, _ := nginx.ReadFile(configPath)
 	pointers := make(map[string]nginx.CertPointer, len(cmd.Certificates))
+	restoreOwnership := func() {}
 
 	rollback := func() {
 		if oldConfig != nil {
@@ -255,6 +289,7 @@ func (h *Handler) handleApplyTlsBundle(cmd *pb.ApplyTlsBundleCommand, result *pb
 		if valid, _ := h.mgr.TestConfig(); valid {
 			_ = h.mgr.Reload()
 		}
+		restoreOwnership()
 	}
 
 	for _, cert := range cmd.Certificates {
@@ -280,6 +315,13 @@ func (h *Handler) handleApplyTlsBundle(cmd *pb.ApplyTlsBundleCommand, result *pb
 		}
 		pointers[cert.CertId] = pointer
 	}
+	restoreOwnership, err := h.setConfigOwnership(cmd.HostId, cmd.ConfigOwnership)
+	if err != nil {
+		rollback()
+		result.Success = false
+		result.Error = "persist TLS config ownership failed"
+		return
+	}
 
 	if err := nginx.WriteAtomic(configPath, []byte(cmd.ConfigContent)); err != nil {
 		rollback()
@@ -301,7 +343,6 @@ func (h *Handler) handleApplyTlsBundle(cmd *pb.ApplyTlsBundleCommand, result *pb
 		result.Error = "nginx reload failed"
 		return
 	}
-
 	h.state.SetExtra("last_tls_bundle_generation", cmd.Generation)
 	h.state.Save()
 	h.logger.Info("TLS bundle applied", "host_id", cmd.HostId, "certificate_count", len(cmd.Certificates))
@@ -394,6 +435,7 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 	var deployedCerts []string
 	var deployedHtpasswd []string
 	deletedStaleConfigs := make(map[string][]byte)
+	ownershipRollback := make(map[string]bool)
 
 	rollback := func() {
 		// Restore original configs
@@ -411,6 +453,9 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 		// Remove newly deployed htpasswd
 		for _, alId := range deployedHtpasswd {
 			nginx.RemoveFile(filepath.Join(h.cfg.Nginx.HtpasswdDir, fmt.Sprintf("access-list-%s", alId)))
+		}
+		for hostID, previous := range ownershipRollback {
+			_, _, _ = h.secureLinkState.SetSourceConfigManaged(hostID, previous)
 		}
 	}
 
@@ -440,6 +485,25 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 	// Phase 3: Write all host configs
 	activeHosts := make(map[string]bool)
 	for _, host := range cmd.Hosts {
+		if host.ConfigOwnership != "" && h.secureLinkState != nil {
+			managed := host.ConfigOwnership == configOwnershipManagedSecureLink
+			if !managed && host.ConfigOwnership != configOwnershipUserOwned {
+				rollback()
+				result.Success = false
+				result.Error = fmt.Sprintf("invalid config ownership %s", host.HostId)
+				return
+			}
+			previous, found, err := h.secureLinkState.SetSourceConfigManaged(host.HostId, managed)
+			if err != nil {
+				rollback()
+				result.Success = false
+				result.Error = fmt.Sprintf("persist config ownership %s: %v", host.HostId, err)
+				return
+			}
+			if found {
+				ownershipRollback[host.HostId] = previous
+			}
+		}
 		path := h.mgr.ConfigPath(host.HostId)
 		if err := nginx.WriteAtomic(path, []byte(host.ConfigContent)); err != nil {
 			rollback()
@@ -487,7 +551,6 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 		result.Error = fmt.Sprintf("nginx reload failed: %v", err)
 		return
 	}
-
 	// Update state
 	hostIDs := make([]string, 0, len(cmd.Hosts))
 	for _, host := range cmd.Hosts {

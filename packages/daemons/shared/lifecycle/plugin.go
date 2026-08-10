@@ -83,3 +83,16 @@ type RelayTunnelPlugin interface {
 	RunRelayTunnels(ctx context.Context, conn *grpc.ClientConn, nodeID string)
 	SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (detail string, err error)
 }
+
+// ProxySecureLinkPlugin is implemented by nginx and general Docker daemons.
+// The command is a complete desired-state snapshot, so reconnects and daemon
+// restarts can reconcile listeners and connector bindings idempotently.
+type ProxySecureLinkPlugin interface {
+	SyncProxySecureLinks(command *pb.SyncProxySecureLinksCommand) (detail string, err error)
+}
+
+// ProxySecureLinkProbePlugin is implemented only by nginx-daemon, which owns
+// the loopback source listener used for full-path HTTP health probes.
+type ProxySecureLinkProbePlugin interface {
+	ProbeProxySecureLink(command *pb.ProbeProxySecureLinkCommand) (detail string, err error)
+}

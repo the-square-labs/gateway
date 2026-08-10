@@ -374,7 +374,7 @@ decode_base64url() {
 verify_signed_release() {
   local version="$1" encoded_project="$2"
   local tmp_dir manifest_file payload_file signature_file key_file
-  local payload signature kind manifest_version tag image digest image_ref relay_build_version relay_protocol_major relay_image_ref relay_digest connector_image_ref connector_image connector_digest
+  local payload signature kind manifest_version tag image digest image_ref relay_build_version relay_protocol_major relay_image_ref relay_digest connector_image_ref connector_image connector_digest secure_connector_image_ref secure_connector_image secure_connector_digest
 
   tmp_dir="$(mktemp -d)"
   manifest_file="${tmp_dir}/gateway-image.update.json"
@@ -415,6 +415,7 @@ verify_signed_release() {
   relay_protocol_major="$(json_number_field "$payload_file" relayProtocolMajor)"
   relay_image_ref="$(json_string_field "$payload_file" relayImageRef)"
   connector_image_ref="$(json_string_field "$payload_file" databaseConnectorImage)"
+  secure_connector_image_ref="$(json_string_field "$payload_file" secureLinkConnectorImage)"
   if [[ "$kind" != "gateway-image" || "$manifest_version" != "$version" || "$tag" != "$version" ||
     "$image" != "$IMAGE" || ! "$digest" =~ ^sha256:[a-f0-9]{64}$ || "$image_ref" != "${IMAGE}@${digest}" ]]; then
     rm -rf "$tmp_dir"
@@ -426,6 +427,14 @@ verify_signed_release() {
     if [[ "$connector_image_ref" != "${connector_image}@${connector_digest}" || ! "$connector_digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
       rm -rf "$tmp_dir"
       die "Signed release manifest contains an invalid database connector image."
+    fi
+  fi
+  if [[ -n "$secure_connector_image_ref" ]]; then
+    secure_connector_image="${IMAGE}/secure-link-connector"
+    secure_connector_digest="${secure_connector_image_ref##*@}"
+    if [[ "$secure_connector_image_ref" != "${secure_connector_image}@${secure_connector_digest}" || ! "$secure_connector_digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+      rm -rf "$tmp_dir"
+      die "Signed release manifest contains an invalid secure-link connector image."
     fi
   fi
   relay_digest="${relay_image_ref##*@}"
@@ -442,6 +451,7 @@ verify_signed_release() {
   RELAY_PROTOCOL_MAJOR="$relay_protocol_major"
   RELAY_IMAGE_REF="$relay_image_ref"
   DATABASE_CONNECTOR_IMAGE_REF="$connector_image_ref"
+  SECURE_LINK_CONNECTOR_IMAGE_REF="$secure_connector_image_ref"
   ok "Release ${version} verified (SHA-256: $(short_digest "$digest"))"
 }
 
@@ -470,6 +480,7 @@ prepare_install_metadata() {
     [[ "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ]] || die "Could not calculate the local source checksum"
     ARTIFACT_KIND="local source checksum"
     DATABASE_CONNECTOR_IMAGE_REF=""
+    SECURE_LINK_CONNECTOR_IMAGE_REF=""
     RELAY_BUILD_VERSION="$VERSION"
     RELAY_PROTOCOL_MAJOR=1
     RELAY_IMAGE_REF="${IMAGE}/relay:${VERSION}"
@@ -699,6 +710,9 @@ ensure_env GATEWAY_IMAGE_REF "$IMAGE_REF"
 if [[ -n "${DATABASE_CONNECTOR_IMAGE_REF:-}" ]]; then
   ensure_env DATABASE_CONNECTOR_IMAGE "$DATABASE_CONNECTOR_IMAGE_REF"
 fi
+if [[ -n "${SECURE_LINK_CONNECTOR_IMAGE_REF:-}" ]]; then
+  ensure_env SECURE_LINK_CONNECTOR_IMAGE "$SECURE_LINK_CONNECTOR_IMAGE_REF"
+fi
 ensure_env DB_PASSWORD "$(openssl rand -hex 24)"
 ensure_env PKI_MASTER_KEY "$(openssl rand -hex 32)"
 ensure_env SETUP_BOOTSTRAP "$([[ "$FRESH" == 1 ]] && printf true || printf false)"
@@ -834,6 +848,9 @@ else
   foundation_args=(node dist/foundation-migrator.js --host-dir /host --target-version "$VERSION" --image-ref "$IMAGE_REF" --relay-build-version "$RELAY_BUILD_VERSION" --relay-protocol-major "$RELAY_PROTOCOL_MAJOR" --relay-image-ref "$RELAY_IMAGE_REF")
   if [[ -n "${DATABASE_CONNECTOR_IMAGE_REF:-}" ]]; then
     foundation_args+=(--database-connector-image "$DATABASE_CONNECTOR_IMAGE_REF")
+  fi
+  if [[ -n "${SECURE_LINK_CONNECTOR_IMAGE_REF:-}" ]]; then
+    foundation_args+=(--secure-link-connector-image "$SECURE_LINK_CONNECTOR_IMAGE_REF")
   fi
   run_quiet "Gateway foundation migration" "${DOCKER[@]}" run --rm -v "$INSTALL_DIR:/host" "$IMAGE_REF" "${foundation_args[@]}"
 fi

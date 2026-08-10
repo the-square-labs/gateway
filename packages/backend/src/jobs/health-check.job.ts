@@ -6,6 +6,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import { formatHostPort } from '@/lib/network-endpoint.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
+import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 
 const logger = createChildLogger('HealthCheckJob');
 
@@ -25,7 +26,10 @@ export class HealthCheckJob {
   private eventBus?: EventBusService;
   private evaluator?: NotificationEvaluatorService;
 
-  constructor(private readonly db: DrizzleClient) {}
+  constructor(
+    private readonly db: DrizzleClient,
+    private readonly nodeDispatch?: NodeDispatchService
+  ) {}
 
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
@@ -178,6 +182,19 @@ export class HealthCheckJob {
   private async checkHost(
     host: typeof proxyHosts.$inferSelect
   ): Promise<{ status: 'online' | 'offline'; responseMs?: number }> {
+    if (host.upstreamKind !== 'manual' && host.secureLinkMigratedAt != null) {
+      if (!host.nodeId || !this.nodeDispatch) return { status: 'offline' };
+      const result = await this.nodeDispatch.probeProxySecureLink(host.nodeId, {
+        linkId: host.id,
+        scheme: host.forwardScheme ?? 'http',
+        path: host.healthCheckUrl || '/',
+        expectedStatus: host.healthCheckExpectedStatus,
+        expectedBody: host.healthCheckExpectedBody,
+        bodyMatchMode: host.healthCheckBodyMatchMode,
+        timeoutSeconds: Math.ceil(HEALTH_CHECK_TIMEOUT_MS / 1000),
+      });
+      return { status: result.ok ? 'online' : 'offline', responseMs: result.responseMs };
+    }
     if (!host.forwardHost || !host.forwardPort) {
       return { status: 'offline' };
     }

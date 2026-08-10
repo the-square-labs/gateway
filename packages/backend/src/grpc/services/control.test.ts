@@ -227,6 +227,7 @@ function makeDeps(db: any) {
         if (!commandStream || connectedNode?.commandStream === commandStream) connectedNode = undefined;
       }),
       getNode: vi.fn(() => connectedNode),
+      publishNodeChanged: vi.fn(),
       handleCommandResult: vi.fn(),
       handleLogStream: vi.fn(),
       updateHealthReport: vi.fn(),
@@ -339,6 +340,41 @@ describe('mapGpuHealthDevices', () => {
 });
 
 describe('CommandStream daemon certificate identity', () => {
+  it('publishes the online reconciliation event only after daemon capabilities are durable', async () => {
+    let releaseMetadata!: () => void;
+    const metadataCommitted = new Promise<void>((resolve) => {
+      releaseMetadata = resolve;
+    });
+    const setMetadata = vi.fn(() => ({ where: vi.fn(() => metadataCommitted) }));
+    const db = {
+      ...makeDbNode({ type: 'docker' }),
+      update: vi.fn(() => ({ set: setMetadata })),
+    } as any;
+    const deps = makeDeps(db);
+    const stream = makeStream({ serialNumber: 'aa01' });
+
+    createControlHandlers(deps).CommandStream(stream);
+    stream.emit('data', {
+      register: {
+        nodeId,
+        hostname: 'docker-1',
+        nginxVersion: '27.5.1',
+        configVersionHash: 'hash-daemon',
+        daemonVersion: 'dev',
+        daemonType: 'docker',
+        capabilities: ['proxy_secure_links_v1'],
+      },
+    });
+
+    await vi.waitFor(() => expect(setMetadata).toHaveBeenCalled());
+    expect(deps.registry.publishNodeChanged).not.toHaveBeenCalled();
+
+    releaseMetadata();
+    await vi.waitFor(() => {
+      expect(deps.registry.publishNodeChanged).toHaveBeenCalledWith(nodeId, 'online', 'docker-1');
+    });
+  });
+
   it('stores docker daemon engine version under dockerVersion capabilities', async () => {
     const setMetadata = vi.fn((_metadata: { capabilities: Record<string, unknown> }) => ({
       where: vi.fn(async () => undefined),

@@ -1019,8 +1019,11 @@ type RoutePolicy struct {
 	TargetEndpointId        string                 `protobuf:"bytes,6,opt,name=target_endpoint_id,json=targetEndpointId,proto3" json:"target_endpoint_id,omitempty"`
 	MaxConcurrentSessions   uint32                 `protobuf:"varint,7,opt,name=max_concurrent_sessions,json=maxConcurrentSessions,proto3" json:"max_concurrent_sessions,omitempty"`
 	MaxFrameBytes           uint32                 `protobuf:"varint,8,opt,name=max_frame_bytes,json=maxFrameBytes,proto3" json:"max_frame_bytes,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// Proxy Secure Links intentionally have no fixed idle timeout. Existing
+	// routes keep the relay default when this field is false.
+	DisableIdleTimeout bool `protobuf:"varint,9,opt,name=disable_idle_timeout,json=disableIdleTimeout,proto3" json:"disable_idle_timeout,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *RoutePolicy) Reset() {
@@ -1107,6 +1110,13 @@ func (x *RoutePolicy) GetMaxFrameBytes() uint32 {
 		return x.MaxFrameBytes
 	}
 	return 0
+}
+
+func (x *RoutePolicy) GetDisableIdleTimeout() bool {
+	if x != nil {
+		return x.DisableIdleTimeout
+	}
+	return false
 }
 
 type ApplySnapshotRequest struct {
@@ -1628,7 +1638,7 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\n" +
 	"subject_id\x18\x04 \x01(\tR\tsubjectId\x12-\n" +
 	"\x12certificate_sha256\x18\x05 \x01(\tR\x11certificateSha256\x126\n" +
-	"\x17max_concurrent_sessions\x18\x06 \x01(\rR\x15maxConcurrentSessions\"\xd0\x02\n" +
+	"\x17max_concurrent_sessions\x18\x06 \x01(\rR\x15maxConcurrentSessions\"\x82\x03\n" +
 	"\vRoutePolicy\x12\x19\n" +
 	"\broute_id\x18\x01 \x01(\tR\arouteId\x12\x1e\n" +
 	"\n" +
@@ -1640,7 +1650,8 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x19source_certificate_sha256\x18\x05 \x01(\tR\x17sourceCertificateSha256\x12,\n" +
 	"\x12target_endpoint_id\x18\x06 \x01(\tR\x10targetEndpointId\x126\n" +
 	"\x17max_concurrent_sessions\x18\a \x01(\rR\x15maxConcurrentSessions\x12&\n" +
-	"\x0fmax_frame_bytes\x18\b \x01(\rR\rmaxFrameBytes\"\xff\x01\n" +
+	"\x0fmax_frame_bytes\x18\b \x01(\rR\rmaxFrameBytes\x120\n" +
+	"\x14disable_idle_timeout\x18\t \x01(\bR\x12disableIdleTimeout\"\xff\x01\n" +
 	"\x14ApplySnapshotRequest\x12\x1a\n" +
 	"\brevision\x18\x01 \x01(\x04R\brevision\x12.\n" +
 	"\x13gateway_instance_id\x18\x02 \x01(\tR\x11gatewayInstanceId\x124\n" +

@@ -185,6 +185,38 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 				return err
 			}
 			continue
+		case *pb.GatewayCommand_SyncProxySecureLinks:
+			result := &pb.CommandResult{CommandId: cmd.CommandId, Success: true}
+			secureLinkPlugin, ok := d.plugin.(ProxySecureLinkPlugin)
+			if !ok {
+				result.Success = false
+				result.Error = "daemon does not support proxy secure links"
+			} else if detail, err := secureLinkPlugin.SyncProxySecureLinks(cmd.GetSyncProxySecureLinks()); err != nil {
+				result.Success = false
+				result.Error = err.Error()
+			} else {
+				result.Detail = detail
+			}
+			if err := writer.Send(&pb.DaemonMessage{Payload: &pb.DaemonMessage_CommandResult{CommandResult: result}}); err != nil {
+				return err
+			}
+			continue
+		case *pb.GatewayCommand_ProbeProxySecureLink:
+			result := &pb.CommandResult{CommandId: cmd.CommandId, Success: true}
+			secureLinkPlugin, ok := d.plugin.(ProxySecureLinkProbePlugin)
+			if !ok {
+				result.Success = false
+				result.Error = "daemon does not support proxy secure-link probes"
+			} else if detail, err := secureLinkPlugin.ProbeProxySecureLink(cmd.GetProbeProxySecureLink()); err != nil {
+				result.Success = false
+				result.Error = err.Error()
+			} else {
+				result.Detail = detail
+			}
+			if err := writer.Send(&pb.DaemonMessage{Payload: &pb.DaemonMessage_CommandResult{CommandResult: result}}); err != nil {
+				return err
+			}
+			continue
 		case *pb.GatewayCommand_UpdateDaemon:
 			// Self-update: download new binary, replace it on disk, acknowledge the
 			// command to the gateway, then exit so systemd restarts the daemon.

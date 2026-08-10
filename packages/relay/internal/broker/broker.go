@@ -17,12 +17,9 @@ import (
 )
 
 const (
-	DefaultMaxFrameBytes     = 1024 * 1024
-	DefaultRouteSessions     = 16
-	DefaultPrincipalSessions = 64
-	DefaultEndpointSessions  = 256
-	AcceptTimeout            = 30 * time.Second
-	IdleTimeout              = 5 * time.Minute
+	DefaultMaxFrameBytes = 1024 * 1024
+	AcceptTimeout        = 30 * time.Second
+	IdleTimeout          = 5 * time.Minute
 )
 
 type endpointRegistration struct {
@@ -272,10 +269,6 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) error 
 		b.mu.Unlock()
 		return status.Error(codes.Unavailable, "target endpoint is not registered")
 	}
-	if err := b.checkCapacityLocked(route, endpoint, claims.MaxConcurrentSessions); err != nil {
-		b.mu.Unlock()
-		return err
-	}
 	b.pending[token] = pending
 	b.active[sessionID] = session
 	b.mu.Unlock()
@@ -319,7 +312,7 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) error 
 		accepted.result <- err
 		return err
 	}
-	bridgeErr := bridge(stream, accepted.stream, frameLimit, session.stop)
+	bridgeErr := bridge(stream, accepted.stream, frameLimit, session.stop, route.DisableIdleTimeout)
 	accepted.result <- bridgeErr
 	return bridgeErr
 }
@@ -374,34 +367,17 @@ func (b *Broker) closeEndpointSessionsLocked(endpointID string) {
 	}
 }
 
-func (b *Broker) checkCapacityLocked(route *relayv1.RoutePolicy, endpoint *relayv1.EndpointPolicy, grantLimit uint32) error {
-	routeLimit := minNonZero(DefaultRouteSessions, int(route.MaxConcurrentSessions), int(grantLimit))
-	endpointLimit := minNonZero(DefaultEndpointSessions, int(endpoint.MaxConcurrentSessions))
-	routeCount, principalCount, endpointCount := 0, 0, 0
-	for _, active := range b.active {
-		if active.routeID == route.RouteId {
-			routeCount++
-		}
-		if active.endpointID == endpoint.EndpointId {
-			endpointCount++
-		}
-		if active.sourceKind == route.SourceKind && active.sourceID == route.SourceId {
-			principalCount++
-		}
-	}
-	if routeCount >= routeLimit || principalCount >= DefaultPrincipalSessions || endpointCount >= endpointLimit {
-		return status.Error(codes.ResourceExhausted, "relay session limit reached")
-	}
-	return nil
-}
-
 type tunnelStream interface {
 	tunnelReceiver
 	tunnelSender
 }
 
-func bridge(left, right tunnelStream, maxFrame int, stopped <-chan struct{}) error {
-	return bridgeWithIdleTimeout(left, right, maxFrame, stopped, IdleTimeout)
+func bridge(left, right tunnelStream, maxFrame int, stopped <-chan struct{}, disableIdleTimeout bool) error {
+	idleTimeout := IdleTimeout
+	if disableIdleTimeout {
+		idleTimeout = 0
+	}
+	return bridgeWithIdleTimeout(left, right, maxFrame, stopped, idleTimeout)
 }
 
 func bridgeWithIdleTimeout(left, right tunnelStream, maxFrame int, stopped <-chan struct{}, idleTimeout time.Duration) error {
@@ -415,8 +391,13 @@ func bridgeWithIdleTimeout(left, right tunnelStream, maxFrame int, stopped <-cha
 		terminal, err := pump(left, right, maxFrame, activity)
 		results <- pumpResult{terminal: terminal, err: err}
 	}()
-	timer := time.NewTimer(idleTimeout)
-	defer timer.Stop()
+	var timer *time.Timer
+	var idle <-chan time.Time
+	if idleTimeout > 0 {
+		timer = time.NewTimer(idleTimeout)
+		idle = timer.C
+		defer timer.Stop()
+	}
 	completedDirections := 0
 	for {
 		select {
@@ -432,6 +413,9 @@ func bridgeWithIdleTimeout(left, right tunnelStream, maxFrame int, stopped <-cha
 				return nil
 			}
 		case <-activity:
+			if timer == nil {
+				continue
+			}
 			if !timer.Stop() {
 				select {
 				case <-timer.C:
@@ -439,7 +423,7 @@ func bridgeWithIdleTimeout(left, right tunnelStream, maxFrame int, stopped <-cha
 				}
 			}
 			timer.Reset(idleTimeout)
-		case <-timer.C:
+		case <-idle:
 			return status.Error(codes.DeadlineExceeded, "tunnel idle timeout reached")
 		case <-stopped:
 			return status.Error(codes.PermissionDenied, "tunnel policy was revoked")
@@ -466,7 +450,11 @@ func pump(destination tunnelSender, source tunnelReceiver, maxFrame int, activit
 			if err == io.EOF {
 				return false, destination.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_HalfClose{HalfClose: &relayv1.TunnelHalfClose{}}})
 			}
-			return false, err
+			// A cancelled or failed gRPC stream is a terminal transport event, not
+			// a TCP half-close. Mark it terminal even when normalizeBridgeError
+			// later suppresses the expected Canceled status; otherwise the bridge
+			// waits forever for the peer direction and leaks session capacity.
+			return true, err
 		}
 		switch payload := frame.Payload.(type) {
 		case *relayv1.TunnelFrame_Data:

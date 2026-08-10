@@ -150,6 +150,9 @@ server {
         proxy_cache_background_update on;
         add_header X-Cache-Status $upstream_cache_status;
 {{/if}}
+{{#if secureLinkUpstream}}
+        # gateway-managed-secure-link-upstream {{id}}
+{{/if}}
         proxy_pass {{upstream}};
 
         proxy_set_header Host $host;
@@ -160,8 +163,8 @@ server {
         proxy_set_header X-Forwarded-Port $server_port;
 
         proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
+        proxy_send_timeout {{#if secureLinkUpstream}}2h{{else}}60s{{/if}};
+        proxy_read_timeout {{#if secureLinkUpstream}}2h{{else}}60s{{/if}};
 
 {{#if websocketSupport}}
         proxy_http_version 1.1;
@@ -620,6 +623,7 @@ export class NginxTemplateService {
       sslForced: host.sslForced,
       http2Support: host.http2Support,
       websocketSupport: host.websocketSupport,
+      secureLinkUpstream: host.secureLinkUpstream === true,
       sslCertPath: host.sslCertPath,
       sslKeyPath: host.sslKeyPath,
       sslChainPath: host.sslChainPath,

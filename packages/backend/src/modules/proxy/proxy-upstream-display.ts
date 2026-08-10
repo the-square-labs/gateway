@@ -32,9 +32,30 @@ export async function attachDockerUpstreamDisplay<
   ]);
   const names = new Map(deployments.map((deployment) => [deployment.id, deployment.name]));
   const colors = new Map(dockerNodes.map((node) => [node.id, node.appearanceColor]));
-  return hosts.map((host) => ({
-    ...host,
-    dockerDeploymentName: host.dockerDeploymentId ? (names.get(host.dockerDeploymentId) ?? null) : null,
-    dockerNodeAppearanceColor: host.dockerNodeId ? (colors.get(host.dockerNodeId) ?? null) : null,
-  }));
+  return hosts.map((host) => {
+    const visible = { ...host } as Record<string, unknown>;
+    if ((visible.upstreamKind as string | undefined)?.startsWith('docker_')) {
+      visible.forwardHost = null;
+      visible.forwardPort = null;
+      visible.dockerHostPort = null;
+    }
+    for (const key of [
+      'secureLinkGeneration',
+      'secureLinkStatus',
+      'secureLinkLastError',
+      'secureLinkTargetNetwork',
+      'secureLinkTargetContainer',
+      'secureLinkTargetHost',
+      'secureLinkListenerPort',
+      'secureLinkConnectorPort',
+      'secureLinkMigratedAt',
+    ]) {
+      delete visible[key];
+    }
+    return {
+      ...visible,
+      dockerDeploymentName: host.dockerDeploymentId ? (names.get(host.dockerDeploymentId) ?? null) : null,
+      dockerNodeAppearanceColor: host.dockerNodeId ? (colors.get(host.dockerNodeId) ?? null) : null,
+    } as WithDockerUpstreamDisplay<T>;
+  });
 }

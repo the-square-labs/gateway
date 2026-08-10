@@ -77,6 +77,18 @@ export const proxyHosts = pgTable(
     dockerHostPort: integer('docker_host_port'),
     dockerProtocol: varchar('docker_protocol', { length: 8 }),
 
+    // Internal Proxy Host -> Docker Secure Link runtime state. These fields
+    // are control-plane metadata and are not exposed as a selectable upstream.
+    secureLinkGeneration: integer('secure_link_generation').notNull().default(0),
+    secureLinkStatus: varchar('secure_link_status', { length: 32 }).notNull().default('legacy'),
+    secureLinkLastError: text('secure_link_last_error'),
+    secureLinkTargetNetwork: varchar('secure_link_target_network', { length: 255 }),
+    secureLinkTargetContainer: varchar('secure_link_target_container', { length: 255 }),
+    secureLinkTargetHost: varchar('secure_link_target_host', { length: 255 }),
+    secureLinkListenerPort: integer('secure_link_listener_port'),
+    secureLinkConnectorPort: integer('secure_link_connector_port'),
+    secureLinkMigratedAt: timestamp('secure_link_migrated_at', { withTimezone: true }),
+
     // SSL
     sslEnabled: boolean('ssl_enabled').notNull().default(false),
     sslForced: boolean('ssl_forced').notNull().default(false), // HTTP → HTTPS redirect

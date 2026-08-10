@@ -336,6 +336,9 @@ export class UpdateService {
       '--relay-image-ref',
       artifact.relayImageRef,
       ...(artifact.databaseConnectorImage ? ['--database-connector-image', artifact.databaseConnectorImage] : []),
+      ...(artifact.secureLinkConnectorImage
+        ? ['--secure-link-connector-image', artifact.secureLinkConnectorImage]
+        : []),
     ];
     const migrationResult = await this.dockerService.runOneShot({
       Image: artifact.imageRef,

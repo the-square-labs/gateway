@@ -708,6 +708,13 @@
       "when": 1786292220352,
       "tag": "0100_loud_whirlwind",
       "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1786314011888,
+      "tag": "0101_skinny_warstar",
+      "breakpoints": true
     }
   ]
 }

@@ -12,6 +12,7 @@ import (
 
 	mobyclient "github.com/moby/moby/client"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
 )
@@ -67,7 +68,13 @@ func (r *relayTunnelRouter) reconcileRegistrations() {
 	desired := map[string]*pb.RelayGrantAssignment{}
 	if r.plugin.cfg.Docker.Mode == "databases" {
 		for _, assignment := range bundle.Grants {
-			if assignment.Role == "endpoint" && assignment.EndpointId != "" {
+			if assignment.Role == "endpoint" && assignment.OwnerKind == "managed_database" && assignment.EndpointId != "" {
+				desired[assignment.EndpointId] = assignment
+			}
+		}
+	} else {
+		for _, assignment := range bundle.Grants {
+			if assignment.Role == "endpoint" && assignment.OwnerKind == proxySecureLinkOwnerKind && assignment.EndpointId != "" {
 				desired[assignment.EndpointId] = assignment
 			}
 		}
@@ -142,7 +149,10 @@ func (r *relayTunnelRouter) runRegistration(ctx context.Context, assignment *pb.
 					err = stream.Send(&relayv1.EndpointControl{Payload: &relayv1.EndpointControl_Renew{Renew: &relayv1.RenewEndpoint{Grant: relayGrant(current.Grant)}}})
 				case message := <-received:
 					if incoming := message.GetIncoming(); incoming != nil {
-						go r.acceptIncoming(r.ctx, current, incoming)
+						// Bind accepted streams to the endpoint registration, not the
+						// process. Revoking the assignment therefore cancels existing
+						// streams without disturbing unrelated node links.
+						go r.acceptIncoming(ctx, current, incoming)
 					}
 				case err = <-receiveErr:
 				}
@@ -169,9 +179,6 @@ func (r *relayTunnelRouter) runRegistration(ctx context.Context, assignment *pb.
 }
 
 func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.RelayGrantAssignment, incoming *relayv1.IncomingTunnel) {
-	if r.plugin.databaseManager == nil {
-		return
-	}
 	tunnelCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stream, err := r.client.AcceptTunnel(tunnelCtx)
@@ -185,12 +192,30 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 	if err != nil || first.GetReady() == nil {
 		return
 	}
-	connection, err := r.plugin.databaseManager.dial(ctx, assignment.OwnerId)
+	var connection net.Conn
+	switch assignment.OwnerKind {
+	case "managed_database":
+		if r.plugin.databaseManager == nil {
+			return
+		}
+		connection, err = r.plugin.databaseManager.dial(ctx, assignment.OwnerId)
+	case proxySecureLinkOwnerKind:
+		if r.plugin.secureLinks == nil {
+			return
+		}
+		connection, err = r.plugin.secureLinks.dial(ctx, assignment.OwnerId)
+	default:
+		return
+	}
 	if err != nil {
-		_ = stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Error{Error: &relayv1.RelayError{Code: "endpoint_unavailable", Message: "Managed endpoint is unavailable"}}})
+		_ = stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Error{Error: &relayv1.RelayError{Code: "endpoint_unavailable", Message: "Endpoint is unavailable"}}})
 		return
 	}
 	defer connection.Close()
+	if assignment.OwnerKind == proxySecureLinkOwnerKind {
+		_ = relaybridge.Bridge(tunnelCtx, connection, stream, int(first.GetReady().MaxFrameBytes), cancel)
+		return
+	}
 	_ = bridgeRelayConnection(connection, stream, int(first.GetReady().MaxFrameBytes), cancel)
 }
 

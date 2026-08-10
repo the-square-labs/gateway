@@ -35,12 +35,10 @@ export interface ProxyUpstreamSelection {
   containerName: string | null;
   deploymentId: string | null;
   containerPort: number | null;
-  hostPort: number | null;
 }
 
-interface PublishedPort {
+interface ApplicationPort {
   containerPort: number;
-  hostPort: number;
 }
 
 export const DEFAULT_PROXY_UPSTREAM: ProxyUpstreamSelection = {
@@ -52,7 +50,6 @@ export const DEFAULT_PROXY_UPSTREAM: ProxyUpstreamSelection = {
   containerName: null,
   deploymentId: null,
   containerPort: null,
-  hostPort: null,
 };
 
 export function proxyUpstreamFromHost(host: ProxyHost): ProxyUpstreamSelection {
@@ -65,7 +62,6 @@ export function proxyUpstreamFromHost(host: ProxyHost): ProxyUpstreamSelection {
     containerName: host.dockerContainerName ?? null,
     deploymentId: host.dockerDeploymentId ?? null,
     containerPort: host.dockerContainerPort ?? null,
-    hostPort: host.dockerHostPort ?? null,
   };
 }
 
@@ -87,7 +83,6 @@ export function proxyUpstreamRequest(
       dockerNodeId: selection.dockerNodeId,
       dockerContainerName: selection.containerName,
       dockerContainerPort: selection.containerPort,
-      dockerHostPort: selection.hostPort,
       dockerProtocol: "tcp",
     };
   }
@@ -96,7 +91,6 @@ export function proxyUpstreamRequest(
     forwardScheme: selection.scheme,
     dockerDeploymentId: selection.deploymentId,
     dockerContainerPort: selection.containerPort,
-    dockerHostPort: selection.hostPort,
     dockerProtocol: "tcp",
   };
 }
@@ -112,24 +106,16 @@ export function isProxyUpstreamValid(selection: ProxyUpstreamSelection): boolean
     return false;
   }
   if (selection.kind === "docker_deployment" && !selection.deploymentId) return false;
-  return !!selection.containerPort && !!selection.hostPort;
+  return !!selection.containerPort;
 }
 
-function publishedTcpPorts(container: DockerContainer): PublishedPort[] {
-  const seen = new Set<string>();
+function applicationTcpPorts(container: DockerContainer): ApplicationPort[] {
+  const seen = new Set<number>();
   return (container.ports ?? []).flatMap((port) => {
-    const address = port.ip?.toLowerCase();
-    const loopbackOnly =
-      !!address &&
-      (address.startsWith("127.") ||
-        address === "::1" ||
-        address === "0:0:0:0:0:0:0:1" ||
-        address.startsWith("::ffff:127."));
-    if (port.type.toLowerCase() !== "tcp" || !port.publicPort || loopbackOnly) return [];
-    const key = `${port.privatePort}:${port.publicPort}`;
-    if (seen.has(key)) return [];
-    seen.add(key);
-    return [{ containerPort: port.privatePort, hostPort: port.publicPort }];
+    if (port.type.toLowerCase() !== "tcp" || !port.privatePort || seen.has(port.privatePort))
+      return [];
+    seen.add(port.privatePort);
+    return [{ containerPort: port.privatePort }];
   });
 }
 
@@ -153,7 +139,7 @@ export function proxyUpstreamForDockerTarget(
   current: ProxyUpstreamSelection,
   target: DockerContainer
 ): ProxyUpstreamSelection {
-  const ports = publishedTcpPorts(target);
+  const ports = applicationTcpPorts(target);
   const onlyPort = ports.length === 1 ? ports[0]! : null;
   const nodeId = target.nodeId ?? target._nodeId ?? null;
   if (target.kind === "deployment") {
@@ -164,7 +150,6 @@ export function proxyUpstreamForDockerTarget(
       containerName: null,
       deploymentId: target.deploymentId ?? target.id,
       containerPort: onlyPort?.containerPort ?? null,
-      hostPort: onlyPort?.hostPort ?? null,
     };
   }
   return {
@@ -174,7 +159,6 @@ export function proxyUpstreamForDockerTarget(
     containerName: target.name,
     deploymentId: null,
     containerPort: onlyPort?.containerPort ?? null,
-    hostPort: onlyPort?.hostPort ?? null,
   };
 }
 
@@ -205,16 +189,9 @@ export function ProxyUpstreamFields({
         state: "",
         status: "",
         created: 0,
-        ports:
-          value.containerPort && value.hostPort
-            ? [
-                {
-                  privatePort: value.containerPort,
-                  publicPort: value.hostPort,
-                  type: "tcp",
-                },
-              ]
-            : [],
+        ports: value.containerPort
+          ? [{ privatePort: value.containerPort, publicPort: 0, type: "tcp" }]
+          : [],
         kind: "container",
         nodeId: value.dockerNodeId ?? undefined,
         availability: "unavailable",
@@ -238,18 +215,17 @@ export function ProxyUpstreamFields({
   const resourceOptions = useMemo<ComboboxOption[]>(
     () =>
       resourceCandidates.map((candidate) => {
-        const ports = publishedTcpPorts(candidate);
         return {
           value: targetKey(candidate),
           label: candidate.name,
           keywords: [candidate._nodeName, candidate._nodeSlug].filter(Boolean).join(" "),
-          disabled: candidate.availability === "unavailable" || ports.length === 0,
+          disabled: candidate.availability === "unavailable",
         };
       }),
     [resourceCandidates]
   );
   const selectedPorts = useMemo(
-    () => (effectiveSelectedContainer ? publishedTcpPorts(effectiveSelectedContainer) : []),
+    () => (effectiveSelectedContainer ? applicationTcpPorts(effectiveSelectedContainer) : []),
     [effectiveSelectedContainer]
   );
 
@@ -323,7 +299,7 @@ export function ProxyUpstreamFields({
         <>
           <SettingsControlRow
             title="Docker Resource"
-            description="Published resource used as the upstream"
+            description="Container or deployment reached through Secure Link"
             controlsClassName="sm:w-full"
           >
             <Combobox
@@ -344,7 +320,7 @@ export function ProxyUpstreamFields({
                   (resource) => targetKey(resource) === option.value
                 );
                 if (!candidate) return option.label;
-                const ports = publishedTcpPorts(candidate);
+                const ports = applicationTcpPorts(candidate);
                 const unavailable = candidate.availability === "unavailable";
                 return (
                   <span className="flex min-w-0 items-center gap-2">
@@ -374,41 +350,34 @@ export function ProxyUpstreamFields({
             />
           </SettingsControlRow>
           <SettingsControlRow
-            title="Port Mapping"
-            description="Published Docker port used by the proxy"
+            title="Application Port"
+            description="Declared TCP port or a manually entered container port"
             controlsClassName="sm:w-full"
           >
-            <Select
-              value={
-                value.containerPort && value.hostPort
-                  ? `${value.containerPort}:${value.hostPort}`
-                  : "__none__"
-              }
-              onValueChange={(portKey) => {
-                const port = selectedPorts.find(
-                  (candidate) => `${candidate.containerPort}:${candidate.hostPort}` === portKey
-                );
-                if (port) onChange({ ...value, ...port });
+            <Input
+              type="number"
+              min={1}
+              max={65535}
+              list="proxy-application-ports"
+              value={value.containerPort ?? ""}
+              onChange={(event) => {
+                const parsed = Number(event.target.value);
+                onChange({
+                  ...value,
+                  containerPort: Number.isInteger(parsed) && parsed > 0 ? parsed : null,
+                });
               }}
-              disabled={disabled || !effectiveSelectedContainer || selectedPorts.length <= 1}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select a port..." />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__" disabled>
-                  Select a port...
-                </SelectItem>
-                {selectedPorts.map((port) => (
-                  <SelectItem
-                    key={`${port.containerPort}:${port.hostPort}`}
-                    value={`${port.containerPort}:${port.hostPort}`}
-                  >
-                    {port.hostPort} → {port.containerPort}/tcp
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              placeholder="8080"
+              disabled={disabled || !effectiveSelectedContainer}
+            />
+            <datalist id="proxy-application-ports">
+              {selectedPorts.map((port) => (
+                <option
+                  key={port.containerPort}
+                  value={port.containerPort}
+                >{`${port.containerPort}/tcp`}</option>
+              ))}
+            </datalist>
           </SettingsControlRow>
           <SettingsControlRow
             title="Scheme"

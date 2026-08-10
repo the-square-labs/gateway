@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"sync/atomic"
@@ -126,5 +127,53 @@ func TestProcessRelayTunnelReconnectsAfterCredentialRotation(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("process shutdown did not cancel the rotated tunnel")
+	}
+}
+
+func TestProcessRelayTunnelRetriesAfterAConnectionFailure(t *testing.T) {
+	processCtx, cancelProcess := context.WithCancel(context.Background())
+	defer cancelProcess()
+	plugin := &blockingRelayTunnelPlugin{ended: make(chan int32, 1)}
+	identityChanged := make(chan struct{}, 1)
+	var connections atomic.Int32
+	connect := func(context.Context) (*grpc.ClientConn, error) {
+		if connections.Add(1) == 1 {
+			return nil, errors.New("relay unavailable")
+		}
+		return nil, nil
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	go runProcessRelayTunnel(processCtx, connect, plugin, "node-1", identityChanged, logger)
+
+	deadline := time.After(2 * time.Second)
+	for plugin.starts.Load() != 1 {
+		select {
+		case <-deadline:
+			t.Fatal("process tunnel did not recover after the connection failure")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if got := connections.Load(); got != 2 {
+		t.Fatalf("tunnel ClientConns = %d, want failed attempt plus successful retry", got)
+	}
+
+	cancelProcess()
+	select {
+	case <-plugin.ended:
+	case <-time.After(time.Second):
+		t.Fatal("process shutdown did not cancel the recovered tunnel")
+	}
+}
+
+func TestControlSessionReconnectWaitStopsOnShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+	if waitForControlSessionReconnect(ctx) {
+		t.Fatal("reconnect wait must stop when the daemon is shutting down")
+	}
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("shutdown cancellation took %s", elapsed)
 	}
 }

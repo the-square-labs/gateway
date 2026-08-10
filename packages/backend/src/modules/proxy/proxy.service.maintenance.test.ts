@@ -171,7 +171,9 @@ describe('ProxyService maintenance lifecycle', () => {
     expect(nodeDispatch.applyConfig).toHaveBeenCalledWith(
       '22222222-2222-4222-8222-222222222222',
       '11111111-1111-4111-8111-111111111111',
-      'maintenance config'
+      'maintenance config',
+      false,
+      'user_owned'
     );
     expect(auditService.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'proxy_host.maintenance_enter' }));
   });
@@ -193,7 +195,9 @@ describe('ProxyService maintenance lifecycle', () => {
       2,
       '22222222-2222-4222-8222-222222222222',
       '11111111-1111-4111-8111-111111111111',
-      'normal config'
+      'normal config',
+      false,
+      'user_owned'
     );
     expect(auditService.log).not.toHaveBeenCalledWith(
       expect.objectContaining({ action: 'proxy_host.maintenance_enter' })

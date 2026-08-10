@@ -95,6 +95,9 @@ message RoutePolicy {
   string target_endpoint_id = 6;
   uint32 max_concurrent_sessions = 7;
   uint32 max_frame_bytes = 8;
+  // Proxy Secure Links intentionally have no fixed idle timeout. Existing
+  // routes keep the relay default when this field is false.
+  bool disable_idle_timeout = 9;
 }
 
 message ApplySnapshotRequest {

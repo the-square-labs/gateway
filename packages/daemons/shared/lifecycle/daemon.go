@@ -108,10 +108,30 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 			return fmt.Errorf("restart requested: %s", restart.Message)
 		}
 		d.logger.Warn("session ended, reconnecting", "error", err)
+		// The relay can remain reachable while its app upstream is restarting.
+		// In that state a control RPC fails immediately with EOF, so the
+		// transport-level connector backoff is never reached. Bound the retry
+		// rate here to avoid a CPU and log storm during normal Gateway updates.
+		if !waitForControlSessionReconnect(ctx) {
+			return nil
+		}
 	}
 }
 
 type relayTunnelConnect func(context.Context) (*grpc.ClientConn, error)
+
+const controlSessionReconnectDelay = time.Second
+
+func waitForControlSessionReconnect(ctx context.Context) bool {
+	timer := time.NewTimer(controlSessionReconnectDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
 
 func runProcessRelayTunnel(
 	ctx context.Context,
@@ -124,10 +144,16 @@ func runProcessRelayTunnel(
 	for ctx.Err() == nil {
 		conn, err := connect(ctx)
 		if err != nil {
-			if ctx.Err() == nil {
-				logger.Warn("relay tunnel connection failed", "error", err)
+			if ctx.Err() != nil {
+				return
 			}
-			return
+			logger.Warn("relay tunnel connection failed, retrying", "error", err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+				continue
+			}
 		}
 		tunnelCtx, cancelTunnel := context.WithCancel(ctx)
 		tunnelEnded := make(chan struct{})

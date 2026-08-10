@@ -139,6 +139,7 @@ import { FolderService } from '@/modules/proxy/folder.service.js';
 import { NginxTemplateService } from '@/modules/proxy/nginx-template.service.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { ProxyDockerUpstreamService } from '@/modules/proxy/proxy-docker-upstream.service.js';
+import { ProxySecureLinkService } from '@/modules/proxy/proxy-secure-link.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { OutboundWebhookPolicyService } from '@/modules/settings/outbound-webhook-policy.service.js';
@@ -764,6 +765,10 @@ export async function initializeContainer(): Promise<void> {
     dockerAccessResourceService
   );
   container.registerInstance(ProxyDockerUpstreamService, proxyDockerUpstreamService);
+  const proxySecureLinkService = relayPolicyService
+    ? new ProxySecureLinkService(db, nodeDispatch, relayPolicyService, getEnv().SECURE_LINK_CONNECTOR_IMAGE)
+    : undefined;
+  if (proxySecureLinkService) container.registerInstance(ProxySecureLinkService, proxySecureLinkService);
   const proxyService = new ProxyService(
     db,
     nginxTemplateService,
@@ -771,7 +776,8 @@ export async function initializeContainer(): Promise<void> {
     nginxConfigGenerator,
     nodeDispatch,
     nginxCertificateDistribution,
-    proxyDockerUpstreamService
+    proxyDockerUpstreamService,
+    proxySecureLinkService
   );
   proxyService.setEventBus(eventBus);
   container.registerInstance(ProxyService, proxyService);
@@ -1250,7 +1256,7 @@ export async function initializeContainer(): Promise<void> {
 
   const acmeRenewalJob = new ACMERenewalJob(db, sslService, alertService);
   acmeRenewalJob.setEventBus(eventBus);
-  const healthCheckJob = new HealthCheckJob(db);
+  const healthCheckJob = new HealthCheckJob(db, nodeDispatch);
   healthCheckJob.setEventBus(eventBus);
   healthCheckJob.setEvaluator(notifEvaluatorService);
   const expiryAlertJob = new ExpiryAlertJob(db, alertService, env.EXPIRY_WARNING_DAYS, env.EXPIRY_CRITICAL_DAYS);

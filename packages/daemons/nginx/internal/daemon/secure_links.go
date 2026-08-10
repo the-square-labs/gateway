@@ -1,0 +1,374 @@
+package daemon
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
+	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
+)
+
+const (
+	proxySecureLinkOwnerKind    = "proxy_host_secure_link"
+	proxySecureLinkSetupTimeout = 2 * time.Second
+)
+
+var secureLinkIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
+
+type nginxRelayTunnel struct {
+	ctx    context.Context
+	client relayv1.TunnelBrokerClient
+}
+
+type sourceLinkManager struct {
+	mu       sync.Mutex
+	bindings map[string]*sourceLinkBinding
+	opener   func(string, net.Conn)
+}
+
+type sourceLinkBinding struct {
+	generation uint64
+	listener   net.Listener
+	done       chan struct{}
+	activeMu   sync.Mutex
+	active     map[net.Conn]struct{}
+}
+
+type sourceLinkStatus struct {
+	LinkID     string `json:"linkId"`
+	Generation uint64 `json:"generation"`
+	Port       int    `json:"port"`
+}
+
+func proxySecureLinkSetupContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc, func() bool) {
+	ctx, cancel := context.WithCancel(parent)
+	timer := time.AfterFunc(timeout, cancel)
+	return ctx, cancel, timer.Stop
+}
+
+func newSourceLinkManager(opener func(string, net.Conn)) *sourceLinkManager {
+	return &sourceLinkManager{bindings: map[string]*sourceLinkBinding{}, opener: opener}
+}
+
+func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sourceLinkStatus, error) {
+	if command == nil {
+		return nil, errors.New("proxy secure-link bindings are required")
+	}
+	desired := make(map[string]*pb.ProxySecureLinkBinding, len(command.Bindings))
+	for _, binding := range command.Bindings {
+		if binding.Role != "source" || !secureLinkIDPattern.MatchString(binding.LinkId) || binding.ListenerPort > 65535 {
+			return nil, errors.New("invalid proxy secure-link source binding")
+		}
+		if _, exists := desired[binding.LinkId]; exists {
+			return nil, fmt.Errorf("duplicate proxy secure-link binding %s", binding.LinkId)
+		}
+		desired[binding.LinkId] = binding
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, binding := range desired {
+		if current := m.bindings[id]; current != nil && binding.Generation < current.generation {
+			return nil, fmt.Errorf("stale generation for proxy secure-link %s", id)
+		}
+	}
+	staged := make(map[string]*sourceLinkBinding)
+	for id, binding := range desired {
+		if m.bindings[id] != nil && !binding.RotateListener {
+			continue
+		}
+		requestedPort := binding.ListenerPort
+		if binding.RotateListener {
+			requestedPort = 0
+		}
+		created, err := m.create(id, binding.Generation, requestedPort)
+		if err != nil && requestedPort != 0 {
+			created, err = m.create(id, binding.Generation, 0)
+		}
+		if err != nil {
+			for _, listener := range staged {
+				listener.close()
+			}
+			return nil, err
+		}
+		staged[id] = created
+	}
+	for id, current := range m.bindings {
+		if _, keep := desired[id]; keep {
+			continue
+		}
+		current.close()
+		delete(m.bindings, id)
+	}
+	for id, binding := range desired {
+		current := m.bindings[id]
+		if current != nil && binding.RotateListener {
+			current.close()
+			m.bindings[id] = staged[id]
+			continue
+		}
+		if current != nil {
+			// Listener ports are daemon-owned. Once a listener exists, retain it
+			// even if the control plane still has the pre-restart port; the
+			// returned status will reconcile that stale value without churn.
+			current.generation = binding.Generation
+			continue
+		}
+		m.bindings[id] = staged[id]
+	}
+	statuses := make([]sourceLinkStatus, 0, len(m.bindings))
+	for id, binding := range m.bindings {
+		statuses = append(statuses, sourceLinkStatus{LinkID: id, Generation: binding.generation, Port: binding.listener.Addr().(*net.TCPAddr).Port})
+	}
+	sort.Slice(statuses, func(i, j int) bool { return statuses[i].LinkID < statuses[j].LinkID })
+	return statuses, nil
+}
+
+func (m *sourceLinkManager) create(id string, generation uint64, port uint32) (*sourceLinkBinding, error) {
+	listener, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return nil, fmt.Errorf("listen for proxy secure-link %s: %w", id, err)
+	}
+	binding := &sourceLinkBinding{generation: generation, listener: listener, done: make(chan struct{}), active: map[net.Conn]struct{}{}}
+	go func() {
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			binding.activeMu.Lock()
+			binding.active[connection] = struct{}{}
+			binding.activeMu.Unlock()
+			go func() {
+				defer func() {
+					binding.activeMu.Lock()
+					delete(binding.active, connection)
+					binding.activeMu.Unlock()
+				}()
+				m.opener(id, connection)
+			}()
+		}
+	}()
+	return binding, nil
+}
+
+func (b *sourceLinkBinding) close() {
+	select {
+	case <-b.done:
+		return
+	default:
+		close(b.done)
+		_ = b.listener.Close()
+		b.closeActive()
+	}
+}
+
+func (b *sourceLinkBinding) closeActive() {
+	b.activeMu.Lock()
+	defer b.activeMu.Unlock()
+	for connection := range b.active {
+		_ = connection.Close()
+	}
+}
+
+func (m *sourceLinkManager) closeActive(linkID string) {
+	m.mu.Lock()
+	binding := m.bindings[linkID]
+	m.mu.Unlock()
+	if binding != nil {
+		binding.closeActive()
+	}
+}
+
+func (m *sourceLinkManager) port(linkID string) (int, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	binding := m.bindings[linkID]
+	if binding == nil {
+		return 0, false
+	}
+	return binding.listener.Addr().(*net.TCPAddr).Port, true
+}
+
+func (p *NginxPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (string, error) {
+	if p.relayGrants == nil {
+		return "", errors.New("relay grant store is unavailable")
+	}
+	previous := p.relayGrants.get()
+	if err := p.relayGrants.sync(command); err != nil {
+		return "", err
+	}
+	if p.secureLinks != nil {
+		for _, assignment := range previous.Grants {
+			if assignment.Role == "connect" && assignment.OwnerKind == proxySecureLinkOwnerKind &&
+				findRelayAssignment(command, "connect", proxySecureLinkOwnerKind, assignment.OwnerId) == nil {
+				p.secureLinks.closeActive(assignment.OwnerId)
+			}
+		}
+	}
+	return "", nil
+}
+
+func (p *NginxPlugin) SyncProxySecureLinks(command *pb.SyncProxySecureLinksCommand) (string, error) {
+	if p.secureLinks == nil {
+		return "", errors.New("proxy secure-link manager is unavailable")
+	}
+	statuses, err := p.secureLinks.sync(command)
+	if err != nil {
+		return "", err
+	}
+	if err := p.secureLinkState.Save(normalizeSourceBindings(command, statuses)); err != nil {
+		// Never acknowledge an uncommitted listener set. Refuse new streams
+		// until the control plane retries from its durable desired state.
+		_, _ = p.secureLinks.sync(&pb.SyncProxySecureLinksCommand{})
+		return "", err
+	}
+	detail, err := json.Marshal(map[string]any{"bindings": statuses})
+	return string(detail), err
+}
+
+func normalizeSourceBindings(command *pb.SyncProxySecureLinksCommand, statuses []sourceLinkStatus) *pb.SyncProxySecureLinksCommand {
+	normalized := proto.Clone(command).(*pb.SyncProxySecureLinksCommand)
+	ports := make(map[string]uint32, len(statuses))
+	for _, status := range statuses {
+		ports[status.LinkID] = uint32(status.Port)
+	}
+	for _, binding := range normalized.Bindings {
+		binding.ListenerPort = ports[binding.LinkId]
+		binding.RotateListener = false
+	}
+	return normalized
+}
+
+func (p *NginxPlugin) ProbeProxySecureLink(command *pb.ProbeProxySecureLinkCommand) (string, error) {
+	if command == nil || !secureLinkIDPattern.MatchString(command.LinkId) {
+		return "", errors.New("invalid proxy secure-link probe")
+	}
+	if command.Scheme != "http" && command.Scheme != "https" {
+		return "", errors.New("unsupported proxy secure-link probe scheme")
+	}
+	if !strings.HasPrefix(command.Path, "/") {
+		return "", errors.New("proxy secure-link probe path must start with /")
+	}
+	port, ok := p.secureLinks.port(command.LinkId)
+	if !ok {
+		return "", errors.New("proxy secure-link listener is unavailable")
+	}
+	timeout := time.Duration(command.TimeoutSeconds) * time.Second
+	if timeout <= 0 || timeout > 30*time.Second {
+		timeout = 10 * time.Second
+	}
+	transport := &http.Transport{
+		DisableKeepAlives: true,
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{Timeout: timeout}).DialContext(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		},
+		// This checks upstream behavior through the authenticated relay path;
+		// certificate policy remains the responsibility of the proxy config.
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: timeout}
+	started := time.Now()
+	response, err := client.Get(command.Scheme + "://secure-link.internal" + command.Path)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1024*1024+1))
+	if err != nil {
+		return "", err
+	}
+	if len(body) > 1024*1024 {
+		return "", errors.New("proxy secure-link probe response is too large")
+	}
+	passed := response.StatusCode >= 200 && response.StatusCode < 300
+	if command.ExpectedStatus != 0 {
+		passed = response.StatusCode == int(command.ExpectedStatus)
+	}
+	if passed && command.ExpectedBody != "" {
+		actual := string(body)
+		switch command.BodyMatchMode {
+		case "exact":
+			passed = actual == command.ExpectedBody
+		case "starts_with":
+			passed = strings.HasPrefix(actual, command.ExpectedBody)
+		case "ends_with":
+			passed = strings.HasSuffix(actual, command.ExpectedBody)
+		default:
+			passed = strings.Contains(actual, command.ExpectedBody)
+		}
+	}
+	detail, err := json.Marshal(map[string]any{
+		"ok": passed, "httpStatus": response.StatusCode, "responseMs": time.Since(started).Milliseconds(),
+	})
+	return string(detail), err
+}
+
+func (p *NginxPlugin) RunRelayTunnels(ctx context.Context, conn *grpc.ClientConn, _ string) {
+	tunnel := &nginxRelayTunnel{ctx: ctx, client: relayv1.NewTunnelBrokerClient(conn)}
+	p.relayTunnelMu.Lock()
+	p.relayTunnel = tunnel
+	p.relayTunnelMu.Unlock()
+	p.logger.Debug("proxy secure-link relay tunnel ready")
+	<-ctx.Done()
+	p.relayTunnelMu.Lock()
+	if p.relayTunnel == tunnel {
+		p.relayTunnel = nil
+	}
+	p.relayTunnelMu.Unlock()
+}
+
+func (p *NginxPlugin) openProxySecureLink(linkID string, connection net.Conn) {
+	defer connection.Close()
+	assignment := findRelayAssignment(p.relayGrants.get(), "connect", proxySecureLinkOwnerKind, linkID)
+	if assignment == nil {
+		p.logger.Debug("proxy secure-link connection rejected", "link_id", linkID, "stage", "grant")
+		return
+	}
+	p.relayTunnelMu.Lock()
+	tunnel := p.relayTunnel
+	p.relayTunnelMu.Unlock()
+	if tunnel == nil {
+		p.logger.Debug("proxy secure-link connection rejected", "link_id", linkID, "stage", "relay")
+		return
+	}
+	ctx, cancel, finishSetup := proxySecureLinkSetupContext(tunnel.ctx, proxySecureLinkSetupTimeout)
+	defer cancel()
+	stream, err := tunnel.client.OpenTunnel(ctx)
+	if err != nil {
+		p.logger.Debug("proxy secure-link connection failed", "link_id", linkID, "stage", "open", "error", err)
+		return
+	}
+	grant := assignment.Grant
+	if grant == nil {
+		return
+	}
+	if err := stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Open{Open: &relayv1.OpenTunnel{Grant: &relayv1.SignedGrant{KeyId: grant.KeyId, Payload: grant.Payload, Signature: grant.Signature}}}}); err != nil {
+		p.logger.Debug("proxy secure-link connection failed", "link_id", linkID, "stage", "authorize", "error", err)
+		return
+	}
+	first, err := stream.Recv()
+	if err != nil || first.GetReady() == nil {
+		p.logger.Debug("proxy secure-link connection failed", "link_id", linkID, "stage", "ready", "error", err)
+		return
+	}
+	if !finishSetup() {
+		return
+	}
+	_ = relaybridge.Bridge(ctx, connection, stream, int(first.GetReady().MaxFrameBytes), cancel)
+}

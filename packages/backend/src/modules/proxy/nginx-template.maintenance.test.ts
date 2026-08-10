@@ -88,6 +88,18 @@ describe('canonical Gateway nginx pages', () => {
     expect(rendered).toContain('ssl_trusted_certificate /etc/nginx/certs/example.chain.crt;');
   });
 
+  it('renders the two-hour Secure Link inactivity timeout through the production template path', async () => {
+    const secure = await service().renderForHost({ ...host, secureLinkUpstream: true }, null);
+    const regular = await service().renderForHost(host, null);
+
+    expect(secure).toContain('proxy_send_timeout 2h;');
+    expect(secure).toContain('proxy_read_timeout 2h;');
+    expect(secure).toContain('# gateway-managed-secure-link-upstream');
+    expect(regular).toContain('proxy_send_timeout 60s;');
+    expect(regular).toContain('proxy_read_timeout 60s;');
+    expect(regular).not.toContain('# gateway-managed-secure-link-upstream');
+  });
+
   it.each(['redirect', '404'] as const)('uses the same shared TLS policy for built-in %s hosts', async (type) => {
     const template = await service().getBuiltinTemplateContent(type);
     const rendered = service().renderTemplate(template, { ...host, type });

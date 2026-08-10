@@ -30,6 +30,8 @@ const gatewayPayload = Buffer.from(
     relayBuildVersion: 'v9.9.9-relay',
     relayProtocolMajor: 1,
     relayImageRef: `registry.gitlab.wiolett.net/wiolett/gateway/relay@sha256:${checksum}`,
+    databaseConnectorImage: `registry.gitlab.wiolett.net/wiolett/gateway/database-connector@sha256:${checksum}`,
+    secureLinkConnectorImage: `registry.gitlab.wiolett.net/wiolett/gateway/secure-link-connector@sha256:${checksum}`,
     createdAt: '2026-05-02T14:39:10Z',
   })
 );
@@ -109,6 +111,8 @@ describe('update artifact trust', () => {
     expect(artifact.imageRef).toBe(`registry.gitlab.wiolett.net/wiolett/gateway@sha256:${checksum}`);
     expect(artifact.relayProtocolMajor).toBe(1);
     expect(artifact.relayImageRef).toContain('/relay@sha256:');
+    expect(artifact.databaseConnectorImage).toContain('/database-connector@sha256:');
+    expect(artifact.secureLinkConnectorImage).toContain('/secure-link-connector@sha256:');
   });
 
   it('rejects gateway manifests for a different image repository', () => {
@@ -130,6 +134,42 @@ describe('update artifact trust', () => {
     expect(isDigestPinnedImageRef(`${repository}@sha256:${checksum}`, repository)).toBe(true);
     expect(isDigestPinnedImageRef(`${repository}:v2.5.0`, repository)).toBe(false);
     expect(isDigestPinnedImageRef(`registry.example.com/connector@sha256:${checksum}`, repository)).toBe(false);
+  });
+
+  it('rejects a mutable Secure Link connector image even when the manifest signature is valid', () => {
+    const payload = Buffer.from(
+      JSON.stringify({
+        kind: 'gateway-image',
+        version: 'v9.9.9',
+        tag: 'v9.9.9',
+        image: 'registry.gitlab.wiolett.net/wiolett/gateway',
+        digest: `sha256:${checksum}`,
+        imageRef: `registry.gitlab.wiolett.net/wiolett/gateway@sha256:${checksum}`,
+        relayBuildVersion: 'v9.9.9-relay',
+        relayProtocolMajor: 1,
+        relayImageRef: `registry.gitlab.wiolett.net/wiolett/gateway/relay@sha256:${checksum}`,
+        secureLinkConnectorImage: 'registry.gitlab.wiolett.net/wiolett/gateway/secure-link-connector:latest',
+        createdAt: '2026-08-10T00:00:00.000Z',
+      })
+    );
+    const manifest = JSON.stringify({
+      schemaVersion: 1,
+      keyId: 'wiolett-update-v1',
+      payload: payload.toString('base64url'),
+      signature: sign(null, payload, gatewaySigningKey.privateKey).toString('base64url'),
+    });
+
+    expect(() =>
+      verifyGatewayImageManifest(
+        manifest,
+        {
+          version: 'v9.9.9',
+          tag: 'v9.9.9',
+          image: 'registry.gitlab.wiolett.net/wiolett/gateway',
+        },
+        gatewayPublicKey
+      )
+    ).toThrow('Gateway update secure-link connector image reference is not digest pinned');
   });
 
   it('rejects an invalid relay version even when the manifest signature is valid', () => {

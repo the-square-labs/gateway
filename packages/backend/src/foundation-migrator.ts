@@ -5,6 +5,7 @@ interface CliOptions {
   targetVersion?: string;
   imageRef?: string;
   databaseConnectorImage?: string;
+  secureLinkConnectorImage?: string;
   relayBuildVersion?: string;
   relayProtocolMajor?: number;
   relayImageRef?: string;
@@ -33,6 +34,11 @@ function parseArgs(argv: string[]): CliOptions {
     }
     if (arg === '--database-connector-image' && next) {
       options.databaseConnectorImage = next;
+      index += 1;
+      continue;
+    }
+    if (arg === '--secure-link-connector-image' && next) {
+      options.secureLinkConnectorImage = next;
       index += 1;
       continue;
     }

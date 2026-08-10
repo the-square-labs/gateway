@@ -40,6 +40,22 @@ describe('NginxConfigGenerator proxy TLS and ACL rendering', () => {
     expect(rendered).not.toContain('$connection_upgrade');
   });
 
+  it('uses a two-hour inactivity timeout only for Secure Link upstreams', () => {
+    const secure = new NginxConfigGenerator({} as never).generateConfig({
+      ...proxyHost,
+      websocketSupport: true,
+      secureLinkUpstream: true,
+    });
+    const regular = new NginxConfigGenerator({} as never).generateConfig(proxyHost);
+
+    expect(secure).toContain('proxy_send_timeout 2h;');
+    expect(secure).toContain('proxy_read_timeout 2h;');
+    expect(secure).toContain('# gateway-managed-secure-link-upstream');
+    expect(regular).toContain('proxy_send_timeout 60s;');
+    expect(regular).toContain('proxy_read_timeout 60s;');
+    expect(regular).not.toContain('# gateway-managed-secure-link-upstream');
+  });
+
   it('uses shared TLS policy and scopes a basic-auth-only ACL to the upstream', () => {
     const rendered = new NginxConfigGenerator({} as never).generateConfig(proxyHost);
 

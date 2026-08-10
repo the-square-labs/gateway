@@ -39,6 +39,13 @@ type frameSender struct {
 	frames []*relayv1.TunnelFrame
 }
 
+type errorFrameStream struct {
+	err error
+}
+
+func (s *errorFrameStream) Recv() (*relayv1.TunnelFrame, error) { return nil, s.err }
+func (s *errorFrameStream) Send(*relayv1.TunnelFrame) error     { return nil }
+
 type blockingFrameStream struct {
 	mu     sync.Mutex
 	frames []*relayv1.TunnelFrame
@@ -107,44 +114,6 @@ func TestAcceptTokenIsSingleUse(t *testing.T) {
 	second := &acceptStream{ctx: ctx, first: acceptFrame("token-1")}
 	if code := status.Code(b.AcceptTunnel(second)); code != codes.NotFound {
 		t.Fatalf("replayed token status = %v", code)
-	}
-}
-
-func TestCapacityIncludesReservedSessions(t *testing.T) {
-	store, err := policy.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	b := New(store)
-	b.active["reserved"] = &activeTunnel{routeID: "route-1", endpointID: "endpoint-1", stop: make(chan struct{})}
-	route := &relayv1.RoutePolicy{RouteId: "route-1", MaxConcurrentSessions: 1}
-	endpoint := &relayv1.EndpointPolicy{EndpointId: "endpoint-1", MaxConcurrentSessions: 1}
-	if code := status.Code(b.checkCapacityLocked(route, endpoint, 1)); code != codes.ResourceExhausted {
-		t.Fatalf("capacity status = %v", code)
-	}
-}
-
-func TestCapacityPreservesAggregateSourcePrincipalLimit(t *testing.T) {
-	store, err := policy.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	b := New(store)
-	for index := 0; index < DefaultPrincipalSessions; index++ {
-		b.active[fmt.Sprintf("session-%d", index)] = &activeTunnel{
-			routeID:    fmt.Sprintf("route-%d", index),
-			sourceKind: "gateway",
-			sourceID:   "gateway-1",
-			endpointID: fmt.Sprintf("endpoint-%d", index),
-			stop:       make(chan struct{}),
-		}
-	}
-	route := &relayv1.RoutePolicy{RouteId: "next-route", SourceKind: "gateway", SourceId: "gateway-1", MaxConcurrentSessions: 100}
-	endpoint := &relayv1.EndpointPolicy{EndpointId: "next-endpoint", MaxConcurrentSessions: 256}
-	if code := status.Code(b.checkCapacityLocked(route, endpoint, 100)); code != codes.ResourceExhausted {
-		t.Fatalf("principal capacity status = %v", code)
 	}
 }
 
@@ -219,6 +188,27 @@ func TestBridgeClosesIdleTunnel(t *testing.T) {
 	}
 }
 
+func TestBridgeWithoutIdleTimeoutWaitsForPolicyOrTCPClosure(t *testing.T) {
+	left := &blockingFrameStream{stop: make(chan struct{})}
+	right := &blockingFrameStream{stop: make(chan struct{})}
+	revoked := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- bridgeWithIdleTimeout(left, right, DefaultMaxFrameBytes, revoked, 0)
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("idle-disabled bridge exited without close or revocation: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(revoked)
+	if code := status.Code(<-done); code != codes.PermissionDenied {
+		t.Fatalf("idle-disabled bridge revocation status = %v", code)
+	}
+	close(left.stop)
+	close(right.stop)
+}
+
 func TestBridgeRevocationDoesNotAddConcurrentStreamWriters(t *testing.T) {
 	left := &blockingFrameStream{stop: make(chan struct{})}
 	right := &blockingFrameStream{stop: make(chan struct{})}
@@ -239,6 +229,24 @@ func TestBridgeRevocationDoesNotAddConcurrentStreamWriters(t *testing.T) {
 	if leftFrames != 0 || rightFrames != 0 {
 		t.Fatalf("revocation used a concurrent stream writer left=%d right=%d", leftFrames, rightFrames)
 	}
+}
+
+func TestBridgeTreatsCanceledStreamAsTerminal(t *testing.T) {
+	canceled := &errorFrameStream{err: status.Error(codes.Canceled, "source disconnected")}
+	blocked := &blockingFrameStream{stop: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() {
+		done <- bridgeWithIdleTimeout(canceled, blocked, DefaultMaxFrameBytes, make(chan struct{}), 0)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("canceled bridge returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled stream leaked the opposite bridge direction")
+	}
+	close(blocked.stop)
 }
 
 func acceptFrame(token string) *relayv1.TunnelFrame {

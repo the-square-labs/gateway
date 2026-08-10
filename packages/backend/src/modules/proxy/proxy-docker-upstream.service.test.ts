@@ -32,7 +32,7 @@ function snapshots(data: unknown[], refreshStatus: 'success' | 'error' = 'succes
 const connectedRegistry = { getNode: vi.fn(() => ({ id: 'node-1' })) };
 
 describe('ProxyDockerUpstreamService', () => {
-  it('resolves a wildcard container binding through the configured node service address', async () => {
+  it('keeps the container reference without depending on a published host endpoint', async () => {
     const service = new ProxyDockerUpstreamService(
       queuedDb([
         [
@@ -68,13 +68,14 @@ describe('ProxyDockerUpstreamService', () => {
         { actorScopes: ['docker:containers:view:node-1'], requireAvailable: true }
       )
     ).resolves.toMatchObject({
-      forwardHost: 'docker.internal',
-      forwardPort: 18080,
+      forwardHost: '127.0.0.1',
+      forwardPort: 1,
+      dockerHostPort: null,
       dockerContainerName: 'api',
     });
   });
 
-  it('keeps the exact binding address when Docker publishes on a specific IP', async () => {
+  it('does not expose a published binding address as the Docker upstream', async () => {
     const service = new ProxyDockerUpstreamService(
       queuedDb([
         [
@@ -105,10 +106,10 @@ describe('ProxyDockerUpstreamService', () => {
       dockerProtocol: 'tcp',
     });
 
-    expect(resolved.forwardHost).toBe('10.0.0.20');
+    expect(resolved).toMatchObject({ forwardHost: '127.0.0.1', forwardPort: 1, dockerHostPort: null });
   });
 
-  it('rejects ports published only on the Docker node loopback interface', async () => {
+  it('accepts an application port even when an old published mapping is loopback-only', async () => {
     const service = new ProxyDockerUpstreamService(
       queuedDb([
         [
@@ -139,10 +140,10 @@ describe('ProxyDockerUpstreamService', () => {
         dockerHostPort: 18080,
         dockerProtocol: 'tcp',
       })
-    ).rejects.toMatchObject({ code: 'DOCKER_PORT_LOOPBACK_ONLY', statusCode: 409 });
+    ).resolves.toMatchObject({ dockerContainerPort: 80, dockerHostPort: null });
   });
 
-  it('rebinds a stored host port only when the semantic mapping is unambiguous', async () => {
+  it('ignores changes to legacy published host ports', async () => {
     const service = new ProxyDockerUpstreamService(
       queuedDb([
         [
@@ -176,7 +177,7 @@ describe('ProxyDockerUpstreamService', () => {
       { allowPortRebind: true }
     );
 
-    expect(resolved).toMatchObject({ forwardPort: 28080, dockerHostPort: 28080 });
+    expect(resolved).toMatchObject({ forwardPort: 1, dockerHostPort: null, dockerContainerPort: 80 });
   });
 
   it('resolves a deployment through its durable route and derived Docker node', async () => {
@@ -207,10 +208,10 @@ describe('ProxyDockerUpstreamService', () => {
         dockerProtocol: 'tcp',
       })
     ).resolves.toMatchObject({
-      forwardHost: '10.0.0.10',
-      forwardPort: 19090,
+      forwardHost: '127.0.0.1',
+      forwardPort: 1,
       dockerDeploymentId: 'deployment-1',
-      dockerNodeId: null,
+      dockerNodeId: 'node-1',
     });
   });
 

@@ -204,6 +204,7 @@ describe('runFoundationMigrations', () => {
       targetVersion: 'v2.4.3',
       imageRef: 'registry/gateway:v2.4.3',
       databaseConnectorImage: 'registry/gateway/database-connector@sha256:connector',
+      secureLinkConnectorImage: 'registry/gateway/secure-link-connector@sha256:secure-connector',
       relayBuildVersion: 'v2.4.3-relay',
       relayProtocolMajor: 1,
       relayImageRef: `registry/gateway/relay@sha256:${'a'.repeat(64)}`,
@@ -214,6 +215,7 @@ describe('runFoundationMigrations', () => {
       targetVersion: 'v2.4.3',
       imageRef: 'registry/gateway:v2.4.3',
       databaseConnectorImage: 'registry/gateway/database-connector@sha256:connector',
+      secureLinkConnectorImage: 'registry/gateway/secure-link-connector@sha256:secure-connector',
       relayBuildVersion: 'v2.4.3-relay',
       relayProtocolMajor: 1,
       relayImageRef: `registry/gateway/relay@sha256:${'a'.repeat(64)}`,
@@ -227,6 +229,9 @@ describe('runFoundationMigrations', () => {
     expect(await readFile(path.join(tempDir, '.env'), 'utf8')).toContain('GATEWAY_IMAGE_REF=registry/gateway:v2.4.3');
     expect(await readFile(path.join(tempDir, '.env'), 'utf8')).toContain(
       'DATABASE_CONNECTOR_IMAGE=registry/gateway/database-connector@sha256:connector'
+    );
+    expect(await readFile(path.join(tempDir, '.env'), 'utf8')).toContain(
+      'SECURE_LINK_CONNECTOR_IMAGE=registry/gateway/secure-link-connector@sha256:secure-connector'
     );
     expect(await readFile(path.join(tempDir, '.env'), 'utf8')).toContain(
       `GATEWAY_RELAY_IMAGE_REF=registry/gateway/relay@sha256:${'a'.repeat(64)}`

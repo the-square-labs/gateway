@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { proxyHosts } from '@/db/schema/index.js';
 import { formatHostPort } from '@/lib/network-endpoint.js';
+import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { HealthCheckBodyMatchMode } from './proxy.service-helpers.js';
 import { matchesExpectedBody } from './proxy.service-helpers.js';
 
@@ -13,10 +14,12 @@ export function runImmediateProxyHealthCheck({
   db,
   hostId,
   logger,
+  nodeDispatch,
 }: {
   db: DrizzleClient;
   hostId: string;
   logger: ProxyHealthLogger;
+  nodeDispatch?: NodeDispatchService;
 }): void {
   // Run after a short delay to allow nginx reload to complete.
   setTimeout(async () => {
@@ -28,41 +31,61 @@ export function runImmediateProxyHealthCheck({
         !host?.enabled ||
         !host.healthCheckEnabled ||
         host.maintenanceEnabled ||
-        !host.forwardHost ||
-        !host.forwardPort
+        (host.secureLinkMigratedAt == null && (!host.forwardHost || !host.forwardPort))
       )
         return;
 
       const scheme = host.forwardScheme || 'http';
       const path = host.healthCheckUrl || '/';
-      const url = `${scheme}://${formatHostPort(host.forwardHost, host.forwardPort)}${path}`;
+      const url =
+        host.forwardHost && host.forwardPort
+          ? `${scheme}://${formatHostPort(host.forwardHost, host.forwardPort)}${path}`
+          : null;
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10_000);
 
       let status: 'online' | 'offline' | 'degraded' = 'offline';
       try {
-        const response = await fetch(url, {
-          method: 'GET',
-          signal: controller.signal,
-          redirect: 'follow',
-        });
-        clearTimeout(timeout);
-
-        const expectedStatus = (host as any).healthCheckExpectedStatus as number | null;
-        if (expectedStatus) {
-          status = response.status === expectedStatus ? 'online' : 'offline';
+        if (host.upstreamKind !== 'manual' && host.secureLinkMigratedAt != null) {
+          if (!host.nodeId || !nodeDispatch) throw new Error('Secure Link health probe is unavailable');
+          const probe = await nodeDispatch.probeProxySecureLink(host.nodeId, {
+            linkId: host.id,
+            scheme,
+            path,
+            expectedStatus: host.healthCheckExpectedStatus,
+            expectedBody: host.healthCheckExpectedBody,
+            bodyMatchMode: host.healthCheckBodyMatchMode,
+            timeoutSeconds: 10,
+          });
+          clearTimeout(timeout);
+          if (probe.ok) status = 'online';
+          else if (!host.healthCheckExpectedStatus && probe.httpStatus && probe.httpStatus < 500) status = 'degraded';
+          else status = 'offline';
         } else {
-          if (response.status >= 200 && response.status < 300) status = 'online';
-          else if (response.status >= 500) status = 'offline';
-          else status = 'degraded';
-        }
+          if (!url) throw new Error('Proxy upstream endpoint is unavailable');
+          const response = await fetch(url, {
+            method: 'GET',
+            signal: controller.signal,
+            redirect: 'follow',
+          });
+          clearTimeout(timeout);
 
-        const expectedBody = (host as any).healthCheckExpectedBody as string | null;
-        const bodyMatchMode = ((host as any).healthCheckBodyMatchMode as HealthCheckBodyMatchMode | null) ?? 'includes';
-        if (expectedBody && status === 'online') {
-          const body = await response.text();
-          if (!matchesExpectedBody(body, expectedBody, bodyMatchMode)) status = 'degraded';
+          const expectedStatus = host.healthCheckExpectedStatus;
+          if (expectedStatus) {
+            status = response.status === expectedStatus ? 'online' : 'offline';
+          } else {
+            if (response.status >= 200 && response.status < 300) status = 'online';
+            else if (response.status >= 500) status = 'offline';
+            else status = 'degraded';
+          }
+
+          const expectedBody = host.healthCheckExpectedBody;
+          const bodyMatchMode = (host.healthCheckBodyMatchMode as HealthCheckBodyMatchMode | null) ?? 'includes';
+          if (expectedBody && status === 'online') {
+            const body = await response.text();
+            if (!matchesExpectedBody(body, expectedBody, bodyMatchMode)) status = 'degraded';
+          }
         }
       } catch {
         clearTimeout(timeout);

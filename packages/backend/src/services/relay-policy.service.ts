@@ -198,6 +198,57 @@ export class RelayPolicyService {
     return routeId;
   }
 
+  async ensureProxySecureLink(linkId: string, sourceNodeId: string, targetNodeId: string): Promise<string> {
+    const target = await this.grantIssuer.requireNodeIdentity(targetNodeId);
+    const source = await this.grantIssuer.requireNodeIdentity(sourceNodeId);
+    const endpointId = await this.db.transaction(async (tx) => {
+      const [current] = await tx
+        .select()
+        .from(relayEndpoints)
+        .where(and(eq(relayEndpoints.ownerKind, 'proxy_host_secure_link'), eq(relayEndpoints.ownerId, linkId)))
+        .limit(1);
+      if (!current) {
+        const [created] = await tx
+          .insert(relayEndpoints)
+          .values({
+            ownerKind: 'proxy_host_secure_link',
+            ownerId: linkId,
+            subjectKind: 'daemon',
+            subjectId: targetNodeId,
+            certificateSha256: target.certificateFingerprint,
+          })
+          .returning({ id: relayEndpoints.id });
+        await bumpRelayPolicyRevision(tx);
+        return created.id;
+      }
+      if (current.subjectId !== targetNodeId || current.certificateSha256 !== target.certificateFingerprint) {
+        await tx
+          .update(relayEndpoints)
+          .set({
+            subjectId: targetNodeId,
+            certificateSha256: target.certificateFingerprint,
+            generation: current.generation + 1,
+            status: 'active',
+            updatedAt: new Date(),
+          })
+          .where(eq(relayEndpoints.id, current.id));
+        await bumpRelayPolicyRevision(tx);
+      }
+      return current.id;
+    });
+    const routeId = await this.ensureRoute(
+      'proxy_host_secure_link',
+      linkId,
+      'daemon',
+      sourceNodeId,
+      source.certificateFingerprint,
+      endpointId
+    );
+    await this.syncSnapshot();
+    await Promise.all([this.syncNodeGrants(sourceNodeId), this.syncNodeGrants(targetNodeId)]);
+    return routeId;
+  }
+
   async ensureGatewayRoute(
     managedDatabaseId: string,
     targetNodeId: string,
@@ -232,7 +283,7 @@ export class RelayPolicyService {
   }
 
   async revokeOwner(
-    ownerKind: 'managed_database_binding' | 'managed_database_gateway' | 'managed_database',
+    ownerKind: 'managed_database_binding' | 'managed_database_gateway' | 'managed_database' | 'proxy_host_secure_link',
     ownerId: string
   ): Promise<void> {
     const [ownedRoutes, ownedEndpoints] = await Promise.all([
@@ -240,7 +291,7 @@ export class RelayPolicyService {
         .select({ nodeId: relayRoutes.sourceId, sourceKind: relayRoutes.sourceKind })
         .from(relayRoutes)
         .where(and(eq(relayRoutes.ownerKind, ownerKind), eq(relayRoutes.ownerId, ownerId))),
-      ownerKind === 'managed_database'
+      ownerKind === 'managed_database' || ownerKind === 'proxy_host_secure_link'
         ? this.db
             .select({ nodeId: relayEndpoints.subjectId })
             .from(relayEndpoints)
@@ -253,7 +304,7 @@ export class RelayPolicyService {
         .where(and(eq(relayRoutes.ownerKind, ownerKind), eq(relayRoutes.ownerId, ownerId)))
         .returning({ id: relayRoutes.id });
       const endpoints =
-        ownerKind === 'managed_database'
+        ownerKind === 'managed_database' || ownerKind === 'proxy_host_secure_link'
           ? await tx
               .delete(relayEndpoints)
               .where(and(eq(relayEndpoints.ownerKind, ownerKind), eq(relayEndpoints.ownerId, ownerId)))
@@ -335,11 +386,7 @@ export class RelayPolicyService {
     const revision = Number((await this.grantIssuer.requireState()).revision);
     const ttlHours = (await this.settings.getConfig()).relayGrantTtlHours;
     const intervalMs = (ttlHours * 60 * 60 * 1000) / 4;
-    if (
-      !force &&
-      revision === this.lastGrantRefreshRevision &&
-      Date.now() - this.lastGrantRefreshAt < intervalMs
-    )
+    if (!force && revision === this.lastGrantRefreshRevision && Date.now() - this.lastGrantRefreshAt < intervalMs)
       return;
     const nodeIds = await this.grantIssuer.policyNodeIds();
     const results = await Promise.allSettled(nodeIds.map((nodeId) => this.syncNodeGrants(nodeId)));
@@ -450,6 +497,7 @@ export class RelayPolicyService {
               targetEndpointId: route.targetEndpointId,
               maxConcurrentSessions: route.maxConcurrentSessions,
               maxFrameBytes: route.maxFrameBytes,
+              disableIdleTimeout: route.ownerKind === 'proxy_host_secure_link',
             })),
         };
       },

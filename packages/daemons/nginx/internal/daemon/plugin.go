@@ -1,15 +1,19 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
+	"sync"
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/connector"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
+	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 	sharedstate "github.com/wiolett-industries/gateway/daemon-shared/state"
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
 	"github.com/wiolett-industries/gateway/daemon-shared/sysmetrics"
@@ -20,17 +24,58 @@ import (
 
 // NginxPlugin implements lifecycle.DaemonPlugin for the nginx daemon.
 type NginxPlugin struct {
-	cfg      *config.Config
-	baseCfg  *lifecycle.BaseConfig
-	mgr      *nginx.Manager
-	handler  *Handler
-	reporter *Reporter
-	state    *sharedstate.State
-	logger   *slog.Logger
+	cfg             *config.Config
+	baseCfg         *lifecycle.BaseConfig
+	mgr             *nginx.Manager
+	handler         *Handler
+	reporter        *Reporter
+	state           *sharedstate.State
+	logger          *slog.Logger
+	relayGrants     *relayGrantStore
+	secureLinks     *sourceLinkManager
+	secureLinkState *securelink.StateStore
+	relayTunnelMu   sync.Mutex
+	relayTunnel     *nginxRelayTunnel
 
 	// Session-scoped resources
 	sessionCancel context.CancelFunc
 	conn          *grpc.ClientConn
+}
+
+var _ lifecycle.ProxySecureLinkPlugin = (*NginxPlugin)(nil)
+var _ lifecycle.ProxySecureLinkProbePlugin = (*NginxPlugin)(nil)
+
+func secureLinkProxyPassPattern(linkID string, port int) *regexp.Regexp {
+	portPattern := `[0-9]+`
+	if port > 0 {
+		portPattern = fmt.Sprintf("%d", port)
+	}
+	return regexp.MustCompile(fmt.Sprintf(
+		`(?m)(#[[:space:]]*gateway-managed-secure-link-upstream[[:space:]]+%s[[:space:]]*\r?\n[[:space:]]*proxy_pass[[:space:]]+https?://)127[.]0[.]0[.]1:%s`,
+		regexp.QuoteMeta(linkID),
+		portPattern,
+	))
+}
+
+func replaceFirstSecureLinkProxyPass(content []byte, linkID string, oldPort, newPort int) ([]byte, bool) {
+	pattern := secureLinkProxyPassPattern(linkID, oldPort)
+	indices := pattern.FindSubmatchIndex(content)
+	if indices == nil && oldPort > 0 {
+		// A managed config may already be ahead of persisted listener state after
+		// a crash. The per-host marker keeps this fallback out of unrelated or
+		// user-owned raw configs.
+		indices = secureLinkProxyPassPattern(linkID, 0).FindSubmatchIndex(content)
+	}
+	if indices == nil {
+		return content, false
+	}
+	prefix := content[indices[2]:indices[3]]
+	replacement := []byte(fmt.Sprintf("%s127.0.0.1:%d", prefix, newPort))
+	next := make([]byte, 0, len(content)-indices[1]+indices[0]+len(replacement))
+	next = append(next, content[:indices[0]]...)
+	next = append(next, replacement...)
+	next = append(next, content[indices[1]:]...)
+	return next, true
 }
 
 // NewNginxPlugin creates a new NginxPlugin with the given config.
@@ -64,6 +109,27 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	}
 	logger.Info("nginx detected", "version", version)
 	p.mgr = mgr
+	p.relayGrants, err = newRelayGrantStore(baseCfg.StateDir)
+	if err != nil {
+		return fmt.Errorf("initialize relay grant store: %w", err)
+	}
+	p.secureLinks = newSourceLinkManager(p.openProxySecureLink)
+	p.secureLinkState, err = securelink.NewStateStore(baseCfg.StateDir)
+	if err != nil {
+		return fmt.Errorf("initialize proxy secure-link state: %w", err)
+	}
+	if restored := p.secureLinkState.Get(); len(restored.Bindings) > 0 {
+		statuses, restoreErr := p.secureLinks.sync(restored)
+		if restoreErr != nil {
+			return fmt.Errorf("restore proxy secure-link listeners: %w", restoreErr)
+		}
+		if reconcileErr := p.reconcileRestoredSecureLinkPorts(restored, statuses); reconcileErr != nil {
+			return fmt.Errorf("reconcile restored proxy secure-link ports: %w", reconcileErr)
+		}
+		if saveErr := p.secureLinkState.Save(normalizeSourceBindings(restored, statuses)); saveErr != nil {
+			return fmt.Errorf("persist restored proxy secure-link listeners: %w", saveErr)
+		}
+	}
 
 	// Clean up leftover .tmp files from potential crashes
 	nginx.CleanTmpFiles(p.cfg.Nginx.ConfigDir)
@@ -80,10 +146,74 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	return nil
 }
 
+type secureLinkConfigChange struct {
+	path string
+	old  []byte
+	next []byte
+}
+
+func (p *NginxPlugin) reconcileRestoredSecureLinkPorts(
+	restored *pb.SyncProxySecureLinksCommand,
+	statuses []sourceLinkStatus,
+) error {
+	ports := make(map[string]int, len(statuses))
+	for _, status := range statuses {
+		ports[status.LinkID] = status.Port
+	}
+	changes := make([]secureLinkConfigChange, 0)
+	for _, binding := range restored.Bindings {
+		if !binding.SourceConfigManaged {
+			continue
+		}
+		port := ports[binding.LinkId]
+		if port == 0 {
+			continue
+		}
+		path := p.mgr.ConfigPath(binding.LinkId)
+		current, err := nginx.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if current == nil {
+			continue
+		}
+		next, changed := replaceFirstSecureLinkProxyPass(current, binding.LinkId, int(binding.ListenerPort), port)
+		if !changed || bytes.Equal(current, next) {
+			continue
+		}
+		changes = append(changes, secureLinkConfigChange{path: path, old: current, next: next})
+	}
+	if len(changes) == 0 {
+		return nil
+	}
+	rollback := func(applied int) {
+		for index := applied - 1; index >= 0; index-- {
+			_ = nginx.WriteAtomic(changes[index].path, changes[index].old)
+		}
+	}
+	for index, change := range changes {
+		if err := nginx.WriteAtomic(change.path, change.next); err != nil {
+			rollback(index)
+			return err
+		}
+	}
+	valid, output := p.mgr.TestConfig()
+	if !valid {
+		rollback(len(changes))
+		return fmt.Errorf("nginx config test failed after secure-link port recovery: %s", output)
+	}
+	if err := p.mgr.Reload(); err != nil {
+		rollback(len(changes))
+		return err
+	}
+	p.logger.Info("reconciled proxy secure-link listener ports after restart", "host_count", len(changes))
+	return nil
+}
+
 // SetState is called by the daemon wrapper to provide the shared state.
 func (p *NginxPlugin) SetState(st *sharedstate.State) {
 	p.state = st
-	p.handler = NewHandler(p.cfg, p.mgr, st, p.logger)
+	p.handler = NewHandler(p.cfg, p.mgr, st, p.logger, p.secureLinkState)
 	p.reporter = NewReporter(p.cfg, p.mgr, p.logger)
 }
 
@@ -110,7 +240,7 @@ func (p *NginxPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		Architecture:       arch,
 		KernelVersion:      kernelVer,
 		DaemonType:         "nginx",
-		Capabilities:       []string{"nginx_certificate_distribution_v2"},
+		Capabilities:       []string{"nginx_certificate_distribution_v2", "generic_relay_tunnel_v1", "proxy_secure_links_v1"},
 	}
 }
 

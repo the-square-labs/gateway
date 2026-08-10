@@ -222,6 +222,13 @@ message GatewayCommand {
     RemoveCertificateReplicaCommand remove_certificate_replica = 37;
     // Complete, revisioned set of opaque relay grants for this daemon.
     SyncRelayGrantsCommand sync_relay_grants = 38;
+    // Full desired set of Proxy Host -> Docker secure-link bindings for this
+    // daemon. Source bindings are accepted only by nginx-daemon; target
+    // bindings are accepted only by a general docker-daemon.
+    SyncProxySecureLinksCommand sync_proxy_secure_links = 39;
+    // Execute the existing proxy health contract from nginx-daemon through
+    // the loopback Secure Link listener.
+    ProbeProxySecureLinkCommand probe_proxy_secure_link = 40;
   }
 }
 
@@ -248,6 +255,47 @@ message RelaySignedGrant {
   bytes signature = 3;
 }
 
+message SyncProxySecureLinksCommand {
+  repeated ProxySecureLinkBinding bindings = 1;
+}
+
+message ProxySecureLinkBinding {
+  string link_id = 1;
+  string role = 2; // "source" or "target"
+  uint64 generation = 3;
+
+  // Source-only. Gateway allocates and persists this loopback port; the
+  // nginx daemon validates and binds it before the generated config uses it.
+  uint32 listener_port = 4;
+
+  // Target-only. Docker daemon attaches the node connector to target_network
+  // and exposes this exact destination through an allowlisted binding.
+  string target_network = 5;
+  string target_container = 6;
+  string target_host = 7;
+  uint32 target_port = 8;
+  string connector_image = 9;
+  // Container links may deterministically choose a replacement network after
+  // recreate. Deployment router links must remain on their managed network.
+  bool allow_network_reselection = 10;
+  // Source-only. True only after the matching generated Nginx config has
+  // completed cutover; restart recovery must never rewrite user-owned config.
+  bool source_config_managed = 11;
+  // Source-only. Allocate a new listener before retiring the currently live
+  // one so an active target update remains fail-closed until Nginx cutover.
+  bool rotate_listener = 12;
+}
+
+message ProbeProxySecureLinkCommand {
+  string link_id = 1;
+  string scheme = 2;
+  string path = 3;
+  int32 expected_status = 4;
+  string expected_body = 5;
+  string body_match_mode = 6;
+  int32 timeout_seconds = 7;
+}
+
 message NodeExecCommand {
   string action = 1;          // "create", "resize"
   repeated string command = 2; // shell override (default: auto-detect)
@@ -269,6 +317,7 @@ message ApplyConfigCommand {
   string host_id = 1;
   string config_content = 2;
   bool test_only = 3;
+  string config_ownership = 4; // "managed_secure_link", "user_owned", or empty to preserve
 }
 
 // Daemon also cleans up associated cache directory on removal
@@ -293,6 +342,7 @@ message ApplyTlsBundleCommand {
   string config_content = 2;
   repeated VersionedCertBundle certificates = 3;
   string generation = 4;
+  string config_ownership = 5;
 }
 
 message VersionedCertBundle {
@@ -335,6 +385,7 @@ message FullSyncCommand {
 message HostConfig {
   string host_id = 1;
   string config_content = 2;
+  string config_ownership = 3;
 }
 
 message CertBundle {

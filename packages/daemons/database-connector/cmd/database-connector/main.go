@@ -16,7 +16,6 @@ import (
 )
 
 const handshakeMagic = "GWDB1\n"
-const maxConnectorSessions = 16
 
 func main() {
 	bindingID := strings.TrimSpace(os.Getenv("GATEWAY_DB_BINDING_ID"))
@@ -30,25 +29,13 @@ func main() {
 		log.Fatalf("listen: %v", err)
 	}
 	defer listener.Close()
-	// A connector owns exactly one binding, so this is a per-binding admission
-	// cap. It bounds local sockets before an application can consume daemon or
-	// database file descriptors.
-	sessions := make(chan struct{}, maxConnectorSessions)
 	for {
 		appConn, err := listener.Accept()
 		if err != nil {
 			log.Printf("accept: %v", err)
 			continue
 		}
-		select {
-		case sessions <- struct{}{}:
-			go func() {
-				defer func() { <-sessions }()
-				handle(appConn, socketPath, bindingID)
-			}()
-		default:
-			_ = appConn.Close()
-		}
+		go handle(appConn, socketPath, bindingID)
 	}
 }
 

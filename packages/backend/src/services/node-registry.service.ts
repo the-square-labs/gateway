@@ -244,7 +244,6 @@ export class NodeRegistryService {
     });
 
     logger.info('Node registered', { nodeId, type, hostname });
-    this.eventBus?.publish('node.changed', { id: nodeId, action: 'updated', status: 'online', hostname });
     this.observeNodeState(nodeId, 'online', hostname);
   }
 

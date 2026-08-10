@@ -50,6 +50,7 @@ export interface GatewayImageManifestPayload {
   relayProtocolMajor: number;
   relayImageRef: string;
   databaseConnectorImage?: string;
+  secureLinkConnectorImage?: string;
   createdAt: string;
   gitCommitSha?: string;
   gitPipelineId?: string;
@@ -71,6 +72,7 @@ export interface TrustedGatewayUpdateArtifact {
   relayProtocolMajor: number;
   relayImageRef: string;
   databaseConnectorImage?: string;
+  secureLinkConnectorImage?: string;
 }
 
 export interface DaemonUpdateManifestExpectation {
@@ -145,6 +147,13 @@ export function verifyGatewayImageManifest(
   ) {
     throw new UpdateArtifactTrustError('Gateway update database connector image reference is not digest pinned');
   }
+  if (
+    payload.secureLinkConnectorImage !== undefined &&
+    (typeof payload.secureLinkConnectorImage !== 'string' ||
+      !isDigestPinnedImageRef(payload.secureLinkConnectorImage, `${payload.image}/secure-link-connector`))
+  ) {
+    throw new UpdateArtifactTrustError('Gateway update secure-link connector image reference is not digest pinned');
+  }
 
   return {
     payload,
@@ -155,6 +164,7 @@ export function verifyGatewayImageManifest(
     relayProtocolMajor: payload.relayProtocolMajor,
     relayImageRef: payload.relayImageRef,
     ...(payload.databaseConnectorImage ? { databaseConnectorImage: payload.databaseConnectorImage } : {}),
+    ...(payload.secureLinkConnectorImage ? { secureLinkConnectorImage: payload.secureLinkConnectorImage } : {}),
   };
 }
 

@@ -222,7 +222,8 @@ export class NginxCertificateDistributionService {
   async applyHostBundle(
     host: Pick<ProxyHostRow, 'id' | 'nodeId'>,
     configContent: string,
-    prepared: PreparedTlsCertificate
+    prepared: PreparedTlsCertificate,
+    configOwnership = ''
   ): Promise<void> {
     const targetNodeId = prepared.nodeId;
     const generation = deploymentGenerationFor(host.id, targetNodeId, configContent, prepared.version);
@@ -263,6 +264,7 @@ export class NginxCertificateDistributionService {
         hostId: host.id,
         configContent,
         generation,
+        configOwnership,
         certificates: [
           {
             certId: prepared.daemonCertId,

@@ -210,12 +210,15 @@ export interface GatewayCommand {
   exportLegacyCertificates?: ExportLegacyCertificatesCommand;
   removeCertificateReplica?: RemoveCertificateReplicaCommand;
   syncRelayGrants?: SyncRelayGrantsCommand;
+  syncProxySecureLinks?: SyncProxySecureLinksCommand;
+  probeProxySecureLink?: ProbeProxySecureLinkCommand;
 }
 
 export interface ApplyConfigCommand {
   hostId: string;
   configContent: string;
   testOnly: boolean;
+  configOwnership?: string;
 }
 
 export interface RemoveConfigCommand {
@@ -234,6 +237,7 @@ export interface ApplyTlsBundleCommand {
   configContent: string;
   certificates: VersionedCertBundle[];
   generation: string;
+  configOwnership?: string;
 }
 
 export interface VersionedCertBundle {
@@ -274,6 +278,7 @@ export interface FullSyncCommand {
 export interface HostConfig {
   hostId: string;
   configContent: string;
+  configOwnership?: string;
 }
 
 export interface CertBundle {
@@ -428,6 +433,36 @@ export interface SyncRelayGrantsCommand {
   policyRevision: string;
   generatedAtUnixMs: string;
   grants: RelayGrantAssignment[];
+}
+
+/** Complete desired set of Proxy Host secure-link listeners or bindings. */
+export interface SyncProxySecureLinksCommand {
+  bindings: ProxySecureLinkBinding[];
+}
+
+export interface ProxySecureLinkBinding {
+  linkId: string;
+  role: 'source' | 'target' | string;
+  generation: string;
+  listenerPort?: number;
+  targetNetwork?: string;
+  targetContainer?: string;
+  targetHost?: string;
+  targetPort?: number;
+  connectorImage?: string;
+  allowNetworkReselection?: boolean;
+  sourceConfigManaged?: boolean;
+  rotateListener?: boolean;
+}
+
+export interface ProbeProxySecureLinkCommand {
+  linkId: string;
+  scheme: string;
+  path: string;
+  expectedStatus?: number;
+  expectedBody?: string;
+  bodyMatchMode?: string;
+  timeoutSeconds?: number;
 }
 
 export interface RelayGrantAssignment {

@@ -133,8 +133,6 @@ export const CreateProxyHostSchema = z
         ['dockerNodeId', data.dockerNodeId, 'Docker node is required'],
         ['dockerContainerName', data.dockerContainerName, 'Container is required'],
         ['dockerContainerPort', data.dockerContainerPort, 'Container port is required'],
-        ['dockerHostPort', data.dockerHostPort, 'Published host port is required'],
-        ['dockerProtocol', data.dockerProtocol, 'Protocol is required'],
       ] as const) {
         if (value === undefined) {
           ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: [field] });
@@ -146,8 +144,6 @@ export const CreateProxyHostSchema = z
       for (const [field, value, message] of [
         ['dockerDeploymentId', data.dockerDeploymentId, 'Deployment is required'],
         ['dockerContainerPort', data.dockerContainerPort, 'Container port is required'],
-        ['dockerHostPort', data.dockerHostPort, 'Published host port is required'],
-        ['dockerProtocol', data.dockerProtocol, 'Protocol is required'],
       ] as const) {
         if (value === undefined) {
           ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: [field] });

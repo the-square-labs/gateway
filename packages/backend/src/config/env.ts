@@ -3,6 +3,8 @@ import { z } from 'zod';
 // Development only. Production database bindings require a registry image
 // pinned by manifest digest.
 export const DEVELOPMENT_DATABASE_CONNECTOR_IMAGE = 'gateway-database-connector:dev';
+export const DEVELOPMENT_SECURE_LINK_CONNECTOR_IMAGE = 'gateway-secure-link-connector:dev';
+const IMMUTABLE_CONNECTOR_IMAGE_PATTERN = /^.+@sha256:[0-9a-f]{64}$/i;
 
 const rateLimitWindowSchema = z.coerce.number().int().positive();
 const rateLimitMaxSchema = z.coerce.number().int().positive();
@@ -107,6 +109,7 @@ const envSchema = z.object({
   // provide an immutable release reference; development receives the fixed
   // local image after parsing below.
   DATABASE_CONNECTOR_IMAGE: z.string().trim().default(''),
+  SECURE_LINK_CONNECTOR_IMAGE: z.string().trim().default(''),
 
   // Compose project dir (for self-update sidecar)
   COMPOSE_PROJECT_DIR: z.string().optional(),
@@ -192,9 +195,20 @@ export function getEnv(): Env {
     throw new Error('Invalid environment variables');
   }
 
-  cachedEnv = result.data;
+  const parsedEnv = result.data;
+  if (
+    parsedEnv.NODE_ENV === 'production' &&
+    parsedEnv.SECURE_LINK_CONNECTOR_IMAGE &&
+    !IMMUTABLE_CONNECTOR_IMAGE_PATTERN.test(parsedEnv.SECURE_LINK_CONNECTOR_IMAGE)
+  ) {
+    throw new Error('SECURE_LINK_CONNECTOR_IMAGE must use an immutable sha256 digest in production');
+  }
+  cachedEnv = parsedEnv;
   if (cachedEnv.NODE_ENV === 'development' && !cachedEnv.DATABASE_CONNECTOR_IMAGE) {
     cachedEnv.DATABASE_CONNECTOR_IMAGE = DEVELOPMENT_DATABASE_CONNECTOR_IMAGE;
+  }
+  if (cachedEnv.NODE_ENV === 'development' && !cachedEnv.SECURE_LINK_CONNECTOR_IMAGE) {
+    cachedEnv.SECURE_LINK_CONNECTOR_IMAGE = DEVELOPMENT_SECURE_LINK_CONNECTOR_IMAGE;
   }
   return cachedEnv;
 }

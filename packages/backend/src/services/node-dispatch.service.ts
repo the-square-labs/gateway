@@ -50,10 +50,16 @@ export class NodeDispatchService {
     }
   }
 
-  async applyConfig(nodeId: string, hostId: string, configContent: string, testOnly = false): Promise<CommandResult> {
+  async applyConfig(
+    nodeId: string,
+    hostId: string,
+    configContent: string,
+    testOnly = false,
+    configOwnership = ''
+  ): Promise<CommandResult> {
     await this.assertNodeMutable(nodeId);
     return this.registry.sendCommand(nodeId, {
-      applyConfig: { hostId, configContent, testOnly },
+      applyConfig: { hostId, configContent, testOnly, configOwnership },
     });
   }
 
@@ -95,6 +101,7 @@ export class NodeDispatchService {
       hostId: string;
       configContent: string;
       generation: string;
+      configOwnership?: string;
       certificates: Array<{
         certId: string;
         certPem: Buffer;
@@ -113,6 +120,7 @@ export class NodeDispatchService {
           hostId: input.hostId,
           configContent: input.configContent,
           generation: input.generation,
+          configOwnership: input.configOwnership ?? '',
           certificates: input.certificates,
         },
       },
@@ -226,7 +234,7 @@ export class NodeDispatchService {
   /** Send a pre-built FullSyncCommand to a node */
   async fullSync(
     nodeId: string,
-    hosts: { hostId: string; configContent: string }[],
+    hosts: { hostId: string; configContent: string; configOwnership?: string }[],
     certs: { certId: string; certPem: Buffer; keyPem: Buffer; chainPem: Buffer }[],
     globalConfig: string,
     htpasswdFiles: { accessListId: string; content: string }[],
@@ -238,7 +246,11 @@ export class NodeDispatchService {
       nodeId,
       {
         fullSync: {
-          hosts: hosts.map((h) => ({ hostId: h.hostId, configContent: h.configContent })),
+          hosts: hosts.map((h) => ({
+            hostId: h.hostId,
+            configContent: h.configContent,
+            configOwnership: h.configOwnership ?? '',
+          })),
           certs: certs.map((c) => ({ certId: c.certId, certPem: c.certPem, keyPem: c.keyPem, chainPem: c.chainPem })),
           globalConfig,
           htpasswdFiles: htpasswdFiles.map((h) => ({ accessListId: h.accessListId, content: h.content })),
@@ -344,6 +356,88 @@ export class NodeDispatchService {
       },
       timeoutMs
     );
+  }
+
+  async sendProxySecureLinks(
+    nodeId: string,
+    bindings: Array<{
+      linkId: string;
+      role: 'source' | 'target';
+      generation: number;
+      listenerPort?: number;
+      targetNetwork?: string;
+      targetContainer?: string;
+      targetHost?: string;
+      targetPort?: number;
+      connectorImage?: string;
+      allowNetworkReselection?: boolean;
+    }>,
+    timeoutMs = 60_000
+  ): Promise<CommandResult> {
+    await this.assertProxySecureLinkNode(nodeId);
+    await this.assertNodeMutable(nodeId);
+    return this.registry.sendCommand(
+      nodeId,
+      {
+        syncProxySecureLinks: {
+          bindings: bindings.map((binding) => ({ ...binding, generation: String(binding.generation) })),
+        },
+      },
+      timeoutMs
+    );
+  }
+
+  async probeProxySecureLink(
+    nodeId: string,
+    input: {
+      linkId: string;
+      scheme: 'http' | 'https';
+      path: string;
+      expectedStatus?: number | null;
+      expectedBody?: string | null;
+      bodyMatchMode?: string | null;
+      timeoutSeconds?: number;
+    }
+  ): Promise<{ ok: boolean; httpStatus?: number; responseMs?: number; error?: string }> {
+    await this.assertProxySecureLinkNode(nodeId);
+    const result = await this.registry.sendCommand(
+      nodeId,
+      {
+        probeProxySecureLink: {
+          linkId: input.linkId,
+          scheme: input.scheme,
+          path: input.path,
+          expectedStatus: input.expectedStatus ?? 0,
+          expectedBody: input.expectedBody ?? '',
+          bodyMatchMode: input.bodyMatchMode ?? 'includes',
+          timeoutSeconds: input.timeoutSeconds ?? 10,
+        },
+      },
+      ((input.timeoutSeconds ?? 10) + 5) * 1000
+    );
+    if (!result.success) return { ok: false, error: result.error || 'Secure Link probe failed' };
+    try {
+      return JSON.parse(result.detail || '{}') as { ok: boolean; httpStatus?: number; responseMs?: number };
+    } catch {
+      return { ok: false, error: 'Nginx daemon returned an invalid Secure Link probe result' };
+    }
+  }
+
+  private async assertProxySecureLinkNode(nodeId: string) {
+    const [node] = await this.db
+      .select({ capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
+    const reported = (node.capabilities as Record<string, unknown> | null)?.capabilities;
+    if (!Array.isArray(reported) || !reported.includes('proxy_secure_links_v1')) {
+      throw new AppError(
+        409,
+        'PROXY_SECURE_LINK_UPDATE_REQUIRED',
+        'Update both Nginx and Docker daemons before creating this Docker proxy link'
+      );
+    }
   }
 
   private async assertGenericRelayNode(nodeId: string) {

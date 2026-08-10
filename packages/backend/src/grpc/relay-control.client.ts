@@ -33,6 +33,7 @@ export interface RelayPolicySnapshot {
     targetEndpointId: string;
     maxConcurrentSessions: number;
     maxFrameBytes: number;
+    disableIdleTimeout: boolean;
   }>;
 }
 

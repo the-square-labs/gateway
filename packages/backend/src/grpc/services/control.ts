@@ -482,6 +482,11 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               await failRegisteredStream('Node registration metadata update failed', err);
               return;
             }
+            // Reconciliation consumers must observe the capabilities committed
+            // above. Publishing from registry.register() raced this metadata
+            // update and could leave legacy Docker links unmigrated after an
+            // in-place daemon upgrade.
+            deps.registry.publishNodeChanged(claimedNodeId, 'online', msg.register.hostname);
 
             try {
               const { DaemonUpdateService } = await import('@/services/daemon-update.service.js');

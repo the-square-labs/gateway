@@ -70,6 +70,7 @@ func sign(args []string) {
 	image := fs.String("image", "", "gateway image repository")
 	digest := fs.String("digest", "", "gateway image digest")
 	databaseConnectorImage := fs.String("database-connector-image", "", "digest-pinned database connector image reference")
+	secureLinkConnectorImage := fs.String("secure-link-connector-image", "", "digest-pinned secure-link connector image reference")
 	relayBuildVersion := fs.String("relay-build-version", "", "standalone relay build version")
 	relayProtocolMajor := fs.Int("relay-protocol-major", 0, "standalone relay protocol major")
 	relayImageRef := fs.String("relay-image-ref", "", "digest-pinned standalone relay image")
@@ -137,6 +138,9 @@ func sign(args []string) {
 		}
 		if *databaseConnectorImage != "" {
 			payloadMap["databaseConnectorImage"] = *databaseConnectorImage
+		}
+		if *secureLinkConnectorImage != "" {
+			payloadMap["secureLinkConnectorImage"] = *secureLinkConnectorImage
 		}
 		payload = payloadMap
 	default:
