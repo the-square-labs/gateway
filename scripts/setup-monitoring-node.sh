@@ -712,12 +712,7 @@ install_daemon() {
         ok "monitoring-daemon installed (${ver})"
     else
         rm -f "${target}.tmp"
-        warn "Failed to download from releases — you may need to install the binary manually"
-        warn "Place the monitoring-daemon binary at ${target}"
-
-        if [[ ! -f "$target" ]]; then
-            die "monitoring-daemon binary not found at ${target}"
-        fi
+        die "Failed to download monitoring-daemon ${RESOLVED_DAEMON_VERSION} from releases"
     fi
 }
 

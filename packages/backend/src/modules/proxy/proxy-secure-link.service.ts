@@ -39,7 +39,16 @@ export class ProxySecureLinkService {
     phase: 'provisioning' | 'reconciliation' = 'provisioning'
   ): Promise<ProxyHostRow> {
     try {
-      const result = await this.withLinkOperation(host.id, () => this.prepareLocked(host, requireCapabilities, force));
+      const result = await this.withLinkOperation(host.id, async () => {
+        // Reconciliation can be queued from both daemon reconnect and the
+        // background sweep. Refresh only after acquiring the per-link lock so
+        // a queued operation cannot restart a cutover from its stale snapshot.
+        const lockedHost =
+          phase === 'reconciliation'
+            ? ((await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, host.id) })) ?? host)
+            : host;
+        return this.prepareLocked(lockedHost, requireCapabilities, force);
+      });
       this.emitLinkState(result, phase, result.secureLinkLastError ? 'failed' : 'ready', result.secureLinkLastError);
       return result;
     } catch (error) {
@@ -74,6 +83,10 @@ export class ProxySecureLinkService {
       host.dockerContainerPort !== target.applicationPort ||
       host.dockerHostPort !== target.targetPort;
 	const cutoverCommitted = host.secureLinkMigratedAt != null;
+	// Another caller may already have prepared and probed this exact generation
+	// and be between prepare() and commitCutover(). Keep that durable hand-off
+	// intact instead of reverting it to provisioning from a second reconciler.
+	if (!cutoverCommitted && host.secureLinkStatus === 'cutover_ready' && !changed) return host;
 	const activeUpdate = cutoverCommitted && (changed || host.secureLinkStatus === 'updating');
 	if (cutoverCommitted && host.secureLinkStatus === 'active' && !changed) {
 	  if (!force) return host;

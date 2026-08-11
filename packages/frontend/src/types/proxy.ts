@@ -49,6 +49,7 @@ export interface ProxyHost {
   dockerContainerPort?: number | null;
   dockerHostPort?: number | null;
   dockerProtocol?: "tcp" | null;
+  secureLinkActive?: boolean;
   sslEnabled: boolean;
   sslForced: boolean;
   http2Support: boolean;

@@ -371,6 +371,44 @@ describe("ProxyHostDetail", () => {
     expect(backButton.parentElement).not.toHaveClass("items-start");
   });
 
+  it("shows the Secure Link badge only after cutover is active", async () => {
+    vi.spyOn(api, "getProxyHost").mockResolvedValue(
+      makeProxyHost({
+        upstreamKind: "docker_container",
+        dockerContainerName: "application",
+        secureLinkActive: true,
+      })
+    );
+
+    renderWithRouter(<ProxyHostDetail />, {
+      path: "/proxy-hosts/:id/:tab",
+      route: "/proxy-hosts/host-1/details",
+      extraRoutes: <Route path="/proxy-hosts" element={<div>Proxy Hosts</div>} />,
+    });
+
+    expect(await screen.findByText("application")).toBeInTheDocument();
+    expect(screen.getByText("Secure Link")).toBeInTheDocument();
+  });
+
+  it("does not show the Secure Link badge before cutover is active", async () => {
+    vi.spyOn(api, "getProxyHost").mockResolvedValue(
+      makeProxyHost({
+        upstreamKind: "docker_container",
+        dockerContainerName: "application",
+        secureLinkActive: false,
+      })
+    );
+
+    renderWithRouter(<ProxyHostDetail />, {
+      path: "/proxy-hosts/:id/:tab",
+      route: "/proxy-hosts/host-1/details",
+      extraRoutes: <Route path="/proxy-hosts" element={<div>Proxy Hosts</div>} />,
+    });
+
+    expect(await screen.findByText("application")).toBeInTheDocument();
+    expect(screen.queryByText("Secure Link")).not.toBeInTheDocument();
+  });
+
   it("shows maintenance as the primary state with a disable action in the overflow menu", async () => {
     const user = userEvent.setup();
     vi.spyOn(api, "getProxyHost").mockResolvedValue(

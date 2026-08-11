@@ -152,3 +152,18 @@ describe('node installer private logs', () => {
     expect(source).toContain('LOG_FILE="/dev/null"');
   });
 });
+
+describe('node installer daemon downloads', () => {
+  it.each([
+    ['nginx', nginxNodeInstaller, 'nginx-daemon'],
+    ['docker', dockerNodeInstaller, 'docker-daemon'],
+    ['monitoring', monitoringNodeInstaller, 'monitoring-daemon'],
+  ])('%s fails closed when the requested daemon release cannot be downloaded', (_name, path, binary) => {
+    const source = readFileSync(path, 'utf8');
+
+    expect(source).toContain(
+      `die \"Failed to download ${binary} \${RESOLVED_DAEMON_VERSION} from releases\"`
+    );
+    expect(source).not.toContain(`Place the ${binary} binary at \${target}`);
+  });
+});

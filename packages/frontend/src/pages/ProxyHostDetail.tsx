@@ -792,6 +792,11 @@ export function ProxyHostDetail({
                   </span>
                 ) : null}
                 {host.type === "proxy" ? <ProxyUpstreamTarget host={host} size="inline" /> : null}
+                {host.type === "proxy" && host.secureLinkActive ? (
+                  <Badge variant="success" size="inline">
+                    Secure Link
+                  </Badge>
+                ) : null}
                 {host.type === "redirect" && host.redirectUrl
                   ? ` \u2192 ${host.redirectUrl}`
                   : null}

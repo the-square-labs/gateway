@@ -6,6 +6,7 @@ import { nodes } from '@/db/schema/nodes.js';
 export type WithDockerUpstreamDisplay<T> = T & {
   dockerDeploymentName: string | null;
   dockerNodeAppearanceColor: string | null;
+  secureLinkActive: boolean;
 };
 
 export async function attachDockerUpstreamDisplay<
@@ -34,6 +35,7 @@ export async function attachDockerUpstreamDisplay<
   const colors = new Map(dockerNodes.map((node) => [node.id, node.appearanceColor]));
   return hosts.map((host) => {
     const visible = { ...host } as Record<string, unknown>;
+    const secureLinkActive = visible.secureLinkStatus === 'active';
     if ((visible.upstreamKind as string | undefined)?.startsWith('docker_')) {
       visible.forwardHost = null;
       visible.forwardPort = null;
@@ -54,6 +56,7 @@ export async function attachDockerUpstreamDisplay<
     }
     return {
       ...visible,
+      secureLinkActive,
       dockerDeploymentName: host.dockerDeploymentId ? (names.get(host.dockerDeploymentId) ?? null) : null,
       dockerNodeAppearanceColor: host.dockerNodeId ? (colors.get(host.dockerNodeId) ?? null) : null,
     } as WithDockerUpstreamDisplay<T>;

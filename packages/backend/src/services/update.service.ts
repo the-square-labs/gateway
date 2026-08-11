@@ -405,6 +405,7 @@ export class UpdateService {
         '-c',
         `set -eu
 compose() { docker compose --project-name ${composeProject} -f /project/docker-compose.yml "$@"; }
+service_exists() { compose config --services | grep -qx "$1"; }
 rollback() {
   if [ -n "$FOUNDATION_BACKUP_DIR" ]; then
     if [ -f "$FOUNDATION_BACKUP_DIR/.env" ]; then
@@ -414,7 +415,13 @@ rollback() {
       cp -p "$FOUNDATION_BACKUP_DIR/docker-compose.yml" /project/docker-compose.yml
     fi
   fi
-  compose stop app relay
+  rollback_has_relay=0
+  if service_exists relay; then
+    rollback_has_relay=1
+    compose stop app relay
+  else
+    compose stop app
+  fi
   compose up -d postgres
   attempt=0
   until compose exec -T postgres pg_isready -U gateway -d gateway; do
@@ -428,15 +435,24 @@ rollback() {
     [ "$attempt" -lt 10 ]
     sleep 2
   done
-  compose up -d app relay
+  if [ "$rollback_has_relay" -eq 1 ]; then
+    compose up -d app relay
+  else
+    compose up -d app
+  fi
   attempt=0
   while [ "$attempt" -lt 150 ]; do
     app_id="$(compose ps -q app)"
-    relay_id="$(compose ps -q relay)"
-    if [ -n "$app_id" ] && [ -n "$relay_id" ]; then
+    if [ -n "$app_id" ]; then
       app_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$app_id")"
-      relay_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$relay_id")"
-      if [ "$app_health" = healthy ] && [ "$relay_health" = healthy ]; then return 0; fi
+      if [ "$rollback_has_relay" -eq 0 ] && [ "$app_health" = healthy ]; then return 0; fi
+      if [ "$rollback_has_relay" -eq 1 ]; then
+        relay_id="$(compose ps -q relay)"
+        if [ -n "$relay_id" ]; then
+          relay_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$relay_id")"
+          if [ "$app_health" = healthy ] && [ "$relay_health" = healthy ]; then return 0; fi
+        fi
+      fi
     fi
     attempt=$((attempt + 1))
     sleep 2
@@ -451,8 +467,8 @@ on_exit() {
 }
 trap on_exit EXIT
 sleep 2
-compose up -d relay
 compose up -d --force-recreate app
+compose up -d relay
 attempt=0
 while [ "$attempt" -lt 150 ]; do
   app_id="$(compose ps -q app)"
@@ -461,7 +477,6 @@ while [ "$attempt" -lt 150 ]; do
     app_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$app_id")"
     relay_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$relay_id")"
     if [ "$app_health" = healthy ] && [ "$relay_health" = healthy ]; then exit 0; fi
-    if [ "$app_health" = unhealthy ] || [ "$relay_health" = unhealthy ]; then break; fi
   fi
   attempt=$((attempt + 1))
   sleep 2

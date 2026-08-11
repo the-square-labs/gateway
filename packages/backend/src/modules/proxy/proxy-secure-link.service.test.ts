@@ -12,6 +12,7 @@ describe('ProxySecureLinkService migration rollback', () => {
 	  } as any;
 	  const updatedValues: Array<Record<string, unknown>> = [];
 	  const db = {
+		query: { proxyHosts: { findFirst: vi.fn().mockResolvedValue(host) } },
 		update: vi.fn(() => ({
 		  set: vi.fn((values: Record<string, unknown>) => {
 			updatedValues.push(values);
@@ -33,6 +34,43 @@ describe('ProxySecureLinkService migration rollback', () => {
 
 	  expect(result.secureLinkLastError).toBeNull();
 	  expect(updatedValues).toContainEqual(expect.objectContaining({ secureLinkLastError: null }));
+	});
+
+	it('preserves a prepared cutover when queued reconciliation starts from a stale legacy snapshot', async () => {
+	  const stale = {
+		id: '11111111-1111-4111-8111-111111111111', type: 'proxy', upstreamKind: 'docker_container',
+		nodeId: 'nginx-node', dockerNodeId: 'docker-node', dockerContainerName: 'application', dockerContainerPort: 8080,
+		dockerHostPort: 18080, secureLinkGeneration: 0, secureLinkStatus: 'legacy', secureLinkMigratedAt: null,
+		secureLinkTargetNetwork: null, secureLinkTargetContainer: null, secureLinkTargetHost: null,
+	  } as any;
+	  const prepared = {
+		...stale,
+		dockerHostPort: 8080,
+		secureLinkGeneration: 1,
+		secureLinkStatus: 'cutover_ready',
+		secureLinkTargetNetwork: 'application-net',
+		secureLinkTargetContainer: 'application',
+		secureLinkListenerPort: 41001,
+		secureLinkConnectorPort: 42001,
+	  } as any;
+	  const db = {
+		query: { proxyHosts: { findFirst: vi.fn().mockResolvedValue(prepared) } },
+		update: vi.fn(),
+	  } as any;
+	  const dispatch = { probeProxySecureLink: vi.fn() } as any;
+	  const relayPolicy = { ensureProxySecureLink: vi.fn(), revokeOwner: vi.fn() } as any;
+	  const service = new ProxySecureLinkService(db, dispatch, relayPolicy, 'connector@sha256:test');
+	  vi.spyOn(service as any, 'nodesSupportSecureLinks').mockResolvedValue(true);
+	  vi.spyOn(service as any, 'resolveTarget').mockResolvedValue({
+		nodeId: 'docker-node', network: 'application-net', container: 'application', applicationPort: 8080, targetPort: 8080,
+	  });
+
+	  const result = await service.reconcileExisting(stale);
+
+	  expect(result).toBe(prepared);
+	  expect(db.update).not.toHaveBeenCalled();
+	  expect(dispatch.probeProxySecureLink).not.toHaveBeenCalled();
+	  expect(relayPolicy.ensureProxySecureLink).not.toHaveBeenCalled();
 	});
 
 	it('takes the production route and listener out of service before applying an active target candidate', async () => {

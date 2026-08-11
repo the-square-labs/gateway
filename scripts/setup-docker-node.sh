@@ -1159,12 +1159,7 @@ install_daemon() {
         ok "docker-daemon installed (${ver})"
     else
         rm -f "${target}.tmp"
-        warn "Failed to download from releases — you may need to install the binary manually"
-        warn "Place the docker-daemon binary at ${target}"
-
-        if [[ ! -f "$target" ]]; then
-            die "docker-daemon binary not found at ${target}"
-        fi
+        die "Failed to download docker-daemon ${RESOLVED_DAEMON_VERSION} from releases"
     fi
 }
 

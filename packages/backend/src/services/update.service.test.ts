@@ -166,6 +166,17 @@ describe('UpdateService foundation migration', () => {
     expect(sidecarCommand).toContain('rollback');
     expect(sidecarCommand).toContain('trap on_exit EXIT');
     expect(sidecarCommand).toContain('cp -p "$FOUNDATION_BACKUP_DIR/.env" /project/.env');
+    expect(sidecarCommand).toContain('service_exists() { compose config --services | grep -qx "$1"; }');
+    expect(sidecarCommand).toContain(
+      'if service_exists relay; then\n    rollback_has_relay=1\n    compose stop app relay\n  else\n    compose stop app\n  fi'
+    );
+    expect(sidecarCommand).toContain(
+      'if [ "$rollback_has_relay" -eq 1 ]; then\n    compose up -d app relay\n  else\n    compose up -d app\n  fi'
+    );
+    expect(sidecarCommand).toContain('sleep 2\ncompose up -d --force-recreate app\ncompose up -d relay');
+    expect(sidecarCommand).not.toContain(
+      'if [ "$app_health" = unhealthy ] || [ "$relay_health" = unhealthy ]; then break; fi'
+    );
     expect(sidecarCommand).toContain('CREATE OR REPLACE VIEW "public"."gateway_relay_bindings_v1"');
     const syntax = spawnSync('/bin/sh', ['-n'], { input: sidecarCommand, encoding: 'utf8' });
     expect(syntax.stderr).toBe('');

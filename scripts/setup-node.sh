@@ -1096,12 +1096,7 @@ install_daemon() {
         ok "nginx-daemon installed (${ver})"
     else
         rm -f "${target}.tmp"
-        warn "Failed to download from releases — you may need to install the binary manually"
-        warn "Place the nginx-daemon binary at ${target}"
-
-        if [[ ! -f "$target" ]]; then
-            die "nginx-daemon binary not found at ${target}"
-        fi
+        die "Failed to download nginx-daemon ${RESOLVED_DAEMON_VERSION} from releases"
     fi
 }
 

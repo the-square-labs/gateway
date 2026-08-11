@@ -3,23 +3,43 @@
   "edges": [
     {
       "from_id": "rzidwe4n",
-      "to_id": "vrch49nc",
+      "to_id": "iois3ul4",
       "relation": "same_workflow",
-      "weight": 0.74,
-      "reason": "Both describe Gateway image updates followed by compose-based application recreation while preserving host configuration and stateful services.",
+      "weight": 0.86,
+      "reason": "Both document Gateway daemon migration and relay cutover behavior, including preserved state, health checks, and upgrade sequencing.",
       "source": "auto",
-      "created_at": 1786135099925,
-      "updated_at": 1786135099925
+      "created_at": 1786459809319,
+      "updated_at": 1786459809319
     },
     {
       "from_id": "rzidwe4n",
-      "to_id": "iois3ul4",
-      "relation": "same_area",
-      "weight": 0.58,
-      "reason": "Both document Gateway deployment infrastructure and stateful-service handling on the test gateway host.",
+      "to_id": "kufbu8qt",
+      "relation": "same_workflow",
+      "weight": 0.62,
+      "reason": "The migration runs from v2.5.2 to HEAD and depends on Gateway release, image, and signed update conventions.",
       "source": "auto",
-      "created_at": 1786135099925,
-      "updated_at": 1786135099925
+      "created_at": 1786459809319,
+      "updated_at": 1786459809319
+    },
+    {
+      "from_id": "rzidwe4n",
+      "to_id": "hqwh565e",
+      "relation": "same_workflow",
+      "weight": 0.57,
+      "reason": "The migration exposed installer-script requirements and relies on the Gateway installer’s upgrade and parity behavior.",
+      "source": "auto",
+      "created_at": 1786459809319,
+      "updated_at": 1786459809319
+    },
+    {
+      "from_id": "rzidwe4n",
+      "to_id": "zsgne0nk",
+      "relation": "same_area",
+      "weight": 0.48,
+      "reason": "Both cover Gateway deployment topology, app/relay health verification, and production-like rollout practices.",
+      "source": "auto",
+      "created_at": 1786459809319,
+      "updated_at": 1786459809319
     }
   ]
 }
