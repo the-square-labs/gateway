@@ -4,6 +4,8 @@
 
 Gateway is offered in four product plans: Community, Personal, Business, and Enterprise. Plans apply to one self-hosted Gateway installation. Paid plans do not add per-node, per-user, or per-permission-group charges.
 
+The plan limits and feature availability below define the product access granted by each plan.
+
 The source-code license remains defined by [LICENSE.md](../LICENSE.md). This document describes product plans, feature availability, pricing, and product-license activation. Product plan names do not change the permissions granted by the source-code license. If a legal-use summary conflicts with `LICENSE.md`, the license text controls.
 
 ## Plan Positioning
@@ -33,7 +35,7 @@ The source-code license remains defined by [LICENSE.md](../LICENSE.md). This doc
 | Audit Log | Ready | ✅ | ✅ | ✅ | ✅ |
 | REST API, OAuth, and MCP Automation | Ready | ✅ | ✅ | ✅ | ✅ |
 | GitLab Integration | Ready | ✅ | ✅ | ✅ | ✅ |
-| AI Workspace and Sandboxed Execution | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
+| AI Workspace, Plan Mode, Scenarios, and Sandboxed Execution | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
 | Gateway Inference | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
 | Automated Installation and Signed Updates | Ready | ✅ | ✅ | ✅ | ✅ |
 | Storage Connections: S3, R2, MinIO, FTP, FTPS, SFTP, and SMB | Coming soon | ✅ | ✅ | ✅ | ✅ |
@@ -63,6 +65,8 @@ The source-code license remains defined by [LICENSE.md](../LICENSE.md). This doc
 
 AI Workspace and the separate multi-provider Gateway Inference are available in every plan. Both are opt-in and use administrator-configured providers, published models, access rules, and limits. Neither is required to operate Gateway through the Operations Console, REST API, OAuth, or MCP.
 
+AI Workspace includes guided operational Scenarios and Plan Mode. Plan Mode researches the requested outcome with read-only planning tools, validates a structured plan, and waits for explicit user confirmation before implementation. Confirmed plans expose progress controls and finish with a separate verification pass.
+
 ## Pricing
 
 > [!IMPORTANT]
@@ -77,21 +81,12 @@ AI Workspace and the separate multi-provider Gateway Inference are available in 
 
 Contact [contact@wiolett.net](mailto:contact@wiolett.net) or [Wiolett Industries on Telegram](https://t.me/WiolettIndustries) for Enterprise terms.
 
-## Current Enforcement
-
-Current Gateway releases display product license status but do not yet enforce the feature gates in the matrix. The current backend, API, and Settings UI still use the legacy internal tier identifiers `community`, `homelab`, and `enterprise`; the Personal and Business product-plan identifiers require a separate code update.
-
-- Community works without a product license key.
-- Paid product keys can be activated in **Settings > General > License**.
-- The license server returns the current license status, plan, license name, expiration, and active installation details.
-- Planned availability and limits in this document should not be treated as runtime enforcement until the corresponding release notes say otherwise.
-
 ## Product License Verification
 
 Gateway verifies paid product license keys against:
 
 ```text
-https://gw-license-server.wiolett.net
+https://license.wiolett.cloud
 ```
 
 Activation flow:

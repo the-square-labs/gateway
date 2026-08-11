@@ -18,6 +18,7 @@ Use it when you want to:
 - Centralize TLS, internal PKI, ACME certificates, domains, status pages, notifications, and audit history.
 - Manage Docker containers, deployments, portable or registry-backed `.gwca` archives, logs, files, consoles, secrets, and registry workflows from one place.
 - Expose controlled automation through API tokens, OAuth, CI/CD webhooks, and MCP clients.
+- Start from an AI Workspace Scenario or use Plan Mode to research and validate a multi-step change before explicitly confirming execution.
 
 ## Fastest Install
 
@@ -106,6 +107,7 @@ The CLI asks for the Gateway URL and completes OAuth when no active connection e
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware physical GPU telemetry, daemon runtime details, log streaming, and update checks. |
 | Logging | Optional ClickHouse-backed structured log ingestion with schemas, retention, ingest tokens, rate limits, search, storage caps, and health safeguards. |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages, and optional AI Workspace. |
+| AI Workspace | Opt-in intent-driven operations with guided Scenarios, Plan Mode, permission-aware tools, approvals, sandboxed execution, progress tracking, and final verification. Planning never performs mutations before explicit confirmation. |
 | Inference | Optional multi-provider model gateway with dedicated tokens, usage controls, OpenAI-compatible APIs, and managed Codex or Claude Code setup through `@wiolett/gateway-inference`. |
 | Administration | OIDC, password, email-code and passkey login, group-based and per-user additional permissions, scoped programmatic access, audit logs, setup state, updates, and license controls. |
 
@@ -161,6 +163,7 @@ Completed foundations:
 - [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
 - [x] SIEM audit export, enabled in Gateway settings, with encrypted bearer, HMAC-SHA256, or custom-header authentication.
 - [x] Optional ClickHouse-backed structured logging and optional AI Workspace.
+- [x] AI Workspace Scenarios and Plan Mode with validated plans, explicit execution confirmation, progress controls, and final verification.
 - [x] Optional multi-provider inference gateway with OpenAI-compatible and harness-specific APIs.
 - [x] View-based, resource-scoped permission model with filtered list visibility.
 - [x] Hardened OIDC/OAuth flows, setup lockout, fail-closed public endpoints, and signed update trust.
@@ -223,7 +226,7 @@ Managed services keep running. Existing nginx configs continue serving traffic, 
 <details>
 <summary><strong>Is AI Workspace required?</strong></summary>
 
-No. It is optional and disabled by default. Gateway does not send data to an AI provider until an administrator enables AI Workspace and configures a provider.
+No. It is optional and disabled by default. Gateway does not send data to an AI provider until an administrator enables AI Workspace and configures a provider. Operators can start from guided Scenarios or select Plan Mode for a validated, readable plan; no mutating action runs until the user explicitly confirms implementation.
 </details>
 
 ## Plans And Licensing

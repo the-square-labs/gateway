@@ -66,17 +66,16 @@ in the prior tax year. If your company grows beyond either
 of those limits, you may continue use for a permitted purpose
 for 1 year after exceeding either limit for the first time.
 
-Eligible small businesses may request a free Homelab product
-license key as described in [docs/licensing.md](docs/licensing.md).
-Enterprise product license keys are paid commercial keys.
+Product plans, feature availability, and product license keys are
+documented separately in [docs/licensing.md](docs/licensing.md).
 
 ## Commercial Licenses
 
 If your company does not qualify under [Small Business](#small-business),
 or if your use is otherwise not a permitted purpose under
 these terms, you need a separate paid commercial license from
-the licensor. The current Enterprise product license policy is
-documented in [docs/licensing.md](docs/licensing.md).
+the licensor. The current paid product plans and commercial license
+policy are documented in [docs/licensing.md](docs/licensing.md).
 
 ## Personal Uses
 

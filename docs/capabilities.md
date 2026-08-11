@@ -273,6 +273,10 @@ AI Workspace is disabled by default. The Operations Console remains fully usable
 
 When enabled by an admin, it can:
 
+- Start from guided operational Scenarios or a free-form desired outcome.
+- Enter Plan Mode manually or automatically for complex, multi-step, research-heavy, or materially risky work.
+- Research with read-only planning tools, validate a structured Plan Block, and wait for explicit confirmation before any mutating action is available.
+- Execute a confirmed plan in the background with step progress, pause, resume, cancel, and a separate final-verification run.
 - Use a configured OpenAI-compatible provider or an accessible published Gateway Inference model.
 - Call Gateway tools through permission-gated operations.
 - Ask clarifying questions before acting.
@@ -284,5 +288,7 @@ When enabled by an admin, it can:
 - Attach and preview supported images and generated artifacts.
 - Surface Gateway Inference quota warnings and stop new turns only when the applicable budget is exhausted.
 - Respect per-user tool access and AI approval mode preferences.
+
+One plan can be active in each Work Session, while separate Work Sessions can run plans independently. Planning is separate from Approval Mode: planning itself is read-only, and confirmed execution follows the user's current approval settings.
 
 OpenAI-compatible settings remain preserved while Gateway Inference is selected. If Inference is later disabled, AI Workspace returns to the previous OpenAI-compatible configuration or disables itself when none was configured. No data is sent to an AI provider until an administrator enables AI Workspace and configures a provider.

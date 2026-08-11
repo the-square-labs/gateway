@@ -18,6 +18,7 @@ Gateway 为小型基础设施团队提供一个产品，用来处理日常工作
 - 集中管理 TLS、内部 PKI、ACME 证书、域名、状态页、通知和审计历史。
 - 在一个地方管理 Docker containers、deployments、portable 或 registry-backed `.gwca` archives、logs、files、consoles、secrets 和 registry workflows。
 - 通过 API tokens、OAuth、CI/CD webhooks 和 MCP clients 提供受控自动化。
+- 从 AI Workspace Scenario 开始，或使用 Plan Mode 在明确确认执行之前研究并验证多步骤变更。
 
 ## 最快安装
 
@@ -106,6 +107,7 @@ npx -y @wiolett/gateway-inference@latest setup claude-code
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware physical GPU telemetry, daemon runtime details, log streaming 和 update checks。 |
 | Logging | 可选的 ClickHouse-backed structured log ingestion，包含 schemas、retention、ingest tokens、rate limits、search、storage caps 和 health safeguards。 |
 | Automation | API tokens、OAuth 2.0 PKCE、remote MCP endpoint、CI/CD webhooks、webhook notifications、status pages 和可选的 AI Workspace。 |
+| AI Workspace | 可选的 intent-driven operations，包含引导式 Scenarios、Plan Mode、permission-aware tools、approvals、sandboxed execution、进度跟踪和最终验证。在明确确认之前，规划不会执行任何变更。 |
 | Inference | 可选的 multi-provider model gateway，包含独立 tokens、usage controls、OpenAI-compatible APIs，以及通过 `@wiolett/gateway-inference` 管理的 Codex 或 Claude Code 配置。 |
 | Administration | OIDC、password、email-code 和 passkey login，group-based 和 per-user additional permissions, scoped programmatic access, audit logs, setup state, updates 和 license controls。 |
 
@@ -161,6 +163,7 @@ Gateway 已经面向 production operations，而不是狭窄的 MVP。当前方�
 - [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
 - [x] 可在 Gateway 设置中启用的 SIEM 审计导出，支持加密 Bearer、HMAC-SHA256 或自定义请求头认证。
 - [x] 可选的 ClickHouse-backed structured logging 和可选的 AI Workspace。
+- [x] AI Workspace Scenarios 和 Plan Mode，包含已验证计划、明确的执行确认、进度控制和最终验证。
 - [x] 可选的 multi-provider inference gateway，提供 OpenAI-compatible 和 harness-specific APIs。
 - [x] View-based, resource-scoped permission model with filtered list visibility.
 - [x] Hardened OIDC/OAuth flows, setup lockout, fail-closed public endpoints, and signed update trust.
@@ -223,7 +226,7 @@ Managed services 会继续运行。Existing nginx configs 会继续服务 traffi
 <details>
 <summary><strong>AI Workspace 是必须的吗？</strong></summary>
 
-不是。它是可选功能，默认关闭。只有管理员启用 AI Workspace 并配置 provider 后，Gateway 才会向 AI provider 发送数据。
+不是。它是可选功能，默认关闭。只有管理员启用 AI Workspace 并配置 provider 后，Gateway 才会向 AI provider 发送数据。运维人员可以从引导式 Scenario 开始，或选择 Plan Mode 生成经过验证且易读的计划；在用户明确确认实施之前，不会执行任何变更。
 </details>
 
 ## 产品计划与许可

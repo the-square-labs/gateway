@@ -18,6 +18,7 @@ Gateway дает небольшим инфраструктурным коман�
 - Централизовать TLS, внутреннюю PKI, ACME-сертификаты, домены, статус-страницы, уведомления и audit history.
 - Управлять Docker-контейнерами, deployments, portable и registry-backed `.gwca` archives, логами, файлами, консолями, secrets и registry workflows из одного места.
 - Предоставить контролируемую автоматизацию через API tokens, OAuth, CI/CD webhooks и MCP clients.
+- Начать с готового Scenario в AI Workspace или использовать Plan Mode, чтобы исследовать и проверить многошаговое изменение до явного подтверждения выполнения.
 
 ## Самая быстрая установка
 
@@ -106,6 +107,7 @@ npx -y @wiolett/gateway-inference@latest setup claude-code
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware telemetry физических GPU, daemon runtime details, log streaming и update checks. |
 | Logging | Опциональный ClickHouse-backed structured log ingestion со schemas, retention, ingest tokens, rate limits, search, storage caps и health safeguards. |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages и опциональный AI Workspace. |
+| AI Workspace | Опциональные intent-driven operations с готовыми Scenarios, Plan Mode, permission-aware tools, approvals, sandboxed execution, отслеживанием прогресса и финальной проверкой. До явного подтверждения планирование не выполняет изменений. |
 | Inference | Опциональный multi-provider model gateway с отдельными tokens, usage controls, OpenAI-compatible API и управляемой настройкой Codex или Claude Code через `@wiolett/gateway-inference`. |
 | Administration | OIDC, password, email-code и passkey login, group-based и дополнительные per-user permissions, scoped programmatic access, audit logs, setup state, updates и license controls. |
 
@@ -161,6 +163,7 @@ Gateway уже ориентирован на production operations, а не на
 - [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
 - [x] Управляемый в настройках Gateway экспорт audit events в SIEM с зашифрованной аутентификацией bearer, HMAC-SHA256 или custom header.
 - [x] Опциональный ClickHouse-backed structured logging и опциональный AI Workspace.
+- [x] AI Workspace Scenarios и Plan Mode с проверенными планами, явным подтверждением выполнения, управлением прогрессом и финальной проверкой.
 - [x] Опциональный multi-provider inference gateway с OpenAI-compatible и harness-specific APIs.
 - [x] View-based, resource-scoped permission model with filtered list visibility.
 - [x] Hardened OIDC/OAuth flows, setup lockout, fail-closed public endpoints, and signed update trust.
@@ -223,7 +226,7 @@ Managed services продолжают работать. Existing nginx configs �
 <details>
 <summary><strong>AI Workspace обязателен?</strong></summary>
 
-Нет. Он опционален и отключен по умолчанию. Gateway не отправляет данные AI provider, пока администратор не включит AI Workspace и не настроит provider.
+Нет. Он опционален и отключен по умолчанию. Gateway не отправляет данные AI provider, пока администратор не включит AI Workspace и не настроит provider. Оператор может начать с готового Scenario или выбрать Plan Mode для подготовки проверенного и понятного плана; до явного подтверждения реализации никаких изменений не выполняется.
 </details>
 
 ## Планы и лицензирование

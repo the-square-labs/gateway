@@ -273,6 +273,13 @@ To use it:
 5. For Gateway Inference mode, choose a published default model and whether users may select another model they can access.
 6. Review tool access and approval behavior.
 
+AI Workspace offers two structured starting points in addition to free-form requests:
+
+- **Scenarios** provide guided operational workflows while preserving the same permissions, approvals, and audit logging as a free-form request.
+- **Plan Mode** researches and validates a multi-step change without performing mutations. Select Plan manually for any request; AI Workspace can also enter it automatically for complex, research-heavy, or materially risky work.
+
+Plan Mode publishes a structured Plan Block for review. Choose **Implement** to begin, **Refine** to request another planning pass, or provide a custom instruction. Nothing mutates before **Implement** is explicitly confirmed. During execution, the progress block shows the active step and supports pause, resume, and cancel. A separate verification run completes the plan after implementation.
+
 Operational notes:
 
 - No data is sent to an AI provider until an administrator enables AI Workspace.
@@ -287,6 +294,7 @@ Operational notes:
 - If a user's API budget is disabled, models backed only by API-provider connections are hidden from that user in both AI Workspace and Inference model catalogs.
 - OpenAI-compatible provider values are preserved while Gateway Inference is selected. Disabling Inference restores the previous OpenAI-compatible configuration; if none exists, AI Workspace is disabled.
 - Supported image attachments and generated artifacts are stored and previewed through Gateway-managed artifact routes.
+- Each Work Session can have one active plan. Plans in separate Work Sessions can execute independently.
 
 ## Notifications And Status Pages
 
