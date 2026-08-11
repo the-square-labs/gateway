@@ -133,23 +133,20 @@ domainRoutes.openapi({ ...searchDomainsRoute, middleware: requireScope('domains:
 });
 
 // Preview domain DNS (must be before /:id)
-domainRoutes.openapi(
-  { ...previewDomainRoute, middleware: requireScope('domains:create') },
-  async (c) => {
-    const body = await c.req.json();
-    const input = PreviewDomainSchema.parse(body);
-    const domainsService = container.resolve(DomainsService);
-    try {
-      const preview = await domainsService.previewDomain(input);
-      return c.json({ data: preview });
-    } catch (err) {
-      if (err instanceof AppError) {
-        return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);
-      }
-      return c.json({ code: 'ERROR', message: err instanceof Error ? err.message : 'Failed to preview domain' }, 400);
+domainRoutes.openapi({ ...previewDomainRoute, middleware: requireScope('domains:create') }, async (c) => {
+  const body = await c.req.json();
+  const input = PreviewDomainSchema.parse(body);
+  const domainsService = container.resolve(DomainsService);
+  try {
+    const preview = await domainsService.previewDomain(input);
+    return c.json({ data: preview });
+  } catch (err) {
+    if (err instanceof AppError) {
+      return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);
     }
+    return c.json({ code: 'ERROR', message: err instanceof Error ? err.message : 'Failed to preview domain' }, 400);
   }
-);
+});
 
 // Get domain detail with usage
 domainRoutes.openapi({ ...getDomainRoute, middleware: requireScope('domains:view') }, async (c) => {
@@ -163,28 +160,25 @@ domainRoutes.openapi({ ...getDomainRoute, middleware: requireScope('domains:view
 });
 
 // Create domain
-domainRoutes.openapi(
-  { ...createDomainRoute, middleware: requireScope('domains:create') },
-  async (c) => {
-    const user = c.get('user')!;
-    const body = await c.req.json();
-    const input = CreateDomainSchema.parse(body);
-    const domainsService = container.resolve(DomainsService);
-    try {
-      const domain = await domainsService.createDomain(input, user.id);
-      return c.json({ data: domain }, 201);
-    } catch (err) {
-      if (err instanceof AppError) {
-        return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);
-      }
-      const msg = err instanceof Error ? err.message : 'Failed to create domain';
-      if (msg.includes('unique') || msg.includes('duplicate')) {
-        return c.json({ code: 'DUPLICATE', message: 'Domain already exists' }, 409);
-      }
-      return c.json({ code: 'ERROR', message: msg }, 400);
+domainRoutes.openapi({ ...createDomainRoute, middleware: requireScope('domains:create') }, async (c) => {
+  const user = c.get('user')!;
+  const body = await c.req.json();
+  const input = CreateDomainSchema.parse(body);
+  const domainsService = container.resolve(DomainsService);
+  try {
+    const domain = await domainsService.createDomain(input, user.id);
+    return c.json({ data: domain }, 201);
+  } catch (err) {
+    if (err instanceof AppError) {
+      return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);
     }
+    const msg = err instanceof Error ? err.message : 'Failed to create domain';
+    if (msg.includes('unique') || msg.includes('duplicate')) {
+      return c.json({ code: 'DUPLICATE', message: 'Domain already exists' }, 409);
+    }
+    return c.json({ code: 'ERROR', message: msg }, 400);
   }
-);
+});
 
 // Update domain
 domainRoutes.openapi({ ...updateDomainRoute, middleware: requireScope('domains:edit') }, async (c) => {
@@ -204,27 +198,24 @@ domainRoutes.openapi({ ...updateDomainRoute, middleware: requireScope('domains:e
 });
 
 // Delete domain
-domainRoutes.openapi(
-  { ...deleteDomainRoute, middleware: requireScope('domains:delete') },
-  async (c) => {
-    const user = c.get('user')!;
-    const domainsService = container.resolve(DomainsService);
-    try {
-      const rawBody = await c.req.text();
-      const input = rawBody ? DeleteDomainSchema.parse(JSON.parse(rawBody)) : {};
-      await domainsService.deleteDomain(c.req.param('id')!, user.id, input);
-      return c.json({ data: { success: true } });
-    } catch (err) {
-      if (err instanceof AppError) {
-        return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);
-      }
-      if (err instanceof SyntaxError) {
-        return c.json({ code: 'BAD_REQUEST', message: 'Malformed JSON in request body' }, 400);
-      }
-      return c.json({ code: 'ERROR', message: err instanceof Error ? err.message : 'Failed to delete domain' }, 400);
+domainRoutes.openapi({ ...deleteDomainRoute, middleware: requireScope('domains:delete') }, async (c) => {
+  const user = c.get('user')!;
+  const domainsService = container.resolve(DomainsService);
+  try {
+    const rawBody = await c.req.text();
+    const input = rawBody ? DeleteDomainSchema.parse(JSON.parse(rawBody)) : {};
+    await domainsService.deleteDomain(c.req.param('id')!, user.id, input);
+    return c.json({ data: { success: true } });
+  } catch (err) {
+    if (err instanceof AppError) {
+      return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);
     }
+    if (err instanceof SyntaxError) {
+      return c.json({ code: 'BAD_REQUEST', message: 'Malformed JSON in request body' }, 400);
+    }
+    return c.json({ code: 'ERROR', message: err instanceof Error ? err.message : 'Failed to delete domain' }, 400);
   }
-);
+});
 
 // Manual DNS check
 domainRoutes.openapi({ ...checkDomainDnsRoute, middleware: requireScope('domains:edit') }, async (c) => {

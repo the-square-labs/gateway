@@ -97,3 +97,14 @@ func TestTailLastNReadsLargeFileFromEnd(t *testing.T) {
 		t.Fatalf("unexpected lines: got %#v want %#v", lines, expected)
 	}
 }
+
+func TestParseLogLineReadsGatewayTimingFields(t *testing.T) {
+	line := `192.0.2.10 - - [11/Aug/2026:12:34:56 +0000] "GET /api HTTP/1.1" 200 1234 "-" "agent" 0.042 0.050`
+	entry := ParseLogLine("host-1", line)
+	if entry.Status != 200 || entry.BodyBytesSent != 1234 {
+		t.Fatalf("unexpected parsed response: %#v", entry)
+	}
+	if entry.UpstreamResponseTime != "0.042" || entry.RequestTime != "0.050" {
+		t.Fatalf("timing fields were not parsed: %#v", entry)
+	}
+}

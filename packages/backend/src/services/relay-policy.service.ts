@@ -28,6 +28,21 @@ import {
 
 export type { RelayGrantAssignment, RelayGrantBundle, RelayGrantClaims } from './relay-grant-issuer.service.js';
 
+export interface ProxyRouteRuntime {
+  routeId: string;
+  activeStreams: number;
+  openedTotal: string;
+  completedTotal: string;
+  failedTotal: string;
+  throttledTotal: string;
+  sourceToTargetBytes: string;
+  targetToSourceBytes: string;
+  setupLatencyP95Ms: number;
+  averageDurationMs: number;
+  lastActivityAt: string | null;
+  metricsSince: string;
+}
+
 const logger = createChildLogger('RelayPolicyService');
 
 export class RelayPolicyService {
@@ -36,6 +51,7 @@ export class RelayPolicyService {
   private lastGrantRefreshRevision = 0;
   private readonly grantIssuer: RelayGrantIssuerService;
   private readonly grantKeys: RelayGrantKeyService;
+  private relaySettingsSync: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly db: DrizzleClient,
@@ -52,6 +68,20 @@ export class RelayPolicyService {
   }
 
   setEventBus(events: EventBusService): void {
+    events.subscribe('system.config.changed', (payload) => {
+      if ((payload as { relayChanged?: unknown } | null)?.relayChanged !== true) return;
+      this.relaySettingsSync = this.relaySettingsSync
+        .then(async () => {
+          await this.db.transaction((tx) => bumpRelayPolicyRevision(tx));
+          await this.syncSnapshot();
+          await this.refreshAllNodeGrantsIfDue(true);
+        })
+        .catch((error) => {
+          logger.warn('Relay runtime settings distribution will be retried', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+    });
     events.subscribe('node.changed', (payload) => {
       const event = payload as { id?: unknown; action?: unknown } | null;
       if (event?.action !== 'deleted' || typeof event.id !== 'string') return;
@@ -249,6 +279,33 @@ export class RelayPolicyService {
     return routeId;
   }
 
+  async getProxyRouteRuntime(linkId: string): Promise<ProxyRouteRuntime | null> {
+    const [route] = await this.db
+      .select({ id: relayRoutes.id })
+      .from(relayRoutes)
+      .where(and(eq(relayRoutes.ownerKind, 'proxy_host_secure_link'), eq(relayRoutes.ownerId, linkId)))
+      .limit(1);
+    if (!route) return null;
+
+    const runtime = await this.relay.getRouteRuntime(route.id);
+    const lastActivityMillis = Number(runtime.lastActivityUnixMilliseconds || 0);
+    const metricsSinceMillis = Number(runtime.metricsSinceUnixMilliseconds || 0);
+    return {
+      routeId: runtime.routeId,
+      activeStreams: Number(runtime.activeTunnels || 0),
+      openedTotal: runtime.openedTotal,
+      completedTotal: runtime.completedTotal,
+      failedTotal: runtime.failedTotal,
+      throttledTotal: runtime.throttledTotal,
+      sourceToTargetBytes: runtime.sourceToTargetBytes,
+      targetToSourceBytes: runtime.targetToSourceBytes,
+      setupLatencyP95Ms: Number(runtime.setupLatencyP95Microseconds || 0) / 1000,
+      averageDurationMs: Number(runtime.averageDurationMilliseconds || 0),
+      lastActivityAt: lastActivityMillis > 0 ? new Date(lastActivityMillis).toISOString() : null,
+      metricsSince: new Date(metricsSinceMillis > 0 ? metricsSinceMillis : Date.now()).toISOString(),
+    };
+  }
+
   async ensureGatewayRoute(
     managedDatabaseId: string,
     targetNodeId: string,
@@ -397,7 +454,11 @@ export class RelayPolicyService {
   }
 
   async getNodeGrantBundle(nodeId: string): Promise<RelayGrantBundle> {
-    return this.grantIssuer.getNodeGrantBundle(nodeId);
+    const [bundle, config] = await Promise.all([
+      this.grantIssuer.getNodeGrantBundle(nodeId),
+      this.settings.getConfig(),
+    ]);
+    return { ...bundle, dataLanes: config.relay.dataLanes, readChunkBytes: config.relay.readChunkBytes };
   }
 
   async issueGatewayConnectGrant(routeId: string, appCertificateFingerprint: string) {
@@ -457,6 +518,7 @@ export class RelayPolicyService {
   }
 
   private async buildSnapshot(): Promise<RelayPolicySnapshot> {
+    const relaySettings = (await this.settings.getConfig()).relay;
     return this.db.transaction(
       async (tx) => {
         const [[state], keys, endpoints, routes] = await Promise.all([
@@ -477,6 +539,12 @@ export class RelayPolicyService {
         return {
           revision: String(state.revision),
           gatewayInstanceId: state.gatewayInstanceId,
+          admissionPolicy: {
+            enabled: relaySettings.adaptiveAdmissionEnabled,
+            proxyTargetPressurePercent: relaySettings.proxyTargetPressurePercent,
+            databaseReservePercent: relaySettings.databaseReservePercent,
+            hardPressurePercent: relaySettings.hardPressurePercent,
+          },
           publicKeys: keys.map((key) => ({ keyId: key.keyId, publicKey: Buffer.from(key.publicKey, 'base64') })),
           endpoints: activeEndpoints.map((endpoint) => ({
             endpointId: endpoint.id,
@@ -498,6 +566,7 @@ export class RelayPolicyService {
               maxConcurrentSessions: route.maxConcurrentSessions,
               maxFrameBytes: route.maxFrameBytes,
               disableIdleTimeout: route.ownerKind === 'proxy_host_secure_link',
+              trafficClass: route.ownerKind === 'proxy_host_secure_link' ? ('proxy' as const) : ('database' as const),
             })),
         };
       },

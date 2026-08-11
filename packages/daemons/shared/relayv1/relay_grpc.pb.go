@@ -186,6 +186,7 @@ var TunnelBroker_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	RelayAdmin_GetHealth_FullMethodName              = "/relay.v1.RelayAdmin/GetHealth"
+	RelayAdmin_GetRouteRuntime_FullMethodName        = "/relay.v1.RelayAdmin/GetRouteRuntime"
 	RelayAdmin_ApplySnapshot_FullMethodName          = "/relay.v1.RelayAdmin/ApplySnapshot"
 	RelayAdmin_ReloadIdentity_FullMethodName         = "/relay.v1.RelayAdmin/ReloadIdentity"
 	RelayAdmin_CommitIdentityRotation_FullMethodName = "/relay.v1.RelayAdmin/CommitIdentityRotation"
@@ -199,6 +200,7 @@ const (
 // app service identity.
 type RelayAdminClient interface {
 	GetHealth(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
+	GetRouteRuntime(ctx context.Context, in *RouteRuntimeRequest, opts ...grpc.CallOption) (*RouteRuntimeResponse, error)
 	ApplySnapshot(ctx context.Context, in *ApplySnapshotRequest, opts ...grpc.CallOption) (*ApplySnapshotResponse, error)
 	ReloadIdentity(ctx context.Context, in *ReloadIdentityRequest, opts ...grpc.CallOption) (*ReloadIdentityResponse, error)
 	CommitIdentityRotation(ctx context.Context, in *CommitIdentityRotationRequest, opts ...grpc.CallOption) (*CommitIdentityRotationResponse, error)
@@ -216,6 +218,16 @@ func (c *relayAdminClient) GetHealth(ctx context.Context, in *HealthRequest, opt
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HealthResponse)
 	err := c.cc.Invoke(ctx, RelayAdmin_GetHealth_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *relayAdminClient) GetRouteRuntime(ctx context.Context, in *RouteRuntimeRequest, opts ...grpc.CallOption) (*RouteRuntimeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RouteRuntimeResponse)
+	err := c.cc.Invoke(ctx, RelayAdmin_GetRouteRuntime_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +272,7 @@ func (c *relayAdminClient) CommitIdentityRotation(ctx context.Context, in *Commi
 // app service identity.
 type RelayAdminServer interface {
 	GetHealth(context.Context, *HealthRequest) (*HealthResponse, error)
+	GetRouteRuntime(context.Context, *RouteRuntimeRequest) (*RouteRuntimeResponse, error)
 	ApplySnapshot(context.Context, *ApplySnapshotRequest) (*ApplySnapshotResponse, error)
 	ReloadIdentity(context.Context, *ReloadIdentityRequest) (*ReloadIdentityResponse, error)
 	CommitIdentityRotation(context.Context, *CommitIdentityRotationRequest) (*CommitIdentityRotationResponse, error)
@@ -275,6 +288,9 @@ type UnimplementedRelayAdminServer struct{}
 
 func (UnimplementedRelayAdminServer) GetHealth(context.Context, *HealthRequest) (*HealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetHealth not implemented")
+}
+func (UnimplementedRelayAdminServer) GetRouteRuntime(context.Context, *RouteRuntimeRequest) (*RouteRuntimeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRouteRuntime not implemented")
 }
 func (UnimplementedRelayAdminServer) ApplySnapshot(context.Context, *ApplySnapshotRequest) (*ApplySnapshotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApplySnapshot not implemented")
@@ -320,6 +336,24 @@ func _RelayAdmin_GetHealth_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(RelayAdminServer).GetHealth(ctx, req.(*HealthRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RelayAdmin_GetRouteRuntime_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RouteRuntimeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RelayAdminServer).GetRouteRuntime(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RelayAdmin_GetRouteRuntime_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RelayAdminServer).GetRouteRuntime(ctx, req.(*RouteRuntimeRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -388,6 +422,10 @@ var RelayAdmin_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetHealth",
 			Handler:    _RelayAdmin_GetHealth_Handler,
+		},
+		{
+			MethodName: "GetRouteRuntime",
+			Handler:    _RelayAdmin_GetRouteRuntime_Handler,
 		},
 		{
 			MethodName: "ApplySnapshot",

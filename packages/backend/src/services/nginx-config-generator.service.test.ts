@@ -56,6 +56,34 @@ describe('NginxConfigGenerator proxy TLS and ACL rendering', () => {
     expect(regular).not.toContain('# gateway-managed-secure-link-upstream');
   });
 
+  it('applies inherited per-IP request and concurrent connection limits', () => {
+    const rendered = new NginxConfigGenerator({} as never).generateConfig(proxyHost);
+
+    expect(rendered).toContain('rate=1000r/s;');
+    expect(rendered).toContain('burst=3000 nodelay;');
+    expect(rendered).toContain('limit_conn_zone $binary_remote_addr zone=connlimit_');
+    expect(rendered).toContain('limit_conn connlimit_11111111-1111-4111-8111-111111111111 1000;');
+    expect(rendered).toContain('limit_conn_status 429;');
+  });
+
+  it('allows custom per-IP limits or disables both request and connection limiting', () => {
+    const custom = new NginxConfigGenerator({} as never).generateConfig({
+      ...proxyHost,
+      rateLimitMode: 'custom',
+      rateLimitOptions: { requestsPerSecond: 10, burst: 20, connectionsPerIp: 30 },
+    });
+    const disabled = new NginxConfigGenerator({} as never).generateConfig({
+      ...proxyHost,
+      rateLimitMode: 'disabled',
+    });
+
+    expect(custom).toContain('rate=10r/s;');
+    expect(custom).toContain('burst=20 nodelay;');
+    expect(custom).toContain('limit_conn connlimit_11111111-1111-4111-8111-111111111111 30;');
+    expect(disabled).not.toContain('limit_req_zone');
+    expect(disabled).not.toContain('limit_conn_zone');
+  });
+
   it('uses shared TLS policy and scopes a basic-auth-only ACL to the upstream', () => {
     const rendered = new NginxConfigGenerator({} as never).generateConfig(proxyHost);
 

@@ -23,16 +23,6 @@
     },
     {
       "from_id": "h0g48t5u",
-      "to_id": "e5deql0f",
-      "relation": "related_to",
-      "weight": 0.4306,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1786064967380,
-      "updated_at": 1786064967380
-    },
-    {
-      "from_id": "h0g48t5u",
       "to_id": "gnonxe58",
       "relation": "related_to",
       "weight": 0.4026,

@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 )
+
+var ErrMaterialUpdating = errors.New("relay identity material is being updated")
 
 type TrustManifest struct {
 	Version                   int    `json:"version"`
@@ -92,7 +95,7 @@ func (s *Store) Reload(operationID string) error {
 
 func (s *Store) readSnapshot() (*Snapshot, error) {
 	if _, err := os.Stat(filepath.Join(s.dir, ".updating")); err == nil {
-		return nil, fmt.Errorf("relay identity material is being updated")
+		return nil, ErrMaterialUpdating
 	}
 	read := func(name string) ([]byte, error) { return os.ReadFile(filepath.Join(s.dir, name)) }
 	caPEM, err := read("system-ca.crt")
@@ -144,7 +147,7 @@ func (s *Store) readSnapshot() (*Snapshot, error) {
 		return nil, fmt.Errorf("relay app client certificate does not match trust manifest")
 	}
 	if _, err := os.Stat(filepath.Join(s.dir, ".updating")); err == nil {
-		return nil, fmt.Errorf("relay identity material changed during reload")
+		return nil, fmt.Errorf("relay identity material changed during reload: %w", ErrMaterialUpdating)
 	}
 	return &Snapshot{SystemCA: pool, SystemCAPEM: caPEM, External: external, AppClient: appClient, RelayClient: relayClient, Trust: trust}, nil
 }

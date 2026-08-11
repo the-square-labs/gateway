@@ -36,7 +36,7 @@ class MockWebSocket {
   readyState = MockWebSocket.CONNECTING;
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event?: { code?: number; reason?: string }) => void) | null = null;
   onerror: (() => void) | null = null;
   sent: string[] = [];
 
@@ -211,11 +211,25 @@ describe("eventStream", () => {
     MockWebSocket.instances[0]?.open();
     expect(onReconnect).not.toHaveBeenCalled();
 
-    MockWebSocket.instances[0]?.onclose?.();
+    MockWebSocket.instances[0]?.onclose?.({});
     await vi.advanceTimersByTimeAsync(1_000);
     MockWebSocket.instances[1]?.open();
 
     expect(onReconnect).toHaveBeenCalledTimes(1);
     unsubscribe();
+  });
+
+  it("opens the restarting screen when the server closes the event stream for restart", async () => {
+    const { eventStream } = await import("@/services/event-stream");
+    const { useAppStatusStore } = await import("@/stores/app-status");
+    useAppStatusStore.setState({ gatewayRestartingActive: false });
+    eventStream.start();
+    vi.runAllTimers();
+    const socket = MockWebSocket.instances[0];
+    socket?.open();
+
+    socket?.onclose?.({ code: 1012, reason: "Service Restart" });
+
+    expect(useAppStatusStore.getState().gatewayRestartingActive).toBe(true);
   });
 });

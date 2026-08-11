@@ -237,6 +237,8 @@ message SyncRelayGrantsCommand {
   repeated RelayGrantAssignment grants = 2;
   // Monotonic creation time for grant refreshes within one policy revision.
   int64 generated_at_unix_ms = 3;
+  uint32 data_lanes = 4;
+  uint32 read_chunk_bytes = 5;
 }
 
 message RelayGrantAssignment {
@@ -441,6 +443,8 @@ message ReadGlobalConfigCommand {}
 // Request traffic stats from daemon log parsing — response JSON is in CommandResult.detail
 message RequestTrafficStatsCommand {
   int32 tail_lines = 1; // Number of recent log lines to analyze (default 200)
+  string host_id = 2; // Optional proxy host UUID; empty scans all access logs
+  int32 window_seconds = 3; // Optional rolling window for live host metrics
 }
 
 // ─── Docker Commands ────────────────────────────────────────────────

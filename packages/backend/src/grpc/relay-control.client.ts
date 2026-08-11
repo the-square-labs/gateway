@@ -34,7 +34,14 @@ export interface RelayPolicySnapshot {
     maxConcurrentSessions: number;
     maxFrameBytes: number;
     disableIdleTimeout: boolean;
+    trafficClass: 'proxy' | 'database';
   }>;
+  admissionPolicy: {
+    enabled: boolean;
+    proxyTargetPressurePercent: number;
+    databaseReservePercent: number;
+    hardPressurePercent: number;
+  };
 }
 
 interface RelayTunnelMessage {
@@ -116,6 +123,35 @@ export interface RelayHealthResponse {
   liveness: boolean;
   readiness: boolean;
   reason: string;
+  activeProxyTunnels?: string;
+  activeDatabaseTunnels?: string;
+  throttledProxyTotal?: string;
+  throttledDatabaseTotal?: string;
+  pressurePercent?: number;
+  cpuPressurePercent?: number;
+  memoryPressurePercent?: number;
+  fdPressurePercent?: number;
+  admissionState?: string;
+  memoryRssBytes?: string;
+  heapInUseBytes?: string;
+  memoryLimitBytes?: string;
+  openFileDescriptors?: string;
+  fileDescriptorLimit?: string;
+}
+
+export interface RelayRouteRuntimeResponse {
+  routeId: string;
+  activeTunnels: string;
+  openedTotal: string;
+  completedTotal: string;
+  failedTotal: string;
+  throttledTotal: string;
+  sourceToTargetBytes: string;
+  targetToSourceBytes: string;
+  setupLatencyP95Microseconds: string;
+  averageDurationMilliseconds: string;
+  lastActivityUnixMilliseconds: string;
+  metricsSinceUnixMilliseconds: string;
 }
 
 export interface RelayControlClientOptions {
@@ -168,6 +204,12 @@ export class RelayControlClient {
     await this.convergePendingIdentityReload(timeoutMs).catch(() => undefined);
     await this.flushPendingIdentityCommit(timeoutMs).catch(() => undefined);
     return this.unary('GetHealth', {}, timeoutMs) as Promise<RelayHealthResponse>;
+  }
+
+  async getRouteRuntime(routeId: string, timeoutMs = 2_000): Promise<RelayRouteRuntimeResponse> {
+    await this.convergePendingIdentityReload(timeoutMs).catch(() => undefined);
+    await this.flushPendingIdentityCommit(timeoutMs).catch(() => undefined);
+    return this.unary('GetRouteRuntime', { routeId }, timeoutMs) as Promise<RelayRouteRuntimeResponse>;
   }
 
   async applySnapshot(

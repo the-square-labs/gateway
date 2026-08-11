@@ -6,11 +6,20 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 )
 
-const MaxChunkBytes = 1024 * 1024
+const (
+	MaxChunkBytes     = 1024 * 1024
+	DefaultChunkBytes = 32 * 1024
+)
+
+var readBufferPool = sync.Pool{New: func() any {
+	buffer := make([]byte, DefaultChunkBytes)
+	return &buffer
+}}
 
 type FrameStream interface {
 	Send(*relayv1.TunnelFrame) error
@@ -27,11 +36,18 @@ type result struct {
 // stream. It deliberately has no idle deadline: lifecycle is controlled by
 // TCP close, half-close, relay revocation, or the supplied context.
 func Bridge(ctx context.Context, connection net.Conn, stream FrameStream, maxFrame int, cancel context.CancelFunc) error {
+	return BridgeWithChunk(ctx, connection, stream, maxFrame, DefaultChunkBytes, cancel)
+}
+
+func BridgeWithChunk(ctx context.Context, connection net.Conn, stream FrameStream, maxFrame, readChunk int, cancel context.CancelFunc) error {
 	if maxFrame <= 0 || maxFrame > MaxChunkBytes {
 		maxFrame = MaxChunkBytes
 	}
+	if readChunk <= 0 || readChunk > maxFrame {
+		readChunk = DefaultChunkBytes
+	}
 	completed := make(chan result, 2)
-	go sendLocal(connection, stream, maxFrame, completed)
+	go sendLocal(connection, stream, readChunk, completed)
 	go receiveRemote(connection, stream, maxFrame, completed)
 
 	var localDone, remoteDone, terminated bool
@@ -68,8 +84,16 @@ func Bridge(ctx context.Context, connection net.Conn, stream FrameStream, maxFra
 	return bridgeErr
 }
 
-func sendLocal(connection net.Conn, stream FrameStream, maxFrame int, completed chan<- result) {
-	buffer := make([]byte, maxFrame)
+func sendLocal(connection net.Conn, stream FrameStream, readChunk int, completed chan<- result) {
+	var buffer []byte
+	var pooled *[]byte
+	if readChunk == DefaultChunkBytes {
+		pooled = readBufferPool.Get().(*[]byte)
+		buffer = *pooled
+		defer readBufferPool.Put(pooled)
+	} else {
+		buffer = make([]byte, readChunk)
+	}
 	for {
 		n, err := connection.Read(buffer)
 		if n > 0 {

@@ -6,6 +6,13 @@ Gateway installs as a small Docker Compose stack containing the application, a l
 
 ## Requirements
 
+| Profile | CPU | Memory | Free SSD capacity |
+|---------|-----|--------|-------------------|
+| Minimum | 2 vCPU | 4 GB RAM | 32 GB |
+| Recommended | 4 vCPU | 8 GB RAM | 64 GB |
+
+The disk figures are free capacity after the operating system is installed. When Gateway-managed local ClickHouse logging is enabled, reserve an additional 32 GB minimum or 128 GB recommended. Actual logging storage depends on ingest volume and retention. External ClickHouse requires no additional local logging storage on the Gateway host.
+
 - Linux with Docker Engine and Docker Compose v2.
 - OpenSSL and curl.
 - Access to the Gateway image registry and GitLab release API.

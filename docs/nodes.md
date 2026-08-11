@@ -15,6 +15,15 @@ Gateway manages infrastructure hosts through small Go daemons. Each daemon conne
 
 Use a monitoring node when you want host metrics but do not want to grant Gateway proxy or Docker management on that host.
 
+## Host Resource Sizing
+
+Gateway daemons have a small resource footprint compared with the services they manage, so they do not have separate CPU, memory, or disk requirements. Size each host for its operating system and actual workload:
+
+- nginx nodes for nginx traffic, TLS termination, and log volume;
+- Docker nodes for the containers and deployments running on them;
+- database nodes for the CPU, memory, swap, and storage allocated to managed databases;
+- monitoring nodes according to the existing host workload being observed.
+
 ## Quick Setup
 
 1. Open Gateway.

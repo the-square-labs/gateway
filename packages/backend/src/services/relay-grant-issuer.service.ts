@@ -44,6 +44,8 @@ export interface RelayGrantBundle {
   revision: string;
   generatedAtUnixMs: string;
   grants: RelayGrantAssignment[];
+  dataLanes?: number;
+  readChunkBytes?: number;
 }
 
 export class RelayGrantIssuerService {

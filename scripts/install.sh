@@ -155,6 +155,17 @@ run_root_quiet() {
   run_quiet "$label" sudo "$@"
 }
 
+run_root_best_effort() {
+  local label="$1"
+  shift
+  if [[ $EUID -eq 0 ]]; then
+    "$@" </dev/null >>"$LOG_FILE" 2>&1 || true
+    return
+  fi
+  command_exists sudo || die "${label} requires root privileges. Re-run as root or install sudo."
+  sudo "$@" </dev/null >>"$LOG_FILE" 2>&1 || true
+}
+
 detect_docker_os() {
   if [[ -f /etc/os-release ]]; then
     # shellcheck disable=SC1091
@@ -264,14 +275,14 @@ remove_conflicting_docker_packages() {
   local repo_family="$1"
   case "$repo_family" in
     ubuntu|debian)
-      run_root_quiet "Removing conflicting Docker packages" apt-get remove -y docker.io docker-compose docker-compose-v2 docker-doc podman-docker containerd runc
+      run_root_best_effort "Removing conflicting Docker packages" apt-get remove -y docker.io docker-compose docker-compose-v2 docker-doc podman-docker containerd runc
       DOCKER_APT_UPDATED=0
       ;;
     fedora|centos|rhel)
       if command_exists dnf; then
-        run_root_quiet "Removing conflicting Docker packages" dnf remove -y docker docker-client docker-client-latest docker-common docker-latest docker-latest-logrotate docker-logrotate docker-engine podman runc
+        run_root_best_effort "Removing conflicting Docker packages" dnf remove -y docker docker-client docker-client-latest docker-common docker-latest docker-latest-logrotate docker-logrotate docker-engine podman runc
       else
-        run_root_quiet "Removing conflicting Docker packages" yum remove -y docker docker-client docker-client-latest docker-common docker-latest docker-latest-logrotate docker-logrotate docker-engine podman runc
+        run_root_best_effort "Removing conflicting Docker packages" yum remove -y docker docker-client docker-client-latest docker-common docker-latest docker-latest-logrotate docker-logrotate docker-engine podman runc
       fi
       ;;
   esac

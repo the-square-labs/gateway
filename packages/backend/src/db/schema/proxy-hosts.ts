@@ -44,7 +44,10 @@ export interface CacheOptions {
 export interface RateLimitOptions {
   requestsPerSecond: number;
   burst?: number;
+  connectionsPerIp?: number;
 }
+
+export type RateLimitMode = 'inherit' | 'custom' | 'disabled';
 
 export interface RewriteRule {
   source: string;
@@ -108,6 +111,7 @@ export const proxyHosts = pgTable(
     cacheEnabled: boolean('cache_enabled').notNull().default(false),
     cacheOptions: jsonb('cache_options').$type<CacheOptions>(),
     rateLimitEnabled: boolean('rate_limit_enabled').notNull().default(false),
+    rateLimitMode: varchar('rate_limit_mode', { length: 16 }).$type<RateLimitMode>().notNull().default('inherit'),
     rateLimitOptions: jsonb('rate_limit_options').$type<RateLimitOptions>(),
     customRewrites: jsonb('custom_rewrites').$type<RewriteRule[]>().default([]),
 

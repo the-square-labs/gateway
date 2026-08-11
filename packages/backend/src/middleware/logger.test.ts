@@ -15,6 +15,8 @@ describe('redactRequestPath', () => {
 
   it('preserves non-webhook request paths', () => {
     expect(redactRequestPath('/api/docker/nodes/node-1/containers')).toBe('/api/docker/nodes/node-1/containers');
-    expect(redactRequestPath('/api/webhooks/dockerish/sensitive-token')).toBe('/api/webhooks/dockerish/sensitive-token');
+    expect(redactRequestPath('/api/webhooks/dockerish/sensitive-token')).toBe(
+      '/api/webhooks/dockerish/sensitive-token'
+    );
   });
 });

@@ -81,27 +81,15 @@ describe('AIService domain tool routing', () => {
         deleteDns: false,
       })
     ).resolves.toEqual({ result: { success: true }, invalidateStores: ['domains'] });
-    expect(domainsService.deleteDomain).toHaveBeenCalledWith(
-      'domain-1',
-      'user-1',
-      { deleteDns: false }
-    );
+    expect(domainsService.deleteDomain).toHaveBeenCalledWith('domain-1', 'user-1', { deleteDns: false });
 
     await expect(
-      service.executeTool(
-        { ...BASE_USER, scopes: ['domains:delete'] },
-        'delete_domain',
-        {
-          domainId: 'domain-1',
-          deleteDns: true,
-        }
-      )
+      service.executeTool({ ...BASE_USER, scopes: ['domains:delete'] }, 'delete_domain', {
+        domainId: 'domain-1',
+        deleteDns: true,
+      })
     ).resolves.toEqual({ result: { success: true }, invalidateStores: ['domains'] });
-    expect(domainsService.deleteDomain).toHaveBeenLastCalledWith(
-      'domain-1',
-      'user-1',
-      { deleteDns: true }
-    );
+    expect(domainsService.deleteDomain).toHaveBeenLastCalledWith('domain-1', 'user-1', { deleteDns: true });
   });
 
   it('routes managed domain get/update/check operations with resource scopes', async () => {
@@ -113,11 +101,10 @@ describe('AIService domain tool routing', () => {
     const service = createService(domainsService);
 
     await expect(
-      service.executeTool(
-        { ...BASE_USER, scopes: ['integrations:cloudflare:dns:view'] },
-        'manage_domain',
-        { operation: 'get', domainId: 'domain-1' }
-      )
+      service.executeTool({ ...BASE_USER, scopes: ['integrations:cloudflare:dns:view'] }, 'manage_domain', {
+        operation: 'get',
+        domainId: 'domain-1',
+      })
     ).resolves.toMatchObject({ error: expect.stringContaining('domains:view'), invalidateStores: [] });
     expect(domainsService.getDomain).not.toHaveBeenCalled();
 

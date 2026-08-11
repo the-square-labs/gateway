@@ -94,11 +94,10 @@ describe('AIService database tool routing', () => {
     expect(databaseService.testSavedConnection).not.toHaveBeenCalled();
 
     await expect(
-      service.executeTool(
-        { ...BASE_USER, scopes: ['databases:edit:db-1'] },
-        'manage_database_connection',
-        { operation: 'test', databaseId: 'db-1' }
-      )
+      service.executeTool({ ...BASE_USER, scopes: ['databases:edit:db-1'] }, 'manage_database_connection', {
+        operation: 'test',
+        databaseId: 'db-1',
+      })
     ).resolves.toMatchObject({ result: { ok: true } });
     expect(databaseService.testSavedConnection).toHaveBeenCalledWith('db-1', 'user-1');
   });

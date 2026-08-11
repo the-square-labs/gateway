@@ -7,6 +7,9 @@ vi.mock('@/db/schema/ssl-certificates.js', () => ({ sslCertificates: { id: 'ssl_
 vi.mock('@/db/schema/index.js', () => ({
   proxyHosts: {
     id: 'proxy_hosts.id',
+    enabled: 'proxy_hosts.enabled',
+    isSystem: 'proxy_hosts.is_system',
+    nodeId: 'proxy_hosts.node_id',
     upstreamKind: 'proxy_hosts.upstream_kind',
     secureLinkStatus: 'proxy_hosts.secure_link_status',
     type: 'proxy_hosts.type',
@@ -69,6 +72,111 @@ function makeActiveSecureHost(overrides: Record<string, unknown> = {}) {
 }
 
 describe('ProxyService legacy Docker link compatibility', () => {
+  it('collects runtime history in the background and coalesces overlapping rounds', async () => {
+    let releaseRuntime!: (value: Record<string, unknown>) => void;
+    const runtimePending = new Promise<Record<string, unknown>>((resolve) => {
+      releaseRuntime = resolve;
+    });
+    const findMany = vi.fn().mockResolvedValue([{ id: 'host-1', nodeId: 'nginx-node' }]);
+    const getRuntime = vi.fn().mockReturnValue(runtimePending);
+    const requestTrafficStats = vi.fn().mockResolvedValue({ success: true, detail: null });
+    const service = new ProxyService(
+      { query: { proxyHosts: { findMany } } } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      { requestTrafficStats } as any,
+      {} as any,
+      {} as any,
+      { getRuntime } as any
+    );
+
+    const first = service.collectSecureLinkRuntimeSnapshots();
+    const overlapping = service.collectSecureLinkRuntimeSnapshots();
+
+    expect(overlapping).toBe(first);
+    await vi.waitFor(() => expect(getRuntime).toHaveBeenCalledOnce());
+    expect(findMany).toHaveBeenCalledOnce();
+    expect(getRuntime).toHaveBeenCalledOnce();
+    expect(requestTrafficStats).toHaveBeenCalledWith('nginx-node', 200, {
+      hostId: 'host-1',
+      windowSeconds: 15,
+    });
+
+    releaseRuntime({
+      routeId: 'route-1',
+      activeStreams: 0,
+      openedTotal: '0',
+      completedTotal: '0',
+      failedTotal: '0',
+      throttledTotal: '0',
+      sourceToTargetBytes: '0',
+      targetToSourceBytes: '0',
+      setupLatencyP95Ms: 0,
+      averageDurationMs: 0,
+      lastActivityAt: null,
+      metricsSince: '2026-08-11T11:00:00.000Z',
+    });
+    await first;
+
+    expect((service as any).secureLinkRuntimeHistory.get('host-1')).toHaveLength(1);
+  });
+
+  it('keeps a bounded backend runtime history and resets it on a Relay epoch change', () => {
+    const service = new ProxyService({} as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const runtime = (metricsSince: string, openedTotal: string) => ({
+      routeId: 'route-1',
+      activeStreams: 0,
+      openedTotal,
+      completedTotal: openedTotal,
+      failedTotal: '0',
+      throttledTotal: '0',
+      sourceToTargetBytes: '100',
+      targetToSourceBytes: '200',
+      setupLatencyP95Ms: 1,
+      averageDurationMs: 2,
+      lastActivityAt: null,
+      metricsSince,
+    });
+    const record = (service as any).recordSecureLinkRuntimeSnapshot.bind(service);
+
+    expect(
+      record('host-1', {
+        timestamp: '2026-08-11T12:00:00.000Z',
+        runtime: runtime('2026-08-11T11:00:00.000Z', '1'),
+        traffic: null,
+      })
+    ).toHaveLength(1);
+    expect(
+      record('host-1', {
+        timestamp: '2026-08-11T12:00:00.250Z',
+        runtime: runtime('2026-08-11T11:00:00.000Z', '2'),
+        traffic: null,
+      })
+    ).toMatchObject([{ runtime: { openedTotal: '2' } }]);
+    expect(
+      record('host-1', {
+        timestamp: '2026-08-11T12:00:02.000Z',
+        runtime: runtime('2026-08-11T11:00:00.000Z', '3'),
+        traffic: null,
+      })
+    ).toHaveLength(2);
+    expect(
+      record('host-1', {
+        timestamp: '2026-08-11T12:00:05.000Z',
+        runtime: runtime('2026-08-11T11:00:00.000Z', '4'),
+        traffic: null,
+      })
+    ).toHaveLength(3);
+    expect(
+      record('host-1', {
+        timestamp: '2026-08-11T12:00:10.000Z',
+        runtime: runtime('2026-08-11T12:00:09.000Z', '0'),
+        traffic: null,
+      })
+    ).toHaveLength(1);
+  });
+
   it('does not restore a stale legacy upstream when node resync races Secure Link cutover', async () => {
     const active = makeActiveSecureHost();
     const staleLegacy = makeActiveSecureHost({
@@ -111,13 +219,7 @@ describe('ProxyService legacy Docker link compatibility', () => {
       }),
       null
     );
-    expect(applyConfig).toHaveBeenCalledWith(
-      'nginx-node',
-      active.id,
-      'secure config',
-      false,
-      'managed_secure_link'
-    );
+    expect(applyConfig).toHaveBeenCalledWith('nginx-node', active.id, 'secure config', false, 'managed_secure_link');
   });
 
   it('does not replace the legacy endpoint when a complete edit form repeats the same Docker target', async () => {
@@ -271,6 +373,39 @@ describe('ProxyService legacy Docker link compatibility', () => {
     expect(dockerUpstreams.resolve).not.toHaveBeenCalled();
   });
 
+  it('does not force an E2E probe for an unchanged active link on a Docker snapshot', async () => {
+    const active = makeActiveSecureHost();
+    const db = {
+      query: { proxyHosts: { findMany: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([active]) } },
+    } as any;
+    const dockerUpstreams = {
+      resolve: vi.fn().mockResolvedValue({
+        upstreamKind: active.upstreamKind,
+        dockerNodeId: active.dockerNodeId,
+        dockerContainerName: active.dockerContainerName,
+        dockerDeploymentId: active.dockerDeploymentId,
+        dockerContainerPort: active.dockerContainerPort,
+        dockerProtocol: active.dockerProtocol,
+      }),
+    } as any;
+    const secureLinks = { reconcileExisting: vi.fn() } as any;
+    const service = new ProxyService(
+      db,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      dockerUpstreams,
+      secureLinks
+    );
+
+    await (service as any).reconcileDockerUpstreams(false);
+
+    expect(dockerUpstreams.resolve).toHaveBeenCalledWith(active, { allowPortRebind: true });
+    expect(secureLinks.reconcileExisting).not.toHaveBeenCalled();
+  });
+
   it('resumes an unchanged provisioning cutover after a Gateway restart', async () => {
     const provisioning = makeActiveSecureHost({
       forwardHost: '10.0.0.12',
@@ -282,11 +417,11 @@ describe('ProxyService legacy Docker link compatibility', () => {
       query: {
         proxyHosts: {
           findMany: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([provisioning]),
-		  findFirst: vi.fn().mockResolvedValue({
-			...provisioning,
-			secureLinkStatus: 'cutover_ready',
-			secureLinkMigratedAt: new Date(),
-		  }),
+          findFirst: vi.fn().mockResolvedValue({
+            ...provisioning,
+            secureLinkStatus: 'cutover_ready',
+            secureLinkMigratedAt: new Date(),
+          }),
         },
       },
     } as any;
@@ -301,8 +436,8 @@ describe('ProxyService legacy Docker link compatibility', () => {
       }),
     } as any;
     const secureLinks = {
-	  reconcileExisting: vi.fn().mockResolvedValue({ ...provisioning, secureLinkStatus: 'cutover_ready' }),
-	  commitCutover: vi.fn().mockResolvedValue(undefined),
+      reconcileExisting: vi.fn().mockResolvedValue({ ...provisioning, secureLinkStatus: 'cutover_ready' }),
+      commitCutover: vi.fn().mockResolvedValue(undefined),
       activate: vi.fn().mockResolvedValue(undefined),
     } as any;
     const applyConfig = vi.fn().mockResolvedValue({ success: true });

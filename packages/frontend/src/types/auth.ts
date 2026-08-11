@@ -130,6 +130,14 @@ export interface AuthProvisioningSettings {
     gatewayGrpcPublicTarget: string | null;
     gatewayGrpcLocalIp: string | null;
     relayAutoRecovery: boolean;
+    relay?: {
+      dataLanes: number;
+      readChunkBytes: number;
+      adaptiveAdmissionEnabled: boolean;
+      proxyTargetPressurePercent: number;
+      databaseReservePercent: number;
+      hardPressurePercent: number;
+    };
     relayGrantTtlHours: number;
     shutdown: {
       userRequestDrainSeconds: number;

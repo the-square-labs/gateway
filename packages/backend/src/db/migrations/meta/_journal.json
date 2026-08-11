@@ -757,6 +757,20 @@
       "when": 1786403411475,
       "tag": "0107_salty_the_renegades",
       "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1786461138856,
+      "tag": "0108_proxy_rate_limit_mode",
+      "breakpoints": true
+    },
+    {
+      "idx": 109,
+      "version": "7",
+      "when": 1786465615000,
+      "tag": "0109_relay_adaptive_admission",
+      "breakpoints": true
     }
   ]
 }

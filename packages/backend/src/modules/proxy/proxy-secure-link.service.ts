@@ -15,6 +15,9 @@ interface BindingDetail {
   targetNetwork?: string;
 }
 
+const PROXY_SECURE_LINK_PROBE_ATTEMPTS = 6;
+const PROXY_SECURE_LINK_PROBE_RETRY_MS = 500;
+
 export class ProxySecureLinkService {
   private eventBus?: EventBusService;
   private readonly targetNodeSyncs = new Map<string, Promise<void>>();
@@ -30,6 +33,10 @@ export class ProxySecureLinkService {
 
   setEventBus(eventBus: EventBusService): void {
     this.eventBus = eventBus;
+  }
+
+  async getRuntime(linkId: string) {
+    return this.relayPolicy.getProxyRouteRuntime(linkId);
   }
 
   async prepare(
@@ -82,36 +89,36 @@ export class ProxySecureLinkService {
       host.secureLinkTargetHost !== null ||
       host.dockerContainerPort !== target.applicationPort ||
       host.dockerHostPort !== target.targetPort;
-	const cutoverCommitted = host.secureLinkMigratedAt != null;
-	// Another caller may already have prepared and probed this exact generation
-	// and be between prepare() and commitCutover(). Keep that durable hand-off
-	// intact instead of reverting it to provisioning from a second reconciler.
-	if (!cutoverCommitted && host.secureLinkStatus === 'cutover_ready' && !changed) return host;
-	const activeUpdate = cutoverCommitted && (changed || host.secureLinkStatus === 'updating');
-	if (cutoverCommitted && host.secureLinkStatus === 'active' && !changed) {
-	  if (!force) return host;
-	  try {
-		await this.syncTargetNode(target.nodeId);
-		await this.relayPolicy.ensureProxySecureLink(host.id, host.nodeId, target.nodeId);
-		await this.syncSourceNode(host.nodeId);
-		const probe = await this.dispatch.probeProxySecureLink(host.nodeId, {
-		  linkId: host.id,
-		  scheme: host.forwardScheme ?? 'http',
-		  path: host.healthCheckUrl || '/',
-		  timeoutSeconds: 10,
-		});
-		if (!probe.httpStatus) throw new Error(probe.error || 'Secure Link end-to-end probe failed');
-		const [refreshed] = await this.db
-		  .update(proxyHosts)
-		  .set({ secureLinkLastError: null, updatedAt: new Date() })
-		  .where(and(eq(proxyHosts.id, host.id), eq(proxyHosts.secureLinkGeneration, host.secureLinkGeneration)))
-		  .returning();
-		return refreshed ?? host;
-	  } catch (error) {
-		await this.markCutoverError(host.id, error);
-		throw error;
-	  }
-	}
+    const cutoverCommitted = host.secureLinkMigratedAt != null;
+    // Another caller may already have prepared and probed this exact generation
+    // and be between prepare() and commitCutover(). Keep that durable hand-off
+    // intact instead of reverting it to provisioning from a second reconciler.
+    if (!cutoverCommitted && host.secureLinkStatus === 'cutover_ready' && !changed) return host;
+    const activeUpdate = cutoverCommitted && (changed || host.secureLinkStatus === 'updating');
+    if (cutoverCommitted && host.secureLinkStatus === 'active' && !changed) {
+      if (!force) return host;
+      try {
+        await this.syncTargetNode(target.nodeId);
+        await this.relayPolicy.ensureProxySecureLink(host.id, host.nodeId, target.nodeId);
+        await this.syncSourceNode(host.nodeId);
+        const probe = await this.probeSecureLink(host.nodeId, {
+          linkId: host.id,
+          scheme: host.forwardScheme ?? 'http',
+          path: host.healthCheckUrl || '/',
+          timeoutSeconds: 10,
+        });
+        if (!probe.httpStatus) throw new Error(probe.error || 'Secure Link end-to-end probe failed');
+        const [refreshed] = await this.db
+          .update(proxyHosts)
+          .set({ secureLinkLastError: null, updatedAt: new Date() })
+          .where(and(eq(proxyHosts.id, host.id), eq(proxyHosts.secureLinkGeneration, host.secureLinkGeneration)))
+          .returning();
+        return refreshed ?? host;
+      } catch (error) {
+        await this.markCutoverError(host.id, error);
+        throw error;
+      }
+    }
     const generation =
       host.secureLinkGeneration < 1
         ? 1
@@ -135,27 +142,27 @@ export class ProxySecureLinkService {
       .where(eq(proxyHosts.id, host.id));
 
     try {
-	  if (activeUpdate) {
-	    // Close the production path before mutating the in-place target binding.
-	    // The replacement source listener is intentionally unreachable from the
-	    // currently loaded Nginx config until probe and atomic config cutover.
-	    await this.relayPolicy.revokeOwner('proxy_host_secure_link', host.id);
-	    await this.syncSourceNode(host.nodeId, host.id);
-	  }
+      if (activeUpdate) {
+        // Close the production path before mutating the in-place target binding.
+        // The replacement source listener is intentionally unreachable from the
+        // currently loaded Nginx config until probe and atomic config cutover.
+        await this.relayPolicy.revokeOwner('proxy_host_secure_link', host.id);
+        await this.syncSourceNode(host.nodeId, host.id);
+      }
       await this.syncTargetNode(target.nodeId);
       await this.relayPolicy.ensureProxySecureLink(host.id, host.nodeId, target.nodeId);
-	  if (!activeUpdate) await this.syncSourceNode(host.nodeId);
-      const probe = await this.dispatch.probeProxySecureLink(host.nodeId, {
+      if (!activeUpdate) await this.syncSourceNode(host.nodeId);
+      const probe = await this.probeSecureLink(host.nodeId, {
         linkId: host.id,
         scheme: host.forwardScheme ?? 'http',
         path: host.healthCheckUrl || '/',
         timeoutSeconds: 10,
       });
       if (!probe.httpStatus) throw new Error(probe.error || 'Secure Link end-to-end probe failed');
-	  await this.db
-		.update(proxyHosts)
-		.set({ secureLinkStatus: 'cutover_ready', secureLinkLastError: null, updatedAt: new Date() })
-		.where(and(eq(proxyHosts.id, host.id), eq(proxyHosts.secureLinkGeneration, generation)));
+      await this.db
+        .update(proxyHosts)
+        .set({ secureLinkStatus: 'cutover_ready', secureLinkLastError: null, updatedAt: new Date() })
+        .where(and(eq(proxyHosts.id, host.id), eq(proxyHosts.secureLinkGeneration, generation)));
       const refreshed = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, host.id) });
       if (!refreshed?.secureLinkListenerPort) {
         throw new Error('Nginx daemon did not return a secure-link listener port');
@@ -210,20 +217,20 @@ export class ProxySecureLinkService {
   }
 
   async commitCutover(hostId: string): Promise<void> {
-	const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, hostId) });
-	if (!host || host.secureLinkGeneration < 1) throw new Error('Secure Link is not prepared for cutover');
-	if (host.secureLinkMigratedAt) return;
-	await this.db
-	  .update(proxyHosts)
-	  .set({ secureLinkMigratedAt: new Date(), updatedAt: new Date() })
-	  .where(eq(proxyHosts.id, hostId));
+    const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, hostId) });
+    if (!host || host.secureLinkGeneration < 1) throw new Error('Secure Link is not prepared for cutover');
+    if (host.secureLinkMigratedAt) return;
+    await this.db
+      .update(proxyHosts)
+      .set({ secureLinkMigratedAt: new Date(), updatedAt: new Date() })
+      .where(eq(proxyHosts.id, hostId));
   }
 
   async markCutoverError(hostId: string, error: unknown): Promise<void> {
-	await this.db
-	  .update(proxyHosts)
-	  .set({ secureLinkLastError: error instanceof Error ? error.message : String(error), updatedAt: new Date() })
-	  .where(eq(proxyHosts.id, hostId));
+    await this.db
+      .update(proxyHosts)
+      .set({ secureLinkLastError: error instanceof Error ? error.message : String(error), updatedAt: new Date() })
+      .where(eq(proxyHosts.id, hostId));
   }
 
   async cleanup(host: ProxyHostRow): Promise<void> {
@@ -257,10 +264,10 @@ export class ProxySecureLinkService {
       await this.db
         .update(proxyHosts)
         .set({
-		  ...(current?.upstreamKind === 'manual' ? { dockerNodeId: null } : {}),
-		  ...(current?.upstreamKind === 'manual' || current?.type === 'raw' || current?.rawConfigEnabled
-			? { secureLinkMigratedAt: null }
-			: {}),
+          ...(current?.upstreamKind === 'manual' ? { dockerNodeId: null } : {}),
+          ...(current?.upstreamKind === 'manual' || current?.type === 'raw' || current?.rawConfigEnabled
+            ? { secureLinkMigratedAt: null }
+            : {}),
           secureLinkGeneration: 0,
           secureLinkStatus: 'legacy',
           secureLinkLastError: null,
@@ -487,9 +494,9 @@ export class ProxySecureLinkService {
     }
   }
 
-	private async syncSourceNode(nodeId: string, rotateLinkId?: string): Promise<void> {
+  private async syncSourceNode(nodeId: string, rotateLinkId?: string): Promise<void> {
     const previous = this.sourceNodeSyncs.get(nodeId) ?? Promise.resolve();
-	const current = previous.catch(() => undefined).then(() => this.syncSourceNodeLocked(nodeId, rotateLinkId));
+    const current = previous.catch(() => undefined).then(() => this.syncSourceNodeLocked(nodeId, rotateLinkId));
     this.sourceNodeSyncs.set(nodeId, current);
     try {
       await current;
@@ -498,7 +505,7 @@ export class ProxySecureLinkService {
     }
   }
 
-	private async syncSourceNodeLocked(nodeId: string, rotateLinkId?: string): Promise<void> {
+  private async syncSourceNodeLocked(nodeId: string, rotateLinkId?: string): Promise<void> {
     const hosts = await this.db.query.proxyHosts.findMany({
       where: and(
         eq(proxyHosts.nodeId, nodeId),
@@ -514,8 +521,8 @@ export class ProxySecureLinkService {
         role: 'source' as const,
         generation: host.secureLinkGeneration,
         listenerPort: host.secureLinkListenerPort ?? 0,
-		sourceConfigManaged: host.secureLinkStatus === 'active' && host.type === 'proxy' && !host.rawConfigEnabled,
-		rotateListener: host.id === rotateLinkId,
+        sourceConfigManaged: host.secureLinkStatus === 'active' && host.type === 'proxy' && !host.rawConfigEnabled,
+        rotateListener: host.id === rotateLinkId,
       }))
     );
     if (!result.success) throw new Error(result.error || 'Nginx daemon rejected secure-link listeners');
@@ -531,5 +538,25 @@ export class ProxySecureLinkService {
     if (!detail) return [];
     const decoded = JSON.parse(detail) as { bindings?: BindingDetail[] };
     return Array.isArray(decoded.bindings) ? decoded.bindings : [];
+  }
+
+  private async probeSecureLink(
+    nodeId: string,
+    input: Parameters<NodeDispatchService['probeProxySecureLink']>[1]
+  ): Promise<Awaited<ReturnType<NodeDispatchService['probeProxySecureLink']>>> {
+    let lastError: unknown = new Error('Secure Link end-to-end probe failed');
+    for (let attempt = 0; attempt < PROXY_SECURE_LINK_PROBE_ATTEMPTS; attempt++) {
+      try {
+        const result = await this.dispatch.probeProxySecureLink(nodeId, input);
+        if (result.httpStatus) return result;
+        lastError = new Error(result.error || 'Secure Link end-to-end probe failed');
+      } catch (error) {
+        lastError = error;
+      }
+      if (attempt + 1 < PROXY_SECURE_LINK_PROBE_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, PROXY_SECURE_LINK_PROBE_RETRY_MS));
+      }
+    }
+    throw lastError;
   }
 }

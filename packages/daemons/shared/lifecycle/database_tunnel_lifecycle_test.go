@@ -18,6 +18,15 @@ type blockingRelayTunnelPlugin struct {
 	ended  chan int32
 }
 
+type laneRelayTunnelPlugin struct {
+	blockingRelayTunnelPlugin
+	lanes   int
+	changed chan struct{}
+}
+
+func (p *laneRelayTunnelPlugin) RelayTunnelLaneCount() int                  { return p.lanes }
+func (p *laneRelayTunnelPlugin) RelayTunnelRuntimeChanged() <-chan struct{} { return p.changed }
+
 func (p *blockingRelayTunnelPlugin) RunRelayTunnels(ctx context.Context, _ *grpc.ClientConn, _ string) {
 	start := p.starts.Add(1)
 	<-ctx.Done()
@@ -72,6 +81,37 @@ func TestProcessRelayTunnelIgnoresControlSessionCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("process shutdown did not cancel the tunnel")
 	}
+}
+
+func TestProcessRelayTunnelStartsConfiguredPhysicalLanes(t *testing.T) {
+	processCtx, cancelProcess := context.WithCancel(context.Background())
+	plugin := &laneRelayTunnelPlugin{
+		blockingRelayTunnelPlugin: blockingRelayTunnelPlugin{ended: make(chan int32, 8)},
+		lanes:                     4,
+		changed:                   make(chan struct{}, 1),
+	}
+	identityChanged := make(chan struct{}, 1)
+	var connections atomic.Int32
+	connect := func(context.Context) (*grpc.ClientConn, error) {
+		connections.Add(1)
+		return nil, nil
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	go runProcessRelayTunnel(processCtx, connect, plugin, "node-1", identityChanged, logger)
+
+	deadline := time.After(time.Second)
+	for plugin.starts.Load() != 4 {
+		select {
+		case <-deadline:
+			t.Fatalf("lane starts = %d, want 4", plugin.starts.Load())
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if got := connections.Load(); got != 4 {
+		t.Fatalf("lane connections = %d, want 4", got)
+	}
+	cancelProcess()
 }
 
 func TestProcessRelayTunnelReconnectsAfterCredentialRotation(t *testing.T) {

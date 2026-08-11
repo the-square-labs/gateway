@@ -16,6 +16,7 @@ service TunnelBroker {
 // app service identity.
 service RelayAdmin {
   rpc GetHealth(HealthRequest) returns (HealthResponse);
+  rpc GetRouteRuntime(RouteRuntimeRequest) returns (RouteRuntimeResponse);
   rpc ApplySnapshot(ApplySnapshotRequest) returns (ApplySnapshotResponse);
   rpc ReloadIdentity(ReloadIdentityRequest) returns (ReloadIdentityResponse);
   rpc CommitIdentityRotation(CommitIdentityRotationRequest) returns (CommitIdentityRotationResponse);
@@ -98,6 +99,16 @@ message RoutePolicy {
   // Proxy Secure Links intentionally have no fixed idle timeout. Existing
   // routes keep the relay default when this field is false.
   bool disable_idle_timeout = 9;
+  // Product classification used only for overload admission and reporting.
+  // The relay remains unaware of concrete Gateway resource identifiers.
+  string traffic_class = 10;
+}
+
+message AdmissionPolicy {
+  bool enabled = 1;
+  uint32 proxy_target_pressure_percent = 2;
+  uint32 database_reserve_percent = 3;
+  uint32 hard_pressure_percent = 4;
 }
 
 message ApplySnapshotRequest {
@@ -106,6 +117,7 @@ message ApplySnapshotRequest {
   repeated PublicKey public_keys = 3;
   repeated EndpointPolicy endpoints = 4;
   repeated RoutePolicy routes = 5;
+  AdmissionPolicy admission_policy = 6;
 }
 
 message ApplySnapshotResponse {
@@ -124,6 +136,36 @@ message HealthResponse {
   bool liveness = 7;
   bool readiness = 8;
   string reason = 9;
+  uint64 active_proxy_tunnels = 10;
+  uint64 active_database_tunnels = 11;
+  uint64 throttled_proxy_total = 12;
+  uint64 throttled_database_total = 13;
+  uint32 pressure_percent = 14;
+  uint32 cpu_pressure_percent = 15;
+  uint32 memory_pressure_percent = 16;
+  uint32 fd_pressure_percent = 17;
+  string admission_state = 18;
+  uint64 memory_rss_bytes = 19;
+  uint64 heap_in_use_bytes = 20;
+  uint64 memory_limit_bytes = 21;
+  uint64 open_file_descriptors = 22;
+  uint64 file_descriptor_limit = 23;
+}
+
+message RouteRuntimeRequest { string route_id = 1; }
+message RouteRuntimeResponse {
+  string route_id = 1;
+  uint64 active_tunnels = 2;
+  uint64 opened_total = 3;
+  uint64 completed_total = 4;
+  uint64 failed_total = 5;
+  uint64 throttled_total = 6;
+  uint64 source_to_target_bytes = 7;
+  uint64 target_to_source_bytes = 8;
+  uint64 setup_latency_p95_microseconds = 9;
+  uint64 average_duration_milliseconds = 10;
+  int64 last_activity_unix_milliseconds = 11;
+  int64 metrics_since_unix_milliseconds = 12;
 }
 
 message ReloadIdentityRequest { string operation_id = 1; }

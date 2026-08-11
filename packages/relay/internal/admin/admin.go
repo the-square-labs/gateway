@@ -46,13 +46,58 @@ func (s *Service) GetHealth(ctx context.Context, _ *relayv1.HealthRequest) (*rel
 		return nil, err
 	}
 	current := s.store.Current()
-	endpoints, tunnels := s.broker.Counts()
+	runtime := s.broker.RuntimeSnapshot()
 	ready := current.Revision > 0 && len(current.PublicKeys) > 0
 	reason := ""
 	if !ready {
 		reason = "policy_snapshot_required"
 	}
-	return &relayv1.HealthResponse{BuildVersion: s.buildVersion, ProtocolMajor: 1, AppliedRevision: current.Revision, KeyIds: s.store.KeyIDs(), RegisteredEndpoints: endpoints, ActiveTunnels: tunnels, Liveness: true, Readiness: ready, Reason: reason}, nil
+	return &relayv1.HealthResponse{
+		BuildVersion: s.buildVersion, ProtocolMajor: 1, AppliedRevision: current.Revision,
+		KeyIds: s.store.KeyIDs(), RegisteredEndpoints: runtime.RegisteredEndpoints,
+		ActiveTunnels: runtime.ActiveTunnels, ActiveProxyTunnels: runtime.ActiveProxyTunnels,
+		ActiveDatabaseTunnels:  runtime.ActiveDatabaseTunnels,
+		ThrottledProxyTotal:    runtime.Admission.ThrottledProxyTotal,
+		ThrottledDatabaseTotal: runtime.Admission.ThrottledDatabaseTotal,
+		PressurePercent:        runtime.Admission.PressurePercent,
+		CpuPressurePercent:     runtime.Admission.CPUPressurePercent,
+		MemoryPressurePercent:  runtime.Admission.MemoryPressurePercent,
+		FdPressurePercent:      runtime.Admission.FDPressurePercent,
+		AdmissionState:         runtime.Admission.State,
+		MemoryRssBytes:         runtime.Admission.MemoryRSSBytes,
+		HeapInUseBytes:         runtime.Admission.HeapInUseBytes,
+		MemoryLimitBytes:       runtime.Admission.MemoryLimitBytes,
+		OpenFileDescriptors:    runtime.Admission.OpenFileDescriptors,
+		FileDescriptorLimit:    runtime.Admission.FileDescriptorLimit,
+		Liveness:               true, Readiness: ready, Reason: reason,
+	}, nil
+}
+
+func (s *Service) GetRouteRuntime(ctx context.Context, request *relayv1.RouteRuntimeRequest) (*relayv1.RouteRuntimeResponse, error) {
+	if err := s.authorize(ctx); err != nil {
+		return nil, err
+	}
+	if request.GetRouteId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "route id is required")
+	}
+	runtime, found := s.broker.RouteRuntimeSnapshot(request.GetRouteId())
+	if !found {
+		return nil, status.Error(codes.NotFound, "relay route is not active")
+	}
+	return &relayv1.RouteRuntimeResponse{
+		RouteId:                      runtime.RouteID,
+		ActiveTunnels:                runtime.ActiveTunnels,
+		OpenedTotal:                  runtime.OpenedTotal,
+		CompletedTotal:               runtime.CompletedTotal,
+		FailedTotal:                  runtime.FailedTotal,
+		ThrottledTotal:               runtime.ThrottledTotal,
+		SourceToTargetBytes:          runtime.SourceToTargetBytes,
+		TargetToSourceBytes:          runtime.TargetToSourceBytes,
+		SetupLatencyP95Microseconds:  runtime.SetupLatencyP95Micros,
+		AverageDurationMilliseconds:  runtime.AverageDurationMillis,
+		LastActivityUnixMilliseconds: runtime.LastActivityUnixMillis,
+		MetricsSinceUnixMilliseconds: runtime.MetricsSinceUnixMillis,
+	}, nil
 }
 
 func (s *Service) ApplySnapshot(ctx context.Context, request *relayv1.ApplySnapshotRequest) (*relayv1.ApplySnapshotResponse, error) {

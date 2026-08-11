@@ -46,7 +46,9 @@ describe('GitLabClient', () => {
     });
     const client = new GitLabClient(baseUrl, 'glpat-token');
 
-    await expect(client.requestBuffer('/projects/28/repository/archive.tar.gz', { maxBytes: 1024 })).rejects.toMatchObject({
+    await expect(
+      client.requestBuffer('/projects/28/repository/archive.tar.gz', { maxBytes: 1024 })
+    ).rejects.toMatchObject({
       code: 'GITLAB_API_ERROR',
       details: expect.objectContaining({ body: expect.stringContaining('upstream failure:') }),
     });

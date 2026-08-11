@@ -1,12 +1,14 @@
-import type { ForwardScheme, ProxyHost } from "@/types";
+import type { ForwardScheme, ProxyHost, RateLimitMode } from "@/types";
 
 export interface ProxyHostDetailFormState {
   customHeaders: ProxyHost["customHeaders"];
   cacheEnabled: boolean;
   cacheMaxAge: number;
   rateLimitEnabled: boolean;
+  rateLimitMode: RateLimitMode;
   rateLimitRPS: number;
   rateLimitBurst: number;
+  rateLimitConnectionsPerIp: number;
   customRewrites: ProxyHost["customRewrites"];
   accessListId: string;
   healthCheckUrl: string;
@@ -31,8 +33,10 @@ export function deriveProxyHostDetailFormState(host: ProxyHost): ProxyHostDetail
     cacheEnabled: host.cacheEnabled,
     cacheMaxAge: host.cacheOptions?.maxAge || 3600,
     rateLimitEnabled: host.rateLimitEnabled,
-    rateLimitRPS: host.rateLimitOptions?.requestsPerSecond || 100,
-    rateLimitBurst: host.rateLimitOptions?.burst || 200,
+    rateLimitMode: host.rateLimitMode ?? (host.rateLimitEnabled ? "custom" : "inherit"),
+    rateLimitRPS: host.rateLimitOptions?.requestsPerSecond || 1000,
+    rateLimitBurst: host.rateLimitOptions?.burst || 3000,
+    rateLimitConnectionsPerIp: host.rateLimitOptions?.connectionsPerIp || 1000,
     customRewrites: host.customRewrites || [],
     accessListId: host.accessListId || "",
     healthCheckUrl: host.healthCheckUrl || "/",

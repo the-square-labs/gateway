@@ -16,21 +16,19 @@ const VERSION_RELOAD_CHECK_INTERVAL_MS = 30_000;
 
 async function fetchGatewayCurrentVersion(): Promise<string | null> {
   try {
-    const response = await fetch("/api/system/version", {
+    // Health is intentionally outside the authenticated API rate-limit bucket.
+    // A deployment detector must never be able to lock the application UI out.
+    const response = await fetch("/health", {
       cache: "no-store",
-      credentials: "include",
     });
     if (response.ok) {
-      const payload = (await response.json()) as { data?: { currentVersion?: string } };
-      return payload.data?.currentVersion ?? null;
+      const payload = (await response.json()) as GatewayHealthSnapshot;
+      return payload.version ?? null;
     }
   } catch {
-    // Fall through to the public health endpoint.
+    // A transient failure must not be interpreted as a version change.
   }
-
-  const response = await fetch("/health", { cache: "no-store" });
-  const payload = (await response.json()) as { version?: string };
-  return payload.version ?? null;
+  return null;
 }
 
 function MaintenanceScreen() {
@@ -110,10 +108,10 @@ function GatewayOperationScreen() {
     const completeSameOriginRestart = (version: string | null, reason: string) => {
       if (navigating) return;
       navigating = true;
-      publishGatewayReload(version, reason);
+      const reload = publishGatewayReload(version, reason);
       if (updatingActive) clearGatewayUpdating();
       else clearGatewayRestarting();
-      reloadGatewayClient();
+      reloadGatewayClient(reload.id);
     };
 
     const navigateToRestartTarget = () => {
@@ -237,16 +235,20 @@ function GatewayReloadCoordinator() {
 
   useEffect(() => {
     if (rateLimitedUntil != null) return;
-    return subscribeGatewayReload(() => reloadGatewayClient());
+    return subscribeGatewayReload((message) => reloadGatewayClient(message.id));
   }, [rateLimitedUntil]);
 
   useEffect(() => {
     if (gatewayUpdatingActive || gatewayRestartingActive || rateLimitedUntil != null) return;
 
     let cancelled = false;
+    let checking = false;
+    let navigating = false;
     let baselineVersion: string | null = null;
 
     const checkVersion = async () => {
+      if (checking || navigating || document.visibilityState !== "visible") return;
+      checking = true;
       try {
         const currentVersion = await fetchGatewayCurrentVersion();
         if (!currentVersion || cancelled) return;
@@ -260,11 +262,14 @@ function GatewayReloadCoordinator() {
           normalizeGatewayUpdateVersion(currentVersion) !==
           normalizeGatewayUpdateVersion(baselineVersion)
         ) {
-          publishGatewayReload(currentVersion, "gateway-version-changed");
-          reloadGatewayClient();
+          navigating = true;
+          const reload = publishGatewayReload(currentVersion, "gateway-version-changed");
+          reloadGatewayClient(reload.id);
         }
       } catch {
         // Ignore transient backend downtime; explicit update mode has its own faster polling.
+      } finally {
+        checking = false;
       }
     };
 
@@ -335,7 +340,6 @@ function RateLimitScreen() {
       setSecondsRemaining(remaining);
       if (remaining <= 0) {
         clearRateLimit();
-        window.location.reload();
       }
     };
 
@@ -355,7 +359,7 @@ function RateLimitScreen() {
           </div>
           <h2 className="text-lg font-semibold text-foreground">Rate Limit Reached</h2>
           <p className="text-sm text-muted-foreground">
-            You have been rate-limited. The page will reload automatically in{" "}
+            You have been rate-limited. Requests will resume automatically in{" "}
             <span className="font-semibold text-foreground">{secondsRemaining}</span> second
             {secondsRemaining === 1 ? "" : "s"}.
           </p>

@@ -1,4 +1,5 @@
 import {
+  Cable,
   Code2,
   EllipsisVertical,
   Info,
@@ -63,6 +64,7 @@ import {
 import { LogsTab } from "./proxy-detail/LogsTab";
 import { saveProxyHostAccessList, saveProxyHostAdvancedConfig } from "./proxy-detail/mutations";
 import { RawConfigTab } from "./proxy-detail/RawConfigTab";
+import { SecureLinkTab } from "./proxy-detail/SecureLinkTab";
 import { SettingsTab } from "./proxy-detail/SettingsTab";
 import { deriveProxyHostDetailFormState } from "./proxy-detail/state";
 
@@ -83,18 +85,19 @@ export function ProxyHostDetail({
   const canViewRawConfig = !!id && hasScope(`proxy:raw:read:${id}`);
   const canWriteRawConfig = !!id && hasScope(`proxy:raw:write:${id}`);
   const canEditProxyHost = !!id && (hasScope("proxy:edit") || hasScope(`proxy:edit:${id}`));
+  const [host, setHost] = useState<ProxyHost | null>(null);
   const visibleTabs = useMemo(
     () => [
       "details",
       "settings",
+      ...(host?.upstreamKind && host.upstreamKind !== "manual" ? ["secure-link"] : []),
       ...(canViewAdvancedConfig ? ["advanced"] : []),
       ...(canViewRawConfig ? ["raw"] : []),
       "logs",
     ],
-    [canViewAdvancedConfig, canViewRawConfig]
+    [canViewAdvancedConfig, canViewRawConfig, host?.upstreamKind]
   );
 
-  const [host, setHost] = useState<ProxyHost | null>(null);
   const [healthHistory, setHealthHistory] = useState<NonNullable<ProxyHost["healthHistory"]>>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isMaintenanceToggling, setIsMaintenanceToggling] = useState(false);
@@ -116,21 +119,29 @@ export function ProxyHostDetail({
   const [customHeaders, setCustomHeaders] = useState<CustomHeader[]>([]);
   const [cacheEnabled, setCacheEnabled] = useState(false);
   const [cacheMaxAge, setCacheMaxAge] = useState(3600);
-  const [rateLimitEnabled, setRateLimitEnabled] = useState(false);
-  const [rateLimitRPS, setRateLimitRPS] = useState(100);
-  const [rateLimitBurst, setRateLimitBurst] = useState(200);
+  const [rateLimitMode, setRateLimitMode] = useState<"inherit" | "custom" | "disabled">("inherit");
+  const [rateLimitRPS, setRateLimitRPS] = useState(1000);
+  const [rateLimitBurst, setRateLimitBurst] = useState(3000);
+  const [rateLimitConnectionsPerIp, setRateLimitConnectionsPerIp] = useState(1000);
   const [customRewrites, setCustomRewrites] = useState<RewriteRule[]>([]);
   const [isSavingCustom, setIsSavingCustom] = useState(false);
   const [editorErrorLines, setEditorErrorLines] = useState<number[]>([]);
 
   // Health check settings state
   const [healthCheckUrl, setHealthCheckUrl] = useState("/");
+  const [healthCheckEnabled, setHealthCheckEnabled] = useState(false);
   const [healthCheckExpectedStatus, setHealthCheckExpectedStatus] = useState<number | null>(null);
   const [healthCheckExpectedBody, setHealthCheckExpectedBody] = useState("");
   const [healthCheckBodyMatchMode, setHealthCheckBodyMatchMode] = useState<
     "includes" | "exact" | "starts_with" | "ends_with"
   >("includes");
   const [healthCheckSlowThreshold, setHealthCheckSlowThreshold] = useState(3);
+  const [isSavingHealthCheck, setIsSavingHealthCheck] = useState(false);
+  const [sslEnabled, setSslEnabled] = useState(false);
+  const [sslForced, setSslForced] = useState(false);
+  const [http2Support, setHttp2Support] = useState(false);
+  const [sslCertificateId, setSslCertificateId] = useState("");
+  const [isSavingSsl, setIsSavingSsl] = useState(false);
   // Access list tab state
   const [accessListId, setAccessListId] = useState<string>("");
   const [accessLists, setAccessLists] = useState<AccessList[]>([]);
@@ -163,16 +174,22 @@ export function ProxyHostDetail({
     setCustomHeaders(nextState.customHeaders);
     setCacheEnabled(nextState.cacheEnabled);
     setCacheMaxAge(nextState.cacheMaxAge);
-    setRateLimitEnabled(nextState.rateLimitEnabled);
+    setRateLimitMode(nextState.rateLimitMode);
     setRateLimitRPS(nextState.rateLimitRPS);
     setRateLimitBurst(nextState.rateLimitBurst);
+    setRateLimitConnectionsPerIp(nextState.rateLimitConnectionsPerIp);
     setCustomRewrites(nextState.customRewrites);
     setAccessListId(nextState.accessListId);
     setHealthCheckUrl(nextState.healthCheckUrl);
+    setHealthCheckEnabled(data.healthCheckEnabled);
     setHealthCheckExpectedStatus(nextState.healthCheckExpectedStatus);
     setHealthCheckExpectedBody(nextState.healthCheckExpectedBody);
     setHealthCheckBodyMatchMode(nextState.healthCheckBodyMatchMode);
     setHealthCheckSlowThreshold(nextState.healthCheckSlowThreshold);
+    setSslEnabled(data.sslEnabled);
+    setSslForced(data.sslForced);
+    setHttp2Support(data.http2Support);
+    setSslCertificateId(data.sslCertificateId || "");
     setNginxTemplateId(nextState.nginxTemplateId);
     setTemplateVariables(nextState.templateVariables);
     setTemplateForwardScheme(nextState.templateForwardScheme);
@@ -322,25 +339,48 @@ export function ProxyHostDetail({
     [canEditProxyHost, id, host, syncHostState]
   );
 
-  const handleSslCertificateChange = useCallback(
-    async (value: string) => {
-      if (!id || !canEditProxyHost) return;
-      try {
-        const updated = await api.updateProxyHost(id, {
-          sslCertificateId: value || null,
-        });
-        syncHostState(updated);
-        toast.success("SSL certificate updated");
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to update SSL certificate");
-      }
-    },
-    [canEditProxyHost, id, syncHostState]
+  const handleSaveSsl = useCallback(async () => {
+    if (!id || !canEditProxyHost) return;
+    if (sslEnabled && !sslCertificateId && !host?.internalCertificateId) {
+      toast.error("Select an SSL certificate before enabling HTTPS");
+      return;
+    }
+    setIsSavingSsl(true);
+    try {
+      const updated = await api.updateProxyHost(id, {
+        sslEnabled,
+        sslForced: sslEnabled ? sslForced : false,
+        http2Support: sslEnabled ? http2Support : false,
+        sslCertificateId: sslCertificateId || null,
+      });
+      syncHostState(updated);
+      toast.success("SSL settings updated");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update SSL settings");
+    } finally {
+      setIsSavingSsl(false);
+    }
+  }, [
+    canEditProxyHost,
+    host?.internalCertificateId,
+    http2Support,
+    id,
+    sslCertificateId,
+    sslEnabled,
+    sslForced,
+    syncHostState,
+  ]);
+
+  const defaultTemplate = useMemo(
+    () => nginxTemplates.find((t) => t.isBuiltin && t.type === host?.type) ?? null,
+    [nginxTemplates, host?.type]
   );
 
   const selectedTemplate = useMemo(
-    () => nginxTemplates.find((t) => t.id === nginxTemplateId) ?? null,
-    [nginxTemplates, nginxTemplateId]
+    () =>
+      (nginxTemplateId ? nginxTemplates.find((t) => t.id === nginxTemplateId) : defaultTemplate) ??
+      null,
+    [defaultTemplate, nginxTemplates, nginxTemplateId]
   );
 
   const userTemplates = useMemo(
@@ -350,13 +390,27 @@ export function ProxyHostDetail({
 
   const normalizeTemplateVariables = useCallback(
     (templateId: string, vars: Record<string, string | number | boolean>) => {
-      const template = nginxTemplates.find((t) => t.id === templateId);
+      const template = templateId
+        ? nginxTemplates.find((t) => t.id === templateId)
+        : nginxTemplates.find((t) => t.isBuiltin && t.type === host?.type);
       if (!template?.variables?.length) return {};
 
       const next: Record<string, string | number | boolean> = {};
       for (const def of template.variables) {
         if (vars[def.name] !== undefined) {
           next[def.name] = vars[def.name];
+        } else if (def.name === "cacheEnabled" && host?.type === "proxy") {
+          next[def.name] = host.cacheEnabled;
+        } else if (def.name === "cacheMaxAge" && host?.type === "proxy") {
+          next[def.name] = host.cacheOptions?.maxAge ?? 3600;
+        } else if (def.name === "rateLimitMode" && host?.type === "proxy") {
+          next[def.name] = host.rateLimitMode ?? (host.rateLimitEnabled ? "custom" : "inherit");
+        } else if (def.name === "rateLimitRPS" && host?.type === "proxy") {
+          next[def.name] = host.rateLimitOptions?.requestsPerSecond ?? 1000;
+        } else if (def.name === "rateLimitBurst" && host?.type === "proxy") {
+          next[def.name] = host.rateLimitOptions?.burst ?? 3000;
+        } else if (def.name === "connectionsPerIp" && host?.type === "proxy") {
+          next[def.name] = host.rateLimitOptions?.connectionsPerIp ?? 1000;
         } else if (def.default !== undefined) {
           next[def.name] = def.default;
         } else if (def.type === "boolean") {
@@ -369,18 +423,19 @@ export function ProxyHostDetail({
       }
       return next;
     },
-    [nginxTemplates]
+    [host, nginxTemplates]
+  );
+
+  const effectiveTemplateVariables = useMemo(
+    () => normalizeTemplateVariables(nginxTemplateId, templateVariables),
+    [nginxTemplateId, normalizeTemplateVariables, templateVariables]
   );
 
   const hasTemplateSettingsChanged = useMemo(() => {
     if (!host) return false;
     const currentId = host.nginxTemplateId || "";
-    const currentVars = currentId
-      ? normalizeTemplateVariables(currentId, host.templateVariables || {})
-      : {};
-    const nextVars = nginxTemplateId
-      ? normalizeTemplateVariables(nginxTemplateId, templateVariables)
-      : {};
+    const currentVars = normalizeTemplateVariables(currentId, host.templateVariables || {});
+    const nextVars = normalizeTemplateVariables(nginxTemplateId, templateVariables);
     const builtinsChanged =
       (host.type === "proxy" &&
         (host.forwardScheme !== templateForwardScheme ||
@@ -411,11 +466,6 @@ export function ProxyHostDetail({
     (value: string) => {
       const nextId = value || "";
       setNginxTemplateId(nextId);
-      if (!nextId) {
-        setTemplateVariables({});
-        return;
-      }
-
       setTemplateVariables((prev) => normalizeTemplateVariables(nextId, prev));
     },
     [normalizeTemplateVariables]
@@ -432,12 +482,41 @@ export function ProxyHostDetail({
     if (!id || !canEditProxyHost) return;
     setIsSavingTemplate(true);
     try {
-      const vars = nginxTemplateId
-        ? normalizeTemplateVariables(nginxTemplateId, templateVariables)
-        : {};
+      const vars = normalizeTemplateVariables(nginxTemplateId, templateVariables);
+      const hasTemplateVariable = (name: string) =>
+        selectedTemplate?.variables?.some((variable) => variable.name === name) ?? false;
+      const nextCacheEnabled = hasTemplateVariable("cacheEnabled")
+        ? vars.cacheEnabled === true
+        : cacheEnabled;
+      const nextCacheMaxAge = hasTemplateVariable("cacheMaxAge")
+        ? Number(vars.cacheMaxAge ?? 3600)
+        : cacheMaxAge;
+      const nextRateLimitMode = hasTemplateVariable("rateLimitMode")
+        ? vars.rateLimitMode === "custom" || vars.rateLimitMode === "disabled"
+          ? vars.rateLimitMode
+          : "inherit"
+        : rateLimitMode;
+      const nextRateLimitRPS = hasTemplateVariable("rateLimitRPS")
+        ? Number(vars.rateLimitRPS ?? 1000)
+        : rateLimitRPS;
+      const nextRateLimitBurst = hasTemplateVariable("rateLimitBurst")
+        ? Number(vars.rateLimitBurst ?? 3000)
+        : rateLimitBurst;
+      const nextConnectionsPerIp = hasTemplateVariable("connectionsPerIp")
+        ? Number(vars.connectionsPerIp ?? 1000)
+        : rateLimitConnectionsPerIp;
       const updated = await api.updateProxyHost(id, {
         nginxTemplateId: nginxTemplateId || null,
         templateVariables: vars,
+        cacheEnabled: nextCacheEnabled,
+        cacheOptions: { maxAge: nextCacheMaxAge },
+        rateLimitMode: nextRateLimitMode,
+        rateLimitEnabled: nextRateLimitMode === "custom",
+        rateLimitOptions: {
+          requestsPerSecond: nextRateLimitRPS,
+          burst: nextRateLimitBurst,
+          connectionsPerIp: nextConnectionsPerIp,
+        },
         ...(host?.type === "proxy"
           ? {
               forwardScheme: templateForwardScheme,
@@ -461,10 +540,17 @@ export function ProxyHostDetail({
     }
   }, [
     host,
+    cacheEnabled,
+    cacheMaxAge,
     id,
     canEditProxyHost,
     nginxTemplateId,
     normalizeTemplateVariables,
+    rateLimitBurst,
+    rateLimitConnectionsPerIp,
+    rateLimitMode,
+    rateLimitRPS,
+    selectedTemplate,
     templateForwardHost,
     templateForwardPort,
     templateForwardScheme,
@@ -474,29 +560,69 @@ export function ProxyHostDetail({
     syncHostState,
   ]);
 
-  // ── Save custom config ────────────────────────────────────────
-  const handleSaveCustom = async () => {
+  const handleSaveHeaders = async () => {
     if (!id || !canEditProxyHost) return;
     setIsSavingCustom(true);
     try {
       const updated = await api.updateProxyHost(id, {
         customHeaders: customHeaders.filter((h) => h.name.trim() !== ""),
-        cacheEnabled,
-        cacheOptions: cacheEnabled ? { maxAge: cacheMaxAge } : undefined,
-        rateLimitEnabled,
-        rateLimitOptions: rateLimitEnabled
-          ? { requestsPerSecond: rateLimitRPS, burst: rateLimitBurst }
-          : undefined,
-        customRewrites: customRewrites.filter((r) => r.source.trim() !== ""),
       });
       syncHostState(updated);
-      toast.success("Custom config saved");
+      toast.success("Custom headers saved");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save custom config");
+      toast.error(err instanceof Error ? err.message : "Failed to save custom headers");
     } finally {
       setIsSavingCustom(false);
     }
   };
+
+  const handleSaveRewrites = async () => {
+    if (!id || !canEditProxyHost) return;
+    setIsSavingCustom(true);
+    try {
+      const updated = await api.updateProxyHost(id, {
+        customRewrites: customRewrites.filter((rule) => rule.source.trim() !== ""),
+      });
+      syncHostState(updated);
+      toast.success("URL rewrites saved");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to save URL rewrites");
+    } finally {
+      setIsSavingCustom(false);
+    }
+  };
+
+  const handleSaveHealthCheck = useCallback(async () => {
+    if (!id || !canEditProxyHost) return;
+    setIsSavingHealthCheck(true);
+    try {
+      const updated = await api.updateProxyHost(id, {
+        healthCheckEnabled,
+        healthCheckUrl,
+        healthCheckExpectedStatus,
+        healthCheckExpectedBody: healthCheckExpectedBody || null,
+        healthCheckBodyMatchMode,
+        healthCheckSlowThreshold,
+      });
+      syncHostState(updated);
+      if (!updated.healthCheckEnabled) setHealthHistory([]);
+      toast.success("Health check settings updated");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update health checks");
+    } finally {
+      setIsSavingHealthCheck(false);
+    }
+  }, [
+    canEditProxyHost,
+    healthCheckBodyMatchMode,
+    healthCheckEnabled,
+    healthCheckExpectedBody,
+    healthCheckExpectedStatus,
+    healthCheckSlowThreshold,
+    healthCheckUrl,
+    id,
+    syncHostState,
+  ]);
 
   // ── Validate config — returns true if valid ──────────────────
   const handleValidate = async (): Promise<boolean> => {
@@ -667,6 +793,34 @@ export function ProxyHostDetail({
   const hasRewritesChanged = useMemo(
     () => !!host && JSON.stringify(customRewrites) !== JSON.stringify(host.customRewrites || []),
     [host, customRewrites]
+  );
+  const hasSslSettingsChanged = useMemo(
+    () =>
+      !!host &&
+      (host.sslEnabled !== sslEnabled ||
+        host.sslForced !== sslForced ||
+        host.http2Support !== http2Support ||
+        (host.sslCertificateId || "") !== sslCertificateId),
+    [host, http2Support, sslCertificateId, sslEnabled, sslForced]
+  );
+  const hasHealthCheckSettingsChanged = useMemo(
+    () =>
+      !!host &&
+      (host.healthCheckEnabled !== healthCheckEnabled ||
+        (host.healthCheckUrl || "/") !== healthCheckUrl ||
+        (host.healthCheckExpectedStatus ?? null) !== healthCheckExpectedStatus ||
+        (host.healthCheckExpectedBody || "") !== healthCheckExpectedBody ||
+        (host.healthCheckBodyMatchMode || "includes") !== healthCheckBodyMatchMode ||
+        (host.healthCheckSlowThreshold ?? 3) !== healthCheckSlowThreshold),
+    [
+      healthCheckBodyMatchMode,
+      healthCheckEnabled,
+      healthCheckExpectedBody,
+      healthCheckExpectedStatus,
+      healthCheckSlowThreshold,
+      healthCheckUrl,
+      host,
+    ]
   );
   const hasHealthCheckChanged = useMemo(() => {
     if (!host) return false;
@@ -949,6 +1103,12 @@ export function ProxyHostDetail({
                 Advanced
               </TabsTrigger>
             )}
+            {visibleTabs.includes("secure-link") && (
+              <TabsTrigger value="secure-link" className="gap-1.5">
+                <Cable className="h-3.5 w-3.5" />
+                Link Runtime
+              </TabsTrigger>
+            )}
             {visibleTabs.includes("raw") && (
               <TabsTrigger value="raw" className="gap-1.5">
                 <Code2 className="h-3.5 w-3.5" />
@@ -977,37 +1137,32 @@ export function ProxyHostDetail({
                 onToggle={handleToggle}
                 customHeaders={customHeaders}
                 setCustomHeaders={setCustomHeaders}
-                cacheEnabled={cacheEnabled}
-                setCacheEnabled={setCacheEnabled}
-                cacheMaxAge={cacheMaxAge}
-                setCacheMaxAge={setCacheMaxAge}
-                rateLimitEnabled={rateLimitEnabled}
-                setRateLimitEnabled={setRateLimitEnabled}
-                rateLimitRPS={rateLimitRPS}
-                setRateLimitRPS={setRateLimitRPS}
-                rateLimitBurst={rateLimitBurst}
-                setRateLimitBurst={setRateLimitBurst}
                 customRewrites={customRewrites}
                 setCustomRewrites={setCustomRewrites}
-                onSaveCustom={handleSaveCustom}
+                onSaveHeaders={handleSaveHeaders}
+                onSaveRewrites={handleSaveRewrites}
                 isSavingCustom={isSavingCustom}
                 accessListId={accessListId}
                 accessLists={accessLists}
                 onAccessListChange={handleAccessListChange}
                 sslCerts={sslCerts}
-                onSslCertificateChange={handleSslCertificateChange}
+                sslEnabled={sslEnabled}
+                setSslEnabled={setSslEnabled}
+                sslForced={sslForced}
+                setSslForced={setSslForced}
+                http2Support={http2Support}
+                setHttp2Support={setHttp2Support}
+                sslCertificateId={sslCertificateId}
+                setSslCertificateId={setSslCertificateId}
+                onSaveSsl={handleSaveSsl}
+                isSavingSsl={isSavingSsl}
+                hasSslSettingsChanged={hasSslSettingsChanged}
                 nginxTemplates={userTemplates}
                 nginxTemplateId={nginxTemplateId}
                 onNginxTemplateChange={handleTemplateSelectionChange}
                 selectedTemplate={selectedTemplate}
-                templateVariables={templateVariables}
+                templateVariables={effectiveTemplateVariables}
                 onTemplateVariableChange={handleTemplateVariableChange}
-                templateForwardScheme={templateForwardScheme}
-                setTemplateForwardScheme={setTemplateForwardScheme}
-                templateForwardHost={templateForwardHost}
-                setTemplateForwardHost={setTemplateForwardHost}
-                templateForwardPort={templateForwardPort}
-                setTemplateForwardPort={setTemplateForwardPort}
                 templateRedirectUrl={templateRedirectUrl}
                 setTemplateRedirectUrl={setTemplateRedirectUrl}
                 templateRedirectStatusCode={templateRedirectStatusCode}
@@ -1018,6 +1173,8 @@ export function ProxyHostDetail({
                 canManage={canEditProxyHost}
                 hasHeadersChanged={hasHeadersChanged}
                 hasRewritesChanged={hasRewritesChanged}
+                healthCheckEnabled={healthCheckEnabled}
+                setHealthCheckEnabled={setHealthCheckEnabled}
                 healthCheckUrl={healthCheckUrl}
                 setHealthCheckUrl={setHealthCheckUrl}
                 healthCheckExpectedStatus={healthCheckExpectedStatus}
@@ -1028,6 +1185,9 @@ export function ProxyHostDetail({
                 setHealthCheckBodyMatchMode={setHealthCheckBodyMatchMode}
                 healthCheckSlowThreshold={healthCheckSlowThreshold}
                 setHealthCheckSlowThreshold={setHealthCheckSlowThreshold}
+                onSaveHealthCheck={handleSaveHealthCheck}
+                isSavingHealthCheck={isSavingHealthCheck}
+                hasHealthCheckSettingsChanged={hasHealthCheckSettingsChanged}
                 canResyncTls={canResyncTls}
                 isTlsResyncing={isTlsResyncing}
                 onTlsResync={handleTlsResync}
@@ -1048,6 +1208,12 @@ export function ProxyHostDetail({
                 isSavingAdvanced={isSavingAdvanced}
                 canManage={!!id && hasScope(`proxy:advanced:${id}`)}
               />
+            </TabsContent>
+          )}
+
+          {visibleTabs.includes("secure-link") && (
+            <TabsContent value="secure-link" className="pb-6">
+              <SecureLinkTab hostId={id!} />
             </TabsContent>
           )}
 

@@ -47,7 +47,9 @@ vi.mock('@/modules/auth/auth.middleware.js', () => ({
 }));
 
 vi.mock('./managed-databases.service.js', () => ({ ManagedDatabaseService: mocks.ManagedDatabaseService }));
-vi.mock('./managed-database-bindings.service.js', () => ({ ManagedDatabaseBindingService: mocks.ManagedDatabaseBindingService }));
+vi.mock('./managed-database-bindings.service.js', () => ({
+  ManagedDatabaseBindingService: mocks.ManagedDatabaseBindingService,
+}));
 vi.mock('@/modules/docker/docker.service.js', () => ({ DockerManagementService: mocks.DockerManagementService }));
 
 import { databaseRoutes } from './databases.routes.js';
@@ -84,7 +86,9 @@ describe('managed database binding credential reveal route', () => {
   });
 
   it('denies reveal before decrypting credentials when target-workload access is absent', async () => {
-    const response = await createApp().request(`/managed/${MANAGED_DATABASE_ID}/bindings/${BINDING_ID}/reveal-credentials`);
+    const response = await createApp().request(
+      `/managed/${MANAGED_DATABASE_ID}/bindings/${BINDING_ID}/reveal-credentials`
+    );
 
     expect(response.status).toBe(403);
     expect(mocks.bindingService.getTarget).toHaveBeenCalledWith(MANAGED_DATABASE_ID, BINDING_ID);
@@ -94,7 +98,9 @@ describe('managed database binding credential reveal route', () => {
   it('reveals credentials after both database and target-workload access are authorized', async () => {
     mocks.scopes = [...mocks.scopes, ...targetScopes()];
 
-    const response = await createApp().request(`/managed/${MANAGED_DATABASE_ID}/bindings/${BINDING_ID}/reveal-credentials`);
+    const response = await createApp().request(
+      `/managed/${MANAGED_DATABASE_ID}/bindings/${BINDING_ID}/reveal-credentials`
+    );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ data: { username: 'app', password: 'secret' } });

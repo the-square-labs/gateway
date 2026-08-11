@@ -159,7 +159,7 @@ func TestEndpointDisconnectClosesActiveSessions(t *testing.T) {
 func TestPumpPreservesHalfClose(t *testing.T) {
 	source := &frameReceiver{frames: []*relayv1.TunnelFrame{{Payload: &relayv1.TunnelFrame_HalfClose{HalfClose: &relayv1.TunnelHalfClose{}}}}}
 	destination := &frameSender{}
-	terminal, err := pump(destination, source, DefaultMaxFrameBytes, make(chan struct{}, 1))
+	terminal, err := pump(destination, source, DefaultMaxFrameBytes, make(chan struct{}, 1), nil)
 	if err != nil || terminal {
 		t.Fatalf("half-close result terminal=%v err=%v", terminal, err)
 	}
@@ -168,10 +168,40 @@ func TestPumpPreservesHalfClose(t *testing.T) {
 	}
 }
 
+func TestPumpRecordsOnlyForwardedDataBytes(t *testing.T) {
+	source := &frameReceiver{frames: []*relayv1.TunnelFrame{{Payload: &relayv1.TunnelFrame_Data{Data: &relayv1.TunnelData{Data: []byte("payload")}}}}}
+	destination := &frameSender{}
+	var transferred uint64
+	terminal, err := pump(destination, source, DefaultMaxFrameBytes, make(chan struct{}, 1), func(bytes uint64) {
+		transferred += bytes
+	})
+	if err != nil || terminal {
+		t.Fatalf("data pump result terminal=%v err=%v", terminal, err)
+	}
+	if transferred != uint64(len("payload")) {
+		t.Fatalf("recorded bytes = %d", transferred)
+	}
+}
+
+func TestRouteMetricsSummarizeLatencyAndCompletion(t *testing.T) {
+	metrics := &routeMetrics{}
+	metrics.active.Store(1)
+	for _, latency := range []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 30 * time.Millisecond, 40 * time.Millisecond} {
+		metrics.recordSetup(latency)
+	}
+	metrics.recordCompletion(250*time.Millisecond, status.Error(codes.Unavailable, "failed"))
+	if metrics.setupP95Micros() != 40_000 {
+		t.Fatalf("setup p95 = %d", metrics.setupP95Micros())
+	}
+	if metrics.active.Load() != 0 || metrics.completed.Load() != 1 || metrics.failed.Load() != 1 {
+		t.Fatalf("unexpected completion counters active=%d completed=%d failed=%d", metrics.active.Load(), metrics.completed.Load(), metrics.failed.Load())
+	}
+}
+
 func TestBridgeClosesIdleTunnel(t *testing.T) {
 	left := &blockingFrameStream{stop: make(chan struct{})}
 	right := &blockingFrameStream{stop: make(chan struct{})}
-	err := bridgeWithIdleTimeout(left, right, DefaultMaxFrameBytes, make(chan struct{}), 5*time.Millisecond)
+	err := bridgeWithIdleTimeout(left, right, DefaultMaxFrameBytes, make(chan struct{}), 5*time.Millisecond, nil)
 	close(left.stop)
 	close(right.stop)
 	if status.Code(err) != codes.DeadlineExceeded {
@@ -194,7 +224,7 @@ func TestBridgeWithoutIdleTimeoutWaitsForPolicyOrTCPClosure(t *testing.T) {
 	revoked := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- bridgeWithIdleTimeout(left, right, DefaultMaxFrameBytes, revoked, 0)
+		done <- bridgeWithIdleTimeout(left, right, DefaultMaxFrameBytes, revoked, 0, nil)
 	}()
 	select {
 	case err := <-done:
@@ -214,7 +244,7 @@ func TestBridgeRevocationDoesNotAddConcurrentStreamWriters(t *testing.T) {
 	right := &blockingFrameStream{stop: make(chan struct{})}
 	revoked := make(chan struct{})
 	close(revoked)
-	err := bridgeWithIdleTimeout(left, right, DefaultMaxFrameBytes, revoked, time.Minute)
+	err := bridgeWithIdleTimeout(left, right, DefaultMaxFrameBytes, revoked, time.Minute, nil)
 	close(left.stop)
 	close(right.stop)
 	if status.Code(err) != codes.PermissionDenied {
@@ -236,7 +266,7 @@ func TestBridgeTreatsCanceledStreamAsTerminal(t *testing.T) {
 	blocked := &blockingFrameStream{stop: make(chan struct{})}
 	done := make(chan error, 1)
 	go func() {
-		done <- bridgeWithIdleTimeout(canceled, blocked, DefaultMaxFrameBytes, make(chan struct{}), 0)
+		done <- bridgeWithIdleTimeout(canceled, blocked, DefaultMaxFrameBytes, make(chan struct{}), 0, nil)
 	}()
 	select {
 	case err := <-done:

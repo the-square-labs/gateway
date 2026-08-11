@@ -21,6 +21,7 @@ const CacheOptionsSchema = z.object({
 const RateLimitOptionsSchema = z.object({
   requestsPerSecond: z.number().int().min(1),
   burst: z.number().int().min(1).optional(),
+  connectionsPerIp: z.number().int().min(1).optional(),
 });
 
 const RewriteRuleSchema = z.object({
@@ -79,6 +80,7 @@ export const CreateProxyHostSchema = z
 
     // Rate limit
     rateLimitEnabled: z.boolean().default(false),
+    rateLimitMode: z.enum(['inherit', 'custom', 'disabled']).default('inherit'),
     rateLimitOptions: RateLimitOptionsSchema.optional(),
 
     // Rewrites
@@ -222,6 +224,7 @@ export const UpdateProxyHostSchema = z.object({
   cacheEnabled: z.boolean().optional(),
   cacheOptions: CacheOptionsSchema.optional().nullable(),
   rateLimitEnabled: z.boolean().optional(),
+  rateLimitMode: z.enum(['inherit', 'custom', 'disabled']).optional(),
   rateLimitOptions: RateLimitOptionsSchema.optional().nullable(),
   customRewrites: z.array(RewriteRuleSchema).optional(),
 

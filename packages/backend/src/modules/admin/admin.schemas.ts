@@ -9,8 +9,18 @@ import {
   isValidGatewayIp,
   isValidGatewayIpPortTarget,
   normalizePublicUrl,
+  RELAY_DATA_LANES_MAX,
+  RELAY_DATA_LANES_MIN,
+  RELAY_DATABASE_RESERVE_MAX_PERCENT,
+  RELAY_DATABASE_RESERVE_MIN_PERCENT,
   RELAY_GRANT_TTL_MAX_HOURS,
   RELAY_GRANT_TTL_MIN_HOURS,
+  RELAY_HARD_PRESSURE_MAX_PERCENT,
+  RELAY_HARD_PRESSURE_MIN_PERCENT,
+  RELAY_PROXY_TARGET_PRESSURE_MAX_PERCENT,
+  RELAY_PROXY_TARGET_PRESSURE_MIN_PERCENT,
+  RELAY_READ_CHUNK_BYTES_MAX,
+  RELAY_READ_CHUNK_BYTES_MIN,
   SHUTDOWN_FINALIZATION_MAX_SECONDS,
   SHUTDOWN_FINALIZATION_MIN_SECONDS,
   SHUTDOWN_LOG_DRAIN_MAX_SECONDS,
@@ -162,6 +172,31 @@ export const UpdateAuthProvisioningSettingsSchema = z.object({
         .nullable()
         .optional(),
       relayAutoRecovery: z.boolean().optional(),
+      relay: z
+        .object({
+          dataLanes: z.number().int().min(RELAY_DATA_LANES_MIN).max(RELAY_DATA_LANES_MAX).optional(),
+          readChunkBytes: z.number().int().min(RELAY_READ_CHUNK_BYTES_MIN).max(RELAY_READ_CHUNK_BYTES_MAX).optional(),
+          adaptiveAdmissionEnabled: z.boolean().optional(),
+          proxyTargetPressurePercent: z
+            .number()
+            .int()
+            .min(RELAY_PROXY_TARGET_PRESSURE_MIN_PERCENT)
+            .max(RELAY_PROXY_TARGET_PRESSURE_MAX_PERCENT)
+            .optional(),
+          databaseReservePercent: z
+            .number()
+            .int()
+            .min(RELAY_DATABASE_RESERVE_MIN_PERCENT)
+            .max(RELAY_DATABASE_RESERVE_MAX_PERCENT)
+            .optional(),
+          hardPressurePercent: z
+            .number()
+            .int()
+            .min(RELAY_HARD_PRESSURE_MIN_PERCENT)
+            .max(RELAY_HARD_PRESSURE_MAX_PERCENT)
+            .optional(),
+        })
+        .optional(),
       shutdown: ShutdownSettingsSchema.optional(),
       relayGrantTtlHours: z.number().int().min(RELAY_GRANT_TTL_MIN_HOURS).max(RELAY_GRANT_TTL_MAX_HOURS).optional(),
       features: z

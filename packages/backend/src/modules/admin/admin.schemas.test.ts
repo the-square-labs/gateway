@@ -70,6 +70,26 @@ describe('UpdateAuthProvisioningSettingsSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('accepts bounded adaptive relay admission settings', () => {
+    expect(
+      UpdateAuthProvisioningSettingsSchema.safeParse({
+        generalSettings: {
+          relay: {
+            adaptiveAdmissionEnabled: true,
+            proxyTargetPressurePercent: 70,
+            databaseReservePercent: 20,
+            hardPressurePercent: 95,
+          },
+        },
+      }).success
+    ).toBe(true);
+    expect(
+      UpdateAuthProvisioningSettingsSchema.safeParse({
+        generalSettings: { relay: { proxyTargetPressurePercent: 90 } },
+      }).success
+    ).toBe(false);
+  });
+
   it('accepts bounded graceful shutdown settings and rejects an excessive total', () => {
     expect(
       UpdateAuthProvisioningSettingsSchema.safeParse({

@@ -1,0 +1,15 @@
+{
+  "file_name": "3ta908aa_secure_link_e2e",
+  "edges": [
+    {
+      "from_id": "3ta908aa",
+      "to_id": "iois3ul4",
+      "relation": "same_workflow",
+      "weight": 0.94,
+      "reason": "Both define the standalone gateway-relay architecture, multiplexed data tunnels, managed-database relay behavior, and upgrade or migration validation.",
+      "source": "auto",
+      "created_at": 1786469252905,
+      "updated_at": 1786469252905
+    }
+  ]
+}

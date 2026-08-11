@@ -3,11 +3,16 @@ ARG GO_IMAGE=docker.io/library/golang:1.24@sha256:d2d2bc1c84f7e60d7d2438a3836ae7
 ARG APP_VERSION=dev
 
 FROM ${GO_IMAGE} AS relay-bridge-builder
-ARG APP_VERSION
+WORKDIR /src
+COPY packages/daemons/shared/go.mod packages/daemons/shared/go.sum ./packages/daemons/shared/
+COPY packages/relay/go.mod packages/relay/go.sum ./packages/relay/
+WORKDIR /src/packages/relay
+RUN go mod download
 WORKDIR /src
 COPY packages/daemons/shared ./packages/daemons/shared
 COPY packages/relay ./packages/relay
 WORKDIR /src/packages/relay
+ARG APP_VERSION
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.buildVersion=${APP_VERSION}-relay" -o /gateway-relay ./cmd/gateway-relay
 
 FROM ${NODE_IMAGE} AS base
@@ -48,9 +53,6 @@ RUN pnpm --filter backend build
 # ── Production image ────────────────────────────────────────────────
 FROM ${NODE_IMAGE} AS production
 
-ARG APP_VERSION=dev
-ENV APP_VERSION=$APP_VERSION
-
 RUN apk add --no-cache nginx && \
     mkdir -p /var/lib/gateway/tls /var/lib/gateway/sandbox-workspaces && \
     corepack enable && \
@@ -81,6 +83,8 @@ COPY --from=status-page-builder /app/packages/status-page/dist ./status-public
 # during the first self-update, so keep a one-hop relay binary in that image.
 COPY --from=relay-bridge-builder /gateway-relay /gateway-relay
 
+ARG APP_VERSION=dev
+ENV APP_VERSION=$APP_VERSION
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV GRPC_PORT=9443

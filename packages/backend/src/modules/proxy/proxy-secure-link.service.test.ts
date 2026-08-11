@@ -2,169 +2,241 @@ import { describe, expect, it, vi } from 'vitest';
 import { ProxySecureLinkService } from './proxy-secure-link.service.js';
 
 describe('ProxySecureLinkService migration rollback', () => {
-	it('clears a transient runtime error after an active link reconciles successfully', async () => {
-	  const host = {
-		id: '11111111-1111-4111-8111-111111111111', type: 'proxy', upstreamKind: 'docker_container',
-		nodeId: 'nginx-node', dockerNodeId: 'docker-node', dockerContainerName: 'application', dockerContainerPort: 8080,
-		dockerHostPort: 8080, forwardScheme: 'http', healthCheckUrl: '/id', secureLinkGeneration: 2,
-		secureLinkStatus: 'active', secureLinkMigratedAt: new Date(), secureLinkLastError: 'relay unavailable',
-		secureLinkTargetNetwork: 'application-net', secureLinkTargetContainer: 'application', secureLinkTargetHost: null,
-	  } as any;
-	  const updatedValues: Array<Record<string, unknown>> = [];
-	  const db = {
-		query: { proxyHosts: { findFirst: vi.fn().mockResolvedValue(host) } },
-		update: vi.fn(() => ({
-		  set: vi.fn((values: Record<string, unknown>) => {
-			updatedValues.push(values);
-			return { where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ ...host, secureLinkLastError: null }]) })) };
-		  }),
-		})),
-	  } as any;
-	  const dispatch = { probeProxySecureLink: vi.fn().mockResolvedValue({ httpStatus: 200 }) } as any;
-	  const relayPolicy = { ensureProxySecureLink: vi.fn().mockResolvedValue(undefined) } as any;
-	  const service = new ProxySecureLinkService(db, dispatch, relayPolicy, 'connector@sha256:test');
-	  vi.spyOn(service as any, 'nodesSupportSecureLinks').mockResolvedValue(true);
-	  vi.spyOn(service as any, 'resolveTarget').mockResolvedValue({
-		nodeId: 'docker-node', network: 'application-net', container: 'application', applicationPort: 8080, targetPort: 8080,
-	  });
-	  vi.spyOn(service as any, 'syncTargetNode').mockResolvedValue(undefined);
-	  vi.spyOn(service as any, 'syncSourceNode').mockResolvedValue(undefined);
+  it('retries a transient relay registration race before failing provisioning', async () => {
+    const dispatch = {
+      probeProxySecureLink: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('connection reset by peer'))
+        .mockResolvedValueOnce({ httpStatus: 200, responseMs: 4 }),
+    } as any;
+    const service = new ProxySecureLinkService({} as any, dispatch, {} as any, 'connector@sha256:test');
 
-	  const result = await service.reconcileExisting(host);
+    await expect(
+      (service as any).probeSecureLink('nginx-node', {
+        linkId: '11111111-1111-4111-8111-111111111111',
+        scheme: 'http',
+        path: '/',
+        timeoutSeconds: 10,
+      })
+    ).resolves.toEqual({ httpStatus: 200, responseMs: 4 });
+    expect(dispatch.probeProxySecureLink).toHaveBeenCalledTimes(2);
+  });
 
-	  expect(result.secureLinkLastError).toBeNull();
-	  expect(updatedValues).toContainEqual(expect.objectContaining({ secureLinkLastError: null }));
-	});
+  it('clears a transient runtime error after an active link reconciles successfully', async () => {
+    const host = {
+      id: '11111111-1111-4111-8111-111111111111',
+      type: 'proxy',
+      upstreamKind: 'docker_container',
+      nodeId: 'nginx-node',
+      dockerNodeId: 'docker-node',
+      dockerContainerName: 'application',
+      dockerContainerPort: 8080,
+      dockerHostPort: 8080,
+      forwardScheme: 'http',
+      healthCheckUrl: '/id',
+      secureLinkGeneration: 2,
+      secureLinkStatus: 'active',
+      secureLinkMigratedAt: new Date(),
+      secureLinkLastError: 'relay unavailable',
+      secureLinkTargetNetwork: 'application-net',
+      secureLinkTargetContainer: 'application',
+      secureLinkTargetHost: null,
+    } as any;
+    const updatedValues: Array<Record<string, unknown>> = [];
+    const db = {
+      query: { proxyHosts: { findFirst: vi.fn().mockResolvedValue(host) } },
+      update: vi.fn(() => ({
+        set: vi.fn((values: Record<string, unknown>) => {
+          updatedValues.push(values);
+          return {
+            where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ ...host, secureLinkLastError: null }]) })),
+          };
+        }),
+      })),
+    } as any;
+    const dispatch = { probeProxySecureLink: vi.fn().mockResolvedValue({ httpStatus: 200 }) } as any;
+    const relayPolicy = { ensureProxySecureLink: vi.fn().mockResolvedValue(undefined) } as any;
+    const service = new ProxySecureLinkService(db, dispatch, relayPolicy, 'connector@sha256:test');
+    vi.spyOn(service as any, 'nodesSupportSecureLinks').mockResolvedValue(true);
+    vi.spyOn(service as any, 'resolveTarget').mockResolvedValue({
+      nodeId: 'docker-node',
+      network: 'application-net',
+      container: 'application',
+      applicationPort: 8080,
+      targetPort: 8080,
+    });
+    vi.spyOn(service as any, 'syncTargetNode').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'syncSourceNode').mockResolvedValue(undefined);
 
-	it('preserves a prepared cutover when queued reconciliation starts from a stale legacy snapshot', async () => {
-	  const stale = {
-		id: '11111111-1111-4111-8111-111111111111', type: 'proxy', upstreamKind: 'docker_container',
-		nodeId: 'nginx-node', dockerNodeId: 'docker-node', dockerContainerName: 'application', dockerContainerPort: 8080,
-		dockerHostPort: 18080, secureLinkGeneration: 0, secureLinkStatus: 'legacy', secureLinkMigratedAt: null,
-		secureLinkTargetNetwork: null, secureLinkTargetContainer: null, secureLinkTargetHost: null,
-	  } as any;
-	  const prepared = {
-		...stale,
-		dockerHostPort: 8080,
-		secureLinkGeneration: 1,
-		secureLinkStatus: 'cutover_ready',
-		secureLinkTargetNetwork: 'application-net',
-		secureLinkTargetContainer: 'application',
-		secureLinkListenerPort: 41001,
-		secureLinkConnectorPort: 42001,
-	  } as any;
-	  const db = {
-		query: { proxyHosts: { findFirst: vi.fn().mockResolvedValue(prepared) } },
-		update: vi.fn(),
-	  } as any;
-	  const dispatch = { probeProxySecureLink: vi.fn() } as any;
-	  const relayPolicy = { ensureProxySecureLink: vi.fn(), revokeOwner: vi.fn() } as any;
-	  const service = new ProxySecureLinkService(db, dispatch, relayPolicy, 'connector@sha256:test');
-	  vi.spyOn(service as any, 'nodesSupportSecureLinks').mockResolvedValue(true);
-	  vi.spyOn(service as any, 'resolveTarget').mockResolvedValue({
-		nodeId: 'docker-node', network: 'application-net', container: 'application', applicationPort: 8080, targetPort: 8080,
-	  });
+    const result = await service.reconcileExisting(host);
 
-	  const result = await service.reconcileExisting(stale);
+    expect(result.secureLinkLastError).toBeNull();
+    expect(updatedValues).toContainEqual(expect.objectContaining({ secureLinkLastError: null }));
+  });
 
-	  expect(result).toBe(prepared);
-	  expect(db.update).not.toHaveBeenCalled();
-	  expect(dispatch.probeProxySecureLink).not.toHaveBeenCalled();
-	  expect(relayPolicy.ensureProxySecureLink).not.toHaveBeenCalled();
-	});
+  it('preserves a prepared cutover when queued reconciliation starts from a stale legacy snapshot', async () => {
+    const stale = {
+      id: '11111111-1111-4111-8111-111111111111',
+      type: 'proxy',
+      upstreamKind: 'docker_container',
+      nodeId: 'nginx-node',
+      dockerNodeId: 'docker-node',
+      dockerContainerName: 'application',
+      dockerContainerPort: 8080,
+      dockerHostPort: 18080,
+      secureLinkGeneration: 0,
+      secureLinkStatus: 'legacy',
+      secureLinkMigratedAt: null,
+      secureLinkTargetNetwork: null,
+      secureLinkTargetContainer: null,
+      secureLinkTargetHost: null,
+    } as any;
+    const prepared = {
+      ...stale,
+      dockerHostPort: 8080,
+      secureLinkGeneration: 1,
+      secureLinkStatus: 'cutover_ready',
+      secureLinkTargetNetwork: 'application-net',
+      secureLinkTargetContainer: 'application',
+      secureLinkListenerPort: 41001,
+      secureLinkConnectorPort: 42001,
+    } as any;
+    const db = {
+      query: { proxyHosts: { findFirst: vi.fn().mockResolvedValue(prepared) } },
+      update: vi.fn(),
+    } as any;
+    const dispatch = { probeProxySecureLink: vi.fn() } as any;
+    const relayPolicy = { ensureProxySecureLink: vi.fn(), revokeOwner: vi.fn() } as any;
+    const service = new ProxySecureLinkService(db, dispatch, relayPolicy, 'connector@sha256:test');
+    vi.spyOn(service as any, 'nodesSupportSecureLinks').mockResolvedValue(true);
+    vi.spyOn(service as any, 'resolveTarget').mockResolvedValue({
+      nodeId: 'docker-node',
+      network: 'application-net',
+      container: 'application',
+      applicationPort: 8080,
+      targetPort: 8080,
+    });
 
-	it('takes the production route and listener out of service before applying an active target candidate', async () => {
-	  const host = {
-		id: '11111111-1111-4111-8111-111111111111',
-		type: 'proxy',
-		upstreamKind: 'docker_container',
-		nodeId: 'nginx-node',
-		dockerNodeId: 'docker-node',
-		dockerContainerName: 'replacement',
-		dockerContainerPort: 9090,
-		dockerHostPort: 8080,
-		forwardScheme: 'http',
-		healthCheckUrl: '/',
-		secureLinkGeneration: 4,
-		secureLinkStatus: 'active',
-		secureLinkMigratedAt: new Date(),
-		secureLinkTargetNetwork: 'application-net',
-		secureLinkTargetContainer: 'old-application',
-		secureLinkTargetHost: null,
-	  } as any;
-	  const updatedValues: Array<Record<string, unknown>> = [];
-	  const db = {
-		update: vi.fn(() => ({
-		  set: vi.fn((values: Record<string, unknown>) => {
-			updatedValues.push(values);
-			return { where: vi.fn().mockResolvedValue(undefined) };
-		  }),
-		})),
-		query: {
-		  proxyHosts: {
-			findFirst: vi.fn().mockResolvedValue({
-			  ...host,
-			  secureLinkStatus: 'updating',
-			  secureLinkListenerPort: 41002,
-			}),
-		  },
-		},
-	  } as any;
-	  const dispatch = { probeProxySecureLink: vi.fn().mockResolvedValue({ httpStatus: 200 }) } as any;
-	  const relayPolicy = {
-		revokeOwner: vi.fn().mockResolvedValue(undefined),
-		ensureProxySecureLink: vi.fn().mockResolvedValue(undefined),
-	  } as any;
-	  const service = new ProxySecureLinkService(db, dispatch, relayPolicy, 'connector@sha256:test');
-	  vi.spyOn(service as any, 'nodesSupportSecureLinks').mockResolvedValue(true);
-	  vi.spyOn(service as any, 'resolveTarget').mockResolvedValue({
-		nodeId: 'docker-node', network: 'replacement-net', container: 'replacement', applicationPort: 9090, targetPort: 9090,
-	  });
-	  const syncSource = vi.spyOn(service as any, 'syncSourceNode').mockResolvedValue(undefined);
-	  const syncTarget = vi.spyOn(service as any, 'syncTargetNode').mockResolvedValue(undefined);
+    const result = await service.reconcileExisting(stale);
 
-	  await service.prepare(host, true);
+    expect(result).toBe(prepared);
+    expect(db.update).not.toHaveBeenCalled();
+    expect(dispatch.probeProxySecureLink).not.toHaveBeenCalled();
+    expect(relayPolicy.ensureProxySecureLink).not.toHaveBeenCalled();
+  });
 
-	  expect(updatedValues[0]).toEqual(expect.objectContaining({ secureLinkStatus: 'updating' }));
-	  expect(syncSource).toHaveBeenCalledWith('nginx-node', host.id);
-	  expect(relayPolicy.revokeOwner.mock.invocationCallOrder[0]).toBeLessThan(syncSource.mock.invocationCallOrder[0]);
-	  expect(syncSource.mock.invocationCallOrder[0]).toBeLessThan(syncTarget.mock.invocationCallOrder[0]);
-	  expect(syncTarget.mock.invocationCallOrder[0]).toBeLessThan(relayPolicy.ensureProxySecureLink.mock.invocationCallOrder[0]);
-	  expect(relayPolicy.ensureProxySecureLink.mock.invocationCallOrder[0]).toBeLessThan(
-		dispatch.probeProxySecureLink.mock.invocationCallOrder[0]
-	  );
-	});
+  it('takes the production route and listener out of service before applying an active target candidate', async () => {
+    const host = {
+      id: '11111111-1111-4111-8111-111111111111',
+      type: 'proxy',
+      upstreamKind: 'docker_container',
+      nodeId: 'nginx-node',
+      dockerNodeId: 'docker-node',
+      dockerContainerName: 'replacement',
+      dockerContainerPort: 9090,
+      dockerHostPort: 8080,
+      forwardScheme: 'http',
+      healthCheckUrl: '/',
+      secureLinkGeneration: 4,
+      secureLinkStatus: 'active',
+      secureLinkMigratedAt: new Date(),
+      secureLinkTargetNetwork: 'application-net',
+      secureLinkTargetContainer: 'old-application',
+      secureLinkTargetHost: null,
+    } as any;
+    const updatedValues: Array<Record<string, unknown>> = [];
+    const db = {
+      update: vi.fn(() => ({
+        set: vi.fn((values: Record<string, unknown>) => {
+          updatedValues.push(values);
+          return { where: vi.fn().mockResolvedValue(undefined) };
+        }),
+      })),
+      query: {
+        proxyHosts: {
+          findFirst: vi.fn().mockResolvedValue({
+            ...host,
+            secureLinkStatus: 'updating',
+            secureLinkListenerPort: 41002,
+          }),
+        },
+      },
+    } as any;
+    const dispatch = { probeProxySecureLink: vi.fn().mockResolvedValue({ httpStatus: 200 }) } as any;
+    const relayPolicy = {
+      revokeOwner: vi.fn().mockResolvedValue(undefined),
+      ensureProxySecureLink: vi.fn().mockResolvedValue(undefined),
+    } as any;
+    const service = new ProxySecureLinkService(db, dispatch, relayPolicy, 'connector@sha256:test');
+    vi.spyOn(service as any, 'nodesSupportSecureLinks').mockResolvedValue(true);
+    vi.spyOn(service as any, 'resolveTarget').mockResolvedValue({
+      nodeId: 'docker-node',
+      network: 'replacement-net',
+      container: 'replacement',
+      applicationPort: 9090,
+      targetPort: 9090,
+    });
+    const syncSource = vi.spyOn(service as any, 'syncSourceNode').mockResolvedValue(undefined);
+    const syncTarget = vi.spyOn(service as any, 'syncTargetNode').mockResolvedValue(undefined);
 
-	it('never restores legacy state after the no-fallback cutover marker is durable', async () => {
-	  const host = {
-		id: '11111111-1111-4111-8111-111111111111', type: 'proxy', upstreamKind: 'docker_container',
-		nodeId: 'nginx-node', dockerNodeId: 'docker-node', dockerContainerName: 'application', dockerContainerPort: 8080,
-		dockerHostPort: 8080, secureLinkGeneration: 2, secureLinkStatus: 'provisioning', secureLinkMigratedAt: new Date(),
-		secureLinkTargetNetwork: 'application-net', secureLinkTargetContainer: 'application', secureLinkTargetHost: null,
-	  } as any;
-	  const updatedValues: Array<Record<string, unknown>> = [];
-	  const db = {
-		update: vi.fn(() => ({
-		  set: vi.fn((values: Record<string, unknown>) => {
-			updatedValues.push(values);
-			return { where: vi.fn().mockResolvedValue(undefined) };
-		  }),
-		})),
-	  } as any;
-	  const relayPolicy = { revokeOwner: vi.fn() } as any;
-	  const service = new ProxySecureLinkService(db, {} as any, relayPolicy, 'connector@sha256:test');
-	  vi.spyOn(service as any, 'nodesSupportSecureLinks').mockResolvedValue(true);
-	  vi.spyOn(service as any, 'resolveTarget').mockResolvedValue({
-		nodeId: 'docker-node', network: 'application-net', container: 'application', applicationPort: 8080, targetPort: 8080,
-	  });
-	  vi.spyOn(service as any, 'syncTargetNode').mockRejectedValue(new Error('docker unavailable'));
+    await service.prepare(host, true);
 
-	  await expect(service.prepare(host, false)).rejects.toThrow('docker unavailable');
+    expect(updatedValues[0]).toEqual(expect.objectContaining({ secureLinkStatus: 'updating' }));
+    expect(syncSource).toHaveBeenCalledWith('nginx-node', host.id);
+    expect(relayPolicy.revokeOwner.mock.invocationCallOrder[0]).toBeLessThan(syncSource.mock.invocationCallOrder[0]);
+    expect(syncSource.mock.invocationCallOrder[0]).toBeLessThan(syncTarget.mock.invocationCallOrder[0]);
+    expect(syncTarget.mock.invocationCallOrder[0]).toBeLessThan(
+      relayPolicy.ensureProxySecureLink.mock.invocationCallOrder[0]
+    );
+    expect(relayPolicy.ensureProxySecureLink.mock.invocationCallOrder[0]).toBeLessThan(
+      dispatch.probeProxySecureLink.mock.invocationCallOrder[0]
+    );
+  });
 
-	  expect(updatedValues).not.toContainEqual(expect.objectContaining({ secureLinkGeneration: 0 }));
-	  expect(updatedValues).not.toContainEqual(expect.objectContaining({ secureLinkStatus: 'legacy' }));
-	  expect(relayPolicy.revokeOwner).not.toHaveBeenCalled();
-	});
+  it('never restores legacy state after the no-fallback cutover marker is durable', async () => {
+    const host = {
+      id: '11111111-1111-4111-8111-111111111111',
+      type: 'proxy',
+      upstreamKind: 'docker_container',
+      nodeId: 'nginx-node',
+      dockerNodeId: 'docker-node',
+      dockerContainerName: 'application',
+      dockerContainerPort: 8080,
+      dockerHostPort: 8080,
+      secureLinkGeneration: 2,
+      secureLinkStatus: 'provisioning',
+      secureLinkMigratedAt: new Date(),
+      secureLinkTargetNetwork: 'application-net',
+      secureLinkTargetContainer: 'application',
+      secureLinkTargetHost: null,
+    } as any;
+    const updatedValues: Array<Record<string, unknown>> = [];
+    const db = {
+      update: vi.fn(() => ({
+        set: vi.fn((values: Record<string, unknown>) => {
+          updatedValues.push(values);
+          return { where: vi.fn().mockResolvedValue(undefined) };
+        }),
+      })),
+    } as any;
+    const relayPolicy = { revokeOwner: vi.fn() } as any;
+    const service = new ProxySecureLinkService(db, {} as any, relayPolicy, 'connector@sha256:test');
+    vi.spyOn(service as any, 'nodesSupportSecureLinks').mockResolvedValue(true);
+    vi.spyOn(service as any, 'resolveTarget').mockResolvedValue({
+      nodeId: 'docker-node',
+      network: 'application-net',
+      container: 'application',
+      applicationPort: 8080,
+      targetPort: 8080,
+    });
+    vi.spyOn(service as any, 'syncTargetNode').mockRejectedValue(new Error('docker unavailable'));
+
+    await expect(service.prepare(host, false)).rejects.toThrow('docker unavailable');
+
+    expect(updatedValues).not.toContainEqual(expect.objectContaining({ secureLinkGeneration: 0 }));
+    expect(updatedValues).not.toContainEqual(expect.objectContaining({ secureLinkStatus: 'legacy' }));
+    expect(relayPolicy.revokeOwner).not.toHaveBeenCalled();
+  });
 
   it('restores the legacy endpoint when the end-to-end probe fails before cutover', async () => {
     const host = {

@@ -7,6 +7,7 @@ import type {
   PaginatedResponse,
   ProxyHost,
   ProxyHostType,
+  ProxySecureLinkStatus,
 } from "@/types";
 import type { ApiClientBaseConstructor } from "./api-mixins";
 
@@ -56,6 +57,12 @@ export function withProxyApi<TBase extends ApiClientBaseConstructor>(Base: TBase
       id: string
     ): Promise<Array<{ ts: string; status: string; responseMs?: number; slow?: boolean }>> {
       return this.unwrapData(this.request(`/proxy-hosts/${id}/health-history`));
+    }
+
+    async getProxySecureLinkStatus(id: string): Promise<ProxySecureLinkStatus> {
+      return this.unwrapData(
+        this.request<{ data: ProxySecureLinkStatus }>(`/proxy-hosts/${id}/secure-link`)
+      );
     }
 
     async createProxyHost(data: CreateProxyHostRequest): Promise<ProxyHost> {

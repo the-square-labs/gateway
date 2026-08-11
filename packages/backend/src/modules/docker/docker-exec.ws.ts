@@ -19,7 +19,8 @@ export function isDockerExecPreauthMessageTooLarge(payload: unknown): boolean {
   if (typeof payload === 'string') return Buffer.byteLength(payload, 'utf8') > DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES;
   if (payload instanceof ArrayBuffer) return payload.byteLength > DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES;
   if (ArrayBuffer.isView(payload)) return payload.byteLength > DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES;
-  if (typeof Blob !== 'undefined' && payload instanceof Blob) return payload.size > DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES;
+  if (typeof Blob !== 'undefined' && payload instanceof Blob)
+    return payload.size > DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES;
   return Buffer.byteLength(String(payload), 'utf8') > DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES;
 }
 

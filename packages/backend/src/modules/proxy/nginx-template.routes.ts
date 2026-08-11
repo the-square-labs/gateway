@@ -151,6 +151,7 @@ nginxTemplateRoutes.openapi(
         cacheEnabled: host.cacheEnabled,
         cacheOptions: host.cacheOptions as Record<string, unknown> | null,
         rateLimitEnabled: host.rateLimitEnabled,
+        rateLimitMode: host.rateLimitMode,
         rateLimitOptions: host.rateLimitOptions as Record<string, unknown> | null,
         customRewrites: (host.customRewrites ?? []) as { source: string; destination: string; type: string }[],
         advancedConfig: canPreviewAdvancedConfig ? host.advancedConfig : null,

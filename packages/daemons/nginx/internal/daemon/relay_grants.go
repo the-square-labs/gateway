@@ -16,10 +16,11 @@ type relayGrantStore struct {
 	path    string
 	mu      sync.RWMutex
 	current *pb.SyncRelayGrantsCommand
+	changed chan struct{}
 }
 
 func newRelayGrantStore(stateDir string) (*relayGrantStore, error) {
-	store := &relayGrantStore{path: filepath.Join(stateDir, "relay-grants.json"), current: &pb.SyncRelayGrantsCommand{}}
+	store := &relayGrantStore{path: filepath.Join(stateDir, "relay-grants.json"), current: &pb.SyncRelayGrantsCommand{}, changed: make(chan struct{}, 1)}
 	data, err := os.ReadFile(store.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return store, nil
@@ -61,7 +62,14 @@ func (s *relayGrantStore) sync(command *pb.SyncRelayGrantsCommand) error {
 		_ = os.Remove(temporary)
 		return err
 	}
+	laneCountChanged := command.GetDataLanes() != s.current.GetDataLanes()
 	s.current = proto.Clone(command).(*pb.SyncRelayGrantsCommand)
+	if laneCountChanged {
+		select {
+		case s.changed <- struct{}{}:
+		default:
+		}
+	}
 	return nil
 }
 

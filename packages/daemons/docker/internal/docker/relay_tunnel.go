@@ -183,13 +183,16 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 	defer cancel()
 	stream, err := r.client.AcceptTunnel(tunnelCtx)
 	if err != nil {
+		r.plugin.logger.Warn("relay endpoint tunnel failed", "owner_kind", assignment.OwnerKind, "owner_id", assignment.OwnerId, "stage", "accept", "error", err)
 		return
 	}
 	if err = stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Accept{Accept: &relayv1.AcceptTunnel{AcceptToken: incoming.AcceptToken}}}); err != nil {
+		r.plugin.logger.Warn("relay endpoint tunnel failed", "owner_kind", assignment.OwnerKind, "owner_id", assignment.OwnerId, "stage", "authorize", "error", err)
 		return
 	}
 	first, err := stream.Recv()
 	if err != nil || first.GetReady() == nil {
+		r.plugin.logger.Warn("relay endpoint tunnel failed", "owner_kind", assignment.OwnerKind, "owner_id", assignment.OwnerId, "stage", "ready", "error", err)
 		return
 	}
 	var connection net.Conn
@@ -208,12 +211,17 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 		return
 	}
 	if err != nil {
+		r.plugin.logger.Warn("relay endpoint tunnel failed", "owner_kind", assignment.OwnerKind, "owner_id", assignment.OwnerId, "stage", "dial", "error", err)
 		_ = stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Error{Error: &relayv1.RelayError{Code: "endpoint_unavailable", Message: "Endpoint is unavailable"}}})
 		return
 	}
 	defer connection.Close()
 	if assignment.OwnerKind == proxySecureLinkOwnerKind {
-		_ = relaybridge.Bridge(tunnelCtx, connection, stream, int(first.GetReady().MaxFrameBytes), cancel)
+		readChunk := int(r.plugin.relayGrants.get().GetReadChunkBytes())
+		if readChunk == 0 {
+			readChunk = relaybridge.DefaultChunkBytes
+		}
+		_ = relaybridge.BridgeWithChunk(tunnelCtx, connection, stream, int(first.GetReady().MaxFrameBytes), readChunk, cancel)
 		return
 	}
 	_ = bridgeRelayConnection(connection, stream, int(first.GetReady().MaxFrameBytes), cancel)

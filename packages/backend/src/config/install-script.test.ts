@@ -45,6 +45,21 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain(`GATEWAY_RELAY_MANAGED: "\${GATEWAY_RELAY_MANAGED:-true}"`);
   });
 
+  it('keeps missing conflict packages from blocking Docker bootstrap', () => {
+    const source = readFileSync(installer, 'utf8');
+    const cleanupStart = source.indexOf('remove_conflicting_docker_packages()');
+    const installStart = source.indexOf('install_docker_engine()');
+    const cleanup = source.slice(cleanupStart, installStart);
+
+    expect(cleanupStart).toBeGreaterThanOrEqual(0);
+    expect(installStart).toBeGreaterThan(cleanupStart);
+    expect(source).toContain('run_root_best_effort()');
+    expect(cleanup).toContain('run_root_best_effort "Removing conflicting Docker packages" apt-get remove -y');
+    expect(cleanup).toContain('run_root_best_effort "Removing conflicting Docker packages" dnf remove -y');
+    expect(cleanup).toContain('run_root_best_effort "Removing conflicting Docker packages" yum remove -y');
+    expect(cleanup).not.toContain('run_root_quiet "Removing conflicting Docker packages"');
+  });
+
   it('renders a compact, quiet installer and lists usable connection URLs', () => {
     const source = readFileSync(installer, 'utf8');
     expect(source).toContain("BRAND_MINT='\\033[38;2;140;176;132m'");
@@ -95,6 +110,16 @@ describe('database daemon installer prerequisites', () => {
   it('keeps the shared Docker-node installer valid shell', () => {
     const syntax = spawnSync('bash', ['-n', dockerNodeInstaller], { encoding: 'utf8' });
     expect(syntax.status, syntax.stderr).toBe(0);
+  });
+
+  it('bootstraps Docker and Compose from Alpine packages before using OpenRC', () => {
+    const source = readFileSync(dockerNodeInstaller, 'utf8');
+
+    expect(source).toContain('alpine) echo "alpine"');
+    expect(source).toContain('install_system_packages docker docker-cli-compose');
+    expect(source).toContain('Automatic Docker installation is supported only on Alpine/');
+    expect(source).toContain('run_privileged_quiet rc-update add docker default');
+    expect(source).toContain('run_privileged_quiet rc-service docker start');
   });
 
   it('proves the runtime-equivalent fixed-size ext4 image lifecycle before enrollment', () => {
@@ -161,9 +186,7 @@ describe('node installer daemon downloads', () => {
   ])('%s fails closed when the requested daemon release cannot be downloaded', (_name, path, binary) => {
     const source = readFileSync(path, 'utf8');
 
-    expect(source).toContain(
-      `die \"Failed to download ${binary} \${RESOLVED_DAEMON_VERSION} from releases\"`
-    );
+    expect(source).toContain(`die "Failed to download ${binary} \${RESOLVED_DAEMON_VERSION} from releases"`);
     expect(source).not.toContain(`Place the ${binary} binary at \${target}`);
   });
 });

@@ -25,12 +25,13 @@ type LogEntryParsed struct {
 	Referer              string
 	UserAgent            string
 	UpstreamResponseTime string
+	RequestTime          string
 	Raw                  string
 }
 
 // combined log format regex
 var logLineRegex = regexp.MustCompile(
-	`^(\S+) - \S+ \[([^\]]+)\] "(\S+) (\S+) [^"]*" (\d+) (\d+) "([^"]*)" "([^"]*)"`,
+	`^(\S+) - \S+ \[([^\]]+)\] "(\S+) (\S+) [^"]*" (\d+) (\d+) "([^"]*)" "([^"]*)"(?:\s+(\S+)\s+(\S+))?`,
 )
 
 // ParseLogLine parses a single nginx combined-format log line.
@@ -53,14 +54,22 @@ func ParseLogLine(hostID, line string) *LogEntryParsed {
 	entry.BodyBytesSent, _ = strconv.ParseInt(matches[6], 10, 64)
 	entry.Referer = matches[7]
 	entry.UserAgent = matches[8]
+	if len(matches) > 9 {
+		entry.UpstreamResponseTime = matches[9]
+	}
+	if len(matches) > 10 {
+		entry.RequestTime = matches[10]
+	}
 
-	// Try to extract upstream_response_time if present (custom format)
-	if idx := strings.Index(line, "upstream_response_time="); idx >= 0 {
-		rest := line[idx+len("upstream_response_time="):]
-		if spIdx := strings.IndexAny(rest, " \t\n"); spIdx >= 0 {
-			entry.UpstreamResponseTime = rest[:spIdx]
-		} else {
-			entry.UpstreamResponseTime = rest
+	// Compatibility with older custom log formats that used a named suffix.
+	if entry.UpstreamResponseTime == "" {
+		if idx := strings.Index(line, "upstream_response_time="); idx >= 0 {
+			rest := line[idx+len("upstream_response_time="):]
+			if spIdx := strings.IndexAny(rest, " \t\n"); spIdx >= 0 {
+				entry.UpstreamResponseTime = rest[:spIdx]
+			} else {
+				entry.UpstreamResponseTime = rest
+			}
 		}
 	}
 

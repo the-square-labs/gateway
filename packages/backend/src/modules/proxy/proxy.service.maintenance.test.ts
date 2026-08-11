@@ -277,11 +277,7 @@ describe('ProxyService maintenance lifecycle', () => {
 
   it('preserves the scoped raw-validation bypass when enabling stored raw config', async () => {
     const rawConfig = 'include /etc/nginx/conf.d/private.conf;';
-    const { service, configGenerator } = setup(
-      { success: true },
-      { rawConfig },
-      { rawConfig, rawConfigEnabled: true }
-    );
+    const { service, configGenerator } = setup({ success: true }, { rawConfig }, { rawConfig, rawConfigEnabled: true });
 
     await service.updateProxyHost(
       '11111111-1111-4111-8111-111111111111',

@@ -416,6 +416,37 @@ describe('events websocket authentication', () => {
     handlers.onClose(new Event('close'), ws as any);
   });
 
+  it('replays an active Gateway update to clients that subscribe after it started', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({
+      user: USER,
+      effectiveScopes: USER.scopes,
+    });
+    eventBus.publish('system.update.changed', { updating: true, targetVersion: 'v2.4.0' });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscribe', channels: ['system.update.changed'] }),
+      }),
+      ws as any
+    );
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'event',
+        channel: 'system.update.changed',
+        payload: { updating: true, targetVersion: 'v2.4.0' },
+      })
+    );
+
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
   it('delivers configuration invalidations to an authenticated user without configuration payload', async () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);

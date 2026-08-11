@@ -35,7 +35,7 @@ type NginxPlugin struct {
 	secureLinks     *sourceLinkManager
 	secureLinkState *securelink.StateStore
 	relayTunnelMu   sync.Mutex
-	relayTunnel     *nginxRelayTunnel
+	relayTunnels    []*nginxRelayTunnel
 
 	// Session-scoped resources
 	sessionCancel context.CancelFunc

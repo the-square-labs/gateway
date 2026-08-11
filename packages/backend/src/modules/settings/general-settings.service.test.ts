@@ -122,7 +122,30 @@ describe('GeneralSettingsService feature settings', () => {
 
     await service.updateConfig({ features: { inferenceEnabled: true } });
 
-    expect(eventBus.publish).toHaveBeenCalledWith('system.config.changed', {});
+    expect(eventBus.publish).toHaveBeenCalledWith('system.config.changed', { relayChanged: false });
+  });
+
+  it('applies adaptive relay admission defaults and rejects an invalid database reserve window', async () => {
+    const limit = vi.fn().mockResolvedValue([{ value: {} }]);
+    const db = {
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit })) })) })),
+      insert: vi.fn(() => ({
+        values: vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) })),
+      })),
+    };
+    const service = new GeneralSettingsService(db as never);
+
+    expect((await service.getConfig()).relay).toMatchObject({
+      adaptiveAdmissionEnabled: true,
+      proxyTargetPressurePercent: 70,
+      databaseReservePercent: 20,
+      hardPressurePercent: 95,
+    });
+    await expect(
+      service.updateConfig({
+        relay: { proxyTargetPressurePercent: 80, databaseReservePercent: 15, hardPressurePercent: 95 },
+      })
+    ).rejects.toThrow('must remain below');
   });
 });
 

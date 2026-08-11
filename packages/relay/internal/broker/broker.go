@@ -4,11 +4,13 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"io"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+	"github.com/wiolett-industries/gateway/relay/internal/admission"
 	"github.com/wiolett-industries/gateway/relay/internal/grant"
 	"github.com/wiolett-industries/gateway/relay/internal/peer"
 	"github.com/wiolett-industries/gateway/relay/internal/policy"
@@ -51,6 +53,8 @@ type activeTunnel struct {
 	sourceID           string
 	endpointID         string
 	endpointGeneration uint64
+	trafficClass       string
+	metrics            *routeMetrics
 	stop               chan struct{}
 	stopOnce           sync.Once
 }
@@ -59,22 +63,178 @@ func (t *activeTunnel) close() { t.stopOnce.Do(func() { close(t.stop) }) }
 
 type Broker struct {
 	relayv1.UnimplementedTunnelBrokerServer
-	store     *policy.Store
-	verifier  grant.Verifier
-	mu        sync.Mutex
-	endpoints map[string]*endpointRegistration
-	pending   map[string]*pendingTunnel
-	active    map[string]*activeTunnel
+	store          *policy.Store
+	verifier       grant.Verifier
+	mu             sync.Mutex
+	endpoints      map[string]*endpointRegistration
+	pending        map[string]*pendingTunnel
+	active         map[string]*activeTunnel
+	admission      *admission.Controller
+	activeProxy    uint64
+	activeDatabase uint64
+	proxyByRoute   map[string]uint64
+	routeMetrics   map[string]*routeMetrics
+	metricsSince   time.Time
 }
 
 func New(store *policy.Store) *Broker {
-	return &Broker{store: store, verifier: grant.Verifier{Store: store}, endpoints: map[string]*endpointRegistration{}, pending: map[string]*pendingTunnel{}, active: map[string]*activeTunnel{}}
+	controller := admission.New()
+	controller.UpdatePolicy(store.Current().Admission)
+	return &Broker{store: store, verifier: grant.Verifier{Store: store}, endpoints: map[string]*endpointRegistration{}, pending: map[string]*pendingTunnel{}, active: map[string]*activeTunnel{}, admission: controller, proxyByRoute: map[string]uint64{}, routeMetrics: map[string]*routeMetrics{}, metricsSince: time.Now()}
+}
+
+const routeSetupLatencyWindow = 256
+
+type routeMetrics struct {
+	active              atomic.Uint64
+	opened              atomic.Uint64
+	completed           atomic.Uint64
+	failed              atomic.Uint64
+	throttled           atomic.Uint64
+	sourceToTargetBytes atomic.Uint64
+	targetToSourceBytes atomic.Uint64
+	durationMillis      atomic.Uint64
+	durationCount       atomic.Uint64
+	lastActivityMillis  atomic.Int64
+	setupMu             sync.Mutex
+	setupLatencies      [routeSetupLatencyWindow]uint64
+	setupCount          uint64
+}
+
+func (m *routeMetrics) touch() {
+	m.lastActivityMillis.Store(time.Now().UnixMilli())
+}
+
+func (m *routeMetrics) recordSetup(duration time.Duration) {
+	m.setupMu.Lock()
+	m.setupLatencies[m.setupCount%routeSetupLatencyWindow] = uint64(max(0, duration.Microseconds()))
+	m.setupCount++
+	m.setupMu.Unlock()
+	m.touch()
+}
+
+func (m *routeMetrics) recordCompletion(duration time.Duration, err error) {
+	m.active.Add(^uint64(0))
+	m.completed.Add(1)
+	m.durationMillis.Add(uint64(max(0, duration.Milliseconds())))
+	m.durationCount.Add(1)
+	if err != nil {
+		m.failed.Add(1)
+	}
+	m.touch()
+}
+
+func (m *routeMetrics) recordFailedOpen(duration time.Duration) {
+	m.completed.Add(1)
+	m.failed.Add(1)
+	m.durationMillis.Add(uint64(max(0, duration.Milliseconds())))
+	m.durationCount.Add(1)
+	m.touch()
+}
+
+func (m *routeMetrics) setupP95Micros() uint64 {
+	m.setupMu.Lock()
+	count := min(m.setupCount, uint64(routeSetupLatencyWindow))
+	values := append([]uint64(nil), m.setupLatencies[:count]...)
+	m.setupMu.Unlock()
+	if len(values) == 0 {
+		return 0
+	}
+	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	index := (len(values)*95 + 99) / 100
+	return values[max(0, index-1)]
+}
+
+type RouteRuntimeSnapshot struct {
+	RouteID                string
+	ActiveTunnels          uint64
+	OpenedTotal            uint64
+	CompletedTotal         uint64
+	FailedTotal            uint64
+	ThrottledTotal         uint64
+	SourceToTargetBytes    uint64
+	TargetToSourceBytes    uint64
+	SetupLatencyP95Micros  uint64
+	AverageDurationMillis  uint64
+	LastActivityUnixMillis int64
+	MetricsSinceUnixMillis int64
+}
+
+func (b *Broker) RouteRuntimeSnapshot(routeID string) (RouteRuntimeSnapshot, bool) {
+	b.mu.Lock()
+	if b.store.Current().Routes[routeID] == nil {
+		b.mu.Unlock()
+		return RouteRuntimeSnapshot{}, false
+	}
+	metrics := b.routeMetrics[routeID]
+	metricsSince := b.metricsSince.UnixMilli()
+	b.mu.Unlock()
+
+	snapshot := RouteRuntimeSnapshot{RouteID: routeID, MetricsSinceUnixMillis: metricsSince}
+	if metrics == nil {
+		return snapshot, true
+	}
+	durationCount := metrics.durationCount.Load()
+	snapshot.ActiveTunnels = metrics.active.Load()
+	snapshot.OpenedTotal = metrics.opened.Load()
+	snapshot.CompletedTotal = metrics.completed.Load()
+	snapshot.FailedTotal = metrics.failed.Load()
+	snapshot.ThrottledTotal = metrics.throttled.Load()
+	snapshot.SourceToTargetBytes = metrics.sourceToTargetBytes.Load()
+	snapshot.TargetToSourceBytes = metrics.targetToSourceBytes.Load()
+	snapshot.SetupLatencyP95Micros = metrics.setupP95Micros()
+	if durationCount > 0 {
+		snapshot.AverageDurationMillis = metrics.durationMillis.Load() / durationCount
+	}
+	snapshot.LastActivityUnixMillis = metrics.lastActivityMillis.Load()
+	return snapshot, true
+}
+
+func (b *Broker) routeMetricsLocked(routeID string) *routeMetrics {
+	metrics := b.routeMetrics[routeID]
+	if metrics == nil {
+		metrics = &routeMetrics{}
+		b.routeMetrics[routeID] = metrics
+	}
+	return metrics
+}
+
+func (b *Broker) pruneRouteMetrics(routeID string, metrics *routeMetrics) {
+	if metrics.active.Load() != 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.store.Current().Routes[routeID] == nil && b.routeMetrics[routeID] == metrics {
+		delete(b.routeMetrics, routeID)
+	}
 }
 
 func (b *Broker) Counts() (uint64, uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return uint64(len(b.endpoints)), uint64(len(b.active))
+}
+
+type RuntimeSnapshot struct {
+	RegisteredEndpoints   uint64
+	ActiveTunnels         uint64
+	ActiveProxyTunnels    uint64
+	ActiveDatabaseTunnels uint64
+	Admission             admission.Snapshot
+}
+
+func (b *Broker) RuntimeSnapshot() RuntimeSnapshot {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	usage := b.usageLocked()
+	return RuntimeSnapshot{
+		RegisteredEndpoints:   uint64(len(b.endpoints)),
+		ActiveTunnels:         uint64(len(b.active)),
+		ActiveProxyTunnels:    usage.ActiveProxy,
+		ActiveDatabaseTunnels: usage.ActiveDatabase,
+		Admission:             b.admission.GetSnapshot(),
+	}
 }
 
 func (b *Broker) Reconcile(previous, next *policy.Snapshot) {
@@ -100,6 +260,12 @@ func (b *Broker) ApplySnapshot(request *relayv1.ApplySnapshotRequest) (*policy.S
 }
 
 func (b *Broker) reconcileLocked(next *policy.Snapshot) {
+	b.admission.UpdatePolicy(next.Admission)
+	for routeID, metrics := range b.routeMetrics {
+		if next.Routes[routeID] == nil && metrics.active.Load() == 0 {
+			delete(b.routeMetrics, routeID)
+		}
+	}
 	for id, registration := range b.endpoints {
 		endpoint := next.Endpoints[id]
 		if endpoint == nil || endpoint.Generation != registration.generation {
@@ -220,7 +386,7 @@ func sendRegistered(stream relayv1.TunnelBroker_RegisterEndpointServer, registra
 	return stream.Send(&relayv1.EndpointControl{Payload: &relayv1.EndpointControl_Registered{Registered: &relayv1.EndpointRegistered{EndpointId: registration.endpointID, GrantExpiresAtUnix: registration.expiresAt.Load()}}})
 }
 
-func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) error {
+func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resultErr error) {
 	client, err := peer.Require(stream.Context())
 	if err != nil {
 		return status.Error(codes.Unauthenticated, err.Error())
@@ -262,21 +428,40 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) error 
 		return status.Error(codes.PermissionDenied, "connect grant endpoint was revoked")
 	}
 	frameLimit := minNonZero(DefaultMaxFrameBytes, int(route.MaxFrameBytes), int(claims.MaxFrameBytes))
-	session := &activeTunnel{routeID: route.RouteId, routeGeneration: route.Generation, sourceKind: route.SourceKind, sourceID: route.SourceId, endpointID: endpoint.EndpointId, endpointGeneration: endpoint.Generation, stop: make(chan struct{})}
+	trafficClass := routeTrafficClass(route)
+	metrics := b.routeMetricsLocked(route.RouteId)
+	if err := b.admission.Admit(trafficClass, route.RouteId, b.usageLocked()); err != nil {
+		metrics.throttled.Add(1)
+		metrics.touch()
+		b.mu.Unlock()
+		return status.Error(codes.ResourceExhausted, err.Error())
+	}
+	startedAt := time.Now()
+	metrics.opened.Add(1)
+	metrics.touch()
+	session := &activeTunnel{routeID: route.RouteId, routeGeneration: route.Generation, sourceKind: route.SourceKind, sourceID: route.SourceId, endpointID: endpoint.EndpointId, endpointGeneration: endpoint.Generation, trafficClass: trafficClass, metrics: metrics, stop: make(chan struct{})}
 	pending := &pendingTunnel{endpoint: endpoint, session: session, accepted: make(chan acceptedConnection, 1)}
 	registration := b.endpoints[endpoint.EndpointId]
 	if registration == nil || time.Now().Unix() > registration.expiresAt.Load() {
 		b.mu.Unlock()
+		metrics.recordFailedOpen(time.Since(startedAt))
 		return status.Error(codes.Unavailable, "target endpoint is not registered")
 	}
+	metrics.active.Add(1)
 	b.pending[token] = pending
 	b.active[sessionID] = session
+	b.trackSessionLocked(session, 1)
 	b.mu.Unlock()
 	defer func() {
 		b.mu.Lock()
 		delete(b.pending, token)
-		delete(b.active, sessionID)
+		if current := b.active[sessionID]; current != nil {
+			b.trackSessionLocked(current, -1)
+			delete(b.active, sessionID)
+		}
 		b.mu.Unlock()
+		metrics.recordCompletion(time.Since(startedAt), resultErr)
+		b.pruneRouteMetrics(session.routeID, metrics)
 		session.close()
 	}()
 	deadline := time.Now().Add(AcceptTimeout)
@@ -312,9 +497,46 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) error 
 		accepted.result <- err
 		return err
 	}
-	bridgeErr := bridge(stream, accepted.stream, frameLimit, session.stop, route.DisableIdleTimeout)
+	metrics.recordSetup(time.Since(startedAt))
+	bridgeErr := bridge(stream, accepted.stream, frameLimit, session.stop, route.DisableIdleTimeout, metrics)
 	accepted.result <- bridgeErr
 	return bridgeErr
+}
+
+func routeTrafficClass(route *relayv1.RoutePolicy) string {
+	if route.TrafficClass == admission.TrafficClassDatabase {
+		return admission.TrafficClassDatabase
+	}
+	if route.TrafficClass == admission.TrafficClassProxy || route.SourceKind == "nginx" {
+		return admission.TrafficClassProxy
+	}
+	return admission.TrafficClassDatabase
+}
+
+func (b *Broker) usageLocked() admission.Usage {
+	return admission.Usage{ActiveProxy: b.activeProxy, ActiveDatabase: b.activeDatabase, ProxyByRoute: b.proxyByRoute}
+}
+
+func (b *Broker) trackSessionLocked(tunnel *activeTunnel, delta int) {
+	if tunnel.trafficClass == admission.TrafficClassProxy {
+		if delta > 0 {
+			b.activeProxy++
+			b.proxyByRoute[tunnel.routeID]++
+			return
+		}
+		b.activeProxy--
+		if b.proxyByRoute[tunnel.routeID] <= 1 {
+			delete(b.proxyByRoute, tunnel.routeID)
+		} else {
+			b.proxyByRoute[tunnel.routeID]--
+		}
+		return
+	}
+	if delta > 0 {
+		b.activeDatabase++
+	} else {
+		b.activeDatabase--
+	}
 }
 
 func (b *Broker) AcceptTunnel(stream relayv1.TunnelBroker_AcceptTunnelServer) error {
@@ -372,23 +594,35 @@ type tunnelStream interface {
 	tunnelSender
 }
 
-func bridge(left, right tunnelStream, maxFrame int, stopped <-chan struct{}, disableIdleTimeout bool) error {
+func bridge(left, right tunnelStream, maxFrame int, stopped <-chan struct{}, disableIdleTimeout bool, metrics *routeMetrics) error {
 	idleTimeout := IdleTimeout
 	if disableIdleTimeout {
 		idleTimeout = 0
 	}
-	return bridgeWithIdleTimeout(left, right, maxFrame, stopped, idleTimeout)
+	return bridgeWithIdleTimeout(left, right, maxFrame, stopped, idleTimeout, metrics)
 }
 
-func bridgeWithIdleTimeout(left, right tunnelStream, maxFrame int, stopped <-chan struct{}, idleTimeout time.Duration) error {
+func bridgeWithIdleTimeout(left, right tunnelStream, maxFrame int, stopped <-chan struct{}, idleTimeout time.Duration, metrics *routeMetrics) error {
 	results := make(chan pumpResult, 2)
 	activity := make(chan struct{}, 1)
 	go func() {
-		terminal, err := pump(right, left, maxFrame, activity)
+		terminal, err := pump(right, left, maxFrame, activity, func(bytes uint64) {
+			if metrics == nil {
+				return
+			}
+			metrics.sourceToTargetBytes.Add(bytes)
+			metrics.touch()
+		})
 		results <- pumpResult{terminal: terminal, err: err}
 	}()
 	go func() {
-		terminal, err := pump(left, right, maxFrame, activity)
+		terminal, err := pump(left, right, maxFrame, activity, func(bytes uint64) {
+			if metrics == nil {
+				return
+			}
+			metrics.targetToSourceBytes.Add(bytes)
+			metrics.touch()
+		})
 		results <- pumpResult{terminal: terminal, err: err}
 	}()
 	var timer *time.Timer
@@ -443,7 +677,7 @@ type pumpResult struct {
 	err      error
 }
 
-func pump(destination tunnelSender, source tunnelReceiver, maxFrame int, activity chan<- struct{}) (bool, error) {
+func pump(destination tunnelSender, source tunnelReceiver, maxFrame int, activity chan<- struct{}, recordBytes func(uint64)) (bool, error) {
 	for {
 		frame, err := source.Recv()
 		if err != nil {
@@ -456,17 +690,22 @@ func pump(destination tunnelSender, source tunnelReceiver, maxFrame int, activit
 			// waits forever for the peer direction and leaks session capacity.
 			return true, err
 		}
+		dataBytes := 0
 		switch payload := frame.Payload.(type) {
 		case *relayv1.TunnelFrame_Data:
 			if len(payload.Data.Data) == 0 || len(payload.Data.Data) > maxFrame {
 				return false, status.Error(codes.InvalidArgument, "tunnel data frame exceeds negotiated limit")
 			}
+			dataBytes = len(payload.Data.Data)
 		case *relayv1.TunnelFrame_HalfClose, *relayv1.TunnelFrame_Close, *relayv1.TunnelFrame_Error:
 		default:
 			return false, status.Error(codes.InvalidArgument, "unexpected tunnel frame")
 		}
 		if err := destination.Send(frame); err != nil {
 			return false, err
+		}
+		if dataBytes > 0 && recordBytes != nil {
+			recordBytes(uint64(dataBytes))
 		}
 		select {
 		case activity <- struct{}{}:

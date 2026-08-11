@@ -63,8 +63,8 @@ export const useUpdateStore = create<UpdateState>()((set, get) => ({
             isGatewayUpdateTargetVersion(status.currentVersion, version)
           ) {
             clearInterval(poll);
-            publishGatewayReload(status.currentVersion, "gateway-update-complete");
-            reloadGatewayClient();
+            const reload = publishGatewayReload(status.currentVersion, "gateway-update-complete");
+            reloadGatewayClient(reload.id);
           }
         } catch {
           // App still down

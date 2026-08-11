@@ -37,11 +37,9 @@ export async function executeDomainTool(
         user.id
       );
     case 'delete_domain':
-      await context.domainsService.deleteDomain(
-        a.domainId,
-        user.id,
-        { deleteDns: typeof a.deleteDns === 'boolean' ? a.deleteDns : undefined }
-      );
+      await context.domainsService.deleteDomain(a.domainId, user.id, {
+        deleteDns: typeof a.deleteDns === 'boolean' ? a.deleteDns : undefined,
+      });
       return { success: true };
     case 'manage_domain':
       if (a.operation === 'get') {

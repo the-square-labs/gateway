@@ -103,6 +103,13 @@ function relayNoticeContent(relay: DashboardRelaySnapshot) {
         "Secure database connections are temporarily unavailable while Gateway recovers the relay.",
     };
   }
+  if (relay.state === "degraded") {
+    return {
+      title: "Gateway relay management needs attention",
+      summary: "Relay runtime ownership could not be verified.",
+      description: "Traffic may continue, but automatic container recovery is unavailable.",
+    };
+  }
   if (relay.state === "maintenance") {
     return {
       title: "Gateway relay maintenance in progress",
@@ -133,7 +140,9 @@ export function RelayHealthNotice({
   const [detailsOpen, setDetailsOpen] = useState(false);
   if (
     !relay ||
-    !["migration_pending", "maintenance", "recovering", "critical"].includes(relay.state)
+    !["migration_pending", "maintenance", "recovering", "degraded", "critical"].includes(
+      relay.state
+    )
   ) {
     return null;
   }
@@ -614,7 +623,8 @@ export function Dashboard() {
   );
   const relay = dashboardBootstrap?.relay ?? null;
   const relayNotice =
-    relay && ["migration_pending", "maintenance", "recovering", "critical"].includes(relay.state)
+    relay &&
+    ["migration_pending", "maintenance", "recovering", "degraded", "critical"].includes(relay.state)
       ? relay
       : null;
   const canRetryRelay = hasScope("admin:system") && relayNotice?.state === "critical";

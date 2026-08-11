@@ -142,12 +142,38 @@ func runProcessRelayTunnel(
 	logger *slog.Logger,
 ) {
 	for ctx.Err() == nil {
-		conn, err := connect(ctx)
-		if err != nil {
+		laneCount := 1
+		var runtimeChanged <-chan struct{}
+		if runtime, ok := plugin.(RelayTunnelRuntimePlugin); ok {
+			laneCount = runtime.RelayTunnelLaneCount()
+			if laneCount < 1 {
+				laneCount = 1
+			}
+			if laneCount > 16 {
+				laneCount = 16
+			}
+			runtimeChanged = runtime.RelayTunnelRuntimeChanged()
+		}
+		connections := make([]*grpc.ClientConn, 0, laneCount)
+		var connectErr error
+		for lane := 0; lane < laneCount; lane++ {
+			conn, err := connect(ctx)
+			if err != nil {
+				connectErr = err
+				break
+			}
+			connections = append(connections, conn)
+		}
+		if connectErr != nil {
+			for _, conn := range connections {
+				if conn != nil {
+					_ = conn.Close()
+				}
+			}
 			if ctx.Err() != nil {
 				return
 			}
-			logger.Warn("relay tunnel connection failed, retrying", "error", err)
+			logger.Warn("relay tunnel lane connection failed, retrying", "error", connectErr)
 			select {
 			case <-ctx.Done():
 				return
@@ -156,31 +182,46 @@ func runProcessRelayTunnel(
 			}
 		}
 		tunnelCtx, cancelTunnel := context.WithCancel(ctx)
-		tunnelEnded := make(chan struct{})
-		go func() {
-			plugin.RunRelayTunnels(tunnelCtx, conn, nodeID)
-			close(tunnelEnded)
-		}()
+		tunnelEnded := make(chan struct{}, laneCount)
+		for _, conn := range connections {
+			laneConn := conn
+			go func() {
+				plugin.RunRelayTunnels(tunnelCtx, laneConn, nodeID)
+				tunnelEnded <- struct{}{}
+			}()
+		}
 		rotated := false
+		resized := false
+		ended := 0
 		select {
 		case <-ctx.Done():
 		case <-identityChanged:
 			rotated = true
 			logger.Info("relay tunnel identity changed, reconnecting")
+		case <-runtimeChanged:
+			resized = true
+			logger.Info("relay tunnel runtime changed, resizing lanes")
 		case <-tunnelEnded:
+			ended = 1
 		}
 		cancelTunnel()
-		if conn != nil {
-			_ = conn.Close()
+		for _, conn := range connections {
+			if conn != nil {
+				_ = conn.Close()
+			}
 		}
-		select {
-		case <-tunnelEnded:
-		case <-ctx.Done():
+		for ended < len(connections) {
+			select {
+			case <-tunnelEnded:
+				ended++
+			case <-ctx.Done():
+				return
+			}
 		}
 		if ctx.Err() != nil {
 			return
 		}
-		if rotated {
+		if rotated || resized {
 			continue
 		}
 		logger.Warn("relay tunnel lifecycle ended unexpectedly, restarting")

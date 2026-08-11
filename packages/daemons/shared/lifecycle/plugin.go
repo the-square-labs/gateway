@@ -84,6 +84,14 @@ type RelayTunnelPlugin interface {
 	SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (detail string, err error)
 }
 
+// RelayTunnelRuntimePlugin allows a source daemon to resize its physical
+// HTTP/2 lane pool from persisted Gateway settings without an environment
+// variable or process restart.
+type RelayTunnelRuntimePlugin interface {
+	RelayTunnelLaneCount() int
+	RelayTunnelRuntimeChanged() <-chan struct{}
+}
+
 // ProxySecureLinkPlugin is implemented by nginx and general Docker daemons.
 // The command is a complete desired-state snapshot, so reconnects and daemon
 // restarts can reconcile listeners and connector bindings idempotently.

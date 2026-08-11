@@ -139,6 +139,7 @@ export class RelayDockerRecoveryService {
     if (!hasComposeHelper) {
       throw new RelayRecoverySafetyError('docker_unavailable', 'Pinned Compose helper image is not present locally');
     }
+    const composeFile = `${ownership.composeWorkingDir}/docker-compose.yml`;
     const result = await this.runDockerAction(() =>
       this.docker.runOneShot({
         Image: DOCKER_COMPOSE_CLI_IMAGE_REF,
@@ -147,15 +148,23 @@ export class RelayDockerRecoveryService {
           'compose',
           '--project-name',
           ownership.composeProject,
+          '--project-directory',
+          ownership.composeWorkingDir,
           '-f',
-          '/project/docker-compose.yml',
+          composeFile,
           'up',
           '-d',
           ...(forceRecreate ? ['--force-recreate'] : []),
           this.env.GATEWAY_RELAY_SERVICE_NAME,
         ],
         HostConfig: {
-          Binds: [`${ownership.composeWorkingDir}:/project`, '/var/run/docker.sock:/var/run/docker.sock'],
+          // Compose persists its working directory in container ownership
+          // labels. Mounting the project at a synthetic /project path makes
+          // the recreated relay look foreign to the app on the next probe.
+          Binds: [
+            `${ownership.composeWorkingDir}:${ownership.composeWorkingDir}`,
+            '/var/run/docker.sock:/var/run/docker.sock',
+          ],
         },
       })
     );

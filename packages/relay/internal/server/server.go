@@ -20,7 +20,10 @@ import (
 	"google.golang.org/grpc/keepalive"
 )
 
-const maxGatewayMessageBytes = 512 * 1024 * 1024
+const (
+	maxGatewayMessageBytes = 512 * 1024 * 1024
+	clientKeepaliveMinTime = 20 * time.Second
+)
 
 type Runtime struct {
 	GRPC     *grpc.Server
@@ -62,6 +65,10 @@ func Start(cfg config.Config, buildVersion string) (*Runtime, error) {
 		grpc.UnknownServiceHandler(proxyHandler.Handle),
 		grpc.MaxRecvMsgSize(maxGatewayMessageBytes), grpc.MaxSendMsgSize(maxGatewayMessageBytes),
 		grpc.KeepaliveParams(keepalive.ServerParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             clientKeepaliveMinTime,
+			PermitWithoutStream: true,
+		}),
 	)
 	relayv1.RegisterTunnelBrokerServer(grpcServer, tunnelBroker)
 	relayv1.RegisterRelayAdminServer(grpcServer, admin.New(state, tunnelBroker, identityStore, proxyHandler.ReloadUpstream, buildVersion))

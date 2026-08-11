@@ -314,6 +314,8 @@ export type ReadGlobalConfigCommand = Record<string, never>;
 
 export interface RequestTrafficStatsCommand {
   tailLines: number;
+  hostId?: string;
+  windowSeconds?: number;
 }
 
 export interface SetDaemonLogStreamCommand {
@@ -433,6 +435,8 @@ export interface SyncRelayGrantsCommand {
   policyRevision: string;
   generatedAtUnixMs: string;
   grants: RelayGrantAssignment[];
+  dataLanes?: number;
+  readChunkBytes?: number;
 }
 
 /** Complete desired set of Proxy Host secure-link listeners or bindings. */

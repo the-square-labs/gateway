@@ -1,6 +1,9 @@
 export const GATEWAY_UPDATE_RELOAD_STORAGE_KEY = "gateway-update-reload";
+export const GATEWAY_UPDATE_RELOAD_HANDLED_KEY = "gateway-update-reload-handled";
 
 const GATEWAY_UPDATE_RELOAD_CHANNEL = "gateway-update-reload";
+const GATEWAY_UPDATE_RELOAD_MAX_AGE_MS = 120_000;
+let gatewayReloadNavigationStarted = false;
 
 export interface GatewayUpdateReloadMessage {
   id: string;
@@ -35,8 +38,54 @@ export function stripGatewayReloadParam(currentHref: string): string | null {
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
-export function reloadGatewayClient(nonce: number = Date.now()) {
+export function getGatewayReloadToken(currentHref: string): string | null {
+  return new URL(currentHref).searchParams.get("_v");
+}
+
+function getHandledGatewayReloadId(): string | null {
+  try {
+    return window.sessionStorage.getItem(GATEWAY_UPDATE_RELOAD_HANDLED_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function markGatewayReloadHandled(id: string) {
+  try {
+    window.sessionStorage.setItem(GATEWAY_UPDATE_RELOAD_HANDLED_KEY, id);
+  } catch {
+    // Session storage can be unavailable; the URL token still busts cached assets.
+  }
+}
+
+export function rememberGatewayReloadToken(currentHref: string) {
+  const token = getGatewayReloadToken(currentHref);
+  if (token) markGatewayReloadHandled(token);
+}
+
+export function isGatewayReloadMessageActionable(
+  message: GatewayUpdateReloadMessage,
+  handledId: string | null,
+  now: number = Date.now()
+): boolean {
+  const age = now - message.at;
+  return message.id !== handledId && age >= 0 && age <= GATEWAY_UPDATE_RELOAD_MAX_AGE_MS;
+}
+
+export function reloadGatewayClient(nonce: number | string = Date.now()) {
+  // Multiple tabs can observe the same version change and broadcast distinct
+  // reload messages before the first navigation commits. Accept exactly one
+  // navigation per document lifecycle so those messages cannot create a
+  // reload storm.
+  if (gatewayReloadNavigationStarted) return false;
+  gatewayReloadNavigationStarted = true;
+  markGatewayReloadHandled(String(nonce));
   window.location.href = buildGatewayReloadUrl(window.location.href, nonce);
+  return true;
+}
+
+export function resetGatewayReloadNavigationGuardForTest() {
+  gatewayReloadNavigationStarted = false;
 }
 
 export function publishGatewayReload(
@@ -71,7 +120,13 @@ export function subscribeGatewayReload(handler: (message: GatewayUpdateReloadMes
   const seen = new Set<string>();
 
   const emit = (message: GatewayUpdateReloadMessage) => {
-    if (!message.id || seen.has(message.id)) return;
+    if (
+      !message.id ||
+      seen.has(message.id) ||
+      !isGatewayReloadMessageActionable(message, getHandledGatewayReloadId())
+    ) {
+      return;
+    }
     seen.add(message.id);
     handler(message);
   };

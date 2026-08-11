@@ -110,6 +110,11 @@ proxyRoutes.openapi(
   }
 );
 
+proxyRoutes.get('/:id/secure-link', requireScopeForResource('proxy:view', 'id'), async (c) => {
+  const data = await container.resolve(ProxyService).getProxySecureLinkStatus(c.req.param('id')!);
+  return c.json({ data });
+});
+
 proxyRoutes.openapi({ ...createProxyHostRoute, middleware: requireScope('proxy:create') }, async (c) => {
   const proxyService = container.resolve(ProxyService);
   const user = c.get('user')!;

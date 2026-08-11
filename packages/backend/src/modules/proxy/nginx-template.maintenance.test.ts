@@ -26,7 +26,7 @@ const host: ProxyHostConfig = {
   cacheEnabled: true,
   cacheOptions: { maxAge: 60 },
   rateLimitEnabled: true,
-  rateLimitOptions: { requestsPerSecond: 10 },
+  rateLimitOptions: { requestsPerSecond: 10, burst: 20, connectionsPerIp: 30 },
   customRewrites: [{ source: '^/old', destination: '/new', type: 'permanent' }],
   advancedConfig: 'add_header X-Advanced yes;',
   accessList: { id: 'list-1', ipRules: [{ type: 'allow', value: '10.0.0.0/8' }], basicAuthEnabled: true },
@@ -95,9 +95,99 @@ describe('canonical Gateway nginx pages', () => {
     expect(secure).toContain('proxy_send_timeout 2h;');
     expect(secure).toContain('proxy_read_timeout 2h;');
     expect(secure).toContain('# gateway-managed-secure-link-upstream');
+    expect(secure).toContain('upstream gateway_secure_link_11111111_1111_4111_8111_111111111111');
+    expect(secure).toContain('server unix:/run/gateway-secure-links/11111111-1111-4111-8111-111111111111.sock;');
+    expect(secure).toContain('keepalive 64;');
+    expect(secure).toContain('proxy_pass http://gateway_secure_link_11111111_1111_4111_8111_111111111111;');
     expect(regular).toContain('proxy_send_timeout 60s;');
     expect(regular).toContain('proxy_read_timeout 60s;');
     expect(regular).not.toContain('# gateway-managed-secure-link-upstream');
+  });
+
+  it('adds the managed Secure Link upstream to legacy custom templates', async () => {
+    const legacyTemplate = `server {
+    listen 80;
+    server_name {{serverNames}};
+    location / {
+        proxy_pass {{upstream}};
+    }
+}`;
+    const templateService = new NginxTemplateService(
+      {
+        query: {
+          nginxTemplates: {
+            findFirst: async () => ({ id: 'legacy-template', content: legacyTemplate }),
+          },
+        },
+      } as any,
+      {} as any
+    );
+
+    const rendered = await templateService.renderForHost(
+      { ...host, secureLinkUpstream: true, sslEnabled: false, sslForced: false },
+      'legacy-template'
+    );
+
+    expect(rendered.match(/upstream gateway_secure_link_11111111_1111_4111_8111_111111111111/g)).toHaveLength(1);
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/11111111-1111-4111-8111-111111111111.sock;');
+    expect(rendered).toContain('proxy_pass http://gateway_secure_link_11111111_1111_4111_8111_111111111111;');
+  });
+
+  it('inherits the production per-IP request limit and allows explicit disable', async () => {
+    const inherited = await service().renderForHost(
+      { ...host, rateLimitEnabled: false, rateLimitMode: 'inherit' },
+      null
+    );
+    const disabled = await service().renderForHost(
+      { ...host, rateLimitEnabled: false, rateLimitMode: 'disabled' },
+      null
+    );
+
+    expect(inherited).toContain('rate=1000r/s;');
+    expect(inherited).toContain('burst=3000 nodelay;');
+    expect(inherited).toContain('limit_conn_zone $binary_remote_addr zone=connlimit_');
+    expect(inherited).toContain('limit_conn connlimit_11111111-1111-4111-8111-111111111111 1000;');
+    expect(inherited).toContain('limit_conn_status 429;');
+    expect(inherited).toContain('limit_req_status 429;');
+    expect(disabled).not.toContain('limit_req_zone');
+    expect(disabled).not.toContain('limit_req zone=');
+    expect(disabled).not.toContain('limit_conn_zone');
+    expect(disabled).not.toContain('limit_conn connlimit_');
+  });
+
+  it('renders a custom per-IP concurrent connection limit', async () => {
+    const rendered = await service().renderForHost({ ...host, rateLimitMode: 'custom' }, null);
+
+    expect(rendered).toContain('rate=10r/s;');
+    expect(rendered).toContain('burst=20 nodelay;');
+    expect(rendered).toContain('limit_conn connlimit_11111111-1111-4111-8111-111111111111 30;');
+  });
+
+  it('uses managed template variables as the canonical cache and traffic policy', async () => {
+    const rendered = await service().renderForHost(
+      {
+        ...host,
+        cacheEnabled: false,
+        cacheOptions: { maxAge: 60 },
+        rateLimitEnabled: false,
+        rateLimitMode: 'disabled',
+        templateVariables: {
+          cacheEnabled: true,
+          cacheMaxAge: 7200,
+          rateLimitMode: 'custom',
+          rateLimitRPS: 321,
+          rateLimitBurst: 654,
+          connectionsPerIp: 987,
+        },
+      },
+      null
+    );
+
+    expect(rendered).toContain('inactive=7200s;');
+    expect(rendered).toContain('proxy_cache_valid 200 301 302 7200s;');
+    expect(rendered).toContain('rate=321r/s;');
+    expect(rendered).toContain('burst=654 nodelay;');
+    expect(rendered).toContain('limit_conn connlimit_11111111-1111-4111-8111-111111111111 987;');
   });
 
   it.each(['redirect', '404'] as const)('uses the same shared TLS policy for built-in %s hosts', async (type) => {

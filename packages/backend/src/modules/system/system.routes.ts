@@ -57,6 +57,7 @@ systemRoutes.openapi(systemConfigRoute, async (c) => {
       gatewayGrpcPublicTarget: config.gatewayGrpcPublicTarget,
       gatewayGrpcLocalIp: config.gatewayGrpcLocalIp,
       relayAutoRecovery: config.relayAutoRecovery,
+      relay: config.relay,
       features: {
         ...config.features,
         loggingEnabled: loggingFeature.isEnabled(),
@@ -68,6 +69,11 @@ systemRoutes.openapi(systemConfigRoute, async (c) => {
 systemRoutes.post('/relay/recovery', sessionOnly, requireScope('admin:system'), async (c) => {
   const user = c.get('user')!;
   const data = await container.resolve(RelaySupervisorService).retryRecovery(user.id);
+  return c.json({ data });
+});
+
+systemRoutes.get('/relay', requireScope('settings:gateway:view'), async (c) => {
+  const data = container.resolve(RelaySupervisorService).getSnapshot(true);
   return c.json({ data });
 });
 

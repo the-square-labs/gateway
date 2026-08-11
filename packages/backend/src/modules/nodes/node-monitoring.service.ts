@@ -8,6 +8,12 @@ const CONTAINER_STATS_KEY_PREFIX = 'container-stats:';
 const CONTAINER_STATS_MAX = 30;
 const CONTAINER_STATS_TTL = 600; // 10 minutes
 
+export const NODE_MONITORING_CADENCE_MS = {
+  background: 10_000,
+  stream: 5_000,
+  focused: 2_000,
+} as const;
+
 interface MonitoringSnapshot {
   timestamp: string;
   health: any;
@@ -23,9 +29,9 @@ export class NodeMonitoringService extends EventEmitter {
   private pollCadences = new Map<string, number>();
   private backgroundInterval: ReturnType<typeof setInterval> | null = null;
   private readonly MAX_HISTORY = 60;
-  private readonly BACKGROUND_POLL_INTERVAL = 10_000;
-  private readonly STREAM_POLL_INTERVAL = 5_000;
-  private readonly ACTIVE_POLL_INTERVAL = 2_000;
+  private readonly BACKGROUND_POLL_INTERVAL = NODE_MONITORING_CADENCE_MS.background;
+  private readonly STREAM_POLL_INTERVAL = NODE_MONITORING_CADENCE_MS.stream;
+  private readonly ACTIVE_POLL_INTERVAL = NODE_MONITORING_CADENCE_MS.focused;
 
   constructor(
     private registry: NodeRegistryService,

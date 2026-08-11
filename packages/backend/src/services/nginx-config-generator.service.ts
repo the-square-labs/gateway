@@ -24,6 +24,7 @@ export interface ProxyHostConfig {
   forwardPort: number | null;
   forwardScheme: 'http' | 'https';
   secureLinkUpstream?: boolean;
+  secureLinkSocketPath?: string;
   sslEnabled: boolean;
   sslForced: boolean;
   http2Support: boolean;
@@ -34,6 +35,7 @@ export interface ProxyHostConfig {
   cacheEnabled: boolean;
   cacheOptions: Record<string, unknown> | null;
   rateLimitEnabled: boolean;
+  rateLimitMode?: 'inherit' | 'custom' | 'disabled';
   rateLimitOptions: Record<string, unknown> | null;
   customRewrites: { source: string; destination: string; type: string }[];
   advancedConfig: string | null;
@@ -47,6 +49,10 @@ export interface ProxyHostConfig {
   sslChainPath: string | null;
   templateVariables?: Record<string, string | number | boolean>;
 }
+
+const DEFAULT_RATE_LIMIT_RPS = 1000;
+const DEFAULT_RATE_LIMIT_BURST = 3000;
+const DEFAULT_CONNECTIONS_PER_IP = 1000;
 
 // ---------------------------------------------------------------------------
 // Service — pure config generation, no file I/O, no Docker
@@ -117,15 +123,36 @@ export class NginxConfigGenerator {
   private generateProxyConfig(host: ProxyHostConfig): string {
     const serverNames = host.domainNames.map((d) => this.sanitizeNginxValue(d)).join(' ');
     const sanitizedHost = host.forwardHost ? this.validateForwardHost(host.forwardHost) : '';
-    const upstream = `${host.forwardScheme}://${formatHostPort(sanitizedHost, host.forwardPort ?? 0)}`;
+    const secureLinkUpstreamName = `gateway_secure_link_${host.id.replace(/-/g, '_')}`;
+    const upstream = host.secureLinkUpstream
+      ? `${host.forwardScheme}://${secureLinkUpstreamName}`
+      : `${host.forwardScheme}://${formatHostPort(sanitizedHost, host.forwardPort ?? 0)}`;
     const lines: string[] = [];
-    let rateLimitBurst = 20;
+    const rateLimitMode = host.rateLimitMode ?? (host.rateLimitEnabled ? 'custom' : 'inherit');
+    const rateLimitEnabled = rateLimitMode !== 'disabled';
+    let rateLimitBurst = DEFAULT_RATE_LIMIT_BURST;
+    let connectionsPerIp = DEFAULT_CONNECTIONS_PER_IP;
 
-    if (host.rateLimitEnabled && host.rateLimitOptions) {
-      const opts = host.rateLimitOptions as Record<string, unknown>;
-      const rps = opts.requestsPerSecond ?? 10;
-      rateLimitBurst = (opts.burst as number) ?? 20;
+    if (rateLimitEnabled) {
+      const opts = (host.rateLimitOptions ?? {}) as Record<string, unknown>;
+      const rps =
+        rateLimitMode === 'custom' ? (opts.requestsPerSecond ?? DEFAULT_RATE_LIMIT_RPS) : DEFAULT_RATE_LIMIT_RPS;
+      rateLimitBurst =
+        rateLimitMode === 'custom' ? ((opts.burst as number) ?? DEFAULT_RATE_LIMIT_BURST) : DEFAULT_RATE_LIMIT_BURST;
+      connectionsPerIp =
+        rateLimitMode === 'custom'
+          ? ((opts.connectionsPerIp as number) ?? DEFAULT_CONNECTIONS_PER_IP)
+          : DEFAULT_CONNECTIONS_PER_IP;
       lines.push(`limit_req_zone $binary_remote_addr zone=ratelimit_${host.id}:10m rate=${rps}r/s;`);
+      lines.push(`limit_conn_zone $binary_remote_addr zone=connlimit_${host.id}:10m;`);
+      lines.push('');
+    }
+
+    if (host.secureLinkUpstream) {
+      lines.push(`upstream ${secureLinkUpstreamName} {`);
+      lines.push(`    server unix:${host.secureLinkSocketPath ?? `/run/gateway-secure-links/${host.id}.sock`};`);
+      lines.push('    keepalive 64;');
+      lines.push('}');
       lines.push('');
     }
 
@@ -199,8 +226,11 @@ export class NginxConfigGenerator {
     }
     if (host.accessList) lines.push('');
 
-    if (host.rateLimitEnabled && host.rateLimitOptions) {
+    if (rateLimitEnabled) {
+      lines.push('        limit_req_status 429;');
       lines.push(`        limit_req zone=ratelimit_${host.id} burst=${rateLimitBurst} nodelay;`);
+      lines.push('        limit_conn_status 429;');
+      lines.push(`        limit_conn connlimit_${host.id} ${connectionsPerIp};`);
     }
 
     if (host.cacheEnabled && host.cacheOptions) {
@@ -222,6 +252,10 @@ export class NginxConfigGenerator {
     lines.push('        proxy_set_header X-Forwarded-Proto $scheme;');
     lines.push('        proxy_set_header X-Forwarded-Host $host;');
     lines.push('        proxy_set_header X-Forwarded-Port $server_port;');
+    if (host.secureLinkUpstream && !host.websocketSupport) {
+      lines.push('        proxy_http_version 1.1;');
+      lines.push('        proxy_set_header Connection "";');
+    }
     lines.push('');
     lines.push('        proxy_connect_timeout 60s;');
     const proxyInactivityTimeout = host.secureLinkUpstream ? '2h' : '60s';

@@ -3,10 +3,7 @@ import type { CAService } from '@/modules/pki/ca.service.js';
 import type { CertService } from '@/modules/pki/cert.service.js';
 import type { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { SSLService } from '@/modules/ssl/ssl.service.js';
-import type {
-  ReadModelCoordinator,
-  ReadModelEventSubscription,
-} from '@/services/read-model-coordinator.service.js';
+import type { ReadModelCoordinator, ReadModelEventSubscription } from '@/services/read-model-coordinator.service.js';
 import type { ResourceSnapshotEnvelope, ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import type { DashboardStats, HealthOverviewEntry, MonitoringService } from './monitoring.service.js';
 
