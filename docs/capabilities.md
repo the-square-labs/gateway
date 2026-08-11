@@ -4,6 +4,8 @@
 
 Gateway is a self-hosted infrastructure control plane. It is built around a central web app and host daemons that connect outbound to the app, so operators can manage common infrastructure workflows without direct shell access to every server.
 
+Feature availability and plan limits are documented separately in [Plans and licensing](licensing.md). `Coming soon` and `In development` capabilities are not generally available runtime features until released.
+
 ## Reverse Proxy
 
 Gateway manages nginx through the `nginx-daemon` installed on each proxy node.
@@ -215,7 +217,7 @@ Connector credentials are encrypted at rest. GitLab access is split between conn
 
 ## Gateway Inference
 
-Gateway Inference is an optional model gateway that is separate from the internal AI Assistant and remote MCP server.
+Gateway Inference is an optional model gateway available in every product plan. It is separate from AI Workspace and the remote MCP server.
 
 Inference features:
 
@@ -265,9 +267,9 @@ Administration features:
 - Daemon runtime version tracking and daemon updates.
 - License state and edition display.
 
-## Optional AI Assistant
+## Optional AI Workspace
 
-The AI assistant is disabled by default.
+AI Workspace is disabled by default. The Operations Console remains fully usable without it.
 
 When enabled by an admin, it can:
 
@@ -283,4 +285,4 @@ When enabled by an admin, it can:
 - Surface Gateway Inference quota warnings and stop new turns only when the applicable budget is exhausted.
 - Respect per-user tool access and AI approval mode preferences.
 
-OpenAI-compatible settings remain preserved while Gateway Inference is selected. If Inference is later disabled, the assistant returns to the previous OpenAI-compatible configuration or disables itself when none was configured. No data is sent to an AI provider until an admin enables the assistant and configures a provider.
+OpenAI-compatible settings remain preserved while Gateway Inference is selected. If Inference is later disabled, AI Workspace returns to the previous OpenAI-compatible configuration or disables itself when none was configured. No data is sent to an AI provider until an administrator enables AI Workspace and configures a provider.

@@ -1,6 +1,6 @@
 # Multi-provider inference proxy
 
-Gateway exposes a standalone OpenAI- and Anthropic-compatible inference data plane. It is isolated from the internal AI Assistant and MCP runtime: it uses dedicated provider credentials, `gwi_` user tokens, model access rules, accounting, and continuation storage.
+Gateway exposes a standalone OpenAI- and Anthropic-compatible inference data plane. It is isolated from AI Workspace and the MCP runtime: it uses dedicated provider credentials, `gwi_` user tokens, model access rules, accounting, and continuation storage.
 
 The server-side connector baseline is OpenCodex commit `357acee62458684bc027e9d524e95bd066df3a43`. Cursor, Kiro, and OpenCodex desktop lifecycle features are intentionally excluded.
 
@@ -88,7 +88,7 @@ Users see percentages only:
 
 Administrators can see raw cost, tokens, credits, upstream quota, and request metadata.
 
-Setting a user's monthly API budget to zero disables API-funded usage for that user. Logical models whose usable sources are API-only are then omitted from the base OpenAI catalog, harness-specific catalogs, and the internal AI Assistant model picker instead of being shown as unusable choices.
+Setting a user's monthly API budget to zero disables API-funded usage for that user. Logical models whose usable sources are API-only are then omitted from the base OpenAI catalog, harness-specific catalogs, and the AI Workspace model picker instead of being shown as unusable choices.
 
 Subscription credits use:
 

@@ -104,8 +104,8 @@ npx -y @wiolett/gateway-inference@latest setup claude-code
 | Domains | Central domain registry, DNS checks, record validation и usage tracking. |
 | Databases | Saved PostgreSQL, Redis и ClickHouse connections с encrypted credentials, health history, browsing, scoped query consoles и capability-aware write operations; private-by-default managed Postgres, Redis и ClickHouse instances могут безопасно подключаться к Docker workloads. |
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware telemetry физических GPU, daemon runtime details, log streaming и update checks. |
-| Logging | Опциональный ClickHouse-backed structured log ingestion со schemas, retention, ingest tokens, rate limits и search. |
-| Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages и optional AI assistant. |
+| Logging | Опциональный ClickHouse-backed structured log ingestion со schemas, retention, ingest tokens, rate limits, search, storage caps и health safeguards. |
+| Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages и опциональный AI Workspace. |
 | Inference | Опциональный multi-provider model gateway с отдельными tokens, usage controls, OpenAI-compatible API и управляемой настройкой Codex или Claude Code через `@wiolett/gateway-inference`. |
 | Administration | OIDC, password, email-code и passkey login, group-based и дополнительные per-user permissions, scoped programmatic access, audit logs, setup state, updates и license controls. |
 
@@ -116,19 +116,21 @@ Gateway запускается как Docker stack на control-plane серве
 ```text
                 Gateway server
         +-----------------------------+
-        | app + redis                 |
+        | app + relay + redis         |
         | postgres local or remote    |
         | clickhouse local/remote/off |
-        | gRPC :9443                  |
+        | relay gRPC :9443            |
         +-------------+---------------+
                       |
                 outbound mTLS
                       |
         +-------------+-------------------+
         |             |                   |
- nginx-daemon   docker-daemon     monitoring-daemon
- proxy host     container host    metrics-only host
+ nginx-daemon   docker-daemon     database profile     monitoring-daemon
+ proxy host     container host    managed databases    metrics-only host
 ```
+
+Relay — отдельный long-lived container и единственный публичный владелец `9443/tcp`. Обычные app-only обновления сохраняют relay container и установленные managed-database binding streams; обновление relay остается отдельным событием обслуживания data plane.
 
 Узлам не нужны входящие management-порты. Public traffic ports, например `80` и `443` на nginx nodes, все еще нужны для сервисов, которые вы публикуете.
 
@@ -158,7 +160,7 @@ Gateway уже ориентирован на production operations, а не на
 - [x] PostgreSQL, Redis и ClickHouse database explorer с encrypted saved credentials, а также private-by-default managed Postgres, Redis и ClickHouse database nodes с secure application bindings.
 - [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
 - [x] Управляемый в настройках Gateway экспорт audit events в SIEM с зашифрованной аутентификацией bearer, HMAC-SHA256 или custom header.
-- [x] Optional ClickHouse-backed structured logging and optional AI assistant.
+- [x] Опциональный ClickHouse-backed structured logging и опциональный AI Workspace.
 - [x] Опциональный multi-provider inference gateway с OpenAI-compatible и harness-specific APIs.
 - [x] View-based, resource-scoped permission model with filtered list visibility.
 - [x] Hardened OIDC/OAuth flows, setup lockout, fail-closed public endpoints, and signed update trust.
@@ -170,7 +172,7 @@ Gateway уже ориентирован на production operations, а не на
 - [ ] Bastion and SSH management daemon for controlled host access.
 - [ ] CLI for scriptable programmatic control from terminals and CI/CD jobs.
 - [ ] Plugin system for extending Gateway with new integrations and operational modules.
-- [ ] Per-user AI assistant quotas and richer usage reporting.
+- [ ] Per-user AI Workspace quotas и более подробная отчётность об использовании.
 - [ ] More guided onboarding for first-time installs and first-node setup.
 - [ ] Broader operational documentation and examples for common deployment patterns.
 
@@ -219,21 +221,25 @@ Managed services продолжают работать. Existing nginx configs �
 </details>
 
 <details>
-<summary><strong>AI assistant обязателен?</strong></summary>
+<summary><strong>AI Workspace обязателен?</strong></summary>
 
-Нет. Он опционален и отключен по умолчанию. Gateway не отправляет данные AI provider, пока admin не включит assistant и не настроит provider.
+Нет. Он опционален и отключен по умолчанию. Gateway не отправляет данные AI provider, пока администратор не включит AI Workspace и не настроит provider.
 </details>
 
-## License
+## Планы и лицензирование
 
-Gateway использует source-available licensing и опциональные product license keys. Текущие license tiers являются информационными в приложении и пока не ограничивают features.
+У Gateway четыре продуктовых плана. Платные планы применяются к одной self-hosted установке без отдельной оплаты за managed nodes, пользователей или custom permission groups.
 
-| Tier | Для кого | Key | Текущее поведение |
-|------|----------|-----|-------------------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | Personal use, noncommercial use и permitted source-license use under [LICENSE.md](LICENSE.md). | Не требуется. | Full product access today. |
-| ![Homelab](docs/assets/license/wiolett-gw-homelab-24.png)<br>Homelab | Homelab operators и eligible small businesses under $100K revenue and fewer than 10 people. | Free renewable key by request. | Full product access today; planned Homelab-and-up perks include Status Pages, PKI, and Logging. |
-| ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | Organizations above the small-business threshold or teams that want a paid commercial license. | $290/year. | Full product access today; planned Enterprise tier remains the paid commercial/support path. |
+> [!NOTE]
+> Цены предварительные, не являются офертой и могут измениться. Перед покупкой уточните актуальные цены и условия.
 
-Homelab keys доступны по запросу через [contact@wiolett.net](mailto:contact@wiolett.net) или [Wiolett Industries on Telegram](https://t.me/WiolettIndustries). См. [Licensing](docs/licensing.md) для license verification, future tier perks и renewal details.
+| План | Месяц | Год | Масштаб и назначение |
+|------|-------|-----|----------------------|
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Ядро платформы, AI Workspace и Gateway Inference; до 100 managed nodes, 10 пользователей и 5 custom permission groups. |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Неограниченный масштаб, lifecycle контейнеров, managed databases с Secure Links и публичные status pages. |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Возможности Personal, а также structured logging, security scanning, audit export и guided onboarding. |
+| ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | По запросу | По запросу | Возможности Business, а также Internal PKI, SIEM export, выделенный технический контакт и сопровождение развёртывания и миграции. |
+
+Полная матрица возможностей, статусы доступности, проверка лицензии и граница source license приведены в [Планах и лицензировании](docs/licensing.md).
 
 Copyright (c) 2021-2026 [Wiolett Industries](https://wiolett.net)

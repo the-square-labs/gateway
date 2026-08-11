@@ -104,8 +104,8 @@ npx -y @wiolett/gateway-inference@latest setup claude-code
 | Domains | Central domain registry, DNS checks, record validation 和 usage tracking。 |
 | Databases | Saved PostgreSQL、Redis 和 ClickHouse connections，含 encrypted credentials、health history、browsing、scoped query consoles 和 capability-aware write operations；private-by-default managed Postgres、Redis 和 ClickHouse instances 可安全绑定到 Docker workloads。 |
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware physical GPU telemetry, daemon runtime details, log streaming 和 update checks。 |
-| Logging | 可选的 ClickHouse-backed structured log ingestion，包含 schemas、retention、ingest tokens、rate limits 和 search。 |
-| Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages 和 optional AI assistant。 |
+| Logging | 可选的 ClickHouse-backed structured log ingestion，包含 schemas、retention、ingest tokens、rate limits、search、storage caps 和 health safeguards。 |
+| Automation | API tokens、OAuth 2.0 PKCE、remote MCP endpoint、CI/CD webhooks、webhook notifications、status pages 和可选的 AI Workspace。 |
 | Inference | 可选的 multi-provider model gateway，包含独立 tokens、usage controls、OpenAI-compatible APIs，以及通过 `@wiolett/gateway-inference` 管理的 Codex 或 Claude Code 配置。 |
 | Administration | OIDC、password、email-code 和 passkey login，group-based 和 per-user additional permissions, scoped programmatic access, audit logs, setup state, updates 和 license controls。 |
 
@@ -116,18 +116,21 @@ Gateway 作为 Docker stack 运行在 control-plane server 上。Managed hosts �
 ```text
                 Gateway server
         +-----------------------------+
-        | app + postgres + redis      |
-        | optional clickhouse         |
-        | gRPC :9443                  |
+        | app + relay + redis         |
+        | postgres local or remote    |
+        | clickhouse local/remote/off |
+        | relay gRPC :9443            |
         +-------------+---------------+
                       |
                 outbound mTLS
                       |
         +-------------+-------------------+
         |             |                   |
- nginx-daemon   docker-daemon     monitoring-daemon
- proxy host     container host    metrics-only host
+ nginx-daemon   docker-daemon     database profile     monitoring-daemon
+ proxy host     container host    managed databases    metrics-only host
 ```
+
+Relay 是一个独立的 long-lived container，也是 `9443/tcp` 唯一的公开监听方。普通 app-only 更新会保留 relay container 和已建立的 managed-database binding streams；更新 relay 仍然是一个单独的 data-plane maintenance event。
 
 节点不需要入站 management 端口。你对外提供服务时仍然需要 public traffic ports，例如 nginx nodes 上的 `80` 和 `443`。
 
@@ -157,7 +160,7 @@ Gateway 已经面向 production operations，而不是狭窄的 MVP。当前方�
 - [x] PostgreSQL、Redis 和 ClickHouse database explorer with encrypted saved credentials，以及 private-by-default managed Postgres、Redis 和 ClickHouse database nodes with secure application bindings。
 - [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
 - [x] 可在 Gateway 设置中启用的 SIEM 审计导出，支持加密 Bearer、HMAC-SHA256 或自定义请求头认证。
-- [x] Optional ClickHouse-backed structured logging and optional AI assistant.
+- [x] 可选的 ClickHouse-backed structured logging 和可选的 AI Workspace。
 - [x] 可选的 multi-provider inference gateway，提供 OpenAI-compatible 和 harness-specific APIs。
 - [x] View-based, resource-scoped permission model with filtered list visibility.
 - [x] Hardened OIDC/OAuth flows, setup lockout, fail-closed public endpoints, and signed update trust.
@@ -169,7 +172,7 @@ Gateway 已经面向 production operations，而不是狭窄的 MVP。当前方�
 - [ ] Bastion and SSH management daemon for controlled host access.
 - [ ] CLI for scriptable programmatic control from terminals and CI/CD jobs.
 - [ ] Plugin system for extending Gateway with new integrations and operational modules.
-- [ ] Per-user AI assistant quotas and richer usage reporting.
+- [ ] Per-user AI Workspace quotas 和更丰富的使用情况报告。
 - [ ] More guided onboarding for first-time installs and first-node setup.
 - [ ] Broader operational documentation and examples for common deployment patterns.
 
@@ -218,21 +221,25 @@ Managed services 会继续运行。Existing nginx configs 会继续服务 traffi
 </details>
 
 <details>
-<summary><strong>AI assistant 是必须的吗？</strong></summary>
+<summary><strong>AI Workspace 是必须的吗？</strong></summary>
 
-不是。它是可选功能，默认关闭。只有 admin 启用 assistant 并配置 provider 后，Gateway 才会向 AI provider 发送数据。
+不是。它是可选功能，默认关闭。只有管理员启用 AI Workspace 并配置 provider 后，Gateway 才会向 AI provider 发送数据。
 </details>
 
-## License
+## 产品计划与许可
 
-Gateway 使用 source-available licensing 和可选 product license keys。当前 license tiers 只在应用中显示信息，暂时不会限制 features。
+Gateway 提供四个产品计划。付费计划适用于一个 self-hosted 实例，不按 managed node、用户或 custom permission group 额外收费。
 
-| Tier | 适用对象 | Key | 当前行为 |
-|------|----------|-----|----------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | Personal use, noncommercial use, and permitted source-license use under [LICENSE.md](LICENSE.md). | 不需要。 | Full product access today. |
-| ![Homelab](docs/assets/license/wiolett-gw-homelab-24.png)<br>Homelab | Homelab operators and eligible small businesses under $100K revenue and fewer than 10 people. | Free renewable key by request. | Full product access today; planned Homelab-and-up perks include Status Pages, PKI, and Logging. |
-| ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | Organizations above the small-business threshold or teams that want a paid commercial license. | $290/year. | Full product access today; planned Enterprise tier remains the paid commercial/support path. |
+> [!NOTE]
+> 以下价格为初步价格，不构成要约，并可能发生变化。购买前请确认最新价格和条款。
 
-Homelab keys 可通过 [contact@wiolett.net](mailto:contact@wiolett.net) 或 [Wiolett Industries on Telegram](https://t.me/WiolettIndustries) 申请。关于 license verification、future tier perks 和 renewal details，请参见 [Licensing](docs/licensing.md)。
+| 计划 | 月付 | 年付 | 规模与重点 |
+|------|------|------|------------|
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | 核心平台、AI Workspace 和 Gateway Inference；最多 100 个 managed nodes、10 个用户和 5 个 custom permission groups。 |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | 节点、用户和权限组不限量，并包含 container lifecycle、带 Secure Links 的 managed databases 和 public status pages。 |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | 包含 Personal 的全部功能，并增加 structured logging、security scanning、audit export 和 guided onboarding。 |
+| ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | 询价 | 询价 | 包含 Business 的全部功能，并增加 Internal PKI、SIEM export、专属技术联系人，以及部署和迁移协助。 |
+
+完整功能矩阵、可用性状态、许可证验证和 source-license 边界请参见[产品计划与许可](docs/licensing.md)。
 
 Copyright (c) 2021-2026 [Wiolett Industries](https://wiolett.net)

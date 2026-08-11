@@ -153,7 +153,7 @@ The intended deployment model is narrow:
 - Managed nodes do not need inbound SSH or daemon management ports for Gateway.
 - Nginx nodes still expose normal service traffic ports, typically `80/tcp` and `443/tcp`.
 
-For webhook delivery, Gateway has outbound network policy controls. Loopback, link-local, multicast, reserved outbound ranges, and Gateway private/self addresses are blocked. Private network webhooks can be allowed for enterprise and homelab deployments that intentionally deliver to internal systems.
+For webhook delivery, Gateway has outbound network policy controls. Loopback, link-local, multicast, reserved outbound ranges, and Gateway self addresses are always blocked. Private destinations are allowed only when private-network delivery is enabled and every resolved address matches an administrator-configured CIDR; the default allowlist is `10.0.0.0/8` and `172.16.0.0/12`. This policy is not gated by the product license tier.
 
 ## Auditability
 

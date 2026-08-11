@@ -105,7 +105,7 @@ The CLI asks for the Gateway URL and completes OAuth when no active connection e
 | Databases | Saved PostgreSQL, Redis, and ClickHouse connections with encrypted credentials, health history, browsing, scoped query consoles, and capability-aware write operations; private-by-default managed Postgres, Redis, and ClickHouse instances can bind securely to Docker workloads. |
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware physical GPU telemetry, daemon runtime details, log streaming, and update checks. |
 | Logging | Optional ClickHouse-backed structured log ingestion with schemas, retention, ingest tokens, rate limits, search, storage caps, and health safeguards. |
-| Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages, and optional AI assistant. |
+| Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages, and optional AI Workspace. |
 | Inference | Optional multi-provider model gateway with dedicated tokens, usage controls, OpenAI-compatible APIs, and managed Codex or Claude Code setup through `@wiolett/gateway-inference`. |
 | Administration | OIDC, password, email-code and passkey login, group-based and per-user additional permissions, scoped programmatic access, audit logs, setup state, updates, and license controls. |
 
@@ -160,7 +160,7 @@ Completed foundations:
 - [x] PostgreSQL, Redis, and ClickHouse database explorer with encrypted saved credentials, plus private-by-default managed Postgres, Redis, and ClickHouse database nodes with secure application bindings.
 - [x] Status pages, notifications, audit logs, RBAC, API tokens, OAuth PKCE, and remote MCP access.
 - [x] SIEM audit export, enabled in Gateway settings, with encrypted bearer, HMAC-SHA256, or custom-header authentication.
-- [x] Optional ClickHouse-backed structured logging and optional AI assistant.
+- [x] Optional ClickHouse-backed structured logging and optional AI Workspace.
 - [x] Optional multi-provider inference gateway with OpenAI-compatible and harness-specific APIs.
 - [x] View-based, resource-scoped permission model with filtered list visibility.
 - [x] Hardened OIDC/OAuth flows, setup lockout, fail-closed public endpoints, and signed update trust.
@@ -172,7 +172,7 @@ Planned work:
 - [ ] Bastion and SSH management daemon for controlled host access.
 - [ ] CLI for scriptable programmatic control from terminals and CI/CD jobs.
 - [ ] Plugin system for extending Gateway with new integrations and operational modules.
-- [ ] Per-user AI assistant quotas and richer usage reporting.
+- [ ] Per-user AI Workspace quotas and richer usage reporting.
 - [ ] More guided onboarding for first-time installs and first-node setup.
 - [ ] Broader operational documentation and examples for common deployment patterns.
 
@@ -221,21 +221,25 @@ Managed services keep running. Existing nginx configs continue serving traffic, 
 </details>
 
 <details>
-<summary><strong>Is the AI assistant required?</strong></summary>
+<summary><strong>Is AI Workspace required?</strong></summary>
 
-No. It is optional and disabled by default. Gateway does not send data to an AI provider until an admin enables the assistant and configures a provider.
+No. It is optional and disabled by default. Gateway does not send data to an AI provider until an administrator enables AI Workspace and configures a provider.
 </details>
 
-## License
+## Plans And Licensing
 
-Gateway uses source-available licensing plus optional product license keys. Current license tiers are informational in the app and do not gate features yet.
+Gateway has four product plans. Paid plans apply to one self-hosted installation and do not add per-node, per-user, or per-permission-group charges.
 
-| Tier | Who it is for | Key | Current behavior |
-|------|---------------|-----|------------------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | Personal use, noncommercial use, and permitted source-license use under [LICENSE.md](LICENSE.md). | Not required. | Full product access today. |
-| ![Homelab](docs/assets/license/wiolett-gw-homelab-24.png)<br>Homelab | Homelab operators and eligible small businesses under $100K revenue and fewer than 10 people. | Free renewable key by request. | Full product access today; planned Homelab-and-up perks include Status Pages, PKI, and Logging. |
-| ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | Organizations above the small-business threshold or teams that want a paid commercial license. | $290/year. | Full product access today; planned Enterprise tier remains the paid commercial/support path. |
+> [!NOTE]
+> Pricing is preliminary, does not constitute an offer, and is subject to change. Confirm current pricing and terms before purchase.
 
-Homelab keys are available by contacting [contact@wiolett.net](mailto:contact@wiolett.net) or [Wiolett Industries on Telegram](https://t.me/WiolettIndustries). See [Licensing](docs/licensing.md) for license verification, future tier perks, and renewal details.
+| Plan | Monthly | Annual | Scale and focus |
+|------|---------|--------|-----------------|
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Core platform, AI Workspace, and Gateway Inference; up to 100 managed nodes, 10 users, and 5 custom permission groups. |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Unlimited scale, container lifecycle features, managed databases with Secure Links, and public status pages. |
+| ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Personal plus structured logging, security scanning, audit export, and guided onboarding. |
+| ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | On request | On request | Business plus Internal PKI, SIEM export, a dedicated technical contact, and assisted deployment and migration. |
+
+See [Plans and licensing](docs/licensing.md) for the complete feature matrix, availability states, license verification, and source-license boundary.
 
 Copyright (c) 2021-2026 [Wiolett Industries](https://wiolett.net)

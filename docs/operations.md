@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-This guide covers day-two operation: updates, configuration, programmatic access, structured logging, AI assistant, backups, and security notes.
+This guide covers day-two operation: updates, configuration, programmatic access, structured logging, AI Workspace, backups, and security notes.
 
 ## Updates
 
@@ -260,14 +260,14 @@ await logger.close();
 
 `gwl_` tokens are server-side write-only secrets. Do not expose them in browser code.
 
-## AI Assistant
+## AI Workspace
 
-The AI assistant is optional and disabled by default.
+AI Workspace is optional and disabled by default. The Operations Console remains fully usable without it.
 
 To use it:
 
-1. Go to **Settings > AI Assistant**.
-2. Enable the assistant.
+1. Go to **Settings > AI Workspace**.
+2. Enable AI Workspace.
 3. Choose **OpenAI-compatible** or, when the Inference feature is enabled, **Gateway Inference** as the provider type.
 4. For OpenAI-compatible mode, configure the provider URL, endpoint family, model, and API key.
 5. For Gateway Inference mode, choose a published default model and whether users may select another model they can access.
@@ -275,17 +275,17 @@ To use it:
 
 Operational notes:
 
-- No data is sent to an AI provider until an admin enables the assistant.
-- Chat execution is backend-owned. Closing the AI panel or reconnecting the browser does not make an active assistant run depend on that WebSocket connection.
+- No data is sent to an AI provider until an administrator enables AI Workspace.
+- Chat execution is backend-owned. Closing AI Workspace or reconnecting the browser does not make an active run depend on that WebSocket connection.
 - Saved conversation history is loaded over REST, while active chat turns, approvals, questions, stops, and live snapshots use the AI WebSocket.
 - Tool calls are permission-gated and scopes are checked by the backend before execution.
 - Destructive operations require approval unless the user's AI approval mode allows the backend to auto-approve that class of tool.
 - AI-initiated actions are flagged in audit logs.
-- The assistant can use Gateway-specific context from its knowledge base.
+- AI Workspace can use Gateway-specific context from its knowledge base.
 - The selected model and reasoning effort are stored with each conversation. Changing a model after the conversation starts requires confirmation and adds a model-change marker to history.
-- Gateway Inference mode uses the user's Inference limits instead of the Assistant request-limit block. The composer warns when an applicable quota window has 10% or less remaining and blocks new turns only when the budget is effectively exhausted.
-- If a user's API budget is disabled, models backed only by API-provider connections are hidden from that user in both Assistant and Inference model catalogs.
-- OpenAI-compatible provider values are preserved while Gateway Inference is selected. Disabling Inference restores the previous OpenAI-compatible configuration; if none exists, the Assistant is disabled.
+- Gateway Inference mode uses the user's Inference limits instead of the AI Workspace request-limit block. The composer warns when an applicable quota window has 10% or less remaining and blocks new turns only when the budget is effectively exhausted.
+- If a user's API budget is disabled, models backed only by API-provider connections are hidden from that user in both AI Workspace and Inference model catalogs.
+- OpenAI-compatible provider values are preserved while Gateway Inference is selected. Disabling Inference restores the previous OpenAI-compatible configuration; if none exists, AI Workspace is disabled.
 - Supported image attachments and generated artifacts are stored and previewed through Gateway-managed artifact routes.
 
 ## Notifications And Status Pages

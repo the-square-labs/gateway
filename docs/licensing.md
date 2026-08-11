@@ -1,94 +1,94 @@
-# Licensing
+# Plans And Licensing
 
 [Back to README](../README.md)
 
-Gateway has two licensing layers:
+Gateway is offered in four product plans: Community, Personal, Business, and Enterprise. Plans apply to one self-hosted Gateway installation. Paid plans do not add per-node, per-user, or per-permission-group charges.
 
-1. The source license in [LICENSE.md](../LICENSE.md), which defines when you may use, copy, modify, and distribute the software.
-2. Product license keys inside Gateway, which identify Community, Homelab, and Enterprise installations.
+The source-code license remains defined by [LICENSE.md](../LICENSE.md). This document describes product plans, feature availability, pricing, and product-license activation. Product plan names do not change the permissions granted by the source-code license. If a legal-use summary conflicts with `LICENSE.md`, the license text controls.
 
-Today, product license tiers are informational and do not gate features. Future releases may move selected features behind Homelab-and-up or Enterprise tiers. This document describes the intended policy so users can choose the right tier before those gates exist.
+## Plan Positioning
 
-## Tier Summary
+| Plan | Best fit | Scale | Support |
+|---|---|---|---|
+| **Community** | Personal infrastructure, evaluation, and small self-hosted environments | Up to 100 managed nodes, 10 users, and 5 custom permission groups | Community |
+| **Personal** | Operators and production teams that need unlimited scale and workload lifecycle features | Unlimited nodes, users, and custom permission groups | Standard |
+| **Business** | Teams that need security scanning, structured logging, audit export, and guided onboarding | Unlimited | Priority |
+| **Enterprise** | Organizations that need Internal PKI, SIEM export, dedicated technical ownership, or assisted migration | Unlimited | Priority + Dedicated |
 
-| Tier | Intended users | Key | Current product behavior |
-|------|----------------|-----|--------------------------|
-| Community | Personal use, noncommercial organizations, and permitted source-license use under [LICENSE.md](../LICENSE.md). | Not required. | Full product access today. |
-| Homelab | Homelab operators and eligible small businesses below the source-license threshold. | Free renewable key by request. | Full product access today. Planned Homelab-and-up perks include Status Pages, PKI, and Logging. |
-| Enterprise | Organizations above the small-business threshold or teams that want a paid commercial license. | 290 USD per year. | Full product access today. Planned Enterprise tier remains the paid commercial and support path. |
+## Feature Availability
 
-"Homelab-and-up" means Homelab and Enterprise licenses.
+| Feature | Status | Community | Personal | Business | Enterprise |
+|---|---|:---:|:---:|:---:|:---:|
+| Infrastructure Node Management | Ready | ✅ | ✅ | ✅ | ✅ |
+| Nginx Reverse Proxy Management | Ready | ✅ | ✅ | ✅ | ✅ |
+| Docker Container Management | Ready | ✅ | ✅ | ✅ | ✅ |
+| Docker ↔ Nginx Secure Links | Ready | ✅ | ✅ | ✅ | ✅ |
+| SSL/TLS Certificate Management | Ready | ✅ | ✅ | ✅ | ✅ |
+| Domain and DNS Management | Ready | ✅ | ✅ | ✅ | ✅ |
+| External Database Connections and Explorers | Ready | ✅ | ✅ | ✅ | ✅ |
+| Infrastructure Monitoring | Ready | ✅ | ✅ | ✅ | ✅ |
+| Alerts and Webhook Notifications | Ready | ✅ | ✅ | ✅ | ✅ |
+| Authentication, OIDC, and MFA | Ready | ✅ | ✅ | ✅ | ✅ |
+| Role-Based Access Control | Ready | ✅ | ✅ | ✅ | ✅ |
+| Audit Log | Ready | ✅ | ✅ | ✅ | ✅ |
+| REST API, OAuth, and MCP Automation | Ready | ✅ | ✅ | ✅ | ✅ |
+| GitLab Integration | Ready | ✅ | ✅ | ✅ | ✅ |
+| AI Workspace and Sandboxed Execution | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
+| Gateway Inference | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
+| Automated Installation and Signed Updates | Ready | ✅ | ✅ | ✅ | ✅ |
+| Storage Connections: S3, R2, MinIO, FTP, FTPS, SFTP, and SMB | Coming soon | ✅ | ✅ | ✅ | ✅ |
+| Managed Nodes | Plan limit | 100 | Unlimited | Unlimited | Unlimited |
+| Users | Plan limit | 10 | Unlimited | Unlimited | Unlimited |
+| Custom Permission Groups | Plan limit | 5 | Unlimited | Unlimited | Unlimited |
+| Support Level | Service level | Community | Standard | Priority | Priority + Dedicated |
+| Container Export and Import | Ready | — | ✅ | ✅ | ✅ |
+| Blue/Green Deployments | Ready | — | ✅ | ✅ | ✅ |
+| Cross-Node Container and Deployment Migration | Ready | — | ✅ | ✅ | ✅ |
+| Managed Databases with Secure Links | Ready | — | ✅ | ✅ | ✅ |
+| Public Status Pages | Ready, opt-in | — | ✅ | ✅ | ✅ |
+| Automatic GitLab Container Registry Discovery | Ready | — | ✅ | ✅ | ✅ |
+| Managed Database Backup and Restore | Coming soon, after Storage | — | ✅ | ✅ | ✅ |
+| Managed Storages with Secure Links | Coming soon | — | ✅ | ✅ | ✅ |
+| Structured Logging | Ready, opt-in | — | — | ✅ | ✅ |
+| Audit Log Export | Ready | — | — | ✅ | ✅ |
+| Vulnerability and Security Scanning | In development | — | — | ✅ | ✅ |
+| Guided Onboarding and Configuration Review | Plan benefit | — | — | ✅ | ✅ |
+| Internal PKI | Ready | — | — | — | ✅ |
+| SIEM Audit Export | Ready, opt-in | — | — | — | ✅ |
+| OIDC Group Mapping and SCIM Provisioning | In development | — | — | — | ✅ |
+| Dedicated Technical Contact | Plan benefit | — | — | — | ✅ |
+| Assisted Deployment and Migration | Plan benefit | — | — | — | ✅ |
+
+`Coming soon` and `In development` identify product availability separately from plan entitlement. A checkmark on such a row means the feature is included in that plan when released.
+
+AI Workspace and the separate multi-provider Gateway Inference are available in every plan. Both are opt-in and use administrator-configured providers, published models, access rules, and limits. Neither is required to operate Gateway through the Operations Console, REST API, OAuth, or MCP.
+
+## Pricing
+
+> [!IMPORTANT]
+> Pricing in this document is preliminary, does not constitute an offer, and is subject to change until commercial terms are finalized. Confirm the current price and applicable terms before purchase.
+
+| Plan | Monthly | Annual |
+|---|---:|---:|
+| Community | $0 | $0 |
+| Personal | $29 | $290 |
+| Business | $189 | $1,890 |
+| Enterprise | On request | On request |
+
+Contact [contact@wiolett.net](mailto:contact@wiolett.net) or [Wiolett Industries on Telegram](https://t.me/WiolettIndustries) for Enterprise terms.
 
 ## Current Enforcement
 
-Gateway currently treats license tiers as no-op product entitlements:
+Current Gateway releases display product license status but do not yet enforce the feature gates in the matrix. The current backend, API, and Settings UI still use the legacy internal tier identifiers `community`, `homelab`, and `enterprise`; the Personal and Business product-plan identifiers require a separate code update.
 
-- Community works without a license key.
-- Homelab and Enterprise keys can be activated in **Settings > General > License**.
-- Current releases do not block features by tier.
-- License status is displayed so installations can be prepared for future tiered behavior.
+- Community works without a product license key.
+- Paid product keys can be activated in **Settings > General > License**.
+- The license server returns the current license status, plan, license name, expiration, and active installation details.
+- Planned availability and limits in this document should not be treated as runtime enforcement until the corresponding release notes say otherwise.
 
-Future planned Homelab-and-up perks:
+## Product License Verification
 
-- Status pages.
-- PKI infrastructure.
-- Structured logging.
-
-If these gates are introduced, they should be documented in release notes before users are expected to rely on them.
-
-## Community
-
-Community requires no product license key.
-
-Community is suitable for:
-
-- Personal testing.
-- Noncommercial experiments.
-- Evaluation.
-- Uses already permitted by [LICENSE.md](../LICENSE.md).
-
-Community installations still receive an installation ID internally so the app can show consistent license status and support later activation.
-
-## Homelab
-
-Homelab keys are free for users who run real homelab infrastructure and for eligible small businesses under the source-license threshold.
-
-Homelab terms:
-
-- Homelab operators: 3 years, renewable on request.
-- Eligible small businesses: 1 year, renewable on request while still eligible.
-
-Small-business eligibility:
-
-- Less than 100,000 USD revenue in the prior tax year.
-- Fewer than 10 total team members, including employees and independent contractors.
-
-How to request:
-
-- Email [contact@wiolett.net](mailto:contact@wiolett.net), or
-- Contact [Wiolett Industries on Telegram](https://t.me/WiolettIndustries).
-
-Request expectation:
-
-- Homelab users: show that you operate a homelab.
-- Small businesses: confirm that your organization is below the revenue and team-size thresholds.
-- This can be informal. The goal is to confirm eligibility, not to create a heavy approval process.
-
-Homelab keys are intended for personal, hobby, learning, noncommercial infrastructure use, and eligible small-business use.
-
-## Enterprise
-
-Enterprise keys are paid commercial keys.
-
-- Required for organizations above either small-business threshold.
-- Price: 290 USD per year.
-- Contact [contact@wiolett.net](mailto:contact@wiolett.net) or [Wiolett Industries on Telegram](https://t.me/WiolettIndustries).
-
-Enterprise keys are not issued for free. Eligible small businesses can request a free Homelab key instead.
-
-## License Verification
-
-Gateway verifies product license keys against the Wiolett Industries license server:
+Gateway verifies paid product license keys against:
 
 ```text
 https://gw-license-server.wiolett.net
@@ -96,18 +96,12 @@ https://gw-license-server.wiolett.net
 
 Activation flow:
 
-1. An admin enters a license key in **Settings > General > License**.
+1. An administrator enters a license key in **Settings > General > License**.
 2. Gateway sends an activation request to the license server.
-3. The license server returns license status, tier, license name, expiration, and active installation details.
-4. Gateway stores the license key encrypted.
-5. Gateway caches the latest license status locally.
+3. The server returns license status, plan, license name, expiration, and active installation details.
+4. Gateway stores the license key encrypted and caches the latest status.
 
-Heartbeat flow:
-
-- Gateway checks the stored key periodically.
-- Current heartbeat interval: every 12 hours.
-- If the license server is unreachable, Gateway uses the cached status.
-- Current offline grace period after the last valid check: 30 days.
+Gateway checks an installed key every 12 hours. If the license server is unreachable, Gateway uses the cached status for a 30-day offline grace period.
 
 Data sent to the license server:
 
@@ -116,15 +110,15 @@ Data sent to the license server:
 - Installation name.
 - Gateway version.
 
-The installation name is derived from Gateway's persisted canonical public URL when possible, otherwise from the host name.
+The installation name is derived from Gateway's persisted canonical public URL when possible, otherwise from the host name. Infrastructure configuration, managed-resource contents, logs, prompts, and model responses are not sent to the license server.
 
 ## License Statuses
 
 | Status | Meaning |
-|--------|---------|
-| `community` | No product key is installed; Gateway is using Community status. |
+|---|---|
+| `community` | No paid product key is installed; Gateway is using Community status. |
 | `valid` | The installed key is valid. |
-| `valid_with_warning` | The key was previously valid, but the license server is currently unreachable and Gateway is within grace. |
+| `valid_with_warning` | The key was previously valid, but the license server is unreachable and Gateway remains within grace. |
 | `unreachable_grace_expired` | Gateway cannot validate the key and the offline grace period expired. |
 | `invalid` | The license key is not valid. |
 | `expired` | The license key expired. |
@@ -133,18 +127,8 @@ The installation name is derived from Gateway's persisted canonical public URL w
 
 ## Storage And Security
 
-Gateway stores:
-
-- A generated installation ID.
-- The encrypted license key, if one is installed.
-- Cached license status returned by the license server.
-
-The license key is encrypted through Gateway's crypto service before storage. Admins can remove the active key from **Settings > General > License**.
+Gateway stores a generated installation ID, the encrypted license key when one is installed, and the cached license status returned by the license server. Administrators can remove the active key from **Settings > General > License**.
 
 ## Source License
 
-The source license lives in [LICENSE.md](../LICENSE.md). It is source-available and permits personal, noncommercial, and eligible small-business use under the written terms.
-
-Organizations that do not fit those terms need a separate paid commercial license. In practice, that means using an Enterprise key.
-
-This document explains Wiolett Industries' product licensing policy. If this summary conflicts with [LICENSE.md](../LICENSE.md), the license text controls.
+The source license lives in [LICENSE.md](../LICENSE.md). It defines permitted personal, noncommercial, small-business, and separately licensed commercial use. Product plan packaging and feature availability do not replace or modify those legal terms.
