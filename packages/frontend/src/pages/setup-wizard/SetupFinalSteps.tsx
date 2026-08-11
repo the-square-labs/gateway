@@ -1,12 +1,14 @@
 import {
   ArrowLeft,
   ArrowRight,
+  Bot,
   Check,
   Database,
   KeyRound,
   Loader2,
   type LucideIcon,
   Mail,
+  MoreHorizontal,
   ShieldCheck,
 } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
@@ -29,6 +31,40 @@ interface NavigationProps {
   busy: boolean;
   onBack?: () => void;
   onContinue: () => void;
+}
+
+export function AIWorkspaceStep({
+  busy,
+  onConfigure,
+  onSkip,
+}: {
+  busy: boolean;
+  onConfigure: () => void;
+  onSkip: () => void;
+}) {
+  return (
+    <section className="mx-auto max-w-md space-y-3 text-center">
+      <div>
+        <h2 className="text-lg font-semibold">AI Workspace</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          AI Workspace is Gateway&apos;s recommended intent-driven interface, keeping guidance,
+          actions, and infrastructure context in one Work Session so Gateway is easier to understand
+          and operate. It is optional: Operations Console remains fully available without AI, and
+          you can enable AI Workspace later.
+        </p>
+      </div>
+      <div className="flex justify-center gap-2">
+        <Button type="button" variant="outline" onClick={onSkip} disabled={busy}>
+          <MoreHorizontal />
+          Skip for now
+        </Button>
+        <Button type="button" onClick={onConfigure} disabled={busy}>
+          <Bot className="h-4 w-4" />
+          Configure AI Workspace
+        </Button>
+      </div>
+    </section>
+  );
 }
 
 const ADMIN_AUTH_METHODS: Record<PrimaryMethod, { label: string; icon: LucideIcon }> = {

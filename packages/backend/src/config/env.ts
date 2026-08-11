@@ -81,7 +81,7 @@ const envSchema = z.object({
   RATE_LIMIT_PUBLIC_WEBHOOK_MAX_REQUESTS: rateLimitMaxSchema.default(60),
   RATE_LIMIT_PKI_MAX_REQUESTS: rateLimitMaxSchema.default(600),
   RATE_LIMIT_STREAM_MAX_REQUESTS: rateLimitMaxSchema.default(120),
-  RATE_LIMIT_AI_WS_MAX_REQUESTS: rateLimitMaxSchema.default(30),
+  RATE_LIMIT_AI_WS_MAX_REQUESTS: rateLimitMaxSchema.default(120),
   RATE_LIMIT_INFERENCE_MAX_REQUESTS: rateLimitMaxSchema.default(600),
 
   // Request body limits

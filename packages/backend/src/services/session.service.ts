@@ -16,11 +16,19 @@ export class SessionService {
     user: User,
     accessToken?: string,
     refreshToken?: string,
-    metadata: { authMethod?: AuthMethod; ipAddress?: string; userAgent?: string; mfaSatisfiedAt?: number } = {}
+    metadata: {
+      authMethod?: AuthMethod;
+      ipAddress?: string;
+      userAgent?: string;
+      mfaSatisfiedAt?: number;
+      purpose?: 'user' | 'setup';
+      setupSessionId?: string;
+      expiresAt?: number;
+    } = {}
   ): Promise<{ sessionId: string; expiresAt: number }> {
     const env = getEnv();
     const sessionId = nanoid(32);
-    const expiresAt = Date.now() + env.SESSION_EXPIRY * 1000;
+    const expiresAt = Math.min(metadata.expiresAt ?? Number.POSITIVE_INFINITY, Date.now() + env.SESSION_EXPIRY * 1000);
 
     const sessionData: SessionData = {
       userId: user.id,
@@ -34,6 +42,8 @@ export class SessionService {
       ipAddress: metadata.ipAddress,
       userAgent: metadata.userAgent,
       mfaSatisfiedAt: metadata.mfaSatisfiedAt,
+      purpose: metadata.purpose ?? 'user',
+      setupSessionId: metadata.setupSessionId,
       expiresAt,
     };
 
@@ -121,7 +131,7 @@ export class SessionService {
 
   async refreshSession(sessionId: string, session?: SessionData | null): Promise<boolean> {
     const resolved = session ?? (await this.getSession(sessionId));
-    if (!resolved) return false;
+    if (!resolved || resolved.purpose === 'setup') return false;
 
     const env = getEnv();
     const halfTtl = (env.SESSION_EXPIRY * 1000) / 2;
@@ -182,7 +192,7 @@ export class SessionService {
     const currentSession = await this.getSession(currentSessionId);
     const currentPublicId = currentSession?.publicId;
     return sessions
-      .filter((session) => Boolean(session.publicId))
+      .filter((session) => Boolean(session.publicId) && session.purpose !== 'setup')
       .map((session) => ({
         id: session.publicId!,
         authMethod: session.authMethod ?? session.user?.authMethod ?? 'oidc',
@@ -226,5 +236,15 @@ export class SessionService {
   async validateSession(sessionId: string): Promise<User | null> {
     const session = await this.getSession(sessionId);
     return session?.user || null;
+  }
+
+  async destroySetupSessions(userId: string, setupSessionId?: string): Promise<void> {
+    const sessionIds = await this.cache.smembers(`${USER_SESSIONS_PREFIX}${userId}`);
+    for (const sessionId of sessionIds) {
+      const session = await this.getSession(sessionId);
+      if (session?.purpose !== 'setup') continue;
+      if (setupSessionId && session.setupSessionId !== setupSessionId) continue;
+      await this.destroySession(sessionId);
+    }
   }
 }

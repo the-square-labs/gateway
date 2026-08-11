@@ -47,6 +47,7 @@ function createHarness() {
   const finalizeSetup = {
     initializeOwner: vi.fn(),
     clearOwner: vi.fn(),
+    applySetupAIWorkspaceOutcomeForOwner: vi.fn(),
   };
   const refreshGrpcIdentity = vi.fn();
   const refreshWebIdentity = vi.fn();
@@ -56,6 +57,12 @@ function createHarness() {
     insert: vi.fn(() => ({
       values: vi.fn(() => ({
         onConflictDoNothing: vi.fn(() => ({ returning: claimReturning })),
+        onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+      })),
+    })),
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([{ value: 'ai_workspace' }]) })),
       })),
     })),
     query: {
@@ -130,7 +137,7 @@ const APPLY_INPUT = {
 };
 
 describe('SetupWizardService', () => {
-  it('applies the complete setup only from the final operation without sending a test email', async () => {
+  it('applies core setup before the AI Workspace step without sending a test email', async () => {
     const harness = createHarness();
     harness.policy.isGatewayConfigured
       .mockResolvedValueOnce(false)
@@ -152,8 +159,8 @@ describe('SetupWizardService', () => {
     expect(harness.mail.sendTestEmail).not.toHaveBeenCalled();
     expect(harness.logging.update).toHaveBeenCalledWith({ mode: 'disabled' });
     expect(harness.auth.createUser).toHaveBeenCalledOnce();
-    expect(harness.policy.markSetupComplete).toHaveBeenCalledOnce();
-    expect(harness.access.invalidate).toHaveBeenCalledOnce();
+    expect(harness.policy.markSetupComplete).not.toHaveBeenCalled();
+    expect(harness.access.invalidate).not.toHaveBeenCalled();
   });
 
   it('finishes a previously partial setup without creating another administrator', async () => {
@@ -163,7 +170,7 @@ describe('SetupWizardService', () => {
     await harness.service.apply({ ...APPLY_INPUT, administrator: undefined }, harness.logging as any);
 
     expect(harness.auth.createUser).not.toHaveBeenCalled();
-    expect(harness.policy.markSetupComplete).toHaveBeenCalledOnce();
+    expect(harness.policy.markSetupComplete).not.toHaveBeenCalled();
   });
 
   it('rolls back live configuration when final apply fails', async () => {
@@ -260,7 +267,7 @@ describe('SetupWizardService', () => {
     const harness = createHarness();
     harness.policy.isGatewayConfigured.mockResolvedValue(true);
 
-    await harness.service.complete();
+    await harness.service.completeAIWorkspace({ status: 'skipped' });
 
     expect(harness.general.requirePublicUrl).toHaveBeenCalledOnce();
     expect(harness.policy.markSetupComplete).toHaveBeenCalledOnce();

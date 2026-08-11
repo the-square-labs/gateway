@@ -1,4 +1,4 @@
-import { Minimize2, Pencil, Pin, PinOff, Sparkles, Trash2 } from "lucide-react";
+import { Pencil, Pin, PinOff, Sparkles, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -47,8 +47,8 @@ import {
 
 const BOTTOM_SCROLL_THRESHOLD = 48;
 const SLASH_COMMANDS = [
-  { name: "new", description: "Start new conversation" },
-  { name: "clear", description: "Clear conversation" },
+  { name: "new", description: "Start new Work Session" },
+  { name: "clear", description: "Clear Work Session" },
   { name: "compact", description: "Compact older context" },
   { name: "context", description: "Show token usage" },
 ];
@@ -109,6 +109,8 @@ function usePageContext(): PageContext {
       route,
       resourceType: resolvedResource.resourceType,
       resourceId: resolvedResource.resourceId,
+      label: resolvedResource.label,
+      nodeId: resolvedResource.nodeId,
     };
   }
 
@@ -164,7 +166,6 @@ export function AILitePanel() {
     refreshProviderStatus,
   } = useAIStore();
   const {
-    setAILiteMode,
     aiApprovalMode: approvalMode,
     pinnedAIConversationIds,
     togglePinnedAIConversation,
@@ -196,10 +197,10 @@ export function AILitePanel() {
     ? recentConversations.find((conversation) => conversation.id === activeConversationId)
     : null;
   const currentChatTitle = isStartingConversation
-    ? "Starting chat..."
+    ? "Starting Work Session..."
     : activeConversationId
-      ? (savedName ?? currentConversation?.title ?? "New chat")
-      : "New chat";
+      ? (savedName ?? currentConversation?.title ?? "New Work Session")
+      : "New Work Session";
   const isCurrentChatPinned = activeConversationId
     ? pinnedAIConversationIds.includes(activeConversationId)
     : false;
@@ -243,7 +244,7 @@ export function AILitePanel() {
       await renameConversation(activeConversationId, nextTitle);
       setRenameDialogOpen(false);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to rename chat");
+      toast.error(error instanceof Error ? error.message : "Failed to rename Work Session");
     } finally {
       setIsRenaming(false);
     }
@@ -575,8 +576,8 @@ export function AILitePanel() {
             className="h-9 w-9"
             onClick={() => activeConversationId && togglePinnedAIConversation(activeConversationId)}
             disabled={!activeConversationId}
-            title={isCurrentChatPinned ? "Unpin chat" : "Pin chat"}
-            aria-label={isCurrentChatPinned ? "Unpin chat" : "Pin chat"}
+            title={isCurrentChatPinned ? "Unpin Work Session" : "Pin Work Session"}
+            aria-label={isCurrentChatPinned ? "Unpin Work Session" : "Pin Work Session"}
           >
             {isCurrentChatPinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
           </Button>
@@ -586,8 +587,8 @@ export function AILitePanel() {
             className="h-9 w-9"
             onClick={openRenameDialog}
             disabled={!activeConversationId}
-            title="Rename chat"
-            aria-label="Rename chat"
+            title="Rename Work Session"
+            aria-label="Rename Work Session"
           >
             <Pencil className="h-4 w-4" />
           </Button>
@@ -597,27 +598,17 @@ export function AILitePanel() {
             className="h-9 w-9"
             onClick={() => void handleDeleteCurrentConversation()}
             disabled={!activeConversationId}
-            title="Delete chat"
-            aria-label="Delete chat"
+            title="Delete Work Session"
+            aria-label="Delete Work Session"
           >
             <Trash2 className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9"
-            onClick={() => setAILiteMode(false)}
-            title="Exit full screen"
-            aria-label="Exit full screen"
-          >
-            <Minimize2 className="h-4 w-4" />
           </Button>
         </div>
       </div>
       <Dialog open={renameDialogOpen} onOpenChange={setRenameDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Rename chat</DialogTitle>
+            <DialogTitle>Rename Work Session</DialogTitle>
           </DialogHeader>
           <Input
             value={renameDraft}
@@ -628,7 +619,7 @@ export function AILitePanel() {
                 void submitRename();
               }
             }}
-            placeholder="Chat name"
+            placeholder="Work Session name"
             autoFocus
           />
           <DialogFooter>

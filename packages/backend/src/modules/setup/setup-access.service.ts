@@ -140,6 +140,11 @@ export class SetupAccessService {
     return session?.csrfToken ?? null;
   }
 
+  async getSessionExpiresAt(sessionId: string | undefined): Promise<string | null> {
+    if (!(await this.validateSession(sessionId))) return null;
+    return (await this.readCode())?.expiresAt ?? null;
+  }
+
   async validateCsrfToken(sessionId: string | undefined, csrfToken: string | undefined): Promise<boolean> {
     if (!csrfToken) return false;
     const expected = await this.getCsrfToken(sessionId);

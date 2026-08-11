@@ -97,7 +97,7 @@ export function AIToolAccessModal({
       <DialogContent className="overflow-x-hidden sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>AI Tool Access</DialogTitle>
-          <DialogDescription>Control which tools the AI assistant can use</DialogDescription>
+          <DialogDescription>Control which tools AI Workspace can use</DialogDescription>
         </DialogHeader>
 
         <div className="min-w-0 space-y-2">

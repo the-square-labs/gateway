@@ -1,4 +1,4 @@
-/** The scope that grants access to the AI assistant — must match backend canUseAI() */
+/** The scope that grants access to AI Workspace — must match backend canUseAI() */
 export const AI_SCOPE = "feat:ai:use" as const;
 
 export const RESOURCE_SCOPABLE_SCOPES = [
@@ -720,8 +720,8 @@ const RAW_TOKEN_SCOPES = [
   // Features
   {
     value: "feat:ai:use",
-    label: "Use AI Assistant",
-    desc: "Use the AI assistant",
+    label: "Use AI Workspace",
+    desc: "Use AI Workspace",
     group: "Features",
   },
   {

@@ -32,7 +32,7 @@ export function AIConversationBlockedBlock({
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2 sm:justify-end">
-          <Button onClick={onNewChat}>New chat</Button>
+          <Button onClick={onNewChat}>New Work Session</Button>
         </div>
       </div>
     </div>

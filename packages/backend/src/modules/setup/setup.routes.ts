@@ -1,13 +1,15 @@
 import { OpenAPIHono, z } from '@hono/zod-openapi';
 import type { Context, MiddlewareHandler } from 'hono';
-import { getCookie, setCookie } from 'hono/cookie';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { container } from '@/container.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { AuthService } from '@/modules/auth/auth.service.js';
 import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
 import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
+import { getAcceptedSessionCookieNames, getSessionCookieName } from '@/modules/auth/session-cookie.js';
 import { LoggingRuntimeService } from '@/modules/logging/logging-runtime.service.js';
 import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
 import {
@@ -17,6 +19,7 @@ import {
   isValidGatewayIpPortTarget,
 } from '@/modules/settings/general-settings.service.js';
 import { RuntimeRestartService } from '@/services/runtime-restart.service.js';
+import { SessionService } from '@/services/session.service.js';
 import { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
 import type { AppEnv } from '@/types.js';
 import { SetupAccessService, SetupAlreadyInProgressError, SetupApplyInProgressError } from './setup-access.service.js';
@@ -29,6 +32,7 @@ const logger = createChildLogger('SetupRoutes');
 export const setupRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 export const SETUP_SESSION_COOKIE = 'setup_session';
 export const SETUP_CSRF_HEADER = 'X-CSRF-Token';
+const GATEWAY_SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
 
 async function setupApiDisabledResponse(c: Context<AppEnv>): Promise<Response | null> {
   const path = new URL(c.req.url).pathname;
@@ -195,7 +199,11 @@ setupRoutes.get('/wizard/csrf', async (c) => {
   return c.json({ data: { csrfToken } });
 });
 
-setupRoutes.use('/wizard/apply', async (c, next) => {
+setupRoutes.use('/wizard/*', async (c, next) => {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(c.req.method.toUpperCase())) {
+    await next();
+    return;
+  }
   const valid = await container
     .resolve(SetupAccessService)
     .validateCsrfToken(getCookie(c, SETUP_SESSION_COOKIE), c.req.header(SETUP_CSRF_HEADER));
@@ -204,7 +212,7 @@ setupRoutes.use('/wizard/apply', async (c, next) => {
 });
 
 setupRoutes.get('/wizard/config', async (c) => {
-  const [general, auth, smtp, oidc, logging, transport, administratorCreated] = await Promise.all([
+  const [general, auth, smtp, oidc, logging, transport, administratorCreated, phase] = await Promise.all([
     container.resolve(GeneralSettingsService).getConfig(),
     container.resolve(AuthSettingsService).getConfig(),
     container.resolve(AuthMailService).getPublicConfig(),
@@ -212,6 +220,7 @@ setupRoutes.get('/wizard/config', async (c) => {
     container.resolve(LoggingSettingsService).getPublicConfig(),
     container.resolve(WebTransportSettingsService).getConfig(),
     container.resolve(SetupTokenPolicyService).isGatewayConfigured(),
+    container.resolve(SetupWizardService).getPhase(),
   ]);
   return c.json({
     data: {
@@ -222,15 +231,50 @@ setupRoutes.get('/wizard/config', async (c) => {
       logging,
       transport,
       administratorCreated,
+      phase,
       networkSuggestions: getSetupNetworkSuggestions(),
     },
   });
 });
 
+setupRoutes.post('/wizard/session', async (c) => {
+  const setupSessionId = getCookie(c, SETUP_SESSION_COOKIE);
+  const access = container.resolve(SetupAccessService);
+  const expiresAt = await access.getSessionExpiresAt(setupSessionId);
+  if (!setupSessionId || !expiresAt) {
+    throw new AppError(401, 'SETUP_SESSION_REQUIRED', 'A valid setup session is required');
+  }
+  if ((await container.resolve(SetupWizardService).getPhase()) !== 'ai_workspace') {
+    throw new AppError(409, 'SETUP_CONFIGURATION_REQUIRED', 'Apply Gateway setup before configuring AI Workspace');
+  }
+  const user = await container.resolve(AuthService).getUserById(GATEWAY_SYSTEM_USER_ID);
+  if (!user) throw new AppError(500, 'SETUP_SYSTEM_USER_MISSING', 'Gateway System user is unavailable');
+
+  const sessions = container.resolve(SessionService);
+  await sessions.destroySetupSessions(GATEWAY_SYSTEM_USER_ID, setupSessionId);
+  const session = await sessions.createSession(user, undefined, undefined, {
+    purpose: 'setup',
+    setupSessionId,
+    expiresAt: Date.parse(expiresAt),
+    ipAddress: c.req.header('x-forwarded-for')?.split(',')[0]?.trim(),
+    userAgent: c.req.header('user-agent'),
+  });
+  const forwardedProto = c.req.header('x-forwarded-proto')?.split(',')[0]?.trim();
+  const secure = forwardedProto ? forwardedProto === 'https' : new URL(c.req.url).protocol === 'https:';
+  setCookie(c, getSessionCookieName(secure ? 'https' : 'http'), session.sessionId, {
+    httpOnly: true,
+    secure,
+    sameSite: 'Lax',
+    maxAge: Math.max(1, Math.floor((session.expiresAt - Date.now()) / 1000)),
+    path: '/',
+  });
+  return c.json({ data: { expiresAt: new Date(session.expiresAt).toISOString() } });
+});
+
 setupRoutes.post('/wizard/apply', async (c) => {
   const access = container.resolve(SetupAccessService);
   const input = SetupApplySchema.parse(await c.req.json());
-  let result: { status: 'completed' };
+  let result: { status: 'ready_for_ai' };
   try {
     result = await access.withApplyLock(getCookie(c, SETUP_SESSION_COOKIE), () =>
       container.resolve(SetupWizardService).apply(input, container.resolve(LoggingRuntimeService))
@@ -241,7 +285,25 @@ setupRoutes.post('/wizard/apply', async (c) => {
     }
     throw error;
   }
+  return c.json({ data: result });
+});
+
+const SetupAIWorkspaceOutcomeSchema = z.object({
+  status: z.enum(['configured', 'skipped']),
+  configuredVia: z.enum(['direct', 'gateway_inference']).optional(),
+});
+
+setupRoutes.post('/wizard/complete', async (c) => {
+  const setupSessionId = getCookie(c, SETUP_SESSION_COOKIE);
+  const access = container.resolve(SetupAccessService);
+  const outcome = SetupAIWorkspaceOutcomeSchema.parse(await c.req.json());
+  await access.withApplyLock(setupSessionId, async () => {
+    await container.resolve(SessionService).destroySetupSessions(GATEWAY_SYSTEM_USER_ID, setupSessionId);
+    await container.resolve(SetupWizardService).completeAIWorkspace(outcome);
+  });
+  for (const cookieName of getAcceptedSessionCookieNames()) deleteCookie(c, cookieName, { path: '/' });
+  deleteCookie(c, SETUP_SESSION_COOKIE, { path: '/api/setup' });
   const transport = await container.resolve(WebTransportSettingsService).getConfig();
   if (transport.tlsEnabled) container.resolve(RuntimeRestartService).request('first-run web identity updated', 1_000);
-  return c.json({ data: { ...result, restartRequired: transport.tlsEnabled } });
+  return c.json({ data: { status: 'completed', restartRequired: transport.tlsEnabled } });
 });

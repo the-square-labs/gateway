@@ -35,6 +35,8 @@ export const PageContextSchema = z.object({
   route: z.string().max(200),
   resourceType: z.string().max(50).optional(),
   resourceId: z.string().max(100).optional(),
+  label: z.string().max(200).optional(),
+  nodeId: z.string().max(100).optional(),
 });
 
 export const ChatRequestSchema = z.object({

@@ -128,6 +128,9 @@ export interface AIResourceReference {
   nodeSlug?: string;
   slug?: string;
   appearanceColor?: AIResourceAppearanceColor;
+  /** Canonical Gateway route issued by the backend; absent only on legacy stored references. */
+  uiHref?: string;
+  workspaceEmbeddable?: boolean;
 }
 
 // ── Page Context (from frontend) ──
@@ -136,6 +139,8 @@ export interface PageContext {
   route: string;
   resourceType?: string;
   resourceId?: string;
+  label?: string;
+  nodeId?: string;
 }
 
 // ── Chat Messages (OpenAI-compatible) ──

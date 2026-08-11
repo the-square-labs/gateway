@@ -5,6 +5,11 @@ import { AIButton } from "@/components/ai/AIButton";
 import { AILitePanel } from "@/components/ai/AILitePanel";
 import { AILiteSidebar } from "@/components/ai/AILiteSidebar";
 import { AISidePanel } from "@/components/ai/AISidePanel";
+import {
+  type AIWorkspaceAvailability,
+  AIWorkspaceAvailabilityDialog,
+} from "@/components/ai/AIWorkspaceAvailabilityDialog";
+import { InterfaceChoiceDialog } from "@/components/ai/InterfaceChoiceDialog";
 import { CommandPalette } from "@/components/common/CommandPalette";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { PageTransition } from "@/components/common/PageTransition";
@@ -15,6 +20,8 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { keyboardNavigationRoutes, visibleNavigationGroups } from "@/lib/app-navigation";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
+import { isCompactPanelsViewport } from "@/lib/responsive-panels";
+import { ConfigureAIWorkspaceWizard } from "@/pages/dashboard/finalize-setup/ConfigureAIWorkspaceWizard";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useAIStore } from "@/stores/ai";
@@ -32,6 +39,15 @@ import { SidebarContent } from "./SidebarContent";
 
 const SIDEBAR_WIDTH_KEY = "gateway-sidebar-width";
 const DEFAULT_SIDEBAR_WIDTH = 260;
+
+export function resolveInterfaceTransition(
+  nextInterface: "ai_workspace" | "operations_console",
+  preserveConversationInConsole = false
+): { path: "/" | null; aiPanelOpen: boolean | null } {
+  if (nextInterface === "ai_workspace") return { path: "/", aiPanelOpen: false };
+  if (preserveConversationInConsole) return { path: "/", aiPanelOpen: true };
+  return { path: null, aiPanelOpen: null };
+}
 
 /**
  * Authentication has already determined the user before this renders. Keep a
@@ -188,6 +204,9 @@ export function DashboardLayout() {
     commandPaletteOpen,
     setCommandPaletteOpen,
     aiLiteMode,
+    preferredInterface,
+    interfacePreferenceLoaded,
+    setPreferredInterface,
   } = useUIStore();
   const aiEnabled = useAIStore((state) => state.isEnabled);
   const dashboardInferenceUsage = useDashboardBootstrapStore(
@@ -197,6 +216,13 @@ export function DashboardLayout() {
 
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
   const [isResizing, setIsResizing] = useState(false);
+  const [interfaceChoiceBusy, setInterfaceChoiceBusy] = useState(false);
+  const [interfaceChoiceDismissed, setInterfaceChoiceDismissed] = useState(false);
+  const [interfaceSetupOrigin, setInterfaceSetupOrigin] = useState<
+    "interface_choice" | "cta" | null
+  >(null);
+  const [aiWorkspaceAvailability, setAIWorkspaceAvailability] =
+    useState<AIWorkspaceAvailability | null>(null);
   const setSystemConfig = useSystemConfigStore((state) => state.setConfig);
   const systemConfigLoaded = useSystemConfigStore((state) => state.loaded);
   const [systemConfigReady, setSystemConfigReady] = useState(systemConfigLoaded);
@@ -205,6 +231,88 @@ export function DashboardLayout() {
   const invalidateUIBootstrap = useUIBootstrapStore((state) => state.invalidate);
   const clearUIBootstrap = useUIBootstrapStore((state) => state.clear);
   const hasNginxNodes = uiBootstrap?.navigation.hasNginxNodes ?? true;
+  const canUseAIWorkspace = Boolean(currentUser?.scopes?.includes(AI_SCOPE));
+  const canConfigureAIWorkspace = Boolean(currentUser?.scopes?.includes("feat:ai:configure"));
+  const canConfigureGatewayInference = [
+    "settings:gateway:edit",
+    "inference:providers:view",
+    "inference:providers:manage",
+    "inference:models:manage",
+    "inference:limits:manage",
+  ].every((scope) => currentUser?.scopes?.includes(scope));
+  const aiWorkspaceConfigured = uiBootstrap?.aiWorkspace.configured ?? false;
+  const interfaceChoiceRequired = Boolean(
+    interfacePreferenceLoaded &&
+      !interfaceChoiceDismissed &&
+      preferredInterface === null &&
+      uiBootstrap &&
+      ((aiWorkspaceConfigured && canUseAIWorkspace) || uiBootstrap.aiWorkspace.installationOwner)
+  );
+
+  const savePreferredInterface = useCallback(
+    async (
+      nextInterface: "ai_workspace" | "operations_console",
+      preserveConversationInConsole = false
+    ) => {
+      setInterfaceChoiceBusy(true);
+      try {
+        await api.updateUserPreferences({ preferredInterface: nextInterface });
+        setPreferredInterface(nextInterface);
+        setInterfaceChoiceDismissed(true);
+        const transition = resolveInterfaceTransition(nextInterface, preserveConversationInConsole);
+        if (transition.aiPanelOpen !== null)
+          useUIStore.getState().setAIPanelOpen(transition.aiPanelOpen);
+        if (transition.path) navigate(transition.path);
+      } finally {
+        setInterfaceChoiceBusy(false);
+      }
+    },
+    [navigate, setPreferredInterface]
+  );
+
+  const finishInterfaceSetup = useCallback(async () => {
+    setInterfaceChoiceBusy(true);
+    try {
+      try {
+        await api.updateFinalizeSetupStep("ai_workspace", "configured");
+      } catch (cause) {
+        if (!(cause instanceof ApiRequestError) || ![404, 409].includes(cause.status)) throw cause;
+      }
+      await useAIStore.getState().refreshProviderStatus();
+      invalidateUIBootstrap();
+      setInterfaceSetupOrigin(null);
+      await savePreferredInterface("ai_workspace");
+    } finally {
+      setInterfaceChoiceBusy(false);
+    }
+  }, [invalidateUIBootstrap, savePreferredInterface]);
+
+  const interfaceSetupOpen = interfaceSetupOrigin !== null;
+
+  useEffect(() => {
+    const openAIWorkspace = () => {
+      if (aiWorkspaceConfigured && canUseAIWorkspace) {
+        void savePreferredInterface("ai_workspace");
+        return;
+      }
+      if (aiWorkspaceConfigured) {
+        setAIWorkspaceAvailability("no_access");
+        return;
+      }
+      setAIWorkspaceAvailability(
+        canConfigureAIWorkspace ? "needs_configuration" : "not_configured"
+      );
+    };
+    const openOperationsConsole = () => {
+      void savePreferredInterface("operations_console", true);
+    };
+    window.addEventListener("gateway:open-ai-workspace", openAIWorkspace);
+    window.addEventListener("gateway:open-operations-console", openOperationsConsole);
+    return () => {
+      window.removeEventListener("gateway:open-ai-workspace", openAIWorkspace);
+      window.removeEventListener("gateway:open-operations-console", openOperationsConsole);
+    };
+  }, [aiWorkspaceConfigured, canConfigureAIWorkspace, canUseAIWorkspace, savePreferredInterface]);
 
   useEffect(() => {
     if (systemConfigLoaded) setSystemConfigReady(true);
@@ -306,6 +414,10 @@ export function DashboardLayout() {
   useEffect(() => {
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 768);
+      const ui = useUIStore.getState();
+      if (isCompactPanelsViewport(window.innerWidth) && ui.aiPanelOpen && ui.sidebarOpen) {
+        ui.setSidebarCollapsed(true);
+      }
     };
 
     checkMobile();
@@ -519,6 +631,39 @@ export function DashboardLayout() {
     };
   }, [commandPaletteOpen, dashboardHasLowInferenceUsage, setCommandPaletteOpen, navigate]);
 
+  const interfaceOnboarding = (
+    <>
+      <InterfaceChoiceDialog
+        open={interfaceChoiceRequired && !interfaceSetupOpen}
+        busy={interfaceChoiceBusy}
+        onAIWorkspace={() => {
+          if (aiWorkspaceConfigured) void savePreferredInterface("ai_workspace");
+          else setInterfaceSetupOrigin("interface_choice");
+        }}
+        onOperationsConsole={() => void savePreferredInterface("operations_console")}
+      />
+      <ConfigureAIWorkspaceWizard
+        open={interfaceSetupOpen}
+        allowGatewayInference={canConfigureGatewayInference}
+        initialStepCanSkip={interfaceSetupOrigin !== "interface_choice"}
+        completionActionLabel={
+          interfaceSetupOrigin === "interface_choice" ? "Enable AI Workspace" : undefined
+        }
+        onBack={() => setInterfaceSetupOrigin(null)}
+        onConfigured={() => finishInterfaceSetup()}
+        onSkipped={async () => setInterfaceSetupOrigin(null)}
+      />
+      <AIWorkspaceAvailabilityDialog
+        state={aiWorkspaceAvailability}
+        onClose={() => setAIWorkspaceAvailability(null)}
+        onConfigure={() => {
+          setAIWorkspaceAvailability(null);
+          setInterfaceSetupOrigin("cta");
+        }}
+      />
+    </>
+  );
+
   if (isLoading || !systemConfigReady) {
     return (
       <ApplicationShellSkeleton scopes={currentUser?.scopes ?? []} pathname={location.pathname} />
@@ -576,6 +721,7 @@ export function DashboardLayout() {
           <Toaster position="bottom-center" />
           <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
           <ConfirmDialog />
+          {interfaceOnboarding}
         </div>
       </TooltipProvider>
     );
@@ -583,7 +729,8 @@ export function DashboardLayout() {
 
   const canUseAI = !!currentUser?.scopes?.includes(AI_SCOPE) && aiEnabled !== false;
   const isAIConversationRoute = /^\/ai\/chats\/[^/]+$/.test(location.pathname);
-  const useLiteMode = (aiLiteMode || isAIConversationRoute) && canUseAI;
+  const useLiteMode =
+    interfacePreferenceLoaded && (aiLiteMode || isAIConversationRoute) && canUseAI;
 
   if (useLiteMode) {
     const isAIHome = location.pathname === "/" || isAIConversationRoute;
@@ -610,6 +757,7 @@ export function DashboardLayout() {
           <Toaster position="bottom-right" />
           <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
           <ConfirmDialog />
+          {interfaceOnboarding}
         </div>
       </TooltipProvider>
     );
@@ -633,6 +781,7 @@ export function DashboardLayout() {
         <Toaster position="bottom-right" />
         <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
         <ConfirmDialog />
+        {interfaceOnboarding}
       </div>
     </TooltipProvider>
   );

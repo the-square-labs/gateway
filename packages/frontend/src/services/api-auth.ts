@@ -4,6 +4,12 @@ import type { BrowserSession, OAuthAuthorization, OAuthConsentPreview, User } fr
 import type { ApiClientBaseConstructor } from "./api-mixins";
 
 const AUTH_BASE = "/auth";
+export type PreferredInterface = "ai_workspace" | "operations_console";
+export interface UserPreferences {
+  aiApprovalMode: AIApprovalMode;
+  preferredInterface: PreferredInterface | null;
+  preferredInterfaceSelectedAt: string | null;
+}
 
 export function withAuthApi<TBase extends ApiClientBaseConstructor>(Base: TBase) {
   return class AuthApiClient extends Base {
@@ -13,22 +19,20 @@ export function withAuthApi<TBase extends ApiClientBaseConstructor>(Base: TBase)
       return this.request<User>("/auth/me");
     }
 
-    async getUserPreferences(): Promise<{ aiApprovalMode: AIApprovalMode }> {
+    async getUserPreferences(): Promise<UserPreferences> {
       return this.cachedRequest("auth:me:preferences", () =>
-        this.request<{ aiApprovalMode: AIApprovalMode }>("/auth/me/preferences")
+        this.request<UserPreferences>("/auth/me/preferences")
       );
     }
 
     async updateUserPreferences(input: {
-      aiApprovalMode: AIApprovalMode;
-    }): Promise<{ aiApprovalMode: AIApprovalMode }> {
-      const preferences = await this.request<{ aiApprovalMode: AIApprovalMode }>(
-        "/auth/me/preferences",
-        {
-          method: "PATCH",
-          body: JSON.stringify(input),
-        }
-      );
+      aiApprovalMode?: AIApprovalMode;
+      preferredInterface?: PreferredInterface;
+    }): Promise<UserPreferences> {
+      const preferences = await this.request<UserPreferences>("/auth/me/preferences", {
+        method: "PATCH",
+        body: JSON.stringify(input),
+      });
       this.setCache("auth:me:preferences", preferences);
       return preferences;
     }

@@ -30,6 +30,8 @@ export interface SessionData {
   accessToken?: string;
   refreshToken?: string;
   csrfToken?: string;
+  purpose?: 'user' | 'setup';
+  setupSessionId?: string;
   createdAt: number;
   lastSeenAt?: number;
   ipAddress?: string;

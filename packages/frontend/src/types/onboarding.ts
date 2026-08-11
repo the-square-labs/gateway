@@ -1,7 +1,6 @@
 export const FINALIZE_SETUP_STEPS = [
   "nodes",
-  "ai_assistant",
-  "inference",
+  "ai_workspace",
   "cloudflare",
   "gitlab",
   "mfa",

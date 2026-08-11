@@ -125,7 +125,7 @@ describe('AIService AI settings tools', () => {
       result: expect.arrayContaining([
         expect.objectContaining({
           name: 'get_ai_settings',
-          category: 'AI Assistant',
+          category: 'AI Workspace',
           requiredScope: 'feat:ai:configure',
         }),
       ]),

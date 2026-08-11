@@ -128,8 +128,8 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 ### Features
 | Scope | Description |
 |-------|-------------|
-| feat:ai:use | Access the AI assistant |
-| feat:ai:configure | Configure AI assistant settings |
+| feat:ai:use | Access AI Workspace |
+| feat:ai:configure | Configure AI Workspace settings |
 | ai:sandbox:use | Use AI sandbox runner tools |
 | ai:sandbox:tier:medium | Allow medium sandbox resource tier |
 | ai:sandbox:tier:high | Allow high sandbox resource tier |

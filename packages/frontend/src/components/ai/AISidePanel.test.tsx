@@ -10,6 +10,7 @@ import { useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { usePinnedNodesStore } from "@/stores/pinned-nodes";
+import { useResolvedPageContext } from "@/stores/resolved-page-context";
 import { useUIStore } from "@/stores/ui";
 import { renderWithRouter } from "@/test/render";
 import type { AIMessage } from "@/types/ai";
@@ -73,6 +74,7 @@ describe("AISidePanel autoscroll", () => {
       useAuthStore.setState({ user: null, isAuthenticated: false, isLoading: false });
       useDashboardBootstrapStore.getState().clear();
       usePinnedNodesStore.setState({ dashboardNodeIds: [], sidebarNodeIds: [] });
+      useResolvedPageContext.setState({ routeKey: null, status: "idle", resource: null });
       useConfirmDialog.getState().close();
     });
     localStorage.removeItem("gateway-ai-panel-width");
@@ -152,7 +154,7 @@ describe("AISidePanel autoscroll", () => {
     await waitFor(() => expect(log.scrollTop).toBe(300));
   });
 
-  it("uses the 480px default when the stored width is below the minimum", async () => {
+  it("uses the responsive default when the stored width is below the minimum", async () => {
     localStorage.setItem("gateway-ai-panel-width", "320");
     act(() => {
       useAIStore.setState({
@@ -169,8 +171,8 @@ describe("AISidePanel autoscroll", () => {
 
     renderAISidePanel();
 
-    const panelContent = screen.getByText("New chat").closest<HTMLDivElement>("div[style]");
-    expect(panelContent).toHaveStyle({ width: "480px" });
+    const panelContent = screen.getByText("New Work Session").closest<HTMLDivElement>("div[style]");
+    expect(panelContent).toHaveStyle({ width: "410px" });
   });
 
   it("shows the starting title shimmer and Thinking before a new chat snapshot arrives", () => {
@@ -203,7 +205,7 @@ describe("AISidePanel autoscroll", () => {
 
     renderAISidePanel();
 
-    expect(screen.getByText("Starting chat...")).toHaveClass(
+    expect(screen.getByText("Starting Work Session...")).toHaveClass(
       "thinking-shimmer",
       "text-muted-foreground"
     );
@@ -385,21 +387,26 @@ describe("AISidePanel autoscroll", () => {
       within(header as HTMLElement)
         .getAllByRole("button")
         .map((button) => button.getAttribute("aria-label"))
-    ).toEqual(["Full screen", "New chat", "Chat actions", "Close AI Assistant"]);
+    ).toEqual([
+      "Open in AI Workspace",
+      "New Work Session",
+      "Work Session actions",
+      "Close AI Workspace",
+    ]);
 
-    expect(screen.queryByRole("button", { name: "Pin chat" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Rename chat" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Delete chat" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pin Work Session" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Rename Work Session" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete Work Session" })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Chat actions" }));
-    expect(screen.getByRole("menuitem", { name: "Pin chat" })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "Rename chat" })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "Delete chat" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Work Session actions" }));
+    expect(screen.getByRole("menuitem", { name: "Pin Work Session" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Rename Work Session" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Delete Work Session" })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("menuitem", { name: "Pin chat" }));
+    await user.click(screen.getByRole("menuitem", { name: "Pin Work Session" }));
     expect(togglePinnedAIConversation).toHaveBeenCalledWith("conversation-1");
 
-    await user.click(screen.getByRole("button", { name: "New chat" }));
+    await user.click(screen.getByRole("button", { name: "New Work Session" }));
     expect(clearMessages).toHaveBeenCalledTimes(1);
   });
 
@@ -421,15 +428,21 @@ describe("AISidePanel autoscroll", () => {
 
     renderAISidePanel();
 
-    const actions = screen.getByRole("button", { name: "Chat actions" });
-    const newChat = screen.getByRole("button", { name: "New chat" });
+    const actions = screen.getByRole("button", { name: "Work Session actions" });
+    const newChat = screen.getByRole("button", { name: "New Work Session" });
     expect(actions).toBeEnabled();
     expect(newChat).toBeEnabled();
     await user.click(actions);
 
-    expect(screen.getByRole("menuitem", { name: "Pin chat" })).toHaveAttribute("data-disabled");
-    expect(screen.getByRole("menuitem", { name: "Rename chat" })).toHaveAttribute("data-disabled");
-    expect(screen.getByRole("menuitem", { name: "Delete chat" })).toHaveAttribute("data-disabled");
+    expect(screen.getByRole("menuitem", { name: "Pin Work Session" })).toHaveAttribute(
+      "data-disabled"
+    );
+    expect(screen.getByRole("menuitem", { name: "Rename Work Session" })).toHaveAttribute(
+      "data-disabled"
+    );
+    expect(screen.getByRole("menuitem", { name: "Delete Work Session" })).toHaveAttribute(
+      "data-disabled"
+    );
   });
 
   it("attaches the slash command palette directly to the composer", async () => {
@@ -451,7 +464,7 @@ describe("AISidePanel autoscroll", () => {
 
     await user.type(screen.getByPlaceholderText("Ask anything... (/ commands)"), "/");
     const newCommand = await screen.findByRole("button", {
-      name: "/new Start new conversation",
+      name: "/new Start new Work Session",
     });
 
     expect(newCommand.parentElement).toHaveClass("bottom-full", "-mb-px");
@@ -501,7 +514,9 @@ describe("AISidePanel autoscroll", () => {
     expect(useAIStore.getState().contextUsageDialog).toBeNull();
   });
 
-  it("prompts before switching the side panel into persisted lite mode", async () => {
+  it("requests AI Workspace without changing the current session locally", () => {
+    const onOpenAIWorkspace = vi.fn();
+    window.addEventListener("gateway:open-ai-workspace", onOpenAIWorkspace);
     act(() => {
       useAIStore.setState({
         messages: [],
@@ -515,19 +530,60 @@ describe("AISidePanel autoscroll", () => {
 
     renderAISidePanel();
 
-    fireEvent.click(screen.getByRole("button", { name: "Full screen" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open in AI Workspace" }));
 
-    expect(useConfirmDialog.getState().open).toBe(true);
+    expect(onOpenAIWorkspace).toHaveBeenCalledTimes(1);
     expect(useUIStore.getState().aiLiteMode).toBe(false);
+    expect(useUIStore.getState().aiPanelOpen).toBe(true);
+    window.removeEventListener("gateway:open-ai-workspace", onOpenAIWorkspace);
+  });
 
+  it("shows resolved page context and can exclude it from the next request", async () => {
+    const user = userEvent.setup();
+    const sendMessage = vi.fn();
+    const route = "/docker/containers/docker-src/api";
     act(() => {
-      useConfirmDialog.getState().onConfirm?.();
+      useAIStore.setState({
+        messages: [],
+        activeConversationId: "conversation-1",
+        isConnected: true,
+        isStreaming: false,
+        retryAfter: null,
+        connect: vi.fn().mockResolvedValue(true),
+        refreshProviderStatus: vi.fn().mockResolvedValue(undefined),
+        sendMessage,
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+      useResolvedPageContext.setState({
+        routeKey: route,
+        status: "ready",
+        resource: {
+          resourceType: "docker-container",
+          resourceId: "api",
+          nodeId: "node-1",
+          label: "api",
+        },
+      });
     });
 
-    await waitFor(() => {
-      expect(useUIStore.getState().aiLiteMode).toBe(true);
-      expect(useUIStore.getState().aiPanelOpen).toBe(false);
+    renderWithRouter(
+      <TooltipProvider>
+        <AISidePanel />
+      </TooltipProvider>,
+      { route }
+    );
+
+    expect(screen.getByText("Viewing api")).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Exclude this resource from the next request" })
+    );
+    await user.type(screen.getByPlaceholderText("Ask anything... (/ commands)"), "Inspect it");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    expect(sendMessage).toHaveBeenCalledWith("Inspect it", { route }, [], {
+      startNewConversation: true,
     });
+    expect(await screen.findByText("Viewing api")).toBeInTheDocument();
   });
 
   it("warns before changing the model of an existing conversation", async () => {
@@ -1298,7 +1354,7 @@ describe("AISidePanel autoscroll", () => {
     expect(conversationRow).toHaveClass("bg-sidebar-accent");
 
     await user.click(screen.getByRole("button", { name: "Create" }));
-    await user.click(await screen.findByRole("menuitem", { name: /New chat/ }));
+    await user.click(await screen.findByRole("menuitem", { name: /New Work Session/ }));
 
     expect(useAIStore.getState().sidebarActiveConversationId).toBeNull();
     expect(useAIStore.getState().activeConversationId).toBeNull();
@@ -1407,11 +1463,11 @@ describe("AISidePanel autoscroll", () => {
       </TooltipProvider>
     );
 
-    expect(screen.getByText("Starting chat...")).toHaveClass(
+    expect(screen.getByText("Starting Work Session...")).toHaveClass(
       "thinking-shimmer",
       "text-muted-foreground"
     );
-    expect(screen.queryByText("New chat")).not.toBeInTheDocument();
+    expect(screen.queryByText("New Work Session")).not.toBeInTheDocument();
   });
 
   it("shows run status icons for chats in the collapsed lite sidebar", () => {

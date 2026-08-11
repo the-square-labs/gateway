@@ -3,33 +3,23 @@
   "edges": [
     {
       "from_id": "z638qk12",
-      "to_id": "fk86zmru",
-      "relation": "same_area",
-      "weight": 0.4041,
-      "reason": "The memories share tags or vocabulary from the same area.",
+      "to_id": "dcfkgqwx",
+      "relation": "same_workflow",
+      "weight": 0.86,
+      "reason": "Gateway Inference is nested in the AI Workspace onboarding flow, while this memory defines its product contract.",
       "source": "auto",
-      "created_at": 1786064967210,
-      "updated_at": 1786064967210
+      "created_at": 1786405036882,
+      "updated_at": 1786405036882
     },
     {
       "from_id": "z638qk12",
-      "to_id": "37llsl1w",
+      "to_id": "gahvf5k5",
       "relation": "same_area",
-      "weight": 0.3649,
-      "reason": "The memories share tags or vocabulary from the same area.",
+      "weight": 0.72,
+      "reason": "The onboarding checklist includes MFA and triggers a post-completion MFA reminder governed by the gateway MFA policy.",
       "source": "auto",
-      "created_at": 1786064967210,
-      "updated_at": 1786064967210
-    },
-    {
-      "from_id": "z638qk12",
-      "to_id": "asy6c7bj",
-      "relation": "same_area",
-      "weight": 0.3552,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1786064967210,
-      "updated_at": 1786064967210
+      "created_at": 1786405036882,
+      "updated_at": 1786405036882
     }
   ]
 }

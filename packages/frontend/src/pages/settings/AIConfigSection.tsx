@@ -68,8 +68,7 @@ function normalizeAIConfigState(config: AIConfigState): AIConfigState {
     ...config,
     providerType: config.providerType ?? "openai_compatible",
     gatewayInferenceModel: config.gatewayInferenceModel ?? "",
-    gatewayInferenceAllowUserModelSelection:
-      config.gatewayInferenceAllowUserModelSelection ?? false,
+    gatewayInferenceAllowUserModelSelection: config.gatewayInferenceAllowUserModelSelection ?? true,
     gatewayInferenceModels: (config.gatewayInferenceModels ?? []).map((model) => ({
       ...model,
       reasoningEfforts: model.reasoningEfforts ?? [],
@@ -677,8 +676,8 @@ export function AIConfigSection() {
   return (
     <>
       <PanelShell
-        title="AI Assistant"
-        description="Configure the AI assistant for operators and admins"
+        title="AI Workspace"
+        description="Configure the Workspace model connection for intent-driven operations"
         actions={
           <SaveSettingsButton
             onClick={saveAssistantSettings}
@@ -689,7 +688,7 @@ export function AIConfigSection() {
       >
         <SettingsControlRow
           title="Enabled"
-          description="Enable the AI assistant for operators and admins."
+          description="Enable AI Workspace for operators and admins."
           controlsClassName="flex justify-end justify-self-end !w-auto !min-w-0 !max-w-none"
         >
           <Switch
@@ -722,12 +721,12 @@ export function AIConfigSection() {
             <div className="border-b border-border bg-muted p-4">
               <h3 className="text-sm font-semibold">System Prompt</h3>
               <p className="text-xs text-muted-foreground">
-                Add durable instructions that are prepended to assistant conversations.
+                Add durable instructions that are prepended to Work Sessions.
               </p>
             </div>
             <Textarea
               className="min-h-[16rem] flex-1 resize-none border-0"
-              placeholder="Add custom instructions for the AI assistant.&#10;&#10;Examples:&#10;- Company PKI policies and naming conventions&#10;- Preferred certificate settings&#10;- Security guidelines"
+              placeholder="Add custom instructions for AI Workspace.&#10;&#10;Examples:&#10;- Company PKI policies and naming conventions&#10;- Preferred certificate settings&#10;- Security guidelines"
               value={aiConfig.customSystemPrompt}
               onChange={(e) => setAiConfig({ ...aiConfig, customSystemPrompt: e.target.value })}
             />
@@ -736,7 +735,7 @@ export function AIConfigSection() {
             <div className="border-b border-border bg-muted p-4">
               <h3 className="text-sm font-semibold">Tools</h3>
               <p className="text-xs text-muted-foreground">
-                Configure assistant tool access and optional web search provider.
+                Configure AI Workspace tool access and an optional web search provider.
               </p>
             </div>
             <SettingsControlRow
@@ -758,7 +757,7 @@ export function AIConfigSection() {
             </SettingsControlRow>
             <SettingsControlRow
               title="Enable web search"
-              description="Expose web search tools to the AI assistant."
+              description="Expose web search tools to AI Workspace."
               controlsClassName="flex justify-end justify-self-end !w-auto !min-w-0 !max-w-none"
             >
               <Switch
@@ -837,8 +836,8 @@ export function AIConfigSection() {
           title="Provider"
           description={
             aiConfig.providerType === "gateway_inference"
-              ? "Gateway Inference model used for assistant responses"
-              : "OpenAI-compatible provider connection used for assistant responses"
+              ? "Gateway Inference model used for Workspace responses"
+              : "OpenAI-compatible provider connection used for Workspace responses"
           }
           actions={
             <SaveSettingsButton
@@ -856,7 +855,7 @@ export function AIConfigSection() {
             title="Provider type"
             description={
               <>
-                Response provider for the AI assistant.
+                Response provider for AI Workspace.
                 {!inferenceEnabled && (
                   <>
                     {" "}
@@ -980,7 +979,7 @@ export function AIConfigSection() {
               </SettingsControlRow>
               <SettingsControlRow
                 title="Model"
-                description="Model name used for assistant responses."
+                description="Model name used for Workspace responses."
               >
                 <Input
                   aria-label="Model"
@@ -1021,7 +1020,7 @@ export function AIConfigSection() {
           >
             <SettingsControlRow
               title="Requests and window"
-              description="Maximum assistant requests allowed per time window."
+              description="Maximum Workspace requests allowed per time window."
               controlsClassName="grid grid-cols-2 gap-2 sm:max-w-none sm:grid-cols-[8rem_8rem]"
             >
               <Input
@@ -1116,7 +1115,7 @@ export function AIConfigSection() {
       >
         <SettingsControlRow
           title="Enabled"
-          description="Expose sandbox execution tools to the AI assistant."
+          description="Expose sandbox execution tools to AI Workspace."
           controlsClassName="flex justify-end justify-self-end !w-auto !min-w-0 !max-w-none"
         >
           <Switch

@@ -2,7 +2,9 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Markdown from "react-markdown";
 import { MemoryRouter, useLocation } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAIStore } from "@/stores/ai";
+import { useUIStore } from "@/stores/ui";
 import type { AIResourceReference } from "@/types/ai";
 import {
   AIChangedResources,
@@ -22,10 +24,19 @@ const containerReference: AIResourceReference = {
 
 function LocationProbe() {
   const location = useLocation();
-  return <output data-testid="location-state">{JSON.stringify(location.state)}</output>;
+  return (
+    <output data-testid="location-state">
+      {JSON.stringify({ pathname: location.pathname, state: location.state })}
+    </output>
+  );
 }
 
 describe("AI resource links", () => {
+  afterEach(() => {
+    useUIStore.setState({ aiLiteMode: false, aiPanelOpen: false });
+    useAIStore.setState({ activeConversationId: null });
+  });
+
   it("renders a validated marker as a canonical internal resource link", () => {
     const content = resourceAwareMarkdown(
       "Created [[resource:gwr_0123456789abcdef01234567|527b02985e9b37cf]].",
@@ -142,5 +153,61 @@ describe("AI resource links", () => {
     expect(
       screen.getByRole("link", { name: "Docker volume: ai-e2e-restart-data" })
     ).toHaveAttribute("href", "/docker/volumes/docker-src/ai-e2e-restart-data");
+  });
+
+  it("uses the backend-issued route and keeps it embedded in AI Workspace", async () => {
+    const user = userEvent.setup();
+    useUIStore.setState({ aiLiteMode: true, aiPanelOpen: false });
+    render(
+      <MemoryRouter initialEntries={["/ai/chats/conversation-1"]}>
+        <AIChangedResources
+          references={[
+            {
+              ...containerReference,
+              uiHref: "/docker/containers/canonical-node/canonical-container",
+              workspaceEmbeddable: true,
+            },
+          ]}
+        />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getByRole("link", { name: "Container: ai-e2e-restart" }));
+
+    expect(screen.getByTestId("location-state")).toHaveTextContent(
+      '"pathname":"/docker/containers/canonical-node/canonical-container"'
+    );
+    expect(useUIStore.getState().aiLiteMode).toBe(true);
+  });
+
+  it("opens the canonical route in Operations Console with the same Work Session", async () => {
+    const user = userEvent.setup();
+    useUIStore.setState({ aiLiteMode: true, aiPanelOpen: false });
+    useAIStore.setState({ activeConversationId: "conversation-1" });
+    render(
+      <MemoryRouter initialEntries={["/ai/chats/conversation-1"]}>
+        <AIChangedResources
+          references={[
+            {
+              ...containerReference,
+              uiHref: "/docker/containers/canonical-node/canonical-container",
+              workspaceEmbeddable: true,
+            },
+          ]}
+        />
+        <LocationProbe />
+      </MemoryRouter>
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Open ai-e2e-restart in Operations Console" })
+    );
+
+    expect(screen.getByTestId("location-state")).toHaveTextContent(
+      '"pathname":"/docker/containers/canonical-node/canonical-container"'
+    );
+    expect(useUIStore.getState()).toMatchObject({ aiLiteMode: false, aiPanelOpen: true });
+    expect(useAIStore.getState().activeConversationId).toBe("conversation-1");
   });
 });

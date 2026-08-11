@@ -8,5 +8,5 @@ export function LiteModeBackButton() {
 
   if (!aiLiteMode) return null;
 
-  return <PageBackButton onClick={() => navigate("/")} />;
+  return <PageBackButton label="Back to Work Session" onClick={() => navigate("/")} />;
 }

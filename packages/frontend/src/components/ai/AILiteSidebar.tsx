@@ -147,8 +147,6 @@ export function AILiteSidebar({
     toggleSidebar,
     pinnedAIConversationIds,
     togglePinnedAIConversation,
-    showAILiteModeCTA,
-    setAILiteMode,
     setCommandPaletteOpen: openPalette,
   } = useUIStore();
   const dashboardBootstrap = useDashboardBootstrapStore((s) => s.snapshot);
@@ -287,8 +285,8 @@ export function AILiteSidebar({
     }
   };
 
-  const handleSwitchToDefaultMode = () => {
-    setAILiteMode(false);
+  const handleOpenOperationsConsole = () => {
+    window.dispatchEvent(new CustomEvent("gateway:open-operations-console"));
   };
 
   const handleToggleFolder = (folderId: string) => {
@@ -397,12 +395,12 @@ export function AILiteSidebar({
                     size="icon"
                     className="h-8 w-8"
                     onClick={handleNewChat}
-                    aria-label="New chat"
+                    aria-label="New Work Session"
                   >
                     <Plus className="h-4 w-4" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent side="right">New chat</TooltipContent>
+                <TooltipContent side="right">New Work Session</TooltipContent>
               </Tooltip>
 
               <Tooltip>
@@ -440,12 +438,12 @@ export function AILiteSidebar({
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 bg-sidebar-accent"
-                        aria-label="Starting chat..."
+                        aria-label="Starting Work Session..."
                       >
                         <Loader2 className="h-4 w-4 animate-spin text-primary" />
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent side="right">Starting chat...</TooltipContent>
+                    <TooltipContent side="right">Starting Work Session...</TooltipContent>
                   </Tooltip>
                 )}
                 {recentConversations.map((conversation) => {
@@ -474,22 +472,22 @@ export function AILiteSidebar({
                 })}
               </nav>
 
-              {showAILiteModeCTA && (
+              {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8 bg-sidebar-accent text-sidebar-accent-foreground/80 hover:bg-muted hover:text-sidebar-accent-foreground"
-                      onClick={handleSwitchToDefaultMode}
-                      aria-label="Switch to default mode"
+                      onClick={handleOpenOperationsConsole}
+                      aria-label="Open Operations Console"
                     >
                       <PanelLeft className="h-4 w-4" />
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent side="right">Switch to default mode</TooltipContent>
+                  <TooltipContent side="right">Open Operations Console</TooltipContent>
                 </Tooltip>
-              )}
+              }
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -554,7 +552,7 @@ export function AILiteSidebar({
                   <DropdownMenuContent align="end" className="w-44">
                     <DropdownMenuItem onClick={handleNewChat}>
                       <MessageSquare className="mr-2 h-4 w-4" />
-                      New chat
+                      New Work Session
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => setFolderDialog({ mode: "create", name: "", description: "" })}
@@ -741,7 +739,7 @@ export function AILiteSidebar({
                           >
                             <MessageSquare className="h-4 w-4 shrink-0" />
                             <span className="thinking-shimmer truncate text-muted-foreground">
-                              Starting chat...
+                              Starting Work Session...
                             </span>
                           </div>
                         )}
@@ -754,7 +752,7 @@ export function AILiteSidebar({
                             onClick={handleNewChat}
                           >
                             <MessageSquare className="h-4 w-4 shrink-0" />
-                            <span className="truncate">New chat</span>
+                            <span className="truncate">New Work Session</span>
                           </button>
                         ) : (
                           <RootConversationDropZone>
@@ -830,21 +828,21 @@ export function AILiteSidebar({
                   <Separator />
                 </>
               )}
-              {showAILiteModeCTA && (
+              {
                 <>
                   <div className="px-2 py-2">
                     <button
                       type="button"
-                      onClick={handleSwitchToDefaultMode}
+                      onClick={handleOpenOperationsConsole}
                       className="flex w-full items-center gap-2 bg-sidebar-accent px-3 py-2 text-left text-sm font-medium text-sidebar-accent-foreground/80 transition-colors hover:bg-muted hover:text-sidebar-accent-foreground"
                     >
                       <PanelLeft className="h-4 w-4 shrink-0" />
-                      <span className="truncate">Switch to default mode</span>
+                      <span className="truncate">Open Operations Console</span>
                     </button>
                   </div>
                   <Separator />
                 </>
-              )}
+              }
               <div className="p-2">
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -935,7 +933,7 @@ function ConversationFolderDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{state.mode === "create" ? "New project" : "Edit project"}</DialogTitle>
-          <DialogDescription>Group related AI chats in a sidebar project.</DialogDescription>
+          <DialogDescription>Group related Work Sessions in a sidebar project.</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-1.5">

@@ -15,7 +15,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { InferenceProviderConnectDialog } from "@/pages/settings/inference/InferenceProviderConnectDialog";
 import { api } from "@/services/api";
-import { useAuthStore } from "@/stores/auth";
+import { useAIStore } from "@/stores/ai";
 import { useSystemConfigStore } from "@/stores/system-config";
 import type {
   InferenceLimitInput,
@@ -66,15 +66,16 @@ export function InferenceSetupWizard({
   onBack,
   onConfigured,
   onSkipped,
+  completionActionLabel = "Back to checklist",
 }: {
   open: boolean;
   onBack: () => void;
   onConfigured: () => Promise<void>;
   onSkipped: () => Promise<void>;
+  completionActionLabel?: string;
 }) {
   const systemConfig = useSystemConfigStore((state) => state.config);
   const setSystemConfig = useSystemConfigStore((state) => state.setConfig);
-  const currentUser = useAuthStore((state) => state.user);
   const inferenceEnabled = systemConfig.features.inferenceEnabled;
   const [catalog, setCatalog] = useState<InferenceProviderCatalogItem[]>([]);
   const [connections, setConnections] = useState<InferenceProviderConnection[]>([]);
@@ -85,14 +86,7 @@ export function InferenceSetupWizard({
   const [saving, setSaving] = useState(false);
   const [completed, setCompleted] = useState(false);
 
-  const load = useCallback(async () => {
-    if (!inferenceEnabled) {
-      setCatalog([]);
-      setConnections([]);
-      setModels([]);
-      setLoading(false);
-      return;
-    }
+  const loadInferenceData = useCallback(async () => {
     setLoading(true);
     try {
       const [nextCatalog, nextConnections, nextModels] = await Promise.all([
@@ -108,7 +102,18 @@ export function InferenceSetupWizard({
     } finally {
       setLoading(false);
     }
-  }, [inferenceEnabled]);
+  }, []);
+
+  const load = useCallback(async () => {
+    if (!inferenceEnabled) {
+      setCatalog([]);
+      setConnections([]);
+      setModels([]);
+      setLoading(false);
+      return;
+    }
+    await loadInferenceData();
+  }, [inferenceEnabled, loadInferenceData]);
 
   useEffect(() => {
     if (!open) return;
@@ -144,28 +149,15 @@ export function InferenceSetupWizard({
     return policies;
   };
 
-  const ensureCurrentUserEnabled = async () => {
-    if (!currentUser) return;
-    const policies = await ensureDefaultLimits();
-    const userPolicy = policies.find(
-      (policy) => policy.policyType === "user" && policy.userId === currentUser.id
-    );
-    const defaultPolicy = policies.find((policy) => policy.policyType === "default");
-    if (userPolicy?.enabled || (!userPolicy && defaultPolicy?.enabled)) return;
-
-    const base = userPolicy ?? defaultPolicy;
-    await api.setInferenceUserLimits(currentUser.id, {
+  const configureAIWorkspace = async (defaultModel: InferenceModel) => {
+    await ensureDefaultLimits();
+    await api.updateAIConfig({
       enabled: true,
-      credits5hEnabled: base?.credits5hEnabled ?? ONBOARDING_DEFAULT_LIMITS.credits5hEnabled,
-      credits5h: Number(base?.credits5h ?? ONBOARDING_DEFAULT_LIMITS.credits5h),
-      credits7dEnabled: base?.credits7dEnabled ?? ONBOARDING_DEFAULT_LIMITS.credits7dEnabled,
-      credits7d: Number(base?.credits7d ?? ONBOARDING_DEFAULT_LIMITS.credits7d),
-      credits30dEnabled: base?.credits30dEnabled ?? ONBOARDING_DEFAULT_LIMITS.credits30dEnabled,
-      credits30d: Number(base?.credits30d ?? ONBOARDING_DEFAULT_LIMITS.credits30d),
-      apiMonthlyMicrodollars:
-        base?.apiMonthlyMicrodollars ?? ONBOARDING_DEFAULT_LIMITS.apiMonthlyMicrodollars,
-      billingTimezone: base?.billingTimezone ?? ONBOARDING_DEFAULT_LIMITS.billingTimezone,
+      providerType: "gateway_inference",
+      gatewayInferenceModel: defaultModel.publicId,
+      gatewayInferenceAllowUserModelSelection: true,
     });
+    await useAIStore.getState().refreshProviderStatus();
   };
 
   const enable = async () => {
@@ -179,12 +171,13 @@ export function InferenceSetupWizard({
         },
       });
       await ensureDefaultLimits();
-      await ensureCurrentUserEnabled();
       setSystemConfig({
         ...systemConfig,
         features: { ...systemConfig.features, ...updated.generalSettings.features },
       });
-      await load();
+      // This callback still closes over the pre-enable feature flag. Load the
+      // catalog explicitly instead of waiting for the store-driven rerender.
+      await loadInferenceData();
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "Failed to enable Gateway Inference");
     } finally {
@@ -244,8 +237,11 @@ export function InferenceSetupWizard({
       });
       const nextModels = await api.listInferenceModels();
       setModels(nextModels);
-      await ensureCurrentUserEnabled();
-      if (selectableModel(nextModels)) setCompleted(true);
+      const defaultModel = nextModels.find((model) => model.enabled && model.defaultAccessAllowed);
+      if (defaultModel) {
+        await configureAIWorkspace(defaultModel);
+        setCompleted(true);
+      }
     } catch (cause) {
       toast.error(
         cause instanceof Error ? cause.message : "Failed to configure the inference model"
@@ -256,13 +252,14 @@ export function InferenceSetupWizard({
   };
 
   const completeSetup = async () => {
+    const defaultModel = models.find((model) => model.enabled && model.defaultAccessAllowed);
+    if (!defaultModel) return;
     setSaving(true);
     try {
-      await ensureDefaultLimits();
-      await ensureCurrentUserEnabled();
+      await configureAIWorkspace(defaultModel);
       setCompleted(true);
     } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : "Failed to configure inference limits");
+      toast.error(cause instanceof Error ? cause.message : "Failed to configure AI Workspace");
     } finally {
       setSaving(false);
     }
@@ -283,7 +280,7 @@ export function InferenceSetupWizard({
             </p>
             <p>
               After enabling it, you connect a provider, choose the models Gateway may expose, and
-              define who can use them. AI Assistant can then use one of those centrally managed
+              define who can use them. AI Workspace can then use one of those centrally managed
               models, and future Gateway features can use the same approved catalog.
             </p>
             <p>
@@ -310,7 +307,7 @@ export function InferenceSetupWizard({
         footer={
           completed ? (
             <Button onClick={() => void onConfigured()} disabled={saving}>
-              <Check /> Back to checklist
+              <Check /> {completionActionLabel}
             </Button>
           ) : !inferenceEnabled ? (
             <Button onClick={() => void enable()} disabled={saving}>
@@ -336,11 +333,10 @@ export function InferenceSetupWizard({
       >
         {completed ? (
           <FinalizeSetupCompletion
-            title="Gateway Inference is ready"
+            title="AI Workspace is ready"
             continueIn="Continue from Settings → Inference to connect more providers, configure models, and refine access rules."
           >
-            Gateway has at least one selectable model and can route approved model requests through
-            its centrally managed catalog.
+            Gateway Inference is configured, and AI Workspace will use the selected managed model.
           </FinalizeSetupCompletion>
         ) : loading ? (
           <div className="space-y-4" aria-busy="true" aria-label="Loading Gateway Inference">

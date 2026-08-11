@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
 import { getResourceScopedIds, hasScope, hasScopeBase } from '@/lib/permissions.js';
+import type { AISettingsService } from '@/modules/ai/ai.settings.service.js';
 import type { AIProviderRuntimeService } from '@/modules/ai/ai-provider-runtime.service.js';
 import { dockerScopedNodeIds } from '@/modules/docker/docker-access-resource.service.js';
 import type { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import type { LoggingFeatureService } from '@/modules/logging/logging-feature.service.js';
 import type { NodesService } from '@/modules/nodes/nodes.service.js';
+import type { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
 import {
   DEFAULT_GENERAL_SETTINGS,
   type GeneralSettings,
@@ -66,6 +68,7 @@ export interface UIBootstrapShell {
   };
   update: unknown | null;
   aiStatus: unknown | null;
+  aiWorkspace: { configured: boolean; installationOwner: boolean };
 }
 
 /**
@@ -82,7 +85,9 @@ export class UIBootstrapService {
     private readonly integrations: IntegrationsService,
     private readonly statusPage: StatusPageService,
     private readonly updates: UpdateService,
-    private readonly aiRuntime: AIProviderRuntimeService
+    private readonly aiRuntime: AIProviderRuntimeService,
+    private readonly aiSettings: AISettingsService,
+    private readonly finalizeSetup: FinalizeSetupService
   ) {
     this.coordinator.register({
       id: 'ui-shell:nodes',
@@ -111,13 +116,24 @@ export class UIBootstrapService {
   }
 
   async getShell(user: User, scopes: string[]): Promise<UIBootstrapShell> {
-    const [nodeSnapshot, configSnapshot, statusPageSnapshot, cloudflareSnapshot, update, aiStatus] = await Promise.all([
+    const [
+      nodeSnapshot,
+      configSnapshot,
+      statusPageSnapshot,
+      cloudflareSnapshot,
+      update,
+      aiStatus,
+      aiWorkspaceConfigured,
+      installationOwner,
+    ] = await Promise.all([
       this.getNodeSnapshot(),
       this.getConfigSnapshot(),
       this.getStatusPageConfigSnapshot(),
       this.getCloudflareIntegrationSnapshot(),
       hasScope(scopes, 'admin:update') ? this.updates.getCachedStatus() : Promise.resolve(null),
       hasScope(scopes, 'feat:ai:use') ? this.aiRuntime.statusForUser(user) : Promise.resolve(null),
+      this.aiSettings.isEnabled(),
+      this.finalizeSetup.isOwner(user.id),
     ]);
     const config = configSnapshot.data;
 
@@ -158,6 +174,10 @@ export class UIBootstrapService {
       },
       update,
       aiStatus,
+      aiWorkspace: {
+        configured: aiWorkspaceConfigured,
+        installationOwner,
+      },
     };
   }
 

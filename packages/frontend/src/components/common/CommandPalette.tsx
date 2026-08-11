@@ -606,7 +606,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       },
       {
         id: "settings-ai",
-        label: "AI assistant settings",
+        label: "AI Workspace settings",
         href: "/settings/ai",
         icon: Bot,
         parentId: "settings",
@@ -792,20 +792,9 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     if (aiEnabled !== false && aiScopeOk) {
       actions.push({
         id: "action:open-ai",
-        label: "Open AI assistant",
+        label: "Open AI Workspace",
         icon: Sparkles,
         action: () => useUIStore.getState().setAIPanelOpen(true),
-      });
-    }
-    // Temporary visual QA entry for the guided Assistant setup warning.
-    if (hasScope("settings:gateway:edit")) {
-      actions.push({
-        id: "action:preview-assistant-inference-access-notice",
-        label: "Preview Assistant Inference access notice",
-        detail: "Temporary UI check",
-        keywords: ["temporary", "onboarding", "inference", "assistant"],
-        icon: Bot,
-        action: () => navigate("/dashboard?preview=assistant-inference-access"),
       });
     }
     return actions;

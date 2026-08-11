@@ -269,5 +269,6 @@ function makeShell(inferenceEnabled: boolean): UIBootstrapShell {
     },
     update: null,
     aiStatus: null,
+    aiWorkspace: { configured: false, installationOwner: false },
   };
 }

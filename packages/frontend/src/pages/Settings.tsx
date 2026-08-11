@@ -154,7 +154,7 @@ export function Settings() {
             {canConfigAI && (
               <TabsTrigger value="ai" className="gap-1.5">
                 <Bot className="h-3.5 w-3.5" />
-                AI Assistant
+                AI Workspace
               </TabsTrigger>
             )}
             {canConfigInference && (

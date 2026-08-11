@@ -39,6 +39,8 @@ export const users = pgTable(
       .$type<'always-ask' | 'normal' | 'bypass-non-destructive' | 'bypass-everything'>()
       .notNull()
       .default('normal'),
+    preferredInterface: varchar('preferred_interface', { length: 32 }).$type<'ai_workspace' | 'operations_console'>(),
+    preferredInterfaceSelectedAt: timestamp('preferred_interface_selected_at', { withTimezone: true }),
     folderId: uuid('folder_id').references((): AnyPgColumn => adminUserFolders.id, { onDelete: 'set null' }),
     sortOrder: integer('sort_order').notNull().default(0),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true }),

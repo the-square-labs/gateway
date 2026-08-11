@@ -455,7 +455,7 @@ describe('AI tool scope filtering', () => {
   });
 
   it('keeps AI assistant configuration tools scoped to assistant configuration admins', () => {
-    const aiToolNames = AI_TOOLS.filter((tool) => tool.category === 'AI Assistant').map((tool) => tool.name);
+    const aiToolNames = AI_TOOLS.filter((tool) => tool.category === 'AI Workspace').map((tool) => tool.name);
 
     expect(aiToolNames).toEqual([
       'get_ai_settings',

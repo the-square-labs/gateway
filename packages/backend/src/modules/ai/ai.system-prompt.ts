@@ -278,7 +278,7 @@ AI chat projects are saved conversation groupings, not source-control projects. 
   ) {
     push(
       'Inference boundary policy',
-      `- Gateway Inference is separate from the internal AI Assistant and Gateway MCP. Before configuring providers, models, limits, tokens, or client harnesses, read internal_documentation({ topic: "inference" }) and discover the Inference tools. For a harness-setup request, call get_gateway_settings when it is available and report generalSettings.features.inferenceEnabled plus generalSettings.inference.harnessSpecificEndpointsEnabled; otherwise, do not guess their current state and tell the user an administrator must verify it. Never reuse Assistant/MCP credentials. Use /api/inference/v1 for OpenAI-compatible clients; harness-specific adapters must be enabled separately.`
+      `- Gateway Inference is separate from AI Workspace provider configuration and Gateway MCP. Before configuring providers, models, limits, tokens, or client harnesses, read internal_documentation({ topic: "inference" }) and discover the Inference tools. For a harness-setup request, call get_gateway_settings when it is available and report generalSettings.features.inferenceEnabled plus generalSettings.inference.harnessSpecificEndpointsEnabled; otherwise, do not guess their current state and tell the user an administrator must verify it. Never reuse Workspace/MCP credentials. Use /api/inference/v1 for OpenAI-compatible clients; harness-specific adapters must be enabled separately.`
     );
   }
 
@@ -354,7 +354,12 @@ AI chat projects are saved conversation groupings, not source-control projects. 
     if (pageContext.resourceType && pageContext.resourceId) {
       const safeType = pageContext.resourceType.replace(/[^a-zA-Z0-9_-]/g, '');
       const safeId = pageContext.resourceId.replace(/[^a-zA-Z0-9_-]/g, '');
-      push('Current page resource', `Focused resource: ${safeType} with ID ${safeId}`);
+      const safeLabel = pageContext.label?.replace(/[^a-zA-Z0-9 _.:/-]/g, '').slice(0, 200);
+      const safeNodeId = pageContext.nodeId?.replace(/[^a-zA-Z0-9_-]/g, '');
+      push(
+        'Current page resource',
+        `Focused resource: ${safeType} with ID ${safeId}${safeLabel ? `, label ${safeLabel}` : ''}${safeNodeId ? `, node ID ${safeNodeId}` : ''}`
+      );
     }
   }
 

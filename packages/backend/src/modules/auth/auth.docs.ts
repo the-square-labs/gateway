@@ -2,8 +2,11 @@ import { createRoute, z } from '@hono/zod-openapi';
 import { appRoute, commonErrorResponses, okJson, UnknownDataResponseSchema } from '@/lib/openapi.js';
 
 const AIApprovalModeSchema = z.enum(['always-ask', 'normal', 'bypass-non-destructive', 'bypass-everything']);
+const PreferredInterfaceSchema = z.enum(['ai_workspace', 'operations_console']);
 const UserPreferencesSchema = z.object({
   aiApprovalMode: AIApprovalModeSchema,
+  preferredInterface: PreferredInterfaceSchema.nullable(),
+  preferredInterfaceSelectedAt: z.string().datetime().nullable(),
 });
 const PublicSessionSchema = z.object({
   id: z.string(),
@@ -64,7 +67,14 @@ export const updateCurrentUserPreferencesRoute = createRoute({
     body: {
       content: {
         'application/json': {
-          schema: UserPreferencesSchema,
+          schema: z
+            .object({
+              aiApprovalMode: AIApprovalModeSchema.optional(),
+              preferredInterface: PreferredInterfaceSchema.optional(),
+            })
+            .refine((value) => value.aiApprovalMode !== undefined || value.preferredInterface !== undefined, {
+              message: 'At least one preference must be provided',
+            }),
         },
       },
     },

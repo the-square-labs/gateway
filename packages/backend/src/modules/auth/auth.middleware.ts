@@ -6,6 +6,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import { hasScopeBase } from '@/lib/permissions.js';
 import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
 import { OAuthService } from '@/modules/oauth/oauth.service.js';
+import { SetupAccessService } from '@/modules/setup/setup-access.service.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { AppEnv, SessionData, User } from '@/types.js';
@@ -54,6 +55,38 @@ function extractCredential(c: Context<AppEnv>): { type: CredentialType; value: s
 
 function requiresCsrf(method: string): boolean {
   return UNSAFE_METHODS.has(method.toUpperCase());
+}
+
+const SETUP_PURPOSE_PATHS = [
+  '/auth/csrf',
+  '/api/ai/config',
+  '/api/ai/status',
+  '/api/inference/settings',
+  '/api/inference/providers',
+  '/api/inference/models',
+  '/api/inference/limits',
+  '/api/admin/auth-settings',
+] as const;
+
+function isSetupPurposePath(path: string): boolean {
+  return SETUP_PURPOSE_PATHS.some((allowed) => path === allowed || path.startsWith(`${allowed}/`));
+}
+
+async function validateSetupPurposeSession(session: SessionData, path: string): Promise<boolean> {
+  return Boolean(
+    session.purpose === 'setup' &&
+      session.setupSessionId &&
+      isSetupPurposePath(path) &&
+      (await container.resolve(SetupAccessService).validateSession(session.setupSessionId))
+  );
+}
+
+export async function isAdmittedSetupPurposeRequest(c: Context<AppEnv>): Promise<boolean> {
+  const credential = extractCredential(c);
+  if (!credential || credential.type !== 'session') return false;
+  const session = await container.resolve(SessionService).getSession(credential.value);
+  if (!session) return false;
+  return validateSetupPurposeSession(session, new URL(c.req.url).pathname);
 }
 
 function allowsBlockedSessionPath(c: Context<AppEnv>): boolean {
@@ -131,6 +164,13 @@ export const authMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     if (!session) {
       throw new HTTPException(401, { message: 'Invalid or expired session' });
     }
+    if (session.purpose === 'setup') {
+      const validSetupSession = await validateSetupPurposeSession(session, new URL(c.req.url).pathname);
+      if (!validSetupSession) {
+        await sessionService.destroySession(credential.value);
+        throw new HTTPException(401, { message: 'Invalid or expired setup session' });
+      }
+    }
     const sessionUserId = session.userId ?? session.user?.id;
     if (!sessionUserId) {
       await sessionService.destroySession(credential.value);
@@ -161,8 +201,10 @@ export const authMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     c.set('isTokenAuth', false);
     c.set('authType', 'session');
     sessionService.updateSession(credential.value, { user }).catch(() => {});
-    sessionService.touchSession?.(credential.value, session).catch(() => {});
-    sessionService.refreshSession(credential.value, session).catch(() => {});
+    if (session.purpose !== 'setup') {
+      sessionService.touchSession?.(credential.value, session).catch(() => {});
+      sessionService.refreshSession(credential.value, session).catch(() => {});
+    }
   }
 
   await next();
@@ -181,6 +223,14 @@ export const optionalAuthMiddleware: MiddlewareHandler<AppEnv> = async (c, next)
       const sessionService = container.resolve(SessionService);
       const session = await sessionService.getSession(credential.value);
       if (session) {
+        if (session.purpose === 'setup') {
+          const validSetupSession = await validateSetupPurposeSession(session, new URL(c.req.url).pathname);
+          if (!validSetupSession) {
+            await sessionService.destroySession(credential.value);
+            await next();
+            return;
+          }
+        }
         const sessionUserId = session.userId ?? session.user?.id;
         if (!sessionUserId) {
           await sessionService.destroySession(credential.value);
@@ -200,8 +250,10 @@ export const optionalAuthMiddleware: MiddlewareHandler<AppEnv> = async (c, next)
           c.set('isTokenAuth', false);
           c.set('authType', 'session');
           sessionService.updateSession(credential.value, { user }).catch(() => {});
-          sessionService.touchSession?.(credential.value, session).catch(() => {});
-          sessionService.refreshSession(credential.value, session).catch(() => {});
+          if (session.purpose !== 'setup') {
+            sessionService.touchSession?.(credential.value, session).catch(() => {});
+            sessionService.refreshSession(credential.value, session).catch(() => {});
+          }
         }
       }
     }

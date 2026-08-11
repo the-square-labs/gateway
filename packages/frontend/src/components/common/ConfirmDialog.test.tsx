@@ -15,13 +15,13 @@ describe("ConfirmDialog", () => {
       useConfirmDialog.getState().show({
         title: "Enable AI bypass delete approvals?",
         description:
-          "The AI assistant will create, modify, and delete resources without asking for your confirmation.",
+          "AI Workspace will create, modify, and delete resources without asking for your confirmation.",
         onConfirm: vi.fn(),
       });
     });
 
     const description = screen.getByText(
-      "The AI assistant will create, modify, and delete resources without asking for your confirmation."
+      "AI Workspace will create, modify, and delete resources without asking for your confirmation."
     );
 
     expect(description.closest("[data-dialog-body]")).toBeInTheDocument();

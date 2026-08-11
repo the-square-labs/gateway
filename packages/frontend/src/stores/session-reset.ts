@@ -23,6 +23,7 @@ export function resetClientSessionState() {
   resetAIStateForAuthChange();
   useDashboardBootstrapStore.getState().clear();
   useUIBootstrapStore.getState().clear();
+  useUIStore.getState().beginInterfacePreferenceLoad();
   useUIStore.setState({ aiPanelOpen: false });
 
   useCAStore.setState({ cas: [], selectedCA: null, isLoading: false, error: null });

@@ -50,6 +50,8 @@ export interface SetupApplyInput {
 }
 
 const FIRST_ADMIN_CLAIM_KEY = 'setup:first_admin_claim';
+const SETUP_WIZARD_PHASE_KEY = 'setup:wizard_phase';
+const SETUP_AI_WORKSPACE_OUTCOME_KEY = 'setup:ai_workspace_outcome';
 const FIRST_ADMIN_CLAIM_TTL_MS = 10 * 60 * 1000;
 const logger = createChildLogger('SetupWizard');
 
@@ -124,8 +126,8 @@ export class SetupWizardService {
       if (!administratorCreated) {
         createdAdministratorId = (await this.createAdministrator(input.administrator!)).id;
       }
-      await this.complete();
-      return { status: 'completed' as const };
+      await this.setPhase('ai_workspace');
+      return { status: 'ready_for_ai' as const };
     } catch (error) {
       const rollbackFailures: unknown[] = [];
       const rollback = async (task: () => Promise<unknown>) => {
@@ -227,19 +229,51 @@ export class SetupWizardService {
     }
   }
 
-  async complete(): Promise<void> {
+  async getPhase(): Promise<'configuration' | 'ai_workspace'> {
+    const [row] = await this.db
+      .select({ value: settings.value })
+      .from(settings)
+      .where(eq(settings.key, SETUP_WIZARD_PHASE_KEY))
+      .limit(1);
+    return row?.value === 'ai_workspace' ? 'ai_workspace' : 'configuration';
+  }
+
+  async completeAIWorkspace(outcome: {
+    status: 'configured' | 'skipped';
+    configuredVia?: 'direct' | 'gateway_inference';
+  }): Promise<void> {
     await this.generalSettings.requirePublicUrl();
     if (!(await this.policy.isGatewayConfigured()))
       throw new Error('Create the first administrator before completing setup');
+    if ((await this.getPhase()) !== 'ai_workspace')
+      throw new Error('Apply Gateway setup before configuring AI Workspace');
     const methods = (await this.authSettings.getConfig()).methods;
     if (!methods.oidc && !methods.password && !methods.emailOtp) {
       throw new Error('Configure at least one authentication method before completing setup');
     }
+    await this.db
+      .insert(settings)
+      .values({ key: SETUP_AI_WORKSPACE_OUTCOME_KEY, value: outcome, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: settings.key,
+        set: { value: outcome, updatedAt: new Date() },
+      });
+    await this.finalizeSetup.applySetupAIWorkspaceOutcomeForOwner(outcome.status);
     await this.policy.markSetupComplete();
     await Promise.allSettled([
       this.access.invalidate(),
       this.db.delete(settings).where(eq(settings.key, FIRST_ADMIN_CLAIM_KEY)),
     ]);
+  }
+
+  private async setPhase(phase: 'configuration' | 'ai_workspace'): Promise<void> {
+    await this.db
+      .insert(settings)
+      .values({ key: SETUP_WIZARD_PHASE_KEY, value: phase, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: settings.key,
+        set: { value: phase, updatedAt: new Date() },
+      });
   }
 
   private async rollbackAdministrator(userId: string): Promise<void> {

@@ -23,7 +23,7 @@ const AI_SETTINGS_DEFAULTS: Record<string, unknown> = {
   'ai:api_key_encrypted': null,
   'ai:model': '',
   'ai:gateway_inference_model': '',
-  'ai:gateway_inference_allow_user_model_selection': false,
+  'ai:gateway_inference_allow_user_model_selection': true,
   'ai:max_completion_tokens': 8192,
   'ai:max_tokens_field': 'max_completion_tokens',
   'ai:reasoning_effort': 'none',
@@ -155,7 +155,7 @@ export class AISettingsService {
           throw new AppError(
             400,
             'AI_GATEWAY_INFERENCE_DISABLED',
-            'Gateway Inference must be enabled before it can be used by the AI assistant'
+            'Gateway Inference must be enabled before it can be used by AI Workspace'
           );
         }
         if (!gatewayInferenceModel) {

@@ -1,6 +1,6 @@
 import { AlertTriangle, ArrowRight, Info, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { Button } from "@/components/ui/button";
@@ -37,12 +37,7 @@ import type { InferenceSelfUsage } from "@/types/inference";
 import { CertificateAuthoritiesCard } from "./dashboard/CertificateAuthoritiesCard";
 import { CertificateExpiryCard, type ExpiringItem } from "./dashboard/CertificateExpiryCard";
 import { FinalizeSetupDialog, type FinalizeSetupRootStep } from "./dashboard/FinalizeSetupDialog";
-import {
-  type AssistantSetupDraft,
-  AssistantSetupWizard,
-  EMPTY_ASSISTANT_SETUP_DRAFT,
-} from "./dashboard/finalize-setup/AssistantSetupWizard";
-import { InferenceSetupWizard } from "./dashboard/finalize-setup/InferenceSetupWizard";
+import { ConfigureAIWorkspaceWizard } from "./dashboard/finalize-setup/ConfigureAIWorkspaceWizard";
 import { IntegrationsSetupWizard } from "./dashboard/finalize-setup/IntegrationsSetupWizard";
 import { InviteUsersSetupWizard } from "./dashboard/finalize-setup/InviteUsersSetupWizard";
 import { MfaSetupWizard } from "./dashboard/finalize-setup/MfaSetupWizard";
@@ -354,7 +349,6 @@ function DashboardSkeleton({
 }
 
 export function Dashboard() {
-  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const { user, hasScope, hasScopedAccess, logout } = useAuthStore();
   const dashboardPinnedIds = usePinnedNodesStore((s) => s.dashboardNodeIds);
@@ -494,18 +488,7 @@ export function Dashboard() {
     password: boolean;
     emailOtp: boolean;
   } | null>(null);
-  const [assistantDraft, setAssistantDraft] = useState<AssistantSetupDraft>(
-    EMPTY_ASSISTANT_SETUP_DRAFT
-  );
-  const [returnToAssistant, setReturnToAssistant] = useState(false);
   const [relayRetryPending, setRelayRetryPending] = useState(false);
-  const previewInferenceAssistantNotice =
-    searchParams.get("preview") === "assistant-inference-access";
-  const closeInferenceAssistantNoticePreview = useCallback(() => {
-    const next = new URLSearchParams(searchParams);
-    next.delete("preview");
-    setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams]);
   const canViewNodeDetails = useCallback(
     (nodeId: string) => hasScope("nodes:details") || hasScope(`nodes:details:${nodeId}`),
     [hasScope]
@@ -650,25 +633,6 @@ export function Dashboard() {
       setRelayRetryPending(false);
     }
   }, [canRetryRelay, invalidateDashboardBootstrap, relay?.canRetry, relayRetryPending]);
-
-  const finishInferenceWizard = useCallback(
-    async (status: "configured" | "skipped") => {
-      setFinalizeSetupBusy(true);
-      try {
-        await updateFinalizeSetupStep("inference", status);
-        if (returnToAssistant) {
-          setActiveFinalizeWizard("ai_assistant");
-          setReturnToAssistant(false);
-        } else {
-          setActiveFinalizeWizard(null);
-          setFinalizeSetupOpen(true);
-        }
-      } finally {
-        setFinalizeSetupBusy(false);
-      }
-    },
-    [returnToAssistant, updateFinalizeSetupStep]
-  );
 
   useEffect(() => {
     if (!import.meta.env.DEV || typeof window === "undefined") return;
@@ -1035,45 +999,21 @@ export function Dashboard() {
                 onSkipped={() => completeFinalizeSetupStep("invite_users", "skipped")}
               />
             )}
-            <AssistantSetupWizard
-              open={activeFinalizeWizard === "ai_assistant"}
-              draft={assistantDraft}
-              onDraftChange={setAssistantDraft}
+            <ConfigureAIWorkspaceWizard
+              open={activeFinalizeWizard === "ai_workspace"}
+              allowGatewayInference={[
+                "settings:gateway:edit",
+                "inference:providers:view",
+                "inference:providers:manage",
+                "inference:models:manage",
+                "inference:limits:manage",
+              ].every(hasScope)}
               onBack={() => {
                 setActiveFinalizeWizard(null);
                 setFinalizeSetupOpen(true);
               }}
-              onConfigured={() => completeFinalizeSetupStep("ai_assistant", "configured")}
-              onSkipped={() => completeFinalizeSetupStep("ai_assistant", "skipped")}
-              onNeedInference={() => {
-                setReturnToAssistant(true);
-                setActiveFinalizeWizard("inference");
-              }}
-            />
-            <AssistantSetupWizard
-              open={previewInferenceAssistantNotice}
-              draft={{ ...EMPTY_ASSISTANT_SETUP_DRAFT, source: "inference" }}
-              onDraftChange={() => {}}
-              onBack={closeInferenceAssistantNoticePreview}
-              onConfigured={async () => closeInferenceAssistantNoticePreview()}
-              onSkipped={async () => closeInferenceAssistantNoticePreview()}
-              onNeedInference={closeInferenceAssistantNoticePreview}
-              previewInferenceAccessNotice
-              onPreviewClose={closeInferenceAssistantNoticePreview}
-            />
-            <InferenceSetupWizard
-              open={activeFinalizeWizard === "inference"}
-              onBack={() => {
-                if (returnToAssistant) {
-                  setActiveFinalizeWizard("ai_assistant");
-                  setReturnToAssistant(false);
-                } else {
-                  setActiveFinalizeWizard(null);
-                  setFinalizeSetupOpen(true);
-                }
-              }}
-              onConfigured={() => finishInferenceWizard("configured")}
-              onSkipped={() => finishInferenceWizard("skipped")}
+              onConfigured={() => completeFinalizeSetupStep("ai_workspace", "configured")}
+              onSkipped={() => completeFinalizeSetupStep("ai_workspace", "skipped")}
             />
             <IntegrationsSetupWizard
               open={activeFinalizeWizard === "integrations"}

@@ -66,6 +66,8 @@ function makeService() {
   const statusPage = { getConfig: vi.fn(async () => ({ enabled: true })) };
   const updates = { getCachedStatus: vi.fn(async () => ({ updateAvailable: false })) };
   const aiRuntime = { statusForUser: vi.fn(async () => ({ enabled: true })) };
+  const aiSettings = { isEnabled: vi.fn(async () => true) };
+  const finalizeSetup = { isOwner: vi.fn(async () => false) };
   return {
     service: new UIBootstrapService(
       snapshots as never,
@@ -76,7 +78,9 @@ function makeService() {
       integrations as never,
       statusPage as never,
       updates as never,
-      aiRuntime as never
+      aiRuntime as never,
+      aiSettings as never,
+      finalizeSetup as never
     ),
     coordinator,
     updates,
@@ -150,6 +154,8 @@ describe('UIBootstrapService', () => {
     const statusPage = { getConfig: vi.fn(async () => ({ enabled: true })) };
     const updates = { getCachedStatus: vi.fn() };
     const aiRuntime = { statusForUser: vi.fn() };
+    const aiSettings = { isEnabled: vi.fn(async () => false) };
+    const finalizeSetup = { isOwner: vi.fn(async () => false) };
     const service = new UIBootstrapService(
       snapshots as never,
       coordinator as never,
@@ -159,7 +165,9 @@ describe('UIBootstrapService', () => {
       integrations as never,
       statusPage as never,
       updates as never,
-      aiRuntime as never
+      aiRuntime as never,
+      aiSettings as never,
+      finalizeSetup as never
     );
 
     const shell = await service.getShell(

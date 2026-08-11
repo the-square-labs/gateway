@@ -25,6 +25,8 @@ export function toPageContext(value: Record<string, unknown> | null): PageContex
     route: value.route,
     resourceType: typeof value.resourceType === 'string' ? value.resourceType : undefined,
     resourceId: typeof value.resourceId === 'string' ? value.resourceId : undefined,
+    label: typeof value.label === 'string' ? value.label : undefined,
+    nodeId: typeof value.nodeId === 'string' ? value.nodeId : undefined,
   };
 }
 

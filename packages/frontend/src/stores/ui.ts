@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { type AIApprovalMode, isAIApprovalMode } from "@/lib/ai-approval-mode";
+import { isCompactPanelsViewport } from "@/lib/responsive-panels";
+import type { PreferredInterface } from "@/services/api-auth";
 
 type Theme = "light" | "dark" | "system";
 type ResolvedTheme = "light" | "dark";
@@ -33,6 +35,10 @@ function commandActionUsageKey(userId: string, context: string, actionId: string
   return `${userId}\u001f${context}\u001f${actionId}`;
 }
 
+function usesCompactPanelsLayout(): boolean {
+  return typeof window !== "undefined" && isCompactPanelsViewport(window.innerWidth);
+}
+
 const UUID_PATH_SEGMENT = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const LEGACY_ID_DETAIL_PATHS = [
   new RegExp(`^/(?:nodes|databases|proxy-hosts)/${UUID_PATH_SEGMENT}(?:/|$)`, "i"),
@@ -59,6 +65,7 @@ interface UIState {
   // Sidebar
   sidebarOpen: boolean;
   sidebarCollapsed: boolean;
+  aiWorkspaceSidebarCollapsed: boolean;
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
 
@@ -73,13 +80,16 @@ interface UIState {
   setShowUpdateNotifications: (show: boolean) => void;
   showSystemCertificates: boolean;
   setShowSystemCertificates: (show: boolean) => void;
-  showAILiteModeCTA: boolean;
-  setShowAILiteModeCTA: (show: boolean) => void;
 
   // AI Approval Mode
   aiApprovalMode: AIApprovalMode;
   setAIApprovalMode: (mode: AIApprovalMode) => void;
   hydrateAIApprovalMode: (mode: AIApprovalMode) => void;
+  preferredInterface: PreferredInterface | null;
+  interfacePreferenceLoaded: boolean;
+  beginInterfacePreferenceLoad: () => void;
+  hydratePreferredInterface: (preferredInterface: PreferredInterface | null) => void;
+  setPreferredInterface: (preferredInterface: PreferredInterface) => void;
 
   // Command palette
   commandPaletteOpen: boolean;
@@ -122,32 +132,76 @@ export const useUIStore = create<UIState>()(
       // Sidebar
       sidebarOpen: true,
       sidebarCollapsed: false,
+      aiWorkspaceSidebarCollapsed: false,
       toggleSidebar: () =>
-        set((state) => ({
-          sidebarOpen: !state.sidebarOpen,
-          sidebarCollapsed: !state.sidebarCollapsed,
-        })),
+        set((state) => {
+          const sidebarOpen = !state.sidebarOpen;
+          return {
+            sidebarOpen,
+            sidebarCollapsed: !sidebarOpen,
+            ...(state.aiLiteMode ? { aiWorkspaceSidebarCollapsed: !sidebarOpen } : {}),
+            ...(sidebarOpen && usesCompactPanelsLayout() ? { aiPanelOpen: false } : {}),
+          };
+        }),
       setSidebarCollapsed: (sidebarCollapsed) =>
-        set({ sidebarCollapsed, sidebarOpen: !sidebarCollapsed }),
+        set((state) => ({
+          sidebarCollapsed,
+          sidebarOpen: !sidebarCollapsed,
+          ...(state.aiLiteMode ? { aiWorkspaceSidebarCollapsed: sidebarCollapsed } : {}),
+          ...(!sidebarCollapsed && usesCompactPanelsLayout() ? { aiPanelOpen: false } : {}),
+        })),
 
       // Mobile
       isMobile: false,
       setIsMobile: (isMobile) => set({ isMobile }),
       mobileMenuOpen: false,
-      setMobileMenuOpen: (mobileMenuOpen) => set({ mobileMenuOpen }),
+      setMobileMenuOpen: (mobileMenuOpen) =>
+        set({
+          mobileMenuOpen,
+          ...(mobileMenuOpen && usesCompactPanelsLayout() ? { aiPanelOpen: false } : {}),
+        }),
 
       // Preferences
       showUpdateNotifications: true,
       setShowUpdateNotifications: (showUpdateNotifications) => set({ showUpdateNotifications }),
       showSystemCertificates: false,
       setShowSystemCertificates: (showSystemCertificates) => set({ showSystemCertificates }),
-      showAILiteModeCTA: true,
-      setShowAILiteModeCTA: (showAILiteModeCTA) => set({ showAILiteModeCTA }),
 
       // AI Approval Mode
       aiApprovalMode: "normal",
       hydrateAIApprovalMode: (aiApprovalMode) => set({ aiApprovalMode }),
       setAIApprovalMode: (aiApprovalMode) => set({ aiApprovalMode }),
+      preferredInterface: null,
+      interfacePreferenceLoaded: false,
+      beginInterfacePreferenceLoad: () =>
+        set({
+          preferredInterface: null,
+          interfacePreferenceLoaded: false,
+          aiLiteMode: false,
+        }),
+      hydratePreferredInterface: (preferredInterface) =>
+        set((state) => ({
+          preferredInterface,
+          interfacePreferenceLoaded: true,
+          aiLiteMode: preferredInterface === "ai_workspace",
+          ...(preferredInterface === "ai_workspace"
+            ? {
+                sidebarOpen: !state.aiWorkspaceSidebarCollapsed,
+                sidebarCollapsed: state.aiWorkspaceSidebarCollapsed,
+              }
+            : {}),
+        })),
+      setPreferredInterface: (preferredInterface) =>
+        set((state) => ({
+          preferredInterface,
+          aiLiteMode: preferredInterface === "ai_workspace",
+          ...(preferredInterface === "ai_workspace"
+            ? {
+                sidebarOpen: !state.aiWorkspaceSidebarCollapsed,
+                sidebarCollapsed: state.aiWorkspaceSidebarCollapsed,
+              }
+            : {}),
+        })),
 
       // Command palette
       commandPaletteOpen: false,
@@ -184,8 +238,23 @@ export const useUIStore = create<UIState>()(
       aiLiteMode: false,
       aiLiteModeIntroAccepted: false,
       pinnedAIConversationIds: [],
-      setAIPanelOpen: (aiPanelOpen) => set({ aiPanelOpen }),
-      setAILiteMode: (aiLiteMode) => set({ aiLiteMode }),
+      setAIPanelOpen: (aiPanelOpen) =>
+        set({
+          aiPanelOpen,
+          ...(aiPanelOpen && usesCompactPanelsLayout()
+            ? { sidebarOpen: false, sidebarCollapsed: true, mobileMenuOpen: false }
+            : {}),
+        }),
+      setAILiteMode: (aiLiteMode) =>
+        set((state) => ({
+          aiLiteMode,
+          ...(aiLiteMode
+            ? {
+                sidebarOpen: !state.aiWorkspaceSidebarCollapsed,
+                sidebarCollapsed: state.aiWorkspaceSidebarCollapsed,
+              }
+            : {}),
+        })),
       setAILiteModeIntroAccepted: (aiLiteModeIntroAccepted) => set({ aiLiteModeIntroAccepted }),
       togglePinnedAIConversation: (conversationId) =>
         set((state) => ({
@@ -193,8 +262,29 @@ export const useUIStore = create<UIState>()(
             ? state.pinnedAIConversationIds.filter((id) => id !== conversationId)
             : [conversationId, ...state.pinnedAIConversationIds],
         })),
-      toggleAIPanel: () => set((state) => ({ aiPanelOpen: !state.aiPanelOpen })),
-      toggleAILiteMode: () => set((state) => ({ aiLiteMode: !state.aiLiteMode })),
+      toggleAIPanel: () =>
+        set((state) => {
+          const aiPanelOpen = !state.aiPanelOpen;
+          return {
+            aiPanelOpen,
+            ...(aiPanelOpen && usesCompactPanelsLayout()
+              ? { sidebarOpen: false, sidebarCollapsed: true, mobileMenuOpen: false }
+              : {}),
+          };
+        }),
+      toggleAILiteMode: () =>
+        set((state) => {
+          const aiLiteMode = !state.aiLiteMode;
+          return {
+            aiLiteMode,
+            ...(aiLiteMode
+              ? {
+                  sidebarOpen: !state.aiWorkspaceSidebarCollapsed,
+                  sidebarCollapsed: state.aiWorkspaceSidebarCollapsed,
+                }
+              : {}),
+          };
+        }),
 
       // Recent pages
       recentPages: [],
@@ -224,9 +314,9 @@ export const useUIStore = create<UIState>()(
         theme: state.theme,
         sidebarOpen: state.sidebarOpen,
         sidebarCollapsed: state.sidebarCollapsed,
+        aiWorkspaceSidebarCollapsed: state.aiWorkspaceSidebarCollapsed,
         showUpdateNotifications: state.showUpdateNotifications,
         showSystemCertificates: state.showSystemCertificates,
-        showAILiteModeCTA: state.showAILiteModeCTA,
         aiPanelOpen: state.aiPanelOpen,
         aiLiteMode: state.aiLiteMode,
         aiLiteModeIntroAccepted: state.aiLiteModeIntroAccepted,
@@ -242,9 +332,9 @@ export const useUIStore = create<UIState>()(
           theme: state.theme,
           sidebarOpen: state.sidebarOpen,
           sidebarCollapsed: state.sidebarCollapsed,
+          aiWorkspaceSidebarCollapsed: state.aiWorkspaceSidebarCollapsed ?? false,
           showUpdateNotifications: state.showUpdateNotifications,
           showSystemCertificates: state.showSystemCertificates,
-          showAILiteModeCTA: state.showAILiteModeCTA,
           aiPanelOpen: state.aiPanelOpen,
           aiLiteMode: state.aiLiteMode,
           aiLiteModeIntroAccepted: state.aiLiteModeIntroAccepted,

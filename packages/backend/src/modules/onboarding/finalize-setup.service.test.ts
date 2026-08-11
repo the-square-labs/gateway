@@ -41,12 +41,11 @@ function createDb(initial: FinalizeSetupState | null = null) {
 
 function pendingState(ownerUserId: string): FinalizeSetupState {
   return {
-    version: 2,
+    version: 3,
     ownerUserId,
     steps: {
       nodes: 'pending',
-      ai_assistant: 'pending',
-      inference: 'pending',
+      ai_workspace: 'pending',
       cloudflare: 'pending',
       gitlab: 'pending',
       mfa: 'pending',
@@ -131,7 +130,7 @@ describe('FinalizeSetupService', () => {
     const harness = createDb(pendingState('owner-1'));
     const service = new FinalizeSetupService(harness.db as never);
 
-    for (const step of ['nodes', 'ai_assistant', 'inference', 'cloudflare', 'gitlab', 'mfa', 'invite_users'] as const) {
+    for (const step of ['nodes', 'ai_workspace', 'cloudflare', 'gitlab', 'mfa', 'invite_users'] as const) {
       await service.markStep('owner-1', step, step === 'mfa' ? 'skipped' : 'configured');
     }
     await expect(service.shouldShowMfaReminder('owner-1')).resolves.toBe(true);

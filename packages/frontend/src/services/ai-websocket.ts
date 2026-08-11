@@ -48,7 +48,6 @@ export class AIWebSocketClient {
       }
 
       const timeout = setTimeout(() => {
-        this.errorHandler?.("AI connection timed out");
         resolve(false);
         this.cleanupSocket();
         this.scheduleReconnect();
@@ -187,9 +186,13 @@ export class AIWebSocketClient {
 
   private scheduleReconnect(): void {
     if (this.intentionalClose) return;
-    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) return;
+    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      this.errorHandler?.("AI connection unavailable");
+      return;
+    }
 
     this.clearReconnectTimer();
+    this.errorHandler?.("Reconnecting...");
     const delay = RECONNECT_DELAYS[this.reconnectAttempts] || 8000;
     this.reconnectAttempts++;
 

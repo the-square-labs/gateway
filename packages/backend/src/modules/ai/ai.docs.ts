@@ -314,7 +314,7 @@ Gateway can enable OIDC, password, and email one-time-code sign-in independently
 - View all users: list_users
 - Change a user's group: update_user_role(userId, groupId) — changes their permissions immediately
 - The Administration UI can assign additional per-user scopes on top of the user's group, but only from scopes the acting administrator already has. The current AI user tool does not expose this override mutation.
-- Block/unblock users from the Administration UI/API or AI assistant.
+- Block or unblock users from the Administration UI, API, or AI Workspace.
 - Deleting a user is a soft-delete: their access and tokens are revoked, they are hidden from operational user lists, and historical audit/usage data remains intact. Only a system administrator can restore a deleted user, and restore leaves them blocked until explicitly unblocked.
 
 ## User Fields
@@ -868,7 +868,7 @@ When send_artifact succeeds, do not print the download URL in a markdown table o
 
 Resource tiers are low, medium, and high. TTL is capped by tier. The agent may request ttlSeconds but cannot exceed the tier cap.`,
 
-  conversations: `# AI Conversations and Lite Mode
+  conversations: `# Work Sessions and AI Workspace
 
 AI conversations are stored on the backend. Tool discovery is conversation-scoped, so discovered toolsets remain available when returning to a saved conversation.
 
@@ -897,8 +897,8 @@ AI conversations are stored on the backend. Tool discovery is conversation-scope
 - Uploaded attachments become Gateway-managed artifacts tied to the conversation.
 - Tool-generated files are attached through send_artifact and should not be duplicated as manual download links.
 
-## Lite Mode
-Lite mode is an AI-first desktop layout. The assistant becomes the main screen, the sidebar shows a separated Dashboard link, Sidebar-pinned resources, and recent/pinned conversations. Dashboard pins are not duplicated there: use the Sidebar placement for frequent navigation. Settings/Administration/top-level pages keep a back button to return to chat.
+## AI Workspace
+AI Workspace is Gateway's intent-driven desktop interface. The Work Session becomes the main screen, the sidebar shows a separate Dashboard link, Sidebar-pinned resources, and recent/pinned Work Sessions. Dashboard pins are not duplicated there: use the Sidebar placement for frequent navigation. Settings, Administration, and top-level pages keep a back button to return to the Work Session.
 
 Do not assume the current page from chat text. Use get_current_context when the user refers to their visible page.`,
 
@@ -919,7 +919,7 @@ Scopes: status-page:view for reads/preview, status-page:manage for settings/serv
   api: `# Gateway REST API
 
 Gateway provides REST access for external scripts, CI/CD pipelines, CLI tools, and integrations without a browser session.
-Programmatic REST clients can use either Gateway API tokens (\`gw_\`) or OAuth Authorization Code + PKCE access tokens (\`gwo_\`). AI assistant access, AI configuration, MCP user access, auth administration, raw nginx config, gateway settings, node raw config, node filesystem access, \`proxy:raw:bypass\`, and \`proxy:advanced:bypass\` cannot be delegated to API/OAuth tokens. MCP clients use OAuth access tokens for the MCP resource with ordinary delegated API scopes; the owning user account must have \`mcp:use\`. Node config and node file-management assistant tools are intentionally AI-session-only and are not exposed through MCP.
+Programmatic REST clients can use either Gateway API tokens (\`gw_\`) or OAuth Authorization Code + PKCE access tokens (\`gwo_\`). AI Workspace access, AI configuration, MCP user access, auth administration, raw nginx config, gateway settings, node raw config, node filesystem access, \`proxy:raw:bypass\`, and \`proxy:advanced:bypass\` cannot be delegated to API/OAuth tokens. MCP clients use OAuth access tokens for the MCP resource with ordinary delegated API scopes; the owning user account must have \`mcp:use\`. Node config and node file-management Workspace tools are intentionally browser-session-only and are not exposed through MCP.
 
 ## Current-User OAuth Authorizations
 The assistant can manage existing OAuth authorizations for the current browser user with manage_oauth_authorization:
@@ -1076,7 +1076,7 @@ Never weaken callback, network, or webhook restrictions without explaining the r
 
   inference: `# Gateway Inference
 
-Gateway Inference is a standalone external model gateway. It is not the internal AI Assistant provider and it is not Gateway MCP. It has separate provider credentials, model configuration, scopes, accounting, continuation state, and dedicated \`gwi_\` runtime tokens. Never use a normal \`gw_\` API token, a \`gwo_\` OAuth token, an Assistant provider key, or an MCP credential on the inference data plane.
+Gateway Inference is a standalone external model gateway. It is not the AI Workspace provider configuration and it is not Gateway MCP. It has separate provider credentials, model configuration, scopes, accounting, continuation state, and dedicated \`gwi_\` runtime tokens. Never use a normal \`gw_\` API token, a \`gwo_\` OAuth token, a Workspace provider key, or an MCP credential on the inference data plane.
 
 ## Availability
 
@@ -1200,9 +1200,9 @@ Anthropic SDKs append \`/v1\` themselves, so configure the SDK base URL without 
 - Activity stores metadata and normalized usage, never prompts or model output.
 - After configuration, verify provider sync, model visibility, a small request, accounting, reasoning mapping, tools, continuation, and Codex auto-compaction where applicable.
 - Gateway Inference runtime and credentials remain isolated from the assistant configuration. The assistant may use a published Gateway Inference model only when an administrator explicitly selects that provider type.`,
-  'ai-settings': `# AI Assistant Settings
+  'ai-settings': `# AI Workspace Settings
 
-AI assistant settings control the provider, request limits, tool exposure, web search, and sandbox runner. Use these tools instead of guessing from UI labels:
+AI Workspace settings control the provider, request limits, tool exposure, web search, and sandbox runner. Use these tools instead of guessing from UI labels:
 
 ## Tools
 - get_ai_settings: read provider, model, limits, system prompt, tool access, web search, and sandbox runner settings.

@@ -1,14 +1,4 @@
-import {
-  ArrowRight,
-  Bot,
-  Check,
-  Cloud,
-  Cpu,
-  KeyRound,
-  Server,
-  Sparkles,
-  UserPlus,
-} from "lucide-react";
+import { ArrowRight, Bot, Check, Cloud, KeyRound, Server, Sparkles, UserPlus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -63,16 +53,10 @@ const ROOT_STEPS: Array<{
     icon: Server,
   },
   {
-    id: "ai_assistant",
-    title: "Configure AI Assistant",
-    description: "Give Gateway an AI provider for assistance and automation.",
+    id: "ai_workspace",
+    title: "Configure AI Workspace",
+    description: "Connect the Workspace model used for intent-driven operations.",
     icon: Bot,
-  },
-  {
-    id: "inference",
-    title: "Configure Gateway Inference",
-    description: "Connect a provider and make models available through Gateway.",
-    icon: Cpu,
   },
   {
     id: "mfa",

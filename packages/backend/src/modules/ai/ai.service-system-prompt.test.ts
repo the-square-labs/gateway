@@ -231,9 +231,9 @@ describe('AIService system prompt', () => {
 
     expect(prompt).toContain('Available topics:');
     expect(prompt).toContain('inference');
-    expect(prompt).toContain('Gateway Inference is separate from the internal AI Assistant and Gateway MCP');
+    expect(prompt).toContain('Gateway Inference is separate from AI Workspace provider configuration and Gateway MCP');
     expect(prompt).toContain('internal_documentation({ topic: "inference" })');
-    expect(prompt).toContain('Never reuse Assistant/MCP credentials');
+    expect(prompt).toContain('Never reuse Workspace/MCP credentials');
     expect(prompt).toContain('Use /api/inference/v1 for OpenAI-compatible clients');
     expect(prompt).toContain('generalSettings.inference.harnessSpecificEndpointsEnabled');
   });

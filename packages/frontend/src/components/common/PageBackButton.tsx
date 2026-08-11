@@ -5,9 +5,14 @@ import { Button } from "@/components/ui/button";
 import { getReturnNavigationTarget } from "@/lib/return-navigation";
 import { cn } from "@/lib/utils";
 
-type PageBackButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement>;
+type PageBackButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & { label?: string };
 
-export function PageBackButton({ className, onClick, ...props }: PageBackButtonProps) {
+export function PageBackButton({
+  className,
+  onClick,
+  label = "Back",
+  ...props
+}: PageBackButtonProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const returnTarget = getReturnNavigationTarget(location.state, "");
@@ -18,7 +23,8 @@ export function PageBackButton({ className, onClick, ...props }: PageBackButtonP
       variant="ghost"
       size="icon"
       className={cn("h-9 w-9 shrink-0", className)}
-      aria-label="Back"
+      aria-label={label}
+      title={label}
       onClick={(event) => {
         if (returnTarget) {
           navigate(returnTarget);

@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { errorHandler } from '@/middleware/error-handler.js';
@@ -16,29 +17,43 @@ const mocks = vi.hoisted(() => ({
     validateSession: vi.fn(),
     getCsrfToken: vi.fn(),
     validateCsrfToken: vi.fn(),
+    getSessionExpiresAt: vi.fn(),
     withApplyLock: vi.fn(async (_sessionId: string, task: () => Promise<unknown>) => task()),
   },
+  auth: { getUserById: vi.fn() },
+  sessions: { destroySetupSessions: vi.fn(), createSession: vi.fn() },
   general: { getPublicUrl: vi.fn() },
   transport: { getConfig: vi.fn(), updateConfig: vi.fn() },
   restart: { request: vi.fn() },
-  wizard: { apply: vi.fn() },
+  wizard: { apply: vi.fn(), completeAIWorkspace: vi.fn(), getPhase: vi.fn() },
   logging: {},
 }));
 
-vi.mock('@/container.js', () => ({
-  container: {
-    resolve: vi.fn((token: unknown) => {
-      const name = typeof token === 'function' ? token.name : String(token);
-      if (name === 'SetupTokenPolicyService') return mocks.policy;
-      if (name === 'SetupAccessService') return mocks.access;
-      if (name === 'GeneralSettingsService') return mocks.general;
-      if (name === 'WebTransportSettingsService') return mocks.transport;
-      if (name === 'SetupWizardService') return mocks.wizard;
-      if (name === 'LoggingRuntimeService') return mocks.logging;
-      if (name === 'RuntimeRestartService') return mocks.restart;
-      throw new Error(`Unexpected resolve: ${name}`);
-    }),
-  },
+vi.mock('@/container.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/container.js')>();
+  return {
+    ...actual,
+    container: {
+      resolve: vi.fn((token: unknown) => {
+        const name = typeof token === 'function' ? token.name : String(token);
+        if (name === 'SetupTokenPolicyService') return mocks.policy;
+        if (name === 'SetupAccessService') return mocks.access;
+        if (name === 'GeneralSettingsService') return mocks.general;
+        if (name === 'WebTransportSettingsService') return mocks.transport;
+        if (name === 'SetupWizardService') return mocks.wizard;
+        if (name === 'AuthService') return mocks.auth;
+        if (name === 'SessionService') return mocks.sessions;
+        if (name === 'LoggingRuntimeService') return mocks.logging;
+        if (name === 'RuntimeRestartService') return mocks.restart;
+        throw new Error(`Unexpected resolve: ${name}`);
+      }),
+    },
+  };
+});
+
+vi.mock('@/modules/auth/session-cookie.js', () => ({
+  getSessionCookieName: () => 'gw_session',
+  getAcceptedSessionCookieNames: () => ['gw_session'],
 }));
 
 import { setupRoutes } from './setup.routes.js';
@@ -73,7 +88,15 @@ describe('setup wizard routes', () => {
     mocks.access.validateSession.mockResolvedValue(false);
     mocks.access.getCsrfToken.mockResolvedValue('setup-csrf');
     mocks.access.validateCsrfToken.mockResolvedValue(false);
-    mocks.wizard.apply.mockResolvedValue({ status: 'completed' });
+    mocks.access.getSessionExpiresAt.mockResolvedValue(new Date(Date.now() + 60 * 60 * 1000).toISOString());
+    mocks.auth.getUserById.mockResolvedValue({ id: '00000000-0000-0000-0000-000000000000' });
+    mocks.sessions.createSession.mockResolvedValue({
+      sessionId: 'purpose-session',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+    });
+    mocks.wizard.getPhase.mockResolvedValue('ai_workspace');
+    mocks.wizard.apply.mockResolvedValue({ status: 'ready_for_ai' });
+    mocks.wizard.completeAIWorkspace.mockResolvedValue(undefined);
   });
 
   it('exposes setup status without a setup session', async () => {
@@ -138,7 +161,7 @@ describe('setup wizard routes', () => {
     }
   });
 
-  it('exposes only one final mutation endpoint for wizard configuration', async () => {
+  it('applies the core setup through the single configuration endpoint', async () => {
     mocks.access.validateSession.mockResolvedValue(true);
     mocks.access.validateCsrfToken.mockResolvedValue(true);
     const payload = {
@@ -175,10 +198,51 @@ describe('setup wizard routes', () => {
       ['/api/setup/wizard/admin', 'POST'],
       ['/api/setup/wizard/logging', 'PUT'],
       ['/api/setup/wizard/transport', 'PUT'],
-      ['/api/setup/wizard/complete', 'POST'],
     ]) {
       expect(await createApp().request(path, { method })).toHaveProperty('status', 404);
     }
+  });
+
+  it('exchanges the setup session for a bounded system-user session during AI configuration', async () => {
+    mocks.access.validateSession.mockResolvedValue(true);
+    mocks.access.validateCsrfToken.mockResolvedValue(true);
+
+    const response = await createApp().request('/api/setup/wizard/session', {
+      method: 'POST',
+      headers: { Cookie: 'setup_session=valid', 'X-CSRF-Token': 'setup-csrf' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.sessions.destroySetupSessions).toHaveBeenCalledWith('00000000-0000-0000-0000-000000000000', 'valid');
+    expect(mocks.sessions.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: '00000000-0000-0000-0000-000000000000' }),
+      undefined,
+      undefined,
+      expect.objectContaining({ purpose: 'setup', setupSessionId: 'valid' })
+    );
+    expect(response.headers.get('set-cookie')).toContain('purpose-session');
+  });
+
+  it('records the AI Workspace outcome and closes setup', async () => {
+    mocks.access.validateSession.mockResolvedValue(true);
+    mocks.access.validateCsrfToken.mockResolvedValue(true);
+
+    const response = await createApp().request('/api/setup/wizard/complete', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: 'setup_session=valid',
+        'X-CSRF-Token': 'setup-csrf',
+      },
+      body: JSON.stringify({ status: 'configured', configuredVia: 'gateway_inference' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.wizard.completeAIWorkspace).toHaveBeenCalledWith({
+      status: 'configured',
+      configuredVia: 'gateway_inference',
+    });
+    expect(mocks.sessions.destroySetupSessions).toHaveBeenCalledWith('00000000-0000-0000-0000-000000000000', 'valid');
   });
 
   it('rejects invalid network settings before invoking the final apply operation', async () => {

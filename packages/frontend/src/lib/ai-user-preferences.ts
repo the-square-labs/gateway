@@ -10,7 +10,7 @@ export async function confirmBypassEverythingMode(): Promise<boolean> {
   return confirm({
     title: "Enable AI bypass delete approvals?",
     description:
-      "The AI assistant will create, modify, and delete resources without asking for your confirmation.",
+      "AI Workspace will create, modify, and delete resources without asking for your confirmation.",
     confirmLabel: "Enable",
     variant: "destructive",
   });

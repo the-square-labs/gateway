@@ -280,7 +280,7 @@ describe("CommandPalette", () => {
     expect(within(quickGroup as HTMLElement).getAllByRole("option")).toHaveLength(1);
     expect(screen.getByRole("option", { name: "New logging environment" })).toBeVisible();
     expect(screen.queryByRole("option", { name: /New proxy host/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /Open AI assistant/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Open AI Workspace/ })).not.toBeInTheDocument();
   });
 
   it("disables Ask AI when Gateway Inference quota is exhausted", async () => {

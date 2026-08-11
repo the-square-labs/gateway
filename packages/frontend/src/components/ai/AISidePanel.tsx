@@ -15,7 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { useLocation, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { Button } from "@/components/ui/button";
@@ -41,6 +41,12 @@ import {
   confirmBypassEverythingMode,
   updateAIApprovalModeOptimistically,
 } from "@/lib/ai-user-preferences";
+import {
+  AI_PANEL_DEFAULT_WIDTH,
+  AI_PANEL_MAX_WIDTH,
+  AI_PANEL_MIN_WIDTH,
+  getDefaultAIPanelWidth,
+} from "@/lib/responsive-panels";
 import { api } from "@/services/api";
 import { getConversationBlock, useAIStore } from "@/stores/ai";
 import { useResolvedPageContext } from "@/stores/resolved-page-context";
@@ -59,7 +65,6 @@ import { AIComposer, AIQueuedMessages } from "./AIComposer";
 import { AIConversationBlockedBlock } from "./AIConversationBlockedBlock";
 import { AIMessageList } from "./AIMessageList";
 import { ApprovalBlock, QuestionBlock } from "./AIToolCallBlock";
-import { confirmAILiteMode } from "./confirm-lite-mode";
 import { GitLabAuthorizationModal } from "./GitLabAuthorizationModal";
 import { QuickActionChips } from "./QuickActionChips";
 import {
@@ -111,9 +116,6 @@ async function uploadLocalComposerAttachment(
 }
 
 const PANEL_WIDTH_KEY = "gateway-ai-panel-width";
-const DEFAULT_WIDTH = 480;
-const MIN_WIDTH = 360;
-const MAX_WIDTH = 560;
 const NORMAL_RECENT_CONVERSATION_LIMIT = 5;
 const BOTTOM_SCROLL_THRESHOLD = 48;
 
@@ -122,12 +124,14 @@ function readPanelWidth(): number {
     const stored = localStorage.getItem(PANEL_WIDTH_KEY);
     if (stored) {
       const parsed = Number(stored);
-      if (parsed >= MIN_WIDTH && parsed <= MAX_WIDTH) return parsed;
+      if (parsed >= AI_PANEL_MIN_WIDTH && parsed <= AI_PANEL_MAX_WIDTH) return parsed;
     }
   } catch {
     /* ignore */
   }
-  return DEFAULT_WIDTH;
+  return typeof window === "undefined"
+    ? AI_PANEL_DEFAULT_WIDTH
+    : getDefaultAIPanelWidth(window.innerWidth);
 }
 
 function usePageContext(): PageContext {
@@ -147,6 +151,8 @@ function usePageContext(): PageContext {
       route,
       resourceType: resolvedResource.resourceType,
       resourceId: resolvedResource.resourceId,
+      label: resolvedResource.label,
+      nodeId: resolvedResource.nodeId,
     };
   }
 
@@ -161,8 +167,8 @@ function usePageContext(): PageContext {
 }
 
 const SLASH_COMMANDS = [
-  { name: "new", description: "Start new conversation" },
-  { name: "clear", description: "Clear conversation" },
+  { name: "new", description: "Start new Work Session" },
+  { name: "clear", description: "Clear Work Session" },
   { name: "compact", description: "Compact older context" },
   { name: "context", description: "Show token usage" },
 ];
@@ -257,10 +263,14 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
   const [isRenaming, setIsRenaming] = useState(false);
+  const [excludedResourceContextKey, setExcludedResourceContextKey] = useState<string | null>(null);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const shouldStickToBottomRef = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const context = usePageContext();
+  const resourceContextKey = `${context.route}\u0000${context.resourceId ?? ""}`;
+  const excludeResourceContextOnce = excludedResourceContextKey === resourceContextKey;
+  const requestContext = excludeResourceContextOnce ? { route: context.route } : context;
   const {
     aiApprovalMode: approvalMode,
     pinnedAIConversationIds,
@@ -275,10 +285,10 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     ? recentConversations.find((conversation) => conversation.id === activeConversationId)
     : null;
   const currentChatTitle = isStartingConversation
-    ? "Starting chat..."
+    ? "Starting Work Session..."
     : activeConversationId
-      ? (savedName ?? currentConversation?.title ?? "New chat")
-      : "New chat";
+      ? (savedName ?? currentConversation?.title ?? "New Work Session")
+      : "New Work Session";
   const isCurrentChatPinned = activeConversationId
     ? pinnedAIConversationIds.includes(activeConversationId)
     : false;
@@ -300,7 +310,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
       await renameConversation(activeConversationId, nextTitle);
       setRenameDialogOpen(false);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to rename chat");
+      toast.error(error instanceof Error ? error.message : "Failed to rename Work Session");
     } finally {
       setIsRenaming(false);
     }
@@ -441,12 +451,13 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
       setSlashResults([]);
       if (textareaRef.current) textareaRef.current.style.height = "auto";
       if (currentConversationStreaming) {
-        queueMessage(text, context, uploadedAttachments);
+        queueMessage(text, requestContext, uploadedAttachments);
       } else {
-        sendMessage(text, context, uploadedAttachments, {
+        sendMessage(text, requestContext, uploadedAttachments, {
           startNewConversation: isNewConversationDraft,
         });
       }
+      setExcludedResourceContextKey(null);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to attach image");
     } finally {
@@ -455,7 +466,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
   }, [
     activeConversationId,
     attachments,
-    context,
+    requestContext,
     currentConversationStreaming,
     handleSlashCommand,
     input,
@@ -637,8 +648,8 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
               size="icon"
               className="h-9 w-9"
               onClick={onEnterLiteMode}
-              title="Full screen"
-              aria-label="Full screen"
+              title="Open in AI Workspace"
+              aria-label="Open in AI Workspace"
             >
               <Expand className="h-4 w-4" />
             </Button>
@@ -649,8 +660,8 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
             className="h-9 w-9"
             onClick={clearMessages}
             disabled={!activeConversationId && messages.length === 0}
-            title="New chat"
-            aria-label="New chat"
+            title="New Work Session"
+            aria-label="New Work Session"
           >
             <Plus className="h-4 w-4" />
           </Button>
@@ -660,8 +671,8 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
                 variant="ghost"
                 size="icon"
                 className="h-9 w-9"
-                title="Chat actions"
-                aria-label="Chat actions"
+                title="Work Session actions"
+                aria-label="Work Session actions"
               >
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
@@ -674,11 +685,11 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
                 }
               >
                 {isCurrentChatPinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
-                {isCurrentChatPinned ? "Unpin chat" : "Pin chat"}
+                {isCurrentChatPinned ? "Unpin Work Session" : "Pin Work Session"}
               </DropdownMenuItem>
               <DropdownMenuItem disabled={!activeConversationId} onClick={openRenameDialog}>
                 <Pencil className="h-4 w-4" />
-                Rename chat
+                Rename Work Session
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
@@ -689,7 +700,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
                 }
               >
                 <Trash2 className="h-4 w-4" />
-                Delete chat
+                Delete Work Session
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -699,8 +710,8 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
               size="icon"
               className="-mr-1 h-9 w-9"
               onClick={onClose}
-              title="Close AI Assistant"
-              aria-label="Close AI Assistant"
+              title="Close AI Workspace"
+              aria-label="Close AI Workspace"
             >
               <X className="h-4 w-4" />
             </Button>
@@ -710,7 +721,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
       <Dialog open={renameDialogOpen} onOpenChange={setRenameDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Rename chat</DialogTitle>
+            <DialogTitle>Rename Work Session</DialogTitle>
           </DialogHeader>
           <Input
             value={renameDraft}
@@ -721,7 +732,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
                 void submitRename();
               }
             }}
-            placeholder="Chat name"
+            placeholder="Work Session name"
             autoFocus
           />
           <DialogFooter>
@@ -871,6 +882,23 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
           <AIConversationBlockedBlock block={conversationBlock} onNewChat={clearMessages} />
         ) : (
           <div className="relative space-y-2">
+            {context.resourceId && !excludeResourceContextOnce && (
+              <div className="mx-3 flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground">
+                <span className="min-w-0 truncate">
+                  Viewing {context.label ?? context.resourceType ?? "current resource"}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 shrink-0"
+                  onClick={() => setExcludedResourceContextKey(resourceContextKey)}
+                  title="Exclude this resource from the next request"
+                  aria-label="Exclude this resource from the next request"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            )}
             <AIQueuedMessages
               items={queuedInputs}
               onSendNow={steerQueuedMessage}
@@ -884,7 +912,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
               onInputChange={handleInputChange}
               onKeyDown={handleKeyDown}
               onSend={() => void handleSend()}
-              onContinue={() => continueConversation(context)}
+              onContinue={() => continueConversation(requestContext)}
               onStop={stopStreaming}
               onSlashCommandSelect={(command) => {
                 void handleSlashCommand(`/${command.name}`);
@@ -895,7 +923,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
               slashResults={slashResults}
               slashIndex={slashIndex}
               messages={messages}
-              context={context}
+              context={requestContext}
               conversationId={activeConversationId}
               isStreaming={currentConversationStreaming}
               canContinue={canContinueConversation}
@@ -942,18 +970,13 @@ interface AISidePanelProps {
 }
 
 export function AISidePanel({ isMobile = false }: AISidePanelProps) {
-  const { aiPanelOpen, setAIPanelOpen, setAILiteMode } = useUIStore();
-  const navigate = useNavigate();
+  const { aiPanelOpen, setAIPanelOpen } = useUIStore();
   const [panelWidth, setPanelWidth] = useState(readPanelWidth);
   const [isResizing, setIsResizing] = useState(false);
 
   const handleClose = () => setAIPanelOpen(false);
-  const handleEnterLiteMode = async () => {
-    const confirmed = await confirmAILiteMode();
-    if (!confirmed) return;
-    setAILiteMode(true);
-    setAIPanelOpen(false);
-    navigate("/");
+  const handleEnterLiteMode = () => {
+    window.dispatchEvent(new CustomEvent("gateway:open-ai-workspace"));
   };
 
   const handleResizeEnd = useCallback(() => {
@@ -968,12 +991,22 @@ export function AISidePanel({ isMobile = false }: AISidePanelProps) {
     });
   }, []);
 
+  useEffect(() => {
+    const updateResponsiveDefault = () => {
+      if (localStorage.getItem(PANEL_WIDTH_KEY)) return;
+      setPanelWidth(getDefaultAIPanelWidth(window.innerWidth));
+    };
+
+    window.addEventListener("resize", updateResponsiveDefault);
+    return () => window.removeEventListener("resize", updateResponsiveDefault);
+  }, []);
+
   if (isMobile) {
     return (
       <Sheet open={aiPanelOpen} onOpenChange={setAIPanelOpen}>
         <SheetContent side="right" className="w-full p-0" hideCloseButton>
           <SheetHeader className="sr-only">
-            <SheetTitle>AI Assistant</SheetTitle>
+            <SheetTitle>AI Workspace</SheetTitle>
           </SheetHeader>
           <AIChatSurface active={aiPanelOpen} onClose={handleClose} />
         </SheetContent>
@@ -997,8 +1030,8 @@ export function AISidePanel({ isMobile = false }: AISidePanelProps) {
             onResize={setPanelWidth}
             onResizeStart={() => setIsResizing(true)}
             onResizeEnd={handleResizeEnd}
-            minWidth={MIN_WIDTH}
-            maxWidth={MAX_WIDTH}
+            minWidth={AI_PANEL_MIN_WIDTH}
+            maxWidth={AI_PANEL_MAX_WIDTH}
           />
           <div className="h-full overflow-hidden border-l border-border">
             {/* Inner content pinned to panelWidth so it never reflows */}

@@ -11,8 +11,7 @@ vi.mock("@/components/common/ConfirmDialog", () => ({
 const pendingState: FinalizeSetupState = {
   steps: {
     nodes: "pending",
-    ai_assistant: "pending",
-    inference: "pending",
+    ai_workspace: "pending",
     cloudflare: "pending",
     gitlab: "pending",
     mfa: "pending",

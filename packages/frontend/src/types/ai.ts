@@ -54,6 +54,8 @@ export interface AIResourceReference {
   nodeSlug?: string;
   slug?: string;
   appearanceColor?: "blue" | "red" | "green" | "yellow" | "purple" | "pink" | "orange";
+  uiHref?: string;
+  workspaceEmbeddable?: boolean;
 }
 
 export interface AIMessage {
@@ -229,6 +231,8 @@ export interface PageContext {
   route: string;
   resourceType?: string;
   resourceId?: string;
+  label?: string;
+  nodeId?: string;
 }
 
 // ── Quick Action ──

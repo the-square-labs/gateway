@@ -13,6 +13,9 @@ function setRequiredEnv(overrides: NodeJS.ProcessEnv = {}) {
   if (!Object.hasOwn(overrides, 'SECURE_LINK_CONNECTOR_IMAGE')) {
     delete inheritedEnv.SECURE_LINK_CONNECTOR_IMAGE;
   }
+  if (!Object.hasOwn(overrides, 'RATE_LIMIT_AI_WS_MAX_REQUESTS')) {
+    delete inheritedEnv.RATE_LIMIT_AI_WS_MAX_REQUESTS;
+  }
 
   process.env = {
     ...inheritedEnv,
@@ -59,6 +62,12 @@ describe('getEnv gRPC TLS config', () => {
 
     expect(env.SESSION_EXPIRY).toBe(600);
     expect('SESSION_SECRET' in env).toBe(false);
+  });
+
+  it('allows enough websocket handshakes for reconnecting AI Workspace tabs', async () => {
+    const env = await loadEnv();
+
+    expect(env.RATE_LIMIT_AI_WS_MAX_REQUESTS).toBe(120);
   });
 
   it('defaults the auto-generated gRPC TLS directory when the env value is empty', async () => {

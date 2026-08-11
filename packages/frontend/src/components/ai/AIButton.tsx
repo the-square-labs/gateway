@@ -27,7 +27,7 @@ export function AIButton({ iconOnly = false }: AIButtonProps) {
             <Sparkles className="h-4 w-4" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="right">AI Assistant (⌘I)</TooltipContent>
+        <TooltipContent side="right">AI Workspace (⌘I)</TooltipContent>
       </Tooltip>
     );
   }
@@ -44,7 +44,7 @@ export function AIButton({ iconOnly = false }: AIButtonProps) {
           <Sparkles className="h-4 w-4" />
         </Button>
       </TooltipTrigger>
-      <TooltipContent>AI Assistant (⌘I)</TooltipContent>
+      <TooltipContent>AI Workspace (⌘I)</TooltipContent>
     </Tooltip>
   );
 }

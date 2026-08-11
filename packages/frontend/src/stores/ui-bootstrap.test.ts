@@ -36,6 +36,7 @@ const SNAPSHOT = {
   },
   update: null,
   aiStatus: null,
+  aiWorkspace: { configured: false, installationOwner: false },
 } as UIBootstrapShell;
 
 describe("UI bootstrap store", () => {

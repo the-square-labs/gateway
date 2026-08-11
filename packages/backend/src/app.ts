@@ -43,7 +43,7 @@ import { aiRoutes } from '@/modules/ai/ai.routes.js';
 import { authenticateWSConnection, createWSHandlers } from '@/modules/ai/ai.ws.js';
 import { alertRoutes } from '@/modules/audit/alert.routes.js';
 import { auditRoutes } from '@/modules/audit/audit.routes.js';
-import { authMiddleware, requireActiveUser } from '@/modules/auth/auth.middleware.js';
+import { authMiddleware, isAdmittedSetupPurposeRequest, requireActiveUser } from '@/modules/auth/auth.middleware.js';
 import { authRoutes } from '@/modules/auth/auth.routes.js';
 import { getProgrammaticWebSocketCredential, getSessionWebSocketCredential } from '@/modules/auth/websocket-auth.js';
 import { databaseRoutes } from '@/modules/databases/databases.routes.js';
@@ -486,6 +486,10 @@ export function createApp(): GatewayAppRuntime {
 
     const path = new URL(c.req.url).pathname;
     if (path === '/health' || path === '/api/setup' || path.startsWith('/api/setup/')) {
+      await next();
+      return;
+    }
+    if (await isAdmittedSetupPurposeRequest(c)) {
       await next();
       return;
     }

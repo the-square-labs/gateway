@@ -186,10 +186,80 @@ function nodeReferenceFromArgs(
   ];
 }
 
-function createReference(input: Omit<AIResourceReference, 'refId'>): AIResourceReference {
+function createReference(
+  input: Omit<AIResourceReference, 'refId' | 'uiHref' | 'workspaceEmbeddable'>
+): AIResourceReference {
   const identity = [input.type, input.nodeId ?? '', input.resourceId].join('\u0000');
   const refId = `gwr_${createHash('sha256').update(identity).digest('hex').slice(0, 24)}`;
-  return { refId, ...input };
+  return {
+    refId,
+    ...input,
+    uiHref: resourceUiHref(input),
+    workspaceEmbeddable: true,
+  };
+}
+
+function resourceUiHref(resource: Omit<AIResourceReference, 'refId' | 'uiHref' | 'workspaceEmbeddable'>): string {
+  const segment = (value: string) => encodeURIComponent(value);
+  if (resource.relation === 'deleted') {
+    const parents: Record<AIResourceReferenceType, string> = {
+      node: '/nodes',
+      proxy_host: '/proxy-hosts',
+      proxy_template: '/templates/nginx',
+      ssl_certificate: '/ssl-certificates',
+      domain: '/domains',
+      access_list: '/access-lists',
+      ca: '/cas',
+      pki_certificate: '/certificates',
+      pki_template: '/templates/pki',
+      docker_container: '/docker/containers',
+      docker_deployment: '/docker/deployments',
+      docker_image: '/docker/images',
+      docker_volume: '/docker/volumes',
+      docker_network: '/docker/networks',
+      docker_registry: '/settings/advanced',
+      database: '/databases',
+      logging_environment: '/logging/environments',
+      logging_schema: '/logging/schemas',
+      status_page_service: '/status-page/services',
+      status_page_incident: '/status-page/incidents',
+      notification_rule: '/notifications/alerts',
+      notification_webhook: '/notifications/webhooks',
+    };
+    return parents[resource.type];
+  }
+  switch (resource.type) {
+    case 'node':
+      return `/nodes/${segment(resource.slug ?? resource.resourceId)}`;
+    case 'proxy_host':
+      return resource.slug ? `/proxy-hosts/${segment(resource.slug)}` : '/proxy-hosts';
+    case 'proxy_template':
+      return `/nginx-templates/${segment(resource.resourceId)}`;
+    case 'ca':
+      return `/cas/${segment(resource.resourceId)}`;
+    case 'pki_certificate':
+      return `/certificates/${segment(resource.resourceId)}`;
+    case 'docker_container':
+      return resource.nodeSlug
+        ? `/docker/containers/${segment(resource.nodeSlug)}/${segment(resource.label)}`
+        : '/docker/containers';
+    case 'docker_deployment':
+      return resource.nodeSlug
+        ? `/docker/deployments/${segment(resource.nodeSlug)}/${segment(resource.label)}`
+        : '/docker/deployments';
+    case 'docker_volume':
+      return resource.nodeSlug
+        ? `/docker/volumes/${segment(resource.nodeSlug)}/${segment(resource.label)}`
+        : '/docker/volumes';
+    case 'database':
+      return `/databases/${segment(resource.slug ?? resource.resourceId)}`;
+    case 'logging_environment':
+      return `/logging/environments/${segment(resource.slug ?? resource.resourceId)}`;
+    case 'logging_schema':
+      return `/logging/schemas/${segment(resource.slug ?? resource.resourceId)}`;
+    default:
+      return resourceUiHref({ ...resource, relation: 'deleted' });
+  }
 }
 
 function inferResourceType(toolName: string, args: Record<string, unknown>): AIResourceReferenceType | null {

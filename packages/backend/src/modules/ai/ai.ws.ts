@@ -443,7 +443,7 @@ export function createWSHandlers() {
 
           const runService = container.resolve(AIRunService);
           const title = msg.conversationId
-            ? 'New chat'
+            ? 'New Work Session'
             : await container.resolve(AIProviderRuntimeService).generateConversationTitle(user, {
                 requestId: `conversation-title:${msg.clientCommandId}`,
                 content: userVisibleContent(content),
@@ -925,7 +925,7 @@ export async function authenticateWSConnection(ws: WSContext, sessionId: string)
   }
 
   if (!canUseAI(user.scopes)) {
-    send(ws, { type: 'auth_error', message: 'Insufficient permissions to use AI assistant' });
+    send(ws, { type: 'auth_error', message: 'Insufficient permissions to use AI Workspace' });
     return false;
   }
 
@@ -934,7 +934,7 @@ export async function authenticateWSConnection(ws: WSContext, sessionId: string)
     ? (await container.resolve(AIProviderRuntimeService).statusForUser(user)).enabled
     : await settingsService.isEnabled();
   if (!enabled) {
-    send(ws, { type: 'auth_error', message: 'AI assistant is not enabled' });
+    send(ws, { type: 'auth_error', message: 'AI Workspace is not enabled' });
     return false;
   }
 

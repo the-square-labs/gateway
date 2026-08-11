@@ -701,6 +701,8 @@ function RealtimeBridge() {
   const setGatewayUpdatingActive = useAppStatusStore((s) => s.setGatewayUpdatingActive);
   const clearGatewayUpdating = useAppStatusStore((s) => s.clearGatewayUpdating);
   const hydrateAIApprovalMode = useUIStore((s) => s.hydrateAIApprovalMode);
+  const beginInterfacePreferenceLoad = useUIStore((s) => s.beginInterfacePreferenceLoad);
+  const hydratePreferredInterface = useUIStore((s) => s.hydratePreferredInterface);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -713,16 +715,20 @@ function RealtimeBridge() {
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
+    beginInterfacePreferenceLoad();
     void api
       .getUserPreferences()
       .then((preferences) => {
-        if (!cancelled) hydrateAIApprovalMode(preferences.aiApprovalMode);
+        if (!cancelled) {
+          hydrateAIApprovalMode(preferences.aiApprovalMode);
+          hydratePreferredInterface(preferences.preferredInterface);
+        }
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [hydrateAIApprovalMode, user?.id]);
+  }, [beginInterfacePreferenceLoad, hydrateAIApprovalMode, hydratePreferredInterface, user?.id]);
 
   // Live permission updates: refresh the local user (and thus scopes) whenever
   // the server says this user's permissions changed.

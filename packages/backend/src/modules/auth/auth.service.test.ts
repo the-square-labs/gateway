@@ -136,7 +136,11 @@ describe('AuthService.deleteUser', () => {
 
 describe('AuthService user preferences', () => {
   it('reads the current AI approval mode', async () => {
-    const findFirst = vi.fn().mockResolvedValue({ aiApprovalMode: 'bypass-non-destructive' });
+    const findFirst = vi.fn().mockResolvedValue({
+      aiApprovalMode: 'bypass-non-destructive',
+      preferredInterface: null,
+      preferredInterfaceSelectedAt: null,
+    });
     const service = new AuthService(
       { query: { users: { findFirst } } } as any,
       {} as any,
@@ -147,16 +151,28 @@ describe('AuthService user preferences', () => {
 
     await expect(service.getUserPreferences('user-1')).resolves.toEqual({
       aiApprovalMode: 'bypass-non-destructive',
+      preferredInterface: null,
+      preferredInterfaceSelectedAt: null,
     });
     expect(findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        columns: { aiApprovalMode: true },
+        columns: {
+          aiApprovalMode: true,
+          preferredInterface: true,
+          preferredInterfaceSelectedAt: true,
+        },
       })
     );
   });
 
   it('updates the current AI approval mode and emits a user update', async () => {
-    const returning = vi.fn().mockResolvedValue([{ aiApprovalMode: 'always-ask' }]);
+    const returning = vi.fn().mockResolvedValue([
+      {
+        aiApprovalMode: 'always-ask',
+        preferredInterface: null,
+        preferredInterfaceSelectedAt: null,
+      },
+    ]);
     const where = vi.fn(() => ({ returning }));
     const set = vi.fn(() => ({ where }));
     const eventBus = { publish: vi.fn() };
@@ -171,6 +187,8 @@ describe('AuthService user preferences', () => {
 
     await expect(service.updateUserPreferences('user-1', { aiApprovalMode: 'always-ask' })).resolves.toEqual({
       aiApprovalMode: 'always-ask',
+      preferredInterface: null,
+      preferredInterfaceSelectedAt: null,
     });
     expect(set).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -182,6 +200,39 @@ describe('AuthService user preferences', () => {
       id: 'user-1',
       action: 'updated',
     });
+  });
+
+  it('persists the selected interface with a server timestamp', async () => {
+    const selectedAt = new Date('2026-08-11T00:00:00.000Z');
+    const returning = vi.fn().mockResolvedValue([
+      {
+        aiApprovalMode: 'normal',
+        preferredInterface: 'ai_workspace',
+        preferredInterfaceSelectedAt: selectedAt,
+      },
+    ]);
+    const where = vi.fn(() => ({ returning }));
+    const set = vi.fn(() => ({ where }));
+    const service = new AuthService(
+      { update: vi.fn(() => ({ set })) } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any
+    );
+
+    await expect(service.updateUserPreferences('user-1', { preferredInterface: 'ai_workspace' })).resolves.toEqual({
+      aiApprovalMode: 'normal',
+      preferredInterface: 'ai_workspace',
+      preferredInterfaceSelectedAt: selectedAt.toISOString(),
+    });
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferredInterface: 'ai_workspace',
+        preferredInterfaceSelectedAt: expect.any(Date),
+        updatedAt: expect.any(Date),
+      })
+    );
   });
 });
 

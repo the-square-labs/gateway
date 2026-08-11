@@ -594,34 +594,59 @@ export class AuthService {
     return dbUser ? this.mapDbUserToUser(dbUser) : null;
   }
 
-  async getUserPreferences(userId: string): Promise<{ aiApprovalMode: AIApprovalMode } | null> {
+  async getUserPreferences(userId: string): Promise<{
+    aiApprovalMode: AIApprovalMode;
+    preferredInterface: 'ai_workspace' | 'operations_console' | null;
+    preferredInterfaceSelectedAt: string | null;
+  } | null> {
     const dbUser = await this.db.query.users.findFirst({
-      columns: { aiApprovalMode: true },
+      columns: { aiApprovalMode: true, preferredInterface: true, preferredInterfaceSelectedAt: true },
       where: eq(users.id, userId),
     });
 
-    return dbUser ? { aiApprovalMode: dbUser.aiApprovalMode } : null;
+    return dbUser
+      ? {
+          aiApprovalMode: dbUser.aiApprovalMode,
+          preferredInterface: dbUser.preferredInterface,
+          preferredInterfaceSelectedAt: dbUser.preferredInterfaceSelectedAt?.toISOString() ?? null,
+        }
+      : null;
   }
 
   async updateUserPreferences(
     userId: string,
-    input: { aiApprovalMode: AIApprovalMode }
-  ): Promise<{ aiApprovalMode: AIApprovalMode }> {
+    input: { aiApprovalMode?: AIApprovalMode; preferredInterface?: 'ai_workspace' | 'operations_console' }
+  ): Promise<{
+    aiApprovalMode: AIApprovalMode;
+    preferredInterface: 'ai_workspace' | 'operations_console' | null;
+    preferredInterfaceSelectedAt: string | null;
+  }> {
+    const preferredInterfaceSelectedAt = input.preferredInterface === undefined ? undefined : new Date();
     const [updated] = await this.db
       .update(users)
       .set({
-        aiApprovalMode: input.aiApprovalMode,
+        ...(input.aiApprovalMode === undefined ? {} : { aiApprovalMode: input.aiApprovalMode }),
+        ...(input.preferredInterface === undefined
+          ? {}
+          : { preferredInterface: input.preferredInterface, preferredInterfaceSelectedAt }),
         updatedAt: new Date(),
       })
       .where(eq(users.id, userId))
-      .returning({ aiApprovalMode: users.aiApprovalMode });
+      .returning({
+        aiApprovalMode: users.aiApprovalMode,
+        preferredInterface: users.preferredInterface,
+        preferredInterfaceSelectedAt: users.preferredInterfaceSelectedAt,
+      });
 
     if (!updated) {
       throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
     }
 
     this.emitUser(userId, 'updated');
-    return updated;
+    return {
+      ...updated,
+      preferredInterfaceSelectedAt: updated.preferredInterfaceSelectedAt?.toISOString() ?? null,
+    };
   }
 
   async listUsers(): Promise<User[]> {

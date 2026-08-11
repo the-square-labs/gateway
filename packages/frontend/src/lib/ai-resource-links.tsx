@@ -1,6 +1,8 @@
-import type { AnchorHTMLAttributes } from "react";
+import { ExternalLink } from "lucide-react";
+import type { AnchorHTMLAttributes, MouseEvent } from "react";
 import type { Components } from "react-markdown";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useUIStore } from "@/stores/ui";
 import type { AIResourceReference } from "@/types/ai";
 import { getNodeAppearanceColor } from "./node-appearance";
 import { aiResourceHref, RESOURCE_ICONS, RESOURCE_LABELS } from "./resource-presentation";
@@ -42,22 +44,51 @@ export function resourceMarkdownLinkComponent(references: AIResourceReference[])
 
 export function AIResourceLink({ reference }: { reference: AIResourceReference }) {
   const location = useLocation();
+  const navigate = useNavigate();
+  const aiWorkspace = useUIStore((state) => state.aiLiteMode);
+  const setAILiteMode = useUIStore((state) => state.setAILiteMode);
+  const setAIPanelOpen = useUIStore((state) => state.setAIPanelOpen);
   const Icon = RESOURCE_ICONS[reference.type];
   const typeLabel = RESOURCE_LABELS[reference.type];
   const appearance = getNodeAppearanceColor(reference.appearanceColor);
   const toneClassName =
     appearance?.badgeClassName ??
     "bg-[color:color-mix(in_srgb,var(--color-link)_12%,transparent)] text-[color:var(--color-link)]";
+  const href = reference.uiHref ?? aiResourceHref(reference);
+  const openOperationsConsole = (event: MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setAILiteMode(false);
+    setAIPanelOpen(true);
+    navigate(href);
+  };
+  const openPrimary = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (aiWorkspace && reference.workspaceEmbeddable === false) openOperationsConsole(event);
+  };
   return (
-    <Link
-      to={aiResourceHref(reference)}
-      state={createReturnNavigationState(location)}
-      className={`mx-0.5 inline-flex max-w-full items-center gap-1 rounded-sm px-1 py-0.5 align-baseline font-medium no-underline transition-colors hover:brightness-110 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${toneClassName} ${reference.relation === "deleted" ? "opacity-70" : ""}`}
-      aria-label={`${typeLabel}: ${reference.label}`}
-    >
-      <Icon className="h-3 w-3 shrink-0" aria-hidden="true" />
-      <span className="min-w-0 break-words">{reference.label}</span>
-    </Link>
+    <span className="mx-0.5 inline-flex max-w-full items-center align-baseline">
+      <Link
+        to={href}
+        state={createReturnNavigationState(location)}
+        onClick={openPrimary}
+        className={`inline-flex max-w-full items-center gap-1 rounded-sm px-1 py-0.5 font-medium no-underline transition-colors hover:brightness-110 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${toneClassName} ${reference.relation === "deleted" ? "opacity-70" : ""}`}
+        aria-label={`${typeLabel}: ${reference.label}`}
+      >
+        <Icon className="h-3 w-3 shrink-0" aria-hidden="true" />
+        <span className="min-w-0 break-words">{reference.label}</span>
+      </Link>
+      {aiWorkspace && (
+        <button
+          type="button"
+          className="ml-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          title="Open in Operations Console"
+          aria-label={`Open ${reference.label} in Operations Console`}
+          onClick={openOperationsConsole}
+        >
+          <ExternalLink className="h-3 w-3" />
+        </button>
+      )}
+    </span>
   );
 }
 

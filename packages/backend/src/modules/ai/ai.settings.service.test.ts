@@ -53,6 +53,16 @@ describe('AISettingsService provider selection', () => {
     await expect(service.getConfig()).resolves.toMatchObject({
       providerType: 'openai_compatible',
       gatewayInferenceModel: '',
+      gatewayInferenceAllowUserModelSelection: true,
+    });
+  });
+
+  it('preserves an explicit model-selection opt-out', async () => {
+    const { service } = createHarness({
+      'ai:gateway_inference_allow_user_model_selection': false,
+    });
+
+    await expect(service.getConfig()).resolves.toMatchObject({
       gatewayInferenceAllowUserModelSelection: false,
     });
   });

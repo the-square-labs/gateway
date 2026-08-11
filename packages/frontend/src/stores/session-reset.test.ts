@@ -19,7 +19,12 @@ describe("resetClientSessionState", () => {
       savedName: "incident",
       pendingApprovalToolCallId: "tool-1",
     });
-    useUIStore.setState({ aiPanelOpen: true });
+    useUIStore.setState({
+      aiPanelOpen: true,
+      aiLiteMode: true,
+      preferredInterface: "ai_workspace",
+      interfacePreferenceLoaded: true,
+    });
     usePinnedDatabasesStore.setState({
       sidebarDatabaseIds: ["db-1"],
       databaseMeta: { "db-1": { slug: "prod", name: "Prod", type: "postgres" } },
@@ -42,7 +47,12 @@ describe("resetClientSessionState", () => {
       savedName: null,
       pendingApprovalToolCallId: null,
     });
-    expect(useUIStore.getState().aiPanelOpen).toBe(false);
+    expect(useUIStore.getState()).toMatchObject({
+      aiPanelOpen: false,
+      aiLiteMode: false,
+      preferredInterface: null,
+      interfacePreferenceLoaded: false,
+    });
     expect(usePinnedDatabasesStore.getState()).toMatchObject({
       sidebarDatabaseIds: [],
       databaseMeta: {},

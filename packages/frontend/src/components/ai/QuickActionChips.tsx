@@ -42,7 +42,7 @@ const QUICK_ACTIONS: Record<string, QuickAction[]> = {
     { label: "List users", prompt: "List all users with their roles" },
     { label: "User activity", prompt: "Show recent audit log activity" },
     { label: "Recent activity", prompt: "Show the last 20 audit log entries" },
-    { label: "AI actions", prompt: "Show audit log entries from AI assistant actions" },
+    { label: "AI actions", prompt: "Show audit log entries from AI Workspace actions" },
   ],
   "/settings": [{ label: "System info", prompt: "Show system information and statistics" }],
   "/docker/containers": [

@@ -86,8 +86,6 @@ export function Profile() {
     setShowUpdateNotifications,
     showSystemCertificates,
     setShowSystemCertificates,
-    showAILiteModeCTA,
-    setShowAILiteModeCTA,
     aiApprovalMode,
   } = useUIStore();
   const [nodesList, setNodesList] = useState<Node[]>([]);
@@ -258,15 +256,6 @@ export function Profile() {
                       checked={showUpdateNotifications}
                       onChange={setShowUpdateNotifications}
                     />
-                  </div>
-                  <div className="flex items-center justify-between gap-4 px-4 py-3">
-                    <div>
-                      <p className="text-sm font-medium">Lite mode shortcuts</p>
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        Show sidebar shortcuts for switching between Gateway and AI lite mode
-                      </p>
-                    </div>
-                    <Switch checked={showAILiteModeCTA} onChange={setShowAILiteModeCTA} />
                   </div>
                   {canViewSystemCertificates && (
                     <div className="flex items-center justify-between gap-4 px-4 py-3">

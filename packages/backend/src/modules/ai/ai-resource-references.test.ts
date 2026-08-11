@@ -36,8 +36,17 @@ describe('AI resource references', () => {
         nodeId: 'node-1',
         nodeSlug: 'docker-src',
         relation: 'read',
+        uiHref: '/docker/containers/docker-src/api',
+        workspaceEmbeddable: true,
       }),
-      expect.objectContaining({ type: 'node', resourceId: 'node-1', label: 'docker-src', slug: 'docker-src' }),
+      expect.objectContaining({
+        type: 'node',
+        resourceId: 'node-1',
+        label: 'docker-src',
+        slug: 'docker-src',
+        uiHref: '/nodes/docker-src',
+        workspaceEmbeddable: true,
+      }),
     ]);
   });
 

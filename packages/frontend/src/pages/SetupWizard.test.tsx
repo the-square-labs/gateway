@@ -1,7 +1,8 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useConfirmDialog } from "@/components/common/ConfirmDialog";
 import { SetupWizardPage } from "./SetupWizard";
 import { AdminAuthMethodStep } from "./setup-wizard/SetupFinalSteps";
 import {
@@ -96,8 +97,36 @@ function AdminMethodHarness({ onContinue }: { onContinue: () => void }) {
 
 describe("SetupWizardPage", () => {
   afterEach(() => {
+    act(() => useConfirmDialog.getState().close());
     vi.unstubAllGlobals();
     sessionStorage.clear();
+  });
+
+  it("mounts shared confirmations during installer AI Workspace setup", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() =>
+        response(200, {
+          data: { ...PENDING_STATUS, setupInProgress: true, currentSession: true },
+        })
+      )
+      .mockImplementationOnce(() => response(200, { data: { ...CONFIG, phase: "ai_workspace" } }))
+      .mockImplementationOnce(() => response(200, { data: { csrfToken: "setup-csrf" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SetupWizardPage />);
+    expect(await screen.findByRole("heading", { name: "AI Workspace" })).toBeInTheDocument();
+
+    act(() => {
+      useConfirmDialog.getState().show({
+        title: "Review provider terms",
+        description: "Review the provider terms before continuing.",
+        confirmLabel: "Continue to authorization",
+        onConfirm: vi.fn(),
+      });
+    });
+
+    expect(screen.getByRole("dialog", { name: "Review provider terms" })).toBeInTheDocument();
   });
 
   it("skips administrator method selection when only one method is enabled", () => {
@@ -301,9 +330,7 @@ describe("SetupWizardPage", () => {
       .mockImplementationOnce(() => response(200, { data: PENDING_STATUS }))
       .mockImplementationOnce(() => response(200, { data: UNLOCKED }))
       .mockImplementationOnce(() => response(200, { data: CONFIG }))
-      .mockImplementation(() =>
-        response(200, { data: { status: "completed", restartRequired: true } })
-      );
+      .mockImplementation(() => response(200, { data: { status: "ready_for_ai" } }));
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
 
@@ -412,9 +439,7 @@ describe("SetupWizardPage", () => {
       logging: { mode: "disabled" },
     });
     expect(JSON.parse(String(init.body)).administrator).not.toHaveProperty("password");
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Apply configuration" })).toBeDisabled();
-    });
+    expect(await screen.findByRole("heading", { name: "AI Workspace" })).toBeInTheDocument();
   });
 
   it("disables invalid steps and applies the shared Resend SMTP preset", async () => {

@@ -30,4 +30,8 @@ export interface UIBootstrapShell {
   };
   update: UpdateStatus | null;
   aiStatus: AIProviderStatus | null;
+  aiWorkspace: {
+    configured: boolean;
+    installationOwner: boolean;
+  };
 }

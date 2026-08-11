@@ -1148,21 +1148,21 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: 'get_ai_settings',
     description:
-      'Read AI assistant configuration, including provider, limits, disabled tools, web search, and sandbox runner settings. Secrets are returned only as masked metadata.',
+      'Read AI Workspace configuration, including provider, limits, disabled tools, web search, and sandbox runner settings. Secrets are returned only as masked metadata.',
     parameters: { type: 'object', properties: {} },
     destructive: false,
-    category: 'AI Assistant',
+    category: 'AI Workspace',
     requiredScope: 'feat:ai:configure',
     invalidateStores: [],
   },
   {
     name: 'update_ai_settings',
     description:
-      'Update AI assistant configuration. Only pass fields that should change; API keys may be replaced or cleared with an empty string.',
+      'Update AI Workspace configuration. Only pass fields that should change; API keys may be replaced or cleared with an empty string.',
     parameters: {
       type: 'object',
       properties: {
-        enabled: { type: 'boolean', description: 'Enable or disable the AI assistant.' },
+        enabled: { type: 'boolean', description: 'Enable or disable AI Workspace.' },
         providerType: {
           type: 'string',
           enum: ['openai_compatible', 'gateway_inference'],
@@ -1221,17 +1221,17 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
       },
     },
     destructive: true,
-    category: 'AI Assistant',
+    category: 'AI Workspace',
     requiredScope: 'feat:ai:configure',
     invalidateStores: ['settings'],
   },
   {
     name: 'list_ai_tools',
     description:
-      'List AI assistant tools with categories, descriptions, scopes, and destructive metadata for configuration or auditing.',
+      'List AI Workspace tools with categories, descriptions, scopes, and destructive metadata for configuration or auditing.',
     parameters: { type: 'object', properties: {} },
     destructive: false,
-    category: 'AI Assistant',
+    category: 'AI Workspace',
     requiredScope: 'feat:ai:configure',
     invalidateStores: [],
   },
@@ -1241,7 +1241,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
       'Read sandbox runner configuration and runtime health without starting a sandbox job. Use this to diagnose whether sandbox execution is enabled and available.',
     parameters: { type: 'object', properties: {} },
     destructive: false,
-    category: 'AI Assistant',
+    category: 'AI Workspace',
     requiredScope: 'feat:ai:configure',
     invalidateStores: [],
   },

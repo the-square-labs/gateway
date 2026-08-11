@@ -4,11 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { Badge } from "@/components/ui/badge";
+import { api } from "@/services/api";
+import { ConfigureAIWorkspaceWizard } from "./dashboard/finalize-setup/ConfigureAIWorkspaceWizard";
 import { DEFAULT_SMTP_DRAFT, getSmtpPresetId, type SmtpPresetId } from "./settings/smtp-presets";
 import {
   AdminAuthMethodStep,
   AdminDetailsStep,
+  AIWorkspaceStep,
   FinishStep,
   LoggingStep,
 } from "./setup-wizard/SetupFinalSteps";
@@ -59,6 +63,10 @@ interface SetupUnlockResult {
 }
 
 interface SetupApplyResult {
+  status: "ready_for_ai";
+}
+
+interface SetupCompleteResult {
   status: "completed";
   restartRequired: boolean;
 }
@@ -127,6 +135,7 @@ export function SetupWizardPage() {
   const [draftReady, setDraftReady] = useState(false);
   const [setupInProgress, setSetupInProgress] = useState(false);
   const [restartPending, setRestartPending] = useState(false);
+  const [aiWorkspaceWizardOpen, setAIWorkspaceWizardOpen] = useState(false);
   const [loadingSession, setLoadingSession] = useState(true);
   const [busy, setBusy] = useState(false);
   const [code, setCode] = useState("");
@@ -223,11 +232,13 @@ export function SetupWizardPage() {
     autoGrpcTarget.current = saved?.autoGrpcTarget ?? null;
     const availableSteps = getSetupSteps(nextMethods, next.administratorCreated);
     setStep(
-      next.administratorCreated
-        ? "logging"
-        : saved?.step && availableSteps.includes(saved.step)
-          ? saved.step
-          : "public-url"
+      next.phase === "ai_workspace"
+        ? "ai-workspace"
+        : next.administratorCreated
+          ? "logging"
+          : saved?.step && availableSteps.includes(saved.step)
+            ? saved.step
+            : "public-url"
     );
     setDraftReady(true);
   }, []);
@@ -362,6 +373,29 @@ export function SetupWizardPage() {
         }
       : {}),
   });
+
+  const finishSetup = async (outcome: {
+    status: "configured" | "skipped";
+    configuredVia?: "direct" | "gateway_inference";
+  }) => {
+    const result = await setupRequest<SetupCompleteResult>(
+      "/wizard/complete",
+      "POST",
+      outcome,
+      csrfToken
+    );
+    if (draftCodeId) sessionStorage.removeItem(draftStorageKey(draftCodeId));
+    setAIWorkspaceWizardOpen(false);
+    if (result.restartRequired) setRestartPending(true);
+    else window.location.assign("/login");
+  };
+
+  const openAIWorkspaceSetup = () =>
+    void run(async () => {
+      await setupRequest("/wizard/session", "POST", undefined, csrfToken);
+      api.resetSessionState();
+      setAIWorkspaceWizardOpen(true);
+    });
 
   if (loadingSession) {
     return (
@@ -597,19 +631,31 @@ export function SetupWizardPage() {
                       },
                       csrfToken
                     );
-                    if (draftCodeId) sessionStorage.removeItem(draftStorageKey(draftCodeId));
-                    if (result.restartRequired) {
-                      setRestartPending(true);
-                    } else {
-                      window.location.assign("/login");
-                    }
+                    if (result.status === "ready_for_ai") setStep("ai-workspace");
                   })
                 }
+              />
+            )}
+            {unlocked && step === "ai-workspace" && (
+              <AIWorkspaceStep
+                busy={busy || restartPending}
+                onConfigure={openAIWorkspaceSetup}
+                onSkip={() => void run(() => finishSetup({ status: "skipped" }))}
               />
             )}
           </motion.div>
         </AnimatePresence>
       </AnimatedHeight>
+      <ConfigureAIWorkspaceWizard
+        open={aiWorkspaceWizardOpen}
+        completionActionLabel="Continue to sign in"
+        onBack={() => setAIWorkspaceWizardOpen(false)}
+        onConfigured={(configuredVia) =>
+          run(() => finishSetup({ status: "configured", configuredVia }))
+        }
+        onSkipped={() => run(() => finishSetup({ status: "skipped" }))}
+      />
+      <ConfirmDialog />
     </AuthShell>
   );
 }

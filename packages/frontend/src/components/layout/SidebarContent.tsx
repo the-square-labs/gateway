@@ -3,7 +3,6 @@ import { ArrowUpCircle, Expand, PanelLeft, PanelLeftClose, Search, X } from "luc
 import { useCallback, useEffect, useMemo } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AIButton } from "@/components/ai/AIButton";
-import { confirmAILiteMode } from "@/components/ai/confirm-lite-mode";
 import { AccountMenuContent } from "@/components/layout/AccountMenuContent";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -22,7 +21,6 @@ import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
 import { isSidebarNavigationActive } from "@/lib/sidebar-navigation";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
-import { useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useDockerStore } from "@/stores/docker";
@@ -73,21 +71,13 @@ export function SidebarContent({
   const location = useLocation();
   const navigate = useNavigate();
   const { user, hasScope, hasScopedAccess, logout } = useAuthStore();
-  const {
-    sidebarOpen,
-    toggleSidebar,
-    setAIPanelOpen,
-    setAILiteMode,
-    setCommandPaletteOpen: openPalette,
-  } = useUIStore();
+  const { sidebarOpen, toggleSidebar, setCommandPaletteOpen: openPalette } = useUIStore();
 
-  const aiEnabled = useAIStore((s) => s.isEnabled);
   const updateAvailable = useUpdateStore((s) => s.status?.updateAvailable ?? false);
   const showUpdateNotifications = useUIStore((s) => s.showUpdateNotifications);
   const showSystemCertificatePreference = useUIStore((s) => s.showSystemCertificates);
   const showSystemCertificates =
     hasScope("admin:details:certificates") && showSystemCertificatePreference;
-  const showAILiteModeCTA = useUIStore((s) => s.showAILiteModeCTA);
   const sidebarPinnedIds = usePinnedNodesStore((s) => s.sidebarNodeIds);
   const statusPageEnabled = useUIBootstrapStore(
     (state) => state.snapshot?.navigation.statusPageEnabled ?? false
@@ -220,16 +210,10 @@ export function SidebarContent({
 
   const isExpanded = alwaysExpanded || sidebarOpen;
 
-  const canUseAI = hasScope(AI_SCOPE) && aiEnabled !== false;
-
-  const handleTryLiteMode = useCallback(async () => {
-    const confirmed = await confirmAILiteMode();
-    if (!confirmed) return;
-    setAILiteMode(true);
-    setAIPanelOpen(false);
-    navigate("/");
+  const handleOpenAIWorkspace = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("gateway:open-ai-workspace"));
     onNavigate?.();
-  }, [navigate, onNavigate, setAIPanelOpen, setAILiteMode]);
+  }, [onNavigate]);
 
   const effectiveGroups = visibleNavigationGroups({
     scopes: user?.scopes ?? [],
@@ -318,21 +302,21 @@ export function SidebarContent({
 
               {hasScope(AI_SCOPE) && <AIButton iconOnly />}
 
-              {canUseAI && showAILiteModeCTA && (
+              {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8 bg-sidebar-accent text-sidebar-accent-foreground/80 hover:bg-muted hover:text-sidebar-accent-foreground"
-                      onClick={handleTryLiteMode}
+                      onClick={handleOpenAIWorkspace}
                     >
                       <Expand className="h-4 w-4" />
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent side="right">Switch to lite mode</TooltipContent>
+                  <TooltipContent side="right">Open AI Workspace</TooltipContent>
                 </Tooltip>
-              )}
+              }
 
               {updateAvailable && hasScope("admin:update") && showUpdateNotifications && (
                 <Tooltip>
@@ -485,21 +469,21 @@ export function SidebarContent({
 
             <Separator />
 
-            {canUseAI && showAILiteModeCTA && (
+            {
               <>
                 <div className="px-2 py-2">
                   <button
                     type="button"
-                    onClick={handleTryLiteMode}
+                    onClick={handleOpenAIWorkspace}
                     className="flex w-full items-center gap-2 bg-sidebar-accent px-3 py-2 text-left text-sm font-medium text-sidebar-accent-foreground/80 transition-colors hover:bg-muted hover:text-sidebar-accent-foreground"
                   >
                     <Expand className="h-4 w-4 shrink-0" />
-                    <span className="truncate">Switch to lite mode</span>
+                    <span className="truncate">Open AI Workspace</span>
                   </button>
                 </div>
                 <Separator />
               </>
-            )}
+            }
 
             {/* Update notification */}
             {updateAvailable && hasScope("admin:update") && showUpdateNotifications && (
