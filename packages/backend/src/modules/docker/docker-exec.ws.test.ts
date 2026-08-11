@@ -5,8 +5,8 @@ import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import { DockerManagementService } from './docker.service.js';
 import {
-  DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES,
   createDockerExecWSHandlers,
+  DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES,
   isDockerExecPreauthMessageTooLarge,
   parseDockerExecTerminalSize,
   resizeDockerExec,
@@ -105,7 +105,9 @@ describe('Docker exec unauthenticated message limit', () => {
     expect(isDockerExecPreauthMessageTooLarge('{"type":"resize","rows":24,"cols":120}')).toBe(false);
     expect(isDockerExecPreauthMessageTooLarge('x'.repeat(DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES))).toBe(false);
     expect(isDockerExecPreauthMessageTooLarge('x'.repeat(DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES + 1))).toBe(true);
-    expect(isDockerExecPreauthMessageTooLarge('€'.repeat(Math.ceil(DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES / 3)))).toBe(true);
+    expect(isDockerExecPreauthMessageTooLarge('€'.repeat(Math.ceil(DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES / 3)))).toBe(
+      true
+    );
     expect(isDockerExecPreauthMessageTooLarge(new Uint8Array(DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES + 1).buffer)).toBe(
       true
     );

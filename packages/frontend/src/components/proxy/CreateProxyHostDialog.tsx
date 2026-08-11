@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, Loader2, Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { DomainAutocompleteInput } from "@/components/domains/DomainAutocompleteInput";
 import {
@@ -502,16 +503,13 @@ export function CreateProxyHostDialog({
             >
               {/* Forwarding / Redirect card */}
               {type === "proxy" && (
-                <div className="border border-border bg-card">
-                  <div className="border-b border-border p-4">
-                    <h2 className="font-semibold text-sm">Forwarding</h2>
-                  </div>
+                <PanelShell title="Forwarding">
                   <ProxyUpstreamFields
                     value={upstream}
                     onChange={setUpstream}
                     containers={dockerContainers}
                   />
-                </div>
+                </PanelShell>
               )}
 
               {type === "redirect" && (

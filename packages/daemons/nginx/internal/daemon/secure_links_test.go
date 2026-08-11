@@ -23,6 +23,18 @@ import (
 
 const testSecureLinkID = "11111111-1111-4111-8111-111111111111"
 
+func testSourceLinkManager(t *testing.T, opener func(string, net.Conn)) *sourceLinkManager {
+	t.Helper()
+	manager := newSourceLinkManager(opener)
+	directory, err := os.MkdirTemp("/tmp", "gw-sl-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(directory) })
+	manager.socketDir = directory
+	return manager
+}
+
 func sourceCommand(port uint32, generation uint64) *pb.SyncProxySecureLinksCommand {
 	return &pb.SyncProxySecureLinksCommand{Bindings: []*pb.ProxySecureLinkBinding{{
 		LinkId: testSecureLinkID, Role: "source", Generation: generation, ListenerPort: port, SourceConfigManaged: true,
@@ -60,7 +72,7 @@ func TestProxySecureLinkSetupTimeoutOnlyCoversHandshake(t *testing.T) {
 
 func TestProxySecureLinkProbeDoesNotRetainIdleConnection(t *testing.T) {
 	closed := make(chan struct{}, 1)
-	manager := newSourceLinkManager(func(_ string, connection net.Conn) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) {
 		defer connection.Close()
 		request, err := http.ReadRequest(bufio.NewReader(connection))
 		if err != nil {
@@ -90,7 +102,7 @@ func TestProxySecureLinkProbeDoesNotRetainIdleConnection(t *testing.T) {
 }
 
 func TestSourceLinkManagerAllocatesReusesAndReallocatesPorts(t *testing.T) {
-	manager := newSourceLinkManager(func(_ string, connection net.Conn) { _ = connection.Close() })
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
 	statuses, err := manager.sync(sourceCommand(0, 1))
 	if err != nil || len(statuses) != 1 || statuses[0].Port == 0 {
 		t.Fatalf("initial sync: statuses=%#v err=%v", statuses, err)
@@ -109,7 +121,7 @@ func TestSourceLinkManagerAllocatesReusesAndReallocatesPorts(t *testing.T) {
 	}
 	defer occupied.Close()
 
-	restarted := newSourceLinkManager(func(_ string, connection net.Conn) { _ = connection.Close() })
+	restarted := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
 	statuses, err = restarted.sync(sourceCommand(uint32(allocated), 2))
 	if err != nil || statuses[0].Port == allocated || statuses[0].Port == 0 {
 		t.Fatalf("conflict sync: statuses=%#v err=%v", statuses, err)
@@ -122,7 +134,7 @@ func TestSourceLinkManagerAllocatesReusesAndReallocatesPorts(t *testing.T) {
 }
 
 func TestSourceLinkManagerRejectedSnapshotKeepsThePreviousSet(t *testing.T) {
-	manager := newSourceLinkManager(func(_ string, connection net.Conn) { _ = connection.Close() })
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
 	secondID := "22222222-2222-4222-8222-222222222222"
 	initial := &pb.SyncProxySecureLinksCommand{Bindings: []*pb.ProxySecureLinkBinding{
 		{LinkId: testSecureLinkID, Role: "source", Generation: 2},
@@ -145,7 +157,7 @@ func TestSourceLinkManagerRejectedSnapshotKeepsThePreviousSet(t *testing.T) {
 }
 
 func TestSourceLinkManagerRotatesListenerBeforeActiveTargetCutover(t *testing.T) {
-	manager := newSourceLinkManager(func(_ string, connection net.Conn) { _ = connection.Close() })
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
 	before, err := manager.sync(sourceCommand(0, 2))
 	if err != nil {
 		t.Fatal(err)
@@ -168,7 +180,7 @@ func TestSourceLinkManagerRotatesListenerBeforeActiveTargetCutover(t *testing.T)
 
 func TestSourceLinkRemovalClosesActiveConnections(t *testing.T) {
 	accepted := make(chan struct{})
-	manager := newSourceLinkManager(func(_ string, connection net.Conn) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) {
 		close(accepted)
 		_, _ = io.Copy(io.Discard, connection)
 	})
@@ -197,7 +209,7 @@ func TestSourceLinkRemovalClosesActiveConnections(t *testing.T) {
 
 func TestSourceLinkGrantRevocationClosesActiveConnectionButKeepsListener(t *testing.T) {
 	accepted := make(chan struct{}, 1)
-	manager := newSourceLinkManager(func(_ string, connection net.Conn) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) {
 		select {
 		case accepted <- struct{}{}:
 		default:

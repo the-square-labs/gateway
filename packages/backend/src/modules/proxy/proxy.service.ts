@@ -2,7 +2,7 @@ import { and, count, desc, eq, ilike, inArray, ne, or, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { accessLists } from '@/db/schema/access-lists.js';
 import { certificates } from '@/db/schema/certificates.js';
-import { proxyHosts } from '@/db/schema/index.js';
+import { nodes, proxyHosts } from '@/db/schema/index.js';
 import { sslCertificates } from '@/db/schema/ssl-certificates.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
@@ -46,6 +46,9 @@ import { attachDockerUpstreamDisplay, type WithDockerUpstreamDisplay } from './p
 export { __testOnly } from './proxy.service-helpers.js';
 
 const logger = createChildLogger('ProxyService');
+const SECURE_LINK_RUNTIME_DEDUP_WINDOW_MS = 500;
+const SECURE_LINK_BACKGROUND_TRAFFIC_TAIL_LINES = 200;
+const SECURE_LINK_FOCUSED_TRAFFIC_TAIL_LINES = 10_000;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -53,6 +56,34 @@ const logger = createChildLogger('ProxyService');
 
 type ProxyHostRow = typeof proxyHosts.$inferSelect;
 type ProxyHostView = WithDockerUpstreamDisplay<ProxyHostRow>;
+
+interface ProxyHostTrafficRuntime {
+  hostId: string;
+  statusCodes: { s2xx: number; s3xx: number; s4xx: number; s5xx: number };
+  avgResponseTime: number;
+  p95ResponseTime: number;
+  totalRequests: number;
+  totalBytes: number;
+  requestsPerSecond: number;
+  bytesPerSecond: number;
+  busiestClientRps: number;
+  windowSeconds: number;
+  sampleTruncated: boolean;
+  lastRequestAt?: string;
+}
+
+type ProxyRouteRuntime = Awaited<ReturnType<ProxySecureLinkService['getRuntime']>>;
+
+interface ProxySecureLinkRuntimeSnapshot {
+  timestamp: string;
+  runtime: ProxyRouteRuntime | null;
+  traffic: ProxyHostTrafficRuntime | null;
+}
+
+interface ProxySecureLinkRuntimeSample {
+  snapshot: ProxySecureLinkRuntimeSnapshot;
+  history: ProxySecureLinkRuntimeSnapshot[];
+}
 
 export interface StatusPageSystemHostInput {
   domain: string;
@@ -82,16 +113,20 @@ export class ProxyService {
   private notificationEvaluator?: NotificationEvaluatorService;
   private dockerReconcileRunning = false;
   private dockerReconcileDirty = false;
+  private dockerReconcileForce = false;
   private dockerReconcileRetry?: ReturnType<typeof setTimeout>;
   private dockerReconcileBackoffMs = 5_000;
+  private readonly secureLinkRuntimeHistory = new Map<string, ProxySecureLinkRuntimeSnapshot[]>();
+  private readonly secureLinkRuntimeSamplesInFlight = new Map<string, Promise<ProxySecureLinkRuntimeSample>>();
+  private secureLinkRuntimeBackgroundInFlight: Promise<void> | null = null;
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
     bus.subscribe('docker.snapshot.changed', (payload) => {
       if ((payload as { kind?: string })?.kind === 'containers') this.queueDockerReconciliation();
     });
     bus.subscribe('docker.deployment.changed', () => this.queueDockerReconciliation());
-    bus.subscribe('node.service_address.changed', () => this.queueDockerReconciliation());
-    bus.subscribe('node.changed', () => this.queueDockerReconciliation());
+    bus.subscribe('node.service_address.changed', () => this.queueDockerReconciliation(true));
+    bus.subscribe('node.changed', () => this.queueDockerReconciliation(true));
     bus.subscribe('docker.container.changed', (payload) => {
       const event = payload as { action?: string; nodeId?: string; name?: string; oldName?: string };
       if (event.action === 'renamed' && event.nodeId && event.name && event.oldName) {
@@ -100,7 +135,7 @@ export class ProxyService {
         });
       }
     });
-    this.queueDockerReconciliation();
+    this.queueDockerReconciliation(true);
   }
   setEvaluator(evaluator: NotificationEvaluatorService) {
     this.notificationEvaluator = evaluator;
@@ -123,12 +158,7 @@ export class ProxyService {
   ): Promise<void> {
     const resolvedNodeId = preparedTls?.nodeId ?? (await this.nodeDispatch.resolveNodeId(nodeId));
     if (preparedTls) {
-      await this.certificateDistribution.applyHostBundle(
-        { id: hostId, nodeId },
-        config,
-        preparedTls,
-        configOwnership
-      );
+      await this.certificateDistribution.applyHostBundle({ id: hostId, nodeId }, config, preparedTls, configOwnership);
     } else {
       const result = await this.nodeDispatch.applyConfig(resolvedNodeId, hostId, config, false, configOwnership);
       if (!result.success) {
@@ -145,9 +175,9 @@ export class ProxyService {
   }
 
   private configOwnershipForHost(host: ProxyHostRow): 'managed_secure_link' | 'user_owned' {
-	const committedSecureConfig =
-	  host.secureLinkMigratedAt != null &&
-	  (host.secureLinkStatus === 'active' || host.secureLinkStatus === 'cutover_ready');
+    const committedSecureConfig =
+      host.secureLinkMigratedAt != null &&
+      (host.secureLinkStatus === 'active' || host.secureLinkStatus === 'cutover_ready');
     return host.type === 'proxy' && !host.rawConfigEnabled && host.upstreamKind !== 'manual' && committedSecureConfig
       ? 'managed_secure_link'
       : 'user_owned';
@@ -329,6 +359,7 @@ export class ProxyService {
             cacheEnabled: input.cacheEnabled,
             cacheOptions: input.cacheOptions ?? null,
             rateLimitEnabled: input.rateLimitEnabled,
+            rateLimitMode: input.rateLimitMode,
             rateLimitOptions: input.rateLimitOptions ?? null,
             customRewrites: input.customRewrites,
             advancedConfig: input.advancedConfig ?? null,
@@ -357,15 +388,21 @@ export class ProxyService {
       if (host.upstreamKind !== 'manual') {
         if (!this.secureLinks) throw new Error('Proxy Secure Links are unavailable');
         host = await this.secureLinks.prepare(host, true);
-		await this.secureLinks.commitCutover(host.id);
-		host = (await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, host.id) })) ?? host;
+        await this.secureLinks.commitCutover(host.id);
+        host = (await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, host.id) })) ?? host;
       }
       const certPaths = await this.resolveCertPaths(host);
       const accessList = await this.resolveAccessList(host.accessListId);
       const config = await this.buildNginxConfig(host, certPaths, accessList);
 
       // 3. Apply config via daemon or legacy docker
-      await this.applyConfigToNode(host.id, config, host.nodeId, certPaths.preparedTls, this.configOwnershipForHost(host));
+      await this.applyConfigToNode(
+        host.id,
+        config,
+        host.nodeId,
+        certPaths.preparedTls,
+        this.configOwnershipForHost(host)
+      );
       if (host.upstreamKind !== 'manual') await this.secureLinks?.activate(host.id);
     } catch (error) {
       // 4. If nginx fails, delete the DB row and throw
@@ -549,15 +586,15 @@ export class ProxyService {
           existingUsesRawMode ||
           (existing.secureLinkGeneration < 1 && Object.keys(upstreamData).length > 0);
         updated = await this.secureLinks.prepare(updated, requiresSecureLink);
-		if (updated.secureLinkGeneration > 0 && updated.secureLinkStatus !== 'active') {
-		  // Existing legacy/manual config must stop serving before the durable
-		  // no-fallback cutover marker is committed.
-		  if (existing.secureLinkGeneration === 0 && existing.enabled) {
-			await this.removeConfigFromNode(id, existing.nodeId);
-		  }
-		  await this.secureLinks.commitCutover(id);
-		  updated = (await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) })) ?? updated;
-		}
+        if (updated.secureLinkGeneration > 0 && updated.secureLinkStatus !== 'active') {
+          // Existing legacy/manual config must stop serving before the durable
+          // no-fallback cutover marker is committed.
+          if (existing.secureLinkGeneration === 0 && existing.enabled) {
+            await this.removeConfigFromNode(id, existing.nodeId);
+          }
+          await this.secureLinks.commitCutover(id);
+          updated = (await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) })) ?? updated;
+        }
       }
       if (updated.enabled) {
         const certPaths = await this.resolveCertPaths(updated, {
@@ -566,7 +603,13 @@ export class ProxyService {
         const accessList = await this.resolveAccessList(updated.accessListId);
         const config = await this.buildNginxConfig(updated, certPaths, accessList);
         // 4. Apply config with rollback on failure
-        await this.applyConfigToNode(id, config, updated.nodeId, certPaths.preparedTls, this.configOwnershipForHost(updated));
+        await this.applyConfigToNode(
+          id,
+          config,
+          updated.nodeId,
+          certPaths.preparedTls,
+          this.configOwnershipForHost(updated)
+        );
         if (updated.upstreamKind !== 'manual' && !updatedUsesRawMode) await this.secureLinks?.activate(id);
         appliedOnTargetNode = true;
 
@@ -599,22 +642,22 @@ export class ProxyService {
       }
       if (formerDockerNodeId) await this.secureLinks?.reconcileTargetNode(formerDockerNodeId);
     } catch (error) {
-	  const currentSecureState = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) });
+      const currentSecureState = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) });
       const mustRollForwardSecureLink =
         currentSecureState?.secureLinkMigratedAt != null &&
-		(currentSecureState.secureLinkStatus === 'provisioning' ||
-		  currentSecureState.secureLinkStatus === 'updating' ||
-		  currentSecureState.secureLinkStatus === 'cutover_ready');
-	  if (mustRollForwardSecureLink) {
-		await this.secureLinks?.markCutoverError(id, error).catch(() => undefined);
-		this.queueDockerReconciliation();
-		if (error instanceof AppError) throw error;
-		throw new AppError(
-		  500,
-		  'NGINX_CONFIG_FAILED',
-		  `Secure Link cutover will retry: ${error instanceof Error ? error.message : 'unknown error'}`
-		);
-	  }
+        (currentSecureState.secureLinkStatus === 'provisioning' ||
+          currentSecureState.secureLinkStatus === 'updating' ||
+          currentSecureState.secureLinkStatus === 'cutover_ready');
+      if (mustRollForwardSecureLink) {
+        await this.secureLinks?.markCutoverError(id, error).catch(() => undefined);
+        this.queueDockerReconciliation();
+        if (error instanceof AppError) throw error;
+        throw new AppError(
+          500,
+          'NGINX_CONFIG_FAILED',
+          `Secure Link cutover will retry: ${error instanceof Error ? error.message : 'unknown error'}`
+        );
+      }
       if (nodeChanged && appliedOnTargetNode) {
         try {
           await this.removeConfigFromNode(id, updated.nodeId);
@@ -848,6 +891,223 @@ export class ProxyService {
     return host.healthHistory ?? [];
   }
 
+  async getProxySecureLinkStatus(id: string) {
+    const host = await this.db.query.proxyHosts.findFirst({
+      where: eq(proxyHosts.id, id),
+      columns: {
+        id: true,
+        isSystem: true,
+        upstreamKind: true,
+        nodeId: true,
+        dockerNodeId: true,
+        secureLinkGeneration: true,
+        secureLinkStatus: true,
+        secureLinkLastError: true,
+        secureLinkMigratedAt: true,
+        healthCheckEnabled: true,
+        healthCheckInterval: true,
+        rateLimitEnabled: true,
+        rateLimitMode: true,
+        rateLimitOptions: true,
+      },
+    });
+    if (!host || host.isSystem) throw new AppError(404, 'PROXY_HOST_NOT_FOUND', 'Proxy host not found');
+    if (host.upstreamKind === 'manual') {
+      throw new AppError(409, 'SECURE_LINK_NOT_APPLICABLE', 'Proxy host does not use a Docker Secure Link');
+    }
+
+    const nodeIds = [host.nodeId, host.dockerNodeId].filter((nodeId): nodeId is string => Boolean(nodeId));
+    const [linkNodes, runtimeSample] = await Promise.all([
+      nodeIds.length
+        ? this.db
+            .select({ id: nodes.id, hostname: nodes.hostname, displayName: nodes.displayName, status: nodes.status })
+            .from(nodes)
+            .where(inArray(nodes.id, nodeIds))
+        : Promise.resolve([]),
+      this.sampleSecureLinkRuntime(host, SECURE_LINK_FOCUSED_TRAFFIC_TAIL_LINES),
+    ]);
+
+    const { runtime, traffic } = runtimeSample.snapshot;
+
+    const nodeById = new Map(linkNodes.map((node) => [node.id, node]));
+    const sourceNode = host.nodeId ? nodeById.get(host.nodeId) : undefined;
+    const targetNode = host.dockerNodeId ? nodeById.get(host.dockerNodeId) : undefined;
+    const rateLimitMode = host.rateLimitMode ?? (host.rateLimitEnabled ? 'custom' : 'inherit');
+    const rateLimitOptions = (host.rateLimitOptions ?? {}) as {
+      requestsPerSecond?: number;
+      burst?: number;
+      connectionsPerIp?: number;
+    };
+    const rateLimitEnabled = rateLimitMode !== 'disabled';
+    return {
+      state: host.secureLinkStatus,
+      generation: host.secureLinkGeneration,
+      sourceNodeId: host.nodeId,
+      targetNodeId: host.dockerNodeId,
+      transport: 'grpc-http2-mtls',
+      migratedAt: host.secureLinkMigratedAt?.toISOString() ?? null,
+      lastError: host.secureLinkLastError,
+      healthCheck: {
+        enabled: host.healthCheckEnabled,
+        intervalSeconds: host.healthCheckInterval ?? 30,
+      },
+      sourceNode: sourceNode
+        ? { id: sourceNode.id, name: sourceNode.displayName || sourceNode.hostname, status: sourceNode.status }
+        : null,
+      targetNode: targetNode
+        ? { id: targetNode.id, name: targetNode.displayName || targetNode.hostname, status: targetNode.status }
+        : null,
+      rateLimit: {
+        mode: rateLimitMode,
+        enabled: rateLimitEnabled,
+        requestsPerSecond:
+          rateLimitMode === 'custom' ? (rateLimitOptions.requestsPerSecond ?? 1000) : rateLimitEnabled ? 1000 : 0,
+        burst: rateLimitMode === 'custom' ? (rateLimitOptions.burst ?? 3000) : rateLimitEnabled ? 3000 : 0,
+        connectionsPerIp:
+          rateLimitMode === 'custom' ? (rateLimitOptions.connectionsPerIp ?? 1000) : rateLimitEnabled ? 1000 : 0,
+      },
+      runtime,
+      traffic,
+      history: runtimeSample.history,
+    };
+  }
+
+  /**
+   * Collects the same runtime snapshots that the focused Link Runtime page
+   * requests, but for every enabled active Secure Link. This background path
+   * keeps monitoring history independent from browser sessions.
+   */
+  collectSecureLinkRuntimeSnapshots(): Promise<void> {
+    if (this.secureLinkRuntimeBackgroundInFlight) return this.secureLinkRuntimeBackgroundInFlight;
+
+    const task = this.collectSecureLinkRuntimeSnapshotsOnce().finally(() => {
+      if (this.secureLinkRuntimeBackgroundInFlight === task) {
+        this.secureLinkRuntimeBackgroundInFlight = null;
+      }
+    });
+    this.secureLinkRuntimeBackgroundInFlight = task;
+    return task;
+  }
+
+  private async collectSecureLinkRuntimeSnapshotsOnce(): Promise<void> {
+    if (!this.secureLinks) return;
+    const hosts = await this.db.query.proxyHosts.findMany({
+      where: and(
+        eq(proxyHosts.isSystem, false),
+        eq(proxyHosts.enabled, true),
+        ne(proxyHosts.upstreamKind, 'manual'),
+        eq(proxyHosts.secureLinkStatus, 'active')
+      ),
+      columns: { id: true, nodeId: true },
+    });
+
+    // Keep daemon and Relay fan-out bounded when an installation has many
+    // Secure Links. A slow route cannot create overlapping background rounds.
+    const concurrency = 4;
+    for (let offset = 0; offset < hosts.length; offset += concurrency) {
+      const batch = hosts.slice(offset, offset + concurrency);
+      const results = await Promise.allSettled(
+        batch.map((host) => this.sampleSecureLinkRuntime(host, SECURE_LINK_BACKGROUND_TRAFFIC_TAIL_LINES))
+      );
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          logger.debug('Background Proxy Secure Link telemetry collection failed', {
+            hostId: batch[index]?.id,
+            error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+          });
+        }
+      });
+    }
+  }
+
+  private sampleSecureLinkRuntime(
+    host: { id: string; nodeId: string | null },
+    trafficTailLines: number
+  ): Promise<ProxySecureLinkRuntimeSample> {
+    const active = this.secureLinkRuntimeSamplesInFlight.get(host.id);
+    if (active) return active;
+
+    const task = this.collectSecureLinkRuntimeSnapshot(host, trafficTailLines)
+      .then((snapshot) => ({
+        snapshot,
+        history: this.recordSecureLinkRuntimeSnapshot(host.id, snapshot),
+      }))
+      .finally(() => {
+        if (this.secureLinkRuntimeSamplesInFlight.get(host.id) === task) {
+          this.secureLinkRuntimeSamplesInFlight.delete(host.id);
+        }
+      });
+    this.secureLinkRuntimeSamplesInFlight.set(host.id, task);
+    return task;
+  }
+
+  private async collectSecureLinkRuntimeSnapshot(
+    host: {
+      id: string;
+      nodeId: string | null;
+    },
+    trafficTailLines: number
+  ): Promise<ProxySecureLinkRuntimeSnapshot> {
+    const [runtime, trafficResult] = await Promise.all([
+      this.secureLinks?.getRuntime(host.id).catch((error) => {
+        logger.debug('Proxy Secure Link route telemetry is unavailable', {
+          hostId: host.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      }) ?? Promise.resolve(null),
+      host.nodeId
+        ? this.nodeDispatch
+            .requestTrafficStats(host.nodeId, trafficTailLines, { hostId: host.id, windowSeconds: 15 })
+            .catch((error) => {
+              logger.debug('Proxy Secure Link HTTP telemetry is unavailable', {
+                hostId: host.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              return null;
+            })
+        : Promise.resolve(null),
+    ]);
+
+    let traffic: ProxyHostTrafficRuntime | null = null;
+    if (trafficResult?.success && trafficResult.detail) {
+      try {
+        const parsed = JSON.parse(trafficResult.detail) as ProxyHostTrafficRuntime;
+        // Older daemons ignore host_id and return node-global data. Never
+        // present that fallback as telemetry for one Secure Link.
+        if (parsed.hostId === host.id) traffic = parsed;
+      } catch {
+        traffic = null;
+      }
+    }
+
+    return { timestamp: new Date().toISOString(), runtime, traffic };
+  }
+
+  private recordSecureLinkRuntimeSnapshot(
+    hostId: string,
+    snapshot: ProxySecureLinkRuntimeSnapshot
+  ): ProxySecureLinkRuntimeSnapshot[] {
+    const current = this.secureLinkRuntimeHistory.get(hostId) ?? [];
+    const previous = current.at(-1);
+    const relayRestarted =
+      previous?.runtime != null &&
+      snapshot.runtime != null &&
+      (previous.runtime.metricsSince !== snapshot.runtime.metricsSince ||
+        Number(snapshot.runtime.openedTotal) < Number(previous.runtime.openedTotal));
+    const retained = relayRestarted ? [] : current;
+    const previousTimestamp = retained.at(-1)?.timestamp;
+    const elapsed = previousTimestamp
+      ? new Date(snapshot.timestamp).getTime() - new Date(previousTimestamp).getTime()
+      : Number.POSITIVE_INFINITY;
+    const updated =
+      elapsed < SECURE_LINK_RUNTIME_DEDUP_WINDOW_MS
+        ? [...retained.slice(0, -1), snapshot]
+        : [...retained, snapshot].slice(-60);
+    this.secureLinkRuntimeHistory.set(hostId, updated);
+    return [...updated];
+  }
+
   // -----------------------------------------------------------------------
   // List
   // -----------------------------------------------------------------------
@@ -970,7 +1230,13 @@ export class ProxyService {
         const certPaths = await this.resolveCertPaths(updated);
         const accessList = await this.resolveAccessList(updated.accessListId);
         const config = await this.buildNginxConfig(updated, certPaths, accessList);
-        await this.applyConfigToNode(id, config, updated.nodeId, certPaths.preparedTls, this.configOwnershipForHost(updated));
+        await this.applyConfigToNode(
+          id,
+          config,
+          updated.nodeId,
+          certPaths.preparedTls,
+          this.configOwnershipForHost(updated)
+        );
       } else {
         // Disable: remove config and reload
         await this.removeConfigFromNode(id, updated.nodeId);
@@ -1057,7 +1323,13 @@ export class ProxyService {
         const certPaths = await this.resolveCertPaths(updated, { preserveLegacyOnUnsupported: true });
         const accessList = await this.resolveAccessList(updated.accessListId);
         const config = await this.buildNginxConfig(updated, certPaths, accessList);
-        await this.applyConfigToNode(id, config, updated.nodeId, certPaths.preparedTls, this.configOwnershipForHost(updated));
+        await this.applyConfigToNode(
+          id,
+          config,
+          updated.nodeId,
+          certPaths.preparedTls,
+          this.configOwnershipForHost(updated)
+        );
       }
     } catch (error) {
       logger.error('Failed to apply nginx config during maintenance transition, rolling back DB', {
@@ -1112,16 +1384,19 @@ export class ProxyService {
     runImmediateProxyHealthCheck({ db: this.db, hostId, logger, nodeDispatch: this.nodeDispatch });
   }
 
-  private queueDockerReconciliation(): void {
+  private queueDockerReconciliation(force = false): void {
     if (!this.dockerUpstreams) return;
     this.dockerReconcileDirty = true;
+    this.dockerReconcileForce ||= force;
     if (this.dockerReconcileRunning) return;
     this.dockerReconcileRunning = true;
     void (async () => {
       try {
         do {
           this.dockerReconcileDirty = false;
-          await this.reconcileDockerUpstreams();
+          const reconcileForce = this.dockerReconcileForce;
+          this.dockerReconcileForce = false;
+          await this.reconcileDockerUpstreams(reconcileForce);
         } while (this.dockerReconcileDirty);
       } catch (error) {
         logger.error('Docker proxy upstream reconciliation failed', { error });
@@ -1139,7 +1414,7 @@ export class ProxyService {
     this.dockerReconcileBackoffMs = Math.min(this.dockerReconcileBackoffMs * 2, 5 * 60_000);
     this.dockerReconcileRetry = setTimeout(() => {
       this.dockerReconcileRetry = undefined;
-      this.queueDockerReconciliation();
+      this.queueDockerReconciliation(true);
     }, delay);
   }
 
@@ -1159,7 +1434,7 @@ export class ProxyService {
     this.queueDockerReconciliation();
   }
 
-  private async resolveStoredDockerUpstream(host: ProxyHostRow): Promise<ProxyHostRow> {
+  private async resolveStoredDockerUpstream(host: ProxyHostRow, force = false): Promise<ProxyHostRow> {
     if (host.upstreamKind === 'manual' || !this.dockerUpstreams) return host;
     if (host.type === 'raw' || host.rawConfigEnabled) return host;
     const resolved = await this.dockerUpstreams.resolve(host, { allowPortRebind: true });
@@ -1168,6 +1443,7 @@ export class ProxyService {
       host.dockerNodeId !== resolved.dockerNodeId ||
       host.dockerContainerName !== resolved.dockerContainerName ||
       host.dockerDeploymentId !== resolved.dockerDeploymentId;
+    if (!changed && host.secureLinkStatus === 'active' && !force) return host;
     let updated = host;
     if (changed) {
       const [persisted] = await this.db
@@ -1188,7 +1464,7 @@ export class ProxyService {
     return this.secureLinks ? this.secureLinks.reconcileExisting(updated) : updated;
   }
 
-  private async reconcileDockerUpstreams(): Promise<void> {
+  private async reconcileDockerUpstreams(force = false): Promise<void> {
     let retryNeeded = false;
     const pendingCleanups = await this.db.query.proxyHosts.findMany({
       where: eq(proxyHosts.secureLinkStatus, 'cleanup_pending'),
@@ -1214,7 +1490,7 @@ export class ProxyService {
           if (host.secureLinkGeneration > 0) await this.secureLinks?.cleanup(host);
           continue;
         }
-        const updated = await this.resolveStoredDockerUpstream(host);
+        const updated = await this.resolveStoredDockerUpstream(host, force);
         const secureLinkChanged =
           updated.forwardHost !== host.forwardHost ||
           updated.forwardPort !== host.forwardPort ||
@@ -1229,14 +1505,14 @@ export class ProxyService {
             updated.secureLinkStatus === 'updating' ||
             updated.secureLinkStatus === 'cutover_ready');
         if (!secureLinkChanged && !cutoverPending) continue;
-		let cutoverHost = updated;
-		if (updated.secureLinkGeneration > 0 && updated.secureLinkStatus !== 'active') {
-		  if (host.secureLinkGeneration === 0 && host.enabled) {
-			await this.removeConfigFromNode(host.id, host.nodeId);
-		  }
-		  await this.secureLinks?.commitCutover(updated.id);
-		  cutoverHost = (await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, updated.id) })) ?? updated;
-		}
+        let cutoverHost = updated;
+        if (updated.secureLinkGeneration > 0 && updated.secureLinkStatus !== 'active') {
+          if (host.secureLinkGeneration === 0 && host.enabled) {
+            await this.removeConfigFromNode(host.id, host.nodeId);
+          }
+          await this.secureLinks?.commitCutover(updated.id);
+          cutoverHost = (await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, updated.id) })) ?? updated;
+        }
         if (cutoverHost.enabled) {
           try {
             const certPaths = await this.resolveCertPaths(cutoverHost, { preserveLegacyOnUnsupported: true });
@@ -1304,7 +1580,7 @@ export class ProxyService {
           const current = await this.db.query.proxyHosts.findFirst({
             where: eq(proxyHosts.id, storedHost.id),
           });
-          if (!current || !current.enabled || current.nodeId !== nodeId) continue;
+          if (!current?.enabled || current.nodeId !== nodeId) continue;
           host = current;
           logger.debug('Using current proxy state after Docker resync resolution failed', {
             hostId: storedHost.id,
@@ -1474,7 +1750,13 @@ export class ProxyService {
     try {
       const certPaths = await this.resolveCertPaths(host);
       const config = await this.buildNginxConfig(host, certPaths, null);
-      await this.applyConfigToNode(host.id, config, host.nodeId, certPaths.preparedTls, this.configOwnershipForHost(host));
+      await this.applyConfigToNode(
+        host.id,
+        config,
+        host.nodeId,
+        certPaths.preparedTls,
+        this.configOwnershipForHost(host)
+      );
     } catch (error) {
       logger.error('Failed to apply status page system proxy host config', {
         hostId: host.id,
@@ -1634,11 +1916,11 @@ export class ProxyService {
     // Raw mode is an explicit user-owned escape hatch and is never rewritten.
     if ((host.type === 'raw' || host.rawConfigEnabled) && host.rawConfig) return host.rawConfig;
 
-	const usesSecureLink =
-	  host.upstreamKind !== 'manual' &&
-	  host.secureLinkGeneration > 0 &&
-	  host.secureLinkMigratedAt != null &&
-	  (host.secureLinkStatus === 'active' || host.secureLinkStatus === 'cutover_ready');
+    const usesSecureLink =
+      host.upstreamKind !== 'manual' &&
+      host.secureLinkGeneration > 0 &&
+      host.secureLinkMigratedAt != null &&
+      (host.secureLinkStatus === 'active' || host.secureLinkStatus === 'cutover_ready');
     if (usesSecureLink && !host.secureLinkListenerPort) {
       throw new Error('Secure Link listener port is unavailable');
     }
@@ -1651,6 +1933,7 @@ export class ProxyService {
       forwardPort: usesSecureLink ? host.secureLinkListenerPort : host.forwardPort,
       forwardScheme: host.forwardScheme ?? 'http',
       secureLinkUpstream: usesSecureLink,
+      secureLinkSocketPath: usesSecureLink ? `/run/gateway-secure-links/${host.id}.sock` : undefined,
       sslEnabled: host.sslEnabled && !!certPaths.sslCertPath && !!certPaths.sslKeyPath,
       sslForced: host.sslForced,
       http2Support: host.http2Support,
@@ -1661,6 +1944,7 @@ export class ProxyService {
       cacheEnabled: host.cacheEnabled,
       cacheOptions: host.cacheOptions as Record<string, unknown> | null,
       rateLimitEnabled: host.rateLimitEnabled,
+      rateLimitMode: host.rateLimitMode,
       rateLimitOptions: host.rateLimitOptions as Record<string, unknown> | null,
       customRewrites: (host.customRewrites ?? []) as { source: string; destination: string; type: string }[],
       advancedConfig: host.advancedConfig,

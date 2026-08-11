@@ -2023,7 +2023,9 @@ type SyncRelayGrantsCommand struct {
 	PolicyRevision uint64                  `protobuf:"varint,1,opt,name=policy_revision,json=policyRevision,proto3" json:"policy_revision,omitempty"`
 	Grants         []*RelayGrantAssignment `protobuf:"bytes,2,rep,name=grants,proto3" json:"grants,omitempty"`
 	// Monotonic creation time for grant refreshes within one policy revision.
-	GeneratedAtUnixMs int64 `protobuf:"varint,3,opt,name=generated_at_unix_ms,json=generatedAtUnixMs,proto3" json:"generated_at_unix_ms,omitempty"`
+	GeneratedAtUnixMs int64  `protobuf:"varint,3,opt,name=generated_at_unix_ms,json=generatedAtUnixMs,proto3" json:"generated_at_unix_ms,omitempty"`
+	DataLanes         uint32 `protobuf:"varint,4,opt,name=data_lanes,json=dataLanes,proto3" json:"data_lanes,omitempty"`
+	ReadChunkBytes    uint32 `protobuf:"varint,5,opt,name=read_chunk_bytes,json=readChunkBytes,proto3" json:"read_chunk_bytes,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -2075,6 +2077,20 @@ func (x *SyncRelayGrantsCommand) GetGrants() []*RelayGrantAssignment {
 func (x *SyncRelayGrantsCommand) GetGeneratedAtUnixMs() int64 {
 	if x != nil {
 		return x.GeneratedAtUnixMs
+	}
+	return 0
+}
+
+func (x *SyncRelayGrantsCommand) GetDataLanes() uint32 {
+	if x != nil {
+		return x.DataLanes
+	}
+	return 0
+}
+
+func (x *SyncRelayGrantsCommand) GetReadChunkBytes() uint32 {
+	if x != nil {
+		return x.ReadChunkBytes
 	}
 	return 0
 }
@@ -3919,7 +3935,9 @@ func (*ReadGlobalConfigCommand) Descriptor() ([]byte, []int) {
 // Request traffic stats from daemon log parsing — response JSON is in CommandResult.detail
 type RequestTrafficStatsCommand struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	TailLines     int32                  `protobuf:"varint,1,opt,name=tail_lines,json=tailLines,proto3" json:"tail_lines,omitempty"` // Number of recent log lines to analyze (default 200)
+	TailLines     int32                  `protobuf:"varint,1,opt,name=tail_lines,json=tailLines,proto3" json:"tail_lines,omitempty"`             // Number of recent log lines to analyze (default 200)
+	HostId        string                 `protobuf:"bytes,2,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`                       // Optional proxy host UUID; empty scans all access logs
+	WindowSeconds int32                  `protobuf:"varint,3,opt,name=window_seconds,json=windowSeconds,proto3" json:"window_seconds,omitempty"` // Optional rolling window for live host metrics
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3957,6 +3975,20 @@ func (*RequestTrafficStatsCommand) Descriptor() ([]byte, []int) {
 func (x *RequestTrafficStatsCommand) GetTailLines() int32 {
 	if x != nil {
 		return x.TailLines
+	}
+	return 0
+}
+
+func (x *RequestTrafficStatsCommand) GetHostId() string {
+	if x != nil {
+		return x.HostId
+	}
+	return ""
+}
+
+func (x *RequestTrafficStatsCommand) GetWindowSeconds() int32 {
+	if x != nil {
+		return x.WindowSeconds
 	}
 	return 0
 }
@@ -6778,11 +6810,14 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x11sync_relay_grants\x18& \x01(\v2\".gateway.v1.SyncRelayGrantsCommandH\x00R\x0fsyncRelayGrants\x12`\n" +
 	"\x17sync_proxy_secure_links\x18' \x01(\v2'.gateway.v1.SyncProxySecureLinksCommandH\x00R\x14syncProxySecureLinks\x12`\n" +
 	"\x17probe_proxy_secure_link\x18( \x01(\v2'.gateway.v1.ProbeProxySecureLinkCommandH\x00R\x14probeProxySecureLinkB\t\n" +
-	"\apayload\"\xac\x01\n" +
+	"\apayload\"\xf5\x01\n" +
 	"\x16SyncRelayGrantsCommand\x12'\n" +
 	"\x0fpolicy_revision\x18\x01 \x01(\x04R\x0epolicyRevision\x128\n" +
 	"\x06grants\x18\x02 \x03(\v2 .gateway.v1.RelayGrantAssignmentR\x06grants\x12/\n" +
-	"\x14generated_at_unix_ms\x18\x03 \x01(\x03R\x11generatedAtUnixMs\"\x82\x02\n" +
+	"\x14generated_at_unix_ms\x18\x03 \x01(\x03R\x11generatedAtUnixMs\x12\x1d\n" +
+	"\n" +
+	"data_lanes\x18\x04 \x01(\rR\tdataLanes\x12(\n" +
+	"\x10read_chunk_bytes\x18\x05 \x01(\rR\x0ereadChunkBytes\"\x82\x02\n" +
 	"\x14RelayGrantAssignment\x12\x12\n" +
 	"\x04role\x18\x01 \x01(\tR\x04role\x12\x1d\n" +
 	"\n" +
@@ -6918,10 +6953,12 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\acontent\x18\x02 \x01(\tR\acontent\"2\n" +
 	"\x1aRemoveAcmeChallengeCommand\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\"\x19\n" +
-	"\x17ReadGlobalConfigCommand\";\n" +
+	"\x17ReadGlobalConfigCommand\"{\n" +
 	"\x1aRequestTrafficStatsCommand\x12\x1d\n" +
 	"\n" +
-	"tail_lines\x18\x01 \x01(\x05R\ttailLines\"\xe6\x01\n" +
+	"tail_lines\x18\x01 \x01(\x05R\ttailLines\x12\x17\n" +
+	"\ahost_id\x18\x02 \x01(\tR\x06hostId\x12%\n" +
+	"\x0ewindow_seconds\x18\x03 \x01(\x05R\rwindowSeconds\"\xe6\x01\n" +
 	"\x16DockerContainerCommand\x12\x16\n" +
 	"\x06action\x18\x01 \x01(\tR\x06action\x12!\n" +
 	"\fcontainer_id\x18\x02 \x01(\tR\vcontainerId\x12\x1f\n" +

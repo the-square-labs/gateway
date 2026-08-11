@@ -36,7 +36,9 @@ vi.mock('@/modules/auth/auth.middleware.js', () => ({
 }));
 
 vi.mock('./notification-webhook.service.js', () => ({ NotificationWebhookService: mocks.NotificationWebhookService }));
-vi.mock('./notification-dispatcher.service.js', () => ({ NotificationDispatcherService: mocks.NotificationDispatcherService }));
+vi.mock('./notification-dispatcher.service.js', () => ({
+  NotificationDispatcherService: mocks.NotificationDispatcherService,
+}));
 
 import { webhookRoutes } from './notification-webhook.routes.js';
 
@@ -59,7 +61,13 @@ describe('notification webhook header visibility', () => {
     vi.clearAllMocks();
     mocks.scopes = [];
     mocks.webhookService.list.mockImplementation((_query, options) =>
-      Promise.resolve({ data: [responseWebhook(options?.revealHeaders === true)], total: 1, page: 1, limit: 20, totalPages: 1 })
+      Promise.resolve({
+        data: [responseWebhook(options?.revealHeaders === true)],
+        total: 1,
+        page: 1,
+        limit: 20,
+        totalPages: 1,
+      })
     );
     mocks.webhookService.getById.mockImplementation((_id, options) =>
       Promise.resolve(responseWebhook(options?.revealHeaders === true))

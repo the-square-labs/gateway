@@ -221,8 +221,22 @@ export class NodeDispatchService {
     return this.registry.sendCommand(nodeId, { readGlobalConfig: {} }, 10000);
   }
 
-  async requestTrafficStats(nodeId: string, tailLines = 200): Promise<CommandResult> {
-    return this.registry.sendCommand(nodeId, { requestTrafficStats: { tailLines } }, 10000);
+  async requestTrafficStats(
+    nodeId: string,
+    tailLines = 200,
+    options: { hostId?: string; windowSeconds?: number } = {}
+  ): Promise<CommandResult> {
+    return this.registry.sendCommand(
+      nodeId,
+      {
+        requestTrafficStats: {
+          tailLines,
+          hostId: options.hostId ?? '',
+          windowSeconds: options.windowSeconds ?? 0,
+        },
+      },
+      10000
+    );
   }
 
   async setDaemonLogStream(nodeId: string, enabled: boolean, minLevel = 'info', tailLines = 0): Promise<CommandResult> {
@@ -343,6 +357,8 @@ export class NodeDispatchService {
         syncRelayGrants: {
           policyRevision: bundle.revision,
           generatedAtUnixMs: bundle.generatedAtUnixMs,
+          dataLanes: bundle.dataLanes ?? 4,
+          readChunkBytes: bundle.readChunkBytes ?? 32 * 1024,
           grants: bundle.grants.map((assignment) => ({
             role: assignment.role,
             ownerKind: assignment.ownerKind,

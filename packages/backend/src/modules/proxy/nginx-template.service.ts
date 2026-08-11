@@ -16,6 +16,48 @@ import type { CreateNginxTemplateInput, UpdateNginxTemplateInput } from './nginx
 const logger = createChildLogger('NginxTemplateService');
 
 const NGINX_LOGS_PREFIX = '/var/log/nginx';
+const DEFAULT_RATE_LIMIT_RPS = 1000;
+const DEFAULT_RATE_LIMIT_BURST = 3000;
+const DEFAULT_CONNECTIONS_PER_IP = 1000;
+
+const DEFAULT_PROXY_TEMPLATE_VARIABLES = [
+  {
+    name: 'cacheEnabled',
+    type: 'boolean' as const,
+    default: false,
+    description: 'Cache upstream responses',
+  },
+  {
+    name: 'cacheMaxAge',
+    type: 'number' as const,
+    default: 3600,
+    description: 'Cache lifetime in seconds',
+  },
+  {
+    name: 'rateLimitMode',
+    type: 'string' as const,
+    default: 'inherit',
+    description: 'Use the gateway default, a custom policy, or disable protection',
+  },
+  {
+    name: 'rateLimitRPS',
+    type: 'number' as const,
+    default: DEFAULT_RATE_LIMIT_RPS,
+    description: 'Requests allowed per second for each client IP',
+  },
+  {
+    name: 'rateLimitBurst',
+    type: 'number' as const,
+    default: DEFAULT_RATE_LIMIT_BURST,
+    description: 'Additional request burst allowed for each client IP',
+  },
+  {
+    name: 'connectionsPerIp',
+    type: 'number' as const,
+    default: DEFAULT_CONNECTIONS_PER_IP,
+    description: 'Concurrent connections allowed for each client IP',
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Register Handlebars helpers
@@ -71,6 +113,14 @@ function buildAccessListDirectives(accessList: ProxyHostConfig['accessList']): s
 
 const BUILTIN_PROXY_TEMPLATE = `{{#if rateLimitEnabled}}
 limit_req_zone $binary_remote_addr zone=ratelimit_{{id}}:10m rate={{rateLimitRPS}}r/s;
+limit_conn_zone $binary_remote_addr zone=connlimit_{{id}}:10m;
+
+{{/if}}
+{{#if secureLinkUpstream}}
+upstream {{secureLinkUpstreamName}} {
+    server unix:{{secureLinkSocketPath}};
+    keepalive 64;
+}
 
 {{/if}}
 {{#if cacheEnabled}}
@@ -141,7 +191,10 @@ server {
 
 {{/if}}
 {{#if rateLimitEnabled}}
+        limit_req_status 429;
         limit_req zone=ratelimit_{{id}} burst={{rateLimitBurst}} nodelay;
+        limit_conn_status 429;
+        limit_conn connlimit_{{id}} {{connectionsPerIp}};
 {{/if}}
 {{#if cacheEnabled}}
         proxy_cache cache_{{id}};
@@ -161,6 +214,12 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Forwarded-Port $server_port;
+{{#if secureLinkUpstream}}
+{{#unless websocketSupport}}
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+{{/unless}}
+{{/if}}
 
         proxy_connect_timeout 60s;
         proxy_send_timeout {{#if secureLinkUpstream}}2h{{else}}60s{{/if}};
@@ -304,18 +363,21 @@ const BUILTIN_TEMPLATES = [
     description: 'Standard reverse proxy with SSL, caching, rate limiting, WebSocket, and access control support.',
     type: 'proxy' as const,
     content: BUILTIN_PROXY_TEMPLATE,
+    variables: DEFAULT_PROXY_TEMPLATE_VARIABLES,
   },
   {
     name: 'Default Redirect',
     description: 'HTTP redirect with optional SSL termination.',
     type: 'redirect' as const,
     content: BUILTIN_REDIRECT_TEMPLATE,
+    variables: [],
   },
   {
     name: 'Default 404',
     description: 'Returns 404 for all requests. Use to block domains.',
     type: '404' as const,
     content: BUILTIN_DEAD_TEMPLATE,
+    variables: [],
   },
 ];
 
@@ -342,9 +404,11 @@ const SAMPLE_CONTEXT = {
   cacheEnabled: false,
   cacheMaxAge: 3600,
   cacheStale: 60,
-  rateLimitEnabled: false,
-  rateLimitRPS: 10,
-  rateLimitBurst: 20,
+  rateLimitMode: 'inherit',
+  rateLimitEnabled: true,
+  rateLimitRPS: DEFAULT_RATE_LIMIT_RPS,
+  rateLimitBurst: DEFAULT_RATE_LIMIT_BURST,
+  connectionsPerIp: DEFAULT_CONNECTIONS_PER_IP,
   customHeaders: [],
   customRewrites: [],
   accessList: null,
@@ -387,10 +451,13 @@ export class NginxTemplateService {
           isBuiltin: true,
         });
         logger.info('Seeded built-in nginx template', { name: template.name });
-      } else if (existing.content !== template.content) {
+      } else if (
+        existing.content !== template.content ||
+        JSON.stringify(existing.variables ?? []) !== JSON.stringify(template.variables)
+      ) {
         await this.db
           .update(nginxTemplates)
-          .set({ content: template.content, updatedAt: new Date() })
+          .set({ content: template.content, variables: template.variables, updatedAt: new Date() })
           .where(eq(nginxTemplates.id, existing.id));
         logger.info('Updated built-in nginx template', { name: template.name });
       }
@@ -562,7 +629,24 @@ export class NginxTemplateService {
     } else {
       content = await this.getBuiltinTemplateContent(host.type);
     }
-    return this.renderTemplate(content, host);
+    const rendered = this.renderTemplate(content, host);
+    return this.ensureManagedSecureLinkUpstream(rendered, host);
+  }
+
+  private ensureManagedSecureLinkUpstream(rendered: string, host: ProxyHostConfig): string {
+    if (!host.secureLinkUpstream) return rendered;
+
+    const upstreamName = `gateway_secure_link_${host.id.replace(/-/g, '_')}`;
+    const upstreamDeclaration = new RegExp(`(^|\\n)[\\t ]*upstream[\\t ]+${upstreamName}[\\t ]*\\{`, 'm');
+    if (upstreamDeclaration.test(rendered)) return rendered;
+
+    const socketPath = host.secureLinkSocketPath ?? `/run/gateway-secure-links/${host.id}.sock`;
+    return `upstream ${upstreamName} {
+    server unix:${socketPath};
+    keepalive 64;
+}
+
+${rendered}`;
   }
 
   applyMaintenanceGuard(renderedConfig: string): string {
@@ -607,10 +691,43 @@ export class NginxTemplateService {
   private buildBaseContext(host: ProxyHostConfig): Record<string, unknown> {
     const serverNames = host.domainNames.map((d) => d.replace(DANGEROUS_CHARS, '')).join(' ');
     const sanitizedHost = host.forwardHost ? host.forwardHost.replace(DANGEROUS_CHARS, '') : '';
-    const upstream = `${host.forwardScheme}://${formatHostPort(sanitizedHost, host.forwardPort ?? 0)}`;
+    const secureLinkUpstreamName = `gateway_secure_link_${host.id.replace(/-/g, '_')}`;
+    const secureLinkSocketPath = `/run/gateway-secure-links/${host.id}.sock`;
+    const upstream = host.secureLinkUpstream
+      ? `${host.forwardScheme}://${secureLinkUpstreamName}`
+      : `${host.forwardScheme}://${formatHostPort(sanitizedHost, host.forwardPort ?? 0)}`;
 
     const opts = (host.rateLimitOptions ?? {}) as Record<string, unknown>;
     const cacheOpts = (host.cacheOptions ?? {}) as Record<string, unknown>;
+    const templateVariables = this.sanitizeTemplateVariables(host.templateVariables ?? {});
+    const cacheEnabled =
+      typeof templateVariables.cacheEnabled === 'boolean' ? templateVariables.cacheEnabled : host.cacheEnabled;
+    const cacheMaxAge =
+      typeof templateVariables.cacheMaxAge === 'number' ? templateVariables.cacheMaxAge : (cacheOpts.maxAge ?? 3600);
+    const configuredRateLimitMode =
+      templateVariables.rateLimitMode === 'inherit' ||
+      templateVariables.rateLimitMode === 'custom' ||
+      templateVariables.rateLimitMode === 'disabled'
+        ? templateVariables.rateLimitMode
+        : (host.rateLimitMode ?? (host.rateLimitEnabled ? 'custom' : 'inherit'));
+    const rateLimitRPS =
+      configuredRateLimitMode === 'custom'
+        ? typeof templateVariables.rateLimitRPS === 'number'
+          ? templateVariables.rateLimitRPS
+          : (opts.requestsPerSecond ?? DEFAULT_RATE_LIMIT_RPS)
+        : DEFAULT_RATE_LIMIT_RPS;
+    const rateLimitBurst =
+      configuredRateLimitMode === 'custom'
+        ? typeof templateVariables.rateLimitBurst === 'number'
+          ? templateVariables.rateLimitBurst
+          : (opts.burst ?? DEFAULT_RATE_LIMIT_BURST)
+        : DEFAULT_RATE_LIMIT_BURST;
+    const connectionsPerIp =
+      configuredRateLimitMode === 'custom'
+        ? typeof templateVariables.connectionsPerIp === 'number'
+          ? templateVariables.connectionsPerIp
+          : (opts.connectionsPerIp ?? DEFAULT_CONNECTIONS_PER_IP)
+        : DEFAULT_CONNECTIONS_PER_IP;
 
     return {
       id: host.id,
@@ -624,24 +741,29 @@ export class NginxTemplateService {
       http2Support: host.http2Support,
       websocketSupport: host.websocketSupport,
       secureLinkUpstream: host.secureLinkUpstream === true,
+      secureLinkUpstreamName,
+      secureLinkSocketPath,
       sslCertPath: host.sslCertPath,
       sslKeyPath: host.sslKeyPath,
       sslChainPath: host.sslChainPath,
       redirectUrl: host.redirectUrl,
       redirectStatusCode: host.redirectStatusCode,
-      cacheEnabled: host.cacheEnabled,
-      cacheMaxAge: cacheOpts.maxAge ?? 3600,
       cacheStale: cacheOpts.staleWhileRevalidate ?? 60,
-      rateLimitEnabled: host.rateLimitEnabled,
-      rateLimitRPS: opts.requestsPerSecond ?? 10,
-      rateLimitBurst: opts.burst ?? 20,
       customHeaders: host.customHeaders,
       customRewrites: host.customRewrites,
       accessList: host.accessList,
       accessListHasIpRules: (host.accessList?.ipRules?.length ?? 0) > 0,
       logPath: `${NGINX_LOGS_PREFIX}/proxy-${host.id}`,
-      // Merge custom template variables (sanitized — user-defined values override defaults)
-      ...this.sanitizeTemplateVariables(host.templateVariables ?? {}),
+      // Custom variables remain available to user templates; managed built-ins above
+      // are written last so their derived values cannot become internally inconsistent.
+      ...templateVariables,
+      cacheEnabled,
+      cacheMaxAge,
+      rateLimitMode: configuredRateLimitMode,
+      rateLimitEnabled: configuredRateLimitMode !== 'disabled',
+      rateLimitRPS,
+      rateLimitBurst,
+      connectionsPerIp,
     };
   }
 

@@ -9,10 +9,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
@@ -25,6 +28,7 @@ import (
 const (
 	proxySecureLinkOwnerKind    = "proxy_host_secure_link"
 	proxySecureLinkSetupTimeout = 2 * time.Second
+	proxySecureLinkSocketDir    = "/run/gateway-secure-links"
 )
 
 var secureLinkIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
@@ -32,17 +36,21 @@ var secureLinkIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-
 type nginxRelayTunnel struct {
 	ctx    context.Context
 	client relayv1.TunnelBrokerClient
+	active atomic.Int64
 }
 
 type sourceLinkManager struct {
-	mu       sync.Mutex
-	bindings map[string]*sourceLinkBinding
-	opener   func(string, net.Conn)
+	mu        sync.Mutex
+	bindings  map[string]*sourceLinkBinding
+	opener    func(string, net.Conn)
+	socketDir string
 }
 
 type sourceLinkBinding struct {
 	generation uint64
 	listener   net.Listener
+	unix       net.Listener
+	socketPath string
 	done       chan struct{}
 	activeMu   sync.Mutex
 	active     map[net.Conn]struct{}
@@ -52,6 +60,7 @@ type sourceLinkStatus struct {
 	LinkID     string `json:"linkId"`
 	Generation uint64 `json:"generation"`
 	Port       int    `json:"port"`
+	SocketPath string `json:"socketPath"`
 }
 
 func proxySecureLinkSetupContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc, func() bool) {
@@ -61,7 +70,7 @@ func proxySecureLinkSetupContext(parent context.Context, timeout time.Duration) 
 }
 
 func newSourceLinkManager(opener func(string, net.Conn)) *sourceLinkManager {
-	return &sourceLinkManager{bindings: map[string]*sourceLinkBinding{}, opener: opener}
+	return &sourceLinkManager{bindings: map[string]*sourceLinkBinding{}, opener: opener, socketDir: proxySecureLinkSocketDir}
 }
 
 func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sourceLinkStatus, error) {
@@ -132,7 +141,7 @@ func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sou
 	}
 	statuses := make([]sourceLinkStatus, 0, len(m.bindings))
 	for id, binding := range m.bindings {
-		statuses = append(statuses, sourceLinkStatus{LinkID: id, Generation: binding.generation, Port: binding.listener.Addr().(*net.TCPAddr).Port})
+		statuses = append(statuses, sourceLinkStatus{LinkID: id, Generation: binding.generation, Port: binding.listener.Addr().(*net.TCPAddr).Port, SocketPath: binding.socketPath})
 	}
 	sort.Slice(statuses, func(i, j int) bool { return statuses[i].LinkID < statuses[j].LinkID })
 	return statuses, nil
@@ -143,10 +152,39 @@ func (m *sourceLinkManager) create(id string, generation uint64, port uint32) (*
 	if err != nil {
 		return nil, fmt.Errorf("listen for proxy secure-link %s: %w", id, err)
 	}
-	binding := &sourceLinkBinding{generation: generation, listener: listener, done: make(chan struct{}), active: map[net.Conn]struct{}{}}
-	go func() {
+	if err := os.MkdirAll(m.socketDir, 0o755); err != nil {
+		_ = listener.Close()
+		return nil, fmt.Errorf("create proxy secure-link socket directory: %w", err)
+	}
+	socketPath := filepath.Join(m.socketDir, id+".sock")
+	if info, statErr := os.Lstat(socketPath); statErr == nil {
+		if info.Mode()&os.ModeSocket == 0 {
+			_ = listener.Close()
+			return nil, fmt.Errorf("refuse to replace non-socket secure-link path %s", socketPath)
+		}
+		if err := os.Remove(socketPath); err != nil {
+			_ = listener.Close()
+			return nil, err
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		_ = listener.Close()
+		return nil, statErr
+	}
+	unixListener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		_ = listener.Close()
+		return nil, fmt.Errorf("listen on proxy secure-link socket %s: %w", id, err)
+	}
+	if err := os.Chmod(socketPath, 0o666); err != nil {
+		_ = unixListener.Close()
+		_ = listener.Close()
+		_ = os.Remove(socketPath)
+		return nil, err
+	}
+	binding := &sourceLinkBinding{generation: generation, listener: listener, unix: unixListener, socketPath: socketPath, done: make(chan struct{}), active: map[net.Conn]struct{}{}}
+	accept := func(current net.Listener) {
 		for {
-			connection, err := listener.Accept()
+			connection, err := current.Accept()
 			if err != nil {
 				return
 			}
@@ -162,7 +200,9 @@ func (m *sourceLinkManager) create(id string, generation uint64, port uint32) (*
 				m.opener(id, connection)
 			}()
 		}
-	}()
+	}
+	go accept(listener)
+	go accept(unixListener)
 	return binding, nil
 }
 
@@ -173,6 +213,8 @@ func (b *sourceLinkBinding) close() {
 	default:
 		close(b.done)
 		_ = b.listener.Close()
+		_ = b.unix.Close()
+		_ = os.Remove(b.socketPath)
 		b.closeActive()
 	}
 }
@@ -204,6 +246,16 @@ func (m *sourceLinkManager) port(linkID string) (int, bool) {
 	return binding.listener.Addr().(*net.TCPAddr).Port, true
 }
 
+func (m *sourceLinkManager) socket(linkID string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	binding := m.bindings[linkID]
+	if binding == nil || binding.socketPath == "" {
+		return "", false
+	}
+	return binding.socketPath, true
+}
+
 func (p *NginxPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (string, error) {
 	if p.relayGrants == nil {
 		return "", errors.New("relay grant store is unavailable")
@@ -221,6 +273,18 @@ func (p *NginxPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (strin
 		}
 	}
 	return "", nil
+}
+
+func (p *NginxPlugin) RelayTunnelLaneCount() int {
+	lanes := int(p.relayGrants.get().GetDataLanes())
+	if lanes < 1 {
+		return 4
+	}
+	return lanes
+}
+
+func (p *NginxPlugin) RelayTunnelRuntimeChanged() <-chan struct{} {
+	return p.relayGrants.changed
 }
 
 func (p *NginxPlugin) SyncProxySecureLinks(command *pb.SyncProxySecureLinksCommand) (string, error) {
@@ -264,7 +328,7 @@ func (p *NginxPlugin) ProbeProxySecureLink(command *pb.ProbeProxySecureLinkComma
 	if !strings.HasPrefix(command.Path, "/") {
 		return "", errors.New("proxy secure-link probe path must start with /")
 	}
-	port, ok := p.secureLinks.port(command.LinkId)
+	socketPath, ok := p.secureLinks.socket(command.LinkId)
 	if !ok {
 		return "", errors.New("proxy secure-link listener is unavailable")
 	}
@@ -275,7 +339,7 @@ func (p *NginxPlugin) ProbeProxySecureLink(command *pb.ProbeProxySecureLinkComma
 	transport := &http.Transport{
 		DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{Timeout: timeout}).DialContext(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", port))
+			return (&net.Dialer{Timeout: timeout}).DialContext(ctx, "unix", socketPath)
 		},
 		// This checks upstream behavior through the authenticated relay path;
 		// certificate policy remains the responsibility of the proxy config.
@@ -322,13 +386,16 @@ func (p *NginxPlugin) ProbeProxySecureLink(command *pb.ProbeProxySecureLinkComma
 func (p *NginxPlugin) RunRelayTunnels(ctx context.Context, conn *grpc.ClientConn, _ string) {
 	tunnel := &nginxRelayTunnel{ctx: ctx, client: relayv1.NewTunnelBrokerClient(conn)}
 	p.relayTunnelMu.Lock()
-	p.relayTunnel = tunnel
+	p.relayTunnels = append(p.relayTunnels, tunnel)
 	p.relayTunnelMu.Unlock()
-	p.logger.Debug("proxy secure-link relay tunnel ready")
+	p.logger.Debug("proxy secure-link relay lane ready")
 	<-ctx.Done()
 	p.relayTunnelMu.Lock()
-	if p.relayTunnel == tunnel {
-		p.relayTunnel = nil
+	for index, candidate := range p.relayTunnels {
+		if candidate == tunnel {
+			p.relayTunnels = append(p.relayTunnels[:index], p.relayTunnels[index+1:]...)
+			break
+		}
 	}
 	p.relayTunnelMu.Unlock()
 }
@@ -337,21 +404,30 @@ func (p *NginxPlugin) openProxySecureLink(linkID string, connection net.Conn) {
 	defer connection.Close()
 	assignment := findRelayAssignment(p.relayGrants.get(), "connect", proxySecureLinkOwnerKind, linkID)
 	if assignment == nil {
-		p.logger.Debug("proxy secure-link connection rejected", "link_id", linkID, "stage", "grant")
+		p.logger.Warn("proxy secure-link connection rejected", "link_id", linkID, "stage", "grant")
 		return
 	}
 	p.relayTunnelMu.Lock()
-	tunnel := p.relayTunnel
+	var tunnel *nginxRelayTunnel
+	for _, candidate := range p.relayTunnels {
+		if tunnel == nil || candidate.active.Load() < tunnel.active.Load() {
+			tunnel = candidate
+		}
+	}
+	if tunnel != nil {
+		tunnel.active.Add(1)
+	}
 	p.relayTunnelMu.Unlock()
 	if tunnel == nil {
-		p.logger.Debug("proxy secure-link connection rejected", "link_id", linkID, "stage", "relay")
+		p.logger.Warn("proxy secure-link connection rejected", "link_id", linkID, "stage", "relay")
 		return
 	}
+	defer tunnel.active.Add(-1)
 	ctx, cancel, finishSetup := proxySecureLinkSetupContext(tunnel.ctx, proxySecureLinkSetupTimeout)
 	defer cancel()
 	stream, err := tunnel.client.OpenTunnel(ctx)
 	if err != nil {
-		p.logger.Debug("proxy secure-link connection failed", "link_id", linkID, "stage", "open", "error", err)
+		p.logger.Warn("proxy secure-link connection failed", "link_id", linkID, "stage", "open", "error", err)
 		return
 	}
 	grant := assignment.Grant
@@ -359,16 +435,20 @@ func (p *NginxPlugin) openProxySecureLink(linkID string, connection net.Conn) {
 		return
 	}
 	if err := stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Open{Open: &relayv1.OpenTunnel{Grant: &relayv1.SignedGrant{KeyId: grant.KeyId, Payload: grant.Payload, Signature: grant.Signature}}}}); err != nil {
-		p.logger.Debug("proxy secure-link connection failed", "link_id", linkID, "stage", "authorize", "error", err)
+		p.logger.Warn("proxy secure-link connection failed", "link_id", linkID, "stage", "authorize", "error", err)
 		return
 	}
 	first, err := stream.Recv()
 	if err != nil || first.GetReady() == nil {
-		p.logger.Debug("proxy secure-link connection failed", "link_id", linkID, "stage", "ready", "error", err)
+		p.logger.Warn("proxy secure-link connection failed", "link_id", linkID, "stage", "ready", "error", err)
 		return
 	}
 	if !finishSetup() {
 		return
 	}
-	_ = relaybridge.Bridge(ctx, connection, stream, int(first.GetReady().MaxFrameBytes), cancel)
+	readChunk := int(p.relayGrants.get().GetReadChunkBytes())
+	if readChunk == 0 {
+		readChunk = relaybridge.DefaultChunkBytes
+	}
+	_ = relaybridge.BridgeWithChunk(ctx, connection, stream, int(first.GetReady().MaxFrameBytes), readChunk, cancel)
 }

@@ -446,7 +446,7 @@ describe('AI websocket backend runtime commands', () => {
     expect(startUserRun).toHaveBeenCalledWith({
       conversationId: 'conversation-1',
       userId: USER.id,
-      title: 'New chat',
+      title: 'New Work Session',
       userMessage: { role: 'user', content: 'let me continue' },
       clientCommandId: 'cmd-locked',
       lastContext: null,

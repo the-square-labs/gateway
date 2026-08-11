@@ -35,6 +35,7 @@ export type RelayLifecycleState =
   | "maintenance"
   | "healthy"
   | "suspect"
+  | "degraded"
   | "recovering"
   | "critical";
 
@@ -54,6 +55,22 @@ export interface DashboardRelaySnapshot {
   }>;
   relayBuildVersion?: string | null;
   protocolMajor?: number | null;
+  registeredEndpoints?: number;
+  activeTunnels?: number;
+  activeProxyTunnels?: number;
+  activeDatabaseTunnels?: number;
+  throttledProxyTotal?: number;
+  throttledDatabaseTotal?: number;
+  pressurePercent?: number;
+  cpuPressurePercent?: number;
+  memoryPressurePercent?: number;
+  fdPressurePercent?: number;
+  admissionState?: string;
+  memoryRssBytes?: number;
+  heapInUseBytes?: number;
+  memoryLimitBytes?: number;
+  openFileDescriptors?: number;
+  fileDescriptorLimit?: number;
   expectedService?: string;
   expectedImage?: string | null;
   expectedVersion?: string | null;

@@ -6,7 +6,19 @@ function createService(db: unknown, relay: { applySnapshot: ReturnType<typeof vi
   return new RelayPolicyService(
     db as never,
     {} as never,
-    { getConfig: vi.fn().mockResolvedValue({ relayGrantTtlHours: 4 }) } as never,
+    {
+      getConfig: vi.fn().mockResolvedValue({
+        relayGrantTtlHours: 4,
+        relay: {
+          dataLanes: 4,
+          readChunkBytes: 32 * 1024,
+          adaptiveAdmissionEnabled: true,
+          proxyTargetPressurePercent: 70,
+          databaseReservePercent: 20,
+          hardPressurePercent: 95,
+        },
+      }),
+    } as never,
     relay as never
   );
 }
@@ -88,10 +100,26 @@ describe('RelayPolicyService snapshots', () => {
       expect.objectContaining({
         revision: '7',
         gatewayInstanceId: 'gateway-1',
+        admissionPolicy: {
+          enabled: true,
+          proxyTargetPressurePercent: 70,
+          databaseReservePercent: 20,
+          hardPressurePercent: 95,
+        },
         endpoints: [expect.objectContaining({ endpointId: 'endpoint-1', generation: '3' })],
         routes: [
-          expect.objectContaining({ routeId: 'route-1', generation: '4', disableIdleTimeout: false }),
-          expect.objectContaining({ routeId: 'route-2', generation: '1', disableIdleTimeout: true }),
+          expect.objectContaining({
+            routeId: 'route-1',
+            generation: '4',
+            disableIdleTimeout: false,
+            trafficClass: 'database',
+          }),
+          expect.objectContaining({
+            routeId: 'route-2',
+            generation: '1',
+            disableIdleTimeout: true,
+            trafficClass: 'proxy',
+          }),
         ],
       })
     );
@@ -111,6 +139,26 @@ describe('RelayPolicyService snapshots', () => {
 });
 
 describe('RelayPolicyService lifecycle events', () => {
+  it('bumps and reapplies the relay snapshot when persisted relay settings change', async () => {
+    const handlers = new Map<string, (payload: unknown) => void>();
+    const where = vi.fn().mockResolvedValue(undefined);
+    const tx = { update: vi.fn(() => ({ set: vi.fn(() => ({ where })) })) };
+    const db = { transaction: vi.fn((callback: (value: typeof tx) => unknown) => callback(tx)) };
+    const service = createService(db, { applySnapshot: vi.fn() });
+    const syncSnapshot = vi.spyOn(service, 'syncSnapshot').mockResolvedValue(8);
+    const refresh = vi.spyOn(service, 'refreshAllNodeGrantsIfDue').mockResolvedValue(undefined);
+    service.setEventBus({
+      subscribe: vi.fn((channel: string, handler: (payload: unknown) => void) => handlers.set(channel, handler)),
+    } as never);
+
+    handlers.get('system.config.changed')!({ relayChanged: true });
+    await (service as any).relaySettingsSync;
+
+    expect(db.transaction).toHaveBeenCalledOnce();
+    expect(syncSnapshot).toHaveBeenCalledOnce();
+    expect(refresh).toHaveBeenCalledWith(true);
+  });
+
   it('ignores binding events on the shared database channel', () => {
     const handlers = new Map<string, (payload: unknown) => void>();
     const service = createService({ transaction: vi.fn(), select: vi.fn() }, { applySnapshot: vi.fn() });

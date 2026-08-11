@@ -26,6 +26,12 @@ export function withSystemApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       );
     }
 
+    async getRelayStatus(): Promise<DashboardRelaySnapshot | null> {
+      return this.unwrapData(
+        this.request<{ data: DashboardRelaySnapshot | null }>("/system/relay")
+      );
+    }
+
     async checkForUpdates(): Promise<UpdateStatus> {
       return this.unwrapData(
         this.request<{ data: UpdateStatus }>("/system/check-update", { method: "POST" })

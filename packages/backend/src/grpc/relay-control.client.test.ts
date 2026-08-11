@@ -51,6 +51,11 @@ const fakeGrpc = vi.hoisted(() => {
       _options: unknown,
       callback: (error: Error | null, value?: unknown) => void
     ) => void;
+    GetRouteRuntime: (
+      _request: { routeId?: string },
+      _options: unknown,
+      callback: (error: Error | null, value?: unknown) => void
+    ) => void;
     close: () => void;
   }> = [];
   const brokers: Array<{ tunnel: TunnelStream; closed: boolean }> = [];
@@ -91,6 +96,14 @@ const fakeGrpc = vi.hoisted(() => {
 
     GetHealth(_request: unknown, _options: unknown, callback: (error: Error | null, value?: unknown) => void) {
       callback(null, { liveness: true });
+    }
+
+    GetRouteRuntime(
+      request: { routeId?: string },
+      _options: unknown,
+      callback: (error: Error | null, value?: unknown) => void
+    ) {
+      callback(null, { routeId: request.routeId, activeTunnels: '3', openedTotal: '12' });
     }
 
     close() {
@@ -264,6 +277,21 @@ describe('RelayControlClient identity rotation', () => {
     expect(fakeGrpc.admins).toHaveLength(2);
     expect(fakeGrpc.admins[1]!.closed).toBe(false);
     expect(fakeGrpc.brokers[1]!.closed).toBe(false);
+  });
+
+  it('requests runtime telemetry for one relay route', async () => {
+    const client = new RelayControlClient({
+      target: 'relay:9443',
+      systemCaPath: caPath,
+      certificatePath,
+      privateKeyPath,
+    });
+
+    await expect(client.getRouteRuntime('route-1')).resolves.toMatchObject({
+      routeId: 'route-1',
+      activeTunnels: '3',
+      openedTotal: '12',
+    });
   });
 
   it('retries an explicit rotation commit after its response is lost', async () => {

@@ -18,6 +18,22 @@ export const FILE_OPEN_MAX_BYTES = 100 * 1024 * 1024;
 export const RELAY_GRANT_TTL_DEFAULT_HOURS = 4;
 export const RELAY_GRANT_TTL_MIN_HOURS = 1;
 export const RELAY_GRANT_TTL_MAX_HOURS = 48;
+export const RELAY_DATA_LANES_DEFAULT = 4;
+export const RELAY_DATA_LANES_MIN = 1;
+export const RELAY_DATA_LANES_MAX = 16;
+export const RELAY_READ_CHUNK_BYTES_DEFAULT = 32 * 1024;
+export const RELAY_READ_CHUNK_BYTES_MIN = 4 * 1024;
+export const RELAY_READ_CHUNK_BYTES_MAX = 256 * 1024;
+export const RELAY_ADAPTIVE_ADMISSION_DEFAULT = true;
+export const RELAY_PROXY_TARGET_PRESSURE_DEFAULT_PERCENT = 70;
+export const RELAY_PROXY_TARGET_PRESSURE_MIN_PERCENT = 50;
+export const RELAY_PROXY_TARGET_PRESSURE_MAX_PERCENT = 85;
+export const RELAY_DATABASE_RESERVE_DEFAULT_PERCENT = 20;
+export const RELAY_DATABASE_RESERVE_MIN_PERCENT = 5;
+export const RELAY_DATABASE_RESERVE_MAX_PERCENT = 35;
+export const RELAY_HARD_PRESSURE_DEFAULT_PERCENT = 95;
+export const RELAY_HARD_PRESSURE_MIN_PERCENT = 90;
+export const RELAY_HARD_PRESSURE_MAX_PERCENT = 99;
 export const SHUTDOWN_USER_DRAIN_MAX_SECONDS = 40;
 export const SHUTDOWN_LOG_DRAIN_MAX_SECONDS = 10;
 export const SHUTDOWN_FINALIZATION_MIN_SECONDS = 5;
@@ -32,10 +48,20 @@ export interface GeneralSettings {
   gatewayGrpcPublicTarget: string | null;
   gatewayGrpcLocalIp: string | null;
   relayAutoRecovery: boolean;
+  relay: GeneralRelaySettings;
   shutdown: GeneralShutdownSettings;
   relayGrantTtlHours: number;
   features: GeneralFeatureSettings;
   inference: GeneralInferenceSettings;
+}
+
+export interface GeneralRelaySettings {
+  dataLanes: number;
+  readChunkBytes: number;
+  adaptiveAdmissionEnabled: boolean;
+  proxyTargetPressurePercent: number;
+  databaseReservePercent: number;
+  hardPressurePercent: number;
 }
 
 export interface GeneralShutdownSettings {
@@ -63,6 +89,14 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   gatewayGrpcPublicTarget: null,
   gatewayGrpcLocalIp: null,
   relayAutoRecovery: true,
+  relay: {
+    dataLanes: RELAY_DATA_LANES_DEFAULT,
+    readChunkBytes: RELAY_READ_CHUNK_BYTES_DEFAULT,
+    adaptiveAdmissionEnabled: RELAY_ADAPTIVE_ADMISSION_DEFAULT,
+    proxyTargetPressurePercent: RELAY_PROXY_TARGET_PRESSURE_DEFAULT_PERCENT,
+    databaseReservePercent: RELAY_DATABASE_RESERVE_DEFAULT_PERCENT,
+    hardPressurePercent: RELAY_HARD_PRESSURE_DEFAULT_PERCENT,
+  },
   relayGrantTtlHours: RELAY_GRANT_TTL_DEFAULT_HOURS,
   shutdown: {
     userRequestDrainSeconds: 30,
@@ -80,10 +114,11 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   },
 };
 
-export type GeneralSettingsUpdate = Omit<Partial<GeneralSettings>, 'features' | 'inference' | 'shutdown'> & {
+export type GeneralSettingsUpdate = Omit<Partial<GeneralSettings>, 'features' | 'inference' | 'shutdown' | 'relay'> & {
   features?: Partial<GeneralFeatureSettings>;
   inference?: Partial<GeneralInferenceSettings>;
   shutdown?: GeneralShutdownSettings;
+  relay?: Partial<GeneralRelaySettings>;
 };
 
 export function normalizePublicUrl(value: string | null | undefined): string | null {
@@ -245,6 +280,10 @@ export class GeneralSettingsService {
         ...updates.inference,
       },
       shutdown: updates.shutdown ?? current.shutdown,
+      relay: {
+        ...current.relay,
+        ...updates.relay,
+      },
     });
     await this.db
       .insert(settings)
@@ -257,7 +296,9 @@ export class GeneralSettingsService {
     this.cachedAt = Date.now();
     // No configuration is carried by this event. It only lets cached,
     // permission-filtered read models refresh immediately.
-    this.eventBus?.publish('system.config.changed', {});
+    this.eventBus?.publish('system.config.changed', {
+      relayChanged: JSON.stringify(current.relay) !== JSON.stringify(next.relay),
+    });
     if (
       current.features.inferenceEnabled !== next.features.inferenceEnabled ||
       current.inference.harnessSpecificEndpointsEnabled !== next.inference.harnessSpecificEndpointsEnabled
@@ -345,6 +386,29 @@ export class GeneralSettingsService {
     const relayGrantTtlHours = Number.isInteger(rawRelayGrantTtlHours)
       ? rawRelayGrantTtlHours
       : DEFAULT_GENERAL_SETTINGS.relayGrantTtlHours;
+    const relayRecord =
+      typeof record.relay === 'object' && record.relay !== null ? (record.relay as Record<string, unknown>) : {};
+    const relayDataLanes = numberOrDefault(relayRecord.dataLanes, DEFAULT_GENERAL_SETTINGS.relay.dataLanes);
+    const relayReadChunkBytes = numberOrDefault(
+      relayRecord.readChunkBytes,
+      DEFAULT_GENERAL_SETTINGS.relay.readChunkBytes
+    );
+    const relayAdaptiveAdmissionEnabled =
+      typeof relayRecord.adaptiveAdmissionEnabled === 'boolean'
+        ? relayRecord.adaptiveAdmissionEnabled
+        : DEFAULT_GENERAL_SETTINGS.relay.adaptiveAdmissionEnabled;
+    const relayProxyTargetPressurePercent = numberOrDefault(
+      relayRecord.proxyTargetPressurePercent,
+      DEFAULT_GENERAL_SETTINGS.relay.proxyTargetPressurePercent
+    );
+    const relayDatabaseReservePercent = numberOrDefault(
+      relayRecord.databaseReservePercent,
+      DEFAULT_GENERAL_SETTINGS.relay.databaseReservePercent
+    );
+    const relayHardPressurePercent = numberOrDefault(
+      relayRecord.hardPressurePercent,
+      DEFAULT_GENERAL_SETTINGS.relay.hardPressurePercent
+    );
 
     if (fileUploadMaxBytes < FILE_UPLOAD_MIN_BYTES || fileUploadMaxBytes > FILE_UPLOAD_MAX_BYTES) {
       throw new Error(`File upload limit must be between ${FILE_UPLOAD_MIN_BYTES} and ${FILE_UPLOAD_MAX_BYTES} bytes`);
@@ -360,6 +424,41 @@ export class GeneralSettingsService {
       throw new Error(
         `Relay grant TTL must be between ${RELAY_GRANT_TTL_MIN_HOURS} and ${RELAY_GRANT_TTL_MAX_HOURS} hours`
       );
+    }
+    if (relayDataLanes < RELAY_DATA_LANES_MIN || relayDataLanes > RELAY_DATA_LANES_MAX) {
+      throw new Error(`Relay data lanes must be between ${RELAY_DATA_LANES_MIN} and ${RELAY_DATA_LANES_MAX}`);
+    }
+    if (relayReadChunkBytes < RELAY_READ_CHUNK_BYTES_MIN || relayReadChunkBytes > RELAY_READ_CHUNK_BYTES_MAX) {
+      throw new Error(
+        `Relay read chunk must be between ${RELAY_READ_CHUNK_BYTES_MIN} and ${RELAY_READ_CHUNK_BYTES_MAX} bytes`
+      );
+    }
+    if (
+      relayProxyTargetPressurePercent < RELAY_PROXY_TARGET_PRESSURE_MIN_PERCENT ||
+      relayProxyTargetPressurePercent > RELAY_PROXY_TARGET_PRESSURE_MAX_PERCENT
+    ) {
+      throw new Error(
+        `Relay proxy pressure target must be between ${RELAY_PROXY_TARGET_PRESSURE_MIN_PERCENT} and ${RELAY_PROXY_TARGET_PRESSURE_MAX_PERCENT} percent`
+      );
+    }
+    if (
+      relayDatabaseReservePercent < RELAY_DATABASE_RESERVE_MIN_PERCENT ||
+      relayDatabaseReservePercent > RELAY_DATABASE_RESERVE_MAX_PERCENT
+    ) {
+      throw new Error(
+        `Relay database reserve must be between ${RELAY_DATABASE_RESERVE_MIN_PERCENT} and ${RELAY_DATABASE_RESERVE_MAX_PERCENT} percent`
+      );
+    }
+    if (
+      relayHardPressurePercent < RELAY_HARD_PRESSURE_MIN_PERCENT ||
+      relayHardPressurePercent > RELAY_HARD_PRESSURE_MAX_PERCENT
+    ) {
+      throw new Error(
+        `Relay hard pressure cutoff must be between ${RELAY_HARD_PRESSURE_MIN_PERCENT} and ${RELAY_HARD_PRESSURE_MAX_PERCENT} percent`
+      );
+    }
+    if (relayProxyTargetPressurePercent + relayDatabaseReservePercent >= relayHardPressurePercent) {
+      throw new Error('Relay proxy pressure target plus database reserve must remain below the hard cutoff');
     }
 
     const features =
@@ -383,6 +482,14 @@ export class GeneralSettingsService {
         typeof record.relayAutoRecovery === 'boolean'
           ? record.relayAutoRecovery
           : DEFAULT_GENERAL_SETTINGS.relayAutoRecovery,
+      relay: {
+        dataLanes: relayDataLanes,
+        readChunkBytes: relayReadChunkBytes,
+        adaptiveAdmissionEnabled: relayAdaptiveAdmissionEnabled,
+        proxyTargetPressurePercent: relayProxyTargetPressurePercent,
+        databaseReservePercent: relayDatabaseReservePercent,
+        hardPressurePercent: relayHardPressurePercent,
+      },
       shutdown,
       relayGrantTtlHours,
       features: {

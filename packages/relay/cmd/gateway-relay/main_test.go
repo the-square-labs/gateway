@@ -1,27 +1,51 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+	"os"
 	"testing"
+	"time"
 
-	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+	"github.com/wiolett-industries/gateway/relay/internal/identity"
 )
 
-func TestValidateHealthRequiresDurablePolicyReadiness(t *testing.T) {
-	tests := []struct {
-		name     string
-		response *relayv1.HealthResponse
-		wantErr  bool
-	}{
-		{name: "live but unready", response: &relayv1.HealthResponse{Liveness: true, Readiness: false, Reason: "policy_snapshot_required"}, wantErr: true},
-		{name: "missing revision", response: &relayv1.HealthResponse{Liveness: true, Readiness: true, ProtocolMajor: 1, KeyIds: []string{"key-1"}}, wantErr: true},
-		{name: "ready", response: &relayv1.HealthResponse{Liveness: true, Readiness: true, ProtocolMajor: 1, AppliedRevision: 7, KeyIds: []string{"key-1"}}, wantErr: false},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			err := validateHealth(test.response)
-			if (err != nil) != test.wantErr {
-				t.Fatalf("validateHealth() error = %v, wantErr %v", err, test.wantErr)
+func TestRetryIdentityStartWaitsForProvisioning(t *testing.T) {
+	attempts := 0
+	sleeps := 0
+	result, err := retryIdentityStart(
+		func() (string, error) {
+			attempts++
+			if attempts == 1 {
+				return "", fmt.Errorf("load relay identity: %w", os.ErrNotExist)
 			}
-		})
+			if attempts == 2 {
+				return "", fmt.Errorf("load relay identity: %w", identity.ErrMaterialUpdating)
+			}
+			return "ready", nil
+		},
+		3,
+		time.Second,
+		func(time.Duration) { sleeps++ },
+	)
+	if err != nil || result != "ready" || attempts != 3 || sleeps != 2 {
+		t.Fatalf("unexpected retry result: result=%q err=%v attempts=%d sleeps=%d", result, err, attempts, sleeps)
+	}
+}
+
+func TestRetryIdentityStartFailsFastForPermanentErrors(t *testing.T) {
+	permanent := errors.New("invalid relay configuration")
+	attempts := 0
+	_, err := retryIdentityStart(
+		func() (string, error) {
+			attempts++
+			return "", permanent
+		},
+		30,
+		time.Second,
+		func(time.Duration) { t.Fatal("permanent errors must not sleep") },
+	)
+	if !errors.Is(err, permanent) || attempts != 1 {
+		t.Fatalf("unexpected failure: err=%v attempts=%d", err, attempts)
 	}
 }

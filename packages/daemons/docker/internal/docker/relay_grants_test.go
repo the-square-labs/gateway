@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 )
@@ -21,6 +22,39 @@ func TestRelayConnectorHandshake(t *testing.T) {
 	got, err := readDatabaseTunnelHandshake(&input)
 	if err != nil || got != bindingID {
 		t.Fatalf("read handshake = %q, %v", got, err)
+	}
+}
+
+func TestRelayGrantStoreSignalsEndpointGrantChanges(t *testing.T) {
+	dir := t.TempDir()
+	store, err := newRelayGrantStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := &pb.SyncRelayGrantsCommand{PolicyRevision: 7, GeneratedAtUnixMs: 100, DataLanes: 4}
+	if err := store.sync(first); err != nil {
+		t.Fatal(err)
+	}
+	<-store.changed
+
+	updated := &pb.SyncRelayGrantsCommand{
+		PolicyRevision:    8,
+		GeneratedAtUnixMs: 101,
+		DataLanes:         4,
+		Grants: []*pb.RelayGrantAssignment{{
+			Role:       "endpoint",
+			OwnerKind:  proxySecureLinkOwnerKind,
+			OwnerId:    "11111111-1111-4111-8111-111111111111",
+			EndpointId: "22222222-2222-4222-8222-222222222222",
+		}},
+	}
+	if err := store.sync(updated); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-store.changed:
+	case <-time.After(time.Second):
+		t.Fatal("endpoint grant change did not wake relay registration reconciliation")
 	}
 }
 

@@ -80,6 +80,32 @@ describe("RelayHealthNotice", () => {
     expect(screen.getByRole("button", { name: "View details" })).toBeInTheDocument();
   });
 
+  it("shows an ownership verification problem as a warning rather than a critical outage", () => {
+    render(
+      <RelayHealthNotice
+        relay={{
+          ...critical,
+          state: "degraded",
+          reason: "ownership_unverified",
+          impact:
+            "Relay runtime ownership could not be verified; automatic recovery is unavailable.",
+          canRetry: false,
+        }}
+        isAdmin
+        retryPending={false}
+        onRetry={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Gateway relay management needs attention"
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Relay runtime ownership could not be verified"
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("renders nothing for healthy state", () => {
     const { container } = render(
       <RelayHealthNotice

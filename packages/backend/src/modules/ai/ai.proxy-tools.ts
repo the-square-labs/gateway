@@ -73,6 +73,7 @@ export async function executeProxyTool(
             cacheEnabled: a.cacheEnabled || false,
             cacheOptions: a.cacheOptions,
             rateLimitEnabled: a.rateLimitEnabled || false,
+            rateLimitMode: a.rateLimitEnabled ? 'custom' : 'inherit',
             rateLimitOptions: a.rateLimitOptions,
             customRewrites: a.customRewrites || [],
             internalCertificateId: a.internalCertificateId,

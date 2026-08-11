@@ -611,7 +611,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
   const relayNotice =
     relay?.state === 'critical'
       ? { id: 'gateway-relay', severity: 'critical' as const }
-      : relay && ['migration_pending', 'maintenance', 'recovering'].includes(relay.state)
+      : relay && ['migration_pending', 'maintenance', 'recovering', 'degraded'].includes(relay.state)
         ? { id: 'gateway-relay', severity: 'warning' as const }
         : null;
   const notices = [

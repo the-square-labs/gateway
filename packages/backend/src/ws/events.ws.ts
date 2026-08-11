@@ -607,6 +607,7 @@ function processMessage(ws: WSContext, state: ConnState, msg: ClientMsg) {
   if (msg.type === 'subscribe' && Array.isArray(msg.channels)) {
     const accepted: string[] = [];
     const rejected: string[] = [];
+    const retained: Array<{ channel: string; payload: unknown }> = [];
     for (const ch of msg.channels) {
       if (typeof ch !== 'string' || !ch) continue;
       if (state.subs.has(ch)) {
@@ -638,8 +639,15 @@ function processMessage(ws: WSContext, state: ConnState, msg: ClientMsg) {
       });
       state.subs.set(ch, unsub);
       accepted.push(ch);
+      const retainedPayload = eventBus.getRetained(ch);
+      if (retainedPayload !== undefined) retained.push({ channel: ch, payload: retainedPayload });
     }
     send(ws, { type: 'subscribed', channels: accepted, rejected });
+    for (const event of retained) {
+      if (canReceiveChannelPayload(state.scopes, event.channel, event.payload, state.user?.id)) {
+        send(ws, { type: 'event', channel: event.channel, payload: event.payload });
+      }
+    }
     return;
   }
 

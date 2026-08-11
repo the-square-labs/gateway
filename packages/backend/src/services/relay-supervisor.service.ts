@@ -33,6 +33,7 @@ export type RelayLifecycleState =
   | 'maintenance'
   | 'healthy'
   | 'suspect'
+  | 'degraded'
   | 'recovering'
   | 'critical';
 
@@ -53,6 +54,22 @@ export interface RelaySupervisorState {
   lastProbeAt: string | null;
   relayBuildVersion: string | null;
   protocolMajor: number | null;
+  registeredEndpoints: number;
+  activeTunnels: number;
+  activeProxyTunnels: number;
+  activeDatabaseTunnels: number;
+  throttledProxyTotal: number;
+  throttledDatabaseTotal: number;
+  pressurePercent: number;
+  cpuPressurePercent: number;
+  memoryPressurePercent: number;
+  fdPressurePercent: number;
+  admissionState: string;
+  memoryRssBytes: number;
+  heapInUseBytes: number;
+  memoryLimitBytes: number;
+  openFileDescriptors: number;
+  fileDescriptorLimit: number;
 }
 
 export interface RelaySupervisorOptions {
@@ -86,6 +103,22 @@ function defaultState(): RelaySupervisorState {
     lastProbeAt: null,
     relayBuildVersion: null,
     protocolMajor: null,
+    registeredEndpoints: 0,
+    activeTunnels: 0,
+    activeProxyTunnels: 0,
+    activeDatabaseTunnels: 0,
+    throttledProxyTotal: 0,
+    throttledDatabaseTotal: 0,
+    pressurePercent: 0,
+    cpuPressurePercent: 0,
+    memoryPressurePercent: 0,
+    fdPressurePercent: 0,
+    admissionState: 'unknown',
+    memoryRssBytes: 0,
+    heapInUseBytes: 0,
+    memoryLimitBytes: 0,
+    openFileDescriptors: 0,
+    fileDescriptorLimit: 0,
   };
 }
 
@@ -151,9 +184,11 @@ export class RelaySupervisorService {
       impact:
         this.state.state === 'critical'
           ? 'Managed nodes and secure database connections are disconnected.'
-          : this.state.state === 'recovering'
-            ? 'Secure database connections are temporarily unavailable.'
-            : null,
+          : this.state.state === 'degraded'
+            ? 'Relay runtime ownership could not be verified; automatic recovery is unavailable.'
+            : this.state.state === 'recovering'
+              ? 'Secure database connections are temporarily unavailable.'
+              : null,
       attempt: this.state.attempt,
       maxAttempts: this.state.maxAttempts,
       lastHealthyAt: this.state.lastHealthyAt,
@@ -166,6 +201,22 @@ export class RelaySupervisorService {
       attemptHistory: this.state.attemptHistory,
       relayBuildVersion: this.state.relayBuildVersion,
       protocolMajor: this.state.protocolMajor,
+      registeredEndpoints: this.state.registeredEndpoints,
+      activeTunnels: this.state.activeTunnels,
+      activeProxyTunnels: this.state.activeProxyTunnels,
+      activeDatabaseTunnels: this.state.activeDatabaseTunnels,
+      throttledProxyTotal: this.state.throttledProxyTotal,
+      throttledDatabaseTotal: this.state.throttledDatabaseTotal,
+      pressurePercent: this.state.pressurePercent,
+      cpuPressurePercent: this.state.cpuPressurePercent,
+      memoryPressurePercent: this.state.memoryPressurePercent,
+      fdPressurePercent: this.state.fdPressurePercent,
+      admissionState: this.state.admissionState,
+      memoryRssBytes: this.state.memoryRssBytes,
+      heapInUseBytes: this.state.heapInUseBytes,
+      memoryLimitBytes: this.state.memoryLimitBytes,
+      openFileDescriptors: this.state.openFileDescriptors,
+      fileDescriptorLimit: this.state.fileDescriptorLimit,
       expectedService: this.options.expectedService,
       expectedVersion: this.options.expectedVersion ?? null,
       expectedImage: this.options.expectedImage,
@@ -197,6 +248,22 @@ export class RelaySupervisorService {
           lastHealthyAt: new Date().toISOString(),
           relayBuildVersion: result.response.buildVersion,
           protocolMajor: Number(result.response.protocolMajor),
+          registeredEndpoints: Number(result.response.registeredEndpoints),
+          activeTunnels: Number(result.response.activeTunnels),
+          activeProxyTunnels: Number(result.response.activeProxyTunnels) || 0,
+          activeDatabaseTunnels: Number(result.response.activeDatabaseTunnels) || 0,
+          throttledProxyTotal: Number(result.response.throttledProxyTotal) || 0,
+          throttledDatabaseTotal: Number(result.response.throttledDatabaseTotal) || 0,
+          pressurePercent: Number(result.response.pressurePercent) || 0,
+          cpuPressurePercent: Number(result.response.cpuPressurePercent) || 0,
+          memoryPressurePercent: Number(result.response.memoryPressurePercent) || 0,
+          fdPressurePercent: Number(result.response.fdPressurePercent) || 0,
+          admissionState: result.response.admissionState || 'unknown',
+          memoryRssBytes: Number(result.response.memoryRssBytes) || 0,
+          heapInUseBytes: Number(result.response.heapInUseBytes) || 0,
+          memoryLimitBytes: Number(result.response.memoryLimitBytes) || 0,
+          openFileDescriptors: Number(result.response.openFileDescriptors) || 0,
+          fileDescriptorLimit: Number(result.response.fileDescriptorLimit) || 0,
         };
         if (this.state.state === 'healthy') {
           this.state = { ...this.state, ...healthyUpdate };
@@ -228,8 +295,11 @@ export class RelaySupervisorService {
         return;
       }
       await this.transition({ state: 'critical', reason: result.reason });
-    } catch {
-      await this.transition({ state: 'critical', reason: 'ownership_unverified' }).catch(() => {});
+    } catch (error) {
+      logger.error('Gateway relay supervisor probe failed internally', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await this.transition({ state: 'degraded', reason: 'ownership_unverified' }).catch(() => {});
     } finally {
       this.probing = false;
     }
@@ -267,6 +337,22 @@ export class RelaySupervisorService {
           lastHealthyAt: new Date().toISOString(),
           relayBuildVersion: current.response.buildVersion,
           protocolMajor: Number(current.response.protocolMajor),
+          registeredEndpoints: Number(current.response.registeredEndpoints),
+          activeTunnels: Number(current.response.activeTunnels),
+          activeProxyTunnels: Number(current.response.activeProxyTunnels) || 0,
+          activeDatabaseTunnels: Number(current.response.activeDatabaseTunnels) || 0,
+          throttledProxyTotal: Number(current.response.throttledProxyTotal) || 0,
+          throttledDatabaseTotal: Number(current.response.throttledDatabaseTotal) || 0,
+          pressurePercent: Number(current.response.pressurePercent) || 0,
+          cpuPressurePercent: Number(current.response.cpuPressurePercent) || 0,
+          memoryPressurePercent: Number(current.response.memoryPressurePercent) || 0,
+          fdPressurePercent: Number(current.response.fdPressurePercent) || 0,
+          admissionState: current.response.admissionState || 'unknown',
+          memoryRssBytes: Number(current.response.memoryRssBytes) || 0,
+          heapInUseBytes: Number(current.response.heapInUseBytes) || 0,
+          memoryLimitBytes: Number(current.response.memoryLimitBytes) || 0,
+          openFileDescriptors: Number(current.response.openFileDescriptors) || 0,
+          fileDescriptorLimit: Number(current.response.fileDescriptorLimit) || 0,
         });
         return this.getSnapshot(true);
       }
@@ -297,7 +383,7 @@ export class RelaySupervisorService {
 
   private async runRecoveryCycle(manual: boolean): Promise<void> {
     if (!this.recovery) {
-      await this.transition({ state: 'critical', reason: 'ownership_unverified' });
+      await this.transition({ state: 'degraded', reason: 'ownership_unverified' });
       return;
     }
     const startAttempt = Math.max(1, this.state.attempt + 1);
@@ -316,7 +402,10 @@ export class RelaySupervisorService {
       } catch (error) {
         this.updateAttempt(attempt, { result: 'failed' });
         if (error instanceof RelayRecoverySafetyError) {
-          await this.transition({ state: 'critical', reason: error.reason });
+          await this.transition({
+            state: error.reason === 'ownership_unverified' ? 'degraded' : 'critical',
+            reason: error.reason,
+          });
           return;
         }
         await this.persistAndPublish();

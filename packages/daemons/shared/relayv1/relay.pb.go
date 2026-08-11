@@ -1022,8 +1022,11 @@ type RoutePolicy struct {
 	// Proxy Secure Links intentionally have no fixed idle timeout. Existing
 	// routes keep the relay default when this field is false.
 	DisableIdleTimeout bool `protobuf:"varint,9,opt,name=disable_idle_timeout,json=disableIdleTimeout,proto3" json:"disable_idle_timeout,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Product classification used only for overload admission and reporting.
+	// The relay remains unaware of concrete Gateway resource identifiers.
+	TrafficClass  string `protobuf:"bytes,10,opt,name=traffic_class,json=trafficClass,proto3" json:"traffic_class,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RoutePolicy) Reset() {
@@ -1119,6 +1122,81 @@ func (x *RoutePolicy) GetDisableIdleTimeout() bool {
 	return false
 }
 
+func (x *RoutePolicy) GetTrafficClass() string {
+	if x != nil {
+		return x.TrafficClass
+	}
+	return ""
+}
+
+type AdmissionPolicy struct {
+	state                      protoimpl.MessageState `protogen:"open.v1"`
+	Enabled                    bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	ProxyTargetPressurePercent uint32                 `protobuf:"varint,2,opt,name=proxy_target_pressure_percent,json=proxyTargetPressurePercent,proto3" json:"proxy_target_pressure_percent,omitempty"`
+	DatabaseReservePercent     uint32                 `protobuf:"varint,3,opt,name=database_reserve_percent,json=databaseReservePercent,proto3" json:"database_reserve_percent,omitempty"`
+	HardPressurePercent        uint32                 `protobuf:"varint,4,opt,name=hard_pressure_percent,json=hardPressurePercent,proto3" json:"hard_pressure_percent,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
+}
+
+func (x *AdmissionPolicy) Reset() {
+	*x = AdmissionPolicy{}
+	mi := &file_relay_v1_relay_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdmissionPolicy) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdmissionPolicy) ProtoMessage() {}
+
+func (x *AdmissionPolicy) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdmissionPolicy.ProtoReflect.Descriptor instead.
+func (*AdmissionPolicy) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *AdmissionPolicy) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *AdmissionPolicy) GetProxyTargetPressurePercent() uint32 {
+	if x != nil {
+		return x.ProxyTargetPressurePercent
+	}
+	return 0
+}
+
+func (x *AdmissionPolicy) GetDatabaseReservePercent() uint32 {
+	if x != nil {
+		return x.DatabaseReservePercent
+	}
+	return 0
+}
+
+func (x *AdmissionPolicy) GetHardPressurePercent() uint32 {
+	if x != nil {
+		return x.HardPressurePercent
+	}
+	return 0
+}
+
 type ApplySnapshotRequest struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	Revision          uint64                 `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
@@ -1126,13 +1204,14 @@ type ApplySnapshotRequest struct {
 	PublicKeys        []*PublicKey           `protobuf:"bytes,3,rep,name=public_keys,json=publicKeys,proto3" json:"public_keys,omitempty"`
 	Endpoints         []*EndpointPolicy      `protobuf:"bytes,4,rep,name=endpoints,proto3" json:"endpoints,omitempty"`
 	Routes            []*RoutePolicy         `protobuf:"bytes,5,rep,name=routes,proto3" json:"routes,omitempty"`
+	AdmissionPolicy   *AdmissionPolicy       `protobuf:"bytes,6,opt,name=admission_policy,json=admissionPolicy,proto3" json:"admission_policy,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ApplySnapshotRequest) Reset() {
 	*x = ApplySnapshotRequest{}
-	mi := &file_relay_v1_relay_proto_msgTypes[17]
+	mi := &file_relay_v1_relay_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1144,7 +1223,7 @@ func (x *ApplySnapshotRequest) String() string {
 func (*ApplySnapshotRequest) ProtoMessage() {}
 
 func (x *ApplySnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[17]
+	mi := &file_relay_v1_relay_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1157,7 +1236,7 @@ func (x *ApplySnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplySnapshotRequest.ProtoReflect.Descriptor instead.
 func (*ApplySnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{17}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ApplySnapshotRequest) GetRevision() uint64 {
@@ -1195,6 +1274,13 @@ func (x *ApplySnapshotRequest) GetRoutes() []*RoutePolicy {
 	return nil
 }
 
+func (x *ApplySnapshotRequest) GetAdmissionPolicy() *AdmissionPolicy {
+	if x != nil {
+		return x.AdmissionPolicy
+	}
+	return nil
+}
+
 type ApplySnapshotResponse struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	AppliedRevision uint64                 `protobuf:"varint,1,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
@@ -1205,7 +1291,7 @@ type ApplySnapshotResponse struct {
 
 func (x *ApplySnapshotResponse) Reset() {
 	*x = ApplySnapshotResponse{}
-	mi := &file_relay_v1_relay_proto_msgTypes[18]
+	mi := &file_relay_v1_relay_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1217,7 +1303,7 @@ func (x *ApplySnapshotResponse) String() string {
 func (*ApplySnapshotResponse) ProtoMessage() {}
 
 func (x *ApplySnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[18]
+	mi := &file_relay_v1_relay_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1230,7 +1316,7 @@ func (x *ApplySnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplySnapshotResponse.ProtoReflect.Descriptor instead.
 func (*ApplySnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{18}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ApplySnapshotResponse) GetAppliedRevision() uint64 {
@@ -1255,7 +1341,7 @@ type HealthRequest struct {
 
 func (x *HealthRequest) Reset() {
 	*x = HealthRequest{}
-	mi := &file_relay_v1_relay_proto_msgTypes[19]
+	mi := &file_relay_v1_relay_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1267,7 +1353,7 @@ func (x *HealthRequest) String() string {
 func (*HealthRequest) ProtoMessage() {}
 
 func (x *HealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[19]
+	mi := &file_relay_v1_relay_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1280,27 +1366,41 @@ func (x *HealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthRequest.ProtoReflect.Descriptor instead.
 func (*HealthRequest) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{19}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{20}
 }
 
 type HealthResponse struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	BuildVersion        string                 `protobuf:"bytes,1,opt,name=build_version,json=buildVersion,proto3" json:"build_version,omitempty"`
-	ProtocolMajor       uint32                 `protobuf:"varint,2,opt,name=protocol_major,json=protocolMajor,proto3" json:"protocol_major,omitempty"`
-	AppliedRevision     uint64                 `protobuf:"varint,3,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
-	KeyIds              []string               `protobuf:"bytes,4,rep,name=key_ids,json=keyIds,proto3" json:"key_ids,omitempty"`
-	RegisteredEndpoints uint64                 `protobuf:"varint,5,opt,name=registered_endpoints,json=registeredEndpoints,proto3" json:"registered_endpoints,omitempty"`
-	ActiveTunnels       uint64                 `protobuf:"varint,6,opt,name=active_tunnels,json=activeTunnels,proto3" json:"active_tunnels,omitempty"`
-	Liveness            bool                   `protobuf:"varint,7,opt,name=liveness,proto3" json:"liveness,omitempty"`
-	Readiness           bool                   `protobuf:"varint,8,opt,name=readiness,proto3" json:"readiness,omitempty"`
-	Reason              string                 `protobuf:"bytes,9,opt,name=reason,proto3" json:"reason,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	BuildVersion           string                 `protobuf:"bytes,1,opt,name=build_version,json=buildVersion,proto3" json:"build_version,omitempty"`
+	ProtocolMajor          uint32                 `protobuf:"varint,2,opt,name=protocol_major,json=protocolMajor,proto3" json:"protocol_major,omitempty"`
+	AppliedRevision        uint64                 `protobuf:"varint,3,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
+	KeyIds                 []string               `protobuf:"bytes,4,rep,name=key_ids,json=keyIds,proto3" json:"key_ids,omitempty"`
+	RegisteredEndpoints    uint64                 `protobuf:"varint,5,opt,name=registered_endpoints,json=registeredEndpoints,proto3" json:"registered_endpoints,omitempty"`
+	ActiveTunnels          uint64                 `protobuf:"varint,6,opt,name=active_tunnels,json=activeTunnels,proto3" json:"active_tunnels,omitempty"`
+	Liveness               bool                   `protobuf:"varint,7,opt,name=liveness,proto3" json:"liveness,omitempty"`
+	Readiness              bool                   `protobuf:"varint,8,opt,name=readiness,proto3" json:"readiness,omitempty"`
+	Reason                 string                 `protobuf:"bytes,9,opt,name=reason,proto3" json:"reason,omitempty"`
+	ActiveProxyTunnels     uint64                 `protobuf:"varint,10,opt,name=active_proxy_tunnels,json=activeProxyTunnels,proto3" json:"active_proxy_tunnels,omitempty"`
+	ActiveDatabaseTunnels  uint64                 `protobuf:"varint,11,opt,name=active_database_tunnels,json=activeDatabaseTunnels,proto3" json:"active_database_tunnels,omitempty"`
+	ThrottledProxyTotal    uint64                 `protobuf:"varint,12,opt,name=throttled_proxy_total,json=throttledProxyTotal,proto3" json:"throttled_proxy_total,omitempty"`
+	ThrottledDatabaseTotal uint64                 `protobuf:"varint,13,opt,name=throttled_database_total,json=throttledDatabaseTotal,proto3" json:"throttled_database_total,omitempty"`
+	PressurePercent        uint32                 `protobuf:"varint,14,opt,name=pressure_percent,json=pressurePercent,proto3" json:"pressure_percent,omitempty"`
+	CpuPressurePercent     uint32                 `protobuf:"varint,15,opt,name=cpu_pressure_percent,json=cpuPressurePercent,proto3" json:"cpu_pressure_percent,omitempty"`
+	MemoryPressurePercent  uint32                 `protobuf:"varint,16,opt,name=memory_pressure_percent,json=memoryPressurePercent,proto3" json:"memory_pressure_percent,omitempty"`
+	FdPressurePercent      uint32                 `protobuf:"varint,17,opt,name=fd_pressure_percent,json=fdPressurePercent,proto3" json:"fd_pressure_percent,omitempty"`
+	AdmissionState         string                 `protobuf:"bytes,18,opt,name=admission_state,json=admissionState,proto3" json:"admission_state,omitempty"`
+	MemoryRssBytes         uint64                 `protobuf:"varint,19,opt,name=memory_rss_bytes,json=memoryRssBytes,proto3" json:"memory_rss_bytes,omitempty"`
+	HeapInUseBytes         uint64                 `protobuf:"varint,20,opt,name=heap_in_use_bytes,json=heapInUseBytes,proto3" json:"heap_in_use_bytes,omitempty"`
+	MemoryLimitBytes       uint64                 `protobuf:"varint,21,opt,name=memory_limit_bytes,json=memoryLimitBytes,proto3" json:"memory_limit_bytes,omitempty"`
+	OpenFileDescriptors    uint64                 `protobuf:"varint,22,opt,name=open_file_descriptors,json=openFileDescriptors,proto3" json:"open_file_descriptors,omitempty"`
+	FileDescriptorLimit    uint64                 `protobuf:"varint,23,opt,name=file_descriptor_limit,json=fileDescriptorLimit,proto3" json:"file_descriptor_limit,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *HealthResponse) Reset() {
 	*x = HealthResponse{}
-	mi := &file_relay_v1_relay_proto_msgTypes[20]
+	mi := &file_relay_v1_relay_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1312,7 +1412,7 @@ func (x *HealthResponse) String() string {
 func (*HealthResponse) ProtoMessage() {}
 
 func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[20]
+	mi := &file_relay_v1_relay_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1325,7 +1425,7 @@ func (x *HealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
 func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{20}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *HealthResponse) GetBuildVersion() string {
@@ -1391,6 +1491,280 @@ func (x *HealthResponse) GetReason() string {
 	return ""
 }
 
+func (x *HealthResponse) GetActiveProxyTunnels() uint64 {
+	if x != nil {
+		return x.ActiveProxyTunnels
+	}
+	return 0
+}
+
+func (x *HealthResponse) GetActiveDatabaseTunnels() uint64 {
+	if x != nil {
+		return x.ActiveDatabaseTunnels
+	}
+	return 0
+}
+
+func (x *HealthResponse) GetThrottledProxyTotal() uint64 {
+	if x != nil {
+		return x.ThrottledProxyTotal
+	}
+	return 0
+}
+
+func (x *HealthResponse) GetThrottledDatabaseTotal() uint64 {
+	if x != nil {
+		return x.ThrottledDatabaseTotal
+	}
+	return 0
+}
+
+func (x *HealthResponse) GetPressurePercent() uint32 {
+	if x != nil {
+		return x.PressurePercent
+	}
+	return 0
+}
+
+func (x *HealthResponse) GetCpuPressurePercent() uint32 {
+	if x != nil {
+		return x.CpuPressurePercent
+	}
+	return 0
+}
+
+func (x *HealthResponse) GetMemoryPressurePercent() uint32 {
+	if x != nil {
+		return x.MemoryPressurePercent
+	}
+	return 0
+}
+
+func (x *HealthResponse) GetFdPressurePercent() uint32 {
+	if x != nil {
+		return x.FdPressurePercent
+	}
+	return 0
+}
+
+func (x *HealthResponse) GetAdmissionState() string {
+	if x != nil {
+		return x.AdmissionState
+	}
+	return ""
+}
+
+func (x *HealthResponse) GetMemoryRssBytes() uint64 {
+	if x != nil {
+		return x.MemoryRssBytes
+	}
+	return 0
+}
+
+func (x *HealthResponse) GetHeapInUseBytes() uint64 {
+	if x != nil {
+		return x.HeapInUseBytes
+	}
+	return 0
+}
+
+func (x *HealthResponse) GetMemoryLimitBytes() uint64 {
+	if x != nil {
+		return x.MemoryLimitBytes
+	}
+	return 0
+}
+
+func (x *HealthResponse) GetOpenFileDescriptors() uint64 {
+	if x != nil {
+		return x.OpenFileDescriptors
+	}
+	return 0
+}
+
+func (x *HealthResponse) GetFileDescriptorLimit() uint64 {
+	if x != nil {
+		return x.FileDescriptorLimit
+	}
+	return 0
+}
+
+type RouteRuntimeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RouteId       string                 `protobuf:"bytes,1,opt,name=route_id,json=routeId,proto3" json:"route_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RouteRuntimeRequest) Reset() {
+	*x = RouteRuntimeRequest{}
+	mi := &file_relay_v1_relay_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RouteRuntimeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RouteRuntimeRequest) ProtoMessage() {}
+
+func (x *RouteRuntimeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RouteRuntimeRequest.ProtoReflect.Descriptor instead.
+func (*RouteRuntimeRequest) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *RouteRuntimeRequest) GetRouteId() string {
+	if x != nil {
+		return x.RouteId
+	}
+	return ""
+}
+
+type RouteRuntimeResponse struct {
+	state                        protoimpl.MessageState `protogen:"open.v1"`
+	RouteId                      string                 `protobuf:"bytes,1,opt,name=route_id,json=routeId,proto3" json:"route_id,omitempty"`
+	ActiveTunnels                uint64                 `protobuf:"varint,2,opt,name=active_tunnels,json=activeTunnels,proto3" json:"active_tunnels,omitempty"`
+	OpenedTotal                  uint64                 `protobuf:"varint,3,opt,name=opened_total,json=openedTotal,proto3" json:"opened_total,omitempty"`
+	CompletedTotal               uint64                 `protobuf:"varint,4,opt,name=completed_total,json=completedTotal,proto3" json:"completed_total,omitempty"`
+	FailedTotal                  uint64                 `protobuf:"varint,5,opt,name=failed_total,json=failedTotal,proto3" json:"failed_total,omitempty"`
+	ThrottledTotal               uint64                 `protobuf:"varint,6,opt,name=throttled_total,json=throttledTotal,proto3" json:"throttled_total,omitempty"`
+	SourceToTargetBytes          uint64                 `protobuf:"varint,7,opt,name=source_to_target_bytes,json=sourceToTargetBytes,proto3" json:"source_to_target_bytes,omitempty"`
+	TargetToSourceBytes          uint64                 `protobuf:"varint,8,opt,name=target_to_source_bytes,json=targetToSourceBytes,proto3" json:"target_to_source_bytes,omitempty"`
+	SetupLatencyP95Microseconds  uint64                 `protobuf:"varint,9,opt,name=setup_latency_p95_microseconds,json=setupLatencyP95Microseconds,proto3" json:"setup_latency_p95_microseconds,omitempty"`
+	AverageDurationMilliseconds  uint64                 `protobuf:"varint,10,opt,name=average_duration_milliseconds,json=averageDurationMilliseconds,proto3" json:"average_duration_milliseconds,omitempty"`
+	LastActivityUnixMilliseconds int64                  `protobuf:"varint,11,opt,name=last_activity_unix_milliseconds,json=lastActivityUnixMilliseconds,proto3" json:"last_activity_unix_milliseconds,omitempty"`
+	MetricsSinceUnixMilliseconds int64                  `protobuf:"varint,12,opt,name=metrics_since_unix_milliseconds,json=metricsSinceUnixMilliseconds,proto3" json:"metrics_since_unix_milliseconds,omitempty"`
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
+}
+
+func (x *RouteRuntimeResponse) Reset() {
+	*x = RouteRuntimeResponse{}
+	mi := &file_relay_v1_relay_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RouteRuntimeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RouteRuntimeResponse) ProtoMessage() {}
+
+func (x *RouteRuntimeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RouteRuntimeResponse.ProtoReflect.Descriptor instead.
+func (*RouteRuntimeResponse) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *RouteRuntimeResponse) GetRouteId() string {
+	if x != nil {
+		return x.RouteId
+	}
+	return ""
+}
+
+func (x *RouteRuntimeResponse) GetActiveTunnels() uint64 {
+	if x != nil {
+		return x.ActiveTunnels
+	}
+	return 0
+}
+
+func (x *RouteRuntimeResponse) GetOpenedTotal() uint64 {
+	if x != nil {
+		return x.OpenedTotal
+	}
+	return 0
+}
+
+func (x *RouteRuntimeResponse) GetCompletedTotal() uint64 {
+	if x != nil {
+		return x.CompletedTotal
+	}
+	return 0
+}
+
+func (x *RouteRuntimeResponse) GetFailedTotal() uint64 {
+	if x != nil {
+		return x.FailedTotal
+	}
+	return 0
+}
+
+func (x *RouteRuntimeResponse) GetThrottledTotal() uint64 {
+	if x != nil {
+		return x.ThrottledTotal
+	}
+	return 0
+}
+
+func (x *RouteRuntimeResponse) GetSourceToTargetBytes() uint64 {
+	if x != nil {
+		return x.SourceToTargetBytes
+	}
+	return 0
+}
+
+func (x *RouteRuntimeResponse) GetTargetToSourceBytes() uint64 {
+	if x != nil {
+		return x.TargetToSourceBytes
+	}
+	return 0
+}
+
+func (x *RouteRuntimeResponse) GetSetupLatencyP95Microseconds() uint64 {
+	if x != nil {
+		return x.SetupLatencyP95Microseconds
+	}
+	return 0
+}
+
+func (x *RouteRuntimeResponse) GetAverageDurationMilliseconds() uint64 {
+	if x != nil {
+		return x.AverageDurationMilliseconds
+	}
+	return 0
+}
+
+func (x *RouteRuntimeResponse) GetLastActivityUnixMilliseconds() int64 {
+	if x != nil {
+		return x.LastActivityUnixMilliseconds
+	}
+	return 0
+}
+
+func (x *RouteRuntimeResponse) GetMetricsSinceUnixMilliseconds() int64 {
+	if x != nil {
+		return x.MetricsSinceUnixMilliseconds
+	}
+	return 0
+}
+
 type ReloadIdentityRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
@@ -1400,7 +1774,7 @@ type ReloadIdentityRequest struct {
 
 func (x *ReloadIdentityRequest) Reset() {
 	*x = ReloadIdentityRequest{}
-	mi := &file_relay_v1_relay_proto_msgTypes[21]
+	mi := &file_relay_v1_relay_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1412,7 +1786,7 @@ func (x *ReloadIdentityRequest) String() string {
 func (*ReloadIdentityRequest) ProtoMessage() {}
 
 func (x *ReloadIdentityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[21]
+	mi := &file_relay_v1_relay_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1425,7 +1799,7 @@ func (x *ReloadIdentityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadIdentityRequest.ProtoReflect.Descriptor instead.
 func (*ReloadIdentityRequest) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{21}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ReloadIdentityRequest) GetOperationId() string {
@@ -1444,7 +1818,7 @@ type ReloadIdentityResponse struct {
 
 func (x *ReloadIdentityResponse) Reset() {
 	*x = ReloadIdentityResponse{}
-	mi := &file_relay_v1_relay_proto_msgTypes[22]
+	mi := &file_relay_v1_relay_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1456,7 +1830,7 @@ func (x *ReloadIdentityResponse) String() string {
 func (*ReloadIdentityResponse) ProtoMessage() {}
 
 func (x *ReloadIdentityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[22]
+	mi := &file_relay_v1_relay_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1469,7 +1843,7 @@ func (x *ReloadIdentityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadIdentityResponse.ProtoReflect.Descriptor instead.
 func (*ReloadIdentityResponse) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{22}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ReloadIdentityResponse) GetReloaded() bool {
@@ -1488,7 +1862,7 @@ type CommitIdentityRotationRequest struct {
 
 func (x *CommitIdentityRotationRequest) Reset() {
 	*x = CommitIdentityRotationRequest{}
-	mi := &file_relay_v1_relay_proto_msgTypes[23]
+	mi := &file_relay_v1_relay_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1500,7 +1874,7 @@ func (x *CommitIdentityRotationRequest) String() string {
 func (*CommitIdentityRotationRequest) ProtoMessage() {}
 
 func (x *CommitIdentityRotationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[23]
+	mi := &file_relay_v1_relay_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1513,7 +1887,7 @@ func (x *CommitIdentityRotationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitIdentityRotationRequest.ProtoReflect.Descriptor instead.
 func (*CommitIdentityRotationRequest) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{23}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *CommitIdentityRotationRequest) GetOperationId() string {
@@ -1532,7 +1906,7 @@ type CommitIdentityRotationResponse struct {
 
 func (x *CommitIdentityRotationResponse) Reset() {
 	*x = CommitIdentityRotationResponse{}
-	mi := &file_relay_v1_relay_proto_msgTypes[24]
+	mi := &file_relay_v1_relay_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1544,7 +1918,7 @@ func (x *CommitIdentityRotationResponse) String() string {
 func (*CommitIdentityRotationResponse) ProtoMessage() {}
 
 func (x *CommitIdentityRotationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[24]
+	mi := &file_relay_v1_relay_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1557,7 +1931,7 @@ func (x *CommitIdentityRotationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitIdentityRotationResponse.ProtoReflect.Descriptor instead.
 func (*CommitIdentityRotationResponse) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{24}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *CommitIdentityRotationResponse) GetCommitted() bool {
@@ -1638,7 +2012,7 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\n" +
 	"subject_id\x18\x04 \x01(\tR\tsubjectId\x12-\n" +
 	"\x12certificate_sha256\x18\x05 \x01(\tR\x11certificateSha256\x126\n" +
-	"\x17max_concurrent_sessions\x18\x06 \x01(\rR\x15maxConcurrentSessions\"\x82\x03\n" +
+	"\x17max_concurrent_sessions\x18\x06 \x01(\rR\x15maxConcurrentSessions\"\xa7\x03\n" +
 	"\vRoutePolicy\x12\x19\n" +
 	"\broute_id\x18\x01 \x01(\tR\arouteId\x12\x1e\n" +
 	"\n" +
@@ -1651,18 +2025,26 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x12target_endpoint_id\x18\x06 \x01(\tR\x10targetEndpointId\x126\n" +
 	"\x17max_concurrent_sessions\x18\a \x01(\rR\x15maxConcurrentSessions\x12&\n" +
 	"\x0fmax_frame_bytes\x18\b \x01(\rR\rmaxFrameBytes\x120\n" +
-	"\x14disable_idle_timeout\x18\t \x01(\bR\x12disableIdleTimeout\"\xff\x01\n" +
+	"\x14disable_idle_timeout\x18\t \x01(\bR\x12disableIdleTimeout\x12#\n" +
+	"\rtraffic_class\x18\n" +
+	" \x01(\tR\ftrafficClass\"\xdc\x01\n" +
+	"\x0fAdmissionPolicy\x12\x18\n" +
+	"\aenabled\x18\x01 \x01(\bR\aenabled\x12A\n" +
+	"\x1dproxy_target_pressure_percent\x18\x02 \x01(\rR\x1aproxyTargetPressurePercent\x128\n" +
+	"\x18database_reserve_percent\x18\x03 \x01(\rR\x16databaseReservePercent\x122\n" +
+	"\x15hard_pressure_percent\x18\x04 \x01(\rR\x13hardPressurePercent\"\xc5\x02\n" +
 	"\x14ApplySnapshotRequest\x12\x1a\n" +
 	"\brevision\x18\x01 \x01(\x04R\brevision\x12.\n" +
 	"\x13gateway_instance_id\x18\x02 \x01(\tR\x11gatewayInstanceId\x124\n" +
 	"\vpublic_keys\x18\x03 \x03(\v2\x13.relay.v1.PublicKeyR\n" +
 	"publicKeys\x126\n" +
 	"\tendpoints\x18\x04 \x03(\v2\x18.relay.v1.EndpointPolicyR\tendpoints\x12-\n" +
-	"\x06routes\x18\x05 \x03(\v2\x15.relay.v1.RoutePolicyR\x06routes\"`\n" +
+	"\x06routes\x18\x05 \x03(\v2\x15.relay.v1.RoutePolicyR\x06routes\x12D\n" +
+	"\x10admission_policy\x18\x06 \x01(\v2\x19.relay.v1.AdmissionPolicyR\x0fadmissionPolicy\"`\n" +
 	"\x15ApplySnapshotResponse\x12)\n" +
 	"\x10applied_revision\x18\x01 \x01(\x04R\x0fappliedRevision\x12\x1c\n" +
 	"\tunchanged\x18\x02 \x01(\bR\tunchanged\"\x0f\n" +
-	"\rHealthRequest\"\xcc\x02\n" +
+	"\rHealthRequest\"\xfd\a\n" +
 	"\x0eHealthResponse\x12#\n" +
 	"\rbuild_version\x18\x01 \x01(\tR\fbuildVersion\x12%\n" +
 	"\x0eprotocol_major\x18\x02 \x01(\rR\rprotocolMajor\x12)\n" +
@@ -1672,7 +2054,38 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x0eactive_tunnels\x18\x06 \x01(\x04R\ractiveTunnels\x12\x1a\n" +
 	"\bliveness\x18\a \x01(\bR\bliveness\x12\x1c\n" +
 	"\treadiness\x18\b \x01(\bR\treadiness\x12\x16\n" +
-	"\x06reason\x18\t \x01(\tR\x06reason\":\n" +
+	"\x06reason\x18\t \x01(\tR\x06reason\x120\n" +
+	"\x14active_proxy_tunnels\x18\n" +
+	" \x01(\x04R\x12activeProxyTunnels\x126\n" +
+	"\x17active_database_tunnels\x18\v \x01(\x04R\x15activeDatabaseTunnels\x122\n" +
+	"\x15throttled_proxy_total\x18\f \x01(\x04R\x13throttledProxyTotal\x128\n" +
+	"\x18throttled_database_total\x18\r \x01(\x04R\x16throttledDatabaseTotal\x12)\n" +
+	"\x10pressure_percent\x18\x0e \x01(\rR\x0fpressurePercent\x120\n" +
+	"\x14cpu_pressure_percent\x18\x0f \x01(\rR\x12cpuPressurePercent\x126\n" +
+	"\x17memory_pressure_percent\x18\x10 \x01(\rR\x15memoryPressurePercent\x12.\n" +
+	"\x13fd_pressure_percent\x18\x11 \x01(\rR\x11fdPressurePercent\x12'\n" +
+	"\x0fadmission_state\x18\x12 \x01(\tR\x0eadmissionState\x12(\n" +
+	"\x10memory_rss_bytes\x18\x13 \x01(\x04R\x0ememoryRssBytes\x12)\n" +
+	"\x11heap_in_use_bytes\x18\x14 \x01(\x04R\x0eheapInUseBytes\x12,\n" +
+	"\x12memory_limit_bytes\x18\x15 \x01(\x04R\x10memoryLimitBytes\x122\n" +
+	"\x15open_file_descriptors\x18\x16 \x01(\x04R\x13openFileDescriptors\x122\n" +
+	"\x15file_descriptor_limit\x18\x17 \x01(\x04R\x13fileDescriptorLimit\"0\n" +
+	"\x13RouteRuntimeRequest\x12\x19\n" +
+	"\broute_id\x18\x01 \x01(\tR\arouteId\"\xf1\x04\n" +
+	"\x14RouteRuntimeResponse\x12\x19\n" +
+	"\broute_id\x18\x01 \x01(\tR\arouteId\x12%\n" +
+	"\x0eactive_tunnels\x18\x02 \x01(\x04R\ractiveTunnels\x12!\n" +
+	"\fopened_total\x18\x03 \x01(\x04R\vopenedTotal\x12'\n" +
+	"\x0fcompleted_total\x18\x04 \x01(\x04R\x0ecompletedTotal\x12!\n" +
+	"\ffailed_total\x18\x05 \x01(\x04R\vfailedTotal\x12'\n" +
+	"\x0fthrottled_total\x18\x06 \x01(\x04R\x0ethrottledTotal\x123\n" +
+	"\x16source_to_target_bytes\x18\a \x01(\x04R\x13sourceToTargetBytes\x123\n" +
+	"\x16target_to_source_bytes\x18\b \x01(\x04R\x13targetToSourceBytes\x12C\n" +
+	"\x1esetup_latency_p95_microseconds\x18\t \x01(\x04R\x1bsetupLatencyP95Microseconds\x12B\n" +
+	"\x1daverage_duration_milliseconds\x18\n" +
+	" \x01(\x04R\x1baverageDurationMilliseconds\x12E\n" +
+	"\x1flast_activity_unix_milliseconds\x18\v \x01(\x03R\x1clastActivityUnixMilliseconds\x12E\n" +
+	"\x1fmetrics_since_unix_milliseconds\x18\f \x01(\x03R\x1cmetricsSinceUnixMilliseconds\":\n" +
 	"\x15ReloadIdentityRequest\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\"4\n" +
 	"\x16ReloadIdentityResponse\x12\x1a\n" +
@@ -1685,10 +2098,11 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x10RegisterEndpoint\x12\x19.relay.v1.EndpointControl\x1a\x19.relay.v1.EndpointControl(\x010\x01\x12>\n" +
 	"\n" +
 	"OpenTunnel\x12\x15.relay.v1.TunnelFrame\x1a\x15.relay.v1.TunnelFrame(\x010\x01\x12@\n" +
-	"\fAcceptTunnel\x12\x15.relay.v1.TunnelFrame\x1a\x15.relay.v1.TunnelFrame(\x010\x012\xe0\x02\n" +
+	"\fAcceptTunnel\x12\x15.relay.v1.TunnelFrame\x1a\x15.relay.v1.TunnelFrame(\x010\x012\xb2\x03\n" +
 	"\n" +
 	"RelayAdmin\x12>\n" +
 	"\tGetHealth\x12\x17.relay.v1.HealthRequest\x1a\x18.relay.v1.HealthResponse\x12P\n" +
+	"\x0fGetRouteRuntime\x12\x1d.relay.v1.RouteRuntimeRequest\x1a\x1e.relay.v1.RouteRuntimeResponse\x12P\n" +
 	"\rApplySnapshot\x12\x1e.relay.v1.ApplySnapshotRequest\x1a\x1f.relay.v1.ApplySnapshotResponse\x12S\n" +
 	"\x0eReloadIdentity\x12\x1f.relay.v1.ReloadIdentityRequest\x1a .relay.v1.ReloadIdentityResponse\x12k\n" +
 	"\x16CommitIdentityRotation\x12'.relay.v1.CommitIdentityRotationRequest\x1a(.relay.v1.CommitIdentityRotationResponseB=Z;github.com/wiolett-industries/gateway/daemon-shared/relayv1b\x06proto3"
@@ -1705,7 +2119,7 @@ func file_relay_v1_relay_proto_rawDescGZIP() []byte {
 	return file_relay_v1_relay_proto_rawDescData
 }
 
-var file_relay_v1_relay_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_relay_v1_relay_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_relay_v1_relay_proto_goTypes = []any{
 	(*SignedGrant)(nil),                    // 0: relay.v1.SignedGrant
 	(*EndpointControl)(nil),                // 1: relay.v1.EndpointControl
@@ -1724,14 +2138,17 @@ var file_relay_v1_relay_proto_goTypes = []any{
 	(*PublicKey)(nil),                      // 14: relay.v1.PublicKey
 	(*EndpointPolicy)(nil),                 // 15: relay.v1.EndpointPolicy
 	(*RoutePolicy)(nil),                    // 16: relay.v1.RoutePolicy
-	(*ApplySnapshotRequest)(nil),           // 17: relay.v1.ApplySnapshotRequest
-	(*ApplySnapshotResponse)(nil),          // 18: relay.v1.ApplySnapshotResponse
-	(*HealthRequest)(nil),                  // 19: relay.v1.HealthRequest
-	(*HealthResponse)(nil),                 // 20: relay.v1.HealthResponse
-	(*ReloadIdentityRequest)(nil),          // 21: relay.v1.ReloadIdentityRequest
-	(*ReloadIdentityResponse)(nil),         // 22: relay.v1.ReloadIdentityResponse
-	(*CommitIdentityRotationRequest)(nil),  // 23: relay.v1.CommitIdentityRotationRequest
-	(*CommitIdentityRotationResponse)(nil), // 24: relay.v1.CommitIdentityRotationResponse
+	(*AdmissionPolicy)(nil),                // 17: relay.v1.AdmissionPolicy
+	(*ApplySnapshotRequest)(nil),           // 18: relay.v1.ApplySnapshotRequest
+	(*ApplySnapshotResponse)(nil),          // 19: relay.v1.ApplySnapshotResponse
+	(*HealthRequest)(nil),                  // 20: relay.v1.HealthRequest
+	(*HealthResponse)(nil),                 // 21: relay.v1.HealthResponse
+	(*RouteRuntimeRequest)(nil),            // 22: relay.v1.RouteRuntimeRequest
+	(*RouteRuntimeResponse)(nil),           // 23: relay.v1.RouteRuntimeResponse
+	(*ReloadIdentityRequest)(nil),          // 24: relay.v1.ReloadIdentityRequest
+	(*ReloadIdentityResponse)(nil),         // 25: relay.v1.ReloadIdentityResponse
+	(*CommitIdentityRotationRequest)(nil),  // 26: relay.v1.CommitIdentityRotationRequest
+	(*CommitIdentityRotationResponse)(nil), // 27: relay.v1.CommitIdentityRotationResponse
 }
 var file_relay_v1_relay_proto_depIdxs = []int32{
 	2,  // 0: relay.v1.EndpointControl.register:type_name -> relay.v1.RegisterEndpoint
@@ -1752,25 +2169,28 @@ var file_relay_v1_relay_proto_depIdxs = []int32{
 	14, // 15: relay.v1.ApplySnapshotRequest.public_keys:type_name -> relay.v1.PublicKey
 	15, // 16: relay.v1.ApplySnapshotRequest.endpoints:type_name -> relay.v1.EndpointPolicy
 	16, // 17: relay.v1.ApplySnapshotRequest.routes:type_name -> relay.v1.RoutePolicy
-	1,  // 18: relay.v1.TunnelBroker.RegisterEndpoint:input_type -> relay.v1.EndpointControl
-	6,  // 19: relay.v1.TunnelBroker.OpenTunnel:input_type -> relay.v1.TunnelFrame
-	6,  // 20: relay.v1.TunnelBroker.AcceptTunnel:input_type -> relay.v1.TunnelFrame
-	19, // 21: relay.v1.RelayAdmin.GetHealth:input_type -> relay.v1.HealthRequest
-	17, // 22: relay.v1.RelayAdmin.ApplySnapshot:input_type -> relay.v1.ApplySnapshotRequest
-	21, // 23: relay.v1.RelayAdmin.ReloadIdentity:input_type -> relay.v1.ReloadIdentityRequest
-	23, // 24: relay.v1.RelayAdmin.CommitIdentityRotation:input_type -> relay.v1.CommitIdentityRotationRequest
-	1,  // 25: relay.v1.TunnelBroker.RegisterEndpoint:output_type -> relay.v1.EndpointControl
-	6,  // 26: relay.v1.TunnelBroker.OpenTunnel:output_type -> relay.v1.TunnelFrame
-	6,  // 27: relay.v1.TunnelBroker.AcceptTunnel:output_type -> relay.v1.TunnelFrame
-	20, // 28: relay.v1.RelayAdmin.GetHealth:output_type -> relay.v1.HealthResponse
-	18, // 29: relay.v1.RelayAdmin.ApplySnapshot:output_type -> relay.v1.ApplySnapshotResponse
-	22, // 30: relay.v1.RelayAdmin.ReloadIdentity:output_type -> relay.v1.ReloadIdentityResponse
-	24, // 31: relay.v1.RelayAdmin.CommitIdentityRotation:output_type -> relay.v1.CommitIdentityRotationResponse
-	25, // [25:32] is the sub-list for method output_type
-	18, // [18:25] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	17, // 18: relay.v1.ApplySnapshotRequest.admission_policy:type_name -> relay.v1.AdmissionPolicy
+	1,  // 19: relay.v1.TunnelBroker.RegisterEndpoint:input_type -> relay.v1.EndpointControl
+	6,  // 20: relay.v1.TunnelBroker.OpenTunnel:input_type -> relay.v1.TunnelFrame
+	6,  // 21: relay.v1.TunnelBroker.AcceptTunnel:input_type -> relay.v1.TunnelFrame
+	20, // 22: relay.v1.RelayAdmin.GetHealth:input_type -> relay.v1.HealthRequest
+	22, // 23: relay.v1.RelayAdmin.GetRouteRuntime:input_type -> relay.v1.RouteRuntimeRequest
+	18, // 24: relay.v1.RelayAdmin.ApplySnapshot:input_type -> relay.v1.ApplySnapshotRequest
+	24, // 25: relay.v1.RelayAdmin.ReloadIdentity:input_type -> relay.v1.ReloadIdentityRequest
+	26, // 26: relay.v1.RelayAdmin.CommitIdentityRotation:input_type -> relay.v1.CommitIdentityRotationRequest
+	1,  // 27: relay.v1.TunnelBroker.RegisterEndpoint:output_type -> relay.v1.EndpointControl
+	6,  // 28: relay.v1.TunnelBroker.OpenTunnel:output_type -> relay.v1.TunnelFrame
+	6,  // 29: relay.v1.TunnelBroker.AcceptTunnel:output_type -> relay.v1.TunnelFrame
+	21, // 30: relay.v1.RelayAdmin.GetHealth:output_type -> relay.v1.HealthResponse
+	23, // 31: relay.v1.RelayAdmin.GetRouteRuntime:output_type -> relay.v1.RouteRuntimeResponse
+	19, // 32: relay.v1.RelayAdmin.ApplySnapshot:output_type -> relay.v1.ApplySnapshotResponse
+	25, // 33: relay.v1.RelayAdmin.ReloadIdentity:output_type -> relay.v1.ReloadIdentityResponse
+	27, // 34: relay.v1.RelayAdmin.CommitIdentityRotation:output_type -> relay.v1.CommitIdentityRotationResponse
+	27, // [27:35] is the sub-list for method output_type
+	19, // [19:27] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_relay_v1_relay_proto_init() }
@@ -1800,7 +2220,7 @@ func file_relay_v1_relay_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_relay_v1_relay_proto_rawDesc), len(file_relay_v1_relay_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   25,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

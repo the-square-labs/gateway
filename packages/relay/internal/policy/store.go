@@ -29,6 +29,7 @@ type Snapshot struct {
 	PublicKeys        map[string]ed25519.PublicKey
 	Endpoints         map[string]*relayv1.EndpointPolicy
 	Routes            map[string]*relayv1.RoutePolicy
+	Admission         *relayv1.AdmissionPolicy
 	Digest            [sha256.Size]byte
 }
 
@@ -59,7 +60,7 @@ func Open(dir string) (*Store, error) {
 }
 
 func emptySnapshot() *Snapshot {
-	return &Snapshot{PublicKeys: map[string]ed25519.PublicKey{}, Endpoints: map[string]*relayv1.EndpointPolicy{}, Routes: map[string]*relayv1.RoutePolicy{}}
+	return &Snapshot{PublicKeys: map[string]ed25519.PublicKey{}, Endpoints: map[string]*relayv1.EndpointPolicy{}, Routes: map[string]*relayv1.RoutePolicy{}, Admission: defaultAdmissionPolicy()}
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -149,7 +150,13 @@ func normalize(request *relayv1.ApplySnapshotRequest) ([]byte, [sha256.Size]byte
 		return nil, [sha256.Size]byte{}, nil, err
 	}
 	digest := sha256.Sum256(encoded)
-	next := &Snapshot{Revision: request.Revision, GatewayInstanceID: request.GatewayInstanceId, PublicKeys: map[string]ed25519.PublicKey{}, Endpoints: map[string]*relayv1.EndpointPolicy{}, Routes: map[string]*relayv1.RoutePolicy{}, Digest: digest}
+	next := &Snapshot{Revision: request.Revision, GatewayInstanceID: request.GatewayInstanceId, PublicKeys: map[string]ed25519.PublicKey{}, Endpoints: map[string]*relayv1.EndpointPolicy{}, Routes: map[string]*relayv1.RoutePolicy{}, Admission: defaultAdmissionPolicy(), Digest: digest}
+	if request.AdmissionPolicy != nil {
+		next.Admission = proto.Clone(request.AdmissionPolicy).(*relayv1.AdmissionPolicy)
+	}
+	if err := validateAdmissionPolicy(next.Admission); err != nil {
+		return nil, digest, nil, err
+	}
 	for _, key := range request.PublicKeys {
 		if key.KeyId == "" || len(key.PublicKey) != ed25519.PublicKeySize {
 			return nil, digest, nil, fmt.Errorf("invalid public key")
@@ -181,6 +188,29 @@ func normalize(request *relayv1.ApplySnapshotRequest) ([]byte, [sha256.Size]byte
 		next.Routes[route.RouteId] = proto.Clone(route).(*relayv1.RoutePolicy)
 	}
 	return encoded, digest, next, nil
+}
+
+func defaultAdmissionPolicy() *relayv1.AdmissionPolicy {
+	return &relayv1.AdmissionPolicy{Enabled: true, ProxyTargetPressurePercent: 70, DatabaseReservePercent: 20, HardPressurePercent: 95}
+}
+
+func validateAdmissionPolicy(value *relayv1.AdmissionPolicy) error {
+	if value == nil || !value.Enabled {
+		return nil
+	}
+	if value.ProxyTargetPressurePercent < 50 || value.ProxyTargetPressurePercent > 85 {
+		return fmt.Errorf("proxy target pressure must be between 50 and 85 percent")
+	}
+	if value.DatabaseReservePercent < 5 || value.DatabaseReservePercent > 35 {
+		return fmt.Errorf("database reserve must be between 5 and 35 percent")
+	}
+	if value.HardPressurePercent < 90 || value.HardPressurePercent > 99 {
+		return fmt.Errorf("hard pressure cutoff must be between 90 and 99 percent")
+	}
+	if value.ProxyTargetPressurePercent+value.DatabaseReservePercent >= value.HardPressurePercent {
+		return fmt.Errorf("proxy target pressure plus database reserve must remain below the hard cutoff")
+	}
+	return nil
 }
 
 func RevisionBytes(revision uint64) []byte {

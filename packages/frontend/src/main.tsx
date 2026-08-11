@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { stripGatewayReloadParam } from "@/lib/gateway-update-reload";
+import { rememberGatewayReloadToken, stripGatewayReloadParam } from "@/lib/gateway-update-reload";
 import { registerAuthContextReset } from "@/stores/auth";
 import { resetClientSessionState } from "@/stores/session-reset";
 import App from "./App";
@@ -9,6 +9,7 @@ import "./index.css";
 registerAuthContextReset(resetClientSessionState);
 
 // Strip cache-bust param added by update reload
+rememberGatewayReloadToken(window.location.href);
 const cleanReloadUrl = stripGatewayReloadParam(window.location.href);
 if (cleanReloadUrl != null) {
   window.history.replaceState(null, "", cleanReloadUrl);

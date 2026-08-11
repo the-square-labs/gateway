@@ -599,6 +599,7 @@ docker_repo_distro_family() {
     case "$OS_ID" in
         ubuntu) echo "ubuntu" ;;
         debian) echo "debian" ;;
+        alpine) echo "alpine" ;;
         fedora) echo "fedora" ;;
         rhel) echo "rhel" ;;
         centos|centos_stream) echo "centos" ;;
@@ -673,9 +674,12 @@ remove_conflicting_docker_packages() {
 install_docker_engine() {
     local repo_family
     repo_family=$(docker_repo_distro_family)
-    [[ -n "$repo_family" ]] || die "Automatic Docker installation is supported only on Debian/Ubuntu/Fedora/CentOS/RHEL."
+    [[ -n "$repo_family" ]] || die "Automatic Docker installation is supported only on Alpine/Debian/Ubuntu/Fedora/CentOS/RHEL."
     remove_conflicting_docker_packages "$repo_family"
     case "$repo_family" in
+        alpine)
+            install_system_packages docker docker-cli-compose
+            ;;
         ubuntu|debian)
             setup_docker_apt_repository "$repo_family"
             install_system_packages docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin

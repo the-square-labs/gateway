@@ -1,8 +1,7 @@
-import { AnimatePresence, motion } from "framer-motion";
 import { Minus, Plus, RefreshCw, Save } from "lucide-react";
-import type { ReactNode } from "react";
 import { Combobox } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
+import { SettingsControlRow, SettingsInlineControl } from "@/components/common/SettingsControlRow";
 import { ProxyUpstreamPanel } from "@/components/proxy/ProxyUpstreamEditor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,43 +19,14 @@ import { cn, formatDateTime } from "@/lib/utils";
 import type {
   AccessList,
   CustomHeader,
-  ForwardScheme,
   NginxTemplate,
   ProxyHost,
   RewriteRule,
   SSLCertificate,
 } from "@/types";
-import { ToggleRow } from "./helpers";
 
-function TogglePanelShell({
-  title,
-  description,
-  checked,
-  onChange,
-  disabled,
-  className,
-  children,
-}: {
-  title: string;
-  description: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-  disabled?: boolean;
-  className?: string;
-  children?: ReactNode;
-}) {
-  return (
-    <PanelShell
-      title={title}
-      description={description}
-      className={className}
-      actions={<Switch checked={checked} onChange={onChange} disabled={disabled} />}
-      wrapHeader
-    >
-      {children}
-    </PanelShell>
-  );
-}
+const tableInputClass =
+  "h-9 border-0 rounded-none shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
 
 export interface SettingsTabProps {
   host: ProxyHost;
@@ -64,37 +34,32 @@ export interface SettingsTabProps {
   onToggle: (field: string, value: boolean) => void;
   customHeaders: CustomHeader[];
   setCustomHeaders: (v: CustomHeader[]) => void;
-  cacheEnabled: boolean;
-  setCacheEnabled: (v: boolean) => void;
-  cacheMaxAge: number;
-  setCacheMaxAge: (v: number) => void;
-  rateLimitEnabled: boolean;
-  setRateLimitEnabled: (v: boolean) => void;
-  rateLimitRPS: number;
-  setRateLimitRPS: (v: number) => void;
-  rateLimitBurst: number;
-  setRateLimitBurst: (v: number) => void;
   customRewrites: RewriteRule[];
   setCustomRewrites: (v: RewriteRule[]) => void;
-  onSaveCustom: () => void;
+  onSaveHeaders: () => void;
+  onSaveRewrites: () => void;
   isSavingCustom: boolean;
   accessListId: string;
   accessLists: AccessList[];
   onAccessListChange: (v: string) => void;
   sslCerts: SSLCertificate[];
-  onSslCertificateChange: (v: string) => void;
+  sslEnabled: boolean;
+  setSslEnabled: (v: boolean) => void;
+  sslForced: boolean;
+  setSslForced: (v: boolean) => void;
+  http2Support: boolean;
+  setHttp2Support: (v: boolean) => void;
+  sslCertificateId: string;
+  setSslCertificateId: (v: string) => void;
+  onSaveSsl: () => void;
+  isSavingSsl: boolean;
+  hasSslSettingsChanged: boolean;
   nginxTemplates: NginxTemplate[];
   nginxTemplateId: string;
   onNginxTemplateChange: (v: string) => void;
   selectedTemplate: NginxTemplate | null;
   templateVariables: Record<string, string | number | boolean>;
   onTemplateVariableChange: (name: string, value: string | number | boolean) => void;
-  templateForwardScheme: ForwardScheme;
-  setTemplateForwardScheme: (value: ForwardScheme) => void;
-  templateForwardHost: string;
-  setTemplateForwardHost: (value: string) => void;
-  templateForwardPort: number;
-  setTemplateForwardPort: (value: number) => void;
   templateRedirectUrl: string;
   setTemplateRedirectUrl: (value: string) => void;
   templateRedirectStatusCode: number;
@@ -105,6 +70,8 @@ export interface SettingsTabProps {
   canManage: boolean;
   hasHeadersChanged: boolean;
   hasRewritesChanged: boolean;
+  healthCheckEnabled: boolean;
+  setHealthCheckEnabled: (v: boolean) => void;
   healthCheckUrl: string;
   setHealthCheckUrl: (v: string) => void;
   healthCheckExpectedStatus: number | null;
@@ -115,6 +82,9 @@ export interface SettingsTabProps {
   setHealthCheckBodyMatchMode: (v: "includes" | "exact" | "starts_with" | "ends_with") => void;
   healthCheckSlowThreshold: number;
   setHealthCheckSlowThreshold: (v: number) => void;
+  onSaveHealthCheck: () => void;
+  isSavingHealthCheck: boolean;
+  hasHealthCheckSettingsChanged: boolean;
   canResyncTls: boolean;
   isTlsResyncing: boolean;
   onTlsResync: () => void;
@@ -126,37 +96,32 @@ export function SettingsTab({
   onToggle,
   customHeaders,
   setCustomHeaders,
-  cacheEnabled,
-  setCacheEnabled,
-  cacheMaxAge,
-  setCacheMaxAge,
-  rateLimitEnabled,
-  setRateLimitEnabled,
-  rateLimitRPS,
-  setRateLimitRPS,
-  rateLimitBurst,
-  setRateLimitBurst,
   customRewrites,
   setCustomRewrites,
-  onSaveCustom,
+  onSaveHeaders,
+  onSaveRewrites,
   isSavingCustom,
   accessListId,
   accessLists,
   onAccessListChange,
   sslCerts,
-  onSslCertificateChange,
+  sslEnabled,
+  setSslEnabled,
+  sslForced,
+  setSslForced,
+  http2Support,
+  setHttp2Support,
+  sslCertificateId,
+  setSslCertificateId,
+  onSaveSsl,
+  isSavingSsl,
+  hasSslSettingsChanged,
   nginxTemplates,
   nginxTemplateId,
   onNginxTemplateChange,
   selectedTemplate,
   templateVariables,
   onTemplateVariableChange,
-  templateForwardScheme,
-  setTemplateForwardScheme,
-  templateForwardHost,
-  setTemplateForwardHost,
-  templateForwardPort,
-  setTemplateForwardPort,
   templateRedirectUrl,
   setTemplateRedirectUrl,
   templateRedirectStatusCode,
@@ -167,6 +132,8 @@ export function SettingsTab({
   canManage,
   hasHeadersChanged,
   hasRewritesChanged,
+  healthCheckEnabled,
+  setHealthCheckEnabled,
   healthCheckUrl,
   setHealthCheckUrl,
   healthCheckExpectedStatus,
@@ -177,6 +144,9 @@ export function SettingsTab({
   setHealthCheckBodyMatchMode,
   healthCheckSlowThreshold,
   setHealthCheckSlowThreshold,
+  onSaveHealthCheck,
+  isSavingHealthCheck,
+  hasHealthCheckSettingsChanged,
   canResyncTls,
   isTlsResyncing,
   onTlsResync,
@@ -188,11 +158,7 @@ export function SettingsTab({
   const editableBuiltinVariables =
     host.type === "redirect"
       ? [
-          {
-            name: "redirectUrl",
-            description: "Redirect target URL",
-            type: "string" as const,
-          },
+          { name: "redirectUrl", description: "Redirect target URL", type: "string" as const },
           {
             name: "redirectStatusCode",
             description: "Redirect status code",
@@ -200,7 +166,12 @@ export function SettingsTab({
           },
         ]
       : [];
-
+  const templateVariableDefinitions = selectedTemplate?.variables ?? [];
+  const cacheEnabled = templateVariables.cacheEnabled === true;
+  const rateLimitMode =
+    templateVariables.rateLimitMode === "custom" || templateVariables.rateLimitMode === "disabled"
+      ? templateVariables.rateLimitMode
+      : "inherit";
   const showCustomHeaders = canManage || customHeaders.length > 0;
   const showCustomRewrites = canManage || customRewrites.length > 0;
   const tlsDistributionProblem =
@@ -211,6 +182,103 @@ export function SettingsTab({
       Boolean(host.tlsDistribution.error))
       ? host.tlsDistribution
       : null;
+
+  const renderBuiltinValue = (variable: (typeof editableBuiltinVariables)[number]) => {
+    if (variable.name === "redirectUrl") {
+      return (
+        <Input
+          value={templateRedirectUrl}
+          onChange={(event) => setTemplateRedirectUrl(event.target.value)}
+          className={tableInputClass}
+          disabled={!canManage}
+        />
+      );
+    }
+    return (
+      <NumericInput
+        value={templateRedirectStatusCode}
+        onChange={setTemplateRedirectStatusCode}
+        min={300}
+        max={399}
+        className={tableInputClass}
+        disabled={!canManage}
+      />
+    );
+  };
+
+  const renderTemplateValue = (variable: NonNullable<NginxTemplate["variables"]>[number]) => {
+    const disabledByDependency =
+      (variable.name === "cacheMaxAge" && !cacheEnabled) ||
+      (["rateLimitRPS", "rateLimitBurst", "connectionsPerIp"].includes(variable.name) &&
+        rateLimitMode !== "custom");
+
+    if (variable.name === "rateLimitMode") {
+      return (
+        <Select
+          value={rateLimitMode}
+          onValueChange={(value) => onTemplateVariableChange(variable.name, value)}
+          disabled={!canManage}
+        >
+          <SelectTrigger className={cn(tableInputClass, "font-sans")}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="font-sans">
+            <SelectItem value="inherit">Gateway default (1000 / 3000 / 1000)</SelectItem>
+            <SelectItem value="custom">Custom</SelectItem>
+            <SelectItem value="disabled">Disabled</SelectItem>
+          </SelectContent>
+        </Select>
+      );
+    }
+    if (variable.name === "cacheEnabled") {
+      return (
+        <Select
+          value={templateVariables[variable.name] === true ? "enabled" : "disabled"}
+          onValueChange={(value) => onTemplateVariableChange(variable.name, value === "enabled")}
+          disabled={!canManage}
+        >
+          <SelectTrigger className={cn(tableInputClass, "font-sans")} aria-label="Cache enabled">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="font-sans">
+            <SelectItem value="enabled">Enabled</SelectItem>
+            <SelectItem value="disabled">Disabled</SelectItem>
+          </SelectContent>
+        </Select>
+      );
+    }
+    if (variable.type === "boolean") {
+      return (
+        <div className="flex h-9 items-center justify-end px-3">
+          <Switch
+            checked={templateVariables[variable.name] === true}
+            onChange={(value) => onTemplateVariableChange(variable.name, value)}
+            disabled={!canManage}
+          />
+        </div>
+      );
+    }
+    if (variable.type === "number") {
+      return (
+        <NumericInput
+          value={Number(templateVariables[variable.name] ?? variable.default ?? 0)}
+          onChange={(value) => onTemplateVariableChange(variable.name, value)}
+          min={1}
+          className={tableInputClass}
+          disabled={!canManage || disabledByDependency}
+        />
+      );
+    }
+    return (
+      <Input
+        value={String(templateVariables[variable.name] ?? variable.default ?? "")}
+        onChange={(event) => onTemplateVariableChange(variable.name, event.target.value)}
+        placeholder={variable.default === undefined ? "" : String(variable.default)}
+        className={tableInputClass}
+        disabled={!canManage || disabledByDependency}
+      />
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -265,25 +333,27 @@ export function SettingsTab({
         />
       )}
 
-      {/* WebSocket + Access List -- side by side */}
       <div
         className="grid gap-4"
         style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 32rem), 1fr))" }}
       >
         {host.type === "proxy" && (
-          <TogglePanelShell
-            title="WebSocket Support"
-            description="Enable WebSocket proxying"
-            checked={host.websocketSupport}
-            onChange={(v) => onToggle("websocketSupport", v)}
-            disabled={!canManage}
-          />
+          <PanelShell title="WebSocket Support" description="Enable WebSocket proxying">
+            <SettingsControlRow title="Enabled" description="Allow WebSocket protocol upgrades">
+              <Switch
+                checked={host.websocketSupport}
+                onChange={(value) => onToggle("websocketSupport", value)}
+                disabled={!canManage}
+              />
+            </SettingsControlRow>
+          </PanelShell>
         )}
         <PanelShell
           title="Access List"
           description="Restrict access via IP rules or basic authentication"
           className="overflow-visible"
-          actions={
+        >
+          <SettingsControlRow title="Policy" description="Access policy applied to this proxy host">
             <Combobox
               value={accessListId}
               options={accessListOptions}
@@ -292,12 +362,11 @@ export function SettingsTab({
               searchPlaceholder="Search access lists..."
               emptyMessage="No access lists found."
               disabled={!canManage}
-              className="w-full shrink-0 sm:w-56"
+              ariaLabel="Access List policy"
+              className="w-full"
             />
-          }
-          headerBorder={false}
-          wrapHeader
-        />
+          </SettingsControlRow>
+        </PanelShell>
       </div>
 
       {host.type === "proxy" && (
@@ -306,11 +375,10 @@ export function SettingsTab({
 
       <PanelShell
         title="Config Template"
-        description="Select a proxy template and configure its variables"
+        description="Select a template and configure its variables"
         actions={
           canManage ? (
             <Button
-              className="w-fit"
               onClick={onSaveTemplateSettings}
               disabled={!hasTemplateSettingsChanged || isSavingTemplate}
             >
@@ -319,20 +387,18 @@ export function SettingsTab({
             </Button>
           ) : null
         }
-        bodyClassName="p-4 space-y-4"
         wrapHeader
       >
-        <div className="space-y-1.5">
-          <label className="text-xs text-muted-foreground">Template</label>
+        <SettingsControlRow title="Template" description="Nginx configuration used for this host">
           <Select
             value={nginxTemplateId || "__none__"}
-            onValueChange={(v) => onNginxTemplateChange(v === "__none__" ? "" : v)}
+            onValueChange={(value) => onNginxTemplateChange(value === "__none__" ? "" : value)}
             disabled={!canManage}
           >
-            <SelectTrigger>
+            <SelectTrigger className="w-full font-sans sm:w-72">
               <SelectValue placeholder="Default template" />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="font-sans">
               <SelectItem value="__none__">Default template</SelectItem>
               {nginxTemplates.map((template) => (
                 <SelectItem key={template.id} value={template.id}>
@@ -341,380 +407,242 @@ export function SettingsTab({
               ))}
             </SelectContent>
           </Select>
-        </div>
+        </SettingsControlRow>
 
-        {editableBuiltinVariables.length > 0 || selectedTemplate?.variables?.length ? (
-          <div className="overflow-x-auto border border-border">
+        {editableBuiltinVariables.length > 0 || templateVariableDefinitions.length > 0 ? (
+          <div className="overflow-x-auto">
             <div className="min-w-[680px]">
-              <div className="grid grid-cols-[minmax(0,14rem)_minmax(0,1fr)_minmax(0,12rem)] border-b border-border text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              <div className="grid grid-cols-[minmax(0,14rem)_minmax(0,1fr)_minmax(0,16rem)] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 <div className="px-3 py-2">Variable</div>
-                <div className="px-3 py-2 border-l border-border">Description</div>
-                <div className="px-3 py-2 border-l border-border">Value</div>
+                <div className="border-l border-border px-3 py-2">Description</div>
+                <div className="border-l border-border px-3 py-2">Value</div>
               </div>
-              <div>
-                {editableBuiltinVariables.map((variable) => (
-                  <div
-                    key={variable.name}
-                    className="grid grid-cols-[minmax(0,14rem)_minmax(0,1fr)_minmax(0,12rem)] border-b border-border last:border-b-0"
-                  >
-                    <div className="px-3 py-2 min-w-0 flex items-center">
-                      <p className="text-sm font-medium truncate">{variable.name}</p>
-                    </div>
-                    <div className="border-l border-border">
-                      <div className="flex h-9 items-center px-3 min-w-0">
-                        <p className="text-sm font-medium truncate">{variable.description}</p>
-                      </div>
-                    </div>
-                    <div className="border-l border-border">
-                      {variable.name === "forwardScheme" ? (
-                        <Select
-                          value={templateForwardScheme}
-                          onValueChange={(value) =>
-                            setTemplateForwardScheme(value as ForwardScheme)
-                          }
-                          disabled={!canManage}
-                        >
-                          <SelectTrigger className="h-9 border-0 rounded-none shadow-none focus:ring-1 focus:ring-inset focus:ring-ring">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="http">http</SelectItem>
-                            <SelectItem value="https">https</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      ) : variable.name === "forwardHost" ? (
-                        <Input
-                          value={templateForwardHost}
-                          onChange={(e) => setTemplateForwardHost(e.target.value)}
-                          className="h-9 text-xs border-0 rounded-none shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-                          disabled={!canManage}
-                        />
-                      ) : variable.name === "forwardPort" ? (
-                        <NumericInput
-                          value={templateForwardPort}
-                          onChange={(value) => setTemplateForwardPort(value)}
-                          min={1}
-                          max={65535}
-                          className="h-9 text-xs border-0 rounded-none shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-                          disabled={!canManage}
-                        />
-                      ) : variable.name === "redirectUrl" ? (
-                        <Input
-                          value={templateRedirectUrl}
-                          onChange={(e) => setTemplateRedirectUrl(e.target.value)}
-                          className="h-9 text-xs border-0 rounded-none shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-                          disabled={!canManage}
-                        />
-                      ) : (
-                        <NumericInput
-                          value={templateRedirectStatusCode}
-                          onChange={(value) => setTemplateRedirectStatusCode(value)}
-                          min={300}
-                          max={399}
-                          className="h-9 text-xs border-0 rounded-none shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-                          disabled={!canManage}
-                        />
-                      )}
-                    </div>
+              {[...editableBuiltinVariables, ...templateVariableDefinitions].map((variable) => (
+                <div
+                  key={variable.name}
+                  className="grid grid-cols-[minmax(0,14rem)_minmax(0,1fr)_minmax(0,16rem)] border-b border-border last:border-b-0"
+                >
+                  <div className="flex min-w-0 items-center px-3 py-2">
+                    <p className="truncate text-sm font-medium">{variable.name}</p>
                   </div>
-                ))}
-
-                {selectedTemplate?.variables?.map((variable) => (
-                  <div
-                    key={variable.name}
-                    className="grid grid-cols-[minmax(0,14rem)_minmax(0,1fr)_minmax(0,12rem)] border-b border-border last:border-b-0"
-                  >
-                    <div className="px-3 py-2 min-w-0 flex items-center">
-                      <p className="text-sm font-medium truncate">{variable.name}</p>
-                    </div>
-                    <div className="border-l border-border">
-                      <div className="flex h-9 items-center px-3 min-w-0">
-                        <p className="text-sm font-medium truncate">
-                          {variable.description || "—"}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="border-l border-border">
-                      {variable.type === "boolean" ? (
-                        <Select
-                          value={
-                            templateVariables[variable.name] === true ||
-                            templateVariables[variable.name] === "true"
-                              ? "true"
-                              : "false"
-                          }
-                          onValueChange={(value) =>
-                            onTemplateVariableChange(variable.name, value === "true")
-                          }
-                          disabled={!canManage}
-                        >
-                          <SelectTrigger className="h-9 border-0 rounded-none shadow-none focus:ring-1 focus:ring-inset focus:ring-ring">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="true">Enabled</SelectItem>
-                            <SelectItem value="false">Disabled</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      ) : variable.type === "number" ? (
-                        <NumericInput
-                          value={Number(templateVariables[variable.name] ?? variable.default ?? 0)}
-                          onChange={(value) => onTemplateVariableChange(variable.name, value)}
-                          className="h-9 text-xs border-0 rounded-none shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-                          disabled={!canManage}
-                        />
-                      ) : (
-                        <Input
-                          value={String(templateVariables[variable.name] ?? variable.default ?? "")}
-                          onChange={(e) => onTemplateVariableChange(variable.name, e.target.value)}
-                          placeholder={
-                            variable.default !== undefined ? String(variable.default) : ""
-                          }
-                          className="h-9 text-xs border-0 rounded-none shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-                          disabled={!canManage}
-                        />
-                      )}
-                    </div>
+                  <div className="flex min-w-0 items-center border-l border-border px-3 py-2">
+                    <p className="text-xs text-muted-foreground">
+                      {variable.description || "No description"}
+                    </p>
                   </div>
-                ))}
-              </div>
+                  <div className="border-l border-border">
+                    {editableBuiltinVariables.includes(variable as never)
+                      ? renderBuiltinValue(variable as (typeof editableBuiltinVariables)[number])
+                      : renderTemplateValue(
+                          variable as NonNullable<NginxTemplate["variables"]>[number]
+                        )}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         ) : null}
       </PanelShell>
 
-      {/* SSL */}
-      <TogglePanelShell
-        title="SSL Enabled"
-        description="Serve this host over HTTPS"
-        checked={host.sslEnabled}
-        onChange={(v) => onToggle("sslEnabled", v)}
-        disabled={!canManage}
+      <PanelShell
+        title="SSL"
+        description="HTTPS termination and transport settings"
+        actions={
+          canManage ? (
+            <Button onClick={onSaveSsl} disabled={!hasSslSettingsChanged || isSavingSsl}>
+              <Save className="h-3.5 w-3.5" />
+              Save
+            </Button>
+          ) : null
+        }
+        wrapHeader
       >
-        <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_2fr] divide-y md:divide-y-0 md:divide-x divide-border">
-          <ToggleRow
-            label="Force HTTPS"
-            description="Redirect HTTP to HTTPS"
-            checked={host.sslForced}
-            onChange={(v) => onToggle("sslForced", v)}
-            disabled={!canManage || !host.sslEnabled}
+        <SettingsControlRow title="Enabled" description="Serve this host over HTTPS">
+          <Switch checked={sslEnabled} onChange={setSslEnabled} disabled={!canManage} />
+        </SettingsControlRow>
+        <SettingsControlRow title="Force HTTPS" description="Redirect HTTP requests to HTTPS">
+          <Switch
+            checked={sslForced}
+            onChange={setSslForced}
+            disabled={!canManage || !sslEnabled}
           />
-          <ToggleRow
-            label="HTTP/2"
-            description="Enable HTTP/2 protocol support"
-            checked={host.http2Support}
-            onChange={(v) => onToggle("http2Support", v)}
-            disabled={!canManage || !host.sslEnabled}
+        </SettingsControlRow>
+        <SettingsControlRow title="HTTP/2" description="Enable HTTP/2 protocol support">
+          <Switch
+            checked={http2Support}
+            onChange={setHttp2Support}
+            disabled={!canManage || !sslEnabled}
           />
-          <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <span className="text-sm font-medium">SSL Certificate</span>
-              <p className="text-xs text-muted-foreground">Select the certificate for HTTPS</p>
-            </div>
-            <div className="w-full shrink-0 sm:w-56">
-              <Select
-                value={host.sslCertificateId || "__none__"}
-                onValueChange={(v) => onSslCertificateChange(v === "__none__" ? "" : v)}
-                disabled={!canManage}
-              >
-                <SelectTrigger aria-label="SSL Certificate">
-                  <SelectValue placeholder="Select certificate..." />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">None</SelectItem>
-                  {sslCerts.map((cert) => (
-                    <SelectItem key={cert.id} value={cert.id}>
-                      {cert.name} ({cert.type})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </div>
-      </TogglePanelShell>
+        </SettingsControlRow>
+        <SettingsControlRow title="SSL Certificate" description="Certificate used for HTTPS">
+          <Select
+            value={sslCertificateId || "__none__"}
+            onValueChange={(value) => setSslCertificateId(value === "__none__" ? "" : value)}
+            disabled={!canManage}
+          >
+            <SelectTrigger className="w-full font-sans sm:w-72" aria-label="SSL Certificate">
+              <SelectValue placeholder="Select certificate..." />
+            </SelectTrigger>
+            <SelectContent className="font-sans">
+              <SelectItem value="__none__">None</SelectItem>
+              {sslCerts.map((certificate) => (
+                <SelectItem key={certificate.id} value={certificate.id}>
+                  {certificate.name} ({certificate.type})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </SettingsControlRow>
+      </PanelShell>
 
-      {/* Cache & Rate Limit -- side by side */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <TogglePanelShell
-          title="Cache"
-          description="Enable response caching"
-          checked={cacheEnabled}
-          onChange={setCacheEnabled}
-          disabled={!canManage}
-        >
-          <div className="space-y-1.5 px-4 py-3">
-            <label className="text-xs text-muted-foreground">Max Age (seconds)</label>
-            <NumericInput
-              value={cacheMaxAge}
-              onChange={(v) => setCacheMaxAge(v)}
-              min={1}
-              disabled={!canManage || !cacheEnabled}
-            />
-          </div>
-        </TogglePanelShell>
-        <TogglePanelShell
-          title="Rate Limit"
-          description="Enable request rate limiting"
-          checked={rateLimitEnabled}
-          onChange={setRateLimitEnabled}
-          disabled={!canManage}
-        >
-          <div className="px-4 py-3 grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">Requests/sec</label>
-              <NumericInput
-                value={rateLimitRPS}
-                onChange={setRateLimitRPS}
-                min={1}
-                disabled={!canManage || !rateLimitEnabled}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">Burst</label>
-              <NumericInput
-                value={rateLimitBurst}
-                onChange={setRateLimitBurst}
-                min={1}
-                disabled={!canManage || !rateLimitEnabled}
-              />
-            </div>
-          </div>
-        </TogglePanelShell>
-      </div>
-
-      {/* Health Check */}
       {host.type !== "404" && (
-        <TogglePanelShell
+        <PanelShell
           title="Health Check"
-          description="Enable periodic health monitoring"
-          checked={host.healthCheckEnabled}
-          onChange={(v) => onToggle("healthCheckEnabled", v)}
-          disabled={!canManage}
+          description="Periodic upstream availability monitoring"
+          actions={
+            canManage ? (
+              <Button
+                onClick={onSaveHealthCheck}
+                disabled={!hasHealthCheckSettingsChanged || isSavingHealthCheck}
+              >
+                <Save className="h-3.5 w-3.5" />
+                Save
+              </Button>
+            ) : null
+          }
+          wrapHeader
         >
-          <div className="px-4 py-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">URL Path</label>
-              <Input
-                value={healthCheckUrl}
-                onChange={(e) => setHealthCheckUrl(e.target.value)}
-                placeholder="/"
-                disabled={!canManage || !host.healthCheckEnabled}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">Expected Status</label>
-              <Input
-                type="number"
-                value={healthCheckExpectedStatus ?? ""}
-                onChange={(e) =>
-                  setHealthCheckExpectedStatus(e.target.value ? Number(e.target.value) : null)
-                }
-                placeholder="Any 2xx"
-                disabled={!canManage || !host.healthCheckEnabled}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">Slow Threshold (Nx avg)</label>
-              <Input
-                type="number"
-                min={0}
-                value={healthCheckSlowThreshold}
-                onChange={(e) => setHealthCheckSlowThreshold(Number(e.target.value) || 0)}
-                placeholder="3"
-                disabled={!canManage || !host.healthCheckEnabled}
-              />
-              <p className="text-[10px] text-muted-foreground">
-                Mark degraded when response time exceeds Nx the 3-hour average. 0 to disable.
-              </p>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">Expected Body</label>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[11rem_minmax(0,1fr)]">
+          <SettingsControlRow title="Enabled" description="Run periodic health probes">
+            <Switch
+              checked={healthCheckEnabled}
+              onChange={setHealthCheckEnabled}
+              disabled={!canManage}
+            />
+          </SettingsControlRow>
+          <SettingsControlRow title="URL Path" description="Path requested from the upstream">
+            <Input
+              value={healthCheckUrl}
+              onChange={(event) => setHealthCheckUrl(event.target.value)}
+              placeholder="/"
+              className="w-full sm:w-72"
+              disabled={!canManage || !healthCheckEnabled}
+            />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Expected Status"
+            description="Leave empty to accept any successful 2xx response"
+          >
+            <Input
+              type="number"
+              value={healthCheckExpectedStatus ?? ""}
+              onChange={(event) =>
+                setHealthCheckExpectedStatus(event.target.value ? Number(event.target.value) : null)
+              }
+              placeholder="Any 2xx"
+              className="w-full sm:w-72"
+              disabled={!canManage || !healthCheckEnabled}
+            />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Slow Threshold"
+            description="Mark degraded above this multiple of the 3-hour average; 0 disables it"
+          >
+            <NumericInput
+              value={healthCheckSlowThreshold}
+              onChange={setHealthCheckSlowThreshold}
+              min={0}
+              max={100}
+              className="w-full sm:w-72"
+              disabled={!canManage || !healthCheckEnabled}
+            />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Expected Body"
+            description="Optional response body assertion"
+            controlsClassName="sm:min-w-[24rem] sm:max-w-[32rem]"
+          >
+            <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-[10rem_minmax(0,1fr)]">
+              <SettingsInlineControl label="Match">
                 <Select
                   value={healthCheckBodyMatchMode}
-                  onValueChange={(v) =>
+                  onValueChange={(value) =>
                     setHealthCheckBodyMatchMode(
-                      v as "includes" | "exact" | "starts_with" | "ends_with"
+                      value as "includes" | "exact" | "starts_with" | "ends_with"
                     )
                   }
-                  disabled={!canManage || !host.healthCheckEnabled}
+                  disabled={!canManage || !healthCheckEnabled}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="font-sans">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="font-sans">
                     <SelectItem value="includes">Includes</SelectItem>
                     <SelectItem value="exact">Exact Match</SelectItem>
                     <SelectItem value="starts_with">Starts With</SelectItem>
                     <SelectItem value="ends_with">Ends With</SelectItem>
                   </SelectContent>
                 </Select>
+              </SettingsInlineControl>
+              <SettingsInlineControl label="Value">
                 <Input
                   value={healthCheckExpectedBody}
-                  onChange={(e) => setHealthCheckExpectedBody(e.target.value)}
+                  onChange={(event) => setHealthCheckExpectedBody(event.target.value)}
                   placeholder="Optional"
-                  disabled={!canManage || !host.healthCheckEnabled}
+                  disabled={!canManage || !healthCheckEnabled}
                 />
-              </div>
+              </SettingsInlineControl>
             </div>
-          </div>
-        </TogglePanelShell>
+          </SettingsControlRow>
+        </PanelShell>
       )}
 
-      {/* Custom Headers */}
       {showCustomHeaders && (
         <PanelShell
           title="Custom Headers"
-          description="Add custom HTTP headers to proxied requests"
-          headerBorder={customHeaders.length > 0}
+          description="Headers added to proxied requests"
           actions={
-            <div className="flex shrink-0 items-center gap-2">
-              {canManage && (
-                <>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Add custom header"
-                    title="Add custom header"
-                    onClick={() => setCustomHeaders([...customHeaders, { name: "", value: "" }])}
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button onClick={onSaveCustom} disabled={!hasHeadersChanged || isSavingCustom}>
-                    <Save className="h-3.5 w-3.5" />
-                    Save
-                  </Button>
-                </>
-              )}
-            </div>
+            canManage ? (
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  aria-label="Add custom header"
+                  title="Add custom header"
+                  onClick={() => setCustomHeaders([...customHeaders, { name: "", value: "" }])}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+                <Button onClick={onSaveHeaders} disabled={!hasHeadersChanged || isSavingCustom}>
+                  <Save className="h-3.5 w-3.5" />
+                  Save
+                </Button>
+              </div>
+            ) : null
           }
           wrapHeader
         >
-          <motion.div
-            animate={{ height: customHeaders.length > 0 ? "auto" : 0 }}
-            initial={false}
-            transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
-            className="overflow-hidden"
-          >
-            <div className="p-4 space-y-3">
-              <AnimatePresence initial={false}>
-                {customHeaders.map((header, i) => (
-                  <motion.div
-                    key={`header-${i}`}
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: "auto" }}
-                    exit={{ opacity: 0, height: 0 }}
-                    transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
-                    className="flex flex-col gap-2 sm:flex-row"
+          {customHeaders.length > 0 ? (
+            <div className="overflow-x-auto">
+              <div className="min-w-[560px]">
+                <div className="grid grid-cols-[1fr_1fr_2.25rem] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  <div className="px-3 py-2">Header</div>
+                  <div className="border-l border-border px-3 py-2">Value</div>
+                  <div className="border-l border-border" />
+                </div>
+                {customHeaders.map((header, index) => (
+                  <div
+                    key={`header-${index}`}
+                    className="grid grid-cols-[1fr_1fr_2.25rem] border-b border-border last:border-b-0"
                   >
                     <Input
                       placeholder="Header name"
                       value={header.name}
                       disabled={!canManage}
-                      onChange={(e) => {
+                      className={tableInputClass}
+                      onChange={(event) => {
                         const next = [...customHeaders];
-                        next[i] = { ...next[i], name: e.target.value };
+                        next[index] = { ...next[index], name: event.target.value };
                         setCustomHeaders(next);
                       }}
                     />
@@ -722,87 +650,88 @@ export function SettingsTab({
                       placeholder="Value"
                       value={header.value}
                       disabled={!canManage}
-                      onChange={(e) => {
+                      className={cn(tableInputClass, "border-l border-border")}
+                      onChange={(event) => {
                         const next = [...customHeaders];
-                        next[i] = { ...next[i], value: e.target.value };
+                        next[index] = { ...next[index], value: event.target.value };
                         setCustomHeaders(next);
                       }}
                     />
-                    {canManage && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setCustomHeaders(customHeaders.filter((_, j) => j !== i))}
-                      >
-                        <Minus className="h-4 w-4" />
-                      </Button>
-                    )}
-                  </motion.div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 rounded-none border-l border-border"
+                      aria-label={`Remove custom header ${index + 1}`}
+                      onClick={() => setCustomHeaders(customHeaders.filter((_, i) => i !== index))}
+                      disabled={!canManage}
+                    >
+                      <Minus className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 ))}
-              </AnimatePresence>
+              </div>
             </div>
-          </motion.div>
+          ) : (
+            <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
+              No custom headers
+            </div>
+          )}
         </PanelShell>
       )}
 
-      {/* URL Rewrites */}
       {showCustomRewrites && (
         <PanelShell
           title="URL Rewrites"
           description="Rewrite request paths before proxying"
-          headerBorder={customRewrites.length > 0}
           actions={
-            <div className="flex shrink-0 items-center gap-2">
-              {canManage && (
-                <>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Add URL rewrite"
-                    title="Add URL rewrite"
-                    onClick={() =>
-                      setCustomRewrites([
-                        ...customRewrites,
-                        { source: "", destination: "", type: "permanent" },
-                      ])
-                    }
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button onClick={onSaveCustom} disabled={!hasRewritesChanged || isSavingCustom}>
-                    <Save className="h-3.5 w-3.5" />
-                    Save
-                  </Button>
-                </>
-              )}
-            </div>
+            canManage ? (
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  aria-label="Add URL rewrite"
+                  title="Add URL rewrite"
+                  onClick={() =>
+                    setCustomRewrites([
+                      ...customRewrites,
+                      { source: "", destination: "", type: "permanent" },
+                    ])
+                  }
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+                <Button onClick={onSaveRewrites} disabled={!hasRewritesChanged || isSavingCustom}>
+                  <Save className="h-3.5 w-3.5" />
+                  Save
+                </Button>
+              </div>
+            ) : null
           }
           wrapHeader
         >
-          <motion.div
-            animate={{ height: customRewrites.length > 0 ? "auto" : 0 }}
-            initial={false}
-            transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
-            className="overflow-hidden"
-          >
-            <div className="p-4 space-y-3">
-              <AnimatePresence initial={false}>
-                {customRewrites.map((rule, i) => (
-                  <motion.div
-                    key={`rewrite-${i}`}
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: "auto" }}
-                    exit={{ opacity: 0, height: 0 }}
-                    transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
-                    className="flex flex-col gap-2 sm:flex-row"
+          {customRewrites.length > 0 ? (
+            <div className="overflow-x-auto">
+              <div className="min-w-[720px]">
+                <div className="grid grid-cols-[1fr_1fr_11rem_2.25rem] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  <div className="px-3 py-2">Source</div>
+                  <div className="border-l border-border px-3 py-2">Destination</div>
+                  <div className="border-l border-border px-3 py-2">Type</div>
+                  <div className="border-l border-border" />
+                </div>
+                {customRewrites.map((rule, index) => (
+                  <div
+                    key={`rewrite-${index}`}
+                    className="grid grid-cols-[1fr_1fr_11rem_2.25rem] border-b border-border last:border-b-0"
                   >
                     <Input
                       placeholder="Source path"
                       value={rule.source}
                       disabled={!canManage}
-                      onChange={(e) => {
+                      className={tableInputClass}
+                      onChange={(event) => {
                         const next = [...customRewrites];
-                        next[i] = { ...next[i], source: e.target.value };
+                        next[index] = { ...next[index], source: event.target.value };
                         setCustomRewrites(next);
                       }}
                     />
@@ -810,43 +739,59 @@ export function SettingsTab({
                       placeholder="Destination"
                       value={rule.destination}
                       disabled={!canManage}
-                      onChange={(e) => {
+                      className={cn(tableInputClass, "border-l border-border")}
+                      onChange={(event) => {
                         const next = [...customRewrites];
-                        next[i] = { ...next[i], destination: e.target.value };
+                        next[index] = { ...next[index], destination: event.target.value };
                         setCustomRewrites(next);
                       }}
                     />
                     <Select
                       value={rule.type}
-                      onValueChange={(v) => {
+                      onValueChange={(value) => {
                         const next = [...customRewrites];
-                        next[i] = { ...next[i], type: v as "permanent" | "temporary" };
+                        next[index] = {
+                          ...next[index],
+                          type: value as "permanent" | "temporary",
+                        };
                         setCustomRewrites(next);
                       }}
                       disabled={!canManage}
                     >
-                      <SelectTrigger className="w-full sm:w-36">
+                      <SelectTrigger
+                        className={cn(
+                          tableInputClass,
+                          "border-l border-border font-sans focus:ring-1 focus:ring-inset focus:ring-ring"
+                        )}
+                      >
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent className="font-sans">
                         <SelectItem value="permanent">Permanent</SelectItem>
                         <SelectItem value="temporary">Temporary</SelectItem>
                       </SelectContent>
                     </Select>
-                    {canManage && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setCustomRewrites(customRewrites.filter((_, j) => j !== i))}
-                      >
-                        <Minus className="h-4 w-4" />
-                      </Button>
-                    )}
-                  </motion.div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 rounded-none border-l border-border"
+                      aria-label={`Remove URL rewrite ${index + 1}`}
+                      onClick={() =>
+                        setCustomRewrites(customRewrites.filter((_, i) => i !== index))
+                      }
+                      disabled={!canManage}
+                    >
+                      <Minus className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 ))}
-              </AnimatePresence>
+              </div>
             </div>
-          </motion.div>
+          ) : (
+            <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
+              No URL rewrites
+            </div>
+          )}
         </PanelShell>
       )}
     </div>

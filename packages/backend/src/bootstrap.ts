@@ -120,7 +120,7 @@ import { McpSettingsService } from '@/modules/mcp/mcp-settings.service.js';
 import { DashboardReadModelService } from '@/modules/monitoring/dashboard-read-model.service.js';
 import { MonitoringService } from '@/modules/monitoring/monitoring.service.js';
 import { NodeFolderService } from '@/modules/nodes/node-folders.service.js';
-import { NodeMonitoringService } from '@/modules/nodes/node-monitoring.service.js';
+import { NODE_MONITORING_CADENCE_MS, NodeMonitoringService } from '@/modules/nodes/node-monitoring.service.js';
 import { NodesService } from '@/modules/nodes/nodes.service.js';
 import { NotificationAlertRuleService } from '@/modules/notifications/notification-alert-rule.service.js';
 import { NotificationDeliveryService } from '@/modules/notifications/notification-delivery.service.js';
@@ -1258,6 +1258,11 @@ export async function initializeContainer(): Promise<void> {
     );
     scheduler.registerInterval('relay-signing-key-rotation', 60 * 60 * 1000, () =>
       relayPolicyService!.rotateIfDue().then(() => undefined)
+    );
+    // Same baseline cadence as ordinary node monitoring. Link Runtime pages
+    // add focused 2s samples, but history does not depend on a page being open.
+    scheduler.registerInterval('secure-link-runtime-monitoring', NODE_MONITORING_CADENCE_MS.background, () =>
+      proxyService.collectSecureLinkRuntimeSnapshots()
     );
   }
   scheduler.registerInterval('nginx-tls-certificate-integrity', 6 * 60 * 60 * 1000, async () => {

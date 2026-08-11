@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -33,7 +34,12 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	runtime, err := server.Start(cfg, buildVersion)
+	runtime, err := retryIdentityStart(
+		func() (*server.Runtime, error) { return server.Start(cfg, buildVersion) },
+		30,
+		time.Second,
+		time.Sleep,
+	)
 	if err != nil {
 		fail(err)
 	}
@@ -42,6 +48,32 @@ func main() {
 	defer stop()
 	<-ctx.Done()
 	runtime.Stop()
+}
+
+func retryIdentityStart[T any](
+	start func() (T, error),
+	attempts int,
+	interval time.Duration,
+	sleep func(time.Duration),
+) (T, error) {
+	var zero T
+	for attempt := 1; attempt <= attempts; attempt++ {
+		runtime, err := start()
+		if err == nil {
+			return runtime, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, identity.ErrMaterialUpdating) {
+			return zero, err
+		}
+		if attempt == attempts {
+			return zero, err
+		}
+		if attempt == 1 {
+			slog.Info("waiting for Gateway to provision relay identity", "timeout_seconds", int(interval.Seconds())*attempts)
+		}
+		sleep(interval)
+	}
+	return zero, fmt.Errorf("relay identity startup retry exhausted")
 }
 
 func healthcheck() error {

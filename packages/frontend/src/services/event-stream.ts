@@ -1,4 +1,5 @@
 import { api } from "@/services/api";
+import { useAppStatusStore } from "@/stores/app-status";
 import { useNodesStore } from "@/stores/nodes";
 import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import { usePinnedDatabasesStore } from "@/stores/pinned-databases";
@@ -252,8 +253,11 @@ class EventStream {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (this.ws !== ws) return; // racing stop()→start() — leave singleton alone
+      if (event.code === 1012) {
+        useAppStatusStore.getState().setGatewayRestartingActive(true);
+      }
       this.setConnected(false);
       this.ws = null;
       this.wireSubs.clear();

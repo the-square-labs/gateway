@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
-import type { ProxyHost, SSLCertificate } from "@/types";
+import type { NginxTemplate, ProxyHost, SSLCertificate } from "@/types";
 import { SettingsTab, type SettingsTabProps } from "./SettingsTab";
 
 const host = {
@@ -26,37 +27,32 @@ function makeProps(overrides: Partial<SettingsTabProps> = {}): SettingsTabProps 
     onToggle: vi.fn(),
     customHeaders: [],
     setCustomHeaders: vi.fn(),
-    cacheEnabled: false,
-    setCacheEnabled: vi.fn(),
-    cacheMaxAge: 3600,
-    setCacheMaxAge: vi.fn(),
-    rateLimitEnabled: false,
-    setRateLimitEnabled: vi.fn(),
-    rateLimitRPS: 100,
-    setRateLimitRPS: vi.fn(),
-    rateLimitBurst: 200,
-    setRateLimitBurst: vi.fn(),
     customRewrites: [],
     setCustomRewrites: vi.fn(),
-    onSaveCustom: vi.fn(),
+    onSaveHeaders: vi.fn(),
+    onSaveRewrites: vi.fn(),
     isSavingCustom: false,
     accessListId: "",
     accessLists: [],
     onAccessListChange: vi.fn(),
     sslCerts: [certificate],
-    onSslCertificateChange: vi.fn(),
+    sslEnabled: false,
+    setSslEnabled: vi.fn(),
+    sslForced: false,
+    setSslForced: vi.fn(),
+    http2Support: false,
+    setHttp2Support: vi.fn(),
+    sslCertificateId: "",
+    setSslCertificateId: vi.fn(),
+    onSaveSsl: vi.fn(),
+    isSavingSsl: false,
+    hasSslSettingsChanged: false,
     nginxTemplates: [],
     nginxTemplateId: "",
     onNginxTemplateChange: vi.fn(),
     selectedTemplate: null,
     templateVariables: {},
     onTemplateVariableChange: vi.fn(),
-    templateForwardScheme: "http",
-    setTemplateForwardScheme: vi.fn(),
-    templateForwardHost: "",
-    setTemplateForwardHost: vi.fn(),
-    templateForwardPort: 80,
-    setTemplateForwardPort: vi.fn(),
     templateRedirectUrl: "",
     setTemplateRedirectUrl: vi.fn(),
     templateRedirectStatusCode: 301,
@@ -67,6 +63,8 @@ function makeProps(overrides: Partial<SettingsTabProps> = {}): SettingsTabProps 
     canManage: true,
     hasHeadersChanged: false,
     hasRewritesChanged: false,
+    healthCheckEnabled: false,
+    setHealthCheckEnabled: vi.fn(),
     healthCheckUrl: "/",
     setHealthCheckUrl: vi.fn(),
     healthCheckExpectedStatus: null,
@@ -77,6 +75,9 @@ function makeProps(overrides: Partial<SettingsTabProps> = {}): SettingsTabProps 
     setHealthCheckBodyMatchMode: vi.fn(),
     healthCheckSlowThreshold: 3,
     setHealthCheckSlowThreshold: vi.fn(),
+    onSaveHealthCheck: vi.fn(),
+    isSavingHealthCheck: false,
+    hasHealthCheckSettingsChanged: false,
     canResyncTls: false,
     isTlsResyncing: false,
     onTlsResync: vi.fn(),
@@ -97,6 +98,36 @@ describe("proxy detail SettingsTab", () => {
     expect(screen.getByText("WebSocket Support").closest("div.grid")).toHaveStyle(
       "grid-template-columns: repeat(auto-fit, minmax(min(100%, 32rem), 1fr))"
     );
+    expect(screen.getByText("Access List").closest("div.border")).toHaveTextContent("Policy");
+    expect(screen.getByRole("combobox", { name: "Access List policy" })).toBeEnabled();
+  });
+
+  it("renders cacheEnabled as an Enabled or Disabled dropdown", () => {
+    const defaultTemplate = {
+      id: "template-default",
+      name: "Default Proxy",
+      type: "proxy",
+      variables: [
+        {
+          name: "cacheEnabled",
+          description: "Cache upstream responses",
+          type: "boolean",
+          default: false,
+        },
+      ],
+    } as NginxTemplate;
+
+    render(
+      <SettingsTab
+        {...makeProps({
+          host: { ...host, type: "proxy" },
+          selectedTemplate: defaultTemplate,
+          templateVariables: { cacheEnabled: false },
+        })}
+      />
+    );
+
+    expect(screen.getByRole("combobox", { name: "Cache enabled" })).toHaveTextContent("Disabled");
   });
 
   it("hides TLS distribution when every replica is ready", () => {
@@ -157,5 +188,78 @@ describe("proxy detail SettingsTab", () => {
     render(<SettingsTab {...makeProps({ canManage: false })} />);
 
     expect(screen.getByRole("combobox", { name: "SSL Certificate" })).toBeDisabled();
+  });
+
+  it("keeps SSL changes local until the section Save action", async () => {
+    const user = userEvent.setup();
+    const setSslEnabled = vi.fn();
+    const onSaveSsl = vi.fn();
+    render(<SettingsTab {...makeProps({ setSslEnabled, onSaveSsl })} />);
+
+    const sslPanel = screen.getByText("SSL").closest("div.border");
+    expect(sslPanel).not.toBeNull();
+    await user.click(
+      (sslPanel as HTMLElement).querySelector('button[aria-pressed="false"]') as HTMLElement
+    );
+
+    expect(setSslEnabled).toHaveBeenCalledWith(true);
+    expect(onSaveSsl).not.toHaveBeenCalled();
+  });
+
+  it("keeps health-check changes local until the section Save action", async () => {
+    const user = userEvent.setup();
+    const setHealthCheckEnabled = vi.fn();
+    const onSaveHealthCheck = vi.fn();
+    render(
+      <SettingsTab
+        {...makeProps({
+          host: { ...host, type: "redirect" },
+          setHealthCheckEnabled,
+          onSaveHealthCheck,
+        })}
+      />
+    );
+
+    const healthPanel = screen.getByText("Health Check").closest("div.border");
+    expect(healthPanel).not.toBeNull();
+    await user.click(
+      (healthPanel as HTMLElement).querySelector('button[aria-pressed="false"]') as HTMLElement
+    );
+
+    expect(setHealthCheckEnabled).toHaveBeenCalledWith(true);
+    expect(onSaveHealthCheck).not.toHaveBeenCalled();
+  });
+
+  it("shows inherited request and concurrent connection protection", () => {
+    const defaultTemplate = {
+      id: "template-default",
+      name: "Default Proxy",
+      type: "proxy",
+      variables: [
+        { name: "rateLimitMode", type: "string", default: "inherit" },
+        { name: "rateLimitRPS", type: "number", default: 1000 },
+        { name: "rateLimitBurst", type: "number", default: 3000 },
+        { name: "connectionsPerIp", type: "number", default: 1000 },
+      ],
+    } as NginxTemplate;
+
+    render(
+      <SettingsTab
+        {...makeProps({
+          host: { ...host, type: "proxy" },
+          selectedTemplate: defaultTemplate,
+          templateVariables: {
+            rateLimitMode: "inherit",
+            rateLimitRPS: 1000,
+            rateLimitBurst: 3000,
+            connectionsPerIp: 1000,
+          },
+        })}
+      />
+    );
+
+    expect(screen.getByText("rateLimitMode")).toBeInTheDocument();
+    expect(screen.getByText("Gateway default (1000 / 3000 / 1000)")).toBeInTheDocument();
+    expect(screen.getByText("connectionsPerIp")).toBeInTheDocument();
   });
 });

@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { createChildLogger } from '@/lib/logger.js';
 
 const logger = createChildLogger('EventBus');
+const RETAINED_CHANNELS = new Set(['system.update.changed']);
 
 /**
  * In-process realtime event bus.
@@ -15,6 +16,7 @@ const logger = createChildLogger('EventBus');
  */
 export class EventBusService {
   private emitter = new EventEmitter();
+  private readonly retained = new Map<string, unknown>();
 
   constructor() {
     // Each connection gets its own listener; bump the cap so we don't see
@@ -24,6 +26,11 @@ export class EventBusService {
 
   publish(channel: string, payload: unknown): void {
     try {
+      if (RETAINED_CHANNELS.has(channel)) {
+        const updating = (payload as { updating?: unknown } | null)?.updating;
+        if (updating === true) this.retained.set(channel, payload);
+        else if (updating === false) this.retained.delete(channel);
+      }
       this.emitter.emit(channel, payload);
     } catch (err) {
       logger.error('event publish failed', { channel, error: err });
@@ -39,5 +46,9 @@ export class EventBusService {
     return () => {
       this.emitter.off(channel, fn);
     };
+  }
+
+  getRetained(channel: string): unknown | undefined {
+    return this.retained.get(channel);
   }
 }

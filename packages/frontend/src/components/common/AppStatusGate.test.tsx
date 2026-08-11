@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStatusStore } from "@/stores/app-status";
 import {
   AppStatusGate,
@@ -25,6 +25,10 @@ beforeEach(() => {
         headers: { "Content-Type": "application/json" },
       })
   );
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("gateway update version matching", () => {
@@ -75,5 +79,18 @@ describe("gateway update version matching", () => {
       "href",
       "https://wiolett.net"
     );
+  });
+
+  it("clears the rate-limit blocker without reloading the page", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-11T16:00:00Z"));
+    useAppStatusStore.setState({ rateLimitedUntil: Date.now() + 1_000 });
+
+    render(<AppStatusGate />);
+
+    expect(screen.getByRole("heading", { name: "Rate Limit Reached" })).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(1_250));
+    expect(useAppStatusStore.getState().rateLimitedUntil).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Rate Limit Reached" })).not.toBeInTheDocument();
   });
 });

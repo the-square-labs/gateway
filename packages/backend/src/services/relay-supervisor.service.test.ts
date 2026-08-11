@@ -1,5 +1,6 @@
 import * as grpc from '@grpc/grpc-js';
 import { describe, expect, it, vi } from 'vitest';
+import { RelayRecoverySafetyError } from './relay-docker-recovery.service.js';
 import { RelaySupervisorService } from './relay-supervisor.service.js';
 
 function healthy() {
@@ -85,6 +86,29 @@ describe('RelaySupervisorService', () => {
     expect(recover).toHaveBeenCalledTimes(3);
   });
 
+  it('reports unverifiable managed ownership as degraded instead of a relay outage', async () => {
+    const recover = vi
+      .fn()
+      .mockRejectedValue(
+        new RelayRecoverySafetyError('ownership_unverified', 'Compose relay ownership labels are invalid')
+      );
+    const { supervisor } = harness({
+      getHealth: vi.fn().mockRejectedValue(new Error('connect refused')),
+      recover,
+    });
+
+    await supervisor.probeNow();
+    await supervisor.probeNow();
+
+    await vi.waitFor(() =>
+      expect(supervisor.getSnapshot(true)).toMatchObject({
+        state: 'degraded',
+        reason: 'ownership_unverified',
+        canRetry: false,
+      })
+    );
+  });
+
   it('never restarts for a contract failure', async () => {
     const contractFailure = { ...healthy(), readiness: false, dataPlaneHealthy: false, reason: 'contract_mismatch' };
     const { supervisor, recover } = harness({ getHealth: vi.fn().mockResolvedValue(contractFailure) });
@@ -148,6 +172,36 @@ describe('RelaySupervisorService', () => {
     expect(supervisor.getSnapshot(false)).not.toHaveProperty('expectedImage');
     expect(supervisor.getSnapshot(false)).not.toHaveProperty('reason');
     expect(supervisor.getSnapshot(true)).toMatchObject({ expectedService: 'relay', relayBuildVersion: '1' });
+  });
+
+  it('publishes relay-owned resource telemetry from the health response', async () => {
+    const { supervisor } = harness({
+      getHealth: vi.fn().mockResolvedValue({
+        ...healthy(),
+        pressurePercent: 12,
+        cpuPressurePercent: 12,
+        memoryPressurePercent: 0,
+        fdPressurePercent: 1,
+        memoryRssBytes: String(18 * 1024 * 1024),
+        heapInUseBytes: String(6 * 1024 * 1024),
+        memoryLimitBytes: '0',
+        openFileDescriptors: '42',
+        fileDescriptorLimit: '1048576',
+      }),
+    });
+
+    await supervisor.probeNow();
+
+    expect(supervisor.getSnapshot(true)).toMatchObject({
+      pressurePercent: 12,
+      cpuPressurePercent: 12,
+      memoryPressurePercent: 0,
+      memoryRssBytes: 18 * 1024 * 1024,
+      heapInUseBytes: 6 * 1024 * 1024,
+      memoryLimitBytes: 0,
+      openFileDescriptors: 42,
+      fileDescriptorLimit: 1_048_576,
+    });
   });
 
   it('does not start manual recovery while the relay is healthy or only suspect', async () => {

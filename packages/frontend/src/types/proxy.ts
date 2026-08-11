@@ -20,7 +20,10 @@ export interface CacheOptions {
 export interface RateLimitOptions {
   requestsPerSecond: number;
   burst?: number;
+  connectionsPerIp?: number;
 }
+
+export type RateLimitMode = "inherit" | "custom" | "disabled";
 
 export interface RewriteRule {
   source: string;
@@ -62,6 +65,7 @@ export interface ProxyHost {
   cacheEnabled: boolean;
   cacheOptions: CacheOptions | null;
   rateLimitEnabled: boolean;
+  rateLimitMode?: RateLimitMode;
   rateLimitOptions: RateLimitOptions | null;
   customRewrites: RewriteRule[];
   advancedConfig: string | null;
@@ -92,6 +96,62 @@ export interface ProxyHost {
   sslCertificate?: SSLCertificate;
   tlsDistribution?: CertificateDistributionState | null;
   accessList?: AccessList;
+}
+
+export interface ProxySecureLinkStatus {
+  state: string;
+  generation: number;
+  sourceNodeId: string | null;
+  targetNodeId: string | null;
+  transport: string;
+  migratedAt: string | null;
+  lastError: string | null;
+  healthCheck: {
+    enabled: boolean;
+    intervalSeconds: number;
+  };
+  sourceNode: { id: string; name: string; status: string } | null;
+  targetNode: { id: string; name: string; status: string } | null;
+  rateLimit: {
+    mode: RateLimitMode;
+    enabled: boolean;
+    requestsPerSecond: number;
+    burst: number;
+    connectionsPerIp: number;
+  };
+  runtime: {
+    routeId: string;
+    activeStreams: number;
+    openedTotal: string;
+    completedTotal: string;
+    failedTotal: string;
+    throttledTotal: string;
+    sourceToTargetBytes: string;
+    targetToSourceBytes: string;
+    setupLatencyP95Ms: number;
+    averageDurationMs: number;
+    lastActivityAt: string | null;
+    metricsSince: string;
+  } | null;
+  traffic: {
+    hostId: string;
+    statusCodes: { s2xx: number; s3xx: number; s4xx: number; s5xx: number };
+    avgResponseTime: number;
+    p95ResponseTime: number;
+    totalRequests: number;
+    totalBytes: number;
+    requestsPerSecond: number;
+    bytesPerSecond: number;
+    busiestClientRps: number;
+    windowSeconds: number;
+    sampleTruncated: boolean;
+    lastRequestAt?: string;
+  } | null;
+  history: Array<{
+    timestamp: string;
+    runtime: ProxySecureLinkStatus["runtime"];
+    traffic: ProxySecureLinkStatus["traffic"];
+  }>;
 }
 
 // Access List Types
@@ -143,6 +203,7 @@ export interface CreateProxyHostRequest {
   cacheEnabled?: boolean;
   cacheOptions?: CacheOptions;
   rateLimitEnabled?: boolean;
+  rateLimitMode?: RateLimitMode;
   rateLimitOptions?: RateLimitOptions;
   customRewrites?: RewriteRule[];
   advancedConfig?: string | null;

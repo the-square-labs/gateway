@@ -93,8 +93,15 @@ describe('RelayDockerRecoveryService', () => {
     expect(mock.restartContainer).not.toHaveBeenCalled();
     expect(mock.runOneShot).toHaveBeenCalledWith(
       expect.objectContaining({
-        Cmd: expect.arrayContaining(['--project-name', 'gateway']),
-        HostConfig: expect.objectContaining({ Binds: expect.arrayContaining(['/opt/gateway:/project']) }),
+        Cmd: expect.arrayContaining([
+          '--project-name',
+          'gateway',
+          '--project-directory',
+          '/opt/gateway',
+          '-f',
+          '/opt/gateway/docker-compose.yml',
+        ]),
+        HostConfig: expect.objectContaining({ Binds: expect.arrayContaining(['/opt/gateway:/opt/gateway']) }),
       })
     );
   });

@@ -129,7 +129,8 @@ export function storedRawConfigForRawModeEnablement(
   input: { type?: string; rawConfigEnabled?: boolean; rawConfig?: unknown }
 ): unknown {
   const newlyEnablesRawMode =
-    (input.rawConfigEnabled === true && !existing.rawConfigEnabled) || (input.type === 'raw' && existing.type !== 'raw');
+    (input.rawConfigEnabled === true && !existing.rawConfigEnabled) ||
+    (input.type === 'raw' && existing.type !== 'raw');
   if (input.rawConfig !== undefined || !newlyEnablesRawMode) {
     return undefined;
   }

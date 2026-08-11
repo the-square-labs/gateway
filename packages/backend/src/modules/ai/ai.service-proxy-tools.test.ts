@@ -279,12 +279,9 @@ describe('AIService proxy tool routing', () => {
       )
     ).resolves.toEqual({ result: COMPACT_HOST, invalidateStores: ['proxy'] });
 
-    expect(proxyService.updateProxyHost).toHaveBeenCalledWith(
-      COMPACT_HOST.id,
-      { rawConfigEnabled: true },
-      'user-1',
-      { bypassRawValidation: true }
-    );
+    expect(proxyService.updateProxyHost).toHaveBeenCalledWith(COMPACT_HOST.id, { rawConfigEnabled: true }, 'user-1', {
+      bypassRawValidation: true,
+    });
   });
 
   it('routes proxy folder operations and enforces per-host move scopes', async () => {

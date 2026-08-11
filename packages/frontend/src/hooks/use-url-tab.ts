@@ -24,6 +24,14 @@ export function useUrlTab(
   const lastRouteTabRef = useRef(tabParam);
 
   useEffect(() => {
+    // A resource-backed tab can become valid only after the resource finishes
+    // loading. Keep honoring the URL when that happens instead of preserving
+    // the temporary default tab selected during the loading state.
+    if (tabParam && validTabSet.has(tabParam)) {
+      lastRouteTabRef.current = tabParam;
+      setActiveTabState(tabParam);
+      return;
+    }
     if (tabParam !== lastRouteTabRef.current) {
       lastRouteTabRef.current = tabParam;
       setActiveTabState(routeTab);
