@@ -2,7 +2,7 @@
 
 # Gateway
 
-自托管基础设施控制平面，用于反向代理、Docker 工作负载、证书、数据库、日志、监控、状态页和自动化。
+AI-first 但不依赖 AI 的自托管基础设施控制平面，用于反向代理、Docker 工作负载、证书、数据库、日志、监控、状态页和自动化。
 
 > [!NOTE]
 > 主要开发在 [Wiolett Industries GitLab](https://gitlab.wiolett.net/wiolett/gateway) 进行。[GitHub 仓库](https://github.com/wiolett-industries/gateway) 是公开镜像。Issues 和功能请求可以提交到 [GitHub](https://github.com/wiolett-industries/gateway/issues)。
@@ -10,6 +10,8 @@
 ## 为什么需要 Gateway
 
 Gateway 为小型基础设施团队提供一个产品，用来处理日常工作中通常分散在 nginx 配置、shell 脚本、Docker 主机、证书目录、数据库客户端、仪表盘和告警工具里的任务。
+
+AI Workspace 是推荐的 intent-driven 界面：从完整 Scenario 开始或描述期望结果，查看建议计划，然后决定是否执行。Operations Console 仍然是管理同一基础设施的完整独立界面，因此 Gateway 的安装、运维、自动化和恢复都不依赖 AI。
 
 当你希望做到以下事情时，可以使用 Gateway：
 
@@ -31,7 +33,7 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 > [!IMPORTANT]
 > **Production 部署说明：** Gateway 是一个高权限的基础设施控制平面。为了执行 self-updates 和本地维护等内部操作，Gateway app 会挂载宿主机 Docker socket。请在隔离 VM 或专用主机上运行 Gateway，不要在同一 Docker 主机上放置无关 workloads。
 
-安装器会启动 Gateway 并输出一次性设置代码。随后浏览器向导会配置规范 URL、节点网络 endpoint、一个或多个登录方式（OIDC、密码或 email code）、首个系统管理员以及可选的 structured logging。
+安装器会启动 Gateway 并输出一次性设置代码。随后浏览器向导会配置规范 URL、可选择的节点 public/local network endpoints、一个或多个登录方式（OIDC、密码或 email code）、首个系统管理员、可选的 structured logging 和可选的 AI Workspace。Gateway Inference 在 AI Workspace 流程内配置，而不是作为单独的 onboarding 产品。
 
 根据你的部署方式开放对应端口：
 
@@ -106,7 +108,7 @@ npx -y @wiolett/gateway-inference@latest setup claude-code
 | Databases | Saved PostgreSQL、Redis 和 ClickHouse connections，含 encrypted credentials、health history、browsing、scoped query consoles 和 capability-aware write operations；private-by-default managed Postgres、Redis 和 ClickHouse instances 可安全绑定到 Docker workloads。 |
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware physical GPU telemetry, daemon runtime details, log streaming 和 update checks。 |
 | Logging | 可选的 ClickHouse-backed structured log ingestion，包含 schemas、retention、ingest tokens、rate limits、search、storage caps 和 health safeguards。 |
-| Automation | API tokens、OAuth 2.0 PKCE、remote MCP endpoint、CI/CD webhooks、webhook notifications、status pages 和可选的 AI Workspace。 |
+| Automation | API tokens、OAuth 2.0 PKCE、remote MCP endpoint、CI/CD webhooks、webhook notifications 和 status pages。 |
 | AI Workspace | 可选的 intent-driven operations，包含引导式 Scenarios、Plan Mode、permission-aware tools、approvals、sandboxed execution、进度跟踪和最终验证。在明确确认之前，规划不会执行任何变更。 |
 | Inference | 可选的 multi-provider model gateway，包含独立 tokens、usage controls、OpenAI-compatible APIs，以及通过 `@wiolett/gateway-inference` 管理的 Codex 或 Claude Code 配置。 |
 | Administration | OIDC、password、email-code 和 passkey login，group-based 和 per-user additional permissions, scoped programmatic access, audit logs, setup state, updates 和 license controls。 |
@@ -169,14 +171,16 @@ Gateway 已经面向 production operations，而不是狭窄的 MVP。当前方�
 - [x] Hardened OIDC/OAuth flows, setup lockout, fail-closed public endpoints, and signed update trust.
 - [x] Gateway and daemon update workflows with signature-verified artifacts.
 - [x] Settings workspace organized around preferences, gateway configuration, and feature controls.
+- [x] Docker-to-nginx Secure Links。
 
 计划中的工作：
 
+- [ ] S3、R2、MinIO、FTP、FTPS、SFTP 和 SMB storage connections。
+- [ ] Storage foundation 完成后的带 Secure Links 的 managed storages 和 managed-database backup/restore。
+- [ ] Business 和 Enterprise 的 vulnerability and security scanning。
 - [ ] Bastion and SSH management daemon for controlled host access.
 - [ ] CLI for scriptable programmatic control from terminals and CI/CD jobs.
 - [ ] Plugin system for extending Gateway with new integrations and operational modules.
-- [ ] Per-user AI Workspace quotas 和更丰富的使用情况报告。
-- [ ] More guided onboarding for first-time installs and first-node setup.
 - [ ] Broader operational documentation and examples for common deployment patterns.
 
 ## FAQ
@@ -226,7 +230,7 @@ Managed services 会继续运行。Existing nginx configs 会继续服务 traffi
 <details>
 <summary><strong>AI Workspace 是必须的吗？</strong></summary>
 
-不是。它是可选功能，默认关闭。只有管理员启用 AI Workspace 并配置 provider 后，Gateway 才会向 AI provider 发送数据。运维人员可以从引导式 Scenario 开始，或选择 Plan Mode 生成经过验证且易读的计划；在用户明确确认实施之前，不会执行任何变更。
+不是。AI Workspace 是可选功能。Operations Console、REST API、OAuth 和 MCP 都可以独立使用；只有管理员启用 AI Workspace 并配置 provider 后，Gateway 才会向 AI provider 发送数据。运维人员可以从引导式 Scenario 开始，或选择 Plan Mode 生成经过验证且易读的计划；在用户明确确认实施之前，不会执行任何变更。
 </details>
 
 ## 产品计划与许可

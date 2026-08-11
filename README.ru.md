@@ -2,7 +2,7 @@
 
 # Gateway
 
-Самостоятельно размещаемая панель управления инфраструктурой для reverse proxy, Docker-нагрузок, сертификатов, баз данных, логов, мониторинга, статус-страниц и автоматизации.
+AI-first, но не AI-dependent self-hosted платформа управления инфраструктурой для reverse proxy, Docker-нагрузок, сертификатов, баз данных, логов, мониторинга, статус-страниц и автоматизации.
 
 > [!NOTE]
 > Основная разработка ведется в [Wiolett Industries GitLab](https://gitlab.wiolett.net/wiolett/gateway). [GitHub-репозиторий](https://github.com/wiolett-industries/gateway) является публичным зеркалом. Issues и запросы функций можно оставлять на [GitHub](https://github.com/wiolett-industries/gateway/issues).
@@ -10,6 +10,8 @@
 ## Зачем нужен Gateway
 
 Gateway дает небольшим инфраструктурным командам один продукт для ежедневной работы, которая обычно разбросана между nginx-конфигами, shell-скриптами, Docker-хостами, папками с сертификатами, клиентами баз данных, дашбордами и alert-инструментами.
+
+AI Workspace — рекомендуемый intent-driven интерфейс: начните с полноценного Scenario или опишите желаемый результат, просмотрите предложенный план и решите, выполнять ли его. Operations Console остаётся полноценным независимым интерфейсом для той же инфраструктуры, поэтому установка, эксплуатация, автоматизация и восстановление Gateway не зависят от AI.
 
 Используйте Gateway, если хотите:
 
@@ -31,7 +33,7 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 > [!IMPORTANT]
 > **Примечание для production-развертывания:** Gateway - привилегированная панель управления инфраструктурой. Для внутренних операций, таких как self-updates и локальное обслуживание, приложение Gateway монтирует Docker socket хоста. Запускайте Gateway в изолированной VM или на выделенном хосте и не размещайте на том же Docker-хосте посторонние workloads.
 
-Installer запускает Gateway и выводит одноразовый код настройки. В браузерном мастере затем задаются канонический URL, сетевые endpoints для nodes, один или несколько способов входа (OIDC, пароль или email-код), первый системный администратор и опциональное structured logging.
+Installer запускает Gateway и выводит одноразовый код настройки. В браузерном мастере затем задаются канонический URL, выбираемые публичные и локальные network endpoints для nodes, один или несколько способов входа (OIDC, пароль или email-код), первый системный администратор, опциональное structured logging и опциональный AI Workspace. Gateway Inference настраивается внутри AI Workspace, а не как отдельный onboarding-продукт.
 
 Откройте порты, подходящие для вашей схемы развертывания:
 
@@ -106,7 +108,7 @@ npx -y @wiolett/gateway-inference@latest setup claude-code
 | Databases | Saved PostgreSQL, Redis и ClickHouse connections с encrypted credentials, health history, browsing, scoped query consoles и capability-aware write operations; private-by-default managed Postgres, Redis и ClickHouse instances могут безопасно подключаться к Docker workloads. |
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware telemetry физических GPU, daemon runtime details, log streaming и update checks. |
 | Logging | Опциональный ClickHouse-backed structured log ingestion со schemas, retention, ingest tokens, rate limits, search, storage caps и health safeguards. |
-| Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages и опциональный AI Workspace. |
+| Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications и status pages. |
 | AI Workspace | Опциональные intent-driven operations с готовыми Scenarios, Plan Mode, permission-aware tools, approvals, sandboxed execution, отслеживанием прогресса и финальной проверкой. До явного подтверждения планирование не выполняет изменений. |
 | Inference | Опциональный multi-provider model gateway с отдельными tokens, usage controls, OpenAI-compatible API и управляемой настройкой Codex или Claude Code через `@wiolett/gateway-inference`. |
 | Administration | OIDC, password, email-code и passkey login, group-based и дополнительные per-user permissions, scoped programmatic access, audit logs, setup state, updates и license controls. |
@@ -169,14 +171,16 @@ Gateway уже ориентирован на production operations, а не на
 - [x] Hardened OIDC/OAuth flows, setup lockout, fail-closed public endpoints, and signed update trust.
 - [x] Gateway and daemon update workflows with signature-verified artifacts.
 - [x] Settings workspace organized around preferences, gateway configuration, and feature controls.
+- [x] Docker-to-nginx Secure Links.
 
 Планируемая работа:
 
+- [ ] Storage connections для S3, R2, MinIO, FTP, FTPS, SFTP и SMB.
+- [ ] Managed storages с Secure Links и backup/restore управляемых баз после Storage foundation.
+- [ ] Vulnerability and security scanning для Business и Enterprise.
 - [ ] Bastion and SSH management daemon for controlled host access.
 - [ ] CLI for scriptable programmatic control from terminals and CI/CD jobs.
 - [ ] Plugin system for extending Gateway with new integrations and operational modules.
-- [ ] Per-user AI Workspace quotas и более подробная отчётность об использовании.
-- [ ] More guided onboarding for first-time installs and first-node setup.
 - [ ] Broader operational documentation and examples for common deployment patterns.
 
 ## FAQ
@@ -226,7 +230,7 @@ Managed services продолжают работать. Existing nginx configs �
 <details>
 <summary><strong>AI Workspace обязателен?</strong></summary>
 
-Нет. Он опционален и отключен по умолчанию. Gateway не отправляет данные AI provider, пока администратор не включит AI Workspace и не настроит provider. Оператор может начать с готового Scenario или выбрать Plan Mode для подготовки проверенного и понятного плана; до явного подтверждения реализации никаких изменений не выполняется.
+Нет. AI Workspace опционален. Operations Console, REST API, OAuth и MCP работают независимо, а Gateway не отправляет данные AI provider, пока администратор не включит AI Workspace и не настроит provider. Оператор может начать с готового Scenario или выбрать Plan Mode для подготовки проверенного и понятного плана; до явного подтверждения реализации никаких изменений не выполняется.
 </details>
 
 ## Планы и лицензирование

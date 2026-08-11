@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Gateway is a self-hosted infrastructure control plane. It is built around a central web app and host daemons that connect outbound to the app, so operators can manage common infrastructure workflows without direct shell access to every server.
+Gateway is an AI-first but not AI-dependent self-hosted infrastructure control plane. Operators can work through AI Workspace or use the complete Operations Console, REST API, OAuth, and MCP surfaces without AI. The product is built around a central web app and host daemons that connect outbound to the app, so operators can manage common infrastructure workflows without direct shell access to every server.
 
 Feature availability and plan limits are documented separately in [Plans and licensing](licensing.md). `Coming soon` and `In development` capabilities are not generally available runtime features until released.
 
@@ -15,6 +15,7 @@ Core proxy workflows:
 - Create, edit, order, and delete proxy hosts.
 - Manage proxy hosts across multiple nginx nodes.
 - Configure SSL termination, manual upstream targets, or managed Docker container/deployment upstreams with published-port validation.
+- Connect managed Docker workloads to nginx through Gateway Secure Links without exposing the workload port as a normal public management endpoint.
 - Put an enabled managed proxy host into maintenance mode to return HTTP 503, pause managed health checks, preserve its TLS paths, and expose maintenance state to alerts and status pages.
 - Configure WebSocket support, custom headers, rewrites, and proxy behavior.
 - Create redirect hosts and 404 hosts.
@@ -155,6 +156,21 @@ ClickHouse:
 
 Credential reveal and query execution are intentionally separate permissions. Users can be allowed to monitor a database without being allowed to reveal credentials or run arbitrary commands. Binding-injected application credentials are not displayed by default.
 
+## Storage
+
+Storage is the next product capability family and is marked **Coming soon**.
+
+Planned connection types:
+
+- S3-compatible object storage.
+- Cloudflare R2.
+- MinIO.
+- FTP and FTPS.
+- SFTP.
+- SMB.
+
+Managed storages with Secure Links and managed-database backup and restore are also coming soon. Database backup and restore follows the Storage foundation and should not be described as generally available before that release.
+
 ## Nodes And Monitoring
 
 Gateway supports four daemon types:
@@ -215,6 +231,10 @@ Gateway includes connector and operational communication surfaces:
 
 Connector credentials are encrypted at rest. GitLab access is split between connector administration and per-user credentials unless the caller has the explicit system credential scope.
 
+## Vulnerability And Security Scanning
+
+Vulnerability and security scanning is **In development** for Business and Enterprise. It is not a completed capability until the scanning workflow is released.
+
 ## Gateway Inference
 
 Gateway Inference is an optional model gateway available in every product plan. It is separate from AI Workspace and the remote MCP server.
@@ -267,13 +287,14 @@ Administration features:
 - Daemon runtime version tracking and daemon updates.
 - License state and edition display.
 
-## Optional AI Workspace
+## AI Workspace
 
-AI Workspace is disabled by default. The Operations Console remains fully usable without it.
+AI Workspace is the recommended intent-driven operating surface. It is opt-in and disabled by default, while the Operations Console remains a complete independent interface.
 
 When enabled by an admin, it can:
 
 - Start from guided operational Scenarios or a free-form desired outcome.
+- Use complete task Scenarios for setup, infrastructure health, nodes, Docker, proxy publication and diagnosis, TLS, logging, notifications, databases, status pages, and access delegation.
 - Enter Plan Mode manually or automatically for complex, multi-step, research-heavy, or materially risky work.
 - Research with read-only planning tools, validate a structured Plan Block, and wait for explicit confirmation before any mutating action is available.
 - Execute a confirmed plan in the background with step progress, pause, resume, cancel, and a separate final-verification run.
@@ -288,7 +309,8 @@ When enabled by an admin, it can:
 - Attach and preview supported images and generated artifacts.
 - Surface Gateway Inference quota warnings and stop new turns only when the applicable budget is exhausted.
 - Respect per-user tool access and AI approval mode preferences.
+- Move between AI Workspace and the Operations Console without changing the underlying resource model or permissions.
 
-One plan can be active in each Work Session, while separate Work Sessions can run plans independently. Planning is separate from Approval Mode: planning itself is read-only, and confirmed execution follows the user's current approval settings.
+One plan can be active in each Work Session, while separate Work Sessions can run plans independently. Planning is separate from Approval Mode: planning itself is read-only, and confirmed execution follows the user's current approval settings. Scenarios do not bypass permissions, approvals, or audit logging.
 
 OpenAI-compatible settings remain preserved while Gateway Inference is selected. If Inference is later disabled, AI Workspace returns to the previous OpenAI-compatible configuration or disables itself when none was configured. No data is sent to an AI provider until an administrator enables AI Workspace and configures a provider.

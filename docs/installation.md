@@ -55,10 +55,14 @@ The setup code is shown only in installer output. Gateway stores its identifier,
 Open Gateway and enter the code. The wizard then configures:
 
 1. An explicit canonical public URL. Gateway never uses the browser origin as its default.
-2. One or more sign-in methods: OIDC, password, and email one-time code.
-3. OIDC when selected, and verified SMTP when an email-based method is selected.
-4. Exactly one first administrator and exactly one primary sign-in method for that account.
-5. Structured logging as disabled, Gateway-managed local ClickHouse, or external ClickHouse.
+2. Gateway network endpoints: exactly one public IP for managed DNS records, the public gRPC target embedded in node enrollment commands, and an optional local gRPC IP for private-network nodes. Detected addresses are suggestions and can be replaced.
+3. One or more sign-in methods: OIDC, password, and email one-time code.
+4. OIDC when selected, and verified SMTP when an email-based method is selected.
+5. Exactly one first administrator and exactly one primary sign-in method for that account.
+6. Structured logging as disabled, Gateway-managed local ClickHouse, or external ClickHouse.
+7. Optional AI Workspace setup. AI Workspace is the recommended intent-driven interface, while the Operations Console remains complete without it. Gateway Inference configuration is nested inside this step.
+
+When the UI/API is behind Cloudflare or another web proxy, choose a direct host or IP as the public gRPC target. Generated enrollment commands contain the selected endpoint, so normal node setup does not require editing `--gateway` by hand.
 
 Finish the wizard before using Gateway. The setup session and one-time code are invalidated at completion.
 
@@ -66,7 +70,7 @@ Finish the wizard before using Gateway. The setup session and one-time code are 
 
 Native HTTPS and HTTP use the same port, `3000`. Native HTTPS uses a dedicated `gateway-web` leaf certificate issued by the existing Gateway System CA; it does not create a second root CA.
 
-A reverse proxy can connect to either internal protocol. Configure the proxy to trust the Gateway System CA when it verifies the native HTTPS upstream. Public certificates, DNS, Cloudflare, and ACME remain outside the installer and wizard.
+A reverse proxy can connect to either internal protocol. Configure the proxy to trust the Gateway System CA when it verifies the native HTTPS upstream. The wizard records the Gateway network addresses used by managed DNS and node enrollment; public certificates, Cloudflare connectors, DNS records, and ACME workflows remain product configuration after the base stack is installed.
 
 Administrators can enable or disable internal HTTPS later in **Settings > General**. Gateway restarts after the change. When the browser directly addresses an IP, the UI changes `http`/`https` to follow the listener. With a domain or reverse proxy, the browser keeps its external URL and only reloads.
 

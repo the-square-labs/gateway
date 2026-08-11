@@ -2,7 +2,7 @@ English | [Русский](README.ru.md) | [中文](README.cn.md)
 
 # Gateway
 
-Self-hosted infrastructure control plane for reverse proxies, Docker workloads, certificates, databases, logs, monitoring, status pages, and automation.
+AI-first but not AI-dependent self-hosted infrastructure control plane for reverse proxies, Docker workloads, certificates, databases, logs, monitoring, status pages, and automation.
 
 > [!NOTE]
 > Primary development happens on [Wiolett Industries GitLab](https://gitlab.wiolett.net/wiolett/gateway). The [GitHub repository](https://github.com/wiolett-industries/gateway) is a public mirror. Issues and feature requests are welcome on [GitHub](https://github.com/wiolett-industries/gateway/issues).
@@ -10,6 +10,8 @@ Self-hosted infrastructure control plane for reverse proxies, Docker workloads, 
 ## Why Gateway
 
 Gateway gives small infrastructure teams one product for the daily work that usually lives across nginx configs, shell scripts, Docker hosts, certificate folders, database clients, dashboards, and alert tools.
+
+AI Workspace is the recommended intent-driven interface: start from a complete Scenario or describe the desired outcome, review a proposed plan, and decide whether to execute it. The Operations Console remains a complete independent interface for the same infrastructure, so installing, operating, automating, and recovering Gateway does not depend on AI.
 
 Use it when you want to:
 
@@ -31,7 +33,7 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/install.
 > [!IMPORTANT]
 > **Production deployment note:** Gateway is a privileged infrastructure control plane. For internal operations such as self-updates and local housekeeping, the Gateway app mounts the host Docker socket. Run Gateway in an isolated VM or dedicated host, and do not place unrelated workloads on the same Docker host.
 
-The installer starts Gateway and prints a one-time setup code. The browser wizard then configures the canonical URL, node-network endpoints, one or more sign-in methods (OIDC, password, or email code), the first system administrator, and optional structured logging.
+The installer starts Gateway and prints a one-time setup code. The browser wizard then configures the canonical URL, selectable public and local node-network endpoints, one or more sign-in methods (OIDC, password, or email code), the first system administrator, optional structured logging, and optional AI Workspace. Gateway Inference is configured inside the AI Workspace flow rather than as a separate onboarding product.
 
 Expose the ports that match your deployment:
 
@@ -106,7 +108,7 @@ The CLI asks for the Gateway URL and completes OAuth when no active connection e
 | Databases | Saved PostgreSQL, Redis, and ClickHouse connections with encrypted credentials, health history, browsing, scoped query consoles, and capability-aware write operations; private-by-default managed Postgres, Redis, and ClickHouse instances can bind securely to Docker workloads. |
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware physical GPU telemetry, daemon runtime details, log streaming, and update checks. |
 | Logging | Optional ClickHouse-backed structured log ingestion with schemas, retention, ingest tokens, rate limits, search, storage caps, and health safeguards. |
-| Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, status pages, and optional AI Workspace. |
+| Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint, CI/CD webhooks, webhook notifications, and status pages. |
 | AI Workspace | Opt-in intent-driven operations with guided Scenarios, Plan Mode, permission-aware tools, approvals, sandboxed execution, progress tracking, and final verification. Planning never performs mutations before explicit confirmation. |
 | Inference | Optional multi-provider model gateway with dedicated tokens, usage controls, OpenAI-compatible APIs, and managed Codex or Claude Code setup through `@wiolett/gateway-inference`. |
 | Administration | OIDC, password, email-code and passkey login, group-based and per-user additional permissions, scoped programmatic access, audit logs, setup state, updates, and license controls. |
@@ -169,14 +171,16 @@ Completed foundations:
 - [x] Hardened OIDC/OAuth flows, setup lockout, fail-closed public endpoints, and signed update trust.
 - [x] Gateway and daemon update workflows with signature-verified artifacts.
 - [x] Settings workspace organized around preferences, gateway configuration, and feature controls.
+- [x] Docker-to-nginx Secure Links.
 
 Planned work:
 
+- [ ] Storage connections for S3, R2, MinIO, FTP, FTPS, SFTP, and SMB.
+- [ ] Managed storages with Secure Links and managed-database backup/restore after the Storage foundation.
+- [ ] Vulnerability and security scanning for Business and Enterprise.
 - [ ] Bastion and SSH management daemon for controlled host access.
 - [ ] CLI for scriptable programmatic control from terminals and CI/CD jobs.
 - [ ] Plugin system for extending Gateway with new integrations and operational modules.
-- [ ] Per-user AI Workspace quotas and richer usage reporting.
-- [ ] More guided onboarding for first-time installs and first-node setup.
 - [ ] Broader operational documentation and examples for common deployment patterns.
 
 ## FAQ
@@ -226,7 +230,7 @@ Managed services keep running. Existing nginx configs continue serving traffic, 
 <details>
 <summary><strong>Is AI Workspace required?</strong></summary>
 
-No. It is optional and disabled by default. Gateway does not send data to an AI provider until an administrator enables AI Workspace and configures a provider. Operators can start from guided Scenarios or select Plan Mode for a validated, readable plan; no mutating action runs until the user explicitly confirms implementation.
+No. AI Workspace is optional. The Operations Console, REST API, OAuth, and MCP remain independently usable, and Gateway does not send data to an AI provider until an administrator enables AI Workspace and configures a provider. Operators can start from guided Scenarios or select Plan Mode for a validated, readable plan; no mutating action runs until the user explicitly confirms implementation.
 </details>
 
 ## Plans And Licensing

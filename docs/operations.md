@@ -262,7 +262,7 @@ await logger.close();
 
 ## AI Workspace
 
-AI Workspace is optional and disabled by default. The Operations Console remains fully usable without it.
+AI Workspace is the recommended intent-driven operating surface, but it is optional and disabled by default. The Operations Console remains fully usable without it.
 
 To use it:
 

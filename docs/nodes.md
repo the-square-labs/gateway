@@ -41,7 +41,7 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-da
 ```
 
 > [!IMPORTANT]
-> **Cloudflare DNS/proxy note:** If the Gateway UI is behind Cloudflare, the copied setup command may use the public Gateway domain. Daemons must connect to the Gateway gRPC listener directly on `9443/tcp`; replace `--gateway <domain>:9443` with the actual Gateway server IP or another hostname that exposes `9443/tcp` directly, but keep the generated `--gateway-cert-sha256` value.
+> Daemons must reach the Gateway gRPC listener directly on `9443/tcp`. During Gateway browser setup, select the direct public gRPC host or IP that should appear in enrollment commands; an optional local gRPC IP can be selected for nodes on the same private network. If the address changes later, update it in **Settings > Gateway > General settings** and generate a fresh node command instead of maintaining a manual edit workflow.
 
 The wrapper downloads the daemon-specific installer and forwards all arguments.
 
@@ -152,7 +152,7 @@ The token is only needed for enrollment. Long-term daemon authentication uses mT
 
 Managed nodes do not need inbound management ports for Gateway.
 
-If Gateway is behind Cloudflare for the UI/API, make sure daemon setup uses a direct `9443/tcp` endpoint. Cloudflare-proxied hostnames for the web UI should not be used for daemon enrollment unless they explicitly route the Gateway gRPC port.
+If Gateway is behind Cloudflare for the UI/API, configure Gateway's public gRPC target as a direct `9443/tcp` endpoint. A Cloudflare-proxied web hostname must not be selected unless it explicitly routes the Gateway gRPC port. Generated commands use the configured target, so normal enrollment does not require replacing the address by hand.
 
 Daemons report local and detected public IP addresses in their health data. For Docker nodes, Gateway uses an explicitly configured service address first, then the first reported local address, then a reported public address when proxy Docker upstreams or cross-node workflows need to reach the host. Configure the service address on the node detail page when automatic selection is not routable from the other managed hosts.
 
