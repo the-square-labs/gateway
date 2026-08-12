@@ -180,9 +180,11 @@ export class ProxyService {
     config: string,
     nodeId: string | null,
     preparedTls?: PreparedTlsCertificate | null,
-    configOwnership = 'user_owned'
+    configOwnership = 'user_owned',
+    accessListId?: string | null
   ): Promise<void> {
     const resolvedNodeId = preparedTls?.nodeId ?? (await this.nodeDispatch.resolveNodeId(nodeId));
+    await this.deployAccessListCredentials(resolvedNodeId, accessListId);
     if (preparedTls) {
       await this.certificateDistribution.applyHostBundle({ id: hostId, nodeId }, config, preparedTls, configOwnership);
     } else {
@@ -198,6 +200,25 @@ export class ProxyService {
       resourceId: hostId,
       details: { nodeId: resolvedNodeId },
     });
+  }
+
+  private async deployAccessListCredentials(nodeId: string, accessListId?: string | null): Promise<void> {
+    if (!accessListId) return;
+
+    const list = await this.db.query.accessLists.findFirst({
+      where: eq(accessLists.id, accessListId),
+    });
+    if (!list?.basicAuthEnabled) return;
+
+    const users = list.basicAuthUsers as { username: string; passwordHash: string }[];
+    if (users.length === 0) {
+      throw new Error(`Access list ${accessListId} has basic auth enabled without credentials`);
+    }
+    const content = `${users.map((user) => `${user.username}:${user.passwordHash}`).join('\n')}\n`;
+    const result = await this.nodeDispatch.deployHtpasswd(nodeId, accessListId, content);
+    if (!result.success) {
+      throw new Error(result.error || `Failed to deploy access list credentials to node ${nodeId}`);
+    }
   }
 
   private configOwnershipForHost(host: ProxyHostRow): 'managed_secure_link' | 'user_owned' {
@@ -218,7 +239,8 @@ export class ProxyService {
       config,
       host.nodeId,
       certPaths.preparedTls,
-      this.configOwnershipForHost(host)
+      this.configOwnershipForHost(host),
+      host.accessListId
     );
   }
 
@@ -434,7 +456,8 @@ export class ProxyService {
         config,
         host.nodeId,
         certPaths.preparedTls,
-        this.configOwnershipForHost(host)
+        this.configOwnershipForHost(host),
+        host.accessListId
       );
       if (host.upstreamKind !== 'manual') {
         await this.secureLinks?.activate(host.id);
@@ -654,7 +677,8 @@ export class ProxyService {
           config,
           updated.nodeId,
           certPaths.preparedTls,
-          this.configOwnershipForHost(updated)
+          this.configOwnershipForHost(updated),
+          updated.accessListId
         );
         if (updated.upstreamKind !== 'manual' && !updatedUsesRawMode) {
           await this.secureLinks?.activate(id);
@@ -1542,7 +1566,8 @@ export class ProxyService {
           config,
           updated.nodeId,
           certPaths.preparedTls,
-          this.configOwnershipForHost(updated)
+          this.configOwnershipForHost(updated),
+          updated.accessListId
         );
       } else {
         // Disable: remove config and reload
@@ -1635,7 +1660,8 @@ export class ProxyService {
           config,
           updated.nodeId,
           certPaths.preparedTls,
-          this.configOwnershipForHost(updated)
+          this.configOwnershipForHost(updated),
+          updated.accessListId
         );
       }
     } catch (error) {
@@ -1704,7 +1730,8 @@ export class ProxyService {
         config,
         host.nodeId,
         certPaths.preparedTls,
-        this.configOwnershipForHost(host)
+        this.configOwnershipForHost(host),
+        host.accessListId
       );
     }
   }
@@ -1852,7 +1879,8 @@ export class ProxyService {
               config,
               cutoverHost.nodeId,
               certPaths.preparedTls,
-              this.configOwnershipForHost(cutoverHost)
+              this.configOwnershipForHost(cutoverHost),
+              cutoverHost.accessListId
             );
             if (cutoverHost.secureLinkGeneration > 0) {
               await this.secureLinks?.activate(cutoverHost.id);
@@ -1930,7 +1958,8 @@ export class ProxyService {
           config,
           host.nodeId ?? nodeId,
           certPaths.preparedTls,
-          this.configOwnershipForHost(host)
+          this.configOwnershipForHost(host),
+          host.accessListId
         );
       } catch (err) {
         logger.error('Failed to resync host config', {
@@ -1966,7 +1995,8 @@ export class ProxyService {
       config,
       host.nodeId,
       certPaths.preparedTls,
-      this.configOwnershipForHost(host)
+      this.configOwnershipForHost(host),
+      host.accessListId
     );
     const distribution = await this.certificateDistribution.getStatusForHost(host);
     await this.auditService.log({

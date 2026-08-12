@@ -143,10 +143,9 @@ export class AccessListService {
     const basicAuthEnabled = updated.basicAuthEnabled;
     const basicAuthUsers = updated.basicAuthUsers as BasicAuthUser[];
 
-    if (basicAuthEnabled && basicAuthUsers.length > 0) {
+    const shouldDeployHtpasswd = basicAuthEnabled && basicAuthUsers.length > 0;
+    if (shouldDeployHtpasswd) {
       await this.writeHtpasswd(id, basicAuthUsers);
-    } else {
-      await this.removeHtpasswd(id);
     }
 
     // 5. Find all proxy hosts using this access list and regenerate their nginx configs
@@ -219,6 +218,13 @@ export class AccessListService {
           if (!result.success) throw new Error(result.error || 'Daemon config apply failed');
         }
       }
+    }
+
+    // Remove credentials only after every affected host config has stopped
+    // referencing the file. Removing first creates an avoidable 403 window if
+    // config application is delayed or fails.
+    if (!shouldDeployHtpasswd) {
+      await this.removeHtpasswd(id);
     }
 
     // 6. Audit log
@@ -378,7 +384,14 @@ export class AccessListService {
     const nodeIds = [...new Set(hostsUsingList.map((h) => h.nodeId).filter(Boolean))] as string[];
 
     for (const nodeId of nodeIds) {
-      await this.nodeDispatch.deployHtpasswd(nodeId, accessListId, content);
+      const result = await this.nodeDispatch.deployHtpasswd(nodeId, accessListId, content);
+      if (!result.success) {
+        throw new AppError(
+          502,
+          'HTPASSWD_DEPLOY_FAILED',
+          result.error || `Failed to deploy access list credentials to node ${nodeId}`
+        );
+      }
     }
     logger.debug('Htpasswd deployed to nodes', { accessListId, nodeCount: nodeIds.length });
   }
@@ -393,9 +406,16 @@ export class AccessListService {
 
     for (const nodeId of nodeIds) {
       try {
-        await this.nodeDispatch.removeHtpasswd(nodeId, accessListId);
-      } catch {
-        // Ignore
+        const result = await this.nodeDispatch.removeHtpasswd(nodeId, accessListId);
+        if (!result.success) {
+          logger.warn('Failed to remove stale htpasswd file from node', {
+            accessListId,
+            nodeId,
+            error: result.error,
+          });
+        }
+      } catch (error) {
+        logger.warn('Failed to remove stale htpasswd file from node', { accessListId, nodeId, error });
       }
     }
     logger.debug('Htpasswd removed from nodes', { accessListId });

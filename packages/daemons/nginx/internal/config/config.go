@@ -7,6 +7,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	canonicalHtpasswdDir = "/etc/nginx/gateway/htpasswd"
+	legacyHtpasswdDir    = "/etc/nginx/htpasswd"
+)
+
 type Config struct {
 	Gateway   GatewayConfig `yaml:"gateway"`
 	TLS       TLSConfig     `yaml:"tls"`
@@ -56,11 +61,17 @@ func Load(path string) (*Config, error) {
 	cfg.Nginx.LogsDir = "/var/log/nginx"
 	cfg.Nginx.GlobalConfig = "/etc/nginx/nginx.conf"
 	cfg.Nginx.StubStatusURL = "http://127.0.0.1/nginx_status"
-	cfg.Nginx.HtpasswdDir = "/etc/nginx/gateway/htpasswd"
+	cfg.Nginx.HtpasswdDir = canonicalHtpasswdDir
 	cfg.Nginx.AcmeChallengeDir = "/var/www/acme-challenge"
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	// Gateway-generated host configs always reference the canonical directory.
+	// Normalize the legacy installer value so daemon updates cannot keep writing
+	// valid credentials to a path nginx never reads.
+	if cfg.Nginx.HtpasswdDir == legacyHtpasswdDir {
+		cfg.Nginx.HtpasswdDir = canonicalHtpasswdDir
 	}
 
 	if err := cfg.validate(); err != nil {

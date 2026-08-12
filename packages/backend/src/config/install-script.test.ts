@@ -190,3 +190,14 @@ describe('node installer daemon downloads', () => {
     expect(source).not.toContain(`Place the ${binary} binary at \${target}`);
   });
 });
+
+describe('nginx node path migration', () => {
+  it('rewrites both quoted and legacy unquoted daemon config values', () => {
+    const source = readFileSync(nginxNodeInstaller, 'utf8');
+
+    expect(source).toContain('set_daemon_config_value htpasswd_dir "$NGINX_HTPASSWD_DIR"');
+    expect(source).toContain('sed -i -E "s|^([[:space:]]*');
+    expect(source).toContain(':[[:space:]]*).*$|');
+    expect(source).not.toContain('s|htpasswd_dir: \\".*\\"|');
+  });
+});

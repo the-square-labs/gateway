@@ -1127,14 +1127,30 @@ reset_existing_enrollment_for_token() {
     ok "Backed up previous enrollment state to ${backup_dir}"
 }
 
+set_daemon_config_value() {
+    local key="$1"
+    local value="$2"
+    local config_file="/etc/nginx-daemon/config.yaml"
+
+    if ! grep -Eq "^[[:space:]]*${key}:[[:space:]]*" "$config_file"; then
+        die "Missing ${key} in ${config_file}"
+    fi
+
+    # Accept both quoted and legacy unquoted YAML values. Older installers only
+    # matched quoted values, leaving htpasswd_dir pointed at /etc/nginx/htpasswd
+    # while generated host configs read /etc/nginx/gateway/htpasswd.
+    sed -i -E "s|^([[:space:]]*${key}:[[:space:]]*).*$|\\1\"${value}\"|" "$config_file"
+    grep -Fq "${key}: \"${value}\"" "$config_file" || die "Failed to update ${key} in ${config_file}"
+}
+
 enroll_daemon() {
     local target="/usr/local/bin/nginx-daemon"
 
     if [[ -f /etc/nginx-daemon/config.yaml ]]; then
-        sed -i "s|config_dir: \".*\"|config_dir: \"${NGINX_SITES_DIR}\"|" /etc/nginx-daemon/config.yaml
-        sed -i "s|htpasswd_dir: \".*\"|htpasswd_dir: \"${NGINX_HTPASSWD_DIR}\"|" /etc/nginx-daemon/config.yaml
+        set_daemon_config_value config_dir "$NGINX_SITES_DIR"
+        set_daemon_config_value htpasswd_dir "$NGINX_HTPASSWD_DIR"
         if [[ "$STUB_STATUS_URL" != "http://127.0.0.1/nginx_status" ]]; then
-            sed -i "s|stub_status_url: \".*\"|stub_status_url: \"${STUB_STATUS_URL}\"|" /etc/nginx-daemon/config.yaml
+            set_daemon_config_value stub_status_url "$STUB_STATUS_URL"
         fi
     fi
 
@@ -1150,10 +1166,10 @@ enroll_daemon() {
     if ! "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256" >> "$LOG_FILE" 2>&1; then
         die "Failed to enroll nginx-daemon. Check ${LOG_FILE} for details."
     fi
-    sed -i "s|config_dir: \".*\"|config_dir: \"${NGINX_SITES_DIR}\"|" /etc/nginx-daemon/config.yaml
-    sed -i "s|htpasswd_dir: \".*\"|htpasswd_dir: \"${NGINX_HTPASSWD_DIR}\"|" /etc/nginx-daemon/config.yaml
+    set_daemon_config_value config_dir "$NGINX_SITES_DIR"
+    set_daemon_config_value htpasswd_dir "$NGINX_HTPASSWD_DIR"
     if [[ "$STUB_STATUS_URL" != "http://127.0.0.1/nginx_status" ]]; then
-        sed -i "s|stub_status_url: \"http://127.0.0.1/nginx_status\"|stub_status_url: \"${STUB_STATUS_URL}\"|" /etc/nginx-daemon/config.yaml
+        set_daemon_config_value stub_status_url "$STUB_STATUS_URL"
     fi
     ok "Config written to /etc/nginx-daemon/config.yaml"
 }

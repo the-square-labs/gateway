@@ -421,6 +421,84 @@ describe('ProxyService legacy Docker link compatibility', () => {
     expect(applyConfig).toHaveBeenCalledWith('nginx-node', active.id, 'secure config', false, 'managed_secure_link');
   });
 
+  it('restores basic auth credentials before applying host config during node resync', async () => {
+    const host = makeActiveSecureHost({ accessListId: 'access-list-1' });
+    const db = {
+      query: {
+        proxyHosts: {
+          findMany: vi.fn().mockResolvedValue([host]),
+        },
+        accessLists: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'access-list-1',
+            basicAuthEnabled: true,
+            basicAuthUsers: [{ username: 'pd', passwordHash: 'bcrypt-hash' }],
+            ipRules: [],
+          }),
+        },
+      },
+    } as any;
+    const deployHtpasswd = vi.fn().mockResolvedValue({ success: true });
+    const applyConfig = vi.fn().mockResolvedValue({ success: true });
+    const service = new ProxyService(
+      db,
+      { renderForHost: vi.fn().mockResolvedValue('secure config') } as any,
+      { log: vi.fn().mockResolvedValue(undefined) } as any,
+      {} as any,
+      { resolveNodeId: vi.fn().mockResolvedValue('nginx-node'), deployHtpasswd, applyConfig } as any,
+      { supportsNode: vi.fn().mockResolvedValue(false) } as any,
+      undefined,
+      {
+        getActiveAdditional: vi.fn().mockResolvedValue([]),
+        assertAdditionalReferences: vi.fn().mockResolvedValue(undefined),
+      } as any
+    );
+
+    await service.resyncAllHostsOnNode('nginx-node');
+
+    expect(deployHtpasswd).toHaveBeenCalledWith('nginx-node', 'access-list-1', 'pd:bcrypt-hash\n');
+    expect(deployHtpasswd.mock.invocationCallOrder[0]).toBeLessThan(applyConfig.mock.invocationCallOrder[0]!);
+  });
+
+  it('does not apply a host config when credential deployment fails', async () => {
+    const host = makeActiveSecureHost({ accessListId: 'access-list-1' });
+    const db = {
+      query: {
+        proxyHosts: { findMany: vi.fn().mockResolvedValue([host]) },
+        accessLists: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'access-list-1',
+            basicAuthEnabled: true,
+            basicAuthUsers: [{ username: 'pd', passwordHash: 'bcrypt-hash' }],
+            ipRules: [],
+          }),
+        },
+      },
+    } as any;
+    const applyConfig = vi.fn().mockResolvedValue({ success: true });
+    const service = new ProxyService(
+      db,
+      { renderForHost: vi.fn().mockResolvedValue('secure config') } as any,
+      { log: vi.fn().mockResolvedValue(undefined) } as any,
+      {} as any,
+      {
+        resolveNodeId: vi.fn().mockResolvedValue('nginx-node'),
+        deployHtpasswd: vi.fn().mockResolvedValue({ success: false, error: 'daemon busy' }),
+        applyConfig,
+      } as any,
+      { supportsNode: vi.fn().mockResolvedValue(false) } as any,
+      undefined,
+      {
+        getActiveAdditional: vi.fn().mockResolvedValue([]),
+        assertAdditionalReferences: vi.fn().mockResolvedValue(undefined),
+      } as any
+    );
+
+    await service.resyncAllHostsOnNode('nginx-node');
+
+    expect(applyConfig).not.toHaveBeenCalled();
+  });
+
   it('does not replace the legacy endpoint when a complete edit form repeats the same Docker target', async () => {
     const resolve = vi.fn();
     const service = new ProxyService(
