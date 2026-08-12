@@ -39,7 +39,10 @@ export class RelayDockerRecoveryService {
       | 'restartContainer'
       | 'runOneShot'
     >,
-    private readonly env: Pick<Env, 'GATEWAY_RELAY_MANAGED' | 'GATEWAY_RELAY_IMAGE_REF' | 'GATEWAY_RELAY_SERVICE_NAME'>
+    private readonly env: Pick<
+      Env,
+      'COMPOSE_PROJECT_DIR' | 'GATEWAY_RELAY_MANAGED' | 'GATEWAY_RELAY_IMAGE_REF' | 'GATEWAY_RELAY_SERVICE_NAME'
+    >
   ) {}
 
   async recover(): Promise<RelayRecoveryAction> {
@@ -102,6 +105,11 @@ export class RelayDockerRecoveryService {
   private async inspectOwnership(): Promise<RelayOwnership> {
     const app = await this.docker.inspectSelf();
     const appOwnership = this.validateLabels(app, 'app');
+    const configuredWorkingDir = this.env.COMPOSE_PROJECT_DIR;
+    if (configuredWorkingDir && !SAFE_ABSOLUTE_PATH.test(configuredWorkingDir)) {
+      throw new RelayRecoverySafetyError('ownership_unverified', 'Configured Compose project directory is invalid');
+    }
+    const composeWorkingDir = configuredWorkingDir ?? appOwnership.composeWorkingDir;
     const marker = `com.wiolett.gateway.managed-service=${this.env.GATEWAY_RELAY_SERVICE_NAME}`;
     const matches = await this.docker.listContainersByLabel(marker);
     const owned: Array<{ container: DockerContainerFullInspect; ownership: Omit<RelayOwnership, 'container'> }> = [];
@@ -110,7 +118,7 @@ export class RelayDockerRecoveryService {
       const ownership = this.validateLabels(container, this.env.GATEWAY_RELAY_SERVICE_NAME);
       if (
         ownership.composeProject === appOwnership.composeProject &&
-        ownership.composeWorkingDir === appOwnership.composeWorkingDir
+        (configuredWorkingDir || ownership.composeWorkingDir === appOwnership.composeWorkingDir)
       ) {
         owned.push({ container, ownership });
       }
@@ -118,8 +126,14 @@ export class RelayDockerRecoveryService {
     if (owned.length > 1) {
       throw new RelayRecoverySafetyError('ownership_unverified', 'Multiple relay containers belong to this deployment');
     }
-    if (owned.length === 1) return { container: owned[0]!.container, ...owned[0]!.ownership };
-    return { container: null, ...appOwnership };
+    if (owned.length === 1) {
+      return {
+        container: owned[0]!.container,
+        composeProject: owned[0]!.ownership.composeProject,
+        composeWorkingDir,
+      };
+    }
+    return { container: null, composeProject: appOwnership.composeProject, composeWorkingDir };
   }
 
   private assertExpectedImage(container: DockerContainerFullInspect, expectedImage: string): void {

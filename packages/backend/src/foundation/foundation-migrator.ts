@@ -73,6 +73,7 @@ export async function runFoundationMigrations(options: FoundationMigrationOption
     ...(options.databaseConnectorImage ? { DATABASE_CONNECTOR_IMAGE: options.databaseConnectorImage } : {}),
     ...(options.secureLinkConnectorImage ? { SECURE_LINK_CONNECTOR_IMAGE: options.secureLinkConnectorImage } : {}),
     GATEWAY_RELAY_IMAGE_REF: effectiveRelayImageRef,
+    GATEWAY_RELAY_TARGET: 'relay:9443',
     ...(effectiveRelayBuildVersion ? { GATEWAY_RELAY_BUILD_VERSION: effectiveRelayBuildVersion } : {}),
     GATEWAY_RELAY_PROTOCOL_MAJOR: String(effectiveRelayProtocolMajor),
     SANDBOX_RUNNER_WORKSPACE_DIR: envValue(envContent, 'SANDBOX_RUNNER_WORKSPACE_DIR') ?? defaultSandboxWorkspaceDir,
@@ -311,12 +312,56 @@ function removeLegacyClickHouseService(lines: string[]): string[] {
 function patchRelayFoundation(lines: string[]): string[] {
   let next = removeAppPublicGrpcPort(lines);
   next = upsertAppRelayEnvironment(next);
+  next = upsertAppRelayDependency(next);
   next = upsertAppLabel(next);
   next = upsertAppRelayIdentityVolume(next);
   next = upsertAppGrpcExpose(next);
   next = upsertRelayService(next);
   next = ensureTopLevelVolume(next, 'gateway_relay_identity');
   return ensureTopLevelVolume(next, 'gateway_relay_state');
+}
+
+function upsertAppRelayDependency(lines: string[]): string[] {
+  const app = findServiceBlock(lines, 'app');
+  if (!app) throw new Error('foundation migration failed: services.app block not found');
+  const dependsOn = findNestedBlock(lines, app, 'depends_on');
+  if (!dependsOn) {
+    return [
+      ...lines.slice(0, app.end),
+      `${' '.repeat(app.indent + 2)}depends_on:`,
+      `${' '.repeat(app.indent + 4)}relay:`,
+      `${' '.repeat(app.indent + 6)}condition: service_started`,
+      ...lines.slice(app.end),
+    ];
+  }
+
+  const directIndent = dependsOn.indent + 2;
+  const content = lines.slice(dependsOn.start + 1, dependsOn.end);
+  const listStyle = content
+    .find((line) => line.trim() && !line.trimStart().startsWith('#'))
+    ?.trimStart()
+    .startsWith('-');
+  const next = lines.filter((line, index) => {
+    if (index <= dependsOn.start || index >= dependsOn.end) return true;
+    const indent = line.length - line.trimStart().length;
+    if (listStyle) return !(indent === directIndent && /^\s*-\s*relay\s*(?:#.*)?$/.test(line));
+    if (indent === directIndent && /^\s*relay\s*:/.test(line)) return false;
+    const previousRelay = lines
+      .slice(dependsOn.start + 1, index)
+      .reverse()
+      .find((candidate) => {
+        const candidateIndent = candidate.length - candidate.trimStart().length;
+        return candidate.trim() && candidateIndent <= directIndent;
+      });
+    return !previousRelay || !/^\s*relay\s*:/.test(previousRelay);
+  });
+  const refreshedApp = findServiceBlock(next, 'app');
+  const refreshed = refreshedApp ? findNestedBlock(next, refreshedApp, 'depends_on') : null;
+  if (!refreshed) throw new Error('foundation migration failed: services.app.depends_on block disappeared');
+  const entries = listStyle
+    ? [`${' '.repeat(directIndent)}- relay`]
+    : [`${' '.repeat(directIndent)}relay:`, `${' '.repeat(directIndent + 2)}condition: service_started`];
+  return [...next.slice(0, refreshed.end), ...entries, ...next.slice(refreshed.end)];
 }
 
 function removeAppPublicGrpcPort(lines: string[]): string[] {

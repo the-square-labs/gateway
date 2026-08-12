@@ -71,9 +71,41 @@ describe('foundation migrator patches', () => {
     expect(patched).toContain('com.wiolett.gateway.managed-service: app');
     expect(patched).toContain('gateway_relay_identity:/var/lib/gateway-relay');
     expect(patched).toContain('gateway_relay_state:/var/lib/gateway-relay/state');
+    expect(patched).toContain('      relay:\n        condition: service_started');
     expect(patched).not.toContain('RELAY_DATABASE_URL');
     expect(patched).not.toContain('GATEWAY_RELAY_DB_PASSWORD');
     expect(patched.match(/9443:9443/g)).toHaveLength(1);
+    expect(patchCompose(patched)).toBe(patched);
+  });
+
+  it('replaces legacy relay IP targets with the Compose service DNS name', () => {
+    const mappingStyle = OLD_COMPOSE.replace(
+      '    env_file: .env',
+      '    env_file: .env\n    environment:\n      GATEWAY_RELAY_TARGET: 172.18.0.4:9443'
+    );
+    const listStyle = OLD_COMPOSE.replace(
+      '    env_file: .env',
+      '    env_file: .env\n    environment:\n      - GATEWAY_RELAY_TARGET=172.18.0.4:9443'
+    );
+
+    for (const compose of [mappingStyle, listStyle]) {
+      const patched = patchCompose(compose);
+      expect(patched).toContain('GATEWAY_RELAY_TARGET: relay:9443');
+      expect(patched).not.toContain('172.18.0.4:9443');
+      expect(patched.match(/GATEWAY_RELAY_TARGET/g)).toHaveLength(1);
+    }
+  });
+
+  it('normalizes an existing relay dependency without duplicating it', () => {
+    const compose = OLD_COMPOSE.replace(
+      '    depends_on:\n      redis:',
+      '    depends_on:\n      relay:\n        condition: service_healthy\n      redis:'
+    );
+
+    const patched = patchCompose(compose);
+    expect(patched.match(/^\s+relay:$/gm)).toHaveLength(2);
+    expect(patched).toContain('      relay:\n        condition: service_started');
+    expect(patched).not.toContain('condition: service_healthy\n      redis:');
     expect(patchCompose(patched)).toBe(patched);
   });
 
@@ -194,7 +226,7 @@ describe('runFoundationMigrations', () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), 'gateway-foundation-migrator-test-'));
     await writeFile(
       path.join(tempDir, '.env'),
-      'GATEWAY_VERSION=v2.4.2\nGATEWAY_RELAY_VERSION=1\nGATEWAY_RELAY_DB_PASSWORD=legacy-secret\nRELAY_DATABASE_URL=postgres://legacy\n'
+      'GATEWAY_VERSION=v2.4.2\nGATEWAY_RELAY_TARGET=172.18.0.4:9443\nGATEWAY_RELAY_VERSION=1\nGATEWAY_RELAY_DB_PASSWORD=legacy-secret\nRELAY_DATABASE_URL=postgres://legacy\n'
     );
     await writeFile(path.join(tempDir, 'docker-compose.yml'), OLD_COMPOSE);
     const sandboxWorkspaceDir = path.join(tempDir, 'sandbox-workspaces');
@@ -236,6 +268,8 @@ describe('runFoundationMigrations', () => {
     expect(await readFile(path.join(tempDir, '.env'), 'utf8')).toContain(
       `GATEWAY_RELAY_IMAGE_REF=registry/gateway/relay@sha256:${'a'.repeat(64)}`
     );
+    expect(await readFile(path.join(tempDir, '.env'), 'utf8')).toContain('GATEWAY_RELAY_TARGET=relay:9443');
+    expect(await readFile(path.join(tempDir, '.env'), 'utf8')).not.toContain('172.18.0.4:9443');
     expect(await readFile(path.join(tempDir, '.env'), 'utf8')).not.toContain('GATEWAY_RELAY_DB_PASSWORD');
     expect(await readFile(path.join(tempDir, '.env'), 'utf8')).not.toContain('GATEWAY_RELAY_VERSION');
     expect(await readFile(path.join(tempDir, '.env'), 'utf8')).not.toContain('RELAY_DATABASE_URL');

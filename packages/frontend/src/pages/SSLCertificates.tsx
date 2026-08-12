@@ -448,13 +448,14 @@ export function SSLCertificates() {
     {
       key: "tls",
       header: "TLS",
-      width: "minmax(150px, 0.9fr)",
+      width: "minmax(130px, 0.7fr)",
       render: (cert) => <TLSDistributionBadge distribution={cert.distribution} />,
     },
     {
       key: "expires",
       header: "Expires",
-      width: "150px",
+      width: "190px",
+      className: "whitespace-nowrap",
       render: (cert) => {
         const expDays = cert.notAfter ? daysUntil(cert.notAfter) : null;
         return cert.notAfter ? (
@@ -505,7 +506,7 @@ export function SSLCertificates() {
       key: "actions",
       header: "",
       align: "right",
-      width: "48px",
+      width: "64px",
       render: (cert) => {
         const hasPendingDNSVerification =
           (cert.acmePendingOperation === "issue" || cert.acmePendingOperation === "renewal") &&

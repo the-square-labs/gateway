@@ -393,8 +393,13 @@ export class UpdateService {
 
     logger.info('Foundation files migrated, launching compose sidecar');
 
-    const sidecarBackupDir = migrationOutput.backupDir?.replace(/^\/host(?=\/)/, '/project') ?? '';
-    if (sidecarBackupDir && !/^\/project\/.gateway-foundation-backups\/[a-zA-Z0-9_.-]+$/.test(sidecarBackupDir)) {
+    const sidecarBackupDir = migrationOutput.backupDir?.replace(/^\/host(?=\/)/, composeDir) ?? '';
+    const expectedBackupPrefix = `${composeDir}/.gateway-foundation-backups/`;
+    if (
+      sidecarBackupDir &&
+      (!sidecarBackupDir.startsWith(expectedBackupPrefix) ||
+        !/^[a-zA-Z0-9_.-]+$/.test(sidecarBackupDir.slice(expectedBackupPrefix.length)))
+    ) {
       throw new Error(`Refusing to launch update with unexpected foundation backup path: ${sidecarBackupDir}`);
     }
 
@@ -404,15 +409,18 @@ export class UpdateService {
         'sh',
         '-c',
         `set -eu
-compose() { docker compose --project-name ${composeProject} -f /project/docker-compose.yml "$@"; }
+compose() { docker compose --project-name ${composeProject} --project-directory ${composeDir} -f ${composeDir}/docker-compose.yml "$@"; }
 service_exists() { compose config --services | grep -qx "$1"; }
+relay_reachable() {
+  compose exec -T app node -e 'const net=require("node:net");const socket=net.connect(9443,"relay",()=>{socket.end();process.exit(0)});socket.setTimeout(3000,()=>{socket.destroy();process.exit(1)});socket.on("error",()=>process.exit(1));'
+}
 rollback() {
   if [ -n "$FOUNDATION_BACKUP_DIR" ]; then
     if [ -f "$FOUNDATION_BACKUP_DIR/.env" ]; then
-      cp -p "$FOUNDATION_BACKUP_DIR/.env" /project/.env
+      cp -p "$FOUNDATION_BACKUP_DIR/.env" ${composeDir}/.env
     fi
     if [ -f "$FOUNDATION_BACKUP_DIR/docker-compose.yml" ]; then
-      cp -p "$FOUNDATION_BACKUP_DIR/docker-compose.yml" /project/docker-compose.yml
+      cp -p "$FOUNDATION_BACKUP_DIR/docker-compose.yml" ${composeDir}/docker-compose.yml
     fi
   fi
   rollback_has_relay=0
@@ -450,7 +458,7 @@ rollback() {
         relay_id="$(compose ps -q relay)"
         if [ -n "$relay_id" ]; then
           relay_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$relay_id")"
-          if [ "$app_health" = healthy ] && [ "$relay_health" = healthy ]; then return 0; fi
+          if [ "$app_health" = healthy ] && [ "$relay_health" = healthy ] && relay_reachable; then return 0; fi
         fi
       fi
     fi
@@ -467,8 +475,11 @@ on_exit() {
 }
 trap on_exit EXIT
 sleep 2
-compose up -d --force-recreate app
-compose up -d relay
+if service_exists relay; then
+  compose up -d --force-recreate app relay
+else
+  compose up -d --force-recreate app
+fi
 attempt=0
 while [ "$attempt" -lt 150 ]; do
   app_id="$(compose ps -q app)"
@@ -476,7 +487,17 @@ while [ "$attempt" -lt 150 ]; do
   if [ -n "$app_id" ] && [ -n "$relay_id" ]; then
     app_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$app_id")"
     relay_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$relay_id")"
-    if [ "$app_health" = healthy ] && [ "$relay_health" = healthy ]; then exit 0; fi
+    if [ "$app_health" = healthy ] && [ "$relay_health" = healthy ]; then
+      app_working_dir="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$app_id")"
+      relay_working_dir="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$relay_id")"
+      relay_networks="$(docker inspect --format '{{len .NetworkSettings.Networks}}' "$relay_id")"
+      relay_public_port="$(docker port "$relay_id" 9443/tcp)"
+      # Health states alone do not prove that Compose preserved ownership,
+      # attached the relay network, published 9443, or connected app -> relay.
+      if [ "$app_working_dir" = ${composeDir} ] && [ "$relay_working_dir" = ${composeDir} ] && [ "$relay_networks" -gt 0 ] && [ -n "$relay_public_port" ] && relay_reachable; then
+        exit 0
+      fi
+    fi
   fi
   attempt=$((attempt + 1))
   sleep 2
@@ -484,7 +505,7 @@ done
 exit 1`,
       ],
       Env: [`FOUNDATION_BACKUP_DIR=${sidecarBackupDir}`],
-      HostConfig: { Binds: [`${composeDir}:/project`, '/var/run/docker.sock:/var/run/docker.sock'] },
+      HostConfig: { Binds: [`${composeDir}:${composeDir}`, '/var/run/docker.sock:/var/run/docker.sock'] },
     });
 
     logger.info('Update sidecar launched — container will be replaced shortly');

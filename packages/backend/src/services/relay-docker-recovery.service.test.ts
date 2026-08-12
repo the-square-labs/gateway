@@ -106,6 +106,23 @@ describe('RelayDockerRecoveryService', () => {
     );
   });
 
+  it('uses the configured host Compose directory after an older updater wrote synthetic labels', async () => {
+    const mock = docker();
+    mock.inspectSelf.mockResolvedValue({
+      Id: 'app-id',
+      Config: { Image: IMAGE, Labels: { ...labels('app'), 'com.docker.compose.project.working_dir': '/project' } },
+    });
+    const { service: recovery } = service(mock, { COMPOSE_PROJECT_DIR: '/opt/gateway' });
+
+    await expect(recovery.recover()).resolves.toBe('compose_up');
+    expect(mock.runOneShot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        Cmd: expect.arrayContaining(['--project-directory', '/opt/gateway', '-f', '/opt/gateway/docker-compose.yml']),
+        HostConfig: expect.objectContaining({ Binds: expect.arrayContaining(['/opt/gateway:/opt/gateway']) }),
+      })
+    );
+  });
+
   it('leaves an already-running expected relay untouched during startup finalization', async () => {
     const { service: recovery, mock } = service();
     mock.listContainersByLabel.mockResolvedValue([{ Id: 'relay-id' }]);
