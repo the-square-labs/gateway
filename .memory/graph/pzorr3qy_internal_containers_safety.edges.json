@@ -1,0 +1,15 @@
+{
+  "file_name": "pzorr3qy_internal_containers_safety",
+  "edges": [
+    {
+      "from_id": "pzorr3qy",
+      "to_id": "rzidwe4n",
+      "relation": "same_workflow",
+      "weight": 0.86,
+      "reason": "Both document Gateway Docker migration workflows and the safety checks needed to preserve managed service containers.",
+      "source": "auto",
+      "created_at": 1786557853081,
+      "updated_at": 1786557853081
+    }
+  ]
+}

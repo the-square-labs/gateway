@@ -23,7 +23,7 @@ describe('DockerImageCleanupService', () => {
             Created: 100,
           },
         ]),
-        listContainers: vi.fn().mockResolvedValue([{ ImageID: 'sha-new' }]),
+        listAllContainers: vi.fn().mockResolvedValue([{ ImageID: 'sha-new' }]),
         removeImage: vi.fn().mockResolvedValue(undefined),
       };
       const service = new DockerImageCleanupService({} as never, docker as never);

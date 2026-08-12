@@ -152,7 +152,7 @@ export class DockerMigrationPreflightService {
       this.safeList(() => this.docker.listVolumes(input.sourceNodeId)),
       this.safeList(() => this.docker.listNetworks(input.sourceNodeId)),
       this.safeList(() => this.docker.listImages(input.sourceNodeId)),
-      this.safeList(() => this.docker.listContainers(input.targetNodeId)),
+      this.safeList(() => this.docker.listAllContainers(input.targetNodeId)),
       this.safeList(() => this.docker.listImages(input.targetNodeId)),
       this.safeList(() => this.docker.listVolumes(input.targetNodeId)),
       this.safeList(() => this.docker.listNetworks(input.targetNodeId)),

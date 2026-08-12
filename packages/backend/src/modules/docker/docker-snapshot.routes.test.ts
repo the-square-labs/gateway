@@ -63,6 +63,7 @@ async function setup() {
   await snapshots.replaceList(NODE_2, 'containers', [{ id: 'c2', name: 'two', state: 'running' }]);
   const docker = {
     decorateContainerSnapshot: vi.fn(async (_nodeId, data) => data),
+    decoratePublicContainerSnapshot: vi.fn(async (_nodeId, data) => data),
     decorateContainerDetailSnapshot: vi.fn(async (_nodeId, data) => data),
     listContainers: vi.fn(),
     listGpuAttachmentUsers: vi.fn(),
@@ -119,6 +120,9 @@ describe('Docker snapshot routes', () => {
     const body = (await response.json()) as any;
     expect(body.data[0]).toMatchObject({ nodeId: NODE_1, name: 'one', availability: 'available' });
     expect(docker.listContainers).not.toHaveBeenCalled();
+    expect(docker.decoratePublicContainerSnapshot).toHaveBeenCalledWith(NODE_1, [
+      { id: 'c1', name: 'one', state: 'running' },
+    ]);
     expect(dispatch.sendDockerContainerCommand).not.toHaveBeenCalled();
   });
 

@@ -84,7 +84,7 @@ async function aggregate(c: any, kind: DockerSnapshotKind) {
     visibleNodes.map(async (node) => {
       const snapshot = await snapshots.getList<Record<string, any>[]>(node.id, kind);
       const source =
-        kind === 'containers' ? await docker.decorateContainerSnapshot(node.id, snapshot.data) : snapshot.data;
+        kind === 'containers' ? await docker.decoratePublicContainerSnapshot(node.id, snapshot.data) : snapshot.data;
       const availability = snapshots.availability(node.id, snapshot);
       const normalized = normalizeRows(kind, Array.isArray(source) ? source : [], search);
       const scoped: Array<Record<string, unknown>> =

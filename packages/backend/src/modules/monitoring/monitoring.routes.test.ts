@@ -249,7 +249,7 @@ describe('dashboard bootstrap route', () => {
       getList: vi.fn(async () => ({ data: [{ id: 'container-1', name: '/api' }], revision: 3 })),
     };
     const docker = {
-      decorateContainerSnapshot: vi.fn(async () => [
+      decoratePublicContainerSnapshot: vi.fn(async () => [
         { id: 'container-1', name: '/api', state: 'running', scopeResourceId: 'container-1' },
       ]),
     };
@@ -286,7 +286,9 @@ describe('dashboard bootstrap route', () => {
     expect(response.status).toBe(200);
     expect(dashboardReadModels.get).toHaveBeenCalledWith('stats-user');
     expect(snapshots.getList).toHaveBeenCalledWith(nodeId, 'containers');
-    expect(docker.decorateContainerSnapshot).toHaveBeenCalledWith(nodeId, [{ id: 'container-1', name: '/api' }]);
+    expect(docker.decoratePublicContainerSnapshot).toHaveBeenCalledWith(nodeId, [
+      { id: 'container-1', name: '/api' },
+    ]);
     await expect(response.json()).resolves.toMatchObject({
       data: {
         pinned: {

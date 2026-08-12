@@ -35,6 +35,10 @@ import { deriveDockerGpuAttachment, hasDockerGpuV1Capability } from './docker-gp
 import type { DockerHealthCheckService } from './docker-health-check.service.js';
 import type { DockerImageCleanupService } from './docker-image-cleanup.service.js';
 import {
+  filterGatewayInternalContainers,
+  isGatewayInternalContainer,
+} from './docker-internal-containers.js';
+import {
   listImages as listDockerImages,
   pruneImages as pruneDockerImages,
   pullImage as pullDockerImage,
@@ -616,6 +620,14 @@ export class DockerManagementService {
     await this.validateDockerNode(nodeId);
     const result = await this.nodeDispatch.sendDockerContainerCommand(nodeId, 'list');
     const containers = this.parseResult(result);
+    return this.decoratePublicContainerSnapshot(nodeId, containers);
+  }
+
+  /** Internal inventory for services that must account for Gateway-owned containers. */
+  async listAllContainers(nodeId: string) {
+    await this.validateDockerNode(nodeId);
+    const result = await this.nodeDispatch.sendDockerContainerCommand(nodeId, 'list');
+    const containers = this.parseResult(result);
     return this.decorateContainerSnapshot(nodeId, containers);
   }
 
@@ -638,6 +650,7 @@ export class DockerManagementService {
     );
     const visibleContainers = containers.flatMap((item) => {
       const container = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+      if (isGatewayInternalContainer(container)) return [];
       const containerId = String(container.id ?? container.Id ?? '');
       if (!containerId) return [];
       const name = String(container.name ?? container.Name ?? '').replace(/^\/+/, '');
@@ -786,6 +799,14 @@ export class DockerManagementService {
       return visibleContainers;
     }
     return containers;
+  }
+
+  /** User-facing decoration that keeps Gateway implementation containers private. */
+  async decoratePublicContainerSnapshot(nodeId: string, containers: any) {
+    const publicContainers = Array.isArray(containers)
+      ? filterGatewayInternalContainers(containers)
+      : containers;
+    return this.decorateContainerSnapshot(nodeId, publicContainers);
   }
 
   async inspectContainer(nodeId: string, containerId: string) {

@@ -254,7 +254,7 @@ export class DockerImageCleanupService {
 
       if (matching.length <= retentionCount) return;
 
-      const containers = await this.docker.listContainers(nodeId);
+      const containers = await this.docker.listAllContainers(nodeId);
       const inUseImageIds = new Set<string>();
       if (Array.isArray(containers)) {
         for (const container of containers) {

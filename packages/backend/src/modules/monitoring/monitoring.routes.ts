@@ -478,7 +478,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
           .getList<Record<string, unknown>[]>(nodeId, 'containers');
         const containers = await container
           .resolve(DockerManagementService)
-          .decorateContainerSnapshot(nodeId, Array.isArray(snapshot.data) ? snapshot.data : []);
+          .decoratePublicContainerSnapshot(nodeId, Array.isArray(snapshot.data) ? snapshot.data : []);
         return forNode.reduce<DashboardDockerResource[]>((resolved, resource) => {
           const containerData = containers.find(
             (item: any) =>

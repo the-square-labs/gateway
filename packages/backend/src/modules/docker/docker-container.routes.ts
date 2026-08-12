@@ -191,7 +191,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
     assertDockerNodeScope(c.get('effectiveScopes') ?? [], 'docker:containers:view', nodeId);
     await snapshots.assertDockerNode(nodeId);
     const snapshot = await snapshots.getList<any[]>(nodeId, 'containers');
-    const data = await service.decorateContainerSnapshot(nodeId, snapshot.data);
+    const data = await service.decoratePublicContainerSnapshot(nodeId, snapshot.data);
     if (!Array.isArray(data)) return c.json({ data });
     const search = c.req.query('search')?.trim().toLowerCase();
     const visible = filterDockerResourcesForScope(
