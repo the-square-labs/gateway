@@ -740,7 +740,7 @@ databaseRoutes.openapi(
     const { sql, maxRows } = ExecuteSqlSchema.parse(await c.req.json());
     const databaseId = c.req.param('id')!;
     const access = resolveSqlQueryAccess(c, databaseId, await service.inferSqlIntent(databaseId, sql));
-    const data = await service.executeSql(databaseId, sql, user.id, { maxRows }, access);
+    const data = await service.executeSql(databaseId, sql, user.id, { maxRows, signal: c.req.raw.signal }, access);
     return c.json({ data });
   }
 );

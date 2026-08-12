@@ -1,7 +1,8 @@
-import { act, screen } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithRouter } from "@/test/render";
-import { ConfirmDialog, useConfirmDialog } from "./ConfirmDialog";
+import { ConfirmDialog, confirmAction, useConfirmDialog } from "./ConfirmDialog";
 
 describe("ConfirmDialog", () => {
   afterEach(() => {
@@ -41,5 +42,32 @@ describe("ConfirmDialog", () => {
     });
 
     expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
+  });
+
+  it("keeps an async confirmation open and locked while its action is pending", async () => {
+    const user = userEvent.setup();
+    let resolveAction!: () => void;
+    const action = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveAction = resolve;
+        })
+    );
+    renderWithRouter(<ConfirmDialog />);
+
+    const result = confirmAction(
+      { title: "Delete Proxy Host", description: "Remove it?", confirmLabel: "Delete" },
+      action
+    );
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+
+    expect(action).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
+
+    resolveAction();
+    await expect(result).resolves.toBe(true);
+    await waitFor(() => expect(screen.queryByText("Delete Proxy Host")).not.toBeInTheDocument());
   });
 });

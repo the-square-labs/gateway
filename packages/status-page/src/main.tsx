@@ -10,6 +10,7 @@ type BarStatus = "ok" | "warn" | "error" | "none";
 interface PublicStatusPageDto {
   title: string;
   description: string;
+  hideExternalBranding: boolean;
   generatedAt: string;
   overallStatus: OverallStatus;
   services: Array<{
@@ -299,14 +300,16 @@ function StatusPage({ data }: { data: PublicStatusPageDto }) {
         </section>
       )}
 
-      <footer>
-        <span>
-          Powered by{" "}
-          <a href="https://wiolett.net" target="_blank" rel="noopener noreferrer">
-            Wiolett Industries
-          </a>
-        </span>
-      </footer>
+      {!data.hideExternalBranding && (
+        <footer>
+          <span>
+            Powered by{" "}
+            <a href="https://wiolett.net" target="_blank" rel="noopener noreferrer">
+              Wiolett Industries
+            </a>
+          </span>
+        </footer>
+      )}
     </main>
   );
 }

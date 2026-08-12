@@ -1,4 +1,4 @@
-import { History, Loader2, Play } from "lucide-react";
+import { History, Loader2, Play, Square } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
@@ -193,11 +193,14 @@ export function DatabaseConsoleTab({ database }: { database: DatabaseConnection 
   );
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const latestSplitPercentRef = useRef(splitPercent);
+  const queryAbortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     setInput(readStoredConsoleInput(database.id, database.type));
     setHistory(readStoredConsoleHistory(database.id));
   }, [database.id, database.type]);
+
+  useEffect(() => () => queryAbortControllerRef.current?.abort(), []);
 
   const updateInput = useCallback(
     (value: string) => {
@@ -224,6 +227,8 @@ export function DatabaseConsoleTab({ database }: { database: DatabaseConnection 
   );
 
   const execute = async () => {
+    const abortController = database.type === "redis" ? null : new AbortController();
+    queryAbortControllerRef.current = abortController;
     setRunning(true);
     setResult(null);
     recordHistory(input);
@@ -231,12 +236,15 @@ export function DatabaseConsoleTab({ database }: { database: DatabaseConnection 
       const data =
         database.type === "redis"
           ? await api.executeRedisCommand(database.id, input)
-          : await api.executeSql(database.id, input);
+          : await api.executeSql(database.id, input, abortController?.signal);
       setResult(data);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Query failed";
       setResult({ error: message });
     } finally {
+      if (queryAbortControllerRef.current === abortController) {
+        queryAbortControllerRef.current = null;
+      }
       setRunning(false);
     }
   };
@@ -324,13 +332,26 @@ export function DatabaseConsoleTab({ database }: { database: DatabaseConnection 
               <History className="h-4 w-4" />
             </Button>
           )}
-          <Button onClick={() => void execute()} disabled={running}>
+          <Button
+            onClick={() => {
+              if (running && queryAbortControllerRef.current) {
+                queryAbortControllerRef.current.abort();
+              } else {
+                void execute();
+              }
+            }}
+            disabled={running && database.type === "redis"}
+          >
             {running ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              database.type === "redis" ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Square className="h-3.5 w-3.5" />
+              )
             ) : (
               <Play className="h-3.5 w-3.5" />
             )}
-            Run
+            {running && database.type !== "redis" ? "Cancel" : "Run"}
           </Button>
         </div>
       </div>

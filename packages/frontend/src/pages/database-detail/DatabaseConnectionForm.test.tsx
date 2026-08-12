@@ -61,6 +61,18 @@ describe("DatabaseConnectionForm", () => {
 
     expect(screen.queryByText("Size Limit (MB)")).not.toBeInTheDocument();
   });
+
+  it("shows the interactive query budget for SQL databases", () => {
+    render(
+      <DatabaseConnectionForm
+        draft={draftFromConnection(null)}
+        onChange={vi.fn()}
+        mode="metadata"
+      />
+    );
+
+    expect(screen.getByLabelText("Interactive query budget")).toHaveValue(300);
+  });
 });
 
 describe("buildDatabasePayload", () => {
@@ -119,6 +131,15 @@ describe("buildDatabasePayload", () => {
     });
 
     expect(payload).not.toHaveProperty("manualSizeLimitMb");
+  });
+
+  it("sends the configured interactive query budget for SQL databases", () => {
+    const payload = buildDatabasePayload({
+      ...draftFromConnection(null),
+      interactiveQueryBudgetSeconds: "450",
+    });
+
+    expect(payload).toHaveProperty("interactiveQueryBudgetSeconds", 450);
   });
 });
 

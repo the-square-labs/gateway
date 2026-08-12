@@ -20,6 +20,7 @@ import { inferClickHouseIntent, splitSqlStatements } from './database-query-inte
 import { estimateJsonBytes } from './database-result-compaction.js';
 import type {
   SqlDatabaseAdapter,
+  SqlExecutionOptions,
   SqlExecutionResult,
   SqlObjectSummary,
   SqlStatementResult,
@@ -28,6 +29,7 @@ import type {
 
 const CLICKHOUSE_STATEMENT_LIMIT = 10;
 const CLICKHOUSE_QUERY_TIMEOUT_SECONDS = 15;
+const DEFAULT_QUERY_BUDGET_MS = 15_000;
 const CLICKHOUSE_RESPONSE_MAX_BYTES = 768 * 1024;
 
 export interface ClickHouseSqlAdapterContext {
@@ -346,10 +348,11 @@ export class ClickHouseSqlAdapter implements SqlDatabaseAdapter {
     id: string,
     sqlText: string,
     userId: string,
-    options: { maxRows?: number } = {}
+    options: SqlExecutionOptions = {}
   ): Promise<SqlExecutionResult> {
     const maxRows = Math.min(Math.max(Math.trunc(options.maxRows ?? 500), 1), 2000);
     const statements = splitSqlStatements(sqlText);
+    const deadlineMs = options.deadlineMs ?? Date.now() + DEFAULT_QUERY_BUDGET_MS;
     if (statements.length > CLICKHOUSE_STATEMENT_LIMIT) {
       throw new AppError(
         400,
@@ -360,60 +363,94 @@ export class ClickHouseSqlAdapter implements SqlDatabaseAdapter {
     return this.context.withClient(id, 'query', async (client) => {
       const results: SqlStatementResult[] = [];
       let responseTruncated = false;
-      for (const statement of statements) {
+      for (const [index, statement] of statements.entries()) {
+        if (options.signal?.aborted) {
+          throw new AppError(499, 'DATABASE_QUERY_CANCELLED', 'Interactive query cancelled');
+        }
+        const remainingMs = deadlineMs - Date.now();
+        const remainingStatements = statements.length - index;
+        const statementTimeoutMs = Math.floor(remainingMs / remainingStatements);
+        if (statementTimeoutMs <= 0) {
+          throw new AppError(408, 'DATABASE_QUERY_BUDGET_EXCEEDED', 'Interactive query budget exhausted');
+        }
+        const statementTimeoutSeconds = Math.max(1, Math.ceil(statementTimeoutMs / 1000));
+        const abortController = new AbortController();
+        let budgetTimedOut = false;
+        const abortForBudget = () => {
+          budgetTimedOut = true;
+          abortController.abort();
+        };
+        const abortForClient = () => abortController.abort();
+        const abortTimer = setTimeout(abortForBudget, statementTimeoutMs);
+        options.signal?.addEventListener('abort', abortForClient, { once: true });
         const intent = inferClickHouseIntent(statement);
         const started = Date.now();
         let entry: SqlStatementResult;
-        if (intent === 'read') {
-          const response = await client.query({
-            query: statement,
-            format: 'JSON',
-            clickhouse_settings: {
-              max_execution_time: CLICKHOUSE_QUERY_TIMEOUT_SECONDS,
-              max_result_rows: String(maxRows),
-              result_overflow_mode: 'break',
-              readonly: '1',
-              cancel_http_readonly_queries_on_client_close: 1,
-            },
-          });
-          const body = await response.json<Record<string, unknown>>();
-          const columns = body.meta?.map((column) => ({ name: column.name, type: column.type })) ?? [];
-          entry = {
-            command: commandName(statement),
-            queryId: body.query_id ?? response.query_id,
-            rowCount: body.rows ?? body.data.length,
-            durationMs: Math.round((body.statistics?.elapsed ?? (Date.now() - started) / 1000) * 1000),
-            fields: columns.map((column) => column.name),
-            columns,
-            rows: body.data.slice(0, maxRows),
-            truncated:
-              body.data.length > maxRows ||
-              (body.rows_before_limit_at_least != null && body.rows_before_limit_at_least > body.data.length),
-            maxRows,
-            statistics: body.statistics
-              ? {
-                  elapsedMs: body.statistics.elapsed * 1000,
-                  rowsRead: body.statistics.rows_read,
-                  bytesRead: body.statistics.bytes_read,
-                }
-              : undefined,
-          };
-        } else {
-          const response = await client.command({
-            query: statement,
-            clickhouse_settings: { max_execution_time: CLICKHOUSE_QUERY_TIMEOUT_SECONDS },
-          });
-          entry = {
-            command: commandName(statement),
-            queryId: response.query_id,
-            rowCount: numeric(response.summary?.written_rows) ?? numeric(response.summary?.result_rows) ?? 0,
-            durationMs: Date.now() - started,
-            fields: [],
-            columns: [],
-            rows: [],
-            truncated: false,
-            maxRows,
-          };
+        try {
+          if (intent === 'read') {
+            const response = await client.query({
+              query: statement,
+              format: 'JSON',
+              abort_signal: abortController.signal,
+              clickhouse_settings: {
+                max_execution_time: statementTimeoutSeconds,
+                max_result_rows: String(maxRows),
+                result_overflow_mode: 'break',
+                readonly: '1',
+                cancel_http_readonly_queries_on_client_close: 1,
+              },
+            });
+            const body = await response.json<Record<string, unknown>>();
+            const columns = body.meta?.map((column) => ({ name: column.name, type: column.type })) ?? [];
+            entry = {
+              command: commandName(statement),
+              queryId: body.query_id ?? response.query_id,
+              rowCount: body.rows ?? body.data.length,
+              durationMs: Math.round((body.statistics?.elapsed ?? (Date.now() - started) / 1000) * 1000),
+              fields: columns.map((column) => column.name),
+              columns,
+              rows: body.data.slice(0, maxRows),
+              truncated:
+                body.data.length > maxRows ||
+                (body.rows_before_limit_at_least != null && body.rows_before_limit_at_least > body.data.length),
+              maxRows,
+              statistics: body.statistics
+                ? {
+                    elapsedMs: body.statistics.elapsed * 1000,
+                    rowsRead: body.statistics.rows_read,
+                    bytesRead: body.statistics.bytes_read,
+                  }
+                : undefined,
+            };
+          } else {
+            const response = await client.command({
+              query: statement,
+              abort_signal: abortController.signal,
+              clickhouse_settings: { max_execution_time: statementTimeoutSeconds },
+            });
+            entry = {
+              command: commandName(statement),
+              queryId: response.query_id,
+              rowCount: numeric(response.summary?.written_rows) ?? numeric(response.summary?.result_rows) ?? 0,
+              durationMs: Date.now() - started,
+              fields: [],
+              columns: [],
+              rows: [],
+              truncated: false,
+              maxRows,
+            };
+          }
+        } catch (error) {
+          if (abortController.signal.aborted) {
+            if (budgetTimedOut) {
+              throw new AppError(408, 'DATABASE_QUERY_BUDGET_EXCEEDED', 'Interactive query budget exhausted');
+            }
+            throw new AppError(499, 'DATABASE_QUERY_CANCELLED', 'Interactive query cancelled');
+          }
+          throw error;
+        } finally {
+          options.signal?.removeEventListener('abort', abortForClient);
+          clearTimeout(abortTimer);
         }
         if (estimateJsonBytes([...results, entry]) > CLICKHOUSE_RESPONSE_MAX_BYTES) {
           responseTruncated = true;

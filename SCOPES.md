@@ -89,6 +89,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `proxy:raw:bypass` | Yes |
 | `proxy:advanced` | Yes |
 | `proxy:advanced:bypass` | Yes |
+| `proxy:maintenance:bypass` | Yes |
 | `proxy:folders:manage` |  |
 | `proxy:templates:view` | Yes |
 | `proxy:templates:create` |  |
@@ -277,6 +278,7 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 | `proxy:raw:toggle` | Raw nginx mode is session-only. |
 | `proxy:raw:bypass` | Dangerous raw nginx directive bypass is session-only. |
 | `proxy:advanced:bypass` | Unrestricted advanced nginx snippets are session-only. |
+| `proxy:maintenance:bypass` | Maintenance access code issuance is session-only. |
 | `nodes:config:view` | Global node nginx config is session-only. |
 | `nodes:config:edit` | Global node nginx config is session-only. |
 | `inference:providers:view` | Inference provider credentials and account state are session-only. |

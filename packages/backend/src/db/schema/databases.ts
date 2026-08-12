@@ -53,6 +53,7 @@ export const databaseConnections = pgTable(
     username: varchar('username', { length: 255 }),
     tlsEnabled: boolean('tls_enabled').notNull().default(false),
     manualSizeLimitMb: integer('manual_size_limit_mb'),
+    interactiveQueryBudgetSeconds: integer('interactive_query_budget_seconds').notNull().default(300),
     encryptedConfig: text('encrypted_config').notNull(),
     healthStatus: databaseHealthStatusEnum('health_status').notNull().default('unknown'),
     lastHealthCheckAt: timestamp('last_health_check_at', { withTimezone: true }),

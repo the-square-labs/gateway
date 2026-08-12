@@ -1,0 +1,1 @@
+ALTER TABLE "database_connections" ADD COLUMN "interactive_query_budget_seconds" integer DEFAULT 300 NOT NULL;

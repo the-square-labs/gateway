@@ -1,3 +1,4 @@
+import { Loader2 } from "lucide-react";
 import { create } from "zustand";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,7 +19,8 @@ interface ConfirmState {
   cancelVariant: "outline" | "ghost";
   variant: "default" | "destructive";
   locked: boolean;
-  onConfirm: (() => void) | null;
+  pending: boolean;
+  onConfirm: (() => void | Promise<void>) | null;
   show: (opts: {
     title: string;
     description: string;
@@ -27,8 +29,9 @@ interface ConfirmState {
     cancelVariant?: "outline" | "ghost";
     variant?: "default" | "destructive";
     locked?: boolean;
-    onConfirm: () => void;
+    onConfirm: () => void | Promise<void>;
   }) => void;
+  setPending: (pending: boolean) => void;
   close: () => void;
 }
 
@@ -41,6 +44,7 @@ export const useConfirmDialog = create<ConfirmState>()((set) => ({
   cancelVariant: "outline",
   variant: "default",
   locked: false,
+  pending: false,
   onConfirm: null,
   show: ({
     title,
@@ -61,9 +65,11 @@ export const useConfirmDialog = create<ConfirmState>()((set) => ({
       cancelVariant,
       variant,
       locked,
+      pending: false,
       onConfirm,
     }),
-  close: () => set({ open: false, onConfirm: null }),
+  setPending: (pending) => set({ pending }),
+  close: () => set({ open: false, pending: false, onConfirm: null }),
 }));
 
 export function confirm(opts: {
@@ -92,6 +98,47 @@ export function confirm(opts: {
   });
 }
 
+export function confirmAction(
+  opts: {
+    title: string;
+    description: string;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    cancelVariant?: "outline" | "ghost";
+    variant?: "default" | "destructive";
+  },
+  action: () => Promise<boolean> | Promise<void>
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    let completed = false;
+    useConfirmDialog.getState().show({
+      ...opts,
+      onConfirm: async () => {
+        if (useConfirmDialog.getState().pending) return;
+        useConfirmDialog.getState().setPending(true);
+        try {
+          const result = await action();
+          if (result === false) {
+            useConfirmDialog.getState().setPending(false);
+            return;
+          }
+          completed = true;
+          resolve(true);
+          useConfirmDialog.getState().close();
+        } catch {
+          useConfirmDialog.getState().setPending(false);
+        }
+      },
+    });
+    const unsub = useConfirmDialog.subscribe((state) => {
+      if (!state.open) {
+        if (!completed) resolve(false);
+        unsub();
+      }
+    });
+  });
+}
+
 export function ConfirmDialog() {
   const {
     open,
@@ -102,23 +149,24 @@ export function ConfirmDialog() {
     cancelVariant,
     variant,
     locked,
+    pending,
     onConfirm,
     close,
   } = useConfirmDialog();
 
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && !locked && close()}>
+    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && !locked && !pending && close()}>
       <DialogContent
-        hideCloseButton={locked}
+        hideCloseButton={locked || pending}
         className="max-w-[calc(100vw-2rem)] sm:max-w-md"
         onEscapeKeyDown={(event) => {
-          if (locked) event.preventDefault();
+          if (locked || pending) event.preventDefault();
         }}
         onPointerDownOutside={(event) => {
-          if (locked) event.preventDefault();
+          if (locked || pending) event.preventDefault();
         }}
         onInteractOutside={(event) => {
-          if (locked) event.preventDefault();
+          if (locked || pending) event.preventDefault();
         }}
       >
         <DialogHeader>
@@ -128,15 +176,17 @@ export function ConfirmDialog() {
           {description}
         </DialogDescription>
         <DialogFooter>
-          <Button variant={cancelVariant} onClick={close}>
+          <Button variant={cancelVariant} onClick={close} disabled={pending}>
             {cancelLabel}
           </Button>
           <Button
             variant={variant === "destructive" ? "destructive" : "default"}
+            disabled={pending}
             onClick={() => {
-              onConfirm?.();
+              void onConfirm?.();
             }}
           >
+            {pending && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
             {confirmLabel}
           </Button>
         </DialogFooter>

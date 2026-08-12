@@ -6,6 +6,7 @@ import { PanelShell } from "@/components/common/PanelShell";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { PermissionGroup, User } from "@/types";
@@ -192,6 +193,7 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
 
   return (
     <>
+      {loading && <Skeleton />}
       <PanelShell
         title="Models"
         description="Models exposed to users and the provider account group serving each model"

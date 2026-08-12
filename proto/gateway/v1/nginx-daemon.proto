@@ -47,6 +47,22 @@ service NodeControl {
   rpc CommandStream(stream DaemonMessage) returns (stream GatewayCommand);
 }
 
+// Internal request path used only by an enrolled nginx daemon to exchange and
+// validate maintenance access credentials for its local nginx listener.
+service MaintenanceAccess {
+  rpc Redeem(MaintenanceAccessRedeemRequest) returns (MaintenanceAccessReply);
+}
+
+message MaintenanceAccessRedeemRequest {
+  string host_id = 1;
+  string code = 2;
+}
+
+message MaintenanceAccessReply {
+  bool allowed = 1;
+  string session_token = 2;
+}
+
 // Dedicated large-artifact transport. Docker daemons connect over the same
 // mutually authenticated channel as NodeControl, but artifacts never share the
 // bounded command result envelope.

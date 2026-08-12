@@ -34,6 +34,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { cn, formatRelativeDate } from "@/lib/utils";
@@ -164,6 +165,9 @@ function GitLabIntegrationsSection() {
   const [connectors, setConnectors] = useState<GitLabConnector[]>(
     () => api.getCached<GitLabConnector[]>("settings:gitlab-connectors") ?? []
   );
+  const [initialLoadComplete, setInitialLoadComplete] = useState(
+    () => api.getCached<GitLabConnector[]>("settings:gitlab-connectors") !== undefined
+  );
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingConnector, setEditingConnector] = useState<GitLabConnector | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -226,6 +230,8 @@ function GitLabIntegrationsSection() {
       setConnectors(data ?? []);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to load integrations");
+    } finally {
+      setInitialLoadComplete(true);
     }
   }, []);
 
@@ -558,6 +564,8 @@ function GitLabIntegrationsSection() {
       toast.error(error instanceof Error ? error.message : "Failed to delete connector");
     }
   };
+
+  if (!initialLoadComplete) return <Skeleton />;
 
   return (
     <>

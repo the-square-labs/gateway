@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/services/api";
 import type { InferenceSettings } from "@/types/inference";
@@ -84,6 +85,7 @@ export function InferenceEndpointSettingsPanel({ canManage }: { canManage: boole
 
   return (
     <>
+      {loading && <Skeleton />}
       <PanelShell
         title="Inference settings"
         description="Control which client-facing inference adapters Gateway exposes"

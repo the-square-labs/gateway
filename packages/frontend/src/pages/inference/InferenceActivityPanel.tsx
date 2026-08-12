@@ -22,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { formatDateTime, formatRelativeDate, getInitials } from "@/lib/utils";
 import { api } from "@/services/api";
 import type {
@@ -222,6 +223,7 @@ export function InferenceActivityPanel() {
 
   return (
     <>
+      {recentLoading && <Skeleton />}
       <PanelShell
         title="Recent activity"
         description="Request metadata and normalized usage; prompts and outputs are never stored"

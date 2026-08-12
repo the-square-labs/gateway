@@ -19,6 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -98,6 +99,13 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
     () =>
       api.getCached<StatusPageProxyTemplateOption[]>("settings:status-page-proxy-templates") ?? []
   );
+  const [initialLoadComplete, setInitialLoadComplete] = useState(
+    () =>
+      api.getCached<StatusPageConfig>("settings:status-page-config") !== undefined &&
+      api.getCached<SSLCertificate[]>("settings:status-page-ssl-certs") !== undefined &&
+      api.getCached<StatusPageProxyTemplateOption[]>("settings:status-page-proxy-templates") !==
+        undefined
+  );
   const [savingSettings, setSavingSettings] = useState(false);
 
   const onlineNginxNodes = useMemo(
@@ -127,15 +135,14 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
   }, []);
 
   useEffect(() => {
-    loadStatusPage();
-    loadProxyTemplates();
-    api
-      .listSSLCertificates({ limit: 100 })
-      .then((res) => {
+    void Promise.allSettled([
+      loadStatusPage(),
+      loadProxyTemplates(),
+      api.listSSLCertificates({ limit: 100 }).then((res) => {
         api.setCache("settings:status-page-ssl-certs", res.data ?? []);
         setSslCerts(res.data ?? []);
-      })
-      .catch(() => {});
+      }),
+    ]).finally(() => setInitialLoadComplete(true));
   }, [loadProxyTemplates, loadStatusPage]);
 
   useRealtime("status-page.changed", () => {
@@ -202,6 +209,8 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
       setSavingSettings(false);
     }
   };
+
+  if (!initialLoadComplete) return <Skeleton />;
 
   return (
     <PanelShell

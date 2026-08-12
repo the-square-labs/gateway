@@ -124,6 +124,7 @@ export interface AuthProvisioningSettings {
   };
   generalSettings: {
     publicUrl: string | null;
+    hideExternalBranding?: boolean;
     fileUploadMaxBytes: number;
     fileOpenMaxBytes: number;
     gatewayPublicIps: string[];

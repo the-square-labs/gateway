@@ -152,6 +152,60 @@ export interface ProxySecureLinkStatus {
     runtime: ProxySecureLinkStatus["runtime"];
     traffic: ProxySecureLinkStatus["traffic"];
   }>;
+  additionalLinks?: ProxyAdditionalSecureLinkRuntime[];
+}
+
+export interface ProxyAdditionalSecureLinkRuntime {
+  id: string;
+  name: string;
+  status: ProxyAdditionalSecureLinkStatus;
+  generation: number;
+  targetContainer: string;
+  forwardScheme: ForwardScheme;
+  lastError: string | null;
+  runtime: ProxySecureLinkStatus["runtime"];
+  history: Array<{
+    timestamp: string;
+    runtime: ProxySecureLinkStatus["runtime"];
+  }>;
+}
+
+export type ProxyAdditionalSecureLinkStatus =
+  | "provisioning"
+  | "active"
+  | "failed"
+  | "cleanup_pending";
+
+export interface ProxyAdditionalSecureLink {
+  id: string;
+  proxyHostId: string;
+  name: string;
+  upstreamKind: "docker_container" | "docker_deployment";
+  forwardScheme: ForwardScheme;
+  sourceNodeId: string;
+  dockerNodeId: string;
+  dockerContainerName: string | null;
+  dockerDeploymentId: string | null;
+  dockerContainerPort: number;
+  dockerHostPort: number;
+  targetContainer: string;
+  generation: number;
+  status: ProxyAdditionalSecureLinkStatus;
+  lastError: string | null;
+  listenerPort: number | null;
+  connectorPort: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateProxyAdditionalSecureLinkRequest {
+  name: string;
+  upstreamKind: "docker_container" | "docker_deployment";
+  forwardScheme: ForwardScheme;
+  dockerNodeId?: string | null;
+  dockerContainerName?: string | null;
+  dockerDeploymentId?: string | null;
+  dockerContainerPort: number;
 }
 
 // Access List Types

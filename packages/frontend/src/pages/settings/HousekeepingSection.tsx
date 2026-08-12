@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { formatBytes, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -30,55 +31,58 @@ function normalizeHousekeepingConfig(config: HousekeepingConfig): HousekeepingCo
 }
 
 export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectionProps) {
-  const [hkConfig, setHkConfig] = useState<HousekeepingConfig>({
-    enabled: true,
-    cronExpression: "0 2 * * *",
-    nginxLogs: { enabled: true, retentionDays: 30 },
-    auditLog: { enabled: true, retentionDays: 90 },
-    dismissedAlerts: { enabled: true, retentionDays: 30 },
-    deliveryLog: { enabled: true, retentionDays: 7 },
-    structuredLogs: { enabled: false, maxRows: 100_000, maxSizeBytes: 10 * 1024 ** 3 },
-    clickHouseInternals: { enabled: false },
-    orphanedAIArtifacts: { enabled: true },
-    gatewayLogs: { enabled: false },
-    orphanedVolumes: { enabled: false, retentionDays: 30 },
-    dockerPrune: { enabled: true },
-    orphanedCerts: { enabled: true },
-    acmeCleanup: { enabled: true },
-  });
-  const [hkSavedConfig, setHkSavedConfig] = useState<HousekeepingConfig | null>(null);
-  const [hkStats, setHkStats] = useState<HousekeepingStats | null>(null);
+  const cachedConfig = api.getCached<HousekeepingConfig>("housekeeping:config");
+  const cachedStats = api.getCached<HousekeepingStats>("housekeeping:stats");
+  const [hkConfig, setHkConfig] = useState<HousekeepingConfig>(() =>
+    cachedConfig
+      ? normalizeHousekeepingConfig(cachedConfig)
+      : {
+          enabled: true,
+          cronExpression: "0 2 * * *",
+          nginxLogs: { enabled: true, retentionDays: 30 },
+          auditLog: { enabled: true, retentionDays: 90 },
+          dismissedAlerts: { enabled: true, retentionDays: 30 },
+          deliveryLog: { enabled: true, retentionDays: 7 },
+          structuredLogs: { enabled: false, maxRows: 100_000, maxSizeBytes: 10 * 1024 ** 3 },
+          clickHouseInternals: { enabled: false },
+          orphanedAIArtifacts: { enabled: true },
+          gatewayLogs: { enabled: false },
+          orphanedVolumes: { enabled: false, retentionDays: 30 },
+          dockerPrune: { enabled: true },
+          orphanedCerts: { enabled: true },
+          acmeCleanup: { enabled: true },
+        }
+  );
+  const [hkSavedConfig, setHkSavedConfig] = useState<HousekeepingConfig | null>(() =>
+    cachedConfig ? normalizeHousekeepingConfig(cachedConfig) : null
+  );
+  const [hkStats, setHkStats] = useState<HousekeepingStats | null>(cachedStats ?? null);
+  const [initialLoadComplete, setInitialLoadComplete] = useState(
+    cachedConfig !== undefined && cachedStats !== undefined
+  );
   const [hkRunning, setHkRunning] = useState(false);
   const [hkSaving, setHkSaving] = useState(false);
   const [hkHistoryOpen, setHkHistoryOpen] = useState(false);
   const [hkHistory, setHkHistory] = useState<HousekeepingRunResult[]>([]);
 
   const loadHousekeeping = useCallback(async () => {
-    const cachedConfig = api.getCached<HousekeepingConfig>("housekeeping:config");
-    if (cachedConfig) {
-      const config = normalizeHousekeepingConfig(cachedConfig);
-      setHkConfig(config);
-      setHkSavedConfig(config);
+    try {
+      await Promise.allSettled([
+        api.getHousekeepingConfig().then((c) => {
+          const config = normalizeHousekeepingConfig(c);
+          api.setCache("housekeeping:config", config);
+          setHkConfig(config);
+          setHkSavedConfig(config);
+        }),
+        api.getHousekeepingStats().then((s) => {
+          api.setCache("housekeeping:stats", s);
+          setHkStats(s);
+          setHkRunning(s.isRunning);
+        }),
+      ]);
+    } finally {
+      setInitialLoadComplete(true);
     }
-    const cachedStats = api.getCached<HousekeepingStats>("housekeeping:stats");
-    if (cachedStats) setHkStats(cachedStats);
-    api
-      .getHousekeepingConfig()
-      .then((c) => {
-        const config = normalizeHousekeepingConfig(c);
-        api.setCache("housekeeping:config", config);
-        setHkConfig(config);
-        setHkSavedConfig(config);
-      })
-      .catch(() => {});
-    api
-      .getHousekeepingStats()
-      .then((s) => {
-        api.setCache("housekeeping:stats", s);
-        setHkStats(s);
-        setHkRunning(s.isRunning);
-      })
-      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -187,6 +191,8 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
       toast.error("Failed to load history");
     }
   };
+
+  if (!initialLoadComplete) return <Skeleton />;
 
   return (
     <>

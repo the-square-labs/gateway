@@ -21,6 +21,7 @@ export class SchedulerService {
   private jobs: ScheduledJob[] = [];
   private intervals: IntervalJob[] = [];
   private activeTasks = new Set<Promise<void>>();
+  private activeTaskNames = new Set<string>();
   private running = false;
 
   register(name: string, schedule: string, task: () => Promise<void>): void {
@@ -74,13 +75,21 @@ export class SchedulerService {
 
   private runTask(kind: string, name: string, task: () => Promise<void>): void {
     if (!this.running) return;
+    if (this.activeTaskNames.has(name)) {
+      logger.debug(`Skipping overlapping ${kind.toLowerCase()}: ${name}`);
+      return;
+    }
     logger.debug(`Running ${kind.toLowerCase()}: ${name}`);
+    this.activeTaskNames.add(name);
     const promise = Promise.resolve()
       .then(task)
       .catch((error) => {
         logger.error(`${kind} ${name} failed`, { error });
       })
-      .finally(() => this.activeTasks.delete(promise));
+      .finally(() => {
+        this.activeTaskNames.delete(name);
+        this.activeTasks.delete(promise);
+      });
     this.activeTasks.add(promise);
   }
 }

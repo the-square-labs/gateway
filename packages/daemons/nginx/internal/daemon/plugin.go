@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	sharedauth "github.com/wiolett-industries/gateway/daemon-shared/auth"
 	"github.com/wiolett-industries/gateway/daemon-shared/connector"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
@@ -38,8 +39,10 @@ type NginxPlugin struct {
 	relayTunnels    []*nginxRelayTunnel
 
 	// Session-scoped resources
-	sessionCancel context.CancelFunc
-	conn          *grpc.ClientConn
+	sessionCancel              context.CancelFunc
+	conn                       *grpc.ClientConn
+	maintenanceAccess          *maintenanceAccessServer
+	maintenanceAccessSupported bool
 }
 
 var _ lifecycle.ProxySecureLinkPlugin = (*NginxPlugin)(nil)
@@ -109,6 +112,13 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	}
 	logger.Info("nginx detected", "version", version)
 	p.mgr = mgr
+	p.maintenanceAccessSupported, err = mgr.HasSecureLinkModule()
+	if err != nil {
+		return err
+	}
+	if !p.maintenanceAccessSupported {
+		logger.Warn("nginx secure_link module is unavailable; maintenance access codes are disabled")
+	}
 	p.relayGrants, err = newRelayGrantStore(baseCfg.StateDir)
 	if err != nil {
 		return fmt.Errorf("initialize relay grant store: %w", err)
@@ -240,7 +250,7 @@ func (p *NginxPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		Architecture:       arch,
 		KernelVersion:      kernelVer,
 		DaemonType:         "nginx",
-		Capabilities:       []string{"nginx_certificate_distribution_v2", "generic_relay_tunnel_v1", "proxy_secure_links_v1"},
+		Capabilities:       p.capabilities(),
 	}
 }
 
@@ -256,9 +266,35 @@ func (p *NginxPlugin) CollectStats() *pb.StatsReport {
 	return p.reporter.CollectStats()
 }
 
+func (p *NginxPlugin) capabilities() []string {
+	capabilities := []string{"nginx_certificate_distribution_v2", "generic_relay_tunnel_v1", "proxy_secure_links_v1"}
+	if p.maintenanceAccessSupported {
+		capabilities = append(capabilities, "proxy_maintenance_access_v1")
+	}
+	return capabilities
+}
+
 func (p *NginxPlugin) OnSessionStart(ctx context.Context, _ *stream.Writer) error {
 	sessionCtx, cancel := context.WithCancel(ctx)
 	p.sessionCancel = cancel
+	if !p.maintenanceAccessSupported {
+		go p.runLogCleanup(sessionCtx)
+		return nil
+	}
+	tlsManager := sharedauth.NewTLSManager(p.baseCfg.TLS.CACert, p.baseCfg.TLS.ClientCert, p.baseCfg.TLS.ClientKey)
+	conn, err := connector.NewConnector(p.baseCfg.Gateway.Address, tlsManager, p.logger).Connect(sessionCtx)
+	if err != nil {
+		cancel()
+		return err
+	}
+	accessServer, err := startMaintenanceAccessServer(conn, p.logger)
+	if err != nil {
+		_ = conn.Close()
+		cancel()
+		return err
+	}
+	p.conn = conn
+	p.maintenanceAccess = accessServer
 
 	// Start log cleanup in background
 	go p.runLogCleanup(sessionCtx)
@@ -269,6 +305,12 @@ func (p *NginxPlugin) OnSessionStart(ctx context.Context, _ *stream.Writer) erro
 }
 
 func (p *NginxPlugin) OnSessionEnd() {
+	p.maintenanceAccess.close()
+	p.maintenanceAccess = nil
+	if p.conn != nil {
+		_ = p.conn.Close()
+		p.conn = nil
+	}
 	if p.sessionCancel != nil {
 		p.sessionCancel()
 		p.sessionCancel = nil

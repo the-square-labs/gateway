@@ -167,7 +167,7 @@ describe('ProxyService maintenance lifecycle', () => {
 
     expect(result.maintenanceEnabled).toBe(true);
     expect(nginxTemplateService.renderForHost).toHaveBeenCalledOnce();
-    expect(nginxTemplateService.applyMaintenanceGuard).toHaveBeenCalledWith('normal config');
+    expect(nginxTemplateService.applyMaintenanceGuard).toHaveBeenCalledWith('normal config', undefined, false);
     expect(nodeDispatch.applyConfig).toHaveBeenCalledWith(
       '22222222-2222-4222-8222-222222222222',
       '11111111-1111-4111-8111-111111111111',
@@ -226,9 +226,10 @@ describe('ProxyService maintenance lifecycle', () => {
         sslCertPath: `/etc/nginx/certs/${certificateId}/fullchain.pem`,
         sslKeyPath: `/etc/nginx/certs/${certificateId}/privkey.pem`,
       }),
-      null
+      null,
+      false
     );
-    expect(nginxTemplateService.applyMaintenanceGuard).toHaveBeenCalledWith('normal config');
+    expect(nginxTemplateService.applyMaintenanceGuard).toHaveBeenCalledWith('normal config', undefined, false);
   });
 
   it('rejects maintenance for disabled or unmanaged proxy hosts', async () => {

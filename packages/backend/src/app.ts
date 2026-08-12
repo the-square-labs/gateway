@@ -15,11 +15,7 @@ import { requestId } from 'hono/request-id';
 
 import { getEnv, isDevelopment } from '@/config/env.js';
 import { container, TOKENS } from '@/container.js';
-import {
-  GATEWAY_NOT_FOUND_HTML,
-  GATEWAY_RESTARTING_HTML,
-  GATEWAY_RESTARTING_SCRIPT,
-} from '@/lib/gateway-error-pages.js';
+import { GATEWAY_RESTARTING_HTML, GATEWAY_RESTARTING_SCRIPT, gatewayNotFoundHtml } from '@/lib/gateway-error-pages.js';
 import { tags as openApiTags, openApiValidationHook, securitySchemes } from '@/lib/openapi.js';
 import { auditContextMiddleware } from '@/middleware/audit-context.js';
 import { errorHandler } from '@/middleware/error-handler.js';
@@ -416,7 +412,10 @@ export function createApp(): GatewayAppRuntime {
       return;
     }
 
-    return c.html(GATEWAY_NOT_FOUND_HTML, 404);
+    const hideExternalBranding = container.isRegistered(GeneralSettingsService)
+      ? (await container.resolve(GeneralSettingsService).getConfig()).hideExternalBranding
+      : false;
+    return c.html(gatewayNotFoundHtml(hideExternalBranding), 404);
   });
   app.use(
     '*',

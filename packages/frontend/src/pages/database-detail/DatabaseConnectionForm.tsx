@@ -29,6 +29,7 @@ export interface DatabaseConnectionDraft {
   description: string;
   tags: string;
   manualSizeLimitMb: string;
+  interactiveQueryBudgetSeconds: string;
   type: DatabaseType;
   connectionMethod: "credentials" | "uri";
   connectionString: string;
@@ -95,6 +96,7 @@ export function draftFromConnection(
       description: "",
       tags: "",
       manualSizeLimitMb: "",
+      interactiveQueryBudgetSeconds: "300",
       type: "postgres",
       connectionMethod: "credentials",
       connectionString: "",
@@ -118,6 +120,7 @@ export function draftFromConnection(
       tags: connection.tags.join(", "),
       manualSizeLimitMb:
         connection.manualSizeLimitMb != null ? String(connection.manualSizeLimitMb) : "",
+      interactiveQueryBudgetSeconds: String(connection.interactiveQueryBudgetSeconds ?? 300),
       type: "postgres",
       connectionMethod: "credentials",
       connectionString: "",
@@ -140,6 +143,7 @@ export function draftFromConnection(
       description: connection.description ?? "",
       tags: connection.tags.join(", "),
       manualSizeLimitMb: "",
+      interactiveQueryBudgetSeconds: String(connection.interactiveQueryBudgetSeconds ?? 300),
       type: "clickhouse",
       connectionMethod: "credentials",
       connectionString: "",
@@ -161,6 +165,7 @@ export function draftFromConnection(
     description: connection.description ?? "",
     tags: connection.tags.join(", "),
     manualSizeLimitMb: "",
+    interactiveQueryBudgetSeconds: "300",
     type: "redis",
     connectionMethod: "credentials",
     connectionString: "",
@@ -189,6 +194,7 @@ export function buildDatabasePayload(draft: DatabaseConnectionDraft): Record<str
       tags,
       manualSizeLimitMb:
         draft.manualSizeLimitMb.trim() === "" ? null : Number(draft.manualSizeLimitMb),
+      interactiveQueryBudgetSeconds: Number(draft.interactiveQueryBudgetSeconds),
       type: "postgres",
       config: {
         ...(draft.connectionMethod === "uri"
@@ -211,6 +217,7 @@ export function buildDatabasePayload(draft: DatabaseConnectionDraft): Record<str
       description: draft.description.trim() || null,
       tags,
       type: "clickhouse",
+      interactiveQueryBudgetSeconds: Number(draft.interactiveQueryBudgetSeconds),
       config: {
         ...(draft.connectionMethod === "uri"
           ? { connectionString: draft.connectionString.trim() }
@@ -335,6 +342,27 @@ export function DatabaseConnectionForm({
             value={draft.manualSizeLimitMb}
             onChange={(e) => set("manualSizeLimitMb", e.target.value)}
           />
+        </div>
+      )}
+
+      {metadataOnly && draft.type !== "redis" && (
+        <div className="space-y-1.5">
+          <label htmlFor="database-interactive-query-budget" className="text-sm font-medium">
+            Interactive query budget
+          </label>
+          <Input
+            id="database-interactive-query-budget"
+            type="number"
+            min="30"
+            max="600"
+            step="1"
+            value={draft.interactiveQueryBudgetSeconds}
+            onChange={(event) => set("interactiveQueryBudgetSeconds", event.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            Total execution budget for one SQL Console run, shared dynamically between statements
+            (30–600 seconds).
+          </p>
         </div>
       )}
 

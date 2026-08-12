@@ -22,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -57,9 +58,9 @@ export function DockerRegistriesSection({ nodesList }: DockerRegistriesSectionPr
   const canEditRegistry = hasScope("docker:registries:edit");
   const canDeleteRegistry = hasScope("docker:registries:delete");
   const canUseGitLabRegistry = hasScope("integrations:gitlab:registry:use");
-  const [registries, setRegistries] = useState<DockerRegistry[]>(
-    () => api.getCached<DockerRegistry[]>("settings:docker-registries") ?? []
-  );
+  const cachedRegistries = api.getCached<DockerRegistry[]>("settings:docker-registries");
+  const [registries, setRegistries] = useState<DockerRegistry[]>(cachedRegistries ?? []);
+  const [initialLoadComplete, setInitialLoadComplete] = useState(cachedRegistries !== undefined);
   const [regDialogOpen, setRegDialogOpen] = useState(false);
   const [regEditId, setRegEditId] = useState<string | null>(null);
   const [regName, setRegName] = useState("");
@@ -88,6 +89,8 @@ export function DockerRegistriesSection({ nodesList }: DockerRegistriesSectionPr
       setRegistries(data ?? []);
     } catch {
       /* ignore */
+    } finally {
+      setInitialLoadComplete(true);
     }
   }, []);
 
@@ -302,6 +305,8 @@ export function DockerRegistriesSection({ nodesList }: DockerRegistriesSectionPr
       </div>
     );
   };
+
+  if (!initialLoadComplete) return <Skeleton />;
 
   return (
     <>

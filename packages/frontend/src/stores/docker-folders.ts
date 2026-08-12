@@ -60,6 +60,10 @@ interface DockerFolderState {
 const RESOURCE_TYPES: DockerFolderResourceType[] = ["container", "image", "network", "volume"];
 const EXPANDED_DOCKER_FOLDERS_STORAGE_KEY = "docker-folder-expanded";
 
+function folderRequestCacheKey(resourceType: DockerFolderResourceType) {
+  return `req:/api/docker/folders?resourceType=${resourceType}`;
+}
+
 function resourceMap<T>(value: (type: DockerFolderResourceType) => T): FolderResourceMap<T> {
   return Object.fromEntries(
     RESOURCE_TYPES.map((type) => [type, value(type)])
@@ -169,13 +173,23 @@ export const useDockerFolderStore = create<DockerFolderState>()((set, get) => {
 
     fetchFolders: async (resourceType = "container") => {
       const requestId = ++fetchDockerFoldersRequestIds[resourceType];
+      const cachedEnvelope = api.getCached<{ data: DockerFolderTreeNode[] }>(
+        folderRequestCacheKey(resourceType),
+        Number.POSITIVE_INFINITY
+      );
+      const cached = cachedEnvelope?.data;
       set((state) =>
         withContainerMirror(
           state,
           {
+            foldersByType:
+              cached === undefined
+                ? state.foldersByType
+                : { ...state.foldersByType, [resourceType]: cached },
             loadingByType: {
               ...state.loadingByType,
-              [resourceType]: state.foldersByType[resourceType].length === 0,
+              [resourceType]:
+                cached === undefined && state.foldersByType[resourceType].length === 0,
             },
             errorByType: { ...state.errorByType, [resourceType]: null },
           },

@@ -121,6 +121,11 @@ export class CryptoService {
     return crypto.createHash('sha1').update(data).digest('hex');
   }
 
+  /** Derive a compartmentalized, non-reversible key for a daemon-owned config. */
+  deriveScopedSecret(context: string): string {
+    return crypto.createHmac('sha256', this.masterKey).update(context).digest('hex');
+  }
+
   // --- String encryption (for API keys, secrets) ---
 
   /**

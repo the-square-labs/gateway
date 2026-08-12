@@ -3,6 +3,7 @@ import { z } from 'zod';
 const nameSchema = z.string().trim().min(1).max(255);
 const optionalTextSchema = z.string().trim().max(10_000).optional().nullable();
 const tagsSchema = z.array(z.string().trim().min(1).max(64)).max(32).optional();
+const interactiveQueryBudgetSecondsSchema = z.number().int().min(30).max(600);
 
 const postgresConnectionFields = z.object({
   connectionString: z.string().trim().min(1).max(4096).optional(),
@@ -247,6 +248,7 @@ export const CreateDatabaseConnectionSchema = z.discriminatedUnion('type', [
       .max(1024 * 1024)
       .optional()
       .nullable(),
+    interactiveQueryBudgetSeconds: interactiveQueryBudgetSecondsSchema.optional(),
     type: z.literal('postgres'),
     config: postgresConnectionFields,
   }),
@@ -262,6 +264,7 @@ export const CreateDatabaseConnectionSchema = z.discriminatedUnion('type', [
     description: optionalTextSchema,
     tags: tagsSchema,
     type: z.literal('clickhouse'),
+    interactiveQueryBudgetSeconds: interactiveQueryBudgetSecondsSchema.optional(),
     config: clickHouseConnectionFields,
   }),
 ]);
@@ -278,6 +281,7 @@ export const UpdateDatabaseConnectionSchema = z
       .max(1024 * 1024)
       .optional()
       .nullable(),
+    interactiveQueryBudgetSeconds: interactiveQueryBudgetSecondsSchema.optional(),
     config: z
       .object({
         connectionString: z.string().trim().min(1).max(4096).optional(),
@@ -293,9 +297,17 @@ export const UpdateDatabaseConnectionSchema = z
       })
       .optional(),
   })
-  .refine((data) => !!data.name || data.description !== undefined || !!data.tags || !!data.config, {
-    message: 'At least one field must be provided',
-  });
+  .refine(
+    (data) =>
+      !!data.name ||
+      data.description !== undefined ||
+      !!data.tags ||
+      !!data.config ||
+      data.interactiveQueryBudgetSeconds !== undefined,
+    {
+      message: 'At least one field must be provided',
+    }
+  );
 
 export const BrowsePostgresRowsQuerySchema = z.object({
   schema: z.string().trim().min(1).max(255),

@@ -11,9 +11,9 @@ import {
   Server,
   Waypoints,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useState } from "react";
 import { toast } from "sonner";
-import { PageTransition } from "@/components/common/PageTransition";
+import { InitialPageLoadContext, PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +37,11 @@ function percent(value: number, total: number) {
   return Math.max(0, Math.min(100, (value / total) * 100));
 }
 
+function metric(value: unknown): number {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
 function admissionLabel(state: string | undefined) {
   switch (state) {
     case "normal":
@@ -55,6 +60,7 @@ function admissionLabel(state: string | undefined) {
 }
 
 export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
+  const registerSettingsInitialLoad = useContext(InitialPageLoadContext);
   const [initialSnapshot] = useState(() => {
     const cachedSettings = api.getCached<AuthProvisioningSettings>(
       RELAY_SETTINGS_CACHE_KEY,
@@ -70,6 +76,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
   const [settings, setSettings] = useState<AuthProvisioningSettings | null>(
     initialSnapshot.settings
   );
+  const [initialLoadComplete, setInitialLoadComplete] = useState(settings !== null);
   const [status, setStatus] = useState<DashboardRelaySnapshot | null>(initialSnapshot.status);
   const [history, setHistory] = useState<DashboardRelaySnapshot[]>(() =>
     initialSnapshot.status ? [initialSnapshot.status] : []
@@ -95,6 +102,11 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     initialRelay?.hardPressurePercent ?? 95
   );
   const [saving, setSaving] = useState(false);
+
+  useLayoutEffect(() => {
+    if (initialLoadComplete || !registerSettingsInitialLoad) return;
+    return registerSettingsInitialLoad();
+  }, [initialLoadComplete, registerSettingsInitialLoad]);
 
   const recordStatus = useCallback((next: DashboardRelaySnapshot | null) => {
     setStatus(next);
@@ -128,9 +140,11 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
   }, [recordStatus]);
 
   useEffect(() => {
-    void load().catch((error) =>
-      toast.error(error instanceof Error ? error.message : "Failed to load relay settings")
-    );
+    void load()
+      .catch((error) =>
+        toast.error(error instanceof Error ? error.message : "Failed to load relay settings")
+      )
+      .finally(() => setInitialLoadComplete(true));
     const timer = window.setInterval(() => {
       void api
         .getRelayStatus()
@@ -167,7 +181,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     }
   };
 
-  if (!settings) {
+  if (!initialLoadComplete) {
     return (
       <PageTransition>
         <Skeleton />
@@ -175,11 +189,13 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     );
   }
 
+  if (!settings) return null;
+
   const healthy = status?.state === "healthy";
-  const memoryLimit = status?.memoryLimitBytes ?? 0;
-  const memoryRss = status?.memoryRssBytes ?? 0;
-  const fdLimit = status?.fileDescriptorLimit ?? 0;
-  const openFDs = status?.openFileDescriptors ?? 0;
+  const memoryLimit = metric(status?.memoryLimitBytes);
+  const memoryRss = metric(status?.memoryRssBytes);
+  const fdLimit = metric(status?.fileDescriptorLimit);
+  const openFDs = metric(status?.openFileDescriptors);
   const pressureColor = status?.admissionState === "normal" ? "#22c55e" : "#f59e0b";
   const persistedRelay = settings.generalSettings.relay;
   const persistedDataLanes = persistedRelay?.dataLanes ?? 4;
@@ -221,33 +237,33 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
               label="Active tunnels"
-              value={String(status?.activeTunnels ?? 0)}
+              value={metric(status?.activeTunnels).toLocaleString()}
               icon={Activity}
-              history={history.map((sample) => sample.activeTunnels ?? 0)}
+              history={history.map((sample) => metric(sample.activeTunnels))}
               color="#3b82f6"
               subtitle="Current logical streams"
             />
             <StatCard
               label="Proxy tunnels"
-              value={String(status?.activeProxyTunnels ?? 0)}
+              value={metric(status?.activeProxyTunnels).toLocaleString()}
               icon={Network}
-              history={history.map((sample) => sample.activeProxyTunnels ?? 0)}
+              history={history.map((sample) => metric(sample.activeProxyTunnels))}
               color="#06b6d4"
               subtitle="Secure Link traffic"
             />
             <StatCard
               label="Database tunnels"
-              value={String(status?.activeDatabaseTunnels ?? 0)}
+              value={metric(status?.activeDatabaseTunnels).toLocaleString()}
               icon={Database}
-              history={history.map((sample) => sample.activeDatabaseTunnels ?? 0)}
+              history={history.map((sample) => metric(sample.activeDatabaseTunnels))}
               color="#8b5cf6"
               subtitle="Priority traffic class"
             />
             <StatCard
               label="Registered endpoints"
-              value={String(status?.registeredEndpoints ?? 0)}
+              value={metric(status?.registeredEndpoints).toLocaleString()}
               icon={Waypoints}
-              history={history.map((sample) => sample.registeredEndpoints ?? 0)}
+              history={history.map((sample) => metric(sample.registeredEndpoints))}
               color="#22c55e"
               subtitle="Available relay targets"
             />
@@ -259,33 +275,33 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
               label="Relay CPU"
-              value={`${status?.cpuPressurePercent ?? 0}%`}
+              value={`${metric(status?.cpuPressurePercent)}%`}
               icon={Cpu}
-              history={history.map((sample) => sample.cpuPressurePercent ?? 0)}
+              history={history.map((sample) => metric(sample.cpuPressurePercent))}
               sparklineMax={100}
               color="#3b82f6"
-              progress={{ percent: status?.cpuPressurePercent ?? 0 }}
+              progress={{ percent: metric(status?.cpuPressurePercent) }}
               subtitle="Relay process across available CPUs"
             />
             <StatCard
               label="Resident memory"
               value={formatBytes(memoryRss)}
               icon={MemoryStick}
-              history={history.map((sample) => sample.memoryRssBytes ?? 0)}
+              history={history.map((sample) => metric(sample.memoryRssBytes))}
               sparklineMax={memoryLimit || undefined}
               color="#8b5cf6"
               progress={memoryLimit > 0 ? { percent: percent(memoryRss, memoryLimit) } : undefined}
               subtitle={
                 memoryLimit > 0
-                  ? `${formatBytes(status?.heapInUseBytes ?? 0)} heap · ${formatBytes(memoryLimit)} limit`
-                  : `${formatBytes(status?.heapInUseBytes ?? 0)} heap · no cgroup limit`
+                  ? `${formatBytes(metric(status?.heapInUseBytes))} heap · ${formatBytes(memoryLimit)} limit`
+                  : `${formatBytes(metric(status?.heapInUseBytes))} heap · no cgroup limit`
               }
             />
             <StatCard
               label="File descriptors"
               value={openFDs.toLocaleString()}
               icon={Server}
-              history={history.map((sample) => sample.openFileDescriptors ?? 0)}
+              history={history.map((sample) => metric(sample.openFileDescriptors))}
               sparklineMax={fdLimit || undefined}
               color="#f97316"
               progress={fdLimit > 0 ? { percent: percent(openFDs, fdLimit) } : undefined}
@@ -295,12 +311,12 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
             />
             <StatCard
               label="Admission pressure"
-              value={`${status?.pressurePercent ?? 0}%`}
+              value={`${metric(status?.pressurePercent)}%`}
               icon={Gauge}
-              history={history.map((sample) => sample.pressurePercent ?? 0)}
+              history={history.map((sample) => metric(sample.pressurePercent))}
               sparklineMax={100}
               color={pressureColor}
-              progress={{ percent: status?.pressurePercent ?? 0, color: pressureColor }}
+              progress={{ percent: metric(status?.pressurePercent), color: pressureColor }}
               subtitle={admissionLabel(status?.admissionState)}
             />
           </div>
@@ -311,17 +327,17 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
               label="Proxy throttled"
-              value={(status?.throttledProxyTotal ?? 0).toLocaleString()}
+              value={metric(status?.throttledProxyTotal).toLocaleString()}
               icon={Ban}
-              history={history.map((sample) => sample.throttledProxyTotal ?? 0)}
+              history={history.map((sample) => metric(sample.throttledProxyTotal))}
               color="#f59e0b"
               subtitle="Cumulative rejected proxy streams"
             />
             <StatCard
               label="Database throttled"
-              value={(status?.throttledDatabaseTotal ?? 0).toLocaleString()}
+              value={metric(status?.throttledDatabaseTotal).toLocaleString()}
               icon={Cable}
-              history={history.map((sample) => sample.throttledDatabaseTotal ?? 0)}
+              history={history.map((sample) => metric(sample.throttledDatabaseTotal))}
               color="#ef4444"
               subtitle="Only at the hard safety cutoff"
             />

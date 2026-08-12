@@ -16,6 +16,7 @@ vi.mock("@/hooks/use-realtime", () => ({
 
 vi.mock("@/components/common/ConfirmDialog", () => ({
   confirm: vi.fn(),
+  confirmAction: vi.fn(),
 }));
 
 vi.mock("./proxy-detail/SettingsTab", () => ({
@@ -480,5 +481,40 @@ describe("ProxyHostDetail", () => {
     await user.click(screen.getByRole("button", { name: "More proxy host actions" }));
     expect(await screen.findByRole("menuitem", { name: /Enable Maintenance/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
+  });
+
+  it("issues a maintenance access code from the desktop overflow menu", async () => {
+    const user = userEvent.setup();
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["proxy:edit", "proxy:maintenance:bypass"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.spyOn(api, "getProxyHost").mockResolvedValue(
+      makeProxyHost({ maintenanceEnabled: true, maintenanceStartedAt: new Date().toISOString() })
+    );
+    const issueCode = vi.spyOn(api, "createProxyMaintenanceAccessCode").mockResolvedValue({
+      code: "E2E-ACCESS-CODE",
+      expiresInSeconds: 300,
+    });
+
+    renderWithRouter(<ProxyHostDetail />, {
+      path: "/proxy-hosts/:id/:tab",
+      route: "/proxy-hosts/host-1/details",
+      extraRoutes: <Route path="/proxy-hosts" element={<div>Proxy Hosts</div>} />,
+    });
+
+    await user.click(await screen.findByRole("button", { name: "More proxy host actions" }));
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Create Maintenance Access Code" })
+    );
+
+    await waitFor(() => expect(issueCode).toHaveBeenCalledWith("host-1"));
+    expect(await screen.findByRole("textbox", { name: "Maintenance access code" })).toHaveValue(
+      "E2E-ACCESS-CODE"
+    );
+    expect(
+      screen.getByRole("button", { name: "Copy maintenance access code" })
+    ).toBeInTheDocument();
   });
 });

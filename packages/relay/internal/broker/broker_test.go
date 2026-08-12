@@ -14,6 +14,7 @@ import (
 	"time"
 
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+	"github.com/wiolett-industries/gateway/relay/internal/admission"
 	"github.com/wiolett-industries/gateway/relay/internal/policy"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -46,11 +47,39 @@ type errorFrameStream struct {
 func (s *errorFrameStream) Recv() (*relayv1.TunnelFrame, error) { return nil, s.err }
 func (s *errorFrameStream) Send(*relayv1.TunnelFrame) error     { return nil }
 
+type halfCloseFrameStream struct {
+	received bool
+}
+
+func (s *halfCloseFrameStream) Recv() (*relayv1.TunnelFrame, error) {
+	if s.received {
+		return nil, io.EOF
+	}
+	s.received = true
+	return &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_HalfClose{HalfClose: &relayv1.TunnelHalfClose{}}}, nil
+}
+
+func (s *halfCloseFrameStream) Send(*relayv1.TunnelFrame) error { return nil }
+
 type blockingFrameStream struct {
 	mu     sync.Mutex
 	frames []*relayv1.TunnelFrame
 	stop   chan struct{}
 }
+
+type channelFrameStream struct {
+	received chan *relayv1.TunnelFrame
+}
+
+func (s *channelFrameStream) Recv() (*relayv1.TunnelFrame, error) {
+	frame, ok := <-s.received
+	if !ok {
+		return nil, io.EOF
+	}
+	return frame, nil
+}
+
+func (s *channelFrameStream) Send(*relayv1.TunnelFrame) error { return nil }
 
 func (s *blockingFrameStream) Recv() (*relayv1.TunnelFrame, error) {
 	<-s.stop
@@ -198,6 +227,59 @@ func TestRouteMetricsSummarizeLatencyAndCompletion(t *testing.T) {
 	}
 }
 
+func TestSessionCapacityUsesRouteAndEndpointPolicyLimits(t *testing.T) {
+	b := &Broker{activeByRoute: map[string]uint64{"route-1": 2}, activeByTarget: map[string]uint64{"endpoint-1": 3}}
+	route := &relayv1.RoutePolicy{RouteId: "route-1", MaxConcurrentSessions: 2}
+	endpoint := &relayv1.EndpointPolicy{EndpointId: "endpoint-1", MaxConcurrentSessions: 4}
+	if code := status.Code(b.sessionCapacityErrorLocked(route, endpoint, 4, 4)); code != codes.ResourceExhausted {
+		t.Fatalf("route capacity status = %v", code)
+	}
+
+	route.MaxConcurrentSessions = 3
+	endpoint.MaxConcurrentSessions = 3
+	if code := status.Code(b.sessionCapacityErrorLocked(route, endpoint, 4, 4)); code != codes.ResourceExhausted {
+		t.Fatalf("endpoint capacity status = %v", code)
+	}
+
+	route.MaxConcurrentSessions = 0
+	endpoint.MaxConcurrentSessions = 0
+	if err := b.sessionCapacityErrorLocked(route, endpoint, 0, 0); err != nil {
+		t.Fatalf("zero capacity limits should be unlimited: %v", err)
+	}
+
+	route.MaxConcurrentSessions = 5
+	endpoint.MaxConcurrentSessions = 5
+	if code := status.Code(b.sessionCapacityErrorLocked(route, endpoint, 2, 5)); code != codes.ResourceExhausted {
+		t.Fatalf("signed grant capacity status = %v", code)
+	}
+
+	route.MaxConcurrentSessions = 0
+	if code := status.Code(b.sessionCapacityErrorLocked(route, endpoint, 2, 5)); code != codes.ResourceExhausted {
+		t.Fatalf("grant-only capacity status = %v", code)
+	}
+	route.MaxConcurrentSessions = 2
+	if code := status.Code(b.sessionCapacityErrorLocked(route, endpoint, 0, 5)); code != codes.ResourceExhausted {
+		t.Fatalf("policy-only capacity status = %v", code)
+	}
+
+	route.MaxConcurrentSessions = 5
+	endpoint.MaxConcurrentSessions = 0
+	b.activeByRoute[route.RouteId] = 0
+	if code := status.Code(b.sessionCapacityErrorLocked(route, endpoint, 5, 2)); code != codes.ResourceExhausted {
+		t.Fatalf("endpoint grant-only capacity status = %v", code)
+	}
+}
+
+func TestSessionCapacityCountersAreReleased(t *testing.T) {
+	b := &Broker{proxyByRoute: map[string]uint64{}, activeByRoute: map[string]uint64{}, activeByTarget: map[string]uint64{}}
+	tunnel := &activeTunnel{routeID: "route-1", endpointID: "endpoint-1", trafficClass: admission.TrafficClassProxy}
+	b.trackSessionLocked(tunnel, 1)
+	b.trackSessionLocked(tunnel, -1)
+	if len(b.activeByRoute) != 0 || len(b.activeByTarget) != 0 || len(b.proxyByRoute) != 0 || b.activeProxy != 0 {
+		t.Fatalf("released session retained capacity: routes=%v endpoints=%v proxy=%v active=%d", b.activeByRoute, b.activeByTarget, b.proxyByRoute, b.activeProxy)
+	}
+}
+
 func TestBridgeClosesIdleTunnel(t *testing.T) {
 	left := &blockingFrameStream{stop: make(chan struct{})}
 	right := &blockingFrameStream{stop: make(chan struct{})}
@@ -277,6 +359,99 @@ func TestBridgeTreatsCanceledStreamAsTerminal(t *testing.T) {
 		t.Fatal("canceled stream leaked the opposite bridge direction")
 	}
 	close(blocked.stop)
+}
+
+func TestBridgeReapsHalfClosedProxyTunnelAfterGracePeriod(t *testing.T) {
+	halfClosed := &halfCloseFrameStream{}
+	blocked := &blockingFrameStream{stop: make(chan struct{})}
+	err := bridgeWithTimeouts(
+		blocked,
+		halfClosed,
+		DefaultMaxFrameBytes,
+		make(chan struct{}),
+		0,
+		5*time.Millisecond,
+		nil,
+	)
+	close(blocked.stop)
+	if status.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("half-closed bridge status = %v", status.Code(err))
+	}
+}
+
+func TestBridgeDoesNotReapWhileWaitingForResponseAfterSourceHalfClose(t *testing.T) {
+	halfClosed := &halfCloseFrameStream{}
+	blocked := &blockingFrameStream{stop: make(chan struct{})}
+	revoked := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- bridgeWithTimeouts(halfClosed, blocked, DefaultMaxFrameBytes, revoked, 0, 5*time.Millisecond, nil)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("source half-close incorrectly started orphan reaper: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(revoked)
+	if code := status.Code(<-done); code != codes.PermissionDenied {
+		t.Fatalf("bridge revocation status = %v", code)
+	}
+	close(blocked.stop)
+}
+
+func TestBridgeDoesNotStartHalfCloseGraceBeforeHalfClose(t *testing.T) {
+	left := &blockingFrameStream{stop: make(chan struct{})}
+	right := &blockingFrameStream{stop: make(chan struct{})}
+	revoked := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- bridgeWithTimeouts(left, right, DefaultMaxFrameBytes, revoked, 0, 5*time.Millisecond, nil)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("bridge exited before a half-close: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(revoked)
+	if code := status.Code(<-done); code != codes.PermissionDenied {
+		t.Fatalf("bridge revocation status = %v", code)
+	}
+	close(left.stop)
+	close(right.stop)
+}
+
+func TestBridgeHalfCloseGraceResetsWhileRemainingDirectionIsActive(t *testing.T) {
+	left := &channelFrameStream{received: make(chan *relayv1.TunnelFrame, 8)}
+	right := &channelFrameStream{received: make(chan *relayv1.TunnelFrame, 1)}
+	done := make(chan error, 1)
+	go func() {
+		done <- bridgeWithTimeouts(left, right, DefaultMaxFrameBytes, make(chan struct{}), 0, 10*time.Millisecond, nil)
+	}()
+
+	right.received <- &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_HalfClose{HalfClose: &relayv1.TunnelHalfClose{}}}
+	for range 5 {
+		time.Sleep(5 * time.Millisecond)
+		left.received <- &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Data{Data: &relayv1.TunnelData{Data: []byte("request")}}}
+		select {
+		case err := <-done:
+			t.Fatalf("active half-closed bridge exited early: %v", err)
+		default:
+		}
+	}
+
+	select {
+	case err := <-done:
+		if status.Code(err) != codes.DeadlineExceeded {
+			t.Fatalf("inactive half-closed bridge status = %v", status.Code(err))
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("half-closed bridge was not reaped after remaining traffic stopped")
+	}
+	close(left.received)
+	close(right.received)
 }
 
 func acceptFrame(token string) *relayv1.TunnelFrame {

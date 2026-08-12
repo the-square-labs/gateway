@@ -1,5 +1,6 @@
 import type {
   SqlDatabaseAdapter,
+  SqlExecutionOptions,
   SqlExecutionResult,
   SqlRowMutationResult,
   SqlTableMetadata,
@@ -47,7 +48,7 @@ interface PostgresSqlAdapterContext {
     page: number;
     limit: number;
   }>;
-  executeSql(id: string, sql: string, userId: string, options?: { maxRows?: number }): Promise<SqlExecutionResult>;
+  executeSql(id: string, sql: string, userId: string, options?: SqlExecutionOptions): Promise<SqlExecutionResult>;
   insertRow(
     id: string,
     schema: string,
@@ -210,7 +211,7 @@ export class PostgresSqlAdapter implements SqlDatabaseAdapter {
     return { success: true, affectedRows: 1 };
   }
 
-  executeSql(id: string, sql: string, userId: string, options?: { maxRows?: number }) {
+  executeSql(id: string, sql: string, userId: string, options?: SqlExecutionOptions) {
     return this.context.executeSql(id, sql, userId, options);
   }
 }

@@ -25,6 +25,7 @@ import {
   reconcileManagedDatabaseRelayPolicy,
   updateManagedDatabaseRelayStatus,
 } from './relay-policy-reconciler.js';
+import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
 
 export type { RelayGrantAssignment, RelayGrantBundle, RelayGrantClaims } from './relay-grant-issuer.service.js';
 
@@ -552,7 +553,7 @@ export class RelayPolicyService {
             subjectKind: endpoint.subjectKind,
             subjectId: endpoint.subjectId,
             certificateSha256: endpoint.certificateSha256,
-            maxConcurrentSessions: endpoint.maxConcurrentSessions,
+            maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint),
           })),
           routes: routes
             .filter(({ targetEndpointId }) => activeEndpointIds.has(targetEndpointId))
@@ -563,7 +564,7 @@ export class RelayPolicyService {
               sourceId: route.sourceId,
               sourceCertificateSha256: route.sourceCertificateSha256,
               targetEndpointId: route.targetEndpointId,
-              maxConcurrentSessions: route.maxConcurrentSessions,
+              maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route),
               maxFrameBytes: route.maxFrameBytes,
               disableIdleTimeout: route.ownerKind === 'proxy_host_secure_link',
               trafficClass: route.ownerKind === 'proxy_host_secure_link' ? ('proxy' as const) : ('database' as const),

@@ -10,6 +10,18 @@ class TestApiClient extends ApiClientBase {
     return this.request<void>("/thing", { method: "POST", body: JSON.stringify({ ok: true }) });
   }
 
+  executeThing(signal: AbortSignal) {
+    return this.request<void>("/thing", {
+      method: "POST",
+      body: JSON.stringify({ ok: true }),
+      signal,
+    });
+  }
+
+  deleteProxyHost(id: string) {
+    return this.request<void>(`/proxy-hosts/${id}`, { method: "DELETE" });
+  }
+
   getRouteContextThing() {
     return this.requestRouteContext<{ value: number }>("/route-context");
   }
@@ -20,6 +32,26 @@ class TestApiClient extends ApiClientBase {
 }
 
 describe("ApiClientBase", () => {
+  it("reports caller cancellation without switching the Gateway into maintenance mode", async () => {
+    const client = new TestApiClient();
+    const abortController = new AbortController();
+    abortController.abort();
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ csrfToken: "csrf-token" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+      .mockRejectedValueOnce(new DOMException("Aborted", "AbortError"));
+
+    await expect(client.executeThing(abortController.signal)).rejects.toMatchObject({
+      code: "REQUEST_ABORTED",
+      message: "Query cancelled",
+    });
+    expect(useAppStatusStore.getState().maintenanceActive).toBe(false);
+  });
+
   it("returns fresh GET data and updates the shared cache", async () => {
     const client = new TestApiClient();
     const fetchMock = vi
@@ -133,6 +165,61 @@ describe("ApiClientBase", () => {
     );
     const headers = (fetchMock.mock.calls[2]?.[1] as RequestInit | undefined)?.headers as Headers;
     expect(headers.get("X-CSRF-Token")).toBe("csrf-token");
+  });
+
+  it("invalidates warmed resource projections only after a successful mutation", async () => {
+    const client = new TestApiClient();
+    client.setCache("req:/api/proxy-hosts?page=1", { data: [{ id: "host-1" }] });
+    client.setCache("proxy:grouped", { ungroupedHosts: [{ id: "host-1" }] });
+    client.setCache("dashboard:bootstrap:user", { attention: { severity: null } });
+    let resolveDelete!: (response: Response) => void;
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ csrfToken: "csrf-token" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+      .mockReturnValueOnce(
+        new Promise<Response>((resolve) => {
+          resolveDelete = resolve;
+        })
+      );
+
+    const deleting = client.deleteProxyHost("host-1");
+    await vi.waitFor(() => expect(resolveDelete).toBeTypeOf("function"));
+    expect(client.getCached("proxy:grouped")).toBeDefined();
+
+    resolveDelete(new Response(null, { status: 204 }));
+    await deleting;
+
+    expect(client.getCached("req:/api/proxy-hosts?page=1")).toBeUndefined();
+    expect(client.getCached("proxy:grouped")).toBeUndefined();
+    expect(client.getCached("dashboard:bootstrap:user")).toBeUndefined();
+  });
+
+  it("keeps valid cache entries when a mutation fails", async () => {
+    const client = new TestApiClient();
+    client.setCache("req:/api/proxy-hosts?page=1", { data: [{ id: "host-1" }] });
+    client.setCache("proxy:grouped", { ungroupedHosts: [{ id: "host-1" }] });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ csrfToken: "csrf-token" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: "CONFLICT", message: "Still in use" }), {
+          status: 409,
+          headers: { "Content-Type": "application/json" },
+        })
+      );
+
+    await expect(client.deleteProxyHost("host-1")).rejects.toMatchObject({ code: "CONFLICT" });
+
+    expect(client.getCached("req:/api/proxy-hosts?page=1")).toBeDefined();
+    expect(client.getCached("proxy:grouped")).toBeDefined();
   });
 
   it("clears cache and rejects responses that complete after a session reset", async () => {

@@ -50,13 +50,39 @@ describe("SecureLinkTab", () => {
         totalRequests: 150,
         totalBytes: 4096,
         requestsPerSecond: 10,
-        bytesPerSecond: 273,
+        bytesPerSecond: 0.8667,
         busiestClientRps: 25,
         windowSeconds: 15,
         sampleTruncated: false,
         lastRequestAt: "2026-08-11T12:01:00.000Z",
       },
       history: [],
+      additionalLinks: [
+        {
+          id: "binding-1",
+          name: "api",
+          status: "active",
+          generation: 1,
+          targetContainer: "e2e-api-app",
+          forwardScheme: "http",
+          lastError: null,
+          runtime: {
+            routeId: "binding-1",
+            activeStreams: 2,
+            openedTotal: "8",
+            completedTotal: "6",
+            failedTotal: "0",
+            throttledTotal: "0",
+            sourceToTargetBytes: "512",
+            targetToSourceBytes: "1024",
+            setupLatencyP95Ms: 4,
+            averageDurationMs: 20,
+            lastActivityAt: "2026-08-11T12:01:00.000Z",
+            metricsSince: "2026-08-11T11:00:00.000Z",
+          },
+          history: [],
+        },
+      ],
     } satisfies Awaited<ReturnType<typeof api.getProxySecureLinkStatus>>;
     vi.spyOn(api, "getProxySecureLinkStatus").mockResolvedValue(status);
 
@@ -67,6 +93,12 @@ describe("SecureLinkTab", () => {
     expect(screen.getByText("Hottest client")).toBeInTheDocument();
     expect(screen.getByText("E2E probe every 30s")).toBeInTheDocument();
     expect(screen.getByText("of 1,000 r/s per-IP limit")).toBeInTheDocument();
+    expect(screen.getByText("0.9 B/s")).toBeInTheDocument();
+    expect(screen.getByText("Additional links")).toBeInTheDocument();
+    expect(screen.getByText("api")).toBeInTheDocument();
+    expect(screen.getByText("HTTP · e2e-api-app")).toBeInTheDocument();
+    expect(screen.getByText("Current streams on this binding")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/undefined|NaN/);
     expect(screen.queryByText("Path & policy")).not.toBeInTheDocument();
     expect(screen.queryByText("Metrics since")).not.toBeInTheDocument();
     expect(screen.queryByText("Relay tunnels")).not.toBeInTheDocument();

@@ -3,6 +3,7 @@ import {
   Code2,
   EllipsisVertical,
   Info,
+  KeyRound,
   Pencil,
   Pin,
   RefreshCw,
@@ -15,7 +16,8 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { confirm } from "@/components/common/ConfirmDialog";
+import { confirm, confirmAction } from "@/components/common/ConfirmDialog";
+import { CopyButton } from "@/components/common/CopyButton";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
@@ -24,7 +26,13 @@ import { CreateProxyHostDialog } from "@/components/proxy/CreateProxyHostDialog"
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,6 +41,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { HealthBars } from "@/components/ui/health-bars";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -43,6 +52,7 @@ import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
+import { useFolderStore } from "@/stores/folders";
 import { usePinnedProxiesStore } from "@/stores/pinned-proxies";
 import type {
   AccessList,
@@ -86,6 +96,8 @@ export function ProxyHostDetail({
   const canWriteRawConfig = !!id && hasScope(`proxy:raw:write:${id}`);
   const canEditProxyHost = !!id && (hasScope("proxy:edit") || hasScope(`proxy:edit:${id}`));
   const [host, setHost] = useState<ProxyHost | null>(null);
+  const [maintenanceAccessCode, setMaintenanceAccessCode] = useState<string | null>(null);
+  const [isCreatingMaintenanceAccessCode, setIsCreatingMaintenanceAccessCode] = useState(false);
   const visibleTabs = useMemo(
     () => [
       "details",
@@ -695,21 +707,29 @@ export function ProxyHostDetail({
   // ── Delete host ───────────────────────────────────────────────
   const handleDelete = async () => {
     if (!host) return;
-    const ok = await confirm({
-      title: "Delete Proxy Host",
-      description: "Are you sure you want to delete this proxy host? This action cannot be undone.",
-      confirmLabel: "Delete",
-    });
+    const deletingHostId = host.id;
+    const ok = await confirmAction(
+      {
+        title: "Delete Proxy Host",
+        description:
+          "Are you sure you want to delete this proxy host? This action cannot be undone.",
+        confirmLabel: "Delete",
+      },
+      async () => {
+        try {
+          await api.deleteProxyHost(deletingHostId);
+          return true;
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Failed to delete proxy host");
+          return false;
+        }
+      }
+    );
     if (!ok) return;
-    try {
-      await api.deleteProxyHost(host.id);
-      usePinnedProxiesStore.getState().removePin(host.id);
-      api.invalidateCache();
-      toast.success("Proxy host deleted");
-      navigate("/proxy-hosts");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete proxy host");
-    }
+    usePinnedProxiesStore.getState().removePin(deletingHostId);
+    useFolderStore.getState().removeHost(deletingHostId);
+    toast.success("Proxy host deleted");
+    navigate("/proxy-hosts");
   };
 
   const handleMaintenance = async () => {
@@ -739,6 +759,19 @@ export function ProxyHostDetail({
     }
   };
 
+  const handleCreateMaintenanceAccessCode = async () => {
+    if (!host || !hasScope(`proxy:maintenance:bypass:${host.id}`)) return;
+    setIsCreatingMaintenanceAccessCode(true);
+    try {
+      const { code } = await api.createProxyMaintenanceAccessCode(host.id);
+      setMaintenanceAccessCode(code);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create maintenance access code");
+    } finally {
+      setIsCreatingMaintenanceAccessCode(false);
+    }
+  };
+
   const handleTlsResync = async () => {
     if (!host || !hasScope("admin:update")) return;
     setIsTlsResyncing(true);
@@ -760,6 +793,8 @@ export function ProxyHostDetail({
     !!host &&
     (host.maintenanceEnabled ||
       (host.enabled && host.type === "proxy" && !host.rawConfigEnabled && !host.isSystem));
+  const canIssueMaintenanceAccessCode =
+    !!host && host.maintenanceEnabled && hasScope(`proxy:maintenance:bypass:${host.id}`);
   const canResyncTls =
     !!host &&
     host.sslEnabled &&
@@ -984,6 +1019,16 @@ export function ProxyHostDetail({
                     },
                   ]
                 : []),
+              ...(canIssueMaintenanceAccessCode
+                ? [
+                    {
+                      label: "Create Maintenance Access Code",
+                      icon: <KeyRound className="h-4 w-4" />,
+                      onClick: handleCreateMaintenanceAccessCode,
+                      disabled: isCreatingMaintenanceAccessCode,
+                    },
+                  ]
+                : []),
               ...(canResyncTls
                 ? [
                     {
@@ -1018,7 +1063,10 @@ export function ProxyHostDetail({
                 Edit
               </Button>
             )}
-            {(canEditProxyHost || canResyncTls || (!isSystemHost && hasScope("proxy:delete"))) && (
+            {(canEditProxyHost ||
+              canIssueMaintenanceAccessCode ||
+              canResyncTls ||
+              (!isSystemHost && hasScope("proxy:delete"))) && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="icon" aria-label="More proxy host actions">
@@ -1035,6 +1083,15 @@ export function ProxyHostDetail({
                       {host.maintenanceEnabled ? "Disable Maintenance" : "Enable Maintenance"}
                     </DropdownMenuItem>
                   )}
+                  {canIssueMaintenanceAccessCode && (
+                    <DropdownMenuItem
+                      onClick={handleCreateMaintenanceAccessCode}
+                      disabled={isCreatingMaintenanceAccessCode}
+                    >
+                      <KeyRound className="mr-2 h-4 w-4" />
+                      Create Maintenance Access Code
+                    </DropdownMenuItem>
+                  )}
                   {canResyncTls && (
                     <DropdownMenuItem onClick={handleTlsResync} disabled={isTlsResyncing}>
                       <RefreshCw className={cn("mr-2 h-4 w-4", isTlsResyncing && "animate-spin")} />
@@ -1043,7 +1100,9 @@ export function ProxyHostDetail({
                   )}
                   {!isSystemHost && hasScope("proxy:delete") && (
                     <>
-                      {canEditProxyHost && <DropdownMenuSeparator />}
+                      {(canEditProxyHost || canIssueMaintenanceAccessCode || canResyncTls) && (
+                        <DropdownMenuSeparator />
+                      )}
                       <DropdownMenuItem onClick={handleDelete} className="text-destructive">
                         <Trash2 className="mr-2 h-4 w-4" />
                         Delete
@@ -1264,6 +1323,36 @@ export function ProxyHostDetail({
           loadHost();
         }}
       />
+
+      <Dialog
+        open={maintenanceAccessCode !== null}
+        onOpenChange={(open) => {
+          if (!open) setMaintenanceAccessCode(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Maintenance access code</DialogTitle>
+            <DialogDescription>
+              Share this one-time code only with the person who needs temporary access. It expires
+              in 5 minutes.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex min-w-0 border border-input bg-background">
+            <Input
+              value={maintenanceAccessCode ?? ""}
+              readOnly
+              aria-label="Maintenance access code"
+              className="min-w-0 flex-1 border-0 bg-transparent font-mono focus-visible:ring-0"
+            />
+            <CopyButton
+              value={maintenanceAccessCode ?? ""}
+              label="maintenance access code"
+              className="border-l border-input"
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Pin Dialog ───────────────────────────────────────── */}
       <Dialog open={pinOpen} onOpenChange={setPinOpen}>

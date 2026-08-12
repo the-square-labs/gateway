@@ -77,6 +77,17 @@ describe('mapDatabaseDriverError', () => {
     expect(mapped?.code).toBe('DATABASE_QUERY_FAILED');
   });
 
+  it('maps postgres statement timeouts to the interactive budget error', () => {
+    const error = Object.assign(new Error('canceling statement due to statement timeout'), {
+      code: '57014',
+    });
+
+    expect(mapDatabaseDriverError(error, 'postgres', 'query')).toMatchObject({
+      statusCode: 408,
+      code: 'DATABASE_QUERY_BUDGET_EXCEEDED',
+    });
+  });
+
   it('maps other postgres query driver errors to 400 so the UI sees the real message', () => {
     const error = Object.assign(new Error('invalid input value for enum order_status: "oops"'), {
       code: 'ZZZZZ',
@@ -277,6 +288,44 @@ describe('DatabaseConnectionService.executePostgresSql', () => {
     );
     expect(client.release).toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.objectContaining({ action: 'database.postgres.query' }));
+  });
+});
+
+describe('DatabaseConnectionService interactive query admission', () => {
+  it('allows one run per user and three runs per database', async () => {
+    const service = new DatabaseConnectionService({} as never, { log: vi.fn() } as never, {} as never);
+    const releases: Array<() => void> = [];
+    const executeSql = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          releases.push(() => resolve({ results: [], truncated: false, resultLimit: 10 }));
+        })
+    );
+    vi.spyOn(service as unknown as { getRow: () => Promise<unknown> }, 'getRow').mockResolvedValue({
+      interactiveQueryBudgetSeconds: 300,
+    });
+    vi.spyOn(
+      service as unknown as { getSqlAdapter: () => Promise<{ executeSql: typeof executeSql }> },
+      'getSqlAdapter'
+    ).mockResolvedValue({ executeSql });
+
+    const first = service.executeSql('db-1', 'select 1', 'user-1');
+    await vi.waitFor(() => expect(executeSql).toHaveBeenCalledTimes(1));
+    await expect(service.executeSql('db-1', 'select 2', 'user-1')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'DATABASE_QUERY_ALREADY_RUNNING',
+    });
+
+    const second = service.executeSql('db-1', 'select 2', 'user-2');
+    const third = service.executeSql('db-1', 'select 3', 'user-3');
+    await vi.waitFor(() => expect(executeSql).toHaveBeenCalledTimes(3));
+    await expect(service.executeSql('db-1', 'select 4', 'user-4')).rejects.toMatchObject({
+      statusCode: 429,
+      code: 'DATABASE_QUERY_CONCURRENCY_LIMIT',
+    });
+
+    for (const release of releases) release();
+    await Promise.all([first, second, third]);
   });
 });
 

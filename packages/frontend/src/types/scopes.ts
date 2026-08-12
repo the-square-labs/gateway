@@ -13,6 +13,7 @@ export const RESOURCE_SCOPABLE_SCOPES = [
   "proxy:delete",
   "proxy:advanced",
   "proxy:advanced:bypass",
+  "proxy:maintenance:bypass",
   "proxy:raw:read",
   "proxy:raw:write",
   "proxy:raw:toggle",
@@ -232,6 +233,12 @@ const RAW_TOKEN_SCOPES = [
     value: "proxy:advanced:bypass",
     label: "Bypass Advanced Config Restrictions",
     desc: "Save unrestricted advanced nginx snippets",
+    group: "Proxy Hosts",
+  },
+  {
+    value: "proxy:maintenance:bypass",
+    label: "Issue Maintenance Access",
+    desc: "Create temporary access codes for maintained proxy hosts",
     group: "Proxy Hosts",
   },
   {
@@ -1197,6 +1204,7 @@ const PROGRAMMATIC_DENIED_SCOPE_VALUES = new Set<string>([
   "proxy:raw:toggle",
   "proxy:raw:bypass",
   "proxy:advanced:bypass",
+  "proxy:maintenance:bypass",
   "nodes:config:view",
   "nodes:config:edit",
 ]);

@@ -1,7 +1,9 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfirmDialog, useConfirmDialog } from "@/components/common/ConfirmDialog";
+import { PageTransition } from "@/components/common/PageTransition";
+import { PoweredByFooter } from "@/components/common/PoweredByFooter";
 import { api } from "@/services/api";
 import { useAppStatusStore } from "@/stores/app-status";
 import { useSystemConfigStore } from "@/stores/system-config";
@@ -56,6 +58,56 @@ describe("AuthProvisioningSection inference setting", () => {
     api.invalidateCache("settings:auth-provisioning");
     useConfirmDialog.getState().close();
     useAppStatusStore.getState().clearGatewayRestarting();
+  });
+
+  it("keeps settings and its footer hidden until the first settings snapshot is complete", async () => {
+    api.invalidateCache("settings:auth-provisioning");
+    let resolveSettings!: (settings: AuthProvisioningSettings) => void;
+    vi.spyOn(api, "getAuthProvisioningSettings").mockReturnValueOnce(
+      new Promise<AuthProvisioningSettings>((resolve) => {
+        resolveSettings = resolve;
+      })
+    );
+
+    render(
+      <PageTransition>
+        <AuthProvisioningSection canEdit section="general" />
+        <PoweredByFooter transitionKey="general" />
+      </PageTransition>
+    );
+
+    const transition = document.querySelector<HTMLElement>("[data-page-transition]");
+    expect(transition).toHaveStyle({ visibility: "hidden" });
+    expect(screen.getByText(/Powered by/)).not.toBeVisible();
+
+    await act(async () => resolveSettings(SETTINGS));
+
+    await waitFor(() => {
+      expect(transition).toHaveStyle({ visibility: "visible" });
+      expect(screen.getByText(/Powered by/)).toBeVisible();
+    });
+  });
+
+  it("releases the first-page transition when the settings request fails", async () => {
+    api.invalidateCache("settings:auth-provisioning");
+    vi.spyOn(api, "getAuthProvisioningSettings").mockRejectedValueOnce(
+      new Error("settings unavailable")
+    );
+
+    render(
+      <PageTransition>
+        <AuthProvisioningSection canEdit section="general" />
+        <PoweredByFooter transitionKey="general" />
+      </PageTransition>
+    );
+
+    const transition = document.querySelector<HTMLElement>("[data-page-transition]");
+    expect(transition).toHaveStyle({ visibility: "hidden" });
+
+    await waitFor(() => {
+      expect(transition).toHaveStyle({ visibility: "visible" });
+      expect(screen.getByText(/Powered by/)).toBeVisible();
+    });
   });
 
   it("persists the existing-session MFA grace period", async () => {
@@ -282,29 +334,6 @@ describe("AuthProvisioningSection inference setting", () => {
       })
     );
     expect(useSystemConfigStore.getState().config.features.siemEnabled).toBe(false);
-  });
-
-  it("persists the bounded Gateway relay auto-recovery toggle", async () => {
-    api.setCache("settings:auth-provisioning", SETTINGS);
-    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(SETTINGS);
-    const update = vi
-      .spyOn(api, "updateAuthProvisioningSettings")
-      .mockImplementation(async (input) => ({
-        ...SETTINGS,
-        generalSettings: { ...SETTINGS.generalSettings, ...input.generalSettings },
-      }));
-    const user = userEvent.setup();
-
-    render(<AuthProvisioningSection canEdit />);
-    await user.click(
-      await screen.findByRole("button", { name: "Enable Gateway relay auto-recovery" })
-    );
-
-    await waitFor(() =>
-      expect(update).toHaveBeenCalledWith({
-        generalSettings: expect.objectContaining({ relayAutoRecovery: false }),
-      })
-    );
   });
 
   it("shows the existing informational modal only when saving a changed relay TTL above 24 hours", async () => {

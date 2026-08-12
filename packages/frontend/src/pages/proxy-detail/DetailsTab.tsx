@@ -1,13 +1,15 @@
 import { Server } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { DetailRow } from "@/components/common/DetailRow";
 import { PanelShell } from "@/components/common/PanelShell";
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { nodeRoute } from "@/lib/resource-routes";
 import { api } from "@/services/api";
-import type { ProxyHost } from "@/types";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
+import type { NodeDetail, ProxyHost } from "@/types";
 
 const HEALTH_BODY_MATCH_LABEL: Record<ProxyHost["healthCheckBodyMatchMode"], string> = {
   includes: "Includes",
@@ -18,17 +20,57 @@ const HEALTH_BODY_MATCH_LABEL: Record<ProxyHost["healthCheckBodyMatchMode"], str
 
 export function DetailsTab({ host }: { host: ProxyHost }) {
   const navigate = useNavigate();
-  const nodeId = (host as any).nodeId as string | null;
+  const nodeId = host.nodeId ?? null;
+  const shellNode = useUIBootstrapStore((state) =>
+    state.snapshot?.navigation.nodes.data.find((node) => node.id === nodeId)
+  );
+  const cachedNode = useMemo(
+    () =>
+      nodeId
+        ? api.getCached<{ data: NodeDetail }>(`req:/api/nodes/${nodeId}`, Number.POSITIVE_INFINITY)
+            ?.data
+        : undefined,
+    [nodeId]
+  );
+  const initialNode = shellNode ?? cachedNode;
   const [nodeInfo, setNodeInfo] = useState<{
     id: string;
     slug: string;
     name: string;
     status: string;
     type: string;
-  } | null>(null);
+  } | null>(() =>
+    initialNode
+      ? {
+          id: initialNode.id,
+          slug: initialNode.slug,
+          name: initialNode.displayName || initialNode.hostname,
+          status: initialNode.status,
+          type: initialNode.type,
+        }
+      : null
+  );
+  const [nodeLoadComplete, setNodeLoadComplete] = useState(!nodeId || Boolean(initialNode));
 
   useEffect(() => {
-    if (!nodeId) return;
+    if (!nodeId) {
+      setNodeInfo(null);
+      setNodeLoadComplete(true);
+      return;
+    }
+    if (shellNode) {
+      setNodeInfo({
+        id: shellNode.id,
+        slug: shellNode.slug,
+        name: shellNode.displayName || shellNode.hostname,
+        status: shellNode.status,
+        type: shellNode.type,
+      });
+      setNodeLoadComplete(true);
+    } else if (!cachedNode) {
+      setNodeInfo(null);
+      setNodeLoadComplete(false);
+    }
     api
       .getNode(nodeId)
       .then((n) =>
@@ -40,11 +82,13 @@ export function DetailsTab({ host }: { host: ProxyHost }) {
           type: n.type,
         })
       )
-      .catch(() => {});
-  }, [nodeId]);
+      .catch(() => {})
+      .finally(() => setNodeLoadComplete(true));
+  }, [cachedNode, nodeId, shellNode]);
 
   return (
     <div className="space-y-4">
+      {!nodeLoadComplete && <Skeleton />}
       {/* Node Card */}
       {nodeInfo && (
         <PanelShell

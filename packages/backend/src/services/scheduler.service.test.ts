@@ -29,4 +29,30 @@ describe('SchedulerService shutdown', () => {
     expect(stopped).toBe(true);
     vi.useRealTimers();
   });
+
+  it('does not overlap repeated runs of the same interval', async () => {
+    vi.useFakeTimers();
+    const scheduler = new SchedulerService();
+    let release!: () => void;
+    const task = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+    );
+    scheduler.registerInterval('single-flight', 100, task);
+    scheduler.start();
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(task).toHaveBeenCalledOnce();
+
+    release();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(task).toHaveBeenCalledTimes(2);
+
+    release();
+    await scheduler.stop();
+    vi.useRealTimers();
+  });
 });

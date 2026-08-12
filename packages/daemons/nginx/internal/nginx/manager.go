@@ -67,6 +67,17 @@ func (m *Manager) GetVersion() (string, error) {
 	return s, nil
 }
 
+// HasSecureLinkModule verifies that this nginx build did not explicitly omit
+// the built-in secure-link module required by Gateway maintenance admission.
+func (m *Manager) HasSecureLinkModule() (bool, error) {
+	cmd := exec.Command(m.binary, "-V")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("nginx build check failed: %w", err)
+	}
+	return !strings.Contains(string(output), "--without-http_secure_link_module"), nil
+}
+
 func (m *Manager) IsRunning() bool {
 	pidFile := m.findPidFile()
 	if pidFile != "" {

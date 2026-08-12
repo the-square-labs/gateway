@@ -24,6 +24,7 @@ import type {
   RewriteRule,
   SSLCertificate,
 } from "@/types";
+import { AdditionalSecureLinkBindings } from "./AdditionalSecureLinkBindings";
 
 const tableInputClass =
   "h-9 border-0 rounded-none shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
@@ -372,6 +373,10 @@ export function SettingsTab({
       {host.type === "proxy" && (
         <ProxyUpstreamPanel host={host} canManage={canManage} onUpdated={onHostUpdated} />
       )}
+
+      {host.type === "proxy" && !host.rawConfigEnabled ? (
+        <AdditionalSecureLinkBindings hostId={host.id} canManage={canManage} />
+      ) : null}
 
       <PanelShell
         title="Config Template"

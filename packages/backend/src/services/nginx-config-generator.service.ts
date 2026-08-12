@@ -25,6 +25,12 @@ export interface ProxyHostConfig {
   forwardScheme: 'http' | 'https';
   secureLinkUpstream?: boolean;
   secureLinkSocketPath?: string;
+  additionalSecureLinks?: Array<{
+    id: string;
+    name: string;
+    scheme: 'http' | 'https';
+    socketPath: string;
+  }>;
   sslEnabled: boolean;
   sslForced: boolean;
   http2Support: boolean;

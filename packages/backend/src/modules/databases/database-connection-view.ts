@@ -81,6 +81,7 @@ export interface DatabaseConnectionView {
   description: string | null;
   tags: string[];
   manualSizeLimitMb: number | null;
+  interactiveQueryBudgetSeconds: number;
   host: string;
   port: number;
   databaseName: string | null;
@@ -110,6 +111,7 @@ type DatabaseConnectionRow = {
   description: string | null;
   tags: unknown;
   manualSizeLimitMb: number | null;
+  interactiveQueryBudgetSeconds: number;
   host: string;
   port: number;
   databaseName: string | null;
@@ -216,6 +218,7 @@ export function toDatabaseConnectionView(
     description: row.description,
     tags: (row.tags as string[] | null) ?? [],
     manualSizeLimitMb: row.manualSizeLimitMb,
+    interactiveQueryBudgetSeconds: row.interactiveQueryBudgetSeconds,
     host: row.host,
     port: row.port,
     databaseName: row.databaseName,

@@ -30,6 +30,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useDockerStore } from "@/stores/docker";
+import { useDockerFolderStore } from "@/stores/docker-folders";
 import { useResolvedPageContext } from "@/stores/resolved-page-context";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
@@ -284,14 +285,25 @@ export function DashboardLayout() {
         }
         const hasAdminScopes = user.scopes.some((scope) => scope.startsWith("admin:"));
         const docker = useDockerStore.getState();
+        const dockerFolders = useDockerFolderStore.getState();
         const extraTasks: BackgroundPrewarmTask[] = [];
         const addDockerTask = (allowed: boolean, key: string, run: () => Promise<unknown>) => {
           if (allowed) extraTasks.push({ key, run });
         };
         addDockerTask(
           useAuthStore.getState().hasScopedAccess("docker:containers:view"),
+          "docker-container-folders",
+          () => dockerFolders.fetchFolders("container")
+        );
+        addDockerTask(
+          useAuthStore.getState().hasScopedAccess("docker:containers:view"),
           "docker-containers",
           () => docker.fetchContainers(null, "", shell?.navigation.dockerNodes)
+        );
+        addDockerTask(
+          useAuthStore.getState().hasScopedAccess("docker:images:view"),
+          "docker-image-folders",
+          () => dockerFolders.fetchFolders("image")
         );
         addDockerTask(
           useAuthStore.getState().hasScopedAccess("docker:images:view"),
@@ -300,8 +312,18 @@ export function DashboardLayout() {
         );
         addDockerTask(
           useAuthStore.getState().hasScopedAccess("docker:volumes:view"),
+          "docker-volume-folders",
+          () => dockerFolders.fetchFolders("volume")
+        );
+        addDockerTask(
+          useAuthStore.getState().hasScopedAccess("docker:volumes:view"),
           "docker-volumes",
           () => docker.fetchVolumes(null, "", shell?.navigation.dockerNodes)
+        );
+        addDockerTask(
+          useAuthStore.getState().hasScopedAccess("docker:networks:view"),
+          "docker-network-folders",
+          () => dockerFolders.fetchFolders("network")
         );
         addDockerTask(
           useAuthStore.getState().hasScopedAccess("docker:networks:view"),

@@ -2,7 +2,7 @@ import { and, count, desc, eq, ilike, inArray, ne, or, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { accessLists } from '@/db/schema/access-lists.js';
 import { certificates } from '@/db/schema/certificates.js';
-import { nodes, proxyHosts } from '@/db/schema/index.js';
+import { nodes, proxyAdditionalSecureLinks, proxyHosts } from '@/db/schema/index.js';
 import { sslCertificates } from '@/db/schema/ssl-certificates.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
@@ -11,6 +11,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
+import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CacheService } from '@/services/cache.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type {
@@ -41,7 +42,12 @@ import {
   type ProxyDockerUpstreamService,
 } from './proxy-docker-upstream.service.js';
 import { runImmediateProxyHealthCheck } from './proxy-health-check.js';
-import type { ProxySecureLinkService } from './proxy-secure-link.service.js';
+import type { ProxyMaintenanceAccessService } from './proxy-maintenance-access.service.js';
+import type {
+  CreateProxyAdditionalSecureLinkInput,
+  ProxyAdditionalSecureLinkRow,
+  ProxySecureLinkService,
+} from './proxy-secure-link.service.js';
 import { attachDockerUpstreamDisplay, type WithDockerUpstreamDisplay } from './proxy-upstream-display.js';
 
 export { __testOnly } from './proxy.service-helpers.js';
@@ -110,7 +116,9 @@ export class ProxyService {
     private readonly certificateDistribution: NginxCertificateDistributionService,
     private readonly dockerUpstreams?: ProxyDockerUpstreamService,
     private readonly secureLinks?: ProxySecureLinkService,
-    private readonly cache?: CacheService
+    private readonly cache?: CacheService,
+    private readonly maintenanceAccess?: ProxyMaintenanceAccessService,
+    private readonly generalSettings?: GeneralSettingsService
   ) {}
 
   private eventBus?: EventBusService;
@@ -123,6 +131,7 @@ export class ProxyService {
   private readonly secureLinkRuntimeHistory = new Map<string, ProxySecureLinkRuntimeSnapshot[]>();
   private readonly secureLinkRuntimeSamplesInFlight = new Map<string, Promise<ProxySecureLinkRuntimeSample>>();
   private secureLinkRuntimeBackgroundInFlight: Promise<void> | null = null;
+  private secureLinkRuntimeCollectionPending = false;
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
     bus.subscribe('docker.snapshot.changed', (payload) => {
@@ -131,6 +140,13 @@ export class ProxyService {
     bus.subscribe('docker.deployment.changed', () => this.queueDockerReconciliation());
     bus.subscribe('node.service_address.changed', () => this.queueDockerReconciliation(true));
     bus.subscribe('node.changed', () => this.queueDockerReconciliation(true));
+    bus.subscribe('system.config.changed', (payload) => {
+      if ((payload as { externalBrandingChanged?: boolean })?.externalBrandingChanged) {
+        void this.refreshExternalBranding().catch((error) => {
+          logger.error('Failed to refresh public proxy branding', { error });
+        });
+      }
+    });
     bus.subscribe('docker.container.changed', (payload) => {
       const event = payload as { action?: string; nodeId?: string; name?: string; oldName?: string };
       if (event.action === 'renamed' && event.nodeId && event.name && event.oldName) {
@@ -140,6 +156,10 @@ export class ProxyService {
       }
     });
     this.queueDockerReconciliation(true);
+    // Do not wait for the first 10s scheduler tick. If startup reconciliation
+    // is still using daemon command capacity, the collection is retained and
+    // starts as soon as reconciliation releases it.
+    void this.collectSecureLinkRuntimeSnapshots();
   }
   setEvaluator(evaluator: NotificationEvaluatorService) {
     this.notificationEvaluator = evaluator;
@@ -305,6 +325,13 @@ export class ProxyService {
 
     // 0b. Validate advanced config if provided
     if (input.advancedConfig && !options.bypassAdvancedValidation) {
+      if (/\{\{additionalSecureLinks\./.test(input.advancedConfig)) {
+        throw new AppError(
+          400,
+          'INVALID_SECURE_LINK_REFERENCE',
+          'Provision additional Secure Links after creating the proxy host'
+        );
+      }
       const validation = this.configGenerator.validateAdvancedConfig(input.advancedConfig);
       if (!validation.valid) {
         throw new AppError(
@@ -407,7 +434,10 @@ export class ProxyService {
         certPaths.preparedTls,
         this.configOwnershipForHost(host)
       );
-      if (host.upstreamKind !== 'manual') await this.secureLinks?.activate(host.id);
+      if (host.upstreamKind !== 'manual') {
+        await this.secureLinks?.activate(host.id);
+        this.queueSecureLinkRuntimeSample(host);
+      }
     } catch (error) {
       // 4. If nginx fails, delete the DB row and throw
       logger.error('Failed to apply nginx config for new proxy host, rolling back DB insert', {
@@ -487,6 +517,9 @@ export class ProxyService {
     });
     if (!existing) throw new AppError(404, 'PROXY_HOST_NOT_FOUND', 'Proxy host not found');
     if (existing.isSystem) throw new AppError(403, 'SYSTEM_HOST', 'System proxy hosts cannot be edited');
+    if (input.advancedConfig !== undefined) {
+      await this.secureLinks?.assertAdditionalReferences(existing.id, input.advancedConfig);
+    }
     if (
       existing.maintenanceEnabled &&
       ((input.type !== undefined && input.type !== 'proxy') || input.rawConfigEnabled === true)
@@ -511,6 +544,13 @@ export class ProxyService {
     }
 
     if (input.nodeId && input.nodeId !== existing.nodeId) {
+      if ((await this.secureLinks?.listAdditional(existing.id))?.length) {
+        throw new AppError(
+          409,
+          'ADDITIONAL_SECURE_LINK_NODE_MOVE_BLOCKED',
+          'Remove additional Secure Link bindings before moving this proxy host to another node'
+        );
+      }
       await assertNodeAllowsServiceCreation(this.db, input.nodeId, 'nginx');
     }
 
@@ -614,7 +654,10 @@ export class ProxyService {
           certPaths.preparedTls,
           this.configOwnershipForHost(updated)
         );
-        if (updated.upstreamKind !== 'manual' && !updatedUsesRawMode) await this.secureLinks?.activate(id);
+        if (updated.upstreamKind !== 'manual' && !updatedUsesRawMode) {
+          await this.secureLinks?.activate(id);
+          this.queueSecureLinkRuntimeSample(updated);
+        }
         appliedOnTargetNode = true;
 
         // The new target is now known-good. Only then retire the former
@@ -797,6 +840,7 @@ export class ProxyService {
     }
 
     // 3. Delete the database row only after the active deployment is safely gone.
+    await this.secureLinks?.cleanupAdditionalForHost(existing);
     await this.secureLinks?.cleanup(existing);
     await this.db.delete(proxyHosts).where(eq(proxyHosts.id, id));
 
@@ -895,6 +939,67 @@ export class ProxyService {
     return host.healthHistory ?? [];
   }
 
+  async listAdditionalSecureLinks(id: string) {
+    await this.requireManagedProxyHost(id);
+    if (!this.secureLinks) throw new AppError(503, 'SECURE_LINK_UNAVAILABLE', 'Proxy Secure Links are unavailable');
+    return this.secureLinks.listAdditional(id);
+  }
+
+  async createAdditionalSecureLink(id: string, input: CreateProxyAdditionalSecureLinkInput, userId: string) {
+    const host = await this.requireManagedProxyHost(id);
+    if (!this.secureLinks) throw new AppError(503, 'SECURE_LINK_UNAVAILABLE', 'Proxy Secure Links are unavailable');
+    const binding = await this.secureLinks.createAdditional(host, input);
+    await this.auditService.log({
+      userId,
+      action: 'proxy_host.additional_secure_link.create',
+      resourceType: 'proxy_host',
+      resourceId: id,
+      details: { bindingId: binding.id, name: binding.name, target: binding.targetContainer },
+    });
+    return binding;
+  }
+
+  async retryAdditionalSecureLink(id: string, bindingId: string, userId: string) {
+    const host = await this.requireManagedProxyHost(id);
+    if (!this.secureLinks) throw new AppError(503, 'SECURE_LINK_UNAVAILABLE', 'Proxy Secure Links are unavailable');
+    const binding = await this.secureLinks.retryAdditional(host, bindingId);
+    await this.auditService.log({
+      userId,
+      action: 'proxy_host.additional_secure_link.retry',
+      resourceType: 'proxy_host',
+      resourceId: id,
+      details: { bindingId, name: binding.name },
+    });
+    return binding;
+  }
+
+  async deleteAdditionalSecureLink(id: string, bindingId: string, userId: string) {
+    const host = await this.requireManagedProxyHost(id);
+    if (!this.secureLinks) throw new AppError(503, 'SECURE_LINK_UNAVAILABLE', 'Proxy Secure Links are unavailable');
+    await this.secureLinks.deleteAdditional(host, bindingId);
+    this.queueDockerReconciliation(true);
+    await this.auditService.log({
+      userId,
+      action: 'proxy_host.additional_secure_link.delete',
+      resourceType: 'proxy_host',
+      resourceId: id,
+      details: { bindingId },
+    });
+  }
+
+  private async requireManagedProxyHost(id: string): Promise<ProxyHostRow> {
+    const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) });
+    if (!host || host.isSystem) throw new AppError(404, 'PROXY_HOST_NOT_FOUND', 'Proxy host not found');
+    if (host.type !== 'proxy' || host.rawConfigEnabled) {
+      throw new AppError(
+        409,
+        'ADDITIONAL_SECURE_LINK_UNAVAILABLE',
+        'Additional Secure Links require a managed proxy host'
+      );
+    }
+    return host;
+  }
+
   async getProxySecureLinkStatus(id: string) {
     const host = await this.db.query.proxyHosts.findFirst({
       where: eq(proxyHosts.id, id),
@@ -921,7 +1026,7 @@ export class ProxyService {
     }
 
     const nodeIds = [host.nodeId, host.dockerNodeId].filter((nodeId): nodeId is string => Boolean(nodeId));
-    const [linkNodes, history] = await Promise.all([
+    const [linkNodes, cachedHistory, additionalBindings] = await Promise.all([
       nodeIds.length
         ? this.db
             .select({ id: nodes.id, hostname: nodes.hostname, displayName: nodes.displayName, status: nodes.status })
@@ -929,20 +1034,38 @@ export class ProxyService {
             .where(inArray(nodes.id, nodeIds))
         : Promise.resolve([]),
       this.getSecureLinkRuntimeHistory(host.id),
+      this.secureLinks?.listAdditional?.(host.id) ?? Promise.resolve([]),
     ]);
-    const latestSnapshot = history.at(-1);
-    const runtime = latestSnapshot?.runtime ?? null;
-    const traffic = latestSnapshot?.traffic ?? null;
+    let history = cachedHistory;
+    let latestSnapshot = history.at(-1);
+    let runtime = latestSnapshot?.runtime ?? null;
+    let traffic = latestSnapshot?.traffic ?? null;
 
-    // The read path never waits on Relay or daemon RPCs. An open Link Runtime
-    // tab only accelerates the same sampler that already runs in the
-    // background; the next poll observes the completed snapshot.
-    void this.sampleSecureLinkRuntime(host, SECURE_LINK_FOCUSED_TRAFFIC_TAIL_LINES).catch((error) => {
-      logger.debug('Focused Proxy Secure Link telemetry collection failed', {
-        hostId: host.id,
-        error: error instanceof Error ? error.message : String(error),
+    const focusedSample = this.sampleSecureLinkRuntime(host, SECURE_LINK_FOCUSED_TRAFFIC_TAIL_LINES);
+    if (!runtime || !traffic) {
+      // A partial cached sample must not be exposed as a current "telemetry
+      // unavailable" state. Collect Relay and Nginx telemetry as one snapshot
+      // on the first incomplete read; subsequent reads stay cache-fast.
+      try {
+        const refreshed = await focusedSample;
+        history = refreshed.history;
+        latestSnapshot = refreshed.snapshot;
+        runtime = latestSnapshot.runtime;
+        traffic = latestSnapshot.traffic;
+      } catch (error) {
+        logger.debug('Focused Proxy Secure Link telemetry collection failed', {
+          hostId: host.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else {
+      void focusedSample.catch((error) => {
+        logger.debug('Focused Proxy Secure Link telemetry collection failed', {
+          hostId: host.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
-    });
+    }
 
     const nodeById = new Map(linkNodes.map((node) => [node.id, node]));
     const sourceNode = host.nodeId ? nodeById.get(host.nodeId) : undefined;
@@ -954,6 +1077,51 @@ export class ProxyService {
       connectionsPerIp?: number;
     };
     const rateLimitEnabled = rateLimitMode !== 'disabled';
+    const additionalLinks = await Promise.all(
+      additionalBindings.map(async (binding) => {
+        const historyKey = this.additionalSecureLinkRuntimeKey(binding.id);
+        let bindingHistory = await this.getSecureLinkRuntimeHistory(historyKey);
+        let bindingRuntime = bindingHistory.at(-1)?.runtime ?? null;
+        if (binding.status === 'active') {
+          const focusedSample = this.sampleAdditionalSecureLinkRuntime(binding);
+          if (!bindingRuntime) {
+            try {
+              const refreshed = await focusedSample;
+              bindingHistory = refreshed.history;
+              bindingRuntime = refreshed.snapshot.runtime;
+            } catch (error) {
+              logger.debug('Focused additional Secure Link telemetry collection failed', {
+                hostId: host.id,
+                bindingId: binding.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          } else {
+            void focusedSample.catch((error) => {
+              logger.debug('Focused additional Secure Link telemetry collection failed', {
+                hostId: host.id,
+                bindingId: binding.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
+          }
+        }
+        return {
+          id: binding.id,
+          name: binding.name,
+          status: binding.status,
+          generation: binding.generation,
+          targetContainer: binding.targetContainer,
+          forwardScheme: binding.forwardScheme,
+          lastError: binding.lastError,
+          runtime: bindingRuntime,
+          history: bindingHistory.map(({ timestamp, runtime: snapshotRuntime }) => ({
+            timestamp,
+            runtime: snapshotRuntime,
+          })),
+        };
+      })
+    );
     return {
       state: host.secureLinkStatus,
       generation: host.secureLinkGeneration,
@@ -984,6 +1152,7 @@ export class ProxyService {
       runtime,
       traffic,
       history,
+      additionalLinks,
     };
   }
 
@@ -994,7 +1163,12 @@ export class ProxyService {
    */
   collectSecureLinkRuntimeSnapshots(): Promise<void> {
     if (this.secureLinkRuntimeBackgroundInFlight) return this.secureLinkRuntimeBackgroundInFlight;
+    if (this.dockerReconcileRunning) {
+      this.secureLinkRuntimeCollectionPending = true;
+      return Promise.resolve();
+    }
 
+    this.secureLinkRuntimeCollectionPending = false;
     const task = this.collectSecureLinkRuntimeSnapshotsOnce().finally(() => {
       if (this.secureLinkRuntimeBackgroundInFlight === task) {
         this.secureLinkRuntimeBackgroundInFlight = null;
@@ -1005,16 +1179,23 @@ export class ProxyService {
   }
 
   private async collectSecureLinkRuntimeSnapshotsOnce(): Promise<void> {
-    if (!this.secureLinks || this.dockerReconcileRunning) return;
-    const hosts = await this.db.query.proxyHosts.findMany({
-      where: and(
-        eq(proxyHosts.isSystem, false),
-        eq(proxyHosts.enabled, true),
-        ne(proxyHosts.upstreamKind, 'manual'),
-        eq(proxyHosts.secureLinkStatus, 'active')
-      ),
-      columns: { id: true, nodeId: true },
-    });
+    if (!this.secureLinks) return;
+    const [hosts, additionalBindings] = await Promise.all([
+      this.db.query.proxyHosts.findMany({
+        where: and(
+          eq(proxyHosts.isSystem, false),
+          eq(proxyHosts.enabled, true),
+          ne(proxyHosts.upstreamKind, 'manual'),
+          eq(proxyHosts.secureLinkStatus, 'active')
+        ),
+        columns: { id: true, nodeId: true },
+      }),
+      this.db.query.proxyAdditionalSecureLinks?.findMany
+        ? this.db.query.proxyAdditionalSecureLinks.findMany({
+            where: eq(proxyAdditionalSecureLinks.status, 'active'),
+          })
+        : Promise.resolve([]),
+    ]);
 
     // Keep daemon and Relay fan-out bounded when an installation has many
     // Secure Links. A slow route cannot create overlapping background rounds.
@@ -1028,6 +1209,19 @@ export class ProxyService {
         if (result.status === 'rejected') {
           logger.debug('Background Proxy Secure Link telemetry collection failed', {
             hostId: batch[index]?.id,
+            error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+          });
+        }
+      });
+    }
+
+    for (let offset = 0; offset < additionalBindings.length; offset += concurrency) {
+      const batch = additionalBindings.slice(offset, offset + concurrency);
+      const results = await Promise.allSettled(batch.map((binding) => this.sampleAdditionalSecureLinkRuntime(binding)));
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          logger.debug('Background additional Secure Link telemetry collection failed', {
+            bindingId: batch[index]?.id,
             error: result.reason instanceof Error ? result.reason.message : String(result.reason),
           });
         }
@@ -1056,6 +1250,48 @@ export class ProxyService {
       });
     this.secureLinkRuntimeSamplesInFlight.set(host.id, task);
     return task;
+  }
+
+  private additionalSecureLinkRuntimeKey(bindingId: string): string {
+    return `additional:${bindingId}`;
+  }
+
+  private sampleAdditionalSecureLinkRuntime(
+    binding: Pick<ProxyAdditionalSecureLinkRow, 'id'>
+  ): Promise<ProxySecureLinkRuntimeSample> {
+    const historyKey = this.additionalSecureLinkRuntimeKey(binding.id);
+    const active = this.secureLinkRuntimeSamplesInFlight.get(historyKey);
+    if (active) return active;
+
+    const task = (this.secureLinks?.getRuntime(binding.id) ?? Promise.resolve(null))
+      .then(async (runtime) => {
+        const snapshot: ProxySecureLinkRuntimeSnapshot = {
+          timestamp: new Date().toISOString(),
+          runtime,
+          traffic: null,
+        };
+        await this.getSecureLinkRuntimeHistory(historyKey);
+        const history = this.recordSecureLinkRuntimeSnapshot(historyKey, snapshot);
+        await this.persistSecureLinkRuntimeHistory(historyKey, history);
+        return { snapshot, history };
+      })
+      .finally(() => {
+        if (this.secureLinkRuntimeSamplesInFlight.get(historyKey) === task) {
+          this.secureLinkRuntimeSamplesInFlight.delete(historyKey);
+        }
+      });
+    this.secureLinkRuntimeSamplesInFlight.set(historyKey, task);
+    return task;
+  }
+
+  private queueSecureLinkRuntimeSample(host: { id: string; nodeId: string | null }): void {
+    if (!this.secureLinks || !host.nodeId) return;
+    void this.sampleSecureLinkRuntime(host, SECURE_LINK_BACKGROUND_TRAFFIC_TAIL_LINES).catch((error) => {
+      logger.debug('Initial Proxy Secure Link telemetry collection failed', {
+        hostId: host.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   private async collectSecureLinkRuntimeSnapshot(
@@ -1450,6 +1686,24 @@ export class ProxyService {
     runImmediateProxyHealthCheck({ db: this.db, hostId, logger, nodeDispatch: this.nodeDispatch });
   }
 
+  private async refreshExternalBranding(): Promise<void> {
+    const hosts = await this.db.query.proxyHosts.findMany({
+      where: and(eq(proxyHosts.enabled, true), or(eq(proxyHosts.type, '404'), eq(proxyHosts.maintenanceEnabled, true))),
+    });
+    for (const host of hosts) {
+      const certPaths = await this.resolveCertPaths(host, { preserveLegacyOnUnsupported: true });
+      const accessList = await this.resolveAccessList(host.accessListId);
+      const config = await this.buildNginxConfig(host, certPaths, accessList);
+      await this.applyConfigToNode(
+        host.id,
+        config,
+        host.nodeId,
+        certPaths.preparedTls,
+        this.configOwnershipForHost(host)
+      );
+    }
+  }
+
   private queueDockerReconciliation(force = false): void {
     if (!this.dockerUpstreams) return;
     this.dockerReconcileDirty = true;
@@ -1470,6 +1724,9 @@ export class ProxyService {
       } finally {
         this.dockerReconcileRunning = false;
         if (this.dockerReconcileDirty) this.queueDockerReconciliation();
+        if (this.secureLinkRuntimeCollectionPending) {
+          void this.collectSecureLinkRuntimeSnapshots();
+        }
       }
     })();
   }
@@ -1532,6 +1789,7 @@ export class ProxyService {
 
   private async reconcileDockerUpstreams(force = false): Promise<void> {
     let retryNeeded = false;
+    if (await this.secureLinks?.reconcileAdditionalLifecycle?.()) retryNeeded = true;
     const pendingCleanups = await this.db.query.proxyHosts.findMany({
       where: eq(proxyHosts.secureLinkStatus, 'cleanup_pending'),
     });
@@ -1591,7 +1849,10 @@ export class ProxyService {
               certPaths.preparedTls,
               this.configOwnershipForHost(cutoverHost)
             );
-            if (cutoverHost.secureLinkGeneration > 0) await this.secureLinks?.activate(cutoverHost.id);
+            if (cutoverHost.secureLinkGeneration > 0) {
+              await this.secureLinks?.activate(cutoverHost.id);
+              this.queueSecureLinkRuntimeSample(cutoverHost);
+            }
           } catch (error) {
             // Keep the newly resolved endpoint. A disconnected Nginx node will
             // receive it through the existing resync path after reconnecting.
@@ -1603,6 +1864,7 @@ export class ProxyService {
           }
         } else if (cutoverPending) {
           await this.secureLinks?.activate(cutoverHost.id);
+          this.queueSecureLinkRuntimeSample(cutoverHost);
         }
         this.emitHost(updated.id, 'updated', updated.domainNames?.[0]);
       } catch (error) {
@@ -1895,7 +2157,8 @@ export class ProxyService {
     snippet: string,
     rawMode = false,
     bypassAdvancedValidation = false,
-    bypassRawValidation = false
+    bypassRawValidation = false,
+    proxyHostId?: string
   ) {
     if (!rawMode && bypassAdvancedValidation) {
       return { valid: true, errors: [] };
@@ -1911,6 +2174,13 @@ export class ProxyService {
     // node-side validation still happens during save/apply.
     if (rawMode) {
       return staticResult;
+    }
+
+    if (proxyHostId) {
+      await this.requireManagedProxyHost(proxyHostId);
+      await this.secureLinks?.assertAdditionalReferences(proxyHostId, snippet);
+    } else if (/\{\{additionalSecureLinks\./.test(snippet)) {
+      return { valid: false, errors: ['Select a proxy host before validating additional Secure Link variables'] };
     }
 
     try {
@@ -1990,6 +2260,8 @@ export class ProxyService {
     if (usesSecureLink && !host.secureLinkListenerPort) {
       throw new Error('Secure Link listener port is unavailable');
     }
+    const additionalSecureLinks = this.secureLinks ? await this.secureLinks.getActiveAdditional(host.id) : [];
+    await this.secureLinks?.assertAdditionalReferences(host.id, host.advancedConfig);
     const config: ProxyHostConfig = {
       id: host.id,
       type: host.type,
@@ -2000,6 +2272,12 @@ export class ProxyService {
       forwardScheme: host.forwardScheme ?? 'http',
       secureLinkUpstream: usesSecureLink,
       secureLinkSocketPath: usesSecureLink ? `/run/gateway-secure-links/${host.id}.sock` : undefined,
+      additionalSecureLinks: additionalSecureLinks.map((binding) => ({
+        id: binding.id,
+        name: binding.name,
+        scheme: binding.forwardScheme,
+        socketPath: `/run/gateway-secure-links/${binding.id}.sock`,
+      })),
       sslEnabled: host.sslEnabled && !!certPaths.sslCertPath && !!certPaths.sslKeyPath,
       sslForced: host.sslForced,
       http2Support: host.http2Support,
@@ -2021,7 +2299,17 @@ export class ProxyService {
       templateVariables: (host.templateVariables ?? {}) as Record<string, string | number | boolean>,
     };
 
-    const rendered = await this.nginxTemplateService.renderForHost(config, host.nginxTemplateId ?? null);
-    return host.maintenanceEnabled ? this.nginxTemplateService.applyMaintenanceGuard(rendered) : rendered;
+    const hideExternalBranding = (await this.generalSettings?.getConfig())?.hideExternalBranding ?? false;
+    const rendered = await this.nginxTemplateService.renderForHost(
+      config,
+      host.nginxTemplateId ?? null,
+      hideExternalBranding
+    );
+    if (!host.maintenanceEnabled) return rendered;
+    const access =
+      this.maintenanceAccess && (await this.maintenanceAccess.isNodeSupported(host.nodeId))
+        ? { hostId: host.id, secret: this.maintenanceAccess.secretForHost(host.id) }
+        : undefined;
+    return this.nginxTemplateService.applyMaintenanceGuard(rendered, access, hideExternalBranding);
   }
 }

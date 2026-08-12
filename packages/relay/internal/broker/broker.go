@@ -19,18 +19,20 @@ import (
 )
 
 const (
-	DefaultMaxFrameBytes = 1024 * 1024
-	AcceptTimeout        = 30 * time.Second
-	IdleTimeout          = 5 * time.Minute
+	DefaultMaxFrameBytes  = 1024 * 1024
+	AcceptTimeout         = 30 * time.Second
+	IdleTimeout           = 5 * time.Minute
+	ProxyHalfCloseTimeout = 30 * time.Second
 )
 
 type endpointRegistration struct {
-	endpointID string
-	generation uint64
-	expiresAt  atomic.Int64
-	incoming   chan *relayv1.IncomingTunnel
-	stop       chan struct{}
-	stopOnce   sync.Once
+	endpointID  string
+	generation  uint64
+	expiresAt   atomic.Int64
+	maxSessions atomic.Uint32
+	incoming    chan *relayv1.IncomingTunnel
+	stop        chan struct{}
+	stopOnce    sync.Once
 }
 
 func (r *endpointRegistration) close() { r.stopOnce.Do(func() { close(r.stop) }) }
@@ -73,6 +75,8 @@ type Broker struct {
 	activeProxy    uint64
 	activeDatabase uint64
 	proxyByRoute   map[string]uint64
+	activeByRoute  map[string]uint64
+	activeByTarget map[string]uint64
 	routeMetrics   map[string]*routeMetrics
 	metricsSince   time.Time
 }
@@ -80,7 +84,7 @@ type Broker struct {
 func New(store *policy.Store) *Broker {
 	controller := admission.New()
 	controller.UpdatePolicy(store.Current().Admission)
-	return &Broker{store: store, verifier: grant.Verifier{Store: store}, endpoints: map[string]*endpointRegistration{}, pending: map[string]*pendingTunnel{}, active: map[string]*activeTunnel{}, admission: controller, proxyByRoute: map[string]uint64{}, routeMetrics: map[string]*routeMetrics{}, metricsSince: time.Now()}
+	return &Broker{store: store, verifier: grant.Verifier{Store: store}, endpoints: map[string]*endpointRegistration{}, pending: map[string]*pendingTunnel{}, active: map[string]*activeTunnel{}, admission: controller, proxyByRoute: map[string]uint64{}, activeByRoute: map[string]uint64{}, activeByTarget: map[string]uint64{}, routeMetrics: map[string]*routeMetrics{}, metricsSince: time.Now()}
 }
 
 const routeSetupLatencyWindow = 256
@@ -301,6 +305,7 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 	}
 	registration := &endpointRegistration{endpointID: claims.EndpointID, generation: claims.EndpointGeneration, incoming: make(chan *relayv1.IncomingTunnel, 32), stop: make(chan struct{})}
 	registration.expiresAt.Store(claims.ExpiresAt)
+	registration.maxSessions.Store(claims.MaxConcurrentSessions)
 	b.mu.Lock()
 	if err := grant.ValidatePolicy(claims, "endpoint", b.store.Current()); err != nil {
 		b.mu.Unlock()
@@ -370,6 +375,7 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 				return status.Error(codes.PermissionDenied, err.Error())
 			}
 			registration.expiresAt.Store(next.ExpiresAt)
+			registration.maxSessions.Store(next.MaxConcurrentSessions)
 			b.mu.Unlock()
 			if err := sendRegistered(stream, registration); err != nil {
 				return err
@@ -430,23 +436,31 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 	frameLimit := minNonZero(DefaultMaxFrameBytes, int(route.MaxFrameBytes), int(claims.MaxFrameBytes))
 	trafficClass := routeTrafficClass(route)
 	metrics := b.routeMetricsLocked(route.RouteId)
+	startedAt := time.Now()
+	registration := b.endpoints[endpoint.EndpointId]
+	if registration == nil || time.Now().Unix() > registration.expiresAt.Load() {
+		metrics.opened.Add(1)
+		metrics.touch()
+		b.mu.Unlock()
+		metrics.recordFailedOpen(time.Since(startedAt))
+		return status.Error(codes.Unavailable, "target endpoint is not registered")
+	}
+	if err := b.sessionCapacityErrorLocked(route, endpoint, claims.MaxConcurrentSessions, registration.maxSessions.Load()); err != nil {
+		metrics.throttled.Add(1)
+		metrics.touch()
+		b.mu.Unlock()
+		return err
+	}
 	if err := b.admission.Admit(trafficClass, route.RouteId, b.usageLocked()); err != nil {
 		metrics.throttled.Add(1)
 		metrics.touch()
 		b.mu.Unlock()
 		return status.Error(codes.ResourceExhausted, err.Error())
 	}
-	startedAt := time.Now()
 	metrics.opened.Add(1)
 	metrics.touch()
 	session := &activeTunnel{routeID: route.RouteId, routeGeneration: route.Generation, sourceKind: route.SourceKind, sourceID: route.SourceId, endpointID: endpoint.EndpointId, endpointGeneration: endpoint.Generation, trafficClass: trafficClass, metrics: metrics, stop: make(chan struct{})}
 	pending := &pendingTunnel{endpoint: endpoint, session: session, accepted: make(chan acceptedConnection, 1)}
-	registration := b.endpoints[endpoint.EndpointId]
-	if registration == nil || time.Now().Unix() > registration.expiresAt.Load() {
-		b.mu.Unlock()
-		metrics.recordFailedOpen(time.Since(startedAt))
-		return status.Error(codes.Unavailable, "target endpoint is not registered")
-	}
 	metrics.active.Add(1)
 	b.pending[token] = pending
 	b.active[sessionID] = session
@@ -498,7 +512,7 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 		return err
 	}
 	metrics.recordSetup(time.Since(startedAt))
-	bridgeErr := bridge(stream, accepted.stream, frameLimit, session.stop, route.DisableIdleTimeout, metrics)
+	bridgeErr := bridge(stream, accepted.stream, frameLimit, session.stop, route.DisableIdleTimeout, trafficClass == admission.TrafficClassProxy, metrics)
 	accepted.result <- bridgeErr
 	return bridgeErr
 }
@@ -517,7 +531,29 @@ func (b *Broker) usageLocked() admission.Usage {
 	return admission.Usage{ActiveProxy: b.activeProxy, ActiveDatabase: b.activeDatabase, ProxyByRoute: b.proxyByRoute}
 }
 
+func (b *Broker) sessionCapacityErrorLocked(route *relayv1.RoutePolicy, endpoint *relayv1.EndpointPolicy, routeGrantLimit, endpointGrantLimit uint32) error {
+	if limit := minSessionLimit(route.MaxConcurrentSessions, routeGrantLimit); limit > 0 && b.activeByRoute[route.RouteId] >= uint64(limit) {
+		return status.Error(codes.ResourceExhausted, "relay route session capacity reached")
+	}
+	if limit := minSessionLimit(endpoint.MaxConcurrentSessions, endpointGrantLimit); limit > 0 && b.activeByTarget[endpoint.EndpointId] >= uint64(limit) {
+		return status.Error(codes.ResourceExhausted, "relay endpoint session capacity reached")
+	}
+	return nil
+}
+
+func minSessionLimit(policyLimit, grantLimit uint32) uint32 {
+	if policyLimit == 0 {
+		return grantLimit
+	}
+	if grantLimit == 0 || policyLimit < grantLimit {
+		return policyLimit
+	}
+	return grantLimit
+}
+
 func (b *Broker) trackSessionLocked(tunnel *activeTunnel, delta int) {
+	adjustSessionCount(b.activeByRoute, tunnel.routeID, delta)
+	adjustSessionCount(b.activeByTarget, tunnel.endpointID, delta)
 	if tunnel.trafficClass == admission.TrafficClassProxy {
 		if delta > 0 {
 			b.activeProxy++
@@ -537,6 +573,18 @@ func (b *Broker) trackSessionLocked(tunnel *activeTunnel, delta int) {
 	} else {
 		b.activeDatabase--
 	}
+}
+
+func adjustSessionCount(counts map[string]uint64, id string, delta int) {
+	if delta > 0 {
+		counts[id]++
+		return
+	}
+	if counts[id] <= 1 {
+		delete(counts, id)
+		return
+	}
+	counts[id]--
 }
 
 func (b *Broker) AcceptTunnel(stream relayv1.TunnelBroker_AcceptTunnelServer) error {
@@ -594,36 +642,46 @@ type tunnelStream interface {
 	tunnelSender
 }
 
-func bridge(left, right tunnelStream, maxFrame int, stopped <-chan struct{}, disableIdleTimeout bool, metrics *routeMetrics) error {
+func bridge(left, right tunnelStream, maxFrame int, stopped <-chan struct{}, disableIdleTimeout, reapHalfClosed bool, metrics *routeMetrics) error {
 	idleTimeout := IdleTimeout
+	halfCloseTimeout := time.Duration(0)
 	if disableIdleTimeout {
 		idleTimeout = 0
 	}
-	return bridgeWithIdleTimeout(left, right, maxFrame, stopped, idleTimeout, metrics)
+	if reapHalfClosed {
+		halfCloseTimeout = ProxyHalfCloseTimeout
+	}
+	return bridgeWithTimeouts(left, right, maxFrame, stopped, idleTimeout, halfCloseTimeout, metrics)
 }
 
 func bridgeWithIdleTimeout(left, right tunnelStream, maxFrame int, stopped <-chan struct{}, idleTimeout time.Duration, metrics *routeMetrics) error {
+	return bridgeWithTimeouts(left, right, maxFrame, stopped, idleTimeout, 0, metrics)
+}
+
+func bridgeWithTimeouts(left, right tunnelStream, maxFrame int, stopped <-chan struct{}, idleTimeout, halfCloseTimeout time.Duration, metrics *routeMetrics) error {
 	results := make(chan pumpResult, 2)
 	activity := make(chan struct{}, 1)
+	bridgeDone := make(chan struct{})
+	defer close(bridgeDone)
 	go func() {
-		terminal, err := pump(right, left, maxFrame, activity, func(bytes uint64) {
+		terminal, err := pumpUntil(right, left, maxFrame, activity, bridgeDone, func(bytes uint64) {
 			if metrics == nil {
 				return
 			}
 			metrics.sourceToTargetBytes.Add(bytes)
 			metrics.touch()
 		})
-		results <- pumpResult{terminal: terminal, err: err}
+		results <- pumpResult{terminal: terminal, err: err, direction: pumpSourceToTarget}
 	}()
 	go func() {
-		terminal, err := pump(left, right, maxFrame, activity, func(bytes uint64) {
+		terminal, err := pumpUntil(left, right, maxFrame, activity, bridgeDone, func(bytes uint64) {
 			if metrics == nil {
 				return
 			}
 			metrics.targetToSourceBytes.Add(bytes)
 			metrics.touch()
 		})
-		results <- pumpResult{terminal: terminal, err: err}
+		results <- pumpResult{terminal: terminal, err: err, direction: pumpTargetToSource}
 	}()
 	var timer *time.Timer
 	var idle <-chan time.Time
@@ -632,6 +690,13 @@ func bridgeWithIdleTimeout(left, right tunnelStream, maxFrame int, stopped <-cha
 		idle = timer.C
 		defer timer.Stop()
 	}
+	var halfCloseTimer *time.Timer
+	var halfCloseDeadline <-chan time.Time
+	defer func() {
+		if halfCloseTimer != nil {
+			halfCloseTimer.Stop()
+		}
+	}()
 	completedDirections := 0
 	for {
 		select {
@@ -646,7 +711,20 @@ func bridgeWithIdleTimeout(left, right tunnelStream, maxFrame int, stopped <-cha
 			if completedDirections == 2 {
 				return nil
 			}
+			if halfCloseTimeout > 0 && result.direction == pumpTargetToSource && halfCloseTimer == nil {
+				halfCloseTimer = time.NewTimer(halfCloseTimeout)
+				halfCloseDeadline = halfCloseTimer.C
+			}
 		case <-activity:
+			if halfCloseTimer != nil {
+				if !halfCloseTimer.Stop() {
+					select {
+					case <-halfCloseTimer.C:
+					default:
+					}
+				}
+				halfCloseTimer.Reset(halfCloseTimeout)
+			}
 			if timer == nil {
 				continue
 			}
@@ -659,6 +737,8 @@ func bridgeWithIdleTimeout(left, right tunnelStream, maxFrame int, stopped <-cha
 			timer.Reset(idleTimeout)
 		case <-idle:
 			return status.Error(codes.DeadlineExceeded, "tunnel idle timeout reached")
+		case <-halfCloseDeadline:
+			return status.Error(codes.DeadlineExceeded, "tunnel half-close timeout reached")
 		case <-stopped:
 			return status.Error(codes.PermissionDenied, "tunnel policy was revoked")
 		}
@@ -673,15 +753,30 @@ type tunnelSender interface {
 }
 
 type pumpResult struct {
-	terminal bool
-	err      error
+	terminal  bool
+	err       error
+	direction pumpDirection
 }
 
+type pumpDirection uint8
+
+const (
+	pumpSourceToTarget pumpDirection = iota
+	pumpTargetToSource
+)
+
 func pump(destination tunnelSender, source tunnelReceiver, maxFrame int, activity chan<- struct{}, recordBytes func(uint64)) (bool, error) {
+	return pumpUntil(destination, source, maxFrame, activity, nil, recordBytes)
+}
+
+func pumpUntil(destination tunnelSender, source tunnelReceiver, maxFrame int, activity chan<- struct{}, stopped <-chan struct{}, recordBytes func(uint64)) (bool, error) {
 	for {
 		frame, err := source.Recv()
 		if err != nil {
 			if err == io.EOF {
+				if channelClosed(stopped) {
+					return true, nil
+				}
 				return false, destination.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_HalfClose{HalfClose: &relayv1.TunnelHalfClose{}}})
 			}
 			// A cancelled or failed gRPC stream is a terminal transport event, not
@@ -701,6 +796,9 @@ func pump(destination tunnelSender, source tunnelReceiver, maxFrame int, activit
 		default:
 			return false, status.Error(codes.InvalidArgument, "unexpected tunnel frame")
 		}
+		if channelClosed(stopped) {
+			return true, nil
+		}
 		if err := destination.Send(frame); err != nil {
 			return false, err
 		}
@@ -717,6 +815,18 @@ func pump(destination tunnelSender, source tunnelReceiver, maxFrame int, activit
 		if frame.GetHalfClose() != nil {
 			return false, nil
 		}
+	}
+}
+
+func channelClosed(channel <-chan struct{}) bool {
+	if channel == nil {
+		return false
+	}
+	select {
+	case <-channel:
+		return true
+	default:
+		return false
 	}
 }
 

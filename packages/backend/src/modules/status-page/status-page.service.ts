@@ -17,6 +17,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { ProxyService } from '@/modules/proxy/proxy.service.js';
+import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type {
   CreateStatusPageIncidentInput,
@@ -57,6 +58,7 @@ export interface StatusPageConfig {
 export interface PublicStatusPageDto {
   title: string;
   description: string;
+  hideExternalBranding: boolean;
   generatedAt: string;
   overallStatus: StatusPageOverallStatus;
   services: Array<{
@@ -182,7 +184,8 @@ export class StatusPageService {
   constructor(
     private readonly db: DrizzleClient,
     private readonly proxyService: ProxyService,
-    private readonly auditService: AuditService
+    private readonly auditService: AuditService,
+    private readonly generalSettings?: GeneralSettingsService
   ) {}
 
   setEventBus(bus: EventBusService) {
@@ -732,6 +735,7 @@ export class StatusPageService {
     return {
       title: config.title,
       description: config.description,
+      hideExternalBranding: (await this.generalSettings?.getConfig())?.hideExternalBranding ?? false,
       generatedAt: new Date().toISOString(),
       overallStatus: computeOverall(services.map((service) => service.status)),
       services,

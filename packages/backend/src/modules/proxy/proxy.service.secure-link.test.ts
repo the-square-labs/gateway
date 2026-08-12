@@ -20,6 +20,9 @@ vi.mock('@/db/schema/index.js', () => ({
     secureLinkStatus: 'proxy_hosts.secure_link_status',
     type: 'proxy_hosts.type',
   },
+  proxyAdditionalSecureLinks: {
+    status: 'proxy_additional_secure_links.status',
+  },
 }));
 
 function makeActiveSecureHost(overrides: Record<string, unknown> = {}) {
@@ -93,7 +96,20 @@ describe('ProxyService legacy Docker link compatibility', () => {
       lastActivityAt: '2026-08-12T00:00:00.000Z',
       metricsSince: '2026-08-11T23:00:00.000Z',
     };
-    const history = [{ timestamp: '2026-08-12T00:00:00.000Z', runtime, traffic: null }];
+    const traffic = {
+      hostId: 'legacy-host',
+      statusCodes: { s2xx: 1, s3xx: 0, s4xx: 0, s5xx: 0 },
+      avgResponseTime: 0.01,
+      p95ResponseTime: 0.02,
+      totalRequests: 1,
+      totalBytes: 100,
+      requestsPerSecond: 0.1,
+      bytesPerSecond: 10,
+      busiestClientRps: 0.1,
+      windowSeconds: 15,
+      sampleTruncated: false,
+    };
+    const history = [{ timestamp: '2026-08-12T00:00:00.000Z', runtime, traffic }];
     const host = makeActiveSecureHost();
     const db = {
       query: { proxyHosts: { findFirst: vi.fn().mockResolvedValue(host) } },
@@ -106,7 +122,107 @@ describe('ProxyService legacy Docker link compatibility', () => {
         }),
       }),
     } as any;
-    const cache = { get: vi.fn().mockResolvedValue(history), set: vi.fn().mockResolvedValue(undefined) };
+    const binding = {
+      id: '22222222-2222-4222-8222-222222222222',
+      name: 'api',
+      status: 'active',
+      generation: 1,
+      targetContainer: 'api-container',
+      forwardScheme: 'http',
+      lastError: null,
+    };
+    const additionalRuntime = { ...runtime, routeId: binding.id };
+    const cache = {
+      get: vi.fn().mockImplementation((key: string) => Promise.resolve(key.endsWith(host.id) ? history : [])),
+      set: vi.fn().mockResolvedValue(undefined),
+    };
+    const secureLinks = {
+      listAdditional: vi.fn().mockResolvedValue([binding]),
+      getRuntime: vi.fn().mockResolvedValue(additionalRuntime),
+    };
+    const service = new ProxyService(
+      db,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      secureLinks as any,
+      cache as any
+    );
+    const focusedSample = new Promise(() => undefined);
+    const sample = vi.spyOn(service as any, 'sampleSecureLinkRuntime').mockReturnValue(focusedSample);
+
+    const status = await service.getProxySecureLinkStatus(host.id);
+
+    expect(status.runtime).toEqual(runtime);
+    expect(status.history).toEqual(history);
+    expect(status.additionalLinks).toMatchObject([
+      {
+        id: binding.id,
+        name: 'api',
+        runtime: additionalRuntime,
+        history: [{ runtime: additionalRuntime }],
+      },
+    ]);
+    expect(cache.get).toHaveBeenCalledWith(`proxy-secure-link-runtime:${host.id}`);
+    expect(cache.get).toHaveBeenCalledWith(`proxy-secure-link-runtime:additional:${binding.id}`);
+    expect(secureLinks.getRuntime).toHaveBeenCalledWith(binding.id);
+    expect(sample).toHaveBeenCalledWith(host, 10_000);
+  });
+
+  it('returns a complete focused snapshot on the first read when cached HTTP telemetry is missing', async () => {
+    const host = makeActiveSecureHost();
+    const runtime = {
+      routeId: 'route-1',
+      activeStreams: 1,
+      openedTotal: '3',
+      completedTotal: '2',
+      failedTotal: '0',
+      throttledTotal: '0',
+      sourceToTargetBytes: '100',
+      targetToSourceBytes: '200',
+      setupLatencyP95Ms: 1,
+      averageDurationMs: 2,
+      lastActivityAt: '2026-08-12T00:00:00.000Z',
+      metricsSince: '2026-08-11T23:00:00.000Z',
+    };
+    const traffic = {
+      hostId: host.id,
+      statusCodes: { s2xx: 1, s3xx: 0, s4xx: 0, s5xx: 0 },
+      avgResponseTime: 0.01,
+      p95ResponseTime: 0.02,
+      totalRequests: 1,
+      totalBytes: 100,
+      requestsPerSecond: 0.1,
+      bytesPerSecond: 10,
+      busiestClientRps: 0.1,
+      windowSeconds: 15,
+      sampleTruncated: false,
+    };
+    const cachedHistory = [{ timestamp: '2026-08-12T00:00:00.000Z', runtime, traffic: null }];
+    const refreshedSnapshot = {
+      timestamp: '2026-08-12T00:00:01.000Z',
+      runtime,
+      traffic,
+    };
+    const refreshedHistory = [...cachedHistory, refreshedSnapshot];
+    const db = {
+      query: { proxyHosts: { findFirst: vi.fn().mockResolvedValue(host) } },
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([
+            { id: 'nginx-node', hostname: 'nginx', displayName: null, status: 'online' },
+            { id: 'docker-a', hostname: 'docker', displayName: null, status: 'online' },
+          ]),
+        }),
+      }),
+    } as any;
+    const cache = {
+      get: vi.fn().mockResolvedValue(cachedHistory),
+      set: vi.fn().mockResolvedValue(undefined),
+    };
     const service = new ProxyService(
       db,
       {} as any,
@@ -118,14 +234,16 @@ describe('ProxyService legacy Docker link compatibility', () => {
       {} as any,
       cache as any
     );
-    const focusedSample = new Promise(() => undefined);
-    const sample = vi.spyOn(service as any, 'sampleSecureLinkRuntime').mockReturnValue(focusedSample);
+    const sample = vi.spyOn(service as any, 'sampleSecureLinkRuntime').mockResolvedValue({
+      snapshot: refreshedSnapshot,
+      history: refreshedHistory,
+    });
 
     const status = await service.getProxySecureLinkStatus(host.id);
 
     expect(status.runtime).toEqual(runtime);
-    expect(status.history).toEqual(history);
-    expect(cache.get).toHaveBeenCalledWith(`proxy-secure-link-runtime:${host.id}`);
+    expect(status.traffic).toEqual(traffic);
+    expect(status.history).toEqual(refreshedHistory);
     expect(sample).toHaveBeenCalledWith(host, 10_000);
   });
 
@@ -189,13 +307,14 @@ describe('ProxyService legacy Docker link compatibility', () => {
       {} as any,
       {} as any,
       {} as any,
-      {} as any
+      { getActiveAdditional: vi.fn().mockResolvedValue([]) } as any
     );
     (service as any).dockerReconcileRunning = true;
 
     await service.collectSecureLinkRuntimeSnapshots();
 
     expect(findMany).not.toHaveBeenCalled();
+    expect((service as any).secureLinkRuntimeCollectionPending).toBe(true);
   });
 
   it('keeps a bounded backend runtime history and resets it on a Relay epoch change', () => {
@@ -282,7 +401,10 @@ describe('ProxyService legacy Docker link compatibility', () => {
       { resolveNodeId: vi.fn().mockResolvedValue('nginx-node'), applyConfig } as any,
       { supportsNode: vi.fn().mockResolvedValue(true) } as any,
       { resolve: vi.fn().mockRejectedValue(new Error('stale reconciliation')) } as any,
-      {} as any
+      {
+        getActiveAdditional: vi.fn().mockResolvedValue([]),
+        assertAdditionalReferences: vi.fn().mockResolvedValue(undefined),
+      } as any
     );
 
     await service.resyncAllHostsOnNode('nginx-node');
@@ -293,7 +415,8 @@ describe('ProxyService legacy Docker link compatibility', () => {
         forwardPort: active.secureLinkListenerPort,
         secureLinkUpstream: true,
       }),
-      null
+      null,
+      false
     );
     expect(applyConfig).toHaveBeenCalledWith('nginx-node', active.id, 'secure config', false, 'managed_secure_link');
   });
@@ -515,6 +638,8 @@ describe('ProxyService legacy Docker link compatibility', () => {
       reconcileExisting: vi.fn().mockResolvedValue({ ...provisioning, secureLinkStatus: 'cutover_ready' }),
       commitCutover: vi.fn().mockResolvedValue(undefined),
       activate: vi.fn().mockResolvedValue(undefined),
+      getActiveAdditional: vi.fn().mockResolvedValue([]),
+      assertAdditionalReferences: vi.fn().mockResolvedValue(undefined),
     } as any;
     const applyConfig = vi.fn().mockResolvedValue({ success: true });
     const renderForHost = vi.fn().mockResolvedValue('secure config');
@@ -539,7 +664,8 @@ describe('ProxyService legacy Docker link compatibility', () => {
         forwardPort: provisioning.secureLinkListenerPort,
         secureLinkUpstream: true,
       }),
-      null
+      null,
+      false
     );
   });
 
@@ -578,6 +704,8 @@ describe('ProxyService legacy Docker link compatibility', () => {
       prepare: vi.fn().mockResolvedValue(prepared),
       activate: vi.fn().mockResolvedValue(undefined),
       reconcileTargetNode: vi.fn().mockResolvedValue(undefined),
+      getActiveAdditional: vi.fn().mockResolvedValue([]),
+      assertAdditionalReferences: vi.fn().mockResolvedValue(undefined),
     } as any;
     const service = new ProxyService(
       db,
@@ -700,6 +828,8 @@ describe('ProxyService legacy Docker link compatibility', () => {
     const secureLinks = {
       cleanup: vi.fn().mockResolvedValue(undefined),
       reconcileExisting: vi.fn().mockResolvedValue(existing),
+      getActiveAdditional: vi.fn().mockResolvedValue([]),
+      assertAdditionalReferences: vi.fn().mockResolvedValue(undefined),
     } as any;
     const applyConfig = vi.fn().mockResolvedValue({ success: false, error: 'reload failed' });
     const service = new ProxyService(
@@ -746,7 +876,11 @@ describe('ProxyService legacy Docker link compatibility', () => {
         set: vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([updated]) })) })),
       })),
     } as any;
-    const secureLinks = { cleanup: vi.fn().mockResolvedValue(undefined) } as any;
+    const secureLinks = {
+      cleanup: vi.fn().mockResolvedValue(undefined),
+      getActiveAdditional: vi.fn().mockResolvedValue([]),
+      assertAdditionalReferences: vi.fn().mockResolvedValue(undefined),
+    } as any;
     const applyConfig = vi.fn().mockResolvedValue({ success: true });
     const service = new ProxyService(
       db,
@@ -796,6 +930,8 @@ describe('ProxyService legacy Docker link compatibility', () => {
     const secureLinks = {
       cleanup: vi.fn().mockRejectedValue(new Error('relay unavailable')),
       reconcileExisting: vi.fn(),
+      getActiveAdditional: vi.fn().mockResolvedValue([]),
+      assertAdditionalReferences: vi.fn().mockResolvedValue(undefined),
     } as any;
     const applyConfig = vi.fn().mockResolvedValue({ success: true });
     const service = new ProxyService(

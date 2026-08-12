@@ -50,6 +50,9 @@ export function ManagedDatabaseSettingsTab({
     String(Math.max(minimumMemoryMb(database.type), managed.runtimeConfig.memoryMb))
   );
   const [swapMb, setSwapMb] = useState(String(Math.max(0, managed.runtimeConfig.swapMb)));
+  const [interactiveQueryBudgetSeconds, setInteractiveQueryBudgetSeconds] = useState(
+    String(database.interactiveQueryBudgetSeconds ?? 300)
+  );
   const [publishTcp, setPublishTcp] = useState(
     managed.publishTcp ?? managed.publishedPort !== null
   );
@@ -72,6 +75,7 @@ export function ManagedDatabaseSettingsTab({
     setCpuCores(String(managed.runtimeConfig.cpuCores || 1));
     setMemoryMb(String(Math.max(minimumMemoryMb(database.type), managed.runtimeConfig.memoryMb)));
     setSwapMb(String(Math.max(0, managed.runtimeConfig.swapMb)));
+    setInteractiveQueryBudgetSeconds(String(database.interactiveQueryBudgetSeconds ?? 300));
     setPublishTcp(managed.publishTcp ?? managed.publishedPort !== null);
     setPublishedPort(managed.publishedPort == null ? "" : String(managed.publishedPort));
     setPublishedNativePort(
@@ -79,7 +83,13 @@ export function ManagedDatabaseSettingsTab({
     );
     setPublishNativeTcp(managed.publishNativeTcp ?? managed.publishedNativePort !== null);
     setTlsEnabled(managed.tlsEnabled ?? true);
-  }, [database.name, database.tags, database.type, managed]);
+  }, [
+    database.interactiveQueryBudgetSeconds,
+    database.name,
+    database.tags,
+    database.type,
+    managed,
+  ]);
 
   const requestedPort = useMemo(() => {
     const value = publishedPort.trim();
@@ -115,6 +125,19 @@ export function ManagedDatabaseSettingsTab({
       ? requestedNativePort
       : null) !== (managed.publishedNativePort ?? null) ||
     tlsEnabled !== (managed.tlsEnabled ?? true);
+  const queryBudget = Number(interactiveQueryBudgetSeconds);
+  const queryBudgetValid =
+    database.type === "redis" ||
+    (Number.isInteger(queryBudget) && queryBudget >= 30 && queryBudget <= 600);
+  const queryBudgetChanged =
+    database.type !== "redis" && queryBudget !== (database.interactiveQueryBudgetSeconds ?? 300);
+  const managedSettingsChanged =
+    name.trim() !== database.name ||
+    JSON.stringify(parseTags(tags)) !== JSON.stringify(database.tags) ||
+    Number(cpuCores) !== managed.runtimeConfig.cpuCores ||
+    Number(memoryMb) !== managed.runtimeConfig.memoryMb ||
+    Number(swapMb) !== managed.runtimeConfig.swapMb ||
+    publicationChanged;
 
   const save = async () => {
     const cpu = Number(cpuCores);
@@ -128,7 +151,8 @@ export function ManagedDatabaseSettingsTab({
       !Number.isInteger(swap) ||
       swap < 0 ||
       !portIsValid ||
-      !nativePortIsValid
+      !nativePortIsValid ||
+      !queryBudgetValid
     ) {
       toast.error("Enter valid managed database settings");
       return;
@@ -147,22 +171,29 @@ export function ManagedDatabaseSettingsTab({
     }
     setSaving(true);
     try {
-      await api.updateManagedDatabase(managed.id, {
-        name: name.trim(),
-        tags: parseTags(tags),
-        cpuCores: cpu,
-        memoryMb: memory,
-        swapMb: swap,
-        publishTcp,
-        publishedPort: publishTcp ? requestedPort : null,
-        ...(database.type === "clickhouse"
-          ? {
-              publishNativeTcp: publishTcp && publishNativeTcp,
-              publishedNativePort: publishTcp && publishNativeTcp ? requestedNativePort : null,
-            }
-          : {}),
-        tlsEnabled,
-      });
+      if (queryBudgetChanged) {
+        await api.updateDatabase(database.id, {
+          interactiveQueryBudgetSeconds: queryBudget,
+        });
+      }
+      if (managedSettingsChanged) {
+        await api.updateManagedDatabase(managed.id, {
+          name: name.trim(),
+          tags: parseTags(tags),
+          cpuCores: cpu,
+          memoryMb: memory,
+          swapMb: swap,
+          publishTcp,
+          publishedPort: publishTcp ? requestedPort : null,
+          ...(database.type === "clickhouse"
+            ? {
+                publishNativeTcp: publishTcp && publishNativeTcp,
+                publishedNativePort: publishTcp && publishNativeTcp ? requestedNativePort : null,
+              }
+            : {}),
+          tlsEnabled,
+        });
+      }
       toast.success(
         publicationChanged
           ? "Database publication updated — container recreated"
@@ -245,6 +276,24 @@ export function ManagedDatabaseSettingsTab({
             />
           </div>
         </div>
+
+        {database.type !== "redis" && (
+          <SettingsControlRow
+            title="Interactive query budget"
+            description="Total SQL Console execution budget shared dynamically between statements (30–600 seconds)"
+          >
+            <Input
+              aria-label="Interactive query budget"
+              type="number"
+              min={30}
+              max={600}
+              value={interactiveQueryBudgetSeconds}
+              onChange={(event) => setInteractiveQueryBudgetSeconds(event.target.value)}
+              disabled={saving || confirmingRecreate || managed.status === "paused"}
+              className="w-32"
+            />
+          </SettingsControlRow>
+        )}
 
         <PanelShell
           title="Publish TCP port"

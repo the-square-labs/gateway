@@ -28,6 +28,13 @@ let invalidationTimer: ReturnType<typeof setTimeout> | null = null;
 
 const DASHBOARD_INVALIDATION_DEBOUNCE_MS = 250;
 
+function withoutCachedAttention(snapshot: DashboardBootstrap): DashboardBootstrap {
+  return {
+    ...snapshot,
+    attention: { severity: null, notices: [] },
+  };
+}
+
 /**
  * The shell owns the request so Sidebar and Dashboard consume exactly the
  * same user-scoped snapshot.  Existing data remains visible while refreshes
@@ -45,7 +52,16 @@ export const useDashboardBootstrapStore = create<DashboardBootstrapState>()((set
     const persistentKey = `dashboard:bootstrap:${key}`;
     const cached = api.getCached<DashboardBootstrap>(persistentKey, Number.POSITIVE_INFINITY);
     if (!get().snapshot && cached) {
-      set({ snapshot: cached, key, request, loading: false, error: false });
+      // Keep cached dashboard content for an instant paint, but never present a
+      // persisted health/attention state as current. The live response below
+      // restores the indicator after the server has re-evaluated all notices.
+      set({
+        snapshot: withoutCachedAttention(cached),
+        key,
+        request,
+        loading: false,
+        error: false,
+      });
     }
     // A new request supersedes any deferred refresh for the same old snapshot.
     pendingRefresh = null;

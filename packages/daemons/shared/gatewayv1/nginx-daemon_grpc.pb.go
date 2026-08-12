@@ -261,6 +261,114 @@ var NodeControl_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	MaintenanceAccess_Redeem_FullMethodName = "/gateway.v1.MaintenanceAccess/Redeem"
+)
+
+// MaintenanceAccessClient is the client API for MaintenanceAccess service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Internal request path used only by an enrolled nginx daemon to exchange and
+// validate maintenance access credentials for its local nginx listener.
+type MaintenanceAccessClient interface {
+	Redeem(ctx context.Context, in *MaintenanceAccessRedeemRequest, opts ...grpc.CallOption) (*MaintenanceAccessReply, error)
+}
+
+type maintenanceAccessClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewMaintenanceAccessClient(cc grpc.ClientConnInterface) MaintenanceAccessClient {
+	return &maintenanceAccessClient{cc}
+}
+
+func (c *maintenanceAccessClient) Redeem(ctx context.Context, in *MaintenanceAccessRedeemRequest, opts ...grpc.CallOption) (*MaintenanceAccessReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MaintenanceAccessReply)
+	err := c.cc.Invoke(ctx, MaintenanceAccess_Redeem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// MaintenanceAccessServer is the server API for MaintenanceAccess service.
+// All implementations must embed UnimplementedMaintenanceAccessServer
+// for forward compatibility.
+//
+// Internal request path used only by an enrolled nginx daemon to exchange and
+// validate maintenance access credentials for its local nginx listener.
+type MaintenanceAccessServer interface {
+	Redeem(context.Context, *MaintenanceAccessRedeemRequest) (*MaintenanceAccessReply, error)
+	mustEmbedUnimplementedMaintenanceAccessServer()
+}
+
+// UnimplementedMaintenanceAccessServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedMaintenanceAccessServer struct{}
+
+func (UnimplementedMaintenanceAccessServer) Redeem(context.Context, *MaintenanceAccessRedeemRequest) (*MaintenanceAccessReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method Redeem not implemented")
+}
+func (UnimplementedMaintenanceAccessServer) mustEmbedUnimplementedMaintenanceAccessServer() {}
+func (UnimplementedMaintenanceAccessServer) testEmbeddedByValue()                           {}
+
+// UnsafeMaintenanceAccessServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to MaintenanceAccessServer will
+// result in compilation errors.
+type UnsafeMaintenanceAccessServer interface {
+	mustEmbedUnimplementedMaintenanceAccessServer()
+}
+
+func RegisterMaintenanceAccessServer(s grpc.ServiceRegistrar, srv MaintenanceAccessServer) {
+	// If the following call panics, it indicates UnimplementedMaintenanceAccessServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&MaintenanceAccess_ServiceDesc, srv)
+}
+
+func _MaintenanceAccess_Redeem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MaintenanceAccessRedeemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MaintenanceAccessServer).Redeem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MaintenanceAccess_Redeem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MaintenanceAccessServer).Redeem(ctx, req.(*MaintenanceAccessRedeemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// MaintenanceAccess_ServiceDesc is the grpc.ServiceDesc for MaintenanceAccess service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var MaintenanceAccess_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "gateway.v1.MaintenanceAccess",
+	HandlerType: (*MaintenanceAccessServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Redeem",
+			Handler:    _MaintenanceAccess_Redeem_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "gateway/v1/nginx-daemon.proto",
+}
+
+const (
 	MigrationTransfer_Transfer_FullMethodName = "/gateway.v1.MigrationTransfer/Transfer"
 )
 

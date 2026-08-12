@@ -21,6 +21,7 @@ import {
 import { createControlHandlers } from './services/control.js';
 import { createEnrollmentHandlers } from './services/enrollment.js';
 import { createLogStreamHandlers } from './services/log-stream.js';
+import { createMaintenanceAccessHandlers } from './services/maintenance-access.js';
 import { createMigrationTransferHandlers } from './services/migration-transfer.js';
 
 const logger = createChildLogger('GrpcServer');
@@ -213,6 +214,7 @@ export async function startGrpcServer(
   const control = createControlHandlers(deps);
   const logs = createLogStreamHandlers(deps);
   const migration = createMigrationTransferHandlers(deps);
+  const maintenanceAccess = createMaintenanceAccessHandlers(deps);
   server.addService(
     gatewayV1.NodeEnrollment.service,
     relayOnly
@@ -231,6 +233,7 @@ export async function startGrpcServer(
     gatewayV1.MigrationTransfer.service,
     relayOnly ? { Transfer: protectStream(migration.Transfer) } : migration
   );
+  server.addService(gatewayV1.MaintenanceAccess.service, maintenanceAccess);
   const credentials = await createGrpcServerCredentials(tlsCertPath, tlsKeyPath, deps.systemCA, relayOnly);
   logger.info('gRPC server using TLS with Gateway system CA client certificate validation', { relayOnly });
 

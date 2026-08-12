@@ -12,8 +12,9 @@ import {
   tokenizeRedisCommand,
 } from './database-query-intent.js';
 import { compactCommandResult, compactPostgresRows, estimateJsonBytes } from './database-result-compaction.js';
+import type { SqlExecutionOptions } from './sql-database-adapter.js';
 
-const POSTGRES_QUERY_TIMEOUT_MS = 15_000;
+const DEFAULT_QUERY_BUDGET_MS = 15_000;
 const POSTGRES_RESULT_SET_MAX = 10;
 const POSTGRES_RESPONSE_MAX_BYTES = 768 * 1024;
 const REDIS_COMMAND_MAX_COUNT = 20;
@@ -31,10 +32,11 @@ export async function executePostgresSql(
   id: string,
   sqlText: string,
   userId: string,
-  options: { maxRows?: number } = {}
+  options: SqlExecutionOptions = {}
 ) {
   const maxRows = Math.min(Math.max(Math.trunc(options.maxRows ?? 500), 1), 2000);
   const statements = splitPostgresStatements(sqlText);
+  const deadlineMs = options.deadlineMs ?? Date.now() + DEFAULT_QUERY_BUDGET_MS;
   if (statements.length > POSTGRES_RESULT_SET_MAX) {
     throw new AppError(
       400,
@@ -47,16 +49,43 @@ export async function executePostgresSql(
     const client = await pool.connect();
     const entries: Array<pg.QueryResult & { durationMs: number }> = [];
     let responseTruncated = false;
+    let cancelled = options.signal?.aborted ?? false;
+    const processId = (client as pg.PoolClient & { processID?: number }).processID;
+    const cancel = () => {
+      cancelled = true;
+      if (processId != null) {
+        void pool.query('select pg_cancel_backend($1)', [processId]).catch(() => {});
+      }
+    };
+    options.signal?.addEventListener('abort', cancel, { once: true });
     try {
-      await client.query(`SET statement_timeout = ${POSTGRES_QUERY_TIMEOUT_MS}`);
       for (const [index, statement] of statements.entries()) {
+        if (cancelled) {
+          throw new AppError(499, 'DATABASE_QUERY_CANCELLED', 'Interactive query cancelled');
+        }
+        const remainingMs = deadlineMs - Date.now();
+        const remainingStatements = statements.length - index;
+        const statementTimeoutMs = Math.floor(remainingMs / remainingStatements);
+        if (statementTimeoutMs <= 0) {
+          throw new AppError(408, 'DATABASE_QUERY_BUDGET_EXCEEDED', 'Interactive query budget exhausted');
+        }
+        await client.query(`SET statement_timeout = ${statementTimeoutMs}`);
         const start = Date.now();
-        const entry = await client.query(statement);
+        let entry: pg.QueryResult;
+        try {
+          entry = await client.query(statement);
+        } catch (error) {
+          if (cancelled || options.signal?.aborted) {
+            throw new AppError(499, 'DATABASE_QUERY_CANCELLED', 'Interactive query cancelled');
+          }
+          throw error;
+        }
         if (index < POSTGRES_RESULT_SET_MAX) {
           entries.push({ ...entry, durationMs: Date.now() - start });
         }
       }
     } finally {
+      options.signal?.removeEventListener('abort', cancel);
       await client.query('RESET statement_timeout').catch(() => {});
       client.release();
     }

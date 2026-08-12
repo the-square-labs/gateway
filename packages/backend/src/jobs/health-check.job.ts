@@ -11,6 +11,7 @@ import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 const logger = createChildLogger('HealthCheckJob');
 
 const HEALTH_CHECK_TIMEOUT_MS = 10_000;
+const HEALTH_CHECK_CONCURRENCY = 8;
 const SLOW_BASELINE_WINDOW_MS = 3 * 60 * 60 * 1000; // 3 hours of history for baseline avg
 
 type HealthStatus = 'online' | 'offline' | 'degraded' | 'unknown';
@@ -20,6 +21,33 @@ interface HealthEntry {
   status: string;
   responseMs?: number;
   slow?: boolean;
+}
+
+function healthCheckDue(host: typeof proxyHosts.$inferSelect, now: number): boolean {
+  if (!host.lastHealthCheckAt) return true;
+  const intervalMs = Math.max(5, host.healthCheckInterval ?? 30) * 1000;
+  return now - new Date(host.lastHealthCheckAt).getTime() >= intervalMs;
+}
+
+async function allSettledBounded<T, R>(
+  items: T[],
+  concurrency: number,
+  task: (item: T) => Promise<R>
+): Promise<PromiseSettledResult<R>[]> {
+  const results = new Array<PromiseSettledResult<R>>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      try {
+        results[index] = { status: 'fulfilled', value: await task(items[index]!) };
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason };
+      }
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 export class HealthCheckJob {
@@ -45,116 +73,127 @@ export class HealthCheckJob {
 
   async run(): Promise<void> {
     // Query proxy hosts with health checks enabled
-    const hosts = await this.db.query.proxyHosts.findMany({
+    const candidates = await this.db.query.proxyHosts.findMany({
       where: and(
         eq(proxyHosts.healthCheckEnabled, true),
         eq(proxyHosts.enabled, true),
         eq(proxyHosts.maintenanceEnabled, false)
       ),
     });
+    const hosts = candidates.filter((host) => healthCheckDue(host, Date.now()));
 
     if (hosts.length === 0) {
-      logger.debug('No hosts with health checks enabled');
+      logger.debug('No proxy health checks are due');
       return;
     }
 
     logger.info(`Running health checks for ${hosts.length} host(s)`);
 
-    // Run all health checks in parallel
-    const results = await Promise.allSettled(
-      hosts.map(async (host) => {
-        const previousStatus = host.healthStatus as HealthStatus;
-        const { status: checkStatus, responseMs } = await this.checkHost(host);
+    const results = await allSettledBounded(hosts, HEALTH_CHECK_CONCURRENCY, async (host) => {
+      const relayBacked = host.upstreamKind !== 'manual' && host.secureLinkMigratedAt != null;
+      if (relayBacked && this.relayUnavailable) {
+        await this.recordRelayUnavailable(host);
+        return { hostId: host.id, status: 'skipped' as const };
+      }
+      const previousStatus = host.healthStatus as HealthStatus;
+      const { status: checkStatus, responseMs } = await this.checkHost(host);
 
-        const now = Date.now();
-        const existingHistory: HealthEntry[] = (host.healthHistory as HealthEntry[]) ?? [];
+      if (relayBacked && this.relayUnavailable) {
+        await this.recordRelayUnavailable(host);
+        return { hostId: host.id, status: 'skipped' as const };
+      }
 
-        // Compute slow flag: compare response time against baseline average
-        let slow = false;
-        if (checkStatus === 'online' && responseMs != null) {
-          const threshold = host.healthCheckSlowThreshold ?? 3;
-          if (threshold > 0) {
-            const baselineCutoff = now - SLOW_BASELINE_WINDOW_MS;
-            const baselineTimes = existingHistory
-              .filter(
-                (h) => h.status === 'online' && h.responseMs != null && new Date(h.ts).getTime() >= baselineCutoff
-              )
-              .map((h) => h.responseMs!);
-            if (baselineTimes.length >= 5) {
-              // need enough samples for a meaningful baseline
-              const avgMs = baselineTimes.reduce((a, b) => a + b, 0) / baselineTimes.length;
-              slow = responseMs >= avgMs * threshold;
-            }
+      const now = Date.now();
+      const existingHistory: HealthEntry[] = (host.healthHistory as HealthEntry[]) ?? [];
+
+      // Compute slow flag: compare response time against baseline average
+      let slow = false;
+      if (checkStatus === 'online' && responseMs != null) {
+        const threshold = host.healthCheckSlowThreshold ?? 3;
+        if (threshold > 0) {
+          const baselineCutoff = now - SLOW_BASELINE_WINDOW_MS;
+          const baselineTimes = existingHistory
+            .filter((h) => h.status === 'online' && h.responseMs != null && new Date(h.ts).getTime() >= baselineCutoff)
+            .map((h) => h.responseMs!);
+          if (baselineTimes.length >= 5) {
+            // need enough samples for a meaningful baseline
+            const avgMs = baselineTimes.reduce((a, b) => a + b, 0) / baselineTimes.length;
+            slow = responseMs >= avgMs * threshold;
           }
         }
+      }
 
-        // Push new entry
-        const entry: HealthEntry = { ts: new Date(now).toISOString(), status: checkStatus };
-        if (responseMs != null) entry.responseMs = responseMs;
-        if (slow) entry.slow = true;
-        const history = compactHealthHistory([...existingHistory, entry], { nowMs: now });
+      // Push new entry
+      const entry: HealthEntry = { ts: new Date(now).toISOString(), status: checkStatus };
+      if (responseMs != null) entry.responseMs = responseMs;
+      if (slow) entry.slow = true;
+      const history = compactHealthHistory([...existingHistory, entry], { nowMs: now });
 
-        // Derive the stored healthStatus field from the check
-        const newStatus: HealthStatus = checkStatus === 'online' ? (slow ? 'degraded' : 'online') : 'offline';
+      // Derive the stored healthStatus field from the check
+      const previousProbeFailed = existingHistory.at(-1)?.status === 'offline';
+      const transientFailure =
+        checkStatus === 'offline' &&
+        (previousStatus === 'online' || previousStatus === 'degraded') &&
+        !previousProbeFailed;
+      const newStatus: HealthStatus =
+        checkStatus === 'online' ? (slow ? 'degraded' : 'online') : transientFailure ? previousStatus : 'offline';
 
-        // Write to DB
-        const persisted = await this.db
-          .update(proxyHosts)
-          .set({
-            healthStatus: newStatus,
-            lastHealthCheckAt: new Date(),
-            healthHistory: history,
-          })
-          .where(
-            and(
-              eq(proxyHosts.id, host.id),
-              eq(proxyHosts.enabled, true),
-              eq(proxyHosts.healthCheckEnabled, true),
-              eq(proxyHosts.maintenanceEnabled, false)
-            )
+      // Write to DB
+      const persisted = await this.db
+        .update(proxyHosts)
+        .set({
+          healthStatus: newStatus,
+          lastHealthCheckAt: new Date(),
+          healthHistory: history,
+        })
+        .where(
+          and(
+            eq(proxyHosts.id, host.id),
+            eq(proxyHosts.enabled, true),
+            eq(proxyHosts.healthCheckEnabled, true),
+            eq(proxyHosts.maintenanceEnabled, false)
           )
-          .returning({ id: proxyHosts.id });
+        )
+        .returning({ id: proxyHosts.id });
 
-        if (persisted.length === 0) {
-          logger.debug('Discarded health result because host state changed', { hostId: host.id });
-          return { hostId: host.id, status: 'skipped' as const };
-        }
+      if (persisted.length === 0) {
+        logger.debug('Discarded health result because host state changed', { hostId: host.id });
+        return { hostId: host.id, status: 'skipped' as const };
+      }
 
-        const relayBacked = host.upstreamKind !== 'manual' && host.secureLinkMigratedAt != null;
-        if (!(relayBacked && this.relayUnavailable)) {
-          await this.evaluator?.observeStatefulEvent(
-            'proxy',
-            newStatus === 'online' ? 'health.online' : newStatus === 'offline' ? 'health.offline' : 'health.degraded',
-            {
-              type: 'proxy',
-              id: host.id,
-              name: host.domainNames?.[0] ?? host.id,
-            },
-            { health_status: newStatus }
-          );
-        }
-
-        // Log status transitions and publish event
-        if (previousStatus !== newStatus) {
-          logger.info(`Health status changed for ${host.domainNames?.join(', ') || host.id}`, {
-            hostId: host.id,
-            previousStatus,
-            newStatus,
-            forwardHost: host.forwardHost,
-          });
-          const healthAction =
-            newStatus === 'online' ? 'health.online' : newStatus === 'offline' ? 'health.offline' : 'health.degraded';
-          this.eventBus?.publish('proxy.host.changed', {
+      if (!transientFailure) {
+        await this.evaluator?.observeStatefulEvent(
+          'proxy',
+          newStatus === 'online' ? 'health.online' : newStatus === 'offline' ? 'health.offline' : 'health.degraded',
+          {
+            type: 'proxy',
             id: host.id,
-            action: healthAction,
-            domain: host.domainNames?.[0],
-            health_status: newStatus,
-          });
-        }
+            name: host.domainNames?.[0] ?? host.id,
+          },
+          { health_status: newStatus }
+        );
+      }
 
-        return { hostId: host.id, status: newStatus };
-      })
-    );
+      // Log status transitions and publish event
+      if (previousStatus !== newStatus) {
+        logger.info(`Health status changed for ${host.domainNames?.join(', ') || host.id}`, {
+          hostId: host.id,
+          previousStatus,
+          newStatus,
+          forwardHost: host.forwardHost,
+        });
+        const healthAction =
+          newStatus === 'online' ? 'health.online' : newStatus === 'offline' ? 'health.offline' : 'health.degraded';
+        this.eventBus?.publish('proxy.host.changed', {
+          id: host.id,
+          action: healthAction,
+          domain: host.domainNames?.[0],
+          health_status: newStatus,
+        });
+      }
+
+      return { hostId: host.id, status: newStatus };
+    });
 
     // Summarize results
     let online = 0;
@@ -184,6 +223,26 @@ export class HealthCheckJob {
     if (offline > 0 || degraded > 0 || errors > 0) {
       logger.info('Health check summary', { online, offline, degraded, errors, total: hosts.length });
     }
+  }
+
+  private async recordRelayUnavailable(host: typeof proxyHosts.$inferSelect): Promise<void> {
+    const now = Date.now();
+    const existingHistory: HealthEntry[] = (host.healthHistory as HealthEntry[]) ?? [];
+    const healthHistory = compactHealthHistory(
+      [...existingHistory, { ts: new Date(now).toISOString(), status: 'unknown' }],
+      { nowMs: now }
+    );
+    await this.db
+      .update(proxyHosts)
+      .set({ lastHealthCheckAt: new Date(now), healthHistory })
+      .where(
+        and(
+          eq(proxyHosts.id, host.id),
+          eq(proxyHosts.enabled, true),
+          eq(proxyHosts.healthCheckEnabled, true),
+          eq(proxyHosts.maintenanceEnabled, false)
+        )
+      );
   }
 
   private async checkHost(

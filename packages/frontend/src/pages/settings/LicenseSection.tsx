@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
 import type { LicenseStatus, LicenseStatusView, LicenseTier } from "@/types";
 
@@ -190,15 +191,19 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
     }
   };
 
-  if (loading || !status) {
+  if (loading) {
     return (
       <PanelShell
         title="License"
         description="Loading license status"
         actions={<Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-      />
+      >
+        <Skeleton />
+      </PanelShell>
     );
   }
+
+  if (!status) return null;
 
   return (
     <>

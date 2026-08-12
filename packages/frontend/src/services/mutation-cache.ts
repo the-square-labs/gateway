@@ -1,0 +1,60 @@
+const RESOURCE_PROJECTIONS: Record<string, string[]> = {
+  "access-lists": ["access-lists:list"],
+  admin: ["admin:"],
+  cas: ["cas:list:", "certificates:list:"],
+  certificates: ["certificates:list:", "cas:list:"],
+  databases: ["databases:list"],
+  docker: ["docker:"],
+  domains: ["domains:list"],
+  housekeeping: ["housekeeping:"],
+  inference: ["settings:ai-config"],
+  integrations: ["settings:"],
+  logging: ["logging:"],
+  "nginx-templates": ["nginx-templates:list"],
+  nodes: ["nodes:list:", "docker:snapshots:"],
+  notifications: ["notifications:"],
+  "proxy-host-folders": ["proxy:grouped", "req:/api/proxy-hosts"],
+  "proxy-hosts": ["proxy:grouped", "req:/api/proxy-host-folders/grouped", "domains:list"],
+  "ssl-certificates": ["ssl:list:"],
+  "status-page": ["status-page:", "settings:status-page-"],
+  system: ["system:", "settings:", "req:/api/ui/bootstrap"],
+  templates: ["templates:list"],
+};
+
+const DASHBOARD_RESOURCES = new Set([
+  "cas",
+  "certificates",
+  "databases",
+  "docker",
+  "domains",
+  "housekeeping",
+  "inference",
+  "logging",
+  "nodes",
+  "proxy-host-folders",
+  "proxy-hosts",
+  "ssl-certificates",
+  "system",
+]);
+
+/**
+ * Resolve request-cache and independently warmed projection namespaces that
+ * become stale after a successful API mutation.
+ */
+export function mutationCachePrefixes(url: string): string[] {
+  const pathname = new URL(url, "http://gateway.local").pathname;
+  const apiPath = pathname.startsWith("/api/") ? pathname.slice(5) : pathname.replace(/^\//, "");
+  const resource = apiPath.split("/")[0];
+  if (!resource) return [];
+
+  const prefixes = new Set<string>([
+    `req:/api/${resource}`,
+    ...(RESOURCE_PROJECTIONS[resource] ?? []),
+  ]);
+  if (DASHBOARD_RESOURCES.has(resource)) {
+    prefixes.add("req:/api/monitoring/dashboard");
+    prefixes.add("req:/api/monitoring/health-status");
+    prefixes.add("dashboard:");
+  }
+  return [...prefixes];
+}

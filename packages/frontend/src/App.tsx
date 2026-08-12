@@ -79,6 +79,7 @@ import { APP_STATUS_STORAGE_KEY, useAppStatusStore } from "@/stores/app-status";
 import { useAuthStore } from "@/stores/auth";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useDockerStore } from "@/stores/docker";
+import { useDockerFolderStore } from "@/stores/docker-folders";
 import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import { useResolvedPageRoute } from "@/stores/resolved-page-context";
 import { useSystemConfigStore } from "@/stores/system-config";
@@ -1047,19 +1048,34 @@ function RealtimeBridge() {
       controller = new AbortController();
       const auth = useAuthStore.getState();
       const docker = useDockerStore.getState();
+      const dockerFolders = useDockerFolderStore.getState();
       const dockerNodes = useUIBootstrapStore.getState().snapshot?.navigation.dockerNodes;
       const extraTasks: BackgroundPrewarmTask[] = [];
       const addDockerTask = (allowed: boolean, key: string, run: () => Promise<unknown>) => {
         if (allowed) extraTasks.push({ key, run });
       };
+      addDockerTask(
+        auth.hasScopedAccess("docker:containers:view"),
+        "docker-container-folders",
+        () => dockerFolders.fetchFolders("container")
+      );
       addDockerTask(auth.hasScopedAccess("docker:containers:view"), "docker-containers", () =>
         docker.fetchContainers(null, "", dockerNodes)
+      );
+      addDockerTask(auth.hasScopedAccess("docker:images:view"), "docker-image-folders", () =>
+        dockerFolders.fetchFolders("image")
       );
       addDockerTask(auth.hasScopedAccess("docker:images:view"), "docker-images", () =>
         docker.fetchImages(null, "", dockerNodes)
       );
+      addDockerTask(auth.hasScopedAccess("docker:volumes:view"), "docker-volume-folders", () =>
+        dockerFolders.fetchFolders("volume")
+      );
       addDockerTask(auth.hasScopedAccess("docker:volumes:view"), "docker-volumes", () =>
         docker.fetchVolumes(null, "", dockerNodes)
+      );
+      addDockerTask(auth.hasScopedAccess("docker:networks:view"), "docker-network-folders", () =>
+        dockerFolders.fetchFolders("network")
       );
       addDockerTask(auth.hasScopedAccess("docker:networks:view"), "docker-networks", () =>
         docker.fetchNetworks(null, "", dockerNodes)

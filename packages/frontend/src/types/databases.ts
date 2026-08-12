@@ -193,6 +193,7 @@ export interface DatabaseConnection {
   description: string | null;
   tags: string[];
   manualSizeLimitMb: number | null;
+  interactiveQueryBudgetSeconds?: number;
   host: string;
   port: number;
   databaseName: string | null;

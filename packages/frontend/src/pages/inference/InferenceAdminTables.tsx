@@ -18,6 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/services/api";
 import type {
@@ -286,6 +287,7 @@ export function InferenceUsersTable({
 
   return (
     <>
+      {loading && <Skeleton />}
       <PanelShell
         title="Limits"
         description={

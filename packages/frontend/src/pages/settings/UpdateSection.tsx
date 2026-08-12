@@ -9,6 +9,7 @@ import { PanelShell } from "@/components/common/PanelShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import { isDevForceUpdatesEnabled } from "@/lib/dev-force-updates";
 import { api } from "@/services/api";
 import { useUpdateStore } from "@/stores/update";
@@ -29,11 +30,14 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const [releaseNotesList, setReleaseNotesList] = useState<string[] | null>(null);
   const [releaseVersions, setReleaseVersions] = useState<string[] | null>(null);
+  const [initialLoadComplete, setInitialLoadComplete] = useState(updateStatus !== null);
 
   // Fetch status on mount
   useEffect(() => {
-    fetchStatus();
+    void fetchStatus().finally(() => setInitialLoadComplete(true));
   }, [fetchStatus]);
+
+  if (!initialLoadComplete) return <Skeleton />;
 
   const handleCheckUpdate = async () => {
     await checkForUpdates();

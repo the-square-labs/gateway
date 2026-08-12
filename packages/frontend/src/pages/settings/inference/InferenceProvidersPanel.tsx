@@ -31,6 +31,7 @@ import {
   type SimpleTableRowRenderProps,
 } from "@/components/common/SimpleTable";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -253,6 +254,7 @@ export function InferenceProvidersPanel({
 
   return (
     <>
+      {loading && <Skeleton />}
       <PanelShell
         title="Providers"
         description="Connected accounts and API credentials. Higher connections are used first by Sequential routing; Balanced distributes evenly."

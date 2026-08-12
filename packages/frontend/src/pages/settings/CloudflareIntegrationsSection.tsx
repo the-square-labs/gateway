@@ -23,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { cn, formatRelativeDate } from "@/lib/utils";
@@ -72,6 +73,11 @@ export function CloudflareIntegrationsSection() {
   const [connectors, setConnectors] = useState<CloudflareConnector[]>(
     () => api.getCached<CloudflareConnector[]>("settings:cloudflare-connectors") ?? []
   );
+  const [initialLoadComplete, setInitialLoadComplete] = useState(
+    () =>
+      !canView ||
+      api.getCached<CloudflareConnector[]>("settings:cloudflare-connectors") !== undefined
+  );
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingConnector, setEditingConnector] = useState<CloudflareConnector | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -92,6 +98,8 @@ export function CloudflareIntegrationsSection() {
       toast.error(
         error instanceof Error ? error.message : "Failed to load Cloudflare integrations"
       );
+    } finally {
+      setInitialLoadComplete(true);
     }
   }, [canView]);
 
@@ -263,6 +271,8 @@ export function CloudflareIntegrationsSection() {
       toast.error(error instanceof Error ? error.message : "Failed to delete Cloudflare connector");
     }
   };
+
+  if (!initialLoadComplete) return <Skeleton />;
 
   return (
     <>

@@ -84,6 +84,15 @@ export function mapDatabaseDriverError(
   const lowerMessage = searchableMessage.toLowerCase();
 
   if (
+    operation === 'query' &&
+    provider === 'postgres' &&
+    code === '57014' &&
+    lowerMessage.includes('statement timeout')
+  ) {
+    return new AppError(408, 'DATABASE_QUERY_BUDGET_EXCEEDED', 'Interactive query budget exhausted');
+  }
+
+  if (
     (provider === 'postgres' &&
       (code === '28P01' ||
         lowerMessage.includes('password authentication failed') ||

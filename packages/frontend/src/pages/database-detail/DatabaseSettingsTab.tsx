@@ -26,6 +26,14 @@ export function DatabaseSettingsTab({
   }, [database]);
 
   const save = async () => {
+    const queryBudget = Number(draft.interactiveQueryBudgetSeconds);
+    if (
+      database.type !== "redis" &&
+      (!Number.isInteger(queryBudget) || queryBudget < 30 || queryBudget > 600)
+    ) {
+      toast.error("Interactive query budget must be between 30 and 600 seconds");
+      return;
+    }
     setSaving(true);
     try {
       const updated = await api.updateDatabase(database.id, buildDatabasePayload(draft));

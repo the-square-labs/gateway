@@ -140,6 +140,7 @@ import { FolderService } from '@/modules/proxy/folder.service.js';
 import { NginxTemplateService } from '@/modules/proxy/nginx-template.service.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { ProxyDockerUpstreamService } from '@/modules/proxy/proxy-docker-upstream.service.js';
+import { ProxyMaintenanceAccessService } from '@/modules/proxy/proxy-maintenance-access.service.js';
 import { ProxySecureLinkService } from '@/modules/proxy/proxy-secure-link.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
@@ -771,6 +772,13 @@ export async function initializeContainer(): Promise<void> {
     : undefined;
   proxySecureLinkService?.setEventBus(eventBus);
   if (proxySecureLinkService) container.registerInstance(ProxySecureLinkService, proxySecureLinkService);
+  const proxyMaintenanceAccessService = new ProxyMaintenanceAccessService(
+    db,
+    cacheService,
+    auditService,
+    cryptoService
+  );
+  container.registerInstance(ProxyMaintenanceAccessService, proxyMaintenanceAccessService);
   const proxyService = new ProxyService(
     db,
     nginxTemplateService,
@@ -780,7 +788,9 @@ export async function initializeContainer(): Promise<void> {
     nginxCertificateDistribution,
     proxyDockerUpstreamService,
     proxySecureLinkService,
-    cacheService
+    cacheService,
+    proxyMaintenanceAccessService,
+    generalSettingsService
   );
   proxyService.setEventBus(eventBus);
   container.registerInstance(ProxyService, proxyService);
@@ -823,7 +833,7 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(DockerMigrationService, dockerMigrationService);
   dockerMigrationService.start();
 
-  const statusPageService = new StatusPageService(db, proxyService, auditService);
+  const statusPageService = new StatusPageService(db, proxyService, auditService, generalSettingsService);
   statusPageService.setEventBus(eventBus);
   container.registerInstance(StatusPageService, statusPageService);
 
@@ -1287,7 +1297,11 @@ export async function initializeContainer(): Promise<void> {
   scheduler.registerInterval('dns-check', env.DNS_CHECK_INTERVAL_SECONDS * 1000, () => dnsCheckJob.run());
 
   scheduler.register('acme-renewal', env.ACME_RENEWAL_CRON, () => acmeRenewalJob.run());
-  scheduler.registerInterval('health-check', env.HEALTH_CHECK_INTERVAL_SECONDS * 1000, () => healthCheckJob.run());
+  // Scan at the minimum supported per-host cadence; the job itself evaluates
+  // each host's configured interval and skips hosts that are not due.
+  scheduler.registerInterval('health-check', Math.min(Math.max(env.HEALTH_CHECK_INTERVAL_SECONDS, 1), 5) * 1000, () =>
+    healthCheckJob.run()
+  );
   scheduler.registerInterval('proxy-maintenance-alerts', env.HEALTH_CHECK_INTERVAL_SECONDS * 1000, () =>
     notifEvaluatorService.reconcileProxyMaintenance()
   );

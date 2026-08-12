@@ -78,7 +78,9 @@ export function createClickHouseDatabaseClient(
     username: config.username,
     password: config.password,
     database: config.database,
-    request_timeout: 15_000,
+    // Per-statement execution is bounded by an absolute console deadline.
+    // Keep the transport ceiling above the largest configurable 600s budget.
+    request_timeout: 610_000,
     max_open_connections: maxOpenConnections,
     application: 'gateway-database-connector',
     clickhouse_settings: {

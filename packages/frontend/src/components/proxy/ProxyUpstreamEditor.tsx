@@ -167,11 +167,13 @@ export function ProxyUpstreamFields({
   onChange,
   containers,
   disabled = false,
+  allowManual = true,
 }: {
   value: ProxyUpstreamSelection;
   onChange: (value: ProxyUpstreamSelection) => void;
   containers: DockerContainer[];
   disabled?: boolean;
+  allowManual?: boolean;
 }) {
   const selectedContainer = useMemo(
     () => containers.find((container) => targetKey(container) === selectedTargetKey(value)) ?? null,
@@ -224,11 +226,6 @@ export function ProxyUpstreamFields({
       }),
     [resourceCandidates]
   );
-  const selectedPorts = useMemo(
-    () => (effectiveSelectedContainer ? applicationTcpPorts(effectiveSelectedContainer) : []),
-    [effectiveSelectedContainer]
-  );
-
   const chooseTarget = (key: string) => {
     const target = candidates.find((candidate) => targetKey(candidate) === key);
     if (!target) return;
@@ -253,7 +250,7 @@ export function ProxyUpstreamFields({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="manual">Manual address</SelectItem>
+            {allowManual ? <SelectItem value="manual">Manual address</SelectItem> : null}
             <SelectItem value="docker_container">Docker container</SelectItem>
             <SelectItem value="docker_deployment">Docker deployment</SelectItem>
           </SelectContent>
@@ -358,7 +355,6 @@ export function ProxyUpstreamFields({
               type="number"
               min={1}
               max={65535}
-              list="proxy-application-ports"
               value={value.containerPort ?? ""}
               onChange={(event) => {
                 const parsed = Number(event.target.value);
@@ -370,14 +366,6 @@ export function ProxyUpstreamFields({
               placeholder="8080"
               disabled={disabled || !effectiveSelectedContainer}
             />
-            <datalist id="proxy-application-ports">
-              {selectedPorts.map((port) => (
-                <option
-                  key={port.containerPort}
-                  value={port.containerPort}
-                >{`${port.containerPort}/tcp`}</option>
-              ))}
-            </datalist>
           </SettingsControlRow>
           <SettingsControlRow
             title="Scheme"

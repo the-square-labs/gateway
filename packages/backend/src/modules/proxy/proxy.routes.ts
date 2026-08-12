@@ -1,4 +1,5 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
+import { z } from 'zod';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { getResourceScopedIds, hasScope } from '@/lib/permissions.js';
@@ -35,6 +36,7 @@ import {
   ValidateAdvancedConfigSchema,
 } from './proxy.schemas.js';
 import { ProxyService } from './proxy.service.js';
+import { ProxyMaintenanceAccessService } from './proxy-maintenance-access.service.js';
 import {
   redactRawProxyConfigForBrowser,
   stripRawProxyConfigArrayForProgrammatic,
@@ -114,6 +116,64 @@ proxyRoutes.get('/:id/secure-link', requireScopeForResource('proxy:view', 'id'),
   const data = await container.resolve(ProxyService).getProxySecureLinkStatus(c.req.param('id')!);
   return c.json({ data });
 });
+
+proxyRoutes.post(
+  '/:id/maintenance-access-code',
+  sessionOnly,
+  requireScopeForResource('proxy:maintenance:bypass', 'id'),
+  async (c) => {
+    const data = await container.resolve(ProxyMaintenanceAccessService).issue(c.req.param('id')!, c.get('user')!.id);
+    return c.json({ data });
+  }
+);
+
+const AdditionalSecureLinkSchema = z.object({
+  name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/),
+  upstreamKind: z.enum(['docker_container', 'docker_deployment']),
+  forwardScheme: z.enum(['http', 'https']).default('http'),
+  dockerNodeId: z.string().uuid().nullable().optional(),
+  dockerContainerName: z.string().min(1).max(255).nullable().optional(),
+  dockerDeploymentId: z.string().uuid().nullable().optional(),
+  dockerContainerPort: z.number().int().min(1).max(65535),
+});
+
+proxyRoutes.get('/:id/additional-secure-links', requireScopeForResource('proxy:view', 'id'), async (c) => {
+  const data = await container.resolve(ProxyService).listAdditionalSecureLinks(c.req.param('id')!);
+  return c.json({ data });
+});
+
+proxyRoutes.post('/:id/additional-secure-links', requireScopeForResource('proxy:edit', 'id'), async (c) => {
+  const data = await container
+    .resolve(ProxyService)
+    .createAdditionalSecureLink(
+      c.req.param('id')!,
+      AdditionalSecureLinkSchema.parse(await c.req.json()),
+      c.get('user')!.id
+    );
+  return c.json({ data }, 201);
+});
+
+proxyRoutes.post(
+  '/:id/additional-secure-links/:bindingId/retry',
+  requireScopeForResource('proxy:edit', 'id'),
+  async (c) => {
+    const data = await container
+      .resolve(ProxyService)
+      .retryAdditionalSecureLink(c.req.param('id')!, c.req.param('bindingId')!, c.get('user')!.id);
+    return c.json({ data });
+  }
+);
+
+proxyRoutes.delete(
+  '/:id/additional-secure-links/:bindingId',
+  requireScopeForResource('proxy:edit', 'id'),
+  async (c) => {
+    await container
+      .resolve(ProxyService)
+      .deleteAdditionalSecureLink(c.req.param('id')!, c.req.param('bindingId')!, c.get('user')!.id);
+    return c.body(null, 204);
+  }
+);
 
 proxyRoutes.openapi({ ...createProxyHostRoute, middleware: requireScope('proxy:create') }, async (c) => {
   const proxyService = container.resolve(ProxyService);
@@ -271,11 +331,15 @@ proxyRoutes.openapi(validateProxyConfigRoute, async (c) => {
 
   const bypassAdvancedScope = proxyHostId ? `proxy:advanced:bypass:${proxyHostId}` : 'proxy:advanced:bypass';
   const bypassRawScope = proxyHostId ? `proxy:raw:bypass:${proxyHostId}` : 'proxy:raw:bypass';
-  const result = await proxyService.validateAdvancedConfig(
-    snippet,
-    mode === 'raw',
-    mode === 'advanced' && hasScope(scopes, bypassAdvancedScope),
-    mode === 'raw' && hasScope(scopes, bypassRawScope)
-  );
+  const result =
+    mode === 'advanced'
+      ? await proxyService.validateAdvancedConfig(
+          snippet,
+          false,
+          hasScope(scopes, bypassAdvancedScope),
+          false,
+          proxyHostId
+        )
+      : await proxyService.validateAdvancedConfig(snippet, true, false, hasScope(scopes, bypassRawScope));
   return c.json({ data: result });
 });

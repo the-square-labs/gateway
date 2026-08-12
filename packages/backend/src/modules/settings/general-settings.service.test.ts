@@ -29,6 +29,10 @@ describe('GeneralSettingsService feature settings', () => {
     const service = new GeneralSettingsService(db as never);
 
     expect((await service.getConfig()).relayGrantTtlHours).toBe(4);
+    expect((await service.getConfig()).hideExternalBranding).toBe(false);
+    await expect(service.updateConfig({ hideExternalBranding: true })).resolves.toMatchObject({
+      hideExternalBranding: true,
+    });
     await expect(service.updateConfig({ relayGrantTtlHours: 1 })).resolves.toMatchObject({ relayGrantTtlHours: 1 });
     await expect(service.updateConfig({ relayGrantTtlHours: 48 })).resolves.toMatchObject({ relayGrantTtlHours: 48 });
     await expect(service.updateConfig({ relayGrantTtlHours: 0 })).rejects.toThrow();
@@ -122,7 +126,10 @@ describe('GeneralSettingsService feature settings', () => {
 
     await service.updateConfig({ features: { inferenceEnabled: true } });
 
-    expect(eventBus.publish).toHaveBeenCalledWith('system.config.changed', { relayChanged: false });
+    expect(eventBus.publish).toHaveBeenCalledWith('system.config.changed', {
+      relayChanged: false,
+      externalBrandingChanged: false,
+    });
   });
 
   it('applies adaptive relay admission defaults and rejects an invalid database reserve window', async () => {

@@ -305,6 +305,25 @@ describe('ClickHouseSqlAdapter', () => {
     );
   });
 
+  it('shares the remaining request budget between remaining statements', async () => {
+    let now = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const query = vi.fn(async (_request: Record<string, unknown>) => {
+      now += 10_000;
+      return result({ data: [], meta: [], rows: 0 });
+    });
+    const { adapter } = createAdapter(query);
+
+    await adapter.executeSql('db-1', 'select 1; select 2', 'user-1', { deadlineMs: 300_000 });
+
+    expect(query.mock.calls[0]?.[0]).toMatchObject({
+      clickhouse_settings: { max_execution_time: 150 },
+    });
+    expect(query.mock.calls[1]?.[0]).toMatchObject({
+      clickhouse_settings: { max_execution_time: 290 },
+    });
+  });
+
   it('classifies mutations as admin commands and reports written rows', async () => {
     const query = vi.fn();
     const command = vi.fn().mockResolvedValue({

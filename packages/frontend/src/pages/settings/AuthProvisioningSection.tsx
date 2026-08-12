@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/services/api";
 import { useAppStatusStore } from "@/stores/app-status";
@@ -61,6 +62,7 @@ const DEFAULT_SHUTDOWN_SETTINGS = {
 };
 const DEFAULT_GENERAL_SETTINGS = {
   publicUrl: null as string | null,
+  hideExternalBranding: false,
   fileUploadMaxBytes: DEFAULT_FILE_UPLOAD_MAX_BYTES,
   fileOpenMaxBytes: DEFAULT_FILE_OPEN_MAX_BYTES,
   gatewayPublicIps: [] as string[],
@@ -179,6 +181,7 @@ export function AuthProvisioningSection({
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning") ?? null
     )
   );
+  const [initialLoadComplete, setInitialLoadComplete] = useState(settings !== null);
   const [isSavingAutoCreate, setIsSavingAutoCreate] = useState(false);
   const [isSavingVerifiedEmail, setIsSavingVerifiedEmail] = useState(false);
   const [isSavingGroup, setIsSavingGroup] = useState(false);
@@ -212,6 +215,11 @@ export function AuthProvisioningSection({
     () =>
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
         ?.publicUrl ?? ""
+  );
+  const [hideExternalBranding, setHideExternalBranding] = useState(
+    () =>
+      api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
+        ?.hideExternalBranding ?? false
   );
   const [smtpDraft, setSmtpDraft] = useState<SmtpDraft>(DEFAULT_SMTP_DRAFT);
   const [smtpPreset, setSmtpPreset] = useState<SmtpPresetId>("resend");
@@ -328,6 +336,7 @@ export function AuthProvisioningSection({
         requestTimeoutMs: String(settingsData.logging?.requestTimeoutMs ?? 5000),
       });
       setPublicUrl(settingsData.generalSettings.publicUrl ?? "");
+      setHideExternalBranding(settingsData.generalSettings.hideExternalBranding ?? false);
       setTrustedProxyCidrs(settingsData.networkSecurity.trustedProxyCidrs.join(", "));
       setWebhookPrivateCidrs(settingsData.outboundWebhookPolicy.allowedPrivateCidrs.join(", "));
       setFileUploadLimitMb(
@@ -343,6 +352,8 @@ export function AuthProvisioningSection({
       setInferenceEnabled(settingsData.generalSettings.features?.inferenceEnabled ?? false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to load Gateway settings");
+    } finally {
+      setInitialLoadComplete(true);
     }
   }, []);
 
@@ -533,6 +544,7 @@ export function AuthProvisioningSection({
       setGatewayGrpcLocalIp(updated.generalSettings.gatewayGrpcLocalIp ?? "");
       setRelayGrantTtlHours(String(updated.generalSettings.relayGrantTtlHours));
       setPublicUrl(updated.generalSettings.publicUrl ?? "");
+      setHideExternalBranding(updated.generalSettings.hideExternalBranding ?? false);
       setPkiEnabled(nextSettings.generalSettings.features.pkiEnabled);
       setSiemEnabled(nextSettings.generalSettings.features.siemEnabled);
       setInferenceEnabled(nextSettings.generalSettings.features.inferenceEnabled);
@@ -558,6 +570,7 @@ export function AuthProvisioningSection({
       setGatewayGrpcLocalIp(previous.generalSettings.gatewayGrpcLocalIp ?? "");
       setRelayGrantTtlHours(String(previous.generalSettings.relayGrantTtlHours));
       setPublicUrl(previous.generalSettings.publicUrl ?? "");
+      setHideExternalBranding(previous.generalSettings.hideExternalBranding ?? false);
       setPkiEnabled(previous.generalSettings.features.pkiEnabled);
       setSiemEnabled(previous.generalSettings.features.siemEnabled);
       setInferenceEnabled(previous.generalSettings.features.inferenceEnabled);
@@ -593,6 +606,7 @@ export function AuthProvisioningSection({
   const draftRelayGrantTtlHours = Number(relayGrantTtlHours);
   const generalHasChanges =
     draftPublicUrl !== (settings?.generalSettings.publicUrl ?? "") ||
+    hideExternalBranding !== (settings?.generalSettings.hideExternalBranding ?? false) ||
     (draftFileUploadLimitBytes != null &&
       draftFileUploadLimitBytes !== settings?.generalSettings.fileUploadMaxBytes) ||
     (draftFileOpenLimitBytes != null &&
@@ -640,6 +654,7 @@ export function AuthProvisioningSection({
     }
     if (
       draftPublicUrl === settings.generalSettings.publicUrl &&
+      hideExternalBranding === (settings.generalSettings.hideExternalBranding ?? false) &&
       nextBytes === settings.generalSettings.fileUploadMaxBytes &&
       nextOpenBytes === settings.generalSettings.fileOpenMaxBytes &&
       draftGatewayPublicIps.join(",") === settings.generalSettings.gatewayPublicIps.join(",") &&
@@ -667,6 +682,7 @@ export function AuthProvisioningSection({
     }
     await updateGeneralSettings({
       publicUrl: draftPublicUrl,
+      hideExternalBranding,
       fileUploadMaxBytes: nextBytes,
       fileOpenMaxBytes: nextOpenBytes,
       gatewayPublicIps: draftGatewayPublicIps,
@@ -936,6 +952,7 @@ export function AuthProvisioningSection({
           ? "Paste a Twilio SendGrid API key."
           : "Password or API key used by your SMTP relay.";
 
+  if (!initialLoadComplete) return <Skeleton />;
   if (!settings) return null;
 
   return (
@@ -969,6 +986,17 @@ export function AuthProvisioningSection({
               onKeyDown={(event) => {
                 if (event.key === "Enter") saveGeneralSettings();
               }}
+            />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Hide external branding"
+            description="Hide Wiolett Industries attribution on public status, maintenance, and not-found pages"
+          >
+            <Switch
+              checked={hideExternalBranding}
+              disabled={!canEdit || isSavingGeneral}
+              ariaLabel="Hide external branding"
+              onChange={setHideExternalBranding}
             />
           </SettingsControlRow>
           <div className="flex items-center justify-between gap-4 px-4 py-3">
@@ -1140,21 +1168,6 @@ export function AuthProvisioningSection({
               disabled={!canEdit || isSavingGeneral}
               ariaLabel="Enable SIEM audit export"
               onChange={setSiemEnabled}
-            />
-          </div>
-          <div className="flex items-center justify-between gap-4 px-4 py-3">
-            <div>
-              <p className="text-sm font-medium">Gateway relay auto-recovery</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Let Gateway make up to three bounded attempts to restart its managed relay before
-                reporting a critical incident
-              </p>
-            </div>
-            <Switch
-              checked={settings.generalSettings.relayAutoRecovery}
-              disabled={!canEdit || isSavingGeneral}
-              ariaLabel="Enable Gateway relay auto-recovery"
-              onChange={(checked) => void updateGeneralSettings({ relayAutoRecovery: checked })}
             />
           </div>
           <div className="flex items-center justify-between gap-4 px-4 py-3">

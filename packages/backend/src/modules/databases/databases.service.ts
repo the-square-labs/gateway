@@ -64,11 +64,12 @@ import {
   scanRedisKeys as scanRedisKeysOperation,
   setRedisKey as setRedisKeyOperation,
 } from './redis-key-operations.js';
-import type { SqlDatabaseAdapter } from './sql-database-adapter.js';
+import type { SqlDatabaseAdapter, SqlExecutionOptions } from './sql-database-adapter.js';
 
 const { Pool } = pg;
 const DATABASE_HEALTH_HISTORY_MIN_INTERVAL_MS = 30_000;
 const MANAGED_CLICKHOUSE_QUERY_PRINCIPAL_VERSION = 1;
+const INTERACTIVE_QUERY_MAX_CONCURRENT_PER_DATABASE = 3;
 const logger = createChildLogger('DatabaseConnectionService');
 
 export type {
@@ -153,6 +154,7 @@ export class DatabaseConnectionService {
   private readonly postgresExtensionStates = new Map<string, ManagedPostgresExtensionStateCacheEntry>();
   private readonly redisClients = new Map<string, Redis>();
   private readonly clickHouseClients = new Map<string, ClickHouseClient>();
+  private readonly interactiveQueryRuns = new Map<string, { total: number; users: Set<string> }>();
   private readonly sqlAdapters: Map<'postgres' | 'clickhouse', SqlDatabaseAdapter>;
 
   constructor(
@@ -274,10 +276,46 @@ export class DatabaseConnectionService {
     id: string,
     sql: string,
     userId: string,
-    options: { maxRows?: number } = {},
+    options: SqlExecutionOptions = {},
     access: SqlQueryAccess = 'admin'
   ) {
-    return (await this.getSqlAdapter(id, access)).executeSql(id, sql, userId, options);
+    const startedAt = Date.now();
+    const row = await this.getRow(id);
+    const deadlineMs = startedAt + row.interactiveQueryBudgetSeconds * 1000;
+    return this.withInteractiveQuerySlot(id, userId, async () =>
+      (await this.getSqlAdapter(id, access)).executeSql(id, sql, userId, {
+        ...options,
+        deadlineMs,
+      })
+    );
+  }
+
+  private async withInteractiveQuerySlot<T>(id: string, userId: string, run: () => Promise<T>): Promise<T> {
+    const state = this.interactiveQueryRuns.get(id) ?? { total: 0, users: new Set<string>() };
+    if (state.users.has(userId)) {
+      throw new AppError(
+        409,
+        'DATABASE_QUERY_ALREADY_RUNNING',
+        'This user already has an interactive query running for this database'
+      );
+    }
+    if (state.total >= INTERACTIVE_QUERY_MAX_CONCURRENT_PER_DATABASE) {
+      throw new AppError(
+        429,
+        'DATABASE_QUERY_CONCURRENCY_LIMIT',
+        'This database already has the maximum number of interactive queries running'
+      );
+    }
+    state.total += 1;
+    state.users.add(userId);
+    this.interactiveQueryRuns.set(id, state);
+    try {
+      return await run();
+    } finally {
+      state.total -= 1;
+      state.users.delete(userId);
+      if (state.total === 0) this.interactiveQueryRuns.delete(id);
+    }
   }
 
   async insertSqlRow(
@@ -435,6 +473,7 @@ export class DatabaseConnectionService {
             description: input.description ?? null,
             tags: input.tags ?? [],
             manualSizeLimitMb: input.type === 'postgres' ? (input.manualSizeLimitMb ?? null) : null,
+            interactiveQueryBudgetSeconds: input.type === 'redis' ? 300 : (input.interactiveQueryBudgetSeconds ?? 300),
             host: normalized.host,
             port: normalized.port,
             databaseName: normalized.type === 'redis' ? `db${normalized.db}` : normalized.database,
@@ -473,7 +512,33 @@ export class DatabaseConnectionService {
 
   async update(id: string, input: UpdateDatabaseConnectionInput, userId: string): Promise<DatabaseConnectionView> {
     const existing = await this.getRow(id);
-    if (await this.getManagedMetadata(id)) {
+    const managed = await this.getManagedMetadata(id);
+    if (managed) {
+      const fields = Object.keys(input);
+      if (fields.length === 1 && input.interactiveQueryBudgetSeconds !== undefined && existing.type !== 'redis') {
+        const [updated] = await this.db
+          .update(databaseConnections)
+          .set({
+            interactiveQueryBudgetSeconds: input.interactiveQueryBudgetSeconds,
+            updatedById: userId,
+            updatedAt: new Date(),
+          })
+          .where(eq(databaseConnections.id, id))
+          .returning();
+        await this.auditService.log({
+          userId,
+          action: 'database.connection.update',
+          resourceType: 'database',
+          resourceId: id,
+          details: { name: updated!.name, type: updated!.type, fields },
+        });
+        this.emitChange(id, 'updated', {
+          name: updated!.name,
+          type: updated!.type,
+          healthStatus: updated!.healthStatus,
+        });
+        return this.toView(updated!, false, false);
+      }
       throw new AppError(
         409,
         'MANAGED_DATABASE_SETTINGS',
@@ -557,6 +622,10 @@ export class DatabaseConnectionService {
             ? existing.manualSizeLimitMb
             : (input.manualSizeLimitMb ?? null)
           : null,
+      interactiveQueryBudgetSeconds:
+        existing.type === 'redis'
+          ? 300
+          : (input.interactiveQueryBudgetSeconds ?? existing.interactiveQueryBudgetSeconds),
       host: mergedConfig.host,
       port: mergedConfig.port,
       databaseName: mergedConfig.type === 'redis' ? `db${mergedConfig.db}` : mergedConfig.database,

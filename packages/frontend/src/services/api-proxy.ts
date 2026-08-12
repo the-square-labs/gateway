@@ -1,10 +1,12 @@
 import type {
   CertificateDistributionState,
+  CreateProxyAdditionalSecureLinkRequest,
   CreateProxyHostRequest,
   FolderTreeNode,
   GroupedProxyHostsResponse,
   HealthStatus,
   PaginatedResponse,
+  ProxyAdditionalSecureLink,
   ProxyHost,
   ProxyHostType,
   ProxySecureLinkStatus,
@@ -63,6 +65,60 @@ export function withProxyApi<TBase extends ApiClientBaseConstructor>(Base: TBase
       return this.unwrapData(
         this.request<{ data: ProxySecureLinkStatus }>(`/proxy-hosts/${id}/secure-link`)
       );
+    }
+
+    async createProxyMaintenanceAccessCode(
+      id: string
+    ): Promise<{ code: string; expiresInSeconds: number }> {
+      return this.unwrapData(
+        this.request<{ data: { code: string; expiresInSeconds: number } }>(
+          `/proxy-hosts/${id}/maintenance-access-code`,
+          {
+            method: "POST",
+          }
+        )
+      );
+    }
+
+    async listProxyAdditionalSecureLinks(id: string): Promise<ProxyAdditionalSecureLink[]> {
+      return this.unwrapData(
+        this.request<{ data: ProxyAdditionalSecureLink[] }>(
+          `/proxy-hosts/${id}/additional-secure-links`
+        )
+      );
+    }
+
+    async createProxyAdditionalSecureLink(
+      id: string,
+      data: CreateProxyAdditionalSecureLinkRequest
+    ): Promise<ProxyAdditionalSecureLink> {
+      return this.unwrapData(
+        this.request<{ data: ProxyAdditionalSecureLink }>(
+          `/proxy-hosts/${id}/additional-secure-links`,
+          {
+            method: "POST",
+            body: JSON.stringify(data),
+          }
+        )
+      );
+    }
+
+    async retryProxyAdditionalSecureLink(
+      id: string,
+      bindingId: string
+    ): Promise<ProxyAdditionalSecureLink> {
+      return this.unwrapData(
+        this.request<{ data: ProxyAdditionalSecureLink }>(
+          `/proxy-hosts/${id}/additional-secure-links/${bindingId}/retry`,
+          { method: "POST" }
+        )
+      );
+    }
+
+    async deleteProxyAdditionalSecureLink(id: string, bindingId: string): Promise<void> {
+      await this.request(`/proxy-hosts/${id}/additional-secure-links/${bindingId}`, {
+        method: "DELETE",
+      });
     }
 
     async createProxyHost(data: CreateProxyHostRequest): Promise<ProxyHost> {

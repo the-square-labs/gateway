@@ -2,6 +2,107 @@ import { describe, expect, it, vi } from 'vitest';
 import { ProxySecureLinkService } from './proxy-secure-link.service.js';
 
 describe('ProxySecureLinkService migration rollback', () => {
+  it('returns a newly created binding while provisioning continues in the background', async () => {
+    const host = {
+      id: '11111111-1111-4111-8111-111111111111',
+      type: 'proxy',
+      rawConfigEnabled: false,
+      nodeId: 'nginx-node',
+      domainNames: ['example.test'],
+    } as any;
+    const created = {
+      id: '22222222-2222-4222-8222-222222222222',
+      proxyHostId: host.id,
+      name: 'api',
+      status: 'provisioning',
+      sourceNodeId: host.nodeId,
+      dockerNodeId: 'docker-node',
+    } as any;
+    const db = {
+      query: { proxyAdditionalSecureLinks: { findFirst: vi.fn().mockResolvedValue(null) } },
+      insert: vi.fn(() => ({
+        values: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([created]) })),
+      })),
+    } as any;
+    const service = new ProxySecureLinkService(db, {} as any, {} as any, 'connector@sha256:test');
+    vi.spyOn(service as any, 'nodesSupportSecureLinks').mockResolvedValue(true);
+    vi.spyOn(service as any, 'resolveAdditionalTarget').mockResolvedValue({
+      nodeId: 'docker-node',
+      network: 'application-net',
+      container: 'api',
+      targetPort: 8080,
+    });
+    const background = new Promise(() => undefined);
+    const provision = vi.spyOn(service as any, 'createAdditionalFromExisting').mockReturnValue(background);
+    const publish = vi.fn();
+    service.setEventBus({ publish } as any);
+
+    const result = await service.createAdditional(host, {
+      name: 'api',
+      upstreamKind: 'docker_container',
+      forwardScheme: 'http',
+      dockerNodeId: 'docker-node',
+      dockerContainerName: 'api',
+      dockerContainerPort: 8080,
+    });
+
+    expect(result).toBe(created);
+    expect(result.status).toBe('provisioning');
+    expect(provision).toHaveBeenCalledWith(host, created.id);
+    expect(publish).toHaveBeenCalledWith(
+      'proxy.secure-link.changed',
+      expect.objectContaining({ bindingId: created.id, action: 'provisioning' })
+    );
+  });
+
+  it('acknowledges deletion after marking cleanup pending without waiting for de-provisioning', async () => {
+    const host = {
+      id: '11111111-1111-4111-8111-111111111111',
+      advancedConfig: null,
+      domainNames: ['example.test'],
+    } as any;
+    const binding = {
+      id: '22222222-2222-4222-8222-222222222222',
+      proxyHostId: host.id,
+      name: 'api',
+      status: 'active',
+    } as any;
+    const pending = { ...binding, status: 'cleanup_pending' };
+    const db = {
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([pending]) })),
+        })),
+      })),
+    } as any;
+    const service = new ProxySecureLinkService(db, {} as any, {} as any, 'connector@sha256:test');
+    vi.spyOn(service as any, 'requireAdditional').mockResolvedValue(binding);
+    const background = new Promise(() => undefined);
+    const cleanup = vi.spyOn(service as any, 'finishAdditionalDeletion').mockReturnValue(background);
+    const publish = vi.fn();
+    service.setEventBus({ publish } as any);
+
+    await expect(service.deleteAdditional(host, binding.id)).resolves.toBeUndefined();
+
+    expect(cleanup).toHaveBeenCalledWith(host, binding);
+    expect(publish).toHaveBeenCalledWith(
+      'proxy.secure-link.changed',
+      expect.objectContaining({ bindingId: binding.id, action: 'cleanup_pending' })
+    );
+  });
+
+  it('accepts only active additional binding variables', async () => {
+    const service = new ProxySecureLinkService({} as any, {} as any, {} as any, 'connector@sha256:test');
+    vi.spyOn(service, 'getActiveAdditional').mockResolvedValue([{ name: 'api' }] as any);
+
+    await expect(
+      service.assertAdditionalReferences('host-1', 'location /api { proxy_pass {{additionalSecureLinks.api}}; }')
+    ).resolves.toBeUndefined();
+    await expect(
+      service.assertAdditionalReferences('host-1', 'location /admin { proxy_pass {{additionalSecureLinks.admin}}; }')
+    ).rejects.toMatchObject({ code: 'INVALID_SECURE_LINK_REFERENCE' });
+  });
+
   it('emits the canonical proxy host invalidation alongside the secure-link notification', () => {
     const service = new ProxySecureLinkService({} as any, {} as any, {} as any, 'connector@sha256:test') as any;
     const publish = vi.fn();
@@ -454,6 +555,13 @@ describe('ProxySecureLinkService migration rollback', () => {
       id: '22222222-2222-4222-8222-222222222222',
       secureLinkListenerPort: 41002,
     };
+    const additionalBinding = {
+      id: '33333333-3333-4333-8333-333333333333',
+      sourceNodeId: 'nginx-node',
+      generation: 1,
+      listenerPort: 41003,
+      status: 'active',
+    } as any;
     let releaseFirst!: (value: { success: true; detail: string }) => void;
     const firstDispatch = new Promise<{ success: true; detail: string }>((resolve) => {
       releaseFirst = resolve;
@@ -462,6 +570,9 @@ describe('ProxySecureLinkService migration rollback', () => {
       query: {
         proxyHosts: {
           findMany: vi.fn().mockResolvedValueOnce([firstHost]).mockResolvedValueOnce([firstHost, secondHost]),
+        },
+        proxyAdditionalSecureLinks: {
+          findMany: vi.fn().mockResolvedValue([additionalBinding]),
         },
       },
       update: vi.fn(() => ({
@@ -497,6 +608,44 @@ describe('ProxySecureLinkService migration rollback', () => {
     expect(dispatch.sendProxySecureLinks.mock.calls[1]?.[1]).toEqual([
       expect.objectContaining({ linkId: firstHost.id }),
       expect.objectContaining({ linkId: secondHost.id }),
+      expect.objectContaining({ linkId: additionalBinding.id, sourceConfigManaged: false }),
+    ]);
+  });
+
+  it('sends default and additional bindings in one target desired-state snapshot', async () => {
+    const defaultHost = {
+      id: '11111111-1111-4111-8111-111111111111',
+      secureLinkGeneration: 2,
+      secureLinkTargetNetwork: 'app-net',
+      secureLinkTargetContainer: 'frontend',
+      secureLinkTargetHost: null,
+      dockerHostPort: 8080,
+      upstreamKind: 'docker_container',
+    } as any;
+    const additionalBinding = {
+      id: '22222222-2222-4222-8222-222222222222',
+      generation: 1,
+      targetNetwork: 'app-net',
+      targetContainer: 'api',
+      dockerHostPort: 9000,
+      upstreamKind: 'docker_container',
+    } as any;
+    const db = {
+      query: {
+        proxyHosts: { findMany: vi.fn().mockResolvedValue([defaultHost]) },
+        proxyAdditionalSecureLinks: { findMany: vi.fn().mockResolvedValue([additionalBinding]) },
+      },
+    } as any;
+    const dispatch = {
+      sendProxySecureLinks: vi.fn().mockResolvedValue({ success: true, detail: '{"bindings":[]}' }),
+    } as any;
+    const service = new ProxySecureLinkService(db, dispatch, {} as any, 'connector@sha256:test');
+
+    await service.reconcileTargetNode('docker-node');
+
+    expect(dispatch.sendProxySecureLinks).toHaveBeenCalledWith('docker-node', [
+      expect.objectContaining({ linkId: defaultHost.id, targetContainer: 'frontend' }),
+      expect.objectContaining({ linkId: additionalBinding.id, targetContainer: 'api' }),
     ]);
   });
 

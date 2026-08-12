@@ -42,6 +42,7 @@ export const SHUTDOWN_TOTAL_MAX_SECONDS = 50;
 
 export interface GeneralSettings {
   publicUrl: string | null;
+  hideExternalBranding: boolean;
   fileUploadMaxBytes: number;
   fileOpenMaxBytes: number;
   gatewayPublicIps: string[];
@@ -83,6 +84,7 @@ export interface GeneralInferenceSettings {
 
 export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   publicUrl: null,
+  hideExternalBranding: false,
   fileUploadMaxBytes: FILE_UPLOAD_DEFAULT_BYTES,
   fileOpenMaxBytes: FILE_OPEN_DEFAULT_BYTES,
   gatewayPublicIps: [],
@@ -298,6 +300,7 @@ export class GeneralSettingsService {
     // permission-filtered read models refresh immediately.
     this.eventBus?.publish('system.config.changed', {
       relayChanged: JSON.stringify(current.relay) !== JSON.stringify(next.relay),
+      externalBrandingChanged: current.hideExternalBranding !== next.hideExternalBranding,
     });
     if (
       current.features.inferenceEnabled !== next.features.inferenceEnabled ||
@@ -473,6 +476,10 @@ export class GeneralSettingsService {
 
     return {
       publicUrl: normalizePublicUrl(record.publicUrl as string | null | undefined),
+      hideExternalBranding:
+        typeof record.hideExternalBranding === 'boolean'
+          ? record.hideExternalBranding
+          : DEFAULT_GENERAL_SETTINGS.hideExternalBranding,
       fileUploadMaxBytes,
       fileOpenMaxBytes,
       gatewayPublicIps,

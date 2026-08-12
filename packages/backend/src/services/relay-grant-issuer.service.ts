@@ -5,6 +5,7 @@ import { nodes, relayEndpoints, relayGrantSigningKeys, relayPolicyState, relayRo
 import type { SignedRelayGrant } from '@/grpc/relay-control.client.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CryptoService } from './crypto.service.js';
+import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
 
 const POLICY_ID = 'current';
 
@@ -115,7 +116,7 @@ export class RelayGrantIssuerService {
           certificateSha256: node.certificateFingerprint,
           endpointId: endpoint.id,
           endpointGeneration: endpoint.generation,
-          maxConcurrentSessions: endpoint.maxConcurrentSessions,
+          maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint),
         }),
       });
     }
@@ -133,7 +134,7 @@ export class RelayGrantIssuerService {
           certificateSha256: node.certificateFingerprint,
           routeId: route.id,
           routeGeneration: route.generation,
-          maxConcurrentSessions: route.maxConcurrentSessions,
+          maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route),
           maxFrameBytes: route.maxFrameBytes,
         }),
       });

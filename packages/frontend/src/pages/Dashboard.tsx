@@ -564,6 +564,11 @@ export function Dashboard() {
     ["migration_pending", "maintenance", "recovering", "degraded", "critical"].includes(relay.state)
       ? relay
       : null;
+  const tlsCertificateDistributionNeedsAttention = Boolean(
+    dashboardBootstrap?.attention.notices.some(
+      (notice) => notice.id === "tls-certificate-distribution"
+    )
+  );
   const canRetryRelay = hasScope("admin:system") && relayNotice?.state === "critical";
 
   useEffect(() => {
@@ -681,6 +686,31 @@ export function Dashboard() {
             retryPending={relayRetryPending}
             onRetry={() => void retryRelayRecovery()}
           />
+
+          {tlsCertificateDistributionNeedsAttention && (
+            <div className="border border-destructive/60 bg-card" role="alert">
+              <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 items-center gap-3">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-destructive" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-destructive">
+                      TLS certificate distribution needs attention
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      At least one active proxy host has not received its current certificate.
+                    </p>
+                  </div>
+                </div>
+                <Link
+                  to="/ssl-certificates"
+                  className="flex shrink-0 items-center gap-1 text-sm font-medium text-destructive hover:underline"
+                >
+                  View certificates
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+              </div>
+            </div>
+          )}
 
           {/* Update available */}
           {dashboardBootstrap?.update?.updateAvailable &&

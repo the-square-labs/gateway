@@ -3,7 +3,13 @@ import Handlebars from 'handlebars';
 import type { DrizzleClient } from '@/db/client.js';
 import { nginxTemplates } from '@/db/schema/nginx-templates.js';
 import { proxyHosts } from '@/db/schema/proxy-hosts.js';
-import { escapeNginxReturnText, GATEWAY_MAINTENANCE_HTML, GATEWAY_NOT_FOUND_HTML } from '@/lib/gateway-error-pages.js';
+import {
+  escapeNginxReturnText,
+  GATEWAY_MAINTENANCE_HTML,
+  GATEWAY_NOT_FOUND_HTML,
+  gatewayMaintenanceHtml,
+  gatewayNotFoundHtml,
+} from '@/lib/gateway-error-pages.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { formatHostPort } from '@/lib/network-endpoint.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -347,7 +353,62 @@ server {
 {{/if}}
 `;
 
-const MAINTENANCE_SERVER_GUARD = `
+function maintenanceAccessVariable(hostId: string) {
+  return hostId.replace(/-/g, '_');
+}
+
+function maintenanceMaps(hostId: string) {
+  const suffix = maintenanceAccessVariable(hostId);
+  return `map "$uri:$secure_link" $gm_block_${suffix} {
+    default 1;
+    ~^/\\.well-known/acme-challenge/ 0;
+    ~^/_gateway/maintenance-access: 0;
+    ~:1$ 0;
+}
+
+map $http_cookie $gms_${suffix} {
+    default $http_cookie;
+    "~^(.*)(?:^|;\\s*)gateway_maintenance_access_sig=[^;]*(;.*)?$" "$1$2";
+}
+
+map $gms_${suffix} $gm_cookie_${suffix} {
+    default $gms_${suffix};
+    "~^(.*)(?:^|;\\s*)gateway_maintenance_access_exp=[^;]*(;.*)?$" "$1$2";
+}
+`;
+}
+
+function maintenanceAccessLocation(hostId: string) {
+  return `
+    location = /_gateway/maintenance-access {
+        proxy_pass http://unix:/run/nginx-daemon/maintenance-access.sock:/redeem/${hostId};
+        proxy_set_header Host $host;
+        proxy_set_header X-Gateway-Maintenance-Host $host;
+        proxy_set_header X-Gateway-Maintenance-Secure $https;
+        proxy_set_header Cookie "";
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 5s;
+        proxy_read_timeout 5s;
+    }
+`;
+}
+
+function maintenanceServerGuard(hostId: string, accessSecret: string, hideExternalBranding: boolean) {
+  const suffix = maintenanceAccessVariable(hostId);
+  return `
+    # Gateway maintenance mode. Server-rewrite directives run before location
+    # selection, so upstream/access/cache/rewrite behavior is never reached.
+    default_type text/html;
+    add_header Cache-Control "no-store" always;
+    secure_link "$cookie_gateway_maintenance_access_sig,$cookie_gateway_maintenance_access_exp";
+    secure_link_md5 "\${secure_link_expires}\${host}${accessSecret}";
+    if ($gm_block_${suffix}) {
+        return 503 ${escapeNginxReturnText(gatewayMaintenanceHtml(hideExternalBranding))};
+    }
+${maintenanceAccessLocation(hostId)}`;
+}
+
+const LEGACY_MAINTENANCE_SERVER_GUARD = `
     # Gateway maintenance mode. Server-rewrite directives run before location
     # selection, so upstream/access/cache/rewrite behavior is never reached.
     default_type text/html;
@@ -621,7 +682,7 @@ export class NginxTemplateService {
     }
   }
 
-  async renderForHost(host: ProxyHostConfig, templateId: string | null): Promise<string> {
+  async renderForHost(host: ProxyHostConfig, templateId: string | null, hideExternalBranding = false): Promise<string> {
     let content: string;
     if (templateId) {
       const template = await this.getTemplate(templateId);
@@ -629,8 +690,21 @@ export class NginxTemplateService {
     } else {
       content = await this.getBuiltinTemplateContent(host.type);
     }
-    const rendered = this.renderTemplate(content, host);
-    return this.ensureManagedSecureLinkUpstream(rendered, host);
+    const rendered = this.renderTemplate(content, host).replaceAll(
+      escapeNginxReturnText(GATEWAY_NOT_FOUND_HTML),
+      escapeNginxReturnText(gatewayNotFoundHtml(hideExternalBranding))
+    );
+    return this.ensureManagedAdditionalSecureLinkUpstreams(this.ensureManagedSecureLinkUpstream(rendered, host), host);
+  }
+
+  private ensureManagedAdditionalSecureLinkUpstreams(rendered: string, host: ProxyHostConfig): string {
+    const declarations = (host.additionalSecureLinks ?? []).flatMap((binding) => {
+      const upstreamName = `gateway_additional_secure_link_${binding.id.replace(/-/g, '_')}`;
+      const declaration = new RegExp(`(^|\\n)[\\t ]*upstream[\\t ]+${upstreamName}[\\t ]*\\{`, 'm');
+      if (declaration.test(rendered)) return [];
+      return [`upstream ${upstreamName} {\n    server unix:${binding.socketPath};\n    keepalive 64;\n}`];
+    });
+    return declarations.length > 0 ? `${declarations.join('\n\n')}\n\n${rendered}` : rendered;
   }
 
   private ensureManagedSecureLinkUpstream(rendered: string, host: ProxyHostConfig): string {
@@ -649,11 +723,31 @@ export class NginxTemplateService {
 ${rendered}`;
   }
 
-  applyMaintenanceGuard(renderedConfig: string): string {
+  applyMaintenanceGuard(
+    renderedConfig: string,
+    access?: { hostId: string; secret: string },
+    hideExternalBranding = false
+  ): string {
+    if (!access) return this.applyLegacyMaintenanceGuard(renderedConfig, hideExternalBranding);
+    const cookieDirective = `proxy_set_header Cookie $gm_cookie_${maintenanceAccessVariable(access.hostId)};`;
+    const guarded = this.appendLocationDirective(this.stripProxyCookieHeaders(renderedConfig), cookieDirective).replace(
+      /^[\t ]*server[\t ]*\{/gm,
+      (match) => `${match}${maintenanceServerGuard(access.hostId, access.secret, hideExternalBranding)}`
+    );
+    if (!/^[\t ]*server[\t ]*\{/m.test(renderedConfig)) {
+      throw new AppError(500, 'MAINTENANCE_CONFIG_INVALID', 'Rendered proxy config has no server block');
+    }
+    return `${maintenanceMaps(access.hostId)}\n${guarded}`;
+  }
+
+  private applyLegacyMaintenanceGuard(renderedConfig: string, hideExternalBranding: boolean): string {
     let serverCount = 0;
     const guarded = renderedConfig.replace(/^[\t ]*server[\t ]*\{/gm, (match) => {
       serverCount += 1;
-      return `${match}${MAINTENANCE_SERVER_GUARD}`;
+      return `${match}${LEGACY_MAINTENANCE_SERVER_GUARD.replace(
+        escapeNginxReturnText(GATEWAY_MAINTENANCE_HTML),
+        escapeNginxReturnText(gatewayMaintenanceHtml(hideExternalBranding))
+      )}`;
     });
 
     if (serverCount === 0) {
@@ -661,6 +755,65 @@ ${rendered}`;
     }
 
     return guarded;
+  }
+
+  /**
+   * A location-level proxy_set_header disables server-level inheritance and
+   * duplicate Cookie headers can be forwarded independently. Replace every
+   * rendered Cookie override with the managed, sanitized value below. This
+   * operates only on the generated deployment config; no stored user config
+   * is edited.
+   */
+  private stripProxyCookieHeaders(renderedConfig: string): string {
+    return renderedConfig.replace(/(^|[;{}])\s*proxy_set_header\s+Cookie\s+[^;]*;/gim, '$1');
+  }
+
+  private appendLocationDirective(renderedConfig: string, directive: string): string {
+    let result = '';
+    let header = '';
+    let quote: '"' | "'" | null = null;
+    let inComment = false;
+    const blocks: boolean[] = [];
+
+    for (let index = 0; index < renderedConfig.length; index++) {
+      const char = renderedConfig[index]!;
+      if (inComment) {
+        result += char;
+        if (char === '\n') inComment = false;
+        continue;
+      }
+      if (quote) {
+        result += char;
+        if (char === quote && renderedConfig[index - 1] !== '\\') quote = null;
+        continue;
+      }
+      if (char === '#') {
+        result += char;
+        inComment = true;
+        continue;
+      }
+      if (char === '"' || char === "'") {
+        result += char;
+        quote = char;
+        continue;
+      }
+      if (char === '{') {
+        blocks.push(/^\s*location\b/i.test(header));
+        header = '';
+        result += char;
+        continue;
+      }
+      if (char === '}') {
+        if (blocks.pop()) result += `\n        ${directive}\n`;
+        header = '';
+        result += char;
+        continue;
+      }
+      result += char;
+      if (char === ';') header = '';
+      else header += char;
+    }
+    return result;
   }
 
   previewWithSampleData(content: string): string {
@@ -728,6 +881,12 @@ ${rendered}`;
           ? templateVariables.connectionsPerIp
           : (opts.connectionsPerIp ?? DEFAULT_CONNECTIONS_PER_IP)
         : DEFAULT_CONNECTIONS_PER_IP;
+    const additionalSecureLinks = Object.fromEntries(
+      (host.additionalSecureLinks ?? []).map((binding) => [
+        binding.name,
+        `${binding.scheme}://gateway_additional_secure_link_${binding.id.replace(/-/g, '_')}`,
+      ])
+    );
 
     return {
       id: host.id,
@@ -764,6 +923,7 @@ ${rendered}`;
       rateLimitRPS,
       rateLimitBurst,
       connectionsPerIp,
+      additionalSecureLinks,
     };
   }
 

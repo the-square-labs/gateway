@@ -95,7 +95,14 @@ export function resetClientSessionState() {
     },
     isLoading: false,
   });
-  useDockerFolderStore.setState({ folders: [], isLoading: true, error: null });
+  useDockerFolderStore.setState({
+    folders: [],
+    foldersByType: { container: [], image: [], network: [], volume: [] },
+    isLoading: true,
+    loadingByType: { container: true, image: true, network: true, volume: true },
+    error: null,
+    errorByType: { container: null, image: null, network: null, volume: null },
+  });
   useNodesStore.setState((state) => ({
     nodes: [],
     isLoading: true,

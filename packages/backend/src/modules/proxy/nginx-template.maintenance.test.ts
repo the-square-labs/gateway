@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GATEWAY_MAINTENANCE_HTML, GATEWAY_NOT_FOUND_HTML } from '@/lib/gateway-error-pages.js';
+import {
+  escapeNginxReturnText,
+  GATEWAY_MAINTENANCE_HTML,
+  GATEWAY_NOT_FOUND_HTML,
+  gatewayMaintenanceHtml,
+  gatewayNotFoundHtml,
+} from '@/lib/gateway-error-pages.js';
 import type { ProxyHostConfig } from '@/services/nginx-config-generator.service.js';
 import { NginxTemplateService } from './nginx-template.service.js';
 
@@ -53,6 +59,19 @@ describe('canonical Gateway nginx pages', () => {
     }
   });
 
+  it('uses the browser prompt for maintenance team access', () => {
+    expect(GATEWAY_MAINTENANCE_HTML).toContain("window.prompt('Access code')");
+    expect(GATEWAY_MAINTENANCE_HTML).not.toContain('<dialog');
+    expect(GATEWAY_MAINTENANCE_HTML).not.toContain('maintenance-access-form');
+  });
+
+  it('removes only external branding when configured', () => {
+    expect(gatewayNotFoundHtml(true)).not.toContain('Powered by');
+    expect(gatewayMaintenanceHtml(true)).not.toContain('Powered by');
+    expect(gatewayMaintenanceHtml(true)).toContain('Team access');
+    expect(gatewayMaintenanceHtml(true)).toContain("window.prompt('Access code')");
+  });
+
   it('injects maintenance before location handling without rebuilding the TLS vhost', async () => {
     const templateService = service();
     const normalConfig = await templateService.renderForHost(host, null);
@@ -69,10 +88,41 @@ describe('canonical Gateway nginx pages', () => {
     expect(rendered).toContain('if ($uri !~ ^/\\.well-known/acme-challenge/)');
     expect(rendered).toContain('return 503');
     expect(rendered).toContain('Cache-Control "no-store" always');
-    expect(rendered).toContain(GATEWAY_MAINTENANCE_HTML);
+    expect(rendered).toContain(escapeNginxReturnText(GATEWAY_MAINTENANCE_HTML));
     expect(rendered).toContain('proxy_pass http://10.0.0.2:8080;');
     expect(rendered).toContain('X-Advanced');
     expect(rendered.indexOf('# Gateway maintenance mode')).toBeLessThan(rendered.indexOf('location /'));
+  });
+
+  it('adds a daemon-owned access route and strips its bypass cookie without changing the stored template', async () => {
+    const templateService = service();
+    const normalConfig = await templateService.renderForHost(
+      {
+        ...host,
+        advancedConfig:
+          'location /api/ { proxy_set_header Cookie application_cookie; proxy_pass http://10.0.0.3:8080; }',
+      },
+      null
+    );
+    const rendered = templateService.applyMaintenanceGuard(normalConfig, {
+      hostId: host.id,
+      secret: 'maintenance-secret',
+    });
+
+    expect(normalConfig).toContain('proxy_set_header Cookie application_cookie;');
+    expect(rendered).not.toContain('proxy_set_header Cookie application_cookie;');
+    expect(rendered).toContain('location = /_gateway/maintenance-access');
+    expect(rendered).toContain(
+      'proxy_pass http://unix:/run/nginx-daemon/maintenance-access.sock:/redeem/11111111-1111-4111-8111-111111111111;'
+    );
+    expect(rendered).toContain(
+      'secure_link "$cookie_gateway_maintenance_access_sig,$cookie_gateway_maintenance_access_exp";'
+    );
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: Nginx variables are asserted as literal configuration text.
+    expect(rendered).toContain('secure_link_md5 "${secure_link_expires}${host}maintenance-secret";');
+    expect(rendered).not.toContain('$hostmaintenance-secret');
+    expect(rendered).toContain('map "$uri:$secure_link" $gm_block_11111111_1111_4111_8111_111111111111');
+    expect(rendered).toContain('proxy_set_header Cookie $gm_cookie_11111111_1111_4111_8111_111111111111;');
   });
 
   it('leaves TLS policy to the shared Nginx configuration for SNI-origin compatibility', async () => {
@@ -131,6 +181,32 @@ describe('canonical Gateway nginx pages', () => {
     expect(rendered.match(/upstream gateway_secure_link_11111111_1111_4111_8111_111111111111/g)).toHaveLength(1);
     expect(rendered).toContain('server unix:/run/gateway-secure-links/11111111-1111-4111-8111-111111111111.sock;');
     expect(rendered).toContain('proxy_pass http://gateway_secure_link_11111111_1111_4111_8111_111111111111;');
+  });
+
+  it('renders additional Secure Link variables and their managed Unix upstreams', async () => {
+    const bindingId = '22222222-2222-4222-8222-222222222222';
+    const rendered = await service().renderForHost(
+      {
+        ...host,
+        advancedConfig: 'location /api/ { proxy_pass {{additionalSecureLinks.api}}; }',
+        additionalSecureLinks: [
+          {
+            id: bindingId,
+            name: 'api',
+            scheme: 'http',
+            socketPath: `/run/gateway-secure-links/${bindingId}.sock`,
+          },
+        ],
+      },
+      null
+    );
+
+    expect(rendered).toContain('upstream gateway_additional_secure_link_22222222_2222_4222_8222_222222222222');
+    expect(rendered).toContain(`server unix:/run/gateway-secure-links/${bindingId}.sock;`);
+    expect(rendered).toContain(
+      'proxy_pass http://gateway_additional_secure_link_22222222_2222_4222_8222_222222222222;'
+    );
+    expect(rendered.match(/upstream gateway_additional_secure_link_/g)).toHaveLength(1);
   });
 
   it('inherits the production per-IP request limit and allows explicit disable', async () => {

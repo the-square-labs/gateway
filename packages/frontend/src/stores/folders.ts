@@ -31,6 +31,7 @@ interface FolderState {
 
   // Actions
   fetchGroupedHosts: () => Promise<void>;
+  removeHost: (id: string) => void;
   setFilters: (filters: Partial<FolderFilters>) => void;
   resetFilters: () => void;
 
@@ -128,6 +129,21 @@ function applyFolderOrder(
   return visit(nodes);
 }
 
+function removeHostFromFolders(nodes: FolderTreeNode[], id: string): FolderTreeNode[] {
+  return nodes.map((folder) => ({
+    ...folder,
+    hosts: folder.hosts.filter((host) => host.id !== id),
+    children: removeHostFromFolders(folder.children, id),
+  }));
+}
+
+function folderTreeHasHost(nodes: FolderTreeNode[], id: string): boolean {
+  return nodes.some(
+    (folder) =>
+      folder.hosts.some((host) => host.id === id) || folderTreeHasHost(folder.children, id)
+  );
+}
+
 let fetchGroupedHostsRequestId = 0;
 
 export const useFolderStore = create<FolderState>()((set, get) => ({
@@ -201,6 +217,17 @@ export const useFolderStore = create<FolderState>()((set, get) => ({
       set({ error: message, isLoading: false });
     }
   },
+
+  removeHost: (id) =>
+    set((state) => {
+      const existed =
+        state.ungroupedHosts.some((host) => host.id === id) || folderTreeHasHost(state.folders, id);
+      return {
+        folders: removeHostFromFolders(state.folders, id),
+        ungroupedHosts: state.ungroupedHosts.filter((host) => host.id !== id),
+        totalHosts: existed ? Math.max(0, state.totalHosts - 1) : state.totalHosts,
+      };
+    }),
 
   setFilters: (newFilters) => {
     set((state) => ({

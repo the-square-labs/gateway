@@ -57,6 +57,7 @@ describe("RelaySettingsSection", () => {
     expect(screen.getByText("6.0 MB heap · no cgroup limit")).toBeInTheDocument();
     expect(screen.getByText("File descriptors")).toBeInTheDocument();
     expect(screen.getAllByText("No throttling")).toHaveLength(2);
+    expect(document.body.textContent).not.toMatch(/undefined|NaN/);
     expect(screen.queryByText(/Last probe/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Memory 30%/i)).not.toBeInTheDocument();
   });

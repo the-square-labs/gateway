@@ -28,6 +28,36 @@ describe("dashboard bootstrap store", () => {
     expect(fromDashboard).toBe(SNAPSHOT);
   });
 
+  it("does not present persisted attention as current while refreshing cached content", async () => {
+    const key = "user:scope:pins";
+    const cachedCritical = {
+      ...SNAPSHOT,
+      attention: {
+        severity: "critical",
+        notices: [{ id: "tls-certificate-distribution", severity: "critical" }],
+      },
+    } as DashboardBootstrap;
+    api.setCache(`dashboard:bootstrap:${key}`, cachedCritical);
+
+    let resolveRefresh: (snapshot: DashboardBootstrap) => void;
+    vi.mocked(api.getDashboardBootstrap).mockReturnValueOnce(
+      new Promise<DashboardBootstrap>((resolve) => {
+        resolveRefresh = resolve;
+      })
+    );
+
+    const loading = useDashboardBootstrapStore.getState().load(key, {});
+
+    expect(useDashboardBootstrapStore.getState().snapshot).toMatchObject({
+      fetchedAt: cachedCritical.fetchedAt,
+      attention: { severity: null, notices: [] },
+    });
+
+    resolveRefresh!(SNAPSHOT);
+    await loading;
+    expect(useDashboardBootstrapStore.getState().snapshot?.attention).toEqual(SNAPSHOT.attention);
+  });
+
   it("does not refetch when a component reruns its effect with the same snapshot key", async () => {
     vi.mocked(api.getDashboardBootstrap).mockResolvedValue(SNAPSHOT);
 

@@ -433,11 +433,12 @@ export function withDatabaseApi<TBase extends ApiClientBaseConstructor>(Base: TB
       );
     }
 
-    async executeSql(id: string, sql: string): Promise<SqlExecutionResult> {
+    async executeSql(id: string, sql: string, signal?: AbortSignal): Promise<SqlExecutionResult> {
       return this.unwrapData(
         this.request<{ data: SqlExecutionResult }>(`/databases/${id}/sql/query`, {
           method: "POST",
           body: JSON.stringify({ sql, maxRows: 500 }),
+          ...(signal ? { signal } : {}),
         })
       );
     }

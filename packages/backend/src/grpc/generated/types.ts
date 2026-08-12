@@ -36,6 +36,16 @@ export interface RenewCertResponse {
   certExpiresAt: string;
 }
 
+export interface MaintenanceAccessRedeemRequest {
+  hostId: string;
+  code: string;
+}
+
+export interface MaintenanceAccessReply {
+  allowed: boolean;
+  sessionToken: string;
+}
+
 // ─── Daemon Messages (daemon → gateway) ─────────────────────────────
 
 export interface DaemonMessage {

@@ -17,6 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -486,6 +487,7 @@ export function AIConfigSection() {
     const cached = api.getCached<AIConfigState>("settings:ai-config");
     return cached ? normalizeAIConfigState(cached) : null;
   });
+  const [initialLoadComplete, setInitialLoadComplete] = useState(aiConfig !== null);
   const [aiApiKey, setAiApiKey] = useState("");
   const [aiWebSearchKey, setAiWebSearchKey] = useState("");
   const [aiToolsModalOpen, setAiToolsModalOpen] = useState(false);
@@ -559,6 +561,8 @@ export function AIConfigSection() {
       setAiSavedConfig(config);
     } catch {
       /* AI not configured yet */
+    } finally {
+      setInitialLoadComplete(true);
     }
   }, [inferenceEnabled]);
 
@@ -670,6 +674,7 @@ export function AIConfigSection() {
     if (aiConfig?.sandboxEnabled) loadSandboxStatus();
   }, [aiConfig?.sandboxEnabled, loadSandboxStatus]);
 
+  if (!initialLoadComplete) return <Skeleton />;
   if (!aiConfig) return null;
   const webSearchEnabled = !aiConfig.disabledTools.includes("web_search");
 

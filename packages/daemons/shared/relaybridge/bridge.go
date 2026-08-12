@@ -141,8 +141,8 @@ func receiveRemote(connection net.Conn, stream FrameStream, maxFrame int, comple
 				data = data[n:]
 			}
 		case frame.GetHalfClose() != nil:
-			if tcp, ok := connection.(*net.TCPConn); ok {
-				_ = tcp.CloseWrite()
+			if closer, ok := connection.(interface{ CloseWrite() error }); ok {
+				_ = closer.CloseWrite()
 			}
 			completed <- result{}
 			return

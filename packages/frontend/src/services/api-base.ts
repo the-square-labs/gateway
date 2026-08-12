@@ -1,6 +1,7 @@
 import { useAppStatusStore } from "@/stores/app-status";
 import { useAuthStore } from "@/stores/auth";
 import type { ApiError } from "@/types";
+import { mutationCachePrefixes } from "./mutation-cache";
 import {
   clearPersistentCacheScope,
   deletePersistentCachePrefix,
@@ -362,6 +363,12 @@ export class ApiClientBase {
         headers,
       });
     } catch {
+      if (options.signal?.aborted) {
+        throw new ApiRequestError("Query cancelled", {
+          status: 0,
+          code: "REQUEST_ABORTED",
+        });
+      }
       if (!suppressGlobalStatus) {
         useAppStatusStore.getState().setMaintenanceActive(true);
       }
@@ -486,15 +493,12 @@ export class ApiClientBase {
       return request;
     }
 
-    // Non-GET: invalidate cached GET requests for this endpoint path
-    const basePath = url.split("?")[0];
-    const requestKeys = new Set([...this.cache.keys(), ...this.cacheInflight.keys()]);
-    for (const key of requestKeys) {
-      if (key.startsWith("req:") && key.includes(basePath.replace(/\/[^/]+$/, ""))) {
-        this.invalidateCache(key);
-      }
-    }
-    return this.fetchRaw<T>(url, options);
+    // Mutations invalidate only after the server confirms success. Clearing
+    // before a long-running mutation allows an intervening GET to repopulate
+    // stale data while the write is still in progress.
+    const data = await this.fetchRaw<T>(url, options);
+    for (const prefix of mutationCachePrefixes(url)) this.invalidateCache(prefix);
+    return data;
   }
 
   protected async requestRouteContext<T>(endpoint: string): Promise<T> {

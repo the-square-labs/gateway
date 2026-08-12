@@ -49,6 +49,7 @@ export * from './notification-webhooks.js';
 export * from './oauth.js';
 export * from './permission-group-folders.js';
 export * from './permission-groups.js';
+export * from './proxy-additional-secure-links.js';
 export * from './proxy-host-folders.js';
 export * from './proxy-hosts.js';
 export * from './relay.js';

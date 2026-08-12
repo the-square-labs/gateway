@@ -93,6 +93,14 @@ export interface SqlExecutionResult {
   resultLimit: number;
 }
 
+export interface SqlExecutionOptions {
+  maxRows?: number;
+  /** Absolute Gateway deadline shared by every statement in this console run. */
+  deadlineMs?: number;
+  /** Cancels the active database operation when the HTTP client disconnects. */
+  signal?: AbortSignal;
+}
+
 export interface SqlRowMutationResult {
   success: true;
   affectedRows: number;
@@ -144,5 +152,5 @@ export interface SqlDatabaseAdapter {
     locator: Record<string, unknown>,
     userId: string
   ): Promise<SqlRowMutationResult>;
-  executeSql(id: string, sql: string, userId: string, options?: { maxRows?: number }): Promise<SqlExecutionResult>;
+  executeSql(id: string, sql: string, userId: string, options?: SqlExecutionOptions): Promise<SqlExecutionResult>;
 }

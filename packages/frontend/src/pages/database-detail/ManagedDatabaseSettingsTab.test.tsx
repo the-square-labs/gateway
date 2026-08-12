@@ -10,6 +10,7 @@ const database = {
   id: "database-1",
   name: "Orders",
   type: "postgres",
+  interactiveQueryBudgetSeconds: 300,
   tags: ["green:production", "orders"],
   managed: {
     id: "managed-database-1",
@@ -106,6 +107,24 @@ describe("ManagedDatabaseSettingsTab", () => {
 
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Publish TCP port" })).toBeDisabled();
+  });
+
+  it("updates only the console budget without reprovisioning a managed database", async () => {
+    const user = userEvent.setup();
+    const updateDatabase = vi.spyOn(api, "updateDatabase").mockResolvedValue(database as never);
+    const updateManagedDatabase = vi.spyOn(api, "updateManagedDatabase");
+    render(<ManagedDatabaseSettingsTab database={database} onSaved={() => undefined} />);
+
+    await user.clear(screen.getByLabelText("Interactive query budget"));
+    await user.type(screen.getByLabelText("Interactive query budget"), "450");
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(updateDatabase).toHaveBeenCalledWith("database-1", {
+        interactiveQueryBudgetSeconds: 450,
+      })
+    );
+    expect(updateManagedDatabase).not.toHaveBeenCalled();
   });
 
   it("lets ClickHouse publish HTTP without publishing its native TCP endpoint", async () => {

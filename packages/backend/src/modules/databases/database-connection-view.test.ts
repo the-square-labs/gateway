@@ -9,6 +9,7 @@ const row = {
   description: null,
   tags: [],
   manualSizeLimitMb: null,
+  interactiveQueryBudgetSeconds: 300,
   host: 'clickhouse.example',
   port: 8443,
   databaseName: 'events',
