@@ -148,6 +148,95 @@ describe('HealthCheckJob storm protection', () => {
     expect(writes[0]).toEqual({ lastHealthCheckAt: expect.any(Date) });
   });
 
+  it('does not mark low-latency Secure Link jitter as degraded', async () => {
+    const healthHistory = Array.from({ length: 5 }, (_, index) => ({
+      ts: new Date(Date.now() - (index + 1) * 30_000).toISOString(),
+      status: 'online',
+      responseMs: 4,
+    }));
+    const secure = host({
+      upstreamKind: 'docker_container',
+      secureLinkMigratedAt: new Date(),
+      nodeId: 'nginx-node',
+      healthHistory,
+    });
+    const { db, writes } = database([secure]);
+    const probeProxySecureLink = vi.fn().mockResolvedValue({ ok: true, httpStatus: 200, responseMs: 30 });
+
+    await new HealthCheckJob(db, { probeProxySecureLink } as any).run();
+
+    expect(writes[0]?.healthStatus).toBe('online');
+    expect((writes[0]?.healthHistory as Array<{ slow?: boolean }>).at(-1)?.slow).toBeUndefined();
+  });
+
+  it('still marks materially slow Secure Link responses as degraded', async () => {
+    const healthHistory = Array.from({ length: 5 }, (_, index) => ({
+      ts: new Date(Date.now() - (index + 1) * 30_000).toISOString(),
+      status: 'online',
+      responseMs: 4,
+    }));
+    const secure = host({
+      upstreamKind: 'docker_container',
+      secureLinkMigratedAt: new Date(),
+      nodeId: 'nginx-node',
+      healthHistory,
+    });
+    const { db, writes } = database([secure]);
+    const probeProxySecureLink = vi.fn().mockResolvedValue({ ok: true, httpStatus: 200, responseMs: 300 });
+
+    await new HealthCheckJob(db, { probeProxySecureLink } as any).run();
+
+    expect(writes[0]?.healthStatus).toBe('degraded');
+    expect((writes[0]?.healthHistory as Array<{ slow?: boolean }>).at(-1)?.slow).toBe(true);
+  });
+
+  it.each([
+    { responseMs: 249, expectedStatus: 'online', expectedSlow: undefined },
+    { responseMs: 250, expectedStatus: 'degraded', expectedSlow: true },
+  ])('uses the absolute slow-response boundary at $responseMs ms', async (testCase) => {
+    const healthHistory = Array.from({ length: 5 }, (_, index) => ({
+      ts: new Date(Date.now() - (index + 1) * 30_000).toISOString(),
+      status: 'online',
+      responseMs: 4,
+    }));
+    const secure = host({
+      upstreamKind: 'docker_container',
+      secureLinkMigratedAt: new Date(),
+      nodeId: 'nginx-node',
+      healthHistory,
+    });
+    const { db, writes } = database([secure]);
+    const probeProxySecureLink = vi
+      .fn()
+      .mockResolvedValue({ ok: true, httpStatus: 200, responseMs: testCase.responseMs });
+
+    await new HealthCheckJob(db, { probeProxySecureLink } as any).run();
+
+    expect(writes[0]?.healthStatus).toBe(testCase.expectedStatus);
+    expect((writes[0]?.healthHistory as Array<{ slow?: boolean }>).at(-1)?.slow).toBe(testCase.expectedSlow);
+  });
+
+  it('keeps the relative slow threshold when it is higher than the absolute floor', async () => {
+    const healthHistory = Array.from({ length: 5 }, (_, index) => ({
+      ts: new Date(Date.now() - (index + 1) * 30_000).toISOString(),
+      status: 'online',
+      responseMs: 200,
+    }));
+    const secure = host({
+      upstreamKind: 'docker_container',
+      secureLinkMigratedAt: new Date(),
+      nodeId: 'nginx-node',
+      healthHistory,
+    });
+    const { db, writes } = database([secure]);
+    const probeProxySecureLink = vi.fn().mockResolvedValue({ ok: true, httpStatus: 200, responseMs: 300 });
+
+    await new HealthCheckJob(db, { probeProxySecureLink } as any).run();
+
+    expect(writes[0]?.healthStatus).toBe('online');
+    expect((writes[0]?.healthHistory as Array<{ slow?: boolean }>).at(-1)?.slow).toBeUndefined();
+  });
+
   it('requires two consecutive failures before a healthy host becomes offline', async () => {
     const first = host();
     const firstRun = database([first]);

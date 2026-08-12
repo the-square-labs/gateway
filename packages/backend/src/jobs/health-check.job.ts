@@ -17,6 +17,7 @@ const HEALTH_CHECK_CONCURRENCY = 8;
 const SECURE_LINK_PROBE_CONCURRENCY_PER_NODE = 3;
 const DAEMON_BUSY_ERROR = 'daemon is busy handling long-running commands; retry shortly';
 const SLOW_BASELINE_WINDOW_MS = 3 * 60 * 60 * 1000; // 3 hours of history for baseline avg
+const SLOW_RESPONSE_FLOOR_MS = 250;
 
 type HealthStatus = 'online' | 'offline' | 'degraded' | 'unknown';
 
@@ -126,7 +127,7 @@ export class HealthCheckJob {
           if (baselineTimes.length >= 5) {
             // need enough samples for a meaningful baseline
             const avgMs = baselineTimes.reduce((a, b) => a + b, 0) / baselineTimes.length;
-            slow = responseMs >= avgMs * threshold;
+            slow = responseMs >= Math.max(avgMs * threshold, SLOW_RESPONSE_FLOOR_MS);
           }
         }
       }
