@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 import type { AIMessageAttachment, AIResourceReference } from '@/modules/ai/ai.types.js';
 import { aiConversationMessages, aiConversations } from './ai-conversations.js';
+import { aiPlanRevisions, aiPlans } from './ai-plans.js';
 import { integrationConnectors } from './integration-connectors.js';
 import { users } from './users.js';
 
@@ -51,6 +52,7 @@ export type AIQuestionStatus = 'pending' | 'answered' | 'stopped';
 export type AICredentialChallengeStatus = 'pending' | 'authorized' | 'rejected' | 'stopped';
 export type AIConversationInputMode = 'queued' | 'steer';
 export type AIConversationInputStatus = 'pending' | 'consumed' | 'cancelled';
+export type AIRunPurpose = 'direct' | 'plan_draft' | 'plan_validation' | 'plan_execution' | 'plan_verification';
 
 export const aiRuns = pgTable(
   'ai_runs',
@@ -62,6 +64,9 @@ export const aiRuns = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
+    planId: uuid('plan_id').references(() => aiPlans.id, { onDelete: 'cascade' }),
+    planRevisionId: uuid('plan_revision_id').references(() => aiPlanRevisions.id, { onDelete: 'set null' }),
+    purpose: varchar('purpose', { length: 32 }).$type<AIRunPurpose>().notNull().default('direct'),
     status: varchar('status', { length: 32 }).$type<AIRunStatus>().notNull().default('queued'),
     activeMessageId: uuid('active_message_id'),
     model: varchar('model', { length: 255 }),
@@ -92,6 +97,7 @@ export const aiRuns = pgTable(
     userCommandIdx: uniqueIndex('ai_runs_user_command_idx').on(table.userId, table.clientCommandId),
     conversationStatusIdx: index('ai_runs_conversation_status_idx').on(table.conversationId, table.status),
     userCreatedIdx: index('ai_runs_user_created_idx').on(table.userId, table.createdAt),
+    planStatusIdx: index('ai_runs_plan_status_idx').on(table.planId, table.status),
   })
 );
 

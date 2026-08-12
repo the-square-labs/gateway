@@ -1,4 +1,3 @@
-import { ExternalLink } from "lucide-react";
 import type { AnchorHTMLAttributes, MouseEvent } from "react";
 import type { Components } from "react-markdown";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -66,29 +65,16 @@ export function AIResourceLink({ reference }: { reference: AIResourceReference }
     if (aiWorkspace && reference.workspaceEmbeddable === false) openOperationsConsole(event);
   };
   return (
-    <span className="mx-0.5 inline-flex max-w-full items-center align-baseline">
-      <Link
-        to={href}
-        state={createReturnNavigationState(location)}
-        onClick={openPrimary}
-        className={`inline-flex max-w-full items-center gap-1 rounded-sm px-1 py-0.5 font-medium no-underline transition-colors hover:brightness-110 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${toneClassName} ${reference.relation === "deleted" ? "opacity-70" : ""}`}
-        aria-label={`${typeLabel}: ${reference.label}`}
-      >
-        <Icon className="h-3 w-3 shrink-0" aria-hidden="true" />
-        <span className="min-w-0 break-words">{reference.label}</span>
-      </Link>
-      {aiWorkspace && (
-        <button
-          type="button"
-          className="ml-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          title="Open in Operations Console"
-          aria-label={`Open ${reference.label} in Operations Console`}
-          onClick={openOperationsConsole}
-        >
-          <ExternalLink className="h-3 w-3" />
-        </button>
-      )}
-    </span>
+    <Link
+      to={href}
+      state={createReturnNavigationState(location)}
+      onClick={openPrimary}
+      className={`mx-0.5 inline-flex max-w-full items-center gap-1 rounded-sm px-1 py-0.5 align-baseline font-medium no-underline transition-colors hover:brightness-110 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${toneClassName} ${reference.relation === "deleted" ? "opacity-70" : ""}`}
+      aria-label={`${typeLabel}: ${reference.label}`}
+    >
+      <Icon className="h-3 w-3 shrink-0" aria-hidden="true" />
+      <span className="min-w-0 break-words">{reference.label}</span>
+    </Link>
   );
 }
 

@@ -97,6 +97,7 @@ function createExecutorHarness(
   const publishAssistantCommentDone = vi.fn();
   const publishCredentialChallenge = vi.fn();
   const publishClientAction = vi.fn();
+  const handleFailedRun = vi.fn().mockResolvedValue(undefined);
   const executor = new AIRunExecutor(
     db as never,
     publishConversationChanged,
@@ -105,7 +106,9 @@ function createExecutorHarness(
     publishAssistantCommentDone,
     undefined,
     publishCredentialChallenge,
-    publishClientAction
+    publishClientAction,
+    undefined,
+    handleFailedRun
   );
 
   container.registerInstance(AIService, {
@@ -123,6 +126,7 @@ function createExecutorHarness(
     publishAssistantCommentDelta,
     publishCredentialChallenge,
     publishClientAction,
+    handleFailedRun,
     transaction,
   };
 }
@@ -718,6 +722,11 @@ describe('AIRunExecutor live assistant draft streaming', () => {
           runId: 'run-1',
         }),
       })
+    );
+    expect(harness.handleFailedRun).toHaveBeenCalledWith(
+      USER,
+      expect.objectContaining({ id: 'run-1', conversationId: 'conversation-1' }),
+      'provider failed'
     );
   });
 

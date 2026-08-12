@@ -64,6 +64,17 @@ describe('AI tool scope filtering', () => {
     });
   });
 
+  it('exposes only planning-safe tools while keeping read variants of composite tools available', () => {
+    const names = getOpenAITools([], ['feat:ai:use', 'domains:view', 'domains:manage'], true, {
+      discoveredToolsets: ['Domains'],
+      planningMode: true,
+    }).map((tool) => tool.function.name);
+
+    expect(names).toEqual(expect.arrayContaining(['enter_plan_mode', 'submit_plan', 'manage_domain']));
+    expect(names).not.toContain('create_domain');
+    expect(names).not.toContain('delete_domain');
+  });
+
   it('rejects unsupported composite resource and operation pairs before dispatch', () => {
     expect(
       parseAndValidateAIToolArguments(

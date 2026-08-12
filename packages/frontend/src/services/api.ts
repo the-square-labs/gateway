@@ -54,6 +54,7 @@ import type {
   AIContextEstimate,
   AIMessage,
   AIMessageAttachment,
+  AIPlanStatus,
   AIRunStatus,
   AISandboxArtifact,
   AISandboxJob,
@@ -971,6 +972,7 @@ class ApiClient extends withInferenceApi(
       status: "active" | "ended" | "context_blocked";
       blockReason: string | null;
       activeRunStatus: AIRunStatus | null;
+      planStatus: AIPlanStatus | null;
     }>
   > {
     const res = await this.request<{
@@ -985,6 +987,7 @@ class ApiClient extends withInferenceApi(
         status: "active" | "ended" | "context_blocked";
         blockReason: string | null;
         activeRunStatus: AIRunStatus | null;
+        planStatus: AIPlanStatus | null;
       }>;
     }>("/ai/conversations");
     return res.data;

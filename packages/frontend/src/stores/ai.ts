@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { create } from "zustand";
 import {
   type AIConversationFolder,
@@ -27,6 +28,7 @@ import type {
   AIConversationStatus,
   AICredentialChallenge,
   AIMessage,
+  AIPlanRuntimeSnapshot,
   AIProviderStatus,
   AIResourceReference,
   AIRunToolCall,
@@ -297,6 +299,10 @@ interface AIState {
   activeConversationId: string | null;
   sidebarActiveConversationId: string | null;
   activeRunId: string | null;
+  activePlan: AIPlanRuntimeSnapshot | null;
+  plans: AIPlanRuntimeSnapshot[];
+  devPlanProgressPreview: AIPlanRuntimeSnapshot | null;
+  workMode: "normal" | "plan";
   canContinueConversation: boolean;
   isCompactingContext: boolean;
   lastContext: PageContext | null;
@@ -329,6 +335,11 @@ interface AIState {
   answerQuestion: (toolCallId: string, answer: string) => void;
   resolveCredentialChallenge: (decision: "authorized" | "rejected") => void;
   stopStreaming: () => void;
+  setWorkMode: (mode: "normal" | "plan") => void;
+  decidePlan: (decision: "implement" | "refine" | "custom", customInstruction?: string) => void;
+  pausePlan: () => void;
+  resumePlan: () => void;
+  cancelPlan: () => void;
   clearMessages: () => void;
   fetchRecentConversations: () => Promise<void>;
   fetchConversationFolders: () => Promise<void>;
@@ -359,6 +370,8 @@ interface AIState {
 }
 
 let wsClient: AIWebSocketClient | null = null;
+let wsStoreReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+const WS_STORE_RECONNECT_DELAY_MS = 5_000;
 let conversationLoadGeneration = 0;
 const pendingToolCommands = new Map<
   string,
@@ -377,6 +390,21 @@ const pendingInputCommands = new Map<
     input: AIConversationInput;
   }
 >();
+const observedPlanStatuses = new Map<string, AIPlanRuntimeSnapshot["status"]>();
+
+function clearWSStoreReconnectTimer(): void {
+  if (!wsStoreReconnectTimer) return;
+  clearTimeout(wsStoreReconnectTimer);
+  wsStoreReconnectTimer = null;
+}
+
+function scheduleWSStoreReconnect(reconnect: () => void): void {
+  if (wsStoreReconnectTimer) return;
+  wsStoreReconnectTimer = setTimeout(() => {
+    wsStoreReconnectTimer = null;
+    reconnect();
+  }, WS_STORE_RECONNECT_DELAY_MS);
+}
 
 declare global {
   interface Window {
@@ -385,6 +413,8 @@ declare global {
       hideApprovalBlock?: () => void;
       showChangedResources?: () => void;
       hideChangedResources?: () => void;
+      showPlanProgress?: () => void;
+      hidePlanProgress?: () => void;
       [key: string]: unknown;
     };
   }
@@ -480,6 +510,16 @@ function acceptConversationRevision(conversationId: string, revision: number | u
   if (appliedRevision !== undefined && revision < appliedRevision) return false;
   appliedConversationRevisions.set(conversationId, revision);
   return true;
+}
+
+function upsertTimelinePlan(
+  plans: AIPlanRuntimeSnapshot[],
+  plan: AIPlanRuntimeSnapshot
+): AIPlanRuntimeSnapshot[] {
+  if (!plan.revisionId || !plan.publishedAt) return plans;
+  return [...plans.filter((candidate) => candidate.id !== plan.id), plan].sort(
+    (left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+  );
 }
 
 export interface AIConversationBlock {
@@ -767,6 +807,10 @@ export const useAIStore = create<AIState>()((set, get) => ({
   activeConversationId: null,
   sidebarActiveConversationId: null,
   activeRunId: null,
+  activePlan: null,
+  plans: [],
+  devPlanProgressPreview: null,
+  workMode: "normal",
   canContinueConversation: false,
   isCompactingContext: false,
   lastContext: null,
@@ -791,6 +835,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
       .refreshProviderStatus()
       .catch(() => {});
     if (wsClient?.isConnected) {
+      clearWSStoreReconnectTimer();
       set({ isConnected: true, isConnecting: false, connectionError: null });
       return true;
     }
@@ -808,6 +853,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
       handleWSMessage(msg, set, get);
     });
     wsClient.onStatusChange((connected) => {
+      if (connected) clearWSStoreReconnectTimer();
       set({
         isConnected: connected,
         isConnecting: false,
@@ -832,18 +878,26 @@ export const useAIStore = create<AIState>()((set, get) => ({
 
     const ok = await wsClient.connect();
     if (!ok) {
-      set((state) => ({
+      const currentError = get().connectionError;
+      const transientFailure = currentError === null || currentError === "Reconnecting...";
+      set({
         isConnecting: false,
         isConnected: false,
-        connectionError:
-          state.connectionError ??
-          (useAuthStore.getState().isLoading ? null : "AI connection failed"),
-      }));
+        connectionError: transientFailure ? "Reconnecting..." : currentError,
+      });
+      if (transientFailure) {
+        scheduleWSStoreReconnect(() => {
+          if (useAuthStore.getState().user && !get().isConnected) {
+            void get().connect();
+          }
+        });
+      }
     }
     return ok;
   },
 
   disconnect: () => {
+    clearWSStoreReconnectTimer();
     wsClient?.disconnect();
     wsClient = null;
     set((state) => ({
@@ -884,6 +938,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
       lastContext: context ?? null,
       pendingApprovalToolCallId: null,
       pendingCredentialChallenge: null,
+      workMode: "normal",
       ...(options.startNewConversation
         ? {
             messages: [
@@ -909,6 +964,8 @@ export const useAIStore = create<AIState>()((set, get) => ({
             activeConversationId: null,
             sidebarActiveConversationId: null,
             activeRunId: null,
+            activePlan: null,
+            plans: [],
             isCompactingContext: false,
           }
         : {}),
@@ -928,6 +985,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
         state.selectedReasoningEffort
           ? { reasoningEffort: state.selectedReasoningEffort }
           : {}),
+        ...(state.workMode === "plan" ? { workMode: "plan" as const } : {}),
         conversationId: options.startNewConversation
           ? undefined
           : (state.activeConversationId ?? undefined),
@@ -943,6 +1001,55 @@ export const useAIStore = create<AIState>()((set, get) => ({
         ),
       }));
     }
+  },
+
+  setWorkMode: (workMode) => set({ workMode }),
+
+  decidePlan: (decision, customInstruction) => {
+    const { activeConversationId, activePlan } = get();
+    if (!activeConversationId || !activePlan?.revisionId) return;
+    sendWSMessage({
+      type: "plan.decide",
+      conversationId: activeConversationId,
+      planId: activePlan.id,
+      revisionId: activePlan.revisionId,
+      decision,
+      ...(customInstruction?.trim() ? { customInstruction: customInstruction.trim() } : {}),
+      clientCommandId: generateId(),
+    });
+  },
+
+  pausePlan: () => {
+    const { activeConversationId, activePlan } = get();
+    if (!activeConversationId || !activePlan) return;
+    sendWSMessage({
+      type: "plan.pause",
+      conversationId: activeConversationId,
+      planId: activePlan.id,
+      clientCommandId: generateId(),
+    });
+  },
+
+  resumePlan: () => {
+    const { activeConversationId, activePlan } = get();
+    if (!activeConversationId || !activePlan) return;
+    sendWSMessage({
+      type: "plan.resume",
+      conversationId: activeConversationId,
+      planId: activePlan.id,
+      clientCommandId: generateId(),
+    });
+  },
+
+  cancelPlan: () => {
+    const { activeConversationId, activePlan } = get();
+    if (!activeConversationId || !activePlan) return;
+    sendWSMessage({
+      type: "plan.cancel",
+      conversationId: activeConversationId,
+      planId: activePlan.id,
+      clientCommandId: generateId(),
+    });
   },
 
   queueMessage: (
@@ -1057,6 +1164,9 @@ export const useAIStore = create<AIState>()((set, get) => ({
       isStreaming: true,
       canContinueConversation: false,
       activeRunId: null,
+      activePlan: null,
+      plans: [],
+      workMode: "normal",
       lastContext: context ?? state.lastContext,
       pendingApprovalToolCallId: null,
       pendingCredentialChallenge: null,
@@ -1424,6 +1534,8 @@ export const useAIStore = create<AIState>()((set, get) => ({
         activeConversationId: conversation.id,
         sidebarActiveConversationId: conversation.id,
         activeRunId: null,
+        activePlan: null,
+        plans: [],
         canContinueConversation: false,
         isStartingConversation: false,
         isCompactingContext: false,
@@ -1450,6 +1562,8 @@ export const useAIStore = create<AIState>()((set, get) => ({
         activeConversationId: null,
         sidebarActiveConversationId: null,
         activeRunId: null,
+        activePlan: null,
+        plans: [],
         canContinueConversation: false,
         isStartingConversation: false,
         isCompactingContext: false,
@@ -1479,6 +1593,8 @@ export const useAIStore = create<AIState>()((set, get) => ({
               activeConversationId: null,
               sidebarActiveConversationId: null,
               activeRunId: null,
+              activePlan: null,
+              plans: [],
               canContinueConversation: false,
               isStartingConversation: false,
               isCompactingContext: false,
@@ -1829,6 +1945,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
 }));
 
 export function resetAIStateForAuthChange() {
+  clearWSStoreReconnectTimer();
   wsClient?.disconnect();
   wsClient = null;
   conversationLoadGeneration += 1;
@@ -1836,6 +1953,7 @@ export function resetAIStateForAuthChange() {
   appliedConversationRevisions.clear();
   pendingToolCommands.clear();
   pendingInputCommands.clear();
+  observedPlanStatuses.clear();
   useAIStore.setState({
     messages: [],
     queuedInputs: [],
@@ -1854,6 +1972,10 @@ export function resetAIStateForAuthChange() {
     activeConversationId: null,
     sidebarActiveConversationId: null,
     activeRunId: null,
+    activePlan: null,
+    plans: [],
+    devPlanProgressPreview: null,
+    workMode: "normal",
     canContinueConversation: false,
     isCompactingContext: false,
     lastContext: null,
@@ -1990,6 +2112,32 @@ function handleWSMessage(
         ),
         isStartingConversation: false,
       }));
+      break;
+    }
+
+    case "plan.status_changed": {
+      if (!acceptConversationRevision(msg.conversationId, msg.revision)) return;
+      const previousStatus = observedPlanStatuses.get(msg.conversationId);
+      observedPlanStatuses.set(msg.conversationId, msg.plan.status);
+      set((state) => ({
+        recentConversations: state.recentConversations.map((conversation) =>
+          conversation.id === msg.conversationId
+            ? { ...conversation, planStatus: msg.plan.status }
+            : conversation
+        ),
+        ...(state.activeConversationId === msg.conversationId
+          ? {
+              activePlan: msg.plan,
+              plans: upsertTimelinePlan(state.plans, msg.plan),
+            }
+          : {}),
+      }));
+      if (previousStatus && previousStatus !== msg.plan.status) {
+        const title = msg.plan.title || "Work Session plan";
+        if (msg.plan.status === "awaiting_decision") toast.info(`${title} is ready to review`);
+        if (msg.plan.status === "paused") toast.warning(`${title} is paused`);
+        if (msg.plan.status === "completed") toast.success(`${title} is complete`);
+      }
       break;
     }
 
@@ -2197,6 +2345,9 @@ function projectConversationSnapshot(
     activeConversationId: snapshot.conversation.id,
     sidebarActiveConversationId: snapshot.conversation.id,
     activeRunId: snapshot.runtime.activeRun?.id ?? null,
+    activePlan: snapshot.runtime.activePlan ?? null,
+    plans:
+      snapshot.runtime.plans ?? (snapshot.runtime.activePlan ? [snapshot.runtime.activePlan] : []),
     canContinueConversation: snapshot.runtime.canContinue === true,
     isCompactingContext: Boolean(
       snapshot.runtime.activeRun &&
@@ -2854,6 +3005,7 @@ function patchRecentConversationFromSnapshot(
     status: snapshot.conversation.status ?? existing?.status ?? "active",
     blockReason: snapshot.conversation.blockReason ?? existing?.blockReason ?? null,
     activeRunStatus: snapshot.runtime.activeRun?.status ?? null,
+    planStatus: snapshot.runtime.activePlan?.status ?? existing?.planStatus ?? null,
   };
   const found = Boolean(existing);
   const next = found
@@ -2957,6 +3109,7 @@ function isActiveRunStatus(status: string | null | undefined): boolean {
 const DEV_APPROVAL_MESSAGE_ID = "dev-approval-preview-message";
 const DEV_APPROVAL_TOOL_CALL_ID = "dev-approval-preview-tool";
 const DEV_CHANGED_RESOURCES_MESSAGE_ID = "dev-changed-resources-preview-message";
+const DEV_PLAN_PREVIEW_ID = "dev-plan-progress-preview";
 
 function installAIResourcePreviewCommands(): void {
   if (typeof window === "undefined") return;
@@ -3009,6 +3162,87 @@ function installAIResourcePreviewCommands(): void {
           (message) => message.id !== DEV_CHANGED_RESOURCES_MESSAGE_ID
         ),
       }));
+    },
+    showPlanProgress: () => {
+      const now = new Date();
+      const publishedAt = new Date(now.getTime() - 60_000).toISOString();
+      useUIStore.setState({ aiPanelOpen: true });
+      useAIStore.setState((state) => ({
+        activeConversationId: state.activeConversationId ?? "00000000-0000-4000-8000-000000000001",
+        devPlanProgressPreview: {
+          id: DEV_PLAN_PREVIEW_ID,
+          conversationId: state.activeConversationId ?? "00000000-0000-4000-8000-000000000001",
+          status: "executing",
+          title: "Implement Gateway plan mode",
+          model: state.selectedModel,
+          reasoningEffort: state.selectedReasoningEffort,
+          revisionId: `${DEV_PLAN_PREVIEW_ID}-revision`,
+          revision: 1,
+          revisionStatus: "accepted",
+          publishedAt,
+          timelineAnchorAt: publishedAt,
+          acceptedAt: publishedAt,
+          goal: "Complete and verify the requested Gateway changes.",
+          scope: ["Gateway UI", "Plan execution"],
+          assumptions: [],
+          research: [],
+          intentReview: { verdict: "pass", summary: "The plan matches the request.", findings: [] },
+          securityReview: {
+            verdict: "pass",
+            summary: "The plan is safe to execute.",
+            findings: [],
+          },
+          verification: [],
+          changeSummary: null,
+          steps: [
+            {
+              id: `${DEV_PLAN_PREVIEW_ID}-step-1`,
+              ordinal: 0,
+              title: "Inspect current behavior",
+              description: "Confirm the existing Plan Mode flow.",
+              verification: "The current behavior is documented.",
+              status: "completed",
+              evidence: [{ summary: "Current behavior inspected." }],
+              skipReason: null,
+              startedAt: publishedAt,
+              completedAt: publishedAt,
+            },
+            {
+              id: `${DEV_PLAN_PREVIEW_ID}-step-2`,
+              ordinal: 1,
+              title: "Implement the requested changes",
+              description: "Update the active Plan Mode experience.",
+              verification: "The updated behavior works in the UI.",
+              status: "in_progress",
+              evidence: [],
+              skipReason: null,
+              startedAt: now.toISOString(),
+              completedAt: null,
+            },
+            {
+              id: `${DEV_PLAN_PREVIEW_ID}-step-3`,
+              ordinal: 2,
+              title: "Verify the result",
+              description: "Run targeted checks and browser verification.",
+              verification: "All requested behavior is verified.",
+              status: "pending",
+              evidence: [],
+              skipReason: null,
+              startedAt: null,
+              completedAt: null,
+            },
+          ],
+          noProgressRuns: 0,
+          activeTimeMs: 64_000,
+          activeSince: now.toISOString(),
+          pauseReason: null,
+          createdAt: publishedAt,
+          updatedAt: now.toISOString(),
+        },
+      }));
+    },
+    hidePlanProgress: () => {
+      useAIStore.setState({ devPlanProgressPreview: null });
     },
   };
 }

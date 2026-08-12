@@ -4,6 +4,7 @@ import {
   type AIConversationInput,
   type AICredentialChallenge,
   type AIRun,
+  type AIRunPurpose,
   type AIRunQuestion,
   type AIRunStatus,
   type AIRunToolCall,
@@ -23,9 +24,10 @@ import {
 import { AppError } from '@/middleware/error-handler.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
-import type { AIResourceReference } from './ai.types.js';
+import type { AIPlanRuntimeSnapshot, AIResourceReference } from './ai.types.js';
 import { countVisibleMessages, deriveConversationStatus, getLastUserMessageAt } from './ai-conversation.service.js';
 import type { AIConversationSearchService } from './ai-conversation-search.service.js';
+import type { AIPlanService } from './ai-plan.service.js';
 import { mergeAIResourceReference } from './ai-resource-references.js';
 import { AIRunExecutor } from './ai-run-executor.js';
 import { AI_CONTINUATION_COMMAND_PREFIX, toClientCheckpoint } from './ai-run-runtime.helpers.js';
@@ -165,6 +167,8 @@ export interface RuntimeSnapshot {
   toolCalls: AIRunToolCall[];
   toolRounds: AIRunToolRound[];
   pendingInputs: AIConversationInput[];
+  activePlan: AIPlanRuntimeSnapshot | null;
+  plans: AIPlanRuntimeSnapshot[];
 }
 
 export interface AIConversationRuntimeSnapshot {
@@ -196,7 +200,8 @@ export class AIRunService {
   constructor(
     private readonly db: DrizzleClient,
     private readonly eventBus?: EventBusService,
-    private readonly conversationSearchService?: AIConversationSearchService
+    private readonly conversationSearchService?: AIConversationSearchService,
+    private readonly planService?: AIPlanService
   ) {
     this.executor = new AIRunExecutor(
       db,
@@ -210,8 +215,146 @@ export class AIRunService {
       conversationSearchService,
       (userId, conversationId, runId, challenge) =>
         this.publishCredentialChallenge(userId, conversationId, runId, challenge),
-      (userId, conversationId, runId, action) => this.publishClientAction(userId, conversationId, runId, action)
+      (userId, conversationId, runId, action) => this.publishClientAction(userId, conversationId, runId, action),
+      (user, run) => this.handleCompletedRun(user, run),
+      (user, run, error) => this.handleFailedRun(user, run, error)
     );
+  }
+
+  async attachRunToPlan(input: {
+    userId: string;
+    conversationId: string;
+    runId: string;
+    plan: AIPlanRuntimeSnapshot;
+    purpose: AIRunPurpose;
+  }): Promise<AIRun> {
+    const [run] = await this.db
+      .update(aiRuns)
+      .set({
+        planId: input.plan.id,
+        planRevisionId: input.plan.revisionId,
+        purpose: input.purpose,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(aiRuns.id, input.runId),
+          eq(aiRuns.userId, input.userId),
+          eq(aiRuns.conversationId, input.conversationId),
+          eq(aiRuns.status, 'queued')
+        )
+      )
+      .returning();
+    if (!run) throw new AppError(409, 'AI_PLAN_RUN_NOT_ATTACHABLE', 'The AI run is no longer available for Plan Mode');
+    this.publishConversationChanged(input.userId, input.conversationId);
+    return run;
+  }
+
+  async startPlanRun(input: {
+    user: User;
+    plan: AIPlanRuntimeSnapshot;
+    purpose: Exclude<AIRunPurpose, 'direct'>;
+    clientCommandId: string;
+    instruction?: string;
+  }): Promise<{ run: AIRun; duplicate: boolean }> {
+    const result = await this.db.transaction(async (tx) => {
+      const conversation = await getOwnedConversation(tx, input.user.id, input.plan.conversationId);
+      if (!conversation) throw new AppError(404, 'AI_CONVERSATION_NOT_FOUND', 'AI conversation not found');
+      const existing = await findRunByCommand(tx, input.user.id, conversation.id, input.clientCommandId);
+      if (existing) return { run: existing, duplicate: true };
+      const activeRun = await getActiveRunForUpdate(tx, conversation.id);
+      if (activeRun) throw new AppError(409, 'AI_RUN_ACTIVE', 'Conversation already has an active AI run');
+
+      let activeMessageId: string | null = null;
+      const pendingInputs = await tx
+        .select()
+        .from(aiConversationInputs)
+        .where(
+          and(
+            eq(aiConversationInputs.conversationId, conversation.id),
+            eq(aiConversationInputs.userId, input.user.id),
+            eq(aiConversationInputs.status, 'pending')
+          )
+        )
+        .orderBy(asc(aiConversationInputs.createdAt));
+      const userMessages = [
+        ...pendingInputs.map((item) => ({
+          content: item.content,
+          attachments: item.attachments,
+          steer: true,
+        })),
+        ...(input.instruction?.trim() ? [{ content: input.instruction.trim(), attachments: [], steer: true }] : []),
+      ];
+      if (userMessages.length > 0) {
+        let sequence = await nextMessageSequence(tx, conversation.id);
+        const inserted = await tx
+          .insert(aiConversationMessages)
+          .values(
+            userMessages.map((message) =>
+              toConversationMessage(
+                conversation.id,
+                {
+                  role: 'user',
+                  content: message.content,
+                  attachments: message.attachments,
+                  steer: message.steer,
+                },
+                sequence++
+              )
+            )
+          )
+          .returning({ id: aiConversationMessages.id });
+        activeMessageId = inserted.at(-1)?.id ?? null;
+        if (pendingInputs.length > 0) {
+          const now = new Date();
+          await tx
+            .update(aiConversationInputs)
+            .set({ status: 'consumed', consumedAt: now, updatedAt: now })
+            .where(
+              inArray(
+                aiConversationInputs.id,
+                pendingInputs.map((item) => item.id)
+              )
+            );
+        }
+      }
+      if (!activeMessageId) {
+        const [lastUserMessage] = await tx
+          .select({ id: aiConversationMessages.id })
+          .from(aiConversationMessages)
+          .where(
+            and(eq(aiConversationMessages.conversationId, conversation.id), eq(aiConversationMessages.role, 'user'))
+          )
+          .orderBy(desc(aiConversationMessages.sequence))
+          .limit(1);
+        activeMessageId = lastUserMessage?.id ?? null;
+      }
+      if (!activeMessageId) {
+        throw new AppError(409, 'AI_PLAN_MESSAGE_REQUIRED', 'A Plan Mode run requires conversation context');
+      }
+
+      const [run] = await tx
+        .insert(aiRuns)
+        .values({
+          conversationId: conversation.id,
+          userId: input.user.id,
+          planId: input.plan.id,
+          planRevisionId: input.plan.revisionId,
+          purpose: input.purpose,
+          clientCommandId: input.clientCommandId,
+          activeMessageId,
+          model: input.plan.model ?? conversation.model,
+          reasoningEffort: input.plan.reasoningEffort ?? conversation.reasoningEffort,
+          status: 'queued',
+          updatedAt: new Date(),
+        })
+        .returning();
+      return { run, duplicate: false };
+    });
+    this.publishConversationChanged(input.user.id, input.plan.conversationId);
+    this.conversationSearchService?.rebuildConversationIndexBestEffort(input.user.id, input.plan.conversationId);
+    if (!result.duplicate || result.run.status === 'queued') this.startRunExecution(input.user, result.run.id);
+    return result;
   }
 
   async startUserRun(input: StartUserRunInput): Promise<StartUserRunResult> {
@@ -1226,6 +1369,8 @@ export class AIRunService {
         conversationId: aiRuns.conversationId,
         userId: aiRuns.userId,
         status: aiRuns.status,
+        planId: aiRuns.planId,
+        purpose: aiRuns.purpose,
         assistantDraftContent: aiRuns.assistantDraftContent,
       })
       .from(aiRuns)
@@ -1240,7 +1385,13 @@ export class AIRunService {
           run.assistantDraftContent
         );
         if (run.status === 'running') {
-          await this.reconcileInterruptedRunningRun(run);
+          const effectUnknown = await this.reconcileInterruptedRunningRun(run);
+          if (effectUnknown) {
+            await this.pausePlanAfterFailedRun(
+              run,
+              'Gateway restarted while a plan tool was running. Verify the real resource state before resuming.'
+            );
+          }
         } else {
           await this.db
             .update(aiRuns)
@@ -1255,7 +1406,15 @@ export class AIRunService {
   async recoverInterruptedRuns(loadUser: (userId: string) => Promise<User | null>): Promise<void> {
     const runs = await this.db.select().from(aiRuns).where(inArray(aiRuns.status, ACTIVE_RUN_STATUSES));
     for (const run of runs) {
-      if (run.status === 'running') await this.reconcileInterruptedRunningRun(run);
+      if (run.status === 'running') {
+        const effectUnknown = await this.reconcileInterruptedRunningRun(run);
+        if (effectUnknown) {
+          await this.pausePlanAfterFailedRun(
+            run,
+            'Gateway restarted while a plan tool was running. Verify the real resource state before resuming.'
+          );
+        }
+      }
       const [current] = await this.db.select().from(aiRuns).where(eq(aiRuns.id, run.id)).limit(1);
       if (!current) continue;
       if (current.status === 'waiting_for_approval' || current.status === 'waiting_for_answer') {
@@ -1323,6 +1482,7 @@ export class AIRunService {
     for (const pending of pendingInputs) {
       if (recoveredConversations.has(pending.conversationId)) continue;
       if (await this.getActiveRun(pending.conversationId)) continue;
+      if (await this.planService?.getActivePlanSnapshot(pending.userId, pending.conversationId)) continue;
       if (pending.targetRunId) {
         const [targetRun] = await this.db
           .select({ status: aiRuns.status })
@@ -1351,9 +1511,20 @@ export class AIRunService {
       recoveredConversations.add(pending.conversationId);
       this.executor.startPendingInputExecution(user, pending.conversationId);
     }
+
+    if (this.planService) {
+      for (const owner of await this.planService.listRecoverablePlans()) {
+        if (await this.getActiveRun(owner.conversationId)) continue;
+        const user = await loadUser(owner.userId).catch(() => null);
+        if (!user || user.isBlocked) continue;
+        const plan = await this.planService.getActivePlanSnapshot(owner.userId, owner.conversationId);
+        if (!plan) continue;
+        await this.schedulePlanStateRun(user, plan, `recovery:${Date.now()}`);
+      }
+    }
   }
 
-  private async reconcileInterruptedRunningRun(run: Pick<AIRun, 'id' | 'conversationId' | 'userId'>): Promise<void> {
+  private async reconcileInterruptedRunningRun(run: Pick<AIRun, 'id' | 'conversationId' | 'userId'>): Promise<boolean> {
     const runningCalls = await this.db
       .select({ id: aiRunToolCalls.id, roundId: aiRunToolCalls.roundId })
       .from(aiRunToolCalls)
@@ -1384,7 +1555,7 @@ export class AIRunService {
           updatedAt: now,
         })
         .where(eq(aiRuns.id, run.id));
-      return;
+      return true;
     }
     await this.db
       .update(aiRuns)
@@ -1398,6 +1569,7 @@ export class AIRunService {
         updatedAt: now,
       })
       .where(eq(aiRuns.id, run.id));
+    return false;
   }
 
   waitForIdle(deadline: number): Promise<void> {
@@ -1435,7 +1607,108 @@ export class AIRunService {
     this.executor.startContextCompaction(user, runId, trigger);
   }
 
-  private async getRuntimeSnapshot(conversationId: string): Promise<RuntimeSnapshot> {
+  private async handleCompletedRun(user: User, run: AIRun): Promise<boolean> {
+    if (!this.planService) return false;
+    let plan = await this.planService.getActivePlanSnapshot(user.id, run.conversationId);
+    if (!plan) return false;
+
+    if (plan.status === 'executing' && run.purpose === 'plan_execution') {
+      const progressCalls = await this.db
+        .select({ status: aiRunToolCalls.status, result: aiRunToolCalls.result })
+        .from(aiRunToolCalls)
+        .where(and(eq(aiRunToolCalls.runId, run.id), eq(aiRunToolCalls.toolName, 'update_plan_step')));
+      plan =
+        (await this.planService.recordExecutionRunOutcome(
+          user.id,
+          run.conversationId,
+          progressCalls.some(
+            (call) =>
+              call.status === 'completed' &&
+              !!call.result &&
+              typeof call.result === 'object' &&
+              !Array.isArray(call.result) &&
+              (call.result as Record<string, unknown>).progressMade === true
+          )
+        )) ?? plan;
+    }
+
+    if (plan.status === 'verifying' && run.purpose === 'plan_verification') {
+      const verificationCalls = await this.db
+        .select({ status: aiRunToolCalls.status })
+        .from(aiRunToolCalls)
+        .where(and(eq(aiRunToolCalls.runId, run.id), eq(aiRunToolCalls.toolName, 'submit_plan_verification')));
+      if (verificationCalls.some((call) => call.status === 'completed')) {
+        await this.planService.completeFinalVerificationAfterRun(user.id, run.conversationId);
+        return true;
+      }
+    }
+
+    if (plan.status === 'drafting' && run.purpose === 'plan_draft') return true;
+    if (plan.status === 'awaiting_decision' || plan.status === 'paused') return true;
+    await this.schedulePlanStateRun(user, plan, run.id);
+    return true;
+  }
+
+  private async handleFailedRun(_user: User, run: AIRun, error: string): Promise<void> {
+    if (this.planService && run.planId && run.purpose === 'plan_validation') {
+      const recovered = await this.planService.recoverFailedValidation(
+        run.userId,
+        run.conversationId,
+        run.planId,
+        `Plan validation failed: ${error}`.slice(0, 1000)
+      );
+      if (recovered) this.publishConversationChanged(run.userId, run.conversationId);
+      return;
+    }
+    await this.pausePlanAfterFailedRun(run, `AI run failed: ${error}`);
+  }
+
+  private async pausePlanAfterFailedRun(
+    run: Pick<AIRun, 'conversationId' | 'userId' | 'planId' | 'purpose'>,
+    reason: string
+  ): Promise<boolean> {
+    if (!this.planService || !run.planId || (run.purpose !== 'plan_execution' && run.purpose !== 'plan_verification')) {
+      return false;
+    }
+    const plan = await this.planService.getActivePlanSnapshot(run.userId, run.conversationId);
+    if (!plan || plan.id !== run.planId || (plan.status !== 'executing' && plan.status !== 'verifying')) {
+      return false;
+    }
+    await this.planService.pause(run.userId, run.conversationId, reason.slice(0, 1000));
+    this.publishConversationChanged(run.userId, run.conversationId);
+    return true;
+  }
+
+  private async schedulePlanStateRun(user: User, plan: AIPlanRuntimeSnapshot, triggerId: string): Promise<void> {
+    const purpose =
+      plan.status === 'drafting'
+        ? 'plan_draft'
+        : plan.status === 'validating'
+          ? 'plan_validation'
+          : plan.status === 'executing'
+            ? 'plan_execution'
+            : plan.status === 'verifying'
+              ? 'plan_verification'
+              : null;
+    if (!purpose) return;
+    await this.startPlanRun({
+      user,
+      plan,
+      purpose,
+      clientCommandId: `plan:${plan.id}:${purpose}:${triggerId}`,
+    });
+  }
+
+  private async getRuntimeSnapshot(userId: string, conversationId: string): Promise<RuntimeSnapshot> {
+    const [plans, latestPlan] = await Promise.all([
+      this.planService?.listPlanSnapshots
+        ? this.planService.listPlanSnapshots(userId, conversationId)
+        : Promise.resolve([]),
+      this.planService?.getLatestPlanSnapshot
+        ? this.planService.getLatestPlanSnapshot(userId, conversationId)
+        : Promise.resolve(null),
+    ]);
+    const activePlan = latestPlan ?? plans.at(-1) ?? null;
     const pendingInputs = await this.db
       .select()
       .from(aiConversationInputs)
@@ -1451,6 +1724,8 @@ export class AIRunService {
         .limit(1);
       return {
         activeRun: null,
+        activePlan,
+        plans,
         canContinue: lastRun?.status === 'failed' || lastRun?.status === 'stopped',
         assistantDraftContent: null,
         assistantDraftVersion: null,
@@ -1489,6 +1764,8 @@ export class AIRunService {
 
     return {
       activeRun,
+      activePlan,
+      plans,
       canContinue: false,
       assistantDraftContent,
       assistantDraftVersion: liveDraft?.version ?? (assistantDraftContent ? 0 : null),
@@ -1517,7 +1794,7 @@ export class AIRunService {
         .from(aiConversationMessages)
         .where(eq(aiConversationMessages.conversationId, conversationId))
         .orderBy(asc(aiConversationMessages.sequence)),
-      this.getRuntimeSnapshot(conversationId),
+      this.getRuntimeSnapshot(userId, conversationId),
     ]);
 
     const snapshotMessages = messages.map((message) =>

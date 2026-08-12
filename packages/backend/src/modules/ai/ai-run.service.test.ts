@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { AIRun } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
+import type { User } from '@/types.js';
 import { AIRunService } from './ai-run.service.js';
 
 function createTransitionDb<T>(updateRows: T[], selectRows: unknown[][] = [[{ id: 'conversation-1' }]]) {
@@ -103,6 +105,51 @@ function createRuntimeSnapshotDb() {
   const select = vi.fn(() => ({ from }));
   return { select };
 }
+
+describe('AIRunService plan completion', () => {
+  it('does not count a non-terminal step update as execution progress', async () => {
+    const where = vi.fn().mockResolvedValue([{ status: 'completed', result: { progressMade: false } }]);
+    const select = vi.fn(() => ({ from: vi.fn(() => ({ where })) }));
+    const planService = {
+      getActivePlanSnapshot: vi.fn().mockResolvedValue({ status: 'executing' }),
+      recordExecutionRunOutcome: vi.fn().mockResolvedValue({ status: 'paused' }),
+    };
+    const service = new AIRunService({ select } as never, undefined, undefined, planService as never);
+
+    await (
+      service as unknown as {
+        handleCompletedRun: (user: { id: string }, run: unknown) => Promise<boolean>;
+      }
+    ).handleCompletedRun(
+      { id: 'user-1' },
+      { id: 'run-1', conversationId: 'conversation-1', purpose: 'plan_execution' }
+    );
+
+    expect(planService.recordExecutionRunOutcome).toHaveBeenCalledWith('user-1', 'conversation-1', false);
+  });
+
+  it('completes a verified plan only after the verification run is done', async () => {
+    const where = vi.fn().mockResolvedValue([{ status: 'completed' }]);
+    const select = vi.fn(() => ({ from: vi.fn(() => ({ where })) }));
+    const planService = {
+      getActivePlanSnapshot: vi.fn().mockResolvedValue({ status: 'verifying' }),
+      completeFinalVerificationAfterRun: vi.fn().mockResolvedValue({ status: 'completed' }),
+    };
+    const service = new AIRunService({ select } as never, undefined, undefined, planService as never);
+
+    const handled = await (
+      service as unknown as {
+        handleCompletedRun: (user: { id: string }, run: unknown) => Promise<boolean>;
+      }
+    ).handleCompletedRun(
+      { id: 'user-1' },
+      { id: 'run-1', conversationId: 'conversation-1', purpose: 'plan_verification' }
+    );
+
+    expect(handled).toBe(true);
+    expect(planService.completeFinalVerificationAfterRun).toHaveBeenCalledWith('user-1', 'conversation-1');
+  });
+});
 
 describe('AIRunService startUserRun', () => {
   it('creates a conversation, user message, and queued run atomically', async () => {
@@ -1189,9 +1236,9 @@ describe('AIRunService restart reconciliation', () => {
     const update = vi.fn(() => ({ set: updateSet }));
     const service = new AIRunService({ select, update } as never);
 
-    await (
+    const effectUnknown = await (
       service as unknown as {
-        reconcileInterruptedRunningRun(run: { id: string; conversationId: string; userId: string }): Promise<void>;
+        reconcileInterruptedRunningRun(run: { id: string; conversationId: string; userId: string }): Promise<boolean>;
       }
     ).reconcileInterruptedRunningRun({
       id: 'run-1',
@@ -1199,6 +1246,7 @@ describe('AIRunService restart reconciliation', () => {
       userId: 'user-1',
     });
 
+    expect(effectUnknown).toBe(true);
     expect(updateSet).toHaveBeenCalledWith(
       expect.objectContaining({
         status: 'effect_unknown',
@@ -1222,9 +1270,9 @@ describe('AIRunService restart reconciliation', () => {
     const update = vi.fn(() => ({ set: updateSet }));
     const service = new AIRunService({ select, update } as never);
 
-    await (
+    const effectUnknown = await (
       service as unknown as {
-        reconcileInterruptedRunningRun(run: { id: string; conversationId: string; userId: string }): Promise<void>;
+        reconcileInterruptedRunningRun(run: { id: string; conversationId: string; userId: string }): Promise<boolean>;
       }
     ).reconcileInterruptedRunningRun({
       id: 'run-1',
@@ -1232,8 +1280,75 @@ describe('AIRunService restart reconciliation', () => {
       userId: 'user-1',
     });
 
+    expect(effectUnknown).toBe(false);
     expect(updateSet).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'queued', leaseOwner: null, leaseExpiresAt: null })
+    );
+  });
+
+  it('pauses an executing plan when its run fails', async () => {
+    const planService = {
+      getActivePlanSnapshot: vi.fn().mockResolvedValue({
+        id: 'plan-1',
+        status: 'executing',
+      }),
+      pause: vi.fn().mockResolvedValue(undefined),
+    };
+    const service = new AIRunService({} as never, undefined, undefined, planService as never);
+
+    const paused = await (
+      service as unknown as {
+        pausePlanAfterFailedRun(
+          run: {
+            conversationId: string;
+            userId: string;
+            planId: string | null;
+            purpose: 'plan_execution';
+          },
+          reason: string
+        ): Promise<boolean>;
+      }
+    ).pausePlanAfterFailedRun(
+      {
+        conversationId: 'conversation-1',
+        userId: 'user-1',
+        planId: 'plan-1',
+        purpose: 'plan_execution',
+      },
+      'AI run failed: provider failed'
+    );
+
+    expect(paused).toBe(true);
+    expect(planService.pause).toHaveBeenCalledWith('user-1', 'conversation-1', 'AI run failed: provider failed');
+  });
+
+  it('returns a failed plan validation to drafting', async () => {
+    const planService = {
+      recoverFailedValidation: vi.fn().mockResolvedValue(true),
+    };
+    const service = new AIRunService({} as never, undefined, undefined, planService as never);
+
+    await (
+      service as unknown as {
+        handleFailedRun(user: User, run: AIRun, error: string): Promise<void>;
+      }
+    ).handleFailedRun(
+      { id: 'user-1' } as User,
+      {
+        id: 'run-1',
+        conversationId: 'conversation-1',
+        userId: 'user-1',
+        planId: 'plan-1',
+        purpose: 'plan_validation',
+      } as AIRun,
+      'provider failed'
+    );
+
+    expect(planService.recoverFailedValidation).toHaveBeenCalledWith(
+      'user-1',
+      'conversation-1',
+      'plan-1',
+      'Plan validation failed: provider failed'
     );
   });
 });

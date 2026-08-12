@@ -4,16 +4,20 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
+  ListChecks,
+  Pause,
   Pencil,
   Play,
   Plus,
   Square,
   X,
 } from "lucide-react";
-import type { ChangeEvent, KeyboardEvent, RefObject } from "react";
+import type { ChangeEvent, KeyboardEvent, ReactNode, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,10 +39,13 @@ import type {
   AIConversationInput,
   AIInferenceModelOption,
   AIMessage as AIMessageType,
+  AIPlanRuntimeSnapshot,
   PageContext,
 } from "@/types/ai";
 import { AIContextUsageDialog } from "./AIContextUsageDialog";
+import { AIProgressRing } from "./AIProgressRing";
 import { AIProviderControls } from "./AIProviderControls";
+import { QuestionBlock } from "./AIToolCallBlock";
 import { InferenceQuotaStatus, useInferenceQuota } from "./InferenceQuotaStatus";
 import { getComposerAttachmentId, getComposerAttachmentPreviewUrl } from "./useAIComposerDraft";
 
@@ -69,6 +76,9 @@ interface AIComposerProps {
   approvalMode: AIApprovalMode;
   approvalModeLabel: string;
   setApprovalMode: (mode: AIApprovalMode) => void | Promise<void>;
+  workMode: "normal" | "plan";
+  setWorkMode: (mode: "normal" | "plan") => void;
+  interactionDisabled?: boolean;
   modelOptions?: AIInferenceModelOption[];
   selectedModel?: string | null;
   onModelChange?: (model: string) => void | Promise<void>;
@@ -90,6 +100,246 @@ interface AIComposerProps {
 }
 
 const MAX_IMAGE_ATTACHMENTS = 3;
+
+function formatPlanStepTitle(title: string): string {
+  return title.replace(/^\s*\d+[.)]\s+/, "");
+}
+
+export function AIPlanBlock({
+  plan,
+  className,
+}: {
+  plan: AIPlanRuntimeSnapshot;
+  className?: string;
+}) {
+  if (!plan.revisionId || !plan.goal) return null;
+  return (
+    <div className={cn("space-y-2", className)}>
+      <div className="border border-border bg-muted/30">
+        <div className="border-b border-border bg-muted/50 px-4 py-3">
+          <div className="flex items-center gap-2">
+            <ListChecks className="h-4 w-4 text-link" />
+            <h3 className="min-w-0 flex-1 truncate text-sm font-semibold">
+              {plan.title || "Implementation plan"}
+            </h3>
+            <span className="text-xs capitalize text-muted-foreground">
+              {plan.status.replace("_", " ")}
+            </span>
+          </div>
+          <p className="mt-2 text-sm text-muted-foreground">{plan.goal}</p>
+        </div>
+        <div className="divide-y divide-border">
+          {plan.steps.map((step) => (
+            <div key={step.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
+              <span
+                className={cn(
+                  "flex h-5 w-5 shrink-0 items-center justify-center border border-border text-[11px]",
+                  (step.status === "completed" || step.status === "skipped") &&
+                    "border-primary bg-primary text-primary-foreground"
+                )}
+              >
+                {step.status === "completed" || step.status === "skipped" ? (
+                  <Check className="h-3 w-3" />
+                ) : (
+                  step.ordinal + 1
+                )}
+              </span>
+              <div className="min-w-0">
+                <div className="font-medium">{formatPlanStepTitle(step.title)}</div>
+                <div className="mt-0.5 text-muted-foreground">{step.description}</div>
+                {step.skipReason && <div className="mt-1 text-xs">Skipped: {step.skipReason}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="divide-y divide-border border border-border bg-muted/30">
+        <PlanDetails label="Research">
+          {plan.research.map((item) => (
+            <div key={`${item.title}:${item.summary}`}>
+              <div className="font-medium text-foreground">{item.title}</div>
+              <div>{item.summary}</div>
+            </div>
+          ))}
+        </PlanDetails>
+        <PlanDetails label="Intent and safety review">
+          <div>{plan.intentReview?.summary || "Intent review is pending."}</div>
+          <div>{plan.securityReview?.summary || "Safety review is pending."}</div>
+        </PlanDetails>
+        <PlanDetails label="Verification">
+          {plan.verification.map((item) => (
+            <div key={`${item.title}:${item.description}`}>
+              <span className="font-medium text-foreground">{item.title}: </span>
+              {item.description}
+            </div>
+          ))}
+        </PlanDetails>
+      </div>
+    </div>
+  );
+}
+
+export function AIPlanDecision({
+  onImplement,
+  onRefine,
+  onCustom,
+}: {
+  onImplement: () => void;
+  onRefine: () => void;
+  onCustom: (instruction: string) => void;
+}) {
+  return (
+    <QuestionBlock
+      toolCall={{
+        id: "plan-decision",
+        name: "ask_question",
+        arguments: {
+          question: "Implement this plan?",
+          options: [
+            {
+              label: "Implement plan",
+              description: "Exit Plan mode and begin execution.",
+            },
+            {
+              label: "Refine details",
+              description: "Stay in Plan mode and add more detail.",
+            },
+          ],
+          allowFreeText: true,
+        },
+        status: "awaiting_approval",
+      }}
+      onAnswer={(_id, answer) => {
+        if (answer === "Implement plan") onImplement();
+        else if (answer === "Refine details") onRefine();
+        else onCustom(answer);
+      }}
+    />
+  );
+}
+
+function PlanDetails({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <Collapsible>
+      <CollapsibleTrigger className="group flex w-full items-center gap-2 px-4 py-2 text-left text-sm font-medium">
+        <ChevronDown className="h-3.5 w-3.5 -rotate-90 transition-transform group-data-[state=open]:rotate-0" />
+        {label}
+      </CollapsibleTrigger>
+      <CollapsibleContent className="space-y-2 px-4 pb-3 text-sm text-muted-foreground">
+        {children}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+export function AIPlanProgress({
+  plan,
+  onPause,
+  onResume,
+  onCancel,
+  className,
+}: {
+  plan: AIPlanRuntimeSnapshot;
+  onPause: () => void;
+  onResume: () => void;
+  onCancel: () => void;
+  className?: string;
+}) {
+  const [elapsedMs, setElapsedMs] = useState(plan.activeTimeMs);
+  useEffect(() => {
+    setElapsedMs(plan.activeTimeMs);
+    if (plan.status !== "executing" && plan.status !== "verifying") return;
+    const startedAt = Date.now();
+    const timer = window.setInterval(
+      () => setElapsedMs(plan.activeTimeMs + Date.now() - startedAt),
+      1000
+    );
+    return () => window.clearInterval(timer);
+  }, [plan.activeTimeMs, plan.status]);
+  const completed = plan.steps.filter(
+    (step) => step.status === "completed" || step.status === "skipped"
+  ).length;
+  const progress = plan.steps.length > 0 ? (completed / plan.steps.length) * 100 : 0;
+  const cancel = async () => {
+    const accepted = await confirm({
+      title: "Cancel plan execution?",
+      description: "Execution will stop. Changes already made will not be rolled back.",
+      confirmLabel: "Cancel plan",
+      cancelLabel: "Keep running",
+      variant: "destructive",
+    });
+    if (accepted) onCancel();
+  };
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2 border border-border bg-primary/5 px-2.5 py-2",
+        className
+      )}
+    >
+      <AIProgressRing value={progress} className="h-5 w-5" ariaLabel="Plan progress" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-medium">{plan.title || "Plan execution"}</div>
+        <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="truncate">
+            {plan.status === "paused"
+              ? plan.pauseReason || "Paused"
+              : plan.status === "verifying"
+                ? "Running final verification"
+                : plan.steps.find((step) => step.status === "in_progress")?.title ||
+                  "Preparing next step"}
+          </span>
+          <span className="shrink-0">
+            {completed}/{plan.steps.length} · {formatPlanDuration(elapsedMs)}
+          </span>
+        </div>
+      </div>
+      {plan.status === "paused" ? (
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-7 w-7 shrink-0"
+          onClick={onResume}
+          aria-label="Resume plan"
+          title="Resume plan"
+        >
+          <Play className="h-3.5 w-3.5" />
+        </Button>
+      ) : (
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-7 w-7 shrink-0"
+          onClick={onPause}
+          aria-label="Pause plan"
+          title="Pause plan"
+        >
+          <Pause className="h-3.5 w-3.5" />
+        </Button>
+      )}
+      <Button
+        size="icon"
+        variant="ghost"
+        className="h-7 w-7 shrink-0"
+        onClick={() => void cancel()}
+        aria-label="Cancel plan"
+        title="Cancel plan"
+      >
+        <X className="h-3.5 w-3.5" />
+      </Button>
+    </div>
+  );
+}
+
+function formatPlanDuration(value: number): string {
+  const totalSeconds = Math.max(0, Math.floor(value / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+    : `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
 
 interface AIQueuedMessagesProps {
   items: AIConversationInput[];
@@ -239,6 +489,9 @@ export function AIComposer({
   approvalMode,
   approvalModeLabel,
   setApprovalMode,
+  workMode,
+  setWorkMode,
+  interactionDisabled = false,
   modelOptions = [],
   selectedModel,
   onModelChange,
@@ -258,7 +511,10 @@ export function AIComposer({
   showDisclaimer = false,
 }: AIComposerProps) {
   const modeMeta = AI_APPROVAL_MODE_META[approvalMode];
-  const ModeIcon = modeMeta.icon;
+  const activePlan = useAIStore((state) => state.activePlan);
+  const planModeActive =
+    workMode === "plan" || activePlan?.status === "drafting" || activePlan?.status === "validating";
+  const ModeIcon = planModeActive ? ListChecks : modeMeta.icon;
   const [usage, setUsage] = useState<AIContextUsage | null>(null);
   const [updatingProvider, setUpdatingProvider] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -288,7 +544,7 @@ export function AIComposer({
     enabled: gatewayInferenceMode && canViewInferenceUsage,
     isStreaming,
   });
-  const disabled = !isConnected || !!retryAfter;
+  const disabled = !isConnected || !!retryAfter || interactionDisabled;
   const hasDraft = input.trim().length > 0 || attachments.length > 0;
   const canResume = !hasDraft && canContinue && Boolean(onContinue) && !disabled;
 
@@ -434,7 +690,13 @@ export function AIComposer({
             onChange={onInputChange}
             onKeyDown={onKeyDown}
             onPaste={(event) => attachFiles(event.clipboardData.files)}
-            placeholder={isStreaming ? "Queue a message..." : "Ask anything... (/ commands)"}
+            placeholder={
+              interactionDisabled
+                ? "Choose how to continue the plan above"
+                : isStreaming
+                  ? "Queue a message..."
+                  : "Ask anything... (/ commands)"
+            }
             disabled={disabled}
             rows={1}
             className="block min-h-[42px] resize-none border-0 bg-transparent px-3 pb-1.5 pt-3 pr-3 leading-5 focus-visible:ring-0"
@@ -447,27 +709,42 @@ export function AIComposer({
                     type="button"
                     className={cn(
                       "flex h-8 max-w-[15rem] items-center gap-2 px-1.5 text-sm transition-colors focus-visible:outline-none",
-                      approvalMode === "bypass-everything"
-                        ? "text-warning-foreground hover:text-warning focus-visible:text-warning"
-                        : "text-muted-foreground hover:text-foreground focus-visible:text-foreground"
+                      planModeActive
+                        ? "text-link hover:text-link focus-visible:text-link"
+                        : approvalMode === "bypass-everything"
+                          ? "text-warning-foreground hover:text-warning focus-visible:text-warning"
+                          : "text-muted-foreground hover:text-foreground focus-visible:text-foreground"
                     )}
-                    title={approvalModeLabel}
-                    aria-label={approvalModeLabel}
+                    title={planModeActive ? "Plan" : approvalModeLabel}
+                    aria-label={planModeActive ? "Plan" : approvalModeLabel}
                   >
                     <ModeIcon className="h-4 w-4 shrink-0" />
-                    <span className="truncate">{modeMeta.label}</span>
+                    <span className="truncate">{planModeActive ? "Plan" : modeMeta.label}</span>
                     <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" side="top" className="w-60">
+                  <DropdownMenuItem onClick={() => setWorkMode("plan")}>
+                    <ListChecks className="h-4 w-4 text-link" />
+                    <span className="text-link">Plan</span>
+                    {planModeActive && <Check className="ml-auto h-4 w-4 text-link" />}
+                  </DropdownMenuItem>
                   {AI_APPROVAL_MODES.map((mode) => {
                     const item = AI_APPROVAL_MODE_META[mode];
                     const ItemIcon = item.icon;
                     return (
-                      <DropdownMenuItem key={mode} onClick={() => void setApprovalMode(mode)}>
+                      <DropdownMenuItem
+                        key={mode}
+                        onClick={() => {
+                          setWorkMode("normal");
+                          void setApprovalMode(mode);
+                        }}
+                      >
                         <ItemIcon className="h-4 w-4" />
                         <span>{item.menuLabel}</span>
-                        {approvalMode === mode && <Check className="ml-auto h-4 w-4" />}
+                        {!planModeActive && approvalMode === mode && (
+                          <Check className="ml-auto h-4 w-4" />
+                        )}
                       </DropdownMenuItem>
                     );
                   })}

@@ -95,7 +95,9 @@ import {
 import type {
   AIContextLimits,
   AIMessageAttachment,
+  AIPlanRuntimeSnapshot,
   AIResourceReference,
+  AIToolDefinition,
   ChatMessage,
   PageContext,
   ToolExecutionOptions,
@@ -107,6 +109,7 @@ import { type AIApprovalMode, getAIToolApprovalDecision } from './ai-approval-po
 import { directProviderContextLimits, toolOutputInlineLimits } from './ai-context-limits.js';
 import { AIConversationService } from './ai-conversation.service.js';
 import { type AIChatSearchScope, AIConversationSearchService } from './ai-conversation-search.service.js';
+import type { AIPlanService } from './ai-plan.service.js';
 import type { AIProviderRuntimeService, AIProviderSession } from './ai-provider-runtime.service.js';
 import { appendAIResourceReferencesToModelResult, extractAIResourceReferences } from './ai-resource-references.js';
 import { redactOneTimeSecretToolResult } from './ai-secret-result-redaction.js';
@@ -167,6 +170,119 @@ const SEND_COMMENT_EMPTY_ERROR =
   'send_comment requires a real, non-empty progress comment for the user. Call send_comment again with a concise update in the user language.';
 const SEND_COMMENT_MIXED_ERROR =
   'send_comment must be called by itself. First send the progress comment, then call other tools in the next assistant turn.';
+
+const PLAN_LIFECYCLE_TOOL_NAMES = new Set([
+  'enter_plan_mode',
+  'submit_plan',
+  'submit_plan_review',
+  'update_plan_step',
+  'pause_plan_execution',
+  'resume_plan_execution',
+  'finalize_plan_execution',
+  'submit_plan_verification',
+]);
+
+function isToolNameAllowedForPlanState(toolName: string, status: AIPlanRuntimeSnapshot['status'] | null): boolean {
+  if (!status) return !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName) || toolName === 'enter_plan_mode';
+  if (status === 'drafting') return !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName) || toolName === 'submit_plan';
+  if (status === 'validating') return !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName) || toolName === 'submit_plan_review';
+  if (status === 'awaiting_decision') return false;
+  if (status === 'executing') {
+    return (
+      !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName) ||
+      toolName === 'update_plan_step' ||
+      toolName === 'pause_plan_execution' ||
+      toolName === 'finalize_plan_execution'
+    );
+  }
+  if (status === 'paused') return toolName === 'resume_plan_execution';
+  if (status === 'verifying')
+    return (
+      !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName) ||
+      toolName === 'pause_plan_execution' ||
+      toolName === 'submit_plan_verification'
+    );
+  return !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName);
+}
+
+function isToolAllowedForPlanState(
+  tool: AIToolDefinition,
+  status: AIPlanRuntimeSnapshot['status'] | null,
+  args?: Record<string, unknown>
+): boolean {
+  if (!isToolNameAllowedForPlanState(tool.name, status)) return false;
+  if (status === 'drafting' || status === 'validating' || status === 'verifying') {
+    if (tool.planningAccess !== 'allowed') return false;
+    if (!args || PLAN_LIFECYCLE_TOOL_NAMES.has(tool.name)) return true;
+    const classification = getAIToolApprovalDecision(tool.name, 'normal', args).classification;
+    return classification === 'read' || classification === 'system-never-ask';
+  }
+  return true;
+}
+
+export function shouldEndRunAfterPlanTool(toolName: string, result: unknown, error: string | undefined): boolean {
+  if (error) return false;
+  if (toolName === 'submit_plan_review') {
+    return !isRecord(result) || result.requiresQuestion !== true;
+  }
+  if (
+    toolName === 'enter_plan_mode' ||
+    toolName === 'submit_plan' ||
+    toolName === 'pause_plan_execution' ||
+    toolName === 'resume_plan_execution' ||
+    toolName === 'finalize_plan_execution'
+  ) {
+    return true;
+  }
+  return (
+    toolName === 'submit_plan_verification' &&
+    isRecord(result) &&
+    result.status !== 'completed' &&
+    result.completionPending !== true
+  );
+}
+
+function buildPlanRuntimePrompt(plan: AIPlanRuntimeSnapshot): string {
+  const planState = JSON.stringify({
+    planId: plan.id,
+    revisionId: plan.revisionId,
+    status: plan.status,
+    goal: plan.goal,
+    scope: plan.scope,
+    assumptions: plan.assumptions,
+    research: plan.research,
+    verification: plan.verification,
+    changeSummary: plan.changeSummary,
+    validatorFindings:
+      plan.intentReview?.verdict === 'revise' || plan.securityReview?.verdict === 'revise'
+        ? [...(plan.intentReview?.findings ?? []), ...(plan.securityReview?.findings ?? [])]
+        : [],
+    steps: plan.steps.map((step) => ({
+      id: step.id,
+      title: step.title,
+      status: step.status,
+      verification: step.verification,
+      evidence: step.evidence,
+      skipReason: step.skipReason,
+    })),
+  });
+  if (plan.status === 'drafting') {
+    return `PLAN MODE is active. Clarify only material unknowns with ask_question, perform detailed research with planning-safe tools, and do not attempt any mutating action. Then call submit_plan with a complete structured plan. If validator findings are present, revise the plan to resolve them. Active plan: ${planState}`;
+  }
+  if (plan.status === 'validating') {
+    return `You are the independent plan validator. Compare the draft with the user's intent and research, independently verify critical facts with planning-safe tools when needed, and call submit_plan_review. If the result says requiresQuestion:true, immediately call ask_question for the missing user decision before ending the run. Do not implement or change infrastructure. Active plan: ${planState}`;
+  }
+  if (plan.status === 'executing') {
+    return `Execute the accepted plan. Keep exactly one step in_progress and update every step through update_plan_step with verification evidence. User messages steer the execution. If they materially change scope, call pause_plan_execution with requiresRevision:true; the next planning run must publish a validated revision with changeSummary and wait for acceptance. Call finalize_plan_execution only when the goal is fully implemented and verified. Active plan: ${planState}`;
+  }
+  if (plan.status === 'paused') {
+    return `The plan is paused. Use new user context to resolve the blocker, then call resume_plan_execution before continuing. Active plan: ${planState}`;
+  }
+  if (plan.status === 'verifying') {
+    return `You are the independent final verifier. Use planning-safe read tools as needed, compare the implemented result and evidence with every accepted step, then call submit_plan_verification. Do not change infrastructure. When a passing result returns completionPending:true, provide the user-facing final response and end the turn without calling more tools; the plan becomes completed only after that turn finishes successfully. Active plan: ${planState}`;
+  }
+  return `An AI plan is active in state ${plan.status}. Do not start another plan. Active plan: ${planState}`;
+}
 
 function isAIResourceAppearanceColor(value: unknown): value is NonNullable<AIResourceReference['appearanceColor']> {
   return (
@@ -613,7 +729,8 @@ export class AIService {
     private readonly providerRuntimeService?: AIProviderRuntimeService,
     private readonly siemDestinationService?: import('@/modules/audit/siem-destination.service.js').SiemDestinationService,
     private readonly siemDeliveryService?: import('@/modules/audit/siem-delivery.service.js').SiemDeliveryService,
-    private readonly generalSettingsService?: import('@/modules/settings/general-settings.service.js').GeneralSettingsService
+    private readonly generalSettingsService?: import('@/modules/settings/general-settings.service.js').GeneralSettingsService,
+    private readonly planService?: AIPlanService
   ) {}
 
   private async resolveCurrentApprovalMode(user: User): Promise<AIApprovalMode> {
@@ -841,7 +958,7 @@ export class AIService {
             return undefined;
           })
       : undefined;
-    return buildAISystemPromptDetailed(
+    const base = await buildAISystemPromptDetailed(
       {
         settingsService: this.settingsService,
         monitoringService: this.monitoringService,
@@ -851,6 +968,16 @@ export class AIService {
       user,
       pageContext
     );
+    const activePlan = conversationId ? await this.planService?.getActivePlanSnapshot(user.id, conversationId) : null;
+    if (!activePlan) return base;
+    const planPrompt = buildPlanRuntimePrompt(activePlan);
+    return {
+      prompt: `${base.prompt}\n\n${planPrompt}`,
+      breakdown: [
+        ...base.breakdown,
+        { label: 'Active plan', chars: planPrompt.length, tokens: estimateTextTokens(planPrompt) },
+      ],
+    };
   }
 
   async executeTool(
@@ -862,6 +989,17 @@ export class AIService {
     const toolDef = AI_TOOLS.find((t) => t.name === toolName);
     if (!toolDef) {
       return { error: `Unknown tool: ${toolName}`, invalidateStores: [] };
+    }
+
+    const activePlan =
+      options.source !== 'mcp' && options.conversationId && this.planService
+        ? await this.planService.getActivePlanSnapshot(user.id, options.conversationId)
+        : null;
+    if (!isToolAllowedForPlanState(toolDef, activePlan?.status ?? null, args)) {
+      return {
+        error: `PLAN_MODE_BLOCKED: ${toolName} is unavailable while the active plan is ${activePlan?.status ?? 'inactive'}.`,
+        invalidateStores: [],
+      };
     }
 
     let executionUser: User;
@@ -1230,7 +1368,7 @@ export class AIService {
     switch (toolName) {
       // ── Discovery ──
       case 'discover_tools':
-        return this.discoverTools(user, args);
+        return this.discoverTools(user, args, runtimeContext.conversationId);
 
       case 'get_current_context':
         return {
@@ -1849,6 +1987,66 @@ export class AIService {
       case 'ask_question':
         return { _askQuestion: true, question: a.question, options: a.options, allowFreeText: a.allowFreeText };
 
+      case 'enter_plan_mode': {
+        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
+        return this.planService.enterPlan({
+          userId: user.id,
+          conversationId: runtimeContext.conversationId,
+          title: a.title,
+        });
+      }
+      case 'submit_plan': {
+        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
+        return this.planService.submitPlan(user.id, runtimeContext.conversationId, a as any);
+      }
+      case 'submit_plan_review': {
+        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
+        return this.planService.submitPlanReview({
+          userId: user.id,
+          conversationId: runtimeContext.conversationId,
+          planId: a.planId,
+          revisionId: a.revisionId,
+          intentReview: a.intentReview,
+          securityReview: a.securityReview,
+        });
+      }
+      case 'update_plan_step': {
+        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
+        return this.planService.updateStep({
+          userId: user.id,
+          conversationId: runtimeContext.conversationId,
+          stepId: a.stepId,
+          status: a.status,
+          evidence: a.evidence,
+          skipReason: a.skipReason,
+        });
+      }
+      case 'pause_plan_execution': {
+        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
+        return this.planService.pause(user.id, runtimeContext.conversationId, a.reason, {
+          requiresRevision: a.requiresRevision === true,
+        });
+      }
+      case 'resume_plan_execution': {
+        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
+        return this.planService.resume(user.id, runtimeContext.conversationId);
+      }
+      case 'finalize_plan_execution': {
+        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
+        return this.planService.requestFinalVerification(user.id, runtimeContext.conversationId);
+      }
+      case 'submit_plan_verification': {
+        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
+        return this.planService.submitFinalVerification({
+          userId: user.id,
+          conversationId: runtimeContext.conversationId,
+          planId: a.planId,
+          verdict: a.verdict,
+          summary: a.summary,
+          findings: a.findings,
+        });
+      }
+
       // ── Documentation ──
       case 'internal_documentation':
         return getInternalDocumentation(a.topic, user.scopes);
@@ -1878,12 +2076,19 @@ export class AIService {
     );
   }
 
-  private async discoverTools(user: User, args: Record<string, unknown>) {
+  private async discoverTools(user: User, args: Record<string, unknown>, conversationId?: string) {
     const config = await this.settingsService.getConfig();
+    const activePlan = conversationId ? await this.planService?.getActivePlanSnapshot(user.id, conversationId) : null;
     const callableNames = new Set(
       getOpenAITools(config.disabledTools, user.scopes, config.webSearchEnabled, {
         sandboxEnabled: config.sandboxEnabled,
-      }).map((tool) => tool.function.name)
+        planningMode:
+          activePlan?.status === 'drafting' ||
+          activePlan?.status === 'validating' ||
+          activePlan?.status === 'verifying',
+      })
+        .filter((tool) => isToolNameAllowedForPlanState(tool.function.name, activePlan?.status ?? null))
+        .map((tool) => tool.function.name)
     );
     const categoryFilter = stringArg(args.category)?.toLowerCase();
     const query = stringArg(args.query)?.toLowerCase();
@@ -1950,15 +2155,19 @@ export class AIService {
     }
   }
 
-  private buildModelTools(
+  private async buildModelTools(
     config: { disabledTools: string[]; webSearchEnabled: boolean; sandboxEnabled: boolean },
     user: User,
-    discoveredToolsets: string[]
+    discoveredToolsets: string[],
+    conversationId?: string
   ) {
+    const activePlan = conversationId ? await this.planService?.getActivePlanSnapshot(user.id, conversationId) : null;
     return getOpenAITools(config.disabledTools, user.scopes, config.webSearchEnabled, {
       discoveredToolsets,
       sandboxEnabled: config.sandboxEnabled,
-    });
+      planningMode:
+        activePlan?.status === 'drafting' || activePlan?.status === 'validating' || activePlan?.status === 'verifying',
+    }).filter((tool) => isToolNameAllowedForPlanState(tool.function.name, activePlan?.status ?? null));
   }
 
   private processCommentToolCalls(input: {
@@ -2122,7 +2331,7 @@ export class AIService {
       (await this.getConversationDiscoveredToolsets(user, conversationId)) ?? [],
       inferDiscoveredToolsetsFromMessages(clientMessages)
     );
-    const tools = this.buildModelTools(config, user, discoveredToolsets);
+    const tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
     const providerMessages = [
       { role: 'system', content: systemPrompt },
       ...(await Promise.all(clientMessages.map((message) => this.toProviderMessage(user, message, config)))),
@@ -2232,7 +2441,7 @@ export class AIService {
       (await this.getConversationDiscoveredToolsets(user, conversationId)) ?? [],
       inferDiscoveredToolsetsFromMessages(selection.recent)
     );
-    const tools = this.buildModelTools(config, user, discoveredToolsets);
+    const tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
     const reconstructedMessages = [
       { role: 'system', content: systemPrompt },
       { role: 'assistant', content: cleanedSummary },
@@ -2306,7 +2515,7 @@ export class AIService {
     if (inferredToolsets.length > 0) {
       await this.persistInferredToolsets(user, conversationId, inferredToolsets);
     }
-    let tools = this.buildModelTools(config, user, discoveredToolsets);
+    let tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
 
     let runtimeMessages = clientMessages.filter((message) => message.role !== 'system');
     const buildProviderMessages = async () => [
@@ -2509,7 +2718,7 @@ export class AIService {
         }
         if (tc.name === 'discover_tools') {
           discoveredToolsets = mergeToolsets(discoveredToolsets ?? [], discoveredToolsetsFromResult(result.result));
-          tools = this.buildModelTools(config, user, discoveredToolsets);
+          tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
         }
         const resourceReferences = await this.toolResourceReferences(
           tc.name,
@@ -2552,6 +2761,10 @@ export class AIService {
         };
         if (result.invalidateStores.length > 0) {
           yield { type: 'invalidate_stores', requestId, stores: result.invalidateStores };
+        }
+        if (shouldEndRunAfterPlanTool(tc.name, result.result, result.error)) {
+          yield { type: 'done', requestId };
+          return;
         }
         if (tc.name === 'end_conversation' && !result.error) {
           yield {
@@ -2719,10 +2932,11 @@ export class AIService {
           signal,
         });
         const continuationSystemPrompt = await this.buildSystemPrompt(user, pageContext, conversationId);
-        const continuationTools = this.buildModelTools(
+        const continuationTools = await this.buildModelTools(
           continuationProvider.config,
           user,
-          await this.getConversationDiscoveredToolsets(user, conversationId)
+          await this.getConversationDiscoveredToolsets(user, conversationId),
+          conversationId
         );
         const resourceReferences = await this.toolResourceReferences(
           toolName,
@@ -2844,7 +3058,7 @@ export class AIService {
 
     pendingMessages = orderLatestToolRoundResults(pendingMessages);
     let discoveredToolsets = await this.getConversationDiscoveredToolsets(user, conversationId);
-    let tools = this.buildModelTools(config, user, discoveredToolsets);
+    let tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
     let runtimeMessages = providerMessagesToClientMessages(pendingMessages);
     const systemPrompt = await this.buildSystemPrompt(user, pageContext, conversationId);
     const buildProviderMessages = async () => [
@@ -3034,7 +3248,7 @@ export class AIService {
         }
         if (tc.name === 'discover_tools') {
           discoveredToolsets = mergeToolsets(discoveredToolsets ?? [], discoveredToolsetsFromResult(result.result));
-          tools = this.buildModelTools(config, user, discoveredToolsets);
+          tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
         }
         const resourceReferences = await this.toolResourceReferences(
           tc.name,
@@ -3077,6 +3291,10 @@ export class AIService {
         };
         if (result.invalidateStores.length > 0) {
           yield { type: 'invalidate_stores', requestId, stores: result.invalidateStores };
+        }
+        if (shouldEndRunAfterPlanTool(tc.name, result.result, result.error)) {
+          yield { type: 'done', requestId };
+          return;
         }
         if (tc.name === 'end_conversation' && !result.error) {
           yield {
@@ -3213,7 +3431,7 @@ export class AIService {
     }
     const { prompt, breakdown } = await this.buildSystemPromptDetailed(user, pageContext, conversationId);
     const discoveredToolsets = await this.getConversationDiscoveredToolsets(user, conversationId);
-    const tools = this.buildModelTools(config, user, discoveredToolsets);
+    const tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
     const systemTokens = estimateTextTokens(prompt);
     const toolsTokens = estimateToolSchemaTokens(tools);
     const totalOverhead = systemTokens + toolsTokens;

@@ -2,7 +2,6 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   CircleAlert,
   Expand,
-  Loader2,
   Lock,
   MessageSquare,
   MoreHorizontal,
@@ -61,9 +60,10 @@ import type {
   AIToolCall,
   PageContext,
 } from "@/types/ai";
-import { AIComposer, AIQueuedMessages } from "./AIComposer";
+import { AIComposer, AIPlanDecision, AIPlanProgress, AIQueuedMessages } from "./AIComposer";
 import { AIConversationBlockedBlock } from "./AIConversationBlockedBlock";
-import { AIMessageList } from "./AIMessageList";
+import { AIPlanTimeline } from "./AIPlanTimeline";
+import { AIProgressRing } from "./AIProgressRing";
 import { ApprovalBlock, QuestionBlock } from "./AIToolCallBlock";
 import { GitLabAuthorizationModal } from "./GitLabAuthorizationModal";
 import { QuickActionChips } from "./QuickActionChips";
@@ -189,19 +189,63 @@ function formatConversationDate(value: string): string {
 
 function getConversationStatusIcon(conversation: {
   activeRunStatus?: AIRunStatus | null;
+  planStatus?: import("@/types/ai").AIPlanStatus | null;
   status: AIConversationStatus;
 }) {
   switch (conversation.activeRunStatus) {
-    case "queued":
-    case "running":
-      return Loader2;
     case "waiting_for_approval":
     case "waiting_for_answer":
     case "waiting_for_credential":
       return CircleAlert;
     default:
+      if (conversation.planStatus === "awaiting_decision" || conversation.planStatus === "paused") {
+        return CircleAlert;
+      }
       return conversation.status === "active" ? MessageSquare : Lock;
   }
+}
+
+function isConversationProgressActive(conversation: {
+  activeRunStatus?: AIRunStatus | null;
+  planStatus?: import("@/types/ai").AIPlanStatus | null;
+}) {
+  return (
+    conversation.activeRunStatus === "queued" ||
+    conversation.activeRunStatus === "running" ||
+    conversation.planStatus === "drafting" ||
+    conversation.planStatus === "validating" ||
+    conversation.planStatus === "executing" ||
+    conversation.planStatus === "verifying"
+  );
+}
+
+function ConversationStatusIndicator({
+  conversation,
+}: {
+  conversation: {
+    title: string;
+    activeRunStatus?: AIRunStatus | null;
+    planStatus?: import("@/types/ai").AIPlanStatus | null;
+    status: AIConversationStatus;
+  };
+}) {
+  if (isConversationProgressActive(conversation)) {
+    return <AIProgressRing ariaLabel={`${conversation.title} in progress`} />;
+  }
+  const StatusIcon = getConversationStatusIcon(conversation);
+  const needsAttention =
+    conversation.activeRunStatus === "waiting_for_approval" ||
+    conversation.activeRunStatus === "waiting_for_answer" ||
+    conversation.activeRunStatus === "waiting_for_credential" ||
+    conversation.planStatus === "awaiting_decision" ||
+    conversation.planStatus === "paused";
+  return (
+    <StatusIcon
+      className={`h-4 w-4 shrink-0 text-muted-foreground ${
+        needsAttention ? "text-warning-foreground" : ""
+      }`}
+    />
+  );
 }
 
 interface AIChatSurfaceProps {
@@ -225,6 +269,10 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     savedName,
     activeConversationId,
     activeRunId,
+    activePlan,
+    plans,
+    devPlanProgressPreview,
+    workMode,
     canContinueConversation,
     isCompactingContext,
     queuedInputs,
@@ -237,6 +285,11 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     rejectTool,
     answerQuestion,
     stopStreaming,
+    setWorkMode,
+    decidePlan,
+    pausePlan,
+    resumePlan,
+    cancelPlan,
     clearMessages,
     handleSlashCommand,
     loadConversation,
@@ -253,6 +306,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     refreshProviderStatus,
     fetchRecentConversations,
   } = useAIStore();
+  const progressPlan = devPlanProgressPreview ?? activePlan;
 
   const [input, setInput] = useAIComposerDraft(activeConversationId);
   const [attachments, setAttachments] = useAIComposerAttachmentsDraft(activeConversationId);
@@ -780,23 +834,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
                       className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left"
                       onClick={() => void loadConversation(conversation.id)}
                     >
-                      {(() => {
-                        const StatusIcon = getConversationStatusIcon(conversation);
-                        return (
-                          <StatusIcon
-                            className={`h-4 w-4 shrink-0 text-muted-foreground ${
-                              conversation.activeRunStatus === "queued" ||
-                              conversation.activeRunStatus === "running"
-                                ? "animate-spin text-primary"
-                                : conversation.activeRunStatus === "waiting_for_approval" ||
-                                    conversation.activeRunStatus === "waiting_for_answer" ||
-                                    conversation.activeRunStatus === "waiting_for_credential"
-                                  ? "text-warning-foreground"
-                                  : ""
-                            }`}
-                          />
-                        );
-                      })()}
+                      <ConversationStatusIndicator conversation={conversation} />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-xs text-foreground">
                           {conversation.title}
@@ -834,8 +872,9 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
           onScroll={updateStickToBottom}
         >
           <div className="space-y-3">
-            <AIMessageList
+            <AIPlanTimeline
               messages={messages}
+              plans={plans}
               resourceReferences={resourceReferences}
               isStreaming={currentConversationStreaming}
               onApprove={approveTool}
@@ -876,12 +915,32 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
             )}
             <QuestionBlock toolCall={activeQuestion} onAnswer={answerQuestion} />
           </div>
+        ) : activePlan?.status === "awaiting_decision" ? (
+          <div className="border-t border-border">
+            <AIPlanDecision
+              onImplement={() => decidePlan("implement")}
+              onRefine={() => decidePlan("refine")}
+              onCustom={(instruction) => decidePlan("custom", instruction)}
+            />
+          </div>
         ) : activeApproval ? (
           <ApprovalBlock toolCall={activeApproval} onApprove={approveTool} onReject={rejectTool} />
         ) : conversationBlock ? (
           <AIConversationBlockedBlock block={conversationBlock} onNewChat={clearMessages} />
         ) : (
           <div className="relative space-y-2">
+            {progressPlan &&
+              (progressPlan.status === "executing" ||
+                progressPlan.status === "paused" ||
+                progressPlan.status === "verifying") && (
+                <AIPlanProgress
+                  plan={progressPlan}
+                  onPause={pausePlan}
+                  onResume={resumePlan}
+                  onCancel={cancelPlan}
+                  className="border-x-0"
+                />
+              )}
             {context.resourceId && !excludeResourceContextOnce && (
               <div className="mx-3 flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground">
                 <span className="min-w-0 truncate">
@@ -933,6 +992,8 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
               approvalMode={approvalMode}
               approvalModeLabel={approvalModeLabel}
               setApprovalMode={setApprovalMode}
+              workMode={workMode}
+              setWorkMode={setWorkMode}
               modelOptions={
                 providerStatus?.allowUserModelSelection ? providerStatus.models : undefined
               }

@@ -1,9 +1,11 @@
 import { and, asc, desc, eq, gte, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
+  type AIPlanStatus,
   type AIRunStatus,
   aiConversationMessages,
   aiConversations,
+  aiPlans,
   aiRunQuestions,
   aiRuns,
   aiRunToolCalls,
@@ -48,6 +50,7 @@ export interface AIConversationSummary {
   status: AIConversationStatus;
   blockReason: string | null;
   activeRunStatus: AIRunStatus | null;
+  planStatus: AIPlanStatus | null;
 }
 
 export interface AIConversationDetail extends AIConversationSummary {
@@ -89,7 +92,7 @@ export class AIConversationService {
       .where(eq(aiConversations.userId, userId))
       .orderBy(desc(aiConversations.createdAt));
 
-    const [messageRowsByRow, activeRuns] = await Promise.all([
+    const [messageRowsByRow, activeRuns, plans] = await Promise.all([
       Promise.all(rows.map((row) => this.loadMessageRows(row.id))),
       rows.length > 0
         ? this.db
@@ -106,8 +109,29 @@ export class AIConversationService {
               )
             )
         : Promise.resolve([]),
+      rows.length > 0
+        ? this.db
+            .select({ conversationId: aiPlans.conversationId, status: aiPlans.status, createdAt: aiPlans.createdAt })
+            .from(aiPlans)
+            .where(
+              and(
+                eq(aiPlans.userId, userId),
+                inArray(
+                  aiPlans.conversationId,
+                  rows.map((row) => row.id)
+                )
+              )
+            )
+            .orderBy(desc(aiPlans.createdAt))
+        : Promise.resolve([]),
     ]);
     const activeRunStatusByConversation = new Map(activeRuns.map((run) => [run.conversationId, run.status]));
+    const planStatusByConversation = new Map<string, AIPlanStatus>();
+    for (const plan of plans) {
+      if (!planStatusByConversation.has(plan.conversationId)) {
+        planStatusByConversation.set(plan.conversationId, plan.status);
+      }
+    }
     return sortConversationSummariesByLastUserMessage(
       rows.map((row, index) => {
         const messageRows = messageRowsByRow[index];
@@ -122,6 +146,7 @@ export class AIConversationService {
           messageCount: countVisibleMessages(messages),
           ...deriveConversationStatus(messages),
           activeRunStatus: activeRunStatusByConversation.get(row.id) ?? null,
+          planStatus: planStatusByConversation.get(row.id) ?? null,
         };
       })
     );
@@ -130,7 +155,7 @@ export class AIConversationService {
   async getConversation(userId: string, conversationId: string): Promise<AIConversationDetail | null> {
     const row = await this.getOwnedConversation(userId, conversationId);
     if (!row) return null;
-    const [messageRows, activeRuns] = await Promise.all([
+    const [messageRows, activeRuns, plans] = await Promise.all([
       this.loadMessageRows(row.id),
       this.db
         .select()
@@ -138,6 +163,12 @@ export class AIConversationService {
         .where(
           and(eq(aiRuns.userId, userId), eq(aiRuns.conversationId, row.id), inArray(aiRuns.status, ACTIVE_RUN_STATUSES))
         )
+        .limit(1),
+      this.db
+        .select({ status: aiPlans.status })
+        .from(aiPlans)
+        .where(and(eq(aiPlans.userId, userId), eq(aiPlans.conversationId, row.id)))
+        .orderBy(desc(aiPlans.createdAt))
         .limit(1),
     ]);
     const messages = messageRows.map((message) => message.uiMessage);
@@ -151,6 +182,7 @@ export class AIConversationService {
       messageCount: countVisibleMessages(messages),
       ...deriveConversationStatus(messages),
       activeRunStatus: activeRuns[0]?.status ?? null,
+      planStatus: plans[0]?.status ?? null,
       messages,
       model: row.model,
       reasoningEffort: row.reasoningEffort,

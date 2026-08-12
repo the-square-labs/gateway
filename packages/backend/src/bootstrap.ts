@@ -25,6 +25,7 @@ import { AISettingsService } from '@/modules/ai/ai.settings.service.js';
 import { AIConversationService } from '@/modules/ai/ai-conversation.service.js';
 import { AIConversationFolderService } from '@/modules/ai/ai-conversation-folder.service.js';
 import { AIConversationSearchService } from '@/modules/ai/ai-conversation-search.service.js';
+import { AIPlanService } from '@/modules/ai/ai-plan.service.js';
 import { AIProviderRuntimeService } from '@/modules/ai/ai-provider-runtime.service.js';
 import { AIRunService } from '@/modules/ai/ai-run.service.js';
 import { AlertService } from '@/modules/audit/alert.service.js';
@@ -937,7 +938,9 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(AIConversationService, aiConversationService);
   const aiConversationFolderService = new AIConversationFolderService(db, aiConversationSearchService);
   container.registerInstance(AIConversationFolderService, aiConversationFolderService);
-  const aiRunService = new AIRunService(db, eventBus, aiConversationSearchService);
+  const aiPlanService = new AIPlanService(db);
+  container.registerInstance(AIPlanService, aiPlanService);
+  const aiRunService = new AIRunService(db, eventBus, aiConversationSearchService, aiPlanService);
   container.registerInstance(AIRunService, aiRunService);
   aiSandboxService.startPolicyReconciliation();
   authService.setSandboxService(aiSandboxService);
@@ -1202,7 +1205,8 @@ export async function initializeContainer(): Promise<void> {
     aiProviderRuntimeService,
     siemDestinationService,
     siemDeliveryService,
-    generalSettingsService
+    generalSettingsService,
+    aiPlanService
   );
   container.registerInstance(AIService, aiService);
   if (!container.isRegistered(AIService)) {

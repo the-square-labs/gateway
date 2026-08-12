@@ -9,6 +9,14 @@ import { AI_TOOLS } from './ai.tools.js';
 export type AIApprovalMode = NonNullable<User['aiApprovalMode']>;
 
 const SYSTEM_NEVER_ASK_TOOLS = new Set([
+  'enter_plan_mode',
+  'submit_plan',
+  'submit_plan_review',
+  'update_plan_step',
+  'pause_plan_execution',
+  'resume_plan_execution',
+  'finalize_plan_execution',
+  'submit_plan_verification',
   'ask_question',
   'discover_tools',
   'internal_documentation',

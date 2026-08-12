@@ -15,6 +15,14 @@ describe('AI backend approval policy', () => {
       'find_in_chat',
       'read_chat_slice',
       'list_chat_projects',
+      'enter_plan_mode',
+      'submit_plan',
+      'submit_plan_review',
+      'update_plan_step',
+      'pause_plan_execution',
+      'resume_plan_execution',
+      'finalize_plan_execution',
+      'submit_plan_verification',
     ]) {
       expect(getAIToolApprovalDecision(toolName, 'always-ask')).toEqual({
         classification: 'system-never-ask',

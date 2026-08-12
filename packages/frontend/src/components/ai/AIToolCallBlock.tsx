@@ -527,7 +527,7 @@ export function QuestionBlock({
       )}
 
       {(allowFreeText || options.length === 0) && (
-        <div className="border-t border-border px-3 py-2">
+        <div className="border-t border-border">
           <div className="relative flex">
             <input
               type="text"
@@ -537,7 +537,7 @@ export function QuestionBlock({
                 if (e.key === "Enter") handleSubmit(answerText);
               }}
               placeholder={options.length > 0 ? "Or type your answer..." : "Type your answer..."}
-              className="w-full bg-background border border-input px-2.5 py-1.5 pr-8 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              className="w-full border-0 bg-background px-2.5 py-1.5 pr-8 text-sm focus:outline-none focus:ring-1 focus:ring-inset focus:ring-ring"
               autoFocus
               disabled={isPending}
             />

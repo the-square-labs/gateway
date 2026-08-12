@@ -81,6 +81,8 @@ type PublishClientAction = (
   runId: string,
   action: Record<string, unknown>
 ) => void;
+type HandleCompletedRun = (user: User, run: AIRun) => Promise<boolean>;
+type HandleFailedRun = (user: User, run: AIRun, error: string) => Promise<void>;
 
 interface ApprovalContinuationInput {
   conversationId: string;
@@ -135,7 +137,9 @@ export class AIRunExecutor {
     private readonly publishAssistantCommentDone: PublishAssistantCommentDone,
     private readonly conversationSearchService?: AIConversationSearchService,
     private readonly publishCredentialChallenge?: PublishCredentialChallenge,
-    private readonly publishClientAction?: PublishClientAction
+    private readonly publishClientAction?: PublishClientAction,
+    private readonly handleCompletedRun?: HandleCompletedRun,
+    private readonly handleFailedRun?: HandleFailedRun
   ) {}
 
   startRunExecution(user: User, runId: string): void {
@@ -306,6 +310,7 @@ export class AIRunExecutor {
       await this.updateRunStatus(run.id, 'failed', errorMessage);
       await this.returnPendingSteersToQueue(run.id);
       await this.persistRunErrorMessage(user.id, run.conversationId, run.id, errorMessage);
+      await this.notifyFailedRun(user, run, errorMessage);
       this.forgetAssistantDraftState(run.id);
       this.publishConversationChanged(user.id, run.conversationId);
     } finally {
@@ -567,6 +572,7 @@ export class AIRunExecutor {
       await this.updateRunStatus(input.runId, 'failed', errorMessage);
       await this.returnPendingSteersToQueue(input.runId);
       await this.persistRunErrorMessage(user.id, input.conversationId, input.runId, errorMessage);
+      await this.notifyFailedRun(user, run, errorMessage);
       this.forgetAssistantDraftState(input.runId);
       this.publishConversationChanged(user.id, input.conversationId);
     } finally {
@@ -751,6 +757,7 @@ export class AIRunExecutor {
       if (event.type === 'error') {
         await this.persistRunErrorMessage(user.id, run.conversationId, run.id, errorMessage);
       }
+      await this.notifyFailedRun(user, run, errorMessage);
       this.forgetAssistantDraftState(run.id);
       this.publishConversationChanged(user.id, run.conversationId);
       return { assistantContent, assistantMessageWritten, done: true };
@@ -785,11 +792,36 @@ export class AIRunExecutor {
       await this.setConversationCheckpoint(run.conversationId, null);
       this.forgetAssistantDraftState(run.id);
       this.publishConversationChanged(user.id, run.conversationId);
-      this.startPendingInputExecution(user, run.conversationId);
+      let handledByPlan = false;
+      if (this.handleCompletedRun) {
+        try {
+          handledByPlan = await this.handleCompletedRun(user, run);
+        } catch (error) {
+          logger.error('Failed to continue completed AI plan run', {
+            runId: run.id,
+            conversationId: run.conversationId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      if (!handledByPlan) this.startPendingInputExecution(user, run.conversationId);
       return { assistantContent, assistantMessageWritten, done: true };
     }
 
     return { assistantContent, assistantMessageWritten, done: false };
+  }
+
+  private async notifyFailedRun(user: User, run: AIRun, error: string): Promise<void> {
+    if (!this.handleFailedRun) return;
+    try {
+      await this.handleFailedRun(user, run, error);
+    } catch (failureError) {
+      logger.error('Failed to pause failed AI plan run', {
+        runId: run.id,
+        conversationId: run.conversationId,
+        error: failureError instanceof Error ? failureError.message : String(failureError),
+      });
+    }
   }
 
   private async maybeAutoCompactContext(

@@ -13,7 +13,7 @@ import { usePinnedNodesStore } from "@/stores/pinned-nodes";
 import { useResolvedPageContext } from "@/stores/resolved-page-context";
 import { useUIStore } from "@/stores/ui";
 import { renderWithRouter } from "@/test/render";
-import type { AIMessage } from "@/types/ai";
+import type { AIMessage, AIPlanRuntimeSnapshot } from "@/types/ai";
 import { AILiteSidebar } from "./AILiteSidebar";
 import { AISidePanel } from "./AISidePanel";
 import { getInferenceQuotaState } from "./InferenceQuotaStatus";
@@ -64,6 +64,10 @@ describe("AISidePanel autoscroll", () => {
         isLoadingRecentConversations: false,
         activeConversationId: null,
         activeRunId: null,
+        activePlan: null,
+        plans: [],
+        workMode: "normal",
+        connectionError: null,
         canContinueConversation: false,
         providerStatus: null,
         selectedModel: null,
@@ -738,6 +742,57 @@ describe("AISidePanel autoscroll", () => {
     expect(within(log).queryByText("Create the container?")).not.toBeInTheDocument();
     expect(screen.getByText("Create the container?")).toBeInTheDocument();
     expect(screen.queryByPlaceholderText("Ask anything... (/ commands)")).not.toBeInTheDocument();
+  });
+
+  it("replaces the composer with the plan decision question", () => {
+    act(() => {
+      useAIStore.setState({
+        messages: [{ id: "user-1", role: "user", content: "Prepare a plan" }],
+        activeConversationId: "conversation-1",
+        activePlan: {
+          id: "plan-1",
+          conversationId: "conversation-1",
+          revisionId: "revision-1",
+          revision: 1,
+          revisionStatus: "published",
+          publishedAt: "2026-08-12T00:01:00.000Z",
+          timelineAnchorAt: "2026-08-12T00:01:00.000Z",
+          acceptedAt: null,
+          status: "awaiting_decision",
+          title: "Implementation plan",
+          model: "test-model",
+          reasoningEffort: "medium",
+          goal: "Implement and verify the request.",
+          scope: [],
+          assumptions: [],
+          steps: [],
+          research: [],
+          intentReview: null,
+          securityReview: null,
+          verification: [],
+          changeSummary: null,
+          noProgressRuns: 0,
+          activeTimeMs: 0,
+          activeSince: null,
+          pauseReason: null,
+          createdAt: "2026-08-12T00:00:00.000Z",
+          updatedAt: "2026-08-12T00:00:00.000Z",
+        } satisfies AIPlanRuntimeSnapshot,
+        isConnected: true,
+        isStreaming: false,
+        retryAfter: null,
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    renderAISidePanel();
+
+    expect(screen.getByText("Implement this plan?")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Ask anything... (/ commands)")).not.toBeInTheDocument();
+    const freeText = screen.getByPlaceholderText("Or type your answer...");
+    expect(freeText).toHaveClass("border-0", "focus:ring-inset");
+    expect(freeText.parentElement?.parentElement).toHaveClass("border-t", "border-border");
+    expect(freeText.parentElement?.parentElement).not.toHaveClass("px-3", "py-2");
   });
 
   it("renders a durable-round approval next to the composer instead of in message history", () => {
@@ -1500,6 +1555,19 @@ describe("AISidePanel autoscroll", () => {
             blockReason: null,
             activeRunStatus: "waiting_for_approval",
           },
+          {
+            id: "conversation-plan",
+            title: "Plan awaiting decision",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            lastUserMessageAt: timestamp,
+            folderId: null,
+            messageCount: 1,
+            status: "active",
+            blockReason: null,
+            activeRunStatus: null,
+            planStatus: "awaiting_decision",
+          },
         ],
         isStartingConversation: false,
         isLoadingRecentConversations: false,
@@ -1515,12 +1583,16 @@ describe("AISidePanel autoscroll", () => {
       </TooltipProvider>
     );
 
-    expect(screen.getByRole("button", { name: "Running chat" }).querySelector("svg")).toHaveClass(
-      "animate-spin",
-      "text-primary"
-    );
+    expect(
+      within(screen.getByRole("button", { name: "Running chat" })).getByRole("progressbar", {
+        name: "Running chat in progress",
+      })
+    ).toHaveClass("animate-spin", "text-primary");
     expect(screen.getByRole("button", { name: "Waiting chat" }).querySelector("svg")).toHaveClass(
       "text-warning-foreground"
     );
+    expect(
+      screen.getByRole("button", { name: "Plan awaiting decision" }).querySelector("svg")
+    ).toHaveClass("text-warning-foreground");
   });
 });

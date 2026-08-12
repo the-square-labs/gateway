@@ -310,6 +310,9 @@ export interface AIRun {
   id: string;
   conversationId: string;
   userId: string;
+  planId?: string | null;
+  planRevisionId?: string | null;
+  purpose?: "direct" | "plan_draft" | "plan_validation" | "plan_execution" | "plan_verification";
   status: AIRunStatus;
   activeMessageId: string | null;
   clientCommandId: string;
@@ -321,6 +324,69 @@ export interface AIRun {
   startedAt: string | null;
   completedAt: string | null;
   stoppedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type AIPlanStatus =
+  | "drafting"
+  | "validating"
+  | "awaiting_decision"
+  | "executing"
+  | "paused"
+  | "verifying"
+  | "completed"
+  | "cancelled"
+  | "failed";
+
+export type AIPlanStepStatus = "pending" | "in_progress" | "completed" | "blocked" | "skipped";
+
+export interface AIPlanRuntimeStep {
+  id: string;
+  ordinal: number;
+  title: string;
+  description: string;
+  verification: string;
+  status: AIPlanStepStatus;
+  evidence: Array<{ summary: string; resourceReferenceIds?: string[] }>;
+  skipReason: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface AIPlanRuntimeSnapshot {
+  id: string;
+  conversationId: string;
+  status: AIPlanStatus;
+  title: string | null;
+  model: string | null;
+  reasoningEffort: string | null;
+  revisionId: string | null;
+  revision: number | null;
+  revisionStatus:
+    | "draft"
+    | "validating"
+    | "published"
+    | "accepted"
+    | "superseded"
+    | "rejected"
+    | null;
+  publishedAt: string | null;
+  timelineAnchorAt: string | null;
+  acceptedAt: string | null;
+  goal: string | null;
+  scope: string[];
+  assumptions: string[];
+  research: Array<{ title: string; summary: string; resourceReferenceIds?: string[] }>;
+  intentReview: { verdict: "pass" | "revise"; summary: string; findings: string[] } | null;
+  securityReview: { verdict: "pass" | "revise"; summary: string; findings: string[] } | null;
+  verification: Array<{ title: string; description: string }>;
+  changeSummary: { added: string[]; changed: string[]; removed: string[] } | null;
+  steps: AIPlanRuntimeStep[];
+  noProgressRuns: number;
+  activeTimeMs: number;
+  activeSince: string | null;
+  pauseReason: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -411,6 +477,8 @@ export interface AICredentialChallenge {
 
 export interface AIRuntimeSnapshot {
   activeRun: AIRun | null;
+  activePlan?: AIPlanRuntimeSnapshot | null;
+  plans?: AIPlanRuntimeSnapshot[];
   canContinue?: boolean;
   assistantDraftContent?: string | null;
   assistantDraftVersion?: number | null;
@@ -469,6 +537,7 @@ export type WSClientMessage =
       context?: PageContext;
       model?: string;
       reasoningEffort?: string;
+      workMode?: "normal" | "plan";
     }
   | {
       type: "conversation.continue";
@@ -500,6 +569,18 @@ export type WSClientMessage =
       clientCommandId: string;
     }
   | { type: "run.stop"; conversationId: string; runId: string; clientCommandId: string }
+  | {
+      type: "plan.decide";
+      conversationId: string;
+      planId: string;
+      revisionId: string;
+      decision: "implement" | "refine" | "custom";
+      customInstruction?: string;
+      clientCommandId: string;
+    }
+  | { type: "plan.pause"; conversationId: string; planId: string; clientCommandId: string }
+  | { type: "plan.resume"; conversationId: string; planId: string; clientCommandId: string }
+  | { type: "plan.cancel"; conversationId: string; planId: string; clientCommandId: string }
   | {
       type: "approval.decide";
       conversationId: string;
@@ -551,6 +632,12 @@ export type WSServerMessage =
       type: "conversation.snapshot";
       conversationId: string;
       snapshot: AIConversationRuntimeSnapshot;
+    }
+  | {
+      type: "plan.status_changed";
+      conversationId: string;
+      plan: AIPlanRuntimeSnapshot;
+      revision?: number;
     }
   | {
       type: "assistant.delta";

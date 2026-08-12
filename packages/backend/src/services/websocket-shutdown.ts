@@ -7,13 +7,7 @@ export interface ShutdownWebSocketClients extends Iterable<ShutdownWebSocketClie
   readonly size: number;
 }
 
-const CLOSE_GRACE_MS = 250;
-
 export async function drainWebSocketsForRestart(clients: ShutdownWebSocketClients, deadline: number): Promise<void> {
-  const closeAt = Math.max(Date.now(), deadline - CLOSE_GRACE_MS);
-  await waitWhileConnected(clients, closeAt);
-  if (clients.size === 0) return;
-
   for (const client of clients) client.close(1012, 'Service Restart');
   await waitWhileConnected(clients, deadline);
 }

@@ -10,6 +10,7 @@ import { SessionService } from '@/services/session.service.js';
 import type { User } from '@/types.js';
 import { AISettingsService } from './ai.settings.service.js';
 import type { WSClientMessage, WSServerMessage } from './ai.types.js';
+import { AIPlanService } from './ai-plan.service.js';
 import { AIProviderRuntimeService } from './ai-provider-runtime.service.js';
 import { AIRunService, aiUserConversationsChangedChannel } from './ai-run.service.js';
 
@@ -210,6 +211,14 @@ function subscribeToUserRuntime(ws: WSContext, state: WSConnectionState, userId:
     }
     void sendConversationSnapshot(ws, userId, event.conversationId)
       .then((snapshot) => {
+        if (snapshot.runtime.activePlan) {
+          send(ws, {
+            type: 'plan.status_changed',
+            conversationId: event.conversationId!,
+            plan: snapshot.runtime.activePlan,
+            ...revisionPayload(snapshot),
+          });
+        }
         if (event.invalidatedStores?.length) {
           send(ws, {
             type: 'stores.invalidated',
@@ -442,6 +451,20 @@ export function createWSHandlers() {
           }
 
           const runService = container.resolve(AIRunService);
+          const planService = container.isRegistered(AIPlanService) ? container.resolve(AIPlanService) : null;
+          let activePlan =
+            msg.conversationId && planService
+              ? await planService.getActivePlanSnapshot(user.id, msg.conversationId)
+              : null;
+          if (activePlan?.status === 'awaiting_decision') {
+            throw new AppError(409, 'AI_PLAN_DECISION_REQUIRED', 'Choose how to continue the published plan first');
+          }
+          if (activePlan?.status === 'validating' || activePlan?.status === 'verifying') {
+            throw new AppError(409, 'AI_PLAN_BUSY', 'The active plan is being verified');
+          }
+          if (activePlan?.status === 'paused' && planService) {
+            activePlan = await planService.resume(user.id, activePlan.conversationId);
+          }
           const title = msg.conversationId
             ? 'New Work Session'
             : await container.resolve(AIProviderRuntimeService).generateConversationTitle(user, {
@@ -464,13 +487,38 @@ export function createWSHandlers() {
             ...(model ? { model } : {}),
             ...(reasoningEffort ? { reasoningEffort } : {}),
           });
+          if (msg.workMode === 'plan' && !activePlan) {
+            if (!planService) throw new AppError(503, 'AI_PLAN_UNAVAILABLE', 'Plan Mode is unavailable');
+            activePlan = await planService.enterPlan({
+              userId: user.id,
+              conversationId: result.conversationId,
+              title,
+              model: model ?? null,
+              reasoningEffort: reasoningEffort ?? null,
+            });
+          }
+          let run = result.run;
+          if (!result.duplicate && activePlan) {
+            run = await runService.attachRunToPlan({
+              userId: user.id,
+              conversationId: result.conversationId,
+              runId: result.run.id,
+              plan: activePlan,
+              purpose:
+                activePlan.status === 'drafting'
+                  ? 'plan_draft'
+                  : activePlan.status === 'verifying'
+                    ? 'plan_verification'
+                    : 'plan_execution',
+            });
+          }
 
           send(ws, {
             type: 'command.ack',
             commandType: msg.type,
             clientCommandId: msg.clientCommandId,
             conversationId: result.conversationId,
-            runId: result.run.id,
+            runId: run.id,
             duplicate: result.duplicate,
           });
           state.subscribedConversationIds.add(result.conversationId);
@@ -482,7 +530,7 @@ export function createWSHandlers() {
             ...revisionPayload(snapshot),
           });
           if (!result.duplicate) {
-            runService.startRunExecution(user, result.run.id);
+            runService.startRunExecution(user, run.id);
           }
         } catch (error) {
           sendCommandError(ws, msg, error, 'Failed to send AI message');
@@ -680,6 +728,110 @@ export function createWSHandlers() {
           }
         } catch (error) {
           sendCommandError(ws, msg, error, 'Failed to compact AI conversation');
+        }
+        return;
+      }
+
+      if (msg.type === 'plan.decide') {
+        try {
+          const planService = container.resolve(AIPlanService);
+          const runService = container.resolve(AIRunService);
+          const result = await planService.decide({
+            userId: user.id,
+            conversationId: msg.conversationId,
+            planId: msg.planId,
+            revisionId: msg.revisionId,
+            decision: msg.decision,
+            customInstruction: msg.customInstruction,
+            clientCommandId: msg.clientCommandId,
+          });
+          if (msg.decision !== 'refine') {
+            await runService.startPlanRun({
+              user,
+              plan: result.plan,
+              purpose: 'plan_execution',
+              clientCommandId: `plan-decision:${msg.clientCommandId}`,
+              instruction: msg.decision === 'custom' ? msg.customInstruction : undefined,
+            });
+          }
+          send(ws, {
+            type: 'command.ack',
+            commandType: msg.type,
+            clientCommandId: msg.clientCommandId,
+            conversationId: msg.conversationId,
+            duplicate: result.duplicate,
+          });
+          await sendConversationSnapshot(ws, user.id, msg.conversationId);
+        } catch (error) {
+          sendCommandError(ws, msg, error, 'Failed to apply the plan decision');
+        }
+        return;
+      }
+
+      if (msg.type === 'plan.pause') {
+        try {
+          const planService = container.resolve(AIPlanService);
+          const runService = container.resolve(AIRunService);
+          const plan = await planService.getActivePlanSnapshot(user.id, msg.conversationId);
+          if (!plan || plan.id !== msg.planId) throw new AppError(404, 'AI_PLAN_NOT_FOUND', 'AI plan not found');
+          await planService.pause(user.id, msg.conversationId, 'Paused by user');
+          await runService.stopActiveRunForRollback({ userId: user.id, conversationId: msg.conversationId });
+          send(ws, {
+            type: 'command.ack',
+            commandType: msg.type,
+            clientCommandId: msg.clientCommandId,
+            conversationId: msg.conversationId,
+          });
+          await sendConversationSnapshot(ws, user.id, msg.conversationId);
+        } catch (error) {
+          sendCommandError(ws, msg, error, 'Failed to pause the plan');
+        }
+        return;
+      }
+
+      if (msg.type === 'plan.resume') {
+        try {
+          const planService = container.resolve(AIPlanService);
+          const runService = container.resolve(AIRunService);
+          const current = await planService.getActivePlanSnapshot(user.id, msg.conversationId);
+          if (!current || current.id !== msg.planId) throw new AppError(404, 'AI_PLAN_NOT_FOUND', 'AI plan not found');
+          const plan = await planService.resume(user.id, msg.conversationId);
+          await runService.startPlanRun({
+            user,
+            plan,
+            purpose: plan.status === 'verifying' ? 'plan_verification' : 'plan_execution',
+            clientCommandId: `plan-resume:${msg.clientCommandId}`,
+          });
+          send(ws, {
+            type: 'command.ack',
+            commandType: msg.type,
+            clientCommandId: msg.clientCommandId,
+            conversationId: msg.conversationId,
+          });
+          await sendConversationSnapshot(ws, user.id, msg.conversationId);
+        } catch (error) {
+          sendCommandError(ws, msg, error, 'Failed to resume the plan');
+        }
+        return;
+      }
+
+      if (msg.type === 'plan.cancel') {
+        try {
+          const planService = container.resolve(AIPlanService);
+          const runService = container.resolve(AIRunService);
+          const current = await planService.getActivePlanSnapshot(user.id, msg.conversationId);
+          if (!current || current.id !== msg.planId) throw new AppError(404, 'AI_PLAN_NOT_FOUND', 'AI plan not found');
+          await runService.stopActiveRunForRollback({ userId: user.id, conversationId: msg.conversationId });
+          await planService.cancel(user.id, msg.conversationId);
+          send(ws, {
+            type: 'command.ack',
+            commandType: msg.type,
+            clientCommandId: msg.clientCommandId,
+            conversationId: msg.conversationId,
+          });
+          await sendConversationSnapshot(ws, user.id, msg.conversationId);
+        } catch (error) {
+          sendCommandError(ws, msg, error, 'Failed to cancel the plan');
         }
         return;
       }

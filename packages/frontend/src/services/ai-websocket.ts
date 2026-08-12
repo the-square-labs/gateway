@@ -7,7 +7,6 @@ type ErrorHandler = (message: string) => void;
 const PING_INTERVAL = 15_000;
 const PONG_TIMEOUT = 5_000;
 const CONNECT_TIMEOUT = 10_000;
-const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 8000];
 
 export class AIWebSocketClient {
@@ -94,8 +93,9 @@ export class AIWebSocketClient {
       this.ws.onerror = () => {
         clearTimeout(timeout);
         if (!this._isConnected) {
-          this.errorHandler?.("AI connection failed");
           resolve(false);
+          this.cleanupSocket();
+          this.scheduleReconnect();
         }
       };
 
@@ -125,7 +125,7 @@ export class AIWebSocketClient {
   }
 
   send(msg: WSClientMessage): true {
-    if (this.ws?.readyState !== WebSocket.OPEN) {
+    if (!this._isConnected || this.ws?.readyState !== WebSocket.OPEN) {
       throw new Error("AI connection is not open");
     }
     this.ws.send(JSON.stringify(msg));
@@ -186,10 +186,6 @@ export class AIWebSocketClient {
 
   private scheduleReconnect(): void {
     if (this.intentionalClose) return;
-    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-      this.errorHandler?.("AI connection unavailable");
-      return;
-    }
 
     this.clearReconnectTimer();
     this.errorHandler?.("Reconnecting...");

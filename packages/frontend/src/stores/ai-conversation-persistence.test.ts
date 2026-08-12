@@ -9,7 +9,7 @@ import { api } from "@/services/api";
 import { getAIContextUsage, resetAIStateForAuthChange, useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
 import { useUIStore } from "@/stores/ui";
-import type { WSServerMessage } from "@/types/ai";
+import type { AIPlanRuntimeSnapshot, WSServerMessage } from "@/types/ai";
 
 vi.mock("@/services/ai-conversations", () => ({
   listConversations: vi.fn(async () => []),
@@ -114,8 +114,42 @@ function runtimeRun(
   };
 }
 
+function planSnapshot(overrides: Partial<AIPlanRuntimeSnapshot> = {}): AIPlanRuntimeSnapshot {
+  return {
+    id: "plan-1",
+    conversationId: "conversation-1",
+    status: "awaiting_decision",
+    title: "Verified plan",
+    model: "test-model",
+    reasoningEffort: "medium",
+    revisionId: "revision-1",
+    revision: 1,
+    revisionStatus: "published",
+    publishedAt: "2026-08-12T00:01:00.000Z",
+    timelineAnchorAt: "2026-08-12T00:01:00.000Z",
+    acceptedAt: null,
+    goal: "Previously verified plan",
+    scope: [],
+    assumptions: [],
+    research: [],
+    intentReview: null,
+    securityReview: null,
+    verification: [],
+    changeSummary: null,
+    steps: [],
+    noProgressRuns: 0,
+    activeTimeMs: 0,
+    activeSince: null,
+    pauseReason: null,
+    createdAt: "2026-08-12T00:00:00.000Z",
+    updatedAt: "2026-08-12T00:01:00.000Z",
+    ...overrides,
+  };
+}
+
 describe("AI backend runtime store", () => {
   afterEach(() => {
+    vi.useRealTimers();
     resetAIStateForAuthChange();
     useAuthStore.setState({ user: null, isAuthenticated: false, isLoading: false });
     useUIStore.setState({
@@ -124,6 +158,36 @@ describe("AI backend runtime store", () => {
     MockWebSocket.instances = [];
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+  });
+
+  it("restarts a failed initial connection and clears the transient error", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    setAuthenticatedUser();
+    vi.spyOn(api, "getAIStatus").mockResolvedValue({
+      enabled: true,
+      providerType: "openai_compatible",
+      defaultModel: "test-model",
+      allowUserModelSelection: false,
+      supportsImages: false,
+      models: [],
+    });
+
+    const firstConnect = useAIStore.getState().connect();
+    MockWebSocket.instances[0].onerror?.();
+    await firstConnect;
+
+    expect(useAIStore.getState().connectionError).toBe("Reconnecting...");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    const replacement = MockWebSocket.instances.at(-1)!;
+    replacement.emit({ type: "auth_ok" });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(useAIStore.getState()).toMatchObject({
+      isConnected: true,
+      connectionError: null,
+    });
   });
 
   it("sends user turns through the backend-owned runtime socket command", async () => {
@@ -139,6 +203,50 @@ describe("AI backend runtime store", () => {
         }),
       ])
     );
+  });
+
+  it("keeps an unverified refinement out of the plan timeline during live updates", async () => {
+    const socket = await connectAI();
+    const publishedPlan = planSnapshot();
+    useAIStore.setState({
+      activeConversationId: "conversation-1",
+      activePlan: publishedPlan,
+      plans: [publishedPlan],
+    });
+
+    socket.emit({
+      type: "plan.status_changed",
+      conversationId: "conversation-1",
+      plan: planSnapshot({
+        status: "validating",
+        revisionId: "revision-2",
+        revision: 2,
+        revisionStatus: "validating",
+        publishedAt: null,
+        goal: "Unverified refinement",
+      }),
+    });
+
+    expect(useAIStore.getState().activePlan).toMatchObject({
+      revisionId: "revision-2",
+      goal: "Unverified refinement",
+    });
+    expect(useAIStore.getState().plans).toEqual([publishedPlan]);
+
+    socket.emit({
+      type: "plan.status_changed",
+      conversationId: "conversation-1",
+      plan: planSnapshot({
+        revisionId: "revision-2",
+        revision: 2,
+        publishedAt: "2026-08-12T00:05:00.000Z",
+        goal: "Verified refinement",
+      }),
+    });
+
+    expect(useAIStore.getState().plans).toEqual([
+      expect.objectContaining({ revisionId: "revision-2", goal: "Verified refinement" }),
+    ]);
   });
 
   it("continues an interrupted run without adding a user message", async () => {
@@ -1597,6 +1705,34 @@ describe("AI backend runtime store", () => {
     expect(useAIStore.getState().isStreaming).toBe(false);
   });
 
+  it("ignores a plan status event older than the applied conversation revision", async () => {
+    const socket = await connectAI();
+    useAIStore.setState({ activeConversationId: "conversation-1" });
+    const currentPlan = planSnapshot({
+      status: "executing",
+      revisionId: "revision-2",
+      revision: 2,
+      revisionStatus: "accepted",
+      goal: "Current plan",
+    });
+
+    socket.emit({
+      type: "plan.status_changed",
+      conversationId: "conversation-1",
+      plan: currentPlan,
+      revision: 12,
+    });
+    socket.emit({
+      type: "plan.status_changed",
+      conversationId: "conversation-1",
+      plan: planSnapshot({ goal: "Stale plan" }),
+      revision: 11,
+    });
+
+    expect(useAIStore.getState().activePlan).toEqual(currentPlan);
+    expect(useAIStore.getState().plans).toEqual([currentPlan]);
+  });
+
   it("renders tool-only active turns in a runtime placeholder instead of the previous assistant reply", async () => {
     const socket = await connectAI();
     useAIStore.setState({ activeConversationId: "conversation-1" });
@@ -2395,6 +2531,27 @@ describe("AI backend runtime store", () => {
         .getState()
         .messages.some((message) => message.id === "dev-changed-resources-preview-message")
     ).toBe(false);
+  });
+
+  it("installs a browser-only plan progress preview command", async () => {
+    await connectAI();
+
+    window.gatewayDev?.showPlanProgress?.();
+
+    const existingPlan = useAIStore.getState().activePlan;
+    expect(useAIStore.getState().devPlanProgressPreview).toMatchObject({
+      id: "dev-plan-progress-preview",
+      status: "executing",
+      steps: [
+        expect.objectContaining({ status: "completed" }),
+        expect.objectContaining({ status: "in_progress" }),
+        expect.objectContaining({ status: "pending" }),
+      ],
+    });
+
+    window.gatewayDev?.hidePlanProgress?.();
+    expect(useAIStore.getState().devPlanProgressPreview).toBeNull();
+    expect(useAIStore.getState().activePlan).toBe(existingPlan);
   });
 
   it("leaves approval retryable when the websocket is closed before send", async () => {

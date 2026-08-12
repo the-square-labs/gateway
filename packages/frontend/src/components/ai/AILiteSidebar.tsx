@@ -82,6 +82,7 @@ import { useDockerStore } from "@/stores/docker";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
+import { AIProgressRing } from "./AIProgressRing";
 
 const EXPANDED_PROJECT_IDS_STORAGE_KEY = "gateway-ai-lite-expanded-project-ids";
 
@@ -440,14 +441,13 @@ export function AILiteSidebar({
                         className="h-8 w-8 bg-sidebar-accent"
                         aria-label="Starting Work Session..."
                       >
-                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                        <AIProgressRing ariaLabel="Starting Work Session" />
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent side="right">Starting Work Session...</TooltipContent>
                   </Tooltip>
                 )}
                 {recentConversations.map((conversation) => {
-                  const StatusIcon = getConversationStatusIcon(conversation);
                   return (
                     <Tooltip key={conversation.id}>
                       <TooltipTrigger asChild>
@@ -461,9 +461,7 @@ export function AILiteSidebar({
                           aria-label={conversation.title}
                           onClick={() => void handleLoadConversation(conversation.id)}
                         >
-                          <StatusIcon
-                            className={getConversationStatusIconClassName(conversation)}
-                          />
+                          <ConversationStatusIndicator conversation={conversation} />
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent side="right">{conversation.title}</TooltipContent>
@@ -1131,15 +1129,12 @@ function ConversationDragOverlayItem({
   conversation: AIConversationSummary;
   width: number;
 }) {
-  const StatusIcon = getConversationStatusIcon(conversation);
-  const statusIconClassName = getConversationStatusIconClassName(conversation);
-
   return (
     <div
       style={{ width }}
       className="flex max-w-[calc(100vw-2rem)] items-center gap-3 overflow-hidden whitespace-nowrap border border-sidebar-border bg-sidebar-background px-3 py-2 text-sm font-medium text-sidebar-foreground shadow-lg"
     >
-      <StatusIcon className={statusIconClassName} />
+      <ConversationStatusIndicator conversation={conversation} />
       <span className="min-w-0 flex-1 truncate">{conversation.title}</span>
     </div>
   );
@@ -1169,9 +1164,6 @@ function ConversationMenuItem({
   const rowRef = useRef<HTMLDivElement>(null);
   const hoverSyncRevisionRef = useRef(hoverSyncRevision);
   const [isHovered, setIsHovered] = useState(false);
-  const StatusIcon = getConversationStatusIcon(conversation);
-  const statusIconClassName = getConversationStatusIconClassName(conversation);
-
   useLayoutEffect(() => {
     if (hoverSyncRevisionRef.current === hoverSyncRevision) return;
     hoverSyncRevisionRef.current = hoverSyncRevision;
@@ -1212,7 +1204,7 @@ function ConversationMenuItem({
         className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden px-3 py-2 pr-1 text-left text-sm"
         onClick={onLoad}
       >
-        <StatusIcon className={statusIconClassName} />
+        <ConversationStatusIndicator conversation={conversation} />
         <span className="min-w-0 flex-1 truncate">{conversation.title}</span>
       </button>
       <motion.div
@@ -1278,26 +1270,45 @@ function ConversationMenuItem({
 
 function getConversationStatusIcon(conversation: AIConversationSummary) {
   switch (conversation.activeRunStatus) {
-    case "queued":
-    case "running":
-      return Loader2;
     case "waiting_for_approval":
     case "waiting_for_answer":
     case "waiting_for_credential":
       return CircleAlert;
     default:
+      if (conversation.planStatus === "awaiting_decision" || conversation.planStatus === "paused") {
+        return CircleAlert;
+      }
       return conversation.status === "active" ? MessageSquare : Lock;
   }
+}
+
+function isConversationProgressActive(conversation: AIConversationSummary) {
+  return (
+    conversation.activeRunStatus === "queued" ||
+    conversation.activeRunStatus === "running" ||
+    conversation.planStatus === "drafting" ||
+    conversation.planStatus === "validating" ||
+    conversation.planStatus === "executing" ||
+    conversation.planStatus === "verifying"
+  );
+}
+
+function ConversationStatusIndicator({ conversation }: { conversation: AIConversationSummary }) {
+  if (isConversationProgressActive(conversation)) {
+    return <AIProgressRing ariaLabel={`${conversation.title} in progress`} />;
+  }
+  const StatusIcon = getConversationStatusIcon(conversation);
+  return <StatusIcon className={getConversationStatusIconClassName(conversation)} />;
 }
 
 function getConversationStatusIconClassName(conversation: AIConversationSummary) {
   return cn(
     "h-4 w-4 shrink-0",
-    conversation.activeRunStatus === "queued" || conversation.activeRunStatus === "running"
-      ? "animate-spin text-primary"
-      : conversation.activeRunStatus === "waiting_for_approval" ||
-          conversation.activeRunStatus === "waiting_for_answer" ||
-          conversation.activeRunStatus === "waiting_for_credential"
+    conversation.activeRunStatus === "waiting_for_approval" ||
+      conversation.activeRunStatus === "waiting_for_answer" ||
+      conversation.activeRunStatus === "waiting_for_credential"
+      ? "text-warning-foreground"
+      : conversation.planStatus === "awaiting_decision" || conversation.planStatus === "paused"
         ? "text-warning-foreground"
         : ""
   );
@@ -1309,7 +1320,9 @@ function getFolderStatusIcon(conversations: AIConversationSummary[], expanded: b
       (conversation) =>
         conversation.activeRunStatus === "waiting_for_approval" ||
         conversation.activeRunStatus === "waiting_for_answer" ||
-        conversation.activeRunStatus === "waiting_for_credential"
+        conversation.activeRunStatus === "waiting_for_credential" ||
+        conversation.planStatus === "awaiting_decision" ||
+        conversation.planStatus === "paused"
     )
   ) {
     return CircleAlert;

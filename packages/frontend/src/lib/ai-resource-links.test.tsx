@@ -181,7 +181,7 @@ describe("AI resource links", () => {
     expect(useUIStore.getState().aiLiteMode).toBe(true);
   });
 
-  it("opens the canonical route in Operations Console with the same Work Session", async () => {
+  it("opens a non-embeddable canonical route in Operations Console with the same Work Session", async () => {
     const user = userEvent.setup();
     useUIStore.setState({ aiLiteMode: true, aiPanelOpen: false });
     useAIStore.setState({ activeConversationId: "conversation-1" });
@@ -192,7 +192,7 @@ describe("AI resource links", () => {
             {
               ...containerReference,
               uiHref: "/docker/containers/canonical-node/canonical-container",
-              workspaceEmbeddable: true,
+              workspaceEmbeddable: false,
             },
           ]}
         />
@@ -200,14 +200,15 @@ describe("AI resource links", () => {
       </MemoryRouter>
     );
 
-    await user.click(
-      screen.getByRole("button", { name: "Open ai-e2e-restart in Operations Console" })
-    );
+    await user.click(screen.getByRole("link", { name: "Container: ai-e2e-restart" }));
 
     expect(screen.getByTestId("location-state")).toHaveTextContent(
       '"pathname":"/docker/containers/canonical-node/canonical-container"'
     );
     expect(useUIStore.getState()).toMatchObject({ aiLiteMode: false, aiPanelOpen: true });
     expect(useAIStore.getState().activeConversationId).toBe("conversation-1");
+    expect(
+      screen.queryByRole("button", { name: "Open ai-e2e-restart in Operations Console" })
+    ).not.toBeInTheDocument();
   });
 });

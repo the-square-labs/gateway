@@ -1,4 +1,10 @@
-import type { AIConversationStatus, AIMessage, AIRunStatus, PageContext } from "@/types/ai";
+import type {
+  AIConversationStatus,
+  AIMessage,
+  AIPlanStatus,
+  AIRunStatus,
+  PageContext,
+} from "@/types/ai";
 import { api } from "./api";
 
 export interface SavedAIConversation {
@@ -15,6 +21,7 @@ export interface SavedAIConversation {
   status: AIConversationStatus;
   blockReason: string | null;
   activeRunStatus: AIRunStatus | null;
+  planStatus?: AIPlanStatus | null;
 }
 
 export interface AIConversationSummary {
@@ -28,6 +35,7 @@ export interface AIConversationSummary {
   status: AIConversationStatus;
   blockReason: string | null;
   activeRunStatus: AIRunStatus | null;
+  planStatus?: AIPlanStatus | null;
 }
 
 export interface AIConversationFolder {
@@ -71,6 +79,7 @@ export async function listConversations(): Promise<AIConversationSummary[]> {
     status: conversation.status,
     blockReason: conversation.blockReason,
     activeRunStatus: conversation.activeRunStatus,
+    planStatus: conversation.planStatus,
   }));
 }
 

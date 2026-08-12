@@ -30,9 +30,15 @@ import type {
   AIToolCall,
   PageContext,
 } from "@/types/ai";
-import { AIComposer, AIComposerDisclaimer, AIQueuedMessages } from "./AIComposer";
+import {
+  AIComposer,
+  AIComposerDisclaimer,
+  AIPlanDecision,
+  AIPlanProgress,
+  AIQueuedMessages,
+} from "./AIComposer";
 import { AIConversationBlockedBlock } from "./AIConversationBlockedBlock";
-import { AIMessageList } from "./AIMessageList";
+import { AIPlanTimeline } from "./AIPlanTimeline";
 import { ApprovalBlock, QuestionBlock } from "./AIToolCallBlock";
 import { GitLabAuthorizationModal } from "./GitLabAuthorizationModal";
 import { QuickActionChips } from "./QuickActionChips";
@@ -137,6 +143,10 @@ export function AILitePanel() {
     savedName,
     activeConversationId,
     activeRunId,
+    activePlan,
+    plans,
+    devPlanProgressPreview,
+    workMode,
     canContinueConversation,
     isCompactingContext,
     queuedInputs,
@@ -150,6 +160,11 @@ export function AILitePanel() {
     rejectTool,
     answerQuestion,
     stopStreaming,
+    setWorkMode,
+    decidePlan,
+    pausePlan,
+    resumePlan,
+    cancelPlan,
     clearMessages,
     handleSlashCommand,
     deleteConversation,
@@ -165,6 +180,7 @@ export function AILitePanel() {
     setSelectedReasoningEffort,
     refreshProviderStatus,
   } = useAIStore();
+  const progressPlan = devPlanProgressPreview ?? activePlan;
   const {
     aiApprovalMode: approvalMode,
     pinnedAIConversationIds,
@@ -641,10 +657,7 @@ export function AILitePanel() {
       </Dialog>
 
       {messages.length === 0 ? (
-        <div
-          key={activeConversationId ?? routeConversationId ?? "new-chat"}
-          className="ai-chat-content-fade-in flex min-h-0 flex-1 items-center justify-center px-4"
-        >
+        <div className="ai-chat-content-fade-in flex min-h-0 flex-1 items-center justify-center px-4">
           <div className="flex w-full max-w-3xl flex-col items-center gap-3">
             <Sparkles className="h-8 w-8 text-muted-foreground" />
             <p className="max-w-md text-center text-sm text-foreground/70">
@@ -655,10 +668,7 @@ export function AILitePanel() {
           </div>
         </div>
       ) : (
-        <div
-          key={activeConversationId ?? routeConversationId ?? "new-chat"}
-          className="ai-chat-content-fade-in relative min-h-0 flex-1"
-        >
+        <div className="ai-chat-content-fade-in relative min-h-0 flex-1">
           <div
             ref={scrollViewportRef}
             role="log"
@@ -667,8 +677,9 @@ export function AILitePanel() {
             onScroll={updateStickToBottom}
           >
             <div className="mx-auto w-full max-w-3xl space-y-4 px-4 pb-8">
-              <AIMessageList
+              <AIPlanTimeline
                 messages={messages}
+                plans={plans}
                 resourceReferences={resourceReferences}
                 isStreaming={currentConversationStreaming}
                 assistantMaxWidthClass="max-w-[90%]"
@@ -707,6 +718,14 @@ export function AILitePanel() {
             )}
             <QuestionBlock toolCall={activeQuestion} onAnswer={answerQuestion} />
           </div>
+        ) : activePlan?.status === "awaiting_decision" ? (
+          <div className="border border-border bg-background">
+            <AIPlanDecision
+              onImplement={() => decidePlan("implement")}
+              onRefine={() => decidePlan("refine")}
+              onCustom={(instruction) => decidePlan("custom", instruction)}
+            />
+          </div>
         ) : activeApproval ? (
           <ApprovalBlock toolCall={activeApproval} onApprove={approveTool} onReject={rejectTool} />
         ) : conversationBlock ? (
@@ -719,6 +738,17 @@ export function AILitePanel() {
           </div>
         ) : (
           <div className="relative space-y-2">
+            {progressPlan &&
+              (progressPlan.status === "executing" ||
+                progressPlan.status === "paused" ||
+                progressPlan.status === "verifying") && (
+                <AIPlanProgress
+                  plan={progressPlan}
+                  onPause={pausePlan}
+                  onResume={resumePlan}
+                  onCancel={cancelPlan}
+                />
+              )}
             <AIQueuedMessages
               items={queuedInputs}
               onSendNow={steerQueuedMessage}
@@ -752,6 +782,8 @@ export function AILitePanel() {
               approvalMode={approvalMode}
               approvalModeLabel={approvalModeLabel}
               setApprovalMode={setApprovalMode}
+              workMode={workMode}
+              setWorkMode={setWorkMode}
               modelOptions={
                 providerStatus?.allowUserModelSelection ? providerStatus.models : undefined
               }

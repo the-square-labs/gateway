@@ -3,6 +3,7 @@ export * from './admin-user-folders.js';
 export * from './ai-conversation-folders.js';
 export * from './ai-conversation-search.js';
 export * from './ai-conversations.js';
+export * from './ai-plans.js';
 export * from './ai-runtime.js';
 export * from './alerts.js';
 export * from './api-tokens.js';

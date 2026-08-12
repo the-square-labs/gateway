@@ -517,6 +517,55 @@ describe('AI websocket backend runtime commands', () => {
     );
   });
 
+  it('forwards plan status changes with the authoritative conversation revision', async () => {
+    const { ws, handlers } = await openAuthenticatedWs();
+    const plan = {
+      id: 'plan-1',
+      conversationId: 'conversation-1',
+      status: 'awaiting_decision',
+      revisionId: 'revision-1',
+      publishedAt: '2026-08-12T00:01:00.000Z',
+    };
+    const baseSnapshot = createSnapshot(createRun());
+    const snapshot = {
+      ...baseSnapshot,
+      runtime: { ...baseSnapshot.runtime, activePlan: plan },
+    };
+    const getConversationSnapshot = vi.fn().mockResolvedValue(snapshot);
+    container.registerInstance(AIRunService, {
+      getConversationSnapshot,
+    } as unknown as AIRunService);
+
+    await handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          type: 'conversation.subscribe',
+          conversationId: 'conversation-1',
+          clientCommandId: 'cmd-subscribe',
+        }),
+      }),
+      ws as any
+    );
+    vi.mocked(ws.send).mockClear();
+
+    container.resolve(EventBusService).publish(aiUserConversationsChangedChannel(USER.id), {
+      userId: USER.id,
+      conversationId: 'conversation-1',
+    });
+    await vi.waitFor(() => expect(ws.send).toHaveBeenCalledTimes(2));
+    handlers.onClose(new Event('close'), ws as any);
+
+    expect(ws.send).toHaveBeenNthCalledWith(
+      2,
+      JSON.stringify({
+        type: 'plan.status_changed',
+        conversationId: 'conversation-1',
+        plan,
+        revision: 7,
+      })
+    );
+  });
+
   it('forwards client actions only to the subscribed conversation', async () => {
     const { ws, handlers } = await openAuthenticatedWs();
     const getConversationSnapshot = vi.fn().mockResolvedValue(createSnapshot(createRun()));
