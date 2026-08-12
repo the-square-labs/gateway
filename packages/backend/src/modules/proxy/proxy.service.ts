@@ -56,6 +56,8 @@ const logger = createChildLogger('ProxyService');
 const SECURE_LINK_RUNTIME_DEDUP_WINDOW_MS = 500;
 const SECURE_LINK_BACKGROUND_TRAFFIC_TAIL_LINES = 200;
 const SECURE_LINK_FOCUSED_TRAFFIC_TAIL_LINES = 10_000;
+// The focused UI retains 60 samples at a 2-second cadence.
+const SECURE_LINK_TRAFFIC_WINDOW_SECONDS = 2 * 60;
 const SECURE_LINK_RUNTIME_CACHE_PREFIX = 'proxy-secure-link-runtime:';
 const SECURE_LINK_RUNTIME_CACHE_TTL_SECONDS = 24 * 60 * 60;
 
@@ -1311,7 +1313,10 @@ export class ProxyService {
       }) ?? Promise.resolve(null),
       host.nodeId
         ? this.nodeDispatch
-            .requestTrafficStats(host.nodeId, trafficTailLines, { hostId: host.id, windowSeconds: 15 })
+            .requestTrafficStats(host.nodeId, trafficTailLines, {
+              hostId: host.id,
+              windowSeconds: SECURE_LINK_TRAFFIC_WINDOW_SECONDS,
+            })
             .catch((error) => {
               logger.debug('Proxy Secure Link HTTP telemetry is unavailable', {
                 hostId: host.id,

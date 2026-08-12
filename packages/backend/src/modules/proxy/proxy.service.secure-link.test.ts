@@ -106,7 +106,7 @@ describe('ProxyService legacy Docker link compatibility', () => {
       requestsPerSecond: 0.1,
       bytesPerSecond: 10,
       busiestClientRps: 0.1,
-      windowSeconds: 15,
+      windowSeconds: 120,
       sampleTruncated: false,
     };
     const history = [{ timestamp: '2026-08-12T00:00:00.000Z', runtime, traffic }];
@@ -198,7 +198,7 @@ describe('ProxyService legacy Docker link compatibility', () => {
       requestsPerSecond: 0.1,
       bytesPerSecond: 10,
       busiestClientRps: 0.1,
-      windowSeconds: 15,
+      windowSeconds: 120,
       sampleTruncated: false,
     };
     const cachedHistory = [{ timestamp: '2026-08-12T00:00:00.000Z', runtime, traffic: null }];
@@ -275,7 +275,7 @@ describe('ProxyService legacy Docker link compatibility', () => {
     expect(getRuntime).toHaveBeenCalledOnce();
     expect(requestTrafficStats).toHaveBeenCalledWith('nginx-node', 200, {
       hostId: 'host-1',
-      windowSeconds: 15,
+      windowSeconds: 120,
     });
 
     releaseRuntime({
