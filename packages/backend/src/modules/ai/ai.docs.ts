@@ -305,7 +305,7 @@ Gateway can enable OIDC, password, and email one-time-code sign-in independently
 ## Permission Groups
 - Every user belongs to exactly one permission group
 - Groups define which scopes (permissions) the user has
-- **Built-in groups** (cannot be modified): system-admin, admin, operator, viewer
+- **Built-in groups** (cannot be modified): system-admin, admin, operator, viewer, guest
 - **Custom groups**: created by admins with any combination of scopes
 - **Group nesting**: a group can inherit from one parent group (single level only). Inherited scopes are automatically added to the user's effective scopes.
 - Nesting limit: only top-level groups can be parents — a nested group cannot itself have children

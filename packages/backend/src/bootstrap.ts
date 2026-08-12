@@ -461,7 +461,7 @@ export async function initializeContainer(): Promise<void> {
         })
         .onConflictDoUpdate({
           target: permissionGroups.name,
-          set: { scopes: [...bg.scopes], description: bg.description },
+          set: { scopes: [...bg.scopes], description: bg.description, isBuiltin: true },
         });
     }
 

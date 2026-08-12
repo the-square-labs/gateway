@@ -257,6 +257,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | admin | Curated broad access, excluding admin:system, settings:gateway:edit, housekeeping:configure, and Docker registry create/edit/delete defaults |
 | operator | Operational access — PKI, proxy, SSL, ACL, nodes, Docker containers, AI |
 | viewer | Read-only — view/discovery scopes for PKI, proxy, SSL, Docker containers |
+| guest | Account access only — no infrastructure permissions |
 
 Custom groups can be created with any combination of scopes.
 

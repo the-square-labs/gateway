@@ -567,6 +567,9 @@ export const VIEWER_SCOPES: readonly string[] = [
   'integrations:cloudflare:dns:view',
 ];
 
+/** Guest group: authenticated account access without infrastructure permissions. */
+export const GUEST_SCOPES: readonly string[] = [];
+
 /** Built-in group definitions (order matters for display — most privileged first) */
 export const BUILTIN_GROUPS = [
   {
@@ -581,6 +584,11 @@ export const BUILTIN_GROUPS = [
     scopes: OPERATOR_SCOPES,
   },
   { name: 'viewer', description: 'Read-only access to all resources', scopes: VIEWER_SCOPES },
+  {
+    name: 'guest',
+    description: 'Account access only — no infrastructure permissions',
+    scopes: GUEST_SCOPES,
+  },
 ] as const;
 
 export const BUILTIN_GROUP_NAMES: string[] = BUILTIN_GROUPS.map((g) => g.name);

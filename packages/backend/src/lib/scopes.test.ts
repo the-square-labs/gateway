@@ -6,8 +6,10 @@ import {
   ADMIN_SCOPES,
   ALL_SCOPES,
   API_TOKEN_SCOPES,
+  BUILTIN_GROUPS,
   canonicalizeScopes,
   extractBaseScope,
+  GUEST_SCOPES,
   isApiTokenScope,
   isValidBaseScope,
   MANUAL_APPROVAL_SCOPES,
@@ -99,6 +101,14 @@ describe('canonical scope definitions', () => {
     expect(VIEWER_SCOPES).toContain('integrations:gitlab:registry:use');
     expect(VIEWER_SCOPES).not.toContain('integrations:gitlab:registry:view');
     expect(VIEWER_SCOPES).not.toContain('integrations:gitlab:registry:manage');
+  });
+
+  it('keeps the built-in guest group authenticated but unprivileged', () => {
+    expect(GUEST_SCOPES).toEqual([]);
+    expect(BUILTIN_GROUPS.at(-1)).toMatchObject({
+      name: 'guest',
+      scopes: [],
+    });
   });
 
   it('grants Docker migrations only to admin tiers and requires manual approval', () => {

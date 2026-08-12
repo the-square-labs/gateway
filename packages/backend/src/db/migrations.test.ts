@@ -158,4 +158,15 @@ describe('drizzle migration metadata', () => {
     expect(migration).toContain('UPDATE "sandbox_jobs"');
     expect(migration).toContain("COALESCE(\"scopes\", '[]'::jsonb) - 'inference:use' - 'inference:usage:view:self'");
   });
+
+  it('preserves a custom guest group before reserving the built-in name', () => {
+    const migration = readFileSync(
+      join(process.cwd(), 'src/db/migrations/0115_reserve_guest_builtin_group.sql'),
+      'utf8'
+    );
+
+    expect(migration).toContain('\'guest-custom-\' || "id"::text');
+    expect(migration).toContain('WHERE "name" = \'guest\' AND "is_builtin" = false');
+    expect(migration).not.toContain('DELETE FROM "permission_groups"');
+  });
 });

@@ -10,6 +10,7 @@ All scopes follow `domain:resource:action[:qualifier]`. Resource-scopable scopes
 | `admin` | Curated broad access, excluding `admin:system`, gateway settings edit, housekeeping configure, and Docker registry mutation defaults. |
 | `operator` | Operational access for day-to-day PKI, proxy, SSL, ACL, node, Docker container, database, notification, and logging read/query work. |
 | `viewer` | Read-only view/discovery access. |
+| `guest` | Authenticated account access without infrastructure permissions. |
 
 ## Programmatic Access
 
