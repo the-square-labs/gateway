@@ -91,6 +91,63 @@ describe('HealthCheckJob storm protection', () => {
     expect(maximum).toBeLessThanOrEqual(8);
   });
 
+  it('reserves one daemon command slot while checking Secure Links', async () => {
+    const hosts = Array.from({ length: 20 }, (_, index) =>
+      host({
+        id: `secure-${index}`,
+        upstreamKind: 'docker_container',
+        secureLinkMigratedAt: new Date(),
+        nodeId: 'nginx-node',
+      })
+    );
+    const { db } = database(hosts);
+    let active = 1; // unrelated daemon command already occupies one shared slot
+    let maximum = active;
+    let busyResults = 0;
+    const probeProxySecureLink = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          active++;
+          maximum = Math.max(maximum, active);
+          if (active > 4) {
+            active--;
+            busyResults++;
+            resolve({ ok: false, error: 'daemon is busy handling long-running commands; retry shortly' });
+            return;
+          }
+          setTimeout(() => {
+            active--;
+            resolve({ ok: true, httpStatus: 200, responseMs: 2 });
+          }, 2);
+        })
+    );
+
+    await new HealthCheckJob(db, { probeProxySecureLink } as any).run();
+
+    expect(probeProxySecureLink).toHaveBeenCalledTimes(20);
+    expect(maximum).toBeLessThanOrEqual(4);
+    expect(busyResults).toBe(0);
+  });
+
+  it('does not count daemon capacity pressure as an offline probe', async () => {
+    const secure = host({
+      upstreamKind: 'docker_container',
+      secureLinkMigratedAt: new Date(),
+      nodeId: 'nginx-node',
+      healthHistory: [{ ts: new Date(Date.now() - 30_000).toISOString(), status: 'offline' }],
+    });
+    const { db, writes } = database([secure]);
+    const probeProxySecureLink = vi.fn().mockResolvedValue({
+      ok: false,
+      error: 'daemon is busy handling long-running commands; retry shortly',
+    });
+
+    await new HealthCheckJob(db, { probeProxySecureLink } as any).run();
+
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toEqual({ lastHealthCheckAt: expect.any(Date) });
+  });
+
   it('requires two consecutive failures before a healthy host becomes offline', async () => {
     const first = host();
     const firstRun = database([first]);

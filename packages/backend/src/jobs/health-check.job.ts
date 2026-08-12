@@ -12,6 +12,10 @@ const logger = createChildLogger('HealthCheckJob');
 
 const HEALTH_CHECK_TIMEOUT_MS = 10_000;
 const HEALTH_CHECK_CONCURRENCY = 8;
+// A daemon accepts at most four asynchronous commands at once. Reserve one slot
+// for interactive/synchronization work while scheduled probes are in flight.
+const SECURE_LINK_PROBE_CONCURRENCY_PER_NODE = 3;
+const DAEMON_BUSY_ERROR = 'daemon is busy handling long-running commands; retry shortly';
 const SLOW_BASELINE_WINDOW_MS = 3 * 60 * 60 * 1000; // 3 hours of history for baseline avg
 
 type HealthStatus = 'online' | 'offline' | 'degraded' | 'unknown';
@@ -89,7 +93,7 @@ export class HealthCheckJob {
 
     logger.info(`Running health checks for ${hosts.length} host(s)`);
 
-    const results = await allSettledBounded(hosts, HEALTH_CHECK_CONCURRENCY, async (host) => {
+    const check = async (host: typeof proxyHosts.$inferSelect) => {
       const relayBacked = host.upstreamKind !== 'manual' && host.secureLinkMigratedAt != null;
       if (relayBacked && this.relayUnavailable) {
         await this.recordRelayUnavailable(host);
@@ -100,6 +104,10 @@ export class HealthCheckJob {
 
       if (relayBacked && this.relayUnavailable) {
         await this.recordRelayUnavailable(host);
+        return { hostId: host.id, status: 'skipped' as const };
+      }
+      if (checkStatus === 'skipped') {
+        await this.recordProbeIndeterminate(host);
         return { hostId: host.id, status: 'skipped' as const };
       }
 
@@ -193,7 +201,29 @@ export class HealthCheckJob {
       }
 
       return { hostId: host.id, status: newStatus };
-    });
+    };
+
+    const directHosts: typeof hosts = [];
+    const secureHostsByNode = new Map<string, typeof hosts>();
+    for (const host of hosts) {
+      const relayBacked = host.upstreamKind !== 'manual' && host.secureLinkMigratedAt != null;
+      if (!relayBacked) {
+        directHosts.push(host);
+        continue;
+      }
+      const nodeKey = host.nodeId ?? '__missing_node__';
+      const nodeHosts = secureHostsByNode.get(nodeKey) ?? [];
+      nodeHosts.push(host);
+      secureHostsByNode.set(nodeKey, nodeHosts);
+    }
+
+    const resultGroups = await Promise.all([
+      allSettledBounded(directHosts, HEALTH_CHECK_CONCURRENCY, check),
+      ...Array.from(secureHostsByNode.values(), (nodeHosts) =>
+        allSettledBounded(nodeHosts, SECURE_LINK_PROBE_CONCURRENCY_PER_NODE, check)
+      ),
+    ]);
+    const results = resultGroups.flat();
 
     // Summarize results
     let online = 0;
@@ -245,9 +275,23 @@ export class HealthCheckJob {
       );
   }
 
+  private async recordProbeIndeterminate(host: typeof proxyHosts.$inferSelect): Promise<void> {
+    await this.db
+      .update(proxyHosts)
+      .set({ lastHealthCheckAt: new Date() })
+      .where(
+        and(
+          eq(proxyHosts.id, host.id),
+          eq(proxyHosts.enabled, true),
+          eq(proxyHosts.healthCheckEnabled, true),
+          eq(proxyHosts.maintenanceEnabled, false)
+        )
+      );
+  }
+
   private async checkHost(
     host: typeof proxyHosts.$inferSelect
-  ): Promise<{ status: 'online' | 'offline'; responseMs?: number }> {
+  ): Promise<{ status: 'online' | 'offline' | 'skipped'; responseMs?: number }> {
     if (host.upstreamKind !== 'manual' && host.secureLinkMigratedAt != null) {
       if (!host.nodeId || !this.nodeDispatch) return { status: 'offline' };
       try {
@@ -260,8 +304,31 @@ export class HealthCheckJob {
           bodyMatchMode: host.healthCheckBodyMatchMode,
           timeoutSeconds: Math.ceil(HEALTH_CHECK_TIMEOUT_MS / 1000),
         });
+        if (!result.ok && result.error === DAEMON_BUSY_ERROR) {
+          logger.debug('Secure Link health probe deferred because daemon is busy', {
+            hostId: host.id,
+            nodeId: host.nodeId,
+            domain: host.domainNames?.[0],
+          });
+          return { status: 'skipped' };
+        }
+        if (!result.ok) {
+          logger.warn('Secure Link health probe failed', {
+            hostId: host.id,
+            nodeId: host.nodeId,
+            domain: host.domainNames?.[0],
+            httpStatus: result.httpStatus,
+            error: result.error,
+          });
+        }
         return { status: result.ok ? 'online' : 'offline', responseMs: result.responseMs };
-      } catch {
+      } catch (error) {
+        logger.warn('Secure Link health probe command failed', {
+          hostId: host.id,
+          nodeId: host.nodeId,
+          domain: host.domainNames?.[0],
+          error,
+        });
         return { status: 'offline' };
       }
     }
