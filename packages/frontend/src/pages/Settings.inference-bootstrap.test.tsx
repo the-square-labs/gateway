@@ -44,7 +44,7 @@ vi.mock("@/pages/settings/LicenseSection", () => ({
 describe("Settings inference bootstrap", () => {
   it("keeps a stable application skeleton until feature config is known and preserves the deep link", async () => {
     const user = makeUser({
-      scopes: ["inference:use", "inference:providers:view"],
+      scopes: ["feat:ai:use", "inference:providers:view"],
     });
     useAuthStore.setState({ user, isAuthenticated: true, isLoading: false });
     useSystemConfigStore.setState({

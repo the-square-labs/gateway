@@ -99,8 +99,6 @@ const PLAN_AI_TOOLS: AIToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
-        planId: { type: 'string' },
-        revisionId: { type: 'string' },
         intentReview: {
           type: 'object',
           properties: {
@@ -120,7 +118,7 @@ const PLAN_AI_TOOLS: AIToolDefinition[] = [
           required: ['verdict', 'summary', 'findings'],
         },
       },
-      required: ['planId', 'revisionId', 'intentReview', 'securityReview'],
+      required: ['intentReview', 'securityReview'],
     },
     destructive: false,
     category: 'Planning',
@@ -135,7 +133,6 @@ const PLAN_AI_TOOLS: AIToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
-        stepId: { type: 'string' },
         status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'blocked', 'skipped'] },
         evidence: {
           type: 'array',
@@ -150,7 +147,7 @@ const PLAN_AI_TOOLS: AIToolDefinition[] = [
         },
         skipReason: { type: 'string' },
       },
-      required: ['stepId', 'status'],
+      required: ['status'],
     },
     destructive: false,
     category: 'Planning',
@@ -205,12 +202,11 @@ const PLAN_AI_TOOLS: AIToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
-        planId: { type: 'string' },
         verdict: { type: 'string', enum: ['pass', 'revise'] },
         summary: { type: 'string' },
         findings: { type: 'array', items: { type: 'string' } },
       },
-      required: ['planId', 'verdict', 'summary', 'findings'],
+      required: ['verdict', 'summary', 'findings'],
     },
     destructive: false,
     category: 'Planning',

@@ -164,7 +164,8 @@ describe('canonical scope definitions', () => {
     expect(ALL_SCOPES).not.toContain('admin:housekeeping');
     expect(API_TOKEN_SCOPES).not.toContain('admin:system');
     expect(API_TOKEN_SCOPES).not.toContain('mcp:use');
-    expect(API_TOKEN_SCOPES).not.toContain('inference:use');
+    expect(ALL_SCOPES).not.toContain('inference:use');
+    expect(ALL_SCOPES).not.toContain('inference:usage:view:self');
     expect(API_TOKEN_SCOPES).not.toContain('inference:tokens:manage');
     expect(API_TOKEN_SCOPES).not.toContain('inference:providers:manage');
     expect(API_TOKEN_SCOPES).not.toContain('admin:users');
@@ -180,8 +181,8 @@ describe('canonical scope definitions', () => {
     expect(API_TOKEN_SCOPES).toContain('nodes:files:write');
     expect(isApiTokenScope('admin:system')).toBe(false);
     expect(isApiTokenScope('mcp:use')).toBe(false);
-    expect(isApiTokenScope('inference:use')).toBe(false);
-    expect(isApiTokenScope('inference:usage:view:self')).toBe(false);
+    expect(isValidBaseScope('inference:use')).toBe(false);
+    expect(isValidBaseScope('inference:usage:view:self')).toBe(false);
     expect(isApiTokenScope('inference:models:manage')).toBe(false);
     expect(isApiTokenScope('admin:users')).toBe(false);
     expect(isApiTokenScope('proxy:raw:write:host-1')).toBe(false);
@@ -195,9 +196,7 @@ describe('canonical scope definitions', () => {
 
   it('grants inference administration only to built-in admin tiers by default', () => {
     for (const scope of [
-      'inference:use',
       'inference:tokens:manage',
-      'inference:usage:view:self',
       'inference:providers:view',
       'inference:providers:manage',
       'inference:models:manage',
@@ -208,6 +207,10 @@ describe('canonical scope definitions', () => {
       expect(ADMIN_SCOPES).toContain(scope);
       expect(OPERATOR_SCOPES).not.toContain(scope);
     }
+
+    expect(SYSTEM_ADMIN_SCOPES).toContain('feat:ai:use');
+    expect(ADMIN_SCOPES).toContain('feat:ai:use');
+    expect(OPERATOR_SCOPES).toContain('feat:ai:use');
 
     expect(isValidBaseScope('inference:tokens:create')).toBe(false);
     expect(isValidBaseScope('inference:tokens:revoke')).toBe(false);

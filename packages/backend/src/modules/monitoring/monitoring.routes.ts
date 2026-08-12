@@ -242,7 +242,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
   const dashboardReadModels = container.resolve(DashboardReadModelService);
   const user = c.get('user')!;
   const canViewLogging = hasScope(scopes, 'housekeeping:view');
-  const canViewInference = hasScope(scopes, 'inference:use') && hasScope(scopes, 'inference:usage:view:self');
+  const canViewInference = hasScope(scopes, 'feat:ai:use');
   const scopedNodeIds = getResourceScopedIds(scopes, 'nodes:details');
   const nodeOptions = hasScope(scopes, 'nodes:details') ? undefined : { allowedIds: scopedNodeIds };
   const directStats = () =>

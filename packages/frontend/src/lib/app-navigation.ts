@@ -296,7 +296,7 @@ export function hasDashboardContent(context: AppNavigationVisibility): boolean {
         hasAnyScope(scopes, ["pki:ca:view:root", "pki:ca:view:intermediate"]))) ||
     (context.inferenceEnabled &&
       context.hasLowInferenceUsage === true &&
-      scopeMatches(scopes, "inference:use"))
+      scopeMatches(scopes, "feat:ai:use"))
   );
 }
 

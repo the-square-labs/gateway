@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
+import { ALL_SCOPES } from '@/lib/scopes.js';
 import { AIService } from '@/modules/ai/ai.service.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { MonitoringService } from '@/modules/monitoring/monitoring.service.js';
@@ -529,14 +530,55 @@ describe('MCP tools', () => {
 
   it('eagerly lists all scoped tools when extended compatibility is enabled', async () => {
     registerMcpSettings(true, true);
-    registerToken(['docker:containers:view', 'docker:containers:manage']);
+    registerToken([...ALL_SCOPES]);
 
     const { body } = await mcpRequest('tools/list');
     const names = body.result.tools.map((tool: { name: string }) => tool.name);
 
+    expect(body.result.tools.length).toBeGreaterThan(80);
+    expect(body.result.nextCursor).toBeUndefined();
     expect(names).not.toContain('discover_tools');
     expect(names).toContain('list_docker_deployments');
     expect(names).toContain('restart_docker_container');
+    expect(names).toContain('manage_docker_container_config');
+  });
+
+  it('keeps tools/list pagination in discovery mode', async () => {
+    registerToken([...ALL_SCOPES]);
+
+    const initialList = await mcpRequest('tools/list');
+    const sessionId = initialList.response.headers.get('mcp-session-id') ?? undefined;
+    for (const category of [
+      'folders',
+      'nodes',
+      'proxy',
+      'certificates',
+      'docker',
+      'databases',
+      'logging',
+      'status_page',
+      'notifications',
+      'administration',
+      'maintenance',
+      'ai_assistant',
+    ]) {
+      await mcpRequest('tools/call', { name: 'discover_tools', arguments: { category } }, 'gwo_valid', sessionId);
+    }
+
+    const firstPage = await mcpRequest('tools/list', {}, 'gwo_valid', sessionId);
+    const firstPageNames = firstPage.body.result.tools.map((tool: { name: string }) => tool.name);
+    const secondPage = await mcpRequest(
+      'tools/list',
+      { cursor: firstPage.body.result.nextCursor },
+      'gwo_valid',
+      sessionId
+    );
+    const secondPageNames = secondPage.body.result.tools.map((tool: { name: string }) => tool.name);
+
+    expect(firstPage.body.result.tools).toHaveLength(80);
+    expect(firstPage.body.result.nextCursor).toBe('80');
+    expect(firstPageNames).toContain('discover_tools');
+    expect(secondPageNames).toContain('manage_docker_container_config');
   });
 
   it('keeps newly discovered notification tools visible on the first tools/list page', async () => {

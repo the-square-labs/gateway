@@ -753,7 +753,7 @@ function RealtimeBridge() {
   const canViewCAs = useAuthStore(
     (s) => s.hasScope("pki:ca:view:root") || s.hasScope("pki:ca:view:intermediate")
   );
-  const canUseInference = useAuthStore((s) => s.hasScope("inference:use"));
+  const canUseInference = useAuthStore((s) => s.hasScope("feat:ai:use"));
   const canViewLogging = useAuthStore((s) => s.hasScope("housekeeping:view"));
   const canViewAudit = useAuthStore((s) => s.hasScopedAccess("admin:audit"));
   const invalidateDashboardBootstrap = useDashboardBootstrapStore((s) => s.invalidate);
@@ -820,7 +820,7 @@ function RealtimeBridge() {
       [auth.hasScopedAccess("admin:audit"), "siem.delivery.changed"],
       [
         auth.hasAnyScope(
-          "inference:use",
+          "feat:ai:use",
           "inference:providers:view",
           "inference:models:manage",
           "inference:limits:manage",
@@ -850,10 +850,11 @@ function RealtimeBridge() {
     void api
       .getUserPreferences()
       .then((preferences) => {
-        if (!cancelled) {
-          hydrateAIApprovalMode(preferences.aiApprovalMode);
+        if (cancelled) return;
+        const ui = useUIStore.getState();
+        if (!ui.aiApprovalModeLoaded) hydrateAIApprovalMode(preferences.aiApprovalMode);
+        if (!ui.interfacePreferenceLoaded)
           hydratePreferredInterface(preferences.preferredInterface);
-        }
       })
       .catch(() => {});
     return () => {

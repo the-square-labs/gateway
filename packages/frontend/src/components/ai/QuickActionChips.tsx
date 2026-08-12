@@ -68,9 +68,7 @@ export function QuickActionChips({ onSelect }: QuickActionChipsProps) {
   const gatewayInferenceMode = useAIStore(
     (state) => state.providerStatus?.providerType === "gateway_inference"
   );
-  const canViewInferenceUsage = useAuthStore((state) =>
-    state.hasScope("inference:usage:view:self")
-  );
+  const canViewInferenceUsage = useAuthStore((state) => state.hasScope("feat:ai:use"));
   const inferenceQuota = useInferenceQuotaSnapshot(gatewayInferenceMode && canViewInferenceUsage);
 
   const actions =

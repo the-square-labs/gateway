@@ -69,7 +69,7 @@ describe('AI internal docs registry', () => {
       clickhouse: 'databases:view',
       troubleshooting: 'feat:ai:use',
       proxy: 'proxy:view',
-      inference: expect.arrayContaining(['inference:use', 'inference:providers:manage', 'inference:models:manage']),
+      inference: expect.arrayContaining(['feat:ai:use', 'inference:providers:manage', 'inference:models:manage']),
     });
   });
 
@@ -164,27 +164,27 @@ describe('AI internal docs registry', () => {
     );
     expect(getInternalDocumentation('licensing-updates', ['license:view']).content).toContain('get_license_status');
     expect(getInternalDocumentation('licensing-updates', ['admin:update']).content).toContain('manage_system_updates');
-    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
+    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
       'npx -y @wiolett/gateway-inference@latest setup codex'
     );
-    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
+    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
       'npx -y @wiolett/gateway-inference@latest setup claude-code'
     );
-    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
+    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
       'generalSettings.inference.harnessSpecificEndpointsEnabled'
     );
-    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain('Claude Code 2.1.129 or newer');
-    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
+    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain('Claude Code 2.1.129 or newer');
+    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
       'Claude Desktop and the Claude Code VS Code extension'
     );
-    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain('/api/inference/v1');
-    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
+    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain('/api/inference/v1');
+    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
       '/api/inference/anthropic/v1/messages'
     );
-    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
+    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
       'Profile > Authorizations > Inference API tokens'
     );
-    expect(getInternalDocumentation('inference', ['inference:use']).content).toContain(
+    expect(getInternalDocumentation('inference', ['feat:ai:use']).content).toContain(
       'models whose usable sources are API-only are omitted'
     );
     expect(getInternalDocumentation('inference', ['inference:providers:manage']).content).toContain(

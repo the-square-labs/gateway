@@ -178,6 +178,14 @@ export class DockerSecretService {
       .where(and(eq(dockerSecrets.nodeId, nodeId), eq(dockerSecrets.containerName, containerName)));
   }
 
+  async rename(nodeId: string, fromName: string, toName: string): Promise<void> {
+    await this.migrationGuard?.assertContainerAllowed(nodeId, fromName);
+    await this.db
+      .update(dockerSecrets)
+      .set({ containerName: toName, updatedAt: new Date() })
+      .where(and(eq(dockerSecrets.nodeId, nodeId), eq(dockerSecrets.containerName, fromName)));
+  }
+
   /**
    * Get the set of secret key names for a container (for stripping from env responses).
    */

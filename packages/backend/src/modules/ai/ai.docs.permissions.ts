@@ -128,7 +128,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 ### Features
 | Scope | Description |
 |-------|-------------|
-| feat:ai:use | Access AI Workspace |
+| feat:ai:use | Access AI Workspace and Gateway Inference, including personal inference usage |
 | feat:ai:configure | Configure AI Workspace settings |
 | ai:sandbox:use | Use AI sandbox runner tools |
 | ai:sandbox:tier:medium | Allow medium sandbox resource tier |
@@ -139,10 +139,8 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 ### Inference Gateway
 | Scope | Description |
 |-------|-------------|
-| inference:use | Send requests through the standalone inference data plane and view the current user's inference usage |
 | inference:setup | Authorize the Gateway companion CLI setup resource |
 | inference:tokens:manage | Create and revoke dedicated gwi_ inference tokens for the current user |
-| inference:usage:view:self | View the current user's inference usage percentages (implicitly granted by inference:use) |
 | inference:providers:view | View provider templates, connections, masked credentials, discovery, and quota |
 | inference:providers:manage | Connect, update, synchronize, route, and disconnect inference providers |
 | inference:models:manage | Atomically create, replace, publish, or delete logical inference models |

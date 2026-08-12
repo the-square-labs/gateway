@@ -10,7 +10,7 @@ Inference is disabled by default. An administrator with Gateway settings access 
 
 When disabled, management and data-plane routes return `INFERENCE_DISABLED`, and the frontend omits Inference usage, token management, and administration surfaces. Connected provider credentials, model configuration, and accounting history remain stored.
 
-Apply database migrations before enabling the flag. Roll out admin scopes first, configure and verify providers/models, then grant `inference:use` and token scopes to a limited user group.
+Apply database migrations before enabling the flag. Roll out admin scopes first, configure and verify providers/models, then grant `feat:ai:use` and token scopes to a limited user group.
 
 ## Administrator setup
 
@@ -27,7 +27,7 @@ There is no user-visible or administrator-managed Pool entity. One logical model
 
 ## User setup
 
-Users need `inference:use`. Token creation and revocation additionally require `inference:tokens:manage`.
+Users need `feat:ai:use`, which grants both AI Workspace and Gateway Inference access, including personal usage visibility. Token creation and revocation additionally require `inference:tokens:manage`.
 
 Create a token under **Profile > Authorizations > Inference API tokens**. The `gwi_` secret is shown once.
 

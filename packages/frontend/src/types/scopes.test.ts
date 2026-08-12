@@ -29,10 +29,12 @@ describe("scope constants", () => {
     const groupValues = scopeValues(GROUP_ASSIGNABLE_SCOPES);
 
     expect(tokenValues).toContain("feat:ai:use");
-    expect(tokenValues).toContain("inference:use");
+    expect(tokenValues).not.toContain("inference:use");
     expect(tokenValues).toContain("inference:providers:manage");
     expect(tokenValues).not.toContain("inference:usage:view:self");
-    expect(TOKEN_SCOPES.find((scope) => scope.value === "inference:use")?.group).toBe("Inference");
+    expect(TOKEN_SCOPES.find((scope) => scope.value === "feat:ai:use")?.desc).toContain(
+      "Gateway Inference"
+    );
     expect(tokenValues).toContain("admin:system");
     expect(tokenValues).toContain("proxy:raw:write");
     expect(tokenValues).toContain("docker:containers:view");
@@ -50,7 +52,7 @@ describe("scope constants", () => {
     expect(apiTokenValues).toContain("databases:query:read");
 
     expect(groupValues).toContain("feat:ai:use");
-    expect(groupValues).toContain("inference:use");
+    expect(groupValues).not.toContain("inference:use");
     expect(groupValues).toContain("inference:providers:manage");
     expect(groupValues).not.toContain("inference:usage:view:self");
     expect(groupValues).toContain("admin:users");

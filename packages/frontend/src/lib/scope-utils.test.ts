@@ -27,9 +27,9 @@ describe("canonicalizeScopeSelection", () => {
     expect(scopeMatches(["inference:models:manage"], "inference:providers:view")).toBe(true);
   });
 
-  it("lets inference users view their own usage without a separate grant", () => {
-    expect(scopeMatches(["inference:use"], "inference:usage:view:self")).toBe(true);
-    expect(scopeMatches(["inference:usage:view:self"], "inference:use")).toBe(false);
+  it("uses the canonical AI scope for Workspace and Inference access", () => {
+    expect(scopeMatches(["feat:ai:use"], "feat:ai:use")).toBe(true);
+    expect(scopeMatches([], "feat:ai:use")).toBe(false);
   });
 
   it("matches Docker node scopes against child resources only on the same node", () => {

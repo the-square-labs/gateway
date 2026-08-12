@@ -124,7 +124,7 @@ describe('InferenceGatewayExecutor helpers', () => {
         permissionGroups: {
           findMany: vi
             .fn()
-            .mockResolvedValue([{ id: 'group-1', parentId: null, name: 'Users', scopes: ['inference:use'] }]),
+            .mockResolvedValue([{ id: 'group-1', parentId: null, name: 'Users', scopes: ['feat:ai:use'] }]),
         },
       },
       select: vi.fn(() => ({

@@ -123,7 +123,7 @@ describe('inference usage presentation', () => {
     const result = await service.self({
       id: 'user-1',
       groupId: 'group-1',
-      scopes: ['inference:use'],
+      scopes: ['feat:ai:use'],
       isBlocked: false,
     } as never);
 

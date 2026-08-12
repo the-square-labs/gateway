@@ -144,6 +144,7 @@ export function DataTable<T>({
     >
       <div
         ref={containerRef}
+        data-route-scroll-container=""
         className={`${horizontalScroll ? "overflow-auto" : "overflow-y-auto"} min-h-0 -mb-px`}
       >
         <div

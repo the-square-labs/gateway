@@ -27,14 +27,14 @@ describe("app navigation registry", () => {
 
   it("shows Dashboard for personal inference usage only when a quota is low", () => {
     const regularUsageGroups = visibleNavigationGroups(
-      context({ scopes: ["inference:use"], inferenceEnabled: true })
+      context({ scopes: ["feat:ai:use"], inferenceEnabled: true })
     );
     const regularUsageIds = regularUsageGroups.flatMap((group) =>
       group.items.map((item) => item.id)
     );
     const groups = visibleNavigationGroups(
       context({
-        scopes: ["inference:use"],
+        scopes: ["feat:ai:use"],
         inferenceEnabled: true,
         hasLowInferenceUsage: true,
       })

@@ -29,6 +29,7 @@ export function withAuthApi<TBase extends ApiClientBaseConstructor>(Base: TBase)
       aiApprovalMode?: AIApprovalMode;
       preferredInterface?: PreferredInterface;
     }): Promise<UserPreferences> {
+      this.invalidateCache("auth:me:preferences");
       const preferences = await this.request<UserPreferences>("/auth/me/preferences", {
         method: "PATCH",
         body: JSON.stringify(input),

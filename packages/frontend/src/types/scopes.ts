@@ -727,8 +727,8 @@ const RAW_TOKEN_SCOPES = [
   // Features
   {
     value: "feat:ai:use",
-    label: "Use AI Workspace",
-    desc: "Use AI Workspace",
+    label: "Use AI",
+    desc: "Use AI Workspace, Gateway Inference, and view personal inference usage",
     group: "Features",
   },
   {
@@ -767,13 +767,7 @@ const RAW_TOKEN_SCOPES = [
     desc: "Allow this user account to access the remote MCP server with OAuth",
     group: "Features",
   },
-  // Inference
-  {
-    value: "inference:use",
-    label: "Use Gateway Inference",
-    desc: "Use inference models and view personal inference usage",
-    group: "Inference",
-  },
+  // Inference administration
   {
     value: "inference:setup",
     label: "Set Up Inference Harnesses",
@@ -1183,10 +1177,8 @@ const PROGRAMMATIC_DENIED_SCOPE_VALUES = new Set<string>([
   "ai:sandbox:tier:high",
   "ai:sandbox:manage",
   "mcp:use",
-  "inference:use",
   "inference:setup",
   "inference:tokens:manage",
-  "inference:usage:view:self",
   "inference:providers:view",
   "inference:providers:manage",
   "inference:models:manage",

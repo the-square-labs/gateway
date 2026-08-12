@@ -23,6 +23,7 @@ import type { User } from '@/types.js';
 import type { McpAuthContext } from './mcp-types.js';
 
 const MCP_EXCLUDED_TOOLS = new Set([
+  'discover_tools',
   'ask_question',
   'get_current_context',
   'read_tool_output',
@@ -498,6 +499,8 @@ export function registerMcpToolHandlers(server: McpAuthContext['server'], auth: 
         },
       })),
     ];
+    if (auth.eagerToolListing) return { tools };
+
     const page = paginateTools(tools, request.params?.cursor);
 
     return { tools: page.items, nextCursor: page.nextCursor };

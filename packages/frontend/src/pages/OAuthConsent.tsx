@@ -219,137 +219,145 @@ export function OAuthConsent() {
   }
 
   return (
-    <div className="flex min-h-[100dvh] items-center justify-center bg-background px-4 py-4 sm:py-8">
-      <div className="flex max-h-[calc(100dvh-2rem)] w-full max-w-2xl flex-col border border-border bg-card sm:max-h-[calc(100dvh-4rem)]">
-        <div className="border-b border-border p-5">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
+    <div
+      className="h-[100dvh] overflow-y-auto bg-background px-4 py-4 sm:py-8"
+      data-oauth-consent-scroll-viewport=""
+    >
+      <div className="flex min-h-full items-center justify-center">
+        <div
+          className="flex w-full max-w-2xl flex-col border border-border bg-card"
+          data-oauth-consent-card=""
+        >
+          <div className="border-b border-border p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-3">
+                  <img src="/android-chrome-192x192.png" alt="Gateway" className="h-9 w-9" />
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground">Gateway OAuth</p>
+                    <h1 className="text-xl font-semibold text-foreground">
+                      Authorize {resourceLabel} access
+                    </h1>
+                  </div>
+                </div>
+                <p className="mt-3 text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">{preview.client.name}</span> is
+                  requesting scoped access to{" "}
+                  <span className="font-medium text-foreground">{resourceLabel}</span>.
+                </p>
+              </div>
+              <Badge variant="warning" className="shrink-0">
+                Unverified client
+              </Badge>
+            </div>
+          </div>
+
+          <div className="flex flex-col divide-y divide-border" data-oauth-consent-body="">
+            <section className="p-5">
               <div className="flex items-center gap-3">
-                <img src="/android-chrome-192x192.png" alt="Gateway" className="h-9 w-9" />
-                <div>
-                  <p className="text-xs font-medium text-muted-foreground">Gateway OAuth</p>
-                  <h1 className="text-xl font-semibold text-foreground">
-                    Authorize {resourceLabel} access
-                  </h1>
+                <div className="flex h-10 w-10 items-center justify-center border border-border bg-muted text-sm font-semibold">
+                  {(preview.account.name || preview.account.email).slice(0, 1).toUpperCase()}
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-foreground">
+                    {preview.account.name ?? preview.account.email}
+                  </p>
+                  <p className="truncate text-xs text-muted-foreground">{preview.account.email}</p>
                 </div>
               </div>
-              <p className="mt-3 text-sm text-muted-foreground">
-                <span className="font-medium text-foreground">{preview.client.name}</span> is
-                requesting scoped access to{" "}
-                <span className="font-medium text-foreground">{resourceLabel}</span>.
-              </p>
-            </div>
-            <Badge variant="warning" className="shrink-0">
-              Unverified client
-            </Badge>
-          </div>
-        </div>
+            </section>
 
-        <div className="flex min-h-0 flex-col divide-y divide-border overflow-y-auto">
-          <section className="p-5">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center border border-border bg-muted text-sm font-semibold">
-                {(preview.account.name || preview.account.email).slice(0, 1).toUpperCase()}
-              </div>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-foreground">
-                  {preview.account.name ?? preview.account.email}
-                </p>
-                <p className="truncate text-xs text-muted-foreground">{preview.account.email}</p>
-              </div>
-            </div>
-          </section>
-
-          <section className="bg-warning/15 px-5 py-3">
-            <div className="flex items-center gap-3">
-              <AlertTriangle className="h-5 w-5 shrink-0 text-warning-foreground" />
-              <p className="text-sm font-semibold text-warning-foreground">
-                Only authorize tools you trust. Gateway cannot verify this client; it can only
-                enforce the scopes you approve and the permissions your account currently has.
-              </p>
-            </div>
-          </section>
-
-          {preview.redirect.isExternal && (
-            <section className="bg-destructive/10 px-5 py-3">
+            <section className="bg-warning/15 px-5 py-3">
               <div className="flex items-center gap-3">
-                <AlertTriangle className="h-5 w-5 shrink-0 text-destructive" />
-                <p className="text-sm font-semibold text-destructive">
-                  External OAuth callback. If you authorize this request, the authorization result
-                  will be sent to {redirectHost ?? "an external callback URL"}.
+                <AlertTriangle className="h-5 w-5 shrink-0 text-warning-foreground" />
+                <p className="text-sm font-semibold text-warning-foreground">
+                  Only authorize tools you trust. Gateway cannot verify this client; it can only
+                  enforce the scopes you approve and the permissions your account currently has.
                 </p>
               </div>
             </section>
-          )}
 
-          {hasManualApprovalScopes && (
-            <section className="bg-destructive/10 px-5 py-3">
-              <div className="flex items-center gap-3">
-                <AlertTriangle className="h-5 w-5 shrink-0 text-destructive" />
-                <p className="text-sm font-semibold text-destructive">
-                  Some requested scopes can reveal sensitive data, export private key material, or
-                  perform high-risk operations. They are unchecked until you explicitly approve
-                  them.
-                </p>
-              </div>
-            </section>
-          )}
+            {preview.redirect.isExternal && (
+              <section className="bg-destructive/10 px-5 py-3">
+                <div className="flex items-center gap-3">
+                  <AlertTriangle className="h-5 w-5 shrink-0 text-destructive" />
+                  <p className="text-sm font-semibold text-destructive">
+                    External OAuth callback. If you authorize this request, the authorization result
+                    will be sent to {redirectHost ?? "an external callback URL"}.
+                  </p>
+                </div>
+              </section>
+            )}
 
-          <section className="p-5">
-            <div className="mb-3 flex items-center gap-2">
-              <Shield className="h-4 w-4 text-muted-foreground" />
-              <h2 className="text-sm font-semibold text-foreground">Requested scopes</h2>
-            </div>
-            <div className="flex min-h-0 flex-col border border-border">
-              <Input
-                value={scopeSearch}
-                onChange={(event) => setScopeSearch(event.target.value)}
-                placeholder="Search scopes..."
-                className="h-9 rounded-none border-0 border-b border-border text-sm focus-visible:ring-0"
-              />
-              <ScopeList
-                scopes={grantableScopeItems}
-                search={scopeSearch}
-                selected={selectedScopes}
-                onToggle={(scope) => setScopeSelected(scope, !selectedScopes.includes(scope))}
-                readOnly={isSubmitting}
-                viewportClassName="max-h-[24rem] overflow-y-auto overscroll-contain"
-              />
-            </div>
-          </section>
+            {hasManualApprovalScopes && (
+              <section className="bg-destructive/10 px-5 py-3">
+                <div className="flex items-center gap-3">
+                  <AlertTriangle className="h-5 w-5 shrink-0 text-destructive" />
+                  <p className="text-sm font-semibold text-destructive">
+                    Some requested scopes can reveal sensitive data, export private key material, or
+                    perform high-risk operations. They are unchecked until you explicitly approve
+                    them.
+                  </p>
+                </div>
+              </section>
+            )}
 
-          {preview.unavailableScopes.length > 0 && (
             <section className="p-5">
-              <h2 className="text-sm font-semibold text-foreground">Unavailable scopes</h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                These were requested but cannot be granted by your account.
-              </p>
-              <div className="mt-3 divide-y divide-border border border-border opacity-80">
+              <div className="mb-3 flex items-center gap-2">
+                <Shield className="h-4 w-4 text-muted-foreground" />
+                <h2 className="text-sm font-semibold text-foreground">Requested scopes</h2>
+              </div>
+              <div className="flex min-h-0 flex-col border border-border">
+                <Input
+                  value={scopeSearch}
+                  onChange={(event) => setScopeSearch(event.target.value)}
+                  placeholder="Search scopes..."
+                  className="h-9 rounded-none border-0 border-b border-border text-sm focus-visible:ring-0"
+                />
                 <ScopeList
-                  scopes={unavailableScopeItems}
-                  search=""
-                  selected={[]}
-                  onToggle={() => {}}
-                  readOnly
+                  scopes={grantableScopeItems}
+                  search={scopeSearch}
+                  selected={selectedScopes}
+                  onToggle={(scope) => setScopeSelected(scope, !selectedScopes.includes(scope))}
+                  readOnly={isSubmitting}
+                  viewportClassName="max-h-[24rem] overflow-y-auto overscroll-contain"
                 />
               </div>
             </section>
-          )}
-        </div>
 
-        <div className="flex shrink-0 flex-col-reverse gap-3 border-t border-border p-5 sm:flex-row sm:justify-end">
-          <Button variant="outline" onClick={deny} disabled={isSubmitting}>
-            <X className="h-4 w-4" />
-            Deny
-          </Button>
-          <Button onClick={approve} disabled={isSubmitting || selectedScopes.length === 0}>
-            {isSubmitting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Check className="h-4 w-4" />
+            {preview.unavailableScopes.length > 0 && (
+              <section className="p-5">
+                <h2 className="text-sm font-semibold text-foreground">Unavailable scopes</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  These were requested but cannot be granted by your account.
+                </p>
+                <div className="mt-3 divide-y divide-border border border-border opacity-80">
+                  <ScopeList
+                    scopes={unavailableScopeItems}
+                    search=""
+                    selected={[]}
+                    onToggle={() => {}}
+                    readOnly
+                  />
+                </div>
+              </section>
             )}
-            Authorize
-          </Button>
+          </div>
+
+          <div className="flex shrink-0 flex-col-reverse gap-3 border-t border-border p-5 sm:flex-row sm:justify-end">
+            <Button variant="outline" onClick={deny} disabled={isSubmitting}>
+              <X className="h-4 w-4" />
+              Deny
+            </Button>
+            <Button onClick={approve} disabled={isSubmitting || selectedScopes.length === 0}>
+              {isSubmitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Check className="h-4 w-4" />
+              )}
+              Authorize
+            </Button>
+          </div>
         </div>
       </div>
     </div>

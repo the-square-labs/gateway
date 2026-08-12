@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, max, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, max } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
 import {
   type AIPlan,
@@ -8,6 +8,7 @@ import {
   type AIPlanStepEvidence,
   type AIPlanStepStatus,
   type AIPlanVerificationCriterion,
+  type AIRunPurpose,
   aiConversations,
   aiPlanRevisions,
   aiPlanSteps,
@@ -126,13 +127,11 @@ export class AIPlanService {
   async submitPlanReview(input: {
     userId: string;
     conversationId: string;
-    planId: string;
-    revisionId: string;
     intentReview: AIPlanReview;
     securityReview: AIPlanReview;
   }): Promise<{ plan: AIPlanRuntimeSnapshot; published: boolean; requiresQuestion: boolean }> {
     const plan = await this.requireActivePlan(input.userId, input.conversationId);
-    if (plan.id !== input.planId || plan.status !== 'validating') {
+    if (plan.status !== 'validating') {
       throw new AppError(409, 'AI_PLAN_NOT_VALIDATING', 'The active plan is not awaiting validation');
     }
 
@@ -143,7 +142,8 @@ export class AIPlanService {
       const [revision] = await tx
         .select()
         .from(aiPlanRevisions)
-        .where(and(eq(aiPlanRevisions.id, input.revisionId), eq(aiPlanRevisions.planId, plan.id)))
+        .where(and(eq(aiPlanRevisions.planId, plan.id), eq(aiPlanRevisions.status, 'validating')))
+        .orderBy(desc(aiPlanRevisions.revision))
         .limit(1);
       if (!revision || revision.status !== 'validating') {
         throw new AppError(409, 'AI_PLAN_REVISION_NOT_VALIDATING', 'Plan revision is not awaiting validation');
@@ -203,6 +203,37 @@ export class AIPlanService {
         .where(and(eq(aiPlans.id, plan.id), eq(aiPlans.status, 'validating')));
     });
     return true;
+  }
+
+  async recoverStoppedPlanRun(
+    userId: string,
+    conversationId: string,
+    planId: string,
+    purpose: AIRunPurpose,
+    reason: string
+  ): Promise<boolean> {
+    const plan = await this.getActivePlan(userId, conversationId);
+    if (!plan || plan.id !== planId) return false;
+    const stopReason = reason.trim() || 'Plan run stopped by user';
+
+    if (purpose === 'plan_validation') {
+      return this.recoverFailedValidation(userId, conversationId, planId, stopReason);
+    }
+    if (purpose === 'plan_draft' && plan.status === 'drafting') {
+      await this.db
+        .update(aiPlans)
+        .set({ pauseReason: stopReason, updatedAt: new Date() })
+        .where(and(eq(aiPlans.id, plan.id), eq(aiPlans.status, 'drafting')));
+      return true;
+    }
+    if (
+      (purpose === 'plan_execution' || purpose === 'plan_verification') &&
+      (plan.status === 'executing' || plan.status === 'verifying')
+    ) {
+      await this.pause(userId, conversationId, stopReason);
+      return true;
+    }
+    return false;
   }
 
   async decide(input: {
@@ -269,7 +300,6 @@ export class AIPlanService {
   async updateStep(input: {
     userId: string;
     conversationId: string;
-    stepId: string;
     status: AIPlanStepStatus;
     evidence?: AIPlanStepEvidence[];
     skipReason?: string;
@@ -287,28 +317,31 @@ export class AIPlanService {
 
     const progressMade = await this.db.transaction(async (tx) => {
       const revision = await requireAcceptedRevision(tx, plan.id);
-      const [step] = await tx
+      const [activeStep] = await tx
         .select()
         .from(aiPlanSteps)
-        .where(and(eq(aiPlanSteps.id, input.stepId), eq(aiPlanSteps.revisionId, revision.id)))
+        .where(and(eq(aiPlanSteps.revisionId, revision.id), eq(aiPlanSteps.status, 'in_progress')))
+        .orderBy(asc(aiPlanSteps.ordinal))
         .limit(1);
-      if (!step) throw new AppError(404, 'AI_PLAN_STEP_NOT_FOUND', 'Plan step not found');
+      const [nextStep] =
+        input.status === 'in_progress' && !activeStep
+          ? await tx
+              .select()
+              .from(aiPlanSteps)
+              .where(and(eq(aiPlanSteps.revisionId, revision.id), eq(aiPlanSteps.status, 'pending')))
+              .orderBy(asc(aiPlanSteps.ordinal))
+              .limit(1)
+          : [];
+      const step = activeStep ?? nextStep;
+      if (!step) {
+        throw new AppError(
+          409,
+          input.status === 'in_progress' ? 'AI_PLAN_STEP_NOT_AVAILABLE' : 'AI_PLAN_STEP_NOT_ACTIVE',
+          input.status === 'in_progress' ? 'No pending plan step is available' : 'No plan step is currently active'
+        );
+      }
       if ((step.status === 'completed' || step.status === 'skipped') && step.status !== input.status) {
         throw new AppError(409, 'AI_PLAN_STEP_TERMINAL', 'Completed and skipped plan steps cannot be reopened');
-      }
-      if (input.status === 'in_progress') {
-        const [other] = await tx
-          .select({ id: aiPlanSteps.id })
-          .from(aiPlanSteps)
-          .where(
-            and(
-              eq(aiPlanSteps.revisionId, revision.id),
-              eq(aiPlanSteps.status, 'in_progress'),
-              ne(aiPlanSteps.id, step.id)
-            )
-          )
-          .limit(1);
-        if (other) throw new AppError(409, 'AI_PLAN_STEP_ALREADY_ACTIVE', 'Another plan step is already in progress');
       }
       const now = new Date();
       const madeProgress = step.status !== input.status && (input.status === 'completed' || input.status === 'skipped');
@@ -410,13 +443,12 @@ export class AIPlanService {
   async submitFinalVerification(input: {
     userId: string;
     conversationId: string;
-    planId: string;
     verdict: 'pass' | 'revise';
     summary: string;
     findings: string[];
   }): Promise<AIPlanRuntimeSnapshot & { completionPending?: boolean }> {
     const plan = await this.requireActivePlan(input.userId, input.conversationId);
-    if (plan.id !== input.planId || plan.status !== 'verifying') {
+    if (plan.status !== 'verifying') {
       throw new AppError(409, 'AI_PLAN_NOT_VERIFYING', 'The active plan is not awaiting final verification');
     }
     if (input.verdict === 'pass') {

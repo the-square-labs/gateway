@@ -3,6 +3,8 @@ import {
   createContainer,
   daemonContainerCreateConfig,
   duplicateContainer,
+  removeContainer,
+  renameContainer,
 } from './docker-container-mutation-operations.js';
 
 function unlockedDockerNodeDb() {
@@ -190,5 +192,140 @@ describe('duplicateContainer compensation', () => {
     expect(runtimeSettingsService.delete).toHaveBeenCalledWith('node-1', 'copy');
     expect(secretService.deleteImported).toHaveBeenCalledWith('node-1', 'copy');
     expect(accessResourceService.removeContainer).toHaveBeenCalledWith('node-1', 'copy');
+  });
+});
+
+describe('container name-keyed metadata lifecycle', () => {
+  it('removes environment and secrets together with a deleted container', async () => {
+    const environmentService = { deleteImported: vi.fn().mockResolvedValue(undefined) };
+    const runtimeSettingsService = { delete: vi.fn().mockResolvedValue(undefined) };
+    const secretService = { deleteImported: vi.fn().mockResolvedValue(undefined) };
+    const ctx = {
+      db: unlockedDockerNodeDb(),
+      auditService: { log: vi.fn().mockResolvedValue(undefined) },
+      nodeDispatch: { sendDockerContainerCommand: vi.fn().mockResolvedValue({ success: true, detail: '{}' }) },
+      environmentService,
+      runtimeSettingsService,
+      secretService,
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+      resolveContainerName: vi.fn().mockResolvedValue('deleted-name'),
+      requireNoTransition: vi.fn(),
+      inspectContainer: vi.fn().mockResolvedValue({ State: { Status: 'exited' } }),
+      folderService: { deleteContainerAssignment: vi.fn().mockResolvedValue(undefined) },
+      accessResourceService: { removeContainer: vi.fn().mockResolvedValue('scope-1') },
+      emitContainer: vi.fn(),
+      parseResult: vi.fn(),
+    };
+
+    await removeContainer(ctx as never, 'node-1', 'container-1', false, 'user-1');
+
+    expect(environmentService.deleteImported).toHaveBeenCalledWith('node-1', 'deleted-name');
+    expect(runtimeSettingsService.delete).toHaveBeenCalledWith('node-1', 'deleted-name');
+    expect(secretService.deleteImported).toHaveBeenCalledWith('node-1', 'deleted-name');
+  });
+
+  it('clears stale destination metadata before reusing a deleted name', async () => {
+    const environmentService = {
+      deleteImported: vi.fn().mockResolvedValue(undefined),
+      rename: vi.fn().mockResolvedValue(undefined),
+    };
+    const runtimeSettingsService = {
+      delete: vi.fn().mockResolvedValue(undefined),
+      rename: vi.fn().mockResolvedValue(undefined),
+    };
+    const secretService = {
+      deleteImported: vi.fn().mockResolvedValue(undefined),
+      rename: vi.fn().mockResolvedValue(undefined),
+    };
+    const renameRuntime = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
+    const ctx = {
+      db: unlockedDockerNodeDb(),
+      auditService: { log: vi.fn().mockResolvedValue(undefined) },
+      nodeDispatch: { sendDockerContainerCommand: renameRuntime },
+      environmentService,
+      runtimeSettingsService,
+      secretService,
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+      resolveContainerName: vi.fn().mockResolvedValue('current-name'),
+      requireNoTransition: vi.fn(),
+      assertNameAvailable: vi.fn().mockResolvedValue(undefined),
+      setTransition: vi.fn(),
+      clearTransition: vi.fn(),
+      folderService: {
+        deleteContainerAssignment: vi.fn().mockResolvedValue(undefined),
+        renameContainerAssignment: vi.fn().mockResolvedValue(undefined),
+      },
+      accessResourceService: {
+        removeContainer: vi.fn().mockResolvedValue(undefined),
+        renameContainer: vi.fn().mockResolvedValue(undefined),
+      },
+      emitContainer: vi.fn(),
+      translateNameConflict: (error: unknown) => {
+        throw error;
+      },
+      parseResult: vi.fn(),
+    };
+
+    await renameContainer(ctx as never, 'node-1', 'container-1', 'deleted-name', 'user-1');
+
+    expect(environmentService.deleteImported).toHaveBeenCalledWith('node-1', 'deleted-name');
+    expect(secretService.deleteImported).toHaveBeenCalledWith('node-1', 'deleted-name');
+    expect(environmentService.rename).toHaveBeenCalledWith('node-1', 'current-name', 'deleted-name');
+    expect(secretService.rename).toHaveBeenCalledWith('node-1', 'current-name', 'deleted-name');
+    expect(environmentService.deleteImported.mock.invocationCallOrder[0]).toBeLessThan(
+      renameRuntime.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('rolls the runtime and completed metadata back when metadata rename fails', async () => {
+    const environmentService = {
+      deleteImported: vi.fn().mockResolvedValue(undefined),
+      rename: vi.fn().mockResolvedValue(undefined),
+    };
+    const runtimeSettingsService = {
+      delete: vi.fn().mockResolvedValue(undefined),
+      rename: vi.fn().mockRejectedValueOnce(new Error('runtime metadata unavailable')),
+    };
+    const renameRuntime = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
+    const clearTransition = vi.fn();
+    const emitContainer = vi.fn();
+    const ctx = {
+      db: unlockedDockerNodeDb(),
+      auditService: { log: vi.fn().mockResolvedValue(undefined) },
+      nodeDispatch: { sendDockerContainerCommand: renameRuntime },
+      environmentService,
+      runtimeSettingsService,
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+      resolveContainerName: vi.fn().mockResolvedValue('current-name'),
+      requireNoTransition: vi.fn(),
+      assertNameAvailable: vi.fn().mockResolvedValue(undefined),
+      setTransition: vi.fn(),
+      clearTransition,
+      emitContainer,
+      translateNameConflict: (error: unknown) => {
+        throw error;
+      },
+      parseResult: vi.fn(),
+    };
+
+    await expect(renameContainer(ctx as never, 'node-1', 'container-1', 'new-name', 'user-1')).rejects.toThrow(
+      'runtime metadata unavailable'
+    );
+
+    expect(renameRuntime).toHaveBeenNthCalledWith(1, 'node-1', 'rename', {
+      containerId: 'container-1',
+      newName: 'new-name',
+    });
+    expect(renameRuntime).toHaveBeenNthCalledWith(2, 'node-1', 'rename', {
+      containerId: 'container-1',
+      newName: 'current-name',
+    });
+    expect(environmentService.rename).toHaveBeenNthCalledWith(1, 'node-1', 'current-name', 'new-name');
+    expect(environmentService.rename).toHaveBeenNthCalledWith(2, 'node-1', 'new-name', 'current-name');
+    expect(clearTransition).toHaveBeenCalledWith('node-1', 'new-name');
+    expect(emitContainer).not.toHaveBeenCalled();
   });
 });

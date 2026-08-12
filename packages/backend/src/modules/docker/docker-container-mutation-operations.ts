@@ -104,7 +104,8 @@ export interface DockerContainerMutationContext {
     progress: string,
     expectedState: string,
     timeoutMs?: number,
-    onComplete?: (newContainerId: string) => Promise<void>
+    onComplete?: (newContainerId: string) => Promise<void>,
+    daemonTaskId?: string
   ): void;
   parseResult(result: { success: boolean; error?: string; detail?: string }): any;
 }
@@ -140,6 +141,13 @@ export function daemonContainerCreateConfig(config: Record<string, unknown>): Re
     ...(primaryNetwork ? { network_mode: primaryNetwork } : {}),
     ...(legacyPortBindings && Object.keys(legacyPortBindings).length > 0 ? { port_bindings: legacyPortBindings } : {}),
   };
+}
+
+function asyncDaemonTaskId(data: any, expectedType: string): string | undefined {
+  const status = String(data?.status ?? '');
+  return data?.type === expectedType && ['pending', 'running', 'succeeded', 'failed'].includes(status)
+    ? String(data.id ?? '') || undefined
+    : undefined;
 }
 
 export async function createContainer(
@@ -492,13 +500,14 @@ export async function removeContainer(
     resourceId: containerId,
     details: { nodeId, name, containerName: name, force },
   });
-  if (ctx.folderService) {
-    await ctx.folderService.deleteContainerAssignment(nodeId, name);
-  }
-  const removedScopeResourceId = await ctx.accessResourceService?.removeContainer(nodeId, name);
-  if (ctx.runtimeSettingsService) {
-    await ctx.runtimeSettingsService.delete(nodeId, name);
-  }
+  const [, , , , accessResult] = await Promise.all([
+    ctx.environmentService?.deleteImported(nodeId, name),
+    ctx.runtimeSettingsService?.delete(nodeId, name),
+    ctx.secretService?.deleteImported(nodeId, name),
+    ctx.folderService?.deleteContainerAssignment(nodeId, name),
+    ctx.accessResourceService?.removeContainer(nodeId, name),
+  ]);
+  const removedScopeResourceId = accessResult;
   ctx.emitContainer(nodeId, name, containerId, 'removed', {
     ...(removedScopeResourceId ? { scopeResourceId: removedScopeResourceId } : {}),
   });
@@ -518,31 +527,72 @@ export async function renameContainer(
   await ctx.assertNameAvailable(nodeId, newName);
   ctx.setTransition(nodeId, newName, 'creating');
   try {
-    const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'rename', { containerId, newName });
-    ctx.parseResult(result);
-  } catch (err) {
-    ctx.translateNameConflict(err, newName);
+    // The runtime name is available, so any name-keyed records left behind by a
+    // previously deleted container are stale and must not block reuse.
+    await Promise.all([
+      ctx.environmentService?.deleteImported(nodeId, newName),
+      ctx.runtimeSettingsService?.delete(nodeId, newName),
+      ctx.secretService?.deleteImported(nodeId, newName),
+      ctx.folderService?.deleteContainerAssignment(nodeId, newName),
+      ctx.accessResourceService?.removeContainer(nodeId, newName),
+    ]);
+
+    try {
+      const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'rename', { containerId, newName });
+      ctx.parseResult(result);
+    } catch (err) {
+      ctx.translateNameConflict(err, newName);
+    }
+
+    const metadataRollbacks: Array<() => Promise<unknown>> = [];
+    try {
+      if (ctx.environmentService) {
+        await ctx.environmentService.rename(nodeId, oldName, newName);
+        metadataRollbacks.unshift(() => ctx.environmentService!.rename(nodeId, newName, oldName));
+      }
+      if (ctx.runtimeSettingsService) {
+        await ctx.runtimeSettingsService.rename(nodeId, oldName, newName);
+        metadataRollbacks.unshift(() => ctx.runtimeSettingsService!.rename(nodeId, newName, oldName));
+      }
+      if (ctx.secretService) {
+        await ctx.secretService.rename(nodeId, oldName, newName);
+        metadataRollbacks.unshift(() => ctx.secretService!.rename(nodeId, newName, oldName));
+      }
+      if (ctx.folderService) {
+        await ctx.folderService.renameContainerAssignment(nodeId, oldName, newName);
+        metadataRollbacks.unshift(() => ctx.folderService!.renameContainerAssignment(nodeId, newName, oldName));
+      }
+      if (ctx.accessResourceService) {
+        await ctx.accessResourceService.renameContainer(nodeId, oldName, newName);
+        metadataRollbacks.unshift(() => ctx.accessResourceService!.renameContainer(nodeId, newName, oldName));
+      }
+    } catch (metadataError) {
+      try {
+        const rollbackResult = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'rename', {
+          containerId,
+          newName: oldName,
+        });
+        ctx.parseResult(rollbackResult);
+        for (const rollback of metadataRollbacks) await rollback();
+      } catch (rollbackError) {
+        const primaryMessage = metadataError instanceof Error ? metadataError.message : String(metadataError);
+        const rollbackMessage = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+        throw new Error(`${primaryMessage} (rename rollback failed: ${rollbackMessage})`);
+      }
+      throw metadataError;
+    }
+
+    await ctx.auditService.log({
+      action: 'docker.container.rename',
+      userId,
+      resourceType: 'docker-container',
+      resourceId: containerId,
+      details: { nodeId, oldName, name: newName, containerName: newName },
+    });
+    ctx.emitContainer(nodeId, newName, containerId, 'renamed', { oldName });
   } finally {
     ctx.clearTransition(nodeId, newName);
   }
-  if (ctx.environmentService) {
-    await ctx.environmentService.rename(nodeId, oldName, newName);
-  }
-  if (ctx.runtimeSettingsService) {
-    await ctx.runtimeSettingsService.rename(nodeId, oldName, newName);
-  }
-  if (ctx.folderService) {
-    await ctx.folderService.renameContainerAssignment(nodeId, oldName, newName);
-  }
-  await ctx.accessResourceService?.renameContainer(nodeId, oldName, newName);
-  await ctx.auditService.log({
-    action: 'docker.container.rename',
-    userId,
-    resourceType: 'docker-container',
-    resourceId: containerId,
-    details: { nodeId, oldName, name: newName, containerName: newName },
-  });
-  ctx.emitContainer(nodeId, newName, containerId, 'renamed', { oldName });
 }
 
 export async function duplicateContainer(
@@ -679,7 +729,8 @@ export async function updateContainer(
       updateTimeoutMs
     );
     data = ctx.parseResult(result);
-    const newRuntimeId = String(data?.Id ?? data?.id ?? '');
+    const daemonTaskId = asyncDaemonTaskId(data, 'update');
+    const newRuntimeId = daemonTaskId ? '' : String(data?.Id ?? data?.id ?? '');
     if (newRuntimeId) {
       await ctx.accessResourceService?.preserveContainerRuntimeId(nodeId, name, newRuntimeId);
     }
@@ -687,7 +738,18 @@ export async function updateContainer(
     await ctx.failTask(task?.id, err instanceof Error ? err.message : 'Failed to update container', nodeId, name);
     throw err;
   }
-  ctx.watchRecreateByName(nodeId, name, containerId, task?.id, 'Container updated', expectedState, updateTimeoutMs);
+  const daemonTaskId = asyncDaemonTaskId(data, 'update');
+  ctx.watchRecreateByName(
+    nodeId,
+    name,
+    containerId,
+    task?.id,
+    'Container updated',
+    expectedState,
+    daemonTaskId ? ctx.longDockerOperationTimeoutMs + 30000 : updateTimeoutMs,
+    undefined,
+    daemonTaskId
+  );
   await ctx.auditService.log({
     action: 'docker.container.update',
     userId,
@@ -808,7 +870,8 @@ export async function recreateWithConfig(
       Math.max(120000, ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60))
     );
     const data = ctx.parseResult(result);
-    const newRuntimeId = String(data?.Id ?? data?.id ?? '');
+    const daemonTaskId = asyncDaemonTaskId(data, 'recreate');
+    const newRuntimeId = daemonTaskId ? '' : String(data?.Id ?? data?.id ?? '');
     if (newRuntimeId) {
       await ctx.accessResourceService?.preserveContainerRuntimeId(nodeId, name, newRuntimeId);
     }
@@ -830,7 +893,9 @@ export async function recreateWithConfig(
       task?.id,
       'Container recreated',
       expectedState,
-      ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60)
+      daemonTaskId ? ctx.longDockerOperationTimeoutMs + 30000 : ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60),
+      undefined,
+      daemonTaskId
     );
     return data && typeof data === 'object'
       ? { ...data, taskId: task?.id, containerId, name }
@@ -968,6 +1033,7 @@ export async function updateContainerEnv(
     }
     throw err;
   }
+  const daemonTaskId = asyncDaemonTaskId(data, 'update');
   ctx.watchRecreateByName(
     nodeId,
     name,
@@ -975,10 +1041,11 @@ export async function updateContainerEnv(
     task?.id,
     'Container env updated',
     expectedState,
-    ctx.lifecycleWatchTimeoutMs(updateStopTimeout, 60),
+    daemonTaskId ? ctx.longDockerOperationTimeoutMs + 30000 : ctx.lifecycleWatchTimeoutMs(updateStopTimeout, 60),
     async () => {
       await ctx.environmentService?.replace(nodeId, name, desiredVisibleEnv);
-    }
+    },
+    daemonTaskId
   );
   await ctx.auditService.log({
     action: 'docker.container.env.update',

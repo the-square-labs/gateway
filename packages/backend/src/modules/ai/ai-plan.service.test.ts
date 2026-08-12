@@ -154,6 +154,38 @@ describe('AIPlanService lifecycle guards', () => {
     );
   });
 
+  it('returns a stopped validation to drafting so a replacement validation run can continue', async () => {
+    const validating = planRow({ status: 'validating' });
+    const db = queuedSelectDb([[validating], [validating]]);
+    const updates: unknown[] = [];
+    const updateChain = {
+      set: vi.fn((value: unknown) => {
+        updates.push(value);
+        return updateChain;
+      }),
+      where: vi.fn(async () => []),
+    };
+    db.update = vi.fn(() => updateChain) as never;
+    db.transaction = vi.fn(async (callback: (tx: typeof db) => Promise<unknown>) => callback(db)) as never;
+
+    await expect(
+      new AIPlanService(db as never).recoverStoppedPlanRun(
+        'user-1',
+        'conversation-1',
+        'plan-1',
+        'plan_validation',
+        'Plan run stopped by user'
+      )
+    ).resolves.toBe(true);
+
+    expect(updates).toContainEqual(
+      expect.objectContaining({ status: 'superseded', validatorFindings: ['Plan run stopped by user'] })
+    );
+    expect(updates).toContainEqual(
+      expect.objectContaining({ status: 'drafting', pauseReason: 'Plan run stopped by user' })
+    );
+  });
+
   it('requires evidence before a step can be completed', async () => {
     const service = new AIPlanService(queuedSelectDb([[planRow()]]) as never);
 
@@ -161,7 +193,6 @@ describe('AIPlanService lifecycle guards', () => {
       service.updateStep({
         userId: 'user-1',
         conversationId: 'conversation-1',
-        stepId: 'step-1',
         status: 'completed',
       })
     ).rejects.toMatchObject({ code: 'AI_PLAN_STEP_EVIDENCE_REQUIRED' });
@@ -174,7 +205,6 @@ describe('AIPlanService lifecycle guards', () => {
       service.updateStep({
         userId: 'user-1',
         conversationId: 'conversation-1',
-        stepId: 'step-1',
         status: 'skipped',
       })
     ).rejects.toMatchObject({ code: 'AI_PLAN_STEP_SKIP_REASON_REQUIRED' });
@@ -246,7 +276,6 @@ describe('AIPlanService lifecycle guards', () => {
     const result = await new AIPlanService(db as never).submitFinalVerification({
       userId: 'user-1',
       conversationId: 'conversation-1',
-      planId: 'plan-1',
       verdict: 'pass',
       summary: 'Everything is verified',
       findings: [],

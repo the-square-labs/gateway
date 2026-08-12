@@ -22,6 +22,7 @@ describe("resetClientSessionState", () => {
     useUIStore.setState({
       aiPanelOpen: true,
       aiLiteMode: true,
+      aiApprovalModeLoaded: true,
       preferredInterface: "ai_workspace",
       interfacePreferenceLoaded: true,
     });
@@ -50,6 +51,7 @@ describe("resetClientSessionState", () => {
     expect(useUIStore.getState()).toMatchObject({
       aiPanelOpen: false,
       aiLiteMode: false,
+      aiApprovalModeLoaded: false,
       preferredInterface: null,
       interfacePreferenceLoaded: false,
     });

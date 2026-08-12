@@ -99,6 +99,24 @@ describe("OAuthConsent", () => {
     );
   });
 
+  it("scrolls the page viewport instead of the authorization card body", async () => {
+    vi.spyOn(api, "getOAuthConsent").mockResolvedValue(preview);
+
+    renderWithRouter(<OAuthConsent />, {
+      path: "/oauth/consent",
+      route: "/oauth/consent?request=request-1",
+    });
+
+    await screen.findByText("Authorize Gateway API access");
+    const viewport = document.querySelector("[data-oauth-consent-scroll-viewport]");
+    const card = document.querySelector("[data-oauth-consent-card]");
+    const body = document.querySelector("[data-oauth-consent-body]");
+
+    expect(viewport).toHaveClass("h-[100dvh]", "overflow-y-auto");
+    expect(card?.className).not.toMatch(/max-h-|overflow-y-/);
+    expect(body?.className).not.toMatch(/max-h-|overflow-y-/);
+  });
+
   it("submits only selected grantable scopes", async () => {
     vi.spyOn(api, "getOAuthConsent").mockResolvedValue(preview);
     const approve = vi

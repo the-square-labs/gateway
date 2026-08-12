@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { api } from "@/services/api";
 import {
   buildContainerMutationSnapshot,
+  inspectContainerAfterMutation,
   shouldSettleMutationTransition,
 } from "./DockerContainerDetail";
 import {
@@ -73,6 +75,21 @@ describe("DockerContainerDetail mutation snapshot helpers", () => {
         _transition: "updating",
       })
     ).toBe(true);
+  });
+});
+
+describe("DockerContainerDetail post-mutation identity recovery", () => {
+  it("falls back to the stable name when recreate invalidates the runtime ID", async () => {
+    vi.spyOn(api, "inspectContainer").mockRejectedValueOnce(new Error("not found"));
+    vi.spyOn(api, "inspectContainerByName").mockResolvedValueOnce(
+      makeContainer({ Id: "container-2", Name: "/app" })
+    );
+
+    await expect(inspectContainerAfterMutation("node-1", "container-1", "app")).resolves.toEqual({
+      container: makeContainer({ Id: "container-2", Name: "/app" }),
+      containerId: "container-2",
+    });
+    expect(api.inspectContainerByName).toHaveBeenCalledWith("node-1", "app", true);
   });
 });
 

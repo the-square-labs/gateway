@@ -1,5 +1,5 @@
 import { Menu } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { AIButton } from "@/components/ai/AIButton";
 import { AILitePanel } from "@/components/ai/AILitePanel";
@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useRouteScrollRestoration } from "@/hooks/use-route-scroll-restoration";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { keyboardNavigationRoutes } from "@/lib/app-navigation";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
@@ -98,6 +99,7 @@ export function DashboardLayout() {
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
   const [isResizing, setIsResizing] = useState(false);
   const [interfaceChoiceBusy, setInterfaceChoiceBusy] = useState(false);
+  const interfacePreferenceSavePendingRef = useRef(false);
   const [interfaceChoiceDismissed, setInterfaceChoiceDismissed] = useState(false);
   const [interfaceSetupOrigin, setInterfaceSetupOrigin] = useState<
     "interface_choice" | "cta" | null
@@ -135,6 +137,8 @@ export function DashboardLayout() {
       nextInterface: "ai_workspace" | "operations_console",
       preserveConversationInConsole = false
     ) => {
+      if (interfacePreferenceSavePendingRef.current) return;
+      interfacePreferenceSavePendingRef.current = true;
       setInterfaceChoiceBusy(true);
       try {
         await api.updateUserPreferences({ preferredInterface: nextInterface });
@@ -145,6 +149,7 @@ export function DashboardLayout() {
           useUIStore.getState().setAIPanelOpen(transition.aiPanelOpen);
         if (transition.path) navigate(transition.path);
       } finally {
+        interfacePreferenceSavePendingRef.current = false;
         setInterfaceChoiceBusy(false);
       }
     },
@@ -367,6 +372,7 @@ export function DashboardLayout() {
 
   // Track recent pages for command palette
   const location = useLocation();
+  useRouteScrollRestoration(currentUser?.id);
   const resolvedPageStatus = useResolvedPageContext((s) => s.status);
   const resolvedPageRouteKey = useResolvedPageContext((s) => s.routeKey);
   const resolvedPageResource = useResolvedPageContext((s) => s.resource);

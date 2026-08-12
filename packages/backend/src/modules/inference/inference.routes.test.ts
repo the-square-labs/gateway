@@ -21,7 +21,7 @@ const USER: User = {
   avatarUrl: null,
   groupId: 'group-1',
   groupName: 'inference-users',
-  scopes: ['inference:use', 'inference:tokens:manage'],
+  scopes: ['feat:ai:use', 'inference:tokens:manage'],
   isBlocked: false,
 };
 

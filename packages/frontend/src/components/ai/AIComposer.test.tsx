@@ -138,6 +138,21 @@ describe("AIPlanDecision", () => {
 });
 
 describe("AIPlanProgress", () => {
+  it("keeps cancellation available during validation without showing an invalid pause action", () => {
+    render(
+      <AIPlanProgress
+        plan={{ ...plan, status: "validating" }}
+        onPause={vi.fn()}
+        onResume={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("Validating plan")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel plan" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pause plan" })).not.toBeInTheDocument();
+  });
+
   it("shows a paused plan and resumes it from the existing progress block", () => {
     const onResume = vi.fn();
     const { container } = render(

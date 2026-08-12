@@ -134,6 +134,44 @@ describe("api client contract", () => {
     });
   });
 
+  it("does not let an older preferences read overwrite a completed update", async () => {
+    let resolveStalePreferences!: (response: Response) => void;
+    const stalePreferences = new Promise<Response>((resolve) => {
+      resolveStalePreferences = resolve;
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/auth/csrf") return Promise.resolve(jsonResponse({ csrfToken: "csrf-token" }));
+      if (url === "/auth/me/preferences" && init?.method === "PATCH") {
+        return Promise.resolve(
+          jsonResponse({
+            aiApprovalMode: "normal",
+            preferredInterface: "ai_workspace",
+            preferredInterfaceSelectedAt: "2026-08-12T16:07:32.900Z",
+          })
+        );
+      }
+      if (url === "/auth/me/preferences") return stalePreferences;
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    const staleRead = api.getUserPreferences();
+    const updated = await api.updateUserPreferences({ preferredInterface: "ai_workspace" });
+    resolveStalePreferences(
+      jsonResponse({
+        aiApprovalMode: "normal",
+        preferredInterface: "operations_console",
+        preferredInterfaceSelectedAt: "2026-08-12T15:00:00.000Z",
+      })
+    );
+
+    await expect(staleRead).resolves.toMatchObject({ preferredInterface: "operations_console" });
+    expect(updated.preferredInterface).toBe("ai_workspace");
+    expect(api.getCached("auth:me:preferences")).toMatchObject({
+      preferredInterface: "ai_workspace",
+    });
+  });
+
   it("publishes fresh inference usage to every mounted usage surface", async () => {
     const usage = {
       enabled: true,
@@ -456,7 +494,8 @@ describe("api client contract", () => {
           truncated: true,
         })
       )
-      .mockResolvedValueOnce(jsonResponse({ data: { id: "container-1", name: "api" } }));
+      .mockResolvedValueOnce(jsonResponse({ data: { id: "container-1", name: "api" } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { id: "container-2", name: "api" } }));
 
     await expect(
       api.listDockerContainers("node-1", { search: "api", noCache: true })
@@ -479,6 +518,14 @@ describe("api client contract", () => {
     });
     expect(fetchMock.mock.calls[1]?.[0]).toBe(
       "/api/docker/nodes/node-1/containers/container-1?_t=1782043200000"
+    );
+
+    await expect(api.inspectContainerByName("node-1", "api", true)).resolves.toEqual({
+      id: "container-2",
+      name: "api",
+    });
+    expect(fetchMock.mock.calls[2]?.[0]).toBe(
+      "/api/docker/nodes/node-1/containers/by-name/api?_t=1782043200000"
     );
   });
 

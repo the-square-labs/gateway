@@ -83,6 +83,7 @@ interface UIState {
 
   // AI Approval Mode
   aiApprovalMode: AIApprovalMode;
+  aiApprovalModeLoaded: boolean;
   setAIApprovalMode: (mode: AIApprovalMode) => void;
   hydrateAIApprovalMode: (mode: AIApprovalMode) => void;
   preferredInterface: PreferredInterface | null;
@@ -169,14 +170,17 @@ export const useUIStore = create<UIState>()(
 
       // AI Approval Mode
       aiApprovalMode: "normal",
-      hydrateAIApprovalMode: (aiApprovalMode) => set({ aiApprovalMode }),
-      setAIApprovalMode: (aiApprovalMode) => set({ aiApprovalMode }),
+      aiApprovalModeLoaded: false,
+      hydrateAIApprovalMode: (aiApprovalMode) =>
+        set({ aiApprovalMode, aiApprovalModeLoaded: true }),
+      setAIApprovalMode: (aiApprovalMode) => set({ aiApprovalMode, aiApprovalModeLoaded: true }),
       preferredInterface: null,
       interfacePreferenceLoaded: false,
       beginInterfacePreferenceLoad: () =>
         set({
           preferredInterface: null,
           interfacePreferenceLoaded: false,
+          aiApprovalModeLoaded: false,
           aiLiteMode: false,
         }),
       hydratePreferredInterface: (preferredInterface) =>
@@ -194,6 +198,7 @@ export const useUIStore = create<UIState>()(
       setPreferredInterface: (preferredInterface) =>
         set((state) => ({
           preferredInterface,
+          interfacePreferenceLoaded: true,
           aiLiteMode: preferredInterface === "ai_workspace",
           ...(preferredInterface === "ai_workspace"
             ? {

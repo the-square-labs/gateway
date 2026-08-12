@@ -85,21 +85,42 @@ export function watchDockerRecreateByName(
   progress: string,
   expectedState: string,
   timeoutMs = 60000,
-  onComplete?: (newContainerId: string) => Promise<void>
+  onComplete?: (newContainerId: string) => Promise<void>,
+  daemonTaskId?: string
 ) {
   const start = Date.now();
   const poll = setInterval(async () => {
     try {
       const result = await context.nodeDispatch.sendDockerContainerCommand(nodeId, 'list');
       const containers = context.parseResult(result);
-      if (!Array.isArray(containers)) return;
+      if (!Array.isArray(containers)) throw new Error('Docker container list returned an invalid response');
+
+      let daemonTaskStatus: string | undefined;
+      if (daemonTaskId) {
+        const daemonTaskResult = await context.nodeDispatch.sendDockerContainerCommand(nodeId, 'task_status', {
+          containerId: daemonTaskId,
+        });
+        const daemonTask = context.parseResult(daemonTaskResult) as Record<string, any>;
+        daemonTaskStatus = String(daemonTask.status ?? '');
+        if (daemonTaskStatus === 'failed') {
+          clearInterval(poll);
+          await context.failTask(
+            taskId,
+            String(daemonTask.error || 'Docker daemon task failed'),
+            nodeId,
+            containerName
+          );
+          return;
+        }
+      }
 
       const match = containers.find((c: any) => {
         const cName = (c.name ?? c.Name ?? '').replace(/^\//, '');
         return cName === containerName;
       });
 
-      if (match) {
+      const canEvaluateReplacement = !daemonTaskId || daemonTaskStatus === 'succeeded';
+      if (match && canEvaluateReplacement) {
         const newId = match.id ?? match.Id;
         const state = match.state ?? match.State ?? '';
 

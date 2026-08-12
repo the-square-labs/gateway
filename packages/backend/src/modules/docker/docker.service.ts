@@ -380,8 +380,11 @@ export class DockerManagementService {
       }
     } catch (err) {
       if (err instanceof AppError) throw err;
-      // If listing fails for any other reason, fall through and let the daemon
-      // surface the conflict. The daemon error translator will tag it.
+      throw new AppError(
+        502,
+        'NAME_AVAILABILITY_CHECK_FAILED',
+        `Could not verify whether the container name "${name}" is available`
+      );
     }
   }
 
@@ -549,7 +552,8 @@ export class DockerManagementService {
     progress: string,
     expectedState: string,
     timeoutMs = 60000,
-    onComplete?: (newContainerId: string) => Promise<void>
+    onComplete?: (newContainerId: string) => Promise<void>,
+    daemonTaskId?: string
   ) {
     watchDockerRecreateByName(
       this.lifecycleWatchContext(),
@@ -560,7 +564,8 @@ export class DockerManagementService {
       progress,
       expectedState,
       timeoutMs,
-      onComplete
+      onComplete,
+      daemonTaskId
     );
   }
 
@@ -920,7 +925,8 @@ export class DockerManagementService {
         progress,
         expectedState,
         timeoutMs,
-        onComplete
+        onComplete,
+        daemonTaskId
       ) =>
         this.watchRecreateByName(
           nodeId,
@@ -930,7 +936,8 @@ export class DockerManagementService {
           progress,
           expectedState,
           timeoutMs,
-          onComplete
+          onComplete,
+          daemonTaskId
         ),
       parseResult: (result) => this.parseResult(result),
     };

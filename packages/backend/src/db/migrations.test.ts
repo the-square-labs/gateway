@@ -139,4 +139,23 @@ describe('drizzle migration metadata', () => {
     expect(migration).toContain('UPDATE "ai_run_tool_calls"');
     expect(migration).toContain('UPDATE "sandbox_jobs"');
   });
+
+  it('migrates inference use and personal usage grants into the canonical AI permission', () => {
+    const migration = readFileSync(
+      join(process.cwd(), 'src/db/migrations/0114_collapse_inference_use_into_ai.sql'),
+      'utf8'
+    );
+
+    expect(migration).toContain("WHEN entry.value IN ('inference:use', 'inference:usage:view:self')");
+    expect(migration).toContain("THEN 'feat:ai:use'");
+    expect(migration).toContain('UPDATE "permission_groups"');
+    expect(migration).toContain('UPDATE "users"');
+    expect(migration).toContain('UPDATE "api_tokens"');
+    expect(migration).toContain('UPDATE "oauth_authorization_codes"');
+    expect(migration).toContain('UPDATE "oauth_refresh_tokens"');
+    expect(migration).toContain('UPDATE "oauth_access_tokens"');
+    expect(migration).toContain('UPDATE "ai_run_tool_calls"');
+    expect(migration).toContain('UPDATE "sandbox_jobs"');
+    expect(migration).toContain("COALESCE(\"scopes\", '[]'::jsonb) - 'inference:use' - 'inference:usage:view:self'");
+  });
 });

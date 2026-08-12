@@ -796,6 +796,43 @@ describe('AIRunService stopRun', () => {
     );
   });
 
+  it('recovers the related plan when a plan validation run is stopped', async () => {
+    const stopped = {
+      id: 'run-1',
+      conversationId: 'conversation-1',
+      userId: 'user-1',
+      status: 'stopped',
+      planId: 'plan-1',
+      purpose: 'plan_validation',
+      assistantDraftContent: null,
+    };
+    const harness = createTransitionDb([stopped], [[{ id: 'conversation-1' }], [{ ...stopped, status: 'running' }]]);
+    const planService = { recoverStoppedPlanRun: vi.fn().mockResolvedValue(true) };
+    const service = new AIRunService(harness.db as never, undefined, undefined, planService as never);
+    (
+      service as unknown as {
+        executor: { abortRun: ReturnType<typeof vi.fn>; flushAssistantDraftToMessage: ReturnType<typeof vi.fn> };
+      }
+    ).executor = {
+      abortRun: vi.fn(),
+      flushAssistantDraftToMessage: vi.fn().mockResolvedValue(null),
+    };
+
+    await service.stopRun({
+      conversationId: 'conversation-1',
+      runId: 'run-1',
+      userId: 'user-1',
+    });
+
+    expect(planService.recoverStoppedPlanRun).toHaveBeenCalledWith(
+      'user-1',
+      'conversation-1',
+      'plan-1',
+      'plan_validation',
+      'Plan run stopped by user'
+    );
+  });
+
   it('stops a context compaction run through the ordinary stop path', async () => {
     const current = {
       id: 'run-1',

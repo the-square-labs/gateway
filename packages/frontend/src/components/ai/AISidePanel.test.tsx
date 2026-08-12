@@ -14,6 +14,7 @@ import { useResolvedPageContext } from "@/stores/resolved-page-context";
 import { useUIStore } from "@/stores/ui";
 import { renderWithRouter } from "@/test/render";
 import type { AIMessage, AIPlanRuntimeSnapshot } from "@/types/ai";
+import { AILitePanel } from "./AILitePanel";
 import { AILiteSidebar } from "./AILiteSidebar";
 import { AISidePanel } from "./AISidePanel";
 import { getInferenceQuotaState } from "./InferenceQuotaStatus";
@@ -48,6 +49,38 @@ function assistantMessage(toolStatus?: AIMessage["toolCalls"]): AIMessage {
     content: "I will check that.",
     isStreaming: true,
     toolCalls: toolStatus,
+  };
+}
+
+function planInProgress(status: "drafting" | "validating"): AIPlanRuntimeSnapshot {
+  return {
+    id: "plan-1",
+    conversationId: "conversation-1",
+    revisionId: "revision-1",
+    revision: 1,
+    revisionStatus: "validating",
+    publishedAt: null,
+    timelineAnchorAt: "2026-08-12T00:01:00.000Z",
+    acceptedAt: null,
+    status,
+    title: "Implementation plan",
+    model: "test-model",
+    reasoningEffort: "medium",
+    goal: "Implement and verify the request.",
+    scope: [],
+    assumptions: [],
+    steps: [],
+    research: [],
+    intentReview: null,
+    securityReview: null,
+    verification: [],
+    changeSummary: null,
+    noProgressRuns: 0,
+    activeTimeMs: 0,
+    activeSince: null,
+    pauseReason: null,
+    createdAt: "2026-08-12T00:00:00.000Z",
+    updatedAt: "2026-08-12T00:00:00.000Z",
   };
 }
 
@@ -795,6 +828,40 @@ describe("AISidePanel autoscroll", () => {
     expect(freeText.parentElement?.parentElement).not.toHaveClass("px-3", "py-2");
   });
 
+  it.each([
+    "drafting",
+    "validating",
+  ] as const)("shows the cancellation recovery control during %s in both assistant panels", (status) => {
+    act(() => {
+      useAIStore.setState({
+        messages: [{ id: "user-1", role: "user", content: "Prepare a plan" }],
+        activeConversationId: "conversation-1",
+        activePlan: planInProgress(status),
+        isConnected: true,
+        isStreaming: true,
+        retryAfter: null,
+        refreshProviderStatus: vi.fn().mockResolvedValue(undefined),
+        fetchRecentConversations: vi.fn().mockResolvedValue(undefined),
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    const sidePanel = renderAISidePanel();
+    const litePanel = renderWithRouter(
+      <TooltipProvider>
+        <AILitePanel />
+      </TooltipProvider>
+    );
+
+    for (const panel of [sidePanel.container, litePanel.container]) {
+      expect(
+        within(panel).getByText(status === "drafting" ? "Preparing plan" : "Validating plan")
+      ).toBeInTheDocument();
+      expect(within(panel).getByRole("button", { name: "Cancel plan" })).toBeInTheDocument();
+      expect(within(panel).queryByRole("button", { name: "Pause plan" })).not.toBeInTheDocument();
+    }
+  });
+
   it("renders a durable-round approval next to the composer instead of in message history", () => {
     act(() => {
       useAIStore.setState({
@@ -896,7 +963,7 @@ describe("AISidePanel autoscroll", () => {
           email: "user@example.com",
           name: "User One",
           groupName: "admin",
-          scopes: ["feat:ai:use", "inference:usage:view:self"],
+          scopes: ["feat:ai:use"],
           isBlocked: false,
         } as any,
         isAuthenticated: true,
@@ -952,7 +1019,7 @@ describe("AISidePanel autoscroll", () => {
           email: "user@example.com",
           name: "User One",
           groupName: "admin",
-          scopes: ["feat:ai:use", "inference:usage:view:self"],
+          scopes: ["feat:ai:use"],
           isBlocked: false,
         } as any,
         isAuthenticated: true,
@@ -1027,7 +1094,7 @@ describe("AISidePanel autoscroll", () => {
           email: "user@example.com",
           name: "User One",
           groupName: "admin",
-          scopes: ["feat:ai:use", "inference:usage:view:self"],
+          scopes: ["feat:ai:use"],
           isBlocked: false,
         } as any,
         isAuthenticated: true,
@@ -1113,7 +1180,7 @@ describe("AISidePanel autoscroll", () => {
           email: "user@example.com",
           name: "User One",
           groupName: "admin",
-          scopes: ["feat:ai:use", "inference:usage:view:self"],
+          scopes: ["feat:ai:use"],
           isBlocked: false,
         } as any,
         isAuthenticated: true,

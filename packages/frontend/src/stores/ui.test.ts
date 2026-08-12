@@ -11,6 +11,10 @@ afterEach(() => {
   useUIStore.setState({
     aiPanelOpen: false,
     aiLiteMode: false,
+    aiApprovalMode: "normal",
+    aiApprovalModeLoaded: false,
+    preferredInterface: null,
+    interfacePreferenceLoaded: false,
     sidebarOpen: true,
     sidebarCollapsed: false,
     aiWorkspaceSidebarCollapsed: false,
@@ -19,6 +23,23 @@ afterEach(() => {
 });
 
 describe("compact panel layout", () => {
+  it("tracks loaded user preferences independently", () => {
+    useUIStore.getState().beginInterfacePreferenceLoad();
+
+    useUIStore.getState().setPreferredInterface("ai_workspace");
+    expect(useUIStore.getState()).toMatchObject({
+      interfacePreferenceLoaded: true,
+      aiApprovalModeLoaded: false,
+    });
+
+    useUIStore.getState().hydrateAIApprovalMode("bypass-non-destructive");
+    expect(useUIStore.getState()).toMatchObject({
+      interfacePreferenceLoaded: true,
+      aiApprovalModeLoaded: true,
+      aiApprovalMode: "bypass-non-destructive",
+    });
+  });
+
   it("collapses navigation when the AI panel opens", () => {
     setViewportWidth(899);
 
@@ -53,6 +74,7 @@ describe("compact panel layout", () => {
 
     expect(useUIStore.getState()).toMatchObject({
       aiLiteMode: true,
+      interfacePreferenceLoaded: true,
       sidebarOpen: true,
       sidebarCollapsed: false,
     });

@@ -557,8 +557,7 @@ function formatBytes(bytes: number): string {
 }
 
 function ToolCallsGroup({ toolCalls }: { toolCalls: AIToolCall[] }) {
-  const groupKey = toolCalls[0]?.id ?? "tool-group";
-  const [expanded, setExpanded] = useState(() => wasToolGroupExpanded(groupKey));
+  const [expanded, setExpanded] = useState(() => toolGroupExpansionPreference(toolCalls) === true);
   const [showWaiting, setShowWaiting] = useState(false);
   const failedCount = toolCalls.filter((toolCall) => toolCall.status === "failed").length;
   const waitingCount = toolCalls.filter((toolCall) => toolCall.status === "running").length;
@@ -577,6 +576,13 @@ function ToolCallsGroup({ toolCalls }: { toolCalls: AIToolCall[] }) {
     return () => window.clearTimeout(timeout);
   }, [hasWaiting]);
 
+  useEffect(() => {
+    const preference = toolGroupExpansionPreference(toolCalls);
+    if (preference === null) return;
+    setExpanded(preference);
+    setToolGroupExpansionPreference(toolCalls, preference);
+  }, [toolCalls]);
+
   return (
     <div className="my-0.5 text-sm">
       <button
@@ -585,7 +591,7 @@ function ToolCallsGroup({ toolCalls }: { toolCalls: AIToolCall[] }) {
         onClick={() => {
           setExpanded((value) => {
             const next = !value;
-            setToolGroupExpanded(groupKey, next);
+            setToolGroupExpansionPreference(toolCalls, next);
             return next;
           });
         }}
@@ -615,28 +621,25 @@ function ToolCallsGroup({ toolCalls }: { toolCalls: AIToolCall[] }) {
   );
 }
 
-const expandedToolGroupKeys = new Set<string>();
+const toolGroupExpansionPreferences = new Map<string, boolean>();
 
 function pluralize(word: string, count: number): string {
   return count === 1 ? word : `${word}s`;
 }
 
-function wasToolGroupExpanded(groupKey: string): boolean {
-  if (expandedToolGroupKeys.has(groupKey)) return true;
-  for (const expandedKey of expandedToolGroupKeys) {
-    if (groupKey.startsWith(`${expandedKey}:`)) return true;
-  }
-  return false;
+function toolGroupExpansionPreference(toolCalls: AIToolCall[]): boolean | null {
+  const preferences = toolCalls.flatMap((toolCall) => {
+    const preference = toolGroupExpansionPreferences.get(toolCall.id);
+    return preference === undefined ? [] : [preference];
+  });
+  if (preferences.includes(false)) return false;
+  if (preferences.includes(true)) return true;
+  return null;
 }
 
-function setToolGroupExpanded(groupKey: string, expanded: boolean): void {
-  if (expanded) {
-    expandedToolGroupKeys.add(groupKey);
-  } else {
-    expandedToolGroupKeys.delete(groupKey);
-    for (const expandedKey of Array.from(expandedToolGroupKeys)) {
-      if (expandedKey.startsWith(`${groupKey}:`)) expandedToolGroupKeys.delete(expandedKey);
-    }
+function setToolGroupExpansionPreference(toolCalls: AIToolCall[], expanded: boolean): void {
+  for (const toolCall of toolCalls) {
+    toolGroupExpansionPreferences.set(toolCall.id, expanded);
   }
 }
 

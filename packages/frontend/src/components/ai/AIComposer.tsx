@@ -260,10 +260,14 @@ export function AIPlanProgress({
     (step) => step.status === "completed" || step.status === "skipped"
   ).length;
   const progress = plan.steps.length > 0 ? (completed / plan.steps.length) * 100 : 0;
+  const canPause = plan.status === "executing" || plan.status === "verifying";
+  const isPlanning = plan.status === "drafting" || plan.status === "validating";
   const cancel = async () => {
     const accepted = await confirm({
-      title: "Cancel plan execution?",
-      description: "Execution will stop. Changes already made will not be rolled back.",
+      title: "Cancel plan?",
+      description: isPlanning
+        ? "Planning will stop."
+        : "Execution will stop. Changes already made will not be rolled back.",
       confirmLabel: "Cancel plan",
       cancelLabel: "Keep running",
       variant: "destructive",
@@ -284,10 +288,14 @@ export function AIPlanProgress({
           <span className="truncate">
             {plan.status === "paused"
               ? plan.pauseReason || "Paused"
-              : plan.status === "verifying"
-                ? "Running final verification"
-                : plan.steps.find((step) => step.status === "in_progress")?.title ||
-                  "Preparing next step"}
+              : plan.status === "drafting"
+                ? "Preparing plan"
+                : plan.status === "validating"
+                  ? "Validating plan"
+                  : plan.status === "verifying"
+                    ? "Running final verification"
+                    : plan.steps.find((step) => step.status === "in_progress")?.title ||
+                      "Preparing next step"}
           </span>
           <span className="shrink-0">
             {completed}/{plan.steps.length} · {formatPlanDuration(elapsedMs)}
@@ -305,7 +313,7 @@ export function AIPlanProgress({
         >
           <Play className="h-3.5 w-3.5" />
         </Button>
-      ) : (
+      ) : canPause ? (
         <Button
           size="icon"
           variant="ghost"
@@ -316,7 +324,7 @@ export function AIPlanProgress({
         >
           <Pause className="h-3.5 w-3.5" />
         </Button>
-      )}
+      ) : null}
       <Button
         size="icon"
         variant="ghost"
@@ -520,9 +528,7 @@ export function AIComposer({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const contextUsageDialog = useAIStore((state) => state.contextUsageDialog);
   const closeContextUsageDialog = useAIStore((state) => state.closeContextUsageDialog);
-  const canViewInferenceUsage = useAuthStore((state) =>
-    state.hasScope("inference:usage:view:self")
-  );
+  const canViewInferenceUsage = useAuthStore((state) => state.hasScope("feat:ai:use"));
 
   useEffect(() => {
     let active = true;

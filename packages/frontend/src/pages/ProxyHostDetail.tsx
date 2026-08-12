@@ -529,7 +529,7 @@ export function ProxyHostDetail({
           burst: nextRateLimitBurst,
           connectionsPerIp: nextConnectionsPerIp,
         },
-        ...(host?.type === "proxy"
+        ...(host?.type === "proxy" && host.upstreamKind === "manual"
           ? {
               forwardScheme: templateForwardScheme,
               forwardHost: templateForwardHost,

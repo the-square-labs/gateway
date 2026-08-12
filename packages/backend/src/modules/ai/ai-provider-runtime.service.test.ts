@@ -11,7 +11,7 @@ const USER: User = {
   avatarUrl: null,
   groupId: 'group-1',
   groupName: 'operators',
-  scopes: ['feat:ai:use', 'inference:use'],
+  scopes: ['feat:ai:use'],
   isBlocked: false,
 };
 

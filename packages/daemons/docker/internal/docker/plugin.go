@@ -584,6 +584,21 @@ func (p *DockerPlugin) handleContainerCommand(cmd *pb.DockerContainerCommand, re
 		data, _ := json.Marshal(task)
 		result.Detail = string(data)
 
+	case "task_status":
+		if cmd.ContainerId == "" {
+			result.Success = false
+			result.Error = "container_id is required for task_status"
+			return
+		}
+		task, ok := p.taskMgr.Get(cmd.ContainerId)
+		if !ok {
+			result.Success = false
+			result.Error = "docker task not found"
+			return
+		}
+		data, _ := json.Marshal(task)
+		result.Detail = string(data)
+
 	default:
 		result.Success = false
 		result.Error = fmt.Sprintf("unknown container action: %s", cmd.Action)

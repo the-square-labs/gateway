@@ -96,8 +96,8 @@ export function Profile() {
   const inferenceEnabled = useSystemConfigStore((state) => state.config.features.inferenceEnabled);
 
   const canUseAI = hasScope("feat:ai:use");
-  const canUseInference = inferenceEnabled && hasScope("inference:use");
-  const canViewInferenceUsage = hasScope("inference:usage:view:self");
+  const canUseInference = inferenceEnabled && hasScope("feat:ai:use");
+  const canViewInferenceUsage = hasScope("feat:ai:use");
   const canManageInferenceTokens = hasScope("inference:tokens:manage");
   const canViewSystemCertificates = hasScope("admin:details:certificates");
   const userScopes = user?.scopes;

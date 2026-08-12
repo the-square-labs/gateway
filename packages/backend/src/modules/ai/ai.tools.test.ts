@@ -75,6 +75,25 @@ describe('AI tool scope filtering', () => {
     expect(names).not.toContain('delete_domain');
   });
 
+  it('derives active plan lifecycle identifiers on the server instead of asking the model to copy them', () => {
+    for (const toolName of ['submit_plan_review', 'update_plan_step', 'submit_plan_verification']) {
+      const tool = AI_TOOLS.find((candidate) => candidate.name === toolName);
+      expect(tool?.parameters.properties).not.toHaveProperty('planId');
+      expect(tool?.parameters.properties).not.toHaveProperty('revisionId');
+      expect(tool?.parameters.properties).not.toHaveProperty('stepId');
+    }
+    expect(AI_TOOLS.find((tool) => tool.name === 'submit_plan_review')?.parameters.required).toEqual([
+      'intentReview',
+      'securityReview',
+    ]);
+    expect(AI_TOOLS.find((tool) => tool.name === 'update_plan_step')?.parameters.required).toEqual(['status']);
+    expect(AI_TOOLS.find((tool) => tool.name === 'submit_plan_verification')?.parameters.required).toEqual([
+      'verdict',
+      'summary',
+      'findings',
+    ]);
+  });
+
   it('rejects unsupported composite resource and operation pairs before dispatch', () => {
     expect(
       parseAndValidateAIToolArguments(

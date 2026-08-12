@@ -306,7 +306,7 @@ describe("CommandPalette", () => {
           email: "user@example.com",
           name: "User One",
           groupName: "admin",
-          scopes: ["feat:ai:use", "inference:usage:view:self"],
+          scopes: ["feat:ai:use"],
           isBlocked: false,
         } as never,
         isAuthenticated: true,

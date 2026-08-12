@@ -1134,7 +1134,7 @@ Subscription connections can set minimumRemainingPercent. API connections can se
 
 ## User Tokens And Harness Setup
 
-Users need \`inference:use\`. Creating and revoking tokens additionally require \`inference:tokens:manage\`.
+Users need \`feat:ai:use\`, which grants both AI Workspace and Gateway Inference access, including personal usage visibility. Creating and revoking tokens additionally require \`inference:tokens:manage\`.
 
 Token options:
 
@@ -1557,9 +1557,8 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   'gateway-settings': ['settings:gateway:view', 'settings:gateway:edit'],
   'licensing-updates': ['license:view', 'license:manage', 'admin:update'],
   inference: [
-    'inference:use',
+    'feat:ai:use',
     'inference:tokens:manage',
-    'inference:usage:view:self',
     'inference:providers:view',
     'inference:providers:manage',
     'inference:models:manage',

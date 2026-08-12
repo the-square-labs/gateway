@@ -1354,6 +1354,15 @@ export class AIRunService {
             )
           ),
       ]);
+      if (this.planService && stopped.planId) {
+        await this.planService.recoverStoppedPlanRun(
+          input.userId,
+          input.conversationId,
+          stopped.planId,
+          stopped.purpose,
+          'Plan run stopped by user'
+        );
+      }
       this.publishConversationChanged(input.userId, input.conversationId);
       return { run: stopped, duplicate: false };
     }

@@ -146,19 +146,28 @@ func (m *Manager) GetUptime() (time.Duration, error) {
 	clkTck := int64(100)
 	processStartSec := float64(startTicks) / float64(clkTck)
 	processUptime := systemUptime - processStartSec
+	if processUptime < 0 || processUptime > systemUptime {
+		return 0, fmt.Errorf("process start time is outside system uptime")
+	}
 
 	return time.Duration(processUptime * float64(time.Second)), nil
 }
 
 func (m *Manager) GetWorkerCount() (int, error) {
-	cmd := exec.Command("pgrep", "-c", "-f", "nginx: worker")
-	output, err := cmd.Output()
+	processes, err := filepath.Glob("/proc/[0-9]*/cmdline")
 	if err != nil {
-		return 0, nil // No workers = 0
+		return 0, fmt.Errorf("list processes: %w", err)
 	}
-	count, err := strconv.Atoi(strings.TrimSpace(string(output)))
-	if err != nil {
-		return 0, nil
+	count := 0
+	for _, process := range processes {
+		data, readErr := os.ReadFile(process)
+		if readErr != nil {
+			continue
+		}
+		commandLine := strings.ReplaceAll(string(data), "\x00", " ")
+		if strings.Contains(commandLine, "nginx: worker process") {
+			count++
+		}
 	}
 	return count, nil
 }

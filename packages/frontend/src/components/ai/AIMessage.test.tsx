@@ -187,6 +187,35 @@ describe("AIMessage tool call groups", () => {
     expect(screen.getByRole("button", { name: /read process output/i })).toBeInTheDocument();
   });
 
+  it("keeps a manual tool group preference across changing first tool calls", () => {
+    const { rerender } = render(
+      <AIMessage message={message([toolCall("shifting-tool-1"), toolCall("shifting-tool-2")])} />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /called 2 tools/i }));
+    expect(screen.getByRole("button", { name: /called 2 tools/i })).toHaveAttribute(
+      "aria-expanded",
+      "true"
+    );
+
+    rerender(
+      <AIMessage message={message([toolCall("shifting-tool-2"), toolCall("shifting-tool-3")])} />
+    );
+    expect(screen.getByRole("button", { name: /called 2 tools/i })).toHaveAttribute(
+      "aria-expanded",
+      "true"
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /called 2 tools/i }));
+    rerender(
+      <AIMessage message={message([toolCall("shifting-tool-1"), toolCall("shifting-tool-2")])} />
+    );
+    expect(screen.getByRole("button", { name: /called 2 tools/i })).toHaveAttribute(
+      "aria-expanded",
+      "false"
+    );
+  });
+
   it("keeps questions separate and does not group a single regular durable-round call", () => {
     render(
       <AIMessage

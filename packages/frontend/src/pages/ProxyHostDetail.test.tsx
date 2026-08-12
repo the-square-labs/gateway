@@ -25,11 +25,13 @@ vi.mock("./proxy-detail/SettingsTab", () => ({
     onAccessListChange,
     healthCheckExpectedStatus,
     setHealthCheckExpectedStatus,
+    onSaveTemplateSettings,
   }: {
     accessListId: string;
     onAccessListChange: (value: string) => void;
     healthCheckExpectedStatus: number | null;
     setHealthCheckExpectedStatus: (value: number | null) => void;
+    onSaveTemplateSettings: () => void;
   }) => (
     <div>
       <div data-testid="access-list-value">{accessListId || "__none__"}</div>
@@ -43,6 +45,9 @@ vi.mock("./proxy-detail/SettingsTab", () => ({
           setHealthCheckExpectedStatus(event.target.value ? Number(event.target.value) : null)
         }
       />
+      <button type="button" onClick={onSaveTemplateSettings}>
+        Save template settings
+      </button>
     </div>
   ),
 }));
@@ -222,6 +227,42 @@ describe("ProxyHostDetail", () => {
       });
     });
     expect(screen.getByTestId("access-list-value")).toHaveTextContent("__none__");
+  });
+
+  it("does not submit hidden manual upstream fields for a Docker-backed proxy", async () => {
+    const host = makeProxyHost({
+      upstreamKind: "docker_container",
+      dockerNodeId: "node-1",
+      dockerContainerName: "application",
+      dockerContainerPort: 8080,
+      forwardHost: "",
+      nginxTemplateId: "template-1",
+    });
+    vi.spyOn(api, "getProxyHost").mockResolvedValue(host);
+    vi.spyOn(api, "listNginxTemplates").mockResolvedValue([
+      {
+        id: "template-1",
+        name: "Minimal",
+        type: "proxy",
+        isBuiltin: false,
+        variables: [],
+      } as never,
+    ]);
+    const updateSpy = vi.spyOn(api, "updateProxyHost").mockResolvedValue(host);
+
+    renderWithRouter(<ProxyHostDetail />, {
+      path: "/proxy-hosts/:id/:tab",
+      route: "/proxy-hosts/host-1/settings",
+      extraRoutes: <Route path="/proxy-hosts" element={<div>Proxy Hosts</div>} />,
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Save template settings" }));
+
+    await waitFor(() => expect(updateSpy).toHaveBeenCalled());
+    const payload = updateSpy.mock.calls[0]?.[1];
+    expect(payload).not.toHaveProperty("forwardHost");
+    expect(payload).not.toHaveProperty("forwardPort");
+    expect(payload).not.toHaveProperty("forwardScheme");
   });
 
   it("does not update settings when the user cannot edit the proxy host", async () => {

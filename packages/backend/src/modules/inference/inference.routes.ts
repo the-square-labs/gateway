@@ -60,7 +60,7 @@ export const inferenceManagementRoutes = new OpenAPIHono<AppEnv>({ defaultHook: 
 
 inferenceManagementRoutes.use('*', authMiddleware);
 inferenceManagementRoutes.use('*', sessionOnly);
-inferenceManagementRoutes.use('*', requireScope('inference:use'));
+inferenceManagementRoutes.use('*', requireScope('feat:ai:use'));
 
 inferenceManagementRoutes.openapi(
   { ...getInferenceSettingsRoute, middleware: requireScope('inference:providers:view') },
@@ -201,7 +201,7 @@ inferenceManagementRoutes.openapi(inferenceModelSuggestionsRoute, async (c) => {
   return c.json(await container.resolve(InferenceModelService).suggestions(c.req.param('id')!));
 });
 
-inferenceManagementRoutes.use('/usage/self', requireScope('inference:usage:view:self'));
+inferenceManagementRoutes.use('/usage/self', requireScope('feat:ai:use'));
 inferenceManagementRoutes.openapi(inferenceSelfUsageRoute, async (c) => {
   return c.json(await container.resolve(InferenceUsageService).self(c.get('user')!));
 });

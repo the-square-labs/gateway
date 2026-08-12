@@ -321,7 +321,7 @@ describe('OAuthService.createConsentRequest', () => {
     const { service } = createService();
     const setupUser = {
       ...USER,
-      scopes: ['inference:use', 'inference:tokens:manage', 'nodes:details'],
+      scopes: ['feat:ai:use', 'inference:tokens:manage', 'nodes:details'],
     };
 
     const pending = await service.createConsentRequest(setupUser, {
@@ -343,7 +343,7 @@ describe('OAuthService.createConsentRequest', () => {
 
     await expect(
       service.createConsentRequest(
-        { ...USER, scopes: ['inference:use'] },
+        { ...USER, scopes: ['feat:ai:use'] },
         {
           response_type: 'code',
           client_id: 'goc_client',
@@ -756,7 +756,7 @@ describe('OAuthService.validateAccessToken', () => {
   it('accepts setup access tokens only for the inference setup resource', async () => {
     const setupResource = 'https://gateway.example.com/api/inference/setup';
     const { service } = createService({
-      groupScopes: ['inference:use', 'inference:tokens:manage'],
+      groupScopes: ['feat:ai:use', 'inference:tokens:manage'],
       accessToken: {
         id: 'access-setup',
         tokenHash: 'hash',

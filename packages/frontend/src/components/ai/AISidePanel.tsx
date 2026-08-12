@@ -930,7 +930,9 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
         ) : (
           <div className="relative space-y-2">
             {progressPlan &&
-              (progressPlan.status === "executing" ||
+              (progressPlan.status === "drafting" ||
+                progressPlan.status === "validating" ||
+                progressPlan.status === "executing" ||
                 progressPlan.status === "paused" ||
                 progressPlan.status === "verifying") && (
                 <AIPlanProgress

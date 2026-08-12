@@ -483,7 +483,7 @@ export class NodeDispatchService {
     timeoutMs?: number
   ): Promise<CommandResult> {
     await this.assertGenericDockerNode(nodeId);
-    if (!['list', 'inspect', 'stats', 'top', 'http_probe'].includes(action)) {
+    if (!['list', 'inspect', 'stats', 'top', 'http_probe', 'task_status'].includes(action)) {
       await this.assertNodeMutable(nodeId);
     }
     return this.registry.sendCommand(

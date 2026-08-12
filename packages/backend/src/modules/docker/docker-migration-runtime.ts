@@ -152,12 +152,37 @@ export function assertMigrationManifest(source: Record<string, any>, target: Rec
     ...hostConfig,
     OomKillDisable: hostConfig?.OomKillDisable ?? false,
   });
+  const normalizeEndpoint = (endpoint: Record<string, any> | null | undefined) => {
+    if (!endpoint) return {};
+    return Object.fromEntries(
+      Object.entries(endpoint).filter(([, value]) => {
+        if (value === null || value === undefined || value === '') return false;
+        if (Array.isArray(value) && value.length === 0) return false;
+        if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) return false;
+        if (typeof value === 'number' && value === 0) return false;
+        return true;
+      })
+    );
+  };
+  const normalizeNetworkingConfig = (networkingConfig: Record<string, any> | null | undefined) => {
+    const endpoints = networkingConfig?.EndpointsConfig ?? {};
+    const normalizedEndpoints = Object.fromEntries(
+      Object.entries(endpoints).flatMap(([network, endpoint]) => {
+        const normalizedEndpoint = normalizeEndpoint(endpoint as Record<string, any> | null | undefined);
+        // Docker 29.x patch releases differ in whether the implicit default bridge
+        // is represented as an omitted endpoint or an empty endpoint object.
+        if (network === 'bridge' && Object.keys(normalizedEndpoint).length === 0) return [];
+        return [[network, normalizedEndpoint]];
+      })
+    );
+    return { ...(networkingConfig ?? {}), EndpointsConfig: normalizedEndpoints };
+  };
   const normalize = (manifest: Record<string, any>) => ({
     imageId: manifest.imageId,
     imageReference: manifest.imageReference,
     config: manifest.config,
     hostConfig: normalizeHostConfig(manifest.hostConfig),
-    networkingConfig: manifest.networkingConfig,
+    networkingConfig: normalizeNetworkingConfig(manifest.networkingConfig),
     envKeys: manifest.envKeys,
     volumeNames: manifest.volumeNames,
   });

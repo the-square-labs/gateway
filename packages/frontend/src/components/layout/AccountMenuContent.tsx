@@ -21,8 +21,7 @@ export function AccountMenuContent({
   const navigate = useNavigate();
   const { user, hasScope } = useAuthStore();
   const inferenceEnabled = useSystemConfigStore((state) => state.config.features.inferenceEnabled);
-  const showInferenceUsage =
-    inferenceEnabled && hasScope("inference:use") && hasScope("inference:usage:view:self");
+  const showInferenceUsage = inferenceEnabled && hasScope("feat:ai:use");
 
   const navigateTo = (path: string) => {
     navigate(path);

@@ -144,7 +144,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   );
   const inferenceStreaming = useAIStore((state) => state.isStreaming);
   const aiEnabled = useAIStore((state) => state.isEnabled);
-  const canViewInferenceUsage = hasScope("inference:usage:view:self");
+  const canViewInferenceUsage = hasScope("feat:ai:use");
   const dashboardInferenceUsage = useDashboardBootstrapStore(
     (state) => state.snapshot?.inferenceUsage
   );
@@ -157,7 +157,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     gatewayInferenceMode &&
       canViewInferenceUsage &&
       inferenceEnabled &&
-      hasScope("inference:use") &&
+      hasScope("feat:ai:use") &&
       !waitForDashboardBootstrap,
     dashboardInferenceUsage
   );

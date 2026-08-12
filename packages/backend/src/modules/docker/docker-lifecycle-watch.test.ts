@@ -75,4 +75,115 @@ describe('watchDockerRecreateByName finalization', () => {
     expect(taskService.update).not.toHaveBeenCalled();
     expect(context.emitContainer).not.toHaveBeenCalled();
   });
+
+  it('propagates an asynchronous daemon task failure without waiting for the watcher timeout', async () => {
+    vi.useFakeTimers();
+    const { context } = recreateWatchContext();
+    context.nodeDispatch.sendDockerContainerCommand
+      .mockResolvedValueOnce({ success: true, detail: JSON.stringify([]) })
+      .mockResolvedValueOnce({
+        success: true,
+        detail: JSON.stringify({ id: 'daemon-task-1', status: 'failed', error: 'volume copy failed' }),
+      });
+
+    watchDockerRecreateByName(
+      context as never,
+      'node-1',
+      'api',
+      'container-1',
+      'task-1',
+      'Container recreated',
+      'running',
+      630000,
+      undefined,
+      'daemon-task-1'
+    );
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(context.nodeDispatch.sendDockerContainerCommand).toHaveBeenNthCalledWith(2, 'node-1', 'task_status', {
+      containerId: 'daemon-task-1',
+    });
+    expect(context.failTask).toHaveBeenCalledWith('task-1', 'volume copy failed', 'node-1', 'api');
+  });
+
+  it('does not mistake a healthy rollback container for a successful recreate', async () => {
+    vi.useFakeTimers();
+    const { context, taskService } = recreateWatchContext();
+    context.nodeDispatch.sendDockerContainerCommand
+      .mockResolvedValueOnce({
+        success: true,
+        detail: JSON.stringify([{ id: 'rollback-container', name: 'api', state: 'running' }]),
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        detail: JSON.stringify({
+          id: 'daemon-task-1',
+          status: 'failed',
+          error: 'create container failed; original container restored',
+        }),
+      });
+
+    watchDockerRecreateByName(
+      context as never,
+      'node-1',
+      'api',
+      'container-1',
+      'task-1',
+      'Container recreated',
+      'running',
+      630000,
+      undefined,
+      'daemon-task-1'
+    );
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(context.failTask).toHaveBeenCalledWith(
+      'task-1',
+      'create container failed; original container restored',
+      'node-1',
+      'api'
+    );
+    expect(taskService.update).not.toHaveBeenCalled();
+    expect(context.emitContainer).not.toHaveBeenCalled();
+  });
+
+  it('waits for daemon success before accepting a replacement container', async () => {
+    vi.useFakeTimers();
+    const { context, taskService } = recreateWatchContext();
+    context.nodeDispatch.sendDockerContainerCommand
+      .mockResolvedValueOnce({
+        success: true,
+        detail: JSON.stringify([{ id: 'container-2', name: 'api', state: 'running' }]),
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        detail: JSON.stringify({ id: 'daemon-task-1', status: 'running' }),
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        detail: JSON.stringify([{ id: 'container-2', name: 'api', state: 'running' }]),
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        detail: JSON.stringify({ id: 'daemon-task-1', status: 'succeeded' }),
+      });
+
+    watchDockerRecreateByName(
+      context as never,
+      'node-1',
+      'api',
+      'container-1',
+      'task-1',
+      'Container recreated',
+      'running',
+      630000,
+      undefined,
+      'daemon-task-1'
+    );
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(taskService.update).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(taskService.update).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'succeeded' }));
+  });
 });

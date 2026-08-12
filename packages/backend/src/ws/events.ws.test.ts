@@ -83,8 +83,8 @@ describe('events websocket authentication', () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);
     mocks.resolveLiveSessionUser.mockResolvedValue({
-      user: { ...USER, scopes: ['inference:use'] },
-      effectiveScopes: ['inference:use'],
+      user: { ...USER, scopes: ['feat:ai:use'] },
+      effectiveScopes: ['feat:ai:use'],
     });
     const ws = createWs();
     const handlers = createEventsWSHandlers();
@@ -142,8 +142,8 @@ describe('events websocket authentication', () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);
     mocks.resolveLiveSessionUser.mockResolvedValue({
-      user: { ...USER, scopes: ['inference:use'] },
-      effectiveScopes: ['inference:use'],
+      user: { ...USER, scopes: ['feat:ai:use'] },
+      effectiveScopes: ['feat:ai:use'],
     });
     const ws = createWs();
     const handlers = createEventsWSHandlers();

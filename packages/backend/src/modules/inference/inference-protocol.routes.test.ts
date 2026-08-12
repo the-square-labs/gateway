@@ -29,7 +29,7 @@ const USER: User = {
   avatarUrl: null,
   groupId: 'group-1',
   groupName: 'inference-users',
-  scopes: ['inference:use'],
+  scopes: ['feat:ai:use'],
   isBlocked: false,
 };
 

@@ -443,8 +443,7 @@ export function Dashboard() {
     (hostId: string) => hasScope("proxy:view") || hasScope(`proxy:view:${hostId}`),
     [hasScope]
   );
-  const canViewInferenceUsage =
-    inferenceEnabled && hasScope("inference:use") && hasScope("inference:usage:view:self");
+  const canViewInferenceUsage = inferenceEnabled && hasScope("feat:ai:use");
   const pinnedSkeletonCards = Math.min(
     8,
     dashboardPinnedIds.filter(canViewNodeDetails).length +

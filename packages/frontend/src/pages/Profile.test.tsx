@@ -33,7 +33,7 @@ describe("Profile", () => {
         name: "Alex Gateway",
         email: "alex@example.com",
         authMethod: "oidc",
-        scopes: ["inference:use", "inference:tokens:manage"],
+        scopes: ["feat:ai:use", "inference:tokens:manage"],
       }),
       isAuthenticated: true,
       isLoading: false,

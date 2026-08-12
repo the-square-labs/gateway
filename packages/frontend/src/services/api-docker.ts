@@ -262,10 +262,15 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       return this.unwrapData(this.request<{ data: Record<string, unknown> }>(url));
     }
 
-    async inspectContainerByName(nodeId: string, name: string): Promise<Record<string, unknown>> {
+    async inspectContainerByName(
+      nodeId: string,
+      name: string,
+      noCache = false
+    ): Promise<Record<string, unknown>> {
+      const path = `/docker/nodes/${nodeId}/containers/by-name/${encodeURIComponent(name)}`;
       return this.unwrapData(
         this.requestRouteContext<{ data: Record<string, unknown> }>(
-          `/docker/nodes/${nodeId}/containers/by-name/${encodeURIComponent(name)}`
+          noCache ? `${path}?_t=${Date.now()}` : path
         )
       );
     }

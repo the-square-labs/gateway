@@ -60,6 +60,7 @@ import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import { usePinnedContainersStore } from "@/stores/pinned-containers";
+import { useResolvedPageContext } from "@/stores/resolved-page-context";
 import type { DockerHealthCheck, DockerMigration } from "@/types";
 import { ConfigTab } from "./docker-detail/ConfigTab";
 import { ConsoleTab } from "./docker-detail/ConsoleTab";
@@ -87,6 +88,28 @@ export {
   buildContainerMutationSnapshot,
   shouldSettleMutationTransition,
 } from "./docker-detail/mutation-transition";
+
+export async function inspectContainerAfterMutation(
+  nodeId: string,
+  containerId: string,
+  containerName: string,
+  noCache = true
+): Promise<{ container: InspectData; containerId: string }> {
+  try {
+    const container = (await api.inspectContainer(nodeId, containerId, noCache)) as InspectData;
+    return { container, containerId: String(container.Id ?? containerId) };
+  } catch (error) {
+    if (!containerName) throw error;
+    const container = (await api.inspectContainerByName(
+      nodeId,
+      containerName,
+      noCache
+    )) as InspectData;
+    const replacementId = String(container.Id ?? container.id ?? "");
+    if (!replacementId) throw error;
+    return { container, containerId: replacementId };
+  }
+}
 
 // ── Main Page ────────────────────────────────────────────────────
 
@@ -295,15 +318,51 @@ export function DockerContainerDetail({
   const backendTransition = container?._transition as string | undefined;
   const { effectiveTransition, beginMutationTransition, clearMutationTransition } =
     useContainerMutationTransition(backendTransition);
+  const adoptReplacementContainerId = useCallback(
+    (replacementId: string) => {
+      if (!containerId || replacementId === containerId) return;
+      try {
+        usePinnedContainersStore.getState().migrateId(containerId, replacementId);
+      } catch {
+        /* ignore */
+      }
+      setContainerId(replacementId);
+      clearMutationTransition();
+      if (pageContextToken != null && nodeId) {
+        useResolvedPageContext.getState().resolve(pageContextToken, {
+          resourceType: "docker-container",
+          resourceId: replacementId,
+          nodeId,
+          scopeResourceId,
+          label: routeContainerName,
+        });
+      }
+    },
+    [
+      clearMutationTransition,
+      containerId,
+      nodeId,
+      pageContextToken,
+      routeContainerName,
+      scopeResourceId,
+    ]
+  );
 
   const fetchContainer = useCallback(
     async (silent = false, noCache = false) => {
       if (!nodeId || !containerId) return;
       if (!silent) setIsLoading(true);
       try {
-        const data = await resolveMigrationTarget(!!migrationHandoff?.cutoverAt, () =>
-          api.inspectContainer(nodeId, containerId, noCache)
-        );
+        const data = await resolveMigrationTarget(!!migrationHandoff?.cutoverAt, async () => {
+          const inspected = await inspectContainerAfterMutation(
+            nodeId,
+            containerId,
+            routeContainerName,
+            noCache
+          );
+          adoptReplacementContainerId(inspected.containerId);
+          return inspected.container;
+        });
         setContainer(data);
         if ((data as any)?._transition) {
           clearMutationTransition();
@@ -335,6 +394,7 @@ export function DockerContainerDetail({
     },
     [
       backTarget,
+      adoptReplacementContainerId,
       clearMutationTransition,
       nodeId,
       nodeSlug,
@@ -342,6 +402,7 @@ export function DockerContainerDetail({
       migrationHandoff,
       navigate,
       updateMeta,
+      routeContainerName,
     ]
   );
 
@@ -379,7 +440,11 @@ export function DockerContainerDetail({
       }
 
       try {
-        const next = await api.inspectContainer(nodeId, containerId, true);
+        const stableName =
+          routeContainerName || String(before?.Name ?? before?.name ?? "").replace(/^\//, "");
+        const inspected = await inspectContainerAfterMutation(nodeId, containerId, stableName);
+        const next = inspected.container;
+        adoptReplacementContainerId(inspected.containerId);
         setContainer(next);
         containerRef.current = next;
         if (shouldSettleMutationTransition(previousSignature, next)) {
@@ -390,7 +455,13 @@ export function DockerContainerDetail({
         // Realtime/delete handlers already deal with hard failures; keep polling briefly.
       }
     }
-  }, [clearMutationTransition, containerId, nodeId]);
+  }, [
+    adoptReplacementContainerId,
+    clearMutationTransition,
+    containerId,
+    nodeId,
+    routeContainerName,
+  ]);
 
   // Realtime: refetch on any container.changed event for this container's name.
   // Also handle the recreate ID migration for every open tab.

@@ -63,6 +63,7 @@ async function setup() {
   await snapshots.replaceList(NODE_2, 'containers', [{ id: 'c2', name: 'two', state: 'running' }]);
   const docker = {
     decorateContainerSnapshot: vi.fn(async (_nodeId, data) => data),
+    decorateContainerDetailSnapshot: vi.fn(async (_nodeId, data) => data),
     listContainers: vi.fn(),
     listGpuAttachmentUsers: vi.fn(),
   };
@@ -72,7 +73,7 @@ async function setup() {
     sendDockerVolumeCommand: vi.fn(),
     sendDockerNetworkCommand: vi.fn(),
   };
-  const reconciler = { enqueue: vi.fn() };
+  const reconciler = { enqueue: vi.fn(), refreshNow: vi.fn().mockResolvedValue(undefined) };
   container.registerInstance(DockerSnapshotService, snapshots);
   container.registerInstance(DockerManagementService, docker as never);
   container.registerInstance(NodeDispatchService, dispatch as never);
@@ -119,6 +120,26 @@ describe('Docker snapshot routes', () => {
     expect(body.data[0]).toMatchObject({ nodeId: NODE_1, name: 'one', availability: 'available' });
     expect(docker.listContainers).not.toHaveBeenCalled();
     expect(dispatch.sendDockerContainerCommand).not.toHaveBeenCalled();
+  });
+
+  it('cache-busted by-name inspect refreshes the list before the detail snapshot', async () => {
+    const { snapshots, reconciler } = await setup();
+    vi.spyOn(snapshots, 'getContainerDetailSnapshot').mockResolvedValue({
+      data: { Id: 'c2', Name: '/one' },
+      revision: 2,
+      observedAt: new Date().toISOString(),
+      lastAttemptAt: new Date().toISOString(),
+      lastError: null,
+      refreshStatus: 'success',
+    });
+    const app = appWithScopes(['docker:containers:view']);
+    registerContainerRoutes(app);
+
+    const response = await app.request(`/nodes/${NODE_1}/containers/by-name/one?_t=123`);
+
+    expect(response.status).toBe(200);
+    expect(reconciler.refreshNow).toHaveBeenNthCalledWith(1, NODE_1, 'containers');
+    expect(reconciler.refreshNow).toHaveBeenNthCalledWith(2, NODE_1, 'container-detail', 'one');
   });
 
   it('returns GPU users only for containers visible to the caller', async () => {

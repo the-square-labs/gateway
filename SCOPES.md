@@ -156,17 +156,15 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `housekeeping:configure` |  |
 | `license:view` |  |
 | `license:manage` |  |
-| `feat:ai:use` |  |
+| `feat:ai:use` | Use AI Workspace and Gateway Inference, including personal inference usage. |
 | `feat:ai:configure` |  |
 | `ai:sandbox:use` |  |
 | `ai:sandbox:tier:medium` |  |
 | `ai:sandbox:tier:high` |  |
 | `ai:sandbox:manage` |  |
 | `mcp:use` |  |
-| `inference:use` |  |
 | `inference:setup` |  |
 | `inference:tokens:manage` |  |
-| `inference:usage:view:self` |  |
 | `inference:providers:view` |  |
 | `inference:providers:manage` |  |
 | `inference:models:manage` |  |
@@ -254,17 +252,15 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 
 | Scope | Reason |
 |-------|--------|
-| `feat:ai:use` | User/session-only AI assistant access. |
+| `feat:ai:use` | User/session-only AI Workspace and Gateway Inference access. |
 | `feat:ai:configure` | User/session-only AI configuration. |
 | `ai:sandbox:use` | User/session-only sandbox runner access. |
 | `ai:sandbox:tier:medium` | User/session-only sandbox runner tier access. |
 | `ai:sandbox:tier:high` | User/session-only sandbox runner tier access. |
 | `ai:sandbox:manage` | User/session-only sandbox runner management. |
 | `mcp:use` | User-account capability gate for remote MCP. |
-| `inference:use` | User/session-only inference access; also grants current-user usage visibility. |
 | `inference:setup` | User/session-only companion CLI authorization resource. |
 | `inference:tokens:manage` | User/session-only inference token creation and revocation. |
-| `inference:usage:view:self` | User/session-only current-user inference usage; implicitly granted by `inference:use`. |
 | `admin:system` | Protected system-administrator shielding. |
 | `admin:users` | User administration is session-only. |
 | `admin:groups` | Permission group administration is session-only. |

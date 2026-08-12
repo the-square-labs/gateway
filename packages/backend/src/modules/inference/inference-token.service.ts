@@ -207,7 +207,7 @@ export class InferenceTokenService {
     if (!token) return null;
 
     const user = await resolveLiveUser(this.db, token.userId);
-    if (!user || user.isBlocked || !hasScope(user.scopes, 'inference:use')) return null;
+    if (!user || user.isBlocked || !hasScope(user.scopes, 'feat:ai:use')) return null;
 
     this.db
       .update(inferenceTokens)

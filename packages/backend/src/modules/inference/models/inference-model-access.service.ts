@@ -5,6 +5,7 @@ import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { inferenceModelAccessRules, inferenceModels } from '@/db/schema/index.js';
+import { hasScope } from '@/lib/permissions.js';
 import type { User } from '@/types.js';
 
 const ACCESS_CACHE_TTL_SECONDS = 60;
@@ -17,7 +18,7 @@ export class InferenceModelAccessService {
   ) {}
 
   async allowedModelIds(user: User): Promise<Set<string>> {
-    if (user.isBlocked || !user.scopes.includes('inference:use')) return new Set();
+    if (user.isBlocked || !hasScope(user.scopes, 'feat:ai:use')) return new Set();
     const key = this.cacheKey(user);
     const cached = await this.redis.get(key);
     if (cached) return new Set(JSON.parse(cached) as string[]);

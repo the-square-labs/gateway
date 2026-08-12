@@ -244,8 +244,6 @@ export function shouldEndRunAfterPlanTool(toolName: string, result: unknown, err
 
 function buildPlanRuntimePrompt(plan: AIPlanRuntimeSnapshot): string {
   const planState = JSON.stringify({
-    planId: plan.id,
-    revisionId: plan.revisionId,
     status: plan.status,
     goal: plan.goal,
     scope: plan.scope,
@@ -258,7 +256,6 @@ function buildPlanRuntimePrompt(plan: AIPlanRuntimeSnapshot): string {
         ? [...(plan.intentReview?.findings ?? []), ...(plan.securityReview?.findings ?? [])]
         : [],
     steps: plan.steps.map((step) => ({
-      id: step.id,
       title: step.title,
       status: step.status,
       verification: step.verification,
@@ -2004,8 +2001,6 @@ export class AIService {
         return this.planService.submitPlanReview({
           userId: user.id,
           conversationId: runtimeContext.conversationId,
-          planId: a.planId,
-          revisionId: a.revisionId,
           intentReview: a.intentReview,
           securityReview: a.securityReview,
         });
@@ -2015,7 +2010,6 @@ export class AIService {
         return this.planService.updateStep({
           userId: user.id,
           conversationId: runtimeContext.conversationId,
-          stepId: a.stepId,
           status: a.status,
           evidence: a.evidence,
           skipReason: a.skipReason,
@@ -2040,7 +2034,6 @@ export class AIService {
         return this.planService.submitFinalVerification({
           userId: user.id,
           conversationId: runtimeContext.conversationId,
-          planId: a.planId,
           verdict: a.verdict,
           summary: a.summary,
           findings: a.findings,

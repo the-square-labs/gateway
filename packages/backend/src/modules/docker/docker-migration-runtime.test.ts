@@ -68,6 +68,59 @@ describe('Docker migration runtime safety', () => {
     ).not.toThrow();
   });
 
+  it('treats omitted and empty implicit bridge endpoints as equivalent', () => {
+    expect(() =>
+      assertMigrationManifest(
+        {
+          config: {},
+          hostConfig: { NetworkMode: 'bridge' },
+          networkingConfig: { EndpointsConfig: {} },
+          envKeys: [],
+          volumeNames: [],
+        },
+        {
+          config: {},
+          hostConfig: { NetworkMode: 'bridge' },
+          networkingConfig: {
+            EndpointsConfig: {
+              bridge: {
+                IPAMConfig: null,
+                Links: null,
+                Aliases: [],
+                DriverOpts: {},
+                MacAddress: '',
+                GatewayPriority: 0,
+              },
+            },
+          },
+          envKeys: [],
+          volumeNames: [],
+        }
+      )
+    ).not.toThrow();
+  });
+
+  it('still rejects meaningful bridge endpoint differences', () => {
+    expect(() =>
+      assertMigrationManifest(
+        {
+          config: {},
+          hostConfig: { NetworkMode: 'bridge' },
+          networkingConfig: { EndpointsConfig: {} },
+          envKeys: [],
+          volumeNames: [],
+        },
+        {
+          config: {},
+          hostConfig: { NetworkMode: 'bridge' },
+          networkingConfig: { EndpointsConfig: { bridge: { Aliases: ['api'] } } },
+          envKeys: [],
+          volumeNames: [],
+        }
+      )
+    ).toThrowError(expect.objectContaining({ code: 'MIGRATION_MANIFEST_MISMATCH' }));
+  });
+
   it('encrypts sensitive create manifests in the durable migration plan', () => {
     const sealed = sealMigrationPlan(
       {

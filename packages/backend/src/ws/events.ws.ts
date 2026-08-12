@@ -112,9 +112,9 @@ function requiredScopeFor(channel: string): string | null {
   if (channel === 'group.changed') return 'admin:groups';
   if (channel === 'notification.alert-rule.changed') return 'notifications:view';
   if (channel === 'notification.webhook.changed') return 'notifications:view';
-  if (channel === INFERENCE_SETUP_EVENT_CHANNEL) return 'inference:use';
+  if (channel === INFERENCE_SETUP_EVENT_CHANNEL) return 'feat:ai:use';
   if (channel === 'integration.connector.changed') return 'integrations:gitlab:view';
-  if (channel === INFERENCE_USAGE_CHANGED_CHANNEL) return 'inference:usage:view:self';
+  if (channel === INFERENCE_USAGE_CHANGED_CHANNEL) return 'feat:ai:use';
   if (channel.startsWith('alert.')) return 'notifications:view';
   // permissions.changed.<userId> is filtered separately (own user only)
   return null;
@@ -224,7 +224,7 @@ function hasChannelAccess(scopes: string[], channel: string): boolean {
   }
   if (channel === INFERENCE_SETUP_EVENT_CHANNEL) {
     return (
-      hasScope(scopes, 'inference:use') ||
+      hasScope(scopes, 'feat:ai:use') ||
       hasScope(scopes, 'inference:providers:view') ||
       hasScope(scopes, 'inference:models:manage') ||
       hasScope(scopes, 'inference:limits:manage') ||
