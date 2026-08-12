@@ -4,6 +4,16 @@ import { afterAll, afterEach, beforeAll, vi } from "vitest";
 import { server } from "./msw/server";
 import { resetTestStores } from "./reset-stores";
 
+// Node also exposes a CustomEvent constructor, but jsdom EventTargets only
+// accept events created by their own realm. Radix FocusScope dispatches a
+// deferred CustomEvent during dialog cleanup, so keep the test global bound to
+// jsdom's constructor across files and worker timing.
+Object.defineProperty(globalThis, "CustomEvent", {
+  configurable: true,
+  writable: true,
+  value: window.CustomEvent,
+});
+
 class MockResizeObserver {
   observe() {}
   unobserve() {}
