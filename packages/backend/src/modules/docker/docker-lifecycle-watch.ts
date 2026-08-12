@@ -3,6 +3,8 @@ import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { getReplacementContainerFailureMessage } from './docker-recreate-watch.js';
 import type { DockerTaskService } from './docker-task.service.js';
 
+const LEGACY_TASK_STATUS_UNSUPPORTED_ERROR = 'unknown container action: task_status';
+
 export type ContainerAction =
   | 'created'
   | 'started'
@@ -100,17 +102,21 @@ export function watchDockerRecreateByName(
         const daemonTaskResult = await context.nodeDispatch.sendDockerContainerCommand(nodeId, 'task_status', {
           containerId: daemonTaskId,
         });
-        const daemonTask = context.parseResult(daemonTaskResult) as Record<string, any>;
-        daemonTaskStatus = String(daemonTask.status ?? '');
-        if (daemonTaskStatus === 'failed') {
-          clearInterval(poll);
-          await context.failTask(
-            taskId,
-            String(daemonTask.error || 'Docker daemon task failed'),
-            nodeId,
-            containerName
-          );
-          return;
+        if (!daemonTaskResult.success && daemonTaskResult.error?.trim() === LEGACY_TASK_STATUS_UNSUPPORTED_ERROR) {
+          daemonTaskStatus = 'unsupported';
+        } else {
+          const daemonTask = context.parseResult(daemonTaskResult) as Record<string, any>;
+          daemonTaskStatus = String(daemonTask.status ?? '');
+          if (daemonTaskStatus === 'failed') {
+            clearInterval(poll);
+            await context.failTask(
+              taskId,
+              String(daemonTask.error || 'Docker daemon task failed'),
+              nodeId,
+              containerName
+            );
+            return;
+          }
         }
       }
 
@@ -119,7 +125,8 @@ export function watchDockerRecreateByName(
         return cName === containerName;
       });
 
-      const canEvaluateReplacement = !daemonTaskId || daemonTaskStatus === 'succeeded';
+      const canEvaluateReplacement =
+        !daemonTaskId || daemonTaskStatus === 'succeeded' || daemonTaskStatus === 'unsupported';
       if (match && canEvaluateReplacement) {
         const newId = match.id ?? match.Id;
         const state = match.state ?? match.State ?? '';

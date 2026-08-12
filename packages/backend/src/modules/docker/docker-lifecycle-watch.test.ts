@@ -186,4 +186,72 @@ describe('watchDockerRecreateByName finalization', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(taskService.update).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'succeeded' }));
   });
+
+  it('falls back to replacement inspection when an older daemon does not support task status', async () => {
+    vi.useFakeTimers();
+    const { context, taskService } = recreateWatchContext();
+    context.nodeDispatch.sendDockerContainerCommand
+      .mockResolvedValueOnce({
+        success: true,
+        detail: JSON.stringify([{ id: 'container-2', name: 'api', state: 'running' }]),
+      })
+      .mockResolvedValueOnce({
+        success: false,
+        error: 'unknown container action: task_status',
+        detail: '',
+      });
+
+    watchDockerRecreateByName(
+      context as never,
+      'node-1',
+      'api',
+      'container-1',
+      'task-1',
+      'Container recreated',
+      'running',
+      630000,
+      undefined,
+      'daemon-task-1'
+    );
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(taskService.update).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'succeeded' }));
+    expect(context.failTask).not.toHaveBeenCalled();
+  });
+
+  it('does not treat other daemon task-status failures as legacy compatibility responses', async () => {
+    vi.useFakeTimers();
+    const { context, taskService } = recreateWatchContext();
+    context.parseResult = ((result: { success: boolean; error?: string; detail?: string }) => {
+      if (!result.success) throw new Error(result.error || 'command failed');
+      return JSON.parse(result.detail || 'null');
+    }) as never;
+    context.nodeDispatch.sendDockerContainerCommand
+      .mockResolvedValueOnce({
+        success: true,
+        detail: JSON.stringify([{ id: 'container-2', name: 'api', state: 'running' }]),
+      })
+      .mockResolvedValueOnce({
+        success: false,
+        error: 'docker task not found',
+        detail: '',
+      });
+
+    watchDockerRecreateByName(
+      context as never,
+      'node-1',
+      'api',
+      'container-1',
+      'task-1',
+      'Container recreated',
+      'running',
+      630000,
+      undefined,
+      'daemon-task-1'
+    );
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(taskService.update).not.toHaveBeenCalled();
+    expect(context.emitContainer).not.toHaveBeenCalled();
+  });
 });
