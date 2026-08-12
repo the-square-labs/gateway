@@ -124,6 +124,14 @@ function dockerContainerScope(nodeId: string | null | undefined, search?: string
   return q ? `${base}:search:${q}` : base;
 }
 
+function dockerSnapshotCacheKey(
+  resource: "containers" | "images" | "volumes" | "networks" | "tasks",
+  nodeId: string | null | undefined,
+  search?: string
+) {
+  return `docker:snapshots:${resource}:${dockerContainerScope(nodeId, search)}`;
+}
+
 function filterCachedContainers(items: DockerContainer[], nodeId?: string | null, search?: string) {
   const query = search?.trim().toLowerCase();
   return items.filter((container) => {
@@ -279,7 +287,10 @@ export const useDockerStore = create<DockerState>()((set, get) => ({
     const effectiveNodeId = nodeIdOverride ?? selectedNodeId;
     const search = searchOverride ?? filters.search;
     const scope = dockerContainerScope(effectiveNodeId, search);
-    const cached = cachedContainersForScope(get(), effectiveNodeId, search);
+    const cacheKey = dockerSnapshotCacheKey("containers", effectiveNodeId, search);
+    const cached =
+      cachedContainersForScope(get(), effectiveNodeId, search) ??
+      api.getCached<DockerContainer[]>(cacheKey, Number.POSITIVE_INFINITY);
     set((state) => ({
       containers: cached ?? [],
       ...loadingState(state.loading, "containers", !cached),
@@ -290,6 +301,7 @@ export const useDockerStore = create<DockerState>()((set, get) => ({
         search,
       });
       if (requestId !== dockerRequestIds.containers) return;
+      api.setCache(cacheKey, items);
       set((state) => ({
         containers: items,
         containersByScope: { ...state.containersByScope, [scope]: items },
@@ -307,6 +319,7 @@ export const useDockerStore = create<DockerState>()((set, get) => ({
     const effectiveNodeId = nodeIdOverride ?? selectedNodeId;
     const search = searchOverride ?? filters.search;
     const scope = dockerContainerScope(effectiveNodeId, search);
+    const cacheKey = dockerSnapshotCacheKey("containers", effectiveNodeId, search);
     const cached = cachedContainersForScope(get(), effectiveNodeId, search);
     set((state) => ({
       containers: cached ?? [],
@@ -318,6 +331,7 @@ export const useDockerStore = create<DockerState>()((set, get) => ({
         search,
       });
       if (requestId !== dockerRequestIds.containers) return;
+      api.setCache(cacheKey, items);
       set((state) => ({
         containers: items,
         containersByScope: { ...state.containersByScope, [scope]: items },
@@ -334,7 +348,10 @@ export const useDockerStore = create<DockerState>()((set, get) => ({
     const { selectedNodeId, filters } = get();
     const effectiveNodeId = nodeIdOverride ?? selectedNodeId;
     const search = searchOverride ?? filters.search;
-    set((state) => loadingState(state.loading, "images", get().images.length === 0));
+    const cacheKey = dockerSnapshotCacheKey("images", effectiveNodeId, search);
+    const cached = api.getCached<DockerImage[]>(cacheKey, Number.POSITIVE_INFINITY);
+    if (cached) set({ images: cached });
+    set((state) => loadingState(state.loading, "images", !cached && get().images.length === 0));
     try {
       const tagged = await api.listDockerImageSnapshots({
         nodeId: effectiveNodeId ?? undefined,
@@ -342,6 +359,7 @@ export const useDockerStore = create<DockerState>()((set, get) => ({
       });
       const items = await attachFolderPlacements("image", tagged, dockerImageResourceKey);
       if (requestId !== dockerRequestIds.images) return;
+      api.setCache(cacheKey, items);
       set((state) => ({ images: items, ...loadingState(state.loading, "images", false) }));
     } catch {
       if (requestId !== dockerRequestIds.images) return;
@@ -354,7 +372,10 @@ export const useDockerStore = create<DockerState>()((set, get) => ({
     const { selectedNodeId, filters } = get();
     const effectiveNodeId = nodeIdOverride ?? selectedNodeId;
     const search = searchOverride ?? filters.search;
-    set((state) => loadingState(state.loading, "volumes", get().volumes.length === 0));
+    const cacheKey = dockerSnapshotCacheKey("volumes", effectiveNodeId, search);
+    const cached = api.getCached<DockerVolume[]>(cacheKey, Number.POSITIVE_INFINITY);
+    if (cached) set({ volumes: cached });
+    set((state) => loadingState(state.loading, "volumes", !cached && get().volumes.length === 0));
     try {
       const tagged = await api.listDockerVolumeSnapshots({
         nodeId: effectiveNodeId ?? undefined,
@@ -362,6 +383,7 @@ export const useDockerStore = create<DockerState>()((set, get) => ({
       });
       const items = await attachFolderPlacements("volume", tagged, dockerVolumeResourceKey);
       if (requestId !== dockerRequestIds.volumes) return;
+      api.setCache(cacheKey, items);
       set((state) => ({ volumes: items, ...loadingState(state.loading, "volumes", false) }));
     } catch {
       if (requestId !== dockerRequestIds.volumes) return;
@@ -374,7 +396,10 @@ export const useDockerStore = create<DockerState>()((set, get) => ({
     const { selectedNodeId, filters } = get();
     const effectiveNodeId = nodeIdOverride ?? selectedNodeId;
     const search = searchOverride ?? filters.search;
-    set((state) => loadingState(state.loading, "networks", get().networks.length === 0));
+    const cacheKey = dockerSnapshotCacheKey("networks", effectiveNodeId, search);
+    const cached = api.getCached<DockerNetwork[]>(cacheKey, Number.POSITIVE_INFINITY);
+    if (cached) set({ networks: cached });
+    set((state) => loadingState(state.loading, "networks", !cached && get().networks.length === 0));
     try {
       const tagged = await api.listDockerNetworkSnapshots({
         nodeId: effectiveNodeId ?? undefined,
@@ -382,6 +407,7 @@ export const useDockerStore = create<DockerState>()((set, get) => ({
       });
       const items = await attachFolderPlacements("network", tagged, dockerNetworkResourceKey);
       if (requestId !== dockerRequestIds.networks) return;
+      api.setCache(cacheKey, items);
       set((state) => ({ networks: items, ...loadingState(state.loading, "networks", false) }));
     } catch {
       if (requestId !== dockerRequestIds.networks) return;
@@ -391,14 +417,17 @@ export const useDockerStore = create<DockerState>()((set, get) => ({
 
   fetchTasks: async (nodeIdOverride) => {
     const requestId = ++dockerRequestIds.tasks;
-    set((state) => loadingState(state.loading, "tasks", get().tasks.length === 0));
+    const effectiveNodeId = nodeIdOverride ?? get().selectedNodeId;
+    const cacheKey = dockerSnapshotCacheKey("tasks", effectiveNodeId);
+    const cached = api.getCached<DockerTask[]>(cacheKey, Number.POSITIVE_INFINITY);
+    if (cached) set({ tasks: cached });
+    set((state) => loadingState(state.loading, "tasks", !cached && get().tasks.length === 0));
     try {
-      const { selectedNodeId } = get();
-      const effectiveNodeId = nodeIdOverride ?? selectedNodeId;
       const data = await api.listDockerTasks(
         effectiveNodeId ? { nodeId: effectiveNodeId } : undefined
       );
       if (requestId !== dockerRequestIds.tasks) return;
+      api.setCache(cacheKey, data ?? []);
       set((state) => ({
         tasks: data ?? [],
         ...loadingState(state.loading, "tasks", false),

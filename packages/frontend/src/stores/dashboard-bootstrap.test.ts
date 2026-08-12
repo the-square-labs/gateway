@@ -10,6 +10,7 @@ const SNAPSHOT = {
 describe("dashboard bootstrap store", () => {
   beforeEach(() => {
     vi.spyOn(api, "getDashboardBootstrap").mockReset();
+    api.invalidateCache("dashboard:bootstrap:");
     useDashboardBootstrapStore.getState().clear();
   });
 

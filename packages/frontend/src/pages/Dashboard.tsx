@@ -280,78 +280,15 @@ export function RelayHealthNotice({
   );
 }
 
-/** Keep only permission-authorized dashboard geometry stable while data hydrates. */
-function DashboardSkeleton({
-  hasScope,
-  pkiEnabled,
-  pinnedCards,
-}: {
+function DashboardSkeleton(_props: {
   hasScope: (scope: string) => boolean;
   pkiEnabled: boolean;
   pinnedCards: number;
 }) {
-  const statCards = [
-    hasScope("proxy:view"),
-    hasScope("ssl:cert:view"),
-    pkiEnabled && hasScope("pki:cert:view"),
-    hasScope("nodes:details"),
-  ].filter(Boolean).length;
-  const panels = [
-    hasScope("proxy:view"),
-    hasScope("nodes:details"),
-    pkiEnabled && (hasScope("pki:ca:view:root") || hasScope("pki:ca:view:intermediate")),
-    hasScope("admin:audit"),
-  ].filter(Boolean).length;
-
   return (
     <PageTransition>
-      <div className="h-full overflow-y-auto p-6">
-        <div className="mb-4">
-          <div className="flex items-center gap-3">
-            <LiteModeBackButton />
-            <h1 className="text-2xl font-bold">Dashboard</h1>
-          </div>
-          <p className="text-sm text-muted-foreground">Gateway and PKI infrastructure overview</p>
-        </div>
-        <div className="space-y-6" aria-busy="true" aria-label="Loading dashboard">
-          {statCards > 0 && (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              {Array.from({ length: statCards }, (_, index) => (
-                <div key={index} className="min-h-32 border border-border bg-card p-5">
-                  <Skeleton className="h-4 w-24" />
-                  <Skeleton className="mt-5 h-8 w-14" />
-                  <Skeleton className="mt-4 h-3 w-28" />
-                </div>
-              ))}
-            </div>
-          )}
-          {pinnedCards > 0 && (
-            <div className="grid gap-4 xl:grid-cols-2">
-              {Array.from({ length: pinnedCards }, (_, index) => (
-                <div key={index} className="min-h-40 border border-border bg-card p-5">
-                  <Skeleton className="h-5 w-36" />
-                  <Skeleton className="mt-5 h-4 w-2/3" />
-                  <Skeleton className="mt-3 h-4 w-1/2" />
-                  <Skeleton className="mt-6 h-3 w-full" />
-                </div>
-              ))}
-            </div>
-          )}
-          {panels > 0 && (
-            <div className="grid gap-6 xl:grid-cols-2">
-              {Array.from({ length: panels }, (_, index) => (
-                <div key={index} className="min-h-64 border border-border bg-card p-5">
-                  <Skeleton className="h-5 w-32" />
-                  <div className="mt-6 space-y-4">
-                    {[0, 1, 2].map((row) => (
-                      <Skeleton key={row} className="h-12 w-full" />
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+      <div className="h-full" aria-busy="true" aria-label="Loading dashboard">
+        <Skeleton />
       </div>
     </PageTransition>
   );

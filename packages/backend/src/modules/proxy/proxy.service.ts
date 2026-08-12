@@ -11,6 +11,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
+import type { CacheService } from '@/services/cache.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type {
   NginxCertificateDistributionService,
@@ -49,6 +50,8 @@ const logger = createChildLogger('ProxyService');
 const SECURE_LINK_RUNTIME_DEDUP_WINDOW_MS = 500;
 const SECURE_LINK_BACKGROUND_TRAFFIC_TAIL_LINES = 200;
 const SECURE_LINK_FOCUSED_TRAFFIC_TAIL_LINES = 10_000;
+const SECURE_LINK_RUNTIME_CACHE_PREFIX = 'proxy-secure-link-runtime:';
+const SECURE_LINK_RUNTIME_CACHE_TTL_SECONDS = 24 * 60 * 60;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -106,7 +109,8 @@ export class ProxyService {
     private readonly nodeDispatch: NodeDispatchService,
     private readonly certificateDistribution: NginxCertificateDistributionService,
     private readonly dockerUpstreams?: ProxyDockerUpstreamService,
-    private readonly secureLinks?: ProxySecureLinkService
+    private readonly secureLinks?: ProxySecureLinkService,
+    private readonly cache?: CacheService
   ) {}
 
   private eventBus?: EventBusService;
@@ -917,17 +921,28 @@ export class ProxyService {
     }
 
     const nodeIds = [host.nodeId, host.dockerNodeId].filter((nodeId): nodeId is string => Boolean(nodeId));
-    const [linkNodes, runtimeSample] = await Promise.all([
+    const [linkNodes, history] = await Promise.all([
       nodeIds.length
         ? this.db
             .select({ id: nodes.id, hostname: nodes.hostname, displayName: nodes.displayName, status: nodes.status })
             .from(nodes)
             .where(inArray(nodes.id, nodeIds))
         : Promise.resolve([]),
-      this.sampleSecureLinkRuntime(host, SECURE_LINK_FOCUSED_TRAFFIC_TAIL_LINES),
+      this.getSecureLinkRuntimeHistory(host.id),
     ]);
+    const latestSnapshot = history.at(-1);
+    const runtime = latestSnapshot?.runtime ?? null;
+    const traffic = latestSnapshot?.traffic ?? null;
 
-    const { runtime, traffic } = runtimeSample.snapshot;
+    // The read path never waits on Relay or daemon RPCs. An open Link Runtime
+    // tab only accelerates the same sampler that already runs in the
+    // background; the next poll observes the completed snapshot.
+    void this.sampleSecureLinkRuntime(host, SECURE_LINK_FOCUSED_TRAFFIC_TAIL_LINES).catch((error) => {
+      logger.debug('Focused Proxy Secure Link telemetry collection failed', {
+        hostId: host.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
 
     const nodeById = new Map(linkNodes.map((node) => [node.id, node]));
     const sourceNode = host.nodeId ? nodeById.get(host.nodeId) : undefined;
@@ -968,7 +983,7 @@ export class ProxyService {
       },
       runtime,
       traffic,
-      history: runtimeSample.history,
+      history,
     };
   }
 
@@ -990,7 +1005,7 @@ export class ProxyService {
   }
 
   private async collectSecureLinkRuntimeSnapshotsOnce(): Promise<void> {
-    if (!this.secureLinks) return;
+    if (!this.secureLinks || this.dockerReconcileRunning) return;
     const hosts = await this.db.query.proxyHosts.findMany({
       where: and(
         eq(proxyHosts.isSystem, false),
@@ -1028,10 +1043,12 @@ export class ProxyService {
     if (active) return active;
 
     const task = this.collectSecureLinkRuntimeSnapshot(host, trafficTailLines)
-      .then((snapshot) => ({
-        snapshot,
-        history: this.recordSecureLinkRuntimeSnapshot(host.id, snapshot),
-      }))
+      .then(async (snapshot) => {
+        await this.getSecureLinkRuntimeHistory(host.id);
+        const history = this.recordSecureLinkRuntimeSnapshot(host.id, snapshot);
+        await this.persistSecureLinkRuntimeHistory(host.id, history);
+        return { snapshot, history };
+      })
       .finally(() => {
         if (this.secureLinkRuntimeSamplesInFlight.get(host.id) === task) {
           this.secureLinkRuntimeSamplesInFlight.delete(host.id);
@@ -1106,6 +1123,55 @@ export class ProxyService {
         : [...retained, snapshot].slice(-60);
     this.secureLinkRuntimeHistory.set(hostId, updated);
     return [...updated];
+  }
+
+  private async getSecureLinkRuntimeHistory(hostId: string): Promise<ProxySecureLinkRuntimeSnapshot[]> {
+    const current = this.secureLinkRuntimeHistory.get(hostId);
+    if (current) return [...current];
+    if (!this.cache) return [];
+
+    try {
+      const cached = await this.cache.get<ProxySecureLinkRuntimeSnapshot[]>(
+        `${SECURE_LINK_RUNTIME_CACHE_PREFIX}${hostId}`
+      );
+      const history = Array.isArray(cached)
+        ? cached
+            .filter(
+              (snapshot): snapshot is ProxySecureLinkRuntimeSnapshot =>
+                snapshot != null &&
+                typeof snapshot === 'object' &&
+                typeof (snapshot as ProxySecureLinkRuntimeSnapshot).timestamp === 'string'
+            )
+            .slice(-60)
+        : [];
+      this.secureLinkRuntimeHistory.set(hostId, history);
+      return [...history];
+    } catch (error) {
+      logger.debug('Proxy Secure Link runtime history cache is unavailable', {
+        hostId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
+  private async persistSecureLinkRuntimeHistory(
+    hostId: string,
+    history: ProxySecureLinkRuntimeSnapshot[]
+  ): Promise<void> {
+    if (!this.cache) return;
+    try {
+      await this.cache.set(
+        `${SECURE_LINK_RUNTIME_CACHE_PREFIX}${hostId}`,
+        history,
+        SECURE_LINK_RUNTIME_CACHE_TTL_SECONDS
+      );
+    } catch (error) {
+      logger.debug('Failed to persist Proxy Secure Link runtime history', {
+        hostId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   // -----------------------------------------------------------------------

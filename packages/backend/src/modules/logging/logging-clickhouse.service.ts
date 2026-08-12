@@ -50,9 +50,11 @@ const MANAGED_INTERNAL_LOG_TABLES = new Set([
   'text_log',
   'trace_log',
 ]);
+const CLICKHOUSE_MAINTENANCE_REQUEST_TIMEOUT_MS = 60_000;
 
 export class LoggingClickHouseService {
   private client: ClickHouseClient | null = null;
+  private maintenanceClient: ClickHouseClient | null = null;
   private database = 'gateway_logs';
   private table = 'logs';
 
@@ -69,8 +71,9 @@ export class LoggingClickHouseService {
   }
 
   async configure(config: LoggingRuntimeSettings): Promise<void> {
-    await this.client?.close();
+    await Promise.all([this.client?.close(), this.maintenanceClient?.close()]);
     this.client = null;
+    this.maintenanceClient = null;
     this.applyConfig(config);
   }
 
@@ -269,12 +272,12 @@ export class LoggingClickHouseService {
   }
 
   async flushSystemLogs(): Promise<void> {
-    if (!this.client) throw unavailable();
-    await this.client.command({ query: 'SYSTEM FLUSH LOGS', clickhouse_settings: { log_queries: 0 } });
+    if (!this.maintenanceClient) throw unavailable();
+    await this.maintenanceClient.command({ query: 'SYSTEM FLUSH LOGS', clickhouse_settings: { log_queries: 0 } });
   }
 
   async cleanInternalLogTable(table: string): Promise<void> {
-    if (!this.client) throw unavailable();
+    if (!this.maintenanceClient) throw unavailable();
     const legacyMatch = table.match(/^([a-z_]+_log)_[0-9]+$/);
     const baseTable = legacyMatch?.[1] ?? table;
     if (!MANAGED_INTERNAL_LOG_TABLES.has(baseTable)) {
@@ -282,7 +285,7 @@ export class LoggingClickHouseService {
     }
     const quotedTable = quoteClickHouseIdentifier(validateClickHouseIdentifier(table));
     const operation = legacyMatch ? 'DROP TABLE IF EXISTS' : 'TRUNCATE TABLE IF EXISTS';
-    await this.client.command({
+    await this.maintenanceClient.command({
       query: `${operation} ${quoteClickHouseIdentifier('system')}.${quotedTable}`,
       clickhouse_settings: { log_queries: 0 },
     });
@@ -382,26 +385,33 @@ export class LoggingClickHouseService {
   }
 
   async close(): Promise<void> {
-    await this.client?.close();
+    await Promise.all([this.client?.close(), this.maintenanceClient?.close()]);
     this.client = null;
+    this.maintenanceClient = null;
   }
 
   private applyConfig(config: LoggingRuntimeSettings): void {
     this.database = validateClickHouseIdentifier(config.database);
     this.table = validateClickHouseIdentifier(config.table);
-    this.client =
-      config.mode === 'disabled'
-        ? null
-        : createClient({
-            url: config.url,
-            username: config.username,
-            password: config.password,
-            request_timeout: config.requestTimeoutMs,
-            clickhouse_settings: {
-              async_insert: 1,
-              wait_for_async_insert: 1,
-            },
-          });
+    if (config.mode === 'disabled') {
+      this.client = null;
+      this.maintenanceClient = null;
+      return;
+    }
+    const clientConfig = {
+      url: config.url,
+      username: config.username,
+      password: config.password,
+      clickhouse_settings: {
+        async_insert: 1 as const,
+        wait_for_async_insert: 1 as const,
+      },
+    };
+    this.client = createClient({ ...clientConfig, request_timeout: config.requestTimeoutMs });
+    this.maintenanceClient = createClient({
+      ...clientConfig,
+      request_timeout: Math.max(config.requestTimeoutMs, CLICKHOUSE_MAINTENANCE_REQUEST_TIMEOUT_MS),
+    });
   }
 }
 

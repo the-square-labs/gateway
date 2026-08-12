@@ -176,6 +176,11 @@ func TestSourceLinkManagerRotatesListenerBeforeActiveTargetCutover(t *testing.T)
 		_ = connection.Close()
 		t.Fatal("retired production listener still accepts traffic")
 	}
+	connection, err := net.DialTimeout("unix", after[0].SocketPath, 100*time.Millisecond)
+	if err != nil {
+		t.Fatalf("replacement Unix listener is not addressable after rotation: %v", err)
+	}
+	_ = connection.Close()
 }
 
 func TestSourceLinkRemovalClosesActiveConnections(t *testing.T) {

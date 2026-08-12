@@ -491,7 +491,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
             try {
               const { DaemonUpdateService } = await import('@/services/daemon-update.service.js');
               const daemonUpdateService = container.resolve(DaemonUpdateService);
-              await daemonUpdateService.clearNodeUpdateInProgressOnReconnect(claimedNodeId);
+              await daemonUpdateService.clearNodeUpdateInProgressOnReconnect(claimedNodeId, msg.register.daemonVersion);
             } catch (err) {
               logger.warn('Failed to reconcile node update lock on register', {
                 nodeId: claimedNodeId,

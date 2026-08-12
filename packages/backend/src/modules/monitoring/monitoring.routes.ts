@@ -1,9 +1,9 @@
 import { OpenAPIHono, z } from '@hono/zod-openapi';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { streamSSE } from 'hono/streaming';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { proxyHosts } from '@/db/schema/index.js';
+import { nodes, proxyHosts } from '@/db/schema/index.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { getResourceScopedIds, hasScope, hasScopeBase } from '@/lib/permissions.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
@@ -213,6 +213,14 @@ type DashboardDockerResource = {
   kind: 'container' | 'deployment';
   scopeResourceId?: string;
 };
+
+function hasNodeCapacityWarning(node: any): boolean {
+  const health = node.lastHealthReport;
+  const disk = health?.diskMounts?.find((mount: any) => mount.mountPoint === '/');
+  const memory =
+    health?.systemMemoryTotalBytes > 0 ? (health.systemMemoryUsedBytes / health.systemMemoryTotalBytes) * 100 : 0;
+  return Boolean(health && (health.cpuPercent >= 80 || memory >= 80 || disk?.usagePercent >= 80));
+}
 
 /**
  * Keep the scope calculation shared with the legacy stats endpoint while the
@@ -536,6 +544,20 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     tlsRepairFailuresPromise,
   ]);
   const now = Date.now();
+  const nodeCardIds = nodeResponse.data
+    .filter((node: any) => dashboardPinNodeIds.includes(node.id) || hasNodeCapacityWarning(node))
+    .map((node: any) => node.id);
+  const nodeHealthRows =
+    nodeCardIds.length > 0
+      ? await (container.resolve(TOKENS.DrizzleClient) as DrizzleClient)
+          .select({ id: nodes.id, healthHistory: nodes.healthHistory })
+          .from(nodes)
+          .where(inArray(nodes.id, nodeCardIds))
+      : [];
+  const nodeHealthById = new Map(nodeHealthRows.map((row) => [row.id, row.healthHistory ?? []]));
+  const dashboardNodes = nodeResponse.data.map((node: any) =>
+    nodeHealthById.has(node.id) ? { ...node, healthHistory: nodeHealthById.get(node.id) } : node
+  );
   const expiring = [
     ...sslResponse.data
       .filter(
@@ -589,13 +611,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
         inferenceUsage.subscription['30d'],
       ].some((window) => window.configured && 100 - window.percentage < 20)
     : false;
-  const nodeCapacityWarning = nodeResponse.data.some((node: any) => {
-    const health = node.lastHealthReport;
-    const disk = health?.diskMounts?.find((mount: any) => mount.mountPoint === '/');
-    const memory =
-      health?.systemMemoryTotalBytes > 0 ? (health.systemMemoryUsedBytes / health.systemMemoryTotalBytes) * 100 : 0;
-    return health && (health.cpuPercent >= 80 || memory >= 80 || disk?.usagePercent >= 80);
-  });
+  const nodeCapacityWarning = dashboardNodes.some(hasNodeCapacityWarning);
   const nodeHealthWarning = nodeResponse.data.some((node: any) =>
     ['offline', 'error', 'degraded'].includes(node.status)
   );
@@ -643,7 +659,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
       ? [{ id: 'finalize-setup', severity: 'info' as const }]
       : []),
   ];
-  const visibleNodes = new Map(nodeResponse.data.map((node: any) => [node.id, node]));
+  const visibleNodes = new Map(dashboardNodes.map((node: any) => [node.id, node]));
   const visibleProxies = new Map(pinnedProxyResponse.data.map((proxy: any) => [proxy.id, proxy]));
   const visibleDatabases = new Map(pinnedDatabaseResponse.data.map((database: any) => [database.id, database]));
   const nodeSlugs = new Map(nodeResponse.data.map((node: any) => [node.id, node.slug]));
@@ -674,7 +690,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
         nodes: canViewNodes ? stats.nodes : { total: 0, online: 0, offline: 0, pending: 0 },
       },
       health,
-      nodes: nodeResponse.data,
+      nodes: dashboardNodes,
       expiring,
       cas,
       activity,

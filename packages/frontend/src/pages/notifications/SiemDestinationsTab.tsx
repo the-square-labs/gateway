@@ -13,6 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
@@ -301,7 +302,9 @@ export function SiemDestinationsTab({
 
   return (
     <div className="space-y-4">
-      {isLoading || destinations.length > 0 ? (
+      {isLoading && destinations.length === 0 ? (
+        <Skeleton />
+      ) : destinations.length > 0 ? (
         <div className="border border-border bg-card">
           <SimpleTable
             columns={columns}

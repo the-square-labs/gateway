@@ -18,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
 import { daysUntil, formatDate } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth";
@@ -269,7 +270,9 @@ export function Certificates() {
         />
 
         {/* Table */}
-        {isLoading || (certificates || []).length > 0 ? (
+        {isLoading && (certificates || []).length === 0 ? (
+          <Skeleton />
+        ) : (certificates || []).length > 0 ? (
           <div className="min-h-0 shrink">
             <DataTable
               columns={certificateColumns}

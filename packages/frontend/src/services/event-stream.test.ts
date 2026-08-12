@@ -202,6 +202,50 @@ describe("eventStream", () => {
     unsubscribe();
   });
 
+  it("invalidates request and warmed projection namespaces for session-wide events", async () => {
+    const { eventStream } = await import("@/services/event-stream");
+    const unsubs = [
+      eventStream.subscribe("notification.alert-rule.changed", vi.fn()),
+      eventStream.subscribe("notification.webhook.changed", vi.fn()),
+      eventStream.subscribe("logging.environment.changed", vi.fn()),
+      eventStream.subscribe("logging.schema.changed", vi.fn()),
+      eventStream.subscribe("system.relay.health.changed", vi.fn()),
+      eventStream.subscribe("database.folder.changed", vi.fn()),
+      eventStream.subscribe("inference.catalog.changed", vi.fn()),
+    ];
+    eventStream.start();
+    vi.runAllTimers();
+    const socket = MockWebSocket.instances[0];
+    socket?.open();
+
+    socket?.emit({ type: "event", channel: "notification.alert-rule.changed", payload: {} });
+    socket?.emit({ type: "event", channel: "notification.webhook.changed", payload: {} });
+    socket?.emit({ type: "event", channel: "logging.environment.changed", payload: {} });
+    socket?.emit({ type: "event", channel: "logging.schema.changed", payload: {} });
+    socket?.emit({ type: "event", channel: "system.relay.health.changed", payload: {} });
+    socket?.emit({ type: "event", channel: "database.folder.changed", payload: {} });
+    socket?.emit({ type: "event", channel: "inference.catalog.changed", payload: {} });
+
+    for (const prefix of [
+      "req:/api/notifications/alert-rules",
+      "notifications:alerts",
+      "req:/api/notifications/webhooks",
+      "notifications:webhooks",
+      "req:/api/logging/environments",
+      "logging:environments",
+      "req:/api/logging/schemas",
+      "logging:schemas",
+      "req:/api/system/relay",
+      "relay:",
+      "req:/api/databases",
+      "databases:list",
+      "req:/api/inference",
+    ]) {
+      expect(invalidateCache).toHaveBeenCalledWith(prefix);
+    }
+    unsubs.forEach((unsubscribe) => unsubscribe());
+  });
+
   it("notifies reconnect listeners only after the first connection", async () => {
     const { eventStream } = await import("@/services/event-stream");
     const onReconnect = vi.fn();
@@ -216,6 +260,25 @@ describe("eventStream", () => {
     MockWebSocket.instances[1]?.open();
 
     expect(onReconnect).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it("retains session subscriptions and reissues them after reconnect", async () => {
+    const { eventStream } = await import("@/services/event-stream");
+    const unsubscribe = eventStream.subscribe("logging.environment.changed", vi.fn());
+    eventStream.start();
+    vi.runAllTimers();
+    MockWebSocket.instances[0]?.open();
+    expect(MockWebSocket.instances[0]?.sent).toContain(
+      JSON.stringify({ type: "subscribe", channels: ["logging.environment.changed"] })
+    );
+
+    MockWebSocket.instances[0]?.onclose?.({});
+    await vi.advanceTimersByTimeAsync(1_000);
+    MockWebSocket.instances[1]?.open();
+    expect(MockWebSocket.instances[1]?.sent).toContain(
+      JSON.stringify({ type: "subscribe", channels: ["logging.environment.changed"] })
+    );
     unsubscribe();
   });
 

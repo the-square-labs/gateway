@@ -19,13 +19,20 @@ interface AccessListsState {
 export const useAccessListsStore = create<AccessListsState>()((set, get) => ({
   accessLists: [],
   selectedAccessList: null,
-  isLoading: false,
+  isLoading: true,
   error: null,
 
   fetchAccessLists: async () => {
-    set({ isLoading: true, error: null });
+    const cached =
+      api.getCached<Awaited<ReturnType<typeof api.listAccessLists>>>("access-lists:list");
+    const hasCachedSnapshot = cached !== undefined;
+    if (cached && get().accessLists.length === 0) {
+      set({ accessLists: cached.data || [] });
+    }
+    set({ isLoading: !hasCachedSnapshot && get().accessLists.length === 0, error: null });
     try {
       const response = await api.listAccessLists();
+      api.setCache("access-lists:list", response);
       set({ accessLists: response.data || [], isLoading: false });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to fetch access lists";

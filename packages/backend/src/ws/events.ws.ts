@@ -15,6 +15,7 @@ import {
   INFERENCE_USAGE_CHANGED_CHANNEL,
   type InferenceUsageChangedEvent,
 } from '@/modules/inference/accounting/inference-usage-events.js';
+import { INFERENCE_SETUP_EVENT_CHANNEL } from '@/modules/inference/inference-setup-events.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
 
@@ -111,6 +112,7 @@ function requiredScopeFor(channel: string): string | null {
   if (channel === 'group.changed') return 'admin:groups';
   if (channel === 'notification.alert-rule.changed') return 'notifications:view';
   if (channel === 'notification.webhook.changed') return 'notifications:view';
+  if (channel === INFERENCE_SETUP_EVENT_CHANNEL) return 'inference:use';
   if (channel === 'integration.connector.changed') return 'integrations:gitlab:view';
   if (channel === INFERENCE_USAGE_CHANGED_CHANNEL) return 'inference:usage:view:self';
   if (channel.startsWith('alert.')) return 'notifications:view';
@@ -203,6 +205,32 @@ function hasChannelAccess(scopes: string[], channel: string): boolean {
   if (channel === 'node.slug.changed') {
     return hasScopeBase(scopes, 'nodes:details') || hasAnyDockerNodeRouteAccess(scopes);
   }
+  if (channel === 'node.changed') {
+    return hasScopeBase(scopes, 'nodes:details') || hasAnyDockerNodeRouteAccess(scopes);
+  }
+  if (channel === 'notification.alert-rule.changed') {
+    return (
+      hasScope(scopes, 'notifications:alerts:view') ||
+      hasScope(scopes, 'notifications:view') ||
+      hasScope(scopes, 'notifications:manage')
+    );
+  }
+  if (channel === 'notification.webhook.changed') {
+    return (
+      hasScope(scopes, 'notifications:webhooks:view') ||
+      hasScope(scopes, 'notifications:view') ||
+      hasScope(scopes, 'notifications:manage')
+    );
+  }
+  if (channel === INFERENCE_SETUP_EVENT_CHANNEL) {
+    return (
+      hasScope(scopes, 'inference:use') ||
+      hasScope(scopes, 'inference:providers:view') ||
+      hasScope(scopes, 'inference:models:manage') ||
+      hasScope(scopes, 'inference:limits:manage') ||
+      hasScope(scopes, 'feat:ai:configure')
+    );
+  }
   if (channel === 'logging.logs.ingested') {
     return hasScopeBase(scopes, 'logs:read');
   }
@@ -273,6 +301,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     const event = payload as Partial<InferenceUsageChangedEvent> | undefined;
     return event?.targetUserId === null || event?.targetUserId === userId;
   }
+  if (channel === INFERENCE_SETUP_EVENT_CHANNEL) return hasChannelAccess(scopes, channel);
   if (channel === 'docker.snapshot.changed') {
     const event = payload as { nodeId?: string; kind?: string } | undefined;
     if (!event?.nodeId || !event.kind) return false;
@@ -428,7 +457,10 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
   }
   if (channel === 'node.changed') {
     const nodeId = (payload as { id?: string } | undefined)?.id;
-    return hasScope(scopes, 'nodes:details') || !!(nodeId && hasScope(scopes, `nodes:details:${nodeId}`));
+    return (
+      hasScope(scopes, 'nodes:details') ||
+      !!(nodeId && (hasScope(scopes, `nodes:details:${nodeId}`) || hasDockerNodeRouteAccess(scopes, nodeId)))
+    );
   }
   if (channel === 'node.folder.changed') {
     return hasScope(scopes, 'nodes:details') || hasScope(scopes, 'nodes:folders:manage');

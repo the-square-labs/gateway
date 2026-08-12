@@ -797,6 +797,14 @@ export function Databases({
     void load();
   }, [load]);
 
+  useRealtime("database.changed", () => {
+    void load();
+  });
+
+  useRealtime("database.folder.changed", () => {
+    void load();
+  });
+
   useRealtime(hasScopedAccess("nodes:details") ? "node.changed" : null, () => {
     void api
       .listNodes({ type: "databases", limit: 100 })

@@ -5,6 +5,12 @@ vi.mock('@/db/schema/access-lists.js', () => ({ accessLists: { id: 'access_lists
 vi.mock('@/db/schema/certificates.js', () => ({ certificates: { id: 'certificates.id' } }));
 vi.mock('@/db/schema/ssl-certificates.js', () => ({ sslCertificates: { id: 'ssl_certificates.id' } }));
 vi.mock('@/db/schema/index.js', () => ({
+  nodes: {
+    id: 'nodes.id',
+    hostname: 'nodes.hostname',
+    displayName: 'nodes.display_name',
+    status: 'nodes.status',
+  },
   proxyHosts: {
     id: 'proxy_hosts.id',
     enabled: 'proxy_hosts.enabled',
@@ -72,6 +78,57 @@ function makeActiveSecureHost(overrides: Record<string, unknown> = {}) {
 }
 
 describe('ProxyService legacy Docker link compatibility', () => {
+  it('returns cached Link Runtime telemetry without waiting for a focused live sample', async () => {
+    const runtime = {
+      routeId: 'route-1',
+      activeStreams: 1,
+      openedTotal: '3',
+      completedTotal: '2',
+      failedTotal: '0',
+      throttledTotal: '0',
+      sourceToTargetBytes: '100',
+      targetToSourceBytes: '200',
+      setupLatencyP95Ms: 1,
+      averageDurationMs: 2,
+      lastActivityAt: '2026-08-12T00:00:00.000Z',
+      metricsSince: '2026-08-11T23:00:00.000Z',
+    };
+    const history = [{ timestamp: '2026-08-12T00:00:00.000Z', runtime, traffic: null }];
+    const host = makeActiveSecureHost();
+    const db = {
+      query: { proxyHosts: { findFirst: vi.fn().mockResolvedValue(host) } },
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([
+            { id: 'nginx-node', hostname: 'nginx', displayName: null, status: 'online' },
+            { id: 'docker-a', hostname: 'docker', displayName: null, status: 'online' },
+          ]),
+        }),
+      }),
+    } as any;
+    const cache = { get: vi.fn().mockResolvedValue(history), set: vi.fn().mockResolvedValue(undefined) };
+    const service = new ProxyService(
+      db,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      cache as any
+    );
+    const focusedSample = new Promise(() => undefined);
+    const sample = vi.spyOn(service as any, 'sampleSecureLinkRuntime').mockReturnValue(focusedSample);
+
+    const status = await service.getProxySecureLinkStatus(host.id);
+
+    expect(status.runtime).toEqual(runtime);
+    expect(status.history).toEqual(history);
+    expect(cache.get).toHaveBeenCalledWith(`proxy-secure-link-runtime:${host.id}`);
+    expect(sample).toHaveBeenCalledWith(host, 10_000);
+  });
+
   it('collects runtime history in the background and coalesces overlapping rounds', async () => {
     let releaseRuntime!: (value: Record<string, unknown>) => void;
     const runtimePending = new Promise<Record<string, unknown>>((resolve) => {
@@ -120,6 +177,25 @@ describe('ProxyService legacy Docker link compatibility', () => {
     await first;
 
     expect((service as any).secureLinkRuntimeHistory.get('host-1')).toHaveLength(1);
+  });
+
+  it('does not compete with Docker reconciliation for daemon telemetry commands', async () => {
+    const findMany = vi.fn();
+    const service = new ProxyService(
+      { query: { proxyHosts: { findMany } } } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any
+    );
+    (service as any).dockerReconcileRunning = true;
+
+    await service.collectSecureLinkRuntimeSnapshots();
+
+    expect(findMany).not.toHaveBeenCalled();
   });
 
   it('keeps a bounded backend runtime history and resets it on a Relay epoch change', () => {

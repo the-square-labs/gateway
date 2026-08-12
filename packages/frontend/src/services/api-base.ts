@@ -1,6 +1,12 @@
 import { useAppStatusStore } from "@/stores/app-status";
 import { useAuthStore } from "@/stores/auth";
 import type { ApiError } from "@/types";
+import {
+  clearPersistentCacheScope,
+  deletePersistentCachePrefix,
+  loadPersistentCache,
+  persistCacheEntry,
+} from "./persistent-api-cache";
 
 const API_BASE = "/api";
 
@@ -128,6 +134,11 @@ function getLoginRedirectUrl(): string {
 export class ApiClientBase {
   protected cache = new Map<string, CacheEntry>();
   private readonly cacheInflight = new Map<string, Promise<unknown>>();
+  private cacheEpoch = 0;
+  private readonly prefixEpochs = new Map<string, number>();
+  private persistentHydrationEpoch = 0;
+  private persistentCacheScope: string | null = null;
+  private persistentCacheHydration: Promise<void> | null = null;
   private csrfToken: string | null = null;
   private sessionGeneration = 0;
 
@@ -138,6 +149,18 @@ export class ApiClientBase {
         code: "SESSION_CHANGED",
       });
     }
+  }
+
+  private cacheVersion(key: string): string {
+    let version = `${this.cacheEpoch}`;
+    for (const [prefix, epoch] of this.prefixEpochs) {
+      if (key.startsWith(prefix)) version += `:${prefix}:${epoch}`;
+    }
+    return version;
+  }
+
+  private setCacheIfCurrent<T>(key: string, version: string, data: T): void {
+    if (this.cacheVersion(key) === version) this.setCache(key, data);
   }
 
   /** Get cached data if fresh enough. */
@@ -154,24 +177,72 @@ export class ApiClientBase {
   /** Store data in cache. */
   setCache<T>(key: string, data: T): void {
     this.cache.set(key, { data, timestamp: Date.now() });
+    if (this.persistentCacheScope) {
+      void persistCacheEntry(this.persistentCacheScope, key, data).catch(() => {});
+    }
+  }
+
+  async hydratePersistentCache(scope: string): Promise<void> {
+    if (this.persistentCacheScope === scope && this.persistentCacheHydration) {
+      return this.persistentCacheHydration;
+    }
+    this.persistentCacheScope = scope;
+    const hydrationEpoch = this.persistentHydrationEpoch;
+    const hydration = loadPersistentCache(scope)
+      .then((entries) => {
+        if (this.persistentCacheScope !== scope || this.persistentHydrationEpoch !== hydrationEpoch)
+          return;
+        const hydratedAt = Date.now();
+        for (const entry of entries) {
+          if (!this.cache.has(entry.key)) {
+            // IndexedDB already enforced its longer durable TTL. Treat the
+            // restored value as a fresh in-memory stale snapshot so route
+            // consumers using the normal one-minute TTL can render it.
+            this.cache.set(entry.key, { data: entry.data, timestamp: hydratedAt });
+          }
+        }
+      })
+      .catch(() => {});
+    this.persistentCacheHydration = hydration;
+    return hydration;
   }
 
   /** Invalidate a specific cache key or prefix. */
   invalidateCache(prefix?: string): void {
+    this.persistentHydrationEpoch += 1;
     if (!prefix) {
       this.cache.clear();
+      this.cacheInflight.clear();
+      this.cacheEpoch += 1;
+      if (this.persistentCacheScope) {
+        void deletePersistentCachePrefix(this.persistentCacheScope).catch(() => {});
+      }
       return;
     }
+    this.prefixEpochs.set(prefix, (this.prefixEpochs.get(prefix) ?? 0) + 1);
     for (const key of this.cache.keys()) {
       if (key.startsWith(prefix)) this.cache.delete(key);
+    }
+    for (const key of this.cacheInflight.keys()) {
+      if (key.startsWith(prefix)) this.cacheInflight.delete(key);
+    }
+    if (this.persistentCacheScope) {
+      void deletePersistentCachePrefix(this.persistentCacheScope, prefix).catch(() => {});
     }
   }
 
   resetSessionState(): void {
+    const previousScope = this.persistentCacheScope;
     this.cache.clear();
     this.cacheInflight.clear();
+    this.cacheEpoch += 1;
+    this.prefixEpochs.clear();
+    this.persistentHydrationEpoch += 1;
     this.csrfToken = null;
+    this.persistentCacheScope = null;
+    this.persistentCacheHydration = null;
     this.sessionGeneration += 1;
+    if (previousScope) void clearPersistentCacheScope(previousScope).catch(() => {});
   }
 
   /**
@@ -184,6 +255,7 @@ export class ApiClientBase {
     ttl = DEFAULT_CACHE_TTL
   ): Promise<T> {
     const generation = this.sessionGeneration;
+    const version = this.cacheVersion(key);
     const cached = this.getCached<T>(key, ttl);
     const existing = this.cacheInflight.get(key) as Promise<T> | undefined;
     const fresh =
@@ -192,7 +264,7 @@ export class ApiClientBase {
         const request = fetcher()
           .then((data) => {
             this.assertSessionGeneration(generation);
-            this.setCache(key, data);
+            this.setCacheIfCurrent(key, version, data);
             return data;
           })
           .finally(() => {
@@ -398,12 +470,13 @@ export class ApiClientBase {
     if (method === "GET") {
       const generation = this.sessionGeneration;
       const cacheKey = `req:${url}`;
+      const version = this.cacheVersion(cacheKey);
       const existing = this.cacheInflight.get(cacheKey) as Promise<T> | undefined;
       if (existing) return existing;
       const request = this.fetchRaw<T>(url, options)
         .then((data) => {
           this.assertSessionGeneration(generation);
-          this.setCache(cacheKey, data);
+          this.setCacheIfCurrent(cacheKey, version, data);
           return data;
         })
         .finally(() => {
@@ -415,9 +488,10 @@ export class ApiClientBase {
 
     // Non-GET: invalidate cached GET requests for this endpoint path
     const basePath = url.split("?")[0];
-    for (const key of this.cache.keys()) {
+    const requestKeys = new Set([...this.cache.keys(), ...this.cacheInflight.keys()]);
+    for (const key of requestKeys) {
       if (key.startsWith("req:") && key.includes(basePath.replace(/\/[^/]+$/, ""))) {
-        this.cache.delete(key);
+        this.invalidateCache(key);
       }
     }
     return this.fetchRaw<T>(url, options);

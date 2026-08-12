@@ -4,7 +4,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import { nodes } from '@/db/schema/nodes.js';
 import { settings } from '@/db/schema/settings.js';
 import { createChildLogger } from '@/lib/logger.js';
-import { compareSemver, isNewerVersion } from '@/lib/semver.js';
+import { compareSemver, isNewerVersion, parseSemver } from '@/lib/semver.js';
 import {
   normalizeGitLabApiUrl,
   type TrustedDaemonUpdateArtifact,
@@ -226,12 +226,19 @@ export class DaemonUpdateService {
     this.emitNodeUpdated(nodeId);
   }
 
-  async clearNodeUpdateInProgressOnReconnect(nodeId: string): Promise<boolean> {
+  async clearNodeUpdateInProgressOnReconnect(nodeId: string, reportedVersion: string): Promise<boolean> {
     const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
     if (!node) return false;
 
     const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
     if (metadata.updateInProgress !== true) return false;
+
+    const targetVersion = metadata.updateTargetVersion;
+    if (typeof targetVersion === 'string' && targetVersion.length > 0) {
+      const reported = parseSemver(reportedVersion);
+      const target = parseSemver(targetVersion);
+      if (!reported || !target || compareSemver(reportedVersion, targetVersion) < 0) return false;
+    }
 
     delete metadata.updateInProgress;
     delete metadata.updateTargetVersion;

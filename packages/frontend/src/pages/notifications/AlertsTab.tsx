@@ -13,6 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
@@ -248,7 +249,9 @@ export function AlertsTab({
       <p className="text-sm text-muted-foreground">
         Alerts define conditions that trigger notifications to webhooks.
       </p>
-      {isLoading || visibleRules.length > 0 ? (
+      {isLoading && visibleRules.length === 0 ? (
+        <Skeleton />
+      ) : visibleRules.length > 0 ? (
         <div className="border border-border bg-card">
           <SimpleTable
             columns={columns}

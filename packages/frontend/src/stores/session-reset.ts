@@ -26,11 +26,11 @@ export function resetClientSessionState() {
   useUIStore.getState().beginInterfacePreferenceLoad();
   useUIStore.setState({ aiPanelOpen: false });
 
-  useCAStore.setState({ cas: [], selectedCA: null, isLoading: false, error: null });
+  useCAStore.setState({ cas: [], selectedCA: null, isLoading: true, error: null });
   useCertificatesStore.setState({
     certificates: [],
     selectedCertificate: null,
-    isLoading: false,
+    isLoading: true,
     isLoadingMore: false,
     error: null,
     filters: { search: "", status: "active", type: "all", caId: "all" },
@@ -41,7 +41,7 @@ export function resetClientSessionState() {
   useSSLStore.setState({
     certificates: [],
     selectedCert: null,
-    isLoading: false,
+    isLoading: true,
     isLoadingMore: false,
     error: null,
     filters: { search: "", type: "all", status: "active" },
@@ -70,7 +70,7 @@ export function resetClientSessionState() {
   useAccessListsStore.setState({
     accessLists: [],
     selectedAccessList: null,
-    isLoading: false,
+    isLoading: true,
     error: null,
   });
   useDockerStore.setState({

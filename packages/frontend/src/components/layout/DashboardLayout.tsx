@@ -1,6 +1,6 @@
 import { Menu } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 import { AIButton } from "@/components/ai/AIButton";
 import { AILitePanel } from "@/components/ai/AILitePanel";
 import { AILiteSidebar } from "@/components/ai/AILiteSidebar";
@@ -15,15 +15,16 @@ import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { PageTransition } from "@/components/common/PageTransition";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { keyboardNavigationRoutes, visibleNavigationGroups } from "@/lib/app-navigation";
+import { useStableNavigate } from "@/hooks/use-stable-navigate";
+import { keyboardNavigationRoutes } from "@/lib/app-navigation";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
 import { isCompactPanelsViewport } from "@/lib/responsive-panels";
 import { ConfigureAIWorkspaceWizard } from "@/pages/dashboard/finalize-setup/ConfigureAIWorkspaceWizard";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
+import type { BackgroundPrewarmTask } from "@/services/background-prewarm";
 import { useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
@@ -49,133 +50,9 @@ export function resolveInterfaceTransition(
   return { path: null, aiPanelOpen: null };
 }
 
-/**
- * Authentication has already determined the user before this renders. Keep a
- * stable application frame while the permission-filtered shell projection is
- * warming instead of replacing the entire UI with a spinner.
- */
-function ApplicationShellSkeleton({
-  scopes,
-  pathname,
-}: {
-  scopes: readonly string[];
-  pathname: string;
-}) {
-  const navigationGroups = visibleNavigationGroups({
-    scopes,
-    // Feature values are not available until the typed shell resolves. These
-    // are deliberately optimistic only for skeleton geometry; actual links
-    // still render solely from the server-provided feature projection.
-    pkiEnabled: true,
-    siemEnabled: true,
-    loggingEnabled: true,
-    inferenceEnabled: true,
-    statusPageEnabled: true,
-    hasNginxNodes: true,
-    hasCloudflareIntegration: true,
-    hasDockerNodes: true,
-  });
-  const isSettings = pathname.startsWith("/settings");
-  const isProfile = pathname.startsWith("/profile");
-  const isDetail = /\/(?:nodes|proxy-hosts|certificates|cas|databases|docker)\/[^/]+/.test(
-    pathname
-  );
-
+function ApplicationShellSkeleton(_props: { scopes: readonly string[]; pathname: string }) {
   return (
-    <div
-      className="flex h-screen overflow-hidden bg-background"
-      aria-busy="true"
-      aria-label="Loading application"
-    >
-      <aside className="hidden h-full w-[260px] shrink-0 border-r border-sidebar-border bg-sidebar-background md:block">
-        <div className="border-b border-sidebar-border px-4 py-5">
-          <Skeleton className="h-6 w-32" />
-        </div>
-        <div className="space-y-3 px-3 py-4">
-          {navigationGroups.map((group) => (
-            <div key={group.id} className="space-y-1">
-              <Skeleton className="mx-2 h-3 w-16" />
-              {group.items.map((item, index) => (
-                <div key={item.id} className="flex items-center gap-3 px-2 py-2">
-                  <Skeleton className="h-4 w-4 shrink-0" />
-                  <Skeleton className={index === 0 ? "h-4 w-24" : "h-4 w-32"} />
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      </aside>
-      <main className="min-w-0 flex-1 overflow-hidden p-6">
-        <div className="mb-4 flex h-8 items-center md:hidden">
-          <Skeleton className="h-10 w-10" />
-          <Skeleton className="ml-3 h-5 w-28" />
-        </div>
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="mt-3 h-4 w-72" />
-        {isSettings || isProfile ? (
-          <>
-            <div className="mt-6 flex gap-2 border-b border-border pb-3">
-              {Array.from({ length: isSettings ? 4 : 3 }, (_, index) => (
-                <Skeleton key={index} className="h-8 w-28" />
-              ))}
-            </div>
-            <div className="mt-4 space-y-4">
-              {Array.from({ length: 2 }, (_, index) => (
-                <div key={index} className="min-h-40 border border-border bg-card p-5">
-                  <Skeleton className="h-5 w-36" />
-                  <Skeleton className="mt-3 h-4 w-64" />
-                  <div className="mt-6 space-y-3">
-                    {[0, 1, 2].map((row) => (
-                      <Skeleton key={row} className="h-9 w-full" />
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        ) : isDetail ? (
-          <>
-            <div className="mt-6 flex gap-2 border-b border-border pb-3">
-              {Array.from({ length: 4 }, (_, index) => (
-                <Skeleton key={index} className="h-8 w-24" />
-              ))}
-            </div>
-            <div className="mt-4 min-h-72 border border-border bg-card p-5">
-              <Skeleton className="h-5 w-40" />
-              <div className="mt-6 space-y-4">
-                {[0, 1, 2, 3].map((row) => (
-                  <Skeleton key={row} className="h-12 w-full" />
-                ))}
-              </div>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              {Array.from({ length: 4 }, (_, index) => (
-                <div key={index} className="min-h-32 border border-border bg-card p-5">
-                  <Skeleton className="h-4 w-24" />
-                  <Skeleton className="mt-5 h-8 w-16" />
-                  <Skeleton className="mt-4 h-3 w-28" />
-                </div>
-              ))}
-            </div>
-            <div className="mt-6 grid gap-6 xl:grid-cols-2">
-              {Array.from({ length: 2 }, (_, index) => (
-                <div key={index} className="min-h-64 border border-border bg-card p-5">
-                  <Skeleton className="h-5 w-32" />
-                  <div className="mt-6 space-y-4">
-                    {[0, 1, 2].map((row) => (
-                      <Skeleton key={row} className="h-12 w-full" />
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-      </main>
-    </div>
+    <div className="h-screen bg-background" aria-busy="true" aria-label="Loading application" />
   );
 }
 
@@ -193,9 +70,12 @@ function readSidebarWidth(): number {
 }
 
 export function DashboardLayout() {
-  const navigate = useNavigate();
+  const navigate = useStableNavigate();
   const { isAuthenticated, isLoading, setUser, setLoading, logout } = useAuthStore();
   const currentUser = useAuthStore((state) => state.user);
+  const authAccessKey = currentUser
+    ? `${currentUser.id}\u0000${[...currentUser.scopes].sort().join("\u0000")}`
+    : null;
   const {
     isMobile,
     setIsMobile,
@@ -370,10 +250,11 @@ export function DashboardLayout() {
 
   useEffect(() => {
     let cancelled = false;
+    const prewarmController = new AbortController();
 
     const checkAuth = async () => {
       try {
-        const existingUser = currentUser ?? useAuthStore.getState().user;
+        const existingUser = useAuthStore.getState().user;
         const user = existingUser ?? (await api.getCurrentUser());
         if (cancelled) return;
         if (user.isBlocked) {
@@ -383,6 +264,12 @@ export function DashboardLayout() {
           return;
         }
         if (!existingUser) setUser(user);
+        // Durable route caches are namespaced by the same identity and sorted
+        // access set that the backend uses for its UI access fingerprint.
+        await api.hydratePersistentCache(
+          authAccessKey ?? `${user.id}\u0000${[...user.scopes].sort().join("\u0000")}`
+        );
+        if (cancelled) return;
         // Scopes are now known. The shell can render permission-safe skeleton
         // geometry while its read model fills in, rather than retaining the
         // anonymous loading state for a database/cache request.
@@ -395,6 +282,36 @@ export function DashboardLayout() {
           // the next focus/realtime invalidation retries the projection.
           setSystemConfigReady(true);
         }
+        const hasAdminScopes = user.scopes.some((scope) => scope.startsWith("admin:"));
+        const docker = useDockerStore.getState();
+        const extraTasks: BackgroundPrewarmTask[] = [];
+        const addDockerTask = (allowed: boolean, key: string, run: () => Promise<unknown>) => {
+          if (allowed) extraTasks.push({ key, run });
+        };
+        addDockerTask(
+          useAuthStore.getState().hasScopedAccess("docker:containers:view"),
+          "docker-containers",
+          () => docker.fetchContainers(null, "", shell?.navigation.dockerNodes)
+        );
+        addDockerTask(
+          useAuthStore.getState().hasScopedAccess("docker:images:view"),
+          "docker-images",
+          () => docker.fetchImages(null, "", shell?.navigation.dockerNodes)
+        );
+        addDockerTask(
+          useAuthStore.getState().hasScopedAccess("docker:volumes:view"),
+          "docker-volumes",
+          () => docker.fetchVolumes(null, "", shell?.navigation.dockerNodes)
+        );
+        addDockerTask(
+          useAuthStore.getState().hasScopedAccess("docker:networks:view"),
+          "docker-networks",
+          () => docker.fetchNetworks(null, "", shell?.navigation.dockerNodes)
+        );
+        addDockerTask(useAuthStore.getState().hasScopedAccess("docker:tasks"), "docker-tasks", () =>
+          docker.fetchTasks(null)
+        );
+        void api.prefetchAll(hasAdminScopes, prewarmController.signal, extraTasks);
       } catch (error) {
         if (error instanceof ApiRequestError && error.status === 401) {
           logout();
@@ -408,8 +325,9 @@ export function DashboardLayout() {
     void checkAuth();
     return () => {
       cancelled = true;
+      prewarmController.abort();
     };
-  }, [currentUser, loadUIBootstrap, logout, navigate, setLoading, setUser]);
+  }, [authAccessKey, loadUIBootstrap, logout, navigate, setLoading, setUser]);
 
   useEffect(() => {
     const checkMobile = () => {

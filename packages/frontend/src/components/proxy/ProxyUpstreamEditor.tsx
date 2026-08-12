@@ -1,4 +1,4 @@
-import { Save } from "lucide-react";
+import { Loader2, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
@@ -476,8 +476,12 @@ export function ProxyUpstreamPanel({
             onClick={save}
             disabled={!changed || !isProxyUpstreamValid(selection) || saving}
           >
-            <Save className="h-3.5 w-3.5" />
-            Save
+            {saving ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Save className="h-3.5 w-3.5" />
+            )}
+            {saving ? "Saving..." : "Save"}
           </Button>
         ) : null
       }

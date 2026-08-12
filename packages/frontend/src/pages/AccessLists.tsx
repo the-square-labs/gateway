@@ -31,6 +31,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
@@ -297,7 +298,9 @@ export function AccessLists() {
         </div>
 
         {/* Table */}
-        {isLoading || accessLists.length > 0 ? (
+        {isLoading && accessLists.length === 0 ? (
+          <Skeleton />
+        ) : accessLists.length > 0 ? (
           <div className="border border-border bg-card">
             <SimpleTable
               columns={accessListColumns}

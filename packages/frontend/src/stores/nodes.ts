@@ -43,7 +43,26 @@ export const useNodesStore = create<NodesState>()((set, get) => ({
   fetchNodes: async () => {
     const requestId = ++fetchNodesRequestId;
     const { filters, page, limit } = get();
-    const hasData = get().nodes.length > 0;
+    const isDefaultQuery =
+      filters.search === "" && filters.status === "all" && filters.type === "all" && page === 1;
+    const cached = isDefaultQuery
+      ? api.getCached<{
+          data: Node[];
+          total: number;
+          page: number;
+          limit: number;
+          totalPages: number;
+        }>("nodes:list:default")
+      : undefined;
+    if (cached) {
+      set({
+        nodes: cached.data,
+        total: cached.total,
+        totalPages: cached.totalPages,
+        isLoading: false,
+      });
+    }
+    const hasData = cached !== undefined || get().nodes.length > 0;
     set({ isLoading: !hasData, error: null });
     try {
       const result = await api.listNodes({
@@ -54,6 +73,7 @@ export const useNodesStore = create<NodesState>()((set, get) => ({
         limit,
       });
       if (requestId !== fetchNodesRequestId) return;
+      if (isDefaultQuery) api.setCache("nodes:list:default", result);
       set({
         nodes: result.data,
         total: result.total,

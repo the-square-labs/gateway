@@ -18,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
 import { daysUntil, formatDate } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth";
@@ -251,7 +252,9 @@ export function CAs() {
         />
 
         {/* Table */}
-        {isLoading || visibleCAs.length > 0 ? (
+        {isLoading && visibleCAs.length === 0 ? (
+          <Skeleton />
+        ) : visibleCAs.length > 0 ? (
           <div className="min-h-0 shrink overflow-auto border border-border bg-card">
             <SimpleTable
               columns={caColumns}

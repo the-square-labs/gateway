@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
 import { INFERENCE_USAGE_CHANGED_CHANNEL } from '@/modules/inference/accounting/inference-usage-events.js';
+import { INFERENCE_SETUP_EVENT_CHANNEL } from '@/modules/inference/inference-setup-events.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
 
@@ -134,6 +135,67 @@ describe('events websocket authentication', () => {
       })
     );
 
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
+  it('authorizes catalog invalidations for inference users', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({
+      user: { ...USER, scopes: ['inference:use'] },
+      effectiveScopes: ['inference:use'],
+    });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscribe', channels: [INFERENCE_SETUP_EVENT_CHANNEL] }),
+      }),
+      ws as any
+    );
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'subscribed', channels: [INFERENCE_SETUP_EVENT_CHANNEL], rejected: [] })
+    );
+    eventBus.publish(INFERENCE_SETUP_EVENT_CHANNEL, { id: 'catalog-1', type: 'catalog.changed' });
+    expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('catalog-1'));
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
+  it('uses detailed notification view scopes for their matching event channels', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({
+      user: { ...USER, scopes: ['notifications:alerts:view'] },
+      effectiveScopes: ['notifications:alerts:view'],
+    });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          type: 'subscribe',
+          channels: ['notification.alert-rule.changed', 'notification.webhook.changed'],
+        }),
+      }),
+      ws as any
+    );
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'subscribed',
+        channels: ['notification.alert-rule.changed'],
+        rejected: ['notification.webhook.changed'],
+      })
+    );
+    eventBus.publish('notification.alert-rule.changed', { id: 'alert-1', action: 'updated' });
+    expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('alert-1'));
     handlers.onClose(new Event('close'), ws as any);
   });
 
@@ -662,7 +724,7 @@ describe('events websocket authentication', () => {
     handlers.onClose(new Event('close'), ws as any);
   });
 
-  it('filters node slug changes for Docker-scoped users without exposing general node events', async () => {
+  it('filters node changes for Docker-scoped users to their Docker node', async () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);
     mocks.resolveLiveSessionUser.mockResolvedValue({
@@ -682,7 +744,7 @@ describe('events websocket authentication', () => {
     );
 
     expect(ws.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'subscribed', channels: ['node.slug.changed'], rejected: ['node.changed'] })
+      JSON.stringify({ type: 'subscribed', channels: ['node.slug.changed', 'node.changed'], rejected: [] })
     );
 
     eventBus.publish('node.slug.changed', { id: 'node-2', oldSlug: 'old-2', slug: 'new-2' });
@@ -703,7 +765,7 @@ describe('events websocket authentication', () => {
         payload: { id: 'node-1', oldSlug: 'old-1', slug: 'new-1' },
       })
     );
-    expect(ws.send).not.toHaveBeenCalledWith(
+    expect(ws.send).toHaveBeenCalledWith(
       JSON.stringify({
         type: 'event',
         channel: 'node.changed',

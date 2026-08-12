@@ -68,6 +68,38 @@ describe("ApiClientBase", () => {
     await expect(Promise.all([first, second])).resolves.toEqual([{ value: 1 }, { value: 1 }]);
   });
 
+  it("detaches invalidated GET work and does not let its late response repopulate the cache", async () => {
+    const client = new TestApiClient();
+    let resolveStale!: (response: Response) => void;
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockReturnValueOnce(
+        new Promise<Response>((resolve) => {
+          resolveStale = resolve;
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ value: 2 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      );
+
+    const stale = client.getThing();
+    client.invalidateCache("req:/api/thing");
+    await expect(client.getThing()).resolves.toEqual({ value: 2 });
+    resolveStale(
+      new Response(JSON.stringify({ value: 1 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    await expect(stale).resolves.toEqual({ value: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(client.getCached<{ value: number }>("req:/api/thing")).toEqual({ value: 2 });
+  });
+
   it("invalidates cached GET entries after a mutation", async () => {
     const client = new TestApiClient();
     const fetchMock = vi
@@ -172,6 +204,21 @@ describe("ApiClientBase", () => {
     await expect(client.cachedRequest("custom:key", refreshFetcher)).resolves.toEqual({ value: 4 });
     await expect(client.cachedRequest("custom:key", refreshFetcher)).resolves.toEqual({ value: 4 });
     expect(refreshFetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not restore an invalidated cachedRequest result after its fetcher settles", async () => {
+    const client = new TestApiClient();
+    let resolve!: (value: { value: number }) => void;
+    const pending = new Promise<{ value: number }>((done) => {
+      resolve = done;
+    });
+
+    const stale = client.cachedRequest("custom:key", () => pending);
+    client.invalidateCache("custom:");
+    resolve({ value: 1 });
+
+    await expect(stale).resolves.toEqual({ value: 1 });
+    expect(client.getCached("custom:key")).toBeUndefined();
   });
 
   it("sends cookie credentials and no session Authorization header", async () => {

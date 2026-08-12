@@ -325,13 +325,16 @@ export class ProxySecureLinkService {
     state: 'ready' | 'failed',
     error?: unknown
   ): void {
-    this.eventBus?.publish('proxy.secure-link.changed', {
+    const payload = {
       id: host.id,
       domain: host.domainNames?.[0] ?? host.id,
       phase,
       state,
       failureCode: state === 'failed' ? this.failureCode(error) : null,
-    });
+    };
+    this.eventBus?.publish('proxy.secure-link.changed', payload);
+    // Proxy host cache consumers use this established resource channel.
+    this.eventBus?.publish('proxy.host.changed', { ...payload, action: 'secure_link_changed' });
   }
 
   private failureCode(error: unknown): string {

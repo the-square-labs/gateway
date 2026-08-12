@@ -1,6 +1,6 @@
 import * as TabsPrimitive from "@radix-ui/react-tabs";
-import { motion } from "framer-motion";
 import * as React from "react";
+import { PageTransition } from "@/components/common/PageTransition";
 import { cn } from "@/lib/utils";
 
 const Tabs = TabsPrimitive.Root;
@@ -46,14 +46,7 @@ const TabsContent = React.forwardRef<
     className={cn("mt-4 focus-visible:outline-none", className)}
     {...props}
   >
-    <motion.div
-      className="flex flex-col flex-1 min-h-0"
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
-    >
-      {children}
-    </motion.div>
+    <PageTransition className="flex min-h-0 flex-1 flex-col">{children}</PageTransition>
   </TabsPrimitive.Content>
 ));
 TabsContent.displayName = TabsPrimitive.Content.displayName;

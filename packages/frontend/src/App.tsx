@@ -18,6 +18,7 @@ import { ThemeProvider } from "@/components/layout/ThemeProvider";
 import { Button } from "@/components/ui/button";
 import { resolveMigrationTarget } from "@/lib/docker-migration-navigation";
 import {
+  INFERENCE_CATALOG_CHANGED_CHANNEL,
   INFERENCE_USAGE_CHANGED_CHANNEL,
   type InferenceUsageChangedEvent,
 } from "@/lib/inference-self-usage";
@@ -71,6 +72,7 @@ import { StatusPage } from "@/pages/StatusPage";
 import { TemplatesPage } from "@/pages/TemplatesPage";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
+import type { BackgroundPrewarmTask } from "@/services/background-prewarm";
 import { eventStream } from "@/services/event-stream";
 import { useAIStore } from "@/stores/ai";
 import { APP_STATUS_STORAGE_KEY, useAppStatusStore } from "@/stores/app-status";
@@ -83,6 +85,64 @@ import { useSystemConfigStore } from "@/stores/system-config";
 import { syncAILiteModeFromStorageValue, UI_STORAGE_KEY, useUIStore } from "@/stores/ui";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { DockerMigration } from "@/types";
+
+const REALTIME_RECONCILIATION_CACHE_PREFIXES = [
+  "req:/api/ui/bootstrap",
+  "dashboard:",
+  "req:/api/monitoring/dashboard",
+  "req:/api/monitoring/health-status",
+  "req:/api/cas",
+  "cas:list:",
+  "req:/api/proxy-hosts",
+  "req:/api/proxy-host-folders/grouped",
+  "proxy:grouped",
+  "req:/api/ssl-certificates",
+  "ssl:list:",
+  "req:/api/certificates",
+  "certificates:list:",
+  "req:/api/domains",
+  "domains:list",
+  "req:/api/templates",
+  "templates:list",
+  "req:/api/access-lists",
+  "access-lists:list",
+  "req:/api/nginx-templates",
+  "nginx-templates:list",
+  "req:/api/nodes",
+  "nodes:list:",
+  "req:/api/databases",
+  "databases:list",
+  "req:/api/logging",
+  "logging:",
+  "req:/api/admin/auth-settings",
+  "settings:auth-provisioning",
+  "req:/api/system/relay",
+  "relay:",
+  "req:/api/docker",
+  "docker:",
+  "settings:docker-registries",
+  "req:/api/integrations",
+  "settings:gitlab-connectors",
+  "settings:cloudflare-connectors",
+  "req:/api/housekeeping",
+  "housekeeping:",
+  "req:/api/system/license",
+  "settings:license-status",
+  "req:/api/status-page",
+  "settings:status-page-",
+  "req:/api/notifications",
+  "notifications:",
+  "req:/api/ai/config",
+  "settings:ai-config",
+  "req:/api/inference",
+  "req:/api/system/version",
+  "system:version",
+  "req:/api/admin/users",
+  "req:/api/admin/groups",
+  "admin:",
+  "req:/api/audit",
+  "audit:",
+] as const;
 
 /** Helper to wrap a page element with a scope guard */
 function scoped(scope: string, element: React.ReactElement) {
@@ -704,6 +764,76 @@ function RealtimeBridge() {
   const beginInterfacePreferenceLoad = useUIStore((s) => s.beginInterfacePreferenceLoad);
   const hydratePreferredInterface = useUIStore((s) => s.hydratePreferredInterface);
 
+  // EventStream owns invalidation; retain these subscriptions for the whole
+  // session so warmed projections stay coherent even with no matching route mounted.
+  useEffect(() => {
+    if (!user) return;
+    const auth = useAuthStore.getState();
+    const canViewAnyDockerSnapshot = [
+      "docker:containers:view",
+      "docker:images:view",
+      "docker:volumes:view",
+      "docker:networks:view",
+    ].some((scope) => auth.hasScopedAccess(scope));
+    const channels: Array<[boolean, string]> = [
+      [auth.hasScope("domains:view"), "domain.changed"],
+      [auth.hasScope("pki:templates:view"), "pki.template.changed"],
+      [auth.hasScopedAccess("proxy:templates:view"), "nginx.template.changed"],
+      [auth.hasScopedAccess("acl:view"), "access-list.changed"],
+      [
+        auth.hasScopedAccess("nodes:details") || auth.hasScope("nodes:folders:manage"),
+        "node.folder.changed",
+      ],
+      [
+        auth.hasScopedAccess("databases:view") || auth.hasScope("databases:folders:manage"),
+        "database.folder.changed",
+      ],
+      [auth.hasScopedAccess("logs:environments:view"), "logging.environment.changed"],
+      [auth.hasScopedAccess("logs:schemas:view"), "logging.schema.changed"],
+      [canViewAnyDockerSnapshot, "docker.snapshot.changed"],
+      [canViewAnyDockerSnapshot, "docker.folder.changed"],
+      [auth.hasScopedAccess("docker:images:view"), "docker.image.changed"],
+      [auth.hasScopedAccess("docker:volumes:view"), "docker.volume.changed"],
+      [auth.hasScopedAccess("docker:networks:view"), "docker.network.changed"],
+      [auth.hasScopedAccess("docker:tasks"), "docker.task.changed"],
+      [auth.hasScopedAccess("docker:registries:view"), "docker.registry.changed"],
+      [auth.hasScope("housekeeping:view"), "logging.health.changed"],
+      [auth.hasScope("housekeeping:view"), "system.relay.health.changed"],
+      [auth.hasScope("status-page:view"), "status-page.changed"],
+      [
+        auth.hasAnyScope("notifications:alerts:view", "notifications:view", "notifications:manage"),
+        "notification.alert-rule.changed",
+      ],
+      [
+        auth.hasAnyScope(
+          "notifications:webhooks:view",
+          "notifications:view",
+          "notifications:manage"
+        ),
+        "notification.webhook.changed",
+      ],
+      [auth.hasScopedAccess("admin:users"), "user.changed"],
+      [auth.hasScopedAccess("admin:groups"), "group.changed"],
+      [auth.hasScopedAccess("admin:audit"), "audit.changed"],
+      [auth.hasScopedAccess("admin:audit"), "siem.destination.changed"],
+      [auth.hasScopedAccess("admin:audit"), "siem.delivery.changed"],
+      [
+        auth.hasAnyScope(
+          "inference:use",
+          "inference:providers:view",
+          "inference:models:manage",
+          "inference:limits:manage",
+          "feat:ai:configure"
+        ),
+        INFERENCE_CATALOG_CHANGED_CHANNEL,
+      ],
+    ];
+    const unsubscribe = channels
+      .filter(([allowed]) => allowed)
+      .map(([, channel]) => eventStream.subscribe(channel, () => {}));
+    return () => unsubscribe.forEach((stop) => stop());
+  }, [user]);
+
   useEffect(() => {
     if (isAuthenticated) {
       eventStream.start();
@@ -901,14 +1031,53 @@ function RealtimeBridge() {
     });
   }, [invalidateDashboardBootstrap, invalidateUIBootstrap, user]);
 
-  useEffect(
-    () =>
-      eventStream.onReconnect(() => {
-        invalidateDashboardBootstrap();
-        invalidateUIBootstrap();
-      }),
-    [invalidateDashboardBootstrap, invalidateUIBootstrap]
-  );
+  useEffect(() => {
+    if (!user) return;
+    let controller: AbortController | null = null;
+    const unsubscribe = eventStream.onReconnect(() => {
+      // Reconnect means events may have been missed. Clear every warmed
+      // projection namespace and re-run the existing staggered prefetch queue
+      // once, rather than issuing route-level refetches in parallel.
+      for (const prefix of REALTIME_RECONCILIATION_CACHE_PREFIXES) {
+        api.invalidateCache(prefix);
+      }
+      invalidateDashboardBootstrap();
+      invalidateUIBootstrap();
+      controller?.abort();
+      controller = new AbortController();
+      const auth = useAuthStore.getState();
+      const docker = useDockerStore.getState();
+      const dockerNodes = useUIBootstrapStore.getState().snapshot?.navigation.dockerNodes;
+      const extraTasks: BackgroundPrewarmTask[] = [];
+      const addDockerTask = (allowed: boolean, key: string, run: () => Promise<unknown>) => {
+        if (allowed) extraTasks.push({ key, run });
+      };
+      addDockerTask(auth.hasScopedAccess("docker:containers:view"), "docker-containers", () =>
+        docker.fetchContainers(null, "", dockerNodes)
+      );
+      addDockerTask(auth.hasScopedAccess("docker:images:view"), "docker-images", () =>
+        docker.fetchImages(null, "", dockerNodes)
+      );
+      addDockerTask(auth.hasScopedAccess("docker:volumes:view"), "docker-volumes", () =>
+        docker.fetchVolumes(null, "", dockerNodes)
+      );
+      addDockerTask(auth.hasScopedAccess("docker:networks:view"), "docker-networks", () =>
+        docker.fetchNetworks(null, "", dockerNodes)
+      );
+      addDockerTask(auth.hasScopedAccess("docker:tasks"), "docker-tasks", () =>
+        docker.fetchTasks(null)
+      );
+      void api.prefetchAll(
+        user.scopes.some((scope) => scope.startsWith("admin:")),
+        controller.signal,
+        extraTasks
+      );
+    });
+    return () => {
+      controller?.abort();
+      unsubscribe();
+    };
+  }, [invalidateDashboardBootstrap, invalidateUIBootstrap, user]);
 
   return null;
 }

@@ -35,6 +35,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
 import { cn, daysUntil, formatDate, formatDateTime, hoursUntil } from "@/lib/utils";
@@ -688,7 +689,9 @@ export function SSLCertificates() {
           }
         />
 
-        {(certificates || []).length > 0 || isLoading ? (
+        {isLoading && (certificates || []).length === 0 ? (
+          <Skeleton />
+        ) : (certificates || []).length > 0 ? (
           <div className="min-h-0 shrink">
             <DataTable
               columns={certificateColumns}

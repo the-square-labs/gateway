@@ -19,7 +19,7 @@ interface CAState {
 export const useCAStore = create<CAState>()((set, get) => ({
   cas: [],
   selectedCA: null,
-  isLoading: false,
+  isLoading: true,
   error: null,
 
   fetchCAs: async () => {
@@ -29,10 +29,11 @@ export const useCAStore = create<CAState>()((set, get) => ({
     const cacheKey = `cas:list:${showSystem ? "system" : "default"}`;
     // Show cached data instantly
     const cached = api.getCached<CA[]>(cacheKey);
-    if (cached && get().cas.length === 0) set({ cas: cached });
+    const hasCachedSnapshot = cached !== undefined;
+    if (hasCachedSnapshot && get().cas.length === 0) set({ cas: cached });
 
     const hasData = get().cas.length > 0;
-    set({ isLoading: !hasData, error: null });
+    set({ isLoading: !hasCachedSnapshot && !hasData, error: null });
     try {
       const cas = await api.listCAs({ showSystem });
       api.setCache(cacheKey, cas);

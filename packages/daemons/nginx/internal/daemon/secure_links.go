@@ -126,7 +126,10 @@ func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sou
 	for id, binding := range desired {
 		current := m.bindings[id]
 		if current != nil && binding.RotateListener {
-			current.close()
+			// create() has already replaced the filesystem entry with the
+			// staged Unix listener. Closing the retired binding must not unlink
+			// that replacement path.
+			current.closePreservingSocketPath()
 			m.bindings[id] = staged[id]
 			continue
 		}
@@ -207,6 +210,17 @@ func (m *sourceLinkManager) create(id string, generation uint64, port uint32) (*
 }
 
 func (b *sourceLinkBinding) close() {
+	b.closeBinding(true)
+}
+
+func (b *sourceLinkBinding) closePreservingSocketPath() {
+	if unixListener, ok := b.unix.(*net.UnixListener); ok {
+		unixListener.SetUnlinkOnClose(false)
+	}
+	b.closeBinding(false)
+}
+
+func (b *sourceLinkBinding) closeBinding(removeSocketPath bool) {
 	select {
 	case <-b.done:
 		return
@@ -214,7 +228,9 @@ func (b *sourceLinkBinding) close() {
 		close(b.done)
 		_ = b.listener.Close()
 		_ = b.unix.Close()
-		_ = os.Remove(b.socketPath)
+		if removeSocketPath {
+			_ = os.Remove(b.socketPath)
+		}
 		b.closeActive()
 	}
 }

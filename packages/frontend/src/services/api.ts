@@ -74,6 +74,7 @@ import { withNotificationApi } from "./api-notifications";
 import { withPkiApi } from "./api-pki";
 import { withProxyApi } from "./api-proxy";
 import { withSystemApi } from "./api-system";
+import { type BackgroundPrewarmTask, runBackgroundPrewarm } from "./background-prewarm";
 
 class ApiClient extends withInferenceApi(
   withIntegrationsApi(
@@ -86,6 +87,8 @@ class ApiClient extends withInferenceApi(
     )
   )
 ) {
+  private prewarmTail: Promise<void> = Promise.resolve();
+
   async getUIBootstrap(): Promise<UIBootstrapShell> {
     return this.unwrapData(this.request<{ data: UIBootstrapShell }>("/ui/bootstrap"));
   }
@@ -118,72 +121,214 @@ class ApiClient extends withInferenceApi(
   }
 
   /**
-   * Prefetch key data for all pages in background.
-   * Called once after auth to prime the cache.
+   * Warm route-level read models after authentication. Requests are started
+   * sequentially by runBackgroundPrewarm so login never becomes an API burst.
    */
-  prefetchAll(isAdmin: boolean): void {
-    const quiet = <T>(p: Promise<T>) => p.then((d) => d).catch(() => {});
+  prefetchAll(
+    isAdmin: boolean,
+    signal: AbortSignal,
+    extraTasks: BackgroundPrewarmTask[] = []
+  ): Promise<void> {
     const showSystem =
       useUIStore.getState().showSystemCertificates &&
       useAuthStore.getState().hasScope("admin:details:certificates");
+    const auth = useAuthStore.getState();
+    const tasks: BackgroundPrewarmTask[] = [];
+    const add = (condition: boolean, key: string, run: () => Promise<unknown>) => {
+      if (condition) tasks.push({ key, run });
+    };
+    const cache =
+      <T>(key: string, request: () => Promise<T>) =>
+      () =>
+        request().then((data) => {
+          this.setCache(key, data);
+          return data;
+        });
 
-    // Dashboard data
-    quiet(
-      this.getDashboardStats(showSystem).then((d) =>
-        this.setCache(`dashboard:stats:${showSystem ? "system" : "default"}`, d)
+    add(
+      true,
+      "dashboard:stats",
+      cache(`dashboard:stats:${showSystem ? "system" : "default"}`, () =>
+        this.getDashboardStats(showSystem)
       )
     );
-    quiet(this.getHealthOverview().then((d) => this.setCache("dashboard:health", d)));
-
-    // CAs
-    quiet(
-      this.listCAs({ showSystem }).then((d) =>
-        this.setCache(`cas:list:${showSystem ? "system" : "default"}`, d)
+    add(
+      true,
+      "dashboard:health",
+      cache("dashboard:health", () => this.getHealthOverview())
+    );
+    add(
+      auth.hasAnyScope("pki:ca:view:root", "pki:ca:view:intermediate"),
+      "cas",
+      cache(`cas:list:${showSystem ? "system" : "default"}`, () => this.listCAs({ showSystem }))
+    );
+    add(
+      auth.hasScopedAccess("proxy:view"),
+      "proxy-hosts",
+      cache("proxy:grouped", () => this.getGroupedProxyHosts({}))
+    );
+    add(
+      auth.hasScopedAccess("ssl:cert:view"),
+      "ssl-certificates",
+      cache(`ssl:list:${showSystem ? "system" : "default"}`, () =>
+        this.listSSLCertificates({ page: 1, limit: 25, status: "active", showSystem })
       )
     );
-
-    // Proxy hosts (grouped)
-    quiet(this.getGroupedProxyHosts({}).then((d) => this.setCache("proxy:grouped", d)));
-
-    // SSL Certificates
-    quiet(
-      this.listSSLCertificates({ showSystem }).then((d) =>
-        this.setCache(`ssl:list:${showSystem ? "system" : "default"}`, d)
+    add(
+      auth.hasScopedAccess("pki:cert:view"),
+      "pki-certificates",
+      cache(`certificates:list:${showSystem ? "system" : "default"}`, () =>
+        this.listCertificates({ page: 1, limit: 25, status: "active", showSystem })
       )
     );
-
-    // PKI Certificates
-    quiet(
-      this.listCertificates({ showSystem }).then((d) =>
-        this.setCache(`certificates:list:${showSystem ? "system" : "default"}`, d)
+    add(
+      auth.hasScope("domains:view"),
+      "domains",
+      cache("domains:list:folder-view", () => this.listDomains({ page: 1, limit: 1000 }))
+    );
+    add(
+      auth.hasScope("pki:templates:view"),
+      "pki-templates",
+      cache("templates:list", () => this.listTemplates())
+    );
+    add(
+      auth.hasScopedAccess("acl:view"),
+      "access-lists",
+      cache("access-lists:list", () => this.listAccessLists())
+    );
+    add(
+      auth.hasScopedAccess("proxy:templates:view"),
+      "nginx-templates",
+      cache("nginx-templates:list", () => this.listNginxTemplates())
+    );
+    add(
+      auth.hasScopedAccess("nodes:details"),
+      "nodes",
+      cache("nodes:list:default", () => this.listNodes({ page: 1, limit: 50 }))
+    );
+    add(
+      auth.hasScopedAccess("databases:view"),
+      "databases",
+      cache("databases:list", () =>
+        this.listDatabases({ limit: 200 }).then((result) => result.data)
       )
     );
+    add(
+      auth.hasScopedAccess("logs:environments:view"),
+      "logging-environments",
+      cache("logging:environments", () => this.listLoggingEnvironments())
+    );
+    add(
+      auth.hasScopedAccess("logs:schemas:view"),
+      "logging-schemas",
+      cache("logging:schemas", () => this.listLoggingSchemas())
+    );
+    add(
+      auth.hasScope("settings:gateway:view"),
+      "gateway-settings",
+      cache("settings:auth-provisioning", () => this.getAuthProvisioningSettings())
+    );
+    add(auth.hasScope("settings:gateway:view"), "relay", () => this.getRelayStatus());
+    add(
+      auth.hasScope("docker:registries:view"),
+      "docker-registries",
+      cache("settings:docker-registries", () => this.listDockerRegistries())
+    );
+    add(
+      auth.hasScope("housekeeping:view"),
+      "housekeeping-config",
+      cache("housekeeping:config", () => this.getHousekeepingConfig())
+    );
+    add(
+      auth.hasScope("housekeeping:view"),
+      "housekeeping-stats",
+      cache("housekeeping:stats", () => this.getHousekeepingStats())
+    );
+    add(
+      auth.hasScope("license:view"),
+      "license",
+      cache("settings:license-status", () => this.getLicenseStatus())
+    );
+    add(
+      auth.hasScope("status-page:view"),
+      "status-page-settings",
+      cache("settings:status-page-config", () => this.getStatusPageSettings())
+    );
+    add(
+      auth.hasScope("status-page:view"),
+      "status-page-templates",
+      cache("settings:status-page-proxy-templates", () => this.listStatusPageProxyTemplates())
+    );
+    add(
+      auth.hasAnyScope("integrations:gitlab:view", "integrations:gitlab:manage"),
+      "gitlab-integrations",
+      cache("settings:gitlab-connectors", () => this.listGitLabConnectors())
+    );
+    add(
+      auth.hasAnyScope("notifications:alerts:view", "notifications:view", "notifications:manage"),
+      "notification-alerts",
+      cache("notifications:alerts", () =>
+        this.listAlertRules({ limit: 100 }).then((result) => result.data ?? [])
+      )
+    );
+    add(
+      auth.hasAnyScope("notifications:webhooks:view", "notifications:view", "notifications:manage"),
+      "notification-webhooks",
+      cache("notifications:webhooks", () =>
+        this.listWebhooks({ limit: 100 }).then((result) => result.data ?? [])
+      )
+    );
+    add(
+      auth.hasScope("feat:ai:configure"),
+      "ai-settings",
+      cache("settings:ai-config", () => this.getAIConfig())
+    );
+    add(
+      auth.hasAnyScope(
+        "inference:providers:view",
+        "inference:models:manage",
+        "inference:limits:manage"
+      ),
+      "inference-settings",
+      () => this.getInferenceSettings()
+    );
+    add(auth.hasScope("inference:providers:view"), "inference-provider-catalog", () =>
+      this.listInferenceProviderCatalog()
+    );
+    add(auth.hasScope("inference:providers:view"), "inference-provider-connections", () =>
+      this.listInferenceProviderConnections()
+    );
+    add(
+      auth.hasScope("admin:update"),
+      "version",
+      cache("system:version", () => this.getVersionInfo())
+    );
+    add(
+      isAdmin && auth.hasScopedAccess("admin:users"),
+      "admin-users",
+      cache("admin:users", () => this.listUsers())
+    );
+    add(
+      isAdmin && auth.hasScopedAccess("admin:groups"),
+      "admin-groups",
+      cache("admin:groups", () => this.listGroups())
+    );
+    add(
+      isAdmin && auth.hasScopedAccess("admin:audit"),
+      "audit",
+      cache("audit:list", () => this.getAuditLog({ limit: 25 }))
+    );
 
-    // Domains
-    if (useAuthStore.getState().hasScope("domains:view")) {
-      quiet(this.listDomains({}).then((d) => this.setCache("domains:list", d)));
-    }
-
-    // Templates
-    if (useAuthStore.getState().hasScope("pki:templates:view")) {
-      quiet(this.listTemplates().then((d) => this.setCache("templates:list", d)));
-    }
-
-    // Access Lists
-    quiet(this.listAccessLists().then((d) => this.setCache("access-lists:list", d)));
-
-    // Nginx Templates
-    if (useAuthStore.getState().hasScopedAccess("proxy:templates:view")) {
-      quiet(this.listNginxTemplates().then((d) => this.setCache("nginx-templates:list", d)));
-    }
-
-    // Version info
-    quiet(this.getVersionInfo().then((d) => this.setCache("system:version", d)));
-
-    if (isAdmin) {
-      quiet(this.getAuditLog({ limit: 25 }).then((d) => this.setCache("audit:list", d)));
-      quiet(this.listUsers().then((d) => this.setCache("admin:users", d)));
-    }
+    const run = this.prewarmTail
+      .catch(() => {})
+      .then(async () => {
+        if (signal.aborted) return;
+        await runBackgroundPrewarm([...tasks, ...extraTasks], signal);
+      });
+    // A reconnect reconciliation must never overlap the initial login prewarm.
+    // Queue it behind the active run so request starts remain staggered.
+    this.prewarmTail = run.catch(() => {});
+    return run;
   }
 
   // ── Audit ─────────────────────────────────────────────────────────

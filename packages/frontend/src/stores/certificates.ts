@@ -43,7 +43,7 @@ let fetchCertificatesRequestId = 0;
 export const useCertificatesStore = create<CertificatesState>()((set, get) => ({
   certificates: [],
   selectedCertificate: null,
-  isLoading: false,
+  isLoading: true,
   isLoadingMore: false,
   error: null,
   filters: { ...defaultFilters },
@@ -66,22 +66,24 @@ export const useCertificatesStore = create<CertificatesState>()((set, get) => ({
     const cacheKey = `certificates:list:${showSystem ? "system" : "default"}`;
 
     // Show cached data instantly for default view
-    if (isDefault && get().certificates.length === 0) {
-      const cached = api.getCached<{
-        data: Certificate[];
-        pagination: { total: number; totalPages: number };
-      }>(cacheKey);
-      if (cached)
-        set({
-          certificates: cached.data || [],
-          total: cached.pagination?.total ?? 0,
-          hasMore: (cached.pagination?.totalPages ?? 0) > 1,
-          nextPage: 2,
-        });
+    const cached = isDefault
+      ? api.getCached<{
+          data: Certificate[];
+          pagination: { total: number; totalPages: number };
+        }>(cacheKey)
+      : undefined;
+    const hasCachedSnapshot = cached !== undefined;
+    if (get().certificates.length === 0 && cached) {
+      set({
+        certificates: cached.data || [],
+        total: cached.pagination?.total ?? 0,
+        hasMore: (cached.pagination?.totalPages ?? 0) > 1,
+        nextPage: 2,
+      });
     }
 
     const hasData = get().certificates.length > 0;
-    set({ isLoading: !hasData, isLoadingMore: false, error: null });
+    set({ isLoading: !hasCachedSnapshot && !hasData, isLoadingMore: false, error: null });
     try {
       const response = await api.listCertificates({
         page: 1,

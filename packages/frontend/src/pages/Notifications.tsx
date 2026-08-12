@@ -2,6 +2,7 @@ import { AlertTriangle, Plus, Send, ShieldCheck, Webhook } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -212,104 +213,106 @@ export function Notifications() {
   const usesFillLayout = activeTab === "deliveries" || activeTab === "siem-deliveries";
 
   return (
-    <div
-      className={
-        usesFillLayout
-          ? "h-full flex flex-col overflow-hidden p-6 gap-6"
-          : "h-full overflow-y-auto p-6 space-y-6"
-      }
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <LiteModeBackButton />
-          <div className="min-w-0">
-            <h1 className="text-2xl font-semibold">Notifications</h1>
-            <p className="text-sm text-muted-foreground">
-              {siemEnabled
-                ? "Manage alert rules, webhooks, SIEM audit export, and delivery activity"
-                : "Manage alert rules, webhooks, and delivery activity"}
-            </p>
-          </div>
-        </div>
-        <ResponsiveHeaderActions actions={headerActions}>{headerAction}</ResponsiveHeaderActions>
-      </div>
-      <Tabs
-        value={activeTab}
-        onValueChange={(v) => navigate(`/notifications/${v}`, { replace: true })}
-        className={`flex flex-col ${usesFillLayout ? "flex-1 min-h-0" : ""}`}
+    <PageTransition>
+      <div
+        className={
+          usesFillLayout
+            ? "h-full flex flex-col overflow-hidden p-6 gap-6"
+            : "h-full overflow-y-auto p-6 space-y-6"
+        }
       >
-        <TabsList>
-          {visibleTabs.map((t) => (
-            <TabsTrigger key={t.value} value={t.value} className="flex items-center gap-2">
-              <t.icon className="h-4 w-4" />
-              {t.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-        {canAccessAlerts && (
-          <TabsContent value="alerts" className="mt-4">
-            <AlertsTab
-              canManage={canManageAlerts}
-              canRead={canReadAlerts}
-              openCreateToken={openCreateAlertToken}
-            />
-          </TabsContent>
-        )}
-        {canAccessWebhooks && (
-          <TabsContent value="webhooks" className="mt-4">
-            <WebhooksTab
-              canManage={canManageWebhooks}
-              canRead={canReadWebhooks}
-              openCreateToken={openCreateWebhookToken}
-            />
-          </TabsContent>
-        )}
-        {canViewDeliveries && (
-          <TabsContent
-            value="deliveries"
-            className="mt-4 flex flex-col flex-1 min-h-0 overflow-hidden"
-          >
-            <DeliveryLogTab refreshToken={refreshDeliveriesToken} />
-          </TabsContent>
-        )}
-        {canViewSiem && (
-          <TabsContent value="siem" className="mt-4">
-            <SiemDestinationsTab
-              canManage={canManageSiem}
-              canRead={canViewSiem}
-              openCreateToken={openCreateSiemToken}
-              onViewDeliveryLog={(destination) =>
-                navigate(
-                  `/notifications/siem-deliveries?destinationId=${encodeURIComponent(destination.id)}`
-                )
-              }
-            />
-          </TabsContent>
-        )}
-        {canViewSiem && (
-          <TabsContent
-            value="siem-deliveries"
-            className="mt-4 flex flex-col flex-1 min-h-0 overflow-hidden"
-          >
-            <SiemDeliveryLogTab
-              canManage={canManageSiem}
-              initialDestinationId={searchParams.get("destinationId")}
-              onDestinationFilterChange={(destinationId) => {
-                setSearchParams(
-                  (current) => {
-                    const next = new URLSearchParams(current);
-                    if (destinationId) next.set("destinationId", destinationId);
-                    else next.delete("destinationId");
-                    return next;
-                  },
-                  { replace: true }
-                );
-              }}
-              refreshToken={refreshSiemDeliveriesToken}
-            />
-          </TabsContent>
-        )}
-      </Tabs>
-    </div>
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <LiteModeBackButton />
+            <div className="min-w-0">
+              <h1 className="text-2xl font-semibold">Notifications</h1>
+              <p className="text-sm text-muted-foreground">
+                {siemEnabled
+                  ? "Manage alert rules, webhooks, SIEM audit export, and delivery activity"
+                  : "Manage alert rules, webhooks, and delivery activity"}
+              </p>
+            </div>
+          </div>
+          <ResponsiveHeaderActions actions={headerActions}>{headerAction}</ResponsiveHeaderActions>
+        </div>
+        <Tabs
+          value={activeTab}
+          onValueChange={(v) => navigate(`/notifications/${v}`, { replace: true })}
+          className={`flex flex-col ${usesFillLayout ? "flex-1 min-h-0" : ""}`}
+        >
+          <TabsList>
+            {visibleTabs.map((t) => (
+              <TabsTrigger key={t.value} value={t.value} className="flex items-center gap-2">
+                <t.icon className="h-4 w-4" />
+                {t.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          {canAccessAlerts && (
+            <TabsContent value="alerts" className="mt-4">
+              <AlertsTab
+                canManage={canManageAlerts}
+                canRead={canReadAlerts}
+                openCreateToken={openCreateAlertToken}
+              />
+            </TabsContent>
+          )}
+          {canAccessWebhooks && (
+            <TabsContent value="webhooks" className="mt-4">
+              <WebhooksTab
+                canManage={canManageWebhooks}
+                canRead={canReadWebhooks}
+                openCreateToken={openCreateWebhookToken}
+              />
+            </TabsContent>
+          )}
+          {canViewDeliveries && (
+            <TabsContent
+              value="deliveries"
+              className="mt-4 flex flex-col flex-1 min-h-0 overflow-hidden"
+            >
+              <DeliveryLogTab refreshToken={refreshDeliveriesToken} />
+            </TabsContent>
+          )}
+          {canViewSiem && (
+            <TabsContent value="siem" className="mt-4">
+              <SiemDestinationsTab
+                canManage={canManageSiem}
+                canRead={canViewSiem}
+                openCreateToken={openCreateSiemToken}
+                onViewDeliveryLog={(destination) =>
+                  navigate(
+                    `/notifications/siem-deliveries?destinationId=${encodeURIComponent(destination.id)}`
+                  )
+                }
+              />
+            </TabsContent>
+          )}
+          {canViewSiem && (
+            <TabsContent
+              value="siem-deliveries"
+              className="mt-4 flex flex-col flex-1 min-h-0 overflow-hidden"
+            >
+              <SiemDeliveryLogTab
+                canManage={canManageSiem}
+                initialDestinationId={searchParams.get("destinationId")}
+                onDestinationFilterChange={(destinationId) => {
+                  setSearchParams(
+                    (current) => {
+                      const next = new URLSearchParams(current);
+                      if (destinationId) next.set("destinationId", destinationId);
+                      else next.delete("destinationId");
+                      return next;
+                    },
+                    { replace: true }
+                  );
+                }}
+                refreshToken={refreshSiemDeliveriesToken}
+              />
+            </TabsContent>
+          )}
+        </Tabs>
+      </div>
+    </PageTransition>
   );
 }

@@ -779,7 +779,8 @@ export async function initializeContainer(): Promise<void> {
     nodeDispatch,
     nginxCertificateDistribution,
     proxyDockerUpstreamService,
-    proxySecureLinkService
+    proxySecureLinkService,
+    cacheService
   );
   proxyService.setEventBus(eventBus);
   container.registerInstance(ProxyService, proxyService);

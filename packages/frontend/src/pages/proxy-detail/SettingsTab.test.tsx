@@ -230,6 +230,21 @@ describe("proxy detail SettingsTab", () => {
     expect(onSaveHealthCheck).not.toHaveBeenCalled();
   });
 
+  it("shows an explicit pending state while a settings section is saving", () => {
+    render(
+      <SettingsTab
+        {...makeProps({
+          isSavingTemplate: true,
+          hasTemplateSettingsChanged: true,
+        })}
+      />
+    );
+
+    const saveButton = screen.getByRole("button", { name: "Saving..." });
+    expect(saveButton).toBeDisabled();
+    expect(saveButton.querySelector(".animate-spin")).not.toBeNull();
+  });
+
   it("shows inherited request and concurrent connection protection", () => {
     const defaultTemplate = {
       id: "template-default",

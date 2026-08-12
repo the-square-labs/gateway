@@ -1,4 +1,4 @@
-import { Minus, Plus, RefreshCw, Save } from "lucide-react";
+import { Loader2, Minus, Plus, RefreshCw, Save } from "lucide-react";
 import { Combobox } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow, SettingsInlineControl } from "@/components/common/SettingsControlRow";
@@ -382,8 +382,12 @@ export function SettingsTab({
               onClick={onSaveTemplateSettings}
               disabled={!hasTemplateSettingsChanged || isSavingTemplate}
             >
-              <Save className="h-3.5 w-3.5" />
-              Save
+              {isSavingTemplate ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Save className="h-3.5 w-3.5" />
+              )}
+              {isSavingTemplate ? "Saving..." : "Save"}
             </Button>
           ) : null
         }
@@ -450,8 +454,12 @@ export function SettingsTab({
         actions={
           canManage ? (
             <Button onClick={onSaveSsl} disabled={!hasSslSettingsChanged || isSavingSsl}>
-              <Save className="h-3.5 w-3.5" />
-              Save
+              {isSavingSsl ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Save className="h-3.5 w-3.5" />
+              )}
+              {isSavingSsl ? "Saving..." : "Save"}
             </Button>
           ) : null
         }
@@ -505,8 +513,12 @@ export function SettingsTab({
                 onClick={onSaveHealthCheck}
                 disabled={!hasHealthCheckSettingsChanged || isSavingHealthCheck}
               >
-                <Save className="h-3.5 w-3.5" />
-                Save
+                {isSavingHealthCheck ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Save className="h-3.5 w-3.5" />
+                )}
+                {isSavingHealthCheck ? "Saving..." : "Save"}
               </Button>
             ) : null
           }
@@ -614,8 +626,12 @@ export function SettingsTab({
                   <Plus className="h-3.5 w-3.5" />
                 </Button>
                 <Button onClick={onSaveHeaders} disabled={!hasHeadersChanged || isSavingCustom}>
-                  <Save className="h-3.5 w-3.5" />
-                  Save
+                  {isSavingCustom ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
+                  {isSavingCustom ? "Saving..." : "Save"}
                 </Button>
               </div>
             ) : null
@@ -702,8 +718,12 @@ export function SettingsTab({
                   <Plus className="h-3.5 w-3.5" />
                 </Button>
                 <Button onClick={onSaveRewrites} disabled={!hasRewritesChanged || isSavingCustom}>
-                  <Save className="h-3.5 w-3.5" />
-                  Save
+                  {isSavingCustom ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
+                  {isSavingCustom ? "Saving..." : "Save"}
                 </Button>
               </div>
             ) : null

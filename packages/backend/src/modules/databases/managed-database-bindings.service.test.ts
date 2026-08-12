@@ -20,6 +20,38 @@ function service(
 }
 
 describe('managed database binding provisioning guardrails', () => {
+  it('emits canonical database and Docker resource identifiers for binding changes', () => {
+    const instance = service() as any;
+    const publish = vi.fn();
+    instance.setEventBus({ publish, subscribe: vi.fn() } as never);
+
+    instance.emitBinding(
+      {
+        id: 'managed-database-1',
+        databaseConnectionId: 'database-connection-1',
+        name: 'orders',
+        type: 'postgres',
+      },
+      {
+        id: 'binding-1',
+        status: 'ready',
+        targetNodeId: 'node-1',
+        targetType: 'deployment',
+        targetResourceId: 'deployment-1',
+      },
+      'binding.ready'
+    );
+
+    expect(publish).toHaveBeenCalledWith(
+      'database.changed',
+      expect.objectContaining({ id: 'database-connection-1', bindingId: 'binding-1' })
+    );
+    expect(publish).toHaveBeenCalledWith(
+      'docker.container.changed',
+      expect.objectContaining({ nodeId: 'node-1', scopeResourceId: 'deployment-1' })
+    );
+  });
+
   it('mounts only the daemon-provided socket directory so connectors follow a replaced socket inode', () => {
     const instance = service() as any;
     expect(

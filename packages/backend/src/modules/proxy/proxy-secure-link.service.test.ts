@@ -2,6 +2,28 @@ import { describe, expect, it, vi } from 'vitest';
 import { ProxySecureLinkService } from './proxy-secure-link.service.js';
 
 describe('ProxySecureLinkService migration rollback', () => {
+  it('emits the canonical proxy host invalidation alongside the secure-link notification', () => {
+    const service = new ProxySecureLinkService({} as any, {} as any, {} as any, 'connector@sha256:test') as any;
+    const publish = vi.fn();
+    service.setEventBus({ publish });
+
+    service.emitLinkState(
+      { id: 'host-1', domainNames: ['example.test'] },
+      'reconciliation',
+      'failed',
+      new Error('relay unavailable')
+    );
+
+    expect(publish).toHaveBeenCalledWith(
+      'proxy.secure-link.changed',
+      expect.objectContaining({ id: 'host-1', state: 'failed' })
+    );
+    expect(publish).toHaveBeenCalledWith(
+      'proxy.host.changed',
+      expect.objectContaining({ id: 'host-1', action: 'secure_link_changed', state: 'failed' })
+    );
+  });
+
   it('retries a transient relay registration race before failing provisioning', async () => {
     const dispatch = {
       probeProxySecureLink: vi

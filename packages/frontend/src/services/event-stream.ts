@@ -1,3 +1,4 @@
+import { INFERENCE_CATALOG_CHANGED_CHANNEL } from "@/lib/inference-self-usage";
 import { api } from "@/services/api";
 import { useAppStatusStore } from "@/stores/app-status";
 import { useNodesStore } from "@/stores/nodes";
@@ -7,6 +8,11 @@ import { usePinnedNodesStore } from "@/stores/pinned-nodes";
 import { usePinnedProxiesStore } from "@/stores/pinned-proxies";
 
 type EventHandler = (payload: unknown) => void;
+
+/** Cache projections warmed independently from the request cache. */
+const invalidate = (...prefixes: string[]) => {
+  for (const prefix of prefixes) api.invalidateCache(prefix);
+};
 
 interface ServerMsg {
   type: string;
@@ -149,9 +155,7 @@ class EventStream {
           }
           return;
         } else if (msg.channel === "domain.changed") {
-          api.invalidateCache("req:/api/domains");
-          api.invalidateCache("domains:list");
-          api.invalidateCache("domains:list:folder-view");
+          invalidate("req:/api/domains", "domains:list");
         } else if (msg.channel === "ca.changed") {
           api.invalidateCache("req:/api/cas");
           api.invalidateCache("cas:list:");
@@ -184,8 +188,7 @@ class EventStream {
             usePinnedProxiesStore.getState().removePin(payload.id);
           }
         } else if (msg.channel === "pki.template.changed") {
-          api.invalidateCache("req:/api/templates");
-          api.invalidateCache("templates:list");
+          invalidate("req:/api/templates", "templates:list");
         } else if (msg.channel === "nginx.template.changed") {
           api.invalidateCache("req:/api/nginx-templates");
           api.invalidateCache("nginx-templates:list");
@@ -198,6 +201,7 @@ class EventStream {
         } else if (msg.channel === "group.changed") {
           api.invalidateCache("req:/api/admin/groups");
           api.invalidateCache("req:/api/admin/users");
+          api.invalidateCache("admin:groups");
           api.invalidateCache("admin:users");
         } else if (msg.channel === "docker.registry.changed") {
           api.invalidateCache("req:/api/docker/registries");
@@ -210,9 +214,9 @@ class EventStream {
           api.invalidateCache("req:/api/docker/registries");
           api.invalidateCache("settings:docker-registries");
         } else if (msg.channel === "notification.alert-rule.changed") {
-          api.invalidateCache("req:/api/notifications/alert-rules");
+          invalidate("req:/api/notifications/alert-rules", "notifications:alerts");
         } else if (msg.channel === "notification.webhook.changed") {
-          api.invalidateCache("req:/api/notifications/webhooks");
+          invalidate("req:/api/notifications/webhooks", "notifications:webhooks");
         } else if (msg.channel === "siem.destination.changed") {
           api.invalidateCache("req:/api/audit/siem/destinations");
           api.invalidateCache("audit:siem:destinations");
@@ -220,14 +224,19 @@ class EventStream {
         } else if (msg.channel === "siem.delivery.changed") {
           api.invalidateCache("req:/api/audit/siem/deliveries");
           api.invalidateCache("audit:siem:deliveries");
-        } else if (msg.channel === "database.changed") {
-          api.invalidateCache("req:/api/databases");
+        } else if (
+          msg.channel === "database.changed" ||
+          msg.channel === "database.folder.changed"
+        ) {
+          invalidate("req:/api/databases", "databases:list");
           const payload = msg.payload as { action?: string; id?: string } | undefined;
-          if (payload?.action === "deleted" && payload.id) {
+          if (msg.channel === "database.changed" && payload?.action === "deleted" && payload.id) {
             usePinnedDatabasesStore.getState().removePin(payload.id);
           }
+        } else if (msg.channel === "node.folder.changed") {
+          this.invalidateNodeStores();
         } else if (msg.channel.startsWith("docker.")) {
-          api.invalidateCache("req:/api/docker");
+          invalidate("req:/api/docker", "docker:");
           if (msg.channel === "docker.container.changed") {
             const payload = msg.payload as
               | { action?: string; id?: string; oldId?: string }
@@ -245,6 +254,24 @@ class EventStream {
           }
         } else if (msg.channel.startsWith("alert.")) {
           api.invalidateCache("req:/api/notifications/deliveries");
+        } else if (msg.channel === "logging.environment.changed") {
+          invalidate("req:/api/logging/environments", "logging:environments");
+        } else if (msg.channel === "logging.schema.changed") {
+          invalidate("req:/api/logging/schemas", "logging:schemas");
+        } else if (msg.channel === "system.relay.health.changed") {
+          invalidate("req:/api/system/relay", "relay:", "settings:relay");
+        } else if (msg.channel === "system.config.changed") {
+          invalidate(
+            "req:/api/system/config",
+            "req:/api/system/license",
+            "req:/api/housekeeping",
+            "settings:",
+            "housekeeping:"
+          );
+        } else if (msg.channel === "system.update.changed") {
+          invalidate("req:/api/system/version", "system:version");
+        } else if (msg.channel === INFERENCE_CATALOG_CHANGED_CHANNEL) {
+          invalidate("req:/api/inference", "settings:ai-config", "req:/api/ai/config");
         }
 
         this.dispatch(msg.channel, msg.payload);

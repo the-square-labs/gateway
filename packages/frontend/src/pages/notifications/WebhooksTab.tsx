@@ -13,6 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
@@ -227,7 +228,9 @@ export function WebhooksTab({
       <p className="text-sm text-muted-foreground">
         Webhooks define where and how notifications are delivered.
       </p>
-      {isLoading || visibleWebhooks.length > 0 ? (
+      {isLoading && visibleWebhooks.length === 0 ? (
+        <Skeleton />
+      ) : visibleWebhooks.length > 0 ? (
         <div className="border border-border bg-card">
           <SimpleTable
             columns={columns}

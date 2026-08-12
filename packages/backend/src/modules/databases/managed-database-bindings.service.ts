@@ -970,6 +970,9 @@ export class ManagedDatabaseBindingService {
     extra: { failurePhase?: string; failureCode?: string } = {}
   ) {
     const payload = {
+      // WebSocket database event filtering is resource-scoped by the managed
+      // database connection id, not by the binding id.
+      id: database.databaseConnectionId ?? database.id,
       resourceKind: 'managed_database_binding',
       managedDatabaseId: database.id,
       bindingId: binding.id,
@@ -985,11 +988,14 @@ export class ManagedDatabaseBindingService {
     this.eventBus?.publish('database.changed', payload);
     this.eventBus?.publish('docker.container.changed', {
       action: `database.${action}`,
+      nodeId: binding.targetNodeId,
       managedDatabaseId: database.id,
       bindingId: binding.id,
       targetNodeId: binding.targetNodeId,
       targetType: binding.targetType,
       targetResourceId: binding.targetResourceId,
+      ...(binding.targetType === 'deployment' ? { scopeResourceId: binding.targetResourceId } : {}),
+      ...(binding.targetType === 'container' ? { containerName: binding.targetResourceId } : {}),
     });
   }
 

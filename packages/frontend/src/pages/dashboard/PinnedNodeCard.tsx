@@ -10,16 +10,26 @@ import { effectiveNodeStatus } from "@/types";
 
 export const WARN_THRESHOLD = 80;
 
-function warnStyle(pct: number): {
+function warnStyle(
+  pct: number,
+  boundaries: { left: boolean; right: boolean }
+): {
   style?: React.CSSProperties;
   valueColor?: string;
   progressColor?: string;
 } {
   if (pct < WARN_THRESHOLD) return {};
+  const warningBorder = "1px solid color-mix(in srgb, var(--color-warning) 60%, transparent)";
   return {
     style: {
-      border: "1px solid color-mix(in srgb, var(--color-warning) 60%, transparent)",
-      margin: "-1px",
+      borderTop: warningBorder,
+      borderBottom: warningBorder,
+      borderLeft: boundaries.left ? warningBorder : undefined,
+      borderRight: boundaries.right ? warningBorder : undefined,
+      marginTop: "-1px",
+      marginBottom: "-1px",
+      marginLeft: boundaries.left ? "-1px" : undefined,
+      marginRight: boundaries.right ? "-1px" : undefined,
       position: "relative" as const,
       zIndex: 1 as number,
     },
@@ -35,7 +45,8 @@ interface PinnedNodeCardProps {
 
 export function PinnedNodeCard({ node, liveHealth, healthHistory }: PinnedNodeCardProps) {
   const h = liveHealth ?? node.lastHealthReport;
-  const eStatus = effectiveNodeStatus({ ...node, healthHistory });
+  const resolvedHealthHistory = healthHistory ?? node.healthHistory ?? [];
+  const eStatus = effectiveNodeStatus({ ...node, healthHistory: resolvedHealthHistory });
   const statusColor =
     eStatus === "online" ? "success" : eStatus === "degraded" ? "warning" : "destructive";
 
@@ -47,9 +58,12 @@ export function PinnedNodeCard({ node, liveHealth, healthHistory }: PinnedNodeCa
   const diskPercent = rootDisk ? Math.round(rootDisk.usagePercent) : 0;
   const cpuPercent = h ? Math.min(Math.round(h.cpuPercent), 100) : 0;
 
-  const cpuWarn = warnStyle(cpuPercent);
-  const memWarn = warnStyle(memPercent);
-  const diskWarn = warnStyle(diskPercent);
+  const cpuWarning = cpuPercent >= WARN_THRESHOLD;
+  const memoryWarning = memPercent >= WARN_THRESHOLD;
+  const diskWarning = diskPercent >= WARN_THRESHOLD;
+  const cpuWarn = warnStyle(cpuPercent, { left: true, right: !memoryWarning });
+  const memWarn = warnStyle(memPercent, { left: !cpuWarning, right: !diskWarning });
+  const diskWarn = warnStyle(diskPercent, { left: !memoryWarning, right: true });
 
   return (
     <div className="grid grid-cols-4 border border-border bg-card overflow-visible">
@@ -64,7 +78,7 @@ export function PinnedNodeCard({ node, liveHealth, healthHistory }: PinnedNodeCa
         <p className="text-xl font-bold truncate">{node.displayName || node.hostname}</p>
         <div className="flex items-center gap-2">
           <HealthBars
-            history={healthHistory ?? []}
+            history={resolvedHealthHistory}
             currentStatus={node.status}
             showLabels={false}
             className="flex-1"

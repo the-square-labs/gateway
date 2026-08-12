@@ -42,6 +42,11 @@ export const useDashboardBootstrapStore = create<DashboardBootstrapState>()((set
   load: async (key, request) => {
     if (inFlight?.key === key) return inFlight.promise;
     if (get().key === key && get().snapshot) return get().snapshot;
+    const persistentKey = `dashboard:bootstrap:${key}`;
+    const cached = api.getCached<DashboardBootstrap>(persistentKey, Number.POSITIVE_INFINITY);
+    if (!get().snapshot && cached) {
+      set({ snapshot: cached, key, request, loading: false, error: false });
+    }
     // A new request supersedes any deferred refresh for the same old snapshot.
     pendingRefresh = null;
     set({ loading: !get().snapshot, request, error: false });
@@ -50,6 +55,7 @@ export const useDashboardBootstrapStore = create<DashboardBootstrapState>()((set
       .getDashboardBootstrap(request)
       .then((snapshot) => {
         if (token === requestToken) {
+          api.setCache(persistentKey, snapshot);
           retryAttempts = 0;
           if (retryTimer) clearTimeout(retryTimer);
           retryTimer = null;

@@ -1,7 +1,15 @@
-import { cn } from "@/lib/utils";
+import { useContext, useLayoutEffect } from "react";
+import { InitialPageLoadContext } from "@/components/common/PageTransition";
 
-function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("animate-pulse bg-muted", className)} {...props} />;
+function Skeleton(_props: React.HTMLAttributes<HTMLDivElement>) {
+  const registerInitialPageLoad = useContext(InitialPageLoadContext);
+
+  useLayoutEffect(() => {
+    if (!registerInitialPageLoad) return;
+    return registerInitialPageLoad();
+  }, [registerInitialPageLoad]);
+
+  return null;
 }
 
 export { Skeleton };
