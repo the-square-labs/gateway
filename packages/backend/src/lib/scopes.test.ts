@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { hasScopeForResource } from './permissions.js';
+import { hasScope, hasScopeForResource } from './permissions.js';
 import {
   ADMIN_SCOPES,
   ALL_SCOPES,
@@ -85,9 +85,14 @@ describe('canonical scope definitions', () => {
     expect(ADMIN_SCOPES).toContain('audit:siem:view');
     expect(ADMIN_SCOPES).toContain('audit:siem:manage');
     expect(ADMIN_SCOPES).not.toContain('nodes:console');
+    expect(SYSTEM_ADMIN_SCOPES).toContain('admin:users:impersonate');
+    expect(ADMIN_SCOPES).not.toContain('admin:users:impersonate');
     expect(OPERATOR_SCOPES).not.toContain('proxy:raw:bypass');
+    expect(OPERATOR_SCOPES).toContain('proxy:maintenance:bypass');
     expect(OPERATOR_SCOPES).not.toContain('nodes:console');
     expect(ADMIN_SCOPES).not.toContain('admin:system');
+    expect(hasScope(['admin:users'], 'admin:users:impersonate')).toBe(false);
+    expect(hasScope(['admin:users:impersonate'], 'admin:users:impersonate')).toBe(true);
   });
 
   it('grants Docker mount editing only to built-in admin tiers by default', () => {
@@ -97,8 +102,11 @@ describe('canonical scope definitions', () => {
     expect(ALL_SCOPES).toContain('docker:containers:mounts');
   });
 
-  it('lets built-in viewers use configured GitLab registries without managing them', () => {
-    expect(VIEWER_SCOPES).toContain('integrations:gitlab:registry:use');
+  it('uses Docker operation scopes instead of a provider-specific GitLab registry-use scope', () => {
+    expect(ALL_SCOPES).not.toContain('integrations:gitlab:registry:use');
+    expect(SYSTEM_ADMIN_SCOPES).not.toContain('integrations:gitlab:registry:use');
+    expect(ADMIN_SCOPES).not.toContain('integrations:gitlab:registry:use');
+    expect(VIEWER_SCOPES).not.toContain('integrations:gitlab:registry:use');
     expect(VIEWER_SCOPES).not.toContain('integrations:gitlab:registry:view');
     expect(VIEWER_SCOPES).not.toContain('integrations:gitlab:registry:manage');
   });
@@ -179,6 +187,7 @@ describe('canonical scope definitions', () => {
     expect(API_TOKEN_SCOPES).not.toContain('inference:tokens:manage');
     expect(API_TOKEN_SCOPES).not.toContain('inference:providers:manage');
     expect(API_TOKEN_SCOPES).not.toContain('admin:users');
+    expect(API_TOKEN_SCOPES).not.toContain('admin:users:impersonate');
     expect(API_TOKEN_SCOPES).not.toContain('settings:gateway:edit');
     expect(API_TOKEN_SCOPES).not.toContain('integrations:gitlab:manage');
     expect(API_TOKEN_SCOPES).toContain('integrations:gitlab:repo:read');
@@ -195,6 +204,7 @@ describe('canonical scope definitions', () => {
     expect(isValidBaseScope('inference:usage:view:self')).toBe(false);
     expect(isApiTokenScope('inference:models:manage')).toBe(false);
     expect(isApiTokenScope('admin:users')).toBe(false);
+    expect(isApiTokenScope('admin:users:impersonate')).toBe(false);
     expect(isApiTokenScope('proxy:raw:write:host-1')).toBe(false);
     expect(isApiTokenScope('proxy:raw:bypass:host-1')).toBe(false);
     expect(isApiTokenScope('nodes:files:read:node-1')).toBe(true);

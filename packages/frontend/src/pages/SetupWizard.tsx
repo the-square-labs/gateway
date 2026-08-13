@@ -101,6 +101,37 @@ function readDraft(codeId: string | null): Partial<PersistedSetupDraft> | null {
   }
 }
 
+function restoreStepWithRequiredSecrets(
+  next: SetupConfig,
+  saved: Partial<PersistedSetupDraft> | null,
+  methods: AuthMethodsDraft,
+  availableSteps: SetupStep[]
+): SetupStep {
+  if (next.phase === "ai_workspace") return "ai-workspace";
+  if (next.administratorCreated) return "logging";
+
+  const restoredStep =
+    saved?.step && availableSteps.includes(saved.step) ? saved.step : "public-url";
+  const restoredIndex = availableSteps.indexOf(restoredStep);
+  const requiredSecretSteps: SetupStep[] = [];
+
+  if (methods.oidc && !next.oidc.configured) requiredSecretSteps.push("oidc-config");
+  if ((methods.password || methods.emailOtp) && !next.smtp.configured) {
+    requiredSecretSteps.push("smtp-config");
+  }
+  if (saved?.admin?.authMethod === "password") requiredSecretSteps.push("admin-details");
+  if (saved?.logging?.mode === "external" && !next.logging.passwordLast4) {
+    requiredSecretSteps.push("logging");
+  }
+
+  return (
+    requiredSecretSteps.find((requiredStep) => {
+      const requiredIndex = availableSteps.indexOf(requiredStep);
+      return requiredIndex >= 0 && requiredIndex < restoredIndex;
+    }) ?? restoredStep
+  );
+}
+
 async function setupRequest<T>(
   path: string,
   method = "GET",
@@ -231,15 +262,7 @@ export function SetupWizardPage() {
     autoOidcRedirect.current = saved?.autoOidcRedirect ?? null;
     autoGrpcTarget.current = saved?.autoGrpcTarget ?? null;
     const availableSteps = getSetupSteps(nextMethods, next.administratorCreated);
-    setStep(
-      next.phase === "ai_workspace"
-        ? "ai-workspace"
-        : next.administratorCreated
-          ? "logging"
-          : saved?.step && availableSteps.includes(saved.step)
-            ? saved.step
-            : "public-url"
-    );
+    setStep(restoreStepWithRequiredSecrets(next, saved, nextMethods, availableSteps));
     setDraftReady(true);
   }, []);
 

@@ -7,6 +7,7 @@ import {
   Settings,
   ShieldPlus,
   Trash2,
+  UserRoundCheck,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -104,6 +105,7 @@ export function AdminUsers({
   const [restoreUser, setRestoreUser] = useState<DeletedUser | null>(null);
   const [restoreGroupId, setRestoreGroupId] = useState("");
   const [restoring, setRestoring] = useState(false);
+  const [impersonatingUserId, setImpersonatingUserId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const lastCreateRequest = useRef(createRequest);
 
@@ -229,6 +231,18 @@ export function AdminUsers({
     }
   };
 
+  const handleImpersonate = async (user: User) => {
+    setImpersonatingUserId(user.id);
+    try {
+      await api.impersonateUser(user.id);
+      api.resetSessionState();
+      window.location.assign("/");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to impersonate user");
+      setImpersonatingUserId(null);
+    }
+  };
+
   const openRestore = (user: DeletedUser) => {
     setRestoreUser(user);
     setRestoreGroupId("");
@@ -299,6 +313,7 @@ export function AdminUsers({
   }, [createRequest, embedded]);
 
   const canManageFolders = hasAnyScope("admin:users:folders:manage", "admin:system");
+  const canImpersonateUsers = hasScope("admin:users:impersonate");
   const hasActiveFilters = search.trim() !== "";
   const filteredUsers = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -447,6 +462,17 @@ export function AdminUsers({
                   <ShieldPlus className="h-4 w-4" />
                   Assign permissions
                 </DropdownMenuItem>
+                {canImpersonateUsers && (
+                  <DropdownMenuItem
+                    onClick={() => void handleImpersonate(user)}
+                    disabled={
+                      user.isBlocked || !canManagePermissions || impersonatingUserId !== null
+                    }
+                  >
+                    <UserRoundCheck className="h-4 w-4" />
+                    Impersonate
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={() => void handleDelete(user)}

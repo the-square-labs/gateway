@@ -30,8 +30,12 @@ export interface SessionData {
   accessToken?: string;
   refreshToken?: string;
   csrfToken?: string;
-  purpose?: 'user' | 'setup';
+  purpose?: 'user' | 'setup' | 'impersonation';
   setupSessionId?: string;
+  impersonation?: {
+    actorUserId: string;
+    originalSessionId: string;
+  };
   createdAt: number;
   lastSeenAt?: number;
   ipAddress?: string;
@@ -60,6 +64,11 @@ export interface AppEnv {
     effectiveScopes?: string[];
     isTokenAuth?: boolean;
     authType?: 'session' | 'api-token' | 'oauth-token' | 'inference-token';
+    impersonation?: {
+      actor: User;
+      subject: User;
+      authorized: boolean;
+    };
     inferenceAuth?: {
       tokenId: string;
       tokenPrefix: string;

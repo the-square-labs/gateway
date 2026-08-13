@@ -5,8 +5,13 @@ import { createChildLogger } from '@/lib/logger.js';
 import { canUseAI } from '@/lib/permissions.js';
 import { withRateLimitRedisTimeout } from '@/lib/rate-limit-timeout.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { runWithAuditRequestContext } from '@/modules/audit/audit-request-context.js';
+import {
+  type LiveSessionUser,
+  requiresSessionMfaReauthentication,
+  resolveLiveSessionUser,
+} from '@/modules/auth/live-session-user.js';
 import { EventBusService } from '@/services/event-bus.service.js';
-import { SessionService } from '@/services/session.service.js';
 import type { User } from '@/types.js';
 import { AISettingsService } from './ai.settings.service.js';
 import type { WSClientMessage, WSServerMessage } from './ai.types.js';
@@ -22,6 +27,7 @@ type RedisClient = ReturnType<typeof import('@/services/cache.service.js').creat
 
 interface WSConnectionState {
   user: User | null;
+  impersonation: LiveSessionUser['impersonation'] | null;
   sessionId: string | null;
   authenticated: boolean;
   subscribedConversationIds: Set<string>;
@@ -242,17 +248,16 @@ function unsubscribeFromUserRuntime(state: WSConnectionState): void {
   state.runtimeUnsubscribe = null;
 }
 
-async function authenticateFromSession(sessionId: string): Promise<User | null> {
-  const sessionService = container.resolve(SessionService);
-  const session = await sessionService.getSession(sessionId);
-  const sessionUserId = session?.userId ?? session?.user?.id;
-  if (!sessionUserId) return null;
-
-  // Always resolve live scopes from the group (not stale session cache)
-  const { AuthService } = await import('@/modules/auth/auth.service.js');
-  const authService = container.resolve(AuthService);
-  const freshUser = await authService.getUserById(sessionUserId);
-  return freshUser;
+async function authenticateFromSession(sessionId: string): Promise<LiveSessionUser | null> {
+  const result = await resolveLiveSessionUser(sessionId);
+  if (
+    !result ||
+    (result.impersonation && !result.impersonation.authorized) ||
+    (!result.impersonation && requiresSessionMfaReauthentication(result.user, result.session))
+  ) {
+    return null;
+  }
+  return result;
 }
 
 interface AIRateLimitResult {
@@ -323,6 +328,7 @@ export function createWSHandlers() {
     onOpen(_event: Event, ws: WSContext) {
       const state: WSConnectionState = {
         user: null,
+        impersonation: null,
         sessionId: null,
         authenticated: false,
         subscribedConversationIds: new Set(),
@@ -345,695 +351,713 @@ export function createWSHandlers() {
       const state = wsStates.get(ws);
       if (!state) return;
 
-      let raw: Record<string, unknown>;
-      let msg: WSClientMessage;
-      try {
-        const parsed = JSON.parse(typeof event.data === 'string' ? event.data : String(event.data));
-        if (!parsed || typeof parsed !== 'object' || typeof parsed.type !== 'string') {
-          send(ws, { type: 'error', requestId: '', message: 'Invalid message format' });
-          return;
-        }
-        raw = parsed as Record<string, unknown>;
-        msg = raw as WSClientMessage;
-      } catch {
-        send(ws, { type: 'error', requestId: '', message: 'Invalid JSON' });
-        return;
-      }
-
-      if (msg.type === 'ping') {
-        send(ws, { type: 'pong' });
-        return;
-      }
-
-      if (!state.authenticated) {
-        send(ws, { type: 'auth_error', message: 'Not authenticated' });
-        return;
-      }
-
-      // Re-validate session on each message to catch role changes
-      if (state.sessionId) {
-        const freshUser = await authenticateFromSession(state.sessionId);
-        if (!freshUser || freshUser.isBlocked || !canUseAI(freshUser.scopes)) {
-          send(ws, { type: 'auth_error', message: 'Session expired or role changed' });
+      return runWithAuditRequestContext(
+        {
+          impersonation: state.impersonation
+            ? {
+                actorUserId: state.impersonation.actor.id,
+                subjectUserId: state.impersonation.subject.id,
+                subjectEmail: state.impersonation.subject.email,
+                subjectName: state.impersonation.subject.name,
+              }
+            : undefined,
+        },
+        async () => {
+          let raw: Record<string, unknown>;
+          let msg: WSClientMessage;
           try {
-            ws.close();
+            const parsed = JSON.parse(typeof event.data === 'string' ? event.data : String(event.data));
+            if (!parsed || typeof parsed !== 'object' || typeof parsed.type !== 'string') {
+              send(ws, { type: 'error', requestId: '', message: 'Invalid message format' });
+              return;
+            }
+            raw = parsed as Record<string, unknown>;
+            msg = raw as WSClientMessage;
           } catch {
-            /* ignore */
-          }
-          return;
-        }
-        state.user = freshUser;
-      }
-
-      const user = state.user!;
-
-      if (msg.type === 'conversation.subscribe') {
-        try {
-          state.subscribedConversationIds.add(msg.conversationId);
-          send(ws, {
-            type: 'command.ack',
-            commandType: msg.type,
-            clientCommandId: msg.clientCommandId,
-            conversationId: msg.conversationId,
-          });
-          const snapshot = await sendConversationSnapshot(ws, user.id, msg.conversationId);
-          await resumeResolvedCredentialContinuation(user, snapshot);
-        } catch (error) {
-          sendCommandError(ws, msg, error, 'Failed to subscribe to conversation');
-        }
-        return;
-      }
-
-      if (msg.type === 'conversation.unsubscribe') {
-        state.subscribedConversationIds.delete(msg.conversationId);
-        send(ws, { type: 'command.ack', commandType: msg.type, conversationId: msg.conversationId });
-        return;
-      }
-
-      if (msg.type === 'conversation.sync') {
-        try {
-          const snapshot = await sendConversationSnapshot(ws, user.id, msg.conversationId);
-          await resumeResolvedCredentialContinuation(user, snapshot);
-          send(ws, {
-            type: 'command.ack',
-            commandType: msg.type,
-            clientCommandId: msg.clientCommandId,
-            conversationId: msg.conversationId,
-          });
-        } catch (error) {
-          sendCommandError(ws, msg, error, 'Failed to sync conversation');
-        }
-        return;
-      }
-
-      if (msg.type === 'conversation.send_message') {
-        try {
-          const content = msg.content.trim();
-          if (!content) throw new AppError(400, 'AI_MESSAGE_REQUIRED', 'Message content is required');
-          const model = msg.model?.trim();
-          if (model && model.length > 255) {
-            throw new AppError(400, 'AI_MODEL_INVALID', 'AI model identifier is too long');
-          }
-          const reasoningEffort = msg.reasoningEffort?.trim();
-          if (reasoningEffort && reasoningEffort.length > 64) {
-            throw new AppError(400, 'AI_REASONING_EFFORT_INVALID', 'AI reasoning effort is too long');
+            send(ws, { type: 'error', requestId: '', message: 'Invalid JSON' });
+            return;
           }
 
-          const rateCheck = await checkRateLimit(user.id);
-          if (!rateCheck.allowed) {
-            const code = rateCheck.unavailable ? 'RATE_LIMIT_UNAVAILABLE' : 'RATE_LIMITED';
-            throw new AppError(
-              rateCheck.unavailable ? 503 : 429,
-              code,
-              rateCheck.unavailable ? 'Gateway is temporarily unavailable' : 'AI rate limit exceeded',
-              rateCheck.unavailable ? undefined : { retryAfter: rateCheck.retryAfter }
-            );
+          if (msg.type === 'ping') {
+            send(ws, { type: 'pong' });
+            return;
           }
 
-          const runService = container.resolve(AIRunService);
-          const planService = container.isRegistered(AIPlanService) ? container.resolve(AIPlanService) : null;
-          let activePlan =
-            msg.conversationId && planService
-              ? await planService.getActivePlanSnapshot(user.id, msg.conversationId)
-              : null;
-          if (activePlan?.status === 'awaiting_decision') {
-            throw new AppError(409, 'AI_PLAN_DECISION_REQUIRED', 'Choose how to continue the published plan first');
-          }
-          if (activePlan?.status === 'validating' || activePlan?.status === 'verifying') {
-            throw new AppError(409, 'AI_PLAN_BUSY', 'The active plan is being verified');
-          }
-          if (activePlan?.status === 'paused' && planService) {
-            activePlan = await planService.resume(user.id, activePlan.conversationId);
-          }
-          const title = msg.conversationId
-            ? 'New Work Session'
-            : await container.resolve(AIProviderRuntimeService).generateConversationTitle(user, {
-                requestId: `conversation-title:${msg.clientCommandId}`,
-                content: userVisibleContent(content),
-                ...(model ? { requestedModel: model } : {}),
-                signal: AbortSignal.timeout(CONVERSATION_TITLE_TIMEOUT_MS),
-              });
-          const result = await runService.startUserRun({
-            conversationId: msg.conversationId ?? null,
-            userId: user.id,
-            title,
-            userMessage: {
-              role: 'user',
-              content,
-              ...(msg.attachments?.length ? { attachments: msg.attachments } : {}),
-            },
-            clientCommandId: msg.clientCommandId,
-            lastContext: msg.context ? { ...msg.context } : null,
-            ...(model ? { model } : {}),
-            ...(reasoningEffort ? { reasoningEffort } : {}),
-          });
-          if (msg.workMode === 'plan' && !activePlan) {
-            if (!planService) throw new AppError(503, 'AI_PLAN_UNAVAILABLE', 'Plan Mode is unavailable');
-            activePlan = await planService.enterPlan({
-              userId: user.id,
-              conversationId: result.conversationId,
-              title,
-              model: model ?? null,
-              reasoningEffort: reasoningEffort ?? null,
-            });
-          }
-          let run = result.run;
-          if (!result.duplicate && activePlan) {
-            run = await runService.attachRunToPlan({
-              userId: user.id,
-              conversationId: result.conversationId,
-              runId: result.run.id,
-              plan: activePlan,
-              purpose:
-                activePlan.status === 'drafting'
-                  ? 'plan_draft'
-                  : activePlan.status === 'verifying'
-                    ? 'plan_verification'
-                    : 'plan_execution',
-            });
+          if (!state.authenticated) {
+            send(ws, { type: 'auth_error', message: 'Not authenticated' });
+            return;
           }
 
-          send(ws, {
-            type: 'command.ack',
-            commandType: msg.type,
-            clientCommandId: msg.clientCommandId,
-            conversationId: result.conversationId,
-            runId: run.id,
-            duplicate: result.duplicate,
-          });
-          state.subscribedConversationIds.add(result.conversationId);
-          const snapshot = await sendConversationSnapshot(ws, user.id, result.conversationId);
-          send(ws, {
-            type: 'run.status_changed',
-            conversationId: result.conversationId,
-            run: snapshot.runtime.activeRun,
-            ...revisionPayload(snapshot),
-          });
-          if (!result.duplicate) {
-            runService.startRunExecution(user, run.id);
-          }
-        } catch (error) {
-          sendCommandError(ws, msg, error, 'Failed to send AI message');
-        }
-        return;
-      }
-
-      if (msg.type === 'conversation.queue_message') {
-        try {
-          const content = msg.content.trim();
-          if (!content && !msg.attachments?.length) {
-            throw new AppError(400, 'AI_MESSAGE_REQUIRED', 'Message content is required');
-          }
-          const rateCheck = await checkRateLimit(user.id);
-          if (!rateCheck.allowed) {
-            const code = rateCheck.unavailable ? 'RATE_LIMIT_UNAVAILABLE' : 'RATE_LIMITED';
-            throw new AppError(
-              rateCheck.unavailable ? 503 : 429,
-              code,
-              rateCheck.unavailable ? 'Gateway is temporarily unavailable' : 'AI rate limit exceeded',
-              rateCheck.unavailable ? undefined : { retryAfter: rateCheck.retryAfter }
-            );
-          }
-          const runService = container.resolve(AIRunService);
-          const result = await runService.queueConversationInput({
-            conversationId: msg.conversationId,
-            userId: user.id,
-            inputId: msg.inputId,
-            clientCommandId: msg.clientCommandId,
-            content,
-            attachments: msg.attachments,
-            context: msg.context ? { ...msg.context } : null,
-          });
-          send(ws, {
-            type: 'command.ack',
-            commandType: msg.type,
-            clientCommandId: msg.clientCommandId,
-            conversationId: msg.conversationId,
-            duplicate: result.duplicate,
-          });
-          await sendConversationSnapshot(ws, user.id, msg.conversationId);
-          runService.startPendingInputExecution(user, msg.conversationId);
-        } catch (error) {
-          sendCommandError(ws, msg, error, 'Failed to queue AI message');
-        }
-        return;
-      }
-
-      if (msg.type === 'conversation.steer_message') {
-        try {
-          const runService = container.resolve(AIRunService);
-          await runService.steerConversationInput({
-            conversationId: msg.conversationId,
-            inputId: msg.inputId,
-            userId: user.id,
-          });
-          send(ws, {
-            type: 'command.ack',
-            commandType: msg.type,
-            clientCommandId: msg.clientCommandId,
-            conversationId: msg.conversationId,
-          });
-          await sendConversationSnapshot(ws, user.id, msg.conversationId);
-          runService.startPendingInputExecution(user, msg.conversationId);
-        } catch (error) {
-          sendCommandError(ws, msg, error, 'Failed to steer AI message');
-        }
-        return;
-      }
-
-      if (msg.type === 'conversation.cancel_queued_message') {
-        try {
-          const runService = container.resolve(AIRunService);
-          await runService.cancelConversationInput({
-            conversationId: msg.conversationId,
-            inputId: msg.inputId,
-            userId: user.id,
-          });
-          send(ws, {
-            type: 'command.ack',
-            commandType: msg.type,
-            clientCommandId: msg.clientCommandId,
-            conversationId: msg.conversationId,
-          });
-          await sendConversationSnapshot(ws, user.id, msg.conversationId);
-        } catch (error) {
-          sendCommandError(ws, msg, error, 'Failed to cancel queued AI message');
-        }
-        return;
-      }
-
-      if (msg.type === 'conversation.continue') {
-        try {
-          const model = msg.model?.trim();
-          if (model && model.length > 255) {
-            throw new AppError(400, 'AI_MODEL_INVALID', 'AI model identifier is too long');
-          }
-          const reasoningEffort = msg.reasoningEffort?.trim();
-          if (reasoningEffort && reasoningEffort.length > 64) {
-            throw new AppError(400, 'AI_REASONING_EFFORT_INVALID', 'AI reasoning effort is too long');
-          }
-          const rateCheck = await checkRateLimit(user.id);
-          if (!rateCheck.allowed) {
-            const code = rateCheck.unavailable ? 'RATE_LIMIT_UNAVAILABLE' : 'RATE_LIMITED';
-            throw new AppError(
-              rateCheck.unavailable ? 503 : 429,
-              code,
-              rateCheck.unavailable ? 'Gateway is temporarily unavailable' : 'AI rate limit exceeded',
-              rateCheck.unavailable ? undefined : { retryAfter: rateCheck.retryAfter }
-            );
-          }
-
-          const runService = container.resolve(AIRunService);
-          const result = await runService.startContinuationRun({
-            conversationId: msg.conversationId,
-            userId: user.id,
-            clientCommandId: msg.clientCommandId,
-            lastContext: msg.context ? { ...msg.context } : null,
-            ...(model ? { model } : {}),
-            ...(reasoningEffort ? { reasoningEffort } : {}),
-          });
-
-          send(ws, {
-            type: 'command.ack',
-            commandType: msg.type,
-            clientCommandId: msg.clientCommandId,
-            conversationId: result.conversationId,
-            runId: result.run.id,
-            duplicate: result.duplicate,
-          });
-          state.subscribedConversationIds.add(result.conversationId);
-          const snapshot = await sendConversationSnapshot(ws, user.id, result.conversationId);
-          send(ws, {
-            type: 'run.status_changed',
-            conversationId: result.conversationId,
-            run: snapshot.runtime.activeRun,
-            ...revisionPayload(snapshot),
-          });
-          if (!result.duplicate) runService.startRunExecution(user, result.run.id);
-        } catch (error) {
-          sendCommandError(ws, msg, error, 'Failed to continue AI conversation');
-        }
-        return;
-      }
-
-      if (msg.type === 'conversation.compact') {
-        try {
-          const model = msg.model?.trim();
-          if (model && model.length > 255) {
-            throw new AppError(400, 'AI_MODEL_INVALID', 'AI model identifier is too long');
-          }
-          const reasoningEffort = msg.reasoningEffort?.trim();
-          if (reasoningEffort && reasoningEffort.length > 64) {
-            throw new AppError(400, 'AI_REASONING_EFFORT_INVALID', 'AI reasoning effort is too long');
-          }
-          const rateCheck = await checkRateLimit(user.id);
-          if (!rateCheck.allowed) {
-            const code = rateCheck.unavailable ? 'RATE_LIMIT_UNAVAILABLE' : 'RATE_LIMITED';
-            throw new AppError(
-              rateCheck.unavailable ? 503 : 429,
-              code,
-              rateCheck.unavailable ? 'Gateway is temporarily unavailable' : 'AI rate limit exceeded',
-              rateCheck.unavailable ? undefined : { retryAfter: rateCheck.retryAfter }
-            );
-          }
-
-          const runService = container.resolve(AIRunService);
-          const result = await runService.startContextCompactionRun({
-            conversationId: msg.conversationId,
-            userId: user.id,
-            clientCommandId: msg.clientCommandId,
-            lastContext: msg.context ? { ...msg.context } : null,
-            ...(model ? { model } : {}),
-            ...(reasoningEffort ? { reasoningEffort } : {}),
-          });
-
-          send(ws, {
-            type: 'command.ack',
-            commandType: msg.type,
-            clientCommandId: msg.clientCommandId,
-            conversationId: result.conversationId,
-            runId: result.run.id,
-            duplicate: result.duplicate,
-          });
-          state.subscribedConversationIds.add(result.conversationId);
-          const snapshot = await sendConversationSnapshot(ws, user.id, result.conversationId);
-          send(ws, {
-            type: 'run.status_changed',
-            conversationId: result.conversationId,
-            run: snapshot.runtime.activeRun,
-            ...revisionPayload(snapshot),
-          });
-          if (!result.duplicate) {
-            runService.startContextCompaction(user, result.run.id, 'manual');
-          }
-        } catch (error) {
-          sendCommandError(ws, msg, error, 'Failed to compact AI conversation');
-        }
-        return;
-      }
-
-      if (msg.type === 'plan.decide') {
-        try {
-          const planService = container.resolve(AIPlanService);
-          const runService = container.resolve(AIRunService);
-          const result = await planService.decide({
-            userId: user.id,
-            conversationId: msg.conversationId,
-            planId: msg.planId,
-            revisionId: msg.revisionId,
-            decision: msg.decision,
-            customInstruction: msg.customInstruction,
-            clientCommandId: msg.clientCommandId,
-          });
-          if (msg.decision !== 'refine') {
-            await runService.startPlanRun({
-              user,
-              plan: result.plan,
-              purpose: 'plan_execution',
-              clientCommandId: `plan-decision:${msg.clientCommandId}`,
-              instruction: msg.decision === 'custom' ? msg.customInstruction : undefined,
-            });
-          }
-          send(ws, {
-            type: 'command.ack',
-            commandType: msg.type,
-            clientCommandId: msg.clientCommandId,
-            conversationId: msg.conversationId,
-            duplicate: result.duplicate,
-          });
-          await sendConversationSnapshot(ws, user.id, msg.conversationId);
-        } catch (error) {
-          sendCommandError(ws, msg, error, 'Failed to apply the plan decision');
-        }
-        return;
-      }
-
-      if (msg.type === 'plan.pause') {
-        try {
-          const planService = container.resolve(AIPlanService);
-          const runService = container.resolve(AIRunService);
-          const plan = await planService.getActivePlanSnapshot(user.id, msg.conversationId);
-          if (!plan || plan.id !== msg.planId) throw new AppError(404, 'AI_PLAN_NOT_FOUND', 'AI plan not found');
-          await planService.pause(user.id, msg.conversationId, 'Paused by user');
-          await runService.stopActiveRunForRollback({ userId: user.id, conversationId: msg.conversationId });
-          send(ws, {
-            type: 'command.ack',
-            commandType: msg.type,
-            clientCommandId: msg.clientCommandId,
-            conversationId: msg.conversationId,
-          });
-          await sendConversationSnapshot(ws, user.id, msg.conversationId);
-        } catch (error) {
-          sendCommandError(ws, msg, error, 'Failed to pause the plan');
-        }
-        return;
-      }
-
-      if (msg.type === 'plan.resume') {
-        try {
-          const planService = container.resolve(AIPlanService);
-          const runService = container.resolve(AIRunService);
-          const current = await planService.getActivePlanSnapshot(user.id, msg.conversationId);
-          if (!current || current.id !== msg.planId) throw new AppError(404, 'AI_PLAN_NOT_FOUND', 'AI plan not found');
-          const plan = await planService.resume(user.id, msg.conversationId);
-          await runService.startPlanRun({
-            user,
-            plan,
-            purpose: plan.status === 'verifying' ? 'plan_verification' : 'plan_execution',
-            clientCommandId: `plan-resume:${msg.clientCommandId}`,
-          });
-          send(ws, {
-            type: 'command.ack',
-            commandType: msg.type,
-            clientCommandId: msg.clientCommandId,
-            conversationId: msg.conversationId,
-          });
-          await sendConversationSnapshot(ws, user.id, msg.conversationId);
-        } catch (error) {
-          sendCommandError(ws, msg, error, 'Failed to resume the plan');
-        }
-        return;
-      }
-
-      if (msg.type === 'plan.cancel') {
-        try {
-          const planService = container.resolve(AIPlanService);
-          const runService = container.resolve(AIRunService);
-          const current = await planService.getActivePlanSnapshot(user.id, msg.conversationId);
-          if (!current || current.id !== msg.planId) throw new AppError(404, 'AI_PLAN_NOT_FOUND', 'AI plan not found');
-          await runService.stopActiveRunForRollback({ userId: user.id, conversationId: msg.conversationId });
-          await planService.cancel(user.id, msg.conversationId);
-          send(ws, {
-            type: 'command.ack',
-            commandType: msg.type,
-            clientCommandId: msg.clientCommandId,
-            conversationId: msg.conversationId,
-          });
-          await sendConversationSnapshot(ws, user.id, msg.conversationId);
-        } catch (error) {
-          sendCommandError(ws, msg, error, 'Failed to cancel the plan');
-        }
-        return;
-      }
-
-      if (msg.type === 'run.stop') {
-        try {
-          const runService = container.resolve(AIRunService);
-          const result = await runService.stopRun({
-            conversationId: msg.conversationId,
-            runId: msg.runId,
-            userId: user.id,
-          });
-          send(ws, {
-            type: 'command.ack',
-            commandType: msg.type,
-            clientCommandId: msg.clientCommandId,
-            conversationId: msg.conversationId,
-            runId: msg.runId,
-            duplicate: result.duplicate,
-          });
-          const snapshot = await sendConversationSnapshot(ws, user.id, msg.conversationId);
-          send(ws, {
-            type: 'run.status_changed',
-            conversationId: msg.conversationId,
-            run: result.run,
-            ...revisionPayload(snapshot),
-          });
-        } catch (error) {
-          sendCommandError(ws, msg, error, 'Failed to stop AI run');
-        }
-        return;
-      }
-
-      if (msg.type === 'approval.decide') {
-        try {
-          const runService = container.resolve(AIRunService);
-          const result = await runService.decideToolCall({
-            conversationId: msg.conversationId,
-            runId: msg.runId,
-            toolCallId: msg.approvalId,
-            userId: user.id,
-            clientCommandId: msg.clientCommandId,
-            decision: msg.decision,
-          });
-          send(ws, {
-            type: 'command.ack',
-            commandType: msg.type,
-            clientCommandId: msg.clientCommandId,
-            conversationId: msg.conversationId,
-            runId: msg.runId,
-            duplicate: result.duplicate,
-          });
-          send(ws, {
-            type: 'approval.updated',
-            conversationId: msg.conversationId,
-            runId: msg.runId,
-            approval: result.toolCall,
-            duplicate: result.duplicate,
-          });
-          try {
-            if (result.toolCall.roundId && result.continuationReady) {
-              runService.startToolRoundContinuation(user, {
-                conversationId: msg.conversationId,
-                runId: msg.runId,
-                roundId: result.toolCall.roundId,
-              });
-            } else if (!result.toolCall.roundId && result.continuationReady !== false) {
-              runService.startApprovalContinuation(user, {
-                conversationId: msg.conversationId,
-                runId: msg.runId,
-                toolCall: result.toolCall,
-                approved: msg.decision === 'approved',
-              });
+          // Re-validate session on each message to catch role changes
+          if (state.sessionId) {
+            const freshIdentity = await authenticateFromSession(state.sessionId);
+            const freshUser = freshIdentity?.user;
+            if (!freshIdentity || !freshUser || freshUser.isBlocked || !canUseAI(freshUser.scopes)) {
+              send(ws, { type: 'auth_error', message: 'Session expired or role changed' });
+              try {
+                ws.close();
+              } catch {
+                /* ignore */
+              }
+              return;
             }
-          } catch (error) {
-            logger.error('Failed to schedule AI approval continuation after committed decision', {
-              conversationId: msg.conversationId,
-              runId: msg.runId,
-              error: error instanceof Error ? error.message : String(error),
-            });
+            state.user = freshUser;
+            state.impersonation = freshIdentity.impersonation ?? null;
           }
-          sendConversationSnapshotBestEffort(ws, user.id, msg.conversationId);
-        } catch (error) {
-          sendCommandError(ws, msg, error, 'Failed to decide AI tool approval');
-        }
-        return;
-      }
 
-      if (msg.type === 'credential.resolve') {
-        try {
-          const runService = container.resolve(AIRunService);
-          const result = await runService.resolveCredentialChallenge({
-            conversationId: msg.conversationId,
-            runId: msg.runId,
-            challengeId: msg.challengeId,
-            userId: user.id,
-            clientCommandId: msg.clientCommandId,
-            decision: msg.decision,
-          });
-          send(ws, {
-            type: 'command.ack',
-            commandType: msg.type,
-            clientCommandId: msg.clientCommandId,
-            conversationId: msg.conversationId,
-            runId: msg.runId,
-            duplicate: result.duplicate,
-          });
-          send(ws, {
-            type: 'credential.updated',
-            conversationId: msg.conversationId,
-            runId: msg.runId,
-            challenge: result.challenge,
-            duplicate: result.duplicate,
-          });
-          try {
-            for (const challenge of [result.challenge, ...result.additionalChallenges]) {
-              runService.startCredentialContinuation(user, {
-                conversationId: challenge.conversationId,
-                runId: challenge.runId,
-                challenge,
-                authorized: msg.decision === 'authorized',
+          const user = state.user!;
+
+          if (msg.type === 'conversation.subscribe') {
+            try {
+              state.subscribedConversationIds.add(msg.conversationId);
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: msg.conversationId,
               });
+              const snapshot = await sendConversationSnapshot(ws, user.id, msg.conversationId);
+              await resumeResolvedCredentialContinuation(user, snapshot);
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to subscribe to conversation');
             }
-          } catch (error) {
-            logger.error('Failed to schedule AI credential continuation after committed decision', {
-              conversationId: msg.conversationId,
-              runId: msg.runId,
-              error: error instanceof Error ? error.message : String(error),
-            });
+            return;
           }
-          sendConversationSnapshotBestEffort(ws, user.id, msg.conversationId);
-        } catch (error) {
-          sendCommandError(ws, msg, error, 'Failed to resolve GitLab authorization');
-        }
-        return;
-      }
 
-      if (msg.type === 'question.answer') {
-        try {
-          const runService = container.resolve(AIRunService);
-          const result = await runService.answerQuestion({
-            conversationId: msg.conversationId,
-            runId: msg.runId,
-            questionId: msg.questionId,
-            userId: user.id,
-            clientCommandId: msg.clientCommandId,
-            answer: msg.answer,
-          });
-          send(ws, {
-            type: 'command.ack',
-            commandType: msg.type,
-            clientCommandId: msg.clientCommandId,
-            conversationId: msg.conversationId,
-            runId: msg.runId,
-            duplicate: result.duplicate,
-          });
-          send(ws, {
-            type: 'question.answered',
-            conversationId: msg.conversationId,
-            runId: msg.runId,
-            question: result.question,
-            duplicate: result.duplicate,
-          });
-          try {
-            if (result.question.roundId && result.continuationReady) {
-              runService.startToolRoundContinuation(user, {
+          if (msg.type === 'conversation.unsubscribe') {
+            state.subscribedConversationIds.delete(msg.conversationId);
+            send(ws, { type: 'command.ack', commandType: msg.type, conversationId: msg.conversationId });
+            return;
+          }
+
+          if (msg.type === 'conversation.sync') {
+            try {
+              const snapshot = await sendConversationSnapshot(ws, user.id, msg.conversationId);
+              await resumeResolvedCredentialContinuation(user, snapshot);
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: msg.conversationId,
+              });
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to sync conversation');
+            }
+            return;
+          }
+
+          if (msg.type === 'conversation.send_message') {
+            try {
+              const content = msg.content.trim();
+              if (!content) throw new AppError(400, 'AI_MESSAGE_REQUIRED', 'Message content is required');
+              const model = msg.model?.trim();
+              if (model && model.length > 255) {
+                throw new AppError(400, 'AI_MODEL_INVALID', 'AI model identifier is too long');
+              }
+              const reasoningEffort = msg.reasoningEffort?.trim();
+              if (reasoningEffort && reasoningEffort.length > 64) {
+                throw new AppError(400, 'AI_REASONING_EFFORT_INVALID', 'AI reasoning effort is too long');
+              }
+
+              const rateCheck = await checkRateLimit(user.id);
+              if (!rateCheck.allowed) {
+                const code = rateCheck.unavailable ? 'RATE_LIMIT_UNAVAILABLE' : 'RATE_LIMITED';
+                throw new AppError(
+                  rateCheck.unavailable ? 503 : 429,
+                  code,
+                  rateCheck.unavailable ? 'Gateway is temporarily unavailable' : 'AI rate limit exceeded',
+                  rateCheck.unavailable ? undefined : { retryAfter: rateCheck.retryAfter }
+                );
+              }
+
+              const runService = container.resolve(AIRunService);
+              const planService = container.isRegistered(AIPlanService) ? container.resolve(AIPlanService) : null;
+              let activePlan =
+                msg.conversationId && planService
+                  ? await planService.getActivePlanSnapshot(user.id, msg.conversationId)
+                  : null;
+              if (activePlan?.status === 'awaiting_decision') {
+                throw new AppError(409, 'AI_PLAN_DECISION_REQUIRED', 'Choose how to continue the published plan first');
+              }
+              if (activePlan?.status === 'validating' || activePlan?.status === 'verifying') {
+                throw new AppError(409, 'AI_PLAN_BUSY', 'The active plan is being verified');
+              }
+              if (activePlan?.status === 'paused' && planService) {
+                activePlan = await planService.resume(user.id, activePlan.conversationId);
+              }
+              const title = msg.conversationId
+                ? 'New Work Session'
+                : await container.resolve(AIProviderRuntimeService).generateConversationTitle(user, {
+                    requestId: `conversation-title:${msg.clientCommandId}`,
+                    content: userVisibleContent(content),
+                    ...(model ? { requestedModel: model } : {}),
+                    signal: AbortSignal.timeout(CONVERSATION_TITLE_TIMEOUT_MS),
+                  });
+              const result = await runService.startUserRun({
+                conversationId: msg.conversationId ?? null,
+                userId: user.id,
+                title,
+                userMessage: {
+                  role: 'user',
+                  content,
+                  ...(msg.attachments?.length ? { attachments: msg.attachments } : {}),
+                },
+                clientCommandId: msg.clientCommandId,
+                lastContext: msg.context ? { ...msg.context } : null,
+                ...(model ? { model } : {}),
+                ...(reasoningEffort ? { reasoningEffort } : {}),
+              });
+              if (msg.workMode === 'plan' && !activePlan) {
+                if (!planService) throw new AppError(503, 'AI_PLAN_UNAVAILABLE', 'Plan Mode is unavailable');
+                activePlan = await planService.enterPlan({
+                  userId: user.id,
+                  conversationId: result.conversationId,
+                  title,
+                  model: model ?? null,
+                  reasoningEffort: reasoningEffort ?? null,
+                });
+              }
+              let run = result.run;
+              if (!result.duplicate && activePlan) {
+                run = await runService.attachRunToPlan({
+                  userId: user.id,
+                  conversationId: result.conversationId,
+                  runId: result.run.id,
+                  plan: activePlan,
+                  purpose:
+                    activePlan.status === 'drafting'
+                      ? 'plan_draft'
+                      : activePlan.status === 'verifying'
+                        ? 'plan_verification'
+                        : 'plan_execution',
+                });
+              }
+
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: result.conversationId,
+                runId: run.id,
+                duplicate: result.duplicate,
+              });
+              state.subscribedConversationIds.add(result.conversationId);
+              const snapshot = await sendConversationSnapshot(ws, user.id, result.conversationId);
+              send(ws, {
+                type: 'run.status_changed',
+                conversationId: result.conversationId,
+                run: snapshot.runtime.activeRun,
+                ...revisionPayload(snapshot),
+              });
+              if (!result.duplicate) {
+                runService.startRunExecution(user, run.id);
+              }
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to send AI message');
+            }
+            return;
+          }
+
+          if (msg.type === 'conversation.queue_message') {
+            try {
+              const content = msg.content.trim();
+              if (!content && !msg.attachments?.length) {
+                throw new AppError(400, 'AI_MESSAGE_REQUIRED', 'Message content is required');
+              }
+              const rateCheck = await checkRateLimit(user.id);
+              if (!rateCheck.allowed) {
+                const code = rateCheck.unavailable ? 'RATE_LIMIT_UNAVAILABLE' : 'RATE_LIMITED';
+                throw new AppError(
+                  rateCheck.unavailable ? 503 : 429,
+                  code,
+                  rateCheck.unavailable ? 'Gateway is temporarily unavailable' : 'AI rate limit exceeded',
+                  rateCheck.unavailable ? undefined : { retryAfter: rateCheck.retryAfter }
+                );
+              }
+              const runService = container.resolve(AIRunService);
+              const result = await runService.queueConversationInput({
+                conversationId: msg.conversationId,
+                userId: user.id,
+                inputId: msg.inputId,
+                clientCommandId: msg.clientCommandId,
+                content,
+                attachments: msg.attachments,
+                context: msg.context ? { ...msg.context } : null,
+              });
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: msg.conversationId,
+                duplicate: result.duplicate,
+              });
+              await sendConversationSnapshot(ws, user.id, msg.conversationId);
+              runService.startPendingInputExecution(user, msg.conversationId);
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to queue AI message');
+            }
+            return;
+          }
+
+          if (msg.type === 'conversation.steer_message') {
+            try {
+              const runService = container.resolve(AIRunService);
+              await runService.steerConversationInput({
+                conversationId: msg.conversationId,
+                inputId: msg.inputId,
+                userId: user.id,
+              });
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: msg.conversationId,
+              });
+              await sendConversationSnapshot(ws, user.id, msg.conversationId);
+              runService.startPendingInputExecution(user, msg.conversationId);
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to steer AI message');
+            }
+            return;
+          }
+
+          if (msg.type === 'conversation.cancel_queued_message') {
+            try {
+              const runService = container.resolve(AIRunService);
+              await runService.cancelConversationInput({
+                conversationId: msg.conversationId,
+                inputId: msg.inputId,
+                userId: user.id,
+              });
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: msg.conversationId,
+              });
+              await sendConversationSnapshot(ws, user.id, msg.conversationId);
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to cancel queued AI message');
+            }
+            return;
+          }
+
+          if (msg.type === 'conversation.continue') {
+            try {
+              const model = msg.model?.trim();
+              if (model && model.length > 255) {
+                throw new AppError(400, 'AI_MODEL_INVALID', 'AI model identifier is too long');
+              }
+              const reasoningEffort = msg.reasoningEffort?.trim();
+              if (reasoningEffort && reasoningEffort.length > 64) {
+                throw new AppError(400, 'AI_REASONING_EFFORT_INVALID', 'AI reasoning effort is too long');
+              }
+              const rateCheck = await checkRateLimit(user.id);
+              if (!rateCheck.allowed) {
+                const code = rateCheck.unavailable ? 'RATE_LIMIT_UNAVAILABLE' : 'RATE_LIMITED';
+                throw new AppError(
+                  rateCheck.unavailable ? 503 : 429,
+                  code,
+                  rateCheck.unavailable ? 'Gateway is temporarily unavailable' : 'AI rate limit exceeded',
+                  rateCheck.unavailable ? undefined : { retryAfter: rateCheck.retryAfter }
+                );
+              }
+
+              const runService = container.resolve(AIRunService);
+              const result = await runService.startContinuationRun({
+                conversationId: msg.conversationId,
+                userId: user.id,
+                clientCommandId: msg.clientCommandId,
+                lastContext: msg.context ? { ...msg.context } : null,
+                ...(model ? { model } : {}),
+                ...(reasoningEffort ? { reasoningEffort } : {}),
+              });
+
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: result.conversationId,
+                runId: result.run.id,
+                duplicate: result.duplicate,
+              });
+              state.subscribedConversationIds.add(result.conversationId);
+              const snapshot = await sendConversationSnapshot(ws, user.id, result.conversationId);
+              send(ws, {
+                type: 'run.status_changed',
+                conversationId: result.conversationId,
+                run: snapshot.runtime.activeRun,
+                ...revisionPayload(snapshot),
+              });
+              if (!result.duplicate) runService.startRunExecution(user, result.run.id);
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to continue AI conversation');
+            }
+            return;
+          }
+
+          if (msg.type === 'conversation.compact') {
+            try {
+              const model = msg.model?.trim();
+              if (model && model.length > 255) {
+                throw new AppError(400, 'AI_MODEL_INVALID', 'AI model identifier is too long');
+              }
+              const reasoningEffort = msg.reasoningEffort?.trim();
+              if (reasoningEffort && reasoningEffort.length > 64) {
+                throw new AppError(400, 'AI_REASONING_EFFORT_INVALID', 'AI reasoning effort is too long');
+              }
+              const rateCheck = await checkRateLimit(user.id);
+              if (!rateCheck.allowed) {
+                const code = rateCheck.unavailable ? 'RATE_LIMIT_UNAVAILABLE' : 'RATE_LIMITED';
+                throw new AppError(
+                  rateCheck.unavailable ? 503 : 429,
+                  code,
+                  rateCheck.unavailable ? 'Gateway is temporarily unavailable' : 'AI rate limit exceeded',
+                  rateCheck.unavailable ? undefined : { retryAfter: rateCheck.retryAfter }
+                );
+              }
+
+              const runService = container.resolve(AIRunService);
+              const result = await runService.startContextCompactionRun({
+                conversationId: msg.conversationId,
+                userId: user.id,
+                clientCommandId: msg.clientCommandId,
+                lastContext: msg.context ? { ...msg.context } : null,
+                ...(model ? { model } : {}),
+                ...(reasoningEffort ? { reasoningEffort } : {}),
+              });
+
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: result.conversationId,
+                runId: result.run.id,
+                duplicate: result.duplicate,
+              });
+              state.subscribedConversationIds.add(result.conversationId);
+              const snapshot = await sendConversationSnapshot(ws, user.id, result.conversationId);
+              send(ws, {
+                type: 'run.status_changed',
+                conversationId: result.conversationId,
+                run: snapshot.runtime.activeRun,
+                ...revisionPayload(snapshot),
+              });
+              if (!result.duplicate) {
+                runService.startContextCompaction(user, result.run.id, 'manual');
+              }
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to compact AI conversation');
+            }
+            return;
+          }
+
+          if (msg.type === 'plan.decide') {
+            try {
+              const planService = container.resolve(AIPlanService);
+              const runService = container.resolve(AIRunService);
+              const result = await planService.decide({
+                userId: user.id,
+                conversationId: msg.conversationId,
+                planId: msg.planId,
+                revisionId: msg.revisionId,
+                decision: msg.decision,
+                customInstruction: msg.customInstruction,
+                clientCommandId: msg.clientCommandId,
+              });
+              if (msg.decision !== 'refine') {
+                await runService.startPlanRun({
+                  user,
+                  plan: result.plan,
+                  purpose: 'plan_execution',
+                  clientCommandId: `plan-decision:${msg.clientCommandId}`,
+                  instruction: msg.decision === 'custom' ? msg.customInstruction : undefined,
+                });
+              }
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: msg.conversationId,
+                duplicate: result.duplicate,
+              });
+              await sendConversationSnapshot(ws, user.id, msg.conversationId);
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to apply the plan decision');
+            }
+            return;
+          }
+
+          if (msg.type === 'plan.pause') {
+            try {
+              const planService = container.resolve(AIPlanService);
+              const runService = container.resolve(AIRunService);
+              const plan = await planService.getActivePlanSnapshot(user.id, msg.conversationId);
+              if (!plan || plan.id !== msg.planId) throw new AppError(404, 'AI_PLAN_NOT_FOUND', 'AI plan not found');
+              await planService.pause(user.id, msg.conversationId, 'Paused by user');
+              await runService.stopActiveRunForRollback({ userId: user.id, conversationId: msg.conversationId });
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: msg.conversationId,
+              });
+              await sendConversationSnapshot(ws, user.id, msg.conversationId);
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to pause the plan');
+            }
+            return;
+          }
+
+          if (msg.type === 'plan.resume') {
+            try {
+              const planService = container.resolve(AIPlanService);
+              const runService = container.resolve(AIRunService);
+              const current = await planService.getActivePlanSnapshot(user.id, msg.conversationId);
+              if (!current || current.id !== msg.planId)
+                throw new AppError(404, 'AI_PLAN_NOT_FOUND', 'AI plan not found');
+              const plan = await planService.resume(user.id, msg.conversationId);
+              await runService.startPlanRun({
+                user,
+                plan,
+                purpose: plan.status === 'verifying' ? 'plan_verification' : 'plan_execution',
+                clientCommandId: `plan-resume:${msg.clientCommandId}`,
+              });
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: msg.conversationId,
+              });
+              await sendConversationSnapshot(ws, user.id, msg.conversationId);
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to resume the plan');
+            }
+            return;
+          }
+
+          if (msg.type === 'plan.cancel') {
+            try {
+              const planService = container.resolve(AIPlanService);
+              const runService = container.resolve(AIRunService);
+              const current = await planService.getActivePlanSnapshot(user.id, msg.conversationId);
+              if (!current || current.id !== msg.planId)
+                throw new AppError(404, 'AI_PLAN_NOT_FOUND', 'AI plan not found');
+              await runService.stopActiveRunForRollback({ userId: user.id, conversationId: msg.conversationId });
+              await planService.cancel(user.id, msg.conversationId);
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: msg.conversationId,
+              });
+              await sendConversationSnapshot(ws, user.id, msg.conversationId);
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to cancel the plan');
+            }
+            return;
+          }
+
+          if (msg.type === 'run.stop') {
+            try {
+              const runService = container.resolve(AIRunService);
+              const result = await runService.stopRun({
                 conversationId: msg.conversationId,
                 runId: msg.runId,
-                roundId: result.question.roundId,
+                userId: user.id,
               });
-            } else if (!result.question.roundId && result.continuationReady !== false) {
-              runService.startQuestionContinuation(user, {
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: msg.conversationId,
+                runId: msg.runId,
+                duplicate: result.duplicate,
+              });
+              const snapshot = await sendConversationSnapshot(ws, user.id, msg.conversationId);
+              send(ws, {
+                type: 'run.status_changed',
+                conversationId: msg.conversationId,
+                run: result.run,
+                ...revisionPayload(snapshot),
+              });
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to stop AI run');
+            }
+            return;
+          }
+
+          if (msg.type === 'approval.decide') {
+            try {
+              const runService = container.resolve(AIRunService);
+              const result = await runService.decideToolCall({
+                conversationId: msg.conversationId,
+                runId: msg.runId,
+                toolCallId: msg.approvalId,
+                userId: user.id,
+                clientCommandId: msg.clientCommandId,
+                decision: msg.decision,
+              });
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: msg.conversationId,
+                runId: msg.runId,
+                duplicate: result.duplicate,
+              });
+              send(ws, {
+                type: 'approval.updated',
+                conversationId: msg.conversationId,
+                runId: msg.runId,
+                approval: result.toolCall,
+                duplicate: result.duplicate,
+              });
+              try {
+                if (result.toolCall.roundId && result.continuationReady) {
+                  runService.startToolRoundContinuation(user, {
+                    conversationId: msg.conversationId,
+                    runId: msg.runId,
+                    roundId: result.toolCall.roundId,
+                  });
+                } else if (!result.toolCall.roundId && result.continuationReady !== false) {
+                  runService.startApprovalContinuation(user, {
+                    conversationId: msg.conversationId,
+                    runId: msg.runId,
+                    toolCall: result.toolCall,
+                    approved: msg.decision === 'approved',
+                  });
+                }
+              } catch (error) {
+                logger.error('Failed to schedule AI approval continuation after committed decision', {
+                  conversationId: msg.conversationId,
+                  runId: msg.runId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+              sendConversationSnapshotBestEffort(ws, user.id, msg.conversationId);
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to decide AI tool approval');
+            }
+            return;
+          }
+
+          if (msg.type === 'credential.resolve') {
+            try {
+              const runService = container.resolve(AIRunService);
+              const result = await runService.resolveCredentialChallenge({
+                conversationId: msg.conversationId,
+                runId: msg.runId,
+                challengeId: msg.challengeId,
+                userId: user.id,
+                clientCommandId: msg.clientCommandId,
+                decision: msg.decision,
+              });
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: msg.conversationId,
+                runId: msg.runId,
+                duplicate: result.duplicate,
+              });
+              send(ws, {
+                type: 'credential.updated',
+                conversationId: msg.conversationId,
+                runId: msg.runId,
+                challenge: result.challenge,
+                duplicate: result.duplicate,
+              });
+              try {
+                for (const challenge of [result.challenge, ...result.additionalChallenges]) {
+                  runService.startCredentialContinuation(user, {
+                    conversationId: challenge.conversationId,
+                    runId: challenge.runId,
+                    challenge,
+                    authorized: msg.decision === 'authorized',
+                  });
+                }
+              } catch (error) {
+                logger.error('Failed to schedule AI credential continuation after committed decision', {
+                  conversationId: msg.conversationId,
+                  runId: msg.runId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+              sendConversationSnapshotBestEffort(ws, user.id, msg.conversationId);
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to resolve GitLab authorization');
+            }
+            return;
+          }
+
+          if (msg.type === 'question.answer') {
+            try {
+              const runService = container.resolve(AIRunService);
+              const result = await runService.answerQuestion({
+                conversationId: msg.conversationId,
+                runId: msg.runId,
+                questionId: msg.questionId,
+                userId: user.id,
+                clientCommandId: msg.clientCommandId,
+                answer: msg.answer,
+              });
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: msg.conversationId,
+                runId: msg.runId,
+                duplicate: result.duplicate,
+              });
+              send(ws, {
+                type: 'question.answered',
                 conversationId: msg.conversationId,
                 runId: msg.runId,
                 question: result.question,
+                duplicate: result.duplicate,
               });
+              try {
+                if (result.question.roundId && result.continuationReady) {
+                  runService.startToolRoundContinuation(user, {
+                    conversationId: msg.conversationId,
+                    runId: msg.runId,
+                    roundId: result.question.roundId,
+                  });
+                } else if (!result.question.roundId && result.continuationReady !== false) {
+                  runService.startQuestionContinuation(user, {
+                    conversationId: msg.conversationId,
+                    runId: msg.runId,
+                    question: result.question,
+                  });
+                }
+              } catch (error) {
+                logger.error('Failed to schedule AI question continuation after committed answer', {
+                  conversationId: msg.conversationId,
+                  runId: msg.runId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+              sendConversationSnapshotBestEffort(ws, user.id, msg.conversationId);
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to answer AI question');
             }
-          } catch (error) {
-            logger.error('Failed to schedule AI question continuation after committed answer', {
-              conversationId: msg.conversationId,
-              runId: msg.runId,
-              error: error instanceof Error ? error.message : String(error),
-            });
+            return;
           }
-          sendConversationSnapshotBestEffort(ws, user.id, msg.conversationId);
-        } catch (error) {
-          sendCommandError(ws, msg, error, 'Failed to answer AI question');
-        }
-        return;
-      }
 
-      send(ws, {
-        type: 'command.error',
-        commandType: raw.type as string,
-        clientCommandId:
-          typeof raw.clientCommandId === 'string' ? raw.clientCommandId : (raw.requestId as string | undefined),
-        conversationId: typeof raw.conversationId === 'string' ? raw.conversationId : undefined,
-        runId: typeof raw.runId === 'string' ? raw.runId : undefined,
-        code: 'AI_UNKNOWN_COMMAND',
-        message: 'Unknown AI websocket command',
-        statusCode: 400,
-      });
+          send(ws, {
+            type: 'command.error',
+            commandType: raw.type as string,
+            clientCommandId:
+              typeof raw.clientCommandId === 'string' ? raw.clientCommandId : (raw.requestId as string | undefined),
+            conversationId: typeof raw.conversationId === 'string' ? raw.conversationId : undefined,
+            runId: typeof raw.runId === 'string' ? raw.runId : undefined,
+            code: 'AI_UNKNOWN_COMMAND',
+            message: 'Unknown AI websocket command',
+            statusCode: 400,
+          });
+        }
+      );
     },
 
     onClose(_event: unknown, ws: WSContext) {
@@ -1065,8 +1089,9 @@ export async function authenticateWSConnection(ws: WSContext, sessionId: string)
   const state = wsStates.get(ws);
   if (!state) return false;
 
-  const user = await authenticateFromSession(sessionId);
-  if (!user) {
+  const identity = await authenticateFromSession(sessionId);
+  const user = identity?.user;
+  if (!identity || !user) {
     send(ws, { type: 'auth_error', message: 'Invalid or expired session' });
     return false;
   }
@@ -1091,6 +1116,7 @@ export async function authenticateWSConnection(ws: WSContext, sessionId: string)
   }
 
   state.user = user;
+  state.impersonation = identity.impersonation ?? null;
   state.sessionId = sessionId;
   state.authenticated = true;
   subscribeToUserRuntime(ws, state, user.id);

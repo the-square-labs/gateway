@@ -1,13 +1,15 @@
 import { isIP } from 'node:net';
 import { OpenAPIHono } from '@hono/zod-openapi';
+import { setCookie } from 'hono/cookie';
 import type { Env } from '@/config/env.js';
+import { getEnv } from '@/config/env.js';
 import { container, TOKENS } from '@/container.js';
 import { RelayControlClient } from '@/grpc/relay-control.client.js';
 import { refreshGrpcServerCredentials, stageGrpcServerRelayTrust } from '@/grpc/server.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { canManageUser, isScopeSubset } from '@/lib/permissions.js';
-import { getRemoteAddress, resolveClientIp } from '@/lib/request-ip.js';
+import { getClientIpForContext, getRemoteAddress, resolveClientIp } from '@/lib/request-ip.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   CreateUserSchema,
@@ -29,6 +31,7 @@ import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
 import { LocalAuthService } from '@/modules/auth/local-auth.service.js';
 import { MfaService } from '@/modules/auth/mfa.service.js';
 import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
+import { getSessionCookieNameForUrl } from '@/modules/auth/session-cookie.js';
 import { ManagedDatabaseTunnelProxy } from '@/modules/databases/managed-database-tunnel-proxy.js';
 import { GroupService } from '@/modules/groups/group.service.js';
 import { LoggingRuntimeService } from '@/modules/logging/logging-runtime.service.js';
@@ -59,6 +62,7 @@ import {
   deleteAdminUserFolderRoute,
   deleteAdminUserRoute,
   getAuthSettingsRoute,
+  impersonateAdminUserRoute,
   listAdminUserFoldersRoute,
   listAdminUserSessionsRoute,
   listAdminUsersRoute,
@@ -870,6 +874,76 @@ adminRoutes.openapi({ ...listAdminUserSessionsRoute, middleware: requireScope('a
 
   return c.json(await sessionService.listPublicUserSessions(userId, c.get('sessionId')!));
 });
+
+adminRoutes.openapi(
+  { ...impersonateAdminUserRoute, middleware: requireScope('admin:users:impersonate') },
+  async (c) => {
+    const authService = container.resolve(AuthService);
+    const sessionService = container.resolve(SessionService);
+    const auditService = container.resolve(AuditService);
+    const actor = c.get('user')!;
+    const actorScopes = c.get('effectiveScopes') || [];
+    const originalSessionId = c.get('sessionId')!;
+    const originalSession = await sessionService.getSession(originalSessionId);
+
+    if (!originalSession || originalSession.purpose === 'impersonation') {
+      throw new AppError(409, 'IMPERSONATION_NESTED', 'Nested impersonation is not allowed');
+    }
+
+    const targetUserId = c.req.param('id')!;
+    if (targetUserId === actor.id) {
+      throw new AppError(400, 'IMPERSONATION_SELF', 'Cannot impersonate your own account');
+    }
+
+    const target = await authService.getUserById(targetUserId);
+    if (!target) throw new AppError(404, 'NOT_FOUND', 'User not found');
+    if (target.isDeleted) {
+      throw new AppError(409, 'USER_DELETED', 'Deleted users cannot be impersonated');
+    }
+    if (target.isBlocked) {
+      throw new AppError(409, 'USER_BLOCKED', 'Blocked users cannot be impersonated');
+    }
+    if (target.oidcSubject?.startsWith('system:')) {
+      throw new AppError(403, 'SYSTEM_USER', 'System users cannot be impersonated');
+    }
+
+    const denyReason = canManageUser(actorScopes, target.scopes);
+    if (denyReason) throw new AppError(403, 'PRIVILEGE_BOUNDARY', denyReason);
+
+    const impersonation = await sessionService.createImpersonationSession(actor, target, originalSessionId, {
+      ipAddress: await getClientIpForContext(c),
+      userAgent: c.req.header('user-agent'),
+    });
+    let publicUrl: string;
+    try {
+      publicUrl = await container.resolve(GeneralSettingsService).requirePublicUrl();
+    } catch {
+      publicUrl = getEnv().APP_URL;
+    }
+    setCookie(c, getSessionCookieNameForUrl(publicUrl), impersonation.sessionId, {
+      httpOnly: true,
+      secure: new URL(publicUrl).protocol === 'https:',
+      sameSite: 'Lax',
+      maxAge: Math.max(1, Math.floor((impersonation.expiresAt - Date.now()) / 1000)),
+      path: '/',
+    });
+
+    await auditService.log({
+      userId: actor.id,
+      action: 'auth.impersonation.start',
+      resourceType: 'session',
+      resourceId: target.id,
+      details: {
+        impersonatedUserId: target.id,
+        impersonatedUserEmail: target.email,
+        impersonatedUserName: target.name,
+      },
+      userAgent: c.req.header('user-agent'),
+    });
+
+    return c.json({ message: 'Impersonation started' });
+  }
+);
 
 adminRoutes.openapi({ ...revokeAdminUserSessionRoute, middleware: requireScope('admin:users') }, async (c) => {
   const authService = container.resolve(AuthService);

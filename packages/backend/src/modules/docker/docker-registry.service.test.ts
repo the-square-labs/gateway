@@ -350,27 +350,8 @@ describe('DockerRegistryService GitLab-provided registry credentials', () => {
     updatedAt: new Date(),
   };
 
-  it('requires the GitLab registry-use scope for user-initiated credential use', async () => {
-    const db = createQueuedSelectDb([[integrationRegistry], [link]]);
-    const service = new DockerRegistryService(
-      db as never,
-      {} as never,
-      { decryptString: vi.fn().mockReturnValue('deploy-secret') } as never,
-      {} as never
-    );
-
-    await expect(
-      service.resolveAuthForImagePull('node-1', 'registry.gitlab.example.com/org/app:latest', 'registry-1', {
-        actorScopes: ['docker:images:pull'],
-      })
-    ).rejects.toMatchObject({
-      statusCode: 403,
-      code: 'GITLAB_REGISTRY_SCOPE_REQUIRED',
-    });
-  });
-
-  it('resolves GitLab deploy-token credentials without exposing the secret', async () => {
-    const db = createQueuedSelectDb([[integrationRegistry], [link], [link], [credential]]);
+  it('uses GitLab-provided credentials under the initiating Docker operation scope', async () => {
+    const db = createQueuedSelectDb([[integrationRegistry], [link], [credential]]);
     const decryptString = vi.fn().mockReturnValue('deploy-secret');
     const service = new DockerRegistryService(db as never, {} as never, { decryptString } as never, {} as never);
 
@@ -378,7 +359,28 @@ describe('DockerRegistryService GitLab-provided registry credentials', () => {
       'node-1',
       'registry.gitlab.example.com/org/app:latest',
       'registry-1',
-      { actorScopes: ['integrations:gitlab:registry:use'] }
+      { actorScopes: ['docker:images:pull'] }
+    );
+
+    expect(auth?.registryId).toBe('registry-1');
+    expect(decryptString).toHaveBeenCalledWith({});
+    expect(JSON.parse(Buffer.from(auth?.authJson ?? '', 'base64').toString('utf8'))).toEqual({
+      username: 'gitlab+deploy-token-1',
+      password: 'deploy-secret',
+      serveraddress: 'registry.gitlab.example.com/org/app',
+    });
+  });
+
+  it('resolves GitLab deploy-token credentials without exposing the secret', async () => {
+    const db = createQueuedSelectDb([[integrationRegistry], [link], [credential]]);
+    const decryptString = vi.fn().mockReturnValue('deploy-secret');
+    const service = new DockerRegistryService(db as never, {} as never, { decryptString } as never, {} as never);
+
+    const auth = await service.resolveAuthForImagePull(
+      'node-1',
+      'registry.gitlab.example.com/org/app:latest',
+      'registry-1',
+      { actorScopes: ['docker:containers:create'] }
     );
 
     expect(auth?.registryId).toBe('registry-1');
@@ -393,13 +395,7 @@ describe('DockerRegistryService GitLab-provided registry credentials', () => {
   });
 
   it('returns a clear error when a GitLab-provided registry has no usable credentials', async () => {
-    const db = createQueuedSelectDb([
-      [integrationRegistry],
-      [link],
-      [link],
-      [],
-      [{ ...connector, encryptedToken: null }],
-    ]);
+    const db = createQueuedSelectDb([[integrationRegistry], [link], [], [{ ...connector, encryptedToken: null }]]);
     const service = new DockerRegistryService(
       db as never,
       {} as never,
@@ -410,7 +406,7 @@ describe('DockerRegistryService GitLab-provided registry credentials', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const result = await service.testConnection('registry-1', {
-      actorScopes: ['integrations:gitlab:registry:use'],
+      actorScopes: ['docker:registries:edit'],
     });
 
     expect(result).toEqual({ success: false, statusText: 'GitLab registry credentials are not configured' });
@@ -418,7 +414,7 @@ describe('DockerRegistryService GitLab-provided registry credentials', () => {
   });
 
   it('falls back to connector PAT credentials for GitLab-provided registries', async () => {
-    const db = createQueuedSelectDb([[integrationRegistry], [link], [link], [], [connector]]);
+    const db = createQueuedSelectDb([[integrationRegistry], [link], [], [connector]]);
     const decryptString = vi.fn().mockReturnValue('connector-pat');
     const service = new DockerRegistryService(db as never, {} as never, { decryptString } as never, {} as never);
 
@@ -426,7 +422,7 @@ describe('DockerRegistryService GitLab-provided registry credentials', () => {
       'node-1',
       'registry.gitlab.example.com/org/app:latest',
       'registry-1',
-      { actorScopes: ['integrations:gitlab:registry:use'] }
+      { actorScopes: ['docker:containers:create'] }
     );
 
     expect(auth?.registryId).toBe('registry-1');
@@ -440,7 +436,7 @@ describe('DockerRegistryService GitLab-provided registry credentials', () => {
   });
 
   it('tests GitLab-provided registry repository URLs against the registry API root', async () => {
-    const db = createQueuedSelectDb([[integrationRegistry], [link], [link], [], [connector], [link], [connector]]);
+    const db = createQueuedSelectDb([[integrationRegistry], [link], [], [connector], [link], [connector]]);
     const service = new DockerRegistryService(
       db as never,
       {} as never,
@@ -461,7 +457,7 @@ describe('DockerRegistryService GitLab-provided registry credentials', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const result = await service.testConnection('registry-1', {
-      actorScopes: ['integrations:gitlab:registry:use'],
+      actorScopes: ['docker:registries:edit'],
     });
 
     expect(result).toEqual({ success: true, status: 200, statusText: 'Authenticated (token exchange)' });

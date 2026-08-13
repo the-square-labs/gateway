@@ -1,0 +1,25 @@
+{
+  "file_name": "mv7zw8vw_registry_auth_flow",
+  "edges": [
+    {
+      "from_id": "mv7zw8vw",
+      "to_id": "qz6ixfnq",
+      "relation": "same_area",
+      "weight": 0.94,
+      "reason": "Both define Docker registry credential resolution and explicit registry selection for image pulls.",
+      "source": "auto",
+      "created_at": 1786618696866,
+      "updated_at": 1786618696866
+    },
+    {
+      "from_id": "mv7zw8vw",
+      "to_id": "hh3v2vdi",
+      "relation": "same_area",
+      "weight": 0.82,
+      "reason": "Both cover GitLab-managed registry credentials, authentication behavior, and registry connectivity verification.",
+      "source": "auto",
+      "created_at": 1786618696866,
+      "updated_at": 1786618696866
+    }
+  ]
+}

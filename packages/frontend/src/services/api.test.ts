@@ -26,6 +26,22 @@ describe("api client contract", () => {
     vi.unstubAllGlobals();
   });
 
+  it("starts and stops browser impersonation through the dedicated routes", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ csrfToken: "csrf-token" }))
+      .mockResolvedValueOnce(jsonResponse({ message: "Impersonation started" }))
+      .mockResolvedValueOnce(jsonResponse({ message: "Impersonation stopped" }));
+
+    await api.impersonateUser("user-1");
+    await api.stopImpersonating();
+
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/admin/users/user-1/impersonate");
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "POST", credentials: "include" });
+    expect(fetchMock.mock.calls[2]?.[0]).toBe("/auth/impersonation/stop");
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: "POST", credentials: "include" });
+  });
+
   it("marks only focused node monitoring streams as focused", () => {
     const eventSource = vi.fn(function EventSourceMock() {
       return { close: vi.fn() };

@@ -413,6 +413,12 @@ const RAW_TOKEN_SCOPES = [
     group: "Administration",
   },
   {
+    value: "admin:users:impersonate",
+    label: "Impersonate Users",
+    desc: "Temporarily act as another active user",
+    group: "Administration",
+  },
+  {
     value: "admin:users:folders:manage",
     label: "Manage User Folders",
     desc: "Create, reorder, and remove user folders",
@@ -568,12 +574,6 @@ const RAW_TOKEN_SCOPES = [
     value: "integrations:gitlab:registry:view",
     label: "View GitLab Registries",
     desc: "View GitLab container registries",
-    group: "Integrations: GitLab",
-  },
-  {
-    value: "integrations:gitlab:registry:use",
-    label: "Use GitLab Registries",
-    desc: "Use GitLab registry credentials for Docker operations",
     group: "Integrations: GitLab",
   },
   {
@@ -1186,6 +1186,7 @@ const PROGRAMMATIC_DENIED_SCOPE_VALUES = new Set<string>([
   "inference:usage:view",
   "admin:system",
   "admin:users",
+  "admin:users:impersonate",
   "admin:groups",
   "settings:gateway:view",
   "settings:gateway:edit",

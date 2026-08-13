@@ -258,6 +258,60 @@ describe("SetupWizardPage", () => {
     expect(screen.getByPlaceholderText("Client secret")).toHaveValue("");
   });
 
+  it("returns to the earliest step whose secret was cleared after reload", async () => {
+    sessionStorage.setItem(
+      "gateway:setup-draft:code-id",
+      JSON.stringify({
+        step: "finish",
+        publicUrl: "http://localhost:3300",
+        network: {
+          publicIps: "203.0.113.10",
+          grpcPublicTarget: "localhost:9443",
+          grpcLocalIp: "",
+        },
+        methods: { oidc: false, password: true, emailOtp: false },
+        smtpPreset: "resend",
+        smtp: {
+          host: "smtp.resend.com",
+          port: "587",
+          tlsMode: "starttls",
+          username: "resend",
+          senderName: "Gateway",
+          senderEmail: "gateway@example.com",
+        },
+        admin: {
+          name: "System Administrator",
+          email: "admin@example.com",
+          authMethod: "password",
+        },
+        logging: { mode: "disabled" },
+      })
+    );
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() =>
+        response(200, { data: { ...PENDING_STATUS, setupInProgress: true, currentSession: true } })
+      )
+      .mockImplementationOnce(() =>
+        response(200, {
+          data: {
+            ...CONFIG,
+            auth: { methods: { oidc: false, password: true, emailOtp: false } },
+          },
+        })
+      )
+      .mockImplementationOnce(() => response(200, { data: { csrfToken: "setup-csrf" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SetupWizardPage />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Configure email delivery" })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Review configuration" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("SMTP password")).toHaveValue("");
+  });
+
   it("recomputes auto-derived endpoints when the public URL changes", async () => {
     const fetchMock = vi
       .fn()

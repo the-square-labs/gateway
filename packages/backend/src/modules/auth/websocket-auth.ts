@@ -1,6 +1,6 @@
 import { hasScope, hasScopeBase } from '@/lib/permissions.js';
 import { authenticateBearerToken } from '@/modules/auth/auth.middleware.js';
-import { resolveLiveSessionUser } from '@/modules/auth/live-session-user.js';
+import { requiresSessionMfaReauthentication, resolveLiveSessionUser } from '@/modules/auth/live-session-user.js';
 import type { User } from '@/types.js';
 import { getAcceptedSessionCookieNames } from './session-cookie.js';
 
@@ -17,6 +17,10 @@ export type WebSocketCredential =
 export type WebSocketAuthResult = {
   user: User;
   scopes: string[];
+  impersonation?: {
+    actor: User;
+    subject: User;
+  };
 };
 
 export function getCookieValue(cookieHeader: string | undefined, name: string): string {
@@ -86,13 +90,25 @@ async function resolveWebSocketCredentialContext(
   if (!credential) return null;
   const result =
     credential.type === 'session'
-      ? await resolveLiveSessionUser(credential.value).then((value) =>
-          value ? { user: value.user, scopes: value.effectiveScopes } : null
-        )
+      ? await resolveLiveSessionUser(credential.value).then((value) => {
+          if (
+            !value ||
+            (value.impersonation && !value.impersonation.authorized) ||
+            (!value.impersonation && requiresSessionMfaReauthentication(value.user, value.session))
+          ) {
+            return null;
+          }
+          return {
+            user: value.user,
+            scopes: value.effectiveScopes,
+            impersonation: value.impersonation,
+          };
+        })
       : await authenticateBearerToken(credential.value);
   if (!result || result.user.isBlocked) return null;
   return {
     user: result.user,
     scopes: result.scopes,
+    ...('impersonation' in result && result.impersonation ? { impersonation: result.impersonation } : {}),
   };
 }

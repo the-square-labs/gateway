@@ -21,8 +21,9 @@ export class SessionService {
       ipAddress?: string;
       userAgent?: string;
       mfaSatisfiedAt?: number;
-      purpose?: 'user' | 'setup';
+      purpose?: 'user' | 'setup' | 'impersonation';
       setupSessionId?: string;
+      impersonation?: SessionData['impersonation'];
       expiresAt?: number;
     } = {}
   ): Promise<{ sessionId: string; expiresAt: number }> {
@@ -44,15 +45,66 @@ export class SessionService {
       mfaSatisfiedAt: metadata.mfaSatisfiedAt,
       purpose: metadata.purpose ?? 'user',
       setupSessionId: metadata.setupSessionId,
+      impersonation: metadata.impersonation,
       expiresAt,
     };
 
     await this.cache.set(`${SESSION_PREFIX}${sessionId}`, sessionData, env.SESSION_EXPIRY);
 
-    await this.cache.sadd(`${USER_SESSIONS_PREFIX}${user.id}`, sessionId);
-    await this.cache.expire(`${USER_SESSIONS_PREFIX}${user.id}`, env.SESSION_EXPIRY + 86400);
+    if (sessionData.purpose !== 'impersonation') {
+      await this.cache.sadd(`${USER_SESSIONS_PREFIX}${user.id}`, sessionId);
+      await this.cache.expire(`${USER_SESSIONS_PREFIX}${user.id}`, env.SESSION_EXPIRY + 86400);
+    }
 
     return { sessionId, expiresAt };
+  }
+
+  async createImpersonationSession(
+    actor: User,
+    subject: User,
+    originalSessionId: string,
+    metadata: { ipAddress?: string; userAgent?: string } = {}
+  ): Promise<{ sessionId: string; expiresAt: number }> {
+    const originalSession = await this.getSession(originalSessionId);
+    const originalUserId = originalSession?.userId ?? originalSession?.user?.id;
+    if (
+      !originalSession ||
+      (originalSession.purpose !== undefined && originalSession.purpose !== 'user') ||
+      originalUserId !== actor.id
+    ) {
+      throw new Error('Original administrator session is invalid');
+    }
+
+    return this.createSession(subject, undefined, undefined, {
+      authMethod: originalSession.authMethod ?? actor.authMethod,
+      ipAddress: metadata.ipAddress,
+      userAgent: metadata.userAgent,
+      purpose: 'impersonation',
+      impersonation: {
+        actorUserId: actor.id,
+        originalSessionId,
+      },
+      expiresAt: originalSession.expiresAt,
+    });
+  }
+
+  async getOriginalSessionForImpersonation(
+    session: SessionData
+  ): Promise<{ sessionId: string; session: SessionData } | null> {
+    if (session.purpose !== 'impersonation' || !session.impersonation) return null;
+
+    const { actorUserId, originalSessionId } = session.impersonation;
+    const originalSession = await this.getSession(originalSessionId);
+    const originalUserId = originalSession?.userId ?? originalSession?.user?.id;
+    if (
+      !originalSession ||
+      (originalSession.purpose !== undefined && originalSession.purpose !== 'user') ||
+      originalUserId !== actorUserId
+    ) {
+      return null;
+    }
+
+    return { sessionId: originalSessionId, session: originalSession };
   }
 
   async getSession(sessionId: string): Promise<SessionData | null> {
@@ -131,7 +183,7 @@ export class SessionService {
 
   async refreshSession(sessionId: string, session?: SessionData | null): Promise<boolean> {
     const resolved = session ?? (await this.getSession(sessionId));
-    if (!resolved || resolved.purpose === 'setup') return false;
+    if (!resolved || (resolved.purpose !== undefined && resolved.purpose !== 'user')) return false;
 
     const env = getEnv();
     const halfTtl = (env.SESSION_EXPIRY * 1000) / 2;
@@ -192,7 +244,7 @@ export class SessionService {
     const currentSession = await this.getSession(currentSessionId);
     const currentPublicId = currentSession?.publicId;
     return sessions
-      .filter((session) => Boolean(session.publicId) && session.purpose !== 'setup')
+      .filter((session) => Boolean(session.publicId) && (session.purpose === undefined || session.purpose === 'user'))
       .map((session) => ({
         id: session.publicId!,
         authMethod: session.authMethod ?? session.user?.authMethod ?? 'oidc',

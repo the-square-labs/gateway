@@ -90,6 +90,89 @@ describe('browser-session routes', () => {
       expect.objectContaining({ userId: USER.id, resourceId: 'session-public-id', action: 'auth.session_revoke' })
     );
   });
+
+  it('restores the original administrator session without resolving the impersonated subject', async () => {
+    const actor = { ...USER, id: 'actor-1', scopes: [] };
+    const subject = {
+      ...USER,
+      id: 'subject-1',
+      email: 'subject@example.com',
+      isBlocked: true,
+      isDeleted: true,
+    };
+    const originalSession = {
+      ...SESSION,
+      userId: actor.id,
+      user: actor,
+      purpose: 'user' as const,
+    };
+    const impersonationSession = {
+      ...SESSION,
+      userId: subject.id,
+      user: subject,
+      purpose: 'impersonation' as const,
+      impersonation: { actorUserId: actor.id, originalSessionId: 'original-session' },
+    };
+    const destroySession = vi.fn().mockResolvedValue(undefined);
+    const auditLog = vi.fn().mockResolvedValue(true);
+    container.registerInstance(SessionService, {
+      getSession: vi.fn().mockResolvedValue(impersonationSession),
+      validateCsrfToken: vi.fn().mockResolvedValue(true),
+      getOriginalSessionForImpersonation: vi
+        .fn()
+        .mockResolvedValue({ sessionId: 'original-session', session: originalSession }),
+      destroySession,
+    } as unknown as SessionService);
+    container.registerInstance(AuthService, {
+      getUserById: vi.fn().mockResolvedValue(actor),
+    } as unknown as AuthService);
+    container.registerInstance(GeneralSettingsService, {
+      requirePublicUrl: vi.fn().mockResolvedValue('https://gateway.example.com'),
+    } as unknown as GeneralSettingsService);
+    container.registerInstance(AuditService, { log: auditLog } as unknown as AuditService);
+
+    const app = new Hono<AppEnv>();
+    app.route('/auth', authRoutes);
+    const response = await app.request('/auth/impersonation/stop', {
+      method: 'POST',
+      headers: {
+        Cookie: 'session_id=impersonation-session',
+        'X-CSRF-Token': 'csrf-token',
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('set-cookie')).toContain('original-session');
+    expect(destroySession).toHaveBeenCalledWith('impersonation-session');
+    expect(auditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: actor.id,
+        action: 'auth.impersonation.stop',
+        resourceId: subject.id,
+      })
+    );
+  });
+
+  it('keeps CSRF recovery available for an impersonation session with changed authorization', async () => {
+    const impersonationSession = {
+      ...SESSION,
+      purpose: 'impersonation' as const,
+      impersonation: { actorUserId: 'actor-1', originalSessionId: 'original-session' },
+    };
+    container.registerInstance(SessionService, {
+      getSession: vi.fn().mockResolvedValue(impersonationSession),
+      ensureCsrfToken: vi.fn().mockResolvedValue('recovery-csrf-token'),
+    } as unknown as SessionService);
+
+    const app = new Hono<AppEnv>();
+    app.route('/auth', authRoutes);
+    const response = await app.request('/auth/csrf', {
+      headers: { Cookie: 'session_id=impersonation-session' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ csrfToken: 'recovery-csrf-token' });
+  });
 });
 
 describe('OIDC callback route', () => {

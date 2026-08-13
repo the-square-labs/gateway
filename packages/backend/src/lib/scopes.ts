@@ -74,6 +74,7 @@ export const ALL_SCOPES = [
   'nodes:folders:manage',
   // ── Administration ───────────────────────────────────────────────
   'admin:users',
+  'admin:users:impersonate',
   'admin:users:folders:manage',
   'admin:groups',
   'admin:groups:folders:manage',
@@ -102,7 +103,6 @@ export const ALL_SCOPES = [
   'integrations:gitlab:variables:delete',
   'integrations:gitlab:webhooks:manage',
   'integrations:gitlab:registry:view',
-  'integrations:gitlab:registry:use',
   'integrations:gitlab:registry:manage',
   'integrations:gitlab:sandbox:clone',
   // ── Integrations: Cloudflare ─────────────────────────────────────
@@ -238,6 +238,7 @@ export const PROGRAMMATIC_DENIED_BASE_SCOPES = [
   ...USER_ONLY_SCOPES,
   'admin:system',
   'admin:users',
+  'admin:users:impersonate',
   'admin:groups',
   'settings:gateway:view',
   'settings:gateway:edit',
@@ -348,7 +349,6 @@ export const ADMIN_SCOPES: readonly string[] = [
   'integrations:gitlab:variables:delete',
   'integrations:gitlab:webhooks:manage',
   'integrations:gitlab:registry:view',
-  'integrations:gitlab:registry:use',
   'integrations:gitlab:registry:manage',
   'integrations:gitlab:sandbox:clone',
   'integrations:cloudflare:view',
@@ -466,6 +466,7 @@ export const OPERATOR_SCOPES: readonly string[] = [
   'proxy:view',
   'proxy:create',
   'proxy:edit',
+  'proxy:maintenance:bypass',
   'proxy:folders:manage',
   'proxy:templates:view',
   'proxy:templates:create',
@@ -562,7 +563,6 @@ export const VIEWER_SCOPES: readonly string[] = [
   'logs:read',
   'integrations:gitlab:view',
   'integrations:gitlab:projects:view',
-  'integrations:gitlab:registry:use',
   'integrations:cloudflare:view',
   'integrations:cloudflare:dns:view',
 ];

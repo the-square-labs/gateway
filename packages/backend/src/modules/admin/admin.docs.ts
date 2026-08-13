@@ -229,6 +229,15 @@ export const listAdminUserSessionsRoute = appRoute({
   responses: okJson(z.array(PublicSessionSchema)),
 });
 
+export const impersonateAdminUserRoute = appRoute({
+  method: 'post',
+  path: '/users/{id}/impersonate',
+  tags: ['Admin'],
+  summary: 'Start a protected browser impersonation session',
+  request: { params: IdParamSchema },
+  responses: okJson(z.object({ message: z.string() })),
+});
+
 export const revokeAdminUserSessionRoute = appRoute({
   method: 'delete',
   path: '/users/{id}/sessions/{sessionId}',

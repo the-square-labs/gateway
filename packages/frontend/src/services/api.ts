@@ -487,6 +487,10 @@ class ApiClient extends withInferenceApi(
     return this.request<BrowserSession[]>(`/admin/users/${userId}/sessions`);
   }
 
+  async impersonateUser(userId: string): Promise<void> {
+    await this.request(`/admin/users/${userId}/impersonate`, { method: "POST" });
+  }
+
   async revokeAdminUserSession(userId: string, sessionId: string): Promise<void> {
     await this.request(`/admin/users/${userId}/sessions/${encodeURIComponent(sessionId)}`, {
       method: "DELETE",

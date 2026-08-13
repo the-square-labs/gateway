@@ -34,6 +34,26 @@ export const SETUP_SESSION_COOKIE = 'setup_session';
 export const SETUP_CSRF_HEADER = 'X-CSRF-Token';
 const GATEWAY_SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
 
+function isDockerSocketUnavailable(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 4 && current && typeof current === 'object'; depth += 1) {
+    const candidate = current as { code?: unknown; message?: unknown; cause?: unknown };
+    const code = typeof candidate.code === 'string' ? candidate.code : '';
+    const message = typeof candidate.message === 'string' ? candidate.message : '';
+    if (
+      message.includes('/var/run/docker.sock') &&
+      (code === 'ENOENT' ||
+        code === 'ECONNREFUSED' ||
+        code === 'EACCES' ||
+        /\b(?:ENOENT|ECONNREFUSED|EACCES)\b/.test(message))
+    ) {
+      return true;
+    }
+    current = candidate.cause;
+  }
+  return false;
+}
+
 async function setupApiDisabledResponse(c: Context<AppEnv>): Promise<Response | null> {
   const path = new URL(c.req.url).pathname;
   if (path === '/api/setup/status') return null;
@@ -282,6 +302,13 @@ setupRoutes.post('/wizard/apply', async (c) => {
   } catch (error) {
     if (error instanceof SetupApplyInProgressError) {
       throw new AppError(409, 'SETUP_APPLY_IN_PROGRESS', 'Gateway setup is already being applied');
+    }
+    if (isDockerSocketUnavailable(error)) {
+      throw new AppError(
+        503,
+        'SETUP_DOCKER_UNAVAILABLE',
+        'Gateway cannot access Docker. Verify that /var/run/docker.sock is mounted and accessible, then retry.'
+      );
     }
     throw error;
   }

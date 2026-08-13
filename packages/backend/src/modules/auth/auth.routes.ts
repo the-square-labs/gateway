@@ -1,5 +1,5 @@
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi';
-import { deleteCookie, setCookie } from 'hono/cookie';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { getEnv } from '@/config/env.js';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
@@ -22,11 +22,13 @@ import {
   resetCurrentUserTotpRoute,
   revokeCurrentUserSessionRoute,
   revokeOtherCurrentUserSessionsRoute,
+  stopImpersonationRoute,
   updateCurrentUserPreferencesRoute,
 } from './auth.docs.js';
-import { authMiddleware, sessionOnly } from './auth.middleware.js';
+import { authMiddleware, CSRF_HEADER_NAME, sessionOnly } from './auth.middleware.js';
 import { AuthService } from './auth.service.js';
 import { AuthSettingsService } from './auth.settings.service.js';
+import { requiresSessionMfaReauthentication } from './live-session-user.js';
 import { LocalAuthService } from './local-auth.service.js';
 import { MfaService } from './mfa.service.js';
 import { OidcSettingsService } from './oidc-settings.service.js';
@@ -100,6 +102,20 @@ async function getPublicUrl(): Promise<string> {
   } catch {
     // Isolated tests and pre-migration fixtures still provide APP_URL.
     return getEnv().APP_URL;
+  }
+}
+
+function getRequestSessionId(c: any): string | null {
+  for (const cookieName of getAcceptedSessionCookieNames()) {
+    const sessionId = getCookie(c, cookieName);
+    if (sessionId) return sessionId;
+  }
+  return null;
+}
+
+function clearSessionCookies(c: any): void {
+  for (const cookieName of getAcceptedSessionCookieNames()) {
+    deleteCookie(c, cookieName, { path: '/' });
   }
 }
 
@@ -416,7 +432,17 @@ authRoutes.post('/password/reset/complete', async (c) => {
 });
 
 // CSRF token for cookie-authenticated browser mutations
-authRoutes.use('/csrf', authMiddleware);
+authRoutes.use('/csrf', async (c, next) => {
+  const sessionId = getRequestSessionId(c);
+  const session = sessionId ? await container.resolve(SessionService).getSession(sessionId) : null;
+  if (sessionId && session?.purpose === 'impersonation') {
+    c.set('sessionId', sessionId);
+    c.set('authType', 'session');
+    await next();
+    return;
+  }
+  await authMiddleware(c, next);
+});
 authRoutes.use('/csrf', sessionOnly);
 authRoutes.openapi(csrfTokenRoute, async (c) => {
   const sessionId = c.get('sessionId');
@@ -429,6 +455,66 @@ authRoutes.openapi(csrfTokenRoute, async (c) => {
     return c.json({ code: 'AUTH_ERROR', message: 'Invalid or expired session' }, 401);
   }
   return c.json({ csrfToken });
+});
+
+authRoutes.openapi(stopImpersonationRoute, async (c) => {
+  const sessionService = container.resolve(SessionService);
+  const impersonationSessionId = getRequestSessionId(c);
+  const impersonationSession = impersonationSessionId ? await sessionService.getSession(impersonationSessionId) : null;
+
+  if (!impersonationSessionId || impersonationSession?.purpose !== 'impersonation') {
+    throw new AppError(409, 'IMPERSONATION_NOT_ACTIVE', 'No impersonation session is active');
+  }
+  if (
+    !(await sessionService.validateCsrfToken(
+      impersonationSessionId,
+      c.req.header(CSRF_HEADER_NAME),
+      impersonationSession
+    ))
+  ) {
+    throw new AppError(403, 'INVALID_CSRF', 'Invalid CSRF token');
+  }
+
+  const original = await sessionService.getOriginalSessionForImpersonation(impersonationSession);
+  const actorUserId = impersonationSession.impersonation?.actorUserId;
+  const actor = actorUserId ? await container.resolve(AuthService).getUserById(actorUserId) : null;
+  if (
+    !original ||
+    !actor ||
+    actor.isBlocked ||
+    actor.isDeleted ||
+    requiresSessionMfaReauthentication(actor, original.session)
+  ) {
+    await sessionService.destroySession(impersonationSessionId);
+    clearSessionCookies(c);
+    throw new AppError(401, 'ORIGINAL_SESSION_INVALID', 'The original administrator session is no longer valid');
+  }
+
+  const publicUrl = await getPublicUrl();
+  setCookie(c, getSessionCookieNameForUrl(publicUrl), original.sessionId, {
+    httpOnly: true,
+    secure: new URL(publicUrl).protocol === 'https:',
+    sameSite: 'Lax',
+    maxAge: Math.max(1, Math.floor((original.session.expiresAt - Date.now()) / 1000)),
+    path: '/',
+  });
+  await sessionService.destroySession(impersonationSessionId);
+
+  const subject = impersonationSession.user;
+  await container.resolve(AuditService).log({
+    userId: actor.id,
+    action: 'auth.impersonation.stop',
+    resourceType: 'session',
+    resourceId: subject.id,
+    details: {
+      impersonatedUserId: subject.id,
+      impersonatedUserEmail: subject.email,
+      impersonatedUserName: subject.name,
+    },
+    userAgent: c.req.header('user-agent'),
+  });
+
+  return c.json({ message: 'Impersonation stopped' });
 });
 
 // Logout
@@ -465,6 +551,7 @@ authRoutes.use('/me', authMiddleware);
 authRoutes.use('/me', sessionOnly);
 authRoutes.openapi(currentUserRoute, async (c) => {
   const sessionUser = c.get('user')!;
+  const impersonation = c.get('impersonation');
   const authService = container.resolve(AuthService);
   const user = await authService.getUserById(sessionUser.id);
   const effectiveScopes = c.get('effectiveScopes') || user?.scopes || [];
@@ -486,6 +573,18 @@ authRoutes.openapi(currentUserRoute, async (c) => {
     scopes: effectiveScopes,
     isBlocked: user.isBlocked,
     aiApprovalMode: user.aiApprovalMode ?? 'normal',
+    ...(impersonation
+      ? {
+          impersonation: {
+            active: true as const,
+            actor: {
+              id: impersonation.actor.id,
+              email: impersonation.actor.email,
+              name: impersonation.actor.name,
+            },
+          },
+        }
+      : {}),
   });
 });
 

@@ -18,6 +18,14 @@ export interface User {
   aiApprovalMode?: AIApprovalMode;
   folderId?: string | null;
   sortOrder?: number;
+  impersonation?: {
+    active: true;
+    actor: {
+      id: string;
+      email: string;
+      name: string | null;
+    };
+  };
 }
 
 export interface DeletedUser {

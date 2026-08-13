@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest';
 import type { SessionData, User } from '@/types.js';
 import { SessionService } from './session.service.js';
 
+process.env.NODE_ENV = 'test';
+process.env.DATABASE_URL = 'http://localhost/db';
+process.env.REDIS_URL = 'redis://localhost:6379';
+process.env.PKI_MASTER_KEY = '0000000000000000000000000000000000000000000000000000000000000000';
+
 class MemoryCache {
   readonly values = new Map<string, unknown>();
   readonly sets = new Map<string, Set<string>>();
@@ -18,6 +23,14 @@ class MemoryCache {
   async smembers(key: string): Promise<string[]> {
     return [...(this.sets.get(key) ?? [])];
   }
+
+  async sadd(key: string, member: string): Promise<void> {
+    const values = this.sets.get(key) ?? new Set<string>();
+    values.add(member);
+    this.sets.set(key, values);
+  }
+
+  async expire(): Promise<void> {}
 
   async srem(key: string, member: string): Promise<void> {
     this.sets.get(key)?.delete(member);
@@ -103,5 +116,57 @@ describe('SessionService', () => {
       }),
     ]);
     expect((await cache.get<SessionData>(`session:${sessionId}`))?.publicId).toEqual(sessions[0].id);
+  });
+
+  it('keeps impersonation sessions outside target session listing and bulk revocation', async () => {
+    const cache = new MemoryCache();
+    const service = new SessionService(cache as never);
+    const actor = {
+      id: 'actor-1',
+      oidcSubject: 'actor',
+      authMethod: 'oidc',
+      email: 'actor@example.com',
+      name: 'Actor',
+      avatarUrl: null,
+      groupId: 'system-admin',
+      groupName: 'system-admin',
+      scopes: ['admin:users:impersonate'],
+      isBlocked: false,
+    } satisfies User;
+    const subject = {
+      ...actor,
+      id: 'subject-1',
+      oidcSubject: 'subject',
+      email: 'subject@example.com',
+      name: 'Subject',
+      groupId: 'viewer',
+      groupName: 'viewer',
+      scopes: ['nodes:details'],
+    } satisfies User;
+    const originalSessionId = 'actor-session';
+    cache.values.set(`session:${originalSessionId}`, {
+      userId: actor.id,
+      user: actor,
+      publicId: 'actor-public-session',
+      purpose: 'user',
+      authMethod: 'oidc',
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+    } satisfies SessionData);
+    cache.sets.set(`user_sessions:${actor.id}`, new Set([originalSessionId]));
+
+    const created = await service.createImpersonationSession(actor, subject, originalSessionId);
+
+    expect(cache.sets.get(`user_sessions:${subject.id}`)).toBeUndefined();
+    await expect(service.listPublicUserSessions(subject.id, created.sessionId)).resolves.toEqual([]);
+
+    await service.destroyAllUserSessions(subject.id);
+
+    await expect(service.getSession(created.sessionId)).resolves.toMatchObject({
+      purpose: 'impersonation',
+      userId: subject.id,
+      impersonation: { actorUserId: actor.id, originalSessionId },
+    });
+    await expect(service.getSession(originalSessionId)).resolves.toBeTruthy();
   });
 });

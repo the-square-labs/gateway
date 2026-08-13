@@ -11,6 +11,9 @@ const HEX_SEGMENT = /^[0-9a-f]{16,}$/i;
 const TOKENISH_SEGMENT = /^[A-Za-z0-9_-]{16,}$/;
 
 const FALLBACK_AUDIT_SKIP_ROUTES: Array<{ method: string; pattern: RegExp }> = [
+  // Personal UI/AI preferences are user state, not an auditable security or
+  // administrative mutation.
+  { method: 'PATCH', pattern: /^\/auth\/me\/preferences$/ },
   { method: 'POST', pattern: /^\/api\/logging\/ingest$/ },
   { method: 'POST', pattern: /^\/api\/logging\/ingest\/batch$/ },
   { method: 'POST', pattern: /^\/api\/logging\/environments\/[^/]+\/search$/ },

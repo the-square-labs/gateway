@@ -153,6 +153,100 @@ describe('authMiddleware browser session credentials', () => {
     expect(await response.json()).toEqual({ userId: USER.id });
   });
 
+  it('authorizes an impersonation session only with the subject identity and scopes', async () => {
+    const actor = { ...USER, id: 'actor-1', groupId: 'actor-group' };
+    const subject = {
+      ...USER,
+      id: 'subject-1',
+      email: 'subject@example.com',
+      groupId: 'subject-group',
+      groupName: 'viewer',
+    };
+    const impersonationSession = {
+      ...SESSION,
+      userId: subject.id,
+      user: subject,
+      purpose: 'impersonation' as const,
+      impersonation: { actorUserId: actor.id, originalSessionId: 'original-session' },
+    };
+    container.registerInstance(SessionService, {
+      getSession: vi.fn().mockResolvedValue(impersonationSession),
+      getOriginalSessionForImpersonation: vi.fn().mockResolvedValue({
+        sessionId: 'original-session',
+        session: { ...SESSION, userId: actor.id, user: actor, purpose: 'user' },
+      }),
+      validateCsrfToken: vi.fn().mockResolvedValue(true),
+      updateSession: vi.fn().mockResolvedValue(undefined),
+      refreshSession: vi.fn().mockResolvedValue(false),
+    } as unknown as SessionService);
+    container.registerInstance(TOKENS.DrizzleClient, {
+      query: {
+        users: {
+          findFirst: vi.fn().mockResolvedValueOnce(subject).mockResolvedValueOnce(actor),
+        },
+        permissionGroups: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              id: actor.groupId,
+              parentId: null,
+              name: 'system-admin',
+              scopes: ['admin:users:impersonate', 'nodes:details'],
+            },
+            { id: subject.groupId, parentId: null, name: 'viewer', scopes: ['nodes:details'] },
+          ]),
+        },
+      },
+    } as unknown as DrizzleClient);
+
+    const response = await createApp().request('/read', {
+      headers: { Cookie: 'session_id=impersonation-session' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ userId: subject.id });
+  });
+
+  it('blocks normal requests when the actor loses the impersonation scope', async () => {
+    const actor = { ...USER, id: 'actor-1', groupId: 'actor-group' };
+    const subject = { ...USER, id: 'subject-1', groupId: 'subject-group' };
+    const impersonationSession = {
+      ...SESSION,
+      userId: subject.id,
+      user: subject,
+      purpose: 'impersonation' as const,
+      impersonation: { actorUserId: actor.id, originalSessionId: 'original-session' },
+    };
+    container.registerInstance(SessionService, {
+      getSession: vi.fn().mockResolvedValue(impersonationSession),
+      getOriginalSessionForImpersonation: vi.fn().mockResolvedValue({
+        sessionId: 'original-session',
+        session: { ...SESSION, userId: actor.id, user: actor, purpose: 'user' },
+      }),
+      updateSession: vi.fn().mockResolvedValue(undefined),
+      refreshSession: vi.fn().mockResolvedValue(false),
+    } as unknown as SessionService);
+    container.registerInstance(TOKENS.DrizzleClient, {
+      query: {
+        users: {
+          findFirst: vi.fn().mockResolvedValueOnce(subject).mockResolvedValueOnce(actor),
+        },
+        permissionGroups: {
+          findMany: vi.fn().mockResolvedValue([
+            { id: actor.groupId, parentId: null, name: 'admin', scopes: [] },
+            { id: subject.groupId, parentId: null, name: 'viewer', scopes: [] },
+          ]),
+        },
+      },
+    } as unknown as DrizzleClient);
+
+    const response = await createApp().request('/read', {
+      headers: { Cookie: 'session_id=impersonation-session' },
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ message: 'Impersonation authorization changed' });
+  });
+
   it('rejects a cookie session mutation without a valid CSRF token', async () => {
     registerSession({ csrfValid: false });
 

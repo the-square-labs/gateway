@@ -42,6 +42,14 @@ export const logoutRoute = appRoute({
   responses: okJson(z.object({ message: z.string(), logoutUrl: z.string().optional() })),
 });
 
+export const stopImpersonationRoute = appRoute({
+  method: 'post',
+  path: '/impersonation/stop',
+  tags: ['Authentication'],
+  summary: 'Stop impersonating and restore the original browser session',
+  responses: { ...okJson(z.object({ message: z.string() })), ...commonErrorResponses },
+});
+
 export const currentUserRoute = appRoute({
   method: 'get',
   path: '/me',

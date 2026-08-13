@@ -78,6 +78,8 @@ export class AuditService {
   async log(entry: AuditEntry, options: AuditLogOptions = {}): Promise<boolean> {
     try {
       const requestContext = getAuditRequestContext();
+      const impersonation = requestContext?.impersonation;
+      const actorUserId = impersonation?.actorUserId ?? entry.userId;
       const id = randomUUID();
       const createdAt = new Date();
       const ipAddress = entry.ipAddress ?? requestContext?.ipAddress ?? null;
@@ -94,14 +96,14 @@ export class AuditService {
           }
         : undefined;
       const siemEnabled = this.siemOutboxService ? await this.siemOutboxService.isEnabled() : false;
-      const actorEmail = siemEnabled ? await this.getActorEmail(entry.userId) : null;
+      const actorEmail = siemEnabled ? await this.getActorEmail(actorUserId) : null;
       const siemEvent =
         siemEnabled && this.siemOutboxService
           ? await this.siemOutboxService.buildEvent({
               auditLogId: id,
               createdAt,
               action: entry.action,
-              actorId: entry.userId,
+              actorId: actorUserId,
               actorEmail,
               resourceType: entry.resourceType,
               resourceId: entry.resourceId ?? null,
@@ -111,11 +113,24 @@ export class AuditService {
       const persist = async (writer: Pick<DrizzleClient, 'insert'> & { select?: DrizzleClient['select'] }) => {
         await writer.insert(auditLog).values({
           id,
-          userId: entry.userId,
+          userId: actorUserId,
           action: entry.action,
           resourceType: entry.resourceType,
           resourceId: entry.resourceId,
-          details: mcpDetails ? { ...entry.details, ...mcpDetails } : entry.details,
+          details:
+            mcpDetails || impersonation
+              ? {
+                  ...entry.details,
+                  ...mcpDetails,
+                  ...(impersonation
+                    ? {
+                        impersonatedUserId: impersonation.subjectUserId,
+                        impersonatedUserEmail: impersonation.subjectEmail,
+                        impersonatedUserName: impersonation.subjectName,
+                      }
+                    : {}),
+                }
+              : entry.details,
           ipAddress,
           userAgent: entry.userAgent ?? requestContext?.userAgent,
           createdAt,

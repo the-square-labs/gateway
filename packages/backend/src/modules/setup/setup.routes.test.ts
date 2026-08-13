@@ -203,6 +203,44 @@ describe('setup wizard routes', () => {
     }
   });
 
+  it('returns an actionable error when Docker is unavailable during setup apply', async () => {
+    mocks.access.validateSession.mockResolvedValue(true);
+    mocks.access.validateCsrfToken.mockResolvedValue(true);
+    mocks.wizard.apply.mockRejectedValue(
+      Object.assign(new Error('connect ENOENT /var/run/docker.sock'), { code: 'ENOENT' })
+    );
+
+    const response = await createApp().request('/api/setup/wizard/apply', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: 'setup_session=valid',
+        'X-CSRF-Token': 'setup-csrf',
+      },
+      body: JSON.stringify({
+        publicUrl: 'https://gateway.example.com',
+        network: {
+          publicIps: ['203.0.113.10'],
+          grpcPublicTarget: 'gateway.example.com:9443',
+          grpcLocalIp: '',
+        },
+        auth: { methods: { oidc: true, password: false, emailOtp: false } },
+        administrator: {
+          name: 'Admin',
+          email: 'admin@example.com',
+          authMethod: 'oidc',
+        },
+        logging: { mode: 'disabled' },
+      }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      code: 'SETUP_DOCKER_UNAVAILABLE',
+      message: 'Gateway cannot access Docker. Verify that /var/run/docker.sock is mounted and accessible, then retry.',
+    });
+  });
+
   it('exchanges the setup session for a bounded system-user session during AI configuration', async () => {
     mocks.access.validateSession.mockResolvedValue(true);
     mocks.access.validateCsrfToken.mockResolvedValue(true);

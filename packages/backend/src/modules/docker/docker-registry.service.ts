@@ -9,7 +9,6 @@ import {
   integrationConnectors,
 } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
-import { hasScope } from '@/lib/permissions.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -213,10 +212,9 @@ export class DockerRegistryService {
     this.emitRegistry(id, 'deleted');
   }
 
-  async testConnection(id: string, context: RegistryUseContext = {}) {
+  async testConnection(id: string, _context: RegistryUseContext = {}) {
     const [row] = await this.db.select().from(dockerRegistries).where(eq(dockerRegistries.id, id)).limit(1);
     if (!row) throw new AppError(404, 'NOT_FOUND', 'Docker registry not found');
-    await this.assertRegistryUseAllowed(row, context);
 
     const credentials = await this.resolveRegistryCredentials(row);
     if (this.isGitLabIntegrationRegistry(row) && !credentials) {
@@ -656,11 +654,10 @@ export class DockerRegistryService {
   async getAuthForPull(
     registryId: string,
     targetNodeId: string,
-    context: RegistryUseContext = {}
+    _context: RegistryUseContext = {}
   ): Promise<DockerRegistryAuthCandidate | null> {
     const row = await this.getRegistryRow(registryId);
     this.assertRegistryVisibleFromNode(row, targetNodeId);
-    await this.assertRegistryUseAllowed(row, context);
     return this.authCandidateFromRegistry(row);
   }
 
@@ -787,19 +784,6 @@ export class DockerRegistryService {
     );
   }
 
-  private async assertRegistryUseAllowed(row: DockerRegistryRow, context: RegistryUseContext) {
-    if (row.source !== 'integration' && !row.readOnly && !row.provider) return;
-    const link = await this.getIntegrationLink(row.id);
-    if (!link) return;
-    if (context.actorScopes === undefined) return;
-    if (hasScope(context.actorScopes, 'integrations:gitlab:registry:use')) return;
-    throw new AppError(
-      403,
-      'GITLAB_REGISTRY_SCOPE_REQUIRED',
-      'Using GitLab-provided registry credentials requires integrations:gitlab:registry:use.'
-    );
-  }
-
   private async getIntegrationLink(registryId: string): Promise<IntegrationRegistryLinkRow | null> {
     const [link] = await this.db
       .select()
@@ -911,7 +895,6 @@ export class DockerRegistryService {
     const mappedRegistryId = await this.resolveMappedRegistryId(nodeId, imageRepository);
     if (mappedRegistryId) {
       const mapped = rows.find((row) => row.id === mappedRegistryId);
-      if (mapped) await this.assertRegistryUseAllowed(mapped, context);
       const auth = mapped ? await this.authCandidateFromRegistry(mapped) : null;
       if (auth) candidates.push(auth);
     }
@@ -922,7 +905,6 @@ export class DockerRegistryService {
     for (const row of rows
       .filter((row) => this.normalizeRegistryHost(row.url) === imageRegistryHost)
       .filter((row) => !seen.has(row.id))) {
-      await this.assertRegistryUseAllowed(row, context);
       const auth = await this.authCandidateFromRegistry(row);
       if (!auth) continue;
       candidates.push({ ...auth, url: this.normalizeRegistryHost(row.url) });

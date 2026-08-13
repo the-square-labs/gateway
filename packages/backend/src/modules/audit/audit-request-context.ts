@@ -6,6 +6,14 @@ export interface AuditRequestContext {
   userAgent?: string;
   auditEmitted?: boolean;
   mcp?: AuditMcpContext;
+  impersonation?: AuditImpersonationContext;
+}
+
+export interface AuditImpersonationContext {
+  actorUserId: string;
+  subjectUserId: string;
+  subjectEmail: string;
+  subjectName: string | null;
 }
 
 export interface AuditMcpContext {
@@ -39,5 +47,12 @@ export function setAuditMcpContext(mcp: AuditMcpContext): void {
   const context = storage.getStore();
   if (context) {
     context.mcp = mcp;
+  }
+}
+
+export function setAuditImpersonationContext(impersonation: AuditImpersonationContext): void {
+  const context = storage.getStore();
+  if (context) {
+    context.impersonation = impersonation;
   }
 }

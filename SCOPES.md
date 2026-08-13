@@ -118,6 +118,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `nodes:lock` | Yes |
 | `nodes:folders:manage` |  |
 | `admin:users` |  |
+| `admin:users:impersonate` |  |
 | `admin:users:folders:manage` |  |
 | `admin:groups` |  |
 | `admin:groups:folders:manage` |  |
@@ -144,7 +145,6 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `integrations:gitlab:variables:delete` |  |
 | `integrations:gitlab:webhooks:manage` |  |
 | `integrations:gitlab:registry:view` |  |
-| `integrations:gitlab:registry:use` |  |
 | `integrations:gitlab:registry:manage` |  |
 | `integrations:gitlab:sandbox:clone` |  |
 | `integrations:cloudflare:view` |  |
@@ -264,6 +264,7 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 | `inference:tokens:manage` | User/session-only inference token creation and revocation. |
 | `admin:system` | Protected system-administrator shielding. |
 | `admin:users` | User administration is session-only. |
+| `admin:users:impersonate` | Browser-only protected user impersonation. |
 | `admin:groups` | Permission group administration is session-only. |
 | `settings:gateway:view` | Gateway auth/control-plane settings are session-only. |
 | `settings:gateway:edit` | Gateway auth/control-plane settings are session-only. |

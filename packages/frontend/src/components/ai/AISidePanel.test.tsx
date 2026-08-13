@@ -1280,6 +1280,47 @@ describe("AISidePanel autoscroll", () => {
     expect(await screen.findByText("Administration")).toBeInTheDocument();
   });
 
+  it("keeps the stop impersonating footer action available in expanded and collapsed lite modes", () => {
+    act(() => {
+      useAuthStore.setState({
+        user: {
+          id: "user-1",
+          email: "user@example.com",
+          name: "User One",
+          groupName: "member",
+          scopes: ["feat:ai:use"],
+          isBlocked: true,
+          impersonation: {
+            active: true,
+            actor: { id: "admin-1", email: "admin@example.com", name: "System Admin" },
+          },
+        } as any,
+        isAuthenticated: true,
+        isLoading: false,
+      });
+      useAIStore.setState({
+        recentConversations: [],
+        conversationFolders: [],
+        isLoadingRecentConversations: false,
+        fetchRecentConversations: vi.fn(),
+        fetchConversationFolders: vi.fn(),
+      });
+      useUIStore.setState({ sidebarOpen: true });
+    });
+
+    renderWithRouter(
+      <TooltipProvider>
+        <AILiteSidebar />
+      </TooltipProvider>
+    );
+
+    expect(screen.getByRole("button", { name: "Stop impersonating" })).toBeInTheDocument();
+
+    act(() => useUIStore.setState({ sidebarOpen: false }));
+
+    expect(screen.getByRole("button", { name: "Stop impersonating" })).toBeInTheDocument();
+  });
+
   it("preserves lite sidebar row geometry and refreshes hover after deletion", async () => {
     const timestamp = new Date().toISOString();
     const deleteConversation = vi.fn(async (conversationId: string) => {

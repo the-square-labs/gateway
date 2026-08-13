@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { scopeMatches } from "@/lib/scope-utils";
 import {
   AI_SCOPE,
   API_TOKEN_SCOPES,
@@ -36,6 +37,7 @@ describe("scope constants", () => {
       "Gateway Inference"
     );
     expect(tokenValues).toContain("admin:system");
+    expect(tokenValues).toContain("admin:users:impersonate");
     expect(tokenValues).toContain("proxy:raw:write");
     expect(tokenValues).toContain("docker:containers:view");
 
@@ -44,6 +46,7 @@ describe("scope constants", () => {
     expect(apiTokenValues).not.toContain("inference:providers:manage");
     expect(apiTokenValues).not.toContain("admin:system");
     expect(apiTokenValues).not.toContain("admin:users");
+    expect(apiTokenValues).not.toContain("admin:users:impersonate");
     expect(apiTokenValues).not.toContain("proxy:raw:write");
     expect(apiTokenValues).not.toContain("nodes:config:edit");
     expect(apiTokenValues).toContain("nodes:files:read");
@@ -56,7 +59,10 @@ describe("scope constants", () => {
     expect(groupValues).toContain("inference:providers:manage");
     expect(groupValues).not.toContain("inference:usage:view:self");
     expect(groupValues).toContain("admin:users");
+    expect(groupValues).toContain("admin:users:impersonate");
     expect(groupValues).toContain("proxy:raw:write");
     expect(groupValues).not.toContain("admin:system");
+    expect(scopeMatches(["admin:users"], "admin:users:impersonate")).toBe(false);
+    expect(scopeMatches(["admin:users:impersonate"], "admin:users:impersonate")).toBe(true);
   });
 });

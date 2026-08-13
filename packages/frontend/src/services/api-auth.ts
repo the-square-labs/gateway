@@ -116,6 +116,10 @@ export function withAuthApi<TBase extends ApiClientBaseConstructor>(Base: TBase)
       }
     }
 
+    async stopImpersonating(): Promise<void> {
+      await this.request("/auth/impersonation/stop", { method: "POST" });
+    }
+
     getLoginUrl(): string {
       return `${AUTH_BASE}/login`;
     }

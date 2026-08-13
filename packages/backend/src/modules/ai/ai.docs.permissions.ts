@@ -98,6 +98,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | Scope | Description |
 |-------|-------------|
 | admin:users | Manage users and permission groups |
+| admin:users:impersonate | Temporarily act as another active user from a browser session |
 | admin:groups | Manage permission groups |
 | admin:users:folders:manage | Manage administration user folders and placement |
 | admin:groups:folders:manage | Manage permission group folders and placement |

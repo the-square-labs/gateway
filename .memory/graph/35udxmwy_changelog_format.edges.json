@@ -1,0 +1,25 @@
+{
+  "file_name": "35udxmwy_changelog_format",
+  "edges": [
+    {
+      "from_id": "35udxmwy",
+      "to_id": "kufbu8qt",
+      "relation": "same_workflow",
+      "weight": 0.78,
+      "reason": "Changelog generation uses the Gateway tag-based release workflow and its established release-note format.",
+      "source": "auto",
+      "created_at": 1786615295813,
+      "updated_at": 1786615295813
+    },
+    {
+      "from_id": "35udxmwy",
+      "to_id": "02e60mqr",
+      "relation": "same_workflow",
+      "weight": 0.64,
+      "reason": "Gateway RC tags are part of the same release-note and tag inspection workflow.",
+      "source": "auto",
+      "created_at": 1786615295813,
+      "updated_at": 1786615295813
+    }
+  ]
+}

@@ -103,6 +103,7 @@ describe('shouldSkipFallbackAudit', () => {
   });
 
   it('skips MCP protocol traffic and non-auditable background-style requests', () => {
+    expect(__testOnly.shouldSkipFallbackAudit('PATCH', '/auth/me/preferences')).toBe(true);
     expect(__testOnly.shouldSkipFallbackAudit('POST', '/api/mcp')).toBe(true);
     expect(__testOnly.shouldSkipFallbackAudit('POST', '/api/mcp/')).toBe(true);
     expect(__testOnly.shouldSkipFallbackAudit('POST', '/api/ai/context-estimate')).toBe(true);

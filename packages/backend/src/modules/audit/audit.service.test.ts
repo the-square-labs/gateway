@@ -66,6 +66,41 @@ describe('AuditService MCP context', () => {
     );
   });
 
+  it('attributes impersonated actions to the administrator and records the subject', async () => {
+    const values = vi.fn().mockResolvedValue(undefined);
+    const service = new AuditService({ insert: vi.fn(() => ({ values })) } as any);
+
+    await runWithAuditRequestContext(
+      {
+        impersonation: {
+          actorUserId: 'actor-1',
+          subjectUserId: 'subject-1',
+          subjectEmail: 'subject@example.com',
+          subjectName: 'Subject',
+        },
+      },
+      () =>
+        service.log({
+          userId: 'subject-1',
+          action: 'proxy_host.update',
+          resourceType: 'proxy_host',
+          details: { domain: 'example.com' },
+        })
+    );
+
+    expect(values).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'actor-1',
+        details: {
+          domain: 'example.com',
+          impersonatedUserId: 'subject-1',
+          impersonatedUserEmail: 'subject@example.com',
+          impersonatedUserName: 'Subject',
+        },
+      })
+    );
+  });
+
   it('writes a matching SIEM outbox record in the audit transaction', async () => {
     const values = vi.fn().mockResolvedValue(undefined);
     const tx = { insert: vi.fn(() => ({ values })), select: vi.fn() };

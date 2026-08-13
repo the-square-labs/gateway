@@ -170,7 +170,7 @@ function PopoutAuthGate({ children }: { children: React.ReactElement }) {
       .getCurrentUser()
       .then((freshUser) => {
         if (cancelled) return;
-        if (freshUser.isBlocked) {
+        if (freshUser.isBlocked && !freshUser.impersonation?.active) {
           setUser(freshUser);
           navigate("/blocked", { replace: true });
           return;

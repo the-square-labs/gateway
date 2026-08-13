@@ -2,9 +2,10 @@ import { eq } from 'drizzle-orm';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { users } from '@/db/schema/index.js';
+import { canManageUser, hasScope } from '@/lib/permissions.js';
 import { canonicalizeScopes } from '@/lib/scopes.js';
 import { SessionService } from '@/services/session.service.js';
-import type { User } from '@/types.js';
+import type { SessionData, User } from '@/types.js';
 
 export interface GroupScopeRecord {
   id: string;
@@ -104,17 +105,65 @@ export async function resolveLiveUser(db: DrizzleClient, userId: string): Promis
   };
 }
 
-export async function resolveLiveSessionUser(token: string): Promise<{ user: User; effectiveScopes: string[] } | null> {
+export interface LiveSessionUser {
+  user: User;
+  effectiveScopes: string[];
+  session: SessionData;
+  impersonation?: {
+    actor: User;
+    subject: User;
+    authorized: boolean;
+  };
+}
+
+export function requiresSessionMfaReauthentication(user: User, session: SessionData): boolean {
+  if (!user.requireGateway2fa || user.authMethod === 'oidc' || session.mfaSatisfiedAt !== undefined) {
+    return false;
+  }
+
+  const mfaGraceExpiresAt = session.mfaGraceExpiresAt;
+  return !(
+    typeof mfaGraceExpiresAt === 'number' &&
+    Number.isFinite(mfaGraceExpiresAt) &&
+    mfaGraceExpiresAt > Date.now()
+  );
+}
+
+export async function resolveLiveSessionUser(
+  token: string,
+  knownSession?: SessionData
+): Promise<LiveSessionUser | null> {
   if (!token || token.startsWith('gw_')) return null;
 
   const sessionService = container.resolve(SessionService);
-  const session = await sessionService.getSession(token);
-  const sessionUserId = session?.userId ?? session?.user?.id;
+  const session = knownSession ?? (await sessionService.getSession(token));
+  if (!session) return null;
+
+  const sessionUserId = session.userId ?? session.user?.id;
   if (!sessionUserId) return null;
 
   const db = container.resolve<DrizzleClient>(TOKENS.DrizzleClient);
   const user = await resolveLiveUser(db, sessionUserId);
   if (!user) return null;
 
-  return { user, effectiveScopes: user.scopes };
+  if (session.purpose === 'impersonation') {
+    const original = await sessionService.getOriginalSessionForImpersonation(session);
+    if (!original || !session.impersonation) return null;
+
+    const actor = await resolveLiveUser(db, session.impersonation.actorUserId);
+    if (!actor || actor.isBlocked || actor.isDeleted || requiresSessionMfaReauthentication(actor, original.session)) {
+      return null;
+    }
+
+    const authorized = hasScope(actor.scopes, 'admin:users:impersonate') && !canManageUser(actor.scopes, user.scopes);
+
+    return {
+      user,
+      effectiveScopes: authorized ? user.scopes : [],
+      session,
+      impersonation: { actor, subject: user, authorized },
+    };
+  }
+
+  return { user, effectiveScopes: user.scopes, session };
 }

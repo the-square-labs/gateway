@@ -1,9 +1,10 @@
 import 'reflect-metadata';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container, TOKENS } from '@/container.js';
+import type { DrizzleClient } from '@/db/client.js';
 import { RATE_LIMIT_REDIS_TIMEOUT_MS } from '@/lib/rate-limit-timeout.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { AuthService } from '@/modules/auth/auth.service.js';
+import { getAuditRequestContext } from '@/modules/audit/audit-request-context.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { User } from '@/types.js';
@@ -20,8 +21,14 @@ const USER: User = {
   avatarUrl: null,
   groupId: 'group-1',
   groupName: 'admin',
+  requireGateway2fa: false,
+  groupScopes: ['feat:ai:use'],
+  additionalScopes: [],
   scopes: ['feat:ai:use'],
   isBlocked: false,
+  isDeleted: false,
+  authMethod: undefined,
+  aiApprovalMode: undefined,
 };
 
 function createWs() {
@@ -34,11 +41,24 @@ function createWs() {
 function registerAiWsDependencies(user: User) {
   container.registerInstance(EventBusService, new EventBusService());
   container.registerInstance(SessionService, {
-    getSession: vi.fn().mockResolvedValue({ user }),
+    getSession: vi.fn().mockResolvedValue({
+      userId: user.id,
+      user,
+      purpose: 'user',
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+    }),
   } as unknown as SessionService);
-  container.registerInstance(AuthService, {
-    getUserById: vi.fn().mockResolvedValue(user),
-  } as unknown as AuthService);
+  container.registerInstance(TOKENS.DrizzleClient, {
+    query: {
+      users: { findFirst: vi.fn().mockResolvedValue(user) },
+      permissionGroups: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([{ id: user.groupId, parentId: null, name: user.groupName, scopes: user.scopes }]),
+      },
+    },
+  } as unknown as DrizzleClient);
   container.registerInstance(AISettingsService, {
     isEnabled: vi.fn().mockResolvedValue(true),
     getConfig: vi.fn().mockResolvedValue({
@@ -157,6 +177,102 @@ describe('AI websocket authentication', () => {
 
     expect(authenticated).toBe(false);
     expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'auth_error', message: 'Account is blocked' }));
+  });
+
+  it('keeps the administrator as audit actor for impersonated AI commands', async () => {
+    const actor = {
+      ...USER,
+      id: 'actor-1',
+      email: 'actor@example.com',
+      groupId: 'actor-group',
+      groupName: 'system-admin',
+      groupScopes: ['admin:users:impersonate', 'feat:ai:use'],
+      scopes: ['admin:users:impersonate', 'feat:ai:use'],
+    };
+    const subject = {
+      ...USER,
+      id: 'subject-1',
+      email: 'subject@example.com',
+      name: 'Subject',
+      groupId: 'subject-group',
+      groupName: 'viewer',
+    };
+    const impersonationSession = {
+      userId: subject.id,
+      user: subject,
+      purpose: 'impersonation' as const,
+      impersonation: { actorUserId: actor.id, originalSessionId: 'original-session' },
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+    };
+    container.registerInstance(EventBusService, new EventBusService());
+    container.registerInstance(SessionService, {
+      getSession: vi.fn().mockResolvedValue(impersonationSession),
+      getOriginalSessionForImpersonation: vi.fn().mockResolvedValue({
+        sessionId: 'original-session',
+        session: {
+          userId: actor.id,
+          user: actor,
+          purpose: 'user',
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 60_000,
+        },
+      }),
+    } as unknown as SessionService);
+    container.registerInstance(TOKENS.DrizzleClient, {
+      query: {
+        users: {
+          findFirst: vi
+            .fn()
+            .mockResolvedValueOnce(subject)
+            .mockResolvedValueOnce(actor)
+            .mockResolvedValueOnce(subject)
+            .mockResolvedValueOnce(actor),
+        },
+        permissionGroups: {
+          findMany: vi.fn().mockResolvedValue([
+            { id: actor.groupId, parentId: null, name: actor.groupName, scopes: actor.scopes },
+            { id: subject.groupId, parentId: null, name: subject.groupName, scopes: subject.scopes },
+          ]),
+        },
+      },
+    } as unknown as DrizzleClient);
+    container.registerInstance(AISettingsService, {
+      isEnabled: vi.fn().mockResolvedValue(true),
+    } as unknown as AISettingsService);
+    container.registerInstance(AIProviderRuntimeService, {
+      statusForUser: vi.fn().mockResolvedValue({ enabled: true }),
+    } as unknown as AIProviderRuntimeService);
+    let capturedImpersonation = getAuditRequestContext()?.impersonation;
+    container.registerInstance(AIRunService, {
+      getConversationSnapshot: vi.fn().mockImplementation(async () => {
+        capturedImpersonation = getAuditRequestContext()?.impersonation;
+        return createSnapshot(null);
+      }),
+    } as unknown as AIRunService);
+
+    const ws = createWs();
+    const handlers = createWSHandlers();
+    handlers.onOpen(new Event('open'), ws as any);
+    await expect(authenticateWSConnection(ws as any, 'impersonation-session')).resolves.toBe(true);
+    await handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          type: 'conversation.subscribe',
+          clientCommandId: 'cmd-subscribe',
+          conversationId: 'conversation-1',
+        }),
+      }),
+      ws as any
+    );
+    handlers.onClose(new Event('close'), ws as any);
+
+    expect(capturedImpersonation).toEqual({
+      actorUserId: actor.id,
+      subjectUserId: subject.id,
+      subjectEmail: subject.email,
+      subjectName: subject.name,
+    });
   });
 });
 

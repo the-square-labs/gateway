@@ -429,7 +429,10 @@ export class ApiClientBase {
         if (body.message === "Invalid CSRF token") {
           this.clearCsrfToken();
         }
-        if (body.message === "Account is blocked") {
+        if (
+          body.message === "Account is blocked" &&
+          !useAuthStore.getState().user?.impersonation?.active
+        ) {
           window.location.href = "/blocked";
           throw new ApiRequestError("Account is blocked", {
             status: response.status,
@@ -576,7 +579,10 @@ export class ApiClientBase {
         if (message === "Invalid CSRF token") {
           this.clearCsrfToken();
         }
-        if (message === "Account is blocked") {
+        if (
+          message === "Account is blocked" &&
+          !useAuthStore.getState().user?.impersonation?.active
+        ) {
           window.location.href = "/blocked";
           throw new ApiRequestError("Account is blocked", {
             status: response.status,
@@ -739,7 +745,10 @@ export class ApiClientBase {
           if (message === "Invalid CSRF token") {
             this.clearCsrfToken();
           }
-          if (message === "Account is blocked") {
+          if (
+            message === "Account is blocked" &&
+            !useAuthStore.getState().user?.impersonation?.active
+          ) {
             window.location.href = "/blocked";
             reject(
               new ApiRequestError("Account is blocked", {

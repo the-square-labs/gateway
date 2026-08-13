@@ -21,6 +21,11 @@ import { WebTransportSettingsService } from '@/services/web-transport-settings.s
 import type { AppEnv, SessionData, User } from '@/types.js';
 import { adminRoutes } from './admin.routes.js';
 
+process.env.NODE_ENV = 'test';
+process.env.DATABASE_URL = 'http://localhost/db';
+process.env.REDIS_URL = 'redis://localhost:6379';
+process.env.PKI_MASTER_KEY = '0000000000000000000000000000000000000000000000000000000000000000';
+
 const USER: User = {
   id: '11111111-1111-4111-8111-111111111111',
   oidcSubject: 'oidc-user',
@@ -155,6 +160,90 @@ describe('admin user identity validation', () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ code: 'VALIDATION_ERROR' });
+  });
+});
+
+describe('admin user impersonation', () => {
+  function registerImpersonationDependencies(target: User) {
+    registerSession(['admin:users:impersonate', 'nodes:details']);
+    const createImpersonationSession = vi.fn().mockResolvedValue({
+      sessionId: 'impersonation-session',
+      expiresAt: Date.now() + 60_000,
+    });
+    container.registerInstance(SessionService, {
+      getSession: vi.fn().mockResolvedValue({ ...SESSION, purpose: 'user' }),
+      validateCsrfToken: vi.fn().mockResolvedValue(true),
+      updateSession: vi.fn().mockResolvedValue(undefined),
+      refreshSession: vi.fn().mockResolvedValue(false),
+      createImpersonationSession,
+    } as unknown as SessionService);
+    container.registerInstance(AuthService, {
+      getUserById: vi.fn().mockResolvedValue(target),
+    } as unknown as AuthService);
+    container.registerInstance(AuditService, {
+      log: vi.fn().mockResolvedValue(true),
+    } as unknown as AuditService);
+    container.registerInstance(GeneralSettingsService, {
+      requirePublicUrl: vi.fn().mockResolvedValue('https://gateway.example.com'),
+    } as unknown as GeneralSettingsService);
+    container.registerInstance(NetworkSettingsService, {
+      getConfig: vi.fn().mockResolvedValue({
+        clientIpSource: 'direct',
+        trustedProxyCidrs: [],
+        trustCloudflareHeaders: false,
+      }),
+    } as unknown as NetworkSettingsService);
+    return createImpersonationSession;
+  }
+
+  it('creates a separate impersonation session and replaces only the browser cookie', async () => {
+    const createImpersonationSession = registerImpersonationDependencies(TARGET_USER);
+
+    const response = await createApp().request(`/api/admin/users/${TARGET_USER.id}/impersonate`, {
+      method: 'POST',
+      headers: sessionHeaders(),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('set-cookie')).toContain('impersonation-session');
+    expect(createImpersonationSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: USER.id }),
+      TARGET_USER,
+      'session-1',
+      expect.objectContaining({ userAgent: undefined })
+    );
+  });
+
+  it('rejects blocked targets before creating an impersonation session', async () => {
+    const createImpersonationSession = registerImpersonationDependencies({
+      ...TARGET_USER,
+      isBlocked: true,
+    });
+
+    const response = await createApp().request(`/api/admin/users/${TARGET_USER.id}/impersonate`, {
+      method: 'POST',
+      headers: sessionHeaders(),
+    });
+
+    expect(response.status).toBe(409);
+    expect(createImpersonationSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects deleted targets before creating an impersonation session', async () => {
+    const createImpersonationSession = registerImpersonationDependencies({
+      ...TARGET_USER,
+      isBlocked: true,
+      isDeleted: true,
+    });
+
+    const response = await createApp().request(`/api/admin/users/${TARGET_USER.id}/impersonate`, {
+      method: 'POST',
+      headers: sessionHeaders(),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: 'USER_DELETED' });
+    expect(createImpersonationSession).not.toHaveBeenCalled();
   });
 });
 

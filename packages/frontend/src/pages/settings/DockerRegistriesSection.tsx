@@ -57,7 +57,6 @@ export function DockerRegistriesSection({ nodesList }: DockerRegistriesSectionPr
   const canCreateRegistry = hasScope("docker:registries:create");
   const canEditRegistry = hasScope("docker:registries:edit");
   const canDeleteRegistry = hasScope("docker:registries:delete");
-  const canUseGitLabRegistry = hasScope("integrations:gitlab:registry:use");
   const cachedRegistries = api.getCached<DockerRegistry[]>("settings:docker-registries");
   const [registries, setRegistries] = useState<DockerRegistry[]>(cachedRegistries ?? []);
   const [initialLoadComplete, setInitialLoadComplete] = useState(cachedRegistries !== undefined);
@@ -227,7 +226,7 @@ export function DockerRegistriesSection({ nodesList }: DockerRegistriesSectionPr
   const renderRegistryRow = (r: DockerRegistry) => {
     const isIntegration = Boolean(r.integration);
     const canOpen = canEditRegistry && !isIntegration && !r.readOnly;
-    const canTestRegistry = isIntegration ? canUseGitLabRegistry : canEditRegistry;
+    const canTestRegistry = canEditRegistry;
     const status = r.integration?.status;
     return (
       <div

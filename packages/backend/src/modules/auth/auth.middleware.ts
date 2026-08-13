@@ -1,10 +1,10 @@
 import type { Context, MiddlewareHandler } from 'hono';
 import { getCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
-import { container, TOKENS } from '@/container.js';
-import type { DrizzleClient } from '@/db/client.js';
+import { container } from '@/container.js';
 import { hasScopeBase } from '@/lib/permissions.js';
-import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
+import { setAuditImpersonationContext } from '@/modules/audit/audit-request-context.js';
+import { requiresSessionMfaReauthentication, resolveLiveSessionUser } from '@/modules/auth/live-session-user.js';
 import { OAuthService } from '@/modules/oauth/oauth.service.js';
 import { SetupAccessService } from '@/modules/setup/setup-access.service.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
@@ -94,17 +94,9 @@ function allowsBlockedSessionPath(c: Context<AppEnv>): boolean {
   return path === '/auth/csrf' || path === '/auth/me' || path === '/auth/logout';
 }
 
-function requiresMfaReauthentication(user: User, session: SessionData): boolean {
-  if (!user.requireGateway2fa || user.authMethod === 'oidc' || session.mfaSatisfiedAt !== undefined) {
-    return false;
-  }
-
-  const mfaGraceExpiresAt = session.mfaGraceExpiresAt;
-  return !(
-    typeof mfaGraceExpiresAt === 'number' &&
-    Number.isFinite(mfaGraceExpiresAt) &&
-    mfaGraceExpiresAt > Date.now()
-  );
+function allowsImpersonationRecoveryPath(c: Context<AppEnv>): boolean {
+  const path = new URL(c.req.url).pathname;
+  return path === '/auth/csrf' || path === '/auth/me' || path === '/auth/logout' || path === '/auth/impersonation/stop';
 }
 
 export async function authenticateBearerToken(rawToken: string): Promise<AuthenticatedBearer | null> {
@@ -171,22 +163,23 @@ export const authMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
         throw new HTTPException(401, { message: 'Invalid or expired setup session' });
       }
     }
-    const sessionUserId = session.userId ?? session.user?.id;
-    if (!sessionUserId) {
-      await sessionService.destroySession(credential.value);
+    const resolved = await resolveLiveSessionUser(credential.value, session);
+    if (!resolved) {
+      if (session.purpose !== 'impersonation') {
+        await sessionService.destroySession(credential.value);
+      }
       throw new HTTPException(401, { message: 'Invalid or expired session' });
     }
-    const db = container.resolve<DrizzleClient>(TOKENS.DrizzleClient);
-    const user = await resolveLiveUser(db, sessionUserId);
-    if (!user) {
-      throw new HTTPException(401, { message: 'User no longer exists' });
-    }
-    if (requiresMfaReauthentication(user, session)) {
+    const { user } = resolved;
+    if (!resolved.impersonation && requiresSessionMfaReauthentication(user, session)) {
       await sessionService.destroySession(credential.value);
       throw new HTTPException(401, { message: 'MFA sign-in required' });
     }
     if (user.isBlocked && !allowsBlockedSessionPath(c)) {
       throw new HTTPException(403, { message: 'Account is blocked' });
+    }
+    if (resolved.impersonation && !resolved.impersonation.authorized && !allowsImpersonationRecoveryPath(c)) {
+      throw new HTTPException(403, { message: 'Impersonation authorization changed' });
     }
     if (
       requiresCsrf(c.req.method) &&
@@ -197,7 +190,16 @@ export const authMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
 
     c.set('user', user);
     c.set('sessionId', credential.value);
-    c.set('effectiveScopes', user.scopes);
+    c.set('effectiveScopes', resolved.effectiveScopes);
+    if (resolved.impersonation) {
+      c.set('impersonation', resolved.impersonation);
+      setAuditImpersonationContext({
+        actorUserId: resolved.impersonation.actor.id,
+        subjectUserId: user.id,
+        subjectEmail: user.email,
+        subjectName: user.name,
+      });
+    }
     c.set('isTokenAuth', false);
     c.set('authType', 'session');
     sessionService.updateSession(credential.value, { user }).catch(() => {});
@@ -231,22 +233,27 @@ export const optionalAuthMiddleware: MiddlewareHandler<AppEnv> = async (c, next)
             return;
           }
         }
-        const sessionUserId = session.userId ?? session.user?.id;
-        if (!sessionUserId) {
-          await sessionService.destroySession(credential.value);
-          await next();
-          return;
-        }
-        const db2 = container.resolve<DrizzleClient>(TOKENS.DrizzleClient);
-        const user = await resolveLiveUser(db2, sessionUserId);
-        if (!user) {
-          await sessionService.destroySession(credential.value);
-        } else if (requiresMfaReauthentication(user, session)) {
+        const resolved = await resolveLiveSessionUser(credential.value, session);
+        const user = resolved?.user;
+        if (!resolved || !user) {
+          if (session.purpose !== 'impersonation') {
+            await sessionService.destroySession(credential.value);
+          }
+        } else if (!resolved.impersonation && requiresSessionMfaReauthentication(user, session)) {
           await sessionService.destroySession(credential.value);
         } else {
           c.set('user', user);
           c.set('sessionId', credential.value);
-          c.set('effectiveScopes', user.scopes);
+          c.set('effectiveScopes', resolved.effectiveScopes);
+          if (resolved.impersonation) {
+            c.set('impersonation', resolved.impersonation);
+            setAuditImpersonationContext({
+              actorUserId: resolved.impersonation.actor.id,
+              subjectUserId: user.id,
+              subjectEmail: user.email,
+              subjectName: user.name,
+            });
+          }
           c.set('isTokenAuth', false);
           c.set('authType', 'session');
           sessionService.updateSession(credential.value, { user }).catch(() => {});

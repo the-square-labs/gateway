@@ -1,0 +1,25 @@
+{
+  "file_name": "jlx77t6m_proxy_maintenance_access",
+  "edges": [
+    {
+      "from_id": "jlx77t6m",
+      "to_id": "ml88valu",
+      "relation": "same_workflow",
+      "weight": 0.86,
+      "reason": "Both define the managed proxy maintenance-bypass flow: scoped issuance and browser session status.",
+      "source": "auto",
+      "created_at": 1786628632128,
+      "updated_at": 1786628632128
+    },
+    {
+      "from_id": "jlx77t6m",
+      "to_id": "x7unpgb6",
+      "relation": "same_area",
+      "weight": 0.58,
+      "reason": "Both document Gateway proxy authorization boundaries and protections for managed proxy configuration.",
+      "source": "auto",
+      "created_at": 1786628632128,
+      "updated_at": 1786628632128
+    }
+  ]
+}

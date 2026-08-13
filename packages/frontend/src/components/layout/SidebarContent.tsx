@@ -1,7 +1,16 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUpCircle, Expand, PanelLeft, PanelLeftClose, Search, X } from "lucide-react";
-import { useCallback, useEffect, useMemo } from "react";
+import {
+  ArrowUpCircle,
+  Expand,
+  PanelLeft,
+  PanelLeftClose,
+  Search,
+  UserRoundX,
+  X,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import { AIButton } from "@/components/ai/AIButton";
 import { AccountMenuContent } from "@/components/layout/AccountMenuContent";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -71,6 +80,7 @@ export function SidebarContent({
   const location = useLocation();
   const navigate = useNavigate();
   const { user, hasScope, hasScopedAccess, logout } = useAuthStore();
+  const [stoppingImpersonation, setStoppingImpersonation] = useState(false);
   const { sidebarOpen, toggleSidebar, setCommandPaletteOpen: openPalette } = useUIStore();
 
   const updateAvailable = useUpdateStore((s) => s.status?.updateAvailable ?? false);
@@ -208,6 +218,18 @@ export function SidebarContent({
     navigate("/login");
   };
 
+  const handleStopImpersonating = async () => {
+    setStoppingImpersonation(true);
+    try {
+      await api.stopImpersonating();
+      api.resetSessionState();
+      window.location.assign("/");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to stop impersonating");
+      setStoppingImpersonation(false);
+    }
+  };
+
   const isExpanded = alwaysExpanded || sidebarOpen;
 
   const handleOpenAIWorkspace = useCallback(() => {
@@ -322,15 +344,32 @@ export function SidebarContent({
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
-                      variant="ghost"
                       size="icon"
-                      className="h-8 w-8 bg-warning text-black hover:bg-warning/90"
+                      className="h-8 w-8"
                       onClick={() => navigate("/settings/general")}
                     >
                       <ArrowUpCircle className="h-4 w-4" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent side="right">Update available</TooltipContent>
+                </Tooltip>
+              )}
+
+              {user?.impersonation?.active && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 bg-warning text-black hover:bg-warning/90"
+                      onClick={() => void handleStopImpersonating()}
+                      disabled={stoppingImpersonation}
+                      aria-label="Stop impersonating"
+                    >
+                      <UserRoundX className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">Stop impersonating</TooltipContent>
                 </Tooltip>
               )}
 
@@ -497,6 +536,22 @@ export function SidebarContent({
                     <ArrowUpCircle className="h-4 w-4 shrink-0" />
                     <span className="truncate">Update available</span>
                   </Link>
+                </div>
+                <Separator />
+              </>
+            )}
+
+            {user?.impersonation?.active && (
+              <>
+                <div className="px-2 py-2">
+                  <Button
+                    className="w-full justify-start px-3"
+                    onClick={() => void handleStopImpersonating()}
+                    disabled={stoppingImpersonation}
+                  >
+                    <UserRoundX className="h-4 w-4 shrink-0" />
+                    <span className="truncate">Stop impersonating</span>
+                  </Button>
                 </div>
                 <Separator />
               </>

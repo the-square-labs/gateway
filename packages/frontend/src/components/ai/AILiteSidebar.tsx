@@ -36,9 +36,11 @@ import {
   Plus,
   Search,
   Trash2,
+  UserRoundX,
 } from "lucide-react";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import { AccountMenuContent } from "@/components/layout/AccountMenuContent";
 import {
   dashboardAttentionDotClass,
@@ -186,6 +188,7 @@ export function AILiteSidebar({
     onOpenChange: onFolderDialogOpenChange,
   } = useDeferredDialogState<FolderDialogState>();
   const [dragOverlayConversationId, setDragOverlayConversationId] = useState<string | null>(null);
+  const [stoppingImpersonation, setStoppingImpersonation] = useState(false);
   const canAccessAdministration = hasAnyScope("admin:audit", "admin:users", "admin:groups");
   const navigateToGroups = visibleNavigationGroups({
     scopes: user?.scopes ?? [],
@@ -283,6 +286,18 @@ export function AILiteSidebar({
     } finally {
       logout();
       navigate("/login");
+    }
+  };
+
+  const handleStopImpersonating = async () => {
+    setStoppingImpersonation(true);
+    try {
+      await api.stopImpersonating();
+      api.resetSessionState();
+      window.location.assign("/");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to stop impersonating");
+      setStoppingImpersonation(false);
     }
   };
 
@@ -486,6 +501,23 @@ export function AILiteSidebar({
                   <TooltipContent side="right">Open Operations Console</TooltipContent>
                 </Tooltip>
               }
+
+              {user?.impersonation?.active && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => void handleStopImpersonating()}
+                      disabled={stoppingImpersonation}
+                      aria-label="Stop impersonating"
+                    >
+                      <UserRoundX className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">Stop impersonating</TooltipContent>
+                </Tooltip>
+              )}
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -841,6 +873,21 @@ export function AILiteSidebar({
                   <Separator />
                 </>
               }
+              {user?.impersonation?.active && (
+                <>
+                  <div className="px-2 py-2">
+                    <Button
+                      className="w-full justify-start px-3"
+                      onClick={() => void handleStopImpersonating()}
+                      disabled={stoppingImpersonation}
+                    >
+                      <UserRoundX className="h-4 w-4 shrink-0" />
+                      <span className="truncate">Stop impersonating</span>
+                    </Button>
+                  </div>
+                  <Separator />
+                </>
+              )}
               <div className="p-2">
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>

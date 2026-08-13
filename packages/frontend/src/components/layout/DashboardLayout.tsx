@@ -263,7 +263,7 @@ export function DashboardLayout() {
         const existingUser = useAuthStore.getState().user;
         const user = existingUser ?? (await api.getCurrentUser());
         if (cancelled) return;
-        if (user.isBlocked) {
+        if (user.isBlocked && !user.impersonation?.active) {
           setUser(user);
           setLoading(false);
           navigate("/blocked");
