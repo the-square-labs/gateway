@@ -429,7 +429,27 @@ describe("ProxyHostDetail", () => {
     });
 
     expect(await screen.findByText("application")).toBeInTheDocument();
-    expect(screen.getByText("Secure Link")).toBeInTheDocument();
+    expect(screen.getByText("Secure Link").parentElement).toHaveClass("bg-emerald-500/15");
+  });
+
+  it("shows the Secure Link Offline badge when the active link is offline", async () => {
+    vi.spyOn(api, "getProxyHost").mockResolvedValue(
+      makeProxyHost({
+        upstreamKind: "docker_container",
+        dockerContainerName: "application",
+        secureLinkActive: true,
+        healthStatus: "offline",
+      })
+    );
+
+    renderWithRouter(<ProxyHostDetail />, {
+      path: "/proxy-hosts/:id/:tab",
+      route: "/proxy-hosts/host-1/details",
+      extraRoutes: <Route path="/proxy-hosts" element={<div>Proxy Hosts</div>} />,
+    });
+
+    expect(await screen.findByText("application")).toBeInTheDocument();
+    expect(screen.getByText("Secure Link Offline").parentElement).toHaveClass("bg-red-500/15");
   });
 
   it("does not show the Secure Link badge before cutover is active", async () => {

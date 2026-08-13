@@ -116,6 +116,70 @@ func TestBindingManagerServesMultipleBindingsFromOneConnector(t *testing.T) {
 	}
 }
 
+func TestBindingManagerReleasesClosedTargetWithoutWaitingForSource(t *testing.T) {
+	host := nonLoopbackHost(t)
+	targetListener, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { targetListener.Close() })
+	targetPort := uint16(targetListener.Addr().(*net.TCPAddr).Port)
+	accepted := make(chan *net.TCPConn, 1)
+	go func() {
+		connection, acceptErr := targetListener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		accepted <- connection.(*net.TCPConn)
+	}()
+
+	manager := newBindingManager(16, 8)
+	t.Cleanup(manager.close)
+	bindingID := "77777777-7777-4777-8777-777777777777"
+	statuses, err := manager.sync([]securelink.BindingConfig{{
+		ID: bindingID, Generation: 1, ListenHost: host, TargetHost: host, TargetPort: targetPort,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := net.DialTimeout(
+		"tcp",
+		net.JoinHostPort(host, fmt.Sprintf("%d", statuses[0].Port)),
+		time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { source.Close() })
+
+	var target *net.TCPConn
+	select {
+	case target = <-accepted:
+	case <-time.After(time.Second):
+		t.Fatal("connector did not open the target connection")
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		binding := manager.bindings[bindingID]
+		binding.activeMu.Lock()
+		active := len(binding.active)
+		binding.activeMu.Unlock()
+		if active == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	binding := manager.bindings[bindingID]
+	binding.activeMu.Lock()
+	active := len(binding.active)
+	binding.activeMu.Unlock()
+	t.Fatalf("broken target retained %d connector connections", active)
+}
+
 func TestBindingManagerRejectsArbitraryTargetsAndStaleUpdates(t *testing.T) {
 	manager := newBindingManager(16, 8)
 	t.Cleanup(manager.close)

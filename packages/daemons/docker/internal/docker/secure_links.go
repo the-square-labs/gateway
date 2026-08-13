@@ -32,10 +32,12 @@ const (
 	secureLinkConnectorPidsLimit = int64(128)
 	developmentSecureLinkImage   = "gateway-secure-link-connector:dev"
 	secureLinkConnectorPathEnv   = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	secureLinkRecoveryWindow     = time.Second
 )
 
 var immutableConnectorImagePattern = regexp.MustCompile(`^.+@sha256:[0-9a-f]{64}$`)
 var proxySecureLinkIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
+var errSecureLinkTargetUnavailable = errors.New("target container is unavailable")
 
 type dockerSecureLinkManager struct {
 	mu           sync.Mutex
@@ -45,6 +47,15 @@ type dockerSecureLinkManager struct {
 	attached     map[string]struct{}
 	connectorID  string
 	managementIP string
+
+	recoveryMu sync.Mutex
+	recovery   *dockerSecureLinkRecovery
+}
+
+type dockerSecureLinkRecovery struct {
+	done        chan struct{}
+	err         error
+	completedAt time.Time
 }
 
 type dockerSecureLinkBinding struct {
@@ -420,7 +431,7 @@ func (m *dockerSecureLinkManager) resolveTarget(
 ) (string, string, error) {
 	inspect, err := m.plugin.client.cli.ContainerInspect(ctx, containerName, mobyclient.ContainerInspectOptions{})
 	if err != nil || inspect.Container.State == nil || !inspect.Container.State.Running || inspect.Container.NetworkSettings == nil {
-		return "", "", errors.New("target container is unavailable")
+		return "", "", errSecureLinkTargetUnavailable
 	}
 	primary := ""
 	if inspect.Container.HostConfig != nil {
@@ -475,32 +486,69 @@ func selectSecureLinkTargetNetwork(
 }
 
 func (m *dockerSecureLinkManager) dial(ctx context.Context, linkID string) (net.Conn, error) {
-	return dialWithOneRestore(ctx, linkID, m.dialCurrent, func() error {
-		if m.plugin.secureLinkState == nil {
-			return errors.New("proxy secure-link state is unavailable")
-		}
-		restored := m.plugin.secureLinkState.Get()
-		if len(restored.Bindings) == 0 {
-			return errors.New("proxy secure-link desired state is empty")
-		}
-		if _, err := m.sync(restored); err != nil {
-			return fmt.Errorf("restore proxy secure-link bindings after connector restart: %w", err)
-		}
-		return nil
+	return dialWithOneRestore(ctx, linkID, m.dialCurrent, func(firstErr error) error {
+		return m.restoreBindingsCoalesced(!errors.Is(firstErr, errSecureLinkTargetUnavailable))
 	})
+}
+
+func (m *dockerSecureLinkManager) restoreBindingsCoalesced(bypassCompleted bool) error {
+	return m.restoreCoalesced(m.restoreBindings, bypassCompleted)
+}
+
+func (m *dockerSecureLinkManager) restoreCoalesced(restore func() error, bypassCompleted bool) error {
+	m.recoveryMu.Lock()
+	if current := m.recovery; current != nil {
+		if !current.completedAt.IsZero() {
+			if !bypassCompleted && time.Since(current.completedAt) < secureLinkRecoveryWindow {
+				err := current.err
+				m.recoveryMu.Unlock()
+				return err
+			}
+			m.recovery = nil
+		} else {
+			m.recoveryMu.Unlock()
+			<-current.done
+			return current.err
+		}
+	}
+	current := &dockerSecureLinkRecovery{done: make(chan struct{})}
+	m.recovery = current
+	m.recoveryMu.Unlock()
+
+	err := restore()
+	m.recoveryMu.Lock()
+	current.err = err
+	current.completedAt = time.Now()
+	close(current.done)
+	m.recoveryMu.Unlock()
+	return err
+}
+
+func (m *dockerSecureLinkManager) restoreBindings() error {
+	if m.plugin.secureLinkState == nil {
+		return errors.New("proxy secure-link state is unavailable")
+	}
+	restored := m.plugin.secureLinkState.Get()
+	if len(restored.Bindings) == 0 {
+		return errors.New("proxy secure-link desired state is empty")
+	}
+	if _, err := m.sync(restored); err != nil {
+		return fmt.Errorf("restore proxy secure-link bindings after connector restart: %w", err)
+	}
+	return nil
 }
 
 func dialWithOneRestore(
 	ctx context.Context,
 	linkID string,
 	dial func(context.Context, string) (net.Conn, error),
-	restore func() error,
+	restore func(error) error,
 ) (net.Conn, error) {
 	connection, firstErr := dial(ctx, linkID)
 	if firstErr == nil {
 		return connection, nil
 	}
-	if err := restore(); err != nil {
+	if err := restore(firstErr); err != nil {
 		return nil, fmt.Errorf("%v; recovery failed: %w", firstErr, err)
 	}
 	return dial(ctx, linkID)

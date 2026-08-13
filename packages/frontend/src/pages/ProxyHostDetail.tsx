@@ -982,8 +982,11 @@ export function ProxyHostDetail({
                 ) : null}
                 {host.type === "proxy" ? <ProxyUpstreamTarget host={host} size="inline" /> : null}
                 {host.type === "proxy" && host.secureLinkActive ? (
-                  <Badge variant="success" size="inline">
-                    Secure Link
+                  <Badge
+                    variant={host.healthStatus === "offline" ? "destructive" : "success"}
+                    size="inline"
+                  >
+                    {host.healthStatus === "offline" ? "Secure Link Offline" : "Secure Link"}
                   </Badge>
                 ) : null}
                 {host.type === "redirect" && host.redirectUrl

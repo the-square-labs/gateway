@@ -268,6 +268,38 @@ describe('HealthCheckJob storm protection', () => {
     expect(secondPublish).toHaveBeenCalledOnce();
   });
 
+  it('publishes only the offline transition and the later online recovery', async () => {
+    const failed = host({
+      healthStatus: 'offline',
+      healthHistory: [{ ts: new Date(Date.now() - 30_000).toISOString(), status: 'offline' }],
+    });
+    const failedRun = database([failed]);
+    const failedPublish = vi.fn();
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('timeout')));
+    const failedJob = new HealthCheckJob(failedRun.db);
+    failedJob.setEventBus({ publish: failedPublish } as any);
+
+    await failedJob.run();
+
+    expect(failedRun.writes[0]?.healthStatus).toBe('offline');
+    expect(failedPublish).not.toHaveBeenCalled();
+
+    const recoveredRun = database([failed]);
+    const recoveredPublish = vi.fn();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ status: 200, text: vi.fn().mockResolvedValue('ok') }));
+    const recoveredJob = new HealthCheckJob(recoveredRun.db);
+    recoveredJob.setEventBus({ publish: recoveredPublish } as any);
+
+    await recoveredJob.run();
+
+    expect(recoveredRun.writes[0]?.healthStatus).toBe('online');
+    expect(recoveredPublish).toHaveBeenCalledOnce();
+    expect(recoveredPublish).toHaveBeenCalledWith(
+      'proxy.host.changed',
+      expect.objectContaining({ id: failed.id, action: 'health.online', health_status: 'online' })
+    );
+  });
+
   it('preserves host status and skips probes during a relay-wide critical outage', async () => {
     const secure = host({
       upstreamKind: 'docker_container',

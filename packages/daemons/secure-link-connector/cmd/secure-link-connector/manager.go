@@ -251,18 +251,32 @@ func (b *bindingListener) proxy(source net.Conn) {
 }
 
 func bridge(left, right net.Conn) {
-	var copied sync.WaitGroup
-	copied.Add(2)
-	copyOne := func(destination, source net.Conn) {
-		defer copied.Done()
-		_, _ = io.Copy(destination, source)
-		if closer, ok := destination.(interface{ CloseWrite() error }); ok {
-			_ = closer.CloseWrite()
-		}
+	type copyResult struct {
+		fromTarget bool
+		err        error
 	}
-	go copyOne(left, right)
-	go copyOne(right, left)
-	copied.Wait()
+	results := make(chan copyResult, 2)
+	copyOne := func(destination, source net.Conn, fromTarget bool) {
+		_, err := io.Copy(destination, source)
+		if err == nil {
+			if closer, ok := destination.(interface{ CloseWrite() error }); ok {
+				_ = closer.CloseWrite()
+			}
+		}
+		results <- copyResult{fromTarget: fromTarget, err: err}
+	}
+	go copyOne(left, right, true)
+	go copyOne(right, left, false)
+	first := <-results
+	if first.err != nil || first.fromTarget {
+		left.Close()
+		right.Close()
+	}
+	second := <-results
+	if second.err != nil || second.fromTarget {
+		left.Close()
+		right.Close()
+	}
 }
 
 func (b *bindingListener) track(connection net.Conn, add bool) {

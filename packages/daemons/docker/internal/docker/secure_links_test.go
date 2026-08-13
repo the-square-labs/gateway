@@ -10,7 +10,10 @@ import (
 	"net/netip"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
@@ -213,7 +216,7 @@ func TestDialWithOneRestoreReplaysBindingsBeforeReturningFailure(t *testing.T) {
 			}
 			return local, nil
 		},
-		func() error {
+		func(error) error {
 			restored = true
 			return nil
 		},
@@ -223,6 +226,61 @@ func TestDialWithOneRestoreReplaysBindingsBeforeReturningFailure(t *testing.T) {
 	}
 	if connection != local || attempts != 2 || !restored {
 		t.Fatalf("connection=%v attempts=%d restored=%v", connection, attempts, restored)
+	}
+}
+
+func TestSecureLinkRecoveryCoalescesConcurrentBindingReplays(t *testing.T) {
+	manager := &dockerSecureLinkManager{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+
+	restore := func() error {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return nil
+	}
+
+	const parallel = 16
+	var ready sync.WaitGroup
+	var completed sync.WaitGroup
+	ready.Add(parallel)
+	completed.Add(parallel)
+	begin := make(chan struct{})
+	for range parallel {
+		go func() {
+			defer completed.Done()
+			ready.Done()
+			<-begin
+			_ = manager.restoreCoalesced(restore, false)
+		}()
+	}
+	ready.Wait()
+	close(begin)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("recovery did not start")
+	}
+	time.Sleep(25 * time.Millisecond)
+	close(release)
+	completed.Wait()
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("concurrent recovery replayed bindings %d times", got)
+	}
+	if err := manager.restoreCoalesced(restore, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("recovery burst replayed bindings %d times", got)
+	}
+	if err := manager.restoreCoalesced(restore, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("changed target did not bypass cached recovery: %d replays", got)
 	}
 }
 
