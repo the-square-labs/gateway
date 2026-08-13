@@ -363,7 +363,13 @@ function maintenanceMaps(hostId: string) {
     default 1;
     ~^/\\.well-known/acme-challenge/ 0;
     ~^/_gateway/maintenance-access: 0;
+    ~^/_gateway/maintenance-access/status: 0;
     ~:1$ 0;
+}
+
+map $secure_link $gm_active_${suffix} {
+    default false;
+    "1" true;
 }
 
 map $http_cookie $gms_${suffix} {
@@ -379,6 +385,7 @@ map $gms_${suffix} $gm_cookie_${suffix} {
 }
 
 function maintenanceAccessLocation(hostId: string) {
+  const suffix = maintenanceAccessVariable(hostId);
   return `
     location = /_gateway/maintenance-access {
         proxy_pass http://unix:/run/nginx-daemon/maintenance-access.sock:/redeem/${hostId};
@@ -389,6 +396,16 @@ function maintenanceAccessLocation(hostId: string) {
         proxy_connect_timeout 5s;
         proxy_send_timeout 5s;
         proxy_read_timeout 5s;
+    }
+
+    location = /_gateway/maintenance-access/status {
+        default_type application/json;
+        add_header Cache-Control "no-store" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        if ($request_method != GET) {
+            return 405;
+        }
+        return 200 '{"active":$gm_active_${suffix}}';
     }
 `;
 }

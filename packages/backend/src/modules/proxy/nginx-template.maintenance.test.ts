@@ -89,6 +89,7 @@ describe('canonical Gateway nginx pages', () => {
     expect(rendered).toContain('return 503');
     expect(rendered).toContain('Cache-Control "no-store" always');
     expect(rendered).toContain(escapeNginxReturnText(GATEWAY_MAINTENANCE_HTML));
+    expect(rendered).not.toContain('location = /_gateway/maintenance-access/status');
     expect(rendered).toContain('proxy_pass http://10.0.0.2:8080;');
     expect(rendered).toContain('X-Advanced');
     expect(rendered.indexOf('# Gateway maintenance mode')).toBeLessThan(rendered.indexOf('location /'));
@@ -118,6 +119,12 @@ describe('canonical Gateway nginx pages', () => {
     expect(rendered).toContain(
       'secure_link "$cookie_gateway_maintenance_access_sig,$cookie_gateway_maintenance_access_exp";'
     );
+    expect(rendered).toContain('location = /_gateway/maintenance-access/status');
+    expect(rendered).toContain(`map $secure_link $gm_active_11111111_1111_4111_8111_111111111111 {
+    default false;
+    "1" true;
+}`);
+    expect(rendered).toContain('return 200 \'{"active":$gm_active_11111111_1111_4111_8111_111111111111}\';');
     // biome-ignore lint/suspicious/noTemplateCurlyInString: Nginx variables are asserted as literal configuration text.
     expect(rendered).toContain('secure_link_md5 "${secure_link_expires}${host}maintenance-secret";');
     expect(rendered).not.toContain('$hostmaintenance-secret');

@@ -1,0 +1,25 @@
+{
+  "file_name": "ml88valu_maintenance_bypass_contract",
+  "edges": [
+    {
+      "from_id": "ml88valu",
+      "to_id": "x7unpgb6",
+      "relation": "same_area",
+      "weight": 0.88,
+      "reason": "Both define Nginx proxy security boundaries and generated-location access-control behavior.",
+      "source": "auto",
+      "created_at": 1786611166903,
+      "updated_at": 1786611166903
+    },
+    {
+      "from_id": "ml88valu",
+      "to_id": "3ta908aa",
+      "relation": "same_workflow",
+      "weight": 0.7,
+      "reason": "Both rely on secure-link validation and managed Nginx proxy infrastructure for deployment and verification.",
+      "source": "auto",
+      "created_at": 1786611166903,
+      "updated_at": 1786611166903
+    }
+  ]
+}
