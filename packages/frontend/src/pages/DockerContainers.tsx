@@ -33,6 +33,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { matchesDockerContainerStatus } from "@/lib/docker-container-filters";
 import { formatDisplayImageRef } from "@/lib/docker-image-ref";
 import { loadVisibleDockerNodes } from "@/lib/docker-node-access";
+import { collectFolderTreeIds, findFolderTreeNode } from "@/lib/folder-tree";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { dockerContainerRoute, dockerDeploymentRoute } from "@/lib/resource-routes";
 import { createReturnNavigationState } from "@/lib/return-navigation";
@@ -323,7 +324,7 @@ export function DockerContainers({
     [filters.search, fixedNodeId, rawFolderTree]
   );
 
-  const folderIds = useMemo(() => new Set(folders.map((folder) => folder.id)), [folders]);
+  const folderIds = useMemo(() => collectFolderTreeIds(folders), [folders]);
   const ungroupedContainers = useMemo(
     () =>
       sortContainers(
@@ -483,9 +484,7 @@ export function DockerContainers({
 
   const applyOptimisticMove = useCallback(
     (container: DockerContainerListItem, folderId: string | null) => {
-      const targetFolder = folderId
-        ? (folders.find((folder) => folder.id === folderId) ?? null)
-        : null;
+      const targetFolder = folderId ? findFolderTreeNode(folders, folderId) : null;
       setOptimisticContainers((current) => {
         const source = (current ?? containers).map((item) => ({ ...item }));
         const moving = source.find(

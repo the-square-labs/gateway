@@ -12,7 +12,7 @@ export const dockerContainerFolderAssignments = pgTable(
     resourceType: varchar('resource_type', { length: 32 }).notNull().default('container'),
     resourceKey: varchar('resource_key', { length: 512 }).notNull(),
     containerName: varchar('container_name', { length: 255 }),
-    folderId: uuid('folder_id').references(() => dockerContainerFolders.id, { onDelete: 'cascade' }),
+    folderId: uuid('folder_id').references(() => dockerContainerFolders.id, { onDelete: 'set null' }),
     sortOrder: integer('sort_order').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

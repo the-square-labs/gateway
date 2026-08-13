@@ -1,0 +1,3 @@
+ALTER TABLE "docker_container_folder_assignments" DROP CONSTRAINT "docker_container_folder_assignments_folder_id_docker_container_folders_id_fk";
+--> statement-breakpoint
+ALTER TABLE "docker_container_folder_assignments" ADD CONSTRAINT "docker_container_folder_assignments_folder_id_docker_container_folders_id_fk" FOREIGN KEY ("folder_id") REFERENCES "public"."docker_container_folders"("id") ON DELETE set null ON UPDATE no action;

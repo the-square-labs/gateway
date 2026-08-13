@@ -8,6 +8,7 @@ import { ResourceListForm } from "@/components/common/ResourceListForm";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useRealtime } from "@/hooks/use-realtime";
+import { collectFolderTreeIds, findFolderTreeNode } from "@/lib/folder-tree";
 import { useDockerFolderStore } from "@/stores/docker-folders";
 import type { DockerFolderResourceType, DockerFolderTreeNode } from "@/types";
 
@@ -184,7 +185,7 @@ export function DockerFolderedResourceList<TItem extends DockerFolderedResourceI
   }, [resourceResetKey]);
 
   const visibleResources = optimisticResources ?? resources;
-  const folderIds = useMemo(() => new Set(folders.map((folder) => folder.id)), [folders]);
+  const folderIds = useMemo(() => collectFolderTreeIds(folders), [folders]);
   const rawFolderTree = useMemo(
     () => attachResourcesToFolders(folders, visibleResources, getResourceLabel),
     [folders, getResourceLabel, visibleResources]
@@ -246,9 +247,7 @@ export function DockerFolderedResourceList<TItem extends DockerFolderedResourceI
 
   const applyOptimisticMove = useCallback(
     (resource: TItem, folderId: string | null) => {
-      const targetFolder = folderId
-        ? (folders.find((folder) => folder.id === folderId) ?? null)
-        : null;
+      const targetFolder = folderId ? findFolderTreeNode(folders, folderId) : null;
       setOptimisticResources((current) => {
         const source = (current ?? resources).map((item) => ({ ...item }));
         const moving = source.find(

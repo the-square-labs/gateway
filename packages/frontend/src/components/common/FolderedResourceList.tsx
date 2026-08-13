@@ -8,6 +8,7 @@ import { ResourceListForm } from "@/components/common/ResourceListForm";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useRealtime } from "@/hooks/use-realtime";
+import { collectFolderTreeIds } from "@/lib/folder-tree";
 import { useResourceFolderStore } from "@/stores/resource-folders";
 import type { ResourceFolderTreeNode, ResourceFolderType } from "@/types";
 
@@ -203,7 +204,7 @@ export function FolderedResourceList<TItem extends FolderedResourceListItem>({
   }, [resourceResetKey]);
 
   const visibleResources = optimisticResources ?? resources;
-  const folderIds = useMemo(() => new Set(folders.map((folder) => folder.id)), [folders]);
+  const folderIds = useMemo(() => collectFolderTreeIds(folders), [folders]);
   const systemFolderTree = useMemo(
     () => buildSystemFolderTree(systemFolders, getResourceLabel),
     [getResourceLabel, systemFolders]
