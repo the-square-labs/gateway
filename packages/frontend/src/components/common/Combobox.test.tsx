@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { HTMLAttributes, ReactNode } from "react";
+import { type HTMLAttributes, type ReactNode, useState } from "react";
 import { vi } from "vitest";
 import { Combobox } from "./Combobox";
 
@@ -81,5 +81,33 @@ describe("Combobox", () => {
     fireEvent.animationEnd(dropdown!);
 
     expect(screen.getByRole("button", { name: "Beta" })).toBeInTheDocument();
+  });
+
+  it("keeps unmatched free text and shows the empty state", async () => {
+    const user = userEvent.setup();
+    function ControlledCombobox() {
+      const [value, setValue] = useState("");
+      return (
+        <Combobox
+          freeText
+          value={value}
+          options={[{ value: "example.com", label: "example.com" }]}
+          onValueChange={setValue}
+          emptyMessage="No matching domains."
+          ariaLabel="Domain"
+        />
+      );
+    }
+    render(<ControlledCombobox />);
+
+    const input = screen.getByRole("combobox", { name: "Domain" });
+    await user.click(input);
+    await user.type(input, "new.example");
+
+    expect(input).toHaveValue("new.example");
+    expect(screen.getByText("No matching domains.")).toBeInTheDocument();
+
+    fireEvent.blur(input);
+    expect(input).toHaveValue("new.example");
   });
 });

@@ -5,7 +5,7 @@ import type { CommandResult } from '@/grpc/generated/types.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { DaemonUpdateService } from './daemon-update.service.js';
-import type { NodeRegistryService } from './node-registry.service.js';
+import type { DispatchedCommand, NodeRegistryService } from './node-registry.service.js';
 import type { RelayGrantBundle } from './relay-policy.service.js';
 
 const logger = createChildLogger('NodeDispatch');
@@ -14,6 +14,9 @@ const logger = createChildLogger('NodeDispatch');
 // controller deadline slightly longer so it always receives the final result
 // instead of marking an operation failed while it still changes disk state.
 const managedDatabaseCommandTimeoutMs = 15 * 60 * 1000;
+// SelfUpdate can spend up to five minutes downloading the binary before it
+// acknowledges the command. Leave a small margin for verification and replace.
+const daemonUpdateCommandTimeoutMs = 5 * 60 * 1000 + 30_000;
 
 export class NodeDispatchService {
   private daemonUpdateService?: DaemonUpdateService;
@@ -758,13 +761,15 @@ export class NodeDispatchService {
     targetVersion: string,
     checksum: string,
     signedManifest: string
-  ): Promise<CommandResult> {
+  ): Promise<DispatchedCommand> {
     if (!this.registry.getNode(nodeId)) {
       throw new AppError(409, 'NODE_NOT_CONNECTED', 'Node is not connected');
     }
-    return this.registry.sendCommand(nodeId, {
-      updateDaemon: { downloadUrl, targetVersion, checksum, signedManifest },
-    });
+    return this.registry.dispatchCommand(
+      nodeId,
+      { updateDaemon: { downloadUrl, targetVersion, checksum, signedManifest } },
+      daemonUpdateCommandTimeoutMs
+    );
   }
 
   async resolveNodeId(proxyHostNodeId: string | null): Promise<string> {

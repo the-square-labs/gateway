@@ -61,6 +61,8 @@ describe('canonical Gateway nginx pages', () => {
 
   it('uses the browser prompt for maintenance team access', () => {
     expect(GATEWAY_MAINTENANCE_HTML).toContain("window.prompt('Access code')");
+    expect(GATEWAY_MAINTENANCE_HTML).not.toContain('Error 503');
+    expect(GATEWAY_MAINTENANCE_HTML).toContain('Temporarily unavailable');
     expect(GATEWAY_MAINTENANCE_HTML).not.toContain('<dialog');
     expect(GATEWAY_MAINTENANCE_HTML).not.toContain('maintenance-access-form');
   });

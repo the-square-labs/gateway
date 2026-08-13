@@ -502,6 +502,7 @@ function trySendWSMessage(msg: Parameters<AIWebSocketClient["send"]>[0]): boolea
   }
 }
 const assistantDraftVersions = new Map<string, number>();
+const completedAssistantCommentVersions = new Map<string, number>();
 const appliedConversationRevisions = new Map<string, number>();
 
 function acceptConversationRevision(conversationId: string, revision: number | undefined): boolean {
@@ -1950,6 +1951,7 @@ export function resetAIStateForAuthChange() {
   wsClient = null;
   conversationLoadGeneration += 1;
   assistantDraftVersions.clear();
+  completedAssistantCommentVersions.clear();
   appliedConversationRevisions.clear();
   pendingToolCommands.clear();
   pendingInputCommands.clear();
@@ -2149,6 +2151,7 @@ function handleWSMessage(
 
     case "assistant.delta":
       if (get().activeConversationId !== msg.conversationId) return;
+      completedAssistantCommentVersions.delete(msg.runId);
       set((state) => ({
         activeRunId: msg.runId,
         isStreaming: true,
@@ -2165,6 +2168,7 @@ function handleWSMessage(
 
     case "assistant.comment_delta":
       if (get().activeConversationId !== msg.conversationId) return;
+      completedAssistantCommentVersions.delete(msg.runId);
       set((state) => ({
         activeRunId: msg.runId,
         isStreaming: true,
@@ -2180,6 +2184,7 @@ function handleWSMessage(
 
     case "assistant.comment_done":
       if (get().activeConversationId !== msg.conversationId) return;
+      completedAssistantCommentVersions.set(msg.runId, assistantDraftVersions.get(msg.runId) ?? 0);
       set((state) => ({
         activeRunId: msg.runId,
         isStreaming: true,
@@ -2297,10 +2302,14 @@ function projectConversationSnapshot(
       : null);
   const snapshotDraftVersion = snapshot.runtime.assistantDraftVersion;
   const currentDraftVersion = activeRunId ? (assistantDraftVersions.get(activeRunId) ?? -1) : -1;
+  const completedCommentVersion = activeRunId
+    ? (completedAssistantCommentVersions.get(activeRunId) ?? -1)
+    : -1;
   const snapshotDraftIsStale = Boolean(
     activeRunId &&
       typeof snapshotDraftVersion === "number" &&
-      snapshotDraftVersion < currentDraftVersion
+      (snapshotDraftVersion < currentDraftVersion ||
+        snapshotDraftVersion <= completedCommentVersion)
   );
 
   if (activeRunId && typeof snapshotDraftVersion === "number" && !snapshotDraftIsStale) {
@@ -2948,10 +2957,7 @@ function findActiveRuntimeAssistantIndex(messages: AIMessage[], activeRunId: str
 function findActiveCommentIndex(messages: AIMessage[], activeRunId: string): number {
   return findLastIndex(
     messages,
-    (message) =>
-      message.role === "assistant" &&
-      message.id.startsWith(`${activeRunId}:comment:`) &&
-      Boolean(message.isStreaming)
+    (message) => message.role === "assistant" && message.id.startsWith(`${activeRunId}:comment:`)
   );
 }
 

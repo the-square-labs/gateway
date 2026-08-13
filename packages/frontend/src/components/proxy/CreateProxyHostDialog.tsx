@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, Loader2, Minus, Plus } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
@@ -38,6 +38,7 @@ import type {
   CreateProxyHostRequest,
   DockerContainer,
   NginxTemplate,
+  Node,
   ProxyHost,
   ProxyHostType,
   SSLCertificate,
@@ -59,6 +60,23 @@ interface NodeOption {
   status: string;
   type: string;
   serviceCreationLocked: boolean;
+}
+
+function mapNodeOptions(nodes: Node[]): NodeOption[] {
+  return nodes
+    .filter((node) => node.type === "nginx" && !isNodeIncompatible(node))
+    .map((node) => ({
+      id: node.id,
+      hostname: node.displayName || node.hostname,
+      status: node.status,
+      type: node.type,
+      serviceCreationLocked: node.serviceCreationLocked,
+    }));
+}
+
+function getCachedNodeOptions(): NodeOption[] {
+  const cached = api.getCached<{ data: Node[] }>("nodes:list:default");
+  return mapNodeOptions(cached?.data ?? []);
 }
 
 const STEP_ANIMATION = {
@@ -112,7 +130,8 @@ export function CreateProxyHostDialog({
   const [isSaving, setIsSaving] = useState(false);
 
   // Related data (fetched on open)
-  const [nodes, setNodes] = useState<NodeOption[]>([]);
+  const [nodes, setNodes] = useState<NodeOption[]>(getCachedNodeOptions);
+  const [nodesLoading, setNodesLoading] = useState(nodes.length === 0);
   const [sslCerts, setSslCerts] = useState<SSLCertificate[]>([]);
   const [nginxTemplateList, setNginxTemplateList] = useState<NginxTemplate[]>([]);
   const [dockerContainers, setDockerContainers] = useState<DockerContainer[]>([]);
@@ -160,28 +179,33 @@ export function CreateProxyHostDialog({
     setStep(1);
   }, [existingHost]);
 
+  useLayoutEffect(() => {
+    if (!open) return;
+    const cachedNodes = getCachedNodeOptions();
+    if (cachedNodes.length > 0) {
+      setNodes(cachedNodes);
+      setNodesLoading(false);
+    } else if (nodes.length === 0) {
+      setNodesLoading(true);
+    }
+  }, [nodes.length, open]);
+
   // Fetch related data when dialog opens
   useEffect(() => {
     if (!open) return;
 
-    const load = async () => {
+    void api
+      .listNodes({ type: "nginx" })
+      .then((response) => setNodes(mapNodeOptions(response.data ?? [])))
+      .catch(() => {})
+      .finally(() => setNodesLoading(false));
+
+    const loadSupportingData = async () => {
       try {
-        const [nodeRes, sslRes, templateRes] = await Promise.all([
-          api.listNodes({ type: "nginx" }),
+        const [sslRes, templateRes] = await Promise.all([
           api.listSSLCertificates({ limit: 100 }),
           api.listNginxTemplates(),
         ]);
-
-        const compatible = (nodeRes.data ?? []).filter((n) => !isNodeIncompatible(n));
-        setNodes(
-          compatible.map((n) => ({
-            id: n.id,
-            hostname: n.displayName || n.hostname,
-            status: n.status,
-            type: n.type,
-            serviceCreationLocked: n.serviceCreationLocked,
-          }))
-        );
         setSslCerts(sslRes.data || []);
         setNginxTemplateList(templateRes || []);
       } catch {
@@ -189,7 +213,7 @@ export function CreateProxyHostDialog({
       }
     };
 
-    void load();
+    void loadSupportingData();
     void api
       .listDockerContainerSnapshots()
       .then(setDockerContainers)
@@ -371,8 +395,9 @@ export function CreateProxyHostDialog({
                 <Select
                   value={nodeId || "__none__"}
                   onValueChange={(v) => setNodeId(v === "__none__" ? "" : v)}
+                  disabled={nodesLoading}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger aria-label="Node" aria-busy={nodesLoading}>
                     {selectedNode ? (
                       <div className="flex min-w-0 items-center gap-3 pr-2">
                         <span className="min-w-0 flex-1 truncate">{selectedNode.hostname}</span>
@@ -388,12 +413,14 @@ export function CreateProxyHostDialog({
                         </Badge>
                       </div>
                     ) : (
-                      <SelectValue placeholder="Select a node..." />
+                      <SelectValue
+                        placeholder={nodesLoading ? "Loading nodes..." : "Select a node..."}
+                      />
                     )}
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__" disabled>
-                      Select a node...
+                      {nodesLoading ? "Loading nodes..." : "Select a node..."}
                     </SelectItem>
                     {nodes.map((node) => {
                       const lockedForCreation =

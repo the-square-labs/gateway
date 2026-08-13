@@ -9,15 +9,14 @@ import type {
 } from "@/types";
 import { DnsStatusBadge } from "./DnsStatusBadge";
 
-let cachedDomains: DomainSearchResult[] | null = null;
-let domainsLoadPromise: Promise<DomainSearchResult[]> | null = null;
-
 function mapDomains(domains: Domain[]): DomainSearchResult[] {
-  return domains.map((domain) => ({
-    id: domain.id,
-    domain: domain.domain,
-    dnsStatus: domain.dnsStatus,
-  }));
+  return [...domains]
+    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+    .map((domain) => ({
+      id: domain.id,
+      domain: domain.domain,
+      dnsStatus: domain.dnsStatus,
+    }));
 }
 
 function collectFolderDomains(folder: FolderTreeNode, domains: Set<string>) {
@@ -28,7 +27,9 @@ function collectFolderDomains(folder: FolderTreeNode, domains: Set<string>) {
 }
 
 function getCachedDomainSuggestions() {
-  const cachedDomainList = api.getCached<{ data: Domain[] }>("domains:list");
+  const cachedDomainList =
+    api.getCached<{ data: Domain[] }>("domains:list:folder-view") ??
+    api.getCached<{ data: Domain[] }>("domains:list");
   if (cachedDomainList?.data?.length) return mapDomains(cachedDomainList.data);
   return [];
 }
@@ -53,25 +54,10 @@ function getProxyHostDomainSuggestions() {
 }
 
 function loadDomainSuggestions() {
-  if (cachedDomains) return Promise.resolve(cachedDomains);
-  const cached = getCachedDomainSuggestions();
-  if (cached.length > 0) {
-    cachedDomains = cached;
-    return Promise.resolve(cachedDomains);
-  }
-  domainsLoadPromise ??= api
-    .listDomains({ limit: 100 })
-    .then((result) => mapDomains(result.data))
+  return api
+    .searchDomains("")
     .catch(() => [])
-    .then((domains) => (domains.length > 0 ? domains : getProxyHostDomainSuggestions()))
-    .then((domains) => {
-      if (domains.length > 0) cachedDomains = domains;
-      return domains;
-    })
-    .finally(() => {
-      domainsLoadPromise = null;
-    });
-  return domainsLoadPromise;
+    .then((domains) => (domains.length > 0 ? domains : getProxyHostDomainSuggestions()));
 }
 
 interface DomainAutocompleteInputProps {
@@ -87,7 +73,7 @@ export function DomainAutocompleteInput({
   placeholder = "example.com",
   inputClassName,
 }: DomainAutocompleteInputProps) {
-  const [domains, setDomains] = useState<DomainSearchResult[]>(cachedDomains ?? []);
+  const [domains, setDomains] = useState<DomainSearchResult[]>(getCachedDomainSuggestions);
 
   useEffect(() => {
     let cancelled = false;

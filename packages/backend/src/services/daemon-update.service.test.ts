@@ -47,4 +47,47 @@ describe('DaemonUpdateService update artifact URLs', () => {
     await expect(service.clearNodeUpdateInProgressOnReconnect('node-1', '2.6.0')).resolves.toBe(true);
     expect(set).toHaveBeenCalledWith({ metadata: {}, updatedAt: expect.any(Date) });
   });
+
+  it('keeps the update lock when the daemon disconnects for its expected restart', async () => {
+    const service = new DaemonUpdateService(
+      {} as DrizzleClient,
+      {
+        GITLAB_API_URL: 'https://gitlab.wiolett.net',
+        GITLAB_PROJECT_PATH: 'wiolett/gateway',
+      } as Env
+    );
+    const clear = vi.spyOn(service, 'clearNodeUpdateInProgress').mockResolvedValue(undefined);
+
+    service.trackNodeUpdateCompletion('node-1', Promise.reject(new Error('Node disconnected')));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(clear).not.toHaveBeenCalled();
+  });
+
+  it('clears the update lock after an explicit daemon rejection', async () => {
+    const service = new DaemonUpdateService(
+      {} as DrizzleClient,
+      {
+        GITLAB_API_URL: 'https://gitlab.wiolett.net',
+        GITLAB_PROJECT_PATH: 'wiolett/gateway',
+      } as Env
+    );
+    const clear = vi.spyOn(service, 'clearNodeUpdateInProgress').mockResolvedValue(undefined);
+
+    service.trackNodeUpdateCompletion(
+      'node-1',
+      Promise.resolve({
+        commandId: 'cmd-1',
+        success: false,
+        error: 'checksum mismatch',
+        detail: '',
+        data: Buffer.alloc(0),
+      })
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(clear).toHaveBeenCalledWith('node-1');
+  });
 });

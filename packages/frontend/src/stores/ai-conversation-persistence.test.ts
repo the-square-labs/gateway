@@ -1554,6 +1554,69 @@ describe("AI backend runtime store", () => {
     );
   });
 
+  it("ignores a stale comment draft snapshot received after comment completion", async () => {
+    const socket = await connectAI();
+    useAIStore.setState({ activeConversationId: "conversation-1" });
+
+    socket.emit({
+      type: "assistant.comment_delta",
+      conversationId: "conversation-1",
+      runId: "run-1",
+      content: "Проверяю ресурсы.",
+      version: 1,
+    });
+    socket.emit({
+      type: "assistant.comment_done",
+      conversationId: "conversation-1",
+      runId: "run-1",
+    });
+    socket.emit({
+      type: "conversation.snapshot",
+      conversationId: "conversation-1",
+      snapshot: {
+        revision: 1,
+        conversation: {
+          id: "conversation-1",
+          title: "Runtime chat",
+          createdAt: "2026-06-26T10:00:00.000Z",
+          updatedAt: "2026-06-26T10:00:01.000Z",
+          lastContext: null,
+          discoveredToolsets: [],
+          checkpoint: null,
+        },
+        messages: [],
+        runtime: {
+          activeRun: runtimeRun("running"),
+          assistantDraftContent: "Проверяю ресурсы.",
+          assistantDraftVersion: 1,
+          pendingApprovals: [],
+          pendingQuestion: null,
+          pendingQuestions: [],
+          toolCalls: [],
+        },
+      },
+    });
+
+    expect(useAIStore.getState().isStreaming).toBe(true);
+    expect(useAIStore.getState().messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "run-1:comment:1",
+          content: "Проверяю ресурсы.",
+          isStreaming: false,
+        }),
+        expect.objectContaining({
+          id: "run-1:runtime",
+          content: "",
+          isStreaming: true,
+        }),
+      ])
+    );
+    expect(
+      useAIStore.getState().messages.some((message) => message.content === "Проверяю ресурсы.")
+    ).toBe(true);
+  });
+
   it("updates background chat runtime status from snapshots and status events", async () => {
     const socket = await connectAI();
     useAIStore.setState({

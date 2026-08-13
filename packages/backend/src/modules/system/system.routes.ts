@@ -202,17 +202,15 @@ systemRoutes.openapi({ ...updateDaemonRoute, middleware: sessionOnly }, async (c
 
   await service.markNodeUpdateInProgress(nodeId, release.version);
   try {
-    const result = await dispatch.sendUpdateDaemonCommand(
+    const command = await dispatch.sendUpdateDaemonCommand(
       nodeId,
       artifact.downloadUrl,
       release.version,
       artifact.checksum,
       artifact.signedManifest
     );
-    if (!result.success) {
-      await service.clearNodeUpdateInProgress(nodeId);
-      throw new AppError(502, 'DAEMON_UPDATE_START_FAILED', result.error || 'Failed to start daemon update');
-    }
+    service.trackNodeUpdateCompletion(nodeId, command.result);
+    await command.accepted;
   } catch (error) {
     await service.clearNodeUpdateInProgress(nodeId);
     throw error;

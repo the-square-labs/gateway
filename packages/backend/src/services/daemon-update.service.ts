@@ -3,6 +3,7 @@ import type { Env } from '@/config/env.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { nodes } from '@/db/schema/nodes.js';
 import { settings } from '@/db/schema/settings.js';
+import type { CommandResult } from '@/grpc/generated/types.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { compareSemver, isNewerVersion, parseSemver } from '@/lib/semver.js';
 import {
@@ -224,6 +225,38 @@ export class DaemonUpdateService {
     await this.db.update(nodes).set({ metadata, updatedAt: new Date() }).where(eq(nodes.id, nodeId));
 
     this.emitNodeUpdated(nodeId);
+  }
+
+  trackNodeUpdateCompletion(nodeId: string, completion: Promise<CommandResult>): void {
+    void completion.then(
+      async (result) => {
+        if (result.success) return;
+        logger.error('Daemon update failed after dispatch', {
+          nodeId,
+          error: result.error || result.detail || 'Daemon rejected the update',
+        });
+        await this.clearNodeUpdateInProgress(nodeId).catch((error) => {
+          logger.error('Failed to clear daemon update lock after rejection', {
+            nodeId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      },
+      async (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message === 'Node disconnected') {
+          logger.info('Daemon disconnected while restarting after update', { nodeId });
+          return;
+        }
+        logger.error('Daemon update did not complete', { nodeId, error: message });
+        await this.clearNodeUpdateInProgress(nodeId).catch((clearError) => {
+          logger.error('Failed to clear incomplete daemon update lock', {
+            nodeId,
+            error: clearError instanceof Error ? clearError.message : String(clearError),
+          });
+        });
+      }
+    );
   }
 
   async clearNodeUpdateInProgressOnReconnect(nodeId: string, reportedVersion: string): Promise<boolean> {

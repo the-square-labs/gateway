@@ -279,9 +279,14 @@ describe('AIService maintenance tools', () => {
       }),
       markNodeUpdateInProgress: vi.fn().mockResolvedValue(undefined),
       clearNodeUpdateInProgress: vi.fn().mockResolvedValue(undefined),
+      trackNodeUpdateCompletion: vi.fn(),
     };
+    const completion = new Promise<never>(() => {});
     const nodeDispatchService = {
-      sendUpdateDaemonCommand: vi.fn().mockResolvedValue({ success: true }),
+      sendUpdateDaemonCommand: vi.fn().mockResolvedValue({
+        accepted: Promise.resolve(),
+        result: completion,
+      }),
     };
     const db = {
       select: vi.fn(() => ({
@@ -343,5 +348,6 @@ describe('AIService maintenance tools', () => {
       'sha256:test',
       'signed'
     );
+    expect(daemonUpdateService.trackNodeUpdateCompletion).toHaveBeenCalledWith('node-1', completion);
   });
 });

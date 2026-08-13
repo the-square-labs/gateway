@@ -86,7 +86,7 @@ export function Combobox({
     close();
   };
 
-  const contentOpen = open && !disabled && (!freeText || filteredOptions.length > 0);
+  const contentOpen = open && !disabled;
 
   return (
     <Popover

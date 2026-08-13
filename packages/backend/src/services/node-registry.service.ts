@@ -44,9 +44,16 @@ export interface ConnectedNode {
     {
       resolve: (result: CommandResult) => void;
       reject: (error: Error) => void;
+      resolveAccepted: () => void;
+      rejectAccepted: (error: Error) => void;
       timeout: ReturnType<typeof setTimeout>;
     }
   >;
+}
+
+export interface DispatchedCommand {
+  accepted: Promise<void>;
+  result: Promise<CommandResult>;
 }
 
 export class NodeRegistryService {
@@ -296,6 +303,12 @@ export class NodeRegistryService {
   }
 
   async sendCommand(nodeId: string, command: Partial<GatewayCommand>, timeoutMs = 30000): Promise<CommandResult> {
+    const dispatched = this.dispatchCommand(nodeId, command, timeoutMs);
+    void dispatched.accepted.catch(() => {});
+    return dispatched.result;
+  }
+
+  dispatchCommand(nodeId: string, command: Partial<GatewayCommand>, timeoutMs = 30000): DispatchedCommand {
     const node = this.nodes.get(nodeId);
     if (!node) {
       throw new Error(`Node ${nodeId} is not connected`);
@@ -307,22 +320,43 @@ export class NodeRegistryService {
       ...command,
     };
 
-    return new Promise<CommandResult>((resolve, reject) => {
+    let resolveAccepted!: () => void;
+    let rejectAccepted!: (error: Error) => void;
+    const accepted = new Promise<void>((resolve, reject) => {
+      resolveAccepted = resolve;
+      rejectAccepted = reject;
+    });
+
+    const result = new Promise<CommandResult>((resolve, reject) => {
       const timeout = setTimeout(() => {
         node.pendingCommands.delete(commandId);
-        reject(new Error(`Command ${commandId} timed out after ${timeoutMs}ms`));
+        const error = new Error(`Command ${commandId} timed out after ${timeoutMs}ms`);
+        rejectAccepted(error);
+        reject(error);
       }, timeoutMs);
 
-      node.pendingCommands.set(commandId, { resolve, reject, timeout });
+      node.pendingCommands.set(commandId, {
+        resolve,
+        reject,
+        resolveAccepted,
+        rejectAccepted,
+        timeout,
+      });
 
       node.commandStream.write(fullCommand, (err: Error | null | undefined) => {
         if (err) {
           clearTimeout(timeout);
           node.pendingCommands.delete(commandId);
-          reject(new Error(`Failed to send command: ${err.message}`));
+          const error = new Error(`Failed to send command: ${err.message}`);
+          rejectAccepted(error);
+          reject(error);
+          return;
         }
+        resolveAccepted();
       });
     });
+
+    return { accepted, result };
   }
 
   /** Fire-and-forget: write a command to the stream without awaiting a response */
@@ -352,6 +386,7 @@ export class NodeRegistryService {
     if (pending) {
       clearTimeout(pending.timeout);
       node.pendingCommands.delete(result.commandId);
+      pending.resolveAccepted();
       pending.resolve(result);
     }
   }
@@ -498,7 +533,9 @@ export class NodeRegistryService {
   private cleanupPendingCommands(node: ConnectedNode): void {
     for (const [id, pending] of node.pendingCommands) {
       clearTimeout(pending.timeout);
-      pending.reject(new Error('Node disconnected'));
+      const error = new Error('Node disconnected');
+      pending.rejectAccepted(error);
+      pending.reject(error);
       node.pendingCommands.delete(id);
     }
   }

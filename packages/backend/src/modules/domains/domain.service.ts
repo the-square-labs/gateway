@@ -49,7 +49,6 @@ type DomainCloudflarePlan = {
     settings: { defaultTtl: number; defaultProxied: boolean };
     client: CloudflareClient;
   };
-  existingRecords: CloudflareAddressRecord[];
   addressRecords: CloudflareAddressRecord[];
   blockingRecords: CloudflareAddressRecord[];
   currentIps: string[];
@@ -142,7 +141,6 @@ export class DomainsService {
       ttl,
       proxied,
       context,
-      existingRecords,
       addressRecords,
       blockingRecords,
       currentMatches,
@@ -158,10 +156,11 @@ export class DomainsService {
     }
 
     if (blockingRecords.length > 0 && !currentMatches) {
+      const conflictingRecords = [...addressRecords, ...blockingRecords];
       throw new AppError(409, 'DOMAIN_DNS_TARGET_MISMATCH', 'Existing Cloudflare DNS record target differs', {
         domain: domainName,
         zoneName: context.zone.name,
-        currentRecords: existingRecords.map((record) => ({
+        currentRecords: conflictingRecords.map((record) => ({
           id: record.id,
           type: record.type,
           name: record.name,
@@ -265,6 +264,7 @@ export class DomainsService {
     const plan = await this.prepareCloudflareDomain(input);
     const hasBlockingRecord = plan.blockingRecords.length > 0 && !plan.currentMatches;
     const hasMismatch = plan.addressRecords.length > 0 && !plan.currentMatches;
+    const relevantRecords = [...plan.addressRecords, ...plan.blockingRecords];
     return {
       domain: plan.domainName,
       zoneName: plan.context.zone.name,
@@ -273,7 +273,7 @@ export class DomainsService {
       ttl: plan.ttl,
       proxied: plan.proxied,
       desiredRecords: plan.desiredRecords,
-      currentRecords: plan.existingRecords.map((record) => ({
+      currentRecords: relevantRecords.map((record) => ({
         id: record.id,
         type: record.type,
         name: record.name,
@@ -490,8 +490,8 @@ export class DomainsService {
       .select({ id: domains.id, domain: domains.domain, dnsStatus: domains.dnsStatus })
       .from(domains)
       .where(ilike(domains.domain, `%${query}%`))
-      .orderBy(domains.domain)
-      .limit(10);
+      .orderBy(desc(domains.createdAt), asc(domains.domain))
+      .limit(100);
   }
 
   private async getGatewayDnsTargetIps(): Promise<string[]> {
@@ -532,7 +532,6 @@ export class DomainsService {
       ttl,
       proxied,
       context,
-      existingRecords,
       addressRecords,
       blockingRecords,
       currentIps,

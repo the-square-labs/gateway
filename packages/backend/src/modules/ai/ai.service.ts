@@ -1906,7 +1906,7 @@ export class AIService {
             );
             await daemonUpdateService.markNodeUpdateInProgress(nodeId, release.version);
             try {
-              const result = await container
+              const command = await container
                 .resolve(NodeDispatchService)
                 .sendUpdateDaemonCommand(
                   nodeId,
@@ -1915,10 +1915,8 @@ export class AIService {
                   artifact.checksum,
                   artifact.signedManifest
                 );
-              if (!result.success) {
-                await daemonUpdateService.clearNodeUpdateInProgress(nodeId);
-                throw new Error(result.error || 'Failed to start daemon update');
-              }
+              daemonUpdateService.trackNodeUpdateCompletion(nodeId, command.result);
+              await command.accepted;
             } catch (error) {
               await daemonUpdateService.clearNodeUpdateInProgress(nodeId);
               throw error;

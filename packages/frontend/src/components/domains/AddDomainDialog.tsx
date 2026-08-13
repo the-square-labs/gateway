@@ -25,6 +25,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
+import { useResourceFolderStore } from "@/stores/resource-folders";
 import type { ResourceFolderTreeNode } from "@/types";
 import type { DomainDnsConflictDetails, DomainPreview } from "@/types/domains";
 
@@ -45,7 +46,6 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
   const [domain, setDomain] = useState("");
   const [description, setDescription] = useState("");
   const [folderId, setFolderId] = useState("");
-  const [folderList, setFolderList] = useState<ResourceFolderTreeNode[]>([]);
   const [ttl, setTtl] = useState("1");
   const [proxied, setProxied] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -53,6 +53,10 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const domainFolders = useResourceFolderStore((state) => state.foldersByType.domain);
+  const foldersLoading = useResourceFolderStore((state) => state.loadingByType.domain);
+  const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
+  const folderList = useMemo(() => flattenFolders(domainFolders), [domainFolders]);
 
   const resetForm = () => {
     setDomain("");
@@ -102,11 +106,8 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
 
   useEffect(() => {
     if (!open) return;
-    api
-      .listDomainFolders()
-      .then((folders) => setFolderList(flattenFolders(folders)))
-      .catch(() => setFolderList([]));
-  }, [open]);
+    void fetchFolders("domain");
+  }, [fetchFolders, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -241,31 +242,34 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
                 placeholder="Optional description"
               />
             </SettingsControlRow>
-            {folderList.length > 0 && (
-              <SettingsControlRow
-                title="Folder"
-                description="Optional organization folder"
-                className="sm:grid-cols-[minmax(8rem,1fr)_minmax(0,12rem)]"
-                controlsClassName="sm:w-full sm:min-w-0 sm:max-w-none"
+            <SettingsControlRow
+              title="Folder"
+              description="Optional organization folder"
+              className="sm:grid-cols-[minmax(8rem,1fr)_minmax(0,12rem)]"
+              controlsClassName="sm:w-full sm:min-w-0 sm:max-w-none"
+            >
+              <Select
+                value={folderId || "__none__"}
+                onValueChange={(value) => setFolderId(value === "__none__" ? "" : value)}
+                disabled={foldersLoading}
               >
-                <Select
-                  value={folderId || "__none__"}
-                  onValueChange={(value) => setFolderId(value === "__none__" ? "" : value)}
-                >
-                  <SelectTrigger>
+                <SelectTrigger aria-label="Folder" aria-busy={foldersLoading}>
+                  {foldersLoading ? (
+                    <span>Loading folders...</span>
+                  ) : (
                     <SelectValue placeholder="No folder" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">No folder</SelectItem>
-                    {folderList.map((folder) => (
-                      <SelectItem key={folder.id} value={folder.id}>
-                        {"  ".repeat(folder.depth) + folder.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </SettingsControlRow>
-            )}
+                  )}
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">No folder</SelectItem>
+                  {folderList.map((folder) => (
+                    <SelectItem key={folder.id} value={folder.id}>
+                      {"  ".repeat(folder.depth) + folder.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </SettingsControlRow>
             <SettingsControlRow
               title="TTL"
               description="DNS record time to live"
@@ -322,7 +326,7 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
                         </div>
                         <div className="flex items-start justify-between gap-3">
                           <span className="text-muted-foreground">Target</span>
-                          <div className="flex flex-wrap justify-end gap-1">
+                          <div className="flex min-w-0 flex-1 flex-wrap justify-end gap-1">
                             {preview.desiredRecords.map((record) => (
                               <Badge key={`${record.type}-${record.content}`} variant="outline">
                                 {record.type} {record.content}
@@ -333,7 +337,7 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
                         {preview.currentRecords.length > 0 && (
                           <div className="flex items-start justify-between gap-3">
                             <span className="text-muted-foreground">Current</span>
-                            <div className="flex flex-wrap justify-end gap-1">
+                            <div className="flex min-w-0 flex-1 flex-wrap justify-end gap-1">
                               {preview.currentRecords.map((record) => (
                                 <Badge
                                   key={record.id ?? `${record.type}-${record.content}`}

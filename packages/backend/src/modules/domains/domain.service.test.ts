@@ -157,6 +157,19 @@ describe('DomainsService Cloudflare lifecycle', () => {
     });
   });
 
+  it('does not report MX and TXT records as address conflicts', async () => {
+    const { service } = createService({}, [
+      { id: 'record-mx', type: 'MX', name: 'app.example.com', content: 'mail.example.com', ttl: 1 },
+      { id: 'record-txt', type: 'TXT', name: 'app.example.com', content: 'verification=value', ttl: 1 },
+    ]);
+
+    await expect(service.previewDomain({ domain: 'app.example.com' })).resolves.toMatchObject({
+      status: 'ready',
+      currentRecords: [],
+      canOverwrite: false,
+    });
+  });
+
   it('treats proxied Cloudflare records as valid when provider targets match Gateway IPs', async () => {
     vi.mocked(resolveDnsRecords).mockResolvedValueOnce({
       a: ['104.16.1.1'],
