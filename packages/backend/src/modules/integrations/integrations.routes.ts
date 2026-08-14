@@ -43,7 +43,10 @@ import {
   CloudflareConnectorRotateTokenSchema,
   CloudflareConnectorUpdateSchema,
   GitConnectorCreateSchema,
+  GitConnectorPreviewTestSchema,
   GitConnectorUpdateSchema,
+  GitHubConnectorCreateSchema,
+  GitHubConnectorPreviewTestSchema,
   GitHubOAuthStartSchema,
   GitLabAllowlistPreviewSearchSchema,
   GitLabAllowlistSearchQuerySchema,
@@ -154,6 +157,26 @@ integrationsRoutes.delete(
   }
 );
 
+integrationsRoutes.post(
+  '/github/connectors/preview-test',
+  requireGitOperation('github', 'integrations:github:manage'),
+  async (c) => {
+    const input = GitHubConnectorPreviewTestSchema.parse(await c.req.json());
+    const data = await container.resolve(IntegrationsService).previewGitHubConnectorTest(input);
+    return c.json({ data });
+  }
+);
+
+integrationsRoutes.post(
+  '/git/connectors/preview-test',
+  requireGitOperation('git', 'integrations:git:manage'),
+  async (c) => {
+    const input = GitConnectorPreviewTestSchema.parse(await c.req.json());
+    const data = await container.resolve(IntegrationsService).previewGitConnectorTest(input);
+    return c.json({ data });
+  }
+);
+
 for (const provider of ['github', 'git'] as const) {
   const scopeBase = `integrations:${provider}`;
   integrationsRoutes.get(
@@ -171,7 +194,10 @@ for (const provider of ['github', 'git'] as const) {
     `/${provider}/connectors`,
     requireGitOperation(provider, `${scopeBase}:manage`),
     async (c) => {
-      const input = GitConnectorCreateSchema.parse(await c.req.json());
+      const input =
+        provider === 'github'
+          ? GitHubConnectorCreateSchema.parse(await c.req.json())
+          : GitConnectorCreateSchema.parse(await c.req.json());
       const data = await container.resolve(IntegrationsService).createGitConnector(provider, input, c.get('user')!.id);
       return c.json({ data }, 201);
     }
@@ -185,6 +211,34 @@ for (const provider of ['github', 'git'] as const) {
         .resolve(IntegrationsService)
         .updateGitConnector(provider, c.req.param('id'), input, c.get('user')!.id);
       return c.json({ data });
+    }
+  );
+  integrationsRoutes.post(
+    `/${provider}/connectors/:id/test`,
+    requireGitOperation(provider, `${scopeBase}:manage`),
+    async (c) => {
+      const data = await container
+        .resolve(IntegrationsService)
+        .testGitConnector(provider, c.req.param('id'), c.get('user')!.id);
+      return c.json({ data });
+    }
+  );
+  integrationsRoutes.post(
+    `/${provider}/connectors/:id/sync`,
+    requireGitOperation(provider, `${scopeBase}:manage`),
+    async (c) => {
+      const data = await container
+        .resolve(IntegrationsService)
+        .syncGitConnector(provider, c.req.param('id'), c.get('user')!.id);
+      return c.json({ data });
+    }
+  );
+  integrationsRoutes.delete(
+    `/${provider}/connectors/:id`,
+    requireGitOperation(provider, `${scopeBase}:manage`),
+    async (c) => {
+      await container.resolve(IntegrationsService).deleteGitConnector(provider, c.req.param('id'), c.get('user')!.id);
+      return c.json({ success: true });
     }
   );
   integrationsRoutes.get(
@@ -228,6 +282,23 @@ integrationsRoutes.get(
   }
 );
 
+integrationsRoutes.post(
+  '/ssh/connectors/host-key',
+  requireGitOperation('ssh', 'integrations:ssh:manage'),
+  async (c) => {
+    const input = z
+      .object({
+        host: z.string().trim().min(1).max(255),
+        port: z.number().int().min(1).max(65535).optional(),
+        jumpConnectorId: z.string().uuid().nullable().optional(),
+      })
+      .parse(await c.req.json());
+    return c.json({
+      data: await container.resolve(ExternalSshService).discoverHostKey(c.get('user')!, input, c.req.raw.signal),
+    });
+  }
+);
+
 integrationsRoutes.post('/ssh/connectors', requireGitOperation('ssh', 'integrations:ssh:manage'), async (c) => {
   const body = await c.req.json();
   const input = z
@@ -238,14 +309,48 @@ integrationsRoutes.post('/ssh/connectors', requireGitOperation('ssh', 'integrati
       username: z.string().trim().min(1).max(255),
       authMethod: z.enum(['password', 'private_key']),
       secret: z.string().max(16_384).optional(),
-      passphrase: z.string().max(4096).optional(),
       hostFingerprint: z.string().trim().min(1).max(255),
       jumpConnectorId: z.string().uuid().nullable().optional(),
       enabled: z.boolean().optional(),
       generatePrivateKey: z.boolean().optional(),
+      reuseCredentialFromConnectorId: z.string().uuid().optional(),
     })
     .parse(body);
   return c.json({ data: await container.resolve(ExternalSshService).create(c.get('user')!, input) }, 201);
+});
+
+integrationsRoutes.post(
+  '/ssh/connectors/:id/test',
+  requireGitOperation('ssh', 'integrations:ssh:manage'),
+  async (c) => {
+    return c.json({
+      data: await container.resolve(ExternalSshService).test(c.get('user')!, c.req.param('id'), c.req.raw.signal),
+    });
+  }
+);
+
+integrationsRoutes.post(
+  '/ssh/connectors/:id/sync',
+  requireGitOperation('ssh', 'integrations:ssh:manage'),
+  async (c) => {
+    return c.json({
+      data: await container.resolve(ExternalSshService).test(c.get('user')!, c.req.param('id'), c.req.raw.signal),
+    });
+  }
+);
+
+integrationsRoutes.patch('/ssh/connectors/:id', requireGitOperation('ssh', 'integrations:ssh:manage'), async (c) => {
+  const input = z
+    .object({ name: z.string().trim().min(1).max(255) })
+    .strict()
+    .parse(await c.req.json());
+  return c.json({
+    data: await container.resolve(ExternalSshService).updateName(c.get('user')!, c.req.param('id'), input.name),
+  });
+});
+
+integrationsRoutes.delete('/ssh/connectors/:id', requireGitOperation('ssh', 'integrations:ssh:manage'), async (c) => {
+  return c.json({ data: await container.resolve(ExternalSshService).delete(c.get('user')!, c.req.param('id')) });
 });
 
 integrationsRoutes.openapi(

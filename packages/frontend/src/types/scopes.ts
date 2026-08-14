@@ -795,6 +795,12 @@ const RAW_TOKEN_SCOPES = [
     group: "Features",
   },
   {
+    value: "ai:skills:manage",
+    label: "Manage AI Skills",
+    desc: "Create, edit, enable, disable, and delete AI Workspace skills",
+    group: "Features",
+  },
+  {
     value: "ai:sandbox:use",
     label: "Use Sandbox Runner",
     desc: "Run bounded AI sandbox jobs",
@@ -1229,6 +1235,7 @@ export const TOKEN_SCOPES = RAW_TOKEN_SCOPES;
 const PROGRAMMATIC_DENIED_SCOPE_VALUES = new Set<string>([
   "feat:ai:use",
   "feat:ai:configure",
+  "ai:skills:manage",
   "ai:sandbox:use",
   "ai:sandbox:tier:medium",
   "ai:sandbox:tier:high",

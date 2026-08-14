@@ -131,6 +131,7 @@ export const ALL_SCOPES = [
   // ── Features ─────────────────────────────────────────────────────
   'feat:ai:use',
   'feat:ai:configure',
+  'ai:skills:manage',
   'ai:sandbox:use',
   'ai:sandbox:tier:medium',
   'ai:sandbox:tier:high',
@@ -236,6 +237,7 @@ export type Scope = (typeof ALL_SCOPES)[number];
 export const USER_ONLY_SCOPES = [
   'feat:ai:use',
   'feat:ai:configure',
+  'ai:skills:manage',
   'ai:sandbox:use',
   'ai:sandbox:tier:medium',
   'ai:sandbox:tier:high',

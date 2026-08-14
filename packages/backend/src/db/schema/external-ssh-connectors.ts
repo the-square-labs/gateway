@@ -2,6 +2,7 @@ import { boolean, index, integer, pgTable, text, timestamp, unique, uuid, varcha
 import { users } from './users.js';
 
 export type ExternalSshAuthMethod = 'password' | 'private_key';
+export type ExternalSshTestStatus = 'never' | 'success' | 'error';
 
 export const externalSshConnectors = pgTable(
   'external_ssh_connectors',
@@ -19,6 +20,9 @@ export const externalSshConnectors = pgTable(
       onDelete: 'restrict',
     }),
     enabled: boolean('enabled').notNull().default(true),
+    testStatus: varchar('test_status', { length: 32 }).$type<ExternalSshTestStatus>().notNull().default('never'),
+    testLastError: text('test_last_error'),
+    testedAt: timestamp('tested_at', { withTimezone: true }),
     createdBy: uuid('created_by')
       .notNull()
       .references(() => users.id),
@@ -29,5 +33,6 @@ export const externalSshConnectors = pgTable(
     unique('external_ssh_connector_name_unique').on(table.name),
     index('external_ssh_connector_host_idx').on(table.host),
     index('external_ssh_connector_jump_idx').on(table.jumpConnectorId),
+    index('external_ssh_connector_health_idx').on(table.enabled, table.testedAt),
   ]
 );

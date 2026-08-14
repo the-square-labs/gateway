@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 
 interface CopyValueFieldProps {
   label: string;
+  showLabel?: boolean;
   value: string;
   copyValue?: string;
   copyable?: boolean;
@@ -14,6 +15,7 @@ interface CopyValueFieldProps {
 
 export function CopyValueField({
   label,
+  showLabel = true,
   value,
   copyValue = value,
   copyable = true,
@@ -23,7 +25,7 @@ export function CopyValueField({
 }: CopyValueFieldProps) {
   return (
     <div className={cn("space-y-1.5", className)}>
-      <p className="text-xs text-muted-foreground">{label}</p>
+      {showLabel ? <p className="text-xs text-muted-foreground">{label}</p> : null}
       <div className="flex min-w-0 border border-input bg-background">
         <div
           className={cn(

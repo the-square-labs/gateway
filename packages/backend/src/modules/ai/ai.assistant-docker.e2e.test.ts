@@ -18,6 +18,7 @@ const CONFIG: AIConfig = {
   model: 'deterministic-assistant-e2e',
   gatewayInferenceModel: '',
   gatewayInferenceAllowUserModelSelection: false,
+  allowUserReasoningEffortSelection: false,
   maxCompletionTokens: 1024,
   maxTokensField: 'max_completion_tokens',
   reasoningEffort: 'none',

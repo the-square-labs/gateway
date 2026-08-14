@@ -46,6 +46,7 @@ import {
   AIWorkspaceAssistantConnectorSetup,
   AIWorkspaceScenarioStart,
   type AssistantConnectorSetup,
+  parseAssistantConnectorSetup,
 } from "./AIWorkspaceScenarioStart";
 import { GitLabAuthorizationModal } from "./GitLabAuthorizationModal";
 import {
@@ -64,36 +65,6 @@ const SLASH_COMMANDS = [
   { name: "compact", description: "Compact older context" },
   { name: "context", description: "Show token usage" },
 ];
-
-function parseAssistantConnectorSetup(value: unknown): AssistantConnectorSetup | null {
-  if (!value || typeof value !== "object") return null;
-  const detail = value as Record<string, unknown>;
-  if (
-    detail.connector !== "cloudflare" &&
-    detail.connector !== "gitlab" &&
-    detail.connector !== "github" &&
-    detail.connector !== "git" &&
-    detail.connector !== "ssh"
-  ) {
-    return null;
-  }
-  if (detail.connector === "ssh") {
-    return {
-      connector: "ssh",
-      host: typeof detail.host === "string" ? detail.host : undefined,
-    };
-  }
-  const repositoryMode =
-    detail.repositoryMode === "single_repository" || detail.repositoryMode === "multi_repository"
-      ? detail.repositoryMode
-      : undefined;
-  return {
-    connector: detail.connector,
-    baseUrl: typeof detail.baseUrl === "string" ? detail.baseUrl : undefined,
-    repositoryUrl: typeof detail.repositoryUrl === "string" ? detail.repositoryUrl : undefined,
-    repositoryMode,
-  };
-}
 
 function autoResizeTextarea(el: HTMLTextAreaElement, maxRows = 8) {
   const style = getComputedStyle(el);
@@ -851,7 +822,13 @@ export function AILitePanel({ onOpenMobileMenu }: { onOpenMobileMenu?: () => voi
               }
               selectedModel={selectedModel}
               onModelChange={setSelectedModel}
-              reasoningOptions={selectedProviderModel?.reasoningEfforts}
+              reasoningOptions={
+                providerStatus?.providerType === "openai_compatible"
+                  ? providerStatus.allowUserReasoningEffortSelection
+                    ? (providerStatus.reasoningEfforts ?? [])
+                    : undefined
+                  : selectedProviderModel?.reasoningEfforts
+              }
               selectedReasoningEffort={selectedReasoningEffort}
               onReasoningEffortChange={setSelectedReasoningEffort}
               gatewayInferenceMode={providerStatus?.providerType === "gateway_inference"}

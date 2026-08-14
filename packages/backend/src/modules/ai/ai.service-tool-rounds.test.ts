@@ -32,6 +32,7 @@ const BASE_CONFIG: AIConfig = {
   model: 'gpt-5.4-mini',
   gatewayInferenceModel: '',
   gatewayInferenceAllowUserModelSelection: false,
+  allowUserReasoningEffortSelection: false,
   maxCompletionTokens: 1024,
   maxTokensField: 'max_completion_tokens',
   reasoningEffort: 'none',

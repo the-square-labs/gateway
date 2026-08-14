@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
 import type { FinalizeSetupState } from "@/types";
@@ -9,6 +10,7 @@ vi.mock("@/services/api", () => ({
     createCloudflareConnector: vi.fn(),
     createGitLabConnector: vi.fn(),
     createGitConnector: vi.fn(),
+    getGitHubOAuthAvailability: vi.fn(),
   },
 }));
 
@@ -60,8 +62,9 @@ describe("IntegrationsSetupWizard", () => {
         "git",
         expect.objectContaining({
           username: "deploy-user",
-          repositoryMode: "single_repository",
-          repositoryUrl: "https://git.example.test/team/api",
+          allowlistEntries: [
+            expect.objectContaining({ fullPath: "https://git.example.test/team/api" }),
+          ],
         })
       )
     );
@@ -84,5 +87,69 @@ describe("IntegrationsSetupWizard", () => {
 
     expect(screen.getByRole("button", { name: /GitHub/i })).toHaveTextContent("Optional");
     expect(screen.getByRole("button", { name: /^Git /i })).toHaveTextContent("Optional");
+  });
+
+  it("uses account-wide OAuth without repository fields in direct GitHub setup", async () => {
+    vi.mocked(api.getGitHubOAuthAvailability).mockResolvedValue({ available: true });
+
+    render(
+      <IntegrationsSetupWizard
+        open
+        directSetup={{
+          connector: "github",
+          repositoryUrl: "https://github.com/acme/app",
+        }}
+        onFinished={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("dialog", { name: "Add GitHub connector" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "OAuth" })).toHaveAttribute("data-state", "active")
+    );
+    expect(screen.queryByText("GitHub URL")).not.toBeInTheDocument();
+    expect(screen.queryByText("Repository URL")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start GitHub authorization" })).toBeEnabled();
+  });
+
+  it("creates account-wide GitHub token connectors without repository or username fields", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getGitHubOAuthAvailability).mockResolvedValue({ available: true });
+    vi.mocked(api.createGitConnector).mockResolvedValue({} as never);
+
+    render(
+      <IntegrationsSetupWizard
+        open
+        directSetup={{
+          connector: "github",
+          repositoryUrl: "https://github.com/acme/ignored",
+        }}
+        onFinished={vi.fn()}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByRole("tab", { name: "OAuth" })).toBeInTheDocument());
+    await user.click(screen.getByRole("tab", { name: "Token" }));
+
+    expect(screen.queryByText("Repository URL")).not.toBeInTheDocument();
+    expect(document.querySelector('input[autocomplete="username"]')).not.toBeInTheDocument();
+    const tokenInput = await waitFor(() => {
+      const input = document.querySelector('input[type="password"]');
+      expect(input).not.toBeNull();
+      return input!;
+    });
+    fireEvent.change(tokenInput, {
+      target: { value: "github-token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save GitHub" }));
+
+    await waitFor(() =>
+      expect(api.createGitConnector).toHaveBeenCalledWith("github", {
+        name: "GitHub",
+        baseUrl: "https://github.com",
+        enabled: true,
+        token: "github-token",
+      })
+    );
   });
 });

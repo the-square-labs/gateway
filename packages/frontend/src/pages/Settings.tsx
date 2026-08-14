@@ -71,7 +71,7 @@ export function Settings() {
     hasScope("integrations:cloudflare:dns:delete");
   const canAccessGeneralTab = canViewGatewaySettings || canUpdate || canViewLicense;
   const canAccessAdvancedTab = canViewGatewaySettings || canManageRegistries;
-  const canAccessFeaturesTab = canViewStatusPage || canViewHousekeeping;
+  const canAccessFeaturesTab = canViewGatewaySettings || canViewStatusPage || canViewHousekeeping;
   const availableTabs = useMemo<SettingsTab[]>(() => {
     const tabs: SettingsTab[] = [];
     if (canAccessGeneralTab) tabs.push("general");
@@ -218,6 +218,9 @@ export function Settings() {
           {canAccessFeaturesTab && (
             <TabsContent value="features" className="pb-0">
               <div className="space-y-4">
+                {canViewGatewaySettings && (
+                  <AuthProvisioningSection canEdit={canEditGatewaySettings} section="features" />
+                )}
                 {canViewStatusPage && <StatusPageSection nodesList={nodesList} />}
 
                 {canViewHousekeeping && (

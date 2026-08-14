@@ -1,9 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  CircleAlert,
   Expand,
-  Lock,
-  MessageSquare,
   MoreHorizontal,
   Pencil,
   Pin,
@@ -47,6 +44,7 @@ import {
   AI_PANEL_MIN_WIDTH,
   getDefaultAIPanelWidth,
 } from "@/lib/responsive-panels";
+import { NodeSetupWizard } from "@/pages/dashboard/finalize-setup/NodeSetupWizard";
 import { api } from "@/services/api";
 import { getConversationBlock, useAIStore } from "@/stores/ai";
 import { useResolvedPageContext } from "@/stores/resolved-page-context";
@@ -55,17 +53,20 @@ import type {
   AIComposerAttachment,
   AIComposerLocalImageAttachment,
   AIConversationInput,
-  AIConversationStatus,
   AIMessageAttachment,
-  AIRunStatus,
   AIToolCall,
   PageContext,
 } from "@/types/ai";
 import { AIComposer, AIPlanDecision, AIPlanProgress, AIQueuedMessages } from "./AIComposer";
 import { AIConversationBlockedBlock } from "./AIConversationBlockedBlock";
+import { AIConversationStatusIndicator } from "./AIConversationStatusIndicator";
 import { AIPlanTimeline } from "./AIPlanTimeline";
-import { AIProgressRing } from "./AIProgressRing";
 import { ApprovalBlock, QuestionBlock } from "./AIToolCallBlock";
+import {
+  AIWorkspaceAssistantConnectorSetup,
+  type AssistantConnectorSetup,
+  parseAssistantConnectorSetup,
+} from "./AIWorkspaceScenarioStart";
 import { GitLabAuthorizationModal } from "./GitLabAuthorizationModal";
 import { QuickActionChips } from "./QuickActionChips";
 import {
@@ -190,69 +191,6 @@ function formatConversationDate(value: string): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function getConversationStatusIcon(conversation: {
-  activeRunStatus?: AIRunStatus | null;
-  planStatus?: import("@/types/ai").AIPlanStatus | null;
-  status: AIConversationStatus;
-}) {
-  switch (conversation.activeRunStatus) {
-    case "waiting_for_approval":
-    case "waiting_for_answer":
-    case "waiting_for_credential":
-    case "waiting_for_setup":
-      return CircleAlert;
-    default:
-      if (conversation.planStatus === "awaiting_decision" || conversation.planStatus === "paused") {
-        return CircleAlert;
-      }
-      return conversation.status === "active" ? MessageSquare : Lock;
-  }
-}
-
-function isConversationProgressActive(conversation: {
-  activeRunStatus?: AIRunStatus | null;
-  planStatus?: import("@/types/ai").AIPlanStatus | null;
-}) {
-  return (
-    conversation.activeRunStatus === "queued" ||
-    conversation.activeRunStatus === "running" ||
-    conversation.planStatus === "drafting" ||
-    conversation.planStatus === "validating" ||
-    conversation.planStatus === "executing" ||
-    conversation.planStatus === "verifying"
-  );
-}
-
-function ConversationStatusIndicator({
-  conversation,
-}: {
-  conversation: {
-    title: string;
-    activeRunStatus?: AIRunStatus | null;
-    planStatus?: import("@/types/ai").AIPlanStatus | null;
-    status: AIConversationStatus;
-  };
-}) {
-  if (isConversationProgressActive(conversation)) {
-    return <AIProgressRing ariaLabel={`${conversation.title} in progress`} />;
-  }
-  const StatusIcon = getConversationStatusIcon(conversation);
-  const needsAttention =
-    conversation.activeRunStatus === "waiting_for_approval" ||
-    conversation.activeRunStatus === "waiting_for_answer" ||
-    conversation.activeRunStatus === "waiting_for_credential" ||
-    conversation.activeRunStatus === "waiting_for_setup" ||
-    conversation.planStatus === "awaiting_decision" ||
-    conversation.planStatus === "paused";
-  return (
-    <StatusIcon
-      className={`h-4 w-4 shrink-0 text-muted-foreground ${
-        needsAttention ? "text-warning-foreground" : ""
-      }`}
-    />
-  );
-}
-
 interface AIChatSurfaceProps {
   active?: boolean;
   onClose?: () => void;
@@ -274,6 +212,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     savedName,
     activeConversationId,
     activeRunId,
+    pendingSetupInteraction,
     activePlan,
     plans,
     dismissedPlanDecisionKey,
@@ -290,6 +229,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     approveTool,
     rejectTool,
     answerQuestion,
+    resolveSetupInteraction,
     stopStreaming,
     setWorkMode,
     decidePlan,
@@ -311,6 +251,14 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     refreshProviderStatus,
     fetchRecentConversations,
   } = useAIStore();
+  const assistantConnectorSetup = useMemo(
+    () =>
+      pendingSetupInteraction?.kind === "connector_setup"
+        ? parseAssistantConnectorSetup(pendingSetupInteraction.payload)
+        : null,
+    [pendingSetupInteraction]
+  );
+  const assistantNodeEnrollmentOpen = pendingSetupInteraction?.kind === "node_enrollment";
   const currentConversationPlan =
     activePlan?.conversationId === activeConversationId ? activePlan : null;
   const showPlanDecision =
@@ -394,6 +342,20 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
       }
     },
     [approvalMode]
+  );
+
+  const continueAfterConnectorSetup = useCallback(
+    (_setup: AssistantConnectorSetup, status: "configured" | "cancelled") => {
+      resolveSetupInteraction(status);
+    },
+    [resolveSetupInteraction]
+  );
+
+  const continueAfterNodeEnrollment = useCallback(
+    async (status: "configured" | "cancelled") => {
+      resolveSetupInteraction(status);
+    },
+    [resolveSetupInteraction]
   );
 
   useEffect(() => {
@@ -824,7 +786,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
                       className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left"
                       onClick={() => void loadConversation(conversation.id)}
                     >
-                      <ConversationStatusIndicator conversation={conversation} />
+                      <AIConversationStatusIndicator conversation={conversation} />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-xs text-foreground">
                           {conversation.title}
@@ -992,7 +954,13 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
               }
               selectedModel={selectedModel}
               onModelChange={setSelectedModel}
-              reasoningOptions={selectedProviderModel?.reasoningEfforts}
+              reasoningOptions={
+                providerStatus?.providerType === "openai_compatible"
+                  ? providerStatus.allowUserReasoningEffortSelection
+                    ? (providerStatus.reasoningEfforts ?? [])
+                    : undefined
+                  : selectedProviderModel?.reasoningEfforts
+              }
               selectedReasoningEffort={selectedReasoningEffort}
               onReasoningEffortChange={setSelectedReasoningEffort}
               gatewayInferenceMode={providerStatus?.providerType === "gateway_inference"}
@@ -1015,6 +983,17 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
         )}
       </div>
       <GitLabAuthorizationModal />
+      <AIWorkspaceAssistantConnectorSetup
+        setup={assistantConnectorSetup}
+        onFinished={continueAfterConnectorSetup}
+      />
+      <NodeSetupWizard
+        open={assistantNodeEnrollmentOpen}
+        onBack={() => void continueAfterNodeEnrollment("cancelled")}
+        onConfigured={() => continueAfterNodeEnrollment("configured")}
+        onSkipped={() => continueAfterNodeEnrollment("cancelled")}
+        completionActionLabel="Continue scenario"
+      />
     </div>
   );
 }

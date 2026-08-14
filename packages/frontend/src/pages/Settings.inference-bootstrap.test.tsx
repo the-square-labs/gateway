@@ -244,6 +244,12 @@ describe("Settings inference bootstrap", () => {
       "active"
     );
     expect(screen.getByTestId("location")).toHaveTextContent("/settings/advanced");
+
+    await user.click(screen.getByRole("tab", { name: "Features" }));
+
+    expect(await screen.findByText("Gateway configuration: features")).toBeInTheDocument();
+    expect(screen.queryByText("Gateway configuration: advanced")).not.toBeInTheDocument();
+    expect(screen.getByTestId("location")).toHaveTextContent("/settings/features");
   });
 });
 

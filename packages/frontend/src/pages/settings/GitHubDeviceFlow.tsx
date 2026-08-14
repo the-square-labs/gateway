@@ -1,6 +1,9 @@
-import { ExternalLink, Loader2 } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import { ExternalLink, Loader2, RefreshCw } from "lucide-react";
+import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { CopyValueField } from "@/components/common/CopyValueField";
 import { Button } from "@/components/ui/button";
 import { api } from "@/services/api";
@@ -10,10 +13,12 @@ export function GitHubDeviceFlow({
   request,
   disabled,
   onCompleted,
+  onActiveChange,
 }: {
   request: GitHubOAuthStartRequest;
   disabled?: boolean;
   onCompleted: (connectorId: string) => void | Promise<void>;
+  onActiveChange?: (active: boolean) => void;
 }) {
   const [session, setSession] = useState<GitHubOAuthSession | null>(null);
   const [starting, setStarting] = useState(false);
@@ -63,6 +68,7 @@ export function GitHubDeviceFlow({
       // Deliberately do not open GitHub here. The code must be visible before
       // the user explicitly chooses to leave the Gateway tab.
       setSession(await api.startGitHubOAuth(request));
+      onActiveChange?.(true);
       setPollAttempt(0);
     } catch (cause) {
       toast.error(
@@ -75,52 +81,83 @@ export function GitHubDeviceFlow({
 
   if (!session) {
     return (
-      <Button type="button" disabled={disabled || starting} onClick={() => void start()}>
-        {starting ? <Loader2 className="animate-spin" /> : null}
-        Start GitHub authorization
-      </Button>
+      <DeviceFlowTransition stateKey="start">
+        <Button type="button" disabled={disabled || starting} onClick={() => void start()}>
+          {starting ? <Loader2 className="animate-spin" /> : null}
+          Start GitHub authorization
+        </Button>
+      </DeviceFlowTransition>
     );
   }
 
   const terminal = ["error", "expired", "cancelled"].includes(session.status);
   if (terminal) {
     return (
-      <div className="space-y-2 text-sm">
-        <p className="text-destructive">
-          {session.errorMessage ?? "GitHub authorization did not complete."}
-        </p>
-        <Button type="button" variant="outline" onClick={() => setSession(null)}>
-          Restart authorization
-        </Button>
-      </div>
+      <DeviceFlowTransition stateKey="terminal">
+        <div className="space-y-2 text-sm">
+          <p className="text-destructive">
+            {session.errorMessage ?? "GitHub authorization did not complete."}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setSession(null);
+              onActiveChange?.(false);
+            }}
+          >
+            Restart authorization
+          </Button>
+        </div>
+      </DeviceFlowTransition>
     );
   }
 
   return (
-    <div className="space-y-3">
-      <CopyValueField
-        label="Authorization code"
-        value={session.userCode}
-        valueClassName="font-mono"
-        actions={
-          <Button
-            type="button"
-            variant="ghost"
-            className="h-9 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
-            onClick={() => window.open(session.verificationUri, "_blank", "noopener,noreferrer")}
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            Open GitHub
-          </Button>
-        }
-      />
-      <p className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        Waiting for GitHub authorization…
-      </p>
-      <p className="text-xs text-muted-foreground">
-        Code expires {new Date(session.expiresAt).toLocaleTimeString()}.
-      </p>
-    </div>
+    <DeviceFlowTransition stateKey="pending">
+      <div className="space-y-3 border border-border p-4">
+        <p className="text-sm">
+          Complete authorization in the GitHub window. Gateway checks the status automatically.
+        </p>
+        <CopyValueField
+          label="Authorization code"
+          value={session.userCode}
+          valueClassName="font-mono"
+          actions={
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-9 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+              onClick={() => window.open(session.verificationUri, "_blank", "noopener,noreferrer")}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open GitHub
+            </Button>
+          }
+        />
+        <p className="flex items-center gap-2 text-xs text-muted-foreground">
+          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+          Waiting for GitHub authorization…
+        </p>
+      </div>
+    </DeviceFlowTransition>
+  );
+}
+
+function DeviceFlowTransition({ stateKey, children }: { stateKey: string; children: ReactNode }) {
+  return (
+    <AnimatedHeight>
+      <AnimatePresence initial={false} mode="popLayout">
+        <motion.div
+          key={stateKey}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -4 }}
+          transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
+        >
+          {children}
+        </motion.div>
+      </AnimatePresence>
+    </AnimatedHeight>
   );
 }

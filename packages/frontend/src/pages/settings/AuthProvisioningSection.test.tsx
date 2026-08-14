@@ -143,6 +143,66 @@ describe("AuthProvisioningSection inference setting", () => {
     );
   });
 
+  it("enables explicit saves and marks each edited authentication panel dirty", async () => {
+    const settings = {
+      ...SETTINGS,
+      logging: {
+        mode: "external" as const,
+        url: "https://clickhouse.example.com",
+        username: "gateway",
+        passwordLast4: "1234",
+        database: "gateway_logs",
+        table: "logs",
+        requestTimeoutMs: 5000,
+      },
+    };
+    api.setCache("settings:auth-provisioning", settings);
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(settings);
+    const user = userEvent.setup();
+
+    render(<AuthProvisioningSection canEdit />);
+
+    const oidcSave = await screen.findByRole("button", { name: "Save OIDC provider" });
+    const loggingSave = screen.getByRole("button", { name: "Save structured logging storage" });
+    const mfaSave = screen.getByRole("button", { name: "Save MFA grace period" });
+    const smtpSave = screen.getByRole("button", { name: "Save SMTP settings" });
+    const oidcPanel = screen.getByText("OIDC provider").closest("div.border") as HTMLElement;
+    const loggingPanel = screen
+      .getByText("Structured logging storage")
+      .closest("div.border") as HTMLElement;
+    const mfaPanel = screen
+      .getByText("Multi-factor authentication")
+      .closest("div.border") as HTMLElement;
+    const smtpPanel = screen
+      .getByText("Authentication email (SMTP)")
+      .closest("div.border") as HTMLElement;
+
+    expect(oidcSave).toBeDisabled();
+    expect(loggingSave).toBeDisabled();
+    expect(mfaSave).toBeDisabled();
+    expect(smtpSave).toBeDisabled();
+    expect(smtpSave.querySelector("svg")).not.toBeNull();
+
+    await user.type(within(oidcPanel).getByPlaceholderText(/id\.example\.com/), "https://id.test");
+    const loggingUrl = within(loggingPanel).getByDisplayValue("https://clickhouse.example.com");
+    await user.clear(loggingUrl);
+    await user.type(loggingUrl, "https://clickhouse.test");
+    const mfaInput = within(mfaPanel).getByRole("spinbutton", {
+      name: "Existing-session MFA grace period in days",
+    });
+    await user.clear(mfaInput);
+    await user.type(mfaInput, "4");
+    await user.type(within(smtpPanel).getByLabelText("Sender email"), "security@example.com");
+
+    expect(oidcSave).toBeEnabled();
+    expect(loggingSave).toBeEnabled();
+    expect(mfaSave).toBeEnabled();
+    expect(smtpSave).toBeEnabled();
+    for (const panel of [oidcPanel, loggingPanel, mfaPanel, smtpPanel]) {
+      expect(panel).toHaveStyle({ borderColor: "var(--color-warning)" });
+    }
+  });
+
   it("persists graceful shutdown settings in the separate Gateway panel", async () => {
     api.setCache("settings:auth-provisioning", SETTINGS);
     vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(SETTINGS);

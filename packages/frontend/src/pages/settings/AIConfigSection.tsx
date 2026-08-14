@@ -40,6 +40,7 @@ import type {
   AISandboxJob,
   AISandboxStatus,
 } from "@/types/ai";
+import { AgentSkillsPanel } from "./AgentSkillsPanel";
 import { SaveSettingsButton, SettingsControlRow } from "./AISettingsControls";
 
 interface AIConfigState {
@@ -51,6 +52,7 @@ interface AIConfigState {
   model: string;
   gatewayInferenceModel: string;
   gatewayInferenceAllowUserModelSelection: boolean;
+  allowUserReasoningEffortSelection: boolean;
   gatewayInferenceModels: AIInferenceModelOption[];
   maxCompletionTokens: number;
   maxTokensField: string;
@@ -77,6 +79,7 @@ function normalizeAIConfigState(config: AIConfigState): AIConfigState {
     providerType: config.providerType ?? "openai_compatible",
     gatewayInferenceModel: config.gatewayInferenceModel ?? "",
     gatewayInferenceAllowUserModelSelection: config.gatewayInferenceAllowUserModelSelection ?? true,
+    allowUserReasoningEffortSelection: config.allowUserReasoningEffortSelection ?? false,
     gatewayInferenceModels: (config.gatewayInferenceModels ?? []).map((model) => ({
       ...model,
       reasoningEfforts: model.reasoningEfforts ?? [],
@@ -723,7 +726,6 @@ export function AIConfigSection() {
     if (aiWebSearchKey) return true;
     return (
       aiConfig.enabled !== aiSavedConfig.enabled ||
-      aiConfig.reasoningEffort !== aiSavedConfig.reasoningEffort ||
       aiConfig.customSystemPrompt !== aiSavedConfig.customSystemPrompt ||
       aiConfig.webSearchProvider !== aiSavedConfig.webSearchProvider ||
       aiConfig.webSearchBaseUrl !== aiSavedConfig.webSearchBaseUrl ||
@@ -742,7 +744,9 @@ export function AIConfigSection() {
       aiConfig.model !== aiSavedConfig.model ||
       aiConfig.gatewayInferenceModel !== aiSavedConfig.gatewayInferenceModel ||
       aiConfig.gatewayInferenceAllowUserModelSelection !==
-        aiSavedConfig.gatewayInferenceAllowUserModelSelection
+        aiSavedConfig.gatewayInferenceAllowUserModelSelection ||
+      aiConfig.reasoningEffort !== aiSavedConfig.reasoningEffort ||
+      aiConfig.allowUserReasoningEffortSelection !== aiSavedConfig.allowUserReasoningEffortSelection
     );
   })();
 
@@ -823,7 +827,6 @@ export function AIConfigSection() {
     if (!aiConfig) return;
     const updates: Record<string, unknown> = {
       enabled: aiConfig.enabled,
-      reasoningEffort: aiConfig.reasoningEffort,
       customSystemPrompt: aiConfig.customSystemPrompt,
       disabledTools: aiConfig.disabledTools,
       webSearchProvider: aiConfig.webSearchProvider,
@@ -850,6 +853,8 @@ export function AIConfigSection() {
             endpointMode: aiConfig.endpointMode,
             supportsImages: aiConfig.supportsImages,
             model: aiConfig.model,
+            reasoningEffort: aiConfig.reasoningEffort,
+            allowUserReasoningEffortSelection: aiConfig.allowUserReasoningEffortSelection,
           };
     if (aiConfig.providerType === "openai_compatible" && aiApiKey) {
       updates.apiKey = aiApiKey;
@@ -921,25 +926,6 @@ export function AIConfigSection() {
             disabled={aiSaving}
             onChange={(enabled) => setAiConfig({ ...aiConfig, enabled })}
           />
-        </SettingsControlRow>
-        <SettingsControlRow
-          title="Reasoning effort"
-          description="Controls thinking depth for reasoning models. Ignored by non-reasoning models."
-          controlsClassName="sm:max-w-none"
-        >
-          <Tabs
-            value={aiConfig.reasoningEffort}
-            onValueChange={(reasoningEffort) => setAiConfig({ ...aiConfig, reasoningEffort })}
-            className="w-full"
-          >
-            <TabsList className="w-full">
-              {(["none", "low", "medium", "high"] as const).map((level) => (
-                <TabsTrigger key={level} value={level} className="flex-1 capitalize">
-                  {level === "none" ? "Default" : level}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
         </SettingsControlRow>
         <div className="grid grid-cols-1 lg:grid-cols-2">
           <div className="flex flex-col border-r border-border max-lg:border-r-0 max-lg:border-b">
@@ -1055,6 +1041,8 @@ export function AIConfigSection() {
           </div>
         </div>
       </PanelShell>
+
+      <AgentSkillsPanel />
 
       <div className="space-y-4">
         <PanelShell
@@ -1212,6 +1200,40 @@ export function AIConfigSection() {
                   placeholder="gpt-4o"
                   value={aiConfig.model}
                   onChange={(e) => setAiConfig({ ...aiConfig, model: e.target.value })}
+                />
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="Default reasoning effort"
+                description="Reasoning effort used unless a user selects another value."
+                controlsClassName="sm:max-w-none"
+              >
+                <Tabs
+                  value={aiConfig.reasoningEffort}
+                  onValueChange={(reasoningEffort) => setAiConfig({ ...aiConfig, reasoningEffort })}
+                  className="w-full"
+                >
+                  <TabsList className="w-full">
+                    {(["none", "low", "medium", "high"] as const).map((level) => (
+                      <TabsTrigger key={level} value={level} className="flex-1 capitalize">
+                        {level === "none" ? "Default" : level}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </Tabs>
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="User reasoning selection"
+                description="Allow users to override the default reasoning effort in AI chats."
+              >
+                <Switch
+                  checked={aiConfig.allowUserReasoningEffortSelection}
+                  disabled={aiSaving}
+                  onChange={(allowUserReasoningEffortSelection) =>
+                    setAiConfig({
+                      ...aiConfig,
+                      allowUserReasoningEffortSelection,
+                    })
+                  }
                 />
               </SettingsControlRow>
               <SettingsControlRow

@@ -39,6 +39,31 @@ const CATEGORY_LABELS: Record<AIScenarioCategory, string> = {
 
 export type AssistantConnectorSetup = ConnectorSetupRequest | { connector: "ssh"; host?: string };
 
+export function parseAssistantConnectorSetup(value: unknown): AssistantConnectorSetup | null {
+  if (!value || typeof value !== "object") return null;
+  const detail = value as Record<string, unknown>;
+  if (
+    detail.connector !== "cloudflare" &&
+    detail.connector !== "gitlab" &&
+    detail.connector !== "github" &&
+    detail.connector !== "git" &&
+    detail.connector !== "ssh"
+  ) {
+    return null;
+  }
+  if (detail.connector === "ssh") {
+    return {
+      connector: "ssh",
+      host: typeof detail.host === "string" ? detail.host : undefined,
+    };
+  }
+  return {
+    connector: detail.connector,
+    baseUrl: typeof detail.baseUrl === "string" ? detail.baseUrl : undefined,
+    repositoryUrl: typeof detail.repositoryUrl === "string" ? detail.repositoryUrl : undefined,
+  };
+}
+
 export function AIWorkspaceAssistantConnectorSetup({
   setup,
   onFinished,

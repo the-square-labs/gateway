@@ -1,9 +1,24 @@
-import { GitBranch, Github, Plus } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import {
+  ArrowLeft,
+  Check,
+  GitBranch,
+  Github,
+  KeyRound,
+  Loader2,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  Trash2,
+} from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { AnimatedHeight } from "@/components/common/AnimatedHeight";
+import { confirm } from "@/components/common/ConfirmDialog";
+import { EditableStringList } from "@/components/common/EditableStringList";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -14,6 +29,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
+import { useRealtime } from "@/hooks/use-realtime";
+import { cn, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { GitConnector, GitConnectorProvider, GitConnectorRequest } from "@/types/integrations";
@@ -25,9 +44,20 @@ const initialForm = (provider: GitConnectorProvider): GitConnectorRequest => ({
   enabled: true,
   username: "",
   token: "",
-  repositoryMode: "single_repository",
-  repositoryUrl: "",
+  allowlistEntries: [],
 });
+
+const CAPABILITY_LABELS: Record<string, string> = {
+  projectsView: "Projects",
+  repoRead: "Repo read",
+  repoWrite: "Repo write",
+  ciView: "CI view",
+  ciEdit: "CI edit",
+  variablesView: "Variables view",
+  variablesEdit: "Variables edit",
+  webhooksManage: "Webhooks manage",
+  registryView: "Packages",
+};
 
 export function GitIntegrationsSection() {
   return (
@@ -35,13 +65,13 @@ export function GitIntegrationsSection() {
       <GitConnectorPanel
         provider="github"
         title="GitHub Integrations"
-        description="GitHub OAuth or token connectors for repositories, Actions, variables, webhooks, and packages."
+        description="Account-wide GitHub OAuth or token connectors for repositories, Actions, variables, webhooks, and packages."
         icon={Github}
       />
       <GitConnectorPanel
         provider="git"
         title="Git Integrations"
-        description="Token-based connectors for a single repository or an explicit multi-repository allowlist."
+        description="Token-based connectors for one or more repositories on any HTTPS Git host."
         icon={GitBranch}
       />
     </div>
@@ -61,77 +91,297 @@ function GitConnectorPanel({
 }) {
   const hasScope = useAuthStore((state) => state.hasScope);
   const canManage = hasScope(`integrations:${provider}:manage`);
-  const [connectors, setConnectors] = useState<GitConnector[]>([]);
-  const [open, setOpen] = useState(false);
+  const cacheKey = `settings:${provider}-connectors`;
+  const [connectors, setConnectors] = useState<GitConnector[]>(
+    () => api.getCached<GitConnector[]>(cacheKey) ?? []
+  );
+  const [initialLoadComplete, setInitialLoadComplete] = useState(
+    () => api.getCached<GitConnector[]>(cacheKey) !== undefined
+  );
+  const [editingConnector, setEditingConnector] = useState<GitConnector | null>(null);
+  const [methodOpen, setMethodOpen] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [testedTokenSignature, setTestedTokenSignature] = useState<string | null>(null);
   const [form, setForm] = useState(() => initialForm(provider));
-  const [repositoryUrls, setRepositoryUrls] = useState("");
+  const [repositoryUrls, setRepositoryUrls] = useState<string[]>([""]);
   const [githubOAuthAvailable, setGithubOAuthAvailable] = useState(false);
   const [authMode, setAuthMode] = useState<"oauth" | "token">("token");
+  const [githubOAuthActive, setGitHubOAuthActive] = useState(false);
+  const closeCleanupTimer = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (closeCleanupTimer.current !== null) window.clearTimeout(closeCleanupTimer.current);
+    },
+    []
+  );
+
   const refresh = useCallback(async () => {
     try {
-      setConnectors(await api.listGitConnectors(provider));
+      const data = await api.listGitConnectors(provider);
+      api.setCache(cacheKey, data);
+      setConnectors(data);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : `Failed to load ${title}`);
+    } finally {
+      setInitialLoadComplete(true);
     }
-  }, [provider, title]);
+  }, [cacheKey, provider, title]);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useRealtime("integration.connector.changed", () => {
+    void refresh();
+  });
+
   useEffect(() => {
     if (provider !== "github") return;
     void api
       .getGitHubOAuthAvailability()
-      .then(({ available }) => {
-        setGithubOAuthAvailable(available);
-        setAuthMode(available ? "oauth" : "token");
-      })
+      .then(({ available }) => setGithubOAuthAvailable(available))
       .catch(() => setGithubOAuthAvailable(false));
   }, [provider]);
-  const create = async () => {
-    const urls = repositoryUrls
-      .split(/[,\n]/)
-      .map((url) => url.trim())
-      .filter(Boolean);
-    if (
-      !form.name.trim() ||
-      !form.baseUrl.trim() ||
-      !form.token.trim() ||
-      !urls.length ||
-      (provider === "git" && !form.username?.trim())
-    )
-      return;
+
+  const resetForm = () => {
+    setForm(initialForm(provider));
+    setRepositoryUrls([""]);
+    setTestedTokenSignature(null);
+    setSaving(false);
+    setTesting(false);
+    setGitHubOAuthActive(false);
+  };
+
+  const openCreateDialog = () => {
+    if (closeCleanupTimer.current !== null) window.clearTimeout(closeCleanupTimer.current);
+    resetForm();
+    setEditingConnector(null);
+    if (provider === "github") setMethodOpen(true);
+    else {
+      setAuthMode("token");
+      setFormOpen(true);
+    }
+  };
+
+  const chooseGitHubMethod = (mode: "oauth" | "token") => {
+    setAuthMode(mode);
+    setMethodOpen(false);
+    setFormOpen(true);
+  };
+
+  const closeForm = () => {
+    setFormOpen(false);
+    if (closeCleanupTimer.current !== null) window.clearTimeout(closeCleanupTimer.current);
+    closeCleanupTimer.current = window.setTimeout(() => {
+      setEditingConnector(null);
+      resetForm();
+      closeCleanupTimer.current = null;
+    }, 220);
+  };
+
+  const backToMethods = () => {
+    setFormOpen(false);
+    if (closeCleanupTimer.current !== null) window.clearTimeout(closeCleanupTimer.current);
+    closeCleanupTimer.current = window.setTimeout(() => {
+      setEditingConnector(null);
+      resetForm();
+      setMethodOpen(true);
+      closeCleanupTimer.current = null;
+    }, 220);
+  };
+
+  const openEditDialog = (connector: GitConnector) => {
+    if (closeCleanupTimer.current !== null) window.clearTimeout(closeCleanupTimer.current);
+    setEditingConnector(connector);
+    setAuthMode(connector.authMode);
+    setForm({
+      name: connector.name,
+      baseUrl: connector.baseUrl,
+      enabled: connector.enabled,
+      username: connector.username ?? "",
+      token: "",
+      allowlistEntries: [],
+    });
+    const urls = (connector.allowlistEntries ?? []).map((entry) => entry.fullPath);
+    setRepositoryUrls(urls.length > 0 ? urls : [""]);
+    setTestedTokenSignature(null);
+    setFormOpen(true);
+  };
+
+  const saveConnector = async () => {
+    const wasEditing = editingConnector !== null;
     setSaving(true);
     try {
-      await api.createGitConnector(provider, {
-        ...form,
-        name: form.name.trim(),
-        baseUrl: form.baseUrl.trim(),
-        username: form.username?.trim() || undefined,
-        token: form.token.trim(),
-        repositoryUrl: form.repositoryMode === "single_repository" ? urls[0] : undefined,
-        allowlistEntries:
-          form.repositoryMode === "multi_repository"
-            ? urls.map((url) => ({
-                entryType: "project",
-                remoteId: url,
-                fullPath: url,
-                name: url,
-                webUrl: url,
-              }))
-            : undefined,
-      });
-      setOpen(false);
-      setForm(initialForm(provider));
-      setAuthMode(provider === "github" && githubOAuthAvailable ? "oauth" : "token");
-      setRepositoryUrls("");
+      if (editingConnector) {
+        const urls = repositoryUrls.map((url) => url.trim()).filter(Boolean);
+        await api.updateGitConnector(provider, editingConnector.id, {
+          name: form.name.trim(),
+          baseUrl: form.baseUrl.trim(),
+          enabled: form.enabled,
+          ...(provider === "git"
+            ? {
+                username: form.username?.trim() || undefined,
+                allowlistEntries: urls.map((url) => ({
+                  entryType: "project" as const,
+                  remoteId: url,
+                  fullPath: url,
+                  name: url,
+                  webUrl: url,
+                })),
+              }
+            : {}),
+          ...(form.token.trim() ? { token: form.token.trim() } : {}),
+        });
+      } else if (provider === "github") {
+        await api.createGitConnector("github", {
+          name: form.name.trim(),
+          baseUrl: form.baseUrl.trim(),
+          enabled: form.enabled,
+          token: form.token.trim(),
+        });
+      } else {
+        const urls = repositoryUrls.map((url) => url.trim()).filter(Boolean);
+        if (!form.username?.trim() || !urls.length) return;
+        await api.createGitConnector("git", {
+          ...form,
+          name: form.name.trim(),
+          baseUrl: form.baseUrl.trim(),
+          username: form.username.trim(),
+          token: form.token.trim(),
+          allowlistEntries: urls.map((url) => ({
+            entryType: "project",
+            remoteId: url,
+            fullPath: url,
+            name: url,
+            webUrl: url,
+          })),
+        });
+      }
+      toast.success(
+        `${provider === "github" ? "GitHub" : "Git"} connector ${wasEditing ? "saved" : "created"}`
+      );
+      closeForm();
       await refresh();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : `Failed to create ${title} connector`);
+      toast.error(error instanceof Error ? error.message : `Failed to save ${title} connector`);
     } finally {
       setSaving(false);
     }
   };
+
+  const tokenSignature = [
+    form.baseUrl.trim(),
+    repositoryUrls.map((url) => url.trim()).join("\n"),
+    form.username?.trim() ?? "",
+    form.token,
+  ].join("\n");
+  const tokenTested = testedTokenSignature === tokenSignature;
+
+  const testGitHubConnection = async () => {
+    if (!form.baseUrl.trim() || !form.token.trim()) return;
+    setTesting(true);
+    try {
+      const result = await api.previewGitHubConnectorTest({
+        baseUrl: form.baseUrl.trim(),
+        token: form.token.trim(),
+      });
+      setTestedTokenSignature(tokenSignature);
+      toast.success(`Connected to GitHub as ${result.username}`);
+    } catch (error) {
+      setTestedTokenSignature(null);
+      toast.error(error instanceof Error ? error.message : "GitHub connection test failed");
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const testGitConnection = async () => {
+    const [repositoryUrl] = repositoryUrls.map((url) => url.trim()).filter(Boolean);
+    if (!form.baseUrl.trim() || !repositoryUrl || !form.username?.trim() || !form.token.trim())
+      return;
+    setTesting(true);
+    try {
+      await api.previewGitConnectorTest({
+        baseUrl: form.baseUrl.trim(),
+        repositoryUrl,
+        username: form.username.trim(),
+        token: form.token.trim(),
+      });
+      setTestedTokenSignature(tokenSignature);
+      toast.success("Git connection test passed");
+    } catch (error) {
+      setTestedTokenSignature(null);
+      toast.error(error instanceof Error ? error.message : "Git connection test failed");
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const genericGitReady =
+    provider === "git" &&
+    Boolean(
+      form.name.trim() &&
+        form.baseUrl.trim() &&
+        repositoryUrls.some((url) => url.trim()) &&
+        form.username?.trim() &&
+        (editingConnector || form.token.trim())
+    );
+  const githubFormReady =
+    provider === "github" &&
+    Boolean(
+      form.name.trim() &&
+        (authMode === "oauth" || (form.baseUrl.trim() && (editingConnector || form.token.trim())))
+    );
+
+  const testConnector = async (connector: GitConnector) => {
+    setTestingId(connector.id);
+    try {
+      await api.testGitConnector(provider, connector.id);
+      toast.success(`${provider === "github" ? "GitHub" : "Git"} connector test passed`);
+      await refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Connector test failed");
+    } finally {
+      setTestingId(null);
+    }
+  };
+
+  const syncConnector = async (connector: GitConnector) => {
+    setSyncingId(connector.id);
+    try {
+      await api.syncGitConnector(provider, connector.id);
+      toast.success(`${provider === "github" ? "GitHub" : "Git"} connector synchronized`);
+      await refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Connector sync failed");
+    } finally {
+      setSyncingId(null);
+    }
+  };
+
+  const deleteConnector = async (connector: GitConnector) => {
+    const ok = await confirm({
+      title: `Delete ${provider === "github" ? "GitHub" : "Git"} Connector`,
+      description: `Delete "${connector.name}" and its stored credential?`,
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
+    try {
+      await api.deleteGitConnector(provider, connector.id);
+      toast.success(`${provider === "github" ? "GitHub" : "Git"} connector deleted`);
+      await refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete connector");
+    }
+  };
+
+  if (!initialLoadComplete) return <Skeleton />;
+
   return (
     <>
       <PanelShell
@@ -139,7 +389,7 @@ function GitConnectorPanel({
         description={description}
         actions={
           canManage ? (
-            <Button onClick={() => setOpen(true)}>
+            <Button onClick={openCreateDialog}>
               <Plus className="h-4 w-4" />
               Add Connector
             </Button>
@@ -149,194 +399,491 @@ function GitConnectorPanel({
         {connectors.length ? (
           <div className="divide-y divide-border">
             {connectors.map((connector) => (
-              <div key={connector.id} className="flex items-center gap-3 px-4 py-3">
-                <Icon className="h-4 w-4 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium">{connector.name}</p>
-                  <p className="truncate text-xs text-muted-foreground">{connector.baseUrl}</p>
-                </div>
-                <span className="text-xs text-muted-foreground">
-                  {connector.enabled ? "Enabled" : "Disabled"}
-                </span>
-              </div>
+              <GitConnectorRow
+                key={connector.id}
+                connector={connector}
+                icon={Icon}
+                canManage={canManage}
+                testing={testingId === connector.id}
+                syncing={syncingId === connector.id}
+                onOpen={canManage ? () => openEditDialog(connector) : undefined}
+                onTest={() => void testConnector(connector)}
+                onSync={() => void syncConnector(connector)}
+                onDelete={() => void deleteConnector(connector)}
+              />
             ))}
           </div>
         ) : (
           <EmptyState
             message={`No ${provider === "github" ? "GitHub" : "Git"} connectors configured.`}
             actionLabel={canManage ? "Add connector" : undefined}
-            onAction={canManage ? () => setOpen(true) : undefined}
+            onAction={canManage ? openCreateDialog : undefined}
             embedded
           />
         )}
       </PanelShell>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-xl">
+
+      {provider === "github" ? (
+        <Dialog open={methodOpen} onOpenChange={setMethodOpen}>
+          <DialogContent className="sm:max-w-xl">
+            <DialogHeader>
+              <DialogTitle>Add GitHub Connector</DialogTitle>
+              <DialogDescription>
+                Choose how Gateway should authorize account-wide access to GitHub.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-auto w-full justify-start whitespace-normal px-4 py-3 text-left"
+                disabled={!githubOAuthAvailable}
+                onClick={() => chooseGitHubMethod("oauth")}
+              >
+                <span className="flex w-full items-center gap-3">
+                  <ShieldCheck className="h-5 w-5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[15px] font-medium text-foreground">OAuth</span>
+                    <span className="mt-0.5 block text-[13px] font-normal text-muted-foreground">
+                      Authorize your GitHub account without copying a token into Gateway.
+                    </span>
+                  </span>
+                  <Badge variant={githubOAuthAvailable ? "secondary" : "outline"}>
+                    {githubOAuthAvailable ? "Recommended" : "Unavailable"}
+                  </Badge>
+                </span>
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-auto w-full justify-start whitespace-normal px-4 py-3 text-left"
+                onClick={() => chooseGitHubMethod("token")}
+              >
+                <span className="flex w-full items-center gap-3">
+                  <KeyRound className="h-5 w-5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[15px] font-medium text-foreground">
+                      Personal access token
+                    </span>
+                    <span className="mt-0.5 block text-[13px] font-normal text-muted-foreground">
+                      Connect GitHub.com or a GitHub Enterprise instance with a PAT.
+                    </span>
+                  </span>
+                </span>
+              </Button>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setMethodOpen(false)}>
+                Cancel
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+
+      <Dialog open={formOpen} onOpenChange={(open) => (open ? setFormOpen(true) : closeForm())}>
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Add {provider === "github" ? "GitHub" : "Git"} Connector</DialogTitle>
+            <DialogTitle>
+              {editingConnector
+                ? `${provider === "github" ? "GitHub" : "Git"} Connector`
+                : provider === "github"
+                  ? authMode === "oauth"
+                    ? "Connect GitHub with OAuth"
+                    : "Connect GitHub with a token"
+                  : "Add Git Connector"}
+            </DialogTitle>
             <DialogDescription>
-              {provider === "github" && authMode === "oauth"
-                ? "Authorize Gateway with GitHub Device Flow. The code is shown before GitHub opens."
-                : "Gateway encrypts the credential and never displays it again."}
+              {provider === "github"
+                ? "The connector can use repositories visible to the authorized GitHub account."
+                : "Gateway encrypts the credential and uses it only for the configured repositories."}
             </DialogDescription>
           </DialogHeader>
-          <div className="border border-border">
-            {provider === "github" ? (
-              <SettingsControlRow
-                title="Authentication"
+
+          {provider === "github" && authMode === "oauth" && !editingConnector ? (
+            <div className={githubOAuthActive ? "" : "border border-border"}>
+              {!githubOAuthActive ? (
+                <SettingsControlRow
+                  title="Connector name"
+                  description="A label for this source-control connection in Gateway."
+                >
+                  <Input
+                    value={form.name}
+                    onChange={(event) => setForm({ ...form, name: event.target.value })}
+                    placeholder="Connector name"
+                    autoFocus
+                  />
+                </SettingsControlRow>
+              ) : null}
+              <div
+                className={cn(
+                  githubOAuthActive
+                    ? ""
+                    : "grid gap-3 border-t border-border px-4 py-3 sm:grid-cols-[minmax(12rem,1fr)_auto] sm:items-center"
+                )}
+              >
+                {!githubOAuthActive ? (
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium">Authorization</div>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      Start authorization, then open GitHub after the code appears.
+                    </p>
+                  </div>
+                ) : null}
+                <div
+                  className={cn(
+                    githubOAuthActive
+                      ? "w-full"
+                      : "flex w-full shrink-0 items-center justify-end sm:w-auto sm:min-w-[14rem] sm:max-w-[24rem]"
+                  )}
+                >
+                  <GitHubDeviceFlow
+                    request={{ name: form.name.trim(), enabled: form.enabled }}
+                    disabled={!form.name.trim()}
+                    onActiveChange={setGitHubOAuthActive}
+                    onCompleted={async () => {
+                      toast.success("GitHub connector created");
+                      closeForm();
+                      await refresh();
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <AnimatedHeight>
+              <PanelShell
+                title={
+                  provider === "github"
+                    ? authMode === "oauth"
+                      ? "GitHub OAuth"
+                      : "GitHub personal access token"
+                    : "Git repository access"
+                }
                 description={
-                  githubOAuthAvailable
-                    ? "OAuth is recommended; a personal access token remains available."
-                    : "OAuth is not configured on this Gateway; use a personal access token."
+                  provider === "github"
+                    ? authMode === "oauth"
+                      ? "Authorize GitHub.com through Device Flow."
+                      : "Test the token before saving the encrypted connector."
+                    : "Connect one or more repositories on a generic Git host."
                 }
               >
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    type="button"
-                    variant={authMode === "oauth" ? "default" : "outline"}
-                    disabled={!githubOAuthAvailable}
-                    onClick={() => setAuthMode("oauth")}
-                  >
-                    {githubOAuthAvailable ? "OAuth" : "OAuth unavailable"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    type="button"
-                    variant={authMode === "token" ? "default" : "outline"}
-                    onClick={() => setAuthMode("token")}
-                  >
-                    Token
-                  </Button>
-                </div>
-              </SettingsControlRow>
-            ) : null}
-            <SettingsControlRow title="Connector name">
-              <Input
-                value={form.name}
-                onChange={(event) => setForm({ ...form, name: event.target.value })}
-                placeholder="Connector name"
-              />
-            </SettingsControlRow>
-            <SettingsControlRow title={provider === "github" ? "GitHub URL" : "Git host URL"}>
-              <Input
-                value={form.baseUrl}
-                onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
-                placeholder={
-                  provider === "github" ? "https://github.com" : "https://git.example.com"
-                }
-              />
-            </SettingsControlRow>
-            <SettingsControlRow title="Repository access">
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  type="button"
-                  variant={form.repositoryMode === "single_repository" ? "default" : "outline"}
-                  onClick={() => setForm({ ...form, repositoryMode: "single_repository" })}
-                >
-                  One repository
-                </Button>
-                <Button
-                  size="sm"
-                  type="button"
-                  variant={form.repositoryMode === "multi_repository" ? "default" : "outline"}
-                  onClick={() => setForm({ ...form, repositoryMode: "multi_repository" })}
-                >
-                  Repository allowlist
-                </Button>
-              </div>
-            </SettingsControlRow>
-            <SettingsControlRow
-              title={form.repositoryMode === "multi_repository" ? "Repositories" : "Repository"}
-            >
-              <Input
-                value={repositoryUrls}
-                onChange={(event) => setRepositoryUrls(event.target.value)}
-                placeholder={
-                  form.repositoryMode === "multi_repository"
-                    ? "Repository URLs, separated by commas"
-                    : "Repository URL"
-                }
-              />
-            </SettingsControlRow>
-            {authMode === "token" ? (
-              <>
-                <SettingsControlRow
-                  title="Username"
-                  description={provider === "github" ? "Optional for GitHub tokens" : undefined}
-                >
+                <SettingsControlRow title="Connector name">
                   <Input
-                    value={form.username ?? ""}
-                    onChange={(event) => setForm({ ...form, username: event.target.value })}
-                    placeholder="Git username"
+                    value={form.name}
+                    onChange={(event) => setForm({ ...form, name: event.target.value })}
+                    placeholder="Connector name"
+                    autoFocus
                   />
                 </SettingsControlRow>
-                <SettingsControlRow title="Access token">
-                  <Input
-                    type="password"
-                    value={form.token}
-                    onChange={(event) => setForm({ ...form, token: event.target.value })}
-                    placeholder="Access token"
-                  />
-                </SettingsControlRow>
-              </>
-            ) : null}
-          </div>
+
+                {editingConnector ? (
+                  <SettingsControlRow
+                    title="Enabled"
+                    description="Allow Gateway to use this connector."
+                  >
+                    <Switch
+                      checked={form.enabled}
+                      onChange={(enabled) => setForm({ ...form, enabled })}
+                      ariaLabel="Connector enabled"
+                    />
+                  </SettingsControlRow>
+                ) : null}
+
+                {provider === "github" && authMode === "oauth" && editingConnector ? (
+                  <SettingsControlRow
+                    title="Authentication"
+                    description="This connector uses the GitHub account authorized through OAuth."
+                  >
+                    <Badge variant="secondary">OAuth</Badge>
+                  </SettingsControlRow>
+                ) : null}
+
+                {provider === "github" && authMode === "token" ? (
+                  <>
+                    <SettingsControlRow
+                      title="GitHub URL"
+                      description="Use github.com or the base URL of a GitHub Enterprise instance."
+                    >
+                      <Input
+                        value={form.baseUrl}
+                        onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
+                        placeholder="https://github.com"
+                      />
+                    </SettingsControlRow>
+                    <SettingsControlRow
+                      title="Personal access token"
+                      description="Gateway validates the token without storing it until you save."
+                      controlsClassName="sm:min-w-[22rem] sm:max-w-none"
+                    >
+                      <div className="flex w-full min-w-0 border border-input bg-background">
+                        <Input
+                          type="password"
+                          value={form.token}
+                          onChange={(event) => setForm({ ...form, token: event.target.value })}
+                          placeholder={
+                            editingConnector?.tokenMasked ?? "GitHub personal access token"
+                          }
+                          className="h-9 min-w-0 flex-1 rounded-none border-0 bg-transparent focus-visible:ring-0"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="h-9 shrink-0 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+                          disabled={testing || !form.baseUrl.trim() || !form.token.trim()}
+                          onClick={() => void testGitHubConnection()}
+                        >
+                          {testing ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : tokenTested ? (
+                            <Check className="h-4 w-4" />
+                          ) : null}
+                          Test Connection
+                        </Button>
+                      </div>
+                    </SettingsControlRow>
+                  </>
+                ) : null}
+
+                {provider === "git" ? (
+                  <>
+                    <SettingsControlRow title="Git host URL">
+                      <Input
+                        value={form.baseUrl}
+                        onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
+                        placeholder="https://git.example.com"
+                      />
+                    </SettingsControlRow>
+                    <SettingsControlRow
+                      title="Repositories"
+                      description="Add every repository this credential should make available to Gateway."
+                    >
+                      <EditableStringList
+                        values={repositoryUrls}
+                        onChange={setRepositoryUrls}
+                        placeholder="https://git.example.com/team/repository"
+                        itemLabel="Repository URL"
+                      />
+                    </SettingsControlRow>
+                    <SettingsControlRow title="Username">
+                      <Input
+                        value={form.username ?? ""}
+                        onChange={(event) => setForm({ ...form, username: event.target.value })}
+                        placeholder="Git username"
+                      />
+                    </SettingsControlRow>
+                    <SettingsControlRow
+                      title="Access token"
+                      description="Test the credential against the first configured repository before saving."
+                      controlsClassName="sm:min-w-[22rem] sm:max-w-none"
+                    >
+                      <div className="flex w-full min-w-0 border border-input bg-background">
+                        <Input
+                          type="password"
+                          value={form.token}
+                          onChange={(event) => setForm({ ...form, token: event.target.value })}
+                          placeholder={editingConnector?.tokenMasked ?? "Access token"}
+                          className="h-9 min-w-0 flex-1 rounded-none border-0 bg-transparent focus-visible:ring-0"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="h-9 shrink-0 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+                          disabled={
+                            testing ||
+                            !form.baseUrl.trim() ||
+                            !repositoryUrls.some((url) => url.trim()) ||
+                            !form.username?.trim() ||
+                            !form.token.trim()
+                          }
+                          onClick={() => void testGitConnection()}
+                        >
+                          {testing ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : tokenTested ? (
+                            <Check className="h-4 w-4" />
+                          ) : null}
+                          Test Connection
+                        </Button>
+                      </div>
+                    </SettingsControlRow>
+                  </>
+                ) : null}
+              </PanelShell>
+            </AnimatedHeight>
+          )}
+
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>
+            {provider === "github" && !editingConnector ? (
+              <Button variant="outline" onClick={backToMethods}>
+                <ArrowLeft className="h-4 w-4" />
+                Back
+              </Button>
+            ) : null}
+            <Button variant="outline" onClick={closeForm}>
               Cancel
             </Button>
-            {provider === "github" && authMode === "oauth" ? (
-              <GitHubDeviceFlow
-                request={{
-                  name: form.name.trim(),
-                  baseUrl: form.baseUrl.trim(),
-                  enabled: form.enabled,
-                  repositoryMode: form.repositoryMode,
-                  repositoryUrl:
-                    form.repositoryMode === "single_repository" ? repositoryUrls.trim() : undefined,
-                  allowlistEntries:
-                    form.repositoryMode === "multi_repository"
-                      ? repositoryUrls
-                          .split(/[,\n]/)
-                          .map((url) => url.trim())
-                          .filter(Boolean)
-                          .map((url) => ({
-                            entryType: "project" as const,
-                            remoteId: url,
-                            fullPath: url,
-                            name: url,
-                            webUrl: url,
-                          }))
-                      : undefined,
-                }}
-                disabled={!form.name.trim() || !form.baseUrl.trim() || !repositoryUrls.trim()}
-                onCompleted={async () => {
-                  setOpen(false);
-                  setForm(initialForm(provider));
-                  setRepositoryUrls("");
-                  await refresh();
-                }}
-              />
-            ) : (
+            {editingConnector || provider === "git" || authMode === "token" ? (
               <Button
-                disabled={
-                  saving ||
-                  !form.name.trim() ||
-                  !form.baseUrl.trim() ||
-                  !repositoryUrls.trim() ||
-                  !form.token.trim() ||
-                  (provider === "git" && !form.username?.trim())
-                }
-                onClick={() => void create()}
+                disabled={saving || !(genericGitReady || githubFormReady)}
+                onClick={() => void saveConnector()}
               >
-                {saving ? "Saving…" : "Save connector"}
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {saving ? "Saving…" : editingConnector ? "Save" : "Save connector"}
               </Button>
-            )}
+            ) : null}
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function GitConnectorRow({
+  connector,
+  icon: Icon,
+  canManage,
+  testing,
+  syncing,
+  onOpen,
+  onTest,
+  onSync,
+  onDelete,
+}: {
+  connector: GitConnector;
+  icon: typeof Github;
+  canManage: boolean;
+  testing: boolean;
+  syncing: boolean;
+  onOpen?: () => void;
+  onTest: () => void;
+  onSync: () => void;
+  onDelete: () => void;
+}) {
+  const selectedRepositoryCount = connector.allowlistEntries?.length ?? 0;
+  const accessLabel =
+    connector.provider === "github"
+      ? "All visible"
+      : `${selectedRepositoryCount} ${selectedRepositoryCount === 1 ? "repository" : "repositories"}`;
+  const testedLabel = connector.testedAt
+    ? `Tested ${formatRelativeDate(connector.testedAt)}`
+    : "Never tested";
+  const syncedLabel = connector.syncFinishedAt
+    ? `Synced ${formatRelativeDate(connector.syncFinishedAt)}`
+    : null;
+  const status =
+    connector.syncStatus === "error"
+      ? "error"
+      : connector.testedAt
+        ? "success"
+        : connector.syncStatus;
+
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-3 p-4 transition-colors lg:flex-row lg:items-center lg:justify-between",
+        onOpen && "cursor-pointer hover:bg-accent/50"
+      )}
+      onClick={onOpen}
+    >
+      <div className="flex min-w-0 items-start gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-border bg-muted">
+          <Icon className="h-4 w-4 text-muted-foreground" />
+        </div>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-medium">{connector.name}</p>
+            <Badge variant={connector.enabled ? "secondary" : "outline"} size="inline">
+              {connector.enabled ? "enabled" : "disabled"}
+            </Badge>
+            <Badge variant={status === "error" ? "destructive" : "outline"} size="inline">
+              {status}
+            </Badge>
+          </div>
+          <p className="mt-1 truncate text-xs text-muted-foreground">
+            {connector.baseUrl} &middot; {accessLabel}
+            {connector.username ? ` · ${connector.username}` : ""}
+            {connector.authMode === "oauth"
+              ? " · OAuth"
+              : connector.tokenMasked
+                ? ` · Token ${connector.tokenMasked}`
+                : ""}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {syncedLabel ? `${syncedLabel} · ` : ""}
+            {testedLabel}
+            {connector.syncLastError ? ` · ${connector.syncLastError}` : ""}
+          </p>
+          <CapabilityBadges capabilities={connector.capabilities} className="mt-2" />
+        </div>
+      </div>
+      {canManage ? (
+        <div className="flex shrink-0 items-center gap-2 lg:self-center">
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={(event) => {
+              event.stopPropagation();
+              onTest();
+            }}
+            disabled={testing || syncing}
+            title="Test connector"
+          >
+            {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={(event) => {
+              event.stopPropagation();
+              onSync();
+            }}
+            disabled={testing || syncing}
+            title="Sync connector"
+          >
+            <RefreshCw className={cn("h-4 w-4", syncing && "animate-spin")} />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete();
+            }}
+            title="Delete connector"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function CapabilityBadges({
+  capabilities,
+  className,
+}: {
+  capabilities: Record<string, boolean>;
+  className?: string;
+}) {
+  const enabled = Object.entries(capabilities)
+    .filter(([, value]) => value)
+    .map(([key]) => CAPABILITY_LABELS[key] ?? key);
+
+  if (enabled.length === 0) {
+    return (
+      <p className={cn("text-xs text-muted-foreground", className)}>No capabilities detected</p>
+    );
+  }
+
+  return (
+    <div className={cn("flex flex-wrap gap-1.5", className)}>
+      {enabled.map((label) => (
+        <Badge key={label} variant="outline" size="inline">
+          {label}
+        </Badge>
+      ))}
+    </div>
   );
 }

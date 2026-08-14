@@ -24,6 +24,8 @@ import type { McpAuthContext } from './mcp-types.js';
 
 const MCP_EXCLUDED_TOOLS = new Set([
   'discover_tools',
+  'read_skill',
+  'activate_skill',
   'ask_question',
   'get_current_context',
   'read_tool_output',
@@ -59,6 +61,9 @@ const MCP_EXCLUDED_TOOLS = new Set([
   'list_sandbox_jobs',
   'manage_node_config',
   'manage_node_file',
+  'manage_managed_database',
+  'manage_docker_migration',
+  'manage_logging_backend',
   'set_resource_pin',
 ]);
 const SENSITIVE_TOOL_ARG_RE =
@@ -216,7 +221,11 @@ const MCP_DISCOVER_TOOLS_DEFINITION = {
 };
 
 function isEligibleMcpTool(tool: AIToolDefinition): boolean {
-  return tool.category !== 'GitLab' && !!tool.requiredScope && !MCP_EXCLUDED_TOOLS.has(tool.name);
+  return (
+    !['GitLab', 'GitHub', 'Git', 'External SSH', 'Setup'].includes(tool.category) &&
+    !!tool.requiredScope &&
+    !MCP_EXCLUDED_TOOLS.has(tool.name)
+  );
 }
 
 function hasDirectScopeBase(scopes: string[], baseScope: string): boolean {

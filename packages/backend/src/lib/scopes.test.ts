@@ -63,6 +63,8 @@ function migratedProgrammaticStoredScopes(scopes: string[]): string[] {
 describe('canonical scope definitions', () => {
   it('keeps system-admin on every canonical scope', () => {
     expect(SYSTEM_ADMIN_SCOPES).toEqual([...ALL_SCOPES]);
+    expect(SYSTEM_ADMIN_SCOPES).toContain('ai:skills:manage');
+    expect(OPERATOR_SCOPES).not.toContain('ai:skills:manage');
   });
 
   it('keeps the public scope reference aligned with canonical scope contracts', () => {

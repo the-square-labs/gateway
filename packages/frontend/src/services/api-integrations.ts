@@ -8,9 +8,15 @@ import type {
   CloudflareZone,
   ExternalSshConnector,
   ExternalSshConnectorRequest,
+  ExternalSshHostKeyRequest,
+  ExternalSshHostKeyResult,
   GitConnector,
+  GitConnectorCreateRequest,
+  GitConnectorPreviewTestRequest,
+  GitConnectorPreviewTestResult,
   GitConnectorProvider,
-  GitConnectorRequest,
+  GitHubConnectorPreviewTestRequest,
+  GitHubConnectorPreviewTestResult,
   GitHubOAuthSession,
   GitHubOAuthStartRequest,
   GitLabAllowlistEntry,
@@ -36,7 +42,7 @@ export function withIntegrationsApi<TBase extends ApiClientBaseConstructor>(Base
 
     async createGitConnector(
       provider: GitConnectorProvider,
-      data: GitConnectorRequest
+      data: GitConnectorCreateRequest
     ): Promise<GitConnector> {
       return this.unwrapData(
         this.request<{ data: GitConnector }>(`/integrations/${provider}/connectors`, {
@@ -44,6 +50,69 @@ export function withIntegrationsApi<TBase extends ApiClientBaseConstructor>(Base
           body: JSON.stringify(data),
         })
       );
+    }
+
+    async previewGitHubConnectorTest(
+      data: GitHubConnectorPreviewTestRequest
+    ): Promise<GitHubConnectorPreviewTestResult> {
+      return this.unwrapData(
+        this.request<{ data: GitHubConnectorPreviewTestResult }>(
+          "/integrations/github/connectors/preview-test",
+          {
+            method: "POST",
+            body: JSON.stringify(data),
+          }
+        )
+      );
+    }
+
+    async previewGitConnectorTest(
+      data: GitConnectorPreviewTestRequest
+    ): Promise<GitConnectorPreviewTestResult> {
+      return this.unwrapData(
+        this.request<{ data: GitConnectorPreviewTestResult }>(
+          "/integrations/git/connectors/preview-test",
+          {
+            method: "POST",
+            body: JSON.stringify(data),
+          }
+        )
+      );
+    }
+
+    async updateGitConnector(
+      provider: GitConnectorProvider,
+      id: string,
+      data: Partial<GitConnectorCreateRequest>
+    ): Promise<GitConnector> {
+      return this.unwrapData(
+        this.request<{ data: GitConnector }>(`/integrations/${provider}/connectors/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async testGitConnector(provider: GitConnectorProvider, id: string): Promise<GitConnector> {
+      return this.unwrapData(
+        this.request<{ data: GitConnector }>(`/integrations/${provider}/connectors/${id}/test`, {
+          method: "POST",
+        })
+      );
+    }
+
+    async syncGitConnector(provider: GitConnectorProvider, id: string): Promise<GitConnector> {
+      return this.unwrapData(
+        this.request<{ data: GitConnector }>(`/integrations/${provider}/connectors/${id}/sync`, {
+          method: "POST",
+        })
+      );
+    }
+
+    async deleteGitConnector(provider: GitConnectorProvider, id: string): Promise<void> {
+      await this.request<{ success: true }>(`/integrations/${provider}/connectors/${id}`, {
+        method: "DELETE",
+      });
     }
 
     async getGitHubOAuthAvailability(): Promise<{ available: boolean }> {
@@ -99,20 +168,71 @@ export function withIntegrationsApi<TBase extends ApiClientBaseConstructor>(Base
       );
     }
 
-    async listExternalSshConnectors(): Promise<ExternalSshConnector[]> {
+    async listExternalSshConnectors(signal?: AbortSignal): Promise<ExternalSshConnector[]> {
       return this.unwrapData(
-        this.request<{ data: ExternalSshConnector[] }>("/integrations/ssh/connectors")
+        this.request<{ data: ExternalSshConnector[] }>("/integrations/ssh/connectors", { signal })
+      );
+    }
+
+    async discoverExternalSshHostKey(
+      data: ExternalSshHostKeyRequest,
+      signal?: AbortSignal
+    ): Promise<ExternalSshHostKeyResult> {
+      return this.unwrapData(
+        this.request<{ data: ExternalSshHostKeyResult }>("/integrations/ssh/connectors/host-key", {
+          method: "POST",
+          body: JSON.stringify(data),
+          signal,
+        })
       );
     }
 
     async createExternalSshConnector(
-      data: ExternalSshConnectorRequest
+      data: ExternalSshConnectorRequest,
+      signal?: AbortSignal
     ): Promise<{ connector: ExternalSshConnector; generatedPublicKey: string | null }> {
       return this.unwrapData(
         this.request<{
           data: { connector: ExternalSshConnector; generatedPublicKey: string | null };
-        }>("/integrations/ssh/connectors", { method: "POST", body: JSON.stringify(data) })
+        }>("/integrations/ssh/connectors", {
+          method: "POST",
+          body: JSON.stringify(data),
+          signal,
+        })
       );
+    }
+
+    async testExternalSshConnector(id: string, signal?: AbortSignal): Promise<{ success: true }> {
+      return this.unwrapData(
+        this.request<{ data: { success: true } }>(`/integrations/ssh/connectors/${id}/test`, {
+          method: "POST",
+          signal,
+        })
+      );
+    }
+
+    async syncExternalSshConnector(id: string, signal?: AbortSignal): Promise<{ success: true }> {
+      return this.unwrapData(
+        this.request<{ data: { success: true } }>(`/integrations/ssh/connectors/${id}/sync`, {
+          method: "POST",
+          signal,
+        })
+      );
+    }
+
+    async updateExternalSshConnector(id: string, name: string): Promise<ExternalSshConnector> {
+      return this.unwrapData(
+        this.request<{ data: ExternalSshConnector }>(`/integrations/ssh/connectors/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ name }),
+        })
+      );
+    }
+
+    async deleteExternalSshConnector(id: string): Promise<void> {
+      await this.request<{ data: { success: true } }>(`/integrations/ssh/connectors/${id}`, {
+        method: "DELETE",
+      });
     }
     async listGitLabConnectors(params?: { enabled?: boolean }): Promise<GitLabConnector[]> {
       const searchParams = new URLSearchParams();

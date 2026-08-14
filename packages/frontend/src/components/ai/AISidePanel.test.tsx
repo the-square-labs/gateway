@@ -97,6 +97,7 @@ describe("AISidePanel autoscroll", () => {
         isLoadingRecentConversations: false,
         activeConversationId: null,
         activeRunId: null,
+        pendingSetupInteraction: null,
         activePlan: null,
         plans: [],
         dismissedPlanDecisionKey: null,
@@ -400,6 +401,91 @@ describe("AISidePanel autoscroll", () => {
       screen.queryByText("AI can make mistakes. Check important information.")
     ).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("AI is responding...")).not.toBeInTheDocument();
+  });
+
+  it("renders a durable connector setup interaction in the regular side panel", async () => {
+    vi.spyOn(api, "getGitHubOAuthAvailability").mockResolvedValue({ available: false });
+    act(() => {
+      useAIStore.setState({
+        messages: [],
+        activeConversationId: "conversation-1",
+        activeRunId: "run-1",
+        pendingSetupInteraction: {
+          id: "setup-1",
+          runId: "run-1",
+          roundId: "round-1",
+          conversationId: "conversation-1",
+          userId: "user-1",
+          toolCallId: "tool-setup",
+          toolName: "open_connector_setup",
+          kind: "connector_setup",
+          payload: { type: "open_connector_setup", connector: "github" },
+          status: "pending",
+          result: null,
+          resolveClientCommandId: null,
+          expiresAt: "2026-08-15T00:00:00.000Z",
+          resolvedAt: null,
+          createdAt: "2026-08-14T00:00:00.000Z",
+          updatedAt: "2026-08-14T00:00:00.000Z",
+        },
+        isConnected: true,
+        isStreaming: false,
+        retryAfter: null,
+        connect: vi.fn().mockResolvedValue(true),
+        refreshProviderStatus: vi.fn().mockResolvedValue(undefined),
+        fetchRecentConversations: vi.fn().mockResolvedValue(undefined),
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    renderAISidePanel();
+
+    expect(
+      await screen.findByRole("heading", { name: "Add GitHub connector" })
+    ).toBeInTheDocument();
+    expect(screen.getByText("GitHub connector")).toBeInTheDocument();
+  });
+
+  it("renders a durable node enrollment interaction in the regular side panel", async () => {
+    act(() => {
+      useAIStore.setState({
+        messages: [],
+        activeConversationId: "conversation-1",
+        activeRunId: "run-1",
+        pendingSetupInteraction: {
+          id: "setup-node-1",
+          runId: "run-1",
+          roundId: "round-1",
+          conversationId: "conversation-1",
+          userId: "user-1",
+          toolCallId: "tool-node-setup",
+          toolName: "open_node_enrollment",
+          kind: "node_enrollment",
+          payload: { type: "open_node_enrollment", nodeType: "databases" },
+          status: "pending",
+          result: null,
+          resolveClientCommandId: null,
+          expiresAt: "2026-08-15T00:00:00.000Z",
+          resolvedAt: null,
+          createdAt: "2026-08-14T00:00:00.000Z",
+          updatedAt: "2026-08-14T00:00:00.000Z",
+        },
+        isConnected: true,
+        isStreaming: false,
+        retryAfter: null,
+        connect: vi.fn().mockResolvedValue(true),
+        refreshProviderStatus: vi.fn().mockResolvedValue(undefined),
+        fetchRecentConversations: vi.fn().mockResolvedValue(undefined),
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    renderAISidePanel();
+
+    expect(
+      await screen.findByRole("heading", { name: "Connect your first node" })
+    ).toBeInTheDocument();
+    expect(screen.getByText("Create enrollment")).toBeInTheDocument();
   });
 
   it("focuses the composer when a new chat opens", async () => {

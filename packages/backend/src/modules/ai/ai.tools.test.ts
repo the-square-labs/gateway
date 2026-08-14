@@ -75,14 +75,13 @@ describe('AI tool scope filtering', () => {
           connector: 'git',
           baseUrl: 'https://git.example.test',
           repositoryUrl: 'https://git.example.test/team/api',
-          repositoryMode: 'single_repository',
         })
       )
     ).toMatchObject({
       ok: true,
       arguments: {
         connector: 'git',
-        repositoryMode: 'single_repository',
+        repositoryUrl: 'https://git.example.test/team/api',
       },
     });
     expect(
@@ -100,15 +99,70 @@ describe('AI tool scope filtering', () => {
     });
   });
 
-  it('exposes only planning-safe tools while keeping read variants of composite tools available', () => {
-    const names = getOpenAITools([], ['feat:ai:use', 'domains:view', 'domains:manage'], true, {
-      discoveredToolsets: ['Domains'],
-      planningMode: true,
-    }).map((tool) => tool.function.name);
+  it('exposes guarded resource setup tools to the native assistant', () => {
+    const names = toolNames([
+      'databases:view',
+      'databases:create',
+      'docker:containers:migrate',
+      'settings:gateway:view',
+      'settings:gateway:edit',
+    ]);
+    expect(names).toEqual(
+      expect.arrayContaining(['manage_managed_database', 'manage_docker_migration', 'manage_logging_backend'])
+    );
+    expect(
+      parseAndValidateAIToolArguments(
+        'manage_managed_database',
+        JSON.stringify({ operation: 'create', type: 'postgres', name: 'app-db' })
+      )
+    ).toMatchObject({ ok: true });
+    expect(parseAndValidateAIToolArguments('manage_docker_migration', '{"operation":"invent"}')).toEqual({
+      ok: false,
+      error: 'Invalid tool arguments at /operation',
+    });
+  });
 
-    expect(names).toEqual(expect.arrayContaining(['enter_plan_mode', 'submit_plan', 'manage_domain']));
+  it('exposes only planning-safe tools while keeping read variants of composite tools available', () => {
+    const names = getOpenAITools(
+      [],
+      [
+        'feat:ai:use',
+        'domains:view',
+        'domains:manage',
+        'integrations:github:view',
+        'integrations:github:manage',
+        'integrations:git:view',
+        'integrations:git:manage',
+        'integrations:ssh:view',
+        'integrations:ssh:use',
+      ],
+      true,
+      {
+        discoveredToolsets: ['Domains', 'GitHub', 'Git', 'External SSH', 'Setup'],
+        planningMode: true,
+      }
+    ).map((tool) => tool.function.name);
+
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'enter_plan_mode',
+        'submit_plan',
+        'manage_domain',
+        'open_connector_setup',
+        'github_list_repositories',
+        'github_list_repository_tree',
+        'github_list_workflow_runs',
+        'git_list_repository_tree',
+        'git_read_repository_file',
+        'ssh_list_connectors',
+      ])
+    );
     expect(names).not.toContain('create_domain');
     expect(names).not.toContain('delete_domain');
+    expect(names).not.toContain('github_upsert_repository_file');
+    expect(names).not.toContain('github_upsert_actions_secret');
+    expect(names).not.toContain('git_upsert_repository_file');
+    expect(names).not.toContain('ssh_execute_command');
   });
 
   it('derives active plan lifecycle identifiers on the server instead of asking the model to copy them', () => {
@@ -150,8 +204,10 @@ describe('AI tool scope filtering', () => {
 
   it('keeps core registry ordering, uniqueness, and invalidation contracts stable', () => {
     expect(new Set(AI_TOOLS.map((tool) => tool.name)).size).toBe(AI_TOOLS.length);
-    expect(AI_TOOLS.slice(0, 88).map((tool) => tool.name)).toEqual([
+    expect(AI_TOOLS.slice(0, 90).map((tool) => tool.name)).toEqual([
       'discover_tools',
+      'read_skill',
+      'activate_skill',
       'get_current_context',
       'read_tool_output',
       'search_tool_output',

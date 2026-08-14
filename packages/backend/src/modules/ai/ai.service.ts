@@ -69,6 +69,7 @@ import { executePkiTemplateTool, PKI_TEMPLATE_TOOL_NAMES } from './ai.pki-templa
 import { streamModelResponse } from './ai.provider-adapter.js';
 import { executeProxyTool, PROXY_TOOL_NAMES } from './ai.proxy-tools.js';
 import { findResource } from './ai.resource-search.js';
+import { executeResourceSetupTool, RESOURCE_SETUP_TOOL_NAMES } from './ai.resource-setup-tools.js';
 import type { AISandboxService } from './ai.sandbox.service.js';
 import type { AISandboxArtifactService } from './ai.sandbox-artifact.service.js';
 import {
@@ -83,6 +84,7 @@ import {
   redactToolArgs,
 } from './ai.service-helpers.js';
 import type { AISettingsService } from './ai.settings.service.js';
+import { AISkillService } from './ai.skills.js';
 import { executeSshTool, SSH_TOOL_NAMES } from './ai.ssh-tools.js';
 import { manageStatusPageTool } from './ai.status-page-tools.js';
 import { buildAISystemPromptDetailed, type SystemPromptBreakdownItem } from './ai.system-prompt.js';
@@ -96,6 +98,7 @@ import {
   validateAIToolArguments,
 } from './ai.tools.js';
 import type {
+  AIConfig,
   AIContextLimits,
   AIMessageAttachment,
   AIPlanRuntimeSnapshot,
@@ -638,6 +641,7 @@ const AI_SETTINGS_UPDATE_FIELDS = new Set([
   'model',
   'gatewayInferenceModel',
   'gatewayInferenceAllowUserModelSelection',
+  'allowUserReasoningEffortSelection',
   'customSystemPrompt',
   'rateLimitMax',
   'rateLimitWindowSeconds',
@@ -873,17 +877,38 @@ export class AIService {
     const apiKey = await this.settingsService.getDecryptedApiKey();
     if (!apiKey)
       throw new AppError(503, 'AI_NOT_CONFIGURED', 'AI is not configured. An admin must set up the API key.');
+    const requestedReasoningEffort = options.requestedReasoningEffort?.trim();
+    if (requestedReasoningEffort && !config.allowUserReasoningEffortSelection) {
+      throw new AppError(403, 'AI_REASONING_EFFORT_SELECTION_DISABLED', 'Reasoning effort selection is disabled');
+    }
+    if (requestedReasoningEffort && !['default', 'low', 'medium', 'high'].includes(requestedReasoningEffort)) {
+      throw new AppError(
+        400,
+        'AI_REASONING_EFFORT_UNAVAILABLE',
+        'The selected reasoning effort is unavailable for this provider'
+      );
+    }
+    const effectiveReasoningEffort =
+      requestedReasoningEffort && requestedReasoningEffort !== 'default'
+        ? (requestedReasoningEffort as AIConfig['reasoningEffort'])
+        : config.reasoningEffort;
+    const effectiveConfig = options.preferMinimumReasoning
+      ? { ...config, reasoningEffort: 'none' as const }
+      : { ...config, reasoningEffort: effectiveReasoningEffort };
     const client = new OpenAI({ apiKey, baseURL: config.providerUrl || undefined });
     return {
-      config,
-      contextLimits: directProviderContextLimits(config.maxContextTokens, config.maxCompletionTokens),
-      reasoningEffort: config.reasoningEffort === 'none' ? null : config.reasoningEffort,
+      config: effectiveConfig,
+      contextLimits: directProviderContextLimits(effectiveConfig.maxContextTokens, effectiveConfig.maxCompletionTokens),
+      reasoningEffort: effectiveConfig.reasoningEffort === 'none' ? null : effectiveConfig.reasoningEffort,
       stream: (messages, tools, streamOptions) =>
         streamModelResponse({
           client,
           config: streamOptions?.maxOutputTokens
-            ? { ...config, maxCompletionTokens: Math.min(config.maxCompletionTokens, streamOptions.maxOutputTokens) }
-            : config,
+            ? {
+                ...effectiveConfig,
+                maxCompletionTokens: Math.min(effectiveConfig.maxCompletionTokens, streamOptions.maxOutputTokens),
+              }
+            : effectiveConfig,
           messages,
           tools,
           signal: options.signal,
@@ -1366,6 +1391,9 @@ export class AIService {
     if (INTEGRATION_TOOL_NAMES.has(toolName)) {
       return executeIntegrationTool(user, toolName, args);
     }
+    if (RESOURCE_SETUP_TOOL_NAMES.has(toolName)) {
+      return executeResourceSetupTool(user, toolName, args);
+    }
     if (DOCKER_TOOL_NAMES.has(toolName)) {
       return executeDockerTool(
         {
@@ -1493,6 +1521,27 @@ export class AIService {
       // ── Discovery ──
       case 'discover_tools':
         return this.discoverTools(user, args, runtimeContext.conversationId);
+
+      case 'read_skill': {
+        const skillId = stringArg(a.skillId);
+        if (!skillId) throw new AppError(400, 'AI_SKILL_ID_REQUIRED', 'skillId is required');
+        const skill = await new AISkillService(this.settingsService).getRuntimeSkill(skillId);
+        return { skill, active: false, nextStep: 'Call activate_skill before applying this skill.' };
+      }
+
+      case 'activate_skill': {
+        const skillId = stringArg(a.skillId);
+        if (!skillId) throw new AppError(400, 'AI_SKILL_ID_REQUIRED', 'skillId is required');
+        const skill = await new AISkillService(this.settingsService).getRuntimeSkill(skillId);
+        return {
+          active: true,
+          activationScope: 'current_context',
+          priority: skill.source === 'system' ? 'system_skill' : 'organization_skill',
+          skill,
+          instruction:
+            'Apply the activated instructions while they remain in the current context. Do not activate this skill again until compaction removes this activation. Base security, authorization, permission, and approval rules always take priority.',
+        };
+      }
 
       case 'get_current_context':
         return {
@@ -2143,7 +2192,6 @@ export class AIService {
             connector: a.connector,
             baseUrl: a.baseUrl,
             repositoryUrl: a.repositoryUrl,
-            repositoryMode: a.repositoryMode,
             host: a.host,
           },
         };

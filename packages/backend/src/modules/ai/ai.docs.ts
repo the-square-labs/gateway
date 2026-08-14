@@ -8,6 +8,7 @@ Gateway AI starts conversations with a small base tool surface. Domain-specific 
 
 ## Base Tools
 - discover_tools: inspect callable tool categories and category-specific tools.
+- read_skill and activate_skill: inspect or load one system or enabled organization skill listed in the assistant's compact prompt catalog. These are AI Workspace-only and are not MCP tools. Do not reactivate a skill while its earlier activation remains in the current context; activate it again after compaction only when it is still relevant.
 - get_current_context: read the current UI route/resource when the user says "this page" or "current item".
 - wait: pause briefly when an operation is pending, then continue by re-checking status.
 - find_resource: globally search readable resources by name, ID, domain, image, etc.
@@ -602,8 +603,8 @@ other stable hint to locate the recreated container and continue with its new ID
 ## Cross-Node Migrations
 - Gateway can migrate a standalone container or a blue/green deployment to another Docker node, including referenced images, named-volume data, capacity preflight, verification, proxy cutover, cancellation, and cleanup recovery.
 - Migration requires \`docker:containers:migrate\` plus the source-resource permissions needed to inspect protected configuration, secrets, and mounts.
+- Use \`manage_docker_migration\` to preflight first, start with the returned fingerprint, inspect progress, cancel before cutover, or retry cleanup. Never start without a blocker-free current preflight.
 - Container archive export requires \`docker:containers:export\` plus file and environment access for the source container. Secret values are included only when the caller also has \`docker:containers:secrets\`.
-- The current AI tool surface does not expose migration mutation. Direct the user to the Docker container or deployment migration UI instead of inventing a tool call.
 
 ## Registries & Templates
 - Registries: add private Docker registries with encrypted credentials. Global or node-specific scope.
@@ -637,7 +638,7 @@ Managed database instances are not generic Docker workloads. The database node o
 - The tunnel terminates in Gateway's separate long-lived relay container. Ordinary app-only updates keep established binding traffic running; a red relay warning is a critical operator state after bounded automatic recovery fails, not a reason to publish a replacement port.
 - A TCP endpoint is an independent, explicit publication option for infrastructure outside Gateway. It requires engine authentication and may not be tunnel-encrypted unless the database engine is configured with TLS. Gateway does not change host firewalls automatically.
 - Each application binding gets a separate engine identity. Its URI and optional host/port/database/user/password environment values are injected into the selected application; do not reveal, log, or copy those values unless an explicit secret-reveal flow permits it.
-- The current AI/MCP database tools operate saved external connection workflows. They must not claim to deploy, bind, publish, or reveal managed-instance or binding secrets when no matching tool is available; direct the operator to the Databases or container/deployment Settings UI instead.
+- Native assistant flows use \`manage_managed_database\` for catalog/list/get/create/retry/delete and workload binding lifecycle. Read the catalog before create, keep instances private unless the user explicitly requests publication, poll get until ready, and never reveal owner or binding credentials. MCP remains read-only for this workflow.
 
 ## Providers
 - **Postgres**: schema/table explorer, paginated row browser, row insert/update/delete for PK-backed tables, SQL console, monitoring.
@@ -696,6 +697,8 @@ Managed database instances are not generic Docker workloads. The database node o
   logging: `# External Logging
 
 Gateway can ingest structured logs from external services into ClickHouse-backed logging environments.
+
+Before creating environments or schemas, call \`manage_logging_backend\` with \`get\`. If logging is disabled on an empty Gateway, ask whether to provision Gateway-managed local ClickHouse or use an existing external ClickHouse, then apply the chosen backend before continuing.
 
 Per-environment retention TTL is complemented by optional Housekeeping caps for total rows and approximate disk size. ClickHouse also has an internal-log safety budget and health guard. Enable ClickHouse Internals in Housekeeping to allow cleanup of supported system tables, and only do so for an instance dedicated to Gateway. Users with housekeeping access see storage pressure on the Dashboard.
 
@@ -1218,6 +1221,7 @@ AI Workspace settings control the provider, request limits, tool exposure, web s
 - apiKey: only set this when replacing the stored provider key. The current secret is never returned in full.
 - gatewayInferenceModel: default published Gateway Inference model ID.
 - gatewayInferenceAllowUserModelSelection: whether users may choose another model they are allowed to access.
+- allowUserReasoningEffortSelection: whether users may override the default reasoning effort for the OpenAI-compatible provider. Gateway Inference uses each published model's own reasoning capabilities instead.
 - OpenAI-compatible provider values are preserved while Gateway Inference is selected. Disabling inference restores them; if no OpenAI-compatible key was saved, the assistant is disabled.
 
 ## Limits
@@ -1225,7 +1229,7 @@ AI Workspace settings control the provider, request limits, tool exposure, web s
 - maxToolRounds: maximum sequential tool-call rounds in one assistant run.
 - maxContextTokens: context budget used by the conversation builder.
 - maxCompletionTokens and maxTokensField: response token cap and provider field name.
-- reasoningEffort: low, medium, high, or none. Use none for models/providers that do not support reasoning controls.
+- reasoningEffort: default OpenAI-compatible provider effort: low, medium, high, or none. Use none to leave reasoning unspecified. Gateway Inference ignores this setting.
 
 ## Tool Access
 - disabledTools: exact tool names hidden from the assistant.

@@ -109,8 +109,9 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('databases', ['databases:view']).content).toContain(
       'private connector and authenticated Gateway tunnel'
     );
+    expect(getInternalDocumentation('databases', ['databases:view']).content).toContain('manage_managed_database');
     expect(getInternalDocumentation('databases', ['databases:view']).content).toContain(
-      'must not claim to deploy, bind, publish, or reveal managed-instance or binding secrets'
+      'never reveal owner or binding credentials'
     );
     expect(getInternalDocumentation('node-files', ['nodes:files:read']).content).toContain('manage_node_file');
     expect(getInternalDocumentation('sandbox', ['ai:sandbox:use']).content).toContain('download_artifact');

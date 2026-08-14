@@ -1071,6 +1071,36 @@ class ApiClient extends withInferenceApi(
     return res.data;
   }
 
+  async listAISkills(): Promise<import("@/types/ai").AIAgentSkill[]> {
+    const res = await this.request<{ data: import("@/types/ai").AIAgentSkill[] }>("/ai/skills");
+    return res.data;
+  }
+
+  async createAISkill(
+    input: import("@/types/ai").AIUserSkillInput
+  ): Promise<import("@/types/ai").AIAgentSkill> {
+    const res = await this.request<{ data: import("@/types/ai").AIAgentSkill }>("/ai/skills", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    return res.data;
+  }
+
+  async updateAISkill(
+    id: string,
+    input: Partial<import("@/types/ai").AIUserSkillInput>
+  ): Promise<import("@/types/ai").AIAgentSkill> {
+    const res = await this.request<{ data: import("@/types/ai").AIAgentSkill }>(
+      `/ai/skills/${id}`,
+      { method: "PATCH", body: JSON.stringify(input) }
+    );
+    return res.data;
+  }
+
+  async deleteAISkill(id: string): Promise<void> {
+    await this.request(`/ai/skills/${id}`, { method: "DELETE" });
+  }
+
   async getAITools(): Promise<
     Record<
       string,

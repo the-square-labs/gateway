@@ -18,6 +18,7 @@ export interface AIConfig {
   model: string;
   gatewayInferenceModel: string;
   gatewayInferenceAllowUserModelSelection: boolean;
+  allowUserReasoningEffortSelection: boolean;
   maxCompletionTokens: number;
   maxTokensField: MaxTokensField;
   reasoningEffort: ReasoningEffort;

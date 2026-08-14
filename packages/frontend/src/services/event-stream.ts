@@ -211,6 +211,12 @@ class EventStream {
           api.invalidateCache("settings:gitlab-connectors");
           api.invalidateCache("req:/api/integrations/cloudflare/connectors");
           api.invalidateCache("settings:cloudflare-connectors");
+          api.invalidateCache("req:/api/integrations/github/connectors");
+          api.invalidateCache("settings:github-connectors");
+          api.invalidateCache("req:/api/integrations/git/connectors");
+          api.invalidateCache("settings:git-connectors");
+          api.invalidateCache("req:/api/integrations/ssh/connectors");
+          api.invalidateCache("settings:ssh-connectors");
           api.invalidateCache("req:/api/docker/registries");
           api.invalidateCache("settings:docker-registries");
         } else if (msg.channel === "notification.alert-rule.changed") {

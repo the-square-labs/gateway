@@ -138,6 +138,9 @@ export interface AIProviderStatus {
   providerType: AIProviderType;
   defaultModel: string;
   allowUserModelSelection: boolean;
+  allowUserReasoningEffortSelection?: boolean;
+  reasoningEfforts?: string[];
+  defaultReasoningEffort?: string | null;
   supportsImages: boolean;
   models: AIInferenceModelOption[];
 }
@@ -151,6 +154,7 @@ export interface AIConfig {
   model: string;
   gatewayInferenceModel: string;
   gatewayInferenceAllowUserModelSelection: boolean;
+  allowUserReasoningEffortSelection: boolean;
   gatewayInferenceModels: AIInferenceModelOption[];
   maxCompletionTokens: number;
   maxTokensField: "max_tokens" | "max_completion_tokens";
@@ -170,6 +174,24 @@ export interface AIConfig {
   apiKeyLast4: string;
   hasWebSearchKey: boolean;
   webSearchApiKeyLast4: string;
+}
+
+export interface AIAgentSkill {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  source: "system" | "user";
+  enabled: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface AIUserSkillInput {
+  name: string;
+  description: string;
+  instructions: string;
+  enabled?: boolean;
 }
 
 export interface AIContextEstimate {

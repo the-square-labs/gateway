@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { AppError } from '@/middleware/error-handler.js';
 import { IntegrationsService } from './integrations.service.js';
@@ -200,6 +203,36 @@ function vcsProvider<T extends Record<string, unknown>>(overrides: T) {
 }
 
 describe('IntegrationsService', () => {
+  it('previews generic Git credentials against the configured repository', async () => {
+    const service = new IntegrationsService({} as never, { log: vi.fn() } as never, {} as never);
+    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      await expect(
+        service.previewGitConnectorTest({
+          baseUrl: 'https://git.example.com/',
+          repositoryUrl: 'https://git.example.com/team/app.git',
+          username: 'deploy-user',
+          token: 'secret-token',
+        })
+      ).resolves.toMatchObject({
+        success: true,
+        baseUrl: 'https://git.example.com',
+        capabilities: { projectsView: true, repoRead: true, repoWrite: true },
+      });
+      const [requestUrl, requestInit] = fetchMock.mock.calls[0]!;
+      expect(requestUrl.toString()).toBe('https://git.example.com/team/app.git/info/refs?service=git-upload-pack');
+      expect(requestInit).toEqual({
+        headers: {
+          authorization: `Basic ${Buffer.from('deploy-user:secret-token').toString('base64')}`,
+        },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('requires a username before creating a generic Git connector', async () => {
     const service = new IntegrationsService({} as never, { log: vi.fn() } as never, {} as never);
 
@@ -212,8 +245,15 @@ describe('IntegrationsService', () => {
           enabled: true,
           authMode: 'token',
           token: 'secret',
-          repositoryMode: 'single_repository',
-          repositoryUrl: 'https://git.example.com/team/app.git',
+          allowlistEntries: [
+            {
+              entryType: 'project',
+              remoteId: 'https://git.example.com/team/app.git',
+              fullPath: 'https://git.example.com/team/app.git',
+              name: 'app',
+              webUrl: 'https://git.example.com/team/app.git',
+            },
+          ],
         },
         'user-1'
       )
@@ -268,6 +308,114 @@ describe('IntegrationsService', () => {
     });
   });
 
+  it('allows every repository visible to an account-wide GitHub OAuth connector', async () => {
+    const select = vi.fn();
+    select
+      .mockReturnValueOnce({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn().mockResolvedValue([
+              connectorRow({
+                provider: 'github',
+                name: 'GitHub',
+                baseUrl: 'https://github.com',
+                authMode: 'oauth',
+                allowlistMode: 'all_visible',
+                username: 'owner',
+                encryptedToken: JSON.stringify('encrypted-token'),
+              }),
+            ]),
+          })),
+        })),
+      })
+      .mockReturnValueOnce({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({ orderBy: vi.fn().mockResolvedValue([]) })),
+        })),
+      });
+    const service = new IntegrationsService(
+      { select } as never,
+      { log: vi.fn() } as never,
+      { decryptString: vi.fn(() => 'github-oauth-token') } as never
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify([{ name: 'README.md', path: 'README.md', type: 'file', size: 42, sha: 'abc' }]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      )
+    );
+
+    try {
+      await expect(
+        service.githubListRepositoryTree(
+          {
+            ...BASE_USER,
+            scopes: ['integrations:github:view', 'integrations:github:system'],
+          },
+          {
+            connectorId: '11111111-1111-4111-8111-111111111111',
+            repositoryUrl: 'https://github.com/acme/another-repository',
+          }
+        )
+      ).resolves.toEqual([{ name: 'README.md', path: 'README.md', type: 'file', size: 42, sha: 'abc' }]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('discovers repositories visible to the GitHub account', async () => {
+    const service = new IntegrationsService({} as never, { log: vi.fn() } as never, {} as never);
+    (service as any).resolveGitHubAccount = vi.fn().mockResolvedValue({
+      connector: connectorRow({ provider: 'github', baseUrl: 'https://github.com' }),
+      token: 'github-secret-token',
+    });
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            id: 42,
+            name: 'app',
+            full_name: 'acme/app',
+            html_url: 'https://github.com/acme/app',
+            owner: { login: 'acme' },
+            default_branch: 'main',
+            private: true,
+            archived: false,
+            updated_at: '2026-08-14T12:00:00Z',
+            permissions: { admin: false, maintain: true, push: true, pull: true },
+          },
+        ]),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      await expect(
+        service.githubListRepositories(
+          { ...BASE_USER, scopes: ['integrations:github:view'] },
+          { connectorId: '11111111-1111-4111-8111-111111111111' }
+        )
+      ).resolves.toEqual([
+        expect.objectContaining({
+          fullName: 'acme/app',
+          repositoryUrl: 'https://github.com/acme/app',
+          defaultBranch: 'main',
+          private: true,
+        }),
+      ]);
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/user/repos?'),
+        expect.objectContaining({ headers: expect.objectContaining({ authorization: 'Bearer github-secret-token' }) })
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('updates an allowed GitHub file without exposing the credential', async () => {
     const service = new IntegrationsService({} as never, { log: vi.fn() } as never, {} as never);
     (service as any).resolveGitRepository = vi.fn().mockResolvedValue({
@@ -315,6 +463,94 @@ describe('IntegrationsService', () => {
       );
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+
+  it('encrypts an Actions secret before sending it to GitHub', async () => {
+    const service = new IntegrationsService({} as never, { log: vi.fn() } as never, {} as never);
+    (service as any).resolveGitRepository = vi.fn().mockResolvedValue({
+      connector: connectorRow({ provider: 'github', baseUrl: 'https://github.com' }),
+      repositoryUrl: 'https://github.com/acme/app',
+      token: 'github-secret-token',
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ key_id: 'key-1', key: Buffer.alloc(32, 7).toString('base64') }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      await expect(
+        service.githubUpsertActionsSecret(
+          { ...BASE_USER, scopes: ['integrations:github:manage'] },
+          {
+            connectorId: '11111111-1111-4111-8111-111111111111',
+            repositoryUrl: 'https://github.com/acme/app',
+            name: 'DEPLOY_TOKEN',
+            value: 'one-time-secret',
+          }
+        )
+      ).resolves.toEqual({
+        repositoryUrl: 'https://github.com/acme/app',
+        name: 'DEPLOY_TOKEN',
+        updated: true,
+      });
+      const request = fetchMock.mock.calls[1]?.[1] as RequestInit;
+      expect(request.method).toBe('PUT');
+      expect(String(request.body)).not.toContain('one-time-secret');
+      expect(JSON.parse(String(request.body))).toMatchObject({ key_id: 'key-1' });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('lists and reads generic Git repository content from an isolated checkout', async () => {
+    const checkoutDir = await mkdtemp(join(tmpdir(), 'gateway-git-test-'));
+    await mkdir(join(checkoutDir, 'src'));
+    await writeFile(join(checkoutDir, 'README.md'), '# App\n');
+    await writeFile(join(checkoutDir, 'src', 'index.ts'), 'export const ready = true;\n');
+    const service = new IntegrationsService({} as never, { log: vi.fn() } as never, {} as never);
+    (service as any).withGenericGitCheckout = vi.fn(
+      async (_user: unknown, _input: unknown, callback: (context: Record<string, unknown>) => Promise<unknown>) =>
+        callback({
+          checkoutDir,
+          askpassPath: join(checkoutDir, 'askpass.sh'),
+          username: 'git-user',
+          token: 'git-token',
+          repositoryUrl: 'https://git.example.com/acme/app.git',
+        })
+    );
+
+    try {
+      await expect(
+        service.gitListRepositoryTree(
+          { ...BASE_USER, scopes: ['integrations:git:view'] },
+          {
+            connectorId: '11111111-1111-4111-8111-111111111111',
+            repositoryUrl: 'https://git.example.com/acme/app.git',
+          }
+        )
+      ).resolves.toEqual([
+        { name: 'README.md', path: 'README.md', type: 'blob' },
+        { name: 'src', path: 'src', type: 'tree' },
+      ]);
+      await expect(
+        service.gitReadRepositoryFile(
+          { ...BASE_USER, scopes: ['integrations:git:view'] },
+          {
+            connectorId: '11111111-1111-4111-8111-111111111111',
+            repositoryUrl: 'https://git.example.com/acme/app.git',
+            path: 'src/index.ts',
+          }
+        )
+      ).resolves.toMatchObject({ path: 'src/index.ts', content: 'export const ready = true;\n' });
+    } finally {
+      await rm(checkoutDir, { recursive: true, force: true });
     }
   });
 

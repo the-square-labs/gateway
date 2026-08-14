@@ -14,6 +14,7 @@ const AI_CONFIG = {
   model: "gpt-5",
   gatewayInferenceModel: "",
   gatewayInferenceAllowUserModelSelection: false,
+  allowUserReasoningEffortSelection: false,
   gatewayInferenceModels: [],
   maxCompletionTokens: 4096,
   maxTokensField: "max_output_tokens",
@@ -45,6 +46,7 @@ describe("AIConfigSection provider guidance", () => {
   it("links to General settings only while inference is disabled", async () => {
     api.setCache("settings:ai-config", AI_CONFIG);
     vi.spyOn(api, "getAIConfig").mockResolvedValue(AI_CONFIG);
+    vi.spyOn(api, "listAISkills").mockResolvedValue([]);
     vi.spyOn(api, "listAISandboxJobs").mockResolvedValue([]);
     vi.spyOn(api, "listAISandboxArtifacts").mockResolvedValue({ data: [], nextPage: null });
 
@@ -78,9 +80,65 @@ describe("AIConfigSection provider guidance", () => {
     );
   });
 
+  it("keeps reasoning controls in the OAI-compatible provider block", async () => {
+    api.setCache("settings:ai-config", AI_CONFIG);
+    vi.spyOn(api, "getAIConfig").mockResolvedValue(AI_CONFIG);
+    vi.spyOn(api, "listAISkills").mockResolvedValue([]);
+    vi.spyOn(api, "listAISandboxJobs").mockResolvedValue([]);
+    vi.spyOn(api, "listAISandboxArtifacts").mockResolvedValue({ data: [], nextPage: null });
+
+    render(
+      <MemoryRouter>
+        <AIConfigSection />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("Default reasoning effort")).toBeInTheDocument();
+    expect(screen.getByText("User reasoning selection")).toBeInTheDocument();
+  });
+
+  it("hides direct-provider reasoning controls for Gateway Inference", async () => {
+    const gatewayConfig = {
+      ...AI_CONFIG,
+      providerType: "gateway_inference" as const,
+      gatewayInferenceModel: "gateway-model",
+      gatewayInferenceModels: [
+        {
+          id: "gateway-model",
+          displayName: "Gateway model",
+          supportsImages: false,
+          maxContextTokens: 128_000,
+          maxOutputTokens: 16_000,
+          reasoningEfforts: ["low", "high"],
+          defaultReasoningEffort: "high",
+        },
+      ],
+    };
+    useSystemConfigStore.getState().setConfig({
+      ...DEFAULT_SYSTEM_CONFIG,
+      features: { ...DEFAULT_SYSTEM_CONFIG.features, inferenceEnabled: true },
+    });
+    api.setCache("settings:ai-config", gatewayConfig);
+    vi.spyOn(api, "getAIConfig").mockResolvedValue(gatewayConfig);
+    vi.spyOn(api, "listAISkills").mockResolvedValue([]);
+    vi.spyOn(api, "listAISandboxJobs").mockResolvedValue([]);
+    vi.spyOn(api, "listAISandboxArtifacts").mockResolvedValue({ data: [], nextPage: null });
+
+    render(
+      <MemoryRouter>
+        <AIConfigSection />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("User model selection")).toBeInTheDocument();
+    expect(screen.queryByText("Default reasoning effort")).not.toBeInTheDocument();
+    expect(screen.queryByText("User reasoning selection")).not.toBeInTheDocument();
+  });
+
   it("shows 10 recent artifacts and lazily loads the full list after View all", async () => {
     api.setCache("settings:ai-config", AI_CONFIG);
     vi.spyOn(api, "getAIConfig").mockResolvedValue(AI_CONFIG);
+    vi.spyOn(api, "listAISkills").mockResolvedValue([]);
     vi.spyOn(api, "listAISandboxJobs").mockResolvedValue([]);
     const listArtifacts = vi
       .spyOn(api, "listAISandboxArtifacts")

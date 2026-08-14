@@ -1,4 +1,9 @@
+import { spawn } from 'node:child_process';
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve, sep } from 'node:path';
 import { and, desc, eq, inArray, isNull, type SQL } from 'drizzle-orm';
+import sodium from 'libsodium-wrappers';
 import { getEnv } from '@/config/env.js';
 import type { DrizzleClient } from '@/db/client.js';
 import {
@@ -50,7 +55,10 @@ import type {
   CloudflareConnectorListQuery,
   CloudflareConnectorUpdateInput,
   GitConnectorCreateInput,
+  GitConnectorPreviewTestInput,
   GitConnectorUpdateInput,
+  GitHubConnectorCreateInput,
+  GitHubConnectorPreviewTestInput,
   GitHubOAuthStartInput,
   GitLabAllowlistEntryInput,
   GitLabConnectorCreateInput,
@@ -73,6 +81,14 @@ interface ResolvedGitLabCredential {
   scopes: string[];
 }
 
+interface GenericGitExecutionContext {
+  checkoutDir: string;
+  askpassPath: string;
+  username: string;
+  token: string;
+  repositoryUrl: string;
+}
+
 export const DEFAULT_GITLAB_CONNECTOR_SETTINGS: IntegrationConnectorSettings = {
   autoSyncEnabled: true,
   autoSyncIntervalSeconds: 900,
@@ -93,6 +109,10 @@ export const DEFAULT_CLOUDFLARE_CONNECTOR_SETTINGS: CloudflareConnectorSettings 
 
 const MAX_BACKOFF_SECONDS = 3600;
 const STALE_SYNC_SECONDS = 1800;
+const GITHUB_HEALTH_CHECK_INTERVAL_MS = 15 * 60 * 1000;
+const GIT_CHECKOUT_TIMEOUT_MS = 30_000;
+const GIT_FILE_READ_LIMIT_BYTES = 262_144;
+const GIT_FILE_WRITE_LIMIT_BYTES = 524_288;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -307,6 +327,40 @@ export class IntegrationsService {
     );
   }
 
+  async githubListRepositories(user: User, input: { connectorId: string }) {
+    const { connector, token } = await this.resolveGitHubAccount(user, input.connectorId);
+    const response = await this.githubConnectorRequest(
+      connector,
+      token,
+      '/user/repos?per_page=100&sort=updated&affiliation=owner%2Ccollaborator%2Corganization_member'
+    );
+    const body = (await response.json().catch(() => null)) as unknown;
+    if (!response.ok) throw this.githubRepositoryRequestError(response.status, body);
+    if (!Array.isArray(body)) return [];
+    return body.slice(0, 100).map((entry) => {
+      const repository = isPlainRecord(entry) ? entry : {};
+      const owner = isPlainRecord(repository.owner) ? repository.owner : {};
+      const permissions = isPlainRecord(repository.permissions) ? repository.permissions : {};
+      return {
+        id: typeof repository.id === 'number' ? repository.id : null,
+        name: typeof repository.name === 'string' ? repository.name : '',
+        fullName: typeof repository.full_name === 'string' ? repository.full_name : '',
+        repositoryUrl: typeof repository.html_url === 'string' ? repository.html_url : '',
+        owner: typeof owner.login === 'string' ? owner.login : '',
+        defaultBranch: typeof repository.default_branch === 'string' ? repository.default_branch : null,
+        private: repository.private === true,
+        archived: repository.archived === true,
+        updatedAt: typeof repository.updated_at === 'string' ? repository.updated_at : null,
+        permissions: {
+          admin: permissions.admin === true,
+          maintain: permissions.maintain === true,
+          push: permissions.push === true,
+          pull: permissions.pull === true,
+        },
+      };
+    });
+  }
+
   async githubListRepositoryTree(
     user: User,
     input: { connectorId: string; repositoryUrl: string; path?: string; ref?: string }
@@ -380,6 +434,105 @@ export class IntegrationsService {
     };
   }
 
+  async githubListBranches(user: User, input: { connectorId: string; repositoryUrl: string }) {
+    const context = await this.resolveGitRepository(user, 'github', input.connectorId, input.repositoryUrl);
+    const { owner, repository } = this.githubRepositoryIdentity(context.repositoryUrl);
+    const response = await this.githubConnectorRequest(
+      context.connector,
+      context.token,
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/branches?per_page=100`
+    );
+    const body = (await response.json().catch(() => null)) as unknown;
+    if (!response.ok) throw this.githubRepositoryRequestError(response.status, body);
+    if (!Array.isArray(body)) return [];
+    return body.slice(0, 100).map((entry) => {
+      const branch = isPlainRecord(entry) ? entry : {};
+      const commit = isPlainRecord(branch.commit) ? branch.commit : {};
+      return {
+        name: typeof branch.name === 'string' ? branch.name : '',
+        commitSha: typeof commit.sha === 'string' ? commit.sha : null,
+        protected: branch.protected === true,
+      };
+    });
+  }
+
+  async githubListWorkflowRuns(
+    user: User,
+    input: { connectorId: string; repositoryUrl: string; branch?: string; status?: string }
+  ) {
+    const context = await this.resolveGitRepository(user, 'github', input.connectorId, input.repositoryUrl);
+    const { owner, repository } = this.githubRepositoryIdentity(context.repositoryUrl);
+    const query = new URLSearchParams({ per_page: '50' });
+    if (input.branch?.trim()) query.set('branch', input.branch.trim());
+    if (input.status?.trim()) query.set('status', input.status.trim());
+    const response = await this.githubConnectorRequest(
+      context.connector,
+      context.token,
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/actions/runs?${query}`
+    );
+    const body = (await response.json().catch(() => null)) as unknown;
+    if (!response.ok) throw this.githubRepositoryRequestError(response.status, body);
+    const runs = isPlainRecord(body) && Array.isArray(body.workflow_runs) ? body.workflow_runs : [];
+    return runs.slice(0, 50).map((entry) => {
+      const run = isPlainRecord(entry) ? entry : {};
+      return {
+        id: typeof run.id === 'number' ? run.id : null,
+        name: typeof run.name === 'string' ? run.name : '',
+        event: typeof run.event === 'string' ? run.event : null,
+        branch: typeof run.head_branch === 'string' ? run.head_branch : null,
+        headSha: typeof run.head_sha === 'string' ? run.head_sha : null,
+        status: typeof run.status === 'string' ? run.status : null,
+        conclusion: typeof run.conclusion === 'string' ? run.conclusion : null,
+        url: typeof run.html_url === 'string' ? run.html_url : null,
+        createdAt: typeof run.created_at === 'string' ? run.created_at : null,
+        updatedAt: typeof run.updated_at === 'string' ? run.updated_at : null,
+      };
+    });
+  }
+
+  async githubListActionsVariables(user: User, input: { connectorId: string; repositoryUrl: string }) {
+    const context = await this.resolveGitRepository(user, 'github', input.connectorId, input.repositoryUrl);
+    const { owner, repository } = this.githubRepositoryIdentity(context.repositoryUrl);
+    const response = await this.githubConnectorRequest(
+      context.connector,
+      context.token,
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/actions/variables?per_page=100`
+    );
+    const body = (await response.json().catch(() => null)) as unknown;
+    if (!response.ok) throw this.githubRepositoryRequestError(response.status, body);
+    const variables = isPlainRecord(body) && Array.isArray(body.variables) ? body.variables : [];
+    return variables.slice(0, 100).map((entry) => {
+      const variable = isPlainRecord(entry) ? entry : {};
+      return {
+        name: typeof variable.name === 'string' ? variable.name : '',
+        value: typeof variable.value === 'string' ? variable.value : '',
+        createdAt: typeof variable.created_at === 'string' ? variable.created_at : null,
+        updatedAt: typeof variable.updated_at === 'string' ? variable.updated_at : null,
+      };
+    });
+  }
+
+  async githubListActionsSecrets(user: User, input: { connectorId: string; repositoryUrl: string }) {
+    const context = await this.resolveGitRepository(user, 'github', input.connectorId, input.repositoryUrl);
+    const { owner, repository } = this.githubRepositoryIdentity(context.repositoryUrl);
+    const response = await this.githubConnectorRequest(
+      context.connector,
+      context.token,
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/actions/secrets?per_page=100`
+    );
+    const body = (await response.json().catch(() => null)) as unknown;
+    if (!response.ok) throw this.githubRepositoryRequestError(response.status, body);
+    const secrets = isPlainRecord(body) && Array.isArray(body.secrets) ? body.secrets : [];
+    return secrets.slice(0, 100).map((entry) => {
+      const secret = isPlainRecord(entry) ? entry : {};
+      return {
+        name: typeof secret.name === 'string' ? secret.name : '',
+        createdAt: typeof secret.created_at === 'string' ? secret.created_at : null,
+        updatedAt: typeof secret.updated_at === 'string' ? secret.updated_at : null,
+      };
+    });
+  }
+
   async githubUpsertRepositoryFile(
     user: User,
     input: {
@@ -444,6 +597,77 @@ export class IntegrationsService {
     };
   }
 
+  async githubUpsertActionsVariable(
+    user: User,
+    input: { connectorId: string; repositoryUrl: string; name: string; value: string }
+  ) {
+    if (!hasScope(user.scopes, 'integrations:github:manage')) {
+      throw new AppError(403, 'PERMISSION_DENIED', 'GitHub connector manage scope is required');
+    }
+    const context = await this.resolveGitRepository(user, 'github', input.connectorId, input.repositoryUrl);
+    const { owner, repository } = this.githubRepositoryIdentity(context.repositoryUrl);
+    const name = this.githubActionsName(input.name);
+    const basePath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/actions/variables`;
+    const updateResponse = await this.githubConnectorRequest(
+      context.connector,
+      context.token,
+      `${basePath}/${encodeURIComponent(name)}`,
+      { method: 'PATCH', body: JSON.stringify({ name, value: input.value }) }
+    );
+    if (updateResponse.status === 404) {
+      const createResponse = await this.githubConnectorRequest(context.connector, context.token, basePath, {
+        method: 'POST',
+        body: JSON.stringify({ name, value: input.value }),
+      });
+      if (!createResponse.ok) {
+        throw this.githubRepositoryRequestError(createResponse.status, await createResponse.json().catch(() => null));
+      }
+    } else if (!updateResponse.ok) {
+      throw this.githubRepositoryRequestError(updateResponse.status, await updateResponse.json().catch(() => null));
+    }
+    return { repositoryUrl: context.repositoryUrl, name, updated: true };
+  }
+
+  async githubUpsertActionsSecret(
+    user: User,
+    input: { connectorId: string; repositoryUrl: string; name: string; value: string }
+  ) {
+    if (!hasScope(user.scopes, 'integrations:github:manage')) {
+      throw new AppError(403, 'PERMISSION_DENIED', 'GitHub connector manage scope is required');
+    }
+    const context = await this.resolveGitRepository(user, 'github', input.connectorId, input.repositoryUrl);
+    const { owner, repository } = this.githubRepositoryIdentity(context.repositoryUrl);
+    const name = this.githubActionsName(input.name);
+    const basePath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/actions/secrets`;
+    const keyResponse = await this.githubConnectorRequest(context.connector, context.token, `${basePath}/public-key`);
+    const keyBody = (await keyResponse.json().catch(() => null)) as unknown;
+    if (!keyResponse.ok) throw this.githubRepositoryRequestError(keyResponse.status, keyBody);
+    if (!isPlainRecord(keyBody) || typeof keyBody.key !== 'string' || typeof keyBody.key_id !== 'string') {
+      throw new AppError(502, 'GITHUB_SECRET_KEY_INVALID', 'GitHub returned an invalid Actions secret public key');
+    }
+    await sodium.ready;
+    const encrypted = sodium.crypto_box_seal(
+      sodium.from_string(input.value),
+      sodium.from_base64(keyBody.key, sodium.base64_variants.ORIGINAL)
+    );
+    const response = await this.githubConnectorRequest(
+      context.connector,
+      context.token,
+      `${basePath}/${encodeURIComponent(name)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({
+          encrypted_value: sodium.to_base64(encrypted, sodium.base64_variants.ORIGINAL),
+          key_id: keyBody.key_id,
+        }),
+      }
+    );
+    if (!response.ok) {
+      throw this.githubRepositoryRequestError(response.status, await response.json().catch(() => null));
+    }
+    return { repositoryUrl: context.repositoryUrl, name, updated: true };
+  }
+
   async gitListRemoteRefs(user: User, input: { connectorId: string; repositoryUrl: string }) {
     const { repositoryUrl, token, username } = await this.resolveGitRepository(
       user,
@@ -473,31 +697,100 @@ export class IntegrationsService {
     return { repositoryUrl, refs };
   }
 
+  async gitListRepositoryTree(
+    user: User,
+    input: { connectorId: string; repositoryUrl: string; path?: string; ref?: string }
+  ) {
+    return this.withGenericGitCheckout(user, input, async ({ checkoutDir }) => {
+      const relativePath = this.repositoryRelativePath(input.path ?? '', true);
+      const directory = await this.resolveRepositoryPath(checkoutDir, relativePath, 'directory');
+      const entries = await readdir(directory, { withFileTypes: true });
+      return entries
+        .filter((entry) => !(relativePath === '' && entry.name === '.git'))
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .slice(0, 500)
+        .map((entry) => ({
+          name: entry.name,
+          path: relativePath ? `${relativePath}/${entry.name}` : entry.name,
+          type: entry.isDirectory() ? 'tree' : entry.isFile() ? 'blob' : entry.isSymbolicLink() ? 'symlink' : 'other',
+        }));
+    });
+  }
+
+  async gitReadRepositoryFile(
+    user: User,
+    input: { connectorId: string; repositoryUrl: string; path: string; ref?: string }
+  ) {
+    return this.withGenericGitCheckout(user, input, async ({ checkoutDir }) => {
+      const relativePath = this.repositoryRelativePath(input.path, false);
+      const filePath = await this.resolveRepositoryPath(checkoutDir, relativePath, 'file');
+      const stats = await lstat(filePath);
+      if (stats.size > GIT_FILE_READ_LIMIT_BYTES) {
+        throw new AppError(413, 'GIT_FILE_TOO_LARGE', 'Repository file exceeds the 256 KiB AI read limit');
+      }
+      const content = await readFile(filePath);
+      if (content.includes(0)) throw new AppError(400, 'GIT_FILE_BINARY', 'Repository file is not text');
+      return {
+        repositoryUrl: input.repositoryUrl,
+        path: relativePath,
+        size: content.byteLength,
+        content: content.toString('utf8'),
+      };
+    });
+  }
+
+  async gitUpsertRepositoryFile(
+    user: User,
+    input: {
+      connectorId: string;
+      repositoryUrl: string;
+      path: string;
+      branch: string;
+      message: string;
+      content: string;
+    }
+  ) {
+    if (!hasScope(user.scopes, 'integrations:git:manage')) {
+      throw new AppError(403, 'PERMISSION_DENIED', 'Git connector manage scope is required');
+    }
+    if (Buffer.byteLength(input.content, 'utf8') > GIT_FILE_WRITE_LIMIT_BYTES) {
+      throw new AppError(413, 'GIT_FILE_TOO_LARGE', 'Repository file exceeds the 512 KiB write limit');
+    }
+    const branch = this.gitRefName(input.branch);
+    return this.withGenericGitCheckout(user, { ...input, ref: branch }, async (context) => {
+      const relativePath = this.repositoryRelativePath(input.path, false);
+      await this.assertNoRepositorySymlink(context.checkoutDir, relativePath);
+      const filePath = resolve(context.checkoutDir, relativePath);
+      await mkdir(dirname(filePath), { recursive: true });
+      const existing = await readFile(filePath, 'utf8').catch(() => null);
+      if (existing === input.content) {
+        return { repositoryUrl: context.repositoryUrl, path: relativePath, branch, changed: false, commitSha: null };
+      }
+      await writeFile(filePath, input.content, { mode: 0o600 });
+      await this.runGit(['config', 'user.name', 'Gateway AI'], context);
+      await this.runGit(['config', 'user.email', 'gateway-ai@localhost'], context);
+      await this.runGit(['add', '--', relativePath], context);
+      await this.runGit(['commit', '-m', input.message.trim()], context);
+      await this.runGit(['push', 'origin', `HEAD:${branch}`], context);
+      const commitSha = (await this.runGit(['rev-parse', 'HEAD'], context)).stdout.trim();
+      return { repositoryUrl: context.repositoryUrl, path: relativePath, branch, changed: true, commitSha };
+    });
+  }
+
   async createGitConnector(
     provider: 'github' | 'git',
-    input: GitConnectorCreateInput,
+    input: GitConnectorCreateInput | GitHubConnectorCreateInput,
     userId: string,
     authMode: 'token' | 'oauth' = 'token'
   ) {
     const baseUrl = this.normalizeBaseUrl(input.baseUrl);
-    if (provider === 'git' && !input.username?.trim()) {
+    const gitInput = provider === 'git' ? (input as GitConnectorCreateInput) : null;
+    if (gitInput && !gitInput.username?.trim()) {
       throw new AppError(400, 'GIT_USERNAME_REQUIRED', 'Username is required for a generic Git connector');
     }
     const githubIdentity = provider === 'github' ? await this.validateGitHubToken(baseUrl, input.token) : null;
     const capabilities = githubIdentity?.capabilities ?? genericGitCapabilities();
-    const allowlistEntries = this.dedupeAllowlistEntries(
-      input.repositoryMode === 'single_repository'
-        ? [
-            {
-              entryType: 'project' as const,
-              remoteId: input.repositoryUrl!,
-              fullPath: input.repositoryUrl!,
-              name: input.repositoryUrl!,
-              webUrl: input.repositoryUrl,
-            },
-          ]
-        : (input.allowlistEntries ?? [])
-    );
+    const allowlistEntries = this.dedupeAllowlistEntries(gitInput?.allowlistEntries ?? []);
     const [row] = await this.db
       .insert(integrationConnectors)
       .values({
@@ -506,12 +799,17 @@ export class IntegrationsService {
         baseUrl,
         enabled: input.enabled,
         authMode,
-        username: githubIdentity?.username ?? input.username?.trim() ?? null,
+        username: githubIdentity?.username ?? gitInput?.username?.trim() ?? null,
         encryptedToken: this.encryptToken(input.token),
         tokenLast4: this.tokenLast4(input.token),
-        allowlistMode: 'selected',
-        settings: { repositoryMode: input.repositoryMode, autoSyncEnabled: false, autoSyncIntervalSeconds: 86_400 },
+        allowlistMode: provider === 'github' ? 'all_visible' : 'selected',
+        settings: {
+          repositoryMode: 'multi_repository',
+          autoSyncEnabled: provider === 'github',
+          autoSyncIntervalSeconds: provider === 'github' ? 900 : 86_400,
+        },
         capabilities,
+        syncStatus: provider === 'github' ? 'success' : 'never',
         testedAt: new Date(),
       })
       .returning();
@@ -521,9 +819,9 @@ export class IntegrationsService {
       userId,
       resourceType: 'integration-connector',
       resourceId: row.id,
-      details: { name: row.name, baseUrl: row.baseUrl, repositoryMode: input.repositoryMode, authMode },
+      details: { name: row.name, baseUrl: row.baseUrl, repositoryMode: 'multi_repository', authMode },
     });
-    this.emitConnector(row.id, 'created');
+    this.emitConnector(row.id, 'created', provider);
     return { ...this.toSafeConnector(row), allowlistEntries };
   }
 
@@ -547,10 +845,10 @@ export class IntegrationsService {
       updates.tokenLast4 = this.tokenLast4(input.token);
       updates.testedAt = new Date();
     }
-    if (input.repositoryMode !== undefined) {
+    if (provider === 'git' && input.allowlistEntries !== undefined) {
       updates.allowlistMode = 'selected';
       updates.settings = {
-        repositoryMode: input.repositoryMode,
+        repositoryMode: 'multi_repository',
         autoSyncEnabled: false,
         autoSyncIntervalSeconds: 86_400,
       };
@@ -560,19 +858,8 @@ export class IntegrationsService {
       .set(updates)
       .where(eq(integrationConnectors.id, existing.id))
       .returning();
-    if (input.repositoryUrl || input.allowlistEntries) {
-      const entries = input.repositoryUrl
-        ? [
-            {
-              entryType: 'project' as const,
-              remoteId: input.repositoryUrl,
-              fullPath: input.repositoryUrl,
-              name: input.repositoryUrl,
-              webUrl: input.repositoryUrl,
-            },
-          ]
-        : input.allowlistEntries!;
-      await this.replaceAllowlistEntries(existing.id, this.dedupeAllowlistEntries(entries));
+    if (provider === 'git' && input.allowlistEntries !== undefined) {
+      await this.replaceAllowlistEntries(existing.id, this.dedupeAllowlistEntries(input.allowlistEntries));
     }
     await this.auditService.log({
       action: `integrations.${provider}.connector.update`,
@@ -581,8 +868,86 @@ export class IntegrationsService {
       resourceId: existing.id,
       details: { name: row.name },
     });
-    this.emitConnector(existing.id, 'updated');
+    this.emitConnector(existing.id, 'updated', provider);
     return { ...this.toSafeConnector(row), allowlistEntries: await this.listAllowlistRows(existing.id) };
+  }
+
+  async testGitConnector(provider: 'github' | 'git', id: string, userId: string | null) {
+    const row = await this.getConnectorRow(id, provider);
+    try {
+      if (!row.encryptedToken) {
+        throw new AppError(400, 'CONNECTOR_CREDENTIAL_MISSING', `${row.name} has no credential`);
+      }
+      const token = this.decryptToken(row.encryptedToken);
+      let capabilities = row.capabilities;
+      let username = row.username;
+      if (provider === 'github') {
+        const identity = await this.validateGitHubToken(row.baseUrl, token);
+        capabilities = identity.capabilities;
+        username = identity.username;
+      } else {
+        if (!username) throw new AppError(400, 'GIT_USERNAME_REQUIRED', 'Username is required for this connector');
+        await this.validateGenericGitCredential(row, username, token);
+        capabilities = genericGitCapabilities();
+      }
+      const [updated] = await this.db
+        .update(integrationConnectors)
+        .set({
+          username,
+          capabilities,
+          syncStatus: 'success',
+          syncLastError: null,
+          testedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(and(eq(integrationConnectors.id, id), eq(integrationConnectors.provider, provider)))
+        .returning();
+      if (userId) {
+        await this.auditService.log({
+          action: `integrations.${provider}.connector.test`,
+          userId,
+          resourceType: 'integration-connector',
+          resourceId: id,
+          details: { name: row.name, success: true },
+        });
+      }
+      this.emitConnector(id, 'tested', provider);
+      return { ...this.toSafeConnector(updated), allowlistEntries: await this.listAllowlistRows(id) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Connector health check failed';
+      await this.db
+        .update(integrationConnectors)
+        .set({ syncStatus: 'error', syncLastError: message, testedAt: new Date(), updatedAt: new Date() })
+        .where(and(eq(integrationConnectors.id, id), eq(integrationConnectors.provider, provider)));
+      this.emitConnector(id, 'tested', provider);
+      throw error;
+    }
+  }
+
+  async syncGitConnector(provider: 'github' | 'git', id: string, userId: string) {
+    const result = await this.testGitConnector(provider, id, userId);
+    const [updated] = await this.db
+      .update(integrationConnectors)
+      .set({ syncFinishedAt: new Date(), updatedAt: new Date() })
+      .where(and(eq(integrationConnectors.id, id), eq(integrationConnectors.provider, provider)))
+      .returning();
+    this.emitConnector(id, 'synced', provider);
+    return { ...this.toSafeConnector(updated), allowlistEntries: result.allowlistEntries };
+  }
+
+  async deleteGitConnector(provider: 'github' | 'git', id: string, userId: string) {
+    const row = await this.getConnectorRow(id, provider);
+    await this.db
+      .delete(integrationConnectors)
+      .where(and(eq(integrationConnectors.id, id), eq(integrationConnectors.provider, provider)));
+    await this.auditService.log({
+      action: `integrations.${provider}.connector.delete`,
+      userId,
+      resourceType: 'integration-connector',
+      resourceId: id,
+      details: { name: row.name, baseUrl: row.baseUrl },
+    });
+    this.emitConnector(id, 'deleted', provider);
   }
 
   private async validateGitHubToken(
@@ -616,20 +981,34 @@ export class IntegrationsService {
     return { capabilities: githubTokenCapabilities(scopes), username, scopes };
   }
 
+  async previewGitHubConnectorTest(input: GitHubConnectorPreviewTestInput) {
+    const baseUrl = this.normalizeBaseUrl(input.baseUrl);
+    const identity = await this.validateGitHubToken(baseUrl, input.token);
+    return {
+      success: true as const,
+      baseUrl,
+      username: identity.username,
+      capabilities: identity.capabilities,
+    };
+  }
+
+  async previewGitConnectorTest(input: GitConnectorPreviewTestInput) {
+    const baseUrl = this.normalizeBaseUrl(input.baseUrl);
+    await this.validateGenericGitAccess(baseUrl, input.repositoryUrl, input.username, input.token);
+    return {
+      success: true as const,
+      baseUrl,
+      capabilities: genericGitCapabilities(),
+    };
+  }
+
   getGitHubOAuthAvailability() {
     return { available: true };
   }
 
   async startGitHubOAuth(input: GitHubOAuthStartInput, userId: string): Promise<GitHubOAuthSession> {
     const clientId = getEnv().GITHUB_OAUTH_CLIENT_ID;
-    const baseUrl = this.normalizeBaseUrl(input.baseUrl);
-    if (new URL(baseUrl).hostname !== 'github.com') {
-      throw new AppError(
-        400,
-        'GITHUB_OAUTH_UNSUPPORTED_HOST',
-        'The shared GitHub OAuth app supports github.com; use a token for GitHub Enterprise'
-      );
-    }
+    const baseUrl = 'https://github.com';
     let response: Response;
     try {
       response = await fetch('https://github.com/login/device/code', {
@@ -656,7 +1035,12 @@ export class IntegrationsService {
         encryptedDeviceCode: this.encryptToken(deviceCode),
         userCode,
         verificationUri,
-        connectorDraft: { ...input, baseUrl },
+        connectorDraft: {
+          ...input,
+          baseUrl,
+          repositoryMode: 'multi_repository',
+          allowlistEntries: [],
+        },
         pollIntervalSeconds: interval,
         expiresAt: new Date(Date.now() + expiresIn * 1000),
       })
@@ -1073,6 +1457,22 @@ export class IntegrationsService {
         await this.syncGitLabConnector(row.id, null, { scheduled: true });
       } catch {
         // syncGitLabConnector already persists failure state; scheduler must not block boot or other jobs.
+      }
+    }
+  }
+
+  async runDueGitHubHealthChecks() {
+    const rows = await this.db
+      .select()
+      .from(integrationConnectors)
+      .where(and(eq(integrationConnectors.provider, 'github'), eq(integrationConnectors.enabled, true)));
+    const now = Date.now();
+    for (const row of rows) {
+      if (row.testedAt && now - row.testedAt.getTime() < GITHUB_HEALTH_CHECK_INTERVAL_MS) continue;
+      try {
+        await this.testGitConnector('github', row.id, null);
+      } catch {
+        // testGitConnector persists the failed health state; continue with the remaining connectors.
       }
     }
   }
@@ -2917,6 +3317,213 @@ export class IntegrationsService {
     };
   }
 
+  private async resolveGitHubAccount(
+    user: User,
+    connectorId: string
+  ): Promise<{ connector: ConnectorRow; token: string }> {
+    const connector = await this.getConnectorRow(connectorId, 'github');
+    assertConnectorOperationAccess({
+      actor: { userId: user.id, scopes: user.scopes },
+      provider: 'github',
+      connectorId: connector.id,
+      connectorName: connector.name,
+      operation: 'repository.list',
+      requiredScope: 'integrations:github:view',
+    });
+    if (!connector.enabled) throw new AppError(409, 'CONNECTOR_DISABLED', `${connector.name} is disabled`);
+    if (hasScope(user.scopes, 'integrations:github:system')) {
+      if (!connector.encryptedToken) {
+        throw new AppError(400, 'CONNECTOR_CREDENTIAL_MISSING', `${connector.name} has no credential`);
+      }
+      return { connector, token: this.decryptToken(connector.encryptedToken) };
+    }
+    const personal = await this.gitLabUserCredentials.resolveAuth(user.id, connector.id, connector.baseUrl);
+    if (!personal) throw this.gitUserCredentialRequired('github', connector);
+    return { connector, token: personal.auth.token };
+  }
+
+  private githubActionsName(value: string): string {
+    const name = value.trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      throw new AppError(
+        400,
+        'GITHUB_ACTIONS_NAME_INVALID',
+        'GitHub Actions variable and secret names may contain only letters, numbers, and underscores and cannot start with a number'
+      );
+    }
+    return name;
+  }
+
+  private repositoryRelativePath(value: string, allowEmpty: boolean): string {
+    const normalized = value
+      .trim()
+      .replaceAll('\\', '/')
+      .replace(/^\/+|\/+$/g, '');
+    if (!normalized) {
+      if (allowEmpty) return '';
+      throw new AppError(400, 'INVALID_REPOSITORY_PATH', 'Repository path is required');
+    }
+    const parts = normalized.split('/');
+    if (parts.some((part) => !part || part === '.' || part === '..' || part.includes('\0')) || parts[0] === '.git') {
+      throw new AppError(400, 'INVALID_REPOSITORY_PATH', 'Repository path must remain inside the checkout');
+    }
+    return parts.join('/');
+  }
+
+  private gitRefName(value: string): string {
+    const ref = value.trim();
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/.test(ref) ||
+      ref.includes('..') ||
+      ref.includes('//') ||
+      ref.includes('@{') ||
+      ref.endsWith('/') ||
+      ref.endsWith('.') ||
+      ref.endsWith('.lock')
+    ) {
+      throw new AppError(400, 'INVALID_GIT_REF', 'Git ref is invalid');
+    }
+    return ref;
+  }
+
+  private async resolveRepositoryPath(
+    checkoutDir: string,
+    relativePath: string,
+    expected: 'file' | 'directory'
+  ): Promise<string> {
+    const canonicalCheckoutDir = await realpath(checkoutDir);
+    const target = resolve(canonicalCheckoutDir, relativePath || '.');
+    const checkoutRoot = `${canonicalCheckoutDir}${sep}`;
+    if (target !== canonicalCheckoutDir && !target.startsWith(checkoutRoot)) {
+      throw new AppError(400, 'INVALID_REPOSITORY_PATH', 'Repository path must remain inside the checkout');
+    }
+    const actual = await realpath(target).catch(() => null);
+    if (!actual || (actual !== canonicalCheckoutDir && !actual.startsWith(checkoutRoot))) {
+      throw new AppError(404, 'GIT_PATH_NOT_FOUND', 'Repository path was not found');
+    }
+    const stats = await lstat(actual);
+    if (expected === 'file' && !stats.isFile())
+      throw new AppError(400, 'GIT_PATH_NOT_FILE', 'Repository path is not a file');
+    if (expected === 'directory' && !stats.isDirectory()) {
+      throw new AppError(400, 'GIT_PATH_NOT_DIRECTORY', 'Repository path is not a directory');
+    }
+    return actual;
+  }
+
+  private async assertNoRepositorySymlink(checkoutDir: string, relativePath: string): Promise<void> {
+    let current = checkoutDir;
+    for (const part of relativePath.split('/')) {
+      current = join(current, part);
+      const stats = await lstat(current).catch(() => null);
+      if (!stats) return;
+      if (stats.isSymbolicLink()) {
+        throw new AppError(400, 'GIT_PATH_SYMLINK', 'Repository writes cannot follow symbolic links');
+      }
+    }
+  }
+
+  private async withGenericGitCheckout<T>(
+    user: User,
+    input: { connectorId: string; repositoryUrl: string; ref?: string },
+    callback: (context: GenericGitExecutionContext) => Promise<T>
+  ): Promise<T> {
+    const auth = await this.resolveGitRepository(user, 'git', input.connectorId, input.repositoryUrl);
+    const temporaryRoot = await mkdtemp(join(tmpdir(), 'gateway-git-'));
+    const checkoutDir = join(temporaryRoot, 'checkout');
+    const askpassPath = join(temporaryRoot, 'askpass.sh');
+    await writeFile(
+      askpassPath,
+      '#!/bin/sh\ncase "$1" in *Username*) printf "%s\\n" "$GATEWAY_GIT_USERNAME" ;; *) printf "%s\\n" "$GATEWAY_GIT_SECRET" ;; esac\n',
+      { mode: 0o700 }
+    );
+    await chmod(askpassPath, 0o700);
+    const commandContext: GenericGitExecutionContext = {
+      checkoutDir: temporaryRoot,
+      askpassPath,
+      username: auth.username,
+      token: auth.token,
+      repositoryUrl: auth.repositoryUrl,
+    };
+    const ref = input.ref?.trim() ? this.gitRefName(input.ref) : null;
+    try {
+      await this.runGit(
+        [
+          'clone',
+          '--depth',
+          '1',
+          '--single-branch',
+          ...(ref ? ['--branch', ref] : []),
+          '--',
+          auth.repositoryUrl,
+          checkoutDir,
+        ],
+        commandContext
+      );
+      return await callback({ ...commandContext, checkoutDir });
+    } finally {
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
+  }
+
+  private async runGit(
+    args: string[],
+    context: GenericGitExecutionContext
+  ): Promise<{ stdout: string; stderr: string }> {
+    return new Promise((resolveCommand, rejectCommand) => {
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      const child = spawn('git', ['-c', 'credential.helper=', ...args], {
+        cwd: context.checkoutDir,
+        env: {
+          ...process.env,
+          GIT_CONFIG_GLOBAL: '/dev/null',
+          GIT_CONFIG_NOSYSTEM: '1',
+          GIT_TERMINAL_PROMPT: '0',
+          GIT_ASKPASS: context.askpassPath,
+          GATEWAY_GIT_USERNAME: context.username,
+          GATEWAY_GIT_SECRET: context.token,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      const timer = setTimeout(() => child.kill('SIGKILL'), GIT_CHECKOUT_TIMEOUT_MS);
+      child.stdout.on('data', (chunk: Buffer) => {
+        if (stdout.length < 1_048_576) stdout += chunk.toString('utf8');
+      });
+      child.stderr.on('data', (chunk: Buffer) => {
+        if (stderr.length < 32_768) stderr += chunk.toString('utf8');
+      });
+      child.once('error', (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        rejectCommand(
+          new AppError(
+            502,
+            error.message.includes('ENOENT') ? 'GIT_RUNTIME_UNAVAILABLE' : 'GIT_COMMAND_FAILED',
+            error.message.includes('ENOENT') ? 'Git is not installed in the Gateway runtime' : 'Git operation failed'
+          )
+        );
+      });
+      child.once('close', (code, signal) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (code === 0) {
+          resolveCommand({ stdout, stderr });
+          return;
+        }
+        rejectCommand(
+          new AppError(
+            400,
+            signal === 'SIGKILL' ? 'GIT_COMMAND_TIMEOUT' : 'GIT_COMMAND_FAILED',
+            signal === 'SIGKILL' ? 'Git operation exceeded 30 seconds' : 'Git host rejected the repository operation'
+          )
+        );
+      });
+    });
+  }
+
   private async resolveGitRepository(
     user: User,
     provider: 'github' | 'git',
@@ -2938,9 +3545,11 @@ export class IntegrationsService {
       throw new AppError(403, 'REPOSITORY_HOST_MISMATCH', 'Repository host does not match the connector host');
     }
     const allowlist = await this.listAllowlistRows(connector.id);
-    const allowed = allowlist.some(
-      (entry) => entry.entryType === 'project' && this.normalizeRepositoryUrl(entry.fullPath) === repositoryUrl
-    );
+    const allowed =
+      connector.allowlistMode === 'all_visible' ||
+      allowlist.some(
+        (entry) => entry.entryType === 'project' && this.normalizeRepositoryUrl(entry.fullPath) === repositoryUrl
+      );
     if (!allowed) {
       throw new AppError(403, 'REPOSITORY_NOT_ALLOWED', 'Repository is not included in this connector');
     }
@@ -3026,8 +3635,12 @@ export class IntegrationsService {
   private async validateGenericGitCredential(connector: ConnectorRow, username: string, token: string) {
     const [repository] = await this.listAllowlistRows(connector.id);
     if (!repository) throw new AppError(400, 'GIT_REPOSITORY_REQUIRED', 'Connector has no repository to validate');
-    const repositoryUrl = this.normalizeRepositoryUrl(repository.fullPath);
-    if (new URL(repositoryUrl).host !== new URL(connector.baseUrl).host) {
+    await this.validateGenericGitAccess(connector.baseUrl, repository.fullPath, username, token);
+  }
+
+  private async validateGenericGitAccess(baseUrl: string, repository: string, username: string, token: string) {
+    const repositoryUrl = this.normalizeRepositoryUrl(repository);
+    if (new URL(repositoryUrl).host !== new URL(baseUrl).host) {
       throw new AppError(403, 'REPOSITORY_HOST_MISMATCH', 'Repository host does not match the connector host');
     }
     const url = new URL(repositoryUrl);

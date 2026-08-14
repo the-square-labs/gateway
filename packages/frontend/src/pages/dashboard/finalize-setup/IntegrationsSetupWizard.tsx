@@ -1,15 +1,17 @@
 import { Check, Cloud, GitBranch, Github, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { EditableStringList } from "@/components/common/EditableStringList";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { GitHubDeviceFlow } from "@/pages/settings/GitHubDeviceFlow";
 import { api } from "@/services/api";
 import type { FinalizeSetupState, FinalizeSetupStepStatus } from "@/types";
-import type { GitConnectorMode, GitConnectorProvider } from "@/types/integrations";
+import type { GitConnectorProvider } from "@/types/integrations";
 import { FinalizeSetupCompletion } from "./FinalizeSetupCompletion";
 import { FinalizeSetupWizardDialog } from "./FinalizeSetupWizardDialog";
 
@@ -28,7 +30,6 @@ export interface ConnectorSetupRequest {
   connector: ConnectorSetupKind;
   baseUrl?: string;
   repositoryUrl?: string;
-  repositoryMode?: GitConnectorMode;
 }
 
 const INTEGRATION_OPTIONS = [
@@ -114,11 +115,8 @@ function statusLabel(status: FinalizeSetupStepStatus | undefined) {
   return "Optional";
 }
 
-function repositoryEntries(value: string) {
-  return value
-    .split(/[\n,]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+function repositoryEntries(values: string[]) {
+  return values.map((item) => item.trim()).filter(Boolean);
 }
 
 export function IntegrationsSetupWizard({
@@ -149,15 +147,12 @@ export function IntegrationsSetupWizard({
   const [gitlabToken, setGitlabToken] = useState("");
   const [githubName, setGithubName] = useState("GitHub");
   const [githubUrl, setGithubUrl] = useState("https://github.com");
-  const [githubRepositoryUrls, setGithubRepositoryUrls] = useState("");
-  const [githubUsername, setGithubUsername] = useState("");
   const [githubToken, setGithubToken] = useState("");
   const [githubOAuthAvailable, setGithubOAuthAvailable] = useState(false);
   const [githubAuthMode, setGithubAuthMode] = useState<"oauth" | "token">("token");
   const [gitName, setGitName] = useState("Git");
   const [gitUrl, setGitUrl] = useState("");
-  const [gitRepositoryUrls, setGitRepositoryUrls] = useState("");
-  const [gitRepositoryMode, setGitRepositoryMode] = useState<GitConnectorMode>("single_repository");
+  const [gitRepositoryUrls, setGitRepositoryUrls] = useState<string[]>([""]);
   const [gitUsername, setGitUsername] = useState("");
   const [gitToken, setGitToken] = useState("");
   const [saving, setSaving] = useState(false);
@@ -177,24 +172,15 @@ export function IntegrationsSetupWizard({
     setGitlabToken("");
     setGithubName("GitHub");
     setGithubUrl(directSetup?.baseUrl ?? "https://github.com");
-    setGithubRepositoryUrls(directSetup?.repositoryUrl ?? "");
-    setGithubUsername("");
     setGithubToken("");
     setGitName("Git");
     setGitUrl(directSetup?.baseUrl ?? "");
-    setGitRepositoryUrls(directSetup?.repositoryUrl ?? "");
-    setGitRepositoryMode(directSetup?.repositoryMode ?? "single_repository");
+    setGitRepositoryUrls([directSetup?.repositoryUrl ?? ""]);
     setGitUsername("");
     setGitToken("");
     setSaving(false);
     setConfiguredOptionalConnectors(new Set());
-  }, [
-    directSetup?.baseUrl,
-    directSetup?.connector,
-    directSetup?.repositoryMode,
-    directSetup?.repositoryUrl,
-    open,
-  ]);
+  }, [directSetup?.baseUrl, directSetup?.connector, directSetup?.repositoryUrl, open]);
 
   useEffect(() => {
     if (!open || (directSetup?.connector !== "github" && screen !== "github")) return;
@@ -267,39 +253,35 @@ export function IntegrationsSetupWizard({
     const name = isGithub ? githubName : gitName;
     const baseUrl = isGithub ? githubUrl : gitUrl;
     const token = isGithub ? githubToken : gitToken;
-    const username = isGithub ? githubUsername : gitUsername;
-    const mode = isGithub ? "single_repository" : gitRepositoryMode;
-    const urls = repositoryEntries(isGithub ? githubRepositoryUrls : gitRepositoryUrls);
-    if (
-      !name.trim() ||
-      !baseUrl.trim() ||
-      !token.trim() ||
-      urls.length === 0 ||
-      (!isGithub && !username.trim())
-    )
-      return;
+    const urls = repositoryEntries(gitRepositoryUrls);
+    if (!name.trim() || !baseUrl.trim() || !token.trim()) return;
+    if (!isGithub && (!gitUsername.trim() || urls.length === 0)) return;
 
     setSaving(true);
     try {
-      await api.createGitConnector(provider, {
-        name: name.trim(),
-        baseUrl: baseUrl.trim().replace(/\/$/, ""),
-        enabled: true,
-        username: username.trim() || undefined,
-        token: token.trim(),
-        repositoryMode: mode,
-        repositoryUrl: mode === "single_repository" ? urls[0] : undefined,
-        allowlistEntries:
-          mode === "multi_repository"
-            ? urls.map((url) => ({
-                entryType: "project",
-                remoteId: url,
-                fullPath: url,
-                name: url,
-                webUrl: url,
-              }))
-            : undefined,
-      });
+      if (isGithub) {
+        await api.createGitConnector("github", {
+          name: name.trim(),
+          baseUrl: baseUrl.trim().replace(/\/$/, ""),
+          enabled: true,
+          token: token.trim(),
+        });
+      } else {
+        await api.createGitConnector("git", {
+          name: name.trim(),
+          baseUrl: baseUrl.trim().replace(/\/$/, ""),
+          enabled: true,
+          username: gitUsername.trim(),
+          token: token.trim(),
+          allowlistEntries: urls.map((url) => ({
+            entryType: "project",
+            remoteId: url,
+            fullPath: url,
+            name: url,
+            webUrl: url,
+          })),
+        });
+      }
       setConfiguredOptionalConnectors((current) => new Set(current).add(provider));
       setScreen(completionScreen(provider));
     } catch (cause) {
@@ -391,12 +373,9 @@ export function IntegrationsSetupWizard({
       <GitHubDeviceFlow
         request={{
           name: githubName.trim(),
-          baseUrl: githubUrl.trim(),
           enabled: true,
-          repositoryMode: "single_repository",
-          repositoryUrl: githubRepositoryUrls.trim(),
         }}
-        disabled={!githubName.trim() || !githubUrl.trim() || !githubRepositoryUrls.trim()}
+        disabled={!githubName.trim()}
         onCompleted={() => {
           setConfiguredOptionalConnectors((current) => new Set(current).add("github"));
           setScreen(completionScreen("github"));
@@ -405,13 +384,7 @@ export function IntegrationsSetupWizard({
     ) : screen === "github" ? (
       <Button
         onClick={() => void saveGitConnector("github")}
-        disabled={
-          saving ||
-          !githubName.trim() ||
-          !githubUrl.trim() ||
-          !githubRepositoryUrls.trim() ||
-          !githubToken.trim()
-        }
+        disabled={saving || !githubName.trim() || !githubUrl.trim() || !githubToken.trim()}
       >
         {saving ? <Loader2 className="animate-spin" /> : <Github />}
         Save GitHub
@@ -423,7 +396,7 @@ export function IntegrationsSetupWizard({
           saving ||
           !gitName.trim() ||
           !gitUrl.trim() ||
-          !gitRepositoryUrls.trim() ||
+          !gitRepositoryUrls.some((url) => url.trim()) ||
           !gitUsername.trim() ||
           !gitToken.trim()
         }
@@ -512,7 +485,8 @@ export function IntegrationsSetupWizard({
               : "Continue from Settings → Integrations → GitHub to manage this connector."
           }
         >
-          Gateway can now use the selected GitHub repository for source and deployment workflows.
+          Gateway can now use repositories visible to the authorized GitHub account for source and
+          deployment workflows.
         </FinalizeSetupCompletion>
       ) : screen === "git_complete" ? (
         <FinalizeSetupCompletion
@@ -638,8 +612,10 @@ export function IntegrationsSetupWizard({
           title={screen === "github" ? "GitHub connector" : "Git connector"}
           description={
             screen === "github"
-              ? "Connect the GitHub repository this workflow needs."
-              : "Connect one repository or an explicit repository allowlist."
+              ? githubAuthMode === "oauth"
+                ? "Connect your GitHub account. Gateway can use repositories available to the authorized account."
+                : "Connect a GitHub account with a personal access token."
+              : "Connect one or more repositories on a generic Git host."
           }
         >
           {screen === "github" ? (
@@ -651,25 +627,20 @@ export function IntegrationsSetupWizard({
                   : "OAuth is not configured on this Gateway; use a personal access token."
               }
             >
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={githubAuthMode === "oauth" ? "default" : "outline"}
-                  disabled={!githubOAuthAvailable}
-                  onClick={() => setGithubAuthMode("oauth")}
-                >
-                  {githubOAuthAvailable ? "OAuth" : "OAuth unavailable"}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={githubAuthMode === "token" ? "default" : "outline"}
-                  onClick={() => setGithubAuthMode("token")}
-                >
-                  Token
-                </Button>
-              </div>
+              <Tabs
+                value={githubAuthMode}
+                onValueChange={(value) => setGithubAuthMode(value as "oauth" | "token")}
+                className="w-full"
+              >
+                <TabsList className="w-full">
+                  <TabsTrigger value="oauth" disabled={!githubOAuthAvailable} className="flex-1">
+                    {githubOAuthAvailable ? "OAuth" : "OAuth unavailable"}
+                  </TabsTrigger>
+                  <TabsTrigger value="token" className="flex-1">
+                    Token
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
             </SettingsControlRow>
           ) : null}
           <SettingsControlRow
@@ -685,85 +656,44 @@ export function IntegrationsSetupWizard({
               autoFocus
             />
           </SettingsControlRow>
-          <SettingsControlRow
-            title={screen === "github" ? "GitHub URL" : "Git host URL"}
-            description={
-              screen === "github"
-                ? "Use github.com or the base URL of your GitHub Enterprise instance."
-                : "The base URL of the Git host that serves this repository."
-            }
-          >
-            <Input
-              value={screen === "github" ? githubUrl : gitUrl}
-              onChange={(event) => {
-                if (screen === "github") setGithubUrl(event.target.value);
-                else setGitUrl(event.target.value);
-              }}
-              placeholder={screen === "github" ? "https://github.com" : "https://git.example.com"}
-            />
-          </SettingsControlRow>
-          {screen === "git" ? (
+          {screen === "git" || githubAuthMode === "token" ? (
             <SettingsControlRow
-              title="Repository scope"
-              description="Choose whether this connector is limited to one repository or an explicit allowlist."
+              title={screen === "github" ? "GitHub URL" : "Git host URL"}
+              description={
+                screen === "github"
+                  ? "Use github.com or the base URL of your GitHub Enterprise instance."
+                  : "The base URL of the Git host that serves this repository."
+              }
             >
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={gitRepositoryMode === "single_repository" ? "default" : "outline"}
-                  onClick={() => setGitRepositoryMode("single_repository")}
-                >
-                  One repository
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={gitRepositoryMode === "multi_repository" ? "default" : "outline"}
-                  onClick={() => setGitRepositoryMode("multi_repository")}
-                >
-                  Repository allowlist
-                </Button>
-              </div>
+              <Input
+                value={screen === "github" ? githubUrl : gitUrl}
+                onChange={(event) => {
+                  if (screen === "github") setGithubUrl(event.target.value);
+                  else setGitUrl(event.target.value);
+                }}
+                placeholder={screen === "github" ? "https://github.com" : "https://git.example.com"}
+              />
             </SettingsControlRow>
           ) : null}
-          <SettingsControlRow
-            title={
-              screen === "git" && gitRepositoryMode === "multi_repository"
-                ? "Repository URLs"
-                : "Repository URL"
-            }
-            description={
-              screen === "git" && gitRepositoryMode === "multi_repository"
-                ? "Separate allowed repository URLs with commas or new lines."
-                : "The repository this connector should make available to Gateway."
-            }
-          >
-            <Input
-              value={screen === "github" ? githubRepositoryUrls : gitRepositoryUrls}
-              onChange={(event) => {
-                if (screen === "github") setGithubRepositoryUrls(event.target.value);
-                else setGitRepositoryUrls(event.target.value);
-              }}
-              placeholder={
-                screen === "git" && gitRepositoryMode === "multi_repository"
-                  ? "https://git.example.com/team/api, https://git.example.com/team/web"
-                  : "https://github.com/organization/repository"
-              }
-            />
-          </SettingsControlRow>
-          {screen === "git" || githubAuthMode === "token" ? (
+          {screen === "git" ? (
+            <SettingsControlRow
+              title="Repositories"
+              description="Add every repository this credential should make available to Gateway."
+            >
+              <EditableStringList
+                values={gitRepositoryUrls}
+                onChange={setGitRepositoryUrls}
+                placeholder="https://git.example.com/team/repository"
+                itemLabel="Repository URL"
+              />
+            </SettingsControlRow>
+          ) : null}
+          {screen === "git" ? (
             <>
-              <SettingsControlRow
-                title="Username"
-                description={screen === "github" ? "Optional for GitHub tokens." : undefined}
-              >
+              <SettingsControlRow title="Username">
                 <Input
-                  value={screen === "github" ? githubUsername : gitUsername}
-                  onChange={(event) => {
-                    if (screen === "github") setGithubUsername(event.target.value);
-                    else setGitUsername(event.target.value);
-                  }}
+                  value={gitUsername}
+                  onChange={(event) => setGitUsername(event.target.value)}
                   autoComplete="username"
                 />
               </SettingsControlRow>
@@ -773,15 +703,25 @@ export function IntegrationsSetupWizard({
               >
                 <Input
                   type="password"
-                  value={screen === "github" ? githubToken : gitToken}
-                  onChange={(event) => {
-                    if (screen === "github") setGithubToken(event.target.value);
-                    else setGitToken(event.target.value);
-                  }}
+                  value={gitToken}
+                  onChange={(event) => setGitToken(event.target.value)}
                   autoComplete="off"
                 />
               </SettingsControlRow>
             </>
+          ) : null}
+          {screen === "github" && githubAuthMode === "token" ? (
+            <SettingsControlRow
+              title="Personal access token"
+              description="Gateway encrypts this token and uses repositories visible to its GitHub account."
+            >
+              <Input
+                type="password"
+                value={githubToken}
+                onChange={(event) => setGithubToken(event.target.value)}
+                autoComplete="off"
+              />
+            </SettingsControlRow>
           ) : null}
         </PanelShell>
       )}

@@ -54,6 +54,7 @@ describe('AISettingsService provider selection', () => {
       providerType: 'openai_compatible',
       gatewayInferenceModel: '',
       gatewayInferenceAllowUserModelSelection: true,
+      allowUserReasoningEffortSelection: false,
     });
   });
 

@@ -34,7 +34,7 @@ export const SSH_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'create_ssh_connector',
     description:
-      'Create an external SSH connector only when every required field and the one-time credential are already known. Otherwise use open_connector_setup with connector ssh.',
+      'Create a password-authenticated external SSH connector only when every required field and the confirmed host fingerprint are already known. For generated-key setup or host-key discovery, use open_connector_setup with connector ssh.',
     parameters: {
       type: 'object',
       properties: {
@@ -42,13 +42,14 @@ export const SSH_AI_TOOLS: AIToolDefinition[] = [
         host: { type: 'string' },
         port: { type: 'number' },
         username: { type: 'string' },
-        authMethod: { type: 'string', enum: ['password', 'private_key'] },
-        secret: { type: 'string', description: 'Password or PEM private key.' },
-        passphrase: { type: 'string' },
-        hostFingerprint: { type: 'string', description: 'Pinned SHA256 host key fingerprint.' },
+        secret: { type: 'string', description: 'SSH account password.' },
+        hostFingerprint: {
+          type: 'string',
+          description: 'Pinned SHA256 host key fingerprint explicitly confirmed by the user.',
+        },
         jumpConnectorId: { type: 'string' },
       },
-      required: ['name', 'host', 'username', 'authMethod', 'secret', 'hostFingerprint'],
+      required: ['name', 'host', 'username', 'secret', 'hostFingerprint'],
     },
     destructive: true,
     category: 'External SSH',

@@ -442,7 +442,9 @@ export async function initializeContainer(): Promise<void> {
   const integrationsService = new IntegrationsService(db, auditService, cryptoService, [gitLabProvider]);
   integrationsService.setEventBus(eventBus);
   container.registerInstance(IntegrationsService, integrationsService);
-  container.registerInstance(ExternalSshService, new ExternalSshService(db, cryptoService));
+  const externalSshService = new ExternalSshService(db, cryptoService);
+  externalSshService.setEventBus(eventBus);
+  container.registerInstance(ExternalSshService, externalSshService);
 
   const alertService = new AlertService(db);
   container.registerInstance(AlertService, alertService);
@@ -1364,6 +1366,8 @@ export async function initializeContainer(): Promise<void> {
   const siemDeliveryJob = new SiemDeliveryJob(siemDeliveryService, generalSettingsService);
   scheduler.registerInterval('siem-delivery', 30000, () => siemDeliveryJob.run());
   scheduler.registerInterval('gitlab-integration-sync', 60000, () => integrationsService.runDueGitLabSyncs());
+  scheduler.registerInterval('github-integration-health', 60000, () => integrationsService.runDueGitHubHealthChecks());
+  scheduler.registerInterval('ssh-integration-health', 60000, () => externalSshService.runDueHealthChecks());
   scheduler.registerInterval('cloudflare-integration-sync', 60000, () => integrationsService.runDueCloudflareSyncs());
 
   setTimeout(() => {

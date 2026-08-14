@@ -83,26 +83,38 @@ const GitConnectorRepositoryFieldsSchema = z.object({
   baseUrl: z.string().trim().url().max(2048),
   enabled: z.boolean().default(true),
   username: z.string().trim().min(1).max(255).optional(),
-  repositoryMode: GitConnectorModeSchema,
-  repositoryUrl: z.string().trim().url().max(2048).optional(),
-  allowlistEntries: z.array(GitLabAllowlistEntrySchema).max(1000).optional(),
+  allowlistEntries: z.array(GitLabAllowlistEntrySchema).min(1).max(1000),
 });
-
-function requireSingleRepositoryUrl(
-  value: { repositoryMode: z.infer<typeof GitConnectorModeSchema>; repositoryUrl?: string },
-  context: z.RefinementCtx
-) {
-  if (value.repositoryMode === 'single_repository' && !value.repositoryUrl) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'repositoryUrl is required for a single repository' });
-  }
-}
 
 export const GitConnectorCreateSchema = GitConnectorRepositoryFieldsSchema.extend({
   authMode: z.literal('token').default('token'),
   token: z.string().min(1).max(4096),
-}).superRefine(requireSingleRepositoryUrl);
+});
 
-export const GitHubOAuthStartSchema = GitConnectorRepositoryFieldsSchema.superRefine(requireSingleRepositoryUrl);
+export const GitHubConnectorCreateSchema = z.object({
+  name: z.string().trim().min(1).max(255),
+  baseUrl: z.string().trim().url().max(2048),
+  enabled: z.boolean().default(true),
+  authMode: z.literal('token').default('token'),
+  token: z.string().min(1).max(4096),
+});
+
+export const GitHubConnectorPreviewTestSchema = z.object({
+  baseUrl: z.string().trim().url().max(2048),
+  token: z.string().min(1).max(4096),
+});
+
+export const GitConnectorPreviewTestSchema = z.object({
+  baseUrl: z.string().trim().url().max(2048),
+  repositoryUrl: z.string().trim().url().max(2048),
+  username: z.string().trim().min(1).max(255),
+  token: z.string().min(1).max(4096),
+});
+
+export const GitHubOAuthStartSchema = z.object({
+  name: z.string().trim().min(1).max(255),
+  enabled: z.boolean().default(true),
+});
 
 export const GitConnectorUpdateSchema = z.object({
   name: z.string().trim().min(1).max(255).optional(),
@@ -110,9 +122,7 @@ export const GitConnectorUpdateSchema = z.object({
   enabled: z.boolean().optional(),
   username: z.string().trim().min(1).max(255).nullable().optional(),
   token: z.string().min(1).max(4096).optional(),
-  repositoryMode: GitConnectorModeSchema.optional(),
-  repositoryUrl: z.string().trim().url().max(2048).optional(),
-  allowlistEntries: z.array(GitLabAllowlistEntrySchema).max(1000).optional(),
+  allowlistEntries: z.array(GitLabAllowlistEntrySchema).min(1).max(1000).optional(),
 });
 
 export const CloudflareConnectorSettingsSchema = z.object({
@@ -157,6 +167,9 @@ export type GitLabAllowlistEntryInput = z.infer<typeof GitLabAllowlistEntrySchem
 export type GitLabAllowlistPreviewSearchInput = z.infer<typeof GitLabAllowlistPreviewSearchSchema>;
 export type GitLabConnectorPreviewTestInput = z.infer<typeof GitLabConnectorPreviewTestSchema>;
 export type GitConnectorCreateInput = z.infer<typeof GitConnectorCreateSchema>;
+export type GitHubConnectorCreateInput = z.infer<typeof GitHubConnectorCreateSchema>;
+export type GitHubConnectorPreviewTestInput = z.infer<typeof GitHubConnectorPreviewTestSchema>;
+export type GitConnectorPreviewTestInput = z.infer<typeof GitConnectorPreviewTestSchema>;
 export type GitConnectorUpdateInput = z.infer<typeof GitConnectorUpdateSchema>;
 export type GitHubOAuthStartInput = z.infer<typeof GitHubOAuthStartSchema>;
 export type CloudflareConnectorCreateInput = z.infer<typeof CloudflareConnectorCreateSchema>;

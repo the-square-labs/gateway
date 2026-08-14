@@ -53,7 +53,7 @@ RUN pnpm --filter backend build
 # ── Production image ────────────────────────────────────────────────
 FROM ${NODE_IMAGE} AS production
 
-RUN apk add --no-cache nginx && \
+RUN apk add --no-cache git nginx && \
     mkdir -p /var/lib/gateway/tls /var/lib/gateway/sandbox-workspaces && \
     corepack enable && \
     corepack prepare pnpm@9.15.0 --activate

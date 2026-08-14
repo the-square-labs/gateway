@@ -26,6 +26,7 @@ const CONFIG: AIConfig = {
   model: 'preserved-oai-model',
   gatewayInferenceModel: 'gateway-default',
   gatewayInferenceAllowUserModelSelection: true,
+  allowUserReasoningEffortSelection: false,
   maxCompletionTokens: 8192,
   maxTokensField: 'max_completion_tokens',
   reasoningEffort: 'none',
@@ -77,7 +78,10 @@ function createService(config: AIConfig = CONFIG, runtimeConfigured = true, arti
   });
   const inferencePolicies = { effective: vi.fn().mockResolvedValue({ enabled: true }) };
   const service = new AIProviderRuntimeService(
-    { getConfig: vi.fn().mockResolvedValue(config) } as never,
+    {
+      getConfig: vi.fn().mockResolvedValue(config),
+      isEnabled: vi.fn().mockResolvedValue(config.enabled),
+    } as never,
     { isFeatureEnabled: vi.fn().mockResolvedValue(true) } as never,
     {
       listForUser: vi.fn().mockResolvedValue({ object: 'list', data: MODELS }),
@@ -91,6 +95,22 @@ function createService(config: AIConfig = CONFIG, runtimeConfigured = true, arti
 }
 
 describe('AIProviderRuntimeService', () => {
+  it('exposes direct-provider reasoning choices only when the admin allows user selection', async () => {
+    const { service } = createService({
+      ...CONFIG,
+      providerType: 'openai_compatible',
+      allowUserReasoningEffortSelection: true,
+    });
+
+    await expect(service.statusForUser(USER)).resolves.toMatchObject({
+      providerType: 'openai_compatible',
+      allowUserModelSelection: false,
+      allowUserReasoningEffortSelection: true,
+      reasoningEfforts: ['default', 'low', 'medium', 'high'],
+      defaultReasoningEffort: 'default',
+    });
+  });
+
   it('uses a user-selected accessible Gateway Inference model and its limits', async () => {
     const { service, execute } = createService();
     const session = await service.resolveSession(USER, {
@@ -315,6 +335,66 @@ describe('AIProviderRuntimeService', () => {
     expect(session.config.model).toBe('preserved-oai-model');
     expect(session.config.reasoningEffort).toBe('none');
     expect(session.reasoningEffort).toBeNull();
+  });
+
+  it('applies a user reasoning override only when direct-provider selection is enabled', async () => {
+    const directConfig: AIConfig = {
+      ...CONFIG,
+      providerType: 'openai_compatible',
+      reasoningEffort: 'low',
+      allowUserReasoningEffortSelection: true,
+    };
+    const service = new AIProviderRuntimeService(
+      {
+        getConfig: vi.fn().mockResolvedValue(directConfig),
+        getDecryptedApiKey: vi.fn().mockResolvedValue('test-key'),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never
+    );
+
+    const overridden = await service.resolveSession(USER, {
+      requestId: 'direct-high',
+      requestedReasoningEffort: 'high',
+      signal: new AbortController().signal,
+    });
+    const usingDefault = await service.resolveSession(USER, {
+      requestId: 'direct-default',
+      requestedReasoningEffort: 'default',
+      signal: new AbortController().signal,
+    });
+
+    expect(overridden.config.reasoningEffort).toBe('high');
+    expect(overridden.reasoningEffort).toBe('high');
+    expect(usingDefault.config.reasoningEffort).toBe('low');
+  });
+
+  it('rejects a direct-provider reasoning override when user selection is disabled', async () => {
+    const directConfig: AIConfig = {
+      ...CONFIG,
+      providerType: 'openai_compatible',
+      allowUserReasoningEffortSelection: false,
+    };
+    const service = new AIProviderRuntimeService(
+      {
+        getConfig: vi.fn().mockResolvedValue(directConfig),
+        getDecryptedApiKey: vi.fn().mockResolvedValue('test-key'),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never
+    );
+
+    await expect(
+      service.resolveSession(USER, {
+        requestId: 'direct-high',
+        requestedReasoningEffort: 'high',
+        signal: new AbortController().signal,
+      })
+    ).rejects.toMatchObject({ code: 'AI_REASONING_EFFORT_SELECTION_DISABLED' });
   });
 
   it('normalizes model-generated conversation titles', () => {

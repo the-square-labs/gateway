@@ -653,7 +653,7 @@ describe("AI backend runtime store", () => {
     });
   });
 
-  it("sends the selected model only for Gateway Inference", async () => {
+  it("sends only the provider selections enabled by the active provider", async () => {
     const socket = await connectAI();
     const models = [
       {
@@ -704,6 +704,9 @@ describe("AI backend runtime store", () => {
       providerType: "openai_compatible",
       defaultModel: "oai-model",
       allowUserModelSelection: false,
+      allowUserReasoningEffortSelection: false,
+      reasoningEfforts: ["default", "low", "medium", "high"],
+      defaultReasoningEffort: "default",
       supportsImages: false,
       models: [],
     });
@@ -713,6 +716,27 @@ describe("AI backend runtime store", () => {
     const oaiPayload = sentPayloads(socket).find((payload) => payload.content === "use oai");
     expect(oaiPayload).not.toHaveProperty("model");
     expect(oaiPayload).not.toHaveProperty("reasoningEffort");
+
+    useAIStore.getState().setProviderStatus({
+      enabled: true,
+      providerType: "openai_compatible",
+      defaultModel: "oai-model",
+      allowUserModelSelection: false,
+      allowUserReasoningEffortSelection: true,
+      reasoningEfforts: ["default", "low", "medium", "high"],
+      defaultReasoningEffort: "default",
+      supportsImages: false,
+      models: [],
+    });
+    await useAIStore.getState().setSelectedReasoningEffort("high");
+    useAIStore.setState({ isStreaming: false });
+    useAIStore.getState().sendMessage("use oai reasoning");
+
+    const oaiReasoningPayload = sentPayloads(socket).find(
+      (payload) => payload.content === "use oai reasoning"
+    );
+    expect(oaiReasoningPayload).not.toHaveProperty("model");
+    expect(oaiReasoningPayload).toMatchObject({ reasoningEffort: "high" });
   });
 
   it("reports context usage with server-estimated prompt and tool overhead", async () => {

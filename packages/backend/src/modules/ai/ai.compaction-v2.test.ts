@@ -30,6 +30,7 @@ const CONFIG: AIConfig = {
   model: 'gpt-test',
   gatewayInferenceModel: '',
   gatewayInferenceAllowUserModelSelection: false,
+  allowUserReasoningEffortSelection: false,
   maxCompletionTokens: 8_000,
   maxTokensField: 'max_completion_tokens',
   reasoningEffort: 'none',

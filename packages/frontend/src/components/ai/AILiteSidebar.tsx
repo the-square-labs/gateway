@@ -25,7 +25,6 @@ import {
   FolderOpen,
   LayoutDashboard,
   Loader2,
-  Lock,
   MessageSquare,
   MoreHorizontal,
   PanelLeft,
@@ -87,6 +86,7 @@ import { useDockerStore } from "@/stores/docker";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
+import { AIConversationStatusIndicator } from "./AIConversationStatusIndicator";
 import { AIProgressRing } from "./AIProgressRing";
 
 const EXPANDED_PROJECT_IDS_STORAGE_KEY = "gateway-ai-lite-expanded-project-ids";
@@ -523,7 +523,7 @@ export function AILiteSidebar({
                           aria-label={conversation.title}
                           onClick={() => void handleLoadConversation(conversation.id)}
                         >
-                          <ConversationStatusIndicator conversation={conversation} />
+                          <AIConversationStatusIndicator conversation={conversation} />
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent side="right">{conversation.title}</TooltipContent>
@@ -1333,7 +1333,7 @@ function ConversationDragOverlayItem({
       style={{ width }}
       className="flex max-w-[calc(100vw-2rem)] items-center gap-3 overflow-hidden whitespace-nowrap border border-sidebar-border bg-sidebar-background px-3 py-2 text-sm font-medium text-sidebar-foreground shadow-lg"
     >
-      <ConversationStatusIndicator conversation={conversation} />
+      <AIConversationStatusIndicator conversation={conversation} />
       <span className="min-w-0 flex-1 truncate">{conversation.title}</span>
     </div>
   );
@@ -1403,7 +1403,7 @@ function ConversationMenuItem({
         className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden px-3 py-2 pr-1 text-left text-sm"
         onClick={onLoad}
       >
-        <ConversationStatusIndicator conversation={conversation} />
+        <AIConversationStatusIndicator conversation={conversation} />
         <span className="min-w-0 flex-1 truncate">{conversation.title}</span>
       </button>
       <motion.div
@@ -1464,52 +1464,6 @@ function ConversationMenuItem({
         </AnimatePresence>
       </motion.div>
     </div>
-  );
-}
-
-function getConversationStatusIcon(conversation: AIConversationSummary) {
-  switch (conversation.activeRunStatus) {
-    case "waiting_for_approval":
-    case "waiting_for_answer":
-    case "waiting_for_credential":
-    case "waiting_for_setup":
-      return CircleAlert;
-    default:
-      if (conversation.planStatus === "awaiting_decision" || conversation.planStatus === "paused") {
-        return CircleAlert;
-      }
-      return conversation.status === "active" ? MessageSquare : Lock;
-  }
-}
-
-export function isConversationProgressActive(conversation: AIConversationSummary) {
-  return (
-    conversation.activeRunStatus === "queued" ||
-    conversation.activeRunStatus === "running" ||
-    conversation.planStatus === "executing" ||
-    conversation.planStatus === "verifying"
-  );
-}
-
-function ConversationStatusIndicator({ conversation }: { conversation: AIConversationSummary }) {
-  if (isConversationProgressActive(conversation)) {
-    return <AIProgressRing ariaLabel={`${conversation.title} in progress`} />;
-  }
-  const StatusIcon = getConversationStatusIcon(conversation);
-  return <StatusIcon className={getConversationStatusIconClassName(conversation)} />;
-}
-
-function getConversationStatusIconClassName(conversation: AIConversationSummary) {
-  return cn(
-    "h-4 w-4 shrink-0",
-    conversation.activeRunStatus === "waiting_for_approval" ||
-      conversation.activeRunStatus === "waiting_for_answer" ||
-      conversation.activeRunStatus === "waiting_for_credential" ||
-      conversation.activeRunStatus === "waiting_for_setup"
-      ? "text-warning-foreground"
-      : conversation.planStatus === "awaiting_decision" || conversation.planStatus === "paused"
-        ? "text-warning-foreground"
-        : ""
   );
 }
 

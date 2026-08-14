@@ -8,6 +8,7 @@ import { NODE_FILE_AI_TOOLS } from './ai.tools.node-files.js';
 import { NOTIFICATION_AI_TOOLS, WEB_SEARCH_AI_TOOL } from './ai.tools.notifications.js';
 import { OPERATION_AI_TOOLS } from './ai.tools.operations.js';
 import { PKI_AI_TOOLS } from './ai.tools.pki.js';
+import { RESOURCE_SETUP_AI_TOOLS } from './ai.tools.resource-setup.js';
 import { SANDBOX_AI_TOOLS } from './ai.tools.sandbox.js';
 import { SSH_AI_TOOLS } from './ai.tools.ssh.js';
 import type { AIToolDefinition } from './ai.types.js';
@@ -258,6 +259,36 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
             'Set true only with explicit category/categories to return tool details and activate that bounded working set.',
         },
       },
+    },
+    destructive: false,
+    category: 'Discovery',
+    requiredScope: 'feat:ai:use',
+    invalidateStores: [],
+    historyRetention: { mode: 'persistent_context' },
+  },
+  {
+    name: 'read_skill',
+    description:
+      'Read one available skill for inspection. Reading does not activate it; use activate_skill before applying its instructions.',
+    parameters: {
+      type: 'object',
+      properties: { skillId: { type: 'string', description: 'Exact skill id from the system-prompt skill catalog.' } },
+      required: ['skillId'],
+    },
+    destructive: false,
+    category: 'Discovery',
+    requiredScope: 'feat:ai:use',
+    invalidateStores: [],
+    historyRetention: { mode: 'persistent_context' },
+  },
+  {
+    name: 'activate_skill',
+    description:
+      'Activate one available skill until the next context compaction and return its complete instructions. Do not activate it again while that activation remains visible; base security and authorization rules always take priority.',
+    parameters: {
+      type: 'object',
+      properties: { skillId: { type: 'string', description: 'Exact skill id from the system-prompt skill catalog.' } },
+      required: ['skillId'],
     },
     destructive: false,
     category: 'Discovery',
@@ -1447,6 +1478,10 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
           type: 'boolean',
           description: 'Allow users to select another accessible Gateway Inference model.',
         },
+        allowUserReasoningEffortSelection: {
+          type: 'boolean',
+          description: 'Allow users to override the default reasoning effort for the OpenAI-compatible provider.',
+        },
         customSystemPrompt: { type: 'string', description: 'Additional system prompt instructions.' },
         rateLimitMax: { type: 'number', description: 'Maximum assistant requests per window.' },
         rateLimitWindowSeconds: { type: 'number', description: 'Rate limit window in seconds.' },
@@ -1850,7 +1885,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: 'open_connector_setup',
     description:
-      "Open the concrete add-connector flow in the user's current AI Workspace. Use only after the user has chosen a connector type for a missing prerequisite. Never open the Finalize Setup checklist for this. Use gitlab for a GitLab instance, github for a GitHub repository, git for a generic Git host, cloudflare for DNS, or ssh for an external server. Include a known host or repository only when the user already supplied it. This is a client-side setup handoff, not a blocker and not a resource mutation by itself.",
+      "Open the concrete add-connector flow in the user's current AI Workspace. Use only after the user has chosen a connector type for a missing prerequisite. Never open the Finalize Setup checklist for this. Use gitlab for a GitLab instance, github for an account-wide GitHub connection, git for a generic Git host, cloudflare for DNS, or ssh for an external server. Include a known generic Git host or repository only when the user already supplied it. This is a client-side setup handoff, not a blocker and not a resource mutation by itself.",
     parameters: {
       type: 'object',
       properties: {
@@ -1865,12 +1900,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
         },
         repositoryUrl: {
           type: 'string',
-          description: 'Optional known repository URL to prefill for GitHub or generic Git.',
-        },
-        repositoryMode: {
-          type: 'string',
-          enum: ['single_repository', 'multi_repository'],
-          description: 'Optional generic Git repository scope. Defaults to one repository.',
+          description: 'Optional known repository URL to prefill for generic Git.',
         },
         host: {
           type: 'string',
@@ -1998,6 +2028,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
 
   // ── Operations ──
   ...OPERATION_AI_TOOLS,
+  ...RESOURCE_SETUP_AI_TOOLS,
 
   // ── Sandbox ──
   ...SANDBOX_AI_TOOLS,
@@ -2015,7 +2046,12 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
 export const AI_TOOLS: AIToolDefinition[] = withAIToolPolicyMetadata(AI_TOOL_DEFINITIONS);
 
 const destructiveSet = new Set(AI_TOOLS.filter((t) => t.destructive).map((t) => t.name));
-const REQUIRED_RUNTIME_AI_TOOL_NAMES = new Set(['read_tool_output', 'search_tool_output']);
+const REQUIRED_RUNTIME_AI_TOOL_NAMES = new Set([
+  'read_tool_output',
+  'search_tool_output',
+  'read_skill',
+  'activate_skill',
+]);
 const BASE_AI_TOOL_NAMES = new Set([
   'enter_plan_mode',
   'submit_plan',
@@ -2027,6 +2063,8 @@ const BASE_AI_TOOL_NAMES = new Set([
   'finalize_plan_execution',
   'submit_plan_verification',
   'discover_tools',
+  'read_skill',
+  'activate_skill',
   'get_current_context',
   'read_tool_output',
   'search_tool_output',

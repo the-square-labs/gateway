@@ -1,6 +1,11 @@
+import { render, screen } from "@testing-library/react";
+import { createElement } from "react";
 import { describe, expect, it } from "vitest";
 import type { AIConversationSummary } from "@/services/ai-conversations";
-import { isConversationProgressActive } from "./AILiteSidebar";
+import {
+  AIConversationStatusIndicator,
+  isConversationProgressActive,
+} from "./AIConversationStatusIndicator";
 
 function conversation(overrides: Partial<AIConversationSummary> = {}): AIConversationSummary {
   return {
@@ -32,5 +37,40 @@ describe("AI Workspace conversation progress", () => {
       )
     ).toBe(true);
     expect(isConversationProgressActive(conversation({ planStatus: "executing" }))).toBe(true);
+  });
+
+  it("uses the canonical loader for active work", () => {
+    render(
+      createElement(AIConversationStatusIndicator, {
+        conversation: conversation({ activeRunStatus: "running", planStatus: "drafting" }),
+      })
+    );
+
+    expect(screen.getByRole("progressbar", { name: "Work Session in progress" })).toBeVisible();
+  });
+
+  it("uses the canonical attention icon for conversations waiting on the user", () => {
+    const { container } = render(
+      createElement(AIConversationStatusIndicator, {
+        conversation: conversation({ activeRunStatus: "waiting_for_answer" }),
+      })
+    );
+
+    expect(container.querySelector(".lucide-circle-alert")).toHaveClass("text-warning-foreground");
+  });
+
+  it("uses the canonical default and locked icons for idle conversations", () => {
+    const active = render(
+      createElement(AIConversationStatusIndicator, { conversation: conversation() })
+    );
+    expect(active.container.querySelector(".lucide-message-square")).toBeInTheDocument();
+    active.unmount();
+
+    const archived = render(
+      createElement(AIConversationStatusIndicator, {
+        conversation: conversation({ status: "ended" }),
+      })
+    );
+    expect(archived.container.querySelector(".lucide-lock")).toBeInTheDocument();
   });
 });

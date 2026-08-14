@@ -95,6 +95,19 @@ function resolveReasoningEffort(
 function resolveDraftProviderSelection(
   status: AIProviderStatus | null
 ): Pick<AIState, "selectedModel" | "selectedReasoningEffort"> {
+  if (status?.providerType === "openai_compatible") {
+    const stored = loadStoredAIReasoningEffort(status.defaultModel);
+    return {
+      selectedModel: null,
+      selectedReasoningEffort:
+        status.allowUserReasoningEffortSelection &&
+        (status.reasoningEfforts ?? []).includes(stored ?? "")
+          ? stored
+          : status.allowUserReasoningEffortSelection
+            ? (status.defaultReasoningEffort ?? null)
+            : null,
+    };
+  }
   if (status?.providerType !== "gateway_inference" || status.models.length === 0) {
     return { selectedModel: null, selectedReasoningEffort: null };
   }
@@ -107,6 +120,14 @@ function resolveDraftProviderSelection(
     selectedModel,
     selectedReasoningEffort: resolveReasoningEffort(status, selectedModel),
   };
+}
+
+function canSendSelectedReasoningEffort(status: AIProviderStatus | null): boolean {
+  return (
+    status?.providerType === "gateway_inference" ||
+    (status?.providerType === "openai_compatible" &&
+      status.allowUserReasoningEffortSelection === true)
+  );
 }
 
 interface AIContextOverheadEstimate {
@@ -1002,8 +1023,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
         ...(state.providerStatus?.providerType === "gateway_inference" && state.selectedModel
           ? { model: state.selectedModel }
           : {}),
-        ...(state.providerStatus?.providerType === "gateway_inference" &&
-        state.selectedReasoningEffort
+        ...(canSendSelectedReasoningEffort(state.providerStatus) && state.selectedReasoningEffort
           ? { reasoningEffort: state.selectedReasoningEffort }
           : {}),
         ...(state.workMode === "plan" ? { workMode: "plan" as const } : {}),
@@ -1082,8 +1102,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
         ...(state.providerStatus?.providerType === "gateway_inference" && state.selectedModel
           ? { model: state.selectedModel }
           : {}),
-        ...(state.providerStatus?.providerType === "gateway_inference" &&
-        state.selectedReasoningEffort
+        ...(canSendSelectedReasoningEffort(state.providerStatus) && state.selectedReasoningEffort
           ? { reasoningEffort: state.selectedReasoningEffort }
           : {}),
       });
@@ -1347,8 +1366,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
         ...(state.providerStatus?.providerType === "gateway_inference" && state.selectedModel
           ? { model: state.selectedModel }
           : {}),
-        ...(state.providerStatus?.providerType === "gateway_inference" &&
-        state.selectedReasoningEffort
+        ...(canSendSelectedReasoningEffort(state.providerStatus) && state.selectedReasoningEffort
           ? { reasoningEffort: state.selectedReasoningEffort }
           : {}),
       });
@@ -1907,6 +1925,25 @@ export const useAIStore = create<AIState>()((set, get) => ({
 
   setProviderStatus: (status: AIProviderStatus) => {
     set((state) => {
+      if (status.providerType === "openai_compatible") {
+        const storedReasoningEffort = loadStoredAIReasoningEffort(status.defaultModel);
+        const currentReasoningEffort = (status.reasoningEfforts ?? []).includes(
+          state.selectedReasoningEffort ?? ""
+        )
+          ? state.selectedReasoningEffort
+          : null;
+        return {
+          providerStatus: status,
+          selectedModel: null,
+          selectedReasoningEffort: status.allowUserReasoningEffortSelection
+            ? currentReasoningEffort ||
+              ((status.reasoningEfforts ?? []).includes(storedReasoningEffort ?? "")
+                ? storedReasoningEffort
+                : status.defaultReasoningEffort)
+            : null,
+          isEnabled: status.enabled,
+        };
+      }
       const selectable = status.providerType === "gateway_inference" && status.models.length > 0;
       const hasLoadedConversation =
         Boolean(state.activeConversationId) && state.messages.length > 0;
@@ -1998,6 +2035,35 @@ export const useAIStore = create<AIState>()((set, get) => ({
   setSelectedReasoningEffort: async (effort: string) => {
     const state = get();
     const { providerStatus, selectedModel } = state;
+    if (providerStatus?.providerType === "openai_compatible") {
+      if (
+        !providerStatus.allowUserReasoningEffortSelection ||
+        !(providerStatus.reasoningEfforts ?? []).includes(effort)
+      ) {
+        return;
+      }
+      storeAIReasoningEffort(providerStatus.defaultModel, effort);
+      set({ selectedReasoningEffort: effort });
+      if (!state.activeConversationId || state.messages.length === 0) return;
+      try {
+        const conversation = await updateConversationProvider(state.activeConversationId, {
+          model: providerStatus.defaultModel,
+          reasoningEffort: effort,
+        });
+        if (get().activeConversationId !== conversation.id) return;
+        set({
+          selectedModel: null,
+          selectedReasoningEffort: conversation.reasoningEffort ?? effort,
+        });
+      } catch (error) {
+        if (get().activeConversationId === state.activeConversationId) {
+          set({ selectedReasoningEffort: state.selectedReasoningEffort });
+        }
+        storeAIReasoningEffort(providerStatus.defaultModel, state.selectedReasoningEffort);
+        throw error;
+      }
+      return;
+    }
     const option = providerStatus?.models.find((model) => model.id === selectedModel);
     if (
       providerStatus?.providerType !== "gateway_inference" ||
@@ -2108,7 +2174,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
           ...(providerStatus?.providerType === "gateway_inference" && selectedModel
             ? { model: selectedModel }
             : {}),
-          ...(providerStatus?.providerType === "gateway_inference" && selectedReasoningEffort
+          ...(canSendSelectedReasoningEffort(providerStatus) && selectedReasoningEffort
             ? { reasoningEffort: selectedReasoningEffort }
             : {}),
         });
@@ -2139,7 +2205,7 @@ export const useAIStore = create<AIState>()((set, get) => ({
         lastContext ?? undefined,
         activeConversationId,
         providerStatus?.providerType === "gateway_inference" ? selectedModel : undefined,
-        providerStatus?.providerType === "gateway_inference" ? selectedReasoningEffort : undefined
+        canSendSelectedReasoningEffort(providerStatus) ? selectedReasoningEffort : undefined
       );
       set({ contextUsageDialog: usage });
       return true;

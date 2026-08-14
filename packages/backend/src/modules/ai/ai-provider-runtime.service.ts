@@ -20,6 +20,7 @@ const GATEWAY_INFERENCE_MAX_TOOL_ROUNDS = 20;
 const GATEWAY_INFERENCE_MAX_STREAM_ATTEMPTS = 2;
 const GATEWAY_INFERENCE_RETRY_MIN_DELAY_MS = 200;
 const GATEWAY_INFERENCE_RETRY_JITTER_MS = 300;
+const DIRECT_PROVIDER_REASONING_EFFORTS = ['default', 'low', 'medium', 'high'] as const;
 const RETRYABLE_GATEWAY_INFERENCE_CODES = new Set([
   'provider_request_failed',
   'provider_unavailable',
@@ -43,6 +44,9 @@ export interface AIProviderStatus {
   providerType: AIConfig['providerType'];
   defaultModel: string;
   allowUserModelSelection: boolean;
+  allowUserReasoningEffortSelection: boolean;
+  reasoningEfforts: string[];
+  defaultReasoningEffort: string | null;
   supportsImages: boolean;
   models: AIInferenceModelOption[];
 }
@@ -108,6 +112,9 @@ export class AIProviderRuntimeService {
         providerType: config.providerType,
         defaultModel: config.model,
         allowUserModelSelection: false,
+        allowUserReasoningEffortSelection: config.allowUserReasoningEffortSelection,
+        reasoningEfforts: [...DIRECT_PROVIDER_REASONING_EFFORTS],
+        defaultReasoningEffort: 'default',
         supportsImages: config.supportsImages,
         models: [],
       };
@@ -119,6 +126,9 @@ export class AIProviderRuntimeService {
         providerType: config.providerType,
         defaultModel: config.gatewayInferenceModel,
         allowUserModelSelection: config.gatewayInferenceAllowUserModelSelection,
+        allowUserReasoningEffortSelection: false,
+        reasoningEfforts: [],
+        defaultReasoningEffort: null,
         supportsImages: false,
         models: [],
       };
@@ -139,6 +149,9 @@ export class AIProviderRuntimeService {
       providerType: config.providerType,
       defaultModel: defaultAvailable ? config.gatewayInferenceModel : (models[0]?.id ?? config.gatewayInferenceModel),
       allowUserModelSelection: config.gatewayInferenceAllowUserModelSelection,
+      allowUserReasoningEffortSelection: false,
+      reasoningEfforts: [],
+      defaultReasoningEffort: null,
       supportsImages:
         models.find((model) => model.id === config.gatewayInferenceModel)?.supportsImages ??
         models[0]?.supportsImages ??
@@ -156,7 +169,29 @@ export class AIProviderRuntimeService {
       }
       const client = new OpenAI({ apiKey, baseURL: config.providerUrl || undefined });
       const contextLimits = directProviderContextLimits(config.maxContextTokens, config.maxCompletionTokens);
-      const effectiveConfig = options.preferMinimumReasoning ? { ...config, reasoningEffort: 'none' as const } : config;
+      const requestedReasoningEffort = options.requestedReasoningEffort?.trim();
+      if (requestedReasoningEffort && !config.allowUserReasoningEffortSelection) {
+        throw new AppError(403, 'AI_REASONING_EFFORT_SELECTION_DISABLED', 'Reasoning effort selection is disabled');
+      }
+      if (
+        requestedReasoningEffort &&
+        !DIRECT_PROVIDER_REASONING_EFFORTS.includes(
+          requestedReasoningEffort as (typeof DIRECT_PROVIDER_REASONING_EFFORTS)[number]
+        )
+      ) {
+        throw new AppError(
+          400,
+          'AI_REASONING_EFFORT_UNAVAILABLE',
+          'The selected reasoning effort is unavailable for this provider'
+        );
+      }
+      const effectiveReasoningEffort =
+        requestedReasoningEffort && requestedReasoningEffort !== 'default'
+          ? (requestedReasoningEffort as AIConfig['reasoningEffort'])
+          : config.reasoningEffort;
+      const effectiveConfig = options.preferMinimumReasoning
+        ? { ...config, reasoningEffort: 'none' as const }
+        : { ...config, reasoningEffort: effectiveReasoningEffort };
       return {
         config: effectiveConfig,
         contextLimits,

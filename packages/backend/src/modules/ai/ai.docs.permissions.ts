@@ -131,6 +131,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 |-------|-------------|
 | feat:ai:use | Access AI Workspace and Gateway Inference, including personal inference usage |
 | feat:ai:configure | Configure AI Workspace settings |
+| ai:skills:manage | Create, edit, enable, disable, and delete shared AI Workspace skills |
 | ai:sandbox:use | Use AI sandbox runner tools |
 | ai:sandbox:tier:medium | Allow medium sandbox resource tier |
 | ai:sandbox:tier:high | Allow high sandbox resource tier |

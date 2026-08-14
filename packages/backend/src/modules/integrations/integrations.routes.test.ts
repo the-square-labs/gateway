@@ -111,8 +111,15 @@ describe('integrations routes', () => {
         baseUrl: 'https://git.example.com',
         username: 'deploy-user',
         token: 'secret-token',
-        repositoryMode: 'single_repository',
-        repositoryUrl: 'https://git.example.com/team/app.git',
+        allowlistEntries: [
+          {
+            entryType: 'project',
+            remoteId: 'https://git.example.com/team/app.git',
+            fullPath: 'https://git.example.com/team/app.git',
+            name: 'app',
+            webUrl: 'https://git.example.com/team/app.git',
+          },
+        ],
       }),
     });
 
@@ -120,6 +127,53 @@ describe('integrations routes', () => {
     expect(createGitConnector).toHaveBeenCalledWith(
       'git',
       expect.objectContaining({ username: 'deploy-user', token: 'secret-token' }),
+      USER.id
+    );
+  });
+
+  it('previews a generic Git credential before the connector is saved', async () => {
+    const previewGitConnectorTest = vi.fn().mockResolvedValue({
+      success: true,
+      baseUrl: 'https://git.example.com',
+      capabilities: { projectsView: true, repoRead: true, repoWrite: true },
+    });
+    registerServices(['integrations:git:manage'], { previewGitConnectorTest });
+
+    const input = {
+      baseUrl: 'https://git.example.com',
+      repositoryUrl: 'https://git.example.com/team/app.git',
+      username: 'deploy-user',
+      token: 'secret-token',
+    };
+    const response = await createApp().request('/api/integrations/git/connectors/preview-test', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(input),
+    });
+
+    expect(response.status).toBe(200);
+    expect(previewGitConnectorTest).toHaveBeenCalledWith(input);
+  });
+
+  it('creates account-wide GitHub token connectors without repository scope', async () => {
+    const createGitConnector = vi.fn().mockResolvedValue({ id: 'github-1', allowlistMode: 'all_visible' });
+    registerServices(['integrations:github:manage'], { createGitConnector });
+
+    const response = await createApp().request('/api/integrations/github/connectors', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        name: 'GitHub',
+        baseUrl: 'https://github.com',
+        token: 'github-pat',
+        repositoryUrl: 'https://github.com/should/not-be-used',
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(createGitConnector).toHaveBeenCalledWith(
+      'github',
+      { name: 'GitHub', baseUrl: 'https://github.com', enabled: true, authMode: 'token', token: 'github-pat' },
       USER.id
     );
   });
@@ -138,14 +192,11 @@ describe('integrations routes', () => {
       headers: authHeaders(),
       body: JSON.stringify({
         name: 'GitHub',
-        baseUrl: 'https://github.com',
-        repositoryMode: 'single_repository',
-        repositoryUrl: 'https://github.com/acme/app',
       }),
     });
 
     expect(response.status).toBe(201);
-    expect(startGitHubOAuth).toHaveBeenCalledWith(expect.not.objectContaining({ token: expect.anything() }), USER.id);
+    expect(startGitHubOAuth).toHaveBeenCalledWith({ name: 'GitHub', enabled: true }, USER.id);
     expect(await response.json()).toMatchObject({ data: { userCode: 'ABCD-EFGH' } });
   });
 

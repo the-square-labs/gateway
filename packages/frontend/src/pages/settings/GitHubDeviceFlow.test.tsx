@@ -31,10 +31,7 @@ describe("GitHubDeviceFlow", () => {
       <GitHubDeviceFlow
         request={{
           name: "GitHub",
-          baseUrl: "https://github.com",
           enabled: true,
-          repositoryMode: "single_repository",
-          repositoryUrl: "https://github.com/acme/app",
         }}
         onCompleted={vi.fn()}
       />

@@ -12,6 +12,17 @@ export interface GitConnector {
   username: string | null;
   allowlistMode: GitLabAllowlistMode;
   capabilities: Record<string, boolean>;
+  settings?: {
+    repositoryMode: GitConnectorMode;
+    autoSyncEnabled: boolean;
+    autoSyncIntervalSeconds: number;
+  };
+  syncStatus: IntegrationSyncStatus;
+  syncLastError?: string | null;
+  syncFinishedAt?: string | null;
+  testedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
   tokenMasked?: string | null;
   hasToken: boolean;
   allowlistEntries?: GitLabAllowlistEntry[];
@@ -24,12 +35,48 @@ export interface GitConnectorRequest {
   authMode?: "token";
   username?: string;
   token: string;
-  repositoryMode: GitConnectorMode;
-  repositoryUrl?: string;
-  allowlistEntries?: GitLabAllowlistEntry[];
+  allowlistEntries: GitLabAllowlistEntry[];
 }
 
-export type GitHubOAuthStartRequest = Omit<GitConnectorRequest, "authMode" | "token" | "username">;
+export interface GitHubTokenConnectorRequest {
+  name: string;
+  baseUrl: string;
+  enabled: boolean;
+  authMode?: "token";
+  token: string;
+}
+
+export type GitConnectorCreateRequest = GitConnectorRequest | GitHubTokenConnectorRequest;
+
+export interface GitHubConnectorPreviewTestRequest {
+  baseUrl: string;
+  token: string;
+}
+
+export interface GitHubConnectorPreviewTestResult {
+  success: true;
+  baseUrl: string;
+  username: string;
+  capabilities: Record<string, boolean>;
+}
+
+export interface GitConnectorPreviewTestRequest {
+  baseUrl: string;
+  repositoryUrl: string;
+  username: string;
+  token: string;
+}
+
+export interface GitConnectorPreviewTestResult {
+  success: true;
+  baseUrl: string;
+  capabilities: Record<string, boolean>;
+}
+
+export interface GitHubOAuthStartRequest {
+  name: string;
+  enabled: boolean;
+}
 
 export interface GitHubOAuthSession {
   id: string;
@@ -64,6 +111,9 @@ export interface ExternalSshConnector {
   hostFingerprint: string;
   jumpConnectorId: string | null;
   enabled: boolean;
+  testStatus: "never" | "success" | "error";
+  testLastError: string | null;
+  testedAt: string | null;
 }
 
 export interface ExternalSshConnectorRequest {
@@ -73,11 +123,23 @@ export interface ExternalSshConnectorRequest {
   username: string;
   authMethod: "password" | "private_key";
   secret?: string;
-  passphrase?: string;
   hostFingerprint: string;
   jumpConnectorId?: string | null;
   enabled?: boolean;
   generatePrivateKey?: boolean;
+  reuseCredentialFromConnectorId?: string;
+}
+
+export interface ExternalSshHostKeyRequest {
+  host: string;
+  port?: number;
+  jumpConnectorId?: string | null;
+}
+
+export interface ExternalSshHostKeyResult {
+  host: string;
+  port: number;
+  hostFingerprint: string;
 }
 export type GitLabAllowlistMode = "selected" | "all_visible";
 export type GitLabAllowlistEntryType = "group" | "project";
