@@ -15,6 +15,9 @@ let currentKey: string | null = null;
 let inFlight: Promise<UIBootstrapShell | null> | null = null;
 let requestVersion = 0;
 let refreshQueued = false;
+let invalidationTimer: ReturnType<typeof setTimeout> | null = null;
+
+const UI_BOOTSTRAP_INVALIDATION_DEBOUNCE_MS = 250;
 
 /** Session shell data is shared by layout and routes and survives revalidation. */
 export const useUIBootstrapStore = create<UIBootstrapState>()((set, get) => ({
@@ -58,25 +61,32 @@ export const useUIBootstrapStore = create<UIBootstrapState>()((set, get) => ({
   },
   invalidate: () => {
     if (!currentKey) return;
-    const key = currentKey;
-    requestVersion += 1;
-    currentKey = null;
-    if (inFlight) {
-      refreshQueued = true;
-      void inFlight.finally(() => {
-        if (!refreshQueued || currentKey !== null) return;
-        refreshQueued = false;
-        void get().load(key);
-      });
-      return;
-    }
-    void get().load(key);
+    if (invalidationTimer) return;
+    invalidationTimer = setTimeout(() => {
+      invalidationTimer = null;
+      const key = currentKey;
+      if (!key) return;
+      requestVersion += 1;
+      currentKey = null;
+      if (inFlight) {
+        refreshQueued = true;
+        void inFlight.finally(() => {
+          if (!refreshQueued || currentKey !== null) return;
+          refreshQueued = false;
+          void get().load(key);
+        });
+        return;
+      }
+      void get().load(key);
+    }, UI_BOOTSTRAP_INVALIDATION_DEBOUNCE_MS);
   },
   clear: () => {
     requestVersion += 1;
     currentKey = null;
     inFlight = null;
     refreshQueued = false;
+    if (invalidationTimer) clearTimeout(invalidationTimer);
+    invalidationTimer = null;
     set({ snapshot: null, loading: false, error: false });
   },
 }));

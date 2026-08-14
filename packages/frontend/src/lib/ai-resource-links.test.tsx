@@ -109,6 +109,52 @@ describe("AI resource links", () => {
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
+  it("keeps a bracketed resource label inside one link without a trailing bracket", () => {
+    const bracketedReference = {
+      ...containerReference,
+      label: "Some cool name [something]",
+    };
+    const content = resourceAwareMarkdown(
+      "Open [[resource:gwr_0123456789abcdef01234567|Some cool name [something]]].",
+      [bracketedReference]
+    );
+    render(
+      <MemoryRouter>
+        <Markdown components={{ a: resourceMarkdownLinkComponent([bracketedReference]) }}>
+          {content}
+        </Markdown>
+      </MemoryRouter>
+    );
+
+    expect(
+      screen.getByRole("link", { name: "Container: Some cool name [something]" })
+    ).toHaveTextContent("Some cool name [something]");
+    expect(screen.queryByText("]", { exact: true })).not.toBeInTheDocument();
+  });
+
+  it("keeps adjacent resource markers as separate links", () => {
+    const secondReference: AIResourceReference = {
+      ...containerReference,
+      refId: "gwr_fedcba9876543210fedcba98",
+      resourceId: "container-2",
+      label: "worker",
+    };
+    const references = [containerReference, secondReference];
+    const content = resourceAwareMarkdown(
+      "[[resource:gwr_0123456789abcdef01234567|ai-e2e-restart]] [[resource:gwr_fedcba9876543210fedcba98|worker]]",
+      references
+    );
+    render(
+      <MemoryRouter>
+        <Markdown components={{ a: resourceMarkdownLinkComponent(references) }}>{content}</Markdown>
+      </MemoryRouter>
+    );
+
+    expect(screen.getAllByRole("link")).toHaveLength(2);
+    expect(screen.getByRole("link", { name: "Container: ai-e2e-restart" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Container: worker" })).toBeInTheDocument();
+  });
+
   it("routes deleted resources to their parent list", () => {
     render(
       <MemoryRouter>

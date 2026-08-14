@@ -427,6 +427,124 @@ describe('AI websocket backend runtime commands', () => {
     handlers.onClose(new Event('close'), ws as any);
   });
 
+  it('starts an image-only message when the selected model supports images', async () => {
+    const { ws, handlers } = await openAuthenticatedWs();
+    container.registerInstance(TOKENS.RedisClient, allowingRedis() as any);
+
+    const run = createRun();
+    const snapshot = createSnapshot(run);
+    const attachment = {
+      artifactId: 'artifact-1',
+      filename: 'screen.png',
+      mediaType: 'image/png',
+      sizeBytes: 123,
+      downloadUrl: '/api/ai/sandbox/artifacts/artifact-1/download',
+      kind: 'image' as const,
+    };
+    const startUserRun = vi.fn().mockResolvedValue({
+      conversationId: 'conversation-1',
+      userMessageId: 'message-1',
+      run,
+      duplicate: false,
+    });
+    const generateConversationTitle = vi.fn().mockResolvedValue('Attached screen');
+    container.registerInstance(AIProviderRuntimeService, {
+      statusForUser: vi.fn().mockResolvedValue({
+        enabled: true,
+        providerType: 'gateway_inference',
+        defaultModel: 'vision-model',
+        allowUserModelSelection: true,
+        supportsImages: true,
+        models: [{ id: 'vision-model', supportsImages: true }],
+      }),
+      generateConversationTitle,
+    } as unknown as AIProviderRuntimeService);
+    container.registerInstance(AIRunService, {
+      startUserRun,
+      getConversationSnapshot: vi.fn().mockResolvedValue(snapshot),
+      startRunExecution: vi.fn(),
+    } as unknown as AIRunService);
+
+    await handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          type: 'conversation.send_message',
+          clientCommandId: 'cmd-image',
+          content: ' ',
+          attachments: [attachment],
+          model: 'vision-model',
+        }),
+      }),
+      ws as any
+    );
+
+    expect(generateConversationTitle).toHaveBeenCalledWith(
+      USER,
+      expect.objectContaining({ content: '', attachments: [attachment], requestedModel: 'vision-model' })
+    );
+    expect(startUserRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Attached screen',
+        userMessage: { role: 'user', content: '', attachments: [attachment] },
+        model: 'vision-model',
+      })
+    );
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
+  it('rejects image attachments for a model without image capability', async () => {
+    const { ws, handlers } = await openAuthenticatedWs();
+    container.registerInstance(TOKENS.RedisClient, allowingRedis() as any);
+    const startUserRun = vi.fn();
+    container.registerInstance(AIProviderRuntimeService, {
+      statusForUser: vi.fn().mockResolvedValue({
+        enabled: true,
+        providerType: 'gateway_inference',
+        defaultModel: 'text-model',
+        allowUserModelSelection: true,
+        supportsImages: false,
+        models: [{ id: 'text-model', supportsImages: false }],
+      }),
+      generateConversationTitle: vi.fn(),
+    } as unknown as AIProviderRuntimeService);
+    container.registerInstance(AIRunService, { startUserRun } as unknown as AIRunService);
+
+    await handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          type: 'conversation.send_message',
+          clientCommandId: 'cmd-image-unsupported',
+          content: 'Describe this',
+          attachments: [
+            {
+              artifactId: 'artifact-1',
+              filename: 'screen.png',
+              mediaType: 'image/png',
+              sizeBytes: 123,
+              downloadUrl: '/api/ai/sandbox/artifacts/artifact-1/download',
+              kind: 'image',
+            },
+          ],
+          model: 'text-model',
+        }),
+      }),
+      ws as any
+    );
+
+    expect(startUserRun).not.toHaveBeenCalled();
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'command.error',
+        commandType: 'conversation.send_message',
+        clientCommandId: 'cmd-image-unsupported',
+        code: 'AI_IMAGE_INPUT_UNSUPPORTED',
+        message: 'The selected AI model does not support image attachments',
+        statusCode: 400,
+      })
+    );
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
   it('continues an interrupted conversation without creating another visible user message', async () => {
     const { ws, handlers } = await openAuthenticatedWs();
     container.registerInstance(TOKENS.RedisClient, allowingRedis() as any);

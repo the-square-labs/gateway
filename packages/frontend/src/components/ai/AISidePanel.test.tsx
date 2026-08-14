@@ -99,6 +99,7 @@ describe("AISidePanel autoscroll", () => {
         activeRunId: null,
         activePlan: null,
         plans: [],
+        dismissedPlanDecisionKey: null,
         workMode: "normal",
         connectionError: null,
         canContinueConversation: false,
@@ -189,6 +190,79 @@ describe("AISidePanel autoscroll", () => {
     });
 
     await waitFor(() => expect(log.scrollTop).toBe(300));
+  });
+
+  it("unpins on a small intentional upward scroll even inside the bottom threshold", async () => {
+    act(() => {
+      useAIStore.setState({
+        messages: [assistantMessage()],
+        isConnected: true,
+        isStreaming: true,
+        retryAfter: null,
+      });
+      useUIStore.setState({ aiPanelOpen: true });
+    });
+
+    renderAISidePanel();
+
+    const log = screen.getByRole("log", { name: "AI messages" });
+    setScrollMetrics(log, 1000, 400);
+    log.scrollTop = 600;
+    fireEvent.scroll(log);
+    log.scrollTop = 590;
+    fireEvent.scroll(log);
+
+    setScrollMetrics(log, 1200, 400);
+    act(() => {
+      useAIStore.setState({
+        messages: [
+          assistantMessage([
+            {
+              id: "tool-1",
+              name: "find_resource",
+              arguments: { query: "api" },
+              status: "awaiting_approval",
+            },
+          ]),
+        ],
+      });
+    });
+
+    await waitFor(() => expect(log.scrollTop).toBe(590));
+    expect(screen.queryByRole("button", { name: "Latest" })).not.toBeInTheDocument();
+  });
+
+  it("resets to pinned when the active conversation changes", async () => {
+    act(() => {
+      useAIStore.setState({
+        activeConversationId: "conversation-1",
+        messages: [assistantMessage()],
+        isConnected: true,
+        isStreaming: true,
+        retryAfter: null,
+      });
+      useUIStore.setState({ aiPanelOpen: true });
+    });
+
+    renderAISidePanel();
+
+    const log = screen.getByRole("log", { name: "AI messages" });
+    setScrollMetrics(log, 1000, 400);
+    log.scrollTop = 600;
+    fireEvent.scroll(log);
+    log.scrollTop = 300;
+    fireEvent.scroll(log);
+
+    setScrollMetrics(log, 1200, 400);
+    act(() => {
+      useAIStore.setState({
+        activeConversationId: "conversation-2",
+        messages: [{ ...assistantMessage(), id: "assistant-2", content: "A different chat." }],
+      });
+    });
+
+    await waitFor(() => expect(log.scrollTop).toBe(1200));
+    expect(screen.queryByRole("button", { name: "Latest" })).not.toBeInTheDocument();
   });
 
   it("uses the responsive default when the stored width is below the minimum", async () => {
@@ -611,6 +685,11 @@ describe("AISidePanel autoscroll", () => {
     );
 
     expect(screen.getByText("Viewing api")).toBeInTheDocument();
+    const contextBanner = screen.getByText("Viewing api").parentElement;
+    expect(contextBanner).toHaveClass("w-full", "border-x-0", "border-b-0", "py-1");
+    expect(
+      screen.getByRole("button", { name: "Exclude this resource from the next request" })
+    ).toHaveClass("h-5", "w-5");
     await user.click(
       screen.getByRole("button", { name: "Exclude this resource from the next request" })
     );
@@ -717,6 +796,91 @@ describe("AISidePanel autoscroll", () => {
     });
   });
 
+  it("warns and abandons an unfinished plan before changing approval mode", async () => {
+    const user = userEvent.setup();
+    const abandonPlanning = vi.fn();
+    act(() => {
+      useAIStore.setState({
+        messages: [{ id: "user-1", role: "user", content: "Plan this change" }],
+        isConnected: true,
+        isStreaming: false,
+        retryAfter: null,
+        activeConversationId: "conversation-1",
+        activePlan: planInProgress("drafting"),
+        plans: [planInProgress("drafting")],
+        workMode: "plan",
+        abandonPlanning,
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false, aiApprovalMode: "normal" });
+    });
+
+    renderAISidePanel();
+    await user.click(screen.getByRole("button", { name: "Plan" }));
+    await user.click(await screen.findByText("Always ask"));
+
+    expect(useConfirmDialog.getState()).toMatchObject({
+      open: true,
+      title: "Leave Plan Mode?",
+      confirmLabel: "Leave and delete plan",
+      cancelLabel: "Keep planning",
+      variant: "destructive",
+    });
+    expect(abandonPlanning).not.toHaveBeenCalled();
+
+    act(() => {
+      useConfirmDialog.getState().onConfirm?.();
+    });
+    await waitFor(() => expect(abandonPlanning).toHaveBeenCalledOnce());
+  });
+
+  it("preserves the published plan when leaving an active revision run", async () => {
+    const user = userEvent.setup();
+    const abandonPlanning = vi.fn();
+    const publishedPlan = {
+      ...planInProgress("validating"),
+      status: "awaiting_decision" as const,
+      revisionStatus: "published" as const,
+      publishedAt: "2026-08-12T00:01:00.000Z",
+    };
+    const validatingRevision = {
+      ...planInProgress("validating"),
+      revisionId: "revision-2",
+      revision: 2,
+    };
+    act(() => {
+      useAIStore.setState({
+        messages: [{ id: "user-1", role: "user", content: "Refine the plan" }],
+        isConnected: true,
+        isStreaming: true,
+        retryAfter: null,
+        activeConversationId: "conversation-1",
+        activePlan: validatingRevision,
+        plans: [publishedPlan],
+        workMode: "plan",
+        abandonPlanning,
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false, aiApprovalMode: "normal" });
+    });
+
+    renderAISidePanel();
+    await user.click(screen.getByRole("button", { name: "Plan" }));
+    await user.click(await screen.findByText("Always ask"));
+
+    expect(useConfirmDialog.getState()).toMatchObject({
+      open: true,
+      title: "Leave Plan Mode?",
+      description: expect.stringContaining("published plan will remain available"),
+      confirmLabel: "Leave Plan Mode",
+      cancelLabel: "Keep planning",
+    });
+    expect(useConfirmDialog.getState().variant).not.toBe("destructive");
+
+    act(() => {
+      useConfirmDialog.getState().onConfirm?.();
+    });
+    await waitFor(() => expect(abandonPlanning).toHaveBeenCalledOnce());
+  });
+
   it("keeps the composer visible after an approved tool starts running", () => {
     act(() => {
       useAIStore.setState({
@@ -777,7 +941,8 @@ describe("AISidePanel autoscroll", () => {
     expect(screen.queryByPlaceholderText("Ask anything... (/ commands)")).not.toBeInTheDocument();
   });
 
-  it("replaces the composer with the plan decision question", () => {
+  it("returns to the ordinary composer without changing plan state when refining a ready plan", async () => {
+    const user = userEvent.setup();
     act(() => {
       useAIStore.setState({
         messages: [{ id: "user-1", role: "user", content: "Prepare a plan" }],
@@ -814,6 +979,7 @@ describe("AISidePanel autoscroll", () => {
         isConnected: true,
         isStreaming: false,
         retryAfter: null,
+        workMode: "plan",
       });
       useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
     });
@@ -821,17 +987,22 @@ describe("AISidePanel autoscroll", () => {
     renderAISidePanel();
 
     expect(screen.getByText("Implement this plan?")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Implement plan/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Refine details/ })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Or type your answer...")).toBeInTheDocument();
     expect(screen.queryByPlaceholderText("Ask anything... (/ commands)")).not.toBeInTheDocument();
-    const freeText = screen.getByPlaceholderText("Or type your answer...");
-    expect(freeText).toHaveClass("border-0", "focus:ring-inset");
-    expect(freeText.parentElement?.parentElement).toHaveClass("border-t", "border-border");
-    expect(freeText.parentElement?.parentElement).not.toHaveClass("px-3", "py-2");
+
+    await user.click(screen.getByRole("button", { name: /^Refine details/ }));
+
+    expect(screen.queryByText("Implement this plan?")).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Ask anything... (/ commands)")).toBeInTheDocument();
+    expect(useAIStore.getState().activePlan?.status).toBe("awaiting_decision");
   });
 
   it.each([
     "drafting",
     "validating",
-  ] as const)("shows the cancellation recovery control during %s in both assistant panels", (status) => {
+  ] as const)("does not show execution progress during %s in either assistant panel", (status) => {
     act(() => {
       useAIStore.setState({
         messages: [{ id: "user-1", role: "user", content: "Prepare a plan" }],
@@ -854,10 +1025,8 @@ describe("AISidePanel autoscroll", () => {
     );
 
     for (const panel of [sidePanel.container, litePanel.container]) {
-      expect(
-        within(panel).getByText(status === "drafting" ? "Preparing plan" : "Validating plan")
-      ).toBeInTheDocument();
-      expect(within(panel).getByRole("button", { name: "Cancel plan" })).toBeInTheDocument();
+      expect(within(panel).queryByLabelText("Plan progress")).not.toBeInTheDocument();
+      expect(within(panel).queryByRole("button", { name: "Cancel plan" })).not.toBeInTheDocument();
       expect(within(panel).queryByRole("button", { name: "Pause plan" })).not.toBeInTheDocument();
     }
   });

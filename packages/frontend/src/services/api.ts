@@ -56,10 +56,12 @@ import type {
   AIMessageAttachment,
   AIPlanStatus,
   AIRunStatus,
-  AISandboxArtifact,
+  AISandboxArtifactPage,
   AISandboxJob,
   AISandboxOutput,
   AISandboxStatus,
+  AIScenario,
+  ChatMessage,
   PageContext,
 } from "@/types/ai";
 import type { FileEntry } from "@/types/docker";
@@ -114,6 +116,11 @@ class ApiClient extends withInferenceApi(
       this.request<{ data: { show: boolean } }>("/finalize-setup/mfa-reminder")
     );
     return result.show;
+  }
+
+  async getAIScenarios(context?: PageContext): Promise<AIScenario[]> {
+    const params = context ? `?context=${encodeURIComponent(JSON.stringify(context))}` : "";
+    return this.unwrapData(this.request<{ data: AIScenario[] }>(`/ai/scenarios${params}`));
   }
 
   async hideFinalizeSetupMfaReminder(): Promise<void> {
@@ -1092,6 +1099,7 @@ class ApiClient extends withInferenceApi(
   }
 
   async getAIContextEstimate(input?: {
+    messages?: ChatMessage[];
     context?: PageContext;
     conversationId?: string | null;
     model?: string;
@@ -1100,6 +1108,7 @@ class ApiClient extends withInferenceApi(
     const res = await this.request<{ data: AIContextEstimate }>("/ai/context-estimate", {
       method: "POST",
       body: JSON.stringify({
+        messages: input?.messages,
         context: input?.context,
         conversationId: input?.conversationId ?? undefined,
         model: input?.model,
@@ -1490,9 +1499,14 @@ class ApiClient extends withInferenceApi(
     return res.data;
   }
 
-  async listAISandboxArtifacts(): Promise<AISandboxArtifact[]> {
-    const res = await this.request<{ data: AISandboxArtifact[] }>("/ai/sandbox/artifacts");
-    return res.data;
+  async listAISandboxArtifacts(
+    options: { page?: number; limit?: number } = {}
+  ): Promise<AISandboxArtifactPage> {
+    const params = new URLSearchParams();
+    if (options.page !== undefined) params.set("page", String(options.page));
+    if (options.limit !== undefined) params.set("limit", String(options.limit));
+    const query = params.toString();
+    return this.request<AISandboxArtifactPage>(`/ai/sandbox/artifacts${query ? `?${query}` : ""}`);
   }
 
   async deleteAISandboxArtifact(id: string): Promise<void> {

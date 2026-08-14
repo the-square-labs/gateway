@@ -46,6 +46,7 @@ interface PreparedSource {
   pricing?: InferencePricingInput;
   safeContextWindow: number;
   safeMaxInputTokens: number;
+  safeAutoCompactTokenLimit: number;
 }
 
 @injectable()
@@ -226,6 +227,10 @@ export class InferenceModelConfigurationService {
         ...(pricing ? { pricing } : {}),
         safeContextWindow: technical?.contextWindow ?? discoveredModel?.contextWindow ?? model.contextWindow,
         safeMaxInputTokens: technical?.maxInputTokens ?? discoveredModel?.maxInputTokens ?? model.maxInputTokens,
+        safeAutoCompactTokenLimit:
+          technical?.autoCompactTokenLimit ??
+          discoveredModel?.autoCompactTokenLimit ??
+          model.autoCompactTokenLimit,
       };
     });
   }
@@ -265,7 +270,11 @@ function validatePublishableConfiguration(
     );
   }
   for (const source of enabled) {
-    if (model.contextWindow > source.safeContextWindow || model.maxInputTokens > source.safeMaxInputTokens) {
+    if (
+      model.contextWindow > source.safeContextWindow ||
+      model.maxInputTokens > source.safeMaxInputTokens ||
+      model.autoCompactTokenLimit > Math.min(source.safeAutoCompactTokenLimit, source.safeMaxInputTokens)
+    ) {
       throw new AppError(400, 'INFERENCE_MODEL_LIMIT_UNSAFE', 'Published limits exceed an enabled source safe limit');
     }
   }

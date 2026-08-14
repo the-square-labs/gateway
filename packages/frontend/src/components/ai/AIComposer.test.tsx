@@ -114,7 +114,7 @@ describe("AIPlanBlock", () => {
 });
 
 describe("AIPlanDecision", () => {
-  it("exposes every decision path in a separate block", () => {
+  it("exposes every decision path through the standard question interface", () => {
     const onImplement = vi.fn();
     const onRefine = vi.fn();
     const onCustom = vi.fn();
@@ -138,8 +138,8 @@ describe("AIPlanDecision", () => {
 });
 
 describe("AIPlanProgress", () => {
-  it("keeps cancellation available during validation without showing an invalid pause action", () => {
-    render(
+  it("does not render execution progress while the plan is still validating", () => {
+    const { container } = render(
       <AIPlanProgress
         plan={{ ...plan, status: "validating" }}
         onPause={vi.fn()}
@@ -148,9 +148,7 @@ describe("AIPlanProgress", () => {
       />
     );
 
-    expect(screen.getByText("Validating plan")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Cancel plan" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Pause plan" })).not.toBeInTheDocument();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("shows a paused plan and resumes it from the existing progress block", () => {
@@ -173,5 +171,20 @@ describe("AIPlanProgress", () => {
     expect(container.firstElementChild).toHaveClass("bg-primary/5");
     fireEvent.click(screen.getByRole("button", { name: /Resume/i }));
     expect(onResume).toHaveBeenCalledOnce();
+  });
+
+  it("supports a compact composer-attached execution surface", () => {
+    const { container } = render(
+      <AIPlanProgress
+        plan={{ ...plan, status: "executing" }}
+        onPause={vi.fn()}
+        onResume={vi.fn()}
+        onCancel={vi.fn()}
+        className="border-x-0 border-b-0"
+      />
+    );
+
+    expect(container.firstElementChild).toHaveClass("w-full", "border-x-0", "border-b-0", "py-1.5");
+    expect(screen.getByRole("button", { name: "Cancel plan" })).toHaveClass("h-6", "w-6");
   });
 });

@@ -11,7 +11,7 @@ import type { AppEnv } from '@/types.js';
 import { aiStatusRoute, getAiConfigRoute, listAiToolsRoute, updateAiConfigRoute } from './ai.openapi.js';
 import { AISandboxService } from './ai.sandbox.service.js';
 import { AISandboxArtifactService } from './ai.sandbox-artifact.service.js';
-import { AIConfigUpdateSchema, AIContextEstimateRequestSchema } from './ai.schemas.js';
+import { AIConfigUpdateSchema, AIContextEstimateRequestSchema, PageContextSchema } from './ai.schemas.js';
 import { AIService } from './ai.service.js';
 import { AISettingsService } from './ai.settings.service.js';
 import { AI_TOOLS } from './ai.tools.js';
@@ -19,6 +19,7 @@ import { AIConversationService } from './ai-conversation.service.js';
 import { AIConversationFolderService } from './ai-conversation-folder.service.js';
 import { AIProviderRuntimeService } from './ai-provider-runtime.service.js';
 import { AIRunService } from './ai-run.service.js';
+import { listVisibleAIScenarios, rankAIScenarios } from './ai-scenarios.js';
 
 export const aiRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
@@ -61,6 +62,7 @@ function userFacingToolDescription(name: string, category: string, destructive: 
   if (name === 'end_conversation') return 'Close the current assistant conversation with a reason.';
   if (name === 'find_resource') return 'Search Gateway resources by name, type, or identifier.';
   if (name === 'search_chats') return 'Search previous AI chats for relevant context.';
+  if (name === 'search_compacted_history') return 'Search exact details from compacted history in the current chat.';
   if (name === 'find_in_chat') return 'Search within a specific previous AI chat.';
   if (name === 'read_chat_slice') return 'Read a bounded slice of messages from a previous AI chat.';
   if (name === 'list_chat_projects') return 'List AI chat projects available as retrieval boundaries.';
@@ -147,6 +149,27 @@ aiRoutes.get('/conversations', requireScope('feat:ai:use'), async (c) => {
   const user = c.get('user')!;
   const data = await service.listConversations(user.id);
   return c.json({ data });
+});
+
+// Scenario catalogue for the full AI Workspace start screen. The server owns
+// visibility so a card is never an alternate way around a permission check.
+aiRoutes.get('/scenarios', requireScope('feat:ai:use'), async (c) => {
+  const rawContext = c.req.query('context');
+  let parsed: ReturnType<typeof PageContextSchema.safeParse> | null = null;
+  if (rawContext) {
+    try {
+      parsed = PageContextSchema.safeParse(JSON.parse(rawContext));
+    } catch {
+      return c.json({ code: 'VALIDATION_ERROR', message: 'Invalid page context' }, 400);
+    }
+  }
+  if (rawContext && !parsed?.success) {
+    return c.json({ code: 'VALIDATION_ERROR', message: 'Invalid page context' }, 400);
+  }
+  const scenarios = rankAIScenarios(listVisibleAIScenarios(c.get('user')!), parsed?.data).map(
+    ({ kickoffInstruction: _kickoffInstruction, requiredAnyScopes: _requiredAnyScopes, ...scenario }) => scenario
+  );
+  return c.json({ data: scenarios });
 });
 
 aiRoutes.get('/conversation-folders', requireScope('feat:ai:use'), async (c) => {
@@ -301,7 +324,8 @@ aiRoutes.post('/context-estimate', requireScope('feat:ai:use'), async (c) => {
     parsed.data.context,
     parsed.data.conversationId ?? undefined,
     parsed.data.model,
-    parsed.data.reasoningEffort
+    parsed.data.reasoningEffort,
+    parsed.data.messages
   );
   return c.json({ data });
 });
@@ -473,16 +497,21 @@ aiRoutes.get('/sandbox/artifacts', requireScope('feat:ai:use'), async (c) => {
   const artifactService = container.resolve(AISandboxArtifactService);
   const conversationService = container.resolve(AIConversationService);
   const user = c.get('user')!;
-  const artifacts = await artifactService.listForUser(user.id);
+  const pageRaw = Number(c.req.query('page') ?? 1);
+  const limitRaw = Number(c.req.query('limit') ?? 50);
+  const page = Number.isInteger(pageRaw) ? Math.max(1, pageRaw) : 1;
+  const limit = Number.isInteger(limitRaw) ? Math.min(100, Math.max(1, limitRaw)) : 50;
+  const result = await artifactService.listPageForUser(user.id, page, limit);
   const conversationTitles = await conversationService.listConversationTitles(
     user.id,
-    artifacts.map((artifact) => artifact.conversationId).filter((id): id is string => Boolean(id))
+    result.items.map((artifact) => artifact.conversationId).filter((id): id is string => Boolean(id))
   );
   return c.json({
-    data: artifacts.map((artifact) => ({
+    data: result.items.map((artifact) => ({
       ...artifact,
       conversationTitle: artifact.conversationId ? (conversationTitles[artifact.conversationId] ?? null) : null,
     })),
+    nextPage: result.nextPage,
   });
 });
 

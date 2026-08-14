@@ -247,6 +247,19 @@ describe('authMiddleware browser session credentials', () => {
     expect(await response.json()).toEqual({ message: 'Impersonation authorization changed' });
   });
 
+  it('prefers the current transport cookie over a stale cookie from another transport', async () => {
+    const sessionService = registerSession();
+
+    const response = await createApp().request('/read', {
+      headers: {
+        Cookie: `${getSessionCookieName('https')}=stale-session; ${getSessionCookieName('http')}=current-session`,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(sessionService.getSession).toHaveBeenCalledWith('current-session');
+  });
+
   it('rejects a cookie session mutation without a valid CSRF token', async () => {
     registerSession({ csrfValid: false });
 

@@ -123,7 +123,7 @@ function resourceHref(resource: {
     case "node":
       return nodeRoute(resource.slug ?? resource.resourceId);
     case "proxy_host":
-      return resource.slug ? proxyHostRoute(resource.slug) : "/proxy-hosts";
+      return proxyHostRoute(resource.slug || resource.resourceId);
     case "proxy_template":
       return `/nginx-templates/${encodeURIComponent(resource.resourceId)}`;
     case "ssl_certificate":

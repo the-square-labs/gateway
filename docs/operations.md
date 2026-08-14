@@ -58,6 +58,7 @@ The installer writes infrastructure/bootstrap values to `.env`. Product settings
 | `WEB_TLS_BOOTSTRAP_MODE` | Seeds `http` or `https` only when no persisted web-transport choice exists. |
 | `WEB_TLS_AUTO_DIR` | Persistent directory for the native web TLS leaf and private key. |
 | `SESSION_EXPIRY` | Browser session lifetime in seconds. Browser sessions are opaque Redis-backed session IDs. |
+| `GITHUB_OAUTH_CLIENT_ID` | Public client ID of the product-wide GitHub OAuth App used for connector Device Flow. The same ID is reused by every installation; no client secret or callback URL is used. |
 | `PKI_MASTER_KEY` | 64-character hex key for encrypted PKI material. |
 | `RATE_LIMIT_WINDOW_MS` | Default rate-limit window. |
 | `RATE_LIMIT_MAX_REQUESTS` | Default request limit. |

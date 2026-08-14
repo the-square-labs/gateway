@@ -21,7 +21,12 @@ export interface InferenceModelSourceInput {
   subscriptionMultiplierOverride?: number | null;
   reasoningEffortMap: Record<string, string>;
   capabilitiesOverride?: Record<string, boolean> | null;
-  manualMetadata?: { contextWindow: number; maxInputTokens: number; maxOutputTokens?: number };
+  manualMetadata?: {
+    contextWindow?: number;
+    maxInputTokens?: number;
+    maxOutputTokens?: number;
+    autoCompactTokenLimit?: number;
+  };
   pricing?: InferencePricingInput;
 }
 

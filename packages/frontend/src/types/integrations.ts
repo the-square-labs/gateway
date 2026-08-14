@@ -1,4 +1,84 @@
 export type IntegrationProvider = "gitlab" | "cloudflare";
+export type GitConnectorProvider = "github" | "git";
+export type GitConnectorMode = "single_repository" | "multi_repository";
+
+export interface GitConnector {
+  id: string;
+  provider: GitConnectorProvider;
+  name: string;
+  baseUrl: string;
+  enabled: boolean;
+  authMode: "token" | "oauth";
+  username: string | null;
+  allowlistMode: GitLabAllowlistMode;
+  capabilities: Record<string, boolean>;
+  tokenMasked?: string | null;
+  hasToken: boolean;
+  allowlistEntries?: GitLabAllowlistEntry[];
+}
+
+export interface GitConnectorRequest {
+  name: string;
+  baseUrl: string;
+  enabled: boolean;
+  authMode?: "token";
+  username?: string;
+  token: string;
+  repositoryMode: GitConnectorMode;
+  repositoryUrl?: string;
+  allowlistEntries?: GitLabAllowlistEntry[];
+}
+
+export type GitHubOAuthStartRequest = Omit<GitConnectorRequest, "authMode" | "token" | "username">;
+
+export interface GitHubOAuthSession {
+  id: string;
+  status: "pending" | "processing" | "complete" | "expired" | "cancelled" | "error";
+  userCode: string;
+  verificationUri: string;
+  pollIntervalSeconds: number;
+  expiresAt: string;
+  connectorId: string | null;
+  errorMessage: string | null;
+}
+
+export interface GitUserCredentialStatus {
+  provider: GitConnectorProvider;
+  connectorId: string;
+  connectorName: string;
+  baseUrl: string;
+  authorized: boolean;
+  status: "missing" | "valid" | "invalid";
+  tokenMasked: string | null;
+  username: string | null;
+  authorizationUrl: string | null;
+}
+
+export interface ExternalSshConnector {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  authMethod: "password" | "private_key";
+  hostFingerprint: string;
+  jumpConnectorId: string | null;
+  enabled: boolean;
+}
+
+export interface ExternalSshConnectorRequest {
+  name: string;
+  host: string;
+  port?: number;
+  username: string;
+  authMethod: "password" | "private_key";
+  secret?: string;
+  passphrase?: string;
+  hostFingerprint: string;
+  jumpConnectorId?: string | null;
+  enabled?: boolean;
+  generatePrivateKey?: boolean;
+}
 export type GitLabAllowlistMode = "selected" | "all_visible";
 export type GitLabAllowlistEntryType = "group" | "project";
 export type IntegrationSyncStatus = "never" | "idle" | "running" | "success" | "error";

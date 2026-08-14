@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
@@ -37,6 +37,7 @@ const AI_CONFIG = {
 describe("AIConfigSection provider guidance", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     api.invalidateCache("settings:ai-config");
     useSystemConfigStore.getState().reset();
   });
@@ -45,7 +46,7 @@ describe("AIConfigSection provider guidance", () => {
     api.setCache("settings:ai-config", AI_CONFIG);
     vi.spyOn(api, "getAIConfig").mockResolvedValue(AI_CONFIG);
     vi.spyOn(api, "listAISandboxJobs").mockResolvedValue([]);
-    vi.spyOn(api, "listAISandboxArtifacts").mockResolvedValue([]);
+    vi.spyOn(api, "listAISandboxArtifacts").mockResolvedValue({ data: [], nextPage: null });
 
     render(
       <MemoryRouter>
@@ -76,4 +77,75 @@ describe("AIConfigSection provider guidance", () => {
       ).not.toBeInTheDocument()
     );
   });
+
+  it("shows 10 recent artifacts and lazily loads the full list after View all", async () => {
+    api.setCache("settings:ai-config", AI_CONFIG);
+    vi.spyOn(api, "getAIConfig").mockResolvedValue(AI_CONFIG);
+    vi.spyOn(api, "listAISandboxJobs").mockResolvedValue([]);
+    const listArtifacts = vi
+      .spyOn(api, "listAISandboxArtifacts")
+      .mockImplementation(async (options) => {
+        if (options?.limit === 10) {
+          return {
+            data: Array.from({ length: 10 }, (_, index) => artifact(`recent-${index}`)),
+            nextPage: 2,
+          };
+        }
+        if (options?.page === 2) {
+          return { data: [artifact("older")], nextPage: null };
+        }
+        return { data: [artifact("all-first")], nextPage: 2 };
+      });
+    let intersectionCallback: IntersectionObserverCallback | undefined;
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: IntersectionObserverCallback) {
+          intersectionCallback = callback;
+        }
+        observe() {}
+        disconnect() {}
+      }
+    );
+
+    render(
+      <MemoryRouter>
+        <AIConfigSection />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("recent-9.txt")).toBeInTheDocument();
+    expect(listArtifacts).toHaveBeenCalledWith({ page: 1, limit: 10 });
+
+    fireEvent.click(screen.getByRole("button", { name: "View all" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getAllByText(/Scroll to load older artifacts/)).toHaveLength(2);
+    await waitFor(() => expect(listArtifacts).toHaveBeenCalledWith({ page: 1, limit: 25 }));
+
+    await waitFor(() => expect(intersectionCallback).toBeDefined());
+    act(() => {
+      intersectionCallback?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver
+      );
+    });
+
+    await waitFor(() => expect(listArtifacts).toHaveBeenCalledWith({ page: 2, limit: 25 }));
+  });
 });
+
+function artifact(id: string) {
+  return {
+    id,
+    userId: "user-1",
+    conversationId: null,
+    conversationTitle: null,
+    sourceProcessId: "process-1",
+    sourcePath: `${id}.txt`,
+    filename: `${id}.txt`,
+    mediaType: "text/plain",
+    sizeBytes: 10,
+    createdAt: "2026-08-13T10:00:00.000Z",
+    downloadUrl: `/api/ai/sandbox/artifacts/${id}/download`,
+  };
+}

@@ -107,6 +107,35 @@ describe('AI resource references', () => {
     });
   });
 
+  it('does not let a later proxy host fallback replace a resolved detail route', () => {
+    const canonical = extractAIResourceReferences(
+      'find_resource',
+      { query: 'additional-e2e' },
+      {
+        results: [
+          {
+            type: 'proxy_host',
+            id: 'host-1',
+            name: 'additional-e2e.test, additional-e2e.localhost',
+            summary: { slug: 'additional-e2e-test' },
+          },
+        ],
+      }
+    )[0];
+    const fallback = extractAIResourceReferences(
+      'get_proxy_host',
+      { proxyHostId: 'host-1' },
+      { id: 'host-1', domainNames: ['additional-e2e.test', 'additional-e2e.localhost'] }
+    )[0];
+
+    expect(fallback.uiHref).toBe('/proxy-hosts/host-1');
+    expect(mergeAIResourceReference(canonical, fallback)).toMatchObject({
+      label: 'additional-e2e.test',
+      slug: 'additional-e2e-test',
+      uiHref: '/proxy-hosts/additional-e2e-test',
+    });
+  });
+
   it('carries a resolved node appearance color only on the node reference', () => {
     const references = extractAIResourceReferences(
       'get_docker_container',
@@ -160,6 +189,13 @@ describe('AI resource references', () => {
       'Updated [[resource:gwr_0123456789abcdef01234567|API container]] on [[resource:gwr_fedcba9876543210fedcba98|docker-src]].';
     expect(referencedAIResourceIds(text)).toEqual(['gwr_0123456789abcdef01234567', 'gwr_fedcba9876543210fedcba98']);
     expect(stripAIResourceMarkers(text)).toBe('Updated API container on docker-src.');
+  });
+
+  it('keeps balanced square brackets inside a marker label', () => {
+    const text = 'Updated [[resource:gwr_0123456789abcdef01234567|Some cool name [something]]] successfully.';
+
+    expect(referencedAIResourceIds(text)).toEqual(['gwr_0123456789abcdef01234567']);
+    expect(stripAIResourceMarkers(text)).toBe('Updated Some cool name [something] successfully.');
   });
 
   it('does not manufacture references for broad list tools', () => {

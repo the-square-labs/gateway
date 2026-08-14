@@ -71,7 +71,7 @@ describe("GitLabAuthorizationModal", () => {
     renderWithRouter(<GitLabAuthorizationModal />);
 
     expect(await screen.findByText("Main GitLab")).toBeInTheDocument();
-    const explanation = screen.getByText(/Gateway needs your personal access token/);
+    const explanation = screen.getByText(/Gateway needs your personal repository credential/);
     expect(explanation.closest("[data-dialog-body]")).toBeInTheDocument();
     expect(explanation.closest("[data-dialog-header]")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /create personal access token/i })).toHaveAttribute(
@@ -111,5 +111,40 @@ describe("GitLabAuthorizationModal", () => {
 
     await waitFor(() => expect(resolveCredentialChallenge).toHaveBeenCalledWith("authorized"));
     expect(authorize).not.toHaveBeenCalled();
+  });
+
+  it("collects username and token for a generic Git credential challenge", async () => {
+    const user = userEvent.setup();
+    const resolveCredentialChallenge = vi.fn();
+    vi.spyOn(api, "getGitUserCredentialStatus").mockResolvedValue({
+      provider: "git",
+      connectorId: "connector-1",
+      connectorName: "Private Git",
+      baseUrl: "https://git.example.com",
+      authorized: false,
+      status: "missing",
+      tokenMasked: null,
+      username: null,
+      authorizationUrl: null,
+    });
+    vi.spyOn(api, "authorizeGitUserCredential").mockResolvedValue({} as never);
+    act(() => {
+      useAIStore.setState({
+        pendingCredentialChallenge: { ...challenge, provider: "git", toolName: "git_list_remote_refs" },
+        resolveCredentialChallenge,
+      });
+    });
+
+    renderWithRouter(<GitLabAuthorizationModal />);
+    await screen.findByText("Private Git");
+    await user.type(screen.getByLabelText("Username"), "deploy-user");
+    await user.type(screen.getByLabelText("Access token or password"), "secret-token");
+    await user.click(screen.getByRole("button", { name: "Authorize" }));
+
+    expect(api.authorizeGitUserCredential).toHaveBeenCalledWith("git", "connector-1", {
+      username: "deploy-user",
+      token: "secret-token",
+    });
+    expect(resolveCredentialChallenge).toHaveBeenCalledWith("authorized");
   });
 });

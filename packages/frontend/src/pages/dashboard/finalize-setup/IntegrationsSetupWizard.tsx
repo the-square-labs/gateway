@@ -1,4 +1,4 @@
-import { Check, Cloud, GitBranch, Loader2 } from "lucide-react";
+import { Check, Cloud, GitBranch, Github, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -8,20 +8,117 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/services/api";
 import type { FinalizeSetupState, FinalizeSetupStepStatus } from "@/types";
+import type { GitConnectorMode, GitConnectorProvider } from "@/types/integrations";
+import { GitHubDeviceFlow } from "@/pages/settings/GitHubDeviceFlow";
 import { FinalizeSetupCompletion } from "./FinalizeSetupCompletion";
 import { FinalizeSetupWizardDialog } from "./FinalizeSetupWizardDialog";
 
+export type ConnectorSetupKind = "cloudflare" | "gitlab" | "github" | "git";
+type TrackedIntegration = Extract<ConnectorSetupKind, "cloudflare" | "gitlab">;
+type OptionalIntegration = Exclude<ConnectorSetupKind, TrackedIntegration>;
 type IntegrationScreen =
   | "overview"
-  | "cloudflare"
-  | "gitlab"
+  | ConnectorSetupKind
   | "cloudflare_complete"
-  | "gitlab_complete";
+  | "gitlab_complete"
+  | "github_complete"
+  | "git_complete";
 
-function statusLabel(status: FinalizeSetupStepStatus) {
+export interface ConnectorSetupRequest {
+  connector: ConnectorSetupKind;
+  baseUrl?: string;
+  repositoryUrl?: string;
+  repositoryMode?: GitConnectorMode;
+}
+
+const INTEGRATION_OPTIONS = [
+  {
+    id: "cloudflare",
+    title: "Cloudflare",
+    description: "Manage DNS zones and proxied host records.",
+    icon: Cloud,
+  },
+  {
+    id: "gitlab",
+    title: "GitLab",
+    description: "Connect repositories, CI, and container registries.",
+    icon: GitBranch,
+  },
+  {
+    id: "github",
+    title: "GitHub",
+    description: "Connect repositories, Actions, and packages.",
+    icon: Github,
+  },
+  {
+    id: "git",
+    title: "Git",
+    description: "Connect one repository or an explicit repository allowlist.",
+    icon: GitBranch,
+  },
+] as const;
+
+function isTrackedIntegration(connector: ConnectorSetupKind): connector is TrackedIntegration {
+  return connector === "cloudflare" || connector === "gitlab";
+}
+
+function activeConnector(screen: IntegrationScreen): ConnectorSetupKind | null {
+  switch (screen) {
+    case "cloudflare":
+    case "cloudflare_complete":
+      return "cloudflare";
+    case "gitlab":
+    case "gitlab_complete":
+      return "gitlab";
+    case "github":
+    case "github_complete":
+      return "github";
+    case "git":
+    case "git_complete":
+      return "git";
+    default:
+      return null;
+  }
+}
+
+function completionScreen(connector: ConnectorSetupKind): IntegrationScreen {
+  switch (connector) {
+    case "cloudflare":
+      return "cloudflare_complete";
+    case "gitlab":
+      return "gitlab_complete";
+    case "github":
+      return "github_complete";
+    case "git":
+      return "git_complete";
+  }
+}
+
+function connectorLabel(connector: ConnectorSetupKind): string {
+  switch (connector) {
+    case "cloudflare":
+      return "Cloudflare";
+    case "gitlab":
+      return "GitLab";
+    case "github":
+      return "GitHub";
+    case "git":
+      return "Git";
+  }
+}
+
+function statusLabel(status: FinalizeSetupStepStatus | undefined) {
   if (status === "configured") return "Configured";
   if (status === "skipped") return "Skipped";
-  return "Not started";
+  if (status === "pending") return "Not started";
+  return "Optional";
+}
+
+function repositoryEntries(value: string) {
+  return value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 export function IntegrationsSetupWizard({
@@ -29,27 +126,101 @@ export function IntegrationsSetupWizard({
   state,
   onBack,
   onStep,
+  directSetup = null,
+  onFinished,
 }: {
   open: boolean;
-  state: FinalizeSetupState;
-  onBack: () => void;
-  onStep: (step: "cloudflare" | "gitlab", status: "configured" | "skipped") => Promise<void>;
+  state?: FinalizeSetupState;
+  onBack?: () => void;
+  onStep?: (step: TrackedIntegration, status: "configured" | "skipped") => Promise<void>;
+  /**
+   * Opens one concrete connector form without mounting the Finalize Setup
+   * checklist. Used by the assistant after the user has selected a path.
+   */
+  directSetup?: ConnectorSetupRequest | null;
+  onFinished?: (status: "configured" | "cancelled") => void;
 }) {
+  const isDirectSetup = directSetup !== null;
   const [screen, setScreen] = useState<IntegrationScreen>("overview");
   const [cloudflareName, setCloudflareName] = useState("Cloudflare");
   const [cloudflareToken, setCloudflareToken] = useState("");
   const [gitlabName, setGitlabName] = useState("GitLab");
   const [gitlabUrl, setGitlabUrl] = useState("https://gitlab.com");
   const [gitlabToken, setGitlabToken] = useState("");
+  const [githubName, setGithubName] = useState("GitHub");
+  const [githubUrl, setGithubUrl] = useState("https://github.com");
+  const [githubRepositoryUrls, setGithubRepositoryUrls] = useState("");
+  const [githubUsername, setGithubUsername] = useState("");
+  const [githubToken, setGithubToken] = useState("");
+  const [githubOAuthAvailable, setGithubOAuthAvailable] = useState(false);
+  const [githubAuthMode, setGithubAuthMode] = useState<"oauth" | "token">("token");
+  const [gitName, setGitName] = useState("Git");
+  const [gitUrl, setGitUrl] = useState("");
+  const [gitRepositoryUrls, setGitRepositoryUrls] = useState("");
+  const [gitRepositoryMode, setGitRepositoryMode] = useState<GitConnectorMode>("single_repository");
+  const [gitUsername, setGitUsername] = useState("");
+  const [gitToken, setGitToken] = useState("");
   const [saving, setSaving] = useState(false);
+  const [configuredOptionalConnectors, setConfiguredOptionalConnectors] = useState<
+    Set<OptionalIntegration>
+  >(new Set());
 
   useEffect(() => {
     if (!open) return;
-    setScreen("overview");
+
+    const connector = directSetup?.connector;
+    setScreen(connector ?? "overview");
+    setCloudflareName("Cloudflare");
     setCloudflareToken("");
+    setGitlabName("GitLab");
+    setGitlabUrl(directSetup?.baseUrl ?? "https://gitlab.com");
     setGitlabToken("");
+    setGithubName("GitHub");
+    setGithubUrl(directSetup?.baseUrl ?? "https://github.com");
+    setGithubRepositoryUrls(directSetup?.repositoryUrl ?? "");
+    setGithubUsername("");
+    setGithubToken("");
+    setGitName("Git");
+    setGitUrl(directSetup?.baseUrl ?? "");
+    setGitRepositoryUrls(directSetup?.repositoryUrl ?? "");
+    setGitRepositoryMode(directSetup?.repositoryMode ?? "single_repository");
+    setGitUsername("");
+    setGitToken("");
     setSaving(false);
-  }, [open]);
+    setConfiguredOptionalConnectors(new Set());
+  }, [
+    directSetup?.baseUrl,
+    directSetup?.connector,
+    directSetup?.repositoryMode,
+    directSetup?.repositoryUrl,
+    open,
+  ]);
+
+  useEffect(() => {
+    if (!open || (directSetup?.connector !== "github" && screen !== "github")) return;
+    let cancelled = false;
+    void api
+      .getGitHubOAuthAvailability()
+      .then(({ available }) => {
+        if (cancelled) return;
+        setGithubOAuthAvailable(available);
+        setGithubAuthMode(available ? "oauth" : "token");
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setGithubOAuthAvailable(false);
+          setGithubAuthMode("token");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [directSetup?.connector, open, screen]);
+
+  const updateTrackedStep = async (step: TrackedIntegration, status: "configured" | "skipped") => {
+    if (isDirectSetup || !onStep) return;
+    await onStep(step, status);
+  };
 
   const saveCloudflare = async () => {
     if (!cloudflareName.trim() || !cloudflareToken.trim()) return;
@@ -60,8 +231,8 @@ export function IntegrationsSetupWizard({
         token: cloudflareToken.trim(),
         enabled: true,
       });
-      await onStep("cloudflare", "configured");
-      setScreen("cloudflare_complete");
+      await updateTrackedStep("cloudflare", "configured");
+      setScreen(completionScreen("cloudflare"));
     } catch (cause) {
       toast.error(
         cause instanceof Error ? cause.message : "Failed to create Cloudflare integration"
@@ -82,8 +253,8 @@ export function IntegrationsSetupWizard({
         enabled: true,
         allowlistMode: "all_visible",
       });
-      await onStep("gitlab", "configured");
-      setScreen("gitlab_complete");
+      await updateTrackedStep("gitlab", "configured");
+      setScreen(completionScreen("gitlab"));
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "Failed to create GitLab integration");
     } finally {
@@ -91,26 +262,87 @@ export function IntegrationsSetupWizard({
     }
   };
 
+  const saveGitConnector = async (provider: GitConnectorProvider) => {
+    const isGithub = provider === "github";
+    const name = isGithub ? githubName : gitName;
+    const baseUrl = isGithub ? githubUrl : gitUrl;
+    const token = isGithub ? githubToken : gitToken;
+    const username = isGithub ? githubUsername : gitUsername;
+    const mode = isGithub ? "single_repository" : gitRepositoryMode;
+    const urls = repositoryEntries(isGithub ? githubRepositoryUrls : gitRepositoryUrls);
+    if (
+      !name.trim() ||
+      !baseUrl.trim() ||
+      !token.trim() ||
+      urls.length === 0 ||
+      (!isGithub && !username.trim())
+    )
+      return;
+
+    setSaving(true);
+    try {
+      await api.createGitConnector(provider, {
+        name: name.trim(),
+        baseUrl: baseUrl.trim().replace(/\/$/, ""),
+        enabled: true,
+        username: username.trim() || undefined,
+        token: token.trim(),
+        repositoryMode: mode,
+        repositoryUrl: mode === "single_repository" ? urls[0] : undefined,
+        allowlistEntries:
+          mode === "multi_repository"
+            ? urls.map((url) => ({
+                entryType: "project",
+                remoteId: url,
+                fullPath: url,
+                name: url,
+                webUrl: url,
+              }))
+            : undefined,
+      });
+      setConfiguredOptionalConnectors((current) => new Set(current).add(provider));
+      setScreen(completionScreen(provider));
+    } catch (cause) {
+      toast.error(
+        cause instanceof Error
+          ? cause.message
+          : `Failed to create ${connectorLabel(provider)} integration`
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const skipCurrent = async () => {
-    if (screen === "cloudflare" || screen === "gitlab") {
-      setSaving(true);
-      try {
-        await onStep(screen, "skipped");
-        setScreen("overview");
-      } catch (cause) {
-        toast.error(cause instanceof Error ? cause.message : "Failed to skip integrations setup");
-      } finally {
-        setSaving(false);
-      }
+    if (isDirectSetup) {
+      onFinished?.("cancelled");
       return;
     }
+
+    const connector = activeConnector(screen);
+    if (connector) {
+      if (isTrackedIntegration(connector)) {
+        setSaving(true);
+        try {
+          await updateTrackedStep(connector, "skipped");
+        } catch (cause) {
+          toast.error(cause instanceof Error ? cause.message : "Failed to skip integrations setup");
+          return;
+        } finally {
+          setSaving(false);
+        }
+      }
+      setScreen("overview");
+      return;
+    }
+
     const pending = (["cloudflare", "gitlab"] as const).filter(
-      (step) => state.steps[step] === "pending"
+      (step) => state?.steps[step] === "pending"
     );
     setSaving(true);
     try {
-      for (const step of pending) await onStep(step, "skipped");
-      onBack();
+      for (const step of pending) await updateTrackedStep(step, "skipped");
+      onBack?.();
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "Failed to skip integrations setup");
     } finally {
@@ -118,75 +350,143 @@ export function IntegrationsSetupWizard({
     }
   };
 
-  const activeIntegration = screen.startsWith("cloudflare")
-    ? "cloudflare"
-    : screen.startsWith("gitlab")
-      ? "gitlab"
-      : null;
+  const connector = activeConnector(screen);
   const completedIntegration = screen.endsWith("_complete");
-  const currentStatus = activeIntegration ? state.steps[activeIntegration] : null;
+  const currentStatus =
+    connector && isTrackedIntegration(connector) ? state?.steps[connector] : undefined;
+  const directTitle =
+    directSetup === null ? null : `Add ${connectorLabel(directSetup.connector)} connector`;
+  const directDescription =
+    directSetup === null
+      ? null
+      : "Only this connector is being configured. Credentials are sent to Gateway and stored encrypted; they are never added to the AI conversation.";
+
+  const footer =
+    completedIntegration && connector ? (
+      <Button
+        onClick={() => {
+          if (isDirectSetup) onFinished?.("configured");
+          else setScreen("overview");
+        }}
+      >
+        <Check /> {isDirectSetup ? "Continue scenario" : "Back to integrations"}
+      </Button>
+    ) : screen === "cloudflare" ? (
+      <Button
+        onClick={() => void saveCloudflare()}
+        disabled={saving || !cloudflareName.trim() || !cloudflareToken.trim()}
+      >
+        {saving ? <Loader2 className="animate-spin" /> : <Cloud />}
+        Save Cloudflare
+      </Button>
+    ) : screen === "gitlab" ? (
+      <Button
+        onClick={() => void saveGitLab()}
+        disabled={saving || !gitlabName.trim() || !gitlabUrl.trim() || !gitlabToken.trim()}
+      >
+        {saving ? <Loader2 className="animate-spin" /> : <GitBranch />}
+        Save GitLab
+      </Button>
+    ) : screen === "github" && githubAuthMode === "oauth" ? (
+      <GitHubDeviceFlow
+        request={{
+          name: githubName.trim(),
+          baseUrl: githubUrl.trim(),
+          enabled: true,
+          repositoryMode: "single_repository",
+          repositoryUrl: githubRepositoryUrls.trim(),
+        }}
+        disabled={!githubName.trim() || !githubUrl.trim() || !githubRepositoryUrls.trim()}
+        onCompleted={() => {
+          setConfiguredOptionalConnectors((current) => new Set(current).add("github"));
+          setScreen(completionScreen("github"));
+        }}
+      />
+    ) : screen === "github" ? (
+      <Button
+        onClick={() => void saveGitConnector("github")}
+        disabled={
+          saving ||
+          !githubName.trim() ||
+          !githubUrl.trim() ||
+          !githubRepositoryUrls.trim() ||
+          !githubToken.trim()
+        }
+      >
+        {saving ? <Loader2 className="animate-spin" /> : <Github />}
+        Save GitHub
+      </Button>
+    ) : screen === "git" ? (
+      <Button
+        onClick={() => void saveGitConnector("git")}
+        disabled={
+          saving ||
+          !gitName.trim() ||
+          !gitUrl.trim() ||
+          !gitRepositoryUrls.trim() ||
+          !gitUsername.trim() ||
+          !gitToken.trim()
+        }
+      >
+        {saving ? <Loader2 className="animate-spin" /> : <GitBranch />}
+        Save Git connector
+      </Button>
+    ) : null;
+
   return (
     <FinalizeSetupWizardDialog
       open={open}
-      title="Connect integrations"
+      title={directTitle ?? "Connect integrations"}
       description={
-        <>
-          <p>
-            Integrations let Gateway work with the systems that already surround your
-            infrastructure, without requiring you to leave the control plane for routine setup and
-            deployment tasks.
-          </p>
-          <p>
-            Cloudflare lets Gateway read the zones you authorize and manage DNS records for proxy
-            hosts. GitLab connects repositories, CI, and container registries so workloads can use
-            the projects and images your organization already maintains.
-          </p>
-          <p>
-            Each connection is independent and optional. Grant only the access you need, then refine
-            zones, projects, registries, and permissions later in Settings. You can continue with
-            one integration or neither.
-          </p>
-        </>
+        directDescription ?? (
+          <>
+            <p>
+              Integrations let Gateway work with the systems that already surround your
+              infrastructure, without requiring you to leave the control plane for routine setup and
+              deployment tasks.
+            </p>
+            <p>
+              Cloudflare lets Gateway manage authorized DNS records. GitLab, GitHub, and generic Git
+              connectors provide repository access for source, CI, and deployment workflows.
+            </p>
+            <p>
+              Each connection is independent and optional. Grant only the access you need, then
+              refine connectors and permissions later in Settings.
+            </p>
+          </>
+        )
       }
       stepKey={screen}
+      onClose={isDirectSetup && !completedIntegration ? () => onFinished?.("cancelled") : undefined}
       onBack={
-        screen === "overview"
-          ? onBack
-          : completedIntegration
-            ? undefined
-            : () => setScreen("overview")
+        isDirectSetup
+          ? undefined
+          : screen === "overview"
+            ? onBack
+            : completedIntegration
+              ? undefined
+              : () => setScreen("overview")
       }
       backDisabled={saving}
-      onSkip={completedIntegration ? undefined : skipCurrent}
+      onSkip={isDirectSetup || completedIntegration ? undefined : skipCurrent}
       skipDisabled={saving || currentStatus === "configured"}
-      footer={
-        completedIntegration ? (
-          <Button onClick={() => setScreen("overview")}>
-            <Check /> Back to integrations
+      footerLeft={
+        isDirectSetup && !completedIntegration ? (
+          <Button variant="outline" onClick={() => onFinished?.("cancelled")} disabled={saving}>
+            Cancel
           </Button>
-        ) : screen === "cloudflare" ? (
-          <Button
-            onClick={() => void saveCloudflare()}
-            disabled={saving || !cloudflareName.trim() || !cloudflareToken.trim()}
-          >
-            {saving ? <Loader2 className="animate-spin" /> : <Cloud />}
-            Save Cloudflare
-          </Button>
-        ) : screen === "gitlab" ? (
-          <Button
-            onClick={() => void saveGitLab()}
-            disabled={saving || !gitlabName.trim() || !gitlabUrl.trim() || !gitlabToken.trim()}
-          >
-            {saving ? <Loader2 className="animate-spin" /> : <GitBranch />}
-            Save GitLab
-          </Button>
-        ) : null
+        ) : undefined
       }
+      footer={footer}
     >
       {screen === "cloudflare_complete" ? (
         <FinalizeSetupCompletion
           title="Cloudflare connected"
-          continueIn="Continue from Settings → Integrations → Cloudflare to limit zones, rotate the token, and manage connector access."
+          continueIn={
+            isDirectSetup
+              ? "Gateway can now use this Cloudflare connection in the current scenario."
+              : "Continue from Settings → Integrations → Cloudflare to limit zones, rotate the token, and manage connector access."
+          }
         >
           Gateway can now use the authorized Cloudflare account when you configure eligible DNS
           zones and proxied hosts.
@@ -194,56 +494,80 @@ export function IntegrationsSetupWizard({
       ) : screen === "gitlab_complete" ? (
         <FinalizeSetupCompletion
           title="GitLab connected"
-          continueIn="Continue from Settings → Integrations → GitLab to choose projects, registries, and synchronization settings."
+          continueIn={
+            isDirectSetup
+              ? "Gateway can now re-check this scenario's GitLab prerequisite."
+              : "Continue from Settings → Integrations → GitLab to choose projects, registries, and synchronization settings."
+          }
         >
           Gateway can now discover the repositories, CI projects, and container registries visible
           to this token.
         </FinalizeSetupCompletion>
+      ) : screen === "github_complete" ? (
+        <FinalizeSetupCompletion
+          title="GitHub connected"
+          continueIn={
+            isDirectSetup
+              ? "Gateway can now re-check this scenario's GitHub prerequisite."
+              : "Continue from Settings → Integrations → GitHub to manage this connector."
+          }
+        >
+          Gateway can now use the selected GitHub repository for source and deployment workflows.
+        </FinalizeSetupCompletion>
+      ) : screen === "git_complete" ? (
+        <FinalizeSetupCompletion
+          title="Git connector connected"
+          continueIn={
+            isDirectSetup
+              ? "Gateway can now re-check this scenario's repository prerequisite."
+              : "Continue from Settings → Integrations → Git to manage this connector."
+          }
+        >
+          Gateway can now use the configured repository or allowlist for source workflows.
+        </FinalizeSetupCompletion>
       ) : screen === "overview" ? (
         <div className="space-y-3">
-          {(
-            [
-              ["cloudflare", "Cloudflare", "Manage DNS zones and proxied host records.", Cloud],
-              [
-                "gitlab",
-                "GitLab",
-                "Connect repositories, CI, and container registries.",
-                GitBranch,
-              ],
-            ] as const
-          ).map(([id, title, description, Icon]) => (
-            <Button
-              key={id}
-              type="button"
-              variant="outline"
-              className="h-auto w-full justify-start whitespace-normal px-4 py-3 text-left"
-              disabled={saving || state.steps[id] === "configured"}
-              onClick={() => setScreen(id)}
-            >
-              <span className="flex w-full items-center gap-3">
-                <Icon className="h-5 w-5 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[15px] font-medium text-foreground">{title}</span>
-                  <span className="mt-0.5 block text-[13px] font-normal text-muted-foreground">
-                    {description}
+          {INTEGRATION_OPTIONS.map(({ id, title, description, icon: Icon }) => {
+            const status = isTrackedIntegration(id) ? state?.steps[id] : undefined;
+            const configured =
+              status === "configured" ||
+              (!isTrackedIntegration(id) && configuredOptionalConnectors.has(id));
+            return (
+              <Button
+                key={id}
+                type="button"
+                variant="outline"
+                className="h-auto w-full justify-start whitespace-normal px-4 py-3 text-left"
+                disabled={saving || configured}
+                onClick={() => setScreen(id)}
+              >
+                <span className="flex w-full items-center gap-3">
+                  <Icon className="h-5 w-5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[15px] font-medium text-foreground">{title}</span>
+                    <span className="mt-0.5 block text-[13px] font-normal text-muted-foreground">
+                      {description}
+                    </span>
                   </span>
+                  <Badge
+                    className="shrink-0"
+                    variant={
+                      configured
+                        ? "success"
+                        : status === "skipped"
+                          ? "outline"
+                          : status === "pending"
+                            ? "secondary"
+                            : "outline"
+                    }
+                  >
+                    {configured && <Check className="mr-1 h-3 w-3" />}
+                    {configured ? "Configured" : statusLabel(status)}
+                  </Badge>
                 </span>
-                <Badge
-                  className="shrink-0"
-                  variant={
-                    state.steps[id] === "configured"
-                      ? "success"
-                      : state.steps[id] === "skipped"
-                        ? "outline"
-                        : "secondary"
-                  }
-                >
-                  {state.steps[id] === "configured" && <Check className="mr-1 h-3 w-3" />}
-                  {statusLabel(state.steps[id])}
-                </Badge>
-              </span>
-            </Button>
-          ))}
+              </Button>
+            );
+          })}
         </div>
       ) : screen === "cloudflare" ? (
         <PanelShell
@@ -272,7 +596,7 @@ export function IntegrationsSetupWizard({
             />
           </SettingsControlRow>
         </PanelShell>
-      ) : (
+      ) : screen === "gitlab" ? (
         <PanelShell
           title="GitLab connector"
           description="Connect the GitLab instance Gateway should use for projects, CI, and container registries."
@@ -308,6 +632,157 @@ export function IntegrationsSetupWizard({
               autoComplete="off"
             />
           </SettingsControlRow>
+        </PanelShell>
+      ) : (
+        <PanelShell
+          title={screen === "github" ? "GitHub connector" : "Git connector"}
+          description={
+            screen === "github"
+              ? "Connect the GitHub repository this workflow needs."
+              : "Connect one repository or an explicit repository allowlist."
+          }
+        >
+          {screen === "github" ? (
+            <SettingsControlRow
+              title="Authentication"
+              description={
+                githubOAuthAvailable
+                  ? "OAuth is recommended; a personal access token remains available."
+                  : "OAuth is not configured on this Gateway; use a personal access token."
+              }
+            >
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={githubAuthMode === "oauth" ? "default" : "outline"}
+                  disabled={!githubOAuthAvailable}
+                  onClick={() => setGithubAuthMode("oauth")}
+                >
+                  {githubOAuthAvailable ? "OAuth" : "OAuth unavailable"}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={githubAuthMode === "token" ? "default" : "outline"}
+                  onClick={() => setGithubAuthMode("token")}
+                >
+                  Token
+                </Button>
+              </div>
+            </SettingsControlRow>
+          ) : null}
+          <SettingsControlRow
+            title="Connector name"
+            description="A label for this source-control connection in Gateway."
+          >
+            <Input
+              value={screen === "github" ? githubName : gitName}
+              onChange={(event) => {
+                if (screen === "github") setGithubName(event.target.value);
+                else setGitName(event.target.value);
+              }}
+              autoFocus
+            />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title={screen === "github" ? "GitHub URL" : "Git host URL"}
+            description={
+              screen === "github"
+                ? "Use github.com or the base URL of your GitHub Enterprise instance."
+                : "The base URL of the Git host that serves this repository."
+            }
+          >
+            <Input
+              value={screen === "github" ? githubUrl : gitUrl}
+              onChange={(event) => {
+                if (screen === "github") setGithubUrl(event.target.value);
+                else setGitUrl(event.target.value);
+              }}
+              placeholder={screen === "github" ? "https://github.com" : "https://git.example.com"}
+            />
+          </SettingsControlRow>
+          {screen === "git" ? (
+            <SettingsControlRow
+              title="Repository scope"
+              description="Choose whether this connector is limited to one repository or an explicit allowlist."
+            >
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={gitRepositoryMode === "single_repository" ? "default" : "outline"}
+                  onClick={() => setGitRepositoryMode("single_repository")}
+                >
+                  One repository
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={gitRepositoryMode === "multi_repository" ? "default" : "outline"}
+                  onClick={() => setGitRepositoryMode("multi_repository")}
+                >
+                  Repository allowlist
+                </Button>
+              </div>
+            </SettingsControlRow>
+          ) : null}
+          <SettingsControlRow
+            title={
+              screen === "git" && gitRepositoryMode === "multi_repository"
+                ? "Repository URLs"
+                : "Repository URL"
+            }
+            description={
+              screen === "git" && gitRepositoryMode === "multi_repository"
+                ? "Separate allowed repository URLs with commas or new lines."
+                : "The repository this connector should make available to Gateway."
+            }
+          >
+            <Input
+              value={screen === "github" ? githubRepositoryUrls : gitRepositoryUrls}
+              onChange={(event) => {
+                if (screen === "github") setGithubRepositoryUrls(event.target.value);
+                else setGitRepositoryUrls(event.target.value);
+              }}
+              placeholder={
+                screen === "git" && gitRepositoryMode === "multi_repository"
+                  ? "https://git.example.com/team/api, https://git.example.com/team/web"
+                  : "https://github.com/organization/repository"
+              }
+            />
+          </SettingsControlRow>
+          {screen === "git" || githubAuthMode === "token" ? (
+            <>
+              <SettingsControlRow
+                title="Username"
+                description={screen === "github" ? "Optional for GitHub tokens." : undefined}
+              >
+                <Input
+                  value={screen === "github" ? githubUsername : gitUsername}
+                  onChange={(event) => {
+                    if (screen === "github") setGithubUsername(event.target.value);
+                    else setGitUsername(event.target.value);
+                  }}
+                  autoComplete="username"
+                />
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="Access token"
+                description="Gateway encrypts this token and never displays it again."
+              >
+                <Input
+                  type="password"
+                  value={screen === "github" ? githubToken : gitToken}
+                  onChange={(event) => {
+                    if (screen === "github") setGithubToken(event.target.value);
+                    else setGitToken(event.target.value);
+                  }}
+                  autoComplete="off"
+                />
+              </SettingsControlRow>
+            </>
+          ) : null}
         </PanelShell>
       )}
     </FinalizeSetupWizardDialog>

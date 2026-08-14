@@ -200,6 +200,116 @@ function vcsProvider<T extends Record<string, unknown>>(overrides: T) {
 }
 
 describe('IntegrationsService', () => {
+  it('requires a username before creating a generic Git connector', async () => {
+    const service = new IntegrationsService({} as never, { log: vi.fn() } as never, {} as never);
+
+    await expect(
+      service.createGitConnector(
+        'git',
+        {
+          name: 'Source',
+          baseUrl: 'https://git.example.com',
+          enabled: true,
+          authMode: 'token',
+          token: 'secret',
+          repositoryMode: 'single_repository',
+          repositoryUrl: 'https://git.example.com/team/app.git',
+        },
+        'user-1'
+      )
+    ).rejects.toMatchObject({ code: 'GIT_USERNAME_REQUIRED' });
+  });
+
+  it('requests personal GitHub authorization on first repository access for a non-manager', async () => {
+    const select = vi.fn();
+    select
+      .mockReturnValueOnce({
+        from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([connectorRow({
+          provider: 'github',
+          name: 'GitHub',
+          baseUrl: 'https://github.com',
+          authMode: 'oauth',
+          username: 'owner',
+        })]) })) })),
+      })
+      .mockReturnValueOnce({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            orderBy: vi.fn().mockResolvedValue([
+              { entryType: 'project', fullPath: 'https://github.com/acme/app', remoteId: 'repo-1' },
+            ]),
+          })),
+        })),
+      })
+      .mockReturnValueOnce({
+        from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([]) })) })),
+      });
+    const service = new IntegrationsService({ select } as never, { log: vi.fn() } as never, {} as never);
+
+    await expect(
+      service.githubListRepositoryTree(
+        { ...BASE_USER, scopes: ['integrations:github:view'] },
+        {
+          connectorId: '11111111-1111-4111-8111-111111111111',
+          repositoryUrl: 'https://github.com/acme/app',
+        }
+      )
+    ).rejects.toMatchObject({
+      code: 'GITHUB_CREDENTIAL_REQUIRED',
+      details: { provider: 'github', connectorId: '11111111-1111-4111-8111-111111111111' },
+    });
+  });
+
+  it('updates an allowed GitHub file without exposing the credential', async () => {
+    const service = new IntegrationsService({} as never, { log: vi.fn() } as never, {} as never);
+    (service as any).resolveGitRepository = vi.fn().mockResolvedValue({
+      connector: connectorRow({ provider: 'github', baseUrl: 'https://github.com' }),
+      repositoryUrl: 'https://github.com/acme/app',
+      token: 'github-secret-token',
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: 'Not Found' }), { status: 404 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ commit: { sha: 'commit-1' }, content: { sha: 'content-1' } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      await expect(
+        service.githubUpsertRepositoryFile(
+          { ...BASE_USER, scopes: ['integrations:github:manage'] },
+          {
+            connectorId: '11111111-1111-4111-8111-111111111111',
+            repositoryUrl: 'https://github.com/acme/app',
+            path: '.github/workflows/deploy.yml',
+            branch: 'main',
+            message: 'Configure deployment',
+            content: 'name: deploy\n',
+          }
+        )
+      ).resolves.toEqual({
+        repositoryUrl: 'https://github.com/acme/app',
+        path: '.github/workflows/deploy.yml',
+        branch: 'main',
+        commitSha: 'commit-1',
+        contentSha: 'content-1',
+      });
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        'https://api.github.com/repos/acme/app/contents/.github/workflows/deploy.yml',
+        expect.objectContaining({
+          method: 'PUT',
+          headers: expect.objectContaining({ authorization: 'Bearer github-secret-token' }),
+        })
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('streams GitLab archives into the sandbox without materializing or base64-encoding the archive', async () => {
     const auditService = { log: vi.fn() };
     const service = new IntegrationsService({} as never, auditService as never, {} as never);

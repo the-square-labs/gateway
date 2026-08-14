@@ -1,4 +1,5 @@
 import type { InferenceRuntimeService } from '@/modules/inference/inference-runtime.service.js';
+import { InferenceProtocolError } from '@/modules/inference/protocol/inference-protocol.error.js';
 import type {
   InferenceContentPart,
   InferenceMessage,
@@ -48,60 +49,79 @@ export async function* streamGatewayInferenceResponse(
 
   let content = '';
   let completed = false;
+  let receivedModelOutput = false;
   const toolCalls = new Map<string, NormalizedToolCall>();
 
-  for await (const event of execution.events) {
-    if (options.signal.aborted) throw abortError();
+  try {
+    for await (const event of execution.events) {
+      if (options.signal.aborted) throw abortError();
+      if (
+        event.type === 'output_text.delta' ||
+        event.type === 'reasoning.delta' ||
+        event.type === 'tool_call.delta' ||
+        event.type === 'item.done'
+      ) {
+        receivedModelOutput = true;
+      }
 
-    if (event.type === 'output_text.delta') {
-      content += event.delta;
-      yield { type: 'text_delta', content: event.delta };
-      continue;
-    }
-    if (event.type === 'tool_call.delta') {
-      const current = toolCalls.get(event.callId) ?? {
-        id: event.callId,
-        name: event.name,
-        arguments: '',
-      };
-      current.name = event.name || current.name;
-      current.arguments += event.delta;
-      toolCalls.set(event.callId, current);
-      continue;
-    }
-    if (event.type === 'item.done') {
-      if (event.item.type === 'message' && event.item.text) {
-        const missingText = event.item.text.startsWith(content)
-          ? event.item.text.slice(content.length)
-          : content
-            ? ''
-            : event.item.text;
-        if (missingText) {
-          content += missingText;
-          yield { type: 'text_delta', content: missingText };
+      if (event.type === 'output_text.delta') {
+        content += event.delta;
+        yield { type: 'text_delta', content: event.delta };
+        continue;
+      }
+      if (event.type === 'tool_call.delta') {
+        const current = toolCalls.get(event.callId) ?? {
+          id: event.callId,
+          name: event.name,
+          arguments: '',
+        };
+        current.name = event.name || current.name;
+        current.arguments += event.delta;
+        toolCalls.set(event.callId, current);
+        continue;
+      }
+      if (event.type === 'item.done') {
+        if (event.item.type === 'message' && event.item.text) {
+          const missingText = event.item.text.startsWith(content)
+            ? event.item.text.slice(content.length)
+            : content
+              ? ''
+              : event.item.text;
+          if (missingText) {
+            content += missingText;
+            yield { type: 'text_delta', content: missingText };
+          }
         }
+        if (event.item.type === 'function_call') {
+          toolCalls.set(event.item.callId, {
+            id: event.item.callId,
+            name: event.item.name,
+            arguments: event.item.arguments || '{}',
+          });
+        }
+        continue;
       }
-      if (event.item.type === 'function_call') {
-        toolCalls.set(event.item.callId, {
-          id: event.item.callId,
-          name: event.item.name,
-          arguments: event.item.arguments || '{}',
-        });
+      if (event.type === 'error') {
+        throw new InferenceProtocolError(502, event.code, event.message);
       }
-      continue;
-    }
-    if (event.type === 'error') {
-      throw new Error(event.message);
-    }
-    if (event.type === 'completed') {
-      if (event.status && event.status !== 'completed') {
-        throw new Error(event.incompleteReason || `Gateway Inference ended with status ${event.status}`);
+      if (event.type === 'completed') {
+        if (event.status && event.status !== 'completed') {
+          throw new Error(event.incompleteReason || `Gateway Inference ended with status ${event.status}`);
+        }
+        completed = true;
       }
-      completed = true;
     }
+  } catch (error) {
+    throw markGatewayInferenceOutput(error, receivedModelOutput);
   }
 
-  if (!completed) throw new Error('Gateway Inference stream ended without a successful terminal event');
+  if (!completed) {
+    throw new InferenceProtocolError(
+      502,
+      'upstream_stream_incomplete',
+      'Gateway Inference stream ended without a successful terminal event'
+    );
+  }
   yield {
     type: 'model_response',
     response: {
@@ -109,6 +129,14 @@ export async function* streamGatewayInferenceResponse(
       toolCalls: [...toolCalls.values()].filter((toolCall) => toolCall.id && toolCall.name),
     },
   };
+}
+
+function markGatewayInferenceOutput(error: unknown, emittedOutput: boolean): unknown {
+  if (!emittedOutput || !(error instanceof InferenceProtocolError)) return error;
+  return new InferenceProtocolError(error.status, error.code, error.message, {
+    ...error.details,
+    emittedOutput: true,
+  });
 }
 
 function toInferenceMessages(messages: Record<string, unknown>[]): InferenceMessage[] {

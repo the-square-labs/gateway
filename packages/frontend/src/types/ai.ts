@@ -70,6 +70,8 @@ export interface AIMessage {
   localOnly?: boolean;
   runError?: boolean;
   runId?: string;
+  clientCommandId?: string;
+  streamingChunk?: string;
   steer?: boolean;
   steerPending?: boolean;
   resourceReferences?: AIResourceReference[];
@@ -91,11 +93,28 @@ export interface AIMessage {
     fromDisplayName?: string;
     toDisplayName?: string;
   };
+  scenario?: AIScenario;
   rawToolCalls?: Array<{
     id: string;
     type: string;
     function: { name: string; arguments: string };
   }>;
+}
+
+export type AIScenarioCategory =
+  | "deploy_release"
+  | "migrate_recover"
+  | "infrastructure_access"
+  | "data_storage"
+  | "security_pki"
+  | "observe_operate";
+
+export interface AIScenario {
+  id: string;
+  category: AIScenarioCategory;
+  title: string;
+  description: string;
+  icon: "rocket" | "refresh" | "server" | "database" | "shield" | "activity";
 }
 
 // ── AI Configuration ──
@@ -154,6 +173,8 @@ export interface AIConfig {
 }
 
 export interface AIContextEstimate {
+  chatTokens: number;
+  messageCount: number;
   systemTokens: number;
   toolsTokens: number;
   totalOverhead: number;
@@ -223,6 +244,11 @@ export interface AISandboxArtifact {
   sizeBytes: number;
   createdAt: string;
   downloadUrl: string;
+}
+
+export interface AISandboxArtifactPage {
+  data: AISandboxArtifact[];
+  nextPage: number | null;
 }
 
 // ── Page Context ──
@@ -302,6 +328,7 @@ export type AIRunStatus =
   | "waiting_for_approval"
   | "waiting_for_answer"
   | "waiting_for_credential"
+  | "waiting_for_setup"
   | "completed"
   | "failed"
   | "stopped";
@@ -333,6 +360,7 @@ export type AIPlanStatus =
   | "validating"
   | "awaiting_decision"
   | "executing"
+  | "pause_requested"
   | "paused"
   | "verifying"
   | "completed"
@@ -464,12 +492,31 @@ export interface AICredentialChallenge {
   roundId?: string | null;
   conversationId: string;
   userId: string;
-  provider: "gitlab";
+  provider: "gitlab" | "github" | "git" | "cloudflare" | "ssh";
   connectorId: string;
   toolCallId: string;
   toolName: string;
   status: "pending" | "authorized" | "rejected" | "stopped";
   decisionClientCommandId: string | null;
+  resolvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AISetupInteraction {
+  id: string;
+  runId: string;
+  roundId: string | null;
+  conversationId: string;
+  userId: string;
+  toolCallId: string;
+  toolName: string;
+  kind: "connector_setup" | "node_enrollment";
+  payload: Record<string, unknown>;
+  status: "pending" | "configured" | "cancelled" | "stopped";
+  result: Record<string, unknown> | null;
+  resolveClientCommandId: string | null;
+  expiresAt: string;
   resolvedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -486,6 +533,7 @@ export interface AIRuntimeSnapshot {
   pendingQuestion: AIRunQuestion | null;
   pendingQuestions: AIRunQuestion[];
   pendingCredentialChallenge?: AICredentialChallenge | null;
+  pendingSetupInteraction?: AISetupInteraction | null;
   toolCalls: AIRunToolCall[];
   toolRounds?: AIRunToolRound[];
   pendingInputs?: AIConversationInput[];
@@ -540,6 +588,14 @@ export type WSClientMessage =
       workMode?: "normal" | "plan";
     }
   | {
+      type: "conversation.start_scenario";
+      clientCommandId: string;
+      scenarioId: string;
+      context?: PageContext;
+      model?: string;
+      reasoningEffort?: string;
+    }
+  | {
       type: "conversation.continue";
       conversationId: string;
       clientCommandId: string;
@@ -581,6 +637,7 @@ export type WSClientMessage =
   | { type: "plan.pause"; conversationId: string; planId: string; clientCommandId: string }
   | { type: "plan.resume"; conversationId: string; planId: string; clientCommandId: string }
   | { type: "plan.cancel"; conversationId: string; planId: string; clientCommandId: string }
+  | { type: "conversation.abandon_planning"; conversationId: string; clientCommandId: string }
   | {
       type: "approval.decide";
       conversationId: string;
@@ -603,6 +660,15 @@ export type WSClientMessage =
       runId: string;
       challengeId: string;
       decision: "authorized" | "rejected";
+      clientCommandId: string;
+    }
+  | {
+      type: "setup.resolve";
+      conversationId: string;
+      runId: string;
+      interactionId: string;
+      status: "configured" | "cancelled";
+      result?: Record<string, unknown>;
       clientCommandId: string;
     }
   | { type: "ping" };

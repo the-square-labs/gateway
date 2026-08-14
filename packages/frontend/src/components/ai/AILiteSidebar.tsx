@@ -37,6 +37,7 @@ import {
   Search,
   Trash2,
   UserRoundX,
+  X,
 } from "lucide-react";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -68,12 +69,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { ResizeHandle } from "@/components/ui/resize-handle";
 import { Separator } from "@/components/ui/separator";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { aiConversationRoute } from "@/lib/ai-conversation-route";
 import { visibleNavigationGroups } from "@/lib/app-navigation";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
+import { isSidebarNavigationActive } from "@/lib/sidebar-navigation";
 import { cn, getInitials } from "@/lib/utils";
 import type { AIConversationFolder, AIConversationSummary } from "@/services/ai-conversations";
 import { api } from "@/services/api";
@@ -128,6 +131,9 @@ function writeExpandedProjectIds(ids: Set<string>) {
 }
 
 interface AILiteSidebarProps {
+  alwaysExpanded?: boolean;
+  mobileMenu?: boolean;
+  onClose?: () => void;
   sidebarWidth?: number;
   onSidebarWidthChange?: (width: number) => void;
   isResizing?: boolean;
@@ -136,6 +142,9 @@ interface AILiteSidebarProps {
 }
 
 export function AILiteSidebar({
+  alwaysExpanded = false,
+  mobileMenu = false,
+  onClose,
   sidebarWidth = 260,
   onSidebarWidthChange,
   isResizing = false,
@@ -181,6 +190,7 @@ export function AILiteSidebar({
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const pointerPositionRef = useRef<SidebarPointerPosition | null>(null);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(readExpandedProjectIds);
+  const [sectionsOpen, setSectionsOpen] = useState(false);
   const {
     open: folderDialogOpen,
     value: folderDialog,
@@ -220,7 +230,7 @@ export function AILiteSidebar({
       ),
     }))
     .filter((group) => group.items.length > 0);
-  const isExpanded = sidebarOpen;
+  const isExpanded = alwaysExpanded || sidebarOpen;
   const pinnedConversationSet = new Set(pinnedAIConversationIds);
   const pinnedConversations = pinnedAIConversationIds
     .map((id) => recentConversations.find((conversation) => conversation.id === id))
@@ -366,7 +376,7 @@ export function AILiteSidebar({
 
   return (
     <aside
-      style={{ width: isExpanded ? sidebarWidth : 48 }}
+      style={{ width: alwaysExpanded ? "100%" : isExpanded ? sidebarWidth : 48 }}
       onPointerEnter={(event) => {
         pointerPositionRef.current = { x: event.clientX, y: event.clientY };
       }}
@@ -410,6 +420,21 @@ export function AILiteSidebar({
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8"
+                    onClick={() => openPalette(true)}
+                    aria-label="Search"
+                  >
+                    <Search className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">Search</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
                     onClick={handleNewChat}
                     aria-label="New Work Session"
                   >
@@ -425,20 +450,26 @@ export function AILiteSidebar({
                     asChild
                     variant="ghost"
                     size="icon"
-                    className="relative h-8 w-8"
+                    className={cn(
+                      "h-8 w-8",
+                      isSidebarNavigationActive(location.pathname, "/dashboard") &&
+                        "bg-sidebar-accent"
+                    )}
                     aria-label="Dashboard"
                   >
                     <Link to="/dashboard">
-                      <LayoutDashboard className="h-4 w-4" />
-                      {dashboardAttention && (
-                        <span
-                          aria-label={dashboardAttentionLabel(dashboardAttention)}
-                          className={cn(
-                            "absolute right-1 top-1 h-2 w-2",
-                            dashboardAttentionDotClass(dashboardAttention)
-                          )}
-                        />
-                      )}
+                      <span className="relative flex">
+                        <LayoutDashboard className="h-4 w-4" />
+                        {dashboardAttention && (
+                          <span
+                            aria-label={dashboardAttentionLabel(dashboardAttention)}
+                            className={cn(
+                              "absolute -right-2 -top-2 h-2 w-2",
+                              dashboardAttentionDotClass(dashboardAttention)
+                            )}
+                          />
+                        )}
+                      </span>
                     </Link>
                   </Button>
                 </TooltipTrigger>
@@ -460,6 +491,22 @@ export function AILiteSidebar({
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent side="right">Starting Work Session...</TooltipContent>
+                  </Tooltip>
+                )}
+                {recentConversations.length === 0 && !isStartingConversation && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 bg-sidebar-accent"
+                        aria-label="New Work Session"
+                        onClick={handleNewChat}
+                      >
+                        <MessageSquare className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">New Work Session</TooltipContent>
                   </Tooltip>
                 )}
                 {recentConversations.map((conversation) => {
@@ -484,6 +531,46 @@ export function AILiteSidebar({
                   );
                 })}
               </nav>
+
+              {navigateToGroups.length > 0 && (
+                <Tooltip>
+                  <DropdownMenu>
+                    <TooltipTrigger asChild>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          aria-label="All sections"
+                        >
+                          <Compass className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">All sections</TooltipContent>
+                    <DropdownMenuContent
+                      side="right"
+                      align="end"
+                      className="max-h-[min(70vh,34rem)] w-60 overflow-y-auto"
+                    >
+                      {navigateToGroups.map((group, groupIndex) => (
+                        <div key={group.id}>
+                          {groupIndex > 0 && <DropdownMenuSeparator />}
+                          <DropdownMenuLabel className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                            {group.label}
+                          </DropdownMenuLabel>
+                          {group.items.map((item) => (
+                            <DropdownMenuItem key={item.id} onSelect={() => navigate(item.href)}>
+                              <item.icon className="h-4 w-4" />
+                              <span>{item.name}</span>
+                            </DropdownMenuItem>
+                          ))}
+                        </div>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </Tooltip>
+              )}
 
               {
                 <Tooltip>
@@ -560,8 +647,10 @@ export function AILiteSidebar({
             )}
 
             <div
-              className="flex items-center justify-between px-2"
-              style={{ paddingTop: 10, paddingBottom: 10, paddingLeft: 10 }}
+              className={cn("flex items-center justify-between px-2", mobileMenu && "h-12")}
+              style={
+                mobileMenu ? undefined : { paddingTop: 10, paddingBottom: 10, paddingLeft: 10 }
+              }
             >
               <span className="flex items-center gap-1.5 whitespace-nowrap pl-1 text-sm font-semibold text-foreground/80">
                 <img src="/android-chrome-192x192.png" alt="Gateway" className="h-5 w-5" />
@@ -573,7 +662,7 @@ export function AILiteSidebar({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-10 w-10 md:h-7 md:w-7"
+                      className={cn("md:h-7 md:w-7", mobileMenu ? "h-8 w-8" : "h-10 w-10")}
                       aria-label="Create"
                     >
                       <Plus className="h-4 w-4" />
@@ -597,13 +686,14 @@ export function AILiteSidebar({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-10 w-10 md:h-7 md:w-7"
-                      onClick={toggleSidebar}
+                      className={cn("md:h-7 md:w-7", mobileMenu ? "h-8 w-8" : "h-10 w-10")}
+                      onClick={onClose ?? toggleSidebar}
+                      aria-label={onClose ? "Close menu" : "Close sidebar"}
                     >
-                      <PanelLeftClose className="h-4 w-4" />
+                      {onClose ? <X className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Close sidebar</TooltipContent>
+                  <TooltipContent>{onClose ? "Close menu" : "Close sidebar"}</TooltipContent>
                 </Tooltip>
               </div>
             </div>
@@ -627,7 +717,7 @@ export function AILiteSidebar({
                 to="/dashboard"
                 className={cn(
                   "flex items-center gap-3 px-3 py-2 text-sm transition-colors",
-                  location.pathname === "/dashboard"
+                  isSidebarNavigationActive(location.pathname, "/dashboard")
                     ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
                     : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                 )}
@@ -822,38 +912,53 @@ export function AILiteSidebar({
               {navigateToGroups.length > 0 && (
                 <>
                   <div className="px-2 py-2">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          type="button"
-                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        >
-                          <Compass className="h-4 w-4 shrink-0" />
-                          <span className="min-w-0 flex-1 truncate">All sections</span>
-                          <ChevronRight className="h-4 w-4 shrink-0" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent
-                        side="right"
-                        align="end"
-                        className="max-h-[min(70vh,34rem)] w-60 overflow-y-auto"
+                    {mobileMenu ? (
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        onClick={() => setSectionsOpen(true)}
                       >
-                        {navigateToGroups.map((group, groupIndex) => (
-                          <div key={group.id}>
-                            {groupIndex > 0 && <DropdownMenuSeparator />}
-                            <DropdownMenuLabel className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                              {group.label}
-                            </DropdownMenuLabel>
-                            {group.items.map((item) => (
-                              <DropdownMenuItem key={item.id} onSelect={() => navigate(item.href)}>
-                                <item.icon className="h-4 w-4" />
-                                <span>{item.name}</span>
-                              </DropdownMenuItem>
-                            ))}
-                          </div>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                        <Compass className="h-4 w-4 shrink-0" />
+                        <span className="min-w-0 flex-1 truncate">All sections</span>
+                        <ChevronRight className="h-4 w-4 shrink-0" />
+                      </button>
+                    ) : (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          >
+                            <Compass className="h-4 w-4 shrink-0" />
+                            <span className="min-w-0 flex-1 truncate">All sections</span>
+                            <ChevronRight className="h-4 w-4 shrink-0" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent
+                          side="right"
+                          align="end"
+                          className="max-h-[min(70vh,34rem)] w-60 overflow-y-auto"
+                        >
+                          {navigateToGroups.map((group, groupIndex) => (
+                            <div key={group.id}>
+                              {groupIndex > 0 && <DropdownMenuSeparator />}
+                              <DropdownMenuLabel className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                                {group.label}
+                              </DropdownMenuLabel>
+                              {group.items.map((item) => (
+                                <DropdownMenuItem
+                                  key={item.id}
+                                  onSelect={() => navigate(item.href)}
+                                >
+                                  <item.icon className="h-4 w-4" />
+                                  <span>{item.name}</span>
+                                </DropdownMenuItem>
+                              ))}
+                            </div>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
                   </div>
                   <Separator />
                 </>
@@ -916,6 +1021,53 @@ export function AILiteSidebar({
           </motion.div>
         )}
       </AnimatePresence>
+      {mobileMenu && (
+        <Sheet open={sectionsOpen} onOpenChange={setSectionsOpen}>
+          <SheetContent
+            side="bottom"
+            className="flex max-h-[80dvh] w-full flex-col gap-0 rounded-t-xl p-0"
+          >
+            <SheetHeader className="border-b border-border px-4 py-3 text-left">
+              <SheetTitle>All sections</SheetTitle>
+            </SheetHeader>
+            <nav className="min-h-0 flex-1 overflow-y-auto dashboard-scrollbar">
+              {navigateToGroups.map((group, groupIndex) => (
+                <div key={group.id}>
+                  {groupIndex > 0 && <Separator />}
+                  <div className="space-y-0.5 px-2 py-2">
+                    <p className="px-3 py-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      {group.label}
+                    </p>
+                    {group.items.map((item) => {
+                      const isActive = isSidebarNavigationActive(location.pathname, item.href);
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={cn(
+                            "flex w-full items-center gap-3 overflow-hidden whitespace-nowrap px-3 py-2 text-left text-sm transition-colors",
+                            isActive
+                              ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                              : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                          )}
+                          onClick={() => {
+                            setSectionsOpen(false);
+                            navigate(item.href);
+                            onClose?.();
+                          }}
+                        >
+                          <item.icon className="h-4 w-4 shrink-0" />
+                          <span className="truncate">{item.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </nav>
+          </SheetContent>
+        </Sheet>
+      )}
       {folderDialog && (
         <ConversationFolderDialog
           open={folderDialogOpen}
@@ -1320,6 +1472,7 @@ function getConversationStatusIcon(conversation: AIConversationSummary) {
     case "waiting_for_approval":
     case "waiting_for_answer":
     case "waiting_for_credential":
+    case "waiting_for_setup":
       return CircleAlert;
     default:
       if (conversation.planStatus === "awaiting_decision" || conversation.planStatus === "paused") {
@@ -1329,12 +1482,10 @@ function getConversationStatusIcon(conversation: AIConversationSummary) {
   }
 }
 
-function isConversationProgressActive(conversation: AIConversationSummary) {
+export function isConversationProgressActive(conversation: AIConversationSummary) {
   return (
     conversation.activeRunStatus === "queued" ||
     conversation.activeRunStatus === "running" ||
-    conversation.planStatus === "drafting" ||
-    conversation.planStatus === "validating" ||
     conversation.planStatus === "executing" ||
     conversation.planStatus === "verifying"
   );
@@ -1353,7 +1504,8 @@ function getConversationStatusIconClassName(conversation: AIConversationSummary)
     "h-4 w-4 shrink-0",
     conversation.activeRunStatus === "waiting_for_approval" ||
       conversation.activeRunStatus === "waiting_for_answer" ||
-      conversation.activeRunStatus === "waiting_for_credential"
+      conversation.activeRunStatus === "waiting_for_credential" ||
+      conversation.activeRunStatus === "waiting_for_setup"
       ? "text-warning-foreground"
       : conversation.planStatus === "awaiting_decision" || conversation.planStatus === "paused"
         ? "text-warning-foreground"
@@ -1368,6 +1520,7 @@ function getFolderStatusIcon(conversations: AIConversationSummary[], expanded: b
         conversation.activeRunStatus === "waiting_for_approval" ||
         conversation.activeRunStatus === "waiting_for_answer" ||
         conversation.activeRunStatus === "waiting_for_credential" ||
+        conversation.activeRunStatus === "waiting_for_setup" ||
         conversation.planStatus === "awaiting_decision" ||
         conversation.planStatus === "paused"
     )

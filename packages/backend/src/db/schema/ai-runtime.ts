@@ -12,6 +12,7 @@ export type AIRunStatus =
   | 'waiting_for_approval'
   | 'waiting_for_answer'
   | 'waiting_for_credential'
+  | 'waiting_for_setup'
   | 'completed'
   | 'failed'
   | 'stopped';
@@ -42,6 +43,7 @@ export type AIToolRoundStatus =
   | 'collecting'
   | 'waiting_questions'
   | 'waiting_approvals'
+  | 'waiting_setup'
   | 'ready'
   | 'executing'
   | 'completed'
@@ -50,6 +52,8 @@ export type AIToolRoundStatus =
 
 export type AIQuestionStatus = 'pending' | 'answered' | 'stopped';
 export type AICredentialChallengeStatus = 'pending' | 'authorized' | 'rejected' | 'stopped';
+export type AISetupInteractionKind = 'connector_setup' | 'node_enrollment';
+export type AISetupInteractionStatus = 'pending' | 'configured' | 'cancelled' | 'stopped';
 export type AIConversationInputMode = 'queued' | 'steer';
 export type AIConversationInputStatus = 'pending' | 'consumed' | 'cancelled';
 export type AIRunPurpose = 'direct' | 'plan_draft' | 'plan_validation' | 'plan_execution' | 'plan_verification';
@@ -87,7 +91,7 @@ export const aiRuns = pgTable(
     oneActivePerConversationIdx: uniqueIndex('ai_runs_one_active_per_conversation_idx')
       .on(table.conversationId)
       .where(
-        sql`${table.status} IN ('queued', 'running', 'waiting_for_approval', 'waiting_for_answer', 'waiting_for_credential')`
+        sql`${table.status} IN ('queued', 'running', 'waiting_for_approval', 'waiting_for_answer', 'waiting_for_credential', 'waiting_for_setup')`
       ),
     userConversationCommandIdx: uniqueIndex('ai_runs_user_conversation_command_idx').on(
       table.userId,
@@ -250,7 +254,7 @@ export const aiRunCredentialChallenges = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    provider: varchar('provider', { length: 32 }).$type<'gitlab'>().notNull(),
+    provider: varchar('provider', { length: 32 }).$type<'gitlab' | 'github' | 'git' | 'cloudflare' | 'ssh'>().notNull(),
     connectorId: uuid('connector_id')
       .notNull()
       .references(() => integrationConnectors.id, { onDelete: 'cascade' }),
@@ -276,6 +280,45 @@ export const aiRunCredentialChallenges = pgTable(
   })
 );
 
+export const aiRunSetupInteractions = pgTable(
+  'ai_run_setup_interactions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => aiRuns.id, { onDelete: 'cascade' }),
+    roundId: uuid('round_id').references(() => aiRunToolRounds.id, { onDelete: 'cascade' }),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => aiConversations.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    toolCallId: varchar('tool_call_id', { length: 255 }).notNull(),
+    toolName: varchar('tool_name', { length: 255 }).notNull(),
+    kind: varchar('kind', { length: 32 }).$type<AISetupInteractionKind>().notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull().default({}),
+    status: varchar('status', { length: 32 }).$type<AISetupInteractionStatus>().notNull().default('pending'),
+    result: jsonb('result').$type<Record<string, unknown> | null>(),
+    resolvedByUserId: uuid('resolved_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    resolveClientCommandId: varchar('resolve_client_command_id', { length: 128 }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    runToolCallIdx: uniqueIndex('ai_run_setup_interactions_run_tool_call_idx').on(table.runId, table.toolCallId),
+    resolveCommandIdx: uniqueIndex('ai_run_setup_interactions_resolve_command_idx')
+      .on(table.userId, table.resolveClientCommandId)
+      .where(sql`${table.resolveClientCommandId} IS NOT NULL`),
+    conversationStatusIdx: index('ai_run_setup_interactions_conversation_status_idx').on(
+      table.conversationId,
+      table.status
+    ),
+  })
+);
+
 export type AIRun = typeof aiRuns.$inferSelect;
 export type NewAIRun = typeof aiRuns.$inferInsert;
 export type AIRunToolRound = typeof aiRunToolRounds.$inferSelect;
@@ -286,3 +329,5 @@ export type AIRunQuestion = typeof aiRunQuestions.$inferSelect;
 export type NewAIRunQuestion = typeof aiRunQuestions.$inferInsert;
 export type AICredentialChallenge = typeof aiRunCredentialChallenges.$inferSelect;
 export type NewAICredentialChallenge = typeof aiRunCredentialChallenges.$inferInsert;
+export type AISetupInteraction = typeof aiRunSetupInteractions.$inferSelect;
+export type NewAISetupInteraction = typeof aiRunSetupInteractions.$inferInsert;

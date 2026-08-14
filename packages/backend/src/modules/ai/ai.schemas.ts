@@ -45,6 +45,7 @@ export const ChatRequestSchema = z.object({
 });
 
 export const AIContextEstimateRequestSchema = z.object({
+  messages: z.array(ChatMessageSchema).optional(),
   context: PageContextSchema.optional(),
   conversationId: z.string().uuid().optional().nullable(),
   model: z.string().trim().max(255).optional(),

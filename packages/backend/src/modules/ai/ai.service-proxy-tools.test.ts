@@ -15,6 +15,7 @@ const BASE_USER = {
 
 const COMPACT_HOST = {
   id: 'proxy-1',
+  slug: 'app-example-com',
   type: 'proxy',
   domainNames: ['app.example.com'],
   enabled: true,

@@ -23,11 +23,11 @@ describe('AI context limits', () => {
     });
   });
 
-  it('derives the direct-provider soft compact limit at ninety percent', () => {
+  it('derives the direct-provider soft compact limit at eighty percent', () => {
     expect(directProviderContextLimits(100_000, 8_000)).toEqual({
       contextWindow: 100_000,
       maxInputTokens: 100_000,
-      autoCompactTokenLimit: 90_000,
+      autoCompactTokenLimit: 80_000,
       outputReserveTokens: 8_000,
     });
   });
@@ -37,27 +37,27 @@ describe('AI context limits', () => {
       normalizeAIContextLimits({
         contextWindow: 100_000,
         maxInputTokens: 120_000,
-        autoCompactTokenLimit: 90_000,
+        autoCompactTokenLimit: 80_000,
       })
     ).toThrowError(expect.objectContaining({ code: 'AI_MODEL_CONTEXT_LIMIT_UNKNOWN' }));
   });
 
   it('subtracts system, schema, and output reserve from the conversation budget', () => {
     const limits = directProviderContextLimits(100_000, 8_000);
-    expect(availableConversationTokenBudget(limits, 10_000, 12_000)).toBe(60_000);
+    expect(availableConversationTokenBudget(limits, 10_000, 12_000)).toBe(50_000);
   });
 
   it('clamps tool and round inline limits to 8k-30k and 16k-60k', () => {
     const limits = directProviderContextLimits(500_000, 10_000);
     expect(toolOutputInlineLimits(limits, 10_000, 10_000)).toEqual({
-      availableBudget: 420_000,
-      perToolInlineLimit: 30_000,
+      availableBudget: 370_000,
+      perToolInlineLimit: 29_600,
       roundInlineLimit: 60_000,
     });
 
     const medium = directProviderContextLimits(100_000, 8_000);
     expect(toolOutputInlineLimits(medium, 5_000, 5_000)).toEqual({
-      availableBudget: 72_000,
+      availableBudget: 62_000,
       perToolInlineLimit: 8_000,
       roundInlineLimit: 16_000,
     });
@@ -66,9 +66,9 @@ describe('AI context limits', () => {
   it('bounds both inline limits by the actual budget for tiny windows', () => {
     const limits = directProviderContextLimits(10_000, 4_000);
     expect(toolOutputInlineLimits(limits, 2_000, 2_500)).toEqual({
-      availableBudget: 500,
-      perToolInlineLimit: 500,
-      roundInlineLimit: 500,
+      availableBudget: 0,
+      perToolInlineLimit: 0,
+      roundInlineLimit: 0,
     });
   });
 });

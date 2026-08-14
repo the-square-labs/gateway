@@ -19,9 +19,9 @@ Gateway AI starts conversations with a small base tool surface. Domain-specific 
 ## Tool Discovery
 - If the needed operation is not available, call discover_tools first.
 - Use internal_documentation before Gateway-specific workflows, tool argument details, permission-sensitive operations, and recently added capabilities. Do not answer those from general intuition.
-- Use discover_tools({ category: "Logging" }) before managing logging environments/schemas/logs.
-- Use discover_tools({ category: "Docker" }) before managing Docker containers/images/volumes/networks.
-- Use discover_tools({ category: "Inference" }) before configuring inference providers, models, limits, or tokens.
+- Use discover_tools({ categories: ["Logging"], includeTools: true }) before managing logging environments/schemas/logs.
+- Use discover_tools({ categories: ["Docker"], includeTools: true }) before managing Docker containers/images/volumes/networks.
+- Use discover_tools({ categories: ["Inference"], includeTools: true }) before configuring inference providers, models, limits, or tokens.
 - Use discover_tools({ query: "certificate" }) when you know the task but not the category.
 - After discovery, use internal_documentation for workflow details and argument shapes.
 
@@ -313,7 +313,7 @@ Gateway can enable OIDC, password, and email one-time-code sign-in independently
 ## Managing Users
 - View all users: list_users
 - Change a user's group: update_user_role(userId, groupId) — changes their permissions immediately
-- The Administration UI can assign additional per-user scopes on top of the user's group, but only from scopes the acting administrator already has. The current AI user tool does not expose this override mutation.
+- Replace a user's exact additional per-user scopes: set_user_additional_permissions(userId, additionalScopes). Pass [] to reset all additional permissions without changing the user's group. Only grant scopes the acting administrator already has.
 - Block or unblock users from the Administration UI, API, or AI Workspace.
 - Deleting a user is a soft-delete: their access and tokens are revoked, they are hidden from operational user lists, and historical audit/usage data remains intact. Only a system administrator can restore a deleted user, and restore leaves them blocked until explicitly unblocked.
 
@@ -1243,6 +1243,7 @@ Gateway GitLab connectors are configured by admins in Settings -> Integrations. 
 
 ## Discovery
 - Use gitlab_list_connectors to find enabled connectors.
+- No connector is a setup choice, not a terminal failure. For a GitLab repository, ask the user whether they want a shared GitLab-instance connector or a generic connector scoped to this repository before treating repository inspection as unavailable.
 - If Gateway asks for GitLab authorization, wait for the user to complete or cancel the authorization modal. Never ask the user to paste a PAT into chat.
 - Use gitlab_list_projects or gitlab_search_projects to find projects already synced through Gateway allowlist rules.
 - Project arguments accept the synced project remote ID or full path.
@@ -1459,7 +1460,7 @@ Create a connector in the Cloudflare integration UI or through the authenticated
 - A wildcard certificate or a deployment where port 80 is unavailable usually needs DNS-01.
 
 ## Constraints And Diagnostics
-If no enabled connector has a matching zone, DNS-01 cannot be automated. If several connectors match, resolve the ambiguity rather than choosing one silently. Existing DNS records with a different target require explicit approval before overwrite. Use connector test/sync, zone status, and DNS propagation checks before retrying certificate issuance. The current assistant tool surface does not configure connectors directly; direct the user to the integration UI or API instead of inventing a tool call.`,
+If no enabled connector has a matching zone, DNS-01 cannot be automated. If several connectors match, resolve the ambiguity rather than choosing one silently. Existing DNS records with a different target require explicit approval before overwrite. Use connector test/sync, zone status, and DNS propagation checks before retrying certificate issuance. If the API token is already present in the user's current request, create_cloudflare_connector can create the connector under approval; otherwise open the concrete Cloudflare setup flow and keep the secret out of chat history.`,
 
   'docker-registries': `# Docker Registries
 

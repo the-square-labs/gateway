@@ -92,6 +92,7 @@ export type AIPlanStatus =
   | 'validating'
   | 'awaiting_decision'
   | 'executing'
+  | 'pause_requested'
   | 'paused'
   | 'verifying'
   | 'completed'
@@ -221,6 +222,12 @@ export interface ChatMessage {
   compactEpoch?: number;
   compactBoundaryMessageId?: string;
   compactTailMessageCount?: number;
+  hiddenSystemEvent?: boolean;
+  lifecycleEvent?: {
+    type: 'planning_cancelled' | 'context_compacted';
+    clientCommandId?: string;
+    trigger?: 'manual' | 'auto';
+  };
   steer?: boolean;
 }
 
@@ -268,6 +275,14 @@ export type WSClientMessage =
       workMode?: 'normal' | 'plan';
     }
   | {
+      type: 'conversation.start_scenario';
+      clientCommandId: string;
+      scenarioId: string;
+      context?: PageContext;
+      model?: string;
+      reasoningEffort?: string;
+    }
+  | {
       type: 'conversation.continue';
       conversationId: string;
       clientCommandId: string;
@@ -309,6 +324,7 @@ export type WSClientMessage =
   | { type: 'plan.pause'; conversationId: string; planId: string; clientCommandId: string }
   | { type: 'plan.resume'; conversationId: string; planId: string; clientCommandId: string }
   | { type: 'plan.cancel'; conversationId: string; planId: string; clientCommandId: string }
+  | { type: 'conversation.abandon_planning'; conversationId: string; clientCommandId: string }
   | {
       type: 'approval.decide';
       conversationId: string;
@@ -331,6 +347,15 @@ export type WSClientMessage =
       runId: string;
       challengeId: string;
       decision: 'authorized' | 'rejected';
+      clientCommandId: string;
+    }
+  | {
+      type: 'setup.resolve';
+      conversationId: string;
+      runId: string;
+      interactionId: string;
+      status: 'configured' | 'cancelled';
+      result?: Record<string, unknown>;
       clientCommandId: string;
     }
   | { type: 'ping' };
@@ -386,7 +411,7 @@ export type WSServerMessage =
       requestId: string;
       id: string;
       name: string;
-      provider: 'gitlab';
+      provider: 'gitlab' | 'github' | 'git' | 'cloudflare' | 'ssh';
       connectorId: string;
       arguments: Record<string, unknown>;
       roundId?: string;
@@ -486,7 +511,7 @@ export interface ToolExecutionResult {
   result?: unknown;
   error?: string;
   credentialChallenge?: {
-    provider: 'gitlab';
+    provider: 'gitlab' | 'github' | 'git' | 'cloudflare' | 'ssh';
     connectorId: string;
   };
   invalidateStores: string[];

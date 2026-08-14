@@ -19,6 +19,7 @@ export type AIPlanStatus =
   | 'validating'
   | 'awaiting_decision'
   | 'executing'
+  | 'pause_requested'
   | 'paused'
   | 'verifying'
   | 'completed'
@@ -85,7 +86,7 @@ export const aiPlans = pgTable(
     oneActivePerConversationIdx: uniqueIndex('ai_plans_one_active_per_conversation_idx')
       .on(table.conversationId)
       .where(
-        sql`${table.status} IN ('drafting', 'validating', 'awaiting_decision', 'executing', 'paused', 'verifying')`
+        sql`${table.status} IN ('drafting', 'validating', 'awaiting_decision', 'executing', 'pause_requested', 'paused', 'verifying')`
       ),
     userStatusIdx: index('ai_plans_user_status_idx').on(table.userId, table.status),
     conversationCreatedIdx: index('ai_plans_conversation_created_idx').on(table.conversationId, table.createdAt),

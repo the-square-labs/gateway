@@ -588,6 +588,63 @@ const RAW_TOKEN_SCOPES = [
     desc: "Clone allowed GitLab repositories into AI sandboxes",
     group: "Integrations: GitLab",
   },
+  // Integrations: GitHub
+  {
+    value: "integrations:github:view",
+    label: "View GitHub Integrations",
+    desc: "View configured GitHub token connectors",
+    group: "Integrations: GitHub",
+  },
+  {
+    value: "integrations:github:manage",
+    label: "Manage GitHub Integrations",
+    desc: "Create, edit, rotate, and delete GitHub token connectors",
+    group: "Integrations: GitHub",
+  },
+  {
+    value: "integrations:github:system",
+    label: "Use GitHub System Credential",
+    desc: "Use the connector credential instead of a personal GitHub authorization",
+    group: "Integrations: GitHub",
+  },
+  // Integrations: Generic Git
+  {
+    value: "integrations:git:view",
+    label: "View Git Integrations",
+    desc: "View configured generic Git connectors",
+    group: "Integrations: Git",
+  },
+  {
+    value: "integrations:git:manage",
+    label: "Manage Git Integrations",
+    desc: "Create, edit, rotate, and delete generic Git connectors",
+    group: "Integrations: Git",
+  },
+  {
+    value: "integrations:git:system",
+    label: "Use Git System Credential",
+    desc: "Use the connector credential instead of a personal Git authorization",
+    group: "Integrations: Git",
+  },
+  // Integrations: External SSH
+  {
+    value: "integrations:ssh:view",
+    label: "View External SSH Integrations",
+    desc: "View configured external SSH servers",
+    group: "Integrations: SSH",
+  },
+  {
+    value: "integrations:ssh:manage",
+    label: "Manage External SSH Integrations",
+    desc: "Add and configure external SSH servers and jump hosts",
+    group: "Integrations: SSH",
+  },
+  {
+    value: "integrations:ssh:use",
+    label: "Use External SSH Integrations",
+    desc: "Execute approved commands on configured external SSH servers",
+    group: "Integrations: SSH",
+  },
   // Housekeeping
   {
     value: "housekeeping:view",

@@ -10,7 +10,11 @@ import { SetupAccessService } from '@/modules/setup/setup-access.service.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { AppEnv, SessionData, User } from '@/types.js';
-import { getAcceptedSessionCookieNames, LEGACY_SESSION_COOKIE_NAME } from './session-cookie.js';
+import {
+  getAcceptedSessionCookieNames,
+  getSessionCookieNameForUrl,
+  LEGACY_SESSION_COOKIE_NAME,
+} from './session-cookie.js';
 
 const SESSION_COOKIE_NAME = LEGACY_SESSION_COOKIE_NAME;
 const CSRF_HEADER_NAME = 'X-CSRF-Token';
@@ -41,7 +45,15 @@ function extractCredential(c: Context<AppEnv>): { type: CredentialType; value: s
 
   const cookieHeader = c.req.header('Cookie') ?? '';
   if (cookieHeader.includes('gateway_session_')) {
+    const preferredCookieName = getSessionCookieNameForUrl(c.req.url);
+    const preferredSession = getCookie(c, preferredCookieName);
+    if (preferredSession) return { type: 'session', value: preferredSession };
+
+    const legacySession = getCookie(c, SESSION_COOKIE_NAME);
+    if (legacySession) return { type: 'session', value: legacySession };
+
     for (const cookieName of getAcceptedSessionCookieNames()) {
+      if (cookieName === preferredCookieName || cookieName === SESSION_COOKIE_NAME) continue;
       const cookieSession = getCookie(c, cookieName);
       if (cookieSession) return { type: 'session', value: cookieSession };
     }

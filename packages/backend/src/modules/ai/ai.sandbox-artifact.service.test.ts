@@ -106,6 +106,32 @@ describe('AISandboxArtifactService', () => {
     expect(await service.getDownload('user-1', second.id)).toBeTruthy();
   });
 
+  it('returns newest artifacts in bounded pages', async () => {
+    const artifacts = [];
+    for (let index = 0; index < 3; index += 1) {
+      const artifact = await service.saveFromBuffer({
+        userId: 'user-1',
+        conversationId: 'conversation-1',
+        filename: `artifact-${index}.txt`,
+        mediaType: 'text/plain',
+        buffer: Buffer.from(String(index)),
+      });
+      const metaPath = path.join(tempDir, `${artifact.id}.json`);
+      const metadata = JSON.parse(await readFile(metaPath, 'utf8')) as Record<string, unknown>;
+      metadata.createdAt = `2026-08-13T10:00:0${index}.000Z`;
+      await writeFile(metaPath, JSON.stringify(metadata));
+      artifacts.push(artifact);
+    }
+
+    const firstPage = await service.listPageForUser('user-1', 1, 2);
+    const secondPage = await service.listPageForUser('user-1', 2, 2);
+
+    expect(firstPage.items.map((artifact) => artifact.filename)).toEqual(['artifact-2.txt', 'artifact-1.txt']);
+    expect(firstPage.nextPage).toBe(2);
+    expect(secondPage.items.map((artifact) => artifact.filename)).toEqual(['artifact-0.txt']);
+    expect(secondPage.nextPage).toBeNull();
+  });
+
   it('syncs conversation artifacts and makes removed chat images orphaned for housekeeping', async () => {
     const kept = await service.saveFromBuffer({
       userId: 'user-1',

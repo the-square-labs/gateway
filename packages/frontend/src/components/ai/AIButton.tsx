@@ -9,8 +9,16 @@ interface AIButtonProps {
 }
 
 export function AIButton({ iconOnly = false }: AIButtonProps) {
-  const { toggleAIPanel, aiPanelOpen } = useUIStore();
+  const { toggleAIPanel, aiPanelOpen, aiLiteMode } = useUIStore();
   const isEnabled = useAIStore((s) => s.isEnabled);
+
+  const handleClick = () => {
+    if (aiLiteMode) {
+      window.dispatchEvent(new CustomEvent("gateway:open-ai-workspace"));
+      return;
+    }
+    toggleAIPanel();
+  };
 
   if (isEnabled === false) return null;
 
@@ -22,7 +30,7 @@ export function AIButton({ iconOnly = false }: AIButtonProps) {
             variant="ghost"
             size="icon"
             className={`h-8 w-8 ${aiPanelOpen ? "bg-sidebar-accent text-primary" : ""}`}
-            onClick={toggleAIPanel}
+            onClick={handleClick}
           >
             <Sparkles className="h-4 w-4" />
           </Button>
@@ -39,7 +47,7 @@ export function AIButton({ iconOnly = false }: AIButtonProps) {
           variant="ghost"
           size="icon"
           className={`h-10 w-10 md:h-7 md:w-7 ${aiPanelOpen ? "text-primary" : ""}`}
-          onClick={toggleAIPanel}
+          onClick={handleClick}
         >
           <Sparkles className="h-4 w-4" />
         </Button>

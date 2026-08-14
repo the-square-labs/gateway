@@ -47,6 +47,8 @@ import type {
   GitLabConnectorSettings,
 } from "@/types/integrations";
 import { CloudflareIntegrationsSection } from "./CloudflareIntegrationsSection";
+import { ExternalSshIntegrationsSection } from "./ExternalSshIntegrationsSection";
+import { GitIntegrationsSection } from "./GitIntegrationsSection";
 
 const DEFAULT_SETTINGS: GitLabConnectorSettings = {
   autoSyncEnabled: true,
@@ -155,6 +157,8 @@ export function IntegrationsSection() {
     <div className="space-y-6">
       <CloudflareIntegrationsSection />
       <GitLabIntegrationsSection />
+      <GitIntegrationsSection />
+      <ExternalSshIntegrationsSection />
     </div>
   );
 }

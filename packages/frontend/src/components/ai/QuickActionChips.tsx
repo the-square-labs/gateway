@@ -1,7 +1,7 @@
 import { useLocation } from "react-router-dom";
 import { useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
-import type { QuickAction } from "@/types/ai";
+import type { PageContext, QuickAction } from "@/types/ai";
 import { useInferenceQuotaSnapshot } from "./InferenceQuotaStatus";
 
 const QUICK_ACTIONS: Record<string, QuickAction[]> = {
@@ -9,6 +9,12 @@ const QUICK_ACTIONS: Record<string, QuickAction[]> = {
     { label: "System overview", prompt: "Give me an overview of the system status" },
     { label: "Expiring soon", prompt: "Show certificates expiring in the next 30 days" },
     { label: "Health summary", prompt: "What's the health status of all proxy hosts?" },
+    { label: "Recent changes", prompt: "Summarize recent operational changes and their impact" },
+    { label: "What needs attention", prompt: "What needs my attention right now?" },
+    {
+      label: "Plan an improvement",
+      prompt: "Help me plan the most valuable next infrastructure improvement",
+    },
   ],
   "/cas": [
     { label: "List all CAs", prompt: "List all Certificate Authorities" },
@@ -24,6 +30,11 @@ const QUICK_ACTIONS: Record<string, QuickAction[]> = {
     { label: "List all hosts", prompt: "List all proxy hosts with their status" },
     { label: "Create proxy host", prompt: "Help me create a new proxy host" },
     { label: "Unhealthy hosts", prompt: "Show proxy hosts that are offline or degraded" },
+    {
+      label: "Traffic errors",
+      prompt: "Investigate recent traffic errors and affected proxy hosts",
+    },
+    { label: "Secure a host", prompt: "Help me secure a proxy host with a domain and certificate" },
   ],
   "/ssl-certificates": [
     { label: "List SSL certs", prompt: "List all SSL certificates with expiry dates" },
@@ -48,6 +59,11 @@ const QUICK_ACTIONS: Record<string, QuickAction[]> = {
   "/docker/containers": [
     { label: "List containers", prompt: "List all Docker containers across all nodes" },
     { label: "Container status", prompt: "Show a summary of running and stopped containers" },
+    {
+      label: "Investigate failures",
+      prompt: "Investigate containers that recently failed or restarted",
+    },
+    { label: "Release safely", prompt: "Help me plan a safe release for a running container" },
   ],
   "/docker/images": [{ label: "List images", prompt: "List all Docker images" }],
   "/docker/volumes": [{ label: "List volumes", prompt: "List all Docker volumes" }],
@@ -61,9 +77,10 @@ const DEFAULT_ACTIONS: QuickAction[] = [
 
 interface QuickActionChipsProps {
   onSelect: (prompt: string) => void;
+  context?: PageContext;
 }
 
-export function QuickActionChips({ onSelect }: QuickActionChipsProps) {
+export function QuickActionChips({ onSelect, context }: QuickActionChipsProps) {
   const location = useLocation();
   const gatewayInferenceMode = useAIStore(
     (state) => state.providerStatus?.providerType === "gateway_inference"
@@ -71,10 +88,23 @@ export function QuickActionChips({ onSelect }: QuickActionChipsProps) {
   const canViewInferenceUsage = useAuthStore((state) => state.hasScope("feat:ai:use"));
   const inferenceQuota = useInferenceQuotaSnapshot(gatewayInferenceMode && canViewInferenceUsage);
 
-  const actions =
+  const routeActions =
     QUICK_ACTIONS[location.pathname] ||
     QUICK_ACTIONS[location.pathname.replace(/\/[^/]+$/, "")] ||
     DEFAULT_ACTIONS;
+  const resourceActions: QuickAction[] = context?.label
+    ? [
+        {
+          label: `Inspect ${context.label}`,
+          prompt: `Inspect ${context.label} and explain its current state, risks, and next useful action`,
+        },
+        {
+          label: "Investigate this resource",
+          prompt: `Investigate any operational issues for ${context.label} and show the evidence`,
+        },
+      ]
+    : [];
+  const actions = [...resourceActions, ...routeActions].slice(0, 6);
 
   return (
     <div className="flex flex-wrap justify-center gap-1.5 px-3 py-3">

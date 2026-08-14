@@ -1,4 +1,5 @@
-import { and, desc, eq, isNull, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, type SQL } from 'drizzle-orm';
+import { getEnv } from '@/config/env.js';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   type CloudflareConnectorSettings,
@@ -13,6 +14,7 @@ import {
   integrationConnectorProjects,
   integrationConnectorRegistries,
   integrationConnectors,
+  integrationGitHubOAuthSessions,
 } from '@/db/schema/index.js';
 import { hasScope } from '@/lib/permissions.js';
 import { buildWhere } from '@/lib/utils.js';
@@ -47,6 +49,10 @@ import type {
   CloudflareConnectorCreateInput,
   CloudflareConnectorListQuery,
   CloudflareConnectorUpdateInput,
+  GitConnectorCreateInput,
+  GitConnectorUpdateInput,
+  GitUserCredentialAuthorizeInput,
+  GitHubOAuthStartInput,
   GitLabAllowlistEntryInput,
   GitLabConnectorCreateInput,
   GitLabConnectorListQuery,
@@ -58,6 +64,7 @@ type ConnectorRow = typeof integrationConnectors.$inferSelect;
 type AllowlistRow = typeof integrationConnectorAllowlistEntries.$inferSelect;
 type ProjectRow = typeof integrationConnectorProjects.$inferSelect;
 type CloudflareZoneRow = typeof integrationConnectorCloudflareZones.$inferSelect;
+type GitHubOAuthSessionRow = typeof integrationGitHubOAuthSessions.$inferSelect;
 type GitLabCredentialSource = 'system' | 'personal';
 
 interface ResolvedGitLabCredential {
@@ -88,9 +95,62 @@ const MAX_BACKOFF_SECONDS = 3600;
 const STALE_SYNC_SECONDS = 1800;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function githubApiUrl(baseUrl: string, path: string): string {
+  const url = new URL(baseUrl);
+  if (url.hostname === 'github.com') return `https://api.github.com${path}`;
+  return new URL(`/api/v3${path}`, `${url.protocol}//${url.host}`).toString();
+}
+
+function githubTokenCapabilities(scopes: readonly string[]): IntegrationConnectorCapabilities {
+  const has = (...candidates: string[]) => candidates.some((scope) => scopes.includes(scope));
+  const canUseRepository = has('repo', 'public_repo');
+  return {
+    projectsView: true,
+    repoRead: canUseRepository,
+    repoWrite: canUseRepository,
+    ciView: has('repo', 'public_repo', 'workflow'),
+    ciEdit: has('repo', 'public_repo', 'workflow'),
+    variablesView: canUseRepository,
+    variablesEdit: canUseRepository,
+    webhooksManage: canUseRepository,
+    registryView: has('repo', 'read:packages', 'write:packages'),
+  };
+}
+
+function genericGitCapabilities(): IntegrationConnectorCapabilities {
+  return { projectsView: true, repoRead: true, repoWrite: true };
+}
+
 export interface SafeIntegrationConnector extends Omit<ConnectorRow, 'encryptedToken'> {
   hasToken: boolean;
   tokenMasked: string | null;
+}
+
+export interface GitHubOAuthSession {
+  id: string;
+  status: GitHubOAuthSessionRow['status'];
+  userCode: string;
+  verificationUri: string;
+  pollIntervalSeconds: number;
+  expiresAt: Date;
+  connectorId: string | null;
+  errorMessage: string | null;
+}
+
+export interface GitUserCredentialStatus {
+  provider: 'github' | 'git';
+  connectorId: string;
+  connectorName: string;
+  baseUrl: string;
+  authorized: boolean;
+  status: 'missing' | 'valid' | 'invalid';
+  tokenMasked: string | null;
+  username: string | null;
+  authorizationUrl: string | null;
 }
 
 export class IntegrationsService {
@@ -229,6 +289,493 @@ export class IntegrationsService {
       .orderBy(desc(integrationConnectors.createdAt));
 
     return rows.map((row) => this.toSafeConnector(row));
+  }
+
+  async listGitConnectors(provider: 'github' | 'git', enabled?: boolean) {
+    const conditions: SQL[] = [eq(integrationConnectors.provider, provider)];
+    if (enabled !== undefined) conditions.push(eq(integrationConnectors.enabled, enabled));
+    const rows = await this.db
+      .select()
+      .from(integrationConnectors)
+      .where(buildWhere(conditions))
+      .orderBy(desc(integrationConnectors.createdAt));
+    return Promise.all(
+      rows.map(async (row) => ({
+        ...this.toSafeConnector(row),
+        allowlistEntries: await this.listAllowlistRows(row.id),
+      }))
+    );
+  }
+
+  async githubListRepositoryTree(
+    user: User,
+    input: { connectorId: string; repositoryUrl: string; path?: string; ref?: string }
+  ) {
+    const { connector, repositoryUrl, token } = await this.resolveGitRepository(
+      user,
+      'github',
+      input.connectorId,
+      input.repositoryUrl
+    );
+    const { owner, repository } = this.githubRepositoryIdentity(repositoryUrl);
+    const path = input.path?.trim().replace(/^\/+/, '') ?? '';
+    const query = input.ref?.trim() ? `?ref=${encodeURIComponent(input.ref.trim())}` : '';
+    const response = await this.githubConnectorRequest(
+      connector,
+      token,
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/contents/${path}${query}`
+    );
+    const body = (await response.json().catch(() => null)) as unknown;
+    if (!response.ok) throw this.githubRepositoryRequestError(response.status, body);
+    const entries = Array.isArray(body) ? body : [body];
+    return entries.slice(0, 500).map((entry) => {
+      const item = isPlainRecord(entry) ? entry : {};
+      return {
+        name: typeof item.name === 'string' ? item.name : '',
+        path: typeof item.path === 'string' ? item.path : '',
+        type: typeof item.type === 'string' ? item.type : 'unknown',
+        size: typeof item.size === 'number' ? item.size : null,
+        sha: typeof item.sha === 'string' ? item.sha : null,
+      };
+    });
+  }
+
+  async githubReadRepositoryFile(
+    user: User,
+    input: { connectorId: string; repositoryUrl: string; path: string; ref?: string }
+  ) {
+    const { connector, repositoryUrl, token } = await this.resolveGitRepository(
+      user,
+      'github',
+      input.connectorId,
+      input.repositoryUrl
+    );
+    const { owner, repository } = this.githubRepositoryIdentity(repositoryUrl);
+    const path = input.path.trim().replace(/^\/+/, '');
+    if (!path || path.includes('..') || path.includes('\0')) {
+      throw new AppError(400, 'INVALID_REPOSITORY_PATH', 'Repository path must be relative');
+    }
+    const query = input.ref?.trim() ? `?ref=${encodeURIComponent(input.ref.trim())}` : '';
+    const response = await this.githubConnectorRequest(
+      connector,
+      token,
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/contents/${path}${query}`
+    );
+    const body = (await response.json().catch(() => null)) as unknown;
+    if (!response.ok) throw this.githubRepositoryRequestError(response.status, body);
+    const item = isPlainRecord(body) ? body : {};
+    const encoded = typeof item.content === 'string' ? item.content.replace(/\s+/g, '') : '';
+    if (item.encoding !== 'base64' || !encoded) {
+      throw new AppError(400, 'GITHUB_FILE_UNAVAILABLE', 'GitHub did not return file content');
+    }
+    const content = Buffer.from(encoded, 'base64');
+    if (content.byteLength > 262_144) {
+      throw new AppError(413, 'GITHUB_FILE_TOO_LARGE', 'Repository file exceeds the 256 KiB AI read limit');
+    }
+    return {
+      path: typeof item.path === 'string' ? item.path : path,
+      sha: typeof item.sha === 'string' ? item.sha : null,
+      size: content.byteLength,
+      content: content.toString('utf8'),
+    };
+  }
+
+  async githubUpsertRepositoryFile(
+    user: User,
+    input: {
+      connectorId: string;
+      repositoryUrl: string;
+      path: string;
+      branch: string;
+      message: string;
+      content: string;
+    }
+  ) {
+    if (!hasScope(user.scopes, 'integrations:github:manage')) {
+      throw new AppError(403, 'PERMISSION_DENIED', 'GitHub connector manage scope is required');
+    }
+    const { connector, repositoryUrl, token } = await this.resolveGitRepository(
+      user,
+      'github',
+      input.connectorId,
+      input.repositoryUrl
+    );
+    const { owner, repository } = this.githubRepositoryIdentity(repositoryUrl);
+    const path = input.path.trim().replace(/^\/+/, '');
+    if (!path || path.includes('..') || path.includes('\0')) {
+      throw new AppError(400, 'INVALID_REPOSITORY_PATH', 'Repository path must be relative');
+    }
+    if (Buffer.byteLength(input.content, 'utf8') > 524_288) {
+      throw new AppError(413, 'GITHUB_FILE_TOO_LARGE', 'Repository file exceeds the 512 KiB write limit');
+    }
+    const apiPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/contents/${path}`;
+    const existingResponse = await this.githubConnectorRequest(
+      connector,
+      token,
+      `${apiPath}?ref=${encodeURIComponent(input.branch.trim())}`
+    );
+    let sha: string | undefined;
+    if (existingResponse.ok) {
+      const existing = (await existingResponse.json().catch(() => null)) as unknown;
+      if (isPlainRecord(existing) && typeof existing.sha === 'string') sha = existing.sha;
+    } else if (existingResponse.status !== 404) {
+      throw this.githubRepositoryRequestError(existingResponse.status, await existingResponse.json().catch(() => null));
+    }
+    const response = await this.githubConnectorRequest(connector, token, apiPath, {
+      method: 'PUT',
+      body: JSON.stringify({
+        message: input.message.trim(),
+        branch: input.branch.trim(),
+        content: Buffer.from(input.content, 'utf8').toString('base64'),
+        ...(sha ? { sha } : {}),
+      }),
+    });
+    const body = (await response.json().catch(() => null)) as unknown;
+    if (!response.ok) throw this.githubRepositoryRequestError(response.status, body);
+    const result = isPlainRecord(body) ? body : {};
+    const commit = isPlainRecord(result.commit) ? result.commit : {};
+    const content = isPlainRecord(result.content) ? result.content : {};
+    return {
+      repositoryUrl,
+      path,
+      branch: input.branch.trim(),
+      commitSha: typeof commit.sha === 'string' ? commit.sha : null,
+      contentSha: typeof content.sha === 'string' ? content.sha : null,
+    };
+  }
+
+  async gitListRemoteRefs(user: User, input: { connectorId: string; repositoryUrl: string }) {
+    const { connector, repositoryUrl, token, username } = await this.resolveGitRepository(
+      user,
+      'git',
+      input.connectorId,
+      input.repositoryUrl
+    );
+    const url = new URL(repositoryUrl);
+    url.pathname = `${url.pathname.replace(/\/+$/, '')}/info/refs`;
+    url.searchParams.set('service', 'git-upload-pack');
+    const response = await fetch(url, {
+      headers: {
+        accept: 'application/x-git-upload-pack-advertisement',
+        authorization: `Basic ${Buffer.from(`${username}:${token}`).toString('base64')}`,
+      },
+    }).catch(() => null);
+    if (!response) throw new AppError(502, 'GIT_CONNECTION_FAILED', 'Git host could not be reached');
+    if (!response.ok) throw new AppError(400, 'GIT_AUTHORIZATION_INVALID', `Git host rejected access (${response.status})`);
+    const advertised = await response.text();
+    if (advertised.length > 1_048_576) {
+      throw new AppError(413, 'GIT_REFS_TOO_LARGE', 'Git reference advertisement exceeds 1 MiB');
+    }
+    const refs = [...advertised.matchAll(/([0-9a-f]{40,64})\s+(refs\/(?:heads|tags)\/[^\0\n ]+)/gi)]
+      .slice(0, 500)
+      .map((match) => ({ sha: match[1], ref: match[2] }));
+    return { repositoryUrl, refs };
+  }
+
+  async createGitConnector(
+    provider: 'github' | 'git',
+    input: GitConnectorCreateInput,
+    userId: string,
+    authMode: 'token' | 'oauth' = 'token'
+  ) {
+    const baseUrl = this.normalizeBaseUrl(input.baseUrl);
+    if (provider === 'git' && !input.username?.trim()) {
+      throw new AppError(400, 'GIT_USERNAME_REQUIRED', 'Username is required for a generic Git connector');
+    }
+    const githubIdentity = provider === 'github' ? await this.validateGitHubToken(baseUrl, input.token) : null;
+    const capabilities = githubIdentity?.capabilities ?? genericGitCapabilities();
+    const allowlistEntries = this.dedupeAllowlistEntries(
+      input.repositoryMode === 'single_repository'
+        ? [
+            {
+              entryType: 'project' as const,
+              remoteId: input.repositoryUrl!,
+              fullPath: input.repositoryUrl!,
+              name: input.repositoryUrl!,
+              webUrl: input.repositoryUrl,
+            },
+          ]
+        : (input.allowlistEntries ?? [])
+    );
+    const [row] = await this.db
+      .insert(integrationConnectors)
+      .values({
+        provider,
+        name: input.name,
+        baseUrl,
+        enabled: input.enabled,
+        authMode,
+        username: githubIdentity?.username ?? input.username?.trim() ?? null,
+        encryptedToken: this.encryptToken(input.token),
+        tokenLast4: this.tokenLast4(input.token),
+        allowlistMode: 'selected',
+        settings: { repositoryMode: input.repositoryMode, autoSyncEnabled: false, autoSyncIntervalSeconds: 86_400 },
+        capabilities,
+        testedAt: new Date(),
+      })
+      .returning();
+    await this.replaceAllowlistEntries(row.id, allowlistEntries);
+    await this.auditService.log({
+      action: `integrations.${provider}.connector.create`,
+      userId,
+      resourceType: 'integration-connector',
+      resourceId: row.id,
+      details: { name: row.name, baseUrl: row.baseUrl, repositoryMode: input.repositoryMode, authMode },
+    });
+    this.emitConnector(row.id, 'created');
+    return { ...this.toSafeConnector(row), allowlistEntries };
+  }
+
+  async updateGitConnector(provider: 'github' | 'git', id: string, input: GitConnectorUpdateInput, userId: string) {
+    const existing = await this.getConnectorRow(id, provider);
+    const updates: Partial<typeof integrationConnectors.$inferInsert> = { updatedAt: new Date() };
+    if (input.name !== undefined) updates.name = input.name;
+    if (input.baseUrl !== undefined) updates.baseUrl = this.normalizeBaseUrl(input.baseUrl);
+    if (input.enabled !== undefined) updates.enabled = input.enabled;
+    if (input.username !== undefined) updates.username = input.username?.trim() || null;
+    if (input.token !== undefined) {
+      if (provider === 'github') {
+        const identity = await this.validateGitHubToken(
+          input.baseUrl !== undefined ? this.normalizeBaseUrl(input.baseUrl) : existing.baseUrl,
+          input.token
+        );
+        updates.capabilities = identity.capabilities;
+        updates.username = identity.username;
+      }
+      updates.encryptedToken = this.encryptToken(input.token);
+      updates.tokenLast4 = this.tokenLast4(input.token);
+      updates.testedAt = new Date();
+    }
+    if (input.repositoryMode !== undefined) {
+      updates.allowlistMode = 'selected';
+      updates.settings = {
+        repositoryMode: input.repositoryMode,
+        autoSyncEnabled: false,
+        autoSyncIntervalSeconds: 86_400,
+      };
+    }
+    const [row] = await this.db
+      .update(integrationConnectors)
+      .set(updates)
+      .where(eq(integrationConnectors.id, existing.id))
+      .returning();
+    if (input.repositoryUrl || input.allowlistEntries) {
+      const entries = input.repositoryUrl
+        ? [
+            {
+              entryType: 'project' as const,
+              remoteId: input.repositoryUrl,
+              fullPath: input.repositoryUrl,
+              name: input.repositoryUrl,
+              webUrl: input.repositoryUrl,
+            },
+          ]
+        : input.allowlistEntries!;
+      await this.replaceAllowlistEntries(existing.id, this.dedupeAllowlistEntries(entries));
+    }
+    await this.auditService.log({
+      action: `integrations.${provider}.connector.update`,
+      userId,
+      resourceType: 'integration-connector',
+      resourceId: existing.id,
+      details: { name: row.name },
+    });
+    this.emitConnector(existing.id, 'updated');
+    return { ...this.toSafeConnector(row), allowlistEntries: await this.listAllowlistRows(existing.id) };
+  }
+
+  private async validateGitHubToken(
+    baseUrl: string,
+    token: string
+  ): Promise<{ capabilities: IntegrationConnectorCapabilities; username: string; scopes: string[] }> {
+    let response: Response;
+    try {
+      response = await fetch(githubApiUrl(baseUrl, '/user'), {
+        headers: {
+          accept: 'application/vnd.github+json',
+          authorization: `Bearer ${token}`,
+          'x-github-api-version': '2022-11-28',
+        },
+      });
+    } catch {
+      throw new AppError(400, 'GITHUB_CONNECTION_FAILED', 'GitHub could not be reached');
+    }
+    if (!response.ok) {
+      throw new AppError(400, 'GITHUB_AUTHORIZATION_INVALID', 'GitHub rejected this access token');
+    }
+    const body = (await response.json().catch(() => null)) as { login?: unknown } | null;
+    const username = typeof body?.login === 'string' ? body.login.trim() : '';
+    if (!username) {
+      throw new AppError(400, 'GITHUB_AUTHORIZATION_INVALID', 'GitHub did not return the authorized username');
+    }
+    const scopes = (response.headers.get('x-oauth-scopes') ?? '')
+      .split(',')
+      .map((scope) => scope.trim().toLowerCase())
+      .filter(Boolean);
+    return { capabilities: githubTokenCapabilities(scopes), username, scopes };
+  }
+
+  getGitHubOAuthAvailability() {
+    return { available: Boolean(getEnv().GITHUB_OAUTH_CLIENT_ID) };
+  }
+
+  async startGitHubOAuth(input: GitHubOAuthStartInput, userId: string): Promise<GitHubOAuthSession> {
+    const clientId = getEnv().GITHUB_OAUTH_CLIENT_ID;
+    if (!clientId) {
+      throw new AppError(503, 'GITHUB_OAUTH_NOT_CONFIGURED', 'GitHub OAuth is not configured on this Gateway');
+    }
+    const baseUrl = this.normalizeBaseUrl(input.baseUrl);
+    if (new URL(baseUrl).hostname !== 'github.com') {
+      throw new AppError(
+        400,
+        'GITHUB_OAUTH_UNSUPPORTED_HOST',
+        'The shared GitHub OAuth app supports github.com; use a token for GitHub Enterprise'
+      );
+    }
+    let response: Response;
+    try {
+      response = await fetch('https://github.com/login/device/code', {
+        method: 'POST',
+        headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ client_id: clientId, scope: 'repo workflow read:org read:packages' }),
+      });
+    } catch {
+      throw new AppError(502, 'GITHUB_OAUTH_START_FAILED', 'GitHub authorization could not be started');
+    }
+    const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    const deviceCode = typeof body?.device_code === 'string' ? body.device_code : '';
+    const userCode = typeof body?.user_code === 'string' ? body.user_code : '';
+    const verificationUri = typeof body?.verification_uri === 'string' ? body.verification_uri : '';
+    const expiresIn = typeof body?.expires_in === 'number' ? body.expires_in : 900;
+    const interval = typeof body?.interval === 'number' ? Math.max(1, body.interval) : 5;
+    if (!response.ok || !deviceCode || !userCode || !verificationUri) {
+      throw new AppError(502, 'GITHUB_OAUTH_START_FAILED', 'GitHub returned an incomplete authorization response');
+    }
+    const [row] = await this.db
+      .insert(integrationGitHubOAuthSessions)
+      .values({
+        userId,
+        encryptedDeviceCode: this.encryptToken(deviceCode),
+        userCode,
+        verificationUri,
+        connectorDraft: { ...input, baseUrl },
+        pollIntervalSeconds: interval,
+        expiresAt: new Date(Date.now() + expiresIn * 1000),
+      })
+      .returning();
+    return this.toSafeGitHubOAuthSession(row);
+  }
+
+  async getGitHubOAuthStatus(id: string, userId: string): Promise<GitHubOAuthSession> {
+    let row = await this.getGitHubOAuthSession(id, userId);
+    if (row.status !== 'pending') return this.toSafeGitHubOAuthSession(row);
+    if (row.expiresAt.getTime() <= Date.now()) {
+      [row] = await this.db
+        .update(integrationGitHubOAuthSessions)
+        .set({ status: 'expired', updatedAt: new Date() })
+        .where(and(eq(integrationGitHubOAuthSessions.id, id), eq(integrationGitHubOAuthSessions.userId, userId)))
+        .returning();
+      return this.toSafeGitHubOAuthSession(row);
+    }
+    if (
+      row.lastPolledAt &&
+      Date.now() - row.lastPolledAt.getTime() < Math.max(1, row.pollIntervalSeconds) * 1000
+    ) {
+      return this.toSafeGitHubOAuthSession(row);
+    }
+    const [claimed] = await this.db
+      .update(integrationGitHubOAuthSessions)
+      .set({ status: 'processing', lastPolledAt: new Date(), updatedAt: new Date() })
+      .where(and(eq(integrationGitHubOAuthSessions.id, id), eq(integrationGitHubOAuthSessions.userId, userId), eq(integrationGitHubOAuthSessions.status, 'pending')))
+      .returning();
+    if (!claimed) return this.toSafeGitHubOAuthSession(await this.getGitHubOAuthSession(id, userId));
+    return this.pollClaimedGitHubOAuthSession(claimed, userId);
+  }
+
+  async cancelGitHubOAuth(id: string, userId: string): Promise<GitHubOAuthSession> {
+    const [row] = await this.db
+      .update(integrationGitHubOAuthSessions)
+      .set({ status: 'cancelled', updatedAt: new Date() })
+      .where(
+        and(
+          eq(integrationGitHubOAuthSessions.id, id),
+          eq(integrationGitHubOAuthSessions.userId, userId),
+          inArray(integrationGitHubOAuthSessions.status, ['pending', 'processing'])
+        )
+      )
+      .returning();
+    return this.toSafeGitHubOAuthSession(row ?? (await this.getGitHubOAuthSession(id, userId)));
+  }
+
+  async getGitUserCredentialStatus(
+    provider: 'github' | 'git',
+    connectorId: string,
+    userId: string
+  ): Promise<GitUserCredentialStatus> {
+    const connector = await this.getConnectorRow(connectorId, provider);
+    const status = await this.gitLabUserCredentials.getStatus(userId, connectorId);
+    return {
+      provider,
+      connectorId,
+      connectorName: connector.name,
+      baseUrl: connector.baseUrl,
+      authorized: status.authorized,
+      status: status.status,
+      tokenMasked: status.tokenMasked,
+      username: status.gitlabUsername,
+      authorizationUrl:
+        provider === 'github'
+          ? 'https://github.com/settings/tokens/new?description=Gateway%20AI&scopes=repo,workflow,read:org,read:packages'
+          : null,
+    };
+  }
+
+  async authorizeGitUserCredential(
+    provider: 'github' | 'git',
+    connectorId: string,
+    userId: string,
+    input: GitUserCredentialAuthorizeInput
+  ): Promise<GitUserCredentialStatus> {
+    const connector = await this.getConnectorRow(connectorId, provider);
+    let username = input.username?.trim() ?? '';
+    let scopes: string[] = [];
+    if (provider === 'github') {
+      const identity = await this.validateGitHubToken(connector.baseUrl, input.token);
+      username = identity.username;
+      scopes = identity.scopes;
+    } else {
+      if (!username) throw new AppError(400, 'GIT_USERNAME_REQUIRED', 'Username is required for Git authorization');
+      await this.validateGenericGitCredential(connector, username, input.token);
+    }
+    await this.gitLabUserCredentials.replace(userId, connectorId, input.token, {
+      gitlabUserId: username,
+      gitlabUsername: username,
+      tokenScopes: scopes,
+      tokenExpiresAt: null,
+    });
+    await this.auditService.log({
+      action: `integrations.${provider}.user_credential.authorize`,
+      userId,
+      resourceType: 'integration-connector',
+      resourceId: connectorId,
+      details: { connectorName: connector.name, username },
+    });
+    return this.getGitUserCredentialStatus(provider, connectorId, userId);
+  }
+
+  async disconnectGitUserCredential(provider: 'github' | 'git', connectorId: string, userId: string) {
+    const connector = await this.getConnectorRow(connectorId, provider);
+    const disconnected = await this.gitLabUserCredentials.disconnect(userId, connectorId);
+    if (disconnected) {
+      await this.auditService.log({
+        action: `integrations.${provider}.user_credential.disconnect`,
+        userId,
+        resourceType: 'integration-connector',
+        resourceId: connectorId,
+        details: { connectorName: connector.name },
+      });
+    }
+    return { disconnected };
   }
 
   async getGitLabConnector(id: string) {
@@ -1944,6 +2491,7 @@ export class IntegrationsService {
 
   private gitLabCredentialRequired(connector: ConnectorRow, reason: 'missing' | 'invalid' = 'missing'): AppError {
     return new AppError(428, 'GITLAB_CREDENTIAL_REQUIRED', 'Personal GitLab authorization is required', {
+      provider: 'gitlab',
       connectorId: connector.id,
       connectorName: connector.name,
       baseUrl: connector.baseUrl,
@@ -2366,6 +2914,236 @@ export class IntegrationsService {
       hasToken: Boolean(row.encryptedToken),
       tokenMasked: row.tokenLast4 ? `****${row.tokenLast4}` : null,
     };
+  }
+
+  private async resolveGitRepository(
+    user: User,
+    provider: 'github' | 'git',
+    connectorId: string,
+    rawRepositoryUrl: string
+  ): Promise<{ connector: ConnectorRow; repositoryUrl: string; username: string; token: string }> {
+    const connector = await this.getConnectorRow(connectorId, provider);
+    assertConnectorOperationAccess({
+      actor: { userId: user.id, scopes: user.scopes },
+      provider,
+      connectorId: connector.id,
+      connectorName: connector.name,
+      operation: 'repository.read',
+      requiredScope: `integrations:${provider}:view`,
+    });
+    if (!connector.enabled) throw new AppError(409, 'CONNECTOR_DISABLED', `${connector.name} is disabled`);
+    const repositoryUrl = this.normalizeRepositoryUrl(rawRepositoryUrl);
+    if (new URL(repositoryUrl).host !== new URL(connector.baseUrl).host) {
+      throw new AppError(403, 'REPOSITORY_HOST_MISMATCH', 'Repository host does not match the connector host');
+    }
+    const allowlist = await this.listAllowlistRows(connector.id);
+    const allowed = allowlist.some(
+      (entry) => entry.entryType === 'project' && this.normalizeRepositoryUrl(entry.fullPath) === repositoryUrl
+    );
+    if (!allowed) {
+      throw new AppError(403, 'REPOSITORY_NOT_ALLOWED', 'Repository is not included in this connector');
+    }
+    if (hasScope(user.scopes, `integrations:${provider}:system`)) {
+      if (!connector.encryptedToken) {
+        throw new AppError(400, 'CONNECTOR_CREDENTIAL_MISSING', `${connector.name} has no credential`);
+      }
+      return {
+        connector,
+        repositoryUrl,
+        username: connector.username ?? (provider === 'github' ? 'x-access-token' : ''),
+        token: this.decryptToken(connector.encryptedToken),
+      };
+    }
+    const personal = await this.gitLabUserCredentials.resolveAuth(user.id, connector.id, connector.baseUrl);
+    if (!personal) throw this.gitUserCredentialRequired(provider, connector);
+    return {
+      connector,
+      repositoryUrl,
+      username: personal.gitlabUsername,
+      token: personal.auth.token,
+    };
+  }
+
+  private normalizeRepositoryUrl(rawUrl: string): string {
+    const url = new URL(rawUrl.trim());
+    if (url.protocol !== 'https:') throw new AppError(400, 'INVALID_REPOSITORY_URL', 'Repository URL must use HTTPS');
+    url.hash = '';
+    url.search = '';
+    return url.toString().replace(/\/+$/, '');
+  }
+
+  private githubRepositoryIdentity(repositoryUrl: string): { owner: string; repository: string } {
+    const url = new URL(repositoryUrl);
+    const segments = url.pathname.split('/').filter(Boolean);
+    if (segments.length !== 2) {
+      throw new AppError(400, 'INVALID_GITHUB_REPOSITORY', 'GitHub repository URL must identify owner/repository');
+    }
+    return { owner: segments[0], repository: segments[1].replace(/\.git$/i, '') };
+  }
+
+  private async githubConnectorRequest(
+    connector: ConnectorRow,
+    token: string,
+    path: string,
+    init: RequestInit = {}
+  ): Promise<Response> {
+    try {
+      return await fetch(githubApiUrl(connector.baseUrl, path), {
+        ...init,
+        headers: {
+          accept: 'application/vnd.github+json',
+          'content-type': 'application/json',
+          authorization: `Bearer ${token}`,
+          'x-github-api-version': '2022-11-28',
+          ...init.headers,
+        },
+      });
+    } catch {
+      throw new AppError(502, 'GITHUB_CONNECTION_FAILED', 'GitHub could not be reached');
+    }
+  }
+
+  private githubRepositoryRequestError(status: number, body: unknown): AppError {
+    const message = isPlainRecord(body) && typeof body.message === 'string' ? body.message : `GitHub request failed (${status})`;
+    return new AppError(status === 404 ? 404 : status === 401 || status === 403 ? 403 : 400, 'GITHUB_REPOSITORY_REQUEST_FAILED', message);
+  }
+
+  private gitUserCredentialRequired(provider: 'github' | 'git', connector: ConnectorRow): AppError {
+    return new AppError(
+      428,
+      provider === 'github' ? 'GITHUB_CREDENTIAL_REQUIRED' : 'GIT_CREDENTIAL_REQUIRED',
+      `Personal ${provider === 'github' ? 'GitHub' : 'Git'} authorization is required`,
+      { provider, connectorId: connector.id, connectorName: connector.name, baseUrl: connector.baseUrl }
+    );
+  }
+
+  private async validateGenericGitCredential(connector: ConnectorRow, username: string, token: string) {
+    const [repository] = await this.listAllowlistRows(connector.id);
+    if (!repository) throw new AppError(400, 'GIT_REPOSITORY_REQUIRED', 'Connector has no repository to validate');
+    const repositoryUrl = this.normalizeRepositoryUrl(repository.fullPath);
+    if (new URL(repositoryUrl).host !== new URL(connector.baseUrl).host) {
+      throw new AppError(403, 'REPOSITORY_HOST_MISMATCH', 'Repository host does not match the connector host');
+    }
+    const url = new URL(repositoryUrl);
+    url.pathname = `${url.pathname.replace(/\/+$/, '')}/info/refs`;
+    url.searchParams.set('service', 'git-upload-pack');
+    const response = await fetch(url, {
+      headers: { authorization: `Basic ${Buffer.from(`${username}:${token}`).toString('base64')}` },
+    }).catch(() => null);
+    if (!response) throw new AppError(502, 'GIT_CONNECTION_FAILED', 'Git host could not be reached');
+    if (!response.ok) throw new AppError(400, 'GIT_AUTHORIZATION_INVALID', 'Git host rejected this credential');
+  }
+
+  private toSafeGitHubOAuthSession(row: GitHubOAuthSessionRow): GitHubOAuthSession {
+    return {
+      id: row.id,
+      status: row.status,
+      userCode: row.userCode,
+      verificationUri: row.verificationUri,
+      pollIntervalSeconds: row.pollIntervalSeconds,
+      expiresAt: row.expiresAt,
+      connectorId: row.connectorId,
+      errorMessage: row.errorMessage,
+    };
+  }
+
+  private async getGitHubOAuthSession(id: string, userId: string): Promise<GitHubOAuthSessionRow> {
+    const row = await this.db.query.integrationGitHubOAuthSessions.findFirst({
+      where: and(eq(integrationGitHubOAuthSessions.id, id), eq(integrationGitHubOAuthSessions.userId, userId)),
+    });
+    if (!row) throw new AppError(404, 'GITHUB_OAUTH_SESSION_NOT_FOUND', 'GitHub authorization session not found');
+    return row;
+  }
+
+  private async pollClaimedGitHubOAuthSession(
+    row: GitHubOAuthSessionRow,
+    userId: string
+  ): Promise<GitHubOAuthSession> {
+    const clientId = getEnv().GITHUB_OAUTH_CLIENT_ID;
+    if (!clientId) {
+      return this.failGitHubOAuthSession(row.id, userId, 'GitHub OAuth is no longer configured');
+    }
+    let response: Response;
+    try {
+      response = await fetch('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: clientId,
+          device_code: this.decryptToken(row.encryptedDeviceCode),
+          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        }),
+      });
+    } catch {
+      return this.resetGitHubOAuthSession(row.id, userId, row.pollIntervalSeconds, 'GitHub authorization check failed');
+    }
+    const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    const error = typeof body?.error === 'string' ? body.error : '';
+    if (error === 'authorization_pending') return this.resetGitHubOAuthSession(row.id, userId, row.pollIntervalSeconds);
+    if (error === 'slow_down') return this.resetGitHubOAuthSession(row.id, userId, row.pollIntervalSeconds + 5);
+    if (error === 'expired_token')
+      return this.finishGitHubOAuthSession(row.id, userId, 'expired', null, 'Authorization expired');
+    if (error === 'access_denied')
+      return this.finishGitHubOAuthSession(row.id, userId, 'cancelled', null, 'Authorization denied');
+    const accessToken = typeof body?.access_token === 'string' ? body.access_token : '';
+    if (!response.ok || !accessToken) {
+      return this.failGitHubOAuthSession(row.id, userId, 'GitHub authorization failed');
+    }
+    try {
+      const current = await this.getGitHubOAuthSession(row.id, userId);
+      if (current.status !== 'processing') return this.toSafeGitHubOAuthSession(current);
+      const connector = await this.createGitConnector(
+        'github',
+        { ...row.connectorDraft, authMode: 'token', token: accessToken },
+        userId,
+        'oauth'
+      );
+      const completed = await this.finishGitHubOAuthSession(row.id, userId, 'complete', connector.id, null);
+      if (completed.status !== 'complete') {
+        await this.db.delete(integrationConnectors).where(eq(integrationConnectors.id, connector.id));
+        this.emitConnector(connector.id, 'deleted');
+      }
+      return completed;
+    } catch (cause) {
+      return this.failGitHubOAuthSession(
+        row.id,
+        userId,
+        cause instanceof Error ? cause.message : 'GitHub connector could not be created'
+      );
+    }
+  }
+
+  private async resetGitHubOAuthSession(
+    id: string,
+    userId: string,
+    pollIntervalSeconds: number,
+    errorMessage: string | null = null
+  ): Promise<GitHubOAuthSession> {
+    const [row] = await this.db
+      .update(integrationGitHubOAuthSessions)
+      .set({ status: 'pending', pollIntervalSeconds, errorMessage, updatedAt: new Date() })
+      .where(and(eq(integrationGitHubOAuthSessions.id, id), eq(integrationGitHubOAuthSessions.status, 'processing')))
+      .returning();
+    return this.toSafeGitHubOAuthSession(row ?? (await this.getGitHubOAuthSession(id, userId)));
+  }
+
+  private async finishGitHubOAuthSession(
+    id: string,
+    userId: string,
+    status: 'complete' | 'expired' | 'cancelled' | 'error',
+    connectorId: string | null,
+    errorMessage: string | null
+  ): Promise<GitHubOAuthSession> {
+    const [row] = await this.db
+      .update(integrationGitHubOAuthSessions)
+      .set({ status, connectorId, errorMessage, updatedAt: new Date() })
+      .where(and(eq(integrationGitHubOAuthSessions.id, id), eq(integrationGitHubOAuthSessions.status, 'processing')))
+      .returning();
+    return this.toSafeGitHubOAuthSession(row ?? (await this.getGitHubOAuthSession(id, userId)));
+  }
+
+  private failGitHubOAuthSession(id: string, userId: string, message: string) {
+    return this.finishGitHubOAuthSession(id, userId, 'error', null, message);
   }
 
   private mergeSettings(

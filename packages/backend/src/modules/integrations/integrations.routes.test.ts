@@ -99,6 +99,77 @@ afterEach(() => {
 });
 
 describe('integrations routes', () => {
+  it('forwards username for generic Git token connectors', async () => {
+    const createGitConnector = vi.fn().mockResolvedValue({ id: 'git-1', hasToken: true });
+    registerServices(['integrations:git:manage'], { createGitConnector });
+
+    const response = await createApp().request('/api/integrations/git/connectors', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        name: 'Source',
+        baseUrl: 'https://git.example.com',
+        username: 'deploy-user',
+        token: 'secret-token',
+        repositoryMode: 'single_repository',
+        repositoryUrl: 'https://git.example.com/team/app.git',
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(createGitConnector).toHaveBeenCalledWith(
+      'git',
+      expect.objectContaining({ username: 'deploy-user', token: 'secret-token' }),
+      USER.id
+    );
+  });
+
+  it('starts GitHub Device Flow without accepting a token in the request', async () => {
+    const startGitHubOAuth = vi.fn().mockResolvedValue({
+      id: 'oauth-1',
+      status: 'pending',
+      userCode: 'ABCD-EFGH',
+      verificationUri: 'https://github.com/login/device',
+    });
+    registerServices(['integrations:github:manage'], { startGitHubOAuth });
+
+    const response = await createApp().request('/api/integrations/github/oauth/sessions', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        name: 'GitHub',
+        baseUrl: 'https://github.com',
+        repositoryMode: 'single_repository',
+        repositoryUrl: 'https://github.com/acme/app',
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(startGitHubOAuth).toHaveBeenCalledWith(
+      expect.not.objectContaining({ token: expect.anything() }),
+      USER.id
+    );
+    expect(await response.json()).toMatchObject({ data: { userCode: 'ABCD-EFGH' } });
+  });
+
+  it('authorizes a user-owned generic Git credential through the session-only flow', async () => {
+    const authorizeGitUserCredential = vi.fn().mockResolvedValue({ authorized: true, tokenMasked: '****oken' });
+    registerBrowserSession({ authorizeGitUserCredential });
+
+    const response = await createApp().request('/api/integrations/git/connectors/connector-1/user-credential', {
+      method: 'POST',
+      headers: sessionHeaders(),
+      body: JSON.stringify({ username: 'deploy-user', token: 'secret-token' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(authorizeGitUserCredential).toHaveBeenCalledWith('git', 'connector-1', USER.id, {
+      username: 'deploy-user',
+      token: 'secret-token',
+    });
+    expect(await response.json()).toEqual({ data: { authorized: true, tokenMasked: '****oken' } });
+  });
+
   it('requires GitLab manage scope to create connectors', async () => {
     const createGitLabConnector = vi.fn();
     registerServices(['integrations:gitlab:view'], { createGitLabConnector });

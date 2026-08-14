@@ -428,6 +428,15 @@ export class DockerService {
     return JSON.parse(res.body) as DockerContainerListItem[];
   }
 
+  /** Local Docker inventory used by host-safety checks. */
+  async listLocalContainers(): Promise<DockerContainerListItem[]> {
+    const res = await this.request('GET', `${API_VERSION}/containers/json?all=true`);
+    if (res.statusCode !== 200) {
+      throw new Error(`Docker container list failed (${res.statusCode}): ${res.body}`);
+    }
+    return JSON.parse(res.body) as DockerContainerListItem[];
+  }
+
   async putContainerArchive(id: string, containerPath: string, tarArchive: Buffer): Promise<void> {
     const params = new URLSearchParams({ path: containerPath });
     const res = await this.request(
@@ -568,4 +577,7 @@ export interface DockerContainerListItem {
   State: string;
   Status: string;
   Labels?: Record<string, string>;
+  NetworkSettings?: {
+    Networks?: Record<string, { IPAddress?: string; GlobalIPv6Address?: string }>;
+  };
 }

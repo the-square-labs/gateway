@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStatusStore } from "@/stores/app-status";
 import {
@@ -79,6 +79,21 @@ describe("gateway update version matching", () => {
       "href",
       "https://wiolett.net"
     );
+  });
+
+  it("clears a stale regular restart blocker when Gateway is already healthy", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ lifecycleState: "running", version: "2.4.0" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    useAppStatusStore.setState({ gatewayRestartingActive: true });
+
+    render(<AppStatusGate />);
+
+    await waitFor(() => expect(useAppStatusStore.getState().gatewayRestartingActive).toBe(false));
+    expect(screen.queryByRole("heading", { name: "Restarting Gateway" })).not.toBeInTheDocument();
   });
 
   it("clears the rate-limit blocker without reloading the page", () => {

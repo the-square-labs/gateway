@@ -13,7 +13,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -36,6 +36,7 @@ import { Input } from "@/components/ui/input";
 import { ResizeHandle } from "@/components/ui/resize-handle";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { type AIApprovalMode, formatAIApprovalModeLabel } from "@/lib/ai-approval-mode";
+import { selectedModelSupportsImages } from "@/lib/ai-model-capabilities";
 import {
   confirmBypassEverythingMode,
   updateAIApprovalModeOptimistically,
@@ -75,6 +76,7 @@ import {
   useAIComposerAttachmentsDraft,
   useAIComposerDraft,
 } from "./useAIComposerDraft";
+import { useAIMessageScroll } from "./useAIMessageScroll";
 
 function autoResizeTextarea(el: HTMLTextAreaElement, maxRows = 6) {
   const style = getComputedStyle(el);
@@ -117,7 +119,6 @@ async function uploadLocalComposerAttachment(
 
 const PANEL_WIDTH_KEY = "gateway-ai-panel-width";
 const NORMAL_RECENT_CONVERSATION_LIMIT = 5;
-const BOTTOM_SCROLL_THRESHOLD = 48;
 
 function readPanelWidth(): number {
   try {
@@ -146,24 +147,26 @@ function usePageContext(): PageContext {
     resolvedRouteKey &&
     (route === resolvedRouteKey || route.startsWith(`${resolvedRouteKey}/`));
 
-  if (ownsRoute && resolvedResource) {
-    return {
-      route,
-      resourceType: resolvedResource.resourceType,
-      resourceId: resolvedResource.resourceId,
-      label: resolvedResource.label,
-      nodeId: resolvedResource.nodeId,
-    };
-  }
+  return useMemo(() => {
+    if (ownsRoute && resolvedResource) {
+      return {
+        route,
+        resourceType: resolvedResource.resourceType,
+        resourceId: resolvedResource.resourceId,
+        label: resolvedResource.label,
+        nodeId: resolvedResource.nodeId,
+      };
+    }
 
-  if (params.id && route.startsWith("/cas/")) {
-    return { route, resourceType: "ca", resourceId: params.id };
-  }
-  if (params.id && route.startsWith("/certificates/")) {
-    return { route, resourceType: "certificate", resourceId: params.id };
-  }
+    if (params.id && route.startsWith("/cas/")) {
+      return { route, resourceType: "ca", resourceId: params.id };
+    }
+    if (params.id && route.startsWith("/certificates/")) {
+      return { route, resourceType: "certificate", resourceId: params.id };
+    }
 
-  return { route };
+    return { route };
+  }, [ownsRoute, params.id, resolvedResource, route]);
 }
 
 const SLASH_COMMANDS = [
@@ -196,6 +199,7 @@ function getConversationStatusIcon(conversation: {
     case "waiting_for_approval":
     case "waiting_for_answer":
     case "waiting_for_credential":
+    case "waiting_for_setup":
       return CircleAlert;
     default:
       if (conversation.planStatus === "awaiting_decision" || conversation.planStatus === "paused") {
@@ -237,6 +241,7 @@ function ConversationStatusIndicator({
     conversation.activeRunStatus === "waiting_for_approval" ||
     conversation.activeRunStatus === "waiting_for_answer" ||
     conversation.activeRunStatus === "waiting_for_credential" ||
+    conversation.activeRunStatus === "waiting_for_setup" ||
     conversation.planStatus === "awaiting_decision" ||
     conversation.planStatus === "paused";
   return (
@@ -271,6 +276,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     activeRunId,
     activePlan,
     plans,
+    dismissedPlanDecisionKey,
     devPlanProgressPreview,
     workMode,
     canContinueConversation,
@@ -297,7 +303,6 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     renameConversation,
     rollbackToMessage,
     retryMessage,
-    connect,
     providerStatus,
     selectedModel,
     selectedReasoningEffort,
@@ -306,20 +311,22 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     refreshProviderStatus,
     fetchRecentConversations,
   } = useAIStore();
-  const progressPlan = devPlanProgressPreview ?? activePlan;
+  const currentConversationPlan =
+    activePlan?.conversationId === activeConversationId ? activePlan : null;
+  const showPlanDecision =
+    currentConversationPlan?.status === "awaiting_decision" &&
+    `${activeConversationId}:${currentConversationPlan.revisionId}` !== dismissedPlanDecisionKey;
+  const progressPlan = devPlanProgressPreview ?? currentConversationPlan;
 
   const [input, setInput] = useAIComposerDraft(activeConversationId);
   const [attachments, setAttachments] = useAIComposerAttachmentsDraft(activeConversationId);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
-  const [canAttachImages, setCanAttachImages] = useState(false);
   const [slashResults, setSlashResults] = useState<typeof SLASH_COMMANDS>([]);
   const [slashIndex, setSlashIndex] = useState(0);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
   const [isRenaming, setIsRenaming] = useState(false);
   const [excludedResourceContextKey, setExcludedResourceContextKey] = useState<string | null>(null);
-  const scrollViewportRef = useRef<HTMLDivElement>(null);
-  const shouldStickToBottomRef = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const context = usePageContext();
   const resourceContextKey = `${context.route}\u0000${context.resourceId ?? ""}`;
@@ -347,6 +354,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     ? pinnedAIConversationIds.includes(activeConversationId)
     : false;
   const selectedProviderModel = providerStatus?.models.find((model) => model.id === selectedModel);
+  const canAttachImages = selectedModelSupportsImages(providerStatus, selectedModel);
   const normalRecentConversations = recentConversations.slice(0, NORMAL_RECENT_CONVERSATION_LIMIT);
 
   const openRenameDialog = () => {
@@ -390,12 +398,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
 
   useEffect(() => {
     if (!active) return;
-    void connect();
-  }, [active, connect]);
-
-  useEffect(() => {
-    if (!active) return;
-    void refreshProviderStatus().catch(() => setCanAttachImages(false));
+    void refreshProviderStatus().catch(() => undefined);
   }, [active, refreshProviderStatus]);
 
   useEffect(() => {
@@ -404,19 +407,8 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
   }, [active, fetchRecentConversations, isNewConversationDraft]);
 
   useEffect(() => {
-    const selected = providerStatus?.models.find((model) => model.id === selectedModel);
-    setCanAttachImages(selected?.supportsImages ?? providerStatus?.supportsImages ?? false);
-  }, [providerStatus, selectedModel]);
-
-  const updateStickToBottom = useCallback(() => {
-    const node = scrollViewportRef.current;
-    if (!node) {
-      shouldStickToBottomRef.current = true;
-      return;
-    }
-    shouldStickToBottomRef.current =
-      node.scrollHeight - node.scrollTop - node.clientHeight < BOTTOM_SCROLL_THRESHOLD;
-  }, []);
+    if (providerStatus && !canAttachImages && attachments.length > 0) setAttachments([]);
+  }, [attachments.length, canAttachImages, providerStatus, setAttachments]);
 
   const scrollSignature = messages
     .map((message) =>
@@ -431,16 +423,11 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     )
     .join("|");
 
-  useLayoutEffect(() => {
-    if (!scrollSignature) return;
-    const node = scrollViewportRef.current;
-    if (!node || !shouldStickToBottomRef.current) return;
-    node.scrollTop = node.scrollHeight;
-    const frame = window.requestAnimationFrame(() => {
-      node.scrollTop = node.scrollHeight;
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [scrollSignature]);
+  const {
+    viewportRef: scrollViewportRef,
+    onScroll,
+    pinToBottom,
+  } = useAIMessageScroll(scrollSignature, activeConversationId ?? "__new__");
 
   useEffect(() => {
     if (!isNewConversationDraft) return;
@@ -505,8 +492,10 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
       setSlashResults([]);
       if (textareaRef.current) textareaRef.current.style.height = "auto";
       if (currentConversationStreaming) {
+        pinToBottom();
         queueMessage(text, requestContext, uploadedAttachments);
       } else {
+        pinToBottom();
         sendMessage(text, requestContext, uploadedAttachments, {
           startNewConversation: isNewConversationDraft,
         });
@@ -525,6 +514,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     handleSlashCommand,
     input,
     isNewConversationDraft,
+    pinToBottom,
     queueMessage,
     sendMessage,
     setAttachments,
@@ -815,7 +805,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
             Ask questions, investigate issues, and manage your infrastructure with permission-aware
             guidance.
           </p>
-          <QuickActionChips onSelect={handleQuickAction} />
+          <QuickActionChips onSelect={handleQuickAction} context={context} />
           {(isLoadingRecentConversations || recentConversations.length > 0) && (
             <div className="mt-4 w-full max-w-[340px] border border-border">
               <div className="border-b border-border px-3 py-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
@@ -864,28 +854,30 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
           )}
         </div>
       ) : (
-        <div
-          ref={scrollViewportRef}
-          role="log"
-          aria-label="AI messages"
-          className="flex-1 min-h-0 overflow-y-auto dashboard-scrollbar px-3 pt-3"
-          onScroll={updateStickToBottom}
-        >
-          <div className="space-y-3">
-            <AIPlanTimeline
-              messages={messages}
-              plans={plans}
-              resourceReferences={resourceReferences}
-              isStreaming={currentConversationStreaming}
-              onApprove={approveTool}
-              onReject={rejectTool}
-              onAnswer={answerQuestion}
-              onEditUserMessage={handleEditUserMessage}
-              onRetryUserMessage={(messageId) => void retryMessage(messageId)}
-              retryDisabled={currentConversationStreaming || isCompactingContext}
-              editUserMessageDisabled={isCompactingContext || isCompactionRetryQuestion}
-            />
-            <div className="pb-4" />
+        <div className="relative min-h-0 flex-1">
+          <div
+            ref={scrollViewportRef}
+            role="log"
+            aria-label="AI messages"
+            className="h-full overflow-y-auto dashboard-scrollbar px-3 pt-3"
+            onScroll={onScroll}
+          >
+            <div className="space-y-3">
+              <AIPlanTimeline
+                messages={messages}
+                plans={plans}
+                resourceReferences={resourceReferences}
+                isStreaming={currentConversationStreaming}
+                onApprove={approveTool}
+                onReject={rejectTool}
+                onAnswer={answerQuestion}
+                onEditUserMessage={handleEditUserMessage}
+                onRetryUserMessage={(messageId) => void retryMessage(messageId)}
+                retryDisabled={currentConversationStreaming || isCompactingContext}
+                editUserMessageDisabled={isCompactingContext || isCompactionRetryQuestion}
+              />
+              <div className="pb-4" />
+            </div>
           </div>
         </div>
       )}
@@ -915,7 +907,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
             )}
             <QuestionBlock toolCall={activeQuestion} onAnswer={answerQuestion} />
           </div>
-        ) : activePlan?.status === "awaiting_decision" ? (
+        ) : showPlanDecision ? (
           <div className="border-t border-border">
             <AIPlanDecision
               onImplement={() => decidePlan("implement")}
@@ -928,11 +920,10 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
         ) : conversationBlock ? (
           <AIConversationBlockedBlock block={conversationBlock} onNewChat={clearMessages} />
         ) : (
-          <div className="relative space-y-2">
+          <div className="relative">
             {progressPlan &&
-              (progressPlan.status === "drafting" ||
-                progressPlan.status === "validating" ||
-                progressPlan.status === "executing" ||
+              (progressPlan.status === "executing" ||
+                progressPlan.status === "pause_requested" ||
                 progressPlan.status === "paused" ||
                 progressPlan.status === "verifying") && (
                 <AIPlanProgress
@@ -940,23 +931,23 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
                   onPause={pausePlan}
                   onResume={resumePlan}
                   onCancel={cancelPlan}
-                  className="border-x-0"
+                  className="border-x-0 border-b-0"
                 />
               )}
             {context.resourceId && !excludeResourceContextOnce && (
-              <div className="mx-3 flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground">
+              <div className="flex w-full items-center justify-between gap-2 border border-x-0 border-b-0 border-border bg-muted/40 px-2.5 py-1 text-xs text-muted-foreground">
                 <span className="min-w-0 truncate">
                   Viewing {context.label ?? context.resourceType ?? "current resource"}
                 </span>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-6 w-6 shrink-0"
+                  className="h-5 w-5 shrink-0"
                   onClick={() => setExcludedResourceContextKey(resourceContextKey)}
                   title="Exclude this resource from the next request"
                   aria-label="Exclude this resource from the next request"
                 >
-                  <X className="h-3.5 w-3.5" />
+                  <X className="h-3 w-3" />
                 </Button>
               </div>
             )}

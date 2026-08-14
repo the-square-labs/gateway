@@ -226,6 +226,10 @@ describe("Settings inference bootstrap", () => {
     expect(await screen.findByText("Gateway configuration: general")).toBeInTheDocument();
     expect(screen.getByText("About Gateway")).toBeInTheDocument();
     expect(screen.getByText("Gateway license")).toBeInTheDocument();
+    expect(screen.getByText(/Powered by/).closest('[role="tabpanel"]')).toHaveAttribute(
+      "data-state",
+      "active"
+    );
     expect(screen.queryByText("Gateway configuration: advanced")).not.toBeInTheDocument();
     expect(screen.queryByText(/Registry nodes:/)).not.toBeInTheDocument();
 
@@ -235,6 +239,10 @@ describe("Settings inference bootstrap", () => {
     expect(screen.getByText("Registry nodes: 0")).toBeInTheDocument();
     expect(screen.queryByText("About Gateway")).not.toBeInTheDocument();
     expect(screen.queryByText("Gateway license")).not.toBeInTheDocument();
+    expect(screen.getByText(/Powered by/).closest('[role="tabpanel"]')).toHaveAttribute(
+      "data-state",
+      "active"
+    );
     expect(screen.getByTestId("location")).toHaveTextContent("/settings/advanced");
   });
 });

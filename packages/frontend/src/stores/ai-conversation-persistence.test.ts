@@ -89,6 +89,10 @@ function getToolCall(toolCallId: string) {
     .find((toolCall) => toolCall.id === toolCallId);
 }
 
+async function flushAssistantDeltaBatch() {
+  await vi.advanceTimersByTimeAsync(50);
+}
+
 function runtimeRun(
   status:
     | "queued"
@@ -96,6 +100,7 @@ function runtimeRun(
     | "waiting_for_approval"
     | "waiting_for_answer"
     | "waiting_for_credential"
+    | "waiting_for_setup"
 ) {
   return {
     id: "run-1",
@@ -245,8 +250,138 @@ describe("AI backend runtime store", () => {
     });
 
     expect(useAIStore.getState().plans).toEqual([
+      publishedPlan,
       expect.objectContaining({ revisionId: "revision-2", goal: "Verified refinement" }),
     ]);
+  });
+
+  it("does not resurrect an optimistically cancelled plan from an older status event", async () => {
+    const socket = await connectAI();
+    const executingPlan = planSnapshot({ status: "executing", revisionStatus: "accepted" });
+    useAIStore.setState({
+      activeConversationId: "conversation-1",
+      activePlan: executingPlan,
+      plans: [executingPlan],
+    });
+
+    useAIStore.getState().cancelPlan();
+    const cancelCommand = sentPayloads(socket).find((payload) => payload.type === "plan.cancel");
+    expect(cancelCommand).toBeDefined();
+    expect(useAIStore.getState().activePlan).toBeNull();
+
+    socket.emit({
+      type: "plan.status_changed",
+      conversationId: "conversation-1",
+      plan: executingPlan,
+    });
+    expect(useAIStore.getState().activePlan).toBeNull();
+
+    socket.emit({
+      type: "command.ack",
+      commandType: "plan.cancel",
+      clientCommandId: String(cancelCommand?.clientCommandId),
+      conversationId: "conversation-1",
+    });
+    socket.emit({
+      type: "plan.status_changed",
+      conversationId: "conversation-1",
+      plan: planSnapshot({ status: "cancelled", revisionStatus: "accepted" }),
+    });
+    expect(useAIStore.getState().activePlan).toBeNull();
+    expect(useAIStore.getState().plans).toEqual([
+      expect.objectContaining({ id: "plan-1", status: "cancelled" }),
+    ]);
+  });
+
+  it("restores the plan when optimistic cancellation is rejected", async () => {
+    const socket = await connectAI();
+    const executingPlan = planSnapshot({ status: "executing", revisionStatus: "accepted" });
+    useAIStore.setState({
+      activeConversationId: "conversation-1",
+      activePlan: executingPlan,
+      plans: [executingPlan],
+    });
+
+    useAIStore.getState().cancelPlan();
+    const cancelCommand = sentPayloads(socket).find((payload) => payload.type === "plan.cancel");
+    socket.emit({
+      type: "command.error",
+      commandType: "plan.cancel",
+      clientCommandId: String(cancelCommand?.clientCommandId),
+      conversationId: "conversation-1",
+      code: "AI_PLAN_NOT_FOUND",
+      message: "Plan is no longer active",
+    });
+
+    expect(useAIStore.getState().activePlan).toEqual(executingPlan);
+  });
+
+  it("optimistically abandons an unfinished planning run with a dedicated command", async () => {
+    const socket = await connectAI();
+    const draftPlan = planSnapshot({
+      status: "drafting",
+      revisionId: null,
+      revisionStatus: null,
+      publishedAt: null,
+    });
+    useAIStore.setState({
+      activeConversationId: "conversation-1",
+      activeRunId: "run-1",
+      activePlan: draftPlan,
+      plans: [draftPlan],
+      isStreaming: true,
+      workMode: "plan",
+    });
+
+    useAIStore.getState().abandonPlanning();
+
+    expect(sentPayloads(socket)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "conversation.abandon_planning",
+          conversationId: "conversation-1",
+          clientCommandId: expect.any(String),
+        }),
+      ])
+    );
+    expect(useAIStore.getState()).toMatchObject({
+      activeRunId: null,
+      activePlan: null,
+      plans: [],
+      isStreaming: false,
+      workMode: "normal",
+    });
+  });
+
+  it("preserves the last published plan when abandoning an unfinished revision", async () => {
+    await connectAI();
+    const publishedPlan = planSnapshot();
+    const validatingRevision = planSnapshot({
+      status: "validating",
+      revisionId: "revision-2",
+      revision: 2,
+      revisionStatus: "validating",
+      publishedAt: null,
+    });
+    useAIStore.setState({
+      activeConversationId: "conversation-1",
+      activeRunId: "run-2",
+      activePlan: validatingRevision,
+      plans: [publishedPlan],
+      isStreaming: true,
+      workMode: "plan",
+    });
+
+    useAIStore.getState().abandonPlanning();
+
+    expect(useAIStore.getState()).toMatchObject({
+      activeRunId: null,
+      activePlan: publishedPlan,
+      plans: [publishedPlan],
+      isStreaming: false,
+      workMode: "normal",
+      dismissedPlanDecisionKey: `conversation-1:${publishedPlan.revisionId}`,
+    });
   });
 
   it("continues an interrupted run without adding a user message", async () => {
@@ -324,6 +459,8 @@ describe("AI backend runtime store", () => {
       },
       selectedModel: "model-a",
       selectedReasoningEffort: "high",
+      workMode: "plan",
+      isStreaming: true,
     });
 
     await useAIStore.getState().loadConversation("conversation-1");
@@ -331,7 +468,112 @@ describe("AI backend runtime store", () => {
     expect(useAIStore.getState()).toMatchObject({
       selectedModel: "model-b",
       selectedReasoningEffort: "max",
+      workMode: "normal",
+      isStreaming: false,
     });
+  });
+
+  it("starts a scenario from an empty draft while another conversation is still running", async () => {
+    const socket = await connectAI();
+    useAIStore.setState({
+      messages: [],
+      activeConversationId: "background-conversation",
+      activeRunId: "background-run",
+      isStreaming: true,
+      isStartingConversation: false,
+    });
+
+    useAIStore.getState().startScenario({
+      id: "deploy-production-application",
+      category: "deploy_release",
+      title: "Deploy a production application",
+      description: "Deploy end to end.",
+      icon: "rocket",
+    });
+
+    expect(sentPayloads(socket)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "conversation.start_scenario",
+          scenarioId: "deploy-production-application",
+        }),
+      ])
+    );
+    expect(useAIStore.getState()).toMatchObject({
+      activeConversationId: null,
+      activeRunId: null,
+      isStreaming: true,
+      isStartingConversation: true,
+      workMode: "normal",
+    });
+  });
+
+  it("keeps Plan mode when a reviewed plan becomes ready", async () => {
+    const socket = await connectAI();
+    useAIStore.setState({
+      activeConversationId: "conversation-1",
+      workMode: "plan",
+      isStreaming: true,
+    });
+
+    socket.emit({
+      type: "plan.status_changed",
+      conversationId: "conversation-1",
+      plan: planSnapshot(),
+    });
+
+    expect(useAIStore.getState()).toMatchObject({
+      activePlan: expect.objectContaining({ status: "awaiting_decision" }),
+      workMode: "plan",
+    });
+  });
+
+  it.each([
+    ["implement", undefined],
+    ["custom", "Start with the proxy configuration"],
+  ] as const)("leaves Plan mode when the user chooses %s", async (decision, instruction) => {
+    const socket = await connectAI();
+    const readyPlan = planSnapshot();
+    useAIStore.setState({
+      activeConversationId: "conversation-1",
+      activePlan: readyPlan,
+      plans: [readyPlan],
+      workMode: "plan",
+    });
+
+    useAIStore.getState().decidePlan(decision, instruction);
+
+    expect(useAIStore.getState().workMode).toBe("normal");
+    expect(sentPayloads(socket)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "plan.decide",
+          conversationId: "conversation-1",
+          decision,
+          ...(instruction ? { customInstruction: instruction } : {}),
+        }),
+      ])
+    );
+  });
+
+  it("keeps Plan mode when the user chooses refinement", async () => {
+    const socket = await connectAI();
+    const readyPlan = planSnapshot();
+    useAIStore.setState({
+      activeConversationId: "conversation-1",
+      activePlan: readyPlan,
+      plans: [readyPlan],
+      workMode: "plan",
+    });
+
+    useAIStore.getState().decidePlan("refine");
+
+    expect(useAIStore.getState().workMode).toBe("plan");
+    expect(useAIStore.getState().activePlan).toEqual(readyPlan);
+    expect(useAIStore.getState().dismissedPlanDecisionKey).toBe(
+      `conversation-1:${readyPlan.revisionId}`
+    );
+    expect(sentPayloads(socket).some((payload) => payload.type === "plan.decide")).toBe(false);
   });
 
   it("persists a model change and applies the returned timeline delimiter", async () => {
@@ -476,6 +718,8 @@ describe("AI backend runtime store", () => {
   it("reports context usage with server-estimated prompt and tool overhead", async () => {
     const socket = await connectAI();
     const estimateSpy = vi.spyOn(api, "getAIContextEstimate").mockResolvedValueOnce({
+      chatTokens: 7,
+      messageCount: 1,
       systemTokens: 120,
       toolsTokens: 80,
       totalOverhead: 200,
@@ -502,6 +746,7 @@ describe("AI backend runtime store", () => {
 
     expect(handled).toBe(true);
     expect(estimateSpy).toHaveBeenCalledWith({
+      messages: [{ role: "user", content: "hello world", attachments: undefined }],
       context: {
         route: "/docker/containers/container-1",
         resourceType: "docker container",
@@ -526,8 +771,10 @@ describe("AI backend runtime store", () => {
     });
   });
 
-  it("reports context usage after the backend deterministic message trim", async () => {
+  it("reports the full canonical context without silently trimming older messages", async () => {
     vi.spyOn(api, "getAIContextEstimate").mockResolvedValueOnce({
+      chatTokens: 1408,
+      messageCount: 3,
       systemTokens: 100,
       toolsTokens: 100,
       totalOverhead: 200,
@@ -548,10 +795,35 @@ describe("AI backend runtime store", () => {
       "11111111-1111-4111-8111-111111111111"
     );
 
-    expect(usage.messageCount).toBe(1);
-    expect(usage.chatTokens).toBe(8);
-    expect(usage.estimatedTokens).toBe(208);
-    expect(usage.percent).toBe(80);
+    expect(usage.messageCount).toBe(3);
+    expect(usage.chatTokens).toBe(1408);
+    expect(usage.estimatedTokens).toBe(1608);
+    expect(usage.percent).toBe(618);
+  });
+
+  it("shares one context estimate request between concurrent composer renders", async () => {
+    const estimateSpy = vi.spyOn(api, "getAIContextEstimate").mockResolvedValue({
+      chatTokens: 0,
+      messageCount: 0,
+      systemTokens: 100,
+      toolsTokens: 50,
+      totalOverhead: 150,
+      limit: 1000,
+      reasoningEffort: "low",
+      toolCount: 2,
+      systemBreakdown: [],
+      toolBreakdown: [],
+    });
+    const context = { route: "/ai/chats/test" };
+    const conversationId = "11111111-1111-4111-8111-111111111111";
+
+    await Promise.all([
+      getAIContextUsage([], context, conversationId),
+      getAIContextUsage([], context, conversationId),
+      getAIContextUsage([], context, conversationId),
+    ]);
+
+    expect(estimateSpy).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes all recent conversations without blanking an existing sidebar list", async () => {
@@ -684,6 +956,7 @@ describe("AI backend runtime store", () => {
       activeConversationId: "old-conversation",
       sidebarActiveConversationId: "old-conversation",
       savedName: "Old chat",
+      workMode: "plan",
     });
 
     const loadPromise = useAIStore.getState().loadConversation("conversation-1");
@@ -692,6 +965,7 @@ describe("AI backend runtime store", () => {
     expect(useAIStore.getState().messages).toEqual([
       expect.objectContaining({ id: "old-message", content: "old chat" }),
     ]);
+    expect(useAIStore.getState().workMode).toBe("normal");
 
     useAIStore.getState().clearMessages();
     expect(useAIStore.getState().activeConversationId).toBeNull();
@@ -1134,6 +1408,7 @@ describe("AI backend runtime store", () => {
 
   it("streams assistant deltas without REST refetches and ignores stale draft snapshots", async () => {
     const socket = await connectAI();
+    vi.useFakeTimers();
     useAIStore.setState({
       activeConversationId: "conversation-1",
       recentConversations: [
@@ -1168,6 +1443,7 @@ describe("AI backend runtime store", () => {
       content: "lo",
       version: 2,
     });
+    await flushAssistantDeltaBatch();
 
     expect(useAIStore.getState().messages).toEqual([
       expect.objectContaining({
@@ -1224,6 +1500,7 @@ describe("AI backend runtime store", () => {
       content: " after approval",
       version: 3,
     });
+    await flushAssistantDeltaBatch();
 
     expect(useAIStore.getState().messages[0]).toMatchObject({
       id: "run-1:draft",
@@ -1478,6 +1755,7 @@ describe("AI backend runtime store", () => {
 
   it("separates consecutive streamed assistant comments with a thinking placeholder", async () => {
     const socket = await connectAI();
+    vi.useFakeTimers();
     useAIStore.setState({ activeConversationId: "conversation-1" });
 
     socket.emit({
@@ -1501,6 +1779,7 @@ describe("AI backend runtime store", () => {
       content: "Второй комментарий.",
       version: 2,
     });
+    await flushAssistantDeltaBatch();
 
     expect(useAIStore.getState().messages).toEqual(
       expect.arrayContaining([
@@ -2027,6 +2306,7 @@ describe("AI backend runtime store", () => {
 
   it("stops showing thinking on the tool boundary once assistant text starts streaming", async () => {
     const socket = await connectAI();
+    vi.useFakeTimers();
     useAIStore.setState({ activeConversationId: "conversation-1" });
 
     socket.emit({
@@ -2080,6 +2360,7 @@ describe("AI backend runtime store", () => {
       content: "Done",
       version: 1,
     });
+    await flushAssistantDeltaBatch();
 
     expect(
       useAIStore.getState().messages.find((message) => message.id === "tool-boundary-1")
@@ -2093,6 +2374,7 @@ describe("AI backend runtime store", () => {
 
   it("keeps an assistant comment snapshot separate from the following runtime answer", async () => {
     const socket = await connectAI();
+    vi.useFakeTimers();
     useAIStore.setState({ activeConversationId: "conversation-1" });
 
     socket.emit({
@@ -2172,6 +2454,7 @@ describe("AI backend runtime store", () => {
       content: "Проверил доступность.",
       version: 1,
     });
+    await flushAssistantDeltaBatch();
 
     expect(
       useAIStore.getState().messages.find((message) => message.id === "assistant-comment-1")
@@ -2189,6 +2472,7 @@ describe("AI backend runtime store", () => {
 
   it("streams assistant comments into a separate live message from the final answer", async () => {
     const socket = await connectAI();
+    vi.useFakeTimers();
     useAIStore.setState({
       activeConversationId: "conversation-1",
       messages: [
@@ -2221,6 +2505,7 @@ describe("AI backend runtime store", () => {
       content: "Проверил ресурсы.",
       version: 2,
     });
+    await flushAssistantDeltaBatch();
 
     expect(useAIStore.getState().messages).toEqual([
       expect.objectContaining({
@@ -2506,6 +2791,72 @@ describe("AI backend runtime store", () => {
       duplicate: false,
     });
     expect(useAIStore.getState().pendingCredentialChallenge).toBeNull();
+  });
+
+  it("restores a durable setup interaction and resolves it without adding a synthetic user message", async () => {
+    const socket = await connectAI();
+    useAIStore.setState({ activeConversationId: "conversation-1" });
+    const interaction = {
+      id: "setup-1",
+      runId: "run-1",
+      roundId: "round-1",
+      conversationId: "conversation-1",
+      userId: "user-1",
+      toolCallId: "tool-setup",
+      toolName: "open_connector_setup",
+      kind: "connector_setup" as const,
+      payload: { type: "open_connector_setup", connector: "github" },
+      status: "pending" as const,
+      result: null,
+      resolveClientCommandId: null,
+      expiresAt: "2026-06-27T10:00:00.000Z",
+      resolvedAt: null,
+      createdAt: "2026-06-26T10:00:00.000Z",
+      updatedAt: "2026-06-26T10:00:00.000Z",
+    };
+
+    socket.emit({
+      type: "conversation.snapshot",
+      conversationId: "conversation-1",
+      snapshot: {
+        conversation: {
+          id: "conversation-1",
+          title: "Deploy application",
+          createdAt: "2026-06-26T10:00:00.000Z",
+          updatedAt: "2026-06-26T10:00:01.000Z",
+          lastContext: null,
+          discoveredToolsets: [],
+          checkpoint: null,
+        },
+        messages: [],
+        runtime: {
+          activeRun: runtimeRun("waiting_for_setup"),
+          pendingApprovals: [],
+          pendingQuestion: null,
+          pendingQuestions: [],
+          pendingSetupInteraction: interaction,
+          toolCalls: [],
+        },
+      },
+    });
+
+    expect(useAIStore.getState().pendingSetupInteraction).toEqual(interaction);
+    useAIStore.getState().resolveSetupInteraction("configured", { connectorId: "connector-1" });
+
+    expect(sentPayloads(socket)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "setup.resolve",
+          conversationId: "conversation-1",
+          runId: "run-1",
+          interactionId: "setup-1",
+          status: "configured",
+          result: { connectorId: "connector-1" },
+        }),
+      ])
+    );
+    expect(useAIStore.getState().pendingSetupInteraction).toBeNull();
+    expect(useAIStore.getState().messages.filter((message) => message.role === "user")).toEqual([]);
   });
 
   it("sends approval decisions idempotently to the backend runtime", async () => {

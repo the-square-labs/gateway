@@ -8,6 +8,7 @@ import { TokensService } from '@/modules/tokens/tokens.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { AppEnv, SessionData, User } from '@/types.js';
 import { aiRoutes } from './ai.routes.js';
+import { AISandboxArtifactService } from './ai.sandbox-artifact.service.js';
 import { AISettingsService } from './ai.settings.service.js';
 import { AIConversationService } from './ai-conversation.service.js';
 import { AIProviderRuntimeService } from './ai-provider-runtime.service.js';
@@ -161,6 +162,44 @@ describe('AI routes session-only authentication', () => {
         title: 'debug session',
         messageCount: 1,
       },
+    });
+  });
+
+  it('returns a bounded artifact page with the next-page cursor', async () => {
+    registerServices();
+    const listPageForUser = vi.fn().mockResolvedValue({
+      items: [
+        {
+          id: 'artifact-1',
+          userId: USER.id,
+          conversationId: 'conversation-1',
+          sourceProcessId: 'process-1',
+          sourcePath: 'result.txt',
+          filename: 'result.txt',
+          mediaType: 'text/plain',
+          sizeBytes: 12,
+          createdAt: '2026-08-13T10:00:00.000Z',
+          downloadUrl: '/api/ai/sandbox/artifacts/artifact-1/download',
+        },
+      ],
+      nextPage: 3,
+    });
+    container.registerInstance(AISandboxArtifactService, {
+      listPageForUser,
+    } as unknown as AISandboxArtifactService);
+    container.registerInstance(AIConversationService, {
+      listConversationTitles: vi.fn().mockResolvedValue({ 'conversation-1': 'Deploy app' }),
+    } as unknown as AIConversationService);
+
+    const response = await createApp().request('/api/ai/sandbox/artifacts?page=2&limit=10', {
+      headers: { Cookie: 'session_id=session-1' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(listPageForUser).toHaveBeenCalledWith(USER.id, 2, 10);
+    expect(await response.json()).toMatchObject({
+      data: [{ id: 'artifact-1', conversationTitle: 'Deploy app' }],
+      nextPage: 3,
     });
   });
 

@@ -105,6 +105,7 @@ describe('MCP tool scope filtering', () => {
         'get_current_context',
         'end_conversation',
         'search_chats',
+        'search_compacted_history',
         'find_in_chat',
         'read_chat_slice',
         'list_chat_projects',

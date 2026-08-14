@@ -33,7 +33,11 @@ import { LocalAuthService } from './local-auth.service.js';
 import { MfaService } from './mfa.service.js';
 import { OidcSettingsService } from './oidc-settings.service.js';
 import { PasskeyService } from './passkey.service.js';
-import { getAcceptedSessionCookieNames, getSessionCookieNameForUrl } from './session-cookie.js';
+import {
+  getAcceptedSessionCookieNames,
+  getSessionCookieNameForUrl,
+  LEGACY_SESSION_COOKIE_NAME,
+} from './session-cookie.js';
 
 export const authRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
@@ -87,13 +91,19 @@ async function setLocalSession(
   await container.resolve(AuthService).recordSuccessfulSignIn(user.id);
   const env = getEnv();
   const publicUrl = await getPublicUrl();
-  setCookie(c, getSessionCookieNameForUrl(publicUrl), sessionId, {
+  const publicUrlObject = new URL(publicUrl);
+  const cookieOptions = {
     httpOnly: true,
-    secure: new URL(publicUrl).protocol === 'https:',
-    sameSite: 'Lax',
+    secure: publicUrlObject.protocol === 'https:',
+    sameSite: 'Lax' as const,
     maxAge: env.SESSION_EXPIRY,
     path: '/',
-  });
+  };
+  setCookie(c, getSessionCookieNameForUrl(publicUrl), sessionId, cookieOptions);
+
+  if (['localhost', '127.0.0.1', '::1'].includes(publicUrlObject.hostname)) {
+    setCookie(c, LEGACY_SESSION_COOKIE_NAME, sessionId, cookieOptions);
+  }
 }
 
 async function getPublicUrl(): Promise<string> {

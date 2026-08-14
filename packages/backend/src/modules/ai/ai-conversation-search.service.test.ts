@@ -236,6 +236,65 @@ describe('AIConversationSearchService best-effort indexing', () => {
     );
   });
 
+  it('searches only non-sensitive messages before the latest compaction boundary', async () => {
+    const service = new AIConversationSearchService({} as never);
+    const internals = service as unknown as {
+      requireOwnedConversation: (userId: string, conversationId: string) => Promise<unknown>;
+      loadMessageRows: (conversationId: string) => Promise<unknown[]>;
+      auditRetrieval: (userId: string, input: unknown) => Promise<void>;
+    };
+    vi.spyOn(internals, 'requireOwnedConversation').mockResolvedValue({
+      id: 'conversation-1',
+      folderId: null,
+      title: 'Compacted deploy',
+      createdAt: new Date('2026-06-26T10:00:00.000Z'),
+      updatedAt: new Date('2026-06-26T11:00:00.000Z'),
+    });
+    const row = (overrides: Record<string, unknown>) => ({
+      id: 'message',
+      sequence: 0,
+      role: 'user',
+      content: '',
+      uiMessage: {},
+      toolCalls: null,
+      toolName: null,
+      toolArgsCompact: null,
+      toolResultRaw: null,
+      toolResultCompact: null,
+      isSensitive: false,
+      createdAt: new Date('2026-06-26T10:00:00.000Z'),
+      ...overrides,
+    });
+    vi.spyOn(internals, 'loadMessageRows').mockResolvedValue([
+      row({ id: 'old-1', sequence: 1, content: 'The exact deployment tag is release-7f19.' }),
+      row({ id: 'secret-1', sequence: 2, content: 'release-7f19 private token', isSensitive: true }),
+      row({ id: 'boundary-1', sequence: 3, role: 'assistant', content: 'Older response' }),
+      row({
+        id: 'marker-1',
+        sequence: 4,
+        role: 'system',
+        content: 'lossy summary',
+        uiMessage: { compactMarker: true, compactEpoch: 2, compactBoundaryMessageId: 'boundary-1' },
+      }),
+      row({ id: 'new-1', sequence: 5, content: 'release-7f19 appeared after compaction too' }),
+    ]);
+    vi.spyOn(internals, 'auditRetrieval').mockResolvedValue(undefined);
+
+    const result = await service.searchCompactedHistory('user-1', {
+      conversationId: 'conversation-1',
+      query: 'release-7f19',
+      limit: 10,
+    });
+
+    expect(result.compacted).toBe(true);
+    expect(result.compactEpoch).toBe(2);
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0]?.match).toMatchObject({ messageId: 'old-1', role: 'user' });
+    expect(JSON.stringify(result.results)).not.toContain('private token');
+    expect(JSON.stringify(result.results)).not.toContain('appeared after compaction');
+    expect(JSON.stringify(result.results)).not.toContain('lossy summary');
+  });
+
   it('does not match raw tool payloads when searching inside a chat', async () => {
     const service = new AIConversationSearchService({} as never);
     const internals = service as unknown as {

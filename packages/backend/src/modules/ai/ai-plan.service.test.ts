@@ -39,7 +39,7 @@ function queuedSelectDb(selectRows: unknown[][]) {
     };
     return chain;
   });
-  return { select, update: vi.fn(), insert: vi.fn(), transaction: vi.fn() };
+  return { select, update: vi.fn(), insert: vi.fn(), delete: vi.fn(), transaction: vi.fn() };
 }
 
 describe('AIPlanService lifecycle guards', () => {
@@ -58,7 +58,16 @@ describe('AIPlanService lifecycle guards', () => {
           acceptedAt: new Date('2026-08-12T00:02:00.000Z'),
         },
       ],
-      [{ publishedAt: new Date('2026-08-12T00:01:00.000Z') }],
+      [
+        {
+          id: 'revision-1',
+          planId: 'plan-1',
+          revision: 1,
+          status: 'accepted',
+          publishedAt: new Date('2026-08-12T00:01:00.000Z'),
+          acceptedAt: new Date('2026-08-12T00:02:00.000Z'),
+        },
+      ],
       [],
       [
         {
@@ -70,7 +79,16 @@ describe('AIPlanService lifecycle guards', () => {
           acceptedAt: new Date('2026-08-12T00:12:00.000Z'),
         },
       ],
-      [{ publishedAt: new Date('2026-08-12T00:11:00.000Z') }],
+      [
+        {
+          id: 'revision-2',
+          planId: 'plan-2',
+          revision: 1,
+          status: 'accepted',
+          publishedAt: new Date('2026-08-12T00:11:00.000Z'),
+          acceptedAt: new Date('2026-08-12T00:12:00.000Z'),
+        },
+      ],
       [],
     ]);
 
@@ -98,7 +116,16 @@ describe('AIPlanService lifecycle guards', () => {
           publishedAt: firstPublishedAt,
         },
       ],
-      [{ publishedAt: firstPublishedAt }],
+      [
+        {
+          id: 'revision-1',
+          planId: 'plan-1',
+          revision: 1,
+          status: 'superseded',
+          goal: 'Previously verified plan',
+          publishedAt: firstPublishedAt,
+        },
+      ],
       [],
       [refiningPlan],
       [
@@ -111,7 +138,6 @@ describe('AIPlanService lifecycle guards', () => {
           publishedAt: null,
         },
       ],
-      [{ publishedAt: firstPublishedAt }],
       [],
     ]);
     const service = new AIPlanService(db as never);

@@ -174,6 +174,45 @@ describe('AIService tool round comments', () => {
     );
   });
 
+  it('locks later rounds to the language of ordinary visible text emitted before tool calls', async () => {
+    const responses: MockModelResponse[] = [
+      {
+        content: 'Проверю найденный контекст.',
+        toolCalls: [{ id: 'tool-context', name: 'get_current_context', arguments: '{}' }],
+      },
+      { content: 'Готово.', toolCalls: [] },
+    ];
+    const messagesPerRound: Array<Array<Record<string, unknown>>> = [];
+    mocks.streamModelResponse.mockImplementation(async function* ({ messages }) {
+      messagesPerRound.push(messages);
+      const response = responses.shift();
+      if (!response) throw new Error('unexpected model round');
+      if (response.content) yield { type: 'text_delta', content: response.content };
+      yield {
+        type: 'model_response',
+        response: { content: response.content ?? '', toolCalls: response.toolCalls ?? [] },
+      };
+    });
+
+    const service = createService({ ...BASE_CONFIG, maxToolRounds: 10 });
+    vi.spyOn(service, 'buildSystemPrompt').mockResolvedValue('System prompt');
+    vi.spyOn(service, 'executeTool').mockResolvedValue({ result: { ok: true }, invalidateStores: [] });
+
+    await collect(
+      service.streamChat(
+        BASE_USER,
+        [{ role: 'user', content: 'Inspect the current Gateway context' }],
+        undefined,
+        new AbortController().signal,
+        'request-language-lock'
+      )
+    );
+
+    expect(JSON.stringify(messagesPerRound[1])).toContain(
+      'response language for this run is now locked to the language of the first user-visible assistant text'
+    );
+  });
+
   it('allows more tool rounds than maxToolRounds when send_comment separates them', async () => {
     const responses: MockModelResponse[] = [
       {
@@ -218,13 +257,17 @@ describe('AIService tool round comments', () => {
       },
     ];
     const toolsPerRound: string[][] = [];
+    const messagesPerRound: Array<Array<Record<string, unknown>>> = [];
 
     mocks.streamModelResponse.mockImplementation(async function* ({
       tools,
+      messages,
     }: {
       tools: Array<{ function: { name: string } }>;
+      messages: Array<Record<string, unknown>>;
     }) {
       toolsPerRound.push(tools.map((tool) => tool.function.name));
+      messagesPerRound.push(messages);
       const response = responses.shift();
       if (!response) throw new Error('unexpected model round');
       if (response.content) yield { type: 'text_delta', content: response.content };
@@ -254,6 +297,12 @@ describe('AIService tool round comments', () => {
     expect(toolsPerRound[3]).toEqual(['send_comment']);
     expect(toolsPerRound[4]).toContain('get_current_context');
     expect(toolsPerRound[4]).toContain('send_comment');
+    expect(JSON.stringify(messagesPerRound[2])).toContain(
+      'response language for this run is now locked to the language of the first user-visible assistant text'
+    );
+    expect(JSON.stringify(messagesPerRound[4])).toContain(
+      'Use that same language for every later progress update, question, and final answer'
+    );
 
     expect(events).toEqual(
       expect.arrayContaining([

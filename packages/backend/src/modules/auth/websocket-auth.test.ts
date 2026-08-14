@@ -22,4 +22,13 @@ describe('browser WebSocket credentials', () => {
       value: 'legacy-session',
     });
   });
+
+  it('prefers the cookie matching the WebSocket origin transport', () => {
+    const cookieHeader = `${getSessionCookieName('https')}=stale-session; ${getSessionCookieName('http')}=current-session`;
+
+    expect(getSessionWebSocketCredential(cookieHeader, 'http://gateway.test', allowedOrigin)).toEqual({
+      type: 'session',
+      value: 'current-session',
+    });
+  });
 });

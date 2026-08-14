@@ -1,4 +1,6 @@
+import fs from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
+import { InferenceProtocolError } from '@/modules/inference/protocol/inference-protocol.error.js';
 import type { User } from '@/types.js';
 import type { AIConfig } from './ai.types.js';
 import { AIProviderRuntimeService, normalizeGeneratedConversationTitle } from './ai-provider-runtime.service.js';
@@ -65,7 +67,7 @@ const MODELS = [
   },
 ];
 
-function createService(config: AIConfig = CONFIG, runtimeConfigured = true) {
+function createService(config: AIConfig = CONFIG, runtimeConfigured = true, artifactService?: unknown) {
   const execute = vi.fn().mockResolvedValue({
     responseId: 'response-1',
     resolvedModel: 'gateway-vision',
@@ -82,7 +84,8 @@ function createService(config: AIConfig = CONFIG, runtimeConfigured = true) {
       listAdmin: vi.fn().mockResolvedValue([]),
     } as never,
     { isConfigured: vi.fn().mockReturnValue(runtimeConfigured), execute } as never,
-    inferencePolicies as never
+    inferencePolicies as never,
+    artifactService as never
   );
   return { service, execute, inferencePolicies };
 }
@@ -125,6 +128,88 @@ describe('AIProviderRuntimeService', () => {
     );
   });
 
+  it('retries one transient Gateway Inference failure before the first model output', async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const { service, execute } = createService();
+      execute
+        .mockResolvedValueOnce({
+          responseId: 'response-failed',
+          resolvedModel: 'gateway-vision',
+          events: (async function* () {
+            yield {
+              type: 'error' as const,
+              code: 'upstream_error',
+              message: 'Upstream inference request failed',
+            };
+          })(),
+        })
+        .mockResolvedValueOnce({
+          responseId: 'response-retried',
+          resolvedModel: 'gateway-vision',
+          events: (async function* () {
+            yield { type: 'output_text.delta' as const, delta: 'Recovered' };
+            yield { type: 'completed' as const, status: 'completed' as const };
+          })(),
+        });
+      const session = await service.resolveSession(USER, {
+        requestId: 'run-retry',
+        conversationId: 'conversation-1',
+        requestedModel: 'gateway-vision',
+        signal: new AbortController().signal,
+      });
+      const eventsPromise = (async () => {
+        const events = [];
+        for await (const event of session.stream([{ role: 'user', content: 'Hello' }], [])) {
+          events.push(event);
+        }
+        return events;
+      })();
+
+      await vi.advanceTimersByTimeAsync(200);
+
+      await expect(eventsPromise).resolves.toEqual([
+        { type: 'text_delta', content: 'Recovered' },
+        { type: 'model_response', response: { content: 'Recovered', toolCalls: [] } },
+      ]);
+      expect(execute).toHaveBeenCalledTimes(2);
+    } finally {
+      random.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not retry after any upstream model output, including hidden reasoning', async () => {
+    const { service, execute } = createService();
+    execute.mockResolvedValueOnce({
+      responseId: 'response-partial',
+      resolvedModel: 'gateway-vision',
+      events: (async function* () {
+        yield { type: 'reasoning.delta' as const, itemId: 'reasoning-1', delta: 'Checking' };
+        throw new InferenceProtocolError(502, 'upstream_error', 'Upstream inference request failed');
+      })(),
+    });
+    const session = await service.resolveSession(USER, {
+      requestId: 'run-no-retry',
+      conversationId: 'conversation-1',
+      requestedModel: 'gateway-vision',
+      signal: new AbortController().signal,
+    });
+
+    const consume = async () => {
+      for await (const _event of session.stream([{ role: 'user', content: 'Hello' }], [])) {
+        // Consume the provider stream.
+      }
+    };
+
+    await expect(consume()).rejects.toMatchObject({
+      code: 'upstream_error',
+      details: { emittedOutput: true },
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it('generates conversation titles with the selected model and its minimum reasoning effort', async () => {
     const { service, execute } = createService();
     execute.mockResolvedValueOnce({
@@ -158,6 +243,50 @@ describe('AIProviderRuntimeService', () => {
     expect(JSON.stringify(execute.mock.calls[0]?.[0])).toContain(
       'Do not analyze, reason through the request, or explain anything; answer immediately.'
     );
+  });
+
+  it('passes image-only attachments to the vision model when generating a title', async () => {
+    const readFile = vi.spyOn(fs, 'readFile').mockResolvedValue(Buffer.from('image-bytes'));
+    const artifactService = {
+      getDownload: vi.fn().mockResolvedValue({
+        filePath: '/tmp/title-image.png',
+        metadata: { mediaType: 'image/png' },
+      }),
+    };
+    const { service, execute } = createService(CONFIG, true, artifactService);
+    execute.mockResolvedValueOnce({
+      responseId: 'response-title-image',
+      resolvedModel: 'gateway-vision',
+      events: (async function* () {
+        yield { type: 'output_text.delta' as const, delta: 'Возможности Gateway' };
+        yield { type: 'completed' as const, status: 'completed' as const };
+      })(),
+    });
+
+    await expect(
+      service.generateConversationTitle(USER, {
+        requestId: 'title-image',
+        content: '',
+        attachments: [
+          {
+            artifactId: 'artifact-1',
+            filename: 'screen.png',
+            mediaType: 'image/png',
+            sizeBytes: 11,
+            downloadUrl: '/api/ai/sandbox/artifacts/artifact-1/download',
+            kind: 'image',
+          },
+        ],
+        requestedModel: 'gateway-vision',
+        signal: new AbortController().signal,
+      })
+    ).resolves.toBe('Возможности Gateway');
+
+    expect(artifactService.getDownload).toHaveBeenCalledWith(USER.id, 'artifact-1');
+    expect(readFile).toHaveBeenCalledWith('/tmp/title-image.png');
+    expect(JSON.stringify(execute.mock.calls[0]?.[0])).toContain('data:image/png;base64,aW1hZ2UtYnl0ZXM=');
+    expect(JSON.stringify(execute.mock.calls[0]?.[0])).toContain('"detail":"low"');
+    readFile.mockRestore();
   });
 
   it('disables optional reasoning for direct-provider title generation', async () => {

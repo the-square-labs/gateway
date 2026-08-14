@@ -30,6 +30,7 @@ const MCP_EXCLUDED_TOOLS = new Set([
   'search_tool_output',
   'end_conversation',
   'search_chats',
+  'search_compacted_history',
   'find_in_chat',
   'read_chat_slice',
   'list_projects',

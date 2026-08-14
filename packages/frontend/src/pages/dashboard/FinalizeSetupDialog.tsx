@@ -73,7 +73,7 @@ const ROOT_STEPS: Array<{
   {
     id: "integrations",
     title: "Connect integrations",
-    description: "Configure Cloudflare and GitLab for infrastructure workflows.",
+    description: "Configure DNS and source-control connectors for infrastructure workflows.",
     icon: Cloud,
   },
 ];

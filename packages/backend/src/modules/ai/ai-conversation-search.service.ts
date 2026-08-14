@@ -49,6 +49,12 @@ export interface FindInChatInput {
   currentConversationId?: string;
 }
 
+export interface SearchCompactedHistoryInput {
+  conversationId: string;
+  query: string;
+  limit?: number;
+}
+
 export interface ReadChatSliceInput {
   conversationId: string;
   mode: 'latest' | 'first' | 'around_message' | 'after' | 'before';
@@ -354,13 +360,96 @@ export class AIConversationSearchService {
     return result;
   }
 
+  async searchCompactedHistory(userId: string, input: SearchCompactedHistoryInput) {
+    const conversation = await this.requireOwnedConversation(userId, input.conversationId);
+    const query = String(input.query ?? '').trim();
+    if (!query) throw new AppError(400, 'AI_CHAT_SEARCH_QUERY_REQUIRED', 'query is required');
+    const limit = clampLimit(input.limit, 5, 10);
+    const messages = await this.loadMessageRows(conversation.id);
+    const markerIndex = findLatestCompactMarkerIndex(messages);
+    if (markerIndex < 0) {
+      return {
+        compacted: false,
+        results: [],
+        nextStep: 'The current conversation has no compacted history. Use the visible conversation context directly.',
+      };
+    }
+    const marker = messages[markerIndex];
+    const boundaryId =
+      typeof marker.uiMessage.compactBoundaryMessageId === 'string' ? marker.uiMessage.compactBoundaryMessageId : null;
+    const boundary = boundaryId ? messages.find((message) => message.id === boundaryId) : null;
+    const boundarySequence = boundary?.sequence ?? marker.sequence - 1;
+    const historicalMessages = messages.filter(
+      (message) =>
+        message.sequence <= boundarySequence &&
+        (message.role === 'user' || message.role === 'assistant') &&
+        message.uiMessage.compactMarker !== true &&
+        !message.isSensitive
+    );
+    const normalized = normalizeSearchText(query);
+    const rows = scoreInMemoryDocuments(
+      buildConversationSearchDocuments({
+        userId,
+        projectId: conversation.folderId,
+        conversationId: conversation.id,
+        title: conversation.title,
+        messages: historicalMessages,
+        toolCalls: [],
+      }),
+      {
+        conversationTitle: conversation.title,
+        conversationCreatedAt: conversation.createdAt,
+        conversationUpdatedAt: conversation.updatedAt,
+      },
+      normalized,
+      limit
+    );
+    const bestByMessage = new Map<string, ScoredDocumentRow>();
+    for (const row of rows) {
+      if (!row.messageId || row.kind !== 'message') continue;
+      const current = bestByMessage.get(row.messageId);
+      if (!current || row.score > current.score) bestByMessage.set(row.messageId, row);
+    }
+    const results = [...bestByMessage.values()]
+      .sort((left, right) => right.score - left.score || right.createdAt.getTime() - left.createdAt.getTime())
+      .slice(0, limit)
+      .map((match) => {
+        const index = historicalMessages.findIndex((message) => message.id === match.messageId);
+        const message = historicalMessages[index];
+        return {
+          score: roundScore(match.score),
+          matchedBy: match.matchedBy,
+          match: toReadableMessage(message),
+          context: historicalMessages.slice(Math.max(0, index - 1), index + 2).map(toReadableMessage),
+        };
+      });
+    await this.auditRetrieval(userId, {
+      action: 'ai.search_compacted_history',
+      currentConversationId: conversation.id,
+      currentProjectId: conversation.folderId,
+      targetConversationId: conversation.id,
+      targetProjectId: conversation.folderId,
+      query,
+      resultCount: results.length,
+    });
+    return {
+      compacted: true,
+      compactEpoch: typeof marker.uiMessage.compactEpoch === 'number' ? marker.uiMessage.compactEpoch : null,
+      results,
+      nextStep:
+        results.length > 0
+          ? 'Use only the returned bounded evidence. Search again with a narrower exact term if the needed detail is absent.'
+          : 'No exact historical match was found. Try one narrower identifier, error fragment, path, or command.',
+    };
+  }
+
   async readChatSlice(userId: string, input: ReadChatSliceInput) {
     const conversation = await this.requireOwnedConversation(userId, input.conversationId);
     const currentConversation = input.currentConversationId
       ? await this.getOwnedConversation(userId, input.currentConversationId)
       : null;
     const limit = clampLimit(input.limit, DEFAULT_READ_LIMIT, MAX_READ_LIMIT);
-    const messages = await this.loadMessageRows(conversation.id);
+    const messages = (await this.loadMessageRows(conversation.id)).filter(isRetrievableMessage);
     const slice = selectMessageSlice(messages, input, limit);
     await this.auditRetrieval(userId, {
       action: 'ai.read_chat_slice',
@@ -644,7 +733,7 @@ export class AIConversationSearchService {
     for (const chat of chats.slice(0, PROMPT_PROJECT_CHAT_CONTEXT_LIMIT)) {
       if (chat.projectId !== projectId) continue;
       const messages = (await this.loadMessageRows(chat.conversationId))
-        .filter((message) => !message.isSensitive)
+        .filter(isRetrievableMessage)
         .slice(-PROMPT_PROJECT_CHAT_CONTEXT_MESSAGE_LIMIT)
         .map(toPromptTailMessage);
       if (messages.length === 0) continue;
@@ -805,7 +894,7 @@ function buildConversationSearchDocuments(input: {
     createdAt: new Date(),
   });
   for (const message of input.messages) {
-    if (message.isSensitive) continue;
+    if (!isRetrievableMessage(message)) continue;
     pushDocument(documents, input, {
       kind: 'message',
       role: message.role,
@@ -839,7 +928,7 @@ function buildConversationSearchDocuments(input: {
   for (let index = 0; index < input.messages.length; index += 1) {
     const windowMessages = input.messages
       .slice(Math.max(0, index - WINDOW_RADIUS), index + WINDOW_RADIUS + 1)
-      .filter((message) => !message.isSensitive);
+      .filter(isRetrievableMessage);
     const text = windowMessages.map(messageText).filter(Boolean).join('\n');
     if (text) {
       pushDocument(documents, input, {
@@ -882,6 +971,17 @@ function messageText(message: MessageRow): string {
   if (message.role === 'tool') return '';
   const uiContent = typeof message.uiMessage.content === 'string' ? message.uiMessage.content : '';
   return [message.content, uiContent].filter(Boolean).join('\n');
+}
+
+function isRetrievableMessage(message: MessageRow): boolean {
+  return !message.isSensitive && message.role !== 'system' && message.uiMessage.hiddenSystemEvent !== true;
+}
+
+function findLatestCompactMarkerIndex(messages: MessageRow[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.uiMessage.compactMarker === true) return index;
+  }
+  return -1;
 }
 
 function toolMessageText(message: MessageRow): string {

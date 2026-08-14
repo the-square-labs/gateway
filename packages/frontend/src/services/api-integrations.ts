@@ -6,6 +6,14 @@ import type {
   CloudflareConnectorSyncResult,
   CloudflareConnectorUpdateRequest,
   CloudflareZone,
+  ExternalSshConnector,
+  ExternalSshConnectorRequest,
+  GitConnector,
+  GitConnectorProvider,
+  GitConnectorRequest,
+  GitHubOAuthSession,
+  GitHubOAuthStartRequest,
+  GitUserCredentialStatus,
   GitLabAllowlistEntry,
   GitLabAllowlistPreviewSearchRequest,
   GitLabConnector,
@@ -20,6 +28,92 @@ import type { ApiClientBaseConstructor } from "./api-mixins";
 
 export function withIntegrationsApi<TBase extends ApiClientBaseConstructor>(Base: TBase) {
   return class IntegrationsApi extends Base {
+    async listGitConnectors(provider: GitConnectorProvider): Promise<GitConnector[]> {
+      return this.unwrapData(
+        this.request<{ data: GitConnector[] }>(`/integrations/${provider}/connectors`)
+      );
+    }
+
+    async createGitConnector(
+      provider: GitConnectorProvider,
+      data: GitConnectorRequest
+    ): Promise<GitConnector> {
+      return this.unwrapData(
+        this.request<{ data: GitConnector }>(`/integrations/${provider}/connectors`, {
+          method: "POST",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async getGitHubOAuthAvailability(): Promise<{ available: boolean }> {
+      return this.unwrapData(
+        this.request<{ data: { available: boolean } }>("/integrations/github/oauth")
+      );
+    }
+
+    async startGitHubOAuth(data: GitHubOAuthStartRequest): Promise<GitHubOAuthSession> {
+      return this.unwrapData(
+        this.request<{ data: GitHubOAuthSession }>("/integrations/github/oauth/sessions", {
+          method: "POST",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async getGitHubOAuthStatus(id: string): Promise<GitHubOAuthSession> {
+      return this.unwrapData(
+        this.request<{ data: GitHubOAuthSession }>(`/integrations/github/oauth/sessions/${id}`)
+      );
+    }
+
+    async cancelGitHubOAuth(id: string): Promise<GitHubOAuthSession> {
+      return this.unwrapData(
+        this.request<{ data: GitHubOAuthSession }>(`/integrations/github/oauth/sessions/${id}`, {
+          method: "DELETE",
+        })
+      );
+    }
+
+    async getGitUserCredentialStatus(
+      provider: GitConnectorProvider,
+      connectorId: string
+    ): Promise<GitUserCredentialStatus> {
+      return this.unwrapData(
+        this.request<{ data: GitUserCredentialStatus }>(
+          `/integrations/${provider}/connectors/${connectorId}/user-credential`
+        )
+      );
+    }
+
+    async authorizeGitUserCredential(
+      provider: GitConnectorProvider,
+      connectorId: string,
+      input: { username?: string; token: string }
+    ): Promise<GitUserCredentialStatus> {
+      return this.unwrapData(
+        this.request<{ data: GitUserCredentialStatus }>(
+          `/integrations/${provider}/connectors/${connectorId}/user-credential`,
+          { method: "POST", body: JSON.stringify(input) }
+        )
+      );
+    }
+
+    async listExternalSshConnectors(): Promise<ExternalSshConnector[]> {
+      return this.unwrapData(
+        this.request<{ data: ExternalSshConnector[] }>("/integrations/ssh/connectors")
+      );
+    }
+
+    async createExternalSshConnector(
+      data: ExternalSshConnectorRequest
+    ): Promise<{ connector: ExternalSshConnector; generatedPublicKey: string | null }> {
+      return this.unwrapData(
+        this.request<{
+          data: { connector: ExternalSshConnector; generatedPublicKey: string | null };
+        }>("/integrations/ssh/connectors", { method: "POST", body: JSON.stringify(data) })
+      );
+    }
     async listGitLabConnectors(params?: { enabled?: boolean }): Promise<GitLabConnector[]> {
       const searchParams = new URLSearchParams();
       if (params?.enabled !== undefined) searchParams.set("enabled", String(params.enabled));

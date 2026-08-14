@@ -1,0 +1,25 @@
+{
+  "file_name": "dnv2klmw_docker_session_recovery",
+  "edges": [
+    {
+      "from_id": "dnv2klmw",
+      "to_id": "7rchqhpz",
+      "relation": "same_workflow",
+      "weight": 0.9,
+      "reason": "Both document updating the localhost Gateway stand while preserving existing containers, volumes, and database configuration to avoid auth breakage.",
+      "source": "auto",
+      "created_at": 1786637401615,
+      "updated_at": 1786637401615
+    },
+    {
+      "from_id": "dnv2klmw",
+      "to_id": "dulrcn1x",
+      "relation": "same_workflow",
+      "weight": 0.78,
+      "reason": "Both cover recovery of the preserved gateway-upgrade-e2e localhost stand, including session/auth verification and reuse of PostgreSQL, Redis, and Gateway state.",
+      "source": "auto",
+      "created_at": 1786637401615,
+      "updated_at": 1786637401615
+    }
+  ]
+}

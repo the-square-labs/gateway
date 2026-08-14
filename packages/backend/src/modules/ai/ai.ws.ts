@@ -18,6 +18,7 @@ import type { WSClientMessage, WSServerMessage } from './ai.types.js';
 import { AIPlanService } from './ai-plan.service.js';
 import { AIProviderRuntimeService } from './ai-provider-runtime.service.js';
 import { AIRunService, aiUserConversationsChangedChannel } from './ai-run.service.js';
+import { getAIScenario, listVisibleAIScenarios } from './ai-scenarios.js';
 
 const logger = createChildLogger('AI-WebSocket');
 const RATE_LIMIT_PIPELINE_RESULT_COUNT = 4;
@@ -449,7 +450,9 @@ export function createWSHandlers() {
           if (msg.type === 'conversation.send_message') {
             try {
               const content = msg.content.trim();
-              if (!content) throw new AppError(400, 'AI_MESSAGE_REQUIRED', 'Message content is required');
+              if (!content && !msg.attachments?.length) {
+                throw new AppError(400, 'AI_MESSAGE_REQUIRED', 'Message content is required');
+              }
               const model = msg.model?.trim();
               if (model && model.length > 255) {
                 throw new AppError(400, 'AI_MODEL_INVALID', 'AI model identifier is too long');
@@ -470,15 +473,29 @@ export function createWSHandlers() {
                 );
               }
 
+              const providerRuntime = container.resolve(AIProviderRuntimeService);
+              if (msg.attachments?.length) {
+                const providerStatus = await providerRuntime.statusForUser(user);
+                const supportsImages =
+                  providerStatus.providerType === 'gateway_inference'
+                    ? providerStatus.models.find((candidate) => candidate.id === (model || providerStatus.defaultModel))
+                        ?.supportsImages === true
+                    : providerStatus.supportsImages;
+                if (!supportsImages) {
+                  throw new AppError(
+                    400,
+                    'AI_IMAGE_INPUT_UNSUPPORTED',
+                    'The selected AI model does not support image attachments'
+                  );
+                }
+              }
+
               const runService = container.resolve(AIRunService);
               const planService = container.isRegistered(AIPlanService) ? container.resolve(AIPlanService) : null;
               let activePlan =
                 msg.conversationId && planService
                   ? await planService.getActivePlanSnapshot(user.id, msg.conversationId)
                   : null;
-              if (activePlan?.status === 'awaiting_decision') {
-                throw new AppError(409, 'AI_PLAN_DECISION_REQUIRED', 'Choose how to continue the published plan first');
-              }
               if (activePlan?.status === 'validating' || activePlan?.status === 'verifying') {
                 throw new AppError(409, 'AI_PLAN_BUSY', 'The active plan is being verified');
               }
@@ -487,9 +504,10 @@ export function createWSHandlers() {
               }
               const title = msg.conversationId
                 ? 'New Work Session'
-                : await container.resolve(AIProviderRuntimeService).generateConversationTitle(user, {
+                : await providerRuntime.generateConversationTitle(user, {
                     requestId: `conversation-title:${msg.clientCommandId}`,
                     content: userVisibleContent(content),
+                    ...(msg.attachments?.length ? { attachments: msg.attachments } : {}),
                     ...(model ? { requestedModel: model } : {}),
                     signal: AbortSignal.timeout(CONVERSATION_TITLE_TIMEOUT_MS),
                   });
@@ -518,7 +536,13 @@ export function createWSHandlers() {
                 });
               }
               let run = result.run;
-              if (!result.duplicate && activePlan) {
+              if (
+                !result.duplicate &&
+                activePlan &&
+                (activePlan.status === 'drafting' ||
+                  activePlan.status === 'executing' ||
+                  activePlan.status === 'verifying')
+              ) {
                 run = await runService.attachRunToPlan({
                   userId: user.id,
                   conversationId: result.conversationId,
@@ -554,6 +578,72 @@ export function createWSHandlers() {
               }
             } catch (error) {
               sendCommandError(ws, msg, error, 'Failed to send AI message');
+            }
+            return;
+          }
+
+          if (msg.type === 'conversation.start_scenario') {
+            try {
+              const scenario = getAIScenario(msg.scenarioId);
+              if (!scenario || !listVisibleAIScenarios(user).some((item) => item.id === scenario.id)) {
+                throw new AppError(404, 'AI_SCENARIO_NOT_FOUND', 'This scenario is not available to you');
+              }
+              const rateCheck = await checkRateLimit(user.id);
+              if (!rateCheck.allowed) {
+                const code = rateCheck.unavailable ? 'RATE_LIMIT_UNAVAILABLE' : 'RATE_LIMITED';
+                throw new AppError(
+                  rateCheck.unavailable ? 503 : 429,
+                  code,
+                  rateCheck.unavailable ? 'Gateway is temporarily unavailable' : 'AI rate limit exceeded',
+                  rateCheck.unavailable ? undefined : { retryAfter: rateCheck.retryAfter }
+                );
+              }
+              const model = msg.model?.trim();
+              const reasoningEffort = msg.reasoningEffort?.trim();
+              const content = `${scenario.title}\n<system-instruction>\nScenario selected: ${scenario.title}. ${scenario.kickoffInstruction}\n</system-instruction>`;
+              const runService = container.resolve(AIRunService);
+              const result = await runService.startUserRun({
+                conversationId: null,
+                userId: user.id,
+                title: scenario.title,
+                userMessage: {
+                  role: 'user',
+                  content,
+                  scenario: {
+                    id: scenario.id,
+                    title: scenario.title,
+                    description: scenario.description,
+                    icon: scenario.icon,
+                    category: scenario.category,
+                  },
+                },
+                clientCommandId: msg.clientCommandId,
+                lastContext: msg.context ? { ...msg.context } : null,
+                ...(model ? { model } : {}),
+                ...(reasoningEffort ? { reasoningEffort } : {}),
+              });
+              // A scenario begins with requirement discovery. It must not create a
+              // plan just because the eventual work might mutate infrastructure.
+              const run = result.run;
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: result.conversationId,
+                runId: run.id,
+                duplicate: result.duplicate,
+              });
+              state.subscribedConversationIds.add(result.conversationId);
+              const snapshot = await sendConversationSnapshot(ws, user.id, result.conversationId);
+              send(ws, {
+                type: 'run.status_changed',
+                conversationId: result.conversationId,
+                run: snapshot.runtime.activeRun,
+                ...revisionPayload(snapshot),
+              });
+              if (!result.duplicate) runService.startRunExecution(user, run.id);
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to start AI scenario');
             }
             return;
           }
@@ -791,11 +881,9 @@ export function createWSHandlers() {
           if (msg.type === 'plan.pause') {
             try {
               const planService = container.resolve(AIPlanService);
-              const runService = container.resolve(AIRunService);
               const plan = await planService.getActivePlanSnapshot(user.id, msg.conversationId);
               if (!plan || plan.id !== msg.planId) throw new AppError(404, 'AI_PLAN_NOT_FOUND', 'AI plan not found');
-              await planService.pause(user.id, msg.conversationId, 'Paused by user');
-              await runService.stopActiveRunForRollback({ userId: user.id, conversationId: msg.conversationId });
+              await planService.requestPause(user.id, msg.conversationId, 'Paused by user');
               send(ws, {
                 type: 'command.ack',
                 commandType: msg.type,
@@ -843,8 +931,8 @@ export function createWSHandlers() {
               const current = await planService.getActivePlanSnapshot(user.id, msg.conversationId);
               if (!current || current.id !== msg.planId)
                 throw new AppError(404, 'AI_PLAN_NOT_FOUND', 'AI plan not found');
-              await runService.stopActiveRunForRollback({ userId: user.id, conversationId: msg.conversationId });
               await planService.cancel(user.id, msg.conversationId);
+              await runService.stopActiveRunForRollback({ userId: user.id, conversationId: msg.conversationId });
               send(ws, {
                 type: 'command.ack',
                 commandType: msg.type,
@@ -854,6 +942,29 @@ export function createWSHandlers() {
               await sendConversationSnapshot(ws, user.id, msg.conversationId);
             } catch (error) {
               sendCommandError(ws, msg, error, 'Failed to cancel the plan');
+            }
+            return;
+          }
+
+          if (msg.type === 'conversation.abandon_planning') {
+            try {
+              const runService = container.resolve(AIRunService);
+              const lifecycle = await runService.abandonPlanning({
+                userId: user.id,
+                conversationId: msg.conversationId,
+                clientCommandId: msg.clientCommandId,
+              });
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: msg.conversationId,
+                duplicate: lifecycle.duplicate,
+              });
+              await sendConversationSnapshot(ws, user.id, msg.conversationId);
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to leave Plan Mode');
+              sendConversationSnapshotBestEffort(ws, user.id, msg.conversationId);
             }
             return;
           }
@@ -987,6 +1098,46 @@ export function createWSHandlers() {
               sendConversationSnapshotBestEffort(ws, user.id, msg.conversationId);
             } catch (error) {
               sendCommandError(ws, msg, error, 'Failed to resolve GitLab authorization');
+            }
+            return;
+          }
+
+          if (msg.type === 'setup.resolve') {
+            try {
+              const runService = container.resolve(AIRunService);
+              const result = await runService.resolveSetupInteraction({
+                conversationId: msg.conversationId,
+                runId: msg.runId,
+                interactionId: msg.interactionId,
+                userId: user.id,
+                clientCommandId: msg.clientCommandId,
+                status: msg.status,
+                result: msg.result,
+              });
+              send(ws, {
+                type: 'command.ack',
+                commandType: msg.type,
+                clientCommandId: msg.clientCommandId,
+                conversationId: msg.conversationId,
+                runId: msg.runId,
+                duplicate: result.duplicate,
+              });
+              try {
+                runService.startSetupContinuation(user, {
+                  conversationId: msg.conversationId,
+                  runId: msg.runId,
+                  interaction: result.interaction,
+                });
+              } catch (error) {
+                logger.error('Failed to schedule AI setup continuation after committed result', {
+                  conversationId: msg.conversationId,
+                  runId: msg.runId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+              sendConversationSnapshotBestEffort(ws, user.id, msg.conversationId);
+            } catch (error) {
+              sendCommandError(ws, msg, error, 'Failed to resolve setup interaction');
             }
             return;
           }

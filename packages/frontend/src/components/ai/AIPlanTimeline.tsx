@@ -46,12 +46,12 @@ export function AIPlanTimeline({
 
   return (
     <>
-      {publishedPlans.map((plan) => {
+      {publishedPlans.map((plan, planIndex) => {
         const insertionIndex = Math.max(messageCursor, getPlanInsertionIndex(messages, plan));
         const precedingMessages = messages.slice(messageCursor, insertionIndex);
         messageCursor = insertionIndex;
         return (
-          <Fragment key={plan.id}>
+          <Fragment key={plan.revisionId ?? plan.id}>
             {precedingMessages.length > 0 && (
               <AIMessageList
                 {...messageListProps}
@@ -59,7 +59,13 @@ export function AIPlanTimeline({
                 isStreaming={false}
               />
             )}
-            <AIPlanBlock plan={plan} />
+            <AIPlanBlock
+              plan={plan}
+              collapsed={publishedPlans.some(
+                (candidate, candidateIndex) =>
+                  candidateIndex > planIndex && candidate.id === plan.id
+              )}
+            />
           </Fragment>
         );
       })}

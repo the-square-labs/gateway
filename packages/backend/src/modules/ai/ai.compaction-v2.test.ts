@@ -74,7 +74,7 @@ function createService(): AIService {
 
 function sourceAndRecentMessages(lastContent = 'latest question'): ChatMessage[] {
   return [
-    { id: 'old-user', role: 'user', content: 'old '.repeat(5_000) },
+    { id: 'old-user', role: 'user', content: 'old '.repeat(15_000) },
     {
       id: 'old-assistant-call',
       role: 'assistant',
@@ -142,7 +142,9 @@ describe('AI compaction v2', () => {
     });
     expect(result.sourceTokenEstimate).toBeGreaterThan(0);
     expect(result.resultTokenEstimate).toBeGreaterThan(0);
-    expect(providerInputs[0].config.maxCompletionTokens).toBe(2_880);
+    expect(providerInputs[0].config.maxCompletionTokens).toBe(1_280);
+    expect(result.reconstructedTokens).toBeLessThanOrEqual(result.targetTokens!);
+    expect(result.targetAchieved).toBe(true);
     const compactionPayload = JSON.stringify(providerInputs[0].messages);
     expect(compactionPayload).not.toContain('do-not-leak');
     expect(compactionPayload).not.toContain('also-secret');
@@ -173,6 +175,25 @@ describe('AI compaction v2', () => {
         'auto'
       )
     ).rejects.toMatchObject({ code: 'AI_CONTEXT_TOO_LARGE' });
+    expect(mocks.streamModelResponse).not.toHaveBeenCalled();
+  });
+
+  it('reports an irreducible floor above the target without silently dropping the atomic turn', async () => {
+    const service = createService();
+    const result = await service.compactConversationContext(
+      USER,
+      [{ id: 'only-user', role: 'user', content: 'x'.repeat(100_000) }],
+      undefined,
+      new AbortController().signal,
+      'auto'
+    );
+
+    expect(result).toMatchObject({
+      compacted: false,
+      compactBoundaryMessageId: null,
+      targetAchieved: false,
+    });
+    expect(result.reconstructedTokens).toBeGreaterThan(result.targetTokens!);
     expect(mocks.streamModelResponse).not.toHaveBeenCalled();
   });
 

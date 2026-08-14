@@ -1,5 +1,5 @@
 import { Download, Eye, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { AIToolAccessModal } from "@/components/ai/AIToolAccessModal";
@@ -7,7 +7,14 @@ import { PanelShell } from "@/components/common/PanelShell";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import {
@@ -333,11 +340,20 @@ function SandboxArtifactsPanel() {
   const [artifacts, setArtifacts] = useState<AISandboxArtifact[]>([]);
   const [loading, setLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [allOpen, setAllOpen] = useState(false);
+  const [allArtifacts, setAllArtifacts] = useState<AISandboxArtifact[]>([]);
+  const [allLoading, setAllLoading] = useState(false);
+  const [nextPage, setNextPage] = useState<number | null>(null);
+  const allRequestId = useRef(0);
+  const loadingMore = useRef(false);
+  const tableScrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
   const loadArtifacts = useCallback(async (options: { silent?: boolean } = {}) => {
     if (!options.silent) setLoading(true);
     try {
-      setArtifacts(await api.listAISandboxArtifacts());
+      const result = await api.listAISandboxArtifacts({ page: 1, limit: 10 });
+      setArtifacts(result.data);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to load artifacts");
     } finally {
@@ -349,12 +365,68 @@ function SandboxArtifactsPanel() {
     loadArtifacts();
   }, [loadArtifacts]);
 
+  const loadAllPage = useCallback(async (page: number, replace: boolean) => {
+    if (!replace && loadingMore.current) return;
+    const requestId = ++allRequestId.current;
+    if (replace) {
+      setAllArtifacts([]);
+      setNextPage(null);
+    } else {
+      loadingMore.current = true;
+    }
+    setAllLoading(true);
+    try {
+      const result = await api.listAISandboxArtifacts({ page, limit: 25 });
+      if (requestId !== allRequestId.current) return;
+      setAllArtifacts((current) => (replace ? result.data : [...current, ...result.data]));
+      setNextPage(result.nextPage);
+    } catch (error) {
+      if (requestId === allRequestId.current) {
+        toast.error(error instanceof Error ? error.message : "Failed to load artifacts");
+      }
+    } finally {
+      if (requestId === allRequestId.current) {
+        loadingMore.current = false;
+        setAllLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (allOpen) void loadAllPage(1, true);
+  }, [allOpen, loadAllPage]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const root = tableScrollRef.current;
+    if (!allOpen || !sentinel || !root || !nextPage) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && !loadingMore.current) {
+          void loadAllPage(nextPage, false);
+        }
+      },
+      { root, rootMargin: "320px" }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [allOpen, loadAllPage, nextPage]);
+
+  const onAllOpenChange = (open: boolean) => {
+    setAllOpen(open);
+    if (!open) {
+      allRequestId.current += 1;
+      loadingMore.current = false;
+    }
+  };
+
   const deleteArtifact = async (artifact: AISandboxArtifact) => {
     setDeletingId(artifact.id);
     try {
       await api.deleteAISandboxArtifact(artifact.id);
       toast.success("Artifact deleted");
       await loadArtifacts({ silent: true });
+      if (allOpen) await loadAllPage(1, true);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to delete artifact");
     } finally {
@@ -460,24 +532,172 @@ function SandboxArtifactsPanel() {
     },
   ];
 
+  const modalColumns: DataTableColumn<AISandboxArtifact>[] = [
+    {
+      key: "artifact",
+      header: "Artifact",
+      width: "minmax(14rem,1fr)",
+      truncate: true,
+      render: (artifact) => (
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium" title={artifact.filename}>
+            {artifact.filename}
+          </p>
+          <p className="truncate text-xs text-muted-foreground" title={artifact.mediaType}>
+            {artifact.mediaType || "application/octet-stream"}
+          </p>
+        </div>
+      ),
+    },
+    {
+      key: "chat",
+      header: "Chat",
+      width: "minmax(14rem,1fr)",
+      truncate: true,
+      render: (artifact) => (
+        <div className="min-w-0">
+          <p
+            className="truncate text-sm"
+            title={artifact.conversationTitle ?? artifact.conversationId ?? ""}
+          >
+            {artifact.conversationTitle ?? artifact.conversationId ?? "-"}
+          </p>
+          {artifact.conversationTitle && artifact.conversationId ? (
+            <p className="truncate font-mono text-xs text-muted-foreground">
+              {artifact.conversationId}
+            </p>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: "size",
+      header: "Size",
+      width: "7rem",
+      render: (artifact) => formatBytes(artifact.sizeBytes),
+    },
+    {
+      key: "created",
+      header: "Created",
+      width: "11rem",
+      render: (artifact) => formatDateTime(artifact.createdAt),
+    },
+    {
+      key: "actions",
+      header: "",
+      align: "right",
+      width: "8rem",
+      render: (artifact) => (
+        <div className="flex justify-end gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={(event) => {
+              event.stopPropagation();
+              openArtifactPreview(artifact);
+            }}
+            aria-label={`Preview ${artifact.filename}`}
+          >
+            <Eye className="h-4 w-4" />
+          </Button>
+          <Button asChild variant="ghost" size="icon" aria-label={`Download ${artifact.filename}`}>
+            <a
+              href={artifact.downloadUrl}
+              download={artifact.filename}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <Download className="h-4 w-4" />
+            </a>
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={(event) => {
+              event.stopPropagation();
+              void deleteArtifact(artifact);
+            }}
+            disabled={deletingId === artifact.id}
+            aria-label={`Delete ${artifact.filename}`}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
+  const modalTableHeight = allArtifacts.length
+    ? Math.min(49 + allArtifacts.length * 49 + 44, 640)
+    : undefined;
+
   return (
-    <PanelShell
-      title="Stored Artifacts"
-      description="Files currently retained from assistant sandbox runs"
-      actions={
-        <RefreshButton minDurationMs={1400} onClick={() => loadArtifacts({ silent: true })} />
-      }
-    >
-      <SimpleTable
-        columns={columns}
-        rows={artifacts}
-        getRowKey={(artifact) => artifact.id}
-        loading={loading}
-        emptyMessage="No stored artifacts"
-        tableClassName="table-fixed"
-        onRowClick={openArtifactPreview}
-      />
-    </PanelShell>
+    <>
+      <PanelShell
+        title="Stored Artifacts"
+        description="The 10 most recently retained files from assistant sandbox runs"
+        actions={
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              className="h-auto p-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
+              onClick={() => setAllOpen(true)}
+            >
+              View all
+            </Button>
+            <RefreshButton minDurationMs={1400} onClick={() => loadArtifacts({ silent: true })} />
+          </div>
+        }
+      >
+        <SimpleTable
+          columns={columns}
+          rows={artifacts}
+          getRowKey={(artifact) => artifact.id}
+          loading={loading}
+          emptyMessage="No stored artifacts"
+          tableClassName="table-fixed"
+          onRowClick={openArtifactPreview}
+        />
+      </PanelShell>
+
+      <Dialog open={allOpen} onOpenChange={onAllOpenChange}>
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-h-[85dvh] sm:max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>Stored Artifacts</DialogTitle>
+            <DialogDescription>
+              All retained assistant sandbox files. Scroll to load older artifacts.
+            </DialogDescription>
+          </DialogHeader>
+          <div
+            className="max-h-[min(65dvh,40rem)]"
+            style={modalTableHeight ? { height: modalTableHeight } : undefined}
+          >
+            <DataTable
+              columns={modalColumns}
+              data={allArtifacts}
+              keyFn={(artifact) => artifact.id}
+              onRowClick={openArtifactPreview}
+              horizontalScroll
+              minWidth="56rem"
+              className="h-full"
+              scrollRef={tableScrollRef}
+              loading={allLoading && allArtifacts.length === 0}
+              emptyMessage="No stored artifacts"
+              footer={
+                nextPage ? (
+                  <div ref={sentinelRef} className="py-3 text-center text-xs text-muted-foreground">
+                    {allLoading ? "Loading more…" : "Scroll to load older artifacts"}
+                  </div>
+                ) : allArtifacts.length > 0 ? (
+                  <div className="py-3 text-center text-xs text-muted-foreground">
+                    End of artifacts
+                  </div>
+                ) : null
+              }
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

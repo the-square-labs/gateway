@@ -147,6 +147,15 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `integrations:gitlab:registry:view` |  |
 | `integrations:gitlab:registry:manage` |  |
 | `integrations:gitlab:sandbox:clone` |  |
+| `integrations:github:view` |  |
+| `integrations:github:manage` |  |
+| `integrations:github:system` |  |
+| `integrations:git:view` |  |
+| `integrations:git:manage` |  |
+| `integrations:git:system` |  |
+| `integrations:ssh:view` |  |
+| `integrations:ssh:manage` |  |
+| `integrations:ssh:use` |  |
 | `integrations:cloudflare:view` |  |
 | `integrations:cloudflare:manage` |  |
 | `integrations:cloudflare:dns:view` |  |
@@ -270,6 +279,11 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 | `settings:gateway:edit` | Gateway auth/control-plane settings are session-only. |
 | `integrations:gitlab:manage` | GitLab connector administration is session-only. |
 | `integrations:gitlab:system` | System GitLab credential access is session-only. |
+| `integrations:github:manage` | GitHub connector administration is session-only. |
+| `integrations:github:system` | GitHub connector system credentials are session-only. |
+| `integrations:git:manage` | Generic Git connector administration is session-only. |
+| `integrations:git:system` | Generic Git connector system credentials are session-only. |
+| `integrations:ssh:manage` | External SSH connector administration is session-only. |
 | `integrations:cloudflare:manage` | Cloudflare connector administration is session-only. |
 | `proxy:raw:read` | Raw nginx config is session-only. |
 | `proxy:raw:write` | Raw nginx config is session-only. |

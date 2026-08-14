@@ -68,19 +68,34 @@ describe('AIService discovery tools', () => {
     });
   });
 
-  it('discovers callable tools filtered by scope, config, category, and query', async () => {
+  it('recommends bounded categories, then activates only explicit categories', async () => {
     const service = createService({ disabledTools: ['get_current_context'], webSearchEnabled: true });
 
-    const result = await service.executeTool(
+    const recommendation = await service.executeTool(
       { ...BASE_USER, scopes: ['feat:ai:use', 'logs:schemas:create', 'logs:schemas:view'] },
       'discover_tools',
-      { category: 'Logging', query: 'schema' }
+      { query: 'schema' }
     );
 
-    expect(result.error).toBeUndefined();
-    expect(result.result).toMatchObject({
+    expect(recommendation.error).toBeUndefined();
+    expect(recommendation.result).toMatchObject({
       totalCallableTools: expect.any(Number),
-      categories: expect.arrayContaining([expect.objectContaining({ name: 'Logging' })]),
+      tools: undefined,
+      recommendedToolsets: expect.arrayContaining([expect.objectContaining({ name: 'Logging' })]),
+    });
+    expect(recommendation.result).not.toHaveProperty('discoveredToolsets');
+    expect(
+      (recommendation.result as { recommendedToolsets: Array<{ name: string }> }).recommendedToolsets.length
+    ).toBeLessThanOrEqual(3);
+
+    const activation = await service.executeTool(
+      { ...BASE_USER, scopes: ['feat:ai:use', 'logs:schemas:create', 'logs:schemas:view'] },
+      'discover_tools',
+      { categories: ['Logging'], includeTools: true }
+    );
+    expect(activation.result).toMatchObject({
+      categories: [expect.objectContaining({ name: 'Logging' })],
+      discoveredToolsets: ['Logging'],
       tools: [
         expect.objectContaining({
           name: 'manage_logging',
@@ -90,12 +105,14 @@ describe('AIService discovery tools', () => {
       ],
     });
     expect(
-      (result.result as { categories: Array<{ name: string }>; tools: Array<{ name: string }> }).categories.map(
+      (activation.result as { categories: Array<{ name: string }>; tools: Array<{ name: string }> }).categories.map(
         (category) => category.name
       )
-    ).toContain('Discovery');
+    ).toEqual(['Logging']);
     expect(
-      (result.result as { tools: Array<{ name: string }> }).tools.some((tool) => tool.name === 'get_current_context')
+      (activation.result as { tools: Array<{ name: string }> }).tools.some(
+        (tool) => tool.name === 'get_current_context'
+      )
     ).toBe(false);
   });
 
@@ -109,7 +126,7 @@ describe('AIService discovery tools', () => {
     await service.executeTool(
       { ...BASE_USER, scopes: ['feat:ai:use', 'logs:schemas:view'] },
       'discover_tools',
-      { category: 'Logging' },
+      { categories: ['Logging'], includeTools: true },
       {
         conversationId: 'conversation-1',
         pageContext: { route: '/logging', resourceType: 'logging', resourceId: 'env-1' },
@@ -120,5 +137,24 @@ describe('AIService discovery tools', () => {
       lastContext: { route: '/logging', resourceType: 'logging', resourceId: 'env-1' },
       discoveredToolsets: ['Logging'],
     });
+  });
+
+  it('does not clear the active tool working set when discovery only recommends categories', async () => {
+    const updateRuntimeState = vi.fn().mockResolvedValue(null);
+    container.registerInstance(AIConversationService, {
+      updateRuntimeState,
+    } as unknown as AIConversationService);
+    const service = createService();
+
+    const recommendation = await service.executeTool(
+      { ...BASE_USER, scopes: ['feat:ai:use', 'logs:schemas:view'] },
+      'discover_tools',
+      { query: 'schema' },
+      { conversationId: 'conversation-1' }
+    );
+
+    expect(recommendation.error).toBeUndefined();
+    expect(recommendation.result).not.toHaveProperty('discoveredToolsets');
+    expect(updateRuntimeState).not.toHaveBeenCalled();
   });
 });

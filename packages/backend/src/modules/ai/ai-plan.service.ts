@@ -23,6 +23,7 @@ const ACTIVE_PLAN_STATUSES: AIPlan['status'][] = [
   'validating',
   'awaiting_decision',
   'executing',
+  'pause_requested',
   'paused',
   'verifying',
 ];
@@ -78,7 +79,7 @@ export class AIPlanService {
     }
 
     const plan = await this.requireActivePlan(userId, conversationId);
-    if (plan.status !== 'drafting' && plan.status !== 'paused') {
+    if (plan.status !== 'drafting' && plan.status !== 'paused' && plan.status !== 'awaiting_decision') {
       throw new AppError(409, 'AI_PLAN_NOT_DRAFTING', 'The active plan is not accepting a new draft');
     }
 
@@ -228,8 +229,12 @@ export class AIPlanService {
     }
     if (
       (purpose === 'plan_execution' || purpose === 'plan_verification') &&
-      (plan.status === 'executing' || plan.status === 'verifying')
+      (plan.status === 'executing' || plan.status === 'pause_requested' || plan.status === 'verifying')
     ) {
+      if (plan.status === 'pause_requested') {
+        await this.completePauseRequest(userId, conversationId);
+        return true;
+      }
       await this.pause(userId, conversationId, stopReason);
       return true;
     }
@@ -261,6 +266,19 @@ export class AIPlanService {
       throw new AppError(400, 'AI_PLAN_CUSTOM_INSTRUCTION_REQUIRED', 'Custom implementation instruction is required');
     }
 
+    if (input.decision !== 'refine') {
+      const snapshot = await this.acceptPublishedRevisionForExecution({
+        userId: input.userId,
+        conversationId: input.conversationId,
+        plan,
+        revisionId: input.revisionId,
+        decision: input.decision,
+        customInstruction: customInstruction ?? undefined,
+        clientCommandId: input.clientCommandId,
+      });
+      return { plan: snapshot, duplicate: false };
+    }
+
     await this.db.transaction(async (tx) => {
       const [revision] = await tx
         .select()
@@ -270,31 +288,70 @@ export class AIPlanService {
       if (!revision || revision.status !== 'published') {
         throw new AppError(409, 'AI_PLAN_REVISION_NOT_PUBLISHED', 'Plan revision is not available for a decision');
       }
+    });
+    return { plan: await this.requireSnapshot(input.userId, input.conversationId), duplicate: false };
+  }
+
+  async startExecution(userId: string, conversationId: string): Promise<AIPlanRuntimeSnapshot> {
+    const plan = await this.requireActivePlan(userId, conversationId);
+    if (plan.status === 'executing') return this.snapshot(plan);
+    if (plan.status !== 'awaiting_decision') {
+      throw new AppError(409, 'AI_PLAN_NOT_AWAITING_DECISION', 'No published plan is awaiting execution');
+    }
+    return this.acceptPublishedRevisionForExecution({
+      userId,
+      conversationId,
+      plan,
+      decision: 'implement',
+    });
+  }
+
+  private async acceptPublishedRevisionForExecution(input: {
+    userId: string;
+    conversationId: string;
+    plan: AIPlan;
+    revisionId?: string;
+    decision: 'implement' | 'custom';
+    customInstruction?: string;
+    clientCommandId?: string;
+  }): Promise<AIPlanRuntimeSnapshot> {
+    await this.db.transaction(async (tx) => {
+      const [revision] = await tx
+        .select()
+        .from(aiPlanRevisions)
+        .where(
+          input.revisionId
+            ? and(
+                eq(aiPlanRevisions.id, input.revisionId),
+                eq(aiPlanRevisions.planId, input.plan.id),
+                eq(aiPlanRevisions.status, 'published')
+              )
+            : and(eq(aiPlanRevisions.planId, input.plan.id), eq(aiPlanRevisions.status, 'published'))
+        )
+        .orderBy(desc(aiPlanRevisions.revision))
+        .limit(1);
+      if (!revision) {
+        throw new AppError(409, 'AI_PLAN_REVISION_NOT_PUBLISHED', 'No published plan revision is available');
+      }
       const now = new Date();
       await tx
         .update(aiPlanRevisions)
         .set({
-          status: input.decision === 'refine' ? 'superseded' : 'accepted',
+          status: 'accepted',
           decision: input.decision,
-          customInstruction,
+          customInstruction: input.customInstruction,
           decisionClientCommandId: input.clientCommandId,
+          acceptedAt: now,
           decisionAt: now,
-          acceptedAt: input.decision === 'refine' ? null : now,
           updatedAt: now,
         })
         .where(eq(aiPlanRevisions.id, revision.id));
       await tx
         .update(aiPlans)
-        .set({
-          status: input.decision === 'refine' ? 'drafting' : 'executing',
-          activeSince: input.decision === 'refine' ? null : now,
-          pauseReason: null,
-          noProgressRuns: 0,
-          updatedAt: now,
-        })
-        .where(eq(aiPlans.id, plan.id));
+        .set({ status: 'executing', activeSince: now, pauseReason: null, noProgressRuns: 0, updatedAt: now })
+        .where(eq(aiPlans.id, input.plan.id));
     });
-    return { plan: await this.requireSnapshot(input.userId, input.conversationId), duplicate: false };
+    return this.requireSnapshot(input.userId, input.conversationId);
   }
 
   async updateStep(input: {
@@ -387,10 +444,38 @@ export class AIPlanService {
     return this.requireSnapshot(userId, conversationId);
   }
 
+  async requestPause(userId: string, conversationId: string, reason: string): Promise<AIPlanRuntimeSnapshot> {
+    const plan = await this.requireActivePlan(userId, conversationId);
+    if (plan.status === 'pause_requested' || plan.status === 'paused') return this.snapshot(plan);
+    if (plan.status !== 'executing' && plan.status !== 'verifying') {
+      throw new AppError(409, 'AI_PLAN_NOT_PAUSABLE', 'The active plan cannot be paused');
+    }
+    await this.db
+      .update(aiPlans)
+      .set({ status: 'pause_requested', pauseReason: reason.trim() || 'Pause requested', updatedAt: new Date() })
+      .where(eq(aiPlans.id, plan.id));
+    return this.requireSnapshot(userId, conversationId);
+  }
+
+  async completePauseRequest(userId: string, conversationId: string): Promise<AIPlanRuntimeSnapshot> {
+    const plan = await this.requireActivePlan(userId, conversationId);
+    if (plan.status === 'paused') return this.snapshot(plan);
+    if (plan.status !== 'pause_requested') {
+      throw new AppError(409, 'AI_PLAN_PAUSE_NOT_REQUESTED', 'The active plan has no pending pause request');
+    }
+    await this.stopActiveClock(plan, {
+      status: 'paused',
+      pauseReason: plan.pauseReason || 'Paused by user',
+    });
+    return this.requireSnapshot(userId, conversationId);
+  }
+
   async resume(userId: string, conversationId: string): Promise<AIPlanRuntimeSnapshot> {
     const plan = await this.requireActivePlan(userId, conversationId);
     if (plan.status === 'executing') return this.snapshot(plan);
-    if (plan.status !== 'paused') throw new AppError(409, 'AI_PLAN_NOT_PAUSED', 'The active plan is not paused');
+    if (plan.status !== 'paused' && plan.status !== 'pause_requested') {
+      throw new AppError(409, 'AI_PLAN_NOT_PAUSED', 'The active plan is not paused');
+    }
     const [latestRun] = await this.db
       .select({ purpose: aiRuns.purpose })
       .from(aiRuns)
@@ -557,8 +642,14 @@ export class AIPlanService {
       .orderBy(asc(aiPlans.createdAt));
     const snapshots: AIPlanRuntimeSnapshot[] = [];
     for (const plan of plans) {
-      const snapshot = await this.snapshot(plan, 'latest_published');
-      if (snapshot.revisionId) snapshots.push(snapshot);
+      const revisions = await this.db
+        .select({ id: aiPlanRevisions.id })
+        .from(aiPlanRevisions)
+        .where(and(eq(aiPlanRevisions.planId, plan.id), isNotNull(aiPlanRevisions.publishedAt)))
+        .orderBy(asc(aiPlanRevisions.revision));
+      for (const revision of revisions) {
+        snapshots.push(await this.snapshot(plan, 'latest_published', revision.id));
+      }
     }
     return snapshots;
   }
@@ -567,7 +658,7 @@ export class AIPlanService {
     return this.db
       .select({ userId: aiPlans.userId, conversationId: aiPlans.conversationId })
       .from(aiPlans)
-      .where(inArray(aiPlans.status, ['drafting', 'validating', 'executing', 'verifying']));
+      .where(inArray(aiPlans.status, ['drafting', 'validating', 'executing', 'pause_requested', 'verifying']));
   }
 
   async isPlanning(userId: string, conversationId: string): Promise<boolean> {
@@ -614,23 +705,20 @@ export class AIPlanService {
 
   private async snapshot(
     plan: AIPlan,
-    revisionMode: 'latest' | 'latest_published' = 'latest'
+    revisionMode: 'latest' | 'latest_published' = 'latest',
+    revisionId?: string
   ): Promise<AIPlanRuntimeSnapshot> {
     const [revision] = await this.db
       .select()
       .from(aiPlanRevisions)
       .where(
-        revisionMode === 'latest_published'
-          ? and(eq(aiPlanRevisions.planId, plan.id), isNotNull(aiPlanRevisions.publishedAt))
-          : eq(aiPlanRevisions.planId, plan.id)
+        revisionId
+          ? and(eq(aiPlanRevisions.planId, plan.id), eq(aiPlanRevisions.id, revisionId))
+          : revisionMode === 'latest_published'
+            ? and(eq(aiPlanRevisions.planId, plan.id), isNotNull(aiPlanRevisions.publishedAt))
+            : eq(aiPlanRevisions.planId, plan.id)
       )
       .orderBy(desc(aiPlanRevisions.revision))
-      .limit(1);
-    const [firstPublishedRevision] = await this.db
-      .select({ publishedAt: aiPlanRevisions.publishedAt })
-      .from(aiPlanRevisions)
-      .where(and(eq(aiPlanRevisions.planId, plan.id), isNotNull(aiPlanRevisions.publishedAt)))
-      .orderBy(asc(aiPlanRevisions.publishedAt))
       .limit(1);
     const steps = revision
       ? await this.db
@@ -652,7 +740,7 @@ export class AIPlanService {
       revision: revision?.revision ?? null,
       revisionStatus: revision?.status ?? null,
       publishedAt: revision?.publishedAt?.toISOString() ?? null,
-      timelineAnchorAt: firstPublishedRevision?.publishedAt?.toISOString() ?? null,
+      timelineAnchorAt: revision?.publishedAt?.toISOString() ?? null,
       acceptedAt: revision?.acceptedAt?.toISOString() ?? null,
       goal: revision?.goal ?? null,
       scope: revision?.scope ?? [],

@@ -143,13 +143,9 @@ describe("InferenceModelDialog", () => {
     for (const payload of configuration.sources) {
       expect(payload).not.toHaveProperty("priority");
       expect(payload).not.toHaveProperty("role");
+      expect(payload).not.toHaveProperty("manualMetadata");
       expect(payload).toMatchObject({
         reasoningEffortMap: { low: "low", high: "high", ultra: "thinking-max" },
-        manualMetadata: {
-          contextWindow: 1_000_000,
-          maxInputTokens: 900_000,
-          maxOutputTokens: 8_000,
-        },
       });
     }
     expect(configuration.access).toEqual({ mode: "everyone", subjects: [] });

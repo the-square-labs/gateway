@@ -70,6 +70,10 @@ const envSchema = z.object({
   }),
   OIDC_SCOPES: z.string().default('openid email profile'),
 
+  // Public OAuth App client used by every Gateway installation for GitHub Device Flow.
+  // Device Flow does not use a client secret or a per-instance callback URL.
+  GITHUB_OAUTH_CLIENT_ID: optionalNonEmptyString,
+
   // Rate limiting
   RATE_LIMIT_WINDOW_MS: rateLimitWindowSchema.default(60000),
   RATE_LIMIT_MAX_REQUESTS: rateLimitMaxSchema.default(1200),

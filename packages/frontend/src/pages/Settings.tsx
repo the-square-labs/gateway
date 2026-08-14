@@ -189,6 +189,7 @@ export function Settings() {
                 ) : (
                   canUpdate && <UpdateSection canUpdate={canUpdate} />
                 )}
+                <PoweredByFooter transitionKey="general" />
               </div>
             </TabsContent>
           )}
@@ -200,13 +201,17 @@ export function Settings() {
                   <AuthProvisioningSection canEdit={canEditGatewaySettings} section="advanced" />
                 )}
                 {canManageRegistries && <DockerRegistriesSection nodesList={nodesList} />}
+                <PoweredByFooter transitionKey="advanced" />
               </div>
             </TabsContent>
           )}
 
           {canViewGatewaySettings && (
             <TabsContent value="relay" className="pb-0">
-              <RelaySettingsSection canEdit={canEditGatewaySettings} />
+              <div className="space-y-4">
+                <RelaySettingsSection canEdit={canEditGatewaySettings} />
+                <PoweredByFooter transitionKey="relay" />
+              </div>
             </TabsContent>
           )}
 
@@ -221,6 +226,7 @@ export function Settings() {
                     canConfigure={canConfigureHousekeeping}
                   />
                 )}
+                <PoweredByFooter transitionKey="features" />
               </div>
             </TabsContent>
           )}
@@ -229,6 +235,7 @@ export function Settings() {
             <TabsContent value="integrations" className="pb-0">
               <div className="space-y-4">
                 <IntegrationsSection />
+                <PoweredByFooter transitionKey="integrations" />
               </div>
             </TabsContent>
           )}
@@ -237,17 +244,19 @@ export function Settings() {
             <TabsContent value="ai" className="pb-0">
               <div className="space-y-4">
                 <AIConfigSection />
+                <PoweredByFooter transitionKey="ai" />
               </div>
             </TabsContent>
           )}
           {canConfigInference && (
             <TabsContent value="inference" className="pb-0">
-              <InferenceSettingsSection />
+              <div className="space-y-4">
+                <InferenceSettingsSection />
+                <PoweredByFooter transitionKey="inference" />
+              </div>
             </TabsContent>
           )}
         </Tabs>
-
-        <PoweredByFooter transitionKey={currentTab} />
       </div>
     </PageTransition>
   );

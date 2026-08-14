@@ -37,7 +37,9 @@ export function validateDefaultEffort(efforts: string[], value?: string | null) 
 }
 
 export function manualSourceAllowed(syncStatus: string, modelsPath: string | undefined, metadata?: object): boolean {
-  return Boolean(metadata && (!modelsPath || syncStatus === 'error' || syncStatus === 'never'));
+  if (!metadata || (modelsPath && syncStatus !== 'error' && syncStatus !== 'never')) return false;
+  const technical = metadata as Partial<InferenceModelInput>;
+  return Boolean(technical.contextWindow && technical.maxInputTokens && technical.autoCompactTokenLimit);
 }
 
 export function validatePricing(input?: InferencePricingInput): asserts input is InferencePricingInput {
@@ -82,6 +84,7 @@ export function serializeDiscovered(model: typeof inferenceDiscoveredModels.$inf
     contextWindow: model.contextWindow,
     maxInputTokens: model.maxInputTokens,
     maxOutputTokens: model.maxOutputTokens,
+    autoCompactTokenLimit: model.autoCompactTokenLimit,
     modalities: model.modalities,
     capabilities: model.capabilities,
     reasoningEfforts: model.reasoningEfforts,
