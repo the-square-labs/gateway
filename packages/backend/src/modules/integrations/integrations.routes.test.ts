@@ -145,10 +145,7 @@ describe('integrations routes', () => {
     });
 
     expect(response.status).toBe(201);
-    expect(startGitHubOAuth).toHaveBeenCalledWith(
-      expect.not.objectContaining({ token: expect.anything() }),
-      USER.id
-    );
+    expect(startGitHubOAuth).toHaveBeenCalledWith(expect.not.objectContaining({ token: expect.anything() }), USER.id);
     expect(await response.json()).toMatchObject({ data: { userCode: 'ABCD-EFGH' } });
   });
 

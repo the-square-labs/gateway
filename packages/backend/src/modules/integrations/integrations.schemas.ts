@@ -98,10 +98,9 @@ function requireSingleRepositoryUrl(
 }
 
 export const GitConnectorCreateSchema = GitConnectorRepositoryFieldsSchema.extend({
-    authMode: z.literal('token').default('token'),
-    token: z.string().min(1).max(4096),
-  })
-  .superRefine(requireSingleRepositoryUrl);
+  authMode: z.literal('token').default('token'),
+  token: z.string().min(1).max(4096),
+}).superRefine(requireSingleRepositoryUrl);
 
 export const GitHubOAuthStartSchema = GitConnectorRepositoryFieldsSchema.superRefine(requireSingleRepositoryUrl);
 

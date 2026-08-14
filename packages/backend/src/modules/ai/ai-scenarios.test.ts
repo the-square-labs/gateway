@@ -1,7 +1,7 @@
 import 'reflect-metadata';
+import { describe, expect, it } from 'vitest';
 import { ALL_SCOPES, isValidBaseScope } from '@/lib/scopes.js';
 import type { User } from '@/types.js';
-import { describe, expect, it } from 'vitest';
 import { getAIScenario, listVisibleAIScenarios, rankAIScenarios } from './ai-scenarios.js';
 
 const ADMIN: User = {
@@ -29,10 +29,11 @@ describe('AI scenarios', () => {
   it('preserves the first contextual rank when defaults repeat a scenario', () => {
     const scenarios = listVisibleAIScenarios(ADMIN);
 
-    expect(rankAIScenarios(scenarios, { route: '/docker' }).slice(0, 2).map(({ id }) => id)).toEqual([
-      'release-existing-service',
-      'deploy-production-application',
-    ]);
+    expect(
+      rankAIScenarios(scenarios, { route: '/docker' })
+        .slice(0, 2)
+        .map(({ id }) => id)
+    ).toEqual(['release-existing-service', 'deploy-production-application']);
     expect(rankAIScenarios(scenarios, { route: '/nodes' })[0]?.id).toBe('prepare-production-server');
   });
 

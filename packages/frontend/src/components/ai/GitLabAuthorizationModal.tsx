@@ -17,7 +17,9 @@ import type { GitLabUserCredentialStatus, GitUserCredentialStatus } from "@/type
 
 export function GitLabAuthorizationModal() {
   const { pendingCredentialChallenge, resolveCredentialChallenge } = useAIStore();
-  const [metadata, setMetadata] = useState<GitLabUserCredentialStatus | GitUserCredentialStatus | null>(null);
+  const [metadata, setMetadata] = useState<
+    GitLabUserCredentialStatus | GitUserCredentialStatus | null
+  >(null);
   const [username, setUsername] = useState("");
   const [token, setToken] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -88,7 +90,11 @@ export function GitLabAuthorizationModal() {
       resolveCredentialChallenge("authorized");
     } catch (requestError) {
       setToken("");
-      setError(requestError instanceof Error ? requestError.message : "The repository provider rejected this credential");
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "The repository provider rejected this credential"
+      );
     } finally {
       setLoading(false);
     }
@@ -103,7 +109,9 @@ export function GitLabAuthorizationModal() {
   const provider = activeChallenge?.provider ?? "gitlab";
   const providerLabel = provider === "github" ? "GitHub" : provider === "git" ? "Git" : "GitLab";
   const authorizationUrl =
-    metadata && "authorizationUrl" in metadata ? metadata.authorizationUrl : metadata?.patCreationUrl;
+    metadata && "authorizationUrl" in metadata
+      ? metadata.authorizationUrl
+      : metadata?.patCreationUrl;
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && reject()}>
@@ -119,7 +127,9 @@ export function GitLabAuthorizationModal() {
 
         <div className="space-y-4">
           <div className="rounded-md border border-border bg-muted/40 p-3 text-sm">
-            <div className="font-medium">{metadata?.connectorName ?? `${providerLabel} connector`}</div>
+            <div className="font-medium">
+              {metadata?.connectorName ?? `${providerLabel} connector`}
+            </div>
             <div className="mt-1 break-all text-xs text-muted-foreground">
               {metadata?.baseUrl ?? "Loading connector details…"}
             </div>

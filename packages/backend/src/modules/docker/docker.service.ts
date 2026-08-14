@@ -35,15 +35,12 @@ import { deriveDockerGpuAttachment, hasDockerGpuV1Capability } from './docker-gp
 import type { DockerHealthCheckService } from './docker-health-check.service.js';
 import type { DockerImageCleanupService } from './docker-image-cleanup.service.js';
 import {
-  filterGatewayInternalContainers,
-  isGatewayInternalContainer,
-} from './docker-internal-containers.js';
-import {
   listImages as listDockerImages,
   pruneImages as pruneDockerImages,
   pullImage as pullDockerImage,
   removeImage as removeDockerImage,
 } from './docker-image-operations.js';
+import { filterGatewayInternalContainers, isGatewayInternalContainer } from './docker-internal-containers.js';
 import {
   type ContainerAction,
   type DockerLifecycleWatchContext,
@@ -803,9 +800,7 @@ export class DockerManagementService {
 
   /** User-facing decoration that keeps Gateway implementation containers private. */
   async decoratePublicContainerSnapshot(nodeId: string, containers: any) {
-    const publicContainers = Array.isArray(containers)
-      ? filterGatewayInternalContainers(containers)
-      : containers;
+    const publicContainers = Array.isArray(containers) ? filterGatewayInternalContainers(containers) : containers;
     return this.decorateContainerSnapshot(nodeId, publicContainers);
   }
 

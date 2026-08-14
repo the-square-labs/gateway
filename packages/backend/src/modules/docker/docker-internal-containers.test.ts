@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { filterGatewayInternalContainers, isGatewayInternalContainer } from './docker-internal-containers.js';
 import { DockerManagementService } from './docker.service.js';
+import { filterGatewayInternalContainers, isGatewayInternalContainer } from './docker-internal-containers.js';
 
 describe('Gateway internal container filtering', () => {
   it.each([
@@ -53,10 +53,7 @@ describe('Gateway internal container filtering', () => {
       Labels: { 'wiolett.gateway.managed': 'secure-link-connector' },
     };
 
-    await expect(service.decorateContainerSnapshot('node-1', [user, connector])).resolves.toEqual([
-      user,
-      connector,
-    ]);
+    await expect(service.decorateContainerSnapshot('node-1', [user, connector])).resolves.toEqual([user, connector]);
     await expect(service.decoratePublicContainerSnapshot('node-1', [user, connector])).resolves.toEqual([user]);
   });
 });

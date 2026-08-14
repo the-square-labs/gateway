@@ -224,20 +224,28 @@ describe('IntegrationsService', () => {
     const select = vi.fn();
     select
       .mockReturnValueOnce({
-        from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([connectorRow({
-          provider: 'github',
-          name: 'GitHub',
-          baseUrl: 'https://github.com',
-          authMode: 'oauth',
-          username: 'owner',
-        })]) })) })),
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn().mockResolvedValue([
+              connectorRow({
+                provider: 'github',
+                name: 'GitHub',
+                baseUrl: 'https://github.com',
+                authMode: 'oauth',
+                username: 'owner',
+              }),
+            ]),
+          })),
+        })),
       })
       .mockReturnValueOnce({
         from: vi.fn(() => ({
           where: vi.fn(() => ({
-            orderBy: vi.fn().mockResolvedValue([
-              { entryType: 'project', fullPath: 'https://github.com/acme/app', remoteId: 'repo-1' },
-            ]),
+            orderBy: vi
+              .fn()
+              .mockResolvedValue([
+                { entryType: 'project', fullPath: 'https://github.com/acme/app', remoteId: 'repo-1' },
+              ]),
           })),
         })),
       })

@@ -148,10 +148,7 @@ export class ExternalSshService {
           address.toLowerCase()
         )
       );
-      return (
-        node.hostname.toLowerCase() === normalized ||
-        addresses.some((address) => nodeAddresses.has(address))
-      );
+      return node.hostname.toLowerCase() === normalized || addresses.some((address) => nodeAddresses.has(address));
     });
     if (matchesManagedNode) {
       throw new AppError(403, 'SSH_MANAGED_TARGET_BLOCKED', 'Gateway-managed nodes require their dedicated tools');
@@ -168,7 +165,11 @@ export class ExternalSshService {
         return names.includes(normalized) || addresses.some((address) => containerAddresses.includes(address));
       });
       if (matchesContainer) {
-        throw new AppError(403, 'SSH_CONTAINER_TARGET_BLOCKED', 'Gateway and container addresses require dedicated tools');
+        throw new AppError(
+          403,
+          'SSH_CONTAINER_TARGET_BLOCKED',
+          'Gateway and container addresses require dedicated tools'
+        );
       }
     }
     return addresses[0];

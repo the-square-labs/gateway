@@ -44,7 +44,6 @@ import {
   CloudflareConnectorUpdateSchema,
   GitConnectorCreateSchema,
   GitConnectorUpdateSchema,
-  GitUserCredentialAuthorizeSchema,
   GitHubOAuthStartSchema,
   GitLabAllowlistPreviewSearchSchema,
   GitLabAllowlistSearchQuerySchema,
@@ -54,6 +53,7 @@ import {
   GitLabConnectorRotateTokenSchema,
   GitLabConnectorUpdateSchema,
   GitLabUserCredentialAuthorizeSchema,
+  GitUserCredentialAuthorizeSchema,
 } from './integrations.schemas.js';
 import { IntegrationsService } from './integrations.service.js';
 
@@ -149,9 +149,7 @@ integrationsRoutes.delete(
   '/github/oauth/sessions/:id',
   requireGitOperation('github', 'integrations:github:manage'),
   async (c) => {
-    const data = await container
-      .resolve(IntegrationsService)
-      .cancelGitHubOAuth(c.req.param('id'), c.get('user')!.id);
+    const data = await container.resolve(IntegrationsService).cancelGitHubOAuth(c.req.param('id'), c.get('user')!.id);
     return c.json({ data });
   }
 );
@@ -189,19 +187,27 @@ for (const provider of ['github', 'git'] as const) {
       return c.json({ data });
     }
   );
-  integrationsRoutes.get(`/${provider}/connectors/:id/user-credential`, requireGitLabUserCredentialAccess, async (c) => {
-    const data = await container
-      .resolve(IntegrationsService)
-      .getGitUserCredentialStatus(provider, c.req.param('id'), c.get('user')!.id);
-    return c.json({ data });
-  });
-  integrationsRoutes.post(`/${provider}/connectors/:id/user-credential`, requireGitLabUserCredentialAccess, async (c) => {
-    const input = GitUserCredentialAuthorizeSchema.parse(await c.req.json());
-    const data = await container
-      .resolve(IntegrationsService)
-      .authorizeGitUserCredential(provider, c.req.param('id'), c.get('user')!.id, input);
-    return c.json({ data });
-  });
+  integrationsRoutes.get(
+    `/${provider}/connectors/:id/user-credential`,
+    requireGitLabUserCredentialAccess,
+    async (c) => {
+      const data = await container
+        .resolve(IntegrationsService)
+        .getGitUserCredentialStatus(provider, c.req.param('id'), c.get('user')!.id);
+      return c.json({ data });
+    }
+  );
+  integrationsRoutes.post(
+    `/${provider}/connectors/:id/user-credential`,
+    requireGitLabUserCredentialAccess,
+    async (c) => {
+      const input = GitUserCredentialAuthorizeSchema.parse(await c.req.json());
+      const data = await container
+        .resolve(IntegrationsService)
+        .authorizeGitUserCredential(provider, c.req.param('id'), c.get('user')!.id, input);
+      return c.json({ data });
+    }
+  );
   integrationsRoutes.delete(
     `/${provider}/connectors/:id/user-credential`,
     requireGitLabUserCredentialAccess,

@@ -6,10 +6,10 @@ import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { GitHubDeviceFlow } from "@/pages/settings/GitHubDeviceFlow";
 import { api } from "@/services/api";
 import type { FinalizeSetupState, FinalizeSetupStepStatus } from "@/types";
 import type { GitConnectorMode, GitConnectorProvider } from "@/types/integrations";
-import { GitHubDeviceFlow } from "@/pages/settings/GitHubDeviceFlow";
 import { FinalizeSetupCompletion } from "./FinalizeSetupCompletion";
 import { FinalizeSetupWizardDialog } from "./FinalizeSetupWizardDialog";
 

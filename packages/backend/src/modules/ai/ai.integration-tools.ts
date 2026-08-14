@@ -1,6 +1,6 @@
 import { container } from '@/container.js';
-import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import type { GitConnectorCreateInput } from '@/modules/integrations/integrations.schemas.js';
+import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import type { User } from '@/types.js';
 
 export const INTEGRATION_TOOL_NAMES = new Set([

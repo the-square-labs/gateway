@@ -13,7 +13,6 @@ import type {
   GitConnectorRequest,
   GitHubOAuthSession,
   GitHubOAuthStartRequest,
-  GitUserCredentialStatus,
   GitLabAllowlistEntry,
   GitLabAllowlistPreviewSearchRequest,
   GitLabConnector,
@@ -23,6 +22,7 @@ import type {
   GitLabConnectorSyncResult,
   GitLabConnectorUpdateRequest,
   GitLabUserCredentialStatus,
+  GitUserCredentialStatus,
 } from "@/types/integrations";
 import type { ApiClientBaseConstructor } from "./api-mixins";
 

@@ -163,15 +163,23 @@ export function ExternalSshConnectorDialog({
                   type="button"
                   size="sm"
                   variant={form.authMethod === "password" ? "default" : "outline"}
-                  onClick={() => setForm({ ...form, authMethod: "password", generatePrivateKey: false })}
+                  onClick={() =>
+                    setForm({ ...form, authMethod: "password", generatePrivateKey: false })
+                  }
                 >
                   Password
                 </Button>
                 <Button
                   type="button"
                   size="sm"
-                  variant={form.authMethod === "private_key" && !form.generatePrivateKey ? "default" : "outline"}
-                  onClick={() => setForm({ ...form, authMethod: "private_key", generatePrivateKey: false })}
+                  variant={
+                    form.authMethod === "private_key" && !form.generatePrivateKey
+                      ? "default"
+                      : "outline"
+                  }
+                  onClick={() =>
+                    setForm({ ...form, authMethod: "private_key", generatePrivateKey: false })
+                  }
                 >
                   Import key
                 </Button>
@@ -180,7 +188,12 @@ export function ExternalSshConnectorDialog({
                   size="sm"
                   variant={form.generatePrivateKey ? "default" : "outline"}
                   onClick={() =>
-                    setForm({ ...form, authMethod: "private_key", generatePrivateKey: true, secret: "" })
+                    setForm({
+                      ...form,
+                      authMethod: "private_key",
+                      generatePrivateKey: true,
+                      secret: "",
+                    })
                   }
                 >
                   Generate key
@@ -232,7 +245,9 @@ export function ExternalSshConnectorDialog({
             <SettingsControlRow title="Jump server" description="Optional existing SSH connector.">
               <select
                 value={form.jumpConnectorId ?? ""}
-                onChange={(event) => setForm({ ...form, jumpConnectorId: event.target.value || null })}
+                onChange={(event) =>
+                  setForm({ ...form, jumpConnectorId: event.target.value || null })
+                }
                 className="h-9 w-full border border-input bg-background px-3 text-sm"
               >
                 <option value="">Direct connection</option>

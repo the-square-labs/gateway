@@ -79,6 +79,40 @@ const HEALTH_BADGE: Record<string, "success" | "secondary" | "warning" | "destru
 
 const MANAGED_DATABASE_PROVISION_TIMEOUT_MS = 120_000;
 const MANAGED_DATABASE_PROVISION_INTERVAL_MS = 750;
+const DATABASE_NODE_APPEARANCE_CACHE_KEY = "databases:nodes";
+
+type DatabaseChangedPayload = {
+  id?: string;
+  action?: string;
+  healthStatus?: DatabaseConnection["healthStatus"];
+  sampledAt?: string;
+};
+
+export function applyDatabaseHealthSample(
+  rows: DatabaseConnection[],
+  payload: DatabaseChangedPayload
+): DatabaseConnection[] {
+  if (!payload.id || payload.action !== "health.sampled") return rows;
+  let changed = false;
+  const next = rows.map((row) => {
+    if (row.id !== payload.id) return row;
+    changed = true;
+    return {
+      ...row,
+      ...(payload.healthStatus ? { healthStatus: payload.healthStatus } : {}),
+      ...(payload.sampledAt ? { lastHealthCheckAt: payload.sampledAt } : {}),
+    };
+  });
+  return changed ? next : rows;
+}
+
+export function canRenderDatabaseRowsWithNodeAppearance(
+  rows: DatabaseConnection[],
+  nodes: Node[]
+): boolean {
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  return rows.every((row) => !row.managed || nodeIds.has(row.managed.nodeId));
+}
 
 function delay(ms: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
@@ -295,7 +329,7 @@ function DatabaseTagSummary({ tags, type }: { tags: string[]; type: DatabaseConn
   );
 }
 
-function ManagedDatabaseCreateForm({
+export function ManagedDatabaseCreateForm({
   draft,
   nodes,
   catalog,
@@ -320,6 +354,7 @@ function ManagedDatabaseCreateForm({
     memoryMb: String(draft.memoryMb),
     swapMb: String(draft.swapMb),
   }));
+  const [tagsInput, setTagsInput] = useState(() => (draft.tags ?? []).join(", "));
   const setResourceInput = (
     key: "storageSizeGb" | "cpuCores" | "memoryMb" | "swapMb",
     value: string
@@ -421,8 +456,12 @@ function ManagedDatabaseCreateForm({
             </label>
             <Input
               id="managed-db-tags"
-              value={(draft.tags ?? []).join(", ")}
-              onChange={(event) => set("tags", parseTags(event.target.value))}
+              value={tagsInput}
+              onChange={(event) => {
+                const value = event.target.value;
+                setTagsInput(value);
+                set("tags", parseTags(value));
+              }}
               placeholder="team, green:production, analytics"
             />
             <p className="text-xs text-muted-foreground">
@@ -666,19 +705,29 @@ export function Databases({
         : `databases:list:${search}:${typeFilter}:${healthFilter}`,
     [healthFilter, managedNodeId, search, typeFilter]
   );
-  const [rows, setRows] = useState<DatabaseConnection[]>(() =>
-    embedded
-      ? []
+  const initialListState = useRef<{
+    rows: DatabaseConnection[];
+    nodes: Node[];
+    loading: boolean;
+  } | null>(null);
+  if (!initialListState.current) {
+    const cachedRows = embedded
+      ? undefined
       : (api.getCached<DatabaseConnection[]>("databases:list::all:all") ??
-        api.getCached<DatabaseConnection[]>("databases:list") ??
-        [])
-  );
-  const [loading, setLoading] = useState(
-    () =>
-      embedded ||
-      (api.getCached<DatabaseConnection[]>("databases:list::all:all") === undefined &&
-        api.getCached<DatabaseConnection[]>("databases:list") === undefined)
-  );
+        api.getCached<DatabaseConnection[]>("databases:list"));
+    const cachedNodes = api.getCached<Node[]>(DATABASE_NODE_APPEARANCE_CACHE_KEY) ?? [];
+    const canRenderCachedRows =
+      !embedded &&
+      cachedRows !== undefined &&
+      canRenderDatabaseRowsWithNodeAppearance(cachedRows, cachedNodes);
+    initialListState.current = {
+      rows: canRenderCachedRows ? cachedRows : [],
+      nodes: cachedNodes,
+      loading: embedded || !canRenderCachedRows,
+    };
+  }
+  const [rows, setRows] = useState<DatabaseConnection[]>(initialListState.current.rows);
+  const [loading, setLoading] = useState(initialListState.current.loading);
   const [createOpen, setCreateOpen] = useState(false);
   const [managedCreateOpen, setManagedCreateOpen] = useState(false);
   const [managedNodeRequiredOpen, setManagedNodeRequiredOpen] = useState(false);
@@ -687,8 +736,10 @@ export function Databases({
   const [draft, setDraft] = useState<DatabaseConnectionDraft>(draftFromConnection(null));
   const [managedDraft, setManagedDraft] = useState<ManagedDatabaseCreateInput>(defaultManagedDraft);
   const [managedCatalog, setManagedCatalog] = useState<ManagedDatabaseCatalogEntry[]>([]);
-  const [databaseNodes, setDatabaseNodes] = useState<Node[]>([]);
-  const [databaseNodesLoaded, setDatabaseNodesLoaded] = useState(false);
+  const [databaseNodes, setDatabaseNodes] = useState<Node[]>(initialListState.current.nodes);
+  const [databaseNodesLoaded, setDatabaseNodesLoaded] = useState(
+    initialListState.current.nodes.length > 0
+  );
   const [saving, setSaving] = useState(false);
   const [managedSaving, setManagedSaving] = useState(false);
   const [managedProvisioning, setManagedProvisioning] = useState<{ phase: "waiting" } | null>(null);
@@ -735,80 +786,108 @@ export function Databases({
     navigate(location.pathname, { replace: true, state: null });
   }, [location.pathname, location.state, navigate, openManagedCreate]);
 
-  const load = useCallback(async () => {
-    const cachedRows = api.getCached<DatabaseConnection[]>(databaseCacheKey);
-    if (cachedRows) {
-      setRows(cachedRows);
-      setLoading(false);
-    } else {
-      setRows([]);
-      setLoading(true);
-    }
-    try {
-      if (managedNodeId) {
-        const managed = await api.listManagedDatabases();
-        const data = await Promise.all(
-          managed
-            .filter(
-              (database) => database.nodeId === managedNodeId && database.databaseConnectionId
-            )
-            .map((database) => api.getDatabase(database.databaseConnectionId))
-        );
-        const filteredBySearch = data.filter(
-          (database) =>
-            (!search || database.name.toLowerCase().includes(search.toLowerCase())) &&
-            (typeFilter === "all" || database.type === typeFilter) &&
-            (healthFilter === "all" || database.healthStatus === healthFilter)
-        );
-        api.setCache(databaseCacheKey, filteredBySearch);
-        setRows(filteredBySearch);
-      } else {
-        const result = await api.listDatabases({
-          limit: 200,
-          search: search || undefined,
-          type: typeFilter === "all" ? undefined : typeFilter,
-          healthStatus: healthFilter === "all" ? undefined : healthFilter,
-        });
-        api.setCache(databaseCacheKey, result.data);
-        if (search === "" && typeFilter === "all" && healthFilter === "all") {
-          api.setCache("databases:list", result.data);
-        }
-        setRows(result.data);
-      }
-      const [nodes, catalog] = await Promise.allSettled([
-        api.listNodes({ type: "databases", limit: 100 }),
-        embedded
-          ? Promise.resolve([] as ManagedDatabaseCatalogEntry[])
-          : api.listManagedDatabaseCatalog(),
-      ]);
-      if (nodes.status === "fulfilled") {
-        setDatabaseNodes(nodes.value.data);
+  const load = useCallback(
+    async ({ background = false }: { background?: boolean } = {}) => {
+      const cachedRows = api.getCached<DatabaseConnection[]>(databaseCacheKey);
+      const cachedNodes = api.getCached<Node[]>(DATABASE_NODE_APPEARANCE_CACHE_KEY) ?? [];
+      if (cachedRows && canRenderDatabaseRowsWithNodeAppearance(cachedRows, cachedNodes)) {
+        setDatabaseNodes(cachedNodes);
         setDatabaseNodesLoaded(true);
+        setRows(cachedRows);
+        setLoading(false);
+      } else if (!background) {
+        setRows([]);
+        setLoading(true);
       }
-      if (catalog.status === "fulfilled") setManagedCatalog(catalog.value);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to load databases");
-    } finally {
-      setLoading(false);
-    }
-  }, [databaseCacheKey, embedded, healthFilter, managedNodeId, search, typeFilter]);
+
+      const nodesRequest = api
+        .listNodes({ type: "databases", limit: 100 })
+        .then((result) => result.data)
+        .catch(() => null);
+      if (!embedded) {
+        void api
+          .listManagedDatabaseCatalog()
+          .then(setManagedCatalog)
+          .catch(() => undefined);
+      }
+
+      try {
+        let data: DatabaseConnection[];
+        if (managedNodeId) {
+          const managed = await api.listManagedDatabases();
+          const managedRows = await Promise.all(
+            managed
+              .filter(
+                (database) => database.nodeId === managedNodeId && database.databaseConnectionId
+              )
+              .map((database) => api.getDatabase(database.databaseConnectionId))
+          );
+          data = managedRows.filter(
+            (database) =>
+              (!search || database.name.toLowerCase().includes(search.toLowerCase())) &&
+              (typeFilter === "all" || database.type === typeFilter) &&
+              (healthFilter === "all" || database.healthStatus === healthFilter)
+          );
+        } else {
+          const result = await api.listDatabases({
+            limit: 200,
+            search: search || undefined,
+            type: typeFilter === "all" ? undefined : typeFilter,
+            healthStatus: healthFilter === "all" ? undefined : healthFilter,
+          });
+          data = result.data;
+        }
+
+        const nodes = await nodesRequest;
+        if (nodes) {
+          api.setCache(DATABASE_NODE_APPEARANCE_CACHE_KEY, nodes);
+          setDatabaseNodes(nodes);
+          setDatabaseNodesLoaded(true);
+        }
+        api.setCache(databaseCacheKey, data);
+        if (search === "" && typeFilter === "all" && healthFilter === "all") {
+          api.setCache("databases:list", data);
+        }
+        setRows(data);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to load databases");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [databaseCacheKey, embedded, healthFilter, managedNodeId, search, typeFilter]
+  );
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  useRealtime("database.changed", () => {
-    void load();
+  useRealtime("database.changed", (rawPayload) => {
+    const payload = rawPayload as DatabaseChangedPayload;
+    if (payload.action === "health.sampled") {
+      setRows((currentRows) => {
+        const nextRows = applyDatabaseHealthSample(currentRows, payload);
+        if (nextRows === currentRows) return currentRows;
+        api.setCache(databaseCacheKey, nextRows);
+        if (search === "" && typeFilter === "all" && healthFilter === "all") {
+          api.setCache("databases:list", nextRows);
+        }
+        return nextRows;
+      });
+      return;
+    }
+    void load({ background: true });
   });
 
   useRealtime("database.folder.changed", () => {
-    void load();
+    void load({ background: true });
   });
 
   useRealtime(hasScopedAccess("nodes:details") ? "node.changed" : null, () => {
     void api
       .listNodes({ type: "databases", limit: 100 })
       .then((result) => {
+        api.setCache(DATABASE_NODE_APPEARANCE_CACHE_KEY, result.data);
         setDatabaseNodes(result.data);
         setDatabaseNodesLoaded(true);
       })

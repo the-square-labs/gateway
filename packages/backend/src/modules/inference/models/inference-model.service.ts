@@ -465,9 +465,7 @@ export class InferenceModelService {
           maxInputTokens: manual?.maxInputTokens ?? discovered?.maxInputTokens ?? model.maxInputTokens,
           maxOutputTokens: manual?.maxOutputTokens ?? discovered?.maxOutputTokens ?? model.maxOutputTokens,
           autoCompactTokenLimit:
-            manual?.autoCompactTokenLimit ??
-            discovered?.autoCompactTokenLimit ??
-            model.autoCompactTokenLimit,
+            manual?.autoCompactTokenLimit ?? discovered?.autoCompactTokenLimit ?? model.autoCompactTokenLimit,
         };
       });
     return effectiveTechnicalLimits(technical, model);
@@ -764,18 +762,13 @@ type TechnicalLimits = Pick<
 
 function effectiveTechnicalLimits(sources: TechnicalLimits[], fallback: TechnicalLimits) {
   const effective = sources.length ? sources : [fallback];
-  const outputLimits = effective
-    .map((row) => row.maxOutputTokens)
-    .filter((value): value is number => value !== null);
+  const outputLimits = effective.map((row) => row.maxOutputTokens).filter((value): value is number => value !== null);
   const contextWindow = Math.min(...effective.map((row) => row.contextWindow));
   const maxInputTokens = Math.min(...effective.map((row) => row.maxInputTokens));
   return {
     contextWindow,
     maxInputTokens,
     maxOutputTokens: outputLimits.length ? Math.min(...outputLimits) : null,
-    autoCompactTokenLimit: Math.min(
-      maxInputTokens,
-      ...effective.map((row) => row.autoCompactTokenLimit)
-    ),
+    autoCompactTokenLimit: Math.min(maxInputTokens, ...effective.map((row) => row.autoCompactTokenLimit)),
   };
 }

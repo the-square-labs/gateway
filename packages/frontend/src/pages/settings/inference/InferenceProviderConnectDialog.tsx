@@ -371,11 +371,7 @@ export function InferenceProviderConnectDialog({
                               variant="ghost"
                               className="h-9 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
                               onClick={() =>
-                                window.open(
-                                  oauth.authorizationUrl,
-                                  "_blank",
-                                  "noopener,noreferrer"
-                                )
+                                window.open(oauth.authorizationUrl, "_blank", "noopener,noreferrer")
                               }
                             >
                               <ExternalLink className="h-3.5 w-3.5" />

@@ -38,6 +38,7 @@ export function GitHubDeviceFlow({
       try {
         const next = await api.getGitHubOAuthStatus(session.id);
         if (cancelled) return;
+        if (pollAttempt !== 0) setPollAttempt(0);
         setSession(next);
         if (next.status === "complete" && next.connectorId) await onCompleted(next.connectorId);
         else if (["error", "expired", "cancelled"].includes(next.status)) {
@@ -64,7 +65,9 @@ export function GitHubDeviceFlow({
       setSession(await api.startGitHubOAuth(request));
       setPollAttempt(0);
     } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : "GitHub authorization could not be started");
+      toast.error(
+        cause instanceof Error ? cause.message : "GitHub authorization could not be started"
+      );
     } finally {
       setStarting(false);
     }

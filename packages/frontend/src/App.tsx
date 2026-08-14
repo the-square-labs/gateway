@@ -390,8 +390,7 @@ function DockerVolumeDetailGuard() {
   );
 }
 
-const UUID_PATH_SEGMENT_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_PATH_SEGMENT_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function ProxyHostDetailGuard() {
   const { proxySlug } = useParams<{ proxySlug: string }>();

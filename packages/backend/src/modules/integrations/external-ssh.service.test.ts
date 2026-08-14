@@ -25,8 +25,11 @@ describe('ExternalSshService target safety', () => {
       'resolveHostAddresses'
     ).mockResolvedValue(['10.20.0.8']);
 
-    await expect((service as never as { assertExternalTarget(host: string): Promise<string> }).assertExternalTarget('alias.internal'))
-      .rejects.toMatchObject({ code: 'SSH_MANAGED_TARGET_BLOCKED' });
+    await expect(
+      (service as never as { assertExternalTarget(host: string): Promise<string> }).assertExternalTarget(
+        'alias.internal'
+      )
+    ).rejects.toMatchObject({ code: 'SSH_MANAGED_TARGET_BLOCKED' });
   });
 
   it('rejects a local Docker container address', async () => {
@@ -45,8 +48,11 @@ describe('ExternalSshService target safety', () => {
       ]),
     } as never);
 
-    await expect((service as never as { assertExternalTarget(host: string): Promise<string> }).assertExternalTarget('worker.internal'))
-      .rejects.toMatchObject({ code: 'SSH_CONTAINER_TARGET_BLOCKED' });
+    await expect(
+      (service as never as { assertExternalTarget(host: string): Promise<string> }).assertExternalTarget(
+        'worker.internal'
+      )
+    ).rejects.toMatchObject({ code: 'SSH_CONTAINER_TARGET_BLOCKED' });
   });
 
   it('allows an unrelated private address', async () => {
@@ -58,7 +64,9 @@ describe('ExternalSshService target safety', () => {
     service.setDockerService({ listLocalContainers: vi.fn().mockResolvedValue([]) } as never);
 
     await expect(
-      (service as never as { assertExternalTarget(host: string): Promise<string> }).assertExternalTarget('remote.internal')
+      (service as never as { assertExternalTarget(host: string): Promise<string> }).assertExternalTarget(
+        'remote.internal'
+      )
     ).resolves.toBe('10.40.0.9');
   });
 });
@@ -93,17 +101,14 @@ describe('ExternalSshService generated keys', () => {
       'assertExternalTarget'
     ).mockResolvedValue('10.40.0.9');
 
-    const result = await service.create(
-      { id: 'user-1', scopes: ['integrations:ssh:manage'] } as never,
-      {
-        name: 'Remote',
-        host: '10.40.0.9',
-        username: 'deploy',
-        authMethod: 'private_key',
-        generatePrivateKey: true,
-        hostFingerprint: 'SHA256:test',
-      }
-    );
+    const result = await service.create({ id: 'user-1', scopes: ['integrations:ssh:manage'] } as never, {
+      name: 'Remote',
+      host: '10.40.0.9',
+      username: 'deploy',
+      authMethod: 'private_key',
+      generatePrivateKey: true,
+      hostFingerprint: 'SHA256:test',
+    });
 
     expect(crypto.encryptString).toHaveBeenCalledWith(expect.stringContaining('BEGIN PRIVATE KEY'));
     expect(inserted).toMatchObject({ encryptedSecret: expect.stringContaining('ciphertext') });

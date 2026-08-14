@@ -37,9 +37,7 @@ const CATEGORY_LABELS: Record<AIScenarioCategory, string> = {
   observe_operate: "Observe & Operate",
 };
 
-export type AssistantConnectorSetup =
-  | ConnectorSetupRequest
-  | { connector: "ssh"; host?: string };
+export type AssistantConnectorSetup = ConnectorSetupRequest | { connector: "ssh"; host?: string };
 
 export function AIWorkspaceAssistantConnectorSetup({
   setup,
@@ -161,47 +159,43 @@ export function AIWorkspaceScenarioStart({
         },
       }),
     ]).then(([availableResult, finalizeSetupResult, dashboardResult]) => {
-        if (disposed) return;
-        if (availableResult.status === "fulfilled") {
-          setScenarios(availableResult.value);
-        }
+      if (disposed) return;
+      if (availableResult.status === "fulfilled") {
+        setScenarios(availableResult.value);
+      }
 
-        if (finalizeSetupResult.status === "fulfilled") {
-          const nextFinalizeSetup = finalizeSetupResult.value;
-          setSetupPending(
-            Boolean(
-              nextFinalizeSetup &&
-                Object.values(nextFinalizeSetup.steps).some((step) => step === "pending")
-            )
-          );
-          setFinalizeSetup(nextFinalizeSetup);
-        } else {
-          setSetupPending(false);
-          setFinalizeSetup(null);
-        }
+      if (finalizeSetupResult.status === "fulfilled") {
+        const nextFinalizeSetup = finalizeSetupResult.value;
+        setSetupPending(
+          Boolean(
+            nextFinalizeSetup &&
+              Object.values(nextFinalizeSetup.steps).some((step) => step === "pending")
+          )
+        );
+        setFinalizeSetup(nextFinalizeSetup);
+      } else {
+        setSetupPending(false);
+        setFinalizeSetup(null);
+      }
 
-        if (dashboardResult.status === "fulfilled") {
-          const dashboard = dashboardResult.value;
-          setInviteUserMethods(dashboard.inviteUserMethods);
-          setRelayNeedsAttention(
-            Boolean(
-              dashboard.relay &&
-                [
-                  "migration_pending",
-                  "maintenance",
-                  "recovering",
-                  "degraded",
-                  "critical",
-                ].includes(dashboard.relay.state)
-            )
-          );
-        } else {
-          setInviteUserMethods(null);
-          setRelayNeedsAttention(false);
-        }
+      if (dashboardResult.status === "fulfilled") {
+        const dashboard = dashboardResult.value;
+        setInviteUserMethods(dashboard.inviteUserMethods);
+        setRelayNeedsAttention(
+          Boolean(
+            dashboard.relay &&
+              ["migration_pending", "maintenance", "recovering", "degraded", "critical"].includes(
+                dashboard.relay.state
+              )
+          )
+        );
+      } else {
+        setInviteUserMethods(null);
+        setRelayNeedsAttention(false);
+      }
 
-        setStartDataReady(true);
-      });
+      setStartDataReady(true);
+    });
     return () => {
       disposed = true;
     };

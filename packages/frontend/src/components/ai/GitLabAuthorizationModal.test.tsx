@@ -130,7 +130,11 @@ describe("GitLabAuthorizationModal", () => {
     vi.spyOn(api, "authorizeGitUserCredential").mockResolvedValue({} as never);
     act(() => {
       useAIStore.setState({
-        pendingCredentialChallenge: { ...challenge, provider: "git", toolName: "git_list_remote_refs" },
+        pendingCredentialChallenge: {
+          ...challenge,
+          provider: "git",
+          toolName: "git_list_remote_refs",
+        },
         resolveCredentialChallenge,
       });
     });

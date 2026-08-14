@@ -228,9 +228,7 @@ export class InferenceModelConfigurationService {
         safeContextWindow: technical?.contextWindow ?? discoveredModel?.contextWindow ?? model.contextWindow,
         safeMaxInputTokens: technical?.maxInputTokens ?? discoveredModel?.maxInputTokens ?? model.maxInputTokens,
         safeAutoCompactTokenLimit:
-          technical?.autoCompactTokenLimit ??
-          discoveredModel?.autoCompactTokenLimit ??
-          model.autoCompactTokenLimit,
+          technical?.autoCompactTokenLimit ?? discoveredModel?.autoCompactTokenLimit ?? model.autoCompactTokenLimit,
       };
     });
   }

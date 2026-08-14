@@ -222,7 +222,9 @@ function GitConnectorPanel({
               <Input
                 value={form.baseUrl}
                 onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
-                placeholder={provider === "github" ? "https://github.com" : "https://git.example.com"}
+                placeholder={
+                  provider === "github" ? "https://github.com" : "https://git.example.com"
+                }
               />
             </SettingsControlRow>
             <SettingsControlRow title="Repository access">
@@ -293,9 +295,7 @@ function GitConnectorPanel({
                   enabled: form.enabled,
                   repositoryMode: form.repositoryMode,
                   repositoryUrl:
-                    form.repositoryMode === "single_repository"
-                      ? repositoryUrls.trim()
-                      : undefined,
+                    form.repositoryMode === "single_repository" ? repositoryUrls.trim() : undefined,
                   allowlistEntries:
                     form.repositoryMode === "multi_repository"
                       ? repositoryUrls

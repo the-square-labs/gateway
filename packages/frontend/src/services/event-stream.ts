@@ -228,8 +228,10 @@ class EventStream {
           msg.channel === "database.changed" ||
           msg.channel === "database.folder.changed"
         ) {
-          invalidate("req:/api/databases", "databases:list");
           const payload = msg.payload as { action?: string; id?: string } | undefined;
+          if (!(msg.channel === "database.changed" && payload?.action === "health.sampled")) {
+            invalidate("req:/api/databases", "databases:list");
+          }
           if (msg.channel === "database.changed" && payload?.action === "deleted" && payload.id) {
             usePinnedDatabasesStore.getState().removePin(payload.id);
           }
@@ -310,6 +312,7 @@ class EventStream {
 
   private invalidateNodeStores() {
     api.invalidateCache("req:/api/nodes");
+    api.invalidateCache("databases:nodes");
     useNodesStore.getState().invalidate();
     usePinnedNodesStore.getState().invalidate();
   }

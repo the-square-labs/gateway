@@ -51,13 +51,13 @@ import type {
   CloudflareConnectorUpdateInput,
   GitConnectorCreateInput,
   GitConnectorUpdateInput,
-  GitUserCredentialAuthorizeInput,
   GitHubOAuthStartInput,
   GitLabAllowlistEntryInput,
   GitLabConnectorCreateInput,
   GitLabConnectorListQuery,
   GitLabConnectorUpdateInput,
   GitLabUserCredentialAuthorizeInput,
+  GitUserCredentialAuthorizeInput,
 } from './integrations.schemas.js';
 
 type ConnectorRow = typeof integrationConnectors.$inferSelect;
@@ -445,7 +445,7 @@ export class IntegrationsService {
   }
 
   async gitListRemoteRefs(user: User, input: { connectorId: string; repositoryUrl: string }) {
-    const { connector, repositoryUrl, token, username } = await this.resolveGitRepository(
+    const { repositoryUrl, token, username } = await this.resolveGitRepository(
       user,
       'git',
       input.connectorId,
@@ -461,7 +461,8 @@ export class IntegrationsService {
       },
     }).catch(() => null);
     if (!response) throw new AppError(502, 'GIT_CONNECTION_FAILED', 'Git host could not be reached');
-    if (!response.ok) throw new AppError(400, 'GIT_AUTHORIZATION_INVALID', `Git host rejected access (${response.status})`);
+    if (!response.ok)
+      throw new AppError(400, 'GIT_AUTHORIZATION_INVALID', `Git host rejected access (${response.status})`);
     const advertised = await response.text();
     if (advertised.length > 1_048_576) {
       throw new AppError(413, 'GIT_REFS_TOO_LARGE', 'Git reference advertisement exceeds 1 MiB');
@@ -616,14 +617,11 @@ export class IntegrationsService {
   }
 
   getGitHubOAuthAvailability() {
-    return { available: Boolean(getEnv().GITHUB_OAUTH_CLIENT_ID) };
+    return { available: true };
   }
 
   async startGitHubOAuth(input: GitHubOAuthStartInput, userId: string): Promise<GitHubOAuthSession> {
     const clientId = getEnv().GITHUB_OAUTH_CLIENT_ID;
-    if (!clientId) {
-      throw new AppError(503, 'GITHUB_OAUTH_NOT_CONFIGURED', 'GitHub OAuth is not configured on this Gateway');
-    }
     const baseUrl = this.normalizeBaseUrl(input.baseUrl);
     if (new URL(baseUrl).hostname !== 'github.com') {
       throw new AppError(
@@ -677,16 +675,19 @@ export class IntegrationsService {
         .returning();
       return this.toSafeGitHubOAuthSession(row);
     }
-    if (
-      row.lastPolledAt &&
-      Date.now() - row.lastPolledAt.getTime() < Math.max(1, row.pollIntervalSeconds) * 1000
-    ) {
+    if (row.lastPolledAt && Date.now() - row.lastPolledAt.getTime() < Math.max(1, row.pollIntervalSeconds) * 1000) {
       return this.toSafeGitHubOAuthSession(row);
     }
     const [claimed] = await this.db
       .update(integrationGitHubOAuthSessions)
       .set({ status: 'processing', lastPolledAt: new Date(), updatedAt: new Date() })
-      .where(and(eq(integrationGitHubOAuthSessions.id, id), eq(integrationGitHubOAuthSessions.userId, userId), eq(integrationGitHubOAuthSessions.status, 'pending')))
+      .where(
+        and(
+          eq(integrationGitHubOAuthSessions.id, id),
+          eq(integrationGitHubOAuthSessions.userId, userId),
+          eq(integrationGitHubOAuthSessions.status, 'pending')
+        )
+      )
       .returning();
     if (!claimed) return this.toSafeGitHubOAuthSession(await this.getGitHubOAuthSession(id, userId));
     return this.pollClaimedGitHubOAuthSession(claimed, userId);
@@ -3004,8 +3005,13 @@ export class IntegrationsService {
   }
 
   private githubRepositoryRequestError(status: number, body: unknown): AppError {
-    const message = isPlainRecord(body) && typeof body.message === 'string' ? body.message : `GitHub request failed (${status})`;
-    return new AppError(status === 404 ? 404 : status === 401 || status === 403 ? 403 : 400, 'GITHUB_REPOSITORY_REQUEST_FAILED', message);
+    const message =
+      isPlainRecord(body) && typeof body.message === 'string' ? body.message : `GitHub request failed (${status})`;
+    return new AppError(
+      status === 404 ? 404 : status === 401 || status === 403 ? 403 : 400,
+      'GITHUB_REPOSITORY_REQUEST_FAILED',
+      message
+    );
   }
 
   private gitUserCredentialRequired(provider: 'github' | 'git', connector: ConnectorRow): AppError {
@@ -3055,14 +3061,8 @@ export class IntegrationsService {
     return row;
   }
 
-  private async pollClaimedGitHubOAuthSession(
-    row: GitHubOAuthSessionRow,
-    userId: string
-  ): Promise<GitHubOAuthSession> {
+  private async pollClaimedGitHubOAuthSession(row: GitHubOAuthSessionRow, userId: string): Promise<GitHubOAuthSession> {
     const clientId = getEnv().GITHUB_OAUTH_CLIENT_ID;
-    if (!clientId) {
-      return this.failGitHubOAuthSession(row.id, userId, 'GitHub OAuth is no longer configured');
-    }
     let response: Response;
     try {
       response = await fetch('https://github.com/login/oauth/access_token', {
