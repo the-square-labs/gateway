@@ -1,7 +1,7 @@
 import { type DragEndEvent, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
-import { FolderPlus, MoreVertical, Plus } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { ArrowRight, FolderPlus, MoreVertical, Plus } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -16,6 +16,13 @@ import { MoveToFolderDialog } from "@/components/proxy/MoveToFolderDialog";
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -106,11 +113,10 @@ export function ProxyHosts({
   const [createFolderOpen, setCreateFolderOpen] = useState(false);
   const [moveDialogHostId, setMoveDialogHostId] = useState<string | null>(null);
   const [activeDrag, setActiveDrag] = useState<DragEndEvent["active"] | null>(null);
-  const [createDialogOpen, setCreateDialogOpen] = useState(initialCreateDialogOpen);
-
-  useEffect(() => {
-    if (initialCreateDialogOpen) setCreateDialogOpen(true);
-  }, [initialCreateDialogOpen]);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [nginxNodeRequiredOpen, setNginxNodeRequiredOpen] = useState(false);
+  const [checkingCreateNodes, setCheckingCreateNodes] = useState(false);
+  const initialCreateHandledRef = useRef(false);
   const isMobile = useIsMobile();
   const canManageFolders = hasScope("proxy:folders:manage");
   const isSearchFiltering = filters.search.trim() !== "";
@@ -118,6 +124,29 @@ export function ProxyHosts({
   const canCreateProxyHost = hasScope("proxy:create");
   const canShowHostActions =
     canManageFolders || hasScopedAccess("proxy:edit") || hasScopedAccess("proxy:delete");
+
+  const openCreateProxyHost = useCallback(async () => {
+    if (checkingCreateNodes) return;
+    setCheckingCreateNodes(true);
+    try {
+      const response = await api.listNodes({ type: "nginx", limit: 1 });
+      if ((response.data ?? []).length === 0) {
+        setNginxNodeRequiredOpen(true);
+        return;
+      }
+      setCreateDialogOpen(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to check Nginx nodes");
+    } finally {
+      setCheckingCreateNodes(false);
+    }
+  }, [checkingCreateNodes]);
+
+  useEffect(() => {
+    if (!initialCreateDialogOpen || initialCreateHandledRef.current) return;
+    initialCreateHandledRef.current = true;
+    void openCreateProxyHost();
+  }, [initialCreateDialogOpen, openCreateProxyHost]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -559,7 +588,7 @@ export function ProxyHosts({
                     {
                       label: "Add Proxy Host",
                       icon: <Plus className="h-4 w-4" />,
-                      onClick: () => setCreateDialogOpen(true),
+                      onClick: () => void openCreateProxyHost(),
                     },
                   ]
                 : []),
@@ -578,7 +607,7 @@ export function ProxyHosts({
               </Button>
             )}
             {canCreateProxyHost && (
-              <Button onClick={() => setCreateDialogOpen(true)}>
+              <Button onClick={() => void openCreateProxyHost()} disabled={checkingCreateNodes}>
                 <Plus className="h-4 w-4" />
                 Add Proxy Host
               </Button>
@@ -644,7 +673,7 @@ export function ProxyHosts({
             <EmptyState
               message="No proxy hosts."
               {...(canCreateProxyHost
-                ? { actionLabel: "Add one", onAction: () => setCreateDialogOpen(true) }
+                ? { actionLabel: "Add one", onAction: () => void openCreateProxyHost() }
                 : {})}
               hasActiveFilters={hasActiveFilters}
               onReset={() => {
@@ -739,6 +768,40 @@ export function ProxyHosts({
           if (host) navigate(proxyHostRoute(host.slug));
         }}
       />
+      <Dialog
+        open={nginxNodeRequiredOpen}
+        onOpenChange={(open) => {
+          if (open) return;
+          setNginxNodeRequiredOpen(false);
+          if (initialCreateDialogOpen) navigate("/proxy-hosts", { replace: true });
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>No Nginx nodes</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Proxy hosts must be deployed to an Nginx node. Add and connect an Nginx node first, then
+            return here to create the proxy host.
+          </p>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setNginxNodeRequiredOpen(false);
+                if (initialCreateDialogOpen) navigate("/proxy-hosts", { replace: true });
+              }}
+            >
+              Close
+            </Button>
+            <Button asChild>
+              <Link to="/nodes" onClick={() => setNginxNodeRequiredOpen(false)}>
+                Open Nodes <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </PageTransition>
   );
 }

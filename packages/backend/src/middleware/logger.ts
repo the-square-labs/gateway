@@ -18,6 +18,7 @@ export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     requestId,
     method,
     path,
+    ...(path === '/health' ? { healthProbe: c.req.header('x-gateway-health-probe') ?? 'unattributed' } : {}),
     userAgent: c.req.header('user-agent'),
   });
 

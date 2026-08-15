@@ -1,4 +1,4 @@
-import { ArrowUpCircle, EllipsisVertical, Pin, Settings, Trash2 } from "lucide-react";
+import { ArrowUpCircle, Pin, Settings, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -16,13 +16,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { HealthBars } from "@/components/ui/health-bars";
 import { Input } from "@/components/ui/input";
 import {
@@ -42,6 +35,7 @@ import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import { getForcedDaemonUpdateForNode } from "@/lib/dev-force-updates";
 import { getNodeAppearanceColor, NODE_APPEARANCE_COLOR_OPTIONS } from "@/lib/node-appearance";
+import { confirmAndDeleteNode } from "@/lib/remove-node";
 import { nodeRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -50,7 +44,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useDaemonUpdatesStore } from "@/stores/daemon-updates";
 import { useDockerStore } from "@/stores/docker";
 import { usePinnedNodesStore } from "@/stores/pinned-nodes";
-import type { NodeAppearanceColor, NodeDetail } from "@/types";
+import type { Node, NodeAppearanceColor, NodeDetail } from "@/types";
 import {
   effectiveNodeStatus,
   getNodeUpdateTargetVersion,
@@ -165,6 +159,7 @@ export function AdminNodeDetail({
       ).sort(),
     [node?.lastHealthReport?.publicIpAddresses, node?.liveHealthReport?.publicIpAddresses]
   );
+  const nginxPublicAddresses = node?.publicServiceAddresses ?? [];
   const nonInteractiveWhileUpdating =
     nodeUpdating && activeTab !== "details" && activeTab !== "daemon-logs";
   const canUseNodeConsole = !!(id && hasScope(`nodes:console:${id}`)) || hasScope("nodes:console");
@@ -177,7 +172,9 @@ export function AdminNodeDetail({
     !!id &&
     (node?.type === "databases"
       ? hasScope("nodes:rename") || hasScope(`nodes:rename:${id}`)
-      : hasScope("docker:containers:config") || hasScope(`docker:containers:config:${id}`));
+      : node?.type === "nginx"
+        ? hasScope("nodes:config:edit") || hasScope(`nodes:config:edit:${id}`)
+        : hasScope("docker:containers:config") || hasScope(`docker:containers:config:${id}`));
   const canReadNodeFiles =
     !!id && (hasScope("nodes:files:read") || hasScope(`nodes:files:read:${id}`));
   const canWriteNodeFiles =
@@ -345,11 +342,16 @@ export function AdminNodeDetail({
       setServiceAddressMode("__auto__");
       setCustomServiceAddress("");
     } else if (
-      localIpAddresses.includes(node.serviceAddress) ||
-      publicIpAddresses.includes(node.serviceAddress)
+      (node.type === "nginx"
+        ? nginxPublicAddresses
+        : [...localIpAddresses, ...publicIpAddresses]
+      ).includes(node.serviceAddress)
     ) {
       setServiceAddressMode(node.serviceAddress);
       setCustomServiceAddress("");
+    } else if (node.type === "nginx") {
+      setServiceAddressMode("__stale__");
+      setCustomServiceAddress(node.serviceAddress);
     } else {
       setServiceAddressMode("__custom__");
       setCustomServiceAddress(node.serviceAddress);
@@ -367,13 +369,42 @@ export function AdminNodeDetail({
           : serviceAddressMode === "__custom__"
             ? customServiceAddress.trim() || null
             : serviceAddressMode;
-      const updated = await api.updateNode(id, {
+      const update = {
         displayName: appearanceName.trim() || null,
         appearanceColor,
-        ...((node?.type === "docker" || node?.type === "databases") && canEditNodeServiceAddress
+        ...((node?.type === "docker" || node?.type === "databases" || node?.type === "nginx") &&
+        canEditNodeServiceAddress &&
+        serviceAddressMode !== "__stale__"
           ? { serviceAddress }
           : {}),
-      });
+      };
+      let updated: Node;
+      try {
+        updated = await api.updateNode(id, update);
+      } catch (error) {
+        if (
+          !(error instanceof ApiRequestError) ||
+          error.code !== "NODE_SERVICE_ADDRESS_DOMAINS_AFFECTED" ||
+          node?.type !== "nginx"
+        ) {
+          throw error;
+        }
+        const details = error.details as
+          | {
+              domainCount?: number;
+              domains?: string[];
+              previousAddress?: string;
+              nextAddress?: string;
+            }
+          | undefined;
+        const approved = await confirm({
+          title: "Update domain DNS targets",
+          description: `This Nginx node is used by ${details?.domainCount ?? "one or more"} domain${details?.domainCount === 1 ? "" : "s"}. Their tracked Cloudflare DNS target will change from ${details?.previousAddress || "unavailable"} to ${details?.nextAddress || "unavailable"}.${details?.domains?.length ? ` Affected: ${details.domains.join(", ")}.` : ""}`,
+          confirmLabel: "Update DNS targets",
+        });
+        if (!approved) return;
+        updated = await api.updateNode(id, { ...update, confirmDomainDnsUpdate: true });
+      }
       setNode((prev) => (prev ? { ...prev, ...updated } : prev));
       if (updated.slug && updated.slug !== routeSlug) {
         navigate(nodeRoute(updated.slug, activeTab), { replace: true });
@@ -391,14 +422,8 @@ export function AdminNodeDetail({
 
   const handleDelete = async () => {
     if (!node) return;
-    const ok = await confirm({
-      title: "Remove Node",
-      description: `Are you sure you want to remove "${node.hostname}"?`,
-      confirmLabel: "Remove",
-    });
-    if (!ok) return;
     try {
-      await api.deleteNode(node.id);
+      if (!(await confirmAndDeleteNode(node.id, node.hostname))) return;
       usePinnedNodesStore.getState().removePin(node.id);
       toast.success("Node removed");
       navigate("/nodes");
@@ -575,49 +600,30 @@ export function AdminNodeDetail({
                 Settings
               </Button>
             )}
-            {(hasScope("admin:update") ||
-              hasScope("nodes:delete") ||
-              canManageServiceCreationLock) && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    disabled={checkingUpdates || lockSaving || nodeUpdating}
-                  >
-                    <EllipsisVertical className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  {canManageServiceCreationLock && (
-                    <DropdownMenuItem
-                      onClick={() => handleServiceCreationLock(!node.serviceCreationLocked)}
-                      disabled={lockSaving || nodeUpdating}
-                    >
-                      {node.serviceCreationLocked ? "Unlock new services" : "Lock new services"}
-                    </DropdownMenuItem>
-                  )}
-                  {canManageServiceCreationLock &&
-                    (hasScope("admin:update") || hasScope("nodes:delete")) && (
-                      <DropdownMenuSeparator />
-                    )}
-                  {hasScope("admin:update") && (
-                    <DropdownMenuItem onClick={handleCheckUpdates} disabled={nodeUpdating}>
-                      <ArrowUpCircle className="h-3.5 w-3.5 mr-2" />
-                      Check for updates
-                    </DropdownMenuItem>
-                  )}
-                  {hasScope("admin:update") && hasScope("nodes:delete") && (
-                    <DropdownMenuSeparator />
-                  )}
-                  {hasScope("nodes:delete") && (
-                    <DropdownMenuItem onClick={handleDelete} className="text-destructive">
-                      <Trash2 className="h-3.5 w-3.5 mr-2" />
-                      Remove
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
+            {canManageServiceCreationLock && (
+              <Button
+                variant="outline"
+                onClick={() => handleServiceCreationLock(!node.serviceCreationLocked)}
+                disabled={lockSaving || nodeUpdating}
+              >
+                {node.serviceCreationLocked ? "Unlock new services" : "Lock new services"}
+              </Button>
+            )}
+            {hasScope("admin:update") && (
+              <Button
+                variant="outline"
+                onClick={handleCheckUpdates}
+                disabled={nodeUpdating || checkingUpdates}
+              >
+                <ArrowUpCircle className="h-4 w-4" />
+                Check for updates
+              </Button>
+            )}
+            {hasScope("nodes:delete") && (
+              <Button variant="destructive" onClick={handleDelete} disabled={nodeUpdating}>
+                <Trash2 className="h-4 w-4" />
+                Remove
+              </Button>
             )}
           </ResponsiveHeaderActions>
         </div>
@@ -860,7 +866,7 @@ export function AdminNodeDetail({
                 </Badge>
               </div>
             </div>
-            {(node.type === "docker" || node.type === "databases") && (
+            {(node.type === "docker" || node.type === "databases" || node.type === "nginx") && (
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Service Address</label>
                 <Select
@@ -873,11 +879,15 @@ export function AdminNodeDetail({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__auto__">
-                      {localIpAddresses[0] || publicIpAddresses[0]
-                        ? `Automatic (${localIpAddresses[0] ?? publicIpAddresses[0]})`
+                      {(
+                        node.type === "nginx"
+                          ? nginxPublicAddresses[0]
+                          : localIpAddresses[0] || publicIpAddresses[0]
+                      )
+                        ? `Automatic (${node.type === "nginx" ? nginxPublicAddresses[0] : (localIpAddresses[0] ?? publicIpAddresses[0])})`
                         : "Automatic (no IP reported)"}
                     </SelectItem>
-                    {localIpAddresses.length > 0 && (
+                    {node.type !== "nginx" && localIpAddresses.length > 0 && (
                       <SelectGroup>
                         <SelectLabel>Local addresses</SelectLabel>
                         {localIpAddresses.map((address) => (
@@ -887,24 +897,36 @@ export function AdminNodeDetail({
                         ))}
                       </SelectGroup>
                     )}
-                    {publicIpAddresses.length > 0 && (
+                    {(node.type === "nginx" ? nginxPublicAddresses : publicIpAddresses).length >
+                      0 && (
                       <>
                         <SelectSeparator />
                         <SelectGroup>
                           <SelectLabel>Detected public addresses</SelectLabel>
-                          {publicIpAddresses.map((address) => (
-                            <SelectItem key={address} value={address}>
-                              {address}
-                            </SelectItem>
-                          ))}
+                          {(node.type === "nginx" ? nginxPublicAddresses : publicIpAddresses).map(
+                            (address) => (
+                              <SelectItem key={address} value={address}>
+                                {address}
+                              </SelectItem>
+                            )
+                          )}
                         </SelectGroup>
                       </>
                     )}
-                    <SelectSeparator />
-                    <SelectItem value="__custom__">Custom address</SelectItem>
+                    {node.type === "nginx" && serviceAddressMode === "__stale__" && (
+                      <SelectItem value="__stale__" disabled>
+                        Unavailable ({customServiceAddress})
+                      </SelectItem>
+                    )}
+                    {node.type !== "nginx" && (
+                      <>
+                        <SelectSeparator />
+                        <SelectItem value="__custom__">Custom address</SelectItem>
+                      </>
+                    )}
                   </SelectContent>
                 </Select>
-                {serviceAddressMode === "__custom__" && (
+                {node.type !== "nginx" && serviceAddressMode === "__custom__" && (
                   <Input
                     aria-label="Custom Service Address"
                     value={customServiceAddress}
@@ -918,7 +940,9 @@ export function AdminNodeDetail({
                 <p className="text-xs text-muted-foreground">
                   {node.type === "databases"
                     ? "Used as the host shown for published managed database ports."
-                    : "Used by proxy hosts to reach published Docker ports."}
+                    : node.type === "nginx"
+                      ? "Used as the public ingress address for domains assigned to this node."
+                      : "Used by proxy hosts to reach published Docker ports."}
                 </p>
               </div>
             )}

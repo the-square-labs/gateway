@@ -75,7 +75,12 @@ describe('Gateway lifecycle admission middleware', () => {
     });
     expect(scriptResponse.status).toBe(200);
     expect(scriptResponse.headers.get('content-type')).toContain('text/javascript');
-    expect(await scriptResponse.text()).toContain("fetch('/health'");
+    const restartingScript = await scriptResponse.text();
+    expect(restartingScript).toContain("fetch('/health'");
+    expect(restartingScript).toContain('fetch(window.location.href');
+    expect(restartingScript).toContain('window.setTimeout(check, 1000)');
+    expect(restartingScript).toContain('window.setTimeout(() => window.location.reload(), 1000)');
+    expect(restartingScript).not.toContain('void check()');
 
     const apiResponse = await app.request('/api/users', {
       headers: { accept: 'application/json', host: 'gateway.test' },

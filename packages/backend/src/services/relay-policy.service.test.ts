@@ -137,6 +137,42 @@ describe('RelayPolicyService snapshots', () => {
 
     expect(issuer.policyNodeIds).toHaveBeenCalledOnce();
   });
+
+  it('keeps a persisted owner revocation when the runtime snapshot must be deferred', async () => {
+    const select = vi
+      .fn()
+      .mockReturnValueOnce({
+        from: () => ({
+          where: () => Promise.resolve([{ nodeId: 'source-node', sourceKind: 'daemon' }]),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: () => ({ where: () => Promise.resolve([{ nodeId: 'target-node' }]) }),
+      });
+    const updateWhere = vi.fn().mockResolvedValue(undefined);
+    const tx = {
+      delete: vi.fn(() => ({
+        where: () => ({ returning: () => Promise.resolve([{ id: 'deleted' }]) }),
+      })),
+      update: vi.fn(() => ({ set: () => ({ where: updateWhere }) })),
+    };
+    const db = {
+      select,
+      transaction: vi.fn((callback: (value: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = createService(db, { applySnapshot: vi.fn() });
+    vi.spyOn(service, 'syncSnapshot').mockRejectedValue(new Error('relay unavailable'));
+    vi.spyOn(service as any, 'syncNodeGrants').mockResolvedValue(undefined);
+    (service as any).grantIssuer.policyNodeIds = vi.fn().mockResolvedValue([]);
+
+    await expect(
+      service.revokeOwner('proxy_host_secure_link', 'proxy-1', { allowDeferredSnapshot: true })
+    ).resolves.toBeUndefined();
+
+    expect(db.transaction).toHaveBeenCalledOnce();
+    expect(tx.delete).toHaveBeenCalledTimes(2);
+    expect(updateWhere).toHaveBeenCalledOnce();
+  });
 });
 
 describe('RelayPolicyService lifecycle events', () => {

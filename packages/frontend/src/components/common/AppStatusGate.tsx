@@ -13,6 +13,12 @@ import { useAppStatusStore } from "@/stores/app-status";
 export { isGatewayUpdateTargetVersion, normalizeGatewayUpdateVersion };
 
 const VERSION_RELOAD_CHECK_INTERVAL_MS = 30_000;
+const MAINTENANCE_RECOVERY_CHECK_INTERVAL_MS = 5_000;
+const MAINTENANCE_AUTO_RELOAD_GUARD_KEY = "gateway-maintenance-auto-reload";
+
+export function clearMaintenanceAutoReloadGuard(): void {
+  window.sessionStorage.removeItem(MAINTENANCE_AUTO_RELOAD_GUARD_KEY);
+}
 
 async function fetchGatewayCurrentVersion(): Promise<string | null> {
   try {
@@ -20,6 +26,7 @@ async function fetchGatewayCurrentVersion(): Promise<string | null> {
     // A deployment detector must never be able to lock the application UI out.
     const response = await fetch("/health", {
       cache: "no-store",
+      headers: { "X-Gateway-Health-Probe": "version" },
     });
     if (response.ok) {
       const payload = (await response.json()) as GatewayHealthSnapshot;
@@ -32,27 +39,64 @@ async function fetchGatewayCurrentVersion(): Promise<string | null> {
 }
 
 function MaintenanceScreen() {
-  const setMaintenanceActive = useAppStatusStore((s) => s.setMaintenanceActive);
+  const [backendReady, setBackendReady] = useState(false);
 
   useEffect(() => {
-    const checkHealth = async () => {
-      try {
-        const response = await fetch("/health", { cache: "no-store" });
-        if (response.ok) {
-          setMaintenanceActive(false);
-        }
-      } catch {
-        // Keep the maintenance screen visible until the backend answers again.
-      }
+    let cancelled = false;
+    let timer: number | null = null;
+    let consecutiveReadyChecks = 0;
+    const controller = new AbortController();
+
+    const scheduleCheck = () => {
+      if (cancelled) return;
+      timer = window.setTimeout(() => void checkRecovery(), MAINTENANCE_RECOVERY_CHECK_INTERVAL_MS);
     };
 
-    void checkHealth();
-    const interval = window.setInterval(() => {
-      void checkHealth();
-    }, 5000);
+    const checkRecovery = async () => {
+      try {
+        const [healthResponse, apiResponse] = await Promise.all([
+          fetch("/health", {
+            cache: "no-store",
+            headers: { "X-Gateway-Health-Probe": "maintenance" },
+            signal: controller.signal,
+          }),
+          fetch("/api/setup/status", {
+            cache: "no-store",
+            credentials: "include",
+            signal: controller.signal,
+          }),
+        ]);
+        const health = healthResponse.ok
+          ? ((await healthResponse.json()) as GatewayHealthSnapshot)
+          : null;
+        const ready = healthResponse.ok && health?.lifecycleState === "running" && apiResponse.ok;
 
-    return () => window.clearInterval(interval);
-  }, [setMaintenanceActive]);
+        consecutiveReadyChecks = ready ? consecutiveReadyChecks + 1 : 0;
+        if (consecutiveReadyChecks >= 2) {
+          const autoReloadAlreadyAttempted =
+            window.sessionStorage.getItem(MAINTENANCE_AUTO_RELOAD_GUARD_KEY) === "1";
+          if (!autoReloadAlreadyAttempted) {
+            window.sessionStorage.setItem(MAINTENANCE_AUTO_RELOAD_GUARD_KEY, "1");
+            window.location.reload();
+          } else if (!cancelled) {
+            setBackendReady(true);
+          }
+          return;
+        }
+      } catch {
+        consecutiveReadyChecks = 0;
+      }
+
+      scheduleCheck();
+    };
+
+    scheduleCheck();
+    return () => {
+      cancelled = true;
+      controller.abort();
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, []);
 
   return (
     <div className="fixed inset-0 z-[200] flex min-h-screen items-center justify-center bg-background px-4">
@@ -72,7 +116,11 @@ function MaintenanceScreen() {
             <RotateCw className="mr-2 h-4 w-4" />
             Reload now
           </Button>
-          <p className="text-xs text-muted-foreground">Automatic retry is active.</p>
+          <p className="text-xs text-muted-foreground">
+            {backendReady
+              ? "The backend is available. Reload to continue."
+              : "Checking backend availability automatically."}
+          </p>
         </div>
       </div>
     </div>
@@ -100,6 +148,8 @@ function GatewayOperationScreen() {
   const clearGatewayUpdating = useAppStatusStore((s) => s.clearGatewayUpdating);
   const clearGatewayRestarting = useAppStatusStore((s) => s.clearGatewayRestarting);
   useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
     let restartObserved = false;
     let targetProbeActive = false;
     let targetProbeStartedAt = 0;
@@ -150,7 +200,10 @@ function GatewayOperationScreen() {
       }
 
       try {
-        const response = await fetch("/health", { cache: "no-store" });
+        const response = await fetch("/health", {
+          cache: "no-store",
+          headers: { "X-Gateway-Health-Probe": "operation" },
+        });
         if (!response.ok) {
           restartObserved = true;
           return;
@@ -184,12 +237,19 @@ function GatewayOperationScreen() {
       }
     };
 
-    const interval = window.setInterval(() => {
-      void checkHealth();
-    }, 3000);
-    void checkHealth();
+    const runCheck = async () => {
+      await checkHealth();
+      if (!cancelled && !navigating) {
+        timer = window.setTimeout(() => void runCheck(), 3000);
+      }
+    };
 
-    return () => window.clearInterval(interval);
+    void runCheck();
+
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
   }, [
     clearGatewayRestarting,
     clearGatewayUpdating,
@@ -231,6 +291,7 @@ function GatewayOperationScreen() {
 function GatewayReloadCoordinator() {
   const gatewayUpdatingActive = useAppStatusStore((s) => s.gatewayUpdatingActive);
   const gatewayRestartingActive = useAppStatusStore((s) => s.gatewayRestartingActive);
+  const maintenanceActive = useAppStatusStore((s) => s.maintenanceActive);
   const rateLimitedUntil = useAppStatusStore((s) => s.rateLimitedUntil);
 
   useEffect(() => {
@@ -239,7 +300,13 @@ function GatewayReloadCoordinator() {
   }, [rateLimitedUntil]);
 
   useEffect(() => {
-    if (gatewayUpdatingActive || gatewayRestartingActive || rateLimitedUntil != null) return;
+    if (
+      maintenanceActive ||
+      gatewayUpdatingActive ||
+      gatewayRestartingActive ||
+      rateLimitedUntil != null
+    )
+      return;
 
     let cancelled = false;
     let checking = false;
@@ -282,7 +349,7 @@ function GatewayReloadCoordinator() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [gatewayRestartingActive, gatewayUpdatingActive, rateLimitedUntil]);
+  }, [gatewayRestartingActive, gatewayUpdatingActive, maintenanceActive, rateLimitedUntil]);
 
   return null;
 }

@@ -30,6 +30,7 @@ export interface Domain {
   dnsTargetIps: string[];
   dnsTtl: number | null;
   dnsProxied: boolean | null;
+  nginxNodeId: string | null;
   isSystem?: boolean;
   folderId?: string | null;
   sortOrder?: number;
@@ -41,7 +42,13 @@ export interface Domain {
 }
 
 export interface DomainUsage {
-  proxyHosts: Array<{ id: string; slug: string; domainNames: string[]; enabled: boolean }>;
+  proxyHosts: Array<{
+    id: string;
+    slug: string;
+    domainNames: string[];
+    enabled: boolean;
+    nodeId: string | null;
+  }>;
   sslCertificates: Array<{
     id: string;
     domainNames: string[];
@@ -51,7 +58,24 @@ export interface DomainUsage {
 }
 
 export interface DomainWithUsage extends Domain {
+  nginxNode: DomainNginxNode | null;
   usage: DomainUsage;
+}
+
+export interface DomainNginxNode {
+  id: string;
+  slug: string;
+  hostname: string;
+  displayName: string | null;
+  appearanceColor: string | null;
+  effectiveAddress?: string;
+}
+
+export interface DomainNginxNodeOptions {
+  eligibleNodes: Array<DomainNginxNode & { effectiveAddress: string }>;
+  unconfiguredNodes: DomainNginxNode[];
+  totalNginxNodes: number;
+  unconfiguredNginxNodes: number;
 }
 
 export interface DomainSearchResult {
@@ -67,6 +91,7 @@ export interface CreateDomainRequest {
   ttl?: number;
   proxied?: boolean;
   overwriteDns?: boolean;
+  nginxNodeId?: string;
 }
 
 export interface DeleteDomainRequest {
@@ -95,6 +120,7 @@ export interface DomainPreview {
   domain: string;
   zoneName: string;
   connectorId: string;
+  nginxNode: DomainNginxNode & { effectiveAddress: string };
   targetIps: string[];
   ttl: number;
   proxied: boolean;

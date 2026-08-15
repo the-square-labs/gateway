@@ -27,7 +27,11 @@ import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useResourceFolderStore } from "@/stores/resource-folders";
 import type { ResourceFolderTreeNode } from "@/types";
-import type { DomainDnsConflictDetails, DomainPreview } from "@/types/domains";
+import type {
+  DomainDnsConflictDetails,
+  DomainNginxNodeOptions,
+  DomainPreview,
+} from "@/types/domains";
 
 const PREVIEW_ANIMATION = {
   initial: { height: 0, opacity: 0, y: 8 },
@@ -52,6 +56,10 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
   const [preview, setPreview] = useState<DomainPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [nodeOptions, setNodeOptions] = useState<DomainNginxNodeOptions | null>(null);
+  const [nodesLoading, setNodesLoading] = useState(false);
+  const [nodesError, setNodesError] = useState<string | null>(null);
+  const [nginxNodeId, setNginxNodeId] = useState("");
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const domainFolders = useResourceFolderStore((state) => state.foldersByType.domain);
   const foldersLoading = useResourceFolderStore((state) => state.loadingByType.domain);
@@ -67,6 +75,10 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
     setPreview(null);
     setPreviewError(null);
     setIsPreviewLoading(false);
+    setNodeOptions(null);
+    setNodesError(null);
+    setNodesLoading(false);
+    setNginxNodeId("");
   };
 
   const scheduleReset = () => {
@@ -107,13 +119,34 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
   useEffect(() => {
     if (!open) return;
     void fetchFolders("domain");
+    setNodesLoading(true);
+    api
+      .listDomainNginxNodes()
+      .then((result) => {
+        setNodeOptions(result);
+        setNodesError(null);
+        setNginxNodeId((current) => {
+          if (result.eligibleNodes.some((node) => node.id === current)) return current;
+          return result.eligibleNodes.length === 1 ? result.eligibleNodes[0]!.id : "";
+        });
+      })
+      .catch((error) => {
+        setNodeOptions(null);
+        setNodesError(error instanceof Error ? error.message : "Unable to load Nginx nodes");
+      })
+      .finally(() => setNodesLoading(false));
   }, [fetchFolders, open]);
 
   useEffect(() => {
     if (!open) return;
 
     const normalizedDomain = domain.trim();
-    if (normalizedDomain.length < 4 || !normalizedDomain.includes(".")) {
+    if (
+      normalizedDomain.length < 4 ||
+      !normalizedDomain.includes(".") ||
+      nodesLoading ||
+      !nginxNodeId
+    ) {
       setPreview(null);
       setPreviewError(null);
       setIsPreviewLoading(false);
@@ -124,7 +157,7 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
     setIsPreviewLoading(true);
     const timer = window.setTimeout(() => {
       api
-        .previewDomain({ domain: normalizedDomain, ttl: ttlValue, proxied })
+        .previewDomain({ domain: normalizedDomain, ttl: ttlValue, proxied, nginxNodeId })
         .then((result) => {
           if (cancelled) return;
           setPreview(result);
@@ -144,7 +177,7 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [domain, open, proxied, ttlValue]);
+  }, [domain, nginxNodeId, nodesLoading, open, proxied, ttlValue]);
 
   const create = async (overwriteDns = false) => {
     return api.createDomain({
@@ -154,12 +187,17 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
       ttl: ttlValue,
       proxied,
       overwriteDns,
+      nginxNodeId,
     });
   };
 
   const handleSubmit = async () => {
     if (!domain.trim()) {
       toast.error("Domain is required");
+      return;
+    }
+    if (!nginxNodeId) {
+      toast.error("Select an Nginx node with a public address");
       return;
     }
     setIsSaving(true);
@@ -271,6 +309,41 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
               </Select>
             </SettingsControlRow>
             <SettingsControlRow
+              title="Nginx node"
+              description="Public ingress for this domain"
+              className="sm:grid-cols-[minmax(8rem,1fr)_minmax(0,12rem)]"
+              controlsClassName="sm:w-full sm:min-w-0 sm:max-w-none"
+            >
+              {nodesLoading ? (
+                <span className="text-sm text-muted-foreground">Loading nodes...</span>
+              ) : nodeOptions?.eligibleNodes.length === 1 ? (
+                <div className="min-w-0 text-right text-sm">
+                  <div className="truncate font-medium">
+                    {nodeOptions.eligibleNodes[0]!.displayName ||
+                      nodeOptions.eligibleNodes[0]!.hostname}
+                  </div>
+                  <div className="truncate font-mono text-xs text-muted-foreground">
+                    {nodeOptions.eligibleNodes[0]!.effectiveAddress}
+                  </div>
+                </div>
+              ) : nodeOptions && nodeOptions.eligibleNodes.length > 1 ? (
+                <Select value={nginxNodeId} onValueChange={setNginxNodeId}>
+                  <SelectTrigger aria-label="Nginx node">
+                    <SelectValue placeholder="Select node" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {nodeOptions.eligibleNodes.map((node) => (
+                      <SelectItem key={node.id} value={node.id}>
+                        {node.displayName || node.hostname} · {node.effectiveAddress}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <span className="text-sm text-muted-foreground">Unavailable</span>
+              )}
+            </SettingsControlRow>
+            <SettingsControlRow
               title="TTL"
               description="DNS record time to live"
               className="sm:grid-cols-[minmax(8rem,1fr)_minmax(0,12rem)]"
@@ -365,7 +438,10 @@ export function AddDomainDialog({ open, onOpenChange, onCreated }: AddDomainDial
           <Button variant="outline" onClick={() => handleOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleSubmit} disabled={isSaving}>
+          <Button
+            onClick={handleSubmit}
+            disabled={isSaving || nodesLoading || !nginxNodeId || !!nodesError}
+          >
             {isSaving ? "Adding..." : "Add Domain"}
           </Button>
         </DialogFooter>

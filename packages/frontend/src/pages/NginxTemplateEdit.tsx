@@ -1,13 +1,4 @@
-import {
-  Eye,
-  FlaskConical,
-  HelpCircle,
-  Minus,
-  MoreVertical,
-  Plus,
-  Save,
-  Settings2,
-} from "lucide-react";
+import { Eye, FlaskConical, HelpCircle, Minus, Plus, Save, Settings2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -25,12 +16,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -534,23 +519,14 @@ export function NginxTemplateEdit() {
                 {isSaving ? "Saving..." : "Save"}
               </Button>
             )}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon">
-                  <MoreVertical className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={handlePreview} disabled={!content.trim()}>
-                  <Eye className="h-4 w-4 mr-2" />
-                  Preview
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setCheatsheetOpen(true)}>
-                  <HelpCircle className="h-4 w-4 mr-2" />
-                  Variables Cheatsheet
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <Button variant="outline" onClick={handlePreview} disabled={!content.trim()}>
+              <Eye className="h-4 w-4" />
+              Preview
+            </Button>
+            <Button variant="outline" onClick={() => setCheatsheetOpen(true)}>
+              <HelpCircle className="h-4 w-4" />
+              Variables Cheatsheet
+            </Button>
           </ResponsiveHeaderActions>
         </div>
 

@@ -1,8 +1,9 @@
 import { isIP } from 'node:net';
-import { asc, count, desc, eq, ilike, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import type { DnsRecords } from '@/db/schema/domains.js';
 import { domains } from '@/db/schema/domains.js';
+import { nodes } from '@/db/schema/nodes.js';
 import { proxyHosts } from '@/db/schema/proxy-hosts.js';
 import { sslCertificates } from '@/db/schema/ssl-certificates.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -11,9 +12,10 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { CloudflareClient, CloudflareDnsRecordInput } from '@/modules/integrations/cloudflare-client.js';
 import type { IntegrationsService } from '@/modules/integrations/integrations.service.js';
-import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
+import { getEffectiveNginxIngressAddress } from '@/modules/nodes/node-service-address.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
-import { computeDnsStatus, getPublicIPs, resolveDnsRecords } from './dns.utils.js';
+import type { NodeRegistryService } from '@/services/node-registry.service.js';
+import { computeDnsStatus, resolveDnsRecords } from './dns.utils.js';
 import type {
   CreateDomainInput,
   DeleteDomainInput,
@@ -25,8 +27,28 @@ import type {
 const logger = createChildLogger('DomainsService');
 
 export interface DomainUsage {
-  proxyHosts: Array<{ id: string; slug: string; domainNames: string[]; enabled: boolean }>;
+  proxyHosts: Array<{ id: string; slug: string; domainNames: string[]; enabled: boolean; nodeId: string | null }>;
   sslCertificates: Array<{ id: string; domainNames: string[]; status: string; notAfter: Date | null }>;
+}
+
+export interface EligibleNginxNode {
+  id: string;
+  slug: string;
+  hostname: string;
+  displayName: string | null;
+  appearanceColor: string | null;
+  effectiveAddress: string;
+}
+
+export function selectBackfillNginxNode(
+  eligibleNodes: EligibleNginxNode[],
+  usedNodeIds: Array<string | null>
+): EligibleNginxNode | undefined {
+  if (usedNodeIds.some((nodeId) => !nodeId)) return undefined;
+  const distinctUsedNodeIds = [...new Set(usedNodeIds)];
+  if (distinctUsedNodeIds.length === 0) return eligibleNodes[0];
+  if (distinctUsedNodeIds.length !== 1) return undefined;
+  return eligibleNodes.find((node) => node.id === distinctUsedNodeIds[0]);
 }
 
 type CloudflareAddressRecord = {
@@ -40,6 +62,7 @@ type CloudflareAddressRecord = {
 
 type DomainCloudflarePlan = {
   domainName: string;
+  nginxNode: EligibleNginxNode;
   targetIps: string[];
   ttl: number;
   proxied: boolean;
@@ -60,7 +83,9 @@ type DomainCloudflarePlan = {
 export class DomainsService {
   private eventBus?: EventBusService;
   private integrationsService?: IntegrationsService;
-  private generalSettingsService?: GeneralSettingsService;
+  private nodeRegistry?: NodeRegistryService;
+  private ingressReconcileRunning = false;
+  private ingressReconcileQueued = false;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -69,14 +94,24 @@ export class DomainsService {
 
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
+    bus.subscribe('node.service_address.changed', (payload) => {
+      this.queueIngressTargetReconciliation((payload as { id?: string })?.id);
+    });
+    bus.subscribe('node.ingress_addresses.changed', (payload) => {
+      this.queueIngressTargetReconciliation((payload as { id?: string })?.id);
+    });
   }
 
   setIntegrationsService(service: IntegrationsService) {
     this.integrationsService = service;
   }
 
-  setGeneralSettingsService(service: GeneralSettingsService) {
-    this.generalSettingsService = service;
+  setNodeRegistryService(service: NodeRegistryService) {
+    this.nodeRegistry = service;
+  }
+
+  startIngressTargetReconciliation() {
+    this.queueIngressTargetReconciliation();
   }
 
   private emitDomain(id: string, action: string, domain?: string) {
@@ -129,8 +164,45 @@ export class DomainsService {
   async getDomain(id: string) {
     const [row] = await this.db.select().from(domains).where(eq(domains.id, id)).limit(1);
     if (!row) throw new Error('Domain not found');
-    const usage = await this.getUsage(row.domain);
-    return { ...row, usage };
+    const [usage, nginxNode] = await Promise.all([
+      this.getUsage(row.domain),
+      row.nginxNodeId ? this.getNginxNodeSummary(row.nginxNodeId) : Promise.resolve(null),
+    ]);
+    return { ...row, nginxNode, usage };
+  }
+
+  async getNginxNodeOptions() {
+    const rows = await this.listNginxNodes();
+    const eligibleNodes = rows.flatMap((node) => {
+      const effectiveAddress = this.getNodeEffectiveIngressAddress(node);
+      return effectiveAddress
+        ? [
+            {
+              id: node.id,
+              slug: node.slug,
+              hostname: node.hostname,
+              displayName: node.displayName,
+              appearanceColor: node.appearanceColor,
+              effectiveAddress,
+            },
+          ]
+        : [];
+    });
+    const eligibleIds = new Set(eligibleNodes.map((node) => node.id));
+    return {
+      eligibleNodes,
+      unconfiguredNodes: rows
+        .filter((node) => !eligibleIds.has(node.id))
+        .map((node) => ({
+          id: node.id,
+          slug: node.slug,
+          hostname: node.hostname,
+          displayName: node.displayName,
+          appearanceColor: node.appearanceColor,
+        })),
+      totalNginxNodes: rows.length,
+      unconfiguredNginxNodes: rows.length - eligibleNodes.length,
+    };
   }
 
   async createDomain(input: CreateDomainInput, userId: string) {
@@ -228,6 +300,7 @@ export class DomainsService {
         providerZoneId: context.zone.remoteId,
         providerZoneName: context.zone.name,
         providerRecordIds,
+        nginxNodeId: plan.nginxNode.id,
         dnsRecordType: this.recordTypeLabel(targetIps),
         dnsTargetIps: targetIps,
         dnsTtl: ttl,
@@ -250,6 +323,7 @@ export class DomainsService {
         zoneName: context.zone.name,
         recordIds: providerRecordIds,
         targetIps,
+        nginxNodeId: plan.nginxNode.id,
         ttl,
         proxied,
       },
@@ -269,6 +343,7 @@ export class DomainsService {
       domain: plan.domainName,
       zoneName: plan.context.zone.name,
       connectorId: plan.context.connector.id,
+      nginxNode: plan.nginxNode,
       targetIps: plan.targetIps,
       ttl: plan.ttl,
       proxied: plan.proxied,
@@ -416,8 +491,22 @@ export class DomainsService {
   }
 
   async checkDns(id: string) {
-    const [row] = await this.db.select().from(domains).where(eq(domains.id, id)).limit(1);
+    let [row] = await this.db.select().from(domains).where(eq(domains.id, id)).limit(1);
     if (!row) throw new Error('Domain not found');
+
+    // A manual check retries a durable approved target before falling back to
+    // drift repair for the last committed target. It never invents approval
+    // from a newly detected node address.
+    let reconciliationTarget: string | undefined = row.pendingDnsTargetIp ?? row.dnsTargetIps[0];
+    if (row.pendingDnsTargetIp && row.nginxNodeId) {
+      const node = await this.getNginxNodeSummary(row.nginxNodeId);
+      if (node?.effectiveAddress !== row.pendingDnsTargetIp) reconciliationTarget = undefined;
+    }
+    if (row.dnsProvider === 'cloudflare' && reconciliationTarget) {
+      await this.reconcileDomainTarget(row, reconciliationTarget);
+      [row] = await this.db.select().from(domains).where(eq(domains.id, id)).limit(1);
+      if (!row) throw new Error('Domain not found');
+    }
 
     const dnsRecords = await resolveDnsRecords(row.domain);
     const dnsStatus = await this.computeDomainDnsStatus(row, dnsRecords);
@@ -458,8 +547,9 @@ export class DomainsService {
   }
 
   async getUsage(domainName: string): Promise<DomainUsage> {
-    const jsonContains = sql`${JSON.stringify([domainName])}::jsonb`;
-    const wildcardContains = sql`${JSON.stringify([`*.${domainName}`])}::jsonb`;
+    const normalized = domainName.trim().toLowerCase();
+    const base = normalized.startsWith('*.') ? normalized.slice(2) : normalized;
+    const proxyDomainNames = [base, `*.${base}`];
 
     const [hosts, certs] = await Promise.all([
       this.db
@@ -468,9 +558,16 @@ export class DomainsService {
           slug: proxyHosts.slug,
           domainNames: proxyHosts.domainNames,
           enabled: proxyHosts.enabled,
+          nodeId: proxyHosts.nodeId,
         })
         .from(proxyHosts)
-        .where(sql`${proxyHosts.domainNames} @> ${jsonContains} OR ${proxyHosts.domainNames} @> ${wildcardContains}`),
+        .where(
+          sql`EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements_text(${proxyHosts.domainNames}) AS proxy_domain(value)
+            WHERE ${inArray(sql`lower(proxy_domain.value)`, proxyDomainNames)}
+          )`
+        ),
       this.db
         .select({
           id: sslCertificates.id,
@@ -479,7 +576,13 @@ export class DomainsService {
           notAfter: sslCertificates.notAfter,
         })
         .from(sslCertificates)
-        .where(sql`${sslCertificates.domainNames} @> ${jsonContains}`),
+        .where(
+          sql`EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements_text(${sslCertificates.domainNames}) AS certificate_domain(value)
+            WHERE lower(certificate_domain.value) = ${normalized}
+          )`
+        ),
     ]);
 
     return { proxyHosts: hosts, sslCertificates: certs };
@@ -494,18 +597,317 @@ export class DomainsService {
       .limit(100);
   }
 
-  private async getGatewayDnsTargetIps(): Promise<string[]> {
-    const configured = (await this.generalSettingsService?.getGatewayEndpointSettings())?.gatewayPublicIps ?? [];
-    const targetIps = configured.length > 0 ? configured : [...getPublicIPs().ipv4, ...getPublicIPs().ipv6];
-    const unique = [...new Set(targetIps)];
-    if (unique.length === 0) {
+  private async listNginxNodes() {
+    return this.db
+      .select({
+        id: nodes.id,
+        slug: nodes.slug,
+        hostname: nodes.hostname,
+        displayName: nodes.displayName,
+        appearanceColor: nodes.appearanceColor,
+        serviceAddress: nodes.serviceAddress,
+        lastHealthReport: nodes.lastHealthReport,
+        createdAt: nodes.createdAt,
+      })
+      .from(nodes)
+      .where(eq(nodes.type, 'nginx'))
+      .orderBy(asc(nodes.createdAt), asc(nodes.id));
+  }
+
+  private getNodeEffectiveIngressAddress(node: {
+    id: string;
+    serviceAddress: string | null;
+    lastHealthReport: (typeof nodes.$inferSelect)['lastHealthReport'];
+  }): string | null {
+    return getEffectiveNginxIngressAddress({
+      serviceAddress: node.serviceAddress,
+      lastHealthReport: this.nodeRegistry?.getNode(node.id)?.lastHealthReport ?? node.lastHealthReport,
+    });
+  }
+
+  private async resolveRequestedNginxNode(nginxNodeId?: string): Promise<EligibleNginxNode> {
+    const options = await this.getNginxNodeOptions();
+    if (options.totalNginxNodes === 0) {
+      throw new AppError(409, 'DOMAIN_NGINX_NODE_MISSING', 'Add an Nginx node before creating a domain');
+    }
+    if (options.eligibleNodes.length === 0) {
       throw new AppError(
         409,
-        'GATEWAY_PUBLIC_IP_UNAVAILABLE',
-        'Gateway public IP(s) are not configured and automatic public IP detection has no value'
+        'DOMAIN_NGINX_ADDRESS_REQUIRED',
+        'Configure a detected public service address in Nginx node Settings before creating a domain'
       );
     }
-    return unique;
+    if (nginxNodeId) {
+      const selected = options.eligibleNodes.find((node) => node.id === nginxNodeId);
+      if (!selected) {
+        throw new AppError(400, 'DOMAIN_NGINX_NODE_INELIGIBLE', 'Selected Nginx node has no public ingress address');
+      }
+      return selected;
+    }
+    if (options.eligibleNodes.length === 1) return options.eligibleNodes[0]!;
+    throw new AppError(400, 'DOMAIN_NGINX_NODE_REQUIRED', 'Select an Nginx node for this domain');
+  }
+
+  private async getNginxNodeSummary(nodeId: string): Promise<EligibleNginxNode | null> {
+    const options = await this.getNginxNodeOptions();
+    const eligible = options.eligibleNodes.find((node) => node.id === nodeId);
+    if (eligible) return eligible;
+    const [row] = await this.db
+      .select({
+        id: nodes.id,
+        slug: nodes.slug,
+        hostname: nodes.hostname,
+        displayName: nodes.displayName,
+        appearanceColor: nodes.appearanceColor,
+      })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    return row ? { ...row, effectiveAddress: '' } : null;
+  }
+
+  private queueIngressTargetReconciliation(nodeId?: string) {
+    if (this.ingressReconcileRunning) {
+      this.ingressReconcileQueued = true;
+      return;
+    }
+    this.ingressReconcileRunning = true;
+    void this.reconcileIngressTargets(nodeId)
+      .catch((error) => {
+        logger.error('Domain ingress target reconciliation failed', {
+          nodeId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        this.ingressReconcileRunning = false;
+        if (this.ingressReconcileQueued) {
+          this.ingressReconcileQueued = false;
+          this.queueIngressTargetReconciliation();
+        }
+      });
+  }
+
+  async reconcileIngressTargets(nodeId?: string) {
+    await this.backfillNginxNodeAssignments();
+    const rows = await this.db
+      .select()
+      .from(domains)
+      .where(nodeId ? eq(domains.nginxNodeId, nodeId) : undefined);
+    for (const row of rows) {
+      if (!row.nginxNodeId) continue;
+      const node = await this.getNginxNodeSummary(row.nginxNodeId);
+      if (!node?.effectiveAddress) {
+        if (row.dnsStatus !== 'invalid') {
+          await this.db
+            .update(domains)
+            .set({ dnsStatus: 'invalid', updatedAt: new Date() })
+            .where(eq(domains.id, row.id));
+          this.emitDomain(row.id, 'updated', row.domain);
+        }
+        continue;
+      }
+      const effectiveTargetChanged = !this.sameStringSet(row.dnsTargetIps, [node.effectiveAddress]);
+      const hasDurableRetargetApproval = row.pendingDnsTargetIp === node.effectiveAddress;
+      if (effectiveTargetChanged && !hasDurableRetargetApproval) {
+        if (row.dnsStatus !== 'invalid') {
+          await this.db
+            .update(domains)
+            .set({ dnsStatus: 'invalid', updatedAt: new Date() })
+            .where(eq(domains.id, row.id));
+          this.emitDomain(row.id, 'updated', row.domain);
+        }
+        continue;
+      }
+      await this.reconcileDomainTarget(row, node.effectiveAddress);
+    }
+  }
+
+  private async backfillNginxNodeAssignments() {
+    const unassigned = await this.db.select().from(domains).where(isNull(domains.nginxNodeId));
+    if (unassigned.length === 0) return;
+    const options = await this.getNginxNodeOptions();
+    if (options.eligibleNodes.length === 0) return;
+
+    for (const row of unassigned) {
+      const usage = await this.getUsage(row.domain);
+      const usedNodeIds = usage.proxyHosts.map((host) => host.nodeId);
+      const selected = selectBackfillNginxNode(options.eligibleNodes, usedNodeIds);
+      if (!selected) {
+        logger.warn('Domain Nginx node assignment remains unresolved', {
+          domainId: row.id,
+          reason: usedNodeIds.some((usedNodeId) => !usedNodeId)
+            ? 'proxy_host_node_unassigned'
+            : new Set(usedNodeIds).size > 1
+              ? 'multiple_proxy_host_nodes'
+              : 'proxy_host_node_ineligible',
+        });
+        continue;
+      }
+
+      const pendingDnsTargetIp = row.dnsProvider === 'cloudflare' ? selected.effectiveAddress : null;
+      const [assigned] = await this.db
+        .update(domains)
+        .set({ nginxNodeId: selected.id, pendingDnsTargetIp, updatedAt: new Date() })
+        .where(sql`${domains.id} = ${row.id} AND ${domains.nginxNodeId} IS NULL`)
+        .returning();
+      if (!assigned) continue;
+      await this.auditService.log({
+        userId: null,
+        action: 'domain.nginx_node.assign',
+        resourceType: 'domain',
+        resourceId: row.id,
+        details: { nginxNodeId: selected.id, source: usedNodeIds.length === 0 ? 'first_eligible' : 'proxy_host' },
+      });
+      if (assigned.dnsProvider === 'cloudflare') {
+        await this.reconcileDomainTarget(assigned, selected.effectiveAddress);
+      }
+    }
+  }
+
+  private async reconcileDomainTarget(row: typeof domains.$inferSelect, effectiveAddress: string) {
+    if (
+      row.dnsProvider !== 'cloudflare' ||
+      !this.integrationsService ||
+      !row.integrationConnectorId ||
+      !row.providerZoneId ||
+      row.providerRecordIds.length === 0
+    ) {
+      if (row.dnsProvider === 'cloudflare') {
+        await this.db
+          .update(domains)
+          .set({ dnsStatus: 'invalid', updatedAt: new Date() })
+          .where(eq(domains.id, row.id));
+      }
+      return;
+    }
+
+    try {
+      const context = await this.integrationsService.getCloudflareDnsContextForRecord(
+        row.integrationConnectorId,
+        row.providerZoneId
+      );
+      const records = (await context.client.listDnsRecords(context.zone.remoteId, row.domain)).filter(
+        (record) => record.name.toLowerCase() === row.domain.toLowerCase()
+      );
+      const recordsById = new Map(records.map((record) => [record.id, record]));
+      const trackedRecordIds = new Set(row.providerRecordIds);
+      const recoveryComment = `wiolett-gateway:domain:${row.id}`;
+      const trackedAddressRecords = row.providerRecordIds.flatMap((id) => {
+        const record = recordsById.get(id);
+        return record && (record.type === 'A' || record.type === 'AAAA') ? [record] : [];
+      });
+      const recoveredAddressRecords = records.filter(
+        (record) =>
+          (record.type === 'A' || record.type === 'AAAA') &&
+          record.comment === recoveryComment &&
+          !trackedRecordIds.has(record.id)
+      );
+      const ownedAddressRecords = [...trackedAddressRecords, ...recoveredAddressRecords];
+      const untrackedConflicts = records.filter(
+        (record) =>
+          record.type === 'CNAME' ||
+          ((record.type === 'A' || record.type === 'AAAA') &&
+            !trackedRecordIds.has(record.id) &&
+            record.comment !== recoveryComment)
+      );
+      if (untrackedConflicts.length > 0) {
+        throw new AppError(
+          409,
+          'CLOUDFLARE_DNS_RECORD_CONFLICT',
+          'Untracked Cloudflare address records occupy the managed domain'
+        );
+      }
+      const desiredType = isIP(effectiveAddress) === 6 ? ('AAAA' as const) : ('A' as const);
+      if (ownedAddressRecords.length === 0) {
+        const created = await context.client.createDnsRecord(context.zone.remoteId, {
+          type: desiredType,
+          name: row.domain,
+          content: effectiveAddress,
+          ttl: row.dnsTtl ?? 1,
+          proxied: row.dnsProxied ?? false,
+          comment: recoveryComment,
+        });
+        await this.persistReconciledDomainTarget(row, effectiveAddress, desiredType, created.id);
+        return;
+      }
+
+      const primary = ownedAddressRecords[0]!;
+      const desiredTtl = row.dnsTtl ?? primary.ttl;
+      const desiredProxied = row.dnsProxied ?? primary.proxied ?? false;
+      const primaryMatches =
+        primary.type === desiredType &&
+        primary.name === row.domain &&
+        primary.content === effectiveAddress &&
+        primary.ttl === desiredTtl &&
+        (primary.proxied ?? false) === desiredProxied;
+      const trackedSetMatches = row.providerRecordIds.length === 1 && row.providerRecordIds[0] === primary.id;
+      if (!primaryMatches) {
+        await context.client.updateDnsRecord(context.zone.remoteId, primary.id, {
+          type: desiredType,
+          name: row.domain,
+          content: effectiveAddress,
+          ttl: desiredTtl,
+          proxied: desiredProxied,
+        });
+      }
+      for (const record of ownedAddressRecords.slice(1)) {
+        await context.client.deleteDnsRecord(context.zone.remoteId, record.id);
+      }
+      const snapshotMatches =
+        trackedSetMatches &&
+        row.dnsRecordType === desiredType &&
+        this.sameStringSet(row.dnsTargetIps, [effectiveAddress]) &&
+        row.dnsStatus === 'valid' &&
+        row.pendingDnsTargetIp !== effectiveAddress;
+      if (primaryMatches && snapshotMatches) return;
+      await this.persistReconciledDomainTarget(row, effectiveAddress, desiredType, primary.id);
+    } catch (error) {
+      await this.db
+        .update(domains)
+        .set({ dnsStatus: 'invalid', updatedAt: new Date() })
+        .where(this.reconciliationTargetCondition(row.id, effectiveAddress));
+      await this.auditService.log({
+        userId: null,
+        action: 'domain.dns_target.reconcile_failed',
+        resourceType: 'domain',
+        resourceId: row.id,
+        details: { nginxNodeId: row.nginxNodeId, targetIps: [effectiveAddress] },
+      });
+      logger.error('Failed to reconcile tracked Cloudflare domain target', {
+        domainId: row.id,
+        nginxNodeId: row.nginxNodeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async persistReconciledDomainTarget(
+    row: typeof domains.$inferSelect,
+    effectiveAddress: string,
+    desiredType: 'A' | 'AAAA',
+    providerRecordId: string
+  ) {
+    await this.db
+      .update(domains)
+      .set({
+        providerRecordIds: [providerRecordId],
+        dnsRecordType: desiredType,
+        dnsTargetIps: [effectiveAddress],
+        dnsRecords: this.dnsRecordsFromTargetIps([effectiveAddress]),
+        dnsStatus: 'valid',
+        pendingDnsTargetIp: null,
+        updatedAt: new Date(),
+      })
+      .where(this.reconciliationTargetCondition(row.id, effectiveAddress));
+    await this.auditService.log({
+      userId: null,
+      action: 'domain.dns_target.reconcile',
+      resourceType: 'domain',
+      resourceId: row.id,
+      details: { nginxNodeId: row.nginxNodeId, targetIps: [effectiveAddress], recordIds: [providerRecordId] },
+    });
+    this.emitDomain(row.id, 'updated', row.domain);
   }
 
   private async prepareCloudflareDomain(input: PreviewDomainInput): Promise<DomainCloudflarePlan> {
@@ -513,7 +915,8 @@ export class DomainsService {
       throw new AppError(409, 'CLOUDFLARE_DNS_NOT_CONFIGURED', 'Cloudflare DNS integration is not configured');
     }
     const domainName = input.domain.toLowerCase();
-    const targetIps = await this.getGatewayDnsTargetIps();
+    const nginxNode = await this.resolveRequestedNginxNode(input.nginxNodeId);
+    const targetIps = [nginxNode.effectiveAddress];
     const context = await this.integrationsService.resolveCloudflareDnsContext(domainName);
     const ttl = input.ttl ?? context.settings.defaultTtl;
     const proxied = input.proxied ?? context.settings.defaultProxied;
@@ -528,6 +931,7 @@ export class DomainsService {
     const desiredRecords = this.desiredCloudflareRecords(domainName, desiredIps, ttl, proxied);
     return {
       domainName,
+      nginxNode,
       targetIps,
       ttl,
       proxied,
@@ -545,8 +949,14 @@ export class DomainsService {
     row: typeof domains.$inferSelect,
     resolvedRecords: DnsRecords
   ): Promise<'valid' | 'invalid' | 'pending' | 'unknown'> {
+    if (row.dnsProvider === 'cloudflare' && row.nginxNodeId) {
+      const node = await this.getNginxNodeSummary(row.nginxNodeId);
+      if (!node?.effectiveAddress || !this.sameStringSet(row.dnsTargetIps, [node.effectiveAddress])) {
+        return 'invalid';
+      }
+    }
     if (row.dnsProvider !== 'cloudflare') return computeDnsStatus(resolvedRecords);
-    const expectedIps = row.dnsTargetIps.length > 0 ? row.dnsTargetIps : await this.getGatewayDnsTargetIps();
+    const expectedIps = row.dnsTargetIps;
     if (expectedIps.length === 0) return 'unknown';
 
     if (this.integrationsService && row.integrationConnectorId && row.providerZoneId) {
@@ -591,6 +1001,19 @@ export class DomainsService {
     if (left.length !== right.length) return false;
     const rightSet = new Set(right);
     return left.every((value) => rightSet.has(value));
+  }
+
+  private reconciliationTargetCondition(domainId: string, effectiveAddress: string) {
+    return and(
+      eq(domains.id, domainId),
+      or(
+        eq(domains.pendingDnsTargetIp, effectiveAddress),
+        and(
+          isNull(domains.pendingDnsTargetIp),
+          sql`${domains.dnsTargetIps} = ${JSON.stringify([effectiveAddress])}::jsonb`
+        )
+      )
+    );
   }
 
   private recordTypeLabel(ips: string[]): string {

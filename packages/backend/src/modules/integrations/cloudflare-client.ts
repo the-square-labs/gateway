@@ -42,6 +42,7 @@ export interface CloudflareDnsRecord {
   ttl: number;
   proxied?: boolean;
   proxiable?: boolean;
+  comment?: string | null;
 }
 
 export interface CloudflareDnsRecordInput {
@@ -144,7 +145,7 @@ export class CloudflareClient {
     input: CloudflareDnsRecordInput
   ): Promise<CloudflareDnsRecord> {
     return this.request<CloudflareDnsRecord>(`/zones/${zoneId}/dns_records/${recordId}`, {
-      method: 'PUT',
+      method: 'PATCH',
       body: input,
     });
   }

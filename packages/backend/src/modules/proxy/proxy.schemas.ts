@@ -6,7 +6,13 @@ import { z } from 'zod';
 
 const domainNameRegex = /^(\*\.)?([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
 
-const DomainNameSchema = z.string().min(1).max(253).regex(domainNameRegex, 'Invalid domain name format');
+const DomainNameSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(1)
+  .max(253)
+  .regex(domainNameRegex, 'Invalid domain name format');
 
 const CustomHeaderSchema = z.object({
   name: z.string().min(1).max(255),

@@ -1,4 +1,5 @@
 import {
+  ArrowRight,
   FolderPlus,
   Globe,
   MoreVertical,
@@ -9,6 +10,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -23,6 +25,13 @@ import { DomainDetailDialog } from "@/components/domains/DomainDetailDialog";
 import { getDomainPermissions } from "@/components/domains/domain-permissions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,13 +51,55 @@ import { formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
-import type { DnsStatus, Domain, DomainDnsConflictDetails } from "@/types";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
+import type { DnsStatus, Domain, DomainDnsConflictDetails, DomainNginxNodeOptions } from "@/types";
 
 const DOMAIN_FOLDER_LIST_CACHE_KEY = "domains:list:folder-view";
+
+type DomainCreationBlocker = "no_nodes" | "no_public_address" | "cloudflare";
+
+const DOMAIN_CREATION_BLOCKER_COPY: Record<
+  DomainCreationBlocker,
+  { title: string; description: string; actionLabel: string; href: string }
+> = {
+  no_nodes: {
+    title: "No Nginx nodes",
+    description:
+      "A domain must be assigned to an Nginx node that accepts incoming traffic. Add and connect an Nginx node first; Gateway will use its detected public service address as the DNS target. You can review or change that address in the node's Settings before returning here.",
+    actionLabel: "Open Nodes",
+    href: "/nodes",
+  },
+  no_public_address: {
+    title: "No public Nginx addresses",
+    description:
+      "Gateway found Nginx nodes, but none currently reports a public service address that can be used as the DNS target. Open a node's Settings and choose Automatic or one of the detected public addresses. Nodes that expose only private addresses cannot be assigned to a domain.",
+    actionLabel: "Open Nodes",
+    href: "/nodes",
+  },
+  cloudflare: {
+    title: "Cloudflare integration required",
+    description:
+      "Domains are managed through Cloudflare DNS. Add and enable a Cloudflare connector in Settings, then sync its zones. Return here after the integration is ready to create the domain.",
+    actionLabel: "Configure Cloudflare",
+    href: "/settings/integrations",
+  },
+};
+
+export function getDomainCreationBlocker(
+  options: DomainNginxNodeOptions,
+  cloudflareConfigured: boolean
+): DomainCreationBlocker | null {
+  if (options.totalNginxNodes === 0) return "no_nodes";
+  if (options.eligibleNodes.length === 0) return "no_public_address";
+  return cloudflareConfigured ? null : "cloudflare";
+}
 
 export function Domains() {
   const { hasScope } = useAuthStore();
   const { canCreateDomain, canDeleteDomain, canInspectCloudflare } = getDomainPermissions(hasScope);
+  const hasCloudflareIntegration = useUIBootstrapStore(
+    (state) => state.snapshot?.navigation.hasCloudflareIntegration ?? false
+  );
   const canCheckDns = hasScope("domains:edit");
   const canIssueCert = canCheckDns && hasScope("ssl:cert:issue");
 
@@ -61,8 +112,14 @@ export function Domains() {
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
 
   const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [creationBlocker, setCreationBlocker] = useState<DomainCreationBlocker | null>(null);
+  const [checkingNginxNodes, setCheckingNginxNodes] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const cloudflareConfigured = cloudflareReady ?? hasCloudflareIntegration;
+  const creationBlockerCopy = creationBlocker
+    ? DOMAIN_CREATION_BLOCKER_COPY[creationBlocker]
+    : null;
 
   const loadDomains = useCallback(async () => {
     try {
@@ -113,6 +170,24 @@ export function Domains() {
   useRealtime("integration.connector.changed", () => {
     loadDomains();
   });
+
+  const handleAddDomain = async () => {
+    if (checkingNginxNodes) return;
+    setCheckingNginxNodes(true);
+    try {
+      const options = await api.listDomainNginxNodes();
+      const blocker = getDomainCreationBlocker(options, cloudflareConfigured);
+      if (blocker) {
+        setCreationBlocker(blocker);
+        return;
+      }
+      setAddDialogOpen(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to load Nginx nodes");
+    } finally {
+      setCheckingNginxNodes(false);
+    }
+  };
 
   const handleCheckDns = async (d: Domain) => {
     try {
@@ -194,7 +269,6 @@ export function Domains() {
   };
 
   const hasActiveFilters = search.trim() !== "" || statusFilter !== "all";
-  const domainsAvailable = cloudflareReady !== false;
   const filteredDomains = useMemo(() => {
     const query = search.trim().toLowerCase();
     return domains.filter((domain) => {
@@ -343,12 +417,13 @@ export function Domains() {
                     },
                   ]
                 : []),
-              ...(canCreateDomain && domainsAvailable
+              ...(canCreateDomain
                 ? [
                     {
                       label: "Add Domain",
                       icon: <Plus className="h-4 w-4" />,
-                      onClick: () => setAddDialogOpen(true),
+                      onClick: () => void handleAddDomain(),
+                      disabled: checkingNginxNodes,
                     },
                   ]
                 : []),
@@ -360,8 +435,8 @@ export function Domains() {
                 Add Folder
               </Button>
             )}
-            {canCreateDomain && domainsAvailable && (
-              <Button onClick={() => setAddDialogOpen(true)}>
+            {canCreateDomain && (
+              <Button onClick={() => void handleAddDomain()} disabled={checkingNginxNodes}>
                 <Plus className="h-4 w-4" />
                 Add Domain
               </Button>
@@ -405,13 +480,9 @@ export function Domains() {
           loadingLabel="Loading domains..."
           emptyState={
             <EmptyState
-              message={
-                domainsAvailable ? "No domains." : "Cloudflare DNS integration is not configured."
-              }
-              actionLabel={canCreateDomain && domainsAvailable ? "Add one" : undefined}
-              onAction={
-                canCreateDomain && domainsAvailable ? () => setAddDialogOpen(true) : undefined
-              }
+              message="No domains."
+              actionLabel={canCreateDomain ? "Add one" : undefined}
+              onAction={canCreateDomain ? () => void handleAddDomain() : undefined}
               hasActiveFilters={hasActiveFilters}
               onReset={() => {
                 setSearch("");
@@ -433,6 +504,30 @@ export function Domains() {
           onOpenChange={setAddDialogOpen}
           onCreated={loadDomains}
         />
+        <Dialog
+          open={creationBlocker !== null}
+          onOpenChange={(open) => !open && setCreationBlocker(null)}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{creationBlockerCopy?.title}</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">{creationBlockerCopy?.description}</p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setCreationBlocker(null)}>
+                Close
+              </Button>
+              {(creationBlocker !== "cloudflare" || canInspectCloudflare) &&
+                creationBlockerCopy && (
+                  <Button asChild>
+                    <Link to={creationBlockerCopy.href} onClick={() => setCreationBlocker(null)}>
+                      {creationBlockerCopy.actionLabel} <ArrowRight className="h-4 w-4" />
+                    </Link>
+                  </Button>
+                )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         <DomainDetailDialog
           domainId={detailId}
           open={detailOpen}

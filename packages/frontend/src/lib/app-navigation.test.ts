@@ -84,12 +84,12 @@ describe("app navigation registry", () => {
     expect(groups.flatMap((group) => group.items.map((item) => item.id))).toContain("settings");
   });
 
-  it("hides Domains until an enabled Cloudflare integration is configured", () => {
+  it("shows Domains before a Cloudflare integration is configured", () => {
     const ids = visibleNavigationGroups(
       context({ scopes: ["domains:view"], hasCloudflareIntegration: false })
     ).flatMap((group) => group.items.map((item) => item.id));
 
-    expect(ids).not.toContain("domains");
+    expect(ids).toContain("domains");
   });
 
   it("hides feature-backed destinations while their features are disabled", () => {

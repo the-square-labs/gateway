@@ -74,11 +74,11 @@ export function SetupNetworkStep({
       >
         <PanelShell
           title="Gateway network"
-          description="Choose the addresses used for domains and node enrollment. Detected values can be replaced."
+          description="Choose the addresses used for Gateway certificates and node enrollment. Detected values can be replaced."
         >
           <SettingsControlRow
             title="Gateway public IP"
-            description="Public IPv4 or IPv6 address for Cloudflare DNS records."
+            description="Public IPv4 or IPv6 address advertised by the Gateway control plane."
           >
             <Combobox
               freeText

@@ -52,7 +52,13 @@ const DELIVERY_COLUMNS: ResourceListColumn<WebhookDelivery>[] = [
   { id: "when", label: "When", width: "180px" },
 ];
 
-export function DeliveryLogTab({ refreshToken }: { refreshToken: number }) {
+export function DeliveryLogTab({
+  refreshToken,
+  onConfigureWebhook,
+}: {
+  refreshToken: number;
+  onConfigureWebhook?: () => void;
+}) {
   const [deliveries, setDeliveries] = useState<WebhookDelivery[]>(
     () => api.getCached<WebhookDelivery[]>("notifications:deliveries:all") ?? []
   );
@@ -249,7 +255,11 @@ export function DeliveryLogTab({ refreshToken }: { refreshToken: number }) {
       {isLoading && deliveries.length === 0 ? (
         <DeliveryRowsSkeleton />
       ) : deliveries.length === 0 ? (
-        <EmptyState message="No deliveries yet. Delivery attempts will appear here when alerts fire." />
+        <EmptyState
+          message="No deliveries yet. Delivery attempts will appear here when alerts fire."
+          actionLabel={onConfigureWebhook ? "Configure a webhook" : undefined}
+          onAction={onConfigureWebhook}
+        />
       ) : (
         <ResourceListFrame minWidth={896} innerClassName="flex flex-col">
           <ResourceListHeaderTable columns={DELIVERY_COLUMNS} />

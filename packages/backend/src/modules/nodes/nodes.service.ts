@@ -1,13 +1,14 @@
 import { isIP } from 'node:net';
 import bcrypt from 'bcryptjs';
 import { asc, count, eq, ilike, inArray, or, type SQL } from 'drizzle-orm';
-import type { DrizzleClient } from '@/db/client.js';
-import { dockerDeployments, managedDatabaseInstances, nodes, proxyHosts } from '@/db/schema/index.js';
+import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
+import { dockerDeployments, domains, managedDatabaseInstances, nodes, proxyHosts } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { DaemonUpdateService } from '@/services/daemon-update.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -29,7 +30,11 @@ import {
   readNodeFile,
   writeNodeFile,
 } from './node-file-operations.js';
-import { getEffectiveNodeServiceAddress } from './node-service-address.js';
+import {
+  getEffectiveNginxIngressAddress,
+  getEffectiveServiceAddressForNode,
+  getReportedPublicNodeAddresses,
+} from './node-service-address.js';
 import type {
   CreateNodeInput,
   NodeListQuery,
@@ -47,6 +52,7 @@ function stripNodeHealthHistory<T extends { healthHistory?: unknown }>(node: T):
 export class NodesService {
   private daemonUpdateService?: DaemonUpdateService;
   private generalSettingsService?: GeneralSettingsService;
+  private proxyService?: ProxyService;
   private systemCertificateLifecycle?: SystemCertificateLifecycleService;
   private grpcPort = 9443;
 
@@ -68,6 +74,9 @@ export class NodesService {
   setGeneralSettingsService(service: GeneralSettingsService, grpcPort: number) {
     this.generalSettingsService = service;
     this.grpcPort = grpcPort;
+  }
+  setProxyService(service: ProxyService) {
+    this.proxyService = service;
   }
   setSystemCertificateLifecycleService(service: SystemCertificateLifecycleService) {
     this.systemCertificateLifecycle = service;
@@ -174,7 +183,8 @@ export class NodesService {
       const isConnected = !!this.registry.getNode(row.id);
       return {
         ...row,
-        effectiveServiceAddress: getEffectiveNodeServiceAddress(row),
+        publicServiceAddresses: row.type === 'nginx' ? getReportedPublicNodeAddresses(row) : undefined,
+        effectiveServiceAddress: getEffectiveServiceAddressForNode(row),
         status: row.status === 'online' && !isConnected ? 'offline' : row.status,
         isConnected,
       };
@@ -201,7 +211,13 @@ export class NodesService {
 
     return {
       ...stripNodeHealthHistory(node),
-      effectiveServiceAddress: getEffectiveNodeServiceAddress({
+      publicServiceAddresses:
+        node.type === 'nginx'
+          ? getReportedPublicNodeAddresses({
+              lastHealthReport: connectedNode?.lastHealthReport ?? node.lastHealthReport,
+            })
+          : undefined,
+      effectiveServiceAddress: getEffectiveServiceAddressForNode({
         ...node,
         lastHealthReport: connectedNode?.lastHealthReport ?? node.lastHealthReport,
       }),
@@ -224,7 +240,13 @@ export class NodesService {
 
     return {
       ...stripNodeHealthHistory(node),
-      effectiveServiceAddress: getEffectiveNodeServiceAddress({
+      publicServiceAddresses:
+        node.type === 'nginx'
+          ? getReportedPublicNodeAddresses({
+              lastHealthReport: connectedNode?.lastHealthReport ?? node.lastHealthReport,
+            })
+          : undefined,
+      effectiveServiceAddress: getEffectiveServiceAddressForNode({
         ...node,
         lastHealthReport: connectedNode?.lastHealthReport ?? node.lastHealthReport,
       }),
@@ -306,6 +328,55 @@ export class NodesService {
       throw new AppError(404, 'NOT_FOUND', 'Node not found');
     }
 
+    if (existing.type === 'nginx' && input.serviceAddress) {
+      const liveHealthReport = this.registry.getNode(id)?.lastHealthReport ?? existing.lastHealthReport;
+      const publicAddresses = getReportedPublicNodeAddresses({ lastHealthReport: liveHealthReport });
+      if (!publicAddresses.includes(input.serviceAddress.trim())) {
+        throw new AppError(
+          400,
+          'INVALID_NGINX_SERVICE_ADDRESS',
+          'Nginx service address must be one of the detected public IP addresses'
+        );
+      }
+    }
+
+    let shouldReconcileAssignedDomains = false;
+    let approvedDnsTarget: string | null | undefined;
+    if (existing.type === 'nginx' && input.serviceAddress !== undefined) {
+      const liveHealthReport = this.registry.getNode(id)?.lastHealthReport ?? existing.lastHealthReport;
+      const previousAddress = getEffectiveNginxIngressAddress({
+        serviceAddress: existing.serviceAddress,
+        lastHealthReport: liveHealthReport,
+      });
+      const nextAddress = getEffectiveNginxIngressAddress({
+        serviceAddress: input.serviceAddress,
+        lastHealthReport: liveHealthReport,
+      });
+      const affectedDomains = await this.db
+        .select({ id: domains.id, dnsTargetIps: domains.dnsTargetIps })
+        .from(domains)
+        .where(eq(domains.nginxNodeId, id));
+      const domainsWithChangedTarget = affectedDomains.filter(
+        (domain) => !nextAddress || domain.dnsTargetIps.length !== 1 || domain.dnsTargetIps[0] !== nextAddress
+      );
+      if (domainsWithChangedTarget.length > 0) {
+        if (!input.confirmDomainDnsUpdate) {
+          throw new AppError(
+            409,
+            'NODE_SERVICE_ADDRESS_DOMAINS_AFFECTED',
+            'Changing this address will update tracked DNS targets for assigned domains',
+            {
+              domainCount: domainsWithChangedTarget.length,
+              previousAddress,
+              nextAddress,
+            }
+          );
+        }
+        shouldReconcileAssignedDomains = true;
+        approvedDnsTarget = nextAddress;
+      }
+    }
+
     const updateData = {
       displayName: input.displayName === undefined ? existing.displayName : input.displayName,
       appearanceColor: input.appearanceColor === undefined ? existing.appearanceColor : input.appearanceColor,
@@ -313,12 +384,21 @@ export class NodesService {
       updatedAt: new Date(),
     };
     const updateNode = async (slug?: string) => {
-      const [updated] = await this.db
-        .update(nodes)
-        .set({ ...updateData, ...(slug === undefined ? {} : { slug }) })
-        .where(eq(nodes.id, id))
-        .returning();
-      return updated;
+      const write = async (db: DrizzleExecutor) => {
+        const [updated] = await db
+          .update(nodes)
+          .set({ ...updateData, ...(slug === undefined ? {} : { slug }) })
+          .where(eq(nodes.id, id))
+          .returning();
+        if (shouldReconcileAssignedDomains && approvedDnsTarget !== undefined) {
+          await db
+            .update(domains)
+            .set({ pendingDnsTargetIp: approvedDnsTarget, updatedAt: new Date() })
+            .where(eq(domains.nginxNodeId, id));
+        }
+        return updated;
+      };
+      return shouldReconcileAssignedDomains ? this.db.transaction(write) : write(this.db);
     };
     const displayNameChanged = input.displayName !== undefined && input.displayName !== existing.displayName;
     const updated = !displayNameChanged
@@ -347,11 +427,15 @@ export class NodesService {
     if (updated.slug !== existing.slug) {
       this.eventBus?.publish('node.slug.changed', { id, oldSlug: existing.slug, slug: updated.slug });
     }
-    if (input.serviceAddress !== undefined && input.serviceAddress !== existing.serviceAddress) {
+    if (
+      input.serviceAddress !== undefined &&
+      (input.serviceAddress !== existing.serviceAddress || shouldReconcileAssignedDomains)
+    ) {
       this.eventBus?.publish('node.service_address.changed', {
         id,
         serviceAddress: updated.serviceAddress,
-        effectiveServiceAddress: getEffectiveNodeServiceAddress(updated),
+        effectiveServiceAddress: getEffectiveServiceAddressForNode(updated),
+        reconcileAssignedDomains: shouldReconcileAssignedDomains,
       });
     }
 
@@ -392,7 +476,7 @@ export class NodesService {
     return this.get(id);
   }
 
-  async remove(id: string, userId: string) {
+  async remove(id: string, userId: string, options: { cascadeOfflineProxyHosts?: boolean } = {}) {
     if (this.daemonUpdateService && (await this.daemonUpdateService.isNodeUpdateInProgress(id))) {
       throw new AppError(409, 'NODE_UPDATING', 'Node daemon update is in progress');
     }
@@ -403,15 +487,33 @@ export class NodesService {
       throw new AppError(404, 'NOT_FOUND', 'Node not found');
     }
 
-    // Check if any proxy hosts are assigned to this node
-    const [hostCount] = await this.db.select({ count: count() }).from(proxyHosts).where(eq(proxyHosts.nodeId, id));
-
-    if (hostCount && hostCount.count > 0) {
-      throw new AppError(
-        400,
-        'NODE_HAS_HOSTS',
-        `Cannot delete node with ${hostCount.count} assigned proxy host(s). Reassign or delete them first.`
-      );
+    const assignedHosts = await this.db.select({ id: proxyHosts.id }).from(proxyHosts).where(eq(proxyHosts.nodeId, id));
+    const cascadeOfflineProxyHosts = options.cascadeOfflineProxyHosts === true;
+    if (assignedHosts.length > 0) {
+      if (!cascadeOfflineProxyHosts) {
+        const offlineNginxNode = node.type === 'nginx' && !this.registry.getNode(id);
+        throw new AppError(
+          offlineNginxNode ? 409 : 400,
+          offlineNginxNode ? 'OFFLINE_NGINX_NODE_HAS_HOSTS' : 'NODE_HAS_HOSTS',
+          offlineNginxNode
+            ? `Offline Nginx node has ${assignedHosts.length} assigned proxy host(s). Confirm cascade removal to continue.`
+            : `Cannot delete node with ${assignedHosts.length} assigned proxy host(s). Reassign or delete them first.`,
+          { proxyHostCount: assignedHosts.length }
+        );
+      }
+      if (node.type !== 'nginx') {
+        throw new AppError(
+          409,
+          'PROXY_HOST_CASCADE_NOT_ALLOWED',
+          'Proxy hosts can only be cascaded with an offline Nginx node'
+        );
+      }
+      if (this.registry.getNode(id)) {
+        throw new AppError(409, 'NODE_CONNECTED', 'Disconnect the Nginx node before cascading its proxy hosts');
+      }
+      if (!this.proxyService) {
+        throw new AppError(503, 'PROXY_SERVICE_UNAVAILABLE', 'Proxy host cleanup is unavailable');
+      }
     }
 
     const [upstreamCount] = await this.db
@@ -439,6 +541,23 @@ export class NodesService {
       );
     }
 
+    const assignedDomains = await this.db.select({ id: domains.id }).from(domains).where(eq(domains.nginxNodeId, id));
+    if (assignedDomains.length > 0) {
+      throw new AppError(409, 'NODE_HAS_DOMAINS', 'Cannot delete a node with assigned domains. Reassign them first.', {
+        domainCount: assignedDomains.length,
+      });
+    }
+
+    if (assignedHosts.length > 0) {
+      const proxyService = this.proxyService;
+      if (!proxyService) {
+        throw new AppError(503, 'PROXY_SERVICE_UNAVAILABLE', 'Proxy host cleanup is unavailable');
+      }
+      for (const host of assignedHosts) {
+        await proxyService.deleteProxyHost(host.id, userId, { abandonOfflineNode: true });
+      }
+    }
+
     // Close gRPC stream if connected
     const connectedNode = this.registry.getNode(id);
     if (connectedNode) {
@@ -461,7 +580,7 @@ export class NodesService {
       action: 'node.remove',
       resourceType: 'node',
       resourceId: id,
-      details: { hostname: node.hostname },
+      details: { hostname: node.hostname, cascadedProxyHostCount: cascadeOfflineProxyHosts ? assignedHosts.length : 0 },
     });
 
     logger.info('Node removed', { nodeId: id, hostname: node.hostname });

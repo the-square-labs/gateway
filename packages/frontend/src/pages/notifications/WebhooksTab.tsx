@@ -225,9 +225,6 @@ export function WebhooksTab({
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        Webhooks define where and how notifications are delivered.
-      </p>
       {isLoading && visibleWebhooks.length === 0 ? (
         <Skeleton />
       ) : visibleWebhooks.length > 0 ? (
@@ -242,7 +239,11 @@ export function WebhooksTab({
           />
         </div>
       ) : (
-        <EmptyState message="No webhooks configured. Create a webhook to configure notification delivery." />
+        <EmptyState
+          message="No webhooks configured."
+          actionLabel={canManage ? "Create a webhook" : undefined}
+          onAction={canManage ? openCreate : undefined}
+        />
       )}
       <WebhookDialog
         open={dialogOpen}

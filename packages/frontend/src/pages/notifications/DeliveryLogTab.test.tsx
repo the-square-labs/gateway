@@ -126,4 +126,20 @@ describe("DeliveryLogTab", () => {
     expect(footer).toHaveClass("h-8", "w-full", "justify-center");
     expect(footer).not.toHaveClass("min-h-12");
   });
+
+  it("offers a webhook CTA in the shared empty state", async () => {
+    const onConfigureWebhook = vi.fn();
+    vi.spyOn(api, "listDeliveries").mockResolvedValue({
+      data: [],
+      total: 0,
+      page: 1,
+      limit: 100,
+      totalPages: 1,
+    });
+
+    renderWithRouter(<DeliveryLogTab refreshToken={0} onConfigureWebhook={onConfigureWebhook} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Configure a webhook" }));
+    expect(onConfigureWebhook).toHaveBeenCalledOnce();
+  });
 });

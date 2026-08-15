@@ -2,7 +2,6 @@ import { FolderPlus, Plus, Server, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { confirm } from "@/components/common/ConfirmDialog";
 import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
 import { CopyValueField } from "@/components/common/CopyValueField";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -32,6 +31,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 import { nodeIconClassNames } from "@/lib/node-appearance";
+import { confirmAndDeleteNode } from "@/lib/remove-node";
 import { nodeRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -182,14 +182,8 @@ export function AdminNodes() {
 
   const handleDelete = useCallback(
     async (nodeId: string, hostname: string) => {
-      const ok = await confirm({
-        title: "Remove Node",
-        description: `Are you sure you want to remove "${hostname}"? This cannot be undone.`,
-        confirmLabel: "Remove",
-      });
-      if (!ok) return;
       try {
-        await api.deleteNode(nodeId);
+        if (!(await confirmAndDeleteNode(nodeId, hostname))) return;
         usePinnedNodesStore.getState().removePin(nodeId);
         toast.success("Node removed");
         fetchNodes();

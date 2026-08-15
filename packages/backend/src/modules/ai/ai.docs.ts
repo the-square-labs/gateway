@@ -167,28 +167,30 @@ When rawConfigEnabled is true, the template rendering is bypassed and rawConfig 
 Domains are Cloudflare-backed DNS records used across Gateway.
 
 ## Purpose
-- Create and track Cloudflare A/AAAA records that point to configured Gateway public IPs
+- Create and track Cloudflare A/AAAA records that point to an assigned Nginx node public address
 - Adopt existing matching Cloudflare A/AAAA records without changing their target
 - Detect target mismatches before creating proxy hosts
 - Required for ACME HTTP-01 challenges (domain must resolve to Gateway)
 
 ## Lifecycle
-1. Register a domain: create_domain({ domain: "example.com" })
-2. Gateway autodetects the matching Cloudflare zone and desired A/AAAA target IPs
+1. Register a domain: create_domain({ domain: "example.com", nginxNodeId: "..." })
+2. Gateway resolves the selected Nginx node public address and matching Cloudflare zone
 3. If Cloudflare has no conflicting address records, Gateway creates DNS and stores the domain as valid
 4. If Cloudflare already has matching A/AAAA records, Gateway adopts them as matched_existing
 5. If Cloudflare has different A/AAAA records, create_domain returns conflict metadata; retry with overwriteDns only after explicit user approval
 6. Use manage_domain({ operation: "check_dns", domainId }) to manually re-check resolved DNS
 
 ## DNS Records Tracked
-- **A**: IPv4 address, created from Gateway Public IP(s)
-- **AAAA**: IPv6 address, created from Gateway Public IP(s)
+- **A**: assigned Nginx node public IPv4 address
+- **AAAA**: assigned Nginx node public IPv6 address
 - Other record types are not created or overwritten by Gateway domain tools in v1
 
 ## Rules
 - Domains used by proxy hosts cannot be deleted (remove from proxy first)
 - isSystem domains (management domains) cannot be deleted
 - Wildcard domains (*.example.com) can be registered
+- nginxNodeId is optional only when exactly one Nginx node has a detected public address
+- Registered domains and their proxy hosts must use the same Nginx node
 - create_domain requires domains:create, and delete_domain requires domains:delete. Those domain permissions include the managed DNS records for the domain
 - For matched_existing domains, pass deleteDns=false to keep DNS and remove only the Gateway mapping, or deleteDns=true to remove the adopted Cloudflare records`,
 

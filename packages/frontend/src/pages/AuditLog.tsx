@@ -1,4 +1,4 @@
-import { Download, EllipsisVertical, Settings } from "lucide-react";
+import { Download, Settings } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
@@ -16,14 +16,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -749,33 +741,12 @@ export function AuditLog({
         <Settings className="h-4 w-4" />
         Configure
       </Button>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="icon" aria-label="Audit log actions">
-            <EllipsisVertical className="h-4 w-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuLabel>Download</DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={() => openExportDialog("csv")}>
-            <Download className="h-4 w-4" />
-            CSV
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => openExportDialog("tsv")}>
-            <Download className="h-4 w-4" />
-            TSV
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => openExportDialog("txt")}>
-            <Download className="h-4 w-4" />
-            TXT
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => openExportDialog("html")}>
-            <Download className="h-4 w-4" />
-            HTML
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {(["csv", "tsv", "txt", "html"] as const).map((format) => (
+        <Button key={format} variant="outline" onClick={() => openExportDialog(format)}>
+          <Download className="h-4 w-4" />
+          {format.toUpperCase()}
+        </Button>
+      ))}
     </ResponsiveHeaderActions>
   );
 

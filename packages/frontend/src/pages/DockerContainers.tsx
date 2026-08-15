@@ -1,7 +1,16 @@
 import { type DragEndEvent, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
-import { Box, GitBranch, MoreVertical, Play, Plus, RefreshCw, Square } from "lucide-react";
+import {
+  ArrowRight,
+  Box,
+  GitBranch,
+  MoreVertical,
+  Play,
+  Plus,
+  RefreshCw,
+  Square,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -9,9 +18,17 @@ import { FolderCreateDialog } from "@/components/common/FolderCreateDialog";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResourceListForm } from "@/components/common/ResourceListForm";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
+import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { DockerMoveToFolderDialog } from "@/components/docker/DockerMoveToFolderDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -162,6 +179,8 @@ export function DockerContainers({
   const [nodesLoading, setNodesLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [deployOpen, setDeployOpen] = useState(false);
+  const [dockerNodeRequiredOpen, setDockerNodeRequiredOpen] = useState(false);
+  const [checkingDeployNodes, setCheckingDeployNodes] = useState(false);
   const [createFolderParentId, setCreateFolderParentId] = useState<string | null>(null);
   const [createFolderOpen, setCreateFolderOpen] = useState(false);
   const [moveDialogContainer, setMoveDialogContainer] = useState<DockerContainerListItem | null>(
@@ -178,10 +197,30 @@ export function DockerContainers({
     })
   );
 
-  const openDeploy = useCallback(() => setDeployOpen(true), []);
+  const openDeploy = useCallback(async () => {
+    if (checkingDeployNodes) return;
+    if (fixedNodeId) {
+      setDeployOpen(true);
+      return;
+    }
+
+    setCheckingDeployNodes(true);
+    try {
+      const response = await api.listNodes({ type: "docker", limit: 1 });
+      if ((response.data ?? []).length === 0) {
+        setDockerNodeRequiredOpen(true);
+        return;
+      }
+      setDeployOpen(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to check Docker nodes");
+    } finally {
+      setCheckingDeployNodes(false);
+    }
+  }, [checkingDeployNodes, fixedNodeId]);
 
   useEffect(() => {
-    onDeployRef?.(openDeploy);
+    onDeployRef?.(() => void openDeploy());
   }, [onDeployRef, openDeploy]);
 
   useEffect(() => {
@@ -825,8 +864,8 @@ export function DockerContainers({
   const content = (
     <>
       {!embedded && (
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-bold">Docker Containers</h1>
               {!isLoading && visibleNodeId && (
@@ -839,7 +878,42 @@ export function DockerContainers({
               Manage containers across your Docker nodes
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <ResponsiveHeaderActions
+            actions={[
+              ...(visibleNodeId
+                ? [
+                    {
+                      label: "Refresh",
+                      icon: <RefreshCw className="h-4 w-4" />,
+                      onClick: () => void requestSnapshotRefresh("containers", visibleNodeId),
+                      disabled: isLoading || foldersLoading,
+                    },
+                  ]
+                : []),
+              ...(canManageFolders
+                ? [
+                    {
+                      label: "New Folder",
+                      icon: <Plus className="h-4 w-4" />,
+                      onClick: () => {
+                        setCreateFolderParentId(null);
+                        setCreateFolderOpen(true);
+                      },
+                    },
+                  ]
+                : []),
+              ...(hasScope("docker:containers:create") && visibleNodeId
+                ? [
+                    {
+                      label: "Deploy Container",
+                      icon: <Plus className="h-4 w-4" />,
+                      onClick: () => void openDeploy(),
+                      disabled: checkingDeployNodes,
+                    },
+                  ]
+                : []),
+            ]}
+          >
             {visibleNodeId && (
               <RefreshButton
                 onClick={() => void requestSnapshotRefresh("containers", visibleNodeId)}
@@ -859,12 +933,12 @@ export function DockerContainers({
               </Button>
             )}
             {hasScope("docker:containers:create") && visibleNodeId && (
-              <Button onClick={openDeploy}>
+              <Button onClick={() => void openDeploy()} disabled={checkingDeployNodes}>
                 <Plus className="h-4 w-4 mr-1" />
                 Deploy Container
               </Button>
             )}
-          </div>
+          </ResponsiveHeaderActions>
         </div>
       )}
 
@@ -954,7 +1028,7 @@ export function DockerContainers({
                 if (!fixedNodeId) setSelectedNode(null);
               }}
               actionLabel={hasScope("docker:containers:create") ? "Deploy a container" : undefined}
-              onAction={hasScope("docker:containers:create") ? () => openDeploy() : undefined}
+              onAction={hasScope("docker:containers:create") ? () => void openDeploy() : undefined}
             />
           ) : null
         }
@@ -1060,6 +1134,30 @@ export function DockerContainers({
         dockerNodes={dockerNodes}
         onDeployed={() => void refreshData(true)}
       />
+      <Dialog
+        open={dockerNodeRequiredOpen}
+        onOpenChange={(open) => !open && setDockerNodeRequiredOpen(false)}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>No Docker nodes</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Containers must be deployed to a Docker node. Add and connect a Docker node first, then
+            return here to deploy the container.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDockerNodeRequiredOpen(false)}>
+              Close
+            </Button>
+            <Button asChild>
+              <Link to="/nodes" onClick={() => setDockerNodeRequiredOpen(false)}>
+                Open Nodes <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 

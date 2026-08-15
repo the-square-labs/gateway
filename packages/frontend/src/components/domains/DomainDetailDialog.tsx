@@ -2,7 +2,9 @@ import { ExternalLink, Lock, RefreshCw, Shield } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
+import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { SimpleTable } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,42 +34,41 @@ interface DomainDetailDialogProps {
   onUpdated: () => void;
 }
 
-function RecordRow({ label, values }: { label: string; values: string[] }) {
-  if (values.length === 0) return null;
-  return (
-    <tr>
-      <td className="py-1 pr-3 text-muted-foreground align-top whitespace-nowrap">{label}</td>
-      <td className="py-1 font-mono break-all">{values.join(", ")}</td>
-    </tr>
-  );
+function dnsRows(records: DnsRecords) {
+  return [
+    { type: "A", values: records.a },
+    { type: "AAAA", values: records.aaaa },
+    { type: "CNAME", values: records.cname },
+    {
+      type: "CAA",
+      values: records.caa.map((record) => {
+        const tag = record.issue ? "issue" : "issuewild";
+        return `${record.critical} ${tag} ${record.issue ?? record.issuewild ?? ""}`.trim();
+      }),
+    },
+    { type: "MX", values: records.mx.map((record) => `${record.priority} ${record.exchange}`) },
+    { type: "TXT", values: records.txt.map((record) => record.join("")) },
+  ].filter((row) => row.values.length > 0);
 }
 
-function DnsRecordsTable({ records }: { records: DnsRecords }) {
-  const hasAny =
-    records.a.length > 0 ||
-    records.aaaa.length > 0 ||
-    records.cname.length > 0 ||
-    records.caa.length > 0 ||
-    records.mx.length > 0 ||
-    records.txt.length > 0;
+type UsageRow =
+  | { key: string; type: "Proxy Host"; value: DomainWithUsage["usage"]["proxyHosts"][number] }
+  | {
+      key: string;
+      type: "SSL Certificate";
+      value: DomainWithUsage["usage"]["sslCertificates"][number];
+    };
 
-  if (!hasAny) return <p className="text-xs text-muted-foreground">No DNS records found</p>;
-
-  return (
-    <table className="w-full text-xs">
-      <tbody>
-        <RecordRow label="A" values={records.a} />
-        <RecordRow label="AAAA" values={records.aaaa} />
-        <RecordRow label="CNAME" values={records.cname} />
-        <RecordRow
-          label="CAA"
-          values={records.caa.map((r) => r.issue || r.issuewild || "").filter(Boolean)}
-        />
-        <RecordRow label="MX" values={records.mx.map((r) => `${r.priority} ${r.exchange}`)} />
-        <RecordRow label="TXT" values={records.txt.map((r) => r.join("")).slice(0, 3)} />
-      </tbody>
-    </table>
-  );
+function cloudflareTargetDescription(domain: DomainWithUsage): string | undefined {
+  const effectiveAddress = domain.nginxNode?.effectiveAddress;
+  if (domain.nginxNode && !effectiveAddress) return "Assigned node has no available public address";
+  if (
+    effectiveAddress &&
+    (domain.dnsTargetIps.length !== 1 || domain.dnsTargetIps[0] !== effectiveAddress)
+  ) {
+    return `Node public address is ${effectiveAddress}; the tracked origin needs reconciliation`;
+  }
+  return undefined;
 }
 
 export function DomainDetailDialog({
@@ -242,83 +243,120 @@ export function DomainDetailDialog({
               </div>
             )}
 
-            {/* DNS */}
-            <div className="border border-border bg-card">
-              <div className="flex items-center justify-between p-3 border-b border-border">
+            <PanelShell
+              title={
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">DNS</span>
+                  <span>DNS</span>
                   <DnsStatusBadge status={domain.dnsStatus} />
                 </div>
+              }
+              actions={
                 <Button size="sm" variant="ghost" onClick={handleCheckDns} disabled={isCheckingDns}>
                   <RefreshCw className={`h-3.5 w-3.5 ${isCheckingDns ? "animate-spin" : ""}`} />
                   {isCheckingDns ? "Checking..." : "Check"}
                 </Button>
-              </div>
-              <div className="p-3">
-                {domain.dnsRecords ? (
-                  <DnsRecordsTable records={domain.dnsRecords} />
-                ) : (
-                  <p className="text-xs text-muted-foreground">Run a DNS check to see records</p>
-                )}
-              </div>
-            </div>
+              }
+            >
+              {domain.dnsRecords && dnsRows(domain.dnsRecords).length > 0 ? (
+                dnsRows(domain.dnsRecords).map((row) => (
+                  <SettingsControlRow
+                    key={row.type}
+                    title={row.type}
+                    className="sm:grid-cols-[minmax(5rem,8rem)_minmax(0,1fr)]"
+                    controlsClassName="min-w-0 sm:w-full sm:max-w-none"
+                  >
+                    <span className="min-w-0 max-w-full break-all text-right font-mono text-xs">
+                      {row.values.join(", ")}
+                    </span>
+                  </SettingsControlRow>
+                ))
+              ) : (
+                <p className="px-4 py-3 text-xs text-muted-foreground">
+                  {domain.dnsRecords ? "No DNS records found" : "Run a DNS check to see records"}
+                </p>
+              )}
+            </PanelShell>
 
-            {/* Usage */}
-            <div className="border border-border bg-card">
-              <div className="p-3 border-b border-border">
-                <span className="text-sm font-medium">Usage</span>
-              </div>
-              <div className="p-3 space-y-3">
-                {domain.usage.proxyHosts.length > 0 && (
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                      Proxy Hosts
-                    </p>
-                    {domain.usage.proxyHosts.map((ph) => (
-                      <Link
-                        key={ph.id}
-                        to={proxyHostRoute(ph.slug)}
-                        onClick={() => handleClose(false)}
-                        className="flex items-center gap-2 py-1 text-sm hover:underline"
-                      >
-                        <ExternalLink className="h-3 w-3 text-muted-foreground shrink-0" />
-                        <span className="truncate">{ph.domainNames[0]}</span>
-                        {!ph.enabled && (
-                          <Badge variant="secondary" size="inline">
-                            Off
-                          </Badge>
-                        )}
-                      </Link>
-                    ))}
-                  </div>
-                )}
-                {domain.usage.sslCertificates.length > 0 && (
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                      SSL Certificates
-                    </p>
-                    {domain.usage.sslCertificates.map((cert) => (
-                      <div key={cert.id} className="flex items-center gap-2 py-1 text-sm">
-                        <Lock className="h-3 w-3 text-muted-foreground shrink-0" />
-                        <span className="truncate">{cert.domainNames[0]}</span>
-                        <Badge
-                          variant={cert.status === "active" ? "success" : "secondary"}
-                          size="inline"
+            {domain.dnsProvider === "cloudflare" && domain.dnsProxied && (
+              <PanelShell title="Cloudflare Target">
+                <SettingsControlRow title="Node">
+                  <span className="min-w-0 truncate text-right text-sm">
+                    {domain.nginxNode
+                      ? domain.nginxNode.displayName || domain.nginxNode.hostname
+                      : "Not assigned"}
+                  </span>
+                </SettingsControlRow>
+                <SettingsControlRow
+                  title="IP address"
+                  description={cloudflareTargetDescription(domain)}
+                  controlsClassName="min-w-0 sm:w-full sm:max-w-none"
+                >
+                  <span className="min-w-0 max-w-full break-all text-right font-mono text-xs">
+                    {domain.dnsTargetIps.length > 0
+                      ? domain.dnsTargetIps.join(", ")
+                      : "Not assigned"}
+                  </span>
+                </SettingsControlRow>
+              </PanelShell>
+            )}
+
+            <PanelShell title="Usage" bodyClassName="min-w-0">
+              <SimpleTable<UsageRow>
+                rows={[
+                  ...domain.usage.proxyHosts.map(
+                    (value): UsageRow => ({ key: `proxy-${value.id}`, type: "Proxy Host", value })
+                  ),
+                  ...domain.usage.sslCertificates.map(
+                    (value): UsageRow => ({
+                      key: `certificate-${value.id}`,
+                      type: "SSL Certificate",
+                      value,
+                    })
+                  ),
+                ]}
+                columns={[
+                  {
+                    id: "type",
+                    header: "Type",
+                    cellClassName: "whitespace-nowrap text-muted-foreground",
+                    render: (row) => row.type,
+                  },
+                  {
+                    id: "target",
+                    header: "Target",
+                    render: (row) =>
+                      row.type === "Proxy Host" ? (
+                        <Link
+                          to={proxyHostRoute(row.value.slug)}
+                          onClick={() => handleClose(false)}
+                          className="flex min-w-0 items-center gap-2 hover:underline"
                         >
-                          {cert.status}
-                        </Badge>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {domain.usage.proxyHosts.length === 0 &&
-                  domain.usage.sslCertificates.length === 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      Not used by any proxy hosts or certificates
-                    </p>
-                  )}
-              </div>
-            </div>
+                          <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
+                          <span className="truncate">{row.value.domainNames[0]}</span>
+                          {!row.value.enabled && (
+                            <Badge variant="secondary" size="inline">
+                              Off
+                            </Badge>
+                          )}
+                        </Link>
+                      ) : (
+                        <div className="flex min-w-0 items-center gap-2">
+                          <Lock className="h-3 w-3 shrink-0 text-muted-foreground" />
+                          <span className="truncate">{row.value.domainNames[0]}</span>
+                          <Badge
+                            variant={row.value.status === "active" ? "success" : "secondary"}
+                            size="inline"
+                          >
+                            {row.value.status}
+                          </Badge>
+                        </div>
+                      ),
+                  },
+                ]}
+                getRowKey={(row) => row.key}
+                emptyMessage="Not used by any proxy hosts or certificates"
+              />
+            </PanelShell>
           </div>
         ) : null}
         {domain && (

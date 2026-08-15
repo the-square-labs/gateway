@@ -1,0 +1,25 @@
+{
+  "file_name": "a7elxcv1_nginx_proxy_lifecycle",
+  "edges": [
+    {
+      "from_id": "a7elxcv1",
+      "to_id": "3ta908aa",
+      "relation": "same_workflow",
+      "weight": 0.86,
+      "reason": "Both define Secure Link relay topology, lifecycle synchronization, and deferred reconciliation behavior.",
+      "source": "auto",
+      "created_at": 1786747616201,
+      "updated_at": 1786747616201
+    },
+    {
+      "from_id": "a7elxcv1",
+      "to_id": "8c9f2oec",
+      "relation": "same_area",
+      "weight": 0.64,
+      "reason": "Both govern Nginx proxy-host and Domain relationships relevant to deletion preflight and node affinity.",
+      "source": "auto",
+      "created_at": 1786747616201,
+      "updated_at": 1786747616201
+    }
+  ]
+}

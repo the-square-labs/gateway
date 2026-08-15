@@ -9,7 +9,7 @@ import {
   useNavigate,
   useParams,
 } from "react-router-dom";
-import { AppStatusGate } from "@/components/common/AppStatusGate";
+import { AppStatusGate, clearMaintenanceAutoReloadGuard } from "@/components/common/AppStatusGate";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 import { RequireScope } from "@/components/common/RequireScope";
@@ -75,7 +75,7 @@ import { ApiRequestError } from "@/services/api-base";
 import type { BackgroundPrewarmTask } from "@/services/background-prewarm";
 import { eventStream } from "@/services/event-stream";
 import { useAIStore } from "@/stores/ai";
-import { APP_STATUS_STORAGE_KEY, useAppStatusStore } from "@/stores/app-status";
+import { useAppStatusStore } from "@/stores/app-status";
 import { useAuthStore } from "@/stores/auth";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useDockerStore } from "@/stores/docker";
@@ -1105,13 +1105,17 @@ export default function App() {
   const user = useAuthStore((s) => s.user);
   const maintenanceActive = useAppStatusStore((s) => s.maintenanceActive);
   const setMaintenanceActive = useAppStatusStore((s) => s.setMaintenanceActive);
-  const setGatewayUpdatingActive = useAppStatusStore((s) => s.setGatewayUpdatingActive);
   const setGatewayRestartingActive = useAppStatusStore((s) => s.setGatewayRestartingActive);
-  const clearGatewayUpdating = useAppStatusStore((s) => s.clearGatewayUpdating);
   const clearGatewayRestarting = useAppStatusStore((s) => s.clearGatewayRestarting);
   const authRouteKey = user
     ? `${user.id}:${[...user.scopes].sort().join(",")}:${user.isBlocked ? "blocked" : "active"}`
     : "anonymous";
+
+  useEffect(() => {
+    if (maintenanceActive) return;
+    const timer = window.setTimeout(clearMaintenanceAutoReloadGuard, 60_000);
+    return () => window.clearTimeout(timer);
+  }, [maintenanceActive]);
 
   useEffect(() => {
     localStorage.removeItem("gateway-auth");
@@ -1121,7 +1125,10 @@ export default function App() {
     const checkHealth = async () => {
       try {
         const [response, setupResponse] = await Promise.all([
-          fetch("/health", { cache: "no-store" }),
+          fetch("/health", {
+            cache: "no-store",
+            headers: { "X-Gateway-Health-Probe": "startup" },
+          }),
           fetch("/api/setup/status", { cache: "no-store", credentials: "include" }),
         ]);
         const setup = setupResponse.ok
@@ -1157,43 +1164,12 @@ export default function App() {
 
   useEffect(() => {
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === UI_STORAGE_KEY) {
-        syncAILiteModeFromStorageValue(event.newValue);
-        return;
-      }
-
-      if (event.key !== APP_STATUS_STORAGE_KEY || event.newValue == null) return;
-
-      try {
-        const parsed = JSON.parse(event.newValue) as {
-          state?: {
-            gatewayUpdatingActive?: boolean;
-            gatewayUpdatingTargetVersion?: string | null;
-            gatewayRestartingActive?: boolean;
-            gatewayRestartTargetUrl?: string | null;
-          };
-        };
-        if (parsed.state?.gatewayUpdatingActive) {
-          setGatewayUpdatingActive(true, parsed.state.gatewayUpdatingTargetVersion ?? null);
-        } else if (parsed.state?.gatewayRestartingActive) {
-          setGatewayRestartingActive(true, parsed.state.gatewayRestartTargetUrl ?? null);
-        } else {
-          clearGatewayUpdating();
-          clearGatewayRestarting();
-        }
-      } catch {
-        // Ignore malformed storage updates.
-      }
+      if (event.key === UI_STORAGE_KEY) syncAILiteModeFromStorageValue(event.newValue);
     };
 
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
-  }, [
-    clearGatewayRestarting,
-    clearGatewayUpdating,
-    setGatewayRestartingActive,
-    setGatewayUpdatingActive,
-  ]);
+  }, []);
 
   if (!startupChecked) {
     return (

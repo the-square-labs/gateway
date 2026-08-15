@@ -794,6 +794,7 @@ export async function initializeContainer(): Promise<void> {
   );
   proxyService.setEventBus(eventBus);
   container.registerInstance(ProxyService, proxyService);
+  nodesService.setProxyService(proxyService);
 
   const dockerMigrationDispatch = new DockerMigrationDispatchAdapter(nodeDispatch);
   container.registerInstance(DockerMigrationDispatchAdapter, dockerMigrationDispatch);
@@ -960,8 +961,9 @@ export async function initializeContainer(): Promise<void> {
   const domainsService = new DomainsService(db, auditService);
   domainsService.setEventBus(eventBus);
   domainsService.setIntegrationsService(integrationsService);
-  domainsService.setGeneralSettingsService(generalSettingsService);
+  domainsService.setNodeRegistryService(nodeRegistry);
   container.registerInstance(DomainsService, domainsService);
+  domainsService.startIngressTargetReconciliation();
   const domainFolderService = new DomainFolderService(db, auditService);
   domainFolderService.setEventBus(eventBus);
   container.registerInstance(DomainFolderService, domainFolderService);

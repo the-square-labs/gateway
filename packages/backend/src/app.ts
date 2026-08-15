@@ -988,10 +988,29 @@ export function createApp(): GatewayAppRuntime {
   const publicDir = resolve(process.cwd(), 'public');
   if (existsSync(publicDir)) {
     // Serve static assets (JS, CSS, images, etc.)
-    app.use('/*', serveStatic({ root: './public' }));
+    app.use(
+      '/*',
+      serveStatic({
+        root: './public',
+        onFound: (_path, c) => {
+          const requestPath = new URL(c.req.url).pathname;
+          if (requestPath === '/' || requestPath.endsWith('.html')) {
+            c.header('Cache-Control', 'no-store');
+          } else if (requestPath.startsWith('/assets/')) {
+            c.header('Cache-Control', 'public, max-age=31536000, immutable');
+          }
+        },
+      })
+    );
 
     // SPA fallback — serve index.html for any non-API route
-    app.get('/*', serveStatic({ path: './public/index.html' }));
+    app.get(
+      '/*',
+      serveStatic({
+        path: './public/index.html',
+        onFound: (_path, c) => c.header('Cache-Control', 'no-store'),
+      })
+    );
   }
 
   return { app, injectWebSocket, wss };

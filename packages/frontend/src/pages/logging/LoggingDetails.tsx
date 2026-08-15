@@ -1,21 +1,18 @@
-import { EllipsisVertical, KeyRound, Plus, Save, ScrollText, Settings, Trash2 } from "lucide-react";
+import { KeyRound, Plus, Save, ScrollText, Settings, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { CommandPalettePageActions } from "@/components/common/CommandPalettePageActions";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
+import {
+  type ResponsiveHeaderAction,
+  ResponsiveHeaderActions,
+} from "@/components/common/ResponsiveHeaderActions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import {
@@ -86,37 +83,37 @@ export function LoggingSchemaDetail({
     }
   };
   const dirty = isLoggingSchemaDirty(schema, draft);
+  const headerActions: ResponsiveHeaderAction[] = [
+    ...(canEdit
+      ? [
+          {
+            id: "logging-schema:save",
+            label: saving ? "Saving schema" : "Save schema changes",
+            icon: <Save className="h-4 w-4" />,
+            disabled: saving || !dirty,
+            onClick: () => void save(),
+          },
+        ]
+      : []),
+    ...(canDelete
+      ? [
+          {
+            id: "logging-schema:delete",
+            label: "Delete logging schema",
+            icon: <Trash2 className="h-4 w-4" />,
+            onClick: () => void onDelete(schema),
+            destructive: true,
+            separatorBefore: canEdit,
+          },
+        ]
+      : []),
+  ];
 
   return (
     <PageTransition>
       <div className="h-full overflow-y-auto p-6 space-y-4">
-        <CommandPalettePageActions
-          actions={[
-            ...(canEdit
-              ? [
-                  {
-                    id: "logging-schema:save",
-                    label: saving ? "Saving schema" : "Save schema changes",
-                    icon: <Save className="h-4 w-4" />,
-                    disabled: saving || !dirty,
-                    action: () => void save(),
-                  },
-                ]
-              : []),
-            ...(canDelete
-              ? [
-                  {
-                    id: "logging-schema:delete",
-                    label: "Delete logging schema",
-                    icon: <Trash2 className="h-4 w-4" />,
-                    action: () => void onDelete(schema),
-                  },
-                ]
-              : []),
-          ]}
-        />
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
             <PageBackButton onClick={() => navigate("/logging/schemas")} />
             <div className="min-w-0">
               <div className="flex items-center gap-2">
@@ -133,7 +130,7 @@ export function LoggingSchemaDetail({
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <ResponsiveHeaderActions actions={headerActions}>
             {canEdit && (
               <Button disabled={saving || !dirty} onClick={() => void save()}>
                 <Save className="h-4 w-4" />
@@ -141,24 +138,12 @@ export function LoggingSchemaDetail({
               </Button>
             )}
             {canDelete && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="icon">
-                    <EllipsisVertical className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem
-                    onClick={() => void onDelete(schema)}
-                    className="text-destructive"
-                  >
-                    <Trash2 className="h-3.5 w-3.5 mr-2" />
-                    Delete
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <Button variant="destructive" onClick={() => void onDelete(schema)}>
+                <Trash2 className="h-4 w-4" />
+                Delete
+              </Button>
             )}
-          </div>
+          </ResponsiveHeaderActions>
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -278,6 +263,52 @@ export function LoggingEnvironmentDetail({
       setSettingsSaving(false);
     }
   };
+  const headerActions: ResponsiveHeaderAction[] = [
+    ...(activeTab === "logs"
+      ? [
+          {
+            id: "logging-environment:refresh",
+            label: "Refresh logs",
+            icon: <ScrollText className="h-4 w-4" />,
+            disabled: !loggingEnabled,
+            onClick: () => setLogsRefreshKey((current) => current + 1),
+          },
+        ]
+      : []),
+    ...(activeTab === "tokens" && canCreateToken
+      ? [
+          {
+            id: "logging-environment:new-token",
+            label: "Create ingest token",
+            icon: <Plus className="h-4 w-4" />,
+            onClick: () => setTokenDialogOpen(true),
+          },
+        ]
+      : []),
+    ...(activeTab === "settings" && canEdit
+      ? [
+          {
+            id: "logging-environment:save",
+            label: settingsSaving ? "Saving environment" : "Save environment settings",
+            icon: <Save className="h-4 w-4" />,
+            disabled: !settingsDirty || settingsSaving,
+            onClick: () => void saveSettings(),
+          },
+        ]
+      : []),
+    ...(activeTab === "settings" && canDelete
+      ? [
+          {
+            id: "logging-environment:delete",
+            label: "Delete logging environment",
+            icon: <Trash2 className="h-4 w-4" />,
+            onClick: () => void onDelete(environment),
+            destructive: true,
+            separatorBefore: canEdit,
+          },
+        ]
+      : []),
+  ];
 
   return (
     <PageTransition>
@@ -288,54 +319,8 @@ export function LoggingEnvironmentDetail({
             : "h-full overflow-y-auto p-6 space-y-4"
         }
       >
-        <CommandPalettePageActions
-          actions={[
-            ...(activeTab === "logs"
-              ? [
-                  {
-                    id: "logging-environment:refresh",
-                    label: "Refresh logs",
-                    icon: <ScrollText className="h-4 w-4" />,
-                    disabled: !loggingEnabled,
-                    action: () => setLogsRefreshKey((current) => current + 1),
-                  },
-                ]
-              : []),
-            ...(activeTab === "tokens" && canCreateToken
-              ? [
-                  {
-                    id: "logging-environment:new-token",
-                    label: "Create ingest token",
-                    icon: <Plus className="h-4 w-4" />,
-                    action: () => setTokenDialogOpen(true),
-                  },
-                ]
-              : []),
-            ...(activeTab === "settings" && canEdit
-              ? [
-                  {
-                    id: "logging-environment:save",
-                    label: settingsSaving ? "Saving environment" : "Save environment settings",
-                    icon: <Save className="h-4 w-4" />,
-                    disabled: !settingsDirty || settingsSaving,
-                    action: () => void saveSettings(),
-                  },
-                ]
-              : []),
-            ...(activeTab === "settings" && canDelete
-              ? [
-                  {
-                    id: "logging-environment:delete",
-                    label: "Delete logging environment",
-                    icon: <Trash2 className="h-4 w-4" />,
-                    action: () => void onDelete(environment),
-                  },
-                ]
-              : []),
-          ]}
-        />
-        <div className="flex flex-wrap items-center justify-between gap-2 shrink-0">
-          <div className="flex min-w-0 items-center gap-3">
+        <div className="flex shrink-0 items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
             <PageBackButton onClick={() => navigate("/logging/environments")} />
             <div className="min-w-0">
               <div className="flex items-center gap-2">
@@ -353,7 +338,7 @@ export function LoggingEnvironmentDetail({
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <ResponsiveHeaderActions actions={headerActions}>
             {activeTab === "logs" && (
               <RefreshButton
                 onClick={() => setLogsRefreshKey((current) => current + 1)}
@@ -377,24 +362,12 @@ export function LoggingEnvironmentDetail({
               </Button>
             )}
             {activeTab === "settings" && canDelete && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="icon">
-                    <EllipsisVertical className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem
-                    onClick={() => void onDelete(environment)}
-                    className="text-destructive"
-                  >
-                    <Trash2 className="h-3.5 w-3.5 mr-2" />
-                    Delete
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <Button variant="destructive" onClick={() => void onDelete(environment)}>
+                <Trash2 className="h-4 w-4" />
+                Delete
+              </Button>
             )}
-          </div>
+          </ResponsiveHeaderActions>
         </div>
 
         <Tabs

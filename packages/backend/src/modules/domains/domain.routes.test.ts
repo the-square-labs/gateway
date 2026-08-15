@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
     createDomain: vi.fn(),
     updateDomain: vi.fn(),
     deleteDomain: vi.fn(),
+    getNginxNodeOptions: vi.fn(),
   },
 }));
 
@@ -67,6 +68,12 @@ describe('domain routes authorization', () => {
     mocks.domainsService.createDomain.mockResolvedValue({ id: DOMAIN_ID, domain: 'example.com' });
     mocks.domainsService.updateDomain.mockResolvedValue({ id: DOMAIN_ID, domain: 'example.com', dnsProxied: true });
     mocks.domainsService.deleteDomain.mockResolvedValue(undefined);
+    mocks.domainsService.getNginxNodeOptions.mockResolvedValue({
+      eligibleNodes: [],
+      unconfiguredNodes: [],
+      totalNginxNodes: 0,
+      unconfiguredNginxNodes: 0,
+    });
   });
 
   it('does not accept a Cloudflare-only scope for domain creation', async () => {
@@ -88,6 +95,15 @@ describe('domain routes authorization', () => {
     expect(created.status).toBe(201);
     expect(mocks.domainsService.previewDomain).toHaveBeenCalledWith({ domain: 'example.com' });
     expect(mocks.domainsService.createDomain).toHaveBeenCalledWith({ domain: 'example.com' }, 'user-1');
+  });
+
+  it('uses domains:create for the domain Nginx node options', async () => {
+    mocks.scopes = ['domains:create'];
+
+    const response = await request('GET', '/nginx-nodes');
+
+    expect(response.status).toBe(200);
+    expect(mocks.domainsService.getNginxNodeOptions).toHaveBeenCalledOnce();
   });
 
   it('allows a domains:edit user to change the managed DNS proxy setting', async () => {

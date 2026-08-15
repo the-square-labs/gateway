@@ -131,6 +131,7 @@ export interface Node {
   appearanceColor: NodeAppearanceColor | null;
   serviceAddress?: string | null;
   effectiveServiceAddress?: string | null;
+  publicServiceAddresses?: string[];
   status: NodeStatus;
   serviceCreationLocked: boolean;
   daemonVersion: string | null;

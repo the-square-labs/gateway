@@ -3,18 +3,20 @@ import { z } from 'zod';
 const domainNameRegex = /^(\*\.)?([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
 
 export const CreateDomainSchema = z.object({
-  domain: z.string().min(1).max(253).regex(domainNameRegex, 'Invalid domain name format'),
+  domain: z.string().trim().toLowerCase().min(1).max(253).regex(domainNameRegex, 'Invalid domain name format'),
   description: z.string().max(1000).optional(),
   folderId: z.string().uuid().optional().nullable(),
   ttl: z.coerce.number().int().min(1).max(86_400).optional(),
   proxied: z.boolean().optional(),
   overwriteDns: z.boolean().optional(),
+  nginxNodeId: z.string().uuid().optional(),
 });
 
 export const PreviewDomainSchema = CreateDomainSchema.pick({
   domain: true,
   ttl: true,
   proxied: true,
+  nginxNodeId: true,
 });
 
 export const UpdateDomainSchema = z.object({

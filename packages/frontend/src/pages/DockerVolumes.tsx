@@ -1,4 +1,4 @@
-import { Database, Plus, Trash2 } from "lucide-react";
+import { Database, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -6,6 +6,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
+import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { DockerFolderedResourceList } from "@/components/docker/DockerFolderedResourceList";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -310,8 +311,8 @@ export function DockerVolumes({
     <>
       {/* Header — hidden in embedded mode */}
       {!embedded && (
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-bold">Docker Volumes</h1>
               {!isLoading && visibleNodeId && (
@@ -322,7 +323,37 @@ export function DockerVolumes({
             </div>
             <p className="text-sm text-muted-foreground">Manage Docker volumes across your nodes</p>
           </div>
-          <div className="flex items-center gap-2">
+          <ResponsiveHeaderActions
+            actions={
+              selectedNodeId
+                ? [
+                    {
+                      label: "Refresh",
+                      icon: <RefreshCw className="h-4 w-4" />,
+                      onClick: () => requestSnapshotRefresh("volumes", visibleNodeId),
+                      disabled: isLoading,
+                    },
+                    ...(canManageFolders
+                      ? [
+                          {
+                            label: "New Folder",
+                            onClick: () => createFolderRef.current?.(),
+                          },
+                        ]
+                      : []),
+                    ...(hasScope("docker:volumes:create")
+                      ? [
+                          {
+                            label: "Create Volume",
+                            icon: <Plus className="h-4 w-4" />,
+                            onClick: () => openCreate(),
+                          },
+                        ]
+                      : []),
+                  ]
+                : []
+            }
+          >
             {selectedNodeId && (
               <>
                 <RefreshButton
@@ -342,7 +373,7 @@ export function DockerVolumes({
                 )}
               </>
             )}
-          </div>
+          </ResponsiveHeaderActions>
         </div>
       )}
 

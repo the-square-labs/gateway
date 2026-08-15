@@ -111,6 +111,14 @@ export const searchDomainsRoute = appRoute({
   responses: okJson(UnknownDataResponseSchema),
 });
 
+export const listDomainNginxNodesRoute = appRoute({
+  method: 'get',
+  path: '/nginx-nodes',
+  tags: ['Domains'],
+  summary: 'List eligible Nginx ingress nodes for domains',
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const getDomainRoute = appRoute({
   method: 'get',
   path: '/{id}',

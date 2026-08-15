@@ -1008,12 +1008,11 @@ export function Databases({
               <LiteModeBackButton />
               <div>
                 <h1 className="text-2xl font-bold">Databases</h1>
-                <p className="text-sm text-muted-foreground">
-                  Saved PostgreSQL, ClickHouse, and Redis connections managed through Gateway
-                </p>
+                <p className="text-sm text-muted-foreground">Manage and deploy databases</p>
               </div>
             </div>
             <ResponsiveHeaderActions
+              reservedContentWidth={160}
               actions={[
                 {
                   label: "Refresh",

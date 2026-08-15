@@ -30,6 +30,10 @@ export class NodeDispatchService {
     this.daemonUpdateService = service;
   }
 
+  isNodeConnected(nodeId: string | null): boolean {
+    return !!nodeId && !!this.registry.getNode(nodeId);
+  }
+
   private async assertNodeMutable(nodeId: string) {
     if (this.daemonUpdateService && (await this.daemonUpdateService.isNodeUpdateInProgress(nodeId))) {
       throw new AppError(409, 'NODE_UPDATING', 'Node daemon update is in progress');

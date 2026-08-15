@@ -24,6 +24,7 @@ import {
   getDomainRoute,
   issueDomainCertificateRoute,
   listDomainFoldersRoute,
+  listDomainNginxNodesRoute,
   listDomainsRoute,
   moveDomainFolderRoute,
   moveDomainsToFolderRoute,
@@ -130,6 +131,11 @@ domainRoutes.openapi({ ...searchDomainsRoute, middleware: requireScope('domains:
   const q = c.req.query('q') || '';
   const results = await domainsService.searchDomains(q);
   return c.json({ data: results });
+});
+
+domainRoutes.openapi({ ...listDomainNginxNodesRoute, middleware: requireScope('domains:create') }, async (c) => {
+  const domainsService = container.resolve(DomainsService);
+  return c.json({ data: await domainsService.getNginxNodeOptions() });
 });
 
 // Preview domain DNS (must be before /:id)

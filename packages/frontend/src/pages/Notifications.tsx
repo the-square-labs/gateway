@@ -271,7 +271,14 @@ export function Notifications() {
               value="deliveries"
               className="mt-4 flex flex-col flex-1 min-h-0 overflow-hidden"
             >
-              <DeliveryLogTab refreshToken={refreshDeliveriesToken} />
+              <DeliveryLogTab
+                refreshToken={refreshDeliveriesToken}
+                onConfigureWebhook={
+                  canAccessWebhooks
+                    ? () => navigate("/notifications/webhooks", { replace: true })
+                    : undefined
+                }
+              />
             </TabsContent>
           )}
           {canViewSiem && (

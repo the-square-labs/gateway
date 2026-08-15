@@ -938,7 +938,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: 'create_domain',
     description:
-      'Create a Cloudflare-backed Gateway domain and its A/AAAA DNS records. If Cloudflare already has different A/AAAA records, the tool returns conflict metadata; retry with overwriteDns only after explicit user approval.',
+      'Create a Cloudflare-backed Gateway domain on an eligible Nginx ingress node. If Cloudflare already has different A/AAAA records, the tool returns conflict metadata; retry with overwriteDns only after explicit user approval.',
     parameters: {
       type: 'object',
       properties: {
@@ -946,6 +946,10 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
         description: { type: 'string', description: 'Optional description' },
         ttl: { type: 'number', description: 'Optional Cloudflare DNS TTL override' },
         proxied: { type: 'boolean', description: 'Optional Cloudflare proxy override' },
+        nginxNodeId: {
+          type: 'string',
+          description: 'Eligible Nginx node UUID; optional only when exactly one eligible node exists',
+        },
         overwriteDns: {
           type: 'boolean',
           description: 'Replace existing Cloudflare A/AAAA records after explicit user approval',

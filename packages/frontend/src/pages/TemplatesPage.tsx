@@ -115,14 +115,16 @@ export function TemplatesPage() {
         </div>
 
         <Tabs value={activeTab} onValueChange={handleTabChange} className="flex flex-col">
-          <TabsList className="shrink-0">
-            {visibleTabs.map((tab) => (
-              <TabsTrigger key={tab.value} value={tab.value} className="gap-1.5">
-                <tab.icon className="h-3.5 w-3.5" />
-                {tab.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
+          {pkiEnabled && (
+            <TabsList className="shrink-0">
+              {visibleTabs.map((tab) => (
+                <TabsTrigger key={tab.value} value={tab.value} className="gap-1.5">
+                  <tab.icon className="h-3.5 w-3.5" />
+                  {tab.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          )}
 
           {visibleTabs.some((tab) => tab.value === "pki") && (
             <TabsContent value="pki">

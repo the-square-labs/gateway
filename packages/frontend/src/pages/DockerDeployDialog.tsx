@@ -366,63 +366,55 @@ export function DockerDeployDialog({
             />
           </div>
 
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">GPU</label>
-            <p className="text-xs text-muted-foreground">
-              Selected physical GPUs are shared with other containers. No capacity is reserved.
-            </p>
-            {!deployNodeId ? (
-              <p className="text-sm text-muted-foreground">Select a node to see its GPUs.</p>
-            ) : deployGpuDevices.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No GPUs are currently reported by this node.
+          {deployNodeId && deployGpuDevices.length > 0 && (
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">GPU</label>
+              <p className="text-xs text-muted-foreground">
+                Selected physical GPUs are shared with other containers. No capacity is reserved.
               </p>
-            ) : (
-              <>
-                <div className="border border-border">
-                  {deployGpuDevices.map((gpu) => {
-                    const checked = deployGpuDeviceIds.includes(gpu.id);
-                    const disabled = !gpu.attachable && !checked;
-                    return (
-                      <label
-                        key={gpu.id}
-                        className={`flex min-w-0 items-center gap-2 border-b border-border px-3 py-2 text-sm last:border-b-0 ${disabled ? "opacity-60" : "cursor-pointer"}`}
-                      >
-                        <input
-                          type="checkbox"
-                          className="form-checkbox shrink-0"
-                          checked={checked}
-                          disabled={disabled}
-                          onChange={() =>
-                            setDeployGpuDeviceIds((current) =>
-                              normalizeGpuDeviceIds(
-                                checked
-                                  ? current.filter((deviceId) => deviceId !== gpu.id)
-                                  : [...current, gpu.id]
-                              )
+              <div className="border border-border">
+                {deployGpuDevices.map((gpu) => {
+                  const checked = deployGpuDeviceIds.includes(gpu.id);
+                  const disabled = !gpu.attachable && !checked;
+                  return (
+                    <label
+                      key={gpu.id}
+                      className={`flex min-w-0 items-center gap-2 border-b border-border px-3 py-2 text-sm last:border-b-0 ${disabled ? "opacity-60" : "cursor-pointer"}`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="form-checkbox shrink-0"
+                        checked={checked}
+                        disabled={disabled}
+                        onChange={() =>
+                          setDeployGpuDeviceIds((current) =>
+                            normalizeGpuDeviceIds(
+                              checked
+                                ? current.filter((deviceId) => deviceId !== gpu.id)
+                                : [...current, gpu.id]
                             )
-                          }
-                        />
-                        <span className="min-w-0">
-                          <span className="block font-medium">{gpuDeviceLabel(gpu)}</span>
-                          <span className="block break-all text-xs text-muted-foreground">
-                            {gpu.attachable
-                              ? `Shared physical device · ${gpu.id}`
-                              : gpu.unavailableReason || "Unavailable for container attachment"}
-                          </span>
+                          )
+                        }
+                      />
+                      <span className="min-w-0">
+                        <span className="block font-medium">{gpuDeviceLabel(gpu)}</span>
+                        <span className="block break-all text-xs text-muted-foreground">
+                          {gpu.attachable
+                            ? `Shared physical device · ${gpu.id}`
+                            : gpu.unavailableReason || "Unavailable for container attachment"}
                         </span>
-                      </label>
-                    );
-                  })}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  {deployGpuDeviceIds.length > 0
-                    ? `${deployGpuDeviceIds.length} physical GPU${deployGpuDeviceIds.length === 1 ? "" : "s"} selected`
-                    : "No GPU selected"}
-                </p>
-              </>
-            )}
-          </div>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {deployGpuDeviceIds.length > 0
+                  ? `${deployGpuDeviceIds.length} physical GPU${deployGpuDeviceIds.length === 1 ? "" : "s"} selected`
+                  : "No GPU selected"}
+              </p>
+            </div>
+          )}
 
           {/* Registry */}
           <div className="space-y-1.5">

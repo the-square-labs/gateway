@@ -1,5 +1,4 @@
 import { screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { Route } from "react-router-dom";
 import { vi } from "vitest";
 import { CertificateDetail } from "@/pages/CertificateDetail";
@@ -35,12 +34,7 @@ describe("CertificateDetail", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("System")).toBeInTheDocument();
 
-    const user = userEvent.setup();
-    const trigger = screen.getAllByRole("button").at(-1);
-    if (!trigger) throw new Error("Menu trigger not found");
-    await user.click(trigger);
-
-    expect(screen.queryByText("Revoke Certificate")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Revoke Certificate" })).not.toBeInTheDocument();
   });
 
   it("shows revoke for normal active certificates when the user has scope", async () => {
@@ -64,11 +58,6 @@ describe("CertificateDetail", () => {
       await screen.findByRole("heading", { level: 1, name: "gateway-grpc" })
     ).toBeInTheDocument();
 
-    const user = userEvent.setup();
-    const trigger = screen.getAllByRole("button").at(-1);
-    if (!trigger) throw new Error("Menu trigger not found");
-    await user.click(trigger);
-
-    expect(await screen.findByText("Revoke Certificate")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Revoke Certificate" })).toBeInTheDocument();
   });
 });

@@ -18,10 +18,7 @@ import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
-import {
-  HeaderOverflowMenu,
-  ResponsiveHeaderActions,
-} from "@/components/common/ResponsiveHeaderActions";
+import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { DockerMigrationDialog } from "@/components/docker/DockerMigrationDialog";
 import { Badge } from "@/components/ui/badge";
@@ -973,11 +970,18 @@ export function DockerContainerDetail({
                 )}
               </>
             )}
-            <HeaderOverflowMenu
-              actions={overflowActions}
-              disabled={actionDisabled}
-              ariaLabel="More container actions"
-            />
+            {overflowActions.map((headerAction) => (
+              <Button
+                key={headerAction.label}
+                variant={headerAction.destructive ? "destructive" : "outline"}
+                disabled={headerAction.disabled}
+                title={headerAction.disabled ? headerAction.disabledReason : undefined}
+                onClick={headerAction.onClick}
+              >
+                {headerAction.icon}
+                {headerAction.label}
+              </Button>
+            ))}
           </ResponsiveHeaderActions>
         </div>
 

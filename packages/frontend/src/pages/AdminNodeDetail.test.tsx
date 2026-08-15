@@ -273,4 +273,43 @@ describe("AdminNodeDetail", () => {
 
     expect(screen.getByRole("combobox")).toHaveTextContent("Automatic (8.8.8.8)");
   });
+
+  it("offers only detected public addresses for an Nginx service address", async () => {
+    useAuthStore.setState({
+      user: makeUser({
+        scopes: ["nodes:details", "nodes:rename:node-1", "nodes:config:edit:node-1"],
+      }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.mocked(api.getNode).mockResolvedValue({
+      ...makeNode({ id: "node-1", type: "nginx", hostname: "edge-1" }),
+      publicServiceAddresses: ["1.1.1.1", "2606:4700:4700::1111"],
+      lastHealthReport: {
+        localIpAddresses: ["192.168.1.20"],
+        publicIpAddresses: ["1.1.1.1", "2606:4700:4700::1111"],
+      } as unknown as NodeHealthReport,
+      lastStatsReport: null,
+      liveHealthReport: null,
+      liveStatsReport: null,
+    });
+    vi.mocked(api.getNodeHealthHistory).mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={["/nodes/node-1/details"]}>
+        <Routes>
+          <Route path="/nodes/:id/:tab?" element={<AdminNodeDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole("heading", { name: "Edge 1" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /settings/i }));
+    fireEvent.click(screen.getByRole("combobox"));
+
+    expect(await screen.findByText("1.1.1.1")).toBeInTheDocument();
+    expect(screen.getByText("2606:4700:4700::1111")).toBeInTheDocument();
+    expect(screen.queryByText("192.168.1.20")).not.toBeInTheDocument();
+    expect(screen.queryByText("Custom address")).not.toBeInTheDocument();
+  });
 });

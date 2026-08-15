@@ -1,19 +1,9 @@
-import {
-  AlertTriangle,
-  Copy,
-  Download,
-  MoreVertical,
-  Pencil,
-  Plus,
-  Shield,
-  ShieldOff,
-} from "lucide-react";
+import { AlertTriangle, Copy, Download, Pencil, Plus, Shield, ShieldOff } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { CACreateDialog } from "@/components/ca/CACreateDialog";
 import { CertificateIssueDialog } from "@/components/certificates/CertificateIssueDialog";
-import { CommandPalettePageActions } from "@/components/common/CommandPalettePageActions";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { DetailRow } from "@/components/common/DetailRow";
@@ -21,6 +11,7 @@ import { EmptyState } from "@/components/common/EmptyState";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
+import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { StatusBadge } from "@/components/common/StatusBadge";
 import { Badge } from "@/components/ui/badge";
@@ -33,13 +24,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { useRealtime } from "@/hooks/use-realtime";
 import { daysUntil, formatDate, formatSerialNumber, hoursUntil } from "@/lib/utils";
@@ -256,81 +240,13 @@ export function CADetail() {
   return (
     <PageTransition>
       <div className="h-full overflow-y-auto p-6 space-y-6">
-        <CommandPalettePageActions
-          actions={[
-            ...(canCreateIntermediate && ca.status === "active" && !ca.isSystem
-              ? [
-                  {
-                    id: "ca:create-intermediate",
-                    label: "Create intermediate CA",
-                    icon: <Shield className="h-4 w-4" />,
-                    action: () => setCreateIntermediateOpen(true),
-                  },
-                ]
-              : []),
-            ...(canIssueCertificate && ca.status === "active" && !ca.isSystem
-              ? [
-                  {
-                    id: "ca:issue-certificate",
-                    label: "Issue certificate",
-                    icon: <Plus className="h-4 w-4" />,
-                    action: () => setIssueDialogOpen(true),
-                  },
-                ]
-              : []),
-            {
-              id: "ca:download-pem",
-              label: "Download CA as PEM",
-              icon: <Download className="h-4 w-4" />,
-              action: downloadPem,
-            },
-            {
-              id: "ca:download-crt",
-              label: "Download CA as CRT",
-              icon: <Download className="h-4 w-4" />,
-              action: downloadCrt,
-            },
-            ...(ca.type === "root"
-              ? [
-                  {
-                    id: "ca:install-guide",
-                    label: "Open CA install guide",
-                    icon: <Shield className="h-4 w-4" />,
-                    action: () => setInstallGuideOpen(true),
-                  },
-                ]
-              : []),
-            {
-              id: "ca:copy-pem",
-              label: "Copy CA PEM",
-              icon: <Copy className="h-4 w-4" />,
-              action: copyPem,
-            },
-            {
-              id: "ca:copy-serial",
-              label: "Copy CA serial",
-              icon: <Copy className="h-4 w-4" />,
-              action: copySerial,
-            },
-            ...(canRevokeCA && ca.status === "active" && !ca.isSystem
-              ? [
-                  {
-                    id: "ca:revoke",
-                    label: "Revoke CA",
-                    icon: <ShieldOff className="h-4 w-4" />,
-                    action: handleRevoke,
-                  },
-                ]
-              : []),
-          ]}
-        />
         {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
             <PageBackButton onClick={() => navigate("/cas")} />
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-bold">{ca.commonName}</h1>
+                <h1 className="truncate text-2xl font-bold">{ca.commonName}</h1>
                 <StatusBadge status={ca.status} size="inline" />
                 {ca.isSystem && (
                   <Badge variant="outline" size="inline">
@@ -343,7 +259,76 @@ export function CADetail() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <ResponsiveHeaderActions
+            actions={[
+              ...(canCreateIntermediate && ca.status === "active" && !ca.isSystem
+                ? [
+                    {
+                      id: "ca:create-intermediate",
+                      label: "Create intermediate CA",
+                      icon: <Shield className="h-4 w-4" />,
+                      onClick: () => setCreateIntermediateOpen(true),
+                    },
+                  ]
+                : []),
+              ...(canIssueCertificate && ca.status === "active" && !ca.isSystem
+                ? [
+                    {
+                      id: "ca:issue-certificate",
+                      label: "Issue certificate",
+                      icon: <Plus className="h-4 w-4" />,
+                      onClick: () => setIssueDialogOpen(true),
+                    },
+                  ]
+                : []),
+              {
+                id: "ca:download-pem",
+                label: "Download CA as PEM",
+                icon: <Download className="h-4 w-4" />,
+                onClick: downloadPem,
+              },
+              {
+                id: "ca:download-crt",
+                label: "Download CA as CRT",
+                icon: <Download className="h-4 w-4" />,
+                onClick: downloadCrt,
+              },
+              ...(ca.type === "root"
+                ? [
+                    {
+                      id: "ca:install-guide",
+                      label: "Open CA install guide",
+                      icon: <Shield className="h-4 w-4" />,
+                      onClick: () => setInstallGuideOpen(true),
+                    },
+                  ]
+                : []),
+              {
+                id: "ca:copy-pem",
+                label: "Copy CA PEM",
+                icon: <Copy className="h-4 w-4" />,
+                onClick: copyPem,
+              },
+              {
+                id: "ca:copy-serial",
+                label: "Copy CA serial",
+                icon: <Copy className="h-4 w-4" />,
+                onClick: copySerial,
+              },
+              ...(canRevokeCA && ca.status === "active" && !ca.isSystem
+                ? [
+                    {
+                      id: "ca:revoke",
+                      label: "Revoke CA",
+                      icon: <ShieldOff className="h-4 w-4" />,
+                      onClick: handleRevoke,
+                      destructive: true,
+                      separatorBefore: true,
+                    },
+                  ]
+                : []),
+            ]}
+          >
             {canCreateIntermediate && ca.status === "active" && !ca.isSystem && (
               <Button variant="outline" onClick={() => setCreateIntermediateOpen(true)}>
                 <Shield className="h-4 w-4" />
@@ -356,48 +341,35 @@ export function CADetail() {
                 Issue Certificate
               </Button>
             )}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon">
-                  <MoreVertical className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={downloadPem}>
-                  <Download className="h-4 w-4" />
-                  Download PEM
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={downloadCrt}>
-                  <Download className="h-4 w-4" />
-                  Download CRT
-                </DropdownMenuItem>
-                {ca.type === "root" && (
-                  <DropdownMenuItem onClick={() => setInstallGuideOpen(true)}>
-                    <Shield className="h-4 w-4" />
-                    Install Guide
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={copyPem}>
-                  <Copy className="h-4 w-4" />
-                  Copy PEM
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={copySerial}>
-                  <Copy className="h-4 w-4" />
-                  Copy Serial
-                </DropdownMenuItem>
-                {canRevokeCA && ca.status === "active" && !ca.isSystem && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={handleRevoke} className="text-destructive">
-                      <ShieldOff className="h-4 w-4" />
-                      Revoke CA
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+            <Button variant="outline" onClick={downloadPem}>
+              <Download className="h-4 w-4" />
+              Download PEM
+            </Button>
+            <Button variant="outline" onClick={downloadCrt}>
+              <Download className="h-4 w-4" />
+              Download CRT
+            </Button>
+            {ca.type === "root" && (
+              <Button variant="outline" onClick={() => setInstallGuideOpen(true)}>
+                <Shield className="h-4 w-4" />
+                Install Guide
+              </Button>
+            )}
+            <Button variant="outline" onClick={copyPem}>
+              <Copy className="h-4 w-4" />
+              Copy PEM
+            </Button>
+            <Button variant="outline" onClick={copySerial}>
+              <Copy className="h-4 w-4" />
+              Copy Serial
+            </Button>
+            {canRevokeCA && ca.status === "active" && !ca.isSystem && (
+              <Button variant="destructive" onClick={handleRevoke}>
+                <ShieldOff className="h-4 w-4" />
+                Revoke CA
+              </Button>
+            )}
+          </ResponsiveHeaderActions>
         </div>
 
         <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-3">

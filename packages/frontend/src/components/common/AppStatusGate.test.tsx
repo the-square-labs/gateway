@@ -81,6 +81,88 @@ describe("gateway update version matching", () => {
     );
   });
 
+  it("never overlaps restart recovery requests", async () => {
+    vi.useFakeTimers();
+    useAppStatusStore.setState({ gatewayRestartingActive: true });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+
+    render(<AppStatusGate />);
+
+    await act(async () => Promise.resolve());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs unavailable recovery checks sequentially and stops after stable recovery", async () => {
+    vi.useFakeTimers();
+    window.sessionStorage.setItem("gateway-maintenance-auto-reload", "1");
+    useAppStatusStore.setState({ maintenanceActive: true });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(async (input) => {
+      if (String(input) === "/health") {
+        return new Response(JSON.stringify({ lifecycleState: "running", version: "2.4.0" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ data: { state: "complete" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    render(<AppStatusGate />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(screen.getByText("The backend is available. Reload to continue.")).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("never overlaps unavailable recovery requests", async () => {
+    vi.useFakeTimers();
+    useAppStatusStore.setState({ maintenanceActive: true });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+
+    render(<AppStatusGate />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("clears the rate-limit blocker without reloading the page", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-11T16:00:00Z"));

@@ -1,7 +1,6 @@
 import {
   Cable,
   Code2,
-  EllipsisVertical,
   Info,
   KeyRound,
   Pencil,
@@ -33,13 +32,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { HealthBars } from "@/components/ui/health-bars";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -1066,54 +1058,37 @@ export function ProxyHostDetail({
                 Edit
               </Button>
             )}
-            {(canEditProxyHost ||
-              canIssueMaintenanceAccessCode ||
-              canResyncTls ||
-              (!isSystemHost && hasScope("proxy:delete"))) && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="icon" aria-label="More proxy host actions">
-                    <EllipsisVertical className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  {canEditProxyHost && (
-                    <DropdownMenuItem
-                      onClick={handleMaintenance}
-                      disabled={isMaintenanceToggling || !maintenanceActionAvailable}
-                    >
-                      <Wrench className="mr-2 h-4 w-4" />
-                      {host.maintenanceEnabled ? "Disable Maintenance" : "Enable Maintenance"}
-                    </DropdownMenuItem>
-                  )}
-                  {canIssueMaintenanceAccessCode && (
-                    <DropdownMenuItem
-                      onClick={handleCreateMaintenanceAccessCode}
-                      disabled={isCreatingMaintenanceAccessCode}
-                    >
-                      <KeyRound className="mr-2 h-4 w-4" />
-                      Create Maintenance Access Code
-                    </DropdownMenuItem>
-                  )}
-                  {canResyncTls && (
-                    <DropdownMenuItem onClick={handleTlsResync} disabled={isTlsResyncing}>
-                      <RefreshCw className={cn("mr-2 h-4 w-4", isTlsResyncing && "animate-spin")} />
-                      Retry TLS Sync
-                    </DropdownMenuItem>
-                  )}
-                  {!isSystemHost && hasScope("proxy:delete") && (
-                    <>
-                      {(canEditProxyHost || canIssueMaintenanceAccessCode || canResyncTls) && (
-                        <DropdownMenuSeparator />
-                      )}
-                      <DropdownMenuItem onClick={handleDelete} className="text-destructive">
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete
-                      </DropdownMenuItem>
-                    </>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
+            {canEditProxyHost && (
+              <Button
+                variant="outline"
+                onClick={handleMaintenance}
+                disabled={isMaintenanceToggling || !maintenanceActionAvailable}
+              >
+                <Wrench className="h-4 w-4" />
+                {host.maintenanceEnabled ? "Disable Maintenance" : "Enable Maintenance"}
+              </Button>
+            )}
+            {canIssueMaintenanceAccessCode && (
+              <Button
+                variant="outline"
+                onClick={handleCreateMaintenanceAccessCode}
+                disabled={isCreatingMaintenanceAccessCode}
+              >
+                <KeyRound className="h-4 w-4" />
+                Create Maintenance Access Code
+              </Button>
+            )}
+            {canResyncTls && (
+              <Button variant="outline" onClick={handleTlsResync} disabled={isTlsResyncing}>
+                <RefreshCw className={cn("h-4 w-4", isTlsResyncing && "animate-spin")} />
+                Retry TLS Sync
+              </Button>
+            )}
+            {!isSystemHost && hasScope("proxy:delete") && (
+              <Button variant="destructive" onClick={handleDelete}>
+                <Trash2 className="h-4 w-4" />
+                Delete
+              </Button>
             )}
           </ResponsiveHeaderActions>
         </div>

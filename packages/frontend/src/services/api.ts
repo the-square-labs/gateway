@@ -795,6 +795,7 @@ class ApiClient extends withInferenceApi(
       displayName?: string | null;
       appearanceColor?: import("@/types").NodeAppearanceColor | null;
       serviceAddress?: string | null;
+      confirmDomainDnsUpdate?: boolean;
     }
   ): Promise<import("@/types").Node> {
     return this.unwrapData(
@@ -817,8 +818,9 @@ class ApiClient extends withInferenceApi(
     );
   }
 
-  async deleteNode(id: string): Promise<void> {
-    await this.request(`/nodes/${id}`, { method: "DELETE" });
+  async deleteNode(id: string, options: { cascadeProxyHosts?: boolean } = {}): Promise<void> {
+    const query = options.cascadeProxyHosts ? "?cascadeProxyHosts=true" : "";
+    await this.request(`/nodes/${id}${query}`, { method: "DELETE" });
   }
 
   async listNodeFolders(): Promise<import("@/types").ResourceFolderTreeNode[]> {
@@ -2005,7 +2007,7 @@ class ApiClient extends withInferenceApi(
   }
 
   async previewDomain(
-    data: Pick<CreateDomainRequest, "domain" | "ttl" | "proxied">
+    data: Pick<CreateDomainRequest, "domain" | "ttl" | "proxied" | "nginxNodeId">
   ): Promise<import("@/types").DomainPreview> {
     return this.unwrapData(
       this.request<{ data: import("@/types").DomainPreview }>("/domains/preview", {
@@ -2021,6 +2023,12 @@ class ApiClient extends withInferenceApi(
         method: "POST",
         body: JSON.stringify(data),
       })
+    );
+  }
+
+  async listDomainNginxNodes(): Promise<import("@/types").DomainNginxNodeOptions> {
+    return this.unwrapData(
+      this.request<{ data: import("@/types").DomainNginxNodeOptions }>("/domains/nginx-nodes")
     );
   }
 
