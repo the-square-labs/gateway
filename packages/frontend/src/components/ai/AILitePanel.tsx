@@ -1,5 +1,5 @@
-import { Pencil, Pin, PinOff, Sparkles, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Menu, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -14,10 +14,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { type AIApprovalMode, formatAIApprovalModeLabel } from "@/lib/ai-approval-mode";
 import { aiConversationRoute } from "@/lib/ai-conversation-route";
+import { selectedModelSupportsImages } from "@/lib/ai-model-capabilities";
 import {
   confirmBypassEverythingMode,
   updateAIApprovalModeOptimistically,
 } from "@/lib/ai-user-preferences";
+import { NodeSetupWizard } from "@/pages/dashboard/finalize-setup/NodeSetupWizard";
 import { api } from "@/services/api";
 import { getConversationBlock, useAIStore } from "@/stores/ai";
 import { useResolvedPageContext } from "@/stores/resolved-page-context";
@@ -40,8 +42,13 @@ import {
 import { AIConversationBlockedBlock } from "./AIConversationBlockedBlock";
 import { AIPlanTimeline } from "./AIPlanTimeline";
 import { ApprovalBlock, QuestionBlock } from "./AIToolCallBlock";
+import {
+  AIWorkspaceAssistantConnectorSetup,
+  AIWorkspaceScenarioStart,
+  type AssistantConnectorSetup,
+  parseAssistantConnectorSetup,
+} from "./AIWorkspaceScenarioStart";
 import { GitLabAuthorizationModal } from "./GitLabAuthorizationModal";
-import { QuickActionChips } from "./QuickActionChips";
 import {
   composerAttachmentToFile,
   filesToComposerAttachments,
@@ -50,8 +57,8 @@ import {
   useAIComposerAttachmentsDraft,
   useAIComposerDraft,
 } from "./useAIComposerDraft";
+import { useAIMessageScroll } from "./useAIMessageScroll";
 
-const BOTTOM_SCROLL_THRESHOLD = 48;
 const SLASH_COMMANDS = [
   { name: "new", description: "Start new Work Session" },
   { name: "clear", description: "Clear Work Session" },
@@ -110,27 +117,29 @@ function usePageContext(): PageContext {
     resolvedRouteKey &&
     (route === resolvedRouteKey || route.startsWith(`${resolvedRouteKey}/`));
 
-  if (ownsRoute && resolvedResource) {
-    return {
-      route,
-      resourceType: resolvedResource.resourceType,
-      resourceId: resolvedResource.resourceId,
-      label: resolvedResource.label,
-      nodeId: resolvedResource.nodeId,
-    };
-  }
+  return useMemo(() => {
+    if (ownsRoute && resolvedResource) {
+      return {
+        route,
+        resourceType: resolvedResource.resourceType,
+        resourceId: resolvedResource.resourceId,
+        label: resolvedResource.label,
+        nodeId: resolvedResource.nodeId,
+      };
+    }
 
-  if (params.id && route.startsWith("/cas/")) {
-    return { route, resourceType: "ca", resourceId: params.id };
-  }
-  if (params.id && route.startsWith("/certificates/")) {
-    return { route, resourceType: "certificate", resourceId: params.id };
-  }
+    if (params.id && route.startsWith("/cas/")) {
+      return { route, resourceType: "ca", resourceId: params.id };
+    }
+    if (params.id && route.startsWith("/certificates/")) {
+      return { route, resourceType: "certificate", resourceId: params.id };
+    }
 
-  return { route };
+    return { route };
+  }, [ownsRoute, params.id, resolvedResource, route]);
 }
 
-export function AILitePanel() {
+export function AILitePanel({ onOpenMobileMenu }: { onOpenMobileMenu?: () => void }) {
   const {
     messages,
     resourceReferences,
@@ -143,8 +152,10 @@ export function AILitePanel() {
     savedName,
     activeConversationId,
     activeRunId,
+    pendingSetupInteraction,
     activePlan,
     plans,
+    dismissedPlanDecisionKey,
     devPlanProgressPreview,
     workMode,
     canContinueConversation,
@@ -152,6 +163,7 @@ export function AILitePanel() {
     queuedInputs,
     recentConversations,
     sendMessage,
+    startScenario,
     queueMessage,
     steerQueuedMessage,
     cancelQueuedMessage,
@@ -159,6 +171,7 @@ export function AILitePanel() {
     approveTool,
     rejectTool,
     answerQuestion,
+    resolveSetupInteraction,
     stopStreaming,
     setWorkMode,
     decidePlan,
@@ -172,7 +185,6 @@ export function AILitePanel() {
     renameConversation,
     rollbackToMessage,
     retryMessage,
-    connect,
     providerStatus,
     selectedModel,
     selectedReasoningEffort,
@@ -180,7 +192,12 @@ export function AILitePanel() {
     setSelectedReasoningEffort,
     refreshProviderStatus,
   } = useAIStore();
-  const progressPlan = devPlanProgressPreview ?? activePlan;
+  const currentConversationPlan =
+    activePlan?.conversationId === activeConversationId ? activePlan : null;
+  const showPlanDecision =
+    currentConversationPlan?.status === "awaiting_decision" &&
+    `${activeConversationId}:${currentConversationPlan.revisionId}` !== dismissedPlanDecisionKey;
+  const progressPlan = devPlanProgressPreview ?? currentConversationPlan;
   const {
     aiApprovalMode: approvalMode,
     pinnedAIConversationIds,
@@ -193,15 +210,20 @@ export function AILitePanel() {
   const [input, setInput] = useAIComposerDraft(draftConversationId);
   const [attachments, setAttachments] = useAIComposerAttachmentsDraft(draftConversationId);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
-  const [canAttachImages, setCanAttachImages] = useState(false);
   const [slashResults, setSlashResults] = useState<typeof SLASH_COMMANDS>([]);
   const [slashIndex, setSlashIndex] = useState(0);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
   const [isRenaming, setIsRenaming] = useState(false);
+  const assistantConnectorSetup = useMemo(
+    () =>
+      pendingSetupInteraction?.kind === "connector_setup"
+        ? parseAssistantConnectorSetup(pendingSetupInteraction.payload)
+        : null,
+    [pendingSetupInteraction]
+  );
+  const assistantNodeEnrollmentOpen = pendingSetupInteraction?.kind === "node_enrollment";
   const previousActiveConversationIdRef = useRef(activeConversationId);
-  const scrollViewportRef = useRef<HTMLDivElement>(null);
-  const shouldStickToBottomRef = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const context = usePageContext();
   const approvalModeLabel = formatAIApprovalModeLabel(approvalMode);
@@ -221,6 +243,7 @@ export function AILitePanel() {
     ? pinnedAIConversationIds.includes(activeConversationId)
     : false;
   const selectedProviderModel = providerStatus?.models.find((model) => model.id === selectedModel);
+  const canAttachImages = selectedModelSupportsImages(providerStatus, selectedModel);
 
   useEffect(() => {
     if (
@@ -291,23 +314,32 @@ export function AILitePanel() {
   );
 
   useEffect(() => {
-    void connect();
-  }, [connect]);
-
-  useEffect(() => {
-    void refreshProviderStatus().catch(() => setCanAttachImages(false));
+    void refreshProviderStatus().catch(() => undefined);
   }, [refreshProviderStatus]);
 
   useEffect(() => {
-    const selected = providerStatus?.models.find((model) => model.id === selectedModel);
-    setCanAttachImages(selected?.supportsImages ?? providerStatus?.supportsImages ?? false);
-  }, [providerStatus, selectedModel]);
+    if (providerStatus && !canAttachImages && attachments.length > 0) setAttachments([]);
+  }, [attachments.length, canAttachImages, providerStatus, setAttachments]);
 
   useEffect(() => {
     if (!isNewConversationDraft) return;
     const timer = setTimeout(() => textareaRef.current?.focus(), 0);
     return () => clearTimeout(timer);
   }, [isNewConversationDraft]);
+
+  const continueAfterConnectorSetup = useCallback(
+    (_setup: AssistantConnectorSetup, status: "configured" | "cancelled") => {
+      resolveSetupInteraction(status);
+    },
+    [resolveSetupInteraction]
+  );
+
+  const continueAfterNodeEnrollment = useCallback(
+    async (status: "configured" | "cancelled") => {
+      resolveSetupInteraction(status);
+    },
+    [resolveSetupInteraction]
+  );
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: input changes must re-measure restored composer drafts.
   useLayoutEffect(() => {
@@ -341,16 +373,6 @@ export function AILitePanel() {
     [attachments, canAttachImages, setAttachments]
   );
 
-  const updateStickToBottom = useCallback(() => {
-    const node = scrollViewportRef.current;
-    if (!node) {
-      shouldStickToBottomRef.current = true;
-      return;
-    }
-    shouldStickToBottomRef.current =
-      node.scrollHeight - node.scrollTop - node.clientHeight < BOTTOM_SCROLL_THRESHOLD;
-  }, []);
-
   const scrollSignature = messages
     .map((message) =>
       [
@@ -364,16 +386,11 @@ export function AILitePanel() {
     )
     .join("|");
 
-  useLayoutEffect(() => {
-    if (!scrollSignature) return;
-    const node = scrollViewportRef.current;
-    if (!node || !shouldStickToBottomRef.current) return;
-    node.scrollTop = node.scrollHeight;
-    const frame = window.requestAnimationFrame(() => {
-      node.scrollTop = node.scrollHeight;
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [scrollSignature]);
+  const {
+    viewportRef: scrollViewportRef,
+    onScroll,
+    pinToBottom,
+  } = useAIMessageScroll(scrollSignature, activeConversationId ?? "__new__");
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -401,8 +418,10 @@ export function AILitePanel() {
       setSlashResults([]);
       if (textareaRef.current) textareaRef.current.style.height = "auto";
       if (currentConversationStreaming) {
+        pinToBottom();
         queueMessage(text, context, uploadedAttachments);
       } else {
+        pinToBottom();
         sendMessage(text, context, uploadedAttachments, {
           startNewConversation: isNewConversationDraft,
         });
@@ -421,6 +440,7 @@ export function AILitePanel() {
     input,
     isNewConversationDraft,
     navigate,
+    pinToBottom,
     queueMessage,
     sendMessage,
     setAttachments,
@@ -579,6 +599,17 @@ export function AILitePanel() {
   return (
     <div className="flex h-full flex-col bg-background">
       <div className="flex h-[49px] shrink-0 items-center justify-between border-b border-border px-4">
+        {onOpenMobileMenu && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="-ml-2 mr-2 h-9 w-9 shrink-0"
+            onClick={onOpenMobileMenu}
+            aria-label="Open navigation menu"
+          >
+            <Menu className="h-5 w-5" />
+          </Button>
+        )}
         <span
           className={`min-w-0 flex-1 truncate pr-2 text-sm font-semibold ${isStartingConversation ? "thinking-shimmer text-muted-foreground" : ""}`}
           title={currentChatTitle}
@@ -657,16 +688,16 @@ export function AILitePanel() {
       </Dialog>
 
       {messages.length === 0 ? (
-        <div className="ai-chat-content-fade-in flex min-h-0 flex-1 items-center justify-center px-4">
-          <div className="flex w-full max-w-3xl flex-col items-center gap-3">
-            <Sparkles className="h-8 w-8 text-muted-foreground" />
-            <p className="max-w-md text-center text-sm text-foreground/70">
-              Ask questions, investigate issues, and manage your infrastructure with
-              permission-aware guidance.
-            </p>
-            <QuickActionChips onSelect={handleQuickAction} />
-          </div>
-        </div>
+        <AIWorkspaceScenarioStart
+          context={context}
+          disabled={currentConversationStreaming}
+          onStart={(scenario) => startScenario(scenario, context)}
+          onInvestigateOperationalIssue={() =>
+            handleQuickAction(
+              "Investigate the current Gateway relay issue, identify impact and evidence, then propose the safest recovery plan."
+            )
+          }
+        />
       ) : (
         <div className="ai-chat-content-fade-in relative min-h-0 flex-1">
           <div
@@ -674,7 +705,7 @@ export function AILitePanel() {
             role="log"
             aria-label="AI messages"
             className="h-full overflow-y-auto [scrollbar-gutter:stable_both-edges] dashboard-scrollbar pt-4"
-            onScroll={updateStickToBottom}
+            onScroll={onScroll}
           >
             <div className="mx-auto w-full max-w-3xl space-y-4 px-4 pb-8">
               <AIPlanTimeline
@@ -718,7 +749,7 @@ export function AILitePanel() {
             )}
             <QuestionBlock toolCall={activeQuestion} onAnswer={answerQuestion} />
           </div>
-        ) : activePlan?.status === "awaiting_decision" ? (
+        ) : showPlanDecision ? (
           <div className="border border-border bg-background">
             <AIPlanDecision
               onImplement={() => decidePlan("implement")}
@@ -737,11 +768,10 @@ export function AILitePanel() {
             />
           </div>
         ) : (
-          <div className="relative space-y-2">
+          <div className="relative">
             {progressPlan &&
-              (progressPlan.status === "drafting" ||
-                progressPlan.status === "validating" ||
-                progressPlan.status === "executing" ||
+              (progressPlan.status === "executing" ||
+                progressPlan.status === "pause_requested" ||
                 progressPlan.status === "paused" ||
                 progressPlan.status === "verifying") && (
                 <AIPlanProgress
@@ -749,6 +779,7 @@ export function AILitePanel() {
                   onPause={pausePlan}
                   onResume={resumePlan}
                   onCancel={cancelPlan}
+                  className="border-b-0"
                 />
               )}
             <AIQueuedMessages
@@ -791,7 +822,13 @@ export function AILitePanel() {
               }
               selectedModel={selectedModel}
               onModelChange={setSelectedModel}
-              reasoningOptions={selectedProviderModel?.reasoningEfforts}
+              reasoningOptions={
+                providerStatus?.providerType === "openai_compatible"
+                  ? providerStatus.allowUserReasoningEffortSelection
+                    ? (providerStatus.reasoningEfforts ?? [])
+                    : undefined
+                  : selectedProviderModel?.reasoningEfforts
+              }
               selectedReasoningEffort={selectedReasoningEffort}
               onReasoningEffortChange={setSelectedReasoningEffort}
               gatewayInferenceMode={providerStatus?.providerType === "gateway_inference"}
@@ -813,6 +850,17 @@ export function AILitePanel() {
         <AIComposerDisclaimer />
       </div>
       <GitLabAuthorizationModal />
+      <AIWorkspaceAssistantConnectorSetup
+        setup={assistantConnectorSetup}
+        onFinished={continueAfterConnectorSetup}
+      />
+      <NodeSetupWizard
+        open={assistantNodeEnrollmentOpen}
+        onBack={() => void continueAfterNodeEnrollment("cancelled")}
+        onConfigured={() => continueAfterNodeEnrollment("configured")}
+        onSkipped={() => continueAfterNodeEnrollment("cancelled")}
+        completionActionLabel="Continue scenario"
+      />
     </div>
   );
 }

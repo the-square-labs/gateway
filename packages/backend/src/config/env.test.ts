@@ -16,6 +16,9 @@ function setRequiredEnv(overrides: NodeJS.ProcessEnv = {}) {
   if (!Object.hasOwn(overrides, 'RATE_LIMIT_AI_WS_MAX_REQUESTS')) {
     delete inheritedEnv.RATE_LIMIT_AI_WS_MAX_REQUESTS;
   }
+  if (!Object.hasOwn(overrides, 'GITHUB_OAUTH_CLIENT_ID')) {
+    delete inheritedEnv.GITHUB_OAUTH_CLIENT_ID;
+  }
 
   process.env = {
     ...inheritedEnv,
@@ -68,6 +71,16 @@ describe('getEnv gRPC TLS config', () => {
     const env = await loadEnv();
 
     expect(env.RATE_LIMIT_AI_WS_MAX_REQUESTS).toBe(120);
+  });
+
+  it('uses the built-in GitHub OAuth client ID unless explicitly overridden', async () => {
+    const builtIn = await loadEnv();
+    const overridden = await loadEnv({ GITHUB_OAUTH_CLIENT_ID: 'custom-client-id' });
+    const empty = await loadEnv({ GITHUB_OAUTH_CLIENT_ID: '' });
+
+    expect(builtIn.GITHUB_OAUTH_CLIENT_ID).toBe('Ov23likbDL1gM8asWzfC');
+    expect(overridden.GITHUB_OAUTH_CLIENT_ID).toBe('custom-client-id');
+    expect(empty.GITHUB_OAUTH_CLIENT_ID).toBe('Ov23likbDL1gM8asWzfC');
   });
 
   it('defaults the auto-generated gRPC TLS directory when the env value is empty', async () => {

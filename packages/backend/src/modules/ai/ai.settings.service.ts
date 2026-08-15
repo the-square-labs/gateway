@@ -4,6 +4,7 @@ import { settings } from '@/db/schema/settings.js';
 import { isPrivateUrl } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { CryptoService } from '@/services/crypto.service.js';
+import type { AIUserSkillRecord } from './ai.skills.js';
 import type {
   AIConfig,
   AIEndpointMode,
@@ -24,6 +25,7 @@ const AI_SETTINGS_DEFAULTS: Record<string, unknown> = {
   'ai:model': '',
   'ai:gateway_inference_model': '',
   'ai:gateway_inference_allow_user_model_selection': true,
+  'ai:allow_user_reasoning_effort_selection': false,
   'ai:max_completion_tokens': 8192,
   'ai:max_tokens_field': 'max_completion_tokens',
   'ai:reasoning_effort': 'none',
@@ -38,6 +40,7 @@ const AI_SETTINGS_DEFAULTS: Record<string, unknown> = {
   'ai:web_search_base_url': '',
   'ai:sandbox_enabled': false,
   'ai:sandbox_default_tier': 'low',
+  'ai:user_skills': [],
 };
 
 export class AISettingsService {
@@ -80,6 +83,7 @@ export class AISettingsService {
       model: getValue<string>('ai:model'),
       gatewayInferenceModel: getValue<string>('ai:gateway_inference_model'),
       gatewayInferenceAllowUserModelSelection: getValue<boolean>('ai:gateway_inference_allow_user_model_selection'),
+      allowUserReasoningEffortSelection: getValue<boolean>('ai:allow_user_reasoning_effort_selection'),
       maxCompletionTokens: getValue<number>('ai:max_completion_tokens'),
       maxTokensField: getValue<MaxTokensField>('ai:max_tokens_field'),
       reasoningEffort: getValue<ReasoningEffort>('ai:reasoning_effort'),
@@ -181,6 +185,7 @@ export class AISettingsService {
       model: 'ai:model',
       gatewayInferenceModel: 'ai:gateway_inference_model',
       gatewayInferenceAllowUserModelSelection: 'ai:gateway_inference_allow_user_model_selection',
+      allowUserReasoningEffortSelection: 'ai:allow_user_reasoning_effort_selection',
       customSystemPrompt: 'ai:custom_system_prompt',
       rateLimitMax: 'ai:rate_limit_max',
       rateLimitWindowSeconds: 'ai:rate_limit_window_seconds',
@@ -278,6 +283,15 @@ export class AISettingsService {
     } catch {
       return null;
     }
+  }
+
+  async getUserSkills(): Promise<AIUserSkillRecord[]> {
+    const value = await this.getSetting<unknown>('ai:user_skills');
+    return Array.isArray(value) ? (value as AIUserSkillRecord[]) : [];
+  }
+
+  async setUserSkills(skills: AIUserSkillRecord[]): Promise<void> {
+    await this.setSetting('ai:user_skills', skills);
   }
 
   // ── Internal helpers ──

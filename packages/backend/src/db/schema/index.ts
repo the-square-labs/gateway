@@ -29,6 +29,7 @@ export * from './docker-tasks.js';
 export * from './docker-webhooks.js';
 export * from './domain-folders.js';
 export * from './domains.js';
+export * from './external-ssh-connectors.js';
 export * from './inference-auth.js';
 export * from './inference-models.js';
 export * from './inference-oauth.js';

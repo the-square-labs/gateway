@@ -1,18 +1,33 @@
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs/promises';
 import OpenAI from 'openai';
+import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { InferenceBudgetPolicyService } from '@/modules/inference/accounting/inference-budget-policy.js';
 import type { InferenceRuntimeService } from '@/modules/inference/inference-runtime.service.js';
 import type { InferenceModelService } from '@/modules/inference/models/inference-model.service.js';
+import { InferenceProtocolError } from '@/modules/inference/protocol/inference-protocol.error.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { User } from '@/types.js';
 import { streamGatewayInferenceResponse } from './ai.gateway-inference-adapter.js';
 import { type AIModelTool, type ModelProviderEvent, streamModelResponse } from './ai.provider-adapter.js';
+import type { AISandboxArtifactService } from './ai.sandbox-artifact.service.js';
 import type { AISettingsService } from './ai.settings.service.js';
-import type { AIConfig, AIContextLimits } from './ai.types.js';
+import type { AIConfig, AIContextLimits, AIMessageAttachment } from './ai.types.js';
 import { directProviderContextLimits, normalizeAIContextLimits } from './ai-context-limits.js';
 
 const GATEWAY_INFERENCE_MAX_TOOL_ROUNDS = 20;
+const GATEWAY_INFERENCE_MAX_STREAM_ATTEMPTS = 2;
+const GATEWAY_INFERENCE_RETRY_MIN_DELAY_MS = 200;
+const GATEWAY_INFERENCE_RETRY_JITTER_MS = 300;
+const DIRECT_PROVIDER_REASONING_EFFORTS = ['default', 'low', 'medium', 'high'] as const;
+const RETRYABLE_GATEWAY_INFERENCE_CODES = new Set([
+  'provider_request_failed',
+  'provider_unavailable',
+  'upstream_error',
+  'upstream_stream_incomplete',
+]);
+const logger = createChildLogger('AIProviderRuntime');
 
 export interface AIInferenceModelOption {
   id: string;
@@ -29,6 +44,9 @@ export interface AIProviderStatus {
   providerType: AIConfig['providerType'];
   defaultModel: string;
   allowUserModelSelection: boolean;
+  allowUserReasoningEffortSelection: boolean;
+  reasoningEfforts: string[];
+  defaultReasoningEffort: string | null;
   supportsImages: boolean;
   models: AIInferenceModelOption[];
 }
@@ -57,13 +75,14 @@ interface ResolveSessionOptions {
 interface GenerateConversationTitleOptions {
   requestId: string;
   content: string;
+  attachments?: AIMessageAttachment[];
   requestedModel?: string;
   signal: AbortSignal;
 }
 
 const CONVERSATION_TITLE_SYSTEM_PROMPT = [
   'Generate a concise title for this chat.',
-  'Use the same language as the user.',
+  "Use the language of the user's text. If there is no user text, inspect the attached images and use the dominant meaningful natural language visible in their content. If the image contains no language signal, use English. Never choose an unrelated third language.",
   'Do not analyze, reason through the request, or explain anything; answer immediately.',
   'Return only the title: 3 to 7 words, no quotes, no markdown, no trailing punctuation.',
 ].join(' ');
@@ -75,7 +94,8 @@ export class AIProviderRuntimeService {
     private readonly generalSettings: GeneralSettingsService,
     private readonly inferenceModels: InferenceModelService,
     private readonly inferenceRuntime: InferenceRuntimeService,
-    private readonly inferencePolicies: InferenceBudgetPolicyService
+    private readonly inferencePolicies: InferenceBudgetPolicyService,
+    private readonly artifactService?: AISandboxArtifactService
   ) {}
 
   async adminModels(): Promise<AIInferenceModelOption[]> {
@@ -92,6 +112,9 @@ export class AIProviderRuntimeService {
         providerType: config.providerType,
         defaultModel: config.model,
         allowUserModelSelection: false,
+        allowUserReasoningEffortSelection: config.allowUserReasoningEffortSelection,
+        reasoningEfforts: [...DIRECT_PROVIDER_REASONING_EFFORTS],
+        defaultReasoningEffort: 'default',
         supportsImages: config.supportsImages,
         models: [],
       };
@@ -103,6 +126,9 @@ export class AIProviderRuntimeService {
         providerType: config.providerType,
         defaultModel: config.gatewayInferenceModel,
         allowUserModelSelection: config.gatewayInferenceAllowUserModelSelection,
+        allowUserReasoningEffortSelection: false,
+        reasoningEfforts: [],
+        defaultReasoningEffort: null,
         supportsImages: false,
         models: [],
       };
@@ -123,6 +149,9 @@ export class AIProviderRuntimeService {
       providerType: config.providerType,
       defaultModel: defaultAvailable ? config.gatewayInferenceModel : (models[0]?.id ?? config.gatewayInferenceModel),
       allowUserModelSelection: config.gatewayInferenceAllowUserModelSelection,
+      allowUserReasoningEffortSelection: false,
+      reasoningEfforts: [],
+      defaultReasoningEffort: null,
       supportsImages:
         models.find((model) => model.id === config.gatewayInferenceModel)?.supportsImages ??
         models[0]?.supportsImages ??
@@ -140,7 +169,29 @@ export class AIProviderRuntimeService {
       }
       const client = new OpenAI({ apiKey, baseURL: config.providerUrl || undefined });
       const contextLimits = directProviderContextLimits(config.maxContextTokens, config.maxCompletionTokens);
-      const effectiveConfig = options.preferMinimumReasoning ? { ...config, reasoningEffort: 'none' as const } : config;
+      const requestedReasoningEffort = options.requestedReasoningEffort?.trim();
+      if (requestedReasoningEffort && !config.allowUserReasoningEffortSelection) {
+        throw new AppError(403, 'AI_REASONING_EFFORT_SELECTION_DISABLED', 'Reasoning effort selection is disabled');
+      }
+      if (
+        requestedReasoningEffort &&
+        !DIRECT_PROVIDER_REASONING_EFFORTS.includes(
+          requestedReasoningEffort as (typeof DIRECT_PROVIDER_REASONING_EFFORTS)[number]
+        )
+      ) {
+        throw new AppError(
+          400,
+          'AI_REASONING_EFFORT_UNAVAILABLE',
+          'The selected reasoning effort is unavailable for this provider'
+        );
+      }
+      const effectiveReasoningEffort =
+        requestedReasoningEffort && requestedReasoningEffort !== 'default'
+          ? (requestedReasoningEffort as AIConfig['reasoningEffort'])
+          : config.reasoningEffort;
+      const effectiveConfig = options.preferMinimumReasoning
+        ? { ...config, reasoningEffort: 'none' as const }
+        : { ...config, reasoningEffort: effectiveReasoningEffort };
       return {
         config: effectiveConfig,
         contextLimits,
@@ -215,20 +266,27 @@ export class AIProviderRuntimeService {
       contextLimits,
       reasoningEffort,
       stream: (messages, tools, streamOptions) =>
-        streamGatewayInferenceResponse({
-          runtime: this.inferenceRuntime,
-          userId: user.id,
-          requestId: `${options.requestId}:${randomUUID()}`,
+        streamGatewayInferenceWithRetry({
+          createAttempt: () =>
+            streamGatewayInferenceResponse({
+              runtime: this.inferenceRuntime,
+              userId: user.id,
+              requestId: `${options.requestId}:${randomUUID()}`,
+              conversationId: options.conversationId,
+              model: selected.id,
+              messages,
+              tools,
+              maxOutputTokens: streamOptions?.maxOutputTokens
+                ? Math.min(selected.max_output_tokens ?? streamOptions.maxOutputTokens, streamOptions.maxOutputTokens)
+                : (selected.max_output_tokens ?? undefined),
+              reasoningEffort: reasoningEffort ?? undefined,
+              signal: options.signal,
+              isCompaction: options.isCompaction,
+            }),
+          requestId: options.requestId,
           conversationId: options.conversationId,
           model: selected.id,
-          messages,
-          tools,
-          maxOutputTokens: streamOptions?.maxOutputTokens
-            ? Math.min(selected.max_output_tokens ?? streamOptions.maxOutputTokens, streamOptions.maxOutputTokens)
-            : (selected.max_output_tokens ?? undefined),
-          reasoningEffort: reasoningEffort ?? undefined,
           signal: options.signal,
-          isCompaction: options.isCompaction,
         }),
     };
   }
@@ -242,10 +300,11 @@ export class AIProviderRuntimeService {
     });
     let streamedContent = '';
     let finalContent = '';
+    const userContent = await this.titleUserContent(user.id, options);
     for await (const event of session.stream(
       [
         { role: 'system', content: CONVERSATION_TITLE_SYSTEM_PROMPT },
-        { role: 'user', content: options.content },
+        { role: 'user', content: userContent },
       ],
       [],
       { maxOutputTokens: CONVERSATION_TITLE_MAX_OUTPUT_TOKENS }
@@ -259,6 +318,107 @@ export class AIProviderRuntimeService {
     }
     return title;
   }
+
+  private async titleUserContent(
+    userId: string,
+    options: GenerateConversationTitleOptions
+  ): Promise<string | Array<Record<string, unknown>>> {
+    if (!options.attachments?.length || !this.artifactService) return options.content;
+
+    const parts: Array<Record<string, unknown>> = [];
+    if (options.content) parts.push({ type: 'text', text: options.content });
+    for (const attachment of options.attachments) {
+      if (attachment.kind !== 'image' || !attachment.mediaType.startsWith('image/')) continue;
+      try {
+        const artifact = await this.artifactService.getDownload(userId, attachment.artifactId);
+        const buffer = await fs.readFile(artifact.filePath);
+        parts.push({
+          type: 'image_url',
+          image_url: {
+            url: `data:${artifact.metadata.mediaType};base64,${buffer.toString('base64')}`,
+            detail: 'low',
+          },
+        });
+      } catch {
+        // The main message path will report invalid attachments. Title generation
+        // remains best-effort and can still use any valid text or image parts.
+      }
+    }
+
+    return parts.length > 0 ? parts : options.content;
+  }
+}
+
+async function* streamGatewayInferenceWithRetry(input: {
+  createAttempt: () => AsyncGenerator<ModelProviderEvent>;
+  requestId: string;
+  conversationId?: string;
+  model: string;
+  signal: AbortSignal;
+}): AsyncGenerator<ModelProviderEvent> {
+  for (let attempt = 1; attempt <= GATEWAY_INFERENCE_MAX_STREAM_ATTEMPTS; attempt += 1) {
+    let emittedOutput = false;
+    try {
+      for await (const event of input.createAttempt()) {
+        emittedOutput = true;
+        yield event;
+      }
+      return;
+    } catch (error) {
+      if (
+        input.signal.aborted ||
+        emittedOutput ||
+        attempt >= GATEWAY_INFERENCE_MAX_STREAM_ATTEMPTS ||
+        !isRetryableGatewayInferenceStreamError(error)
+      ) {
+        throw error;
+      }
+      const delayMs =
+        GATEWAY_INFERENCE_RETRY_MIN_DELAY_MS + Math.floor(Math.random() * (GATEWAY_INFERENCE_RETRY_JITTER_MS + 1));
+      logger.warn('Retrying Gateway Inference before first model output', {
+        requestId: input.requestId,
+        conversationId: input.conversationId,
+        model: input.model,
+        attempt,
+        nextAttempt: attempt + 1,
+        delayMs,
+        code: error.code,
+        status: error.status,
+      });
+      await waitForGatewayInferenceRetry(delayMs, input.signal);
+    }
+  }
+}
+
+function isRetryableGatewayInferenceStreamError(error: unknown): error is InferenceProtocolError {
+  return (
+    error instanceof InferenceProtocolError &&
+    (error.status === 502 || error.status === 503) &&
+    error.details?.emittedOutput !== true &&
+    RETRYABLE_GATEWAY_INFERENCE_CODES.has(error.code)
+  );
+}
+
+function waitForGatewayInferenceRetry(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(gatewayInferenceAbortError());
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      reject(gatewayInferenceAbortError());
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function gatewayInferenceAbortError(): Error {
+  const error = new Error('Aborted');
+  error.name = 'AbortError';
+  return error;
 }
 
 function minimumReasoningEffort(efforts: string[]): string | null {

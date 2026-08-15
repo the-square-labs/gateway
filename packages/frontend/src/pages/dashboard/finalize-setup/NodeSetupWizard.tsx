@@ -48,11 +48,13 @@ export function NodeSetupWizard({
   onBack,
   onConfigured,
   onSkipped,
+  completionActionLabel = "Back to checklist",
 }: {
   open: boolean;
   onBack: () => void;
   onConfigured: () => Promise<void>;
   onSkipped: () => Promise<void>;
+  completionActionLabel?: string;
 }) {
   const [type, setType] = useState<NodeType>("nginx");
   const [name, setName] = useState("");
@@ -202,7 +204,7 @@ export function NodeSetupWizard({
       footer={
         online ? (
           <Button onClick={() => void onConfigured()}>
-            <Check /> Back to checklist
+            <Check /> {completionActionLabel}
           </Button>
         ) : !enrollment ? (
           <Button onClick={() => void create()} disabled={saving || !name.trim()}>

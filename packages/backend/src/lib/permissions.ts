@@ -47,6 +47,9 @@ const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Record<string, readonly string[]> = {
   'logs:read': ['logs:manage'],
   'status-page:view': ['status-page:manage'],
   'integrations:cloudflare:view': ['integrations:cloudflare:manage'],
+  'integrations:github:view': ['integrations:github:manage'],
+  'integrations:git:view': ['integrations:git:manage'],
+  'integrations:ssh:view': ['integrations:ssh:manage'],
   'integrations:cloudflare:dns:view': [
     'integrations:cloudflare:manage',
     'integrations:cloudflare:dns:edit',

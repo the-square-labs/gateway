@@ -1,0 +1,15 @@
+{
+  "file_name": "d8e1oh13_scenario_cards",
+  "edges": [
+    {
+      "from_id": "d8e1oh13",
+      "to_id": "myhj1f8i",
+      "relation": "same_area",
+      "weight": 0.72,
+      "reason": "Both define Gateway sidebar navigation conventions, including active states and attention-badge behavior relevant to Lite Mode.",
+      "source": "auto",
+      "created_at": 1786571554164,
+      "updated_at": 1786571554164
+    }
+  ]
+}

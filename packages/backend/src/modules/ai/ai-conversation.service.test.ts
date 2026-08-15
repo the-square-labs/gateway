@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   countVisibleMessages,
   deriveConversationStatus,
+  isHiddenSystemMessage,
   sanitizeConversationMessagesForStorage,
   sortConversationSummariesByLastUserMessage,
 } from './ai-conversation.service.js';
@@ -240,5 +241,17 @@ describe('AIConversationService conversation status', () => {
         },
       ])
     ).toEqual({ status: 'active', blockReason: null });
+  });
+
+  it('does not count hidden system lifecycle messages as visible chat messages', () => {
+    const hidden = {
+      role: 'system',
+      content: 'The user cancelled Plan Mode.',
+      hiddenSystemEvent: true,
+      lifecycleEvent: { type: 'planning_cancelled' },
+    };
+
+    expect(isHiddenSystemMessage(hidden)).toBe(true);
+    expect(countVisibleMessages([{ role: 'user', content: 'hello' }, hidden])).toBe(1);
   });
 });

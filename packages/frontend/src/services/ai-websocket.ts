@@ -5,7 +5,7 @@ type StatusHandler = (connected: boolean) => void;
 type ErrorHandler = (message: string) => void;
 
 const PING_INTERVAL = 15_000;
-const PONG_TIMEOUT = 5_000;
+const PONG_TIMEOUT = 12_000;
 const CONNECT_TIMEOUT = 10_000;
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 8000];
 
@@ -17,6 +17,7 @@ export class AIWebSocketClient {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private pongTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private connectionPromise: Promise<boolean> | null = null;
   private reconnectAttempts = 0;
   private _isConnected = false;
   private intentionalClose = false;
@@ -26,9 +27,15 @@ export class AIWebSocketClient {
   }
 
   connect(): Promise<boolean> {
+    if (this._isConnected) return Promise.resolve(true);
+    if (this.connectionPromise) return this.connectionPromise;
+
     this.reconnectAttempts = 0;
     this.intentionalClose = false;
-    return this.doConnect();
+    this.connectionPromise = this.doConnect().finally(() => {
+      this.connectionPromise = null;
+    });
+    return this.connectionPromise;
   }
 
   private doConnect(): Promise<boolean> {
@@ -41,8 +48,9 @@ export class AIWebSocketClient {
       try {
         this.ws = new WebSocket(url);
       } catch {
-        this.errorHandler?.("Failed to create AI connection");
+        this.errorHandler?.("Reconnecting...");
         resolve(false);
+        this.scheduleReconnect();
         return;
       }
 
@@ -66,7 +74,7 @@ export class AIWebSocketClient {
 
         if (msg.type === "auth_ok") {
           clearTimeout(timeout);
-          this.setConnected(true);
+          this.setConnected(true, true);
           this.reconnectAttempts = 0;
           this.startPingPong();
           resolve(true);
@@ -84,6 +92,10 @@ export class AIWebSocketClient {
 
         if (msg.type === "pong") {
           this.clearPongTimeout();
+          // A pong proves this socket is still usable. Recover from a stale
+          // reconnect state even if a previous close callback raced the new
+          // authenticated connection.
+          this.setConnected(true);
           return;
         }
 
@@ -186,8 +198,7 @@ export class AIWebSocketClient {
 
   private scheduleReconnect(): void {
     if (this.intentionalClose) return;
-
-    this.clearReconnectTimer();
+    if (this.reconnectTimer) return;
     this.errorHandler?.("Reconnecting...");
     const delay = RECONNECT_DELAYS[this.reconnectAttempts] || 8000;
     this.reconnectAttempts++;
@@ -207,9 +218,11 @@ export class AIWebSocketClient {
 
   // ── Helpers ──
 
-  private setConnected(connected: boolean): void {
+  private setConnected(connected: boolean, notify = false): void {
     if (this._isConnected !== connected) {
       this._isConnected = connected;
+      this.statusHandler?.(connected);
+    } else if (notify) {
       this.statusHandler?.(connected);
     }
   }

@@ -55,6 +55,11 @@ export interface AISandboxArtifactListItem extends AISandboxArtifactMetadata {
   downloadUrl: string;
 }
 
+export interface AISandboxArtifactPage {
+  items: AISandboxArtifactListItem[];
+  nextPage: number | null;
+}
+
 export class AISandboxArtifactService {
   private readonly rootDir: string;
   private readonly conversationLocks = new Map<string, Promise<void>>();
@@ -337,6 +342,16 @@ export class AISandboxArtifactService {
       .filter((metadata) => metadata.userId === userId)
       .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
       .map((metadata) => this.toListItem(metadata));
+  }
+
+  async listPageForUser(userId: string, page: number, limit: number): Promise<AISandboxArtifactPage> {
+    const artifacts = await this.listForUser(userId);
+    const offset = (page - 1) * limit;
+    const items = artifacts.slice(offset, offset + limit);
+    return {
+      items,
+      nextPage: offset + items.length < artifacts.length ? page + 1 : null,
+    };
   }
 
   async delete(userId: string, artifactId: string): Promise<boolean> {

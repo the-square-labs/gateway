@@ -143,6 +143,60 @@ describe('AIService admin user lifecycle tools', () => {
     expect(authService.updateUserGroup).toHaveBeenCalledWith('user-2', 'group-2');
   });
 
+  it('replaces and resets a user additional permissions through AuthService privilege checks', async () => {
+    const targetUser = {
+      id: 'user-2',
+      oidcSubject: 'oidc-user-2',
+      scopes: ['proxy:view'],
+      additionalScopes: [],
+    };
+    const authService = {
+      getUserById: vi.fn(async (userId: string) => (userId === BASE_USER.id ? BASE_USER : targetUser)),
+      assertCanUpdateUserAdditionalScopes: vi.fn(async (_actorId, _actorScopes, _userId, requestedScopes) => ({
+        targetUser,
+        additionalScopes: requestedScopes,
+      })),
+      updateUserAdditionalScopes: vi.fn(async (userId: string, additionalScopes: string[]) => ({
+        ...targetUser,
+        id: userId,
+        additionalScopes,
+      })),
+    };
+    const service = createService({ authService });
+
+    await expect(
+      service.executeTool(BASE_USER, 'set_user_additional_permissions', {
+        userId: 'user-2',
+        additionalScopes: ['proxy:view'],
+      })
+    ).resolves.toEqual({
+      result: { ...targetUser, additionalScopes: ['proxy:view'] },
+      invalidateStores: ['users'],
+    });
+    expect(authService.assertCanUpdateUserAdditionalScopes).toHaveBeenLastCalledWith(
+      'user-1',
+      BASE_USER.scopes,
+      'user-2',
+      ['proxy:view']
+    );
+
+    await expect(
+      service.executeTool(BASE_USER, 'set_user_additional_permissions', {
+        userId: 'user-2',
+        additionalScopes: [],
+      })
+    ).resolves.toEqual({
+      result: { ...targetUser, additionalScopes: [] },
+      invalidateStores: ['users'],
+    });
+    expect(authService.updateUserAdditionalScopes).toHaveBeenLastCalledWith('user-2', []);
+
+    await expect(
+      service.executeTool(BASE_USER, 'set_user_additional_permissions', { userId: 'user-2' })
+    ).resolves.toMatchObject({ error: 'additionalScopes must be an array of permission scope strings' });
+    expect(authService.updateUserAdditionalScopes).toHaveBeenCalledTimes(2);
+  });
+
   it('rejects self and system user lifecycle mutations', async () => {
     const authService = {
       getUserById: vi.fn(async (userId: string) =>

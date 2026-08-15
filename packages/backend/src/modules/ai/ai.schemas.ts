@@ -45,6 +45,7 @@ export const ChatRequestSchema = z.object({
 });
 
 export const AIContextEstimateRequestSchema = z.object({
+  messages: z.array(ChatMessageSchema).optional(),
   context: PageContextSchema.optional(),
   conversationId: z.string().uuid().optional().nullable(),
   model: z.string().trim().max(255).optional(),
@@ -61,6 +62,7 @@ export const AIConfigUpdateSchema = z.object({
   model: z.string().optional(),
   gatewayInferenceModel: z.string().trim().max(255).optional(),
   gatewayInferenceAllowUserModelSelection: z.boolean().optional(),
+  allowUserReasoningEffortSelection: z.boolean().optional(),
   customSystemPrompt: z.string().optional(),
   rateLimitMax: z.number().int().min(1).max(1000).optional(),
   rateLimitWindowSeconds: z.number().int().min(10).max(3600).optional(),
@@ -76,3 +78,15 @@ export const AIConfigUpdateSchema = z.object({
   sandboxEnabled: z.boolean().optional(),
   sandboxDefaultTier: z.enum(['low', 'medium', 'high']).optional(),
 });
+
+export const AIUserSkillCreateSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().min(1).max(500),
+  instructions: z.string().trim().min(1).max(20_000),
+  enabled: z.boolean().optional(),
+});
+
+export const AIUserSkillUpdateSchema = AIUserSkillCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  { message: 'At least one skill field is required' }
+);

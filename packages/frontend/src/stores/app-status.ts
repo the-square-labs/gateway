@@ -89,3 +89,25 @@ export const useAppStatusStore = create<AppStatusState>()(
     }
   )
 );
+
+interface GatewayOperationStatusSnapshot {
+  gatewayUpdatingActive: boolean;
+  gatewayUpdatingTargetVersion: string | null;
+  gatewayRestartingActive: boolean;
+  gatewayRestartTargetUrl: string | null;
+}
+
+export function syncGatewayOperationStatus(snapshot: GatewayOperationStatusSnapshot): boolean {
+  const current = useAppStatusStore.getState();
+  if (
+    current.gatewayUpdatingActive === snapshot.gatewayUpdatingActive &&
+    current.gatewayUpdatingTargetVersion === snapshot.gatewayUpdatingTargetVersion &&
+    current.gatewayRestartingActive === snapshot.gatewayRestartingActive &&
+    current.gatewayRestartTargetUrl === snapshot.gatewayRestartTargetUrl
+  ) {
+    return false;
+  }
+
+  useAppStatusStore.setState(snapshot);
+  return true;
+}

@@ -1,18 +1,24 @@
+import { motion, useReducedMotion } from "framer-motion";
 import {
+  Activity,
   Box,
   ChevronDown,
   ChevronRight,
+  CircleAlert,
+  Database,
   Download,
   FileText,
   Image as ImageIcon,
+  Rocket,
   RotateCcw,
+  Server,
+  ShieldCheck,
   SquarePen,
   TerminalSquare,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type ComponentType, type ReactNode, useEffect, useMemo, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Button } from "@/components/ui/button";
 import {
   AIChangedResources,
   resourceAwareMarkdown,
@@ -59,6 +65,87 @@ interface ArtifactAttachment {
 
 type ArtifactPreviewKind = "image" | "text" | null;
 
+const COMMENT_WORD_REVEAL_DELAY_MS = 55;
+
+function useAnimatedCommentContent(
+  messageId: string,
+  content: string,
+  enabled: boolean
+): { content: string; chunk: string } {
+  const tokens = useMemo(() => content.match(/\S+\s*/gu) ?? (content ? [content] : []), [content]);
+  const [reveal, setReveal] = useState(() => ({
+    messageId,
+    revealed: enabled ? 0 : tokens.length,
+    batchStart: 0,
+  }));
+
+  useEffect(() => {
+    if (reveal.messageId !== messageId) {
+      setReveal({
+        messageId,
+        revealed: enabled ? 0 : tokens.length,
+        batchStart: 0,
+      });
+      return;
+    }
+    if (!enabled) {
+      if (reveal.revealed !== tokens.length || reveal.batchStart !== tokens.length) {
+        setReveal({ messageId, revealed: tokens.length, batchStart: tokens.length });
+      }
+      return;
+    }
+    if (reveal.revealed >= tokens.length) return;
+
+    const timer = window.setTimeout(() => {
+      setReveal((current) => {
+        if (current.messageId !== messageId) return current;
+        const batchSize = 1 + Math.floor(Math.random() * 3);
+        return {
+          messageId,
+          batchStart: current.revealed,
+          revealed: Math.min(tokens.length, current.revealed + batchSize),
+        };
+      });
+    }, COMMENT_WORD_REVEAL_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [enabled, messageId, reveal, tokens.length]);
+
+  const revealed = Math.min(reveal.revealed, tokens.length);
+  const batchStart = Math.min(reveal.batchStart, revealed);
+  return {
+    content: tokens.slice(0, revealed).join(""),
+    chunk: enabled ? tokens.slice(batchStart, revealed).join("") : "",
+  };
+}
+
+function AITimelineDivider({
+  icon: Icon,
+  children,
+  action,
+  role,
+}: {
+  icon: ComponentType<{ className?: string }>;
+  children: ReactNode;
+  action?: ReactNode;
+  role?: "alert";
+}) {
+  return (
+    <div
+      data-ai-timeline-divider
+      role={role}
+      className="flex w-full items-center gap-3 py-3 text-xs text-muted-foreground"
+    >
+      <div className="h-px min-w-4 flex-1 bg-border" />
+      <span className="flex min-w-0 shrink items-center justify-center gap-1.5 text-center">
+        <Icon className="h-3.5 w-3.5 shrink-0" />
+        <span className="min-w-0 break-words">{children}</span>
+        {action}
+      </span>
+      <div className="h-px min-w-4 flex-1 bg-border" />
+    </div>
+  );
+}
+
 function isGroupableToolCall(toolCall: AIToolCall): boolean {
   if (toolCall.name === "compact_context" || toolCall.name === "ask_question") return false;
   return (
@@ -103,14 +190,35 @@ export function AIMessage({
   resourceReferences = [],
   suppressActivityIndicator = false,
 }: AIMessageProps) {
+  const prefersReducedMotion = useReducedMotion();
   const content = typeof message.content === "string" ? message.content : "";
+  const animatedComment = useAnimatedCommentContent(
+    message.id ?? "",
+    content,
+    Boolean(message.id?.includes(":comment:") && message.streamingChunk && !prefersReducedMotion)
+  );
   const visibleToolCalls = message.toolCalls?.filter(
     (toolCall) => toolCall.name !== "send_comment"
   );
   const toolCallItems = visibleToolCalls ? buildToolCallRenderItems(visibleToolCalls) : [];
   const hasCompactContextTool =
     visibleToolCalls?.some((tc) => tc.name === "compact_context") ?? false;
-  const visibleContent = message.compactMarker && hasCompactContextTool ? "" : content;
+  const visibleContent =
+    message.compactMarker && hasCompactContextTool ? "" : animatedComment.content;
+  const streamingChunk =
+    animatedComment.chunk ||
+    (message.isStreaming &&
+    message.streamingChunk &&
+    visibleContent.endsWith(message.streamingChunk)
+      ? message.streamingChunk
+      : "");
+  const streamingRehypePlugins = useMemo(
+    () =>
+      streamingChunk
+        ? [createStreamingChunkRehypePlugin(visibleContent.length - streamingChunk.length)]
+        : [],
+    [streamingChunk, visibleContent.length]
+  );
   const errorMessage = extractErrorMessage(visibleContent);
   const compactSummary = message.compactMarker ? content : undefined;
   const artifacts = extractArtifactAttachments(visibleToolCalls);
@@ -123,8 +231,24 @@ export function AIMessage({
     () => ({
       ...markdownComponents,
       a: resourceMarkdownLinkComponent(availableResourceReferences),
+      span: ({ children, className, ...props }: React.HTMLAttributes<HTMLSpanElement>) =>
+        className?.includes("ai-streaming-chunk") ? (
+          <motion.span
+            key={`${message.id}:${visibleContent.length}`}
+            className={className}
+            initial={prefersReducedMotion ? false : { opacity: 0, y: 2 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: prefersReducedMotion ? 0 : 0.12, ease: "easeOut" }}
+          >
+            {children}
+          </motion.span>
+        ) : (
+          <span className={className} {...props}>
+            {children}
+          </span>
+        ),
     }),
-    [availableResourceReferences]
+    [availableResourceReferences, message.id, prefersReducedMotion, visibleContent.length]
   );
 
   if (message.conversationStatus) return null;
@@ -133,14 +257,9 @@ export function AIMessage({
     const from = message.modelChange.fromDisplayName?.trim() || message.modelChange.fromModel;
     const to = message.modelChange.toDisplayName?.trim() || message.modelChange.toModel;
     return (
-      <div className="flex w-full items-center gap-3 py-1 text-xs text-muted-foreground">
-        <div className="h-px flex-1 bg-border" />
-        <span className="flex shrink-0 items-center gap-1.5">
-          <Box className="h-3.5 w-3.5" />
-          Model changed from {from} to {to}
-        </span>
-        <div className="h-px flex-1 bg-border" />
-      </div>
+      <AITimelineDivider icon={Box}>
+        Model changed from {from} to {to}
+      </AITimelineDivider>
     );
   }
 
@@ -149,8 +268,25 @@ export function AIMessage({
     const displayContent = content
       .replace(/<system-instruction>[\s\S]*?<\/system-instruction>\s*/g, "")
       .trim();
+    const ScenarioIcon =
+      message.scenario?.icon === "rocket"
+        ? Rocket
+        : message.scenario?.icon === "refresh"
+          ? RotateCcw
+          : message.scenario?.icon === "server"
+            ? Server
+            : message.scenario?.icon === "database"
+              ? Database
+              : message.scenario?.icon === "shield"
+                ? ShieldCheck
+                : Activity;
     return (
-      <div className="group relative flex justify-end">
+      <motion.div
+        className="group relative flex justify-end"
+        initial={prefersReducedMotion ? false : { opacity: 0, y: 4 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: prefersReducedMotion ? 0 : 0.15, ease: "easeOut" }}
+      >
         <div className="flex max-w-[85%] flex-col items-end gap-1.5">
           {message.attachments && message.attachments.length > 0 && (
             <div className="flex flex-wrap justify-end gap-1">
@@ -172,10 +308,24 @@ export function AIMessage({
               ))}
             </div>
           )}
-          {displayContent && (
-            <div className="break-words bg-primary px-3 py-2 text-sm text-primary-foreground">
-              {displayContent}
+          {message.scenario ? (
+            <div className="w-full border border-primary/35 bg-primary px-3 py-2.5 text-primary-foreground">
+              <div className="flex items-start gap-2.5">
+                <ScenarioIcon className="mt-0.5 h-4 w-4 shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">{message.scenario.title}</p>
+                  <p className="mt-0.5 text-xs text-primary-foreground/75">
+                    {message.scenario.description}
+                  </p>
+                </div>
+              </div>
             </div>
+          ) : (
+            displayContent && (
+              <div className="break-words bg-primary px-3 py-2 text-sm text-primary-foreground">
+                {displayContent}
+              </div>
+            )
           )}
         </div>
         <div className="absolute right-0 top-full z-10 mt-1 flex items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
@@ -197,7 +347,7 @@ export function AIMessage({
             </button>
           )}
         </div>
-      </div>
+      </motion.div>
     );
   }
 
@@ -205,29 +355,24 @@ export function AIMessage({
     if (!content.trim()) return null;
     if (errorMessage) {
       return (
-        <div className={assistantMaxWidthClass}>
-          <div
-            role="alert"
-            className="flex w-fit max-w-full items-center gap-3 border border-border bg-muted/50 px-3 py-2 text-sm text-muted-foreground"
-          >
-            <span className="min-w-0 break-words">
-              <span className="font-medium text-foreground">Error:</span> {errorMessage}
-            </span>
-            {onRetry && (
-              <Button
+        <AITimelineDivider
+          icon={CircleAlert}
+          role="alert"
+          action={
+            onRetry ? (
+              <button
                 type="button"
-                variant="outline"
-                size="sm"
-                className="h-7 shrink-0 px-2.5"
+                className="shrink-0 font-medium text-primary transition-colors hover:text-primary/80 hover:underline disabled:pointer-events-none disabled:opacity-40"
                 onClick={onRetry}
                 disabled={retryDisabled}
               >
-                <RotateCcw className="h-3.5 w-3.5" />
                 Retry
-              </Button>
-            )}
-          </div>
-        </div>
+              </button>
+            ) : undefined
+          }
+        >
+          <span className="font-medium text-foreground">Error:</span> {errorMessage}
+        </AITimelineDivider>
       );
     }
     return (
@@ -313,7 +458,11 @@ export function AIMessage({
         {/* Text content */}
         {hasContent && (
           <div className="prose dark:prose-invert !max-w-none break-words text-sm prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-pre:my-2 prose-table:my-0 prose-code:text-xs prose-pre:text-xs prose-pre:rounded-none prose-code:rounded-none prose-code:before:content-none prose-code:after:content-none [&>*:first-child]:!mt-0 [&>*:last-child]:!mb-0">
-            <Markdown remarkPlugins={[remarkGfm]} components={assistantMarkdownComponents}>
+            <Markdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={streamingRehypePlugins}
+              components={assistantMarkdownComponents}
+            >
               {resourceAwareMarkdown(visibleContent, availableResourceReferences)}
             </Markdown>
           </div>
@@ -688,6 +837,54 @@ const markdownComponents = {
     </a>
   ),
 };
+
+interface StreamingHastNode {
+  type: string;
+  value?: string;
+  tagName?: string;
+  properties?: Record<string, unknown>;
+  position?: { start?: { offset?: number }; end?: { offset?: number } };
+  children?: StreamingHastNode[];
+}
+
+function createStreamingChunkRehypePlugin(chunkStartOffset: number) {
+  return () => (tree: StreamingHastNode) => {
+    wrapStreamingTextNodes(tree, chunkStartOffset);
+  };
+}
+
+function wrapStreamingTextNodes(parent: StreamingHastNode, chunkStartOffset: number): void {
+  if (!parent.children) return;
+  const nextChildren: StreamingHastNode[] = [];
+
+  for (const child of parent.children) {
+    if (child.type !== "text" || typeof child.value !== "string") {
+      wrapStreamingTextNodes(child, chunkStartOffset);
+      nextChildren.push(child);
+      continue;
+    }
+
+    const startOffset = child.position?.start?.offset;
+    const endOffset = child.position?.end?.offset;
+    if (startOffset === undefined || endOffset === undefined || endOffset <= chunkStartOffset) {
+      nextChildren.push(child);
+      continue;
+    }
+
+    const splitAt = Math.max(0, Math.min(child.value.length, chunkStartOffset - startOffset));
+    if (splitAt > 0) {
+      nextChildren.push({ ...child, value: child.value.slice(0, splitAt) });
+    }
+    nextChildren.push({
+      type: "element",
+      tagName: "span",
+      properties: { className: ["ai-streaming-chunk"] },
+      children: [{ ...child, value: child.value.slice(splitAt) }],
+    });
+  }
+
+  parent.children = nextChildren;
+}
 
 function mergeResourceReferences(
   conversationReferences: AIResourceReference[],

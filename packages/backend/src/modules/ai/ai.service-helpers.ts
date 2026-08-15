@@ -173,6 +173,7 @@ function compactProxyHostForAgent(host: Record<string, any>) {
   const safeHost = stripRawProxyConfigForProgrammatic(host);
   return {
     id: safeHost.id,
+    slug: safeHost.slug,
     type: safeHost.type,
     domainNames: safeHost.domainNames,
     enabled: safeHost.enabled,

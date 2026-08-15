@@ -2,7 +2,11 @@ import { hasScope, hasScopeBase } from '@/lib/permissions.js';
 import { authenticateBearerToken } from '@/modules/auth/auth.middleware.js';
 import { requiresSessionMfaReauthentication, resolveLiveSessionUser } from '@/modules/auth/live-session-user.js';
 import type { User } from '@/types.js';
-import { getAcceptedSessionCookieNames } from './session-cookie.js';
+import {
+  getAcceptedSessionCookieNames,
+  getSessionCookieNameForUrl,
+  LEGACY_SESSION_COOKIE_NAME,
+} from './session-cookie.js';
 
 export type WebSocketCredential =
   | {
@@ -45,12 +49,22 @@ export function getSessionWebSocketCredential(
 ): WebSocketCredential | null {
   if (!isAllowedOrigin(origin)) return null;
   if (cookieHeader?.includes('gateway_session_')) {
+    const preferredCookieName = origin ? getSessionCookieNameForUrl(origin) : null;
+    if (preferredCookieName) {
+      const preferredSessionId = getCookieValue(cookieHeader, preferredCookieName);
+      if (preferredSessionId) return { type: 'session', value: preferredSessionId };
+    }
+
+    const legacySessionId = getCookieValue(cookieHeader, LEGACY_SESSION_COOKIE_NAME);
+    if (legacySessionId) return { type: 'session', value: legacySessionId };
+
     for (const cookieName of getAcceptedSessionCookieNames()) {
+      if (cookieName === preferredCookieName || cookieName === LEGACY_SESSION_COOKIE_NAME) continue;
       const sessionId = getCookieValue(cookieHeader, cookieName);
       if (sessionId) return { type: 'session', value: sessionId };
     }
   }
-  const legacySessionId = getCookieValue(cookieHeader, 'session_id');
+  const legacySessionId = getCookieValue(cookieHeader, LEGACY_SESSION_COOKIE_NAME);
   if (legacySessionId) return { type: 'session', value: legacySessionId };
   return null;
 }

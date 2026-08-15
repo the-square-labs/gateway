@@ -7,7 +7,7 @@ import { getNodeAppearanceColor } from "./node-appearance";
 import { aiResourceHref, RESOURCE_ICONS, RESOURCE_LABELS } from "./resource-presentation";
 import { createReturnNavigationState } from "./return-navigation";
 
-const MARKER_RE = /\[\[resource:(gwr_[a-f0-9]{24})\|([^\]\r\n]{1,240})\]\]/g;
+const MARKER_RE = /\[\[resource:(gwr_[a-f0-9]{24})\|((?:[^[\]\r\n]|\[[^[\]\r\n]*\]){1,240})\]\]/g;
 const INTERNAL_HREF_PREFIX = "#gateway-resource:";
 
 export function resourceAwareMarkdown(content: string, references: AIResourceReference[]): string {
@@ -49,11 +49,16 @@ export function AIResourceLink({ reference }: { reference: AIResourceReference }
   const setAIPanelOpen = useUIStore((state) => state.setAIPanelOpen);
   const Icon = RESOURCE_ICONS[reference.type];
   const typeLabel = RESOURCE_LABELS[reference.type];
+  const displayLabel =
+    reference.type === "proxy_host"
+      ? (reference.label.split(",")[0]?.trim() ?? reference.label)
+      : reference.label;
   const appearance = getNodeAppearanceColor(reference.appearanceColor);
   const toneClassName =
     appearance?.badgeClassName ??
     "bg-[color:color-mix(in_srgb,var(--color-link)_12%,transparent)] text-[color:var(--color-link)]";
-  const href = reference.uiHref ?? aiResourceHref(reference);
+  const derivedHref = aiResourceHref(reference);
+  const href = reference.type === "proxy_host" ? derivedHref : (reference.uiHref ?? derivedHref);
   const openOperationsConsole = (event: MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -69,11 +74,11 @@ export function AIResourceLink({ reference }: { reference: AIResourceReference }
       to={href}
       state={createReturnNavigationState(location)}
       onClick={openPrimary}
-      className={`mx-0.5 inline-flex max-w-full items-center gap-1 rounded-sm px-1 py-0.5 align-baseline font-medium no-underline transition-colors hover:brightness-110 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${toneClassName} ${reference.relation === "deleted" ? "opacity-70" : ""}`}
-      aria-label={`${typeLabel}: ${reference.label}`}
+      className={`mx-0.5 inline box-decoration-clone rounded-sm px-1 py-0.5 align-baseline font-medium no-underline transition-colors [overflow-wrap:anywhere] hover:brightness-110 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${toneClassName} ${reference.relation === "deleted" ? "opacity-70" : ""}`}
+      aria-label={`${typeLabel}: ${displayLabel}`}
     >
-      <Icon className="h-3 w-3 shrink-0" aria-hidden="true" />
-      <span className="min-w-0 break-words">{reference.label}</span>
+      <Icon className="mr-1 inline-block h-3 w-3 align-[-0.08em]" aria-hidden="true" />
+      {displayLabel}
     </Link>
   );
 }

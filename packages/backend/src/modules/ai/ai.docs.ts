@@ -8,6 +8,7 @@ Gateway AI starts conversations with a small base tool surface. Domain-specific 
 
 ## Base Tools
 - discover_tools: inspect callable tool categories and category-specific tools.
+- read_skill and activate_skill: inspect or load one system or enabled organization skill listed in the assistant's compact prompt catalog. These are AI Workspace-only and are not MCP tools. Do not reactivate a skill while its earlier activation remains in the current context; activate it again after compaction only when it is still relevant.
 - get_current_context: read the current UI route/resource when the user says "this page" or "current item".
 - wait: pause briefly when an operation is pending, then continue by re-checking status.
 - find_resource: globally search readable resources by name, ID, domain, image, etc.
@@ -19,9 +20,9 @@ Gateway AI starts conversations with a small base tool surface. Domain-specific 
 ## Tool Discovery
 - If the needed operation is not available, call discover_tools first.
 - Use internal_documentation before Gateway-specific workflows, tool argument details, permission-sensitive operations, and recently added capabilities. Do not answer those from general intuition.
-- Use discover_tools({ category: "Logging" }) before managing logging environments/schemas/logs.
-- Use discover_tools({ category: "Docker" }) before managing Docker containers/images/volumes/networks.
-- Use discover_tools({ category: "Inference" }) before configuring inference providers, models, limits, or tokens.
+- Use discover_tools({ categories: ["Logging"], includeTools: true }) before managing logging environments/schemas/logs.
+- Use discover_tools({ categories: ["Docker"], includeTools: true }) before managing Docker containers/images/volumes/networks.
+- Use discover_tools({ categories: ["Inference"], includeTools: true }) before configuring inference providers, models, limits, or tokens.
 - Use discover_tools({ query: "certificate" }) when you know the task but not the category.
 - After discovery, use internal_documentation for workflow details and argument shapes.
 
@@ -315,7 +316,7 @@ Gateway can enable OIDC, password, and email one-time-code sign-in independently
 ## Managing Users
 - View all users: list_users
 - Change a user's group: update_user_role(userId, groupId) — changes their permissions immediately
-- The Administration UI can assign additional per-user scopes on top of the user's group, but only from scopes the acting administrator already has. The current AI user tool does not expose this override mutation.
+- Replace a user's exact additional per-user scopes: set_user_additional_permissions(userId, additionalScopes). Pass [] to reset all additional permissions without changing the user's group. Only grant scopes the acting administrator already has.
 - Block or unblock users from the Administration UI, API, or AI Workspace.
 - Deleting a user is a soft-delete: their access and tokens are revoked, they are hidden from operational user lists, and historical audit/usage data remains intact. Only a system administrator can restore a deleted user, and restore leaves them blocked until explicitly unblocked.
 
@@ -604,8 +605,8 @@ other stable hint to locate the recreated container and continue with its new ID
 ## Cross-Node Migrations
 - Gateway can migrate a standalone container or a blue/green deployment to another Docker node, including referenced images, named-volume data, capacity preflight, verification, proxy cutover, cancellation, and cleanup recovery.
 - Migration requires \`docker:containers:migrate\` plus the source-resource permissions needed to inspect protected configuration, secrets, and mounts.
+- Use \`manage_docker_migration\` to preflight first, start with the returned fingerprint, inspect progress, cancel before cutover, or retry cleanup. Never start without a blocker-free current preflight.
 - Container archive export requires \`docker:containers:export\` plus file and environment access for the source container. Secret values are included only when the caller also has \`docker:containers:secrets\`.
-- The current AI tool surface does not expose migration mutation. Direct the user to the Docker container or deployment migration UI instead of inventing a tool call.
 
 ## Registries & Templates
 - Registries: add private Docker registries with encrypted credentials. Global or node-specific scope.
@@ -639,7 +640,7 @@ Managed database instances are not generic Docker workloads. The database node o
 - The tunnel terminates in Gateway's separate long-lived relay container. Ordinary app-only updates keep established binding traffic running; a red relay warning is a critical operator state after bounded automatic recovery fails, not a reason to publish a replacement port.
 - A TCP endpoint is an independent, explicit publication option for infrastructure outside Gateway. It requires engine authentication and may not be tunnel-encrypted unless the database engine is configured with TLS. Gateway does not change host firewalls automatically.
 - Each application binding gets a separate engine identity. Its URI and optional host/port/database/user/password environment values are injected into the selected application; do not reveal, log, or copy those values unless an explicit secret-reveal flow permits it.
-- The current AI/MCP database tools operate saved external connection workflows. They must not claim to deploy, bind, publish, or reveal managed-instance or binding secrets when no matching tool is available; direct the operator to the Databases or container/deployment Settings UI instead.
+- Native assistant flows use \`manage_managed_database\` for catalog/list/get/create/retry/delete and workload binding lifecycle. Read the catalog before create, keep instances private unless the user explicitly requests publication, poll get until ready, and never reveal owner or binding credentials. MCP remains read-only for this workflow.
 
 ## Providers
 - **Postgres**: schema/table explorer, paginated row browser, row insert/update/delete for PK-backed tables, SQL console, monitoring.
@@ -698,6 +699,8 @@ Managed database instances are not generic Docker workloads. The database node o
   logging: `# External Logging
 
 Gateway can ingest structured logs from external services into ClickHouse-backed logging environments.
+
+Before creating environments or schemas, call \`manage_logging_backend\` with \`get\`. If logging is disabled on an empty Gateway, ask whether to provision Gateway-managed local ClickHouse or use an existing external ClickHouse, then apply the chosen backend before continuing.
 
 Per-environment retention TTL is complemented by optional Housekeeping caps for total rows and approximate disk size. ClickHouse also has an internal-log safety budget and health guard. Enable ClickHouse Internals in Housekeeping to allow cleanup of supported system tables, and only do so for an instance dedicated to Gateway. Users with housekeeping access see storage pressure on the Dashboard.
 
@@ -1220,6 +1223,7 @@ AI Workspace settings control the provider, request limits, tool exposure, web s
 - apiKey: only set this when replacing the stored provider key. The current secret is never returned in full.
 - gatewayInferenceModel: default published Gateway Inference model ID.
 - gatewayInferenceAllowUserModelSelection: whether users may choose another model they are allowed to access.
+- allowUserReasoningEffortSelection: whether users may override the default reasoning effort for the OpenAI-compatible provider. Gateway Inference uses each published model's own reasoning capabilities instead.
 - OpenAI-compatible provider values are preserved while Gateway Inference is selected. Disabling inference restores them; if no OpenAI-compatible key was saved, the assistant is disabled.
 
 ## Limits
@@ -1227,11 +1231,11 @@ AI Workspace settings control the provider, request limits, tool exposure, web s
 - maxToolRounds: maximum sequential tool-call rounds in one assistant run.
 - maxContextTokens: context budget used by the conversation builder.
 - maxCompletionTokens and maxTokensField: response token cap and provider field name.
-- reasoningEffort: low, medium, high, or none. Use none for models/providers that do not support reasoning controls.
+- reasoningEffort: default OpenAI-compatible provider effort: low, medium, high, or none. Use none to leave reasoning unspecified. Gateway Inference ignores this setting.
 
 ## Tool Access
 - disabledTools: exact tool names hidden from the assistant.
-- webSearchProvider, webSearchBaseUrl, and webSearchApiKey: provider selection, optional provider URL, and secret replacement for web search.
+- webSearchProvider, webSearchBaseUrl, and webSearchApiKey: provider selection, optional provider URL, and secret replacement for web search. Tavily is the default; Brave, Serper, Exa, and SearXNG are also supported. API-backed providers require a stored key, while SearXNG requires its base URL. The web_search tool is exposed only when the effective settings configure the selected provider.
 - sandboxEnabled and sandboxDefaultTier: sandbox runner exposure and default tier.
 
 ## Sandbox Runner
@@ -1245,6 +1249,7 @@ Gateway GitLab connectors are configured by admins in Settings -> Integrations. 
 
 ## Discovery
 - Use gitlab_list_connectors to find enabled connectors.
+- No connector is a setup choice, not a terminal failure. For a GitLab repository, ask the user whether they want a shared GitLab-instance connector or a generic connector scoped to this repository before treating repository inspection as unavailable.
 - If Gateway asks for GitLab authorization, wait for the user to complete or cancel the authorization modal. Never ask the user to paste a PAT into chat.
 - Use gitlab_list_projects or gitlab_search_projects to find projects already synced through Gateway allowlist rules.
 - Project arguments accept the synced project remote ID or full path.
@@ -1461,7 +1466,7 @@ Create a connector in the Cloudflare integration UI or through the authenticated
 - A wildcard certificate or a deployment where port 80 is unavailable usually needs DNS-01.
 
 ## Constraints And Diagnostics
-If no enabled connector has a matching zone, DNS-01 cannot be automated. If several connectors match, resolve the ambiguity rather than choosing one silently. Existing DNS records with a different target require explicit approval before overwrite. Use connector test/sync, zone status, and DNS propagation checks before retrying certificate issuance. The current assistant tool surface does not configure connectors directly; direct the user to the integration UI or API instead of inventing a tool call.`,
+If no enabled connector has a matching zone, DNS-01 cannot be automated. If several connectors match, resolve the ambiguity rather than choosing one silently. Existing DNS records with a different target require explicit approval before overwrite. Use connector test/sync, zone status, and DNS propagation checks before retrying certificate issuance. If the API token is already present in the user's current request, create_cloudflare_connector can create the connector under approval; otherwise open the concrete Cloudflare setup flow and keep the secret out of chat history.`,
 
   'docker-registries': `# Docker Registries
 

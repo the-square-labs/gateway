@@ -8,11 +8,13 @@ import {
   type AIRun,
   type AIRunQuestion,
   type AIRunToolCall,
+  type AISetupInteraction,
   aiConversationInputs,
   aiConversationMessages,
   aiConversations,
   aiRunCredentialChallenges,
   aiRunQuestions,
+  aiRunSetupInteractions,
   aiRuns,
   aiRunToolCalls,
   aiRunToolRounds,
@@ -25,6 +27,7 @@ import type { AIResourceReference, ChatMessage, WSServerMessage } from './ai.typ
 import { classifyAIToolForApproval } from './ai-approval-policy.js';
 import type { AIConversationSearchService } from './ai-conversation-search.service.js';
 import { type AssistantLiveDraft, AssistantLiveDraftStore } from './ai-live-draft-store.js';
+import { AIPlanService } from './ai-plan.service.js';
 import {
   appendAIResourceReferencesToModelResult,
   formatAIResourceMarker,
@@ -48,6 +51,7 @@ const ACTIVE_RUN_STATUSES: AIRun['status'][] = [
   'waiting_for_approval',
   'waiting_for_answer',
   'waiting_for_credential',
+  'waiting_for_setup',
 ];
 const STEER_DEBOUNCE_MS = 1_000;
 const STEER_MAX_WAIT_MS = 3_000;
@@ -57,6 +61,12 @@ function getClientAction(result: unknown): Record<string, unknown> | null {
   const action = (result as { clientAction?: unknown }).clientAction;
   if (!action || typeof action !== 'object' || Array.isArray(action)) return null;
   return action as Record<string, unknown>;
+}
+
+function getSetupInteractionKind(action: Record<string, unknown> | null): AISetupInteraction['kind'] | null {
+  if (action?.type === 'open_connector_setup') return 'connector_setup';
+  if (action?.type === 'open_node_enrollment') return 'node_enrollment';
+  return null;
 }
 
 type PublishConversationChanged = (userId: string, conversationId: string, invalidatedStores?: string[]) => void;
@@ -104,6 +114,12 @@ interface CredentialContinuationInput {
   authorized: boolean;
 }
 
+interface SetupContinuationInput {
+  conversationId: string;
+  runId: string;
+  interaction: AISetupInteraction;
+}
+
 interface ResumeInput {
   conversationId: string;
   runId: string;
@@ -116,6 +132,11 @@ interface ResumeInput {
   queuedApprovals: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
   approvalDecisions?: Record<string, boolean>;
   rejectionError?: string;
+  precomputedResult?: {
+    result: Record<string, unknown>;
+    error?: string;
+    rejected?: boolean;
+  };
 }
 
 export class AIRunExecutor {
@@ -195,6 +216,15 @@ export class AIRunExecutor {
     if (this.executingRuns.has(input.runId)) return;
     this.executingRuns.add(input.runId);
     void this.executeCredentialContinuation(user, input).catch((error) => {
+      this.executingRuns.delete(input.runId);
+      this.logExecutionError(input.runId, error);
+    });
+  }
+
+  startSetupContinuation(user: User, input: SetupContinuationInput): void {
+    if (this.executingRuns.has(input.runId)) return;
+    this.executingRuns.add(input.runId);
+    void this.executeSetupContinuation(user, input).catch((error) => {
       this.executingRuns.delete(input.runId);
       this.logExecutionError(input.runId, error);
     });
@@ -299,6 +329,19 @@ export class AIRunExecutor {
       }
     } catch (error) {
       if (abortController.signal.aborted) return;
+      if (isPlanPauseBoundaryError(error)) {
+        const assistantMessageId = await this.persistAssistantBoundary(
+          user.id,
+          run.conversationId,
+          run.id,
+          assistantContent
+        );
+        if (assistantMessageId) await this.linkRunToolCallsToAssistantMessage(run.id, assistantMessageId);
+        await this.updateRunStatus(run.id, 'stopped');
+        this.forgetAssistantDraftState(run.id);
+        this.publishConversationChanged(user.id, run.conversationId);
+        return;
+      }
       const assistantMessageId = await this.persistAssistantBoundary(
         user.id,
         run.conversationId,
@@ -496,13 +539,90 @@ export class AIRunExecutor {
     });
   }
 
+  private async executeSetupContinuation(user: User, input: SetupContinuationInput): Promise<void> {
+    if (input.interaction.status !== 'configured' && input.interaction.status !== 'cancelled') {
+      this.executingRuns.delete(input.runId);
+      return;
+    }
+    if (!input.interaction.roundId) {
+      this.executingRuns.delete(input.runId);
+      throw new AppError(409, 'AI_SETUP_CHECKPOINT_MISSING', 'Setup interaction continuation is unavailable');
+    }
+
+    const [round] = await this.db
+      .select()
+      .from(aiRunToolRounds)
+      .where(
+        and(
+          eq(aiRunToolRounds.id, input.interaction.roundId),
+          eq(aiRunToolRounds.runId, input.runId),
+          eq(aiRunToolRounds.conversationId, input.conversationId)
+        )
+      )
+      .limit(1);
+    if (!round) {
+      this.executingRuns.delete(input.runId);
+      throw new AppError(409, 'AI_SETUP_CHECKPOINT_MISSING', 'Setup interaction continuation is unavailable');
+    }
+
+    const calls = await this.db
+      .select()
+      .from(aiRunToolCalls)
+      .where(eq(aiRunToolCalls.roundId, round.id))
+      .orderBy(asc(aiRunToolCalls.position));
+    const terminalStatuses = new Set(['completed', 'failed', 'rejected', 'stopped', 'effect_unknown']);
+    const remainingCalls = calls.filter(
+      (call) => call.toolCallId !== input.interaction.toolCallId && !terminalStatuses.has(call.status)
+    );
+    const approvalDecisions = Object.fromEntries(
+      remainingCalls.flatMap((call) => {
+        if (
+          call.toolName !== 'ask_question' &&
+          (call.approvalPolicy === 'auto_approved' || call.approvalPolicy === 'system_skipped')
+        ) {
+          return [[call.toolCallId, true] as const];
+        }
+        if (call.status === 'approved' || call.status === 'rejected') {
+          return [[call.toolCallId, call.status === 'approved'] as const];
+        }
+        return [];
+      })
+    );
+    const result = {
+      status: input.interaction.status,
+      ...(input.interaction.result ?? {}),
+      message:
+        input.interaction.status === 'configured'
+          ? 'Setup completed. Re-check the prerequisite before continuing.'
+          : 'Setup was cancelled. Offer the next viable path without treating missing setup as a terminal blocker.',
+    };
+
+    await this.executeResume(user, {
+      conversationId: input.conversationId,
+      runId: input.runId,
+      toolCallId: input.interaction.toolCallId,
+      toolName: input.interaction.toolName,
+      toolArgs: input.interaction.payload,
+      approved: true,
+      pendingMessages: round.providerMessages,
+      queuedApprovals: remainingCalls.map((call) => ({
+        id: call.toolCallId,
+        name: call.toolName,
+        arguments: call.toolArgs,
+      })),
+      approvalDecisions,
+      precomputedResult: { result },
+    });
+  }
+
   private async executeResume(user: User, input: ResumeInput): Promise<void> {
     const run = await this.getOwnedRun(user.id, input.runId);
     if (!run) throw new AppError(404, 'AI_RUN_NOT_FOUND', 'AI run not found');
     if (
       run.status !== 'waiting_for_approval' &&
       run.status !== 'waiting_for_answer' &&
-      run.status !== 'waiting_for_credential'
+      run.status !== 'waiting_for_credential' &&
+      run.status !== 'waiting_for_setup'
     ) {
       return;
     }
@@ -511,7 +631,13 @@ export class AIRunExecutor {
     if (!conversation) throw new AppError(404, 'AI_CONVERSATION_NOT_FOUND', 'AI conversation not found');
 
     if (
-      !(await this.claimRun(run, ['waiting_for_approval', 'waiting_for_answer', 'waiting_for_credential', 'queued']))
+      !(await this.claimRun(run, [
+        'waiting_for_approval',
+        'waiting_for_answer',
+        'waiting_for_credential',
+        'waiting_for_setup',
+        'queued',
+      ]))
     ) {
       return;
     }
@@ -544,7 +670,8 @@ export class AIRunExecutor {
         run.model ?? undefined,
         run.reasoningEffort ?? undefined,
         input.approvalDecisions,
-        (currentMessages) => this.receivePendingSteers(user, run, currentMessages, abortController.signal)
+        (currentMessages) => this.receivePendingSteers(user, run, currentMessages, abortController.signal),
+        input.precomputedResult
       )) {
         if (abortController.signal.aborted) return;
 
@@ -561,6 +688,19 @@ export class AIRunExecutor {
       }
     } catch (error) {
       if (abortController.signal.aborted) return;
+      if (isPlanPauseBoundaryError(error)) {
+        const assistantMessageId = await this.persistAssistantBoundary(
+          user.id,
+          input.conversationId,
+          input.runId,
+          assistantContent
+        );
+        if (assistantMessageId) await this.linkRunToolCallsToAssistantMessage(input.runId, assistantMessageId);
+        await this.updateRunStatus(input.runId, 'stopped');
+        this.forgetAssistantDraftState(input.runId);
+        this.publishConversationChanged(user.id, input.conversationId);
+        return;
+      }
       const assistantMessageId = await this.persistAssistantBoundary(
         user.id,
         input.conversationId,
@@ -685,6 +825,15 @@ export class AIRunExecutor {
     }
 
     if (event.type === 'tool_result') {
+      const clientAction = event.clientAction ?? getClientAction(event.result);
+      const setupKind = getSetupInteractionKind(clientAction);
+      if (clientAction && setupKind) {
+        await this.persistAssistantBoundary(user.id, run.conversationId, run.id, assistantContent);
+        await this.persistSetupInteraction(run, user.id, event, setupKind, clientAction);
+        await this.updateRunStatus(run.id, 'waiting_for_setup');
+        this.publishConversationChanged(user.id, run.conversationId);
+        return { assistantContent: '', assistantMessageWritten: true, done: true };
+      }
       await this.finishToolCall(
         run.id,
         event.id,
@@ -694,7 +843,6 @@ export class AIRunExecutor {
         event.rejected === true,
         event.resourceReferences ?? []
       );
-      const clientAction = event.clientAction ?? getClientAction(event.result);
       if (clientAction) this.publishClientAction?.(user.id, run.conversationId, run.id, clientAction);
       this.publishConversationChanged(user.id, run.conversationId);
       return { assistantContent, assistantMessageWritten, done: false };
@@ -831,6 +979,15 @@ export class AIRunExecutor {
     pageContext: ReturnType<typeof toPageContext>,
     abortController: AbortController
   ): Promise<ChatMessage[]> {
+    if (run.planId && container.isRegistered(AIPlanService)) {
+      const planService = container.resolve(AIPlanService);
+      const plan = await planService.getActivePlanSnapshot(user.id, run.conversationId);
+      if (plan?.id === run.planId && plan.status === 'pause_requested') {
+        await planService.completePauseRequest(user.id, run.conversationId);
+        this.publishConversationChanged(user.id, run.conversationId);
+        throw new AppError(409, 'AI_PLAN_PAUSE_BOUNDARY', 'Plan paused at the tool-round boundary');
+      }
+    }
     const aiService = container.resolve(AIService);
     const shouldCompact = await aiService.shouldAutoCompactContext(
       user,
@@ -1269,8 +1426,10 @@ export class AIRunExecutor {
         toConversationMessage(
           conversationId,
           {
-            role: 'assistant',
-            content: result.summary,
+            role: 'system',
+            content: compactLifecycleContent(result),
+            hiddenSystemEvent: true,
+            lifecycleEvent: { type: 'context_compacted', trigger: result.trigger },
             compactMarker: true,
             compactVersion: 2,
             compactEpoch: result.compactEpoch,
@@ -1285,7 +1444,10 @@ export class AIRunExecutor {
         )
       )
       .returning({ id: aiConversationMessages.id });
-    await this.db.update(aiConversations).set({ updatedAt: new Date() }).where(eq(aiConversations.id, conversationId));
+    await this.db
+      .update(aiConversations)
+      .set({ discoveredToolsets: [], updatedAt: new Date() })
+      .where(eq(aiConversations.id, conversationId));
     this.conversationSearchService?.rebuildConversationIndexBestEffort(userId, conversationId);
     if (!message?.id)
       throw new AppError(500, 'AI_COMPACT_MARKER_NOT_CREATED', 'Context compact marker was not created');
@@ -1587,6 +1749,54 @@ export class AIRunExecutor {
     return challenge;
   }
 
+  private async persistSetupInteraction(
+    run: AIRun,
+    userId: string,
+    event: Extract<WSServerMessage, { type: 'tool_result' }>,
+    kind: AISetupInteraction['kind'],
+    payload: Record<string, unknown>
+  ): Promise<AISetupInteraction> {
+    const roundId = await this.findToolCallRoundId(run.id, event.id);
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const [interaction] = await this.db
+      .insert(aiRunSetupInteractions)
+      .values({
+        runId: run.id,
+        roundId,
+        conversationId: run.conversationId,
+        userId,
+        toolCallId: event.id,
+        toolName: event.name,
+        kind,
+        payload,
+        expiresAt,
+      })
+      .onConflictDoUpdate({
+        target: [aiRunSetupInteractions.runId, aiRunSetupInteractions.toolCallId],
+        set: {
+          roundId,
+          kind,
+          payload,
+          status: 'pending',
+          result: null,
+          resolvedByUserId: null,
+          resolveClientCommandId: null,
+          expiresAt,
+          resolvedAt: null,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    if (!interaction) throw new Error('Failed to persist AI setup interaction');
+    if (roundId) {
+      await this.db
+        .update(aiRunToolRounds)
+        .set({ status: 'waiting_setup', updatedAt: new Date() })
+        .where(eq(aiRunToolRounds.id, roundId));
+    }
+    return interaction;
+  }
+
   private async findToolCallRoundId(runId: string, toolCallId: string): Promise<string | null> {
     const [toolCall] = await this.db
       .select({ roundId: aiRunToolCalls.roundId })
@@ -1802,6 +2012,10 @@ export class AIRunExecutor {
   }
 }
 
+function isPlanPauseBoundaryError(error: unknown): boolean {
+  return error instanceof AppError && error.code === 'AI_PLAN_PAUSE_BOUNDARY';
+}
+
 type DbLike = Pick<DrizzleClient, 'select' | 'insert' | 'update'>;
 
 function findLastCompactMarkerIndex(messages: unknown[]): number {
@@ -1850,8 +2064,10 @@ function compactedRuntimeMessages(messages: ChatMessage[], result: AIContextComp
   }
   return [
     {
-      role: 'assistant',
-      content: result.summary,
+      role: 'system',
+      content: compactLifecycleContent(result),
+      hiddenSystemEvent: true,
+      lifecycleEvent: { type: 'context_compacted', trigger: result.trigger },
       compactMarker: true,
       compactVersion: 2,
       compactEpoch: result.compactEpoch,
@@ -1859,6 +2075,16 @@ function compactedRuntimeMessages(messages: ChatMessage[], result: AIContextComp
     },
     ...messages.slice(boundaryIndex + 1),
   ];
+}
+
+function compactLifecycleContent(result: AIContextCompactionResult): string {
+  return [
+    `Context compaction occurred (${result.trigger}).`,
+    'The summary below is lossy. If an exact older detail is needed, use search_compacted_history rather than guessing.',
+    '',
+    'Compacted summary:',
+    result.summary,
+  ].join('\n');
 }
 
 function formatHistoricalToolOutcome(toolCall: {
@@ -1872,10 +2098,10 @@ function formatHistoricalToolOutcome(toolCall: {
   const parts = [`${toolCall.toolName} status=${toolCall.status}`];
   if (toolCall.decision) parts.push(`decision=${toolCall.decision}`);
   if (toolCall.error) {
-    parts.push(`error=${safeInlineText(toolCall.error, 600)}`);
+    parts.push(`error=${safeInlineText(toolCall.error)}`);
   } else if (toolCall.result !== null && toolCall.result !== undefined) {
     const redactedResult = redactOneTimeSecretToolResult(toolCall.toolName, toolCall.result);
-    parts.push(`result=${safeJsonPreview(redactedResult, 1200)}`);
+    parts.push(`result=${safeJson(redactedResult)}`);
   }
   if (toolCall.resourceReferences.length > 0) {
     parts.push(
@@ -1885,18 +2111,16 @@ function formatHistoricalToolOutcome(toolCall: {
   return `- ${parts.join(' ')}`;
 }
 
-function safeJsonPreview(value: unknown, maxLength: number): string {
+function safeJson(value: unknown): string {
   try {
-    return safeInlineText(JSON.stringify(value), maxLength);
+    return safeInlineText(JSON.stringify(value));
   } catch {
-    return safeInlineText(String(value), maxLength);
+    return safeInlineText(String(value));
   }
 }
 
-function safeInlineText(value: string, maxLength: number): string {
-  const normalized = value.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxLength) return normalized;
-  return `${normalized.slice(0, Math.max(0, maxLength - 15))}...[truncated]`;
+function safeInlineText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
 }
 
 async function getOwnedConversation(db: DbLike, userId: string, conversationId: string) {

@@ -135,7 +135,13 @@ function hasChannelAccess(scopes: string[], channel: string): boolean {
       hasScope(scopes, 'integrations:cloudflare:manage') ||
       hasScope(scopes, 'integrations:cloudflare:dns:view') ||
       hasScope(scopes, 'integrations:cloudflare:dns:edit') ||
-      hasScope(scopes, 'integrations:cloudflare:dns:delete')
+      hasScope(scopes, 'integrations:cloudflare:dns:delete') ||
+      hasScope(scopes, 'integrations:github:view') ||
+      hasScope(scopes, 'integrations:github:manage') ||
+      hasScope(scopes, 'integrations:git:view') ||
+      hasScope(scopes, 'integrations:git:manage') ||
+      hasScope(scopes, 'integrations:ssh:view') ||
+      hasScope(scopes, 'integrations:ssh:manage')
     );
   }
   const required = requiredScopeFor(channel);

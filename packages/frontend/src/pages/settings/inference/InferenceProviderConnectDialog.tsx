@@ -221,7 +221,6 @@ export function InferenceProviderConnectDialog({
           termsVersion: selected.termsVersion,
         });
         setOauthState(session);
-        window.open(session.authorizationUrl, "_blank", "noopener,noreferrer");
       } else {
         await api.createInferenceProviderConnection({
           providerId: selected.id,
@@ -369,14 +368,14 @@ export function InferenceProviderConnectDialog({
                           valueClassName="font-mono"
                           actions={
                             <Button
-                              asChild
                               variant="ghost"
                               className="h-9 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+                              onClick={() =>
+                                window.open(oauth.authorizationUrl, "_blank", "noopener,noreferrer")
+                              }
                             >
-                              <a href={oauth.authorizationUrl} target="_blank" rel="noreferrer">
-                                <ExternalLink className="h-3.5 w-3.5" />
-                                Open
-                              </a>
+                              <ExternalLink className="h-3.5 w-3.5" />
+                              Open
                             </Button>
                           }
                         />

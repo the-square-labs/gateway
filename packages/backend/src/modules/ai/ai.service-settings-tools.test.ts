@@ -53,6 +53,37 @@ function createService({
 }
 
 describe('AIService AI settings tools', () => {
+  it('reads and activates enabled assistant skills from the prompt catalog', async () => {
+    const now = new Date().toISOString();
+    const settingsService = {
+      getUserSkills: vi.fn().mockResolvedValue([
+        {
+          id: 'skill-1',
+          name: 'Acme deploy',
+          description: 'Deploy Acme applications',
+          instructions: 'Follow the Acme deployment checklist.',
+          enabled: true,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ]),
+    };
+    const service = createService({ settingsService });
+
+    await expect(service.executeTool(TOKEN_USER, 'read_skill', { skillId: 'skill-1' })).resolves.toMatchObject({
+      result: { active: false, skill: { id: 'skill-1' } },
+    });
+    await expect(service.executeTool(TOKEN_USER, 'activate_skill', { skillId: 'skill-1' })).resolves.toMatchObject({
+      result: {
+        active: true,
+        activationScope: 'current_context',
+        priority: 'organization_skill',
+        skill: { id: 'skill-1', instructions: 'Follow the Acme deployment checklist.' },
+        instruction: expect.stringContaining('Do not activate this skill again until compaction'),
+      },
+    });
+  });
+
   it('reads and updates only supported AI settings fields', async () => {
     const adminConfig = {
       enabled: true,
@@ -75,6 +106,7 @@ describe('AIService AI settings tools', () => {
       service.executeTool(CONFIG_USER, 'update_ai_settings', {
         model: 'gpt-new',
         maxToolRounds: 20,
+        allowUserReasoningEffortSelection: true,
         unsupported: 'ignored',
       })
     ).resolves.toEqual({
@@ -82,7 +114,11 @@ describe('AIService AI settings tools', () => {
       invalidateStores: ['settings'],
     });
 
-    expect(settingsService.updateConfig).toHaveBeenCalledWith({ model: 'gpt-new', maxToolRounds: 20 });
+    expect(settingsService.updateConfig).toHaveBeenCalledWith({
+      model: 'gpt-new',
+      maxToolRounds: 20,
+      allowUserReasoningEffortSelection: true,
+    });
   });
 
   it('rejects empty updates and exposes sandbox runtime status without sandbox execution', async () => {

@@ -33,6 +33,7 @@ import {
   formWithProviderModel,
   hasCompletePricing,
   hasCompleteTechnicalLimits,
+  manualMetadataForProviderModel,
   modelTechnicalLimits,
   normalizeReasoningMap,
   parsePositiveNumber,
@@ -138,6 +139,7 @@ export function InferenceModelDialog({
       const normalizedMapping = normalizeReasoningMap(mapping);
       const efforts = exposedReasoningEfforts(normalizedMapping);
       const limits = modelTechnicalLimits(form);
+      const manualMetadata = manualMetadataForProviderModel(form, selected);
       const subscriptionMultiplier = parsePositiveNumber(form.subscriptionMultiplier);
       if (subscriptionMultiplier === null || !hasCompletePricing(pricing)) return;
       const payload = {
@@ -161,11 +163,7 @@ export function InferenceModelDialog({
           discoveredModelId: binding.model.id,
           enabled: true,
           reasoningEffortMap: normalizedMapping,
-          manualMetadata: {
-            contextWindow: limits.contextWindow,
-            maxInputTokens: limits.maxInputTokens,
-            ...(limits.maxOutputTokens === null ? {} : { maxOutputTokens: limits.maxOutputTokens }),
-          },
+          ...(manualMetadata ? { manualMetadata } : {}),
           ...(selected.sourceType === "api" && !selected.pricing
             ? { pricing: pricingPayload(pricing) }
             : {}),

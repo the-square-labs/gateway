@@ -40,6 +40,10 @@ const SNAPSHOT = {
 } as UIBootstrapShell;
 
 describe("UI bootstrap store", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     vi.spyOn(api, "getUIBootstrap").mockReset();
     useUIBootstrapStore.getState().clear();
@@ -79,5 +83,24 @@ describe("UI bootstrap store", () => {
 
     await vi.waitFor(() => expect(api.getUIBootstrap).toHaveBeenCalledTimes(3));
     await vi.waitFor(() => expect(useUIBootstrapStore.getState().snapshot).toBe(refreshed));
+  });
+
+  it("coalesces rapid shell invalidations into one refresh", async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.getUIBootstrap)
+      .mockResolvedValueOnce(SNAPSHOT)
+      .mockResolvedValueOnce({
+        ...SNAPSHOT,
+        navigation: { ...SNAPSHOT.navigation, hasNginxNodes: true },
+      });
+
+    await useUIBootstrapStore.getState().load("user:scopes");
+    useUIBootstrapStore.getState().invalidate();
+    useUIBootstrapStore.getState().invalidate();
+    useUIBootstrapStore.getState().invalidate();
+
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(api.getUIBootstrap).toHaveBeenCalledTimes(2);
   });
 });

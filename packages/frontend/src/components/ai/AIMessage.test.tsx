@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AIMessage as AIMessageType, AIToolCall } from "@/types/ai";
 import { AIMessage } from "./AIMessage";
 
@@ -82,6 +82,38 @@ describe("AIMessage tool call groups", () => {
     expect(screen.queryByText("527b02985e9b37cf9252b29f01de321f")).not.toBeInTheDocument();
   });
 
+  it("repairs a stored proxy host collection href and renders its marker as wrapping inline text", () => {
+    const refId = "gwr_abcdef0123456789abcdef01";
+    render(
+      <MemoryRouter>
+        <AIMessage
+          message={{
+            id: "assistant-proxy-resource",
+            role: "assistant",
+            content: `Host [[resource:${refId}|additional-e2e.test, additional-e2e.localhost]] is unavailable.`,
+            resourceReferences: [
+              {
+                refId,
+                type: "proxy_host",
+                resourceId: "fa2f2344-7d51-41d3-8945-7b2b9ec3a1ea",
+                label: "additional-e2e.test, additional-e2e.localhost",
+                relation: "read",
+                uiHref: "/proxy-hosts",
+              },
+            ],
+          }}
+        />
+      </MemoryRouter>
+    );
+
+    const link = screen.getByRole("link", { name: "Proxy host: additional-e2e.test" });
+    expect(link).toHaveAttribute("href", "/proxy-hosts/fa2f2344-7d51-41d3-8945-7b2b9ec3a1ea");
+    expect(link).toHaveClass("inline", "box-decoration-clone", "[overflow-wrap:anywhere]");
+    expect(link).not.toHaveClass("inline-flex");
+    expect(link).toHaveTextContent("additional-e2e.test");
+    expect(link).not.toHaveTextContent("additional-e2e.localhost");
+  });
+
   it("does not crash when a restored user message has no generated id timestamp", () => {
     render(
       <AIMessage
@@ -148,9 +180,45 @@ describe("AIMessage tool call groups", () => {
       />
     );
 
-    expect(screen.getByRole("alert")).toHaveTextContent("Error: Provider quota is exhausted.");
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    const alert = screen.getByRole("alert");
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(alert).toHaveTextContent("Error: Provider quota is exhausted.");
+    expect(alert).toHaveAttribute("data-ai-timeline-divider");
+    expect(alert).toHaveClass("py-3");
+    expect(retry).toHaveClass("text-primary");
+    fireEvent.click(retry);
     expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it("reveals completed live comments in random one-to-three-word batches", () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValueOnce(0).mockReturnValueOnce(0.99);
+    const { container } = render(
+      <AIMessage
+        message={{
+          id: "run-1:comment:1",
+          role: "assistant",
+          content: "One two three four five",
+          streamingChunk: "One two three four five",
+          isStreaming: false,
+        }}
+      />
+    );
+
+    expect(container).not.toHaveTextContent("One");
+    act(() => vi.advanceTimersByTime(55));
+    expect(container).toHaveTextContent("One");
+    expect(container).not.toHaveTextContent("two");
+    expect(container.querySelector(".ai-streaming-chunk")).toHaveTextContent("One");
+
+    act(() => vi.advanceTimersByTime(55));
+    expect(container).toHaveTextContent("One two three four");
+    expect(container).not.toHaveTextContent("five");
+
+    act(() => vi.runAllTimers());
+    expect(container).toHaveTextContent("One two three four five");
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("renders local-only tool calls through the normal tool call UI", () => {
@@ -292,6 +360,26 @@ describe("AIMessage tool call groups", () => {
     );
     expect(tableWrappers).toHaveLength(2);
     expect(tableWrappers.every((wrapper) => wrapper?.classList.contains("my-3"))).toBe(true);
+  });
+
+  it("renders markdown while the assistant response is still streaming", () => {
+    render(
+      <AIMessage
+        message={{
+          id: "assistant-streaming-markdown",
+          role: "assistant",
+          content: "Доступно:\n\n- **Docker**\n- Базы данных",
+          isStreaming: true,
+          streamingChunk: "Базы данных",
+        }}
+      />
+    );
+
+    expect(screen.getByRole("list")).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.getByText("Docker").tagName).toBe("STRONG");
+    expect(screen.getByText("Базы данных")).toHaveClass("ai-streaming-chunk");
+    expect(screen.getByText("Docker")).not.toHaveClass("ai-streaming-chunk");
   });
 
   it("renders running compact context with the thinking shimmer", () => {

@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthStore } from "@/stores/auth";
-import { useAIComposerDraft } from "./useAIComposerDraft";
+import { composerAttachmentToFile, useAIComposerDraft } from "./useAIComposerDraft";
 
 describe("useAIComposerDraft", () => {
   beforeEach(() => {
@@ -37,5 +37,25 @@ describe("useAIComposerDraft", () => {
     expect(reloaded.result.current[0]).toBe("");
     expect(localStorage.getItem("gateway-ai-composer-draft:user-1:new")).toBeNull();
     expect(localStorage.getItem("gateway-ai-composer-draft:user-1:conversation-1")).toBeNull();
+  });
+});
+
+describe("composerAttachmentToFile", () => {
+  it("decodes a persisted data URL without making a network request", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const file = await composerAttachmentToFile({
+      localId: "local-1",
+      filename: "pixel.png",
+      mediaType: "image/png",
+      sizeBytes: 3,
+      dataUrl: "data:image/png;base64,AQID",
+      previewUrl: "data:image/png;base64,AQID",
+      kind: "image",
+    });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(file.name).toBe("pixel.png");
+    expect(file.type).toBe("image/png");
+    expect(file.size).toBe(3);
   });
 });

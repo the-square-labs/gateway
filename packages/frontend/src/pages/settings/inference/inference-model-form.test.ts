@@ -8,6 +8,7 @@ import {
   formWithProviderModel,
   hasCompletePricing,
   hasCompleteTechnicalLimits,
+  manualMetadataForProviderModel,
   modelTechnicalLimits,
   normalizeReasoningMap,
   parsePositiveNumber,
@@ -127,6 +128,22 @@ describe("inference model form helpers", () => {
       autoCompactTokenLimit: 150_000,
     });
     expect(hasCompleteTechnicalLimits(form)).toBe(true);
+  });
+
+  it("inherits discovered technical limits until an admin changes a field", () => {
+    const [option] = buildProviderModelOptions(
+      [connection("openai", "team", [model("gpt", 1_050_000, 922_000, 829_800)])],
+      [provider("openai", "Codex", true)]
+    );
+    const inherited = formWithProviderModel(EMPTY_MODEL_FORM, option!, true);
+
+    expect(manualMetadataForProviderModel(inherited, option!)).toBeUndefined();
+    expect(
+      manualMetadataForProviderModel(
+        { ...inherited, contextWindow: "384000", autoCompactTokenLimit: "356000" },
+        option!
+      )
+    ).toEqual({ contextWindow: 384_000, autoCompactTokenLimit: 356_000 });
   });
 
   it("requires manual technical limits when discovery does not report them", () => {

@@ -13,6 +13,9 @@ export const aiStatusRoute = appRoute({
       providerType: z.enum(['openai_compatible', 'gateway_inference']),
       defaultModel: z.string(),
       allowUserModelSelection: z.boolean(),
+      allowUserReasoningEffortSelection: z.boolean(),
+      reasoningEfforts: z.array(z.string()),
+      defaultReasoningEffort: z.string().nullable(),
       supportsImages: z.boolean(),
       models: z.array(
         z.object({

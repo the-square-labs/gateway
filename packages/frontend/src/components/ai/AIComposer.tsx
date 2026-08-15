@@ -107,9 +107,11 @@ function formatPlanStepTitle(title: string): string {
 
 export function AIPlanBlock({
   plan,
+  collapsed = false,
   className,
 }: {
   plan: AIPlanRuntimeSnapshot;
+  collapsed?: boolean;
   className?: string;
 }) {
   if (!plan.revisionId || !plan.goal) return null;
@@ -123,58 +125,64 @@ export function AIPlanBlock({
               {plan.title || "Implementation plan"}
             </h3>
             <span className="text-xs capitalize text-muted-foreground">
-              {plan.status.replace("_", " ")}
+              {(collapsed ? plan.revisionStatus : plan.status)?.replace("_", " ")}
             </span>
           </div>
-          <p className="mt-2 text-sm text-muted-foreground">{plan.goal}</p>
+          {!collapsed && <p className="mt-2 text-sm text-muted-foreground">{plan.goal}</p>}
         </div>
-        <div className="divide-y divide-border">
-          {plan.steps.map((step) => (
-            <div key={step.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
-              <span
-                className={cn(
-                  "flex h-5 w-5 shrink-0 items-center justify-center border border-border text-[11px]",
-                  (step.status === "completed" || step.status === "skipped") &&
-                    "border-primary bg-primary text-primary-foreground"
-                )}
-              >
-                {step.status === "completed" || step.status === "skipped" ? (
-                  <Check className="h-3 w-3" />
-                ) : (
-                  step.ordinal + 1
-                )}
-              </span>
-              <div className="min-w-0">
-                <div className="font-medium">{formatPlanStepTitle(step.title)}</div>
-                <div className="mt-0.5 text-muted-foreground">{step.description}</div>
-                {step.skipReason && <div className="mt-1 text-xs">Skipped: {step.skipReason}</div>}
+        {!collapsed && (
+          <div className="divide-y divide-border">
+            {plan.steps.map((step) => (
+              <div key={step.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
+                <span
+                  className={cn(
+                    "flex h-5 w-5 shrink-0 items-center justify-center border border-border text-[11px]",
+                    (step.status === "completed" || step.status === "skipped") &&
+                      "border-primary bg-primary text-primary-foreground"
+                  )}
+                >
+                  {step.status === "completed" || step.status === "skipped" ? (
+                    <Check className="h-3 w-3" />
+                  ) : (
+                    step.ordinal + 1
+                  )}
+                </span>
+                <div className="min-w-0">
+                  <div className="font-medium">{formatPlanStepTitle(step.title)}</div>
+                  <div className="mt-0.5 text-muted-foreground">{step.description}</div>
+                  {step.skipReason && (
+                    <div className="mt-1 text-xs">Skipped: {step.skipReason}</div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
+        )}
+      </div>
+      {!collapsed && (
+        <div className="divide-y divide-border border border-border bg-muted/30">
+          <PlanDetails label="Research">
+            {plan.research.map((item) => (
+              <div key={`${item.title}:${item.summary}`}>
+                <div className="font-medium text-foreground">{item.title}</div>
+                <div>{item.summary}</div>
+              </div>
+            ))}
+          </PlanDetails>
+          <PlanDetails label="Intent and safety review">
+            <div>{plan.intentReview?.summary || "Intent review is pending."}</div>
+            <div>{plan.securityReview?.summary || "Safety review is pending."}</div>
+          </PlanDetails>
+          <PlanDetails label="Verification">
+            {plan.verification.map((item) => (
+              <div key={`${item.title}:${item.description}`}>
+                <span className="font-medium text-foreground">{item.title}: </span>
+                {item.description}
+              </div>
+            ))}
+          </PlanDetails>
         </div>
-      </div>
-      <div className="divide-y divide-border border border-border bg-muted/30">
-        <PlanDetails label="Research">
-          {plan.research.map((item) => (
-            <div key={`${item.title}:${item.summary}`}>
-              <div className="font-medium text-foreground">{item.title}</div>
-              <div>{item.summary}</div>
-            </div>
-          ))}
-        </PlanDetails>
-        <PlanDetails label="Intent and safety review">
-          <div>{plan.intentReview?.summary || "Intent review is pending."}</div>
-          <div>{plan.securityReview?.summary || "Safety review is pending."}</div>
-        </PlanDetails>
-        <PlanDetails label="Verification">
-          {plan.verification.map((item) => (
-            <div key={`${item.title}:${item.description}`}>
-              <span className="font-medium text-foreground">{item.title}: </span>
-              {item.description}
-            </div>
-          ))}
-        </PlanDetails>
-      </div>
+      )}
     </div>
   );
 }
@@ -248,7 +256,12 @@ export function AIPlanProgress({
   const [elapsedMs, setElapsedMs] = useState(plan.activeTimeMs);
   useEffect(() => {
     setElapsedMs(plan.activeTimeMs);
-    if (plan.status !== "executing" && plan.status !== "verifying") return;
+    if (
+      plan.status !== "executing" &&
+      plan.status !== "pause_requested" &&
+      plan.status !== "verifying"
+    )
+      return;
     const startedAt = Date.now();
     const timer = window.setInterval(
       () => setElapsedMs(plan.activeTimeMs + Date.now() - startedAt),
@@ -256,18 +269,23 @@ export function AIPlanProgress({
     );
     return () => window.clearInterval(timer);
   }, [plan.activeTimeMs, plan.status]);
+  if (
+    plan.status !== "executing" &&
+    plan.status !== "pause_requested" &&
+    plan.status !== "paused" &&
+    plan.status !== "verifying"
+  ) {
+    return null;
+  }
   const completed = plan.steps.filter(
     (step) => step.status === "completed" || step.status === "skipped"
   ).length;
   const progress = plan.steps.length > 0 ? (completed / plan.steps.length) * 100 : 0;
   const canPause = plan.status === "executing" || plan.status === "verifying";
-  const isPlanning = plan.status === "drafting" || plan.status === "validating";
   const cancel = async () => {
     const accepted = await confirm({
       title: "Cancel plan?",
-      description: isPlanning
-        ? "Planning will stop."
-        : "Execution will stop. Changes already made will not be rolled back.",
+      description: "Execution will stop. Changes already made will not be rolled back.",
       confirmLabel: "Cancel plan",
       cancelLabel: "Keep running",
       variant: "destructive",
@@ -277,7 +295,7 @@ export function AIPlanProgress({
   return (
     <div
       className={cn(
-        "flex items-center gap-2 border border-border bg-primary/5 px-2.5 py-2",
+        "flex w-full items-center gap-2 border border-border bg-primary/5 px-2.5 py-1.5",
         className
       )}
     >
@@ -288,14 +306,12 @@ export function AIPlanProgress({
           <span className="truncate">
             {plan.status === "paused"
               ? plan.pauseReason || "Paused"
-              : plan.status === "drafting"
-                ? "Preparing plan"
-                : plan.status === "validating"
-                  ? "Validating plan"
-                  : plan.status === "verifying"
-                    ? "Running final verification"
-                    : plan.steps.find((step) => step.status === "in_progress")?.title ||
-                      "Preparing next step"}
+              : plan.status === "pause_requested"
+                ? "Pausing after current tool round"
+                : plan.status === "verifying"
+                  ? "Running final verification"
+                  : plan.steps.find((step) => step.status === "in_progress")?.title ||
+                    "Preparing next step"}
           </span>
           <span className="shrink-0">
             {completed}/{plan.steps.length} · {formatPlanDuration(elapsedMs)}
@@ -328,12 +344,12 @@ export function AIPlanProgress({
       <Button
         size="icon"
         variant="ghost"
-        className="h-7 w-7 shrink-0"
+        className="h-6 w-6 shrink-0"
         onClick={() => void cancel()}
         aria-label="Cancel plan"
         title="Cancel plan"
       >
-        <X className="h-3.5 w-3.5" />
+        <X className="h-3 w-3" />
       </Button>
     </div>
   );
@@ -520,8 +536,25 @@ export function AIComposer({
 }: AIComposerProps) {
   const modeMeta = AI_APPROVAL_MODE_META[approvalMode];
   const activePlan = useAIStore((state) => state.activePlan);
+  const plans = useAIStore((state) => state.plans);
+  const abandonPlanning = useAIStore((state) => state.abandonPlanning);
+  const currentConversationPlan = activePlan?.conversationId === conversationId ? activePlan : null;
+  const hasPublishedPlan =
+    Boolean(currentConversationPlan?.publishedAt) ||
+    plans.some(
+      (plan) =>
+        plan.id === currentConversationPlan?.id &&
+        plan.conversationId === conversationId &&
+        Boolean(plan.publishedAt)
+    );
   const planModeActive =
-    workMode === "plan" || activePlan?.status === "drafting" || activePlan?.status === "validating";
+    workMode === "plan" ||
+    currentConversationPlan?.status === "drafting" ||
+    currentConversationPlan?.status === "validating";
+  const planningActive =
+    (workMode === "plan" && isStreaming) ||
+    currentConversationPlan?.status === "drafting" ||
+    currentConversationPlan?.status === "validating";
   const ModeIcon = planModeActive ? ListChecks : modeMeta.icon;
   const [usage, setUsage] = useState<AIContextUsage | null>(null);
   const [updatingProvider, setUpdatingProvider] = useState(false);
@@ -587,6 +620,25 @@ export function AIComposer({
     } finally {
       setUpdatingProvider(false);
     }
+  };
+
+  const changeApprovalMode = async (mode: AIApprovalMode) => {
+    if (planningActive) {
+      const accepted = await confirm({
+        title: "Leave Plan Mode?",
+        description: hasPublishedPlan
+          ? "Leaving Plan Mode stops the current planning run and discards only the unfinished revision. The published plan will remain available."
+          : "Leaving Plan Mode stops the current planning run and deletes the unfinished plan.",
+        confirmLabel: hasPublishedPlan ? "Leave Plan Mode" : "Leave and delete plan",
+        cancelLabel: "Keep planning",
+        variant: hasPublishedPlan ? "default" : "destructive",
+      });
+      if (!accepted) return;
+      abandonPlanning();
+    } else {
+      setWorkMode("normal");
+    }
+    await setApprovalMode(mode);
   };
 
   const attachFiles = (files: FileList | File[] | null) => {
@@ -739,13 +791,7 @@ export function AIComposer({
                     const item = AI_APPROVAL_MODE_META[mode];
                     const ItemIcon = item.icon;
                     return (
-                      <DropdownMenuItem
-                        key={mode}
-                        onClick={() => {
-                          setWorkMode("normal");
-                          void setApprovalMode(mode);
-                        }}
-                      >
+                      <DropdownMenuItem key={mode} onClick={() => void changeApprovalMode(mode)}>
                         <ItemIcon className="h-4 w-4" />
                         <span>{item.menuLabel}</span>
                         {!planModeActive && approvalMode === mode && (

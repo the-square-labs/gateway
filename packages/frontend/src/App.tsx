@@ -72,14 +72,16 @@ import { StatusPage } from "@/pages/StatusPage";
 import { TemplatesPage } from "@/pages/TemplatesPage";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
-import type { BackgroundPrewarmTask } from "@/services/background-prewarm";
 import { eventStream } from "@/services/event-stream";
 import { useAIStore } from "@/stores/ai";
-import { useAppStatusStore } from "@/stores/app-status";
+import {
+  APP_STATUS_STORAGE_KEY,
+  syncGatewayOperationStatus,
+  useAppStatusStore,
+} from "@/stores/app-status";
 import { useAuthStore } from "@/stores/auth";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useDockerStore } from "@/stores/docker";
-import { useDockerFolderStore } from "@/stores/docker-folders";
 import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import { useResolvedPageRoute } from "@/stores/resolved-page-context";
 import { useSystemConfigStore } from "@/stores/system-config";
@@ -388,12 +390,17 @@ function DockerVolumeDetailGuard() {
   );
 }
 
+const UUID_PATH_SEGMENT_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function ProxyHostDetailGuard() {
   const { proxySlug } = useParams<{ proxySlug: string }>();
   const canAccess = useAuthStore((s) => s.hasScopedAccess("proxy:view"));
   const resolved = useResolvedPageRoute(
     canAccess && proxySlug ? proxyHostRoute(proxySlug) : undefined,
-    () => api.getProxyHostBySlug(proxySlug!),
+    () =>
+      UUID_PATH_SEGMENT_RE.test(proxySlug!)
+        ? api.getProxyHost(proxySlug!)
+        : api.getProxyHostBySlug(proxySlug!),
     (host) => ({
       resourceType: "proxy-host",
       resourceId: host.id,
@@ -856,7 +863,9 @@ function RealtimeBridge() {
         if (!ui.interfacePreferenceLoaded)
           hydratePreferredInterface(preferences.preferredInterface);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) hydratePreferredInterface(null);
+      });
     return () => {
       cancelled = true;
     };
@@ -1035,65 +1044,17 @@ function RealtimeBridge() {
 
   useEffect(() => {
     if (!user) return;
-    let controller: AbortController | null = null;
     const unsubscribe = eventStream.onReconnect(() => {
-      // Reconnect means events may have been missed. Clear every warmed
-      // projection namespace and re-run the existing staggered prefetch queue
-      // once, rather than issuing route-level refetches in parallel.
+      // Reconnect means events may have been missed. Invalidate the warmed
+      // projections, then refresh the two shared snapshots that are already
+      // mounted. Route data is fetched only when its route is visited again.
       for (const prefix of REALTIME_RECONCILIATION_CACHE_PREFIXES) {
         api.invalidateCache(prefix);
       }
       invalidateDashboardBootstrap();
       invalidateUIBootstrap();
-      controller?.abort();
-      controller = new AbortController();
-      const auth = useAuthStore.getState();
-      const docker = useDockerStore.getState();
-      const dockerFolders = useDockerFolderStore.getState();
-      const dockerNodes = useUIBootstrapStore.getState().snapshot?.navigation.dockerNodes;
-      const extraTasks: BackgroundPrewarmTask[] = [];
-      const addDockerTask = (allowed: boolean, key: string, run: () => Promise<unknown>) => {
-        if (allowed) extraTasks.push({ key, run });
-      };
-      addDockerTask(
-        auth.hasScopedAccess("docker:containers:view"),
-        "docker-container-folders",
-        () => dockerFolders.fetchFolders("container")
-      );
-      addDockerTask(auth.hasScopedAccess("docker:containers:view"), "docker-containers", () =>
-        docker.fetchContainers(null, "", dockerNodes)
-      );
-      addDockerTask(auth.hasScopedAccess("docker:images:view"), "docker-image-folders", () =>
-        dockerFolders.fetchFolders("image")
-      );
-      addDockerTask(auth.hasScopedAccess("docker:images:view"), "docker-images", () =>
-        docker.fetchImages(null, "", dockerNodes)
-      );
-      addDockerTask(auth.hasScopedAccess("docker:volumes:view"), "docker-volume-folders", () =>
-        dockerFolders.fetchFolders("volume")
-      );
-      addDockerTask(auth.hasScopedAccess("docker:volumes:view"), "docker-volumes", () =>
-        docker.fetchVolumes(null, "", dockerNodes)
-      );
-      addDockerTask(auth.hasScopedAccess("docker:networks:view"), "docker-network-folders", () =>
-        dockerFolders.fetchFolders("network")
-      );
-      addDockerTask(auth.hasScopedAccess("docker:networks:view"), "docker-networks", () =>
-        docker.fetchNetworks(null, "", dockerNodes)
-      );
-      addDockerTask(auth.hasScopedAccess("docker:tasks"), "docker-tasks", () =>
-        docker.fetchTasks(null)
-      );
-      void api.prefetchAll(
-        user.scopes.some((scope) => scope.startsWith("admin:")),
-        controller.signal,
-        extraTasks
-      );
     });
-    return () => {
-      controller?.abort();
-      unsubscribe();
-    };
+    return unsubscribe;
   }, [invalidateDashboardBootstrap, invalidateUIBootstrap, user]);
 
   return null;
@@ -1164,7 +1125,38 @@ export default function App() {
 
   useEffect(() => {
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === UI_STORAGE_KEY) syncAILiteModeFromStorageValue(event.newValue);
+      if (event.key === UI_STORAGE_KEY) {
+        syncAILiteModeFromStorageValue(event.newValue);
+        return;
+      }
+
+      if (event.key !== APP_STATUS_STORAGE_KEY || event.newValue == null) return;
+
+      try {
+        const parsed = JSON.parse(event.newValue) as {
+          state?: {
+            gatewayUpdatingActive?: boolean;
+            gatewayUpdatingTargetVersion?: string | null;
+            gatewayRestartingActive?: boolean;
+            gatewayRestartTargetUrl?: string | null;
+          };
+        };
+        const gatewayUpdatingActive = parsed.state?.gatewayUpdatingActive === true;
+        const gatewayRestartingActive =
+          !gatewayUpdatingActive && parsed.state?.gatewayRestartingActive === true;
+        syncGatewayOperationStatus({
+          gatewayUpdatingActive,
+          gatewayUpdatingTargetVersion: gatewayUpdatingActive
+            ? (parsed.state?.gatewayUpdatingTargetVersion ?? null)
+            : null,
+          gatewayRestartingActive,
+          gatewayRestartTargetUrl: gatewayRestartingActive
+            ? (parsed.state?.gatewayRestartTargetUrl ?? null)
+            : null,
+        });
+      } catch {
+        // Ignore malformed storage updates.
+      }
     };
 
     window.addEventListener("storage", handleStorage);
@@ -1174,12 +1166,7 @@ export default function App() {
   if (!startupChecked) {
     return (
       <ThemeProvider>
-        <div className="flex h-screen items-center justify-center">
-          <div className="flex flex-col items-center gap-4">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            <p className="text-sm text-muted-foreground">Loading...</p>
-          </div>
-        </div>
+        <div className="h-screen bg-background" aria-busy="true" aria-label="Loading application" />
       </ThemeProvider>
     );
   }

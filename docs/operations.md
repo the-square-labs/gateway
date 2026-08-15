@@ -58,6 +58,7 @@ The installer writes infrastructure/bootstrap values to `.env`. Product settings
 | `WEB_TLS_BOOTSTRAP_MODE` | Seeds `http` or `https` only when no persisted web-transport choice exists. |
 | `WEB_TLS_AUTO_DIR` | Persistent directory for the native web TLS leaf and private key. |
 | `SESSION_EXPIRY` | Browser session lifetime in seconds. Browser sessions are opaque Redis-backed session IDs. |
+| `GITHUB_OAUTH_CLIENT_ID` | Optional override for the built-in product-wide GitHub OAuth App client ID used for connector Device Flow. Gateway does not use a client secret or redirect users through the app's callback URL. |
 | `PKI_MASTER_KEY` | 64-character hex key for encrypted PKI material. |
 | `RATE_LIMIT_WINDOW_MS` | Default rate-limit window. |
 | `RATE_LIMIT_MAX_REQUESTS` | Default request limit. |
@@ -77,6 +78,33 @@ See [.env.example](../.env.example) for the full development reference.
 Redis is required infrastructure. Gateway uses it for sessions, cache, and rate limiting; if Redis is unavailable, `/health` returns `503` and Redis-backed rate-limited API/auth/public surfaces fail closed with `RATE_LIMIT_UNAVAILABLE`.
 
 OIDC scopes should normally include `openid email profile`. The `email` scope requests `email` and `email_verified`, but providers differ in whether `email_verified` is present in the ID token and whether it is true by default. Leave **Require verified OIDC email** disabled unless your IdP emits reliable verified-email claims.
+
+### GitHub connector OAuth
+
+GitHub connector OAuth works out of the box with Gateway's built-in product-wide OAuth App client ID. No environment configuration, client secret, or per-instance callback is required.
+
+Set `GITHUB_OAUTH_CLIENT_ID` only to override the built-in client with a custom organization-owned **GitHub OAuth App**, for example for a fork or white-label deployment. Do not create a separate OAuth App per Gateway instance.
+
+1. In GitHub, open **Settings > Developer settings > OAuth apps > New OAuth App**.
+2. Set an operator-facing application name such as `Wiolett Gateway` and use the product's public website as the homepage URL.
+3. GitHub requires an authorization callback URL when registering the app. Use a stable HTTPS page controlled by the product, such as `https://gateway.wiolett.net/`. Gateway's Device Flow does not redirect to this URL.
+4. Enable **Device Flow**, then register the app.
+5. Copy the app's **Client ID**. Gateway does not need a client secret; do not generate or distribute one for this integration.
+6. Set the override on the installations that should use this custom app:
+
+   ```dotenv
+   GITHUB_OAUTH_CLIENT_ID=Ov23li...
+   ```
+
+7. Recreate the app container so it receives the environment variable:
+
+   ```bash
+   docker compose up -d --no-deps --force-recreate app
+   ```
+
+In Gateway, verify the setup under **Settings > Integrations > GitHub**. The user first clicks **Start GitHub authorization** so the device code is visible, then explicitly opens GitHub and approves access. The resulting user token is encrypted by Gateway and stored in the created connector.
+
+The shared OAuth App currently requests `repo`, `workflow`, `read:org`, and `read:packages`. These scopes allow repository and CI operations, organization discovery, and package reads within the authorizing user's own GitHub access. GitHub Enterprise connectors remain token-based because the shared OAuth App is registered on `github.com`.
 
 ## Local authentication operations
 

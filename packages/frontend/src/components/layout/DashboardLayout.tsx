@@ -373,6 +373,10 @@ export function DashboardLayout() {
   // Track recent pages for command palette
   const location = useLocation();
   useRouteScrollRestoration(currentUser?.id);
+  useEffect(() => {
+    if (!isMobile || !location.pathname) return;
+    setMobileMenuOpen(false);
+  }, [isMobile, location.pathname, setMobileMenuOpen]);
   const resolvedPageStatus = useResolvedPageContext((s) => s.status);
   const resolvedPageRouteKey = useResolvedPageContext((s) => s.routeKey);
   const resolvedPageResource = useResolvedPageContext((s) => s.resource);
@@ -620,6 +624,42 @@ export function DashboardLayout() {
     return null;
   }
 
+  const canUseAI = !!currentUser?.scopes?.includes(AI_SCOPE) && aiEnabled !== false;
+  const isAIConversationRoute = /^\/ai\/chats\/[^/]+$/.test(location.pathname);
+  const isAIHome = location.pathname === "/" || isAIConversationRoute;
+  if (canUseAI && isAIHome && !interfacePreferenceLoaded) {
+    return (
+      <div className="h-screen bg-background" aria-busy="true" aria-label="Loading workspace" />
+    );
+  }
+
+  const useLiteMode =
+    interfacePreferenceLoaded && (aiLiteMode || isAIConversationRoute) && canUseAI;
+
+  if (isMobile && useLiteMode && isAIHome) {
+    return (
+      <TooltipProvider>
+        <div className="flex h-screen flex-col bg-background">
+          <PageTransition>
+            <AILitePanel onOpenMobileMenu={() => setMobileMenuOpen(true)} />
+          </PageTransition>
+          <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
+            <SheetContent side="left" className="w-full p-0" hideCloseButton>
+              <SheetHeader className="sr-only">
+                <SheetTitle>Navigation</SheetTitle>
+              </SheetHeader>
+              <AILiteSidebar alwaysExpanded mobileMenu onClose={() => setMobileMenuOpen(false)} />
+            </SheetContent>
+          </Sheet>
+          <Toaster position="bottom-center" />
+          <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
+          <ConfirmDialog />
+          {interfaceOnboarding}
+        </div>
+      </TooltipProvider>
+    );
+  }
+
   if (isMobile) {
     return (
       <TooltipProvider>
@@ -673,24 +713,19 @@ export function DashboardLayout() {
     );
   }
 
-  const canUseAI = !!currentUser?.scopes?.includes(AI_SCOPE) && aiEnabled !== false;
-  const isAIConversationRoute = /^\/ai\/chats\/[^/]+$/.test(location.pathname);
-  const useLiteMode =
-    interfacePreferenceLoaded && (aiLiteMode || isAIConversationRoute) && canUseAI;
-
   if (useLiteMode) {
-    const isAIHome = location.pathname === "/" || isAIConversationRoute;
-
     return (
       <TooltipProvider>
         <div className="flex h-screen bg-background dashboard-scrollbar">
-          <AILiteSidebar
-            sidebarWidth={sidebarWidth}
-            onSidebarWidthChange={handleSidebarResize}
-            isResizing={isResizing}
-            onResizeStart={handleResizeStart}
-            onResizeEnd={handleResizeEnd}
-          />
+          <div className="ai-chat-content-fade-in flex h-full shrink-0">
+            <AILiteSidebar
+              sidebarWidth={sidebarWidth}
+              onSidebarWidthChange={handleSidebarResize}
+              isResizing={isResizing}
+              onResizeStart={handleResizeStart}
+              onResizeEnd={handleResizeEnd}
+            />
+          </div>
           <main className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
             {isAIHome ? (
               <PageTransition>

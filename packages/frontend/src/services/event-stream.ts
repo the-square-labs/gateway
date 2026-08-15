@@ -211,6 +211,12 @@ class EventStream {
           api.invalidateCache("settings:gitlab-connectors");
           api.invalidateCache("req:/api/integrations/cloudflare/connectors");
           api.invalidateCache("settings:cloudflare-connectors");
+          api.invalidateCache("req:/api/integrations/github/connectors");
+          api.invalidateCache("settings:github-connectors");
+          api.invalidateCache("req:/api/integrations/git/connectors");
+          api.invalidateCache("settings:git-connectors");
+          api.invalidateCache("req:/api/integrations/ssh/connectors");
+          api.invalidateCache("settings:ssh-connectors");
           api.invalidateCache("req:/api/docker/registries");
           api.invalidateCache("settings:docker-registries");
         } else if (msg.channel === "notification.alert-rule.changed") {
@@ -228,8 +234,10 @@ class EventStream {
           msg.channel === "database.changed" ||
           msg.channel === "database.folder.changed"
         ) {
-          invalidate("req:/api/databases", "databases:list");
           const payload = msg.payload as { action?: string; id?: string } | undefined;
+          if (!(msg.channel === "database.changed" && payload?.action === "health.sampled")) {
+            invalidate("req:/api/databases", "databases:list");
+          }
           if (msg.channel === "database.changed" && payload?.action === "deleted" && payload.id) {
             usePinnedDatabasesStore.getState().removePin(payload.id);
           }
@@ -310,6 +318,7 @@ class EventStream {
 
   private invalidateNodeStores() {
     api.invalidateCache("req:/api/nodes");
+    api.invalidateCache("databases:nodes");
     useNodesStore.getState().invalidate();
     usePinnedNodesStore.getState().invalidate();
   }

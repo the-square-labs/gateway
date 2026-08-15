@@ -82,6 +82,44 @@ describe('MCP tool scope filtering', () => {
     expect(names.some((name) => name.startsWith('gitlab_'))).toBe(false);
   });
 
+  it('never exposes embedded-assistant connector tools through Gateway MCP', () => {
+    const names = toolNames([
+      'feat:ai:use',
+      'integrations:github:view',
+      'integrations:github:manage',
+      'integrations:git:view',
+      'integrations:git:manage',
+      'integrations:ssh:view',
+      'integrations:ssh:use',
+      'integrations:ssh:manage',
+    ]);
+    expect(names).not.toEqual(
+      expect.arrayContaining([
+        'open_connector_setup',
+        'github_list_connectors',
+        'github_list_repositories',
+        'github_list_repository_tree',
+        'github_list_branches',
+        'github_list_workflow_runs',
+        'github_list_actions_variables',
+        'github_list_actions_secrets',
+        'github_upsert_repository_file',
+        'github_upsert_actions_variable',
+        'github_upsert_actions_secret',
+        'create_github_token_connector',
+        'git_list_connectors',
+        'git_list_remote_refs',
+        'git_list_repository_tree',
+        'git_read_repository_file',
+        'git_upsert_repository_file',
+        'create_git_connector',
+        'ssh_list_connectors',
+        'ssh_execute_command',
+        'create_ssh_connector',
+      ])
+    );
+  });
+
   it('never exposes node config or filesystem tools through MCP', () => {
     expect(toolNames(['nodes:config:view', 'nodes:config:edit'])).not.toContain('manage_node_config');
     expect(toolNames(['nodes:files:read', 'nodes:files:write'])).not.toContain('manage_node_file');
@@ -105,6 +143,7 @@ describe('MCP tool scope filtering', () => {
         'get_current_context',
         'end_conversation',
         'search_chats',
+        'search_compacted_history',
         'find_in_chat',
         'read_chat_slice',
         'list_chat_projects',
@@ -122,6 +161,17 @@ describe('MCP tool scope filtering', () => {
   it('never exposes assistant-only coordination tools through MCP', () => {
     expect(toolNames([])).not.toContain('wait');
     expect(toolByName(['feat:ai:use'], 'wait')).toBeUndefined();
+    const resourceSetupScopes = [
+      'databases:view',
+      'databases:create',
+      'docker:containers:migrate',
+      'docker:tasks',
+      'settings:gateway:view',
+      'settings:gateway:edit',
+    ];
+    expect(toolNames(resourceSetupScopes)).not.toEqual(
+      expect.arrayContaining(['manage_managed_database', 'manage_docker_migration', 'manage_logging_backend'])
+    );
   });
 
   it('advertises Docker folder tools for every Docker resource view scope', () => {

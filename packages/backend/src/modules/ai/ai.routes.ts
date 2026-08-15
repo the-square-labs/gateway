@@ -11,14 +11,22 @@ import type { AppEnv } from '@/types.js';
 import { aiStatusRoute, getAiConfigRoute, listAiToolsRoute, updateAiConfigRoute } from './ai.openapi.js';
 import { AISandboxService } from './ai.sandbox.service.js';
 import { AISandboxArtifactService } from './ai.sandbox-artifact.service.js';
-import { AIConfigUpdateSchema, AIContextEstimateRequestSchema } from './ai.schemas.js';
+import {
+  AIConfigUpdateSchema,
+  AIContextEstimateRequestSchema,
+  AIUserSkillCreateSchema,
+  AIUserSkillUpdateSchema,
+  PageContextSchema,
+} from './ai.schemas.js';
 import { AIService } from './ai.service.js';
 import { AISettingsService } from './ai.settings.service.js';
+import { AISkillService } from './ai.skills.js';
 import { AI_TOOLS } from './ai.tools.js';
 import { AIConversationService } from './ai-conversation.service.js';
 import { AIConversationFolderService } from './ai-conversation-folder.service.js';
 import { AIProviderRuntimeService } from './ai-provider-runtime.service.js';
 import { AIRunService } from './ai-run.service.js';
+import { listVisibleAIScenarios, rankAIScenarios } from './ai-scenarios.js';
 
 export const aiRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
@@ -31,6 +39,15 @@ function promptAuditSummary(prompt: string): { hash: string; length: number; emp
     hash: hashPrompt(prompt),
     length: prompt.length,
     empty: prompt.trim().length === 0,
+  };
+}
+
+function skillAuditSummary(skill: { name: string; description: string; instructions: string; enabled: boolean }) {
+  return {
+    name: skill.name,
+    enabled: skill.enabled,
+    description: promptAuditSummary(skill.description),
+    instructions: promptAuditSummary(skill.instructions),
   };
 }
 
@@ -57,10 +74,13 @@ function toolSubject(name: string): string {
 
 function userFacingToolDescription(name: string, category: string, destructive: boolean): string {
   if (name === 'discover_tools') return 'Find available Gateway tool groups and capabilities.';
+  if (name === 'read_skill') return 'Read one available skill without activating it.';
+  if (name === 'activate_skill') return 'Activate one available skill until the next context compaction.';
   if (name === 'get_current_context') return 'Read the page and resource currently open in the UI.';
   if (name === 'end_conversation') return 'Close the current assistant conversation with a reason.';
   if (name === 'find_resource') return 'Search Gateway resources by name, type, or identifier.';
   if (name === 'search_chats') return 'Search previous AI chats for relevant context.';
+  if (name === 'search_compacted_history') return 'Search exact details from compacted history in the current chat.';
   if (name === 'find_in_chat') return 'Search within a specific previous AI chat.';
   if (name === 'read_chat_slice') return 'Read a bounded slice of messages from a previous AI chat.';
   if (name === 'list_chat_projects') return 'List AI chat projects available as retrieval boundaries.';
@@ -137,6 +157,9 @@ aiRoutes.openapi(aiStatusRoute, async (c) => {
     providerType: config.providerType,
     defaultModel: config.model,
     allowUserModelSelection: false,
+    allowUserReasoningEffortSelection: config.allowUserReasoningEffortSelection,
+    reasoningEfforts: ['default', 'low', 'medium', 'high'],
+    defaultReasoningEffort: 'default',
     supportsImages: config.supportsImages,
     models: [],
   });
@@ -147,6 +170,27 @@ aiRoutes.get('/conversations', requireScope('feat:ai:use'), async (c) => {
   const user = c.get('user')!;
   const data = await service.listConversations(user.id);
   return c.json({ data });
+});
+
+// Scenario catalogue for the full AI Workspace start screen. The server owns
+// visibility so a card is never an alternate way around a permission check.
+aiRoutes.get('/scenarios', requireScope('feat:ai:use'), async (c) => {
+  const rawContext = c.req.query('context');
+  let parsed: ReturnType<typeof PageContextSchema.safeParse> | null = null;
+  if (rawContext) {
+    try {
+      parsed = PageContextSchema.safeParse(JSON.parse(rawContext));
+    } catch {
+      return c.json({ code: 'VALIDATION_ERROR', message: 'Invalid page context' }, 400);
+    }
+  }
+  if (rawContext && !parsed?.success) {
+    return c.json({ code: 'VALIDATION_ERROR', message: 'Invalid page context' }, 400);
+  }
+  const scenarios = rankAIScenarios(listVisibleAIScenarios(c.get('user')!), parsed?.data).map(
+    ({ kickoffInstruction: _kickoffInstruction, requiredAnyScopes: _requiredAnyScopes, ...scenario }) => scenario
+  );
+  return c.json({ data: scenarios });
 });
 
 aiRoutes.get('/conversation-folders', requireScope('feat:ai:use'), async (c) => {
@@ -232,11 +276,32 @@ aiRoutes.patch('/conversations/:id/provider', requireScope('feat:ai:use'), async
   if (!conversation) return c.json({ code: 'NOT_FOUND', message: 'Conversation not found' }, 404);
 
   const status = await container.resolve(AIProviderRuntimeService).statusForUser(user);
-  if (status.providerType !== 'gateway_inference') {
-    return c.json(
-      { code: 'AI_PROVIDER_UNSUPPORTED', message: 'Per-chat model selection requires Gateway Inference' },
-      409
-    );
+  if (status.providerType === 'openai_compatible') {
+    if (!status.allowUserReasoningEffortSelection) {
+      return c.json(
+        { code: 'AI_REASONING_EFFORT_SELECTION_DISABLED', message: 'Reasoning effort selection is disabled' },
+        403
+      );
+    }
+    if (parsed.data.reasoningEffort && !status.reasoningEfforts.includes(parsed.data.reasoningEffort)) {
+      return c.json(
+        {
+          code: 'AI_REASONING_EFFORT_UNAVAILABLE',
+          message: 'The selected reasoning effort is unavailable for this provider',
+        },
+        400
+      );
+    }
+    await container.resolve(AIRunService).updateConversationProvider({
+      userId: user.id,
+      conversationId: conversation.id,
+      model: status.defaultModel,
+      reasoningEffort: parsed.data.reasoningEffort,
+      modelDisplayName: status.defaultModel,
+      previousModelDisplayName: conversation.model ?? undefined,
+    });
+    const data = await conversationService.getConversation(user.id, conversation.id);
+    return c.json({ data });
   }
   const model = status.models.find((candidate) => candidate.id === parsed.data.model);
   if (!model) return c.json({ code: 'AI_MODEL_UNAVAILABLE', message: 'The selected model is unavailable' }, 404);
@@ -301,7 +366,8 @@ aiRoutes.post('/context-estimate', requireScope('feat:ai:use'), async (c) => {
     parsed.data.context,
     parsed.data.conversationId ?? undefined,
     parsed.data.model,
-    parsed.data.reasoningEffort
+    parsed.data.reasoningEffort,
+    parsed.data.messages
   );
   return c.json({ data });
 });
@@ -364,6 +430,56 @@ aiRoutes.openapi({ ...updateAiConfigRoute, middleware: requireScope('feat:ai:con
     }
   }
   return c.json({ data: { ...config, gatewayInferenceModels } });
+});
+
+// AI skills are shared installation-wide. Settings readers may inspect them;
+// a dedicated scope gates every user-skill mutation.
+aiRoutes.get('/skills', requireScope('feat:ai:configure'), async (c) => {
+  const skills = new AISkillService(container.resolve(AISettingsService));
+  return c.json({ data: await skills.listAllForSettings() });
+});
+
+aiRoutes.post('/skills', requireScope('ai:skills:manage'), async (c) => {
+  const body = AIUserSkillCreateSchema.safeParse(await c.req.json());
+  if (!body.success) return c.json({ code: 'VALIDATION_ERROR', message: body.error.message }, 400);
+  const skill = await new AISkillService(container.resolve(AISettingsService)).create(body.data);
+  const user = c.get('user')!;
+  await container.resolve(AuditService).log({
+    userId: user.id,
+    action: 'ai.skill.create',
+    resourceType: 'ai-skill',
+    resourceId: skill.id,
+    details: skillAuditSummary(skill),
+  });
+  return c.json({ data: skill }, 201);
+});
+
+aiRoutes.patch('/skills/:id', requireScope('ai:skills:manage'), async (c) => {
+  const body = AIUserSkillUpdateSchema.safeParse(await c.req.json());
+  if (!body.success) return c.json({ code: 'VALIDATION_ERROR', message: body.error.message }, 400);
+  const skill = await new AISkillService(container.resolve(AISettingsService)).update(c.req.param('id'), body.data);
+  const user = c.get('user')!;
+  await container.resolve(AuditService).log({
+    userId: user.id,
+    action: 'ai.skill.update',
+    resourceType: 'ai-skill',
+    resourceId: skill.id,
+    details: { changedFields: Object.keys(body.data).sort(), ...skillAuditSummary(skill) },
+  });
+  return c.json({ data: skill });
+});
+
+aiRoutes.delete('/skills/:id', requireScope('ai:skills:manage'), async (c) => {
+  const skill = await new AISkillService(container.resolve(AISettingsService)).delete(c.req.param('id'));
+  const user = c.get('user')!;
+  await container.resolve(AuditService).log({
+    userId: user.id,
+    action: 'ai.skill.delete',
+    resourceType: 'ai-skill',
+    resourceId: skill.id,
+    details: skillAuditSummary(skill),
+  });
+  return c.json({ data: { id: skill.id } });
 });
 
 // GET /api/ai/tools — list all tool definitions grouped by category (admin only)
@@ -473,16 +589,21 @@ aiRoutes.get('/sandbox/artifacts', requireScope('feat:ai:use'), async (c) => {
   const artifactService = container.resolve(AISandboxArtifactService);
   const conversationService = container.resolve(AIConversationService);
   const user = c.get('user')!;
-  const artifacts = await artifactService.listForUser(user.id);
+  const pageRaw = Number(c.req.query('page') ?? 1);
+  const limitRaw = Number(c.req.query('limit') ?? 50);
+  const page = Number.isInteger(pageRaw) ? Math.max(1, pageRaw) : 1;
+  const limit = Number.isInteger(limitRaw) ? Math.min(100, Math.max(1, limitRaw)) : 50;
+  const result = await artifactService.listPageForUser(user.id, page, limit);
   const conversationTitles = await conversationService.listConversationTitles(
     user.id,
-    artifacts.map((artifact) => artifact.conversationId).filter((id): id is string => Boolean(id))
+    result.items.map((artifact) => artifact.conversationId).filter((id): id is string => Boolean(id))
   );
   return c.json({
-    data: artifacts.map((artifact) => ({
+    data: result.items.map((artifact) => ({
       ...artifact,
       conversationTitle: artifact.conversationId ? (conversationTitles[artifact.conversationId] ?? null) : null,
     })),
+    nextPage: result.nextPage,
   });
 });
 

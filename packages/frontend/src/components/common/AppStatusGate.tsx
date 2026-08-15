@@ -150,7 +150,10 @@ function GatewayOperationScreen() {
   useEffect(() => {
     let cancelled = false;
     let timer: number | null = null;
-    let restartObserved = false;
+    // A regular restart can recover before this effect mounts. Treat the
+    // persisted restart flag itself as evidence so the first healthy probe
+    // clears a stale blocker. Versioned updates still wait for their target.
+    let restartObserved = !updatingActive && !targetVersion;
     let targetProbeActive = false;
     let targetProbeStartedAt = 0;
     let navigating = false;
@@ -226,7 +229,14 @@ function GatewayOperationScreen() {
 
         if (restartObserved) {
           if (restartTargetUrl) navigateToRestartTarget();
-          else completeSameOriginRestart(health.version ?? null, "gateway-restart-recovered");
+          else if (updatingActive || targetVersion) {
+            completeSameOriginRestart(health.version ?? null, "gateway-restart-recovered");
+          } else {
+            // A regular Gateway restart has no new client assets to load.
+            // Keep the current document alive so the event stream and active
+            // route can recover without repeating the full startup prewarm.
+            clearGatewayRestarting();
+          }
         }
       } catch {
         restartObserved = true;

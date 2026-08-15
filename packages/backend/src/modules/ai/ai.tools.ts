@@ -3,11 +3,14 @@ import { DOCKER_AI_TOOLS } from './ai.tools.docker.js';
 import { FOLDER_AI_TOOLS } from './ai.tools.folders.js';
 import { GITLAB_AI_TOOLS } from './ai.tools.gitlab.js';
 import { INFERENCE_AI_TOOLS } from './ai.tools.inference.js';
+import { INTEGRATION_AI_TOOLS } from './ai.tools.integrations.js';
 import { NODE_FILE_AI_TOOLS } from './ai.tools.node-files.js';
 import { NOTIFICATION_AI_TOOLS, WEB_SEARCH_AI_TOOL } from './ai.tools.notifications.js';
 import { OPERATION_AI_TOOLS } from './ai.tools.operations.js';
 import { PKI_AI_TOOLS } from './ai.tools.pki.js';
+import { RESOURCE_SETUP_AI_TOOLS } from './ai.tools.resource-setup.js';
 import { SANDBOX_AI_TOOLS } from './ai.tools.sandbox.js';
+import { SSH_AI_TOOLS } from './ai.tools.ssh.js';
 import type { AIToolDefinition } from './ai.types.js';
 import { createAIToolArgumentValidator } from './ai-tool-contract.js';
 import { canUseAiTool } from './ai-tool-filtering.js';
@@ -35,7 +38,7 @@ const PLAN_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'submit_plan',
     description:
-      'Submit a complete structured plan after clarification and detailed research. Every plan must include implementation steps and verification criteria. Submission starts the separate intent/security validation pass.',
+      'Submit a complete structured plan after clarification and detailed research, or replace the currently published plan when the user clearly requests a revision. Merely discussing or asking questions about a published plan does not require this tool. Every submitted plan must include implementation steps and verification criteria. Submission starts the separate intent/security validation pass.',
     parameters: {
       type: 'object',
       properties: {
@@ -120,6 +123,17 @@ const PLAN_AI_TOOLS: AIToolDefinition[] = [
       },
       required: ['intentReview', 'securityReview'],
     },
+    destructive: false,
+    category: 'Planning',
+    requiredScope: 'feat:ai:use',
+    invalidateStores: [],
+    historyRetention: { mode: 'persistent_context' },
+  },
+  {
+    name: 'start_plan_execution',
+    description:
+      'Start the latest published plan only when the user explicitly asks to execute or proceed with it. Derive the active plan and published revision from the conversation; never ask the user for internal IDs.',
+    parameters: { type: 'object', properties: {} },
     destructive: false,
     category: 'Planning',
     requiredScope: 'feat:ai:use',
@@ -221,14 +235,19 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: 'discover_tools',
     description:
-      'Discover Gateway tool groups and callable tools before choosing an operation. Use this when you are not sure which tool supports a task, or when a category-specific tool is not visible in your current context.',
+      'Discover Gateway tool groups without loading every tool schema. Call with no arguments for compact category summaries, with query for up to three category recommendations, or with one to three explicit categories plus includeTools:true to replace the current active tool working set. Never pre-open categories for future steps.',
     parameters: {
       type: 'object',
       properties: {
         category: {
           type: 'string',
-          description:
-            'Optional Gateway tool category to inspect, for example Docker, Logging, SSL Certificates, Administration, or Reverse Proxy.',
+          description: 'One explicit Gateway tool category to activate. Legacy shorthand for categories with one item.',
+        },
+        categories: {
+          type: 'array',
+          maxItems: 3,
+          items: { type: 'string' },
+          description: 'One to three explicit categories for the current task step. Replaces the previous working set.',
         },
         query: {
           type: 'string',
@@ -237,9 +256,39 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
         includeTools: {
           type: 'boolean',
           description:
-            'Set true to return matching tool details. When omitted without category/query, only category summaries are returned.',
+            'Set true only with explicit category/categories to return tool details and activate that bounded working set.',
         },
       },
+    },
+    destructive: false,
+    category: 'Discovery',
+    requiredScope: 'feat:ai:use',
+    invalidateStores: [],
+    historyRetention: { mode: 'persistent_context' },
+  },
+  {
+    name: 'read_skill',
+    description:
+      'Read one available skill for inspection. Reading does not activate it; use activate_skill before applying its instructions.',
+    parameters: {
+      type: 'object',
+      properties: { skillId: { type: 'string', description: 'Exact skill id from the system-prompt skill catalog.' } },
+      required: ['skillId'],
+    },
+    destructive: false,
+    category: 'Discovery',
+    requiredScope: 'feat:ai:use',
+    invalidateStores: [],
+    historyRetention: { mode: 'persistent_context' },
+  },
+  {
+    name: 'activate_skill',
+    description:
+      'Activate one available skill until the next context compaction and return its complete instructions. Do not activate it again while that activation remains visible; base security and authorization rules always take priority.',
+    parameters: {
+      type: 'object',
+      properties: { skillId: { type: 'string', description: 'Exact skill id from the system-prompt skill catalog.' } },
+      required: ['skillId'],
     },
     destructive: false,
     category: 'Discovery',
@@ -323,14 +372,14 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: 'send_comment',
     description:
-      'Send a short user-visible progress comment during a long multi-tool task, then continue working. Use this proactively before long tool sequences and when instructed that the tool-round limit requires a comment. Call this tool by itself, without other tool calls in the same assistant turn.',
+      'Send a short user-visible progress comment during a long multi-tool task, then continue working. Use this proactively before long tool sequences and when instructed that the tool-round limit requires a comment. This first user-visible text locks the response language for all later comments and the final answer in the current run. Call this tool by itself, without other tool calls in the same assistant turn.',
     parameters: {
       type: 'object',
       properties: {
         message: {
           type: 'string',
           description:
-            "Concise progress update in the user's language. Mention what you learned or what you are checking next. Do not include secrets.",
+            'Concise progress update in the language already used by this run, or its selected response language if this is the first visible text. Mention what you learned or what you are checking next. Do not include secrets.',
         },
       },
       required: ['message'],
@@ -450,6 +499,27 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
     requiredScope: 'feat:ai:use',
     invalidateStores: [],
     historyRetention: { mode: 'persistent_context' },
+  },
+  {
+    name: 'search_compacted_history',
+    description:
+      'Search exact durable messages from this current conversation before its latest compaction boundary. Use only when the lossy compacted summary is insufficient, the user asks for an exact older detail, or an older identifier, error, path, command, or decision is ambiguous. The server selects the current conversation; this tool cannot read another chat.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'A narrow exact identifier, error fragment, path, command, name, or decision to recover.',
+        },
+        limit: { type: 'number', description: 'Maximum matches to return. Default 5, max 10.' },
+      },
+      required: ['query'],
+    },
+    destructive: false,
+    category: 'Conversation Retrieval',
+    requiredScope: 'feat:ai:use',
+    invalidateStores: [],
+    historyRetention: { mode: 'recent_full', maxBytes: 12000 },
   },
   {
     name: 'find_in_chat',
@@ -1318,6 +1388,27 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
     invalidateStores: ['users'],
   },
   {
+    name: 'set_user_additional_permissions',
+    description:
+      "Replace a user's exact additional permissions. Use list_users first to inspect groupScopes, additionalScopes, and effective scopes. Pass an empty additionalScopes array to reset all user-specific permissions while keeping the user's permission group unchanged.",
+    parameters: {
+      type: 'object',
+      properties: {
+        userId: { type: 'string', description: 'User UUID' },
+        additionalScopes: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Complete replacement list of user-specific permission scopes; [] resets the override',
+        },
+      },
+      required: ['userId', 'additionalScopes'],
+    },
+    destructive: true,
+    category: 'Administration',
+    requiredScope: 'admin:users',
+    invalidateStores: ['users'],
+  },
+  {
     name: 'set_user_blocked',
     description:
       'Block or unblock a user account. Cannot target yourself, the system user, or users whose scopes exceed yours.',
@@ -1390,6 +1481,10 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
         gatewayInferenceAllowUserModelSelection: {
           type: 'boolean',
           description: 'Allow users to select another accessible Gateway Inference model.',
+        },
+        allowUserReasoningEffortSelection: {
+          type: 'boolean',
+          description: 'Allow users to override the default reasoning effort for the OpenAI-compatible provider.',
         },
         customSystemPrompt: { type: 'string', description: 'Additional system prompt instructions.' },
         rateLimitMax: { type: 'number', description: 'Maximum assistant requests per window.' },
@@ -1778,6 +1873,51 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
     requiredScope: 'feat:ai:use',
     invalidateStores: [],
   },
+  {
+    name: 'open_node_enrollment',
+    description:
+      "Open the concrete Gateway node-enrollment flow in the user's current AI Workspace. Use only after the user has chosen to add a Gateway-managed node. This is a client-side setup handoff, not a blocker and not a resource mutation by itself.",
+    parameters: {
+      type: 'object',
+      properties: {},
+    },
+    destructive: false,
+    category: 'Setup',
+    requiredScope: 'feat:ai:use',
+    invalidateStores: [],
+  },
+  {
+    name: 'open_connector_setup',
+    description:
+      "Open the concrete add-connector flow in the user's current AI Workspace. Use only after the user has chosen a connector type for a missing prerequisite. Never open the Finalize Setup checklist for this. Use gitlab for a GitLab instance, github for an account-wide GitHub connection, git for a generic Git host, cloudflare for DNS, or ssh for an external server. Include a known generic Git host or repository only when the user already supplied it. This is a client-side setup handoff, not a blocker and not a resource mutation by itself.",
+    parameters: {
+      type: 'object',
+      properties: {
+        connector: {
+          type: 'string',
+          enum: ['cloudflare', 'gitlab', 'github', 'git', 'ssh'],
+          description: 'The connector form to open.',
+        },
+        baseUrl: {
+          type: 'string',
+          description: 'Optional known provider or Git-host base URL to prefill.',
+        },
+        repositoryUrl: {
+          type: 'string',
+          description: 'Optional known repository URL to prefill for generic Git.',
+        },
+        host: {
+          type: 'string',
+          description: 'Optional known external SSH host to prefill.',
+        },
+      },
+      required: ['connector'],
+    },
+    destructive: false,
+    category: 'Setup',
+    requiredScope: 'feat:ai:use',
+    invalidateStores: [],
+  },
 
   // ── Ask Question ──
   {
@@ -1884,15 +2024,19 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
 
   // ── GitLab Integrations ──
   ...GITLAB_AI_TOOLS,
+  // ── Git and connector setup ──
+  ...INTEGRATION_AI_TOOLS,
 
   // ── Inference ──
   ...INFERENCE_AI_TOOLS,
 
   // ── Operations ──
   ...OPERATION_AI_TOOLS,
+  ...RESOURCE_SETUP_AI_TOOLS,
 
   // ── Sandbox ──
   ...SANDBOX_AI_TOOLS,
+  ...SSH_AI_TOOLS,
 
   // ── Notifications ──
   ...NOTIFICATION_AI_TOOLS,
@@ -1906,17 +2050,25 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
 export const AI_TOOLS: AIToolDefinition[] = withAIToolPolicyMetadata(AI_TOOL_DEFINITIONS);
 
 const destructiveSet = new Set(AI_TOOLS.filter((t) => t.destructive).map((t) => t.name));
-const REQUIRED_RUNTIME_AI_TOOL_NAMES = new Set(['read_tool_output', 'search_tool_output']);
+const REQUIRED_RUNTIME_AI_TOOL_NAMES = new Set([
+  'read_tool_output',
+  'search_tool_output',
+  'read_skill',
+  'activate_skill',
+]);
 const BASE_AI_TOOL_NAMES = new Set([
   'enter_plan_mode',
   'submit_plan',
   'submit_plan_review',
+  'start_plan_execution',
   'update_plan_step',
   'pause_plan_execution',
   'resume_plan_execution',
   'finalize_plan_execution',
   'submit_plan_verification',
   'discover_tools',
+  'read_skill',
+  'activate_skill',
   'get_current_context',
   'read_tool_output',
   'search_tool_output',
@@ -1927,12 +2079,17 @@ const BASE_AI_TOOL_NAMES = new Set([
   'ask_question',
   'internal_documentation',
   'search_chats',
+  'search_compacted_history',
   'find_in_chat',
   'read_chat_slice',
   'list_chat_projects',
   'fetch',
   'web_search',
 ]);
+
+export function isBaseAIToolName(name: string): boolean {
+  return BASE_AI_TOOL_NAMES.has(name);
+}
 
 const TOOL_NAME_BOUNDARY = '[^a-zA-Z0-9_]';
 

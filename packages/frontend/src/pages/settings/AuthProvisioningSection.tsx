@@ -43,7 +43,7 @@ import {
 
 interface AuthProvisioningSectionProps {
   canEdit: boolean;
-  section?: "all" | "general" | "advanced";
+  section?: "all" | "general" | "advanced" | "features";
 }
 
 const BYTES_PER_MEGABYTE = 1024 * 1024;
@@ -460,7 +460,7 @@ export function AuthProvisioningSection({
   };
 
   const saveOidc = async () => {
-    if (!settings || !canEdit) return;
+    if (!settings || !canEdit || !oidcHasChanges) return;
     setIsSavingOidc(true);
     try {
       const updated = await api.updateAuthProvisioningSettings({
@@ -483,7 +483,7 @@ export function AuthProvisioningSection({
   };
 
   const saveLogging = async () => {
-    if (!settings || !canEdit) return;
+    if (!settings || !canEdit || !loggingHasChanges) return;
     setIsSavingLogging(true);
     try {
       const external = loggingDraft.mode === "external";
@@ -863,7 +863,7 @@ export function AuthProvisioningSection({
   };
 
   const saveMfaGracePeriod = async () => {
-    if (!settings || !canEdit) return;
+    if (!settings || !canEdit || !mfaHasChanges) return;
     const gracePeriodDays = Number(mfaGracePeriodRaw);
     if (
       mfaGracePeriodRaw.trim() === "" ||
@@ -894,6 +894,7 @@ export function AuthProvisioningSection({
   };
 
   const saveSmtp = async (testRecipient?: string) => {
+    if (!testRecipient && !smtpHasChanges) return;
     const port = Number(smtpDraft.port);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       toast.error("SMTP port must be between 1 and 65535");
@@ -952,13 +953,52 @@ export function AuthProvisioningSection({
           ? "Paste a Twilio SendGrid API key."
           : "Password or API key used by your SMTP relay.";
 
+  const oidcHasChanges = Boolean(
+    settings &&
+      (oidcDraft.issuer.trim() !== (settings.oidc?.issuer ?? "") ||
+        oidcDraft.clientId.trim() !== (settings.oidc?.clientId ?? "") ||
+        oidcDraft.clientSecret.length > 0 ||
+        oidcDraft.redirectUri.trim() !== (settings.oidc?.redirectUri ?? "") ||
+        oidcDraft.scopes.trim() !== (settings.oidc?.scopes ?? "openid email profile"))
+  );
+  const loggingHasChanges = Boolean(
+    settings &&
+      (loggingDraft.mode !== (settings.logging?.mode ?? "disabled") ||
+        (loggingDraft.mode === "external" &&
+          (loggingDraft.url.trim() !== (settings.logging?.url ?? "") ||
+            loggingDraft.username.trim() !== (settings.logging?.username ?? "") ||
+            loggingDraft.password.length > 0 ||
+            loggingDraft.database.trim() !== (settings.logging?.database ?? "gateway_logs") ||
+            loggingDraft.table.trim() !== (settings.logging?.table ?? "logs") ||
+            Number(loggingDraft.requestTimeoutMs) !==
+              (settings.logging?.requestTimeoutMs ?? 5000))))
+  );
+  const mfaGracePeriodIsValid =
+    mfaGracePeriodRaw.trim() !== "" &&
+    Number.isInteger(Number(mfaGracePeriodRaw)) &&
+    Number(mfaGracePeriodRaw) >= 0 &&
+    Number(mfaGracePeriodRaw) <= 7;
+  const mfaHasChanges = Boolean(
+    settings && mfaGracePeriodRaw.trim() !== String(settings.mfaExistingSessionGracePeriodDays)
+  );
+  const smtpHasChanges = Boolean(
+    settings &&
+      (smtpDraft.host !== (settings.smtp?.host ?? DEFAULT_SMTP_DRAFT.host) ||
+        smtpDraft.port !== String(settings.smtp?.port ?? DEFAULT_SMTP_DRAFT.port) ||
+        smtpDraft.tlsMode !== (settings.smtp?.tlsMode ?? DEFAULT_SMTP_DRAFT.tlsMode) ||
+        smtpDraft.username !== (settings.smtp?.username ?? DEFAULT_SMTP_DRAFT.username) ||
+        smtpDraft.password.length > 0 ||
+        smtpDraft.senderName !== (settings.smtp?.senderName ?? DEFAULT_SMTP_DRAFT.senderName) ||
+        smtpDraft.senderEmail !== (settings.smtp?.senderEmail ?? DEFAULT_SMTP_DRAFT.senderEmail))
+  );
+
   if (!initialLoadComplete) return <Skeleton />;
   if (!settings) return null;
 
   return (
     <div className="space-y-4">
       <PanelShell
-        hidden={section === "advanced"}
+        hidden={section !== "all" && section !== "general"}
         title="General settings"
         description="Gateway-wide behavior and operational limits"
         actions={
@@ -1188,14 +1228,14 @@ export function AuthProvisioningSection({
       </PanelShell>
 
       <GracefulShutdownSettingsPanel
-        hidden={section === "general"}
+        hidden={section !== "all" && section !== "features"}
         value={settings.generalSettings.shutdown}
         canEdit={canEdit}
         onSave={saveShutdownSettings}
       />
 
       <PanelShell
-        hidden={section === "general"}
+        hidden={section !== "all" && section !== "advanced"}
         title="OIDC provider"
         description={
           settings.oidc?.configured
@@ -1203,11 +1243,16 @@ export function AuthProvisioningSection({
             : "Configure the identity provider used for OIDC sign-in"
         }
         actions={
-          <Button onClick={saveOidc} disabled={!canEdit || isSavingOidc}>
+          <Button
+            aria-label="Save OIDC provider"
+            onClick={saveOidc}
+            disabled={!canEdit || isSavingOidc || !oidcHasChanges}
+          >
             <Save className="h-4 w-4" />
             Save
           </Button>
         }
+        dirty={oidcHasChanges}
       >
         <div className="divide-y divide-border">
           <SettingsControlRow
@@ -1287,15 +1332,20 @@ export function AuthProvisioningSection({
       </PanelShell>
 
       <PanelShell
-        hidden={section === "general"}
+        hidden={section !== "all" && section !== "features"}
         title="Structured logging storage"
         description="Keep logging disabled, let Gateway manage a local ClickHouse, or use an external ClickHouse"
         actions={
-          <Button onClick={saveLogging} disabled={!canEdit || isSavingLogging}>
+          <Button
+            aria-label="Save structured logging storage"
+            onClick={saveLogging}
+            disabled={!canEdit || isSavingLogging || !loggingHasChanges}
+          >
             <Save className="h-4 w-4" />
             Save
           </Button>
         }
+        dirty={loggingHasChanges}
       >
         <div className="divide-y divide-border">
           <SettingsControlRow
@@ -1423,7 +1473,7 @@ export function AuthProvisioningSection({
       </PanelShell>
 
       <PanelShell
-        hidden={section === "general"}
+        hidden={section !== "all" && section !== "advanced"}
         title="Identity provisioning"
         description="OIDC sign-in behavior for Gateway users"
       >
@@ -1485,7 +1535,7 @@ export function AuthProvisioningSection({
       </PanelShell>
 
       <PanelShell
-        hidden={section === "general"}
+        hidden={section !== "all" && section !== "advanced"}
         title="Sign-in methods"
         description="Enable the primary methods available to Gateway accounts"
       >
@@ -1526,14 +1576,16 @@ export function AuthProvisioningSection({
       </PanelShell>
 
       <PanelShell
-        hidden={section === "general"}
+        hidden={section !== "all" && section !== "advanced"}
         title="Multi-factor authentication"
         description="Controls how Gateway enforces MFA for local browser sessions"
         actions={
           <Button
             aria-label="Save MFA grace period"
             onClick={saveMfaGracePeriod}
-            disabled={!canEdit || isSavingMfaGracePeriod}
+            disabled={
+              !canEdit || isSavingMfaGracePeriod || !mfaHasChanges || !mfaGracePeriodIsValid
+            }
           >
             {isSavingMfaGracePeriod ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -1543,6 +1595,7 @@ export function AuthProvisioningSection({
             Save
           </Button>
         }
+        dirty={mfaHasChanges}
       >
         <SettingsControlRow
           title="Existing-session MFA grace period"
@@ -1568,7 +1621,7 @@ export function AuthProvisioningSection({
       </PanelShell>
 
       <PanelShell
-        hidden={section === "general"}
+        hidden={section !== "all" && section !== "advanced"}
         title="Authentication email (SMTP)"
         description={
           settings.smtp?.verifiedAt
@@ -1584,11 +1637,21 @@ export function AuthProvisioningSection({
             >
               Send test
             </Button>
-            <Button onClick={() => saveSmtp()} disabled={!canEdit || isSavingLocalAuth}>
+            <Button
+              aria-label="Save SMTP settings"
+              onClick={() => saveSmtp()}
+              disabled={!canEdit || isSavingLocalAuth || !smtpHasChanges}
+            >
+              {isSavingLocalAuth ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4" />
+              )}
               Save
             </Button>
           </div>
         }
+        dirty={smtpHasChanges}
       >
         <div className="divide-y divide-border">
           <SettingsControlRow title="Email provider" description={selectedSmtpPreset.description}>
@@ -1802,7 +1865,7 @@ export function AuthProvisioningSection({
       </Dialog>
 
       <PanelShell
-        hidden={section === "general"}
+        hidden={section !== "all" && section !== "features"}
         title="OAuth and MCP access"
         description="Remote client compatibility and tool access"
       >
@@ -1853,7 +1916,7 @@ export function AuthProvisioningSection({
       </PanelShell>
 
       <PanelShell
-        hidden={section === "general"}
+        hidden={section !== "all" && section !== "advanced"}
         title="Network trust"
         description="Client address detection for rate limits and audit records"
       >
@@ -1970,7 +2033,7 @@ export function AuthProvisioningSection({
       </PanelShell>
 
       <PanelShell
-        hidden={section === "general"}
+        hidden={section !== "all" && section !== "advanced"}
         title="Outbound webhook policy"
         description="Private-network delivery rules for notification webhooks"
       >

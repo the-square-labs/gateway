@@ -181,9 +181,18 @@ export async function filesToComposerAttachments(
 export async function composerAttachmentToFile(
   attachment: AIComposerLocalImageAttachment
 ): Promise<File> {
-  const response = await fetch(attachment.dataUrl);
-  const blob = await response.blob();
-  return new File([blob], attachment.filename, { type: attachment.mediaType });
+  const separatorIndex = attachment.dataUrl.indexOf(",");
+  if (!attachment.dataUrl.startsWith("data:") || separatorIndex < 0) {
+    throw new Error("Invalid image attachment");
+  }
+
+  const metadata = attachment.dataUrl.slice(5, separatorIndex);
+  const payload = attachment.dataUrl.slice(separatorIndex + 1);
+  const bytes = metadata.split(";").includes("base64")
+    ? Uint8Array.from(atob(payload), (character) => character.charCodeAt(0))
+    : new TextEncoder().encode(decodeURIComponent(payload));
+
+  return new File([bytes], attachment.filename, { type: attachment.mediaType });
 }
 
 function fileToDataUrl(file: File): Promise<string> {

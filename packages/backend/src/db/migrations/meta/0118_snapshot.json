@@ -1,6 +1,6 @@
 {
-  "id": "2a766103-f4fb-41ec-9722-e1dedf306785",
-  "prevId": "c5b942d3-227d-4aa4-b308-9d0d39be074c",
+  "id": "f2010945-678e-4fe5-b367-5c487caff860",
+  "prevId": "80ca4981-83a6-4c3a-a18e-5cad556e18c0",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1447,7 +1447,7 @@
             }
           ],
           "isUnique": true,
-          "where": "\"ai_plans\".\"status\" IN ('drafting', 'validating', 'awaiting_decision', 'executing', 'paused', 'verifying')",
+          "where": "\"ai_plans\".\"status\" IN ('drafting', 'validating', 'awaiting_decision', 'executing', 'pause_requested', 'paused', 'verifying')",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -5462,7 +5462,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -8143,18 +8143,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "nginx_node_id": {
-          "name": "nginx_node_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "pending_dns_target_ip": {
-          "name": "pending_dns_target_ip",
-          "type": "varchar(45)",
-          "primaryKey": false,
-          "notNull": false
-        },
         "is_system": {
           "name": "is_system",
           "type": "boolean",
@@ -8257,21 +8245,6 @@
           "method": "btree",
           "with": {}
         },
-        "domain_nginx_node_idx": {
-          "name": "domain_nginx_node_idx",
-          "columns": [
-            {
-              "expression": "nginx_node_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "domain_created_by_idx": {
           "name": "domain_created_by_idx",
           "columns": [
@@ -8317,19 +8290,6 @@
           "onDelete": "set null",
           "onUpdate": "no action"
         },
-        "domains_nginx_node_id_nodes_id_fk": {
-          "name": "domains_nginx_node_id_nodes_id_fk",
-          "tableFrom": "domains",
-          "tableTo": "nodes",
-          "columnsFrom": [
-            "nginx_node_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
         "domains_folder_id_domain_folders_id_fk": {
           "name": "domains_folder_id_domain_folders_id_fk",
           "tableFrom": "domains",
@@ -8364,6 +8324,174 @@
           "nullsNotDistinct": false,
           "columns": [
             "domain"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.external_ssh_connectors": {
+      "name": "external_ssh_connectors",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "host": {
+          "name": "host",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "port": {
+          "name": "port",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 22
+        },
+        "username": {
+          "name": "username",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "auth_method": {
+          "name": "auth_method",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "encrypted_secret": {
+          "name": "encrypted_secret",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "encrypted_passphrase": {
+          "name": "encrypted_passphrase",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "host_fingerprint": {
+          "name": "host_fingerprint",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "jump_connector_id": {
+          "name": "jump_connector_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "external_ssh_connector_host_idx": {
+          "name": "external_ssh_connector_host_idx",
+          "columns": [
+            {
+              "expression": "host",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "external_ssh_connector_jump_idx": {
+          "name": "external_ssh_connector_jump_idx",
+          "columns": [
+            {
+              "expression": "jump_connector_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "external_ssh_connectors_jump_connector_id_external_ssh_connectors_id_fk": {
+          "name": "external_ssh_connectors_jump_connector_id_external_ssh_connectors_id_fk",
+          "tableFrom": "external_ssh_connectors",
+          "tableTo": "external_ssh_connectors",
+          "columnsFrom": [
+            "jump_connector_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "external_ssh_connectors_created_by_users_id_fk": {
+          "name": "external_ssh_connectors_created_by_users_id_fk",
+          "tableFrom": "external_ssh_connectors",
+          "tableTo": "users",
+          "columnsFrom": [
+            "created_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "external_ssh_connector_name_unique": {
+          "name": "external_ssh_connector_name_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "name"
           ]
         }
       },

@@ -61,7 +61,7 @@ export function directProviderContextLimits(
   return normalizeAIContextLimits({
     contextWindow: hardInputLimit,
     maxInputTokens: hardInputLimit,
-    autoCompactTokenLimit: Math.max(1, Math.floor(hardInputLimit * 0.9)),
+    autoCompactTokenLimit: Math.max(1, Math.floor(hardInputLimit * 0.8)),
     maxOutputTokens,
   });
 }

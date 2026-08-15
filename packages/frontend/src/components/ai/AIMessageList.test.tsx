@@ -384,6 +384,7 @@ describe("AIMessageList", () => {
 
     expect(screen.getByText("Model changed from Model A to Model B")).toBeInTheDocument();
     expect(container.querySelector(".lucide-box")).toBeInTheDocument();
+    expect(container.querySelector("[data-ai-timeline-divider]")).toHaveClass("py-3");
   });
 
   it("renders only the latest divider from consecutive model changes", () => {

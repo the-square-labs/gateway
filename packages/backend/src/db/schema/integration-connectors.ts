@@ -2,7 +2,8 @@ import { boolean, index, integer, jsonb, pgTable, text, timestamp, unique, uuid,
 import { dockerRegistries } from './docker-registries.js';
 import { users } from './users.js';
 
-export type IntegrationProvider = 'gitlab' | 'cloudflare';
+export type IntegrationProvider = 'gitlab' | 'github' | 'git' | 'cloudflare' | 'ssh';
+export type IntegrationConnectorAuthMode = 'token' | 'oauth';
 export type IntegrationAllowlistMode = 'selected' | 'all_visible';
 export type IntegrationSyncStatus = 'never' | 'idle' | 'running' | 'success' | 'error';
 export type IntegrationAllowlistEntryType = 'group' | 'project';
@@ -28,8 +29,17 @@ export interface CloudflareConnectorSettings {
   defaultProxied: boolean;
 }
 
+export interface GitConnectorSettings {
+  repositoryMode: 'single_repository' | 'multi_repository';
+  autoSyncEnabled: boolean;
+  autoSyncIntervalSeconds: number;
+}
+
 export type IntegrationConnectorCapabilities = Record<string, boolean>;
-export type IntegrationConnectorSettingsValue = IntegrationConnectorSettings | CloudflareConnectorSettings;
+export type IntegrationConnectorSettingsValue =
+  | IntegrationConnectorSettings
+  | CloudflareConnectorSettings
+  | GitConnectorSettings;
 
 export const integrationConnectors = pgTable(
   'integration_connectors',
@@ -39,6 +49,8 @@ export const integrationConnectors = pgTable(
     name: varchar('name', { length: 255 }).notNull(),
     baseUrl: text('base_url').notNull(),
     enabled: boolean('enabled').notNull().default(true),
+    authMode: varchar('auth_mode', { length: 32 }).$type<IntegrationConnectorAuthMode>().notNull().default('token'),
+    username: varchar('username', { length: 255 }),
     encryptedToken: text('encrypted_token'),
     tokenLast4: varchar('token_last4', { length: 16 }),
     allowlistMode: varchar('allowlist_mode', { length: 32 })
@@ -72,6 +84,49 @@ export const integrationConnectors = pgTable(
     index('integration_connector_provider_idx').on(table.provider),
     index('integration_connector_enabled_idx').on(table.enabled),
     index('integration_connector_sync_idx').on(table.provider, table.syncStatus, table.syncNextRetryAt),
+  ]
+);
+
+export type GitHubOAuthSessionStatus = 'pending' | 'processing' | 'complete' | 'expired' | 'cancelled' | 'error';
+
+export interface GitHubOAuthConnectorDraft {
+  name: string;
+  baseUrl: string;
+  enabled: boolean;
+  repositoryMode: 'single_repository' | 'multi_repository';
+  repositoryUrl?: string;
+  allowlistEntries?: Array<{
+    entryType: 'group' | 'project';
+    remoteId: string;
+    fullPath: string;
+    name?: string;
+    webUrl?: string | null;
+  }>;
+}
+
+export const integrationGitHubOAuthSessions = pgTable(
+  'integration_github_oauth_sessions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    encryptedDeviceCode: text('encrypted_device_code').notNull(),
+    userCode: varchar('user_code', { length: 64 }).notNull(),
+    verificationUri: text('verification_uri').notNull(),
+    connectorDraft: jsonb('connector_draft').$type<GitHubOAuthConnectorDraft>().notNull(),
+    status: varchar('status', { length: 32 }).$type<GitHubOAuthSessionStatus>().notNull().default('pending'),
+    pollIntervalSeconds: integer('poll_interval_seconds').notNull().default(5),
+    lastPolledAt: timestamp('last_polled_at', { withTimezone: true }),
+    connectorId: uuid('connector_id').references(() => integrationConnectors.id, { onDelete: 'set null' }),
+    errorMessage: text('error_message'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('integration_github_oauth_user_status_idx').on(table.userId, table.status),
+    index('integration_github_oauth_expiry_idx').on(table.expiresAt),
   ]
 );
 

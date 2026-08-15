@@ -19,7 +19,7 @@ export function isGatewayInternalContainer(container: Record<string, any>): bool
     labels[SECURE_LINK_MANAGED_LABEL] === 'secure-link-connector' ||
     labels[MANAGED_DATABASE_CONNECTOR_LABEL] === 'true' ||
     (labels[LOCAL_SERVICE_MANAGED_LABEL] === 'clickhouse' && labels[LOCAL_SERVICE_OWNER_LABEL] === 'gateway') ||
-    typeof labels[FOUNDATION_SERVICE_LABEL] === 'string' && labels[FOUNDATION_SERVICE_LABEL] !== '' ||
+    (typeof labels[FOUNDATION_SERVICE_LABEL] === 'string' && labels[FOUNDATION_SERVICE_LABEL] !== '') ||
     labels[SANDBOX_LABEL] === 'true'
   );
 }

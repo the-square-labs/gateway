@@ -103,6 +103,7 @@ describe("eventStream", () => {
     await vi.dynamicImportSettled();
 
     expect(invalidateCache).toHaveBeenCalledWith("req:/api/nodes");
+    expect(invalidateCache).toHaveBeenCalledWith("databases:nodes");
     expect(invalidateNodes).toHaveBeenCalledTimes(1);
     expect(invalidatePinnedNodes).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(payload);
@@ -197,6 +198,33 @@ describe("eventStream", () => {
 
     expect(invalidateCache).toHaveBeenCalledWith("req:/api/databases");
     expect(removePinnedDatabase).toHaveBeenCalledWith("db-1");
+    expect(handler).toHaveBeenCalledWith(payload);
+
+    unsubscribe();
+  });
+
+  it("dispatches database health samples without invalidating the rendered list cache", async () => {
+    const { eventStream } = await import("@/services/event-stream");
+    const handler = vi.fn();
+
+    const unsubscribe = eventStream.subscribe("database.changed", handler);
+    eventStream.start();
+    vi.runAllTimers();
+
+    const socket = MockWebSocket.instances[0];
+    expect(socket).toBeDefined();
+    socket.open();
+
+    const payload = {
+      id: "db-1",
+      action: "health.sampled",
+      healthStatus: "online",
+      sampledAt: "2026-08-14T12:00:00.000Z",
+    };
+    socket.emit({ type: "event", channel: "database.changed", payload });
+
+    expect(invalidateCache).not.toHaveBeenCalledWith("req:/api/databases");
+    expect(invalidateCache).not.toHaveBeenCalledWith("databases:list");
     expect(handler).toHaveBeenCalledWith(payload);
 
     unsubscribe();

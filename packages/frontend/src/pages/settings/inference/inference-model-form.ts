@@ -229,6 +229,29 @@ export function modelTechnicalLimits(form: ModelForm) {
   };
 }
 
+export function manualMetadataForProviderModel(form: ModelForm, option: ProviderModelOption) {
+  const limits = modelTechnicalLimits(form);
+  const detectedAutoCompact =
+    option.autoCompactTokenLimit != null && option.maxInputTokens != null
+      ? Math.min(option.autoCompactTokenLimit, option.maxInputTokens)
+      : option.autoCompactTokenLimit;
+  const manualMetadata = {
+    ...(option.contextWindow !== limits.contextWindow
+      ? { contextWindow: limits.contextWindow }
+      : {}),
+    ...(option.maxInputTokens !== limits.maxInputTokens
+      ? { maxInputTokens: limits.maxInputTokens }
+      : {}),
+    ...(option.maxOutputTokens !== limits.maxOutputTokens && limits.maxOutputTokens !== null
+      ? { maxOutputTokens: limits.maxOutputTokens }
+      : {}),
+    ...(detectedAutoCompact !== limits.autoCompactTokenLimit
+      ? { autoCompactTokenLimit: limits.autoCompactTokenLimit }
+      : {}),
+  };
+  return Object.keys(manualMetadata).length > 0 ? manualMetadata : undefined;
+}
+
 export function hasCompleteTechnicalLimits(form: ModelForm) {
   const limits = modelTechnicalLimits(form);
   return (

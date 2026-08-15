@@ -97,13 +97,72 @@ function createRuntimeSnapshotDb() {
   const orderByQuestions = vi.fn(async () => []);
   const where = vi.fn(() => {
     whereCall += 1;
-    return whereCall === 1 || whereCall === 3 || whereCall === 4 || whereCall === 5
+    return whereCall === 1 || whereCall === 3 || whereCall === 4 || whereCall === 5 || whereCall === 6
       ? { orderBy: orderByQuestions }
       : Promise.resolve([]);
   });
   const from = vi.fn(() => ({ where }));
   const select = vi.fn(() => ({ from }));
   return { select };
+}
+
+function createAbandonPlanningDb(input: {
+  selectRows: unknown[][];
+  stoppedRun?: { id: string } | null;
+  restoredPlan?: { id: string } | null;
+  deletedPlan?: { id: string } | null;
+}) {
+  const selectQueue = [...input.selectRows];
+  const select = vi.fn(() => {
+    const chain = {
+      from: vi.fn(() => chain),
+      where: vi.fn(() => chain),
+      orderBy: vi.fn(() => chain),
+      limit: vi.fn(() => chain),
+      for: vi.fn(async () => selectQueue.shift() ?? []),
+      // biome-ignore lint/suspicious/noThenProperty: Drizzle query builders are PromiseLike.
+      then: (resolve: (value: unknown[]) => unknown) => Promise.resolve(selectQueue.shift() ?? []).then(resolve),
+    };
+    return chain;
+  });
+
+  const returningRows = [
+    ...(input.stoppedRun !== undefined ? [input.stoppedRun ? [input.stoppedRun] : []] : []),
+    ...(input.restoredPlan !== undefined ? [input.restoredPlan ? [input.restoredPlan] : []] : []),
+  ];
+  const updateValues: unknown[] = [];
+  const update = vi.fn(() => {
+    const whereResult = {
+      returning: vi.fn(async () => returningRows.shift() ?? []),
+      // biome-ignore lint/suspicious/noThenProperty: Drizzle query builders are PromiseLike.
+      then: (resolve: (value: unknown[]) => unknown) => Promise.resolve([]).then(resolve),
+    };
+    const where = vi.fn(() => whereResult);
+    return {
+      set: vi.fn((value: unknown) => {
+        updateValues.push(value);
+        return { where };
+      }),
+    };
+  });
+  const deleteReturning = vi.fn().mockResolvedValue(input.deletedPlan ? [input.deletedPlan] : []);
+  const deleteWhere = vi.fn(() => ({ returning: deleteReturning }));
+  const deleteFn = vi.fn(() => ({ where: deleteWhere }));
+  const insertValues = vi.fn().mockResolvedValue(undefined);
+  const insert = vi.fn(() => ({ values: insertValues }));
+  const tx = { select, update, delete: deleteFn, insert };
+  const transaction = vi.fn((callback: (value: typeof tx) => unknown) => callback(tx));
+
+  return {
+    db: { ...tx, transaction },
+    transaction,
+    select,
+    update,
+    updateValues,
+    deleteFn,
+    insert,
+    insertValues,
+  };
 }
 
 describe('AIRunService plan completion', () => {
@@ -920,6 +979,165 @@ describe('AIRunService stopRun', () => {
       })
     ).resolves.toEqual({ run: stopped, duplicate: false });
     expect(executor.abortRun).toHaveBeenCalledWith('run-1');
+  });
+});
+
+describe('AIRunService abandonPlanning', () => {
+  it('treats a delayed duplicate as a receipt and leaves a newer plan untouched', async () => {
+    const harness = createAbandonPlanningDb({
+      selectRows: [[{ id: 'conversation-1' }], [{ id: 'old-cancellation-receipt' }]],
+    });
+    const service = new AIRunService(harness.db as never);
+    const executor = { abortRun: vi.fn() };
+    (service as unknown as { executor: typeof executor }).executor = executor;
+
+    await expect(
+      service.abandonPlanning({
+        conversationId: 'conversation-1',
+        userId: 'user-1',
+        clientCommandId: 'old-command',
+      })
+    ).resolves.toEqual({ duplicate: true, stoppedRunId: null, deletedPlanId: null });
+
+    expect(harness.update).not.toHaveBeenCalled();
+    expect(harness.deleteFn).not.toHaveBeenCalled();
+    expect(harness.insert).not.toHaveBeenCalled();
+    expect(executor.abortRun).not.toHaveBeenCalled();
+  });
+
+  it('refuses to abandon an executing plan before stopping its run', async () => {
+    const harness = createAbandonPlanningDb({
+      selectRows: [[{ id: 'conversation-1' }], [], [{ id: 'plan-1', status: 'executing' }]],
+    });
+    const service = new AIRunService(harness.db as never);
+    const executor = { abortRun: vi.fn() };
+    (service as unknown as { executor: typeof executor }).executor = executor;
+
+    await expect(
+      service.abandonPlanning({
+        conversationId: 'conversation-1',
+        userId: 'user-1',
+        clientCommandId: 'command-1',
+      })
+    ).rejects.toMatchObject({ code: 'AI_PLAN_ALREADY_EXECUTING' });
+
+    expect(harness.update).not.toHaveBeenCalled();
+    expect(harness.deleteFn).not.toHaveBeenCalled();
+    expect(executor.abortRun).not.toHaveBeenCalled();
+  });
+
+  it('does not abort the executor when the guarded plan delete loses a state race', async () => {
+    const harness = createAbandonPlanningDb({
+      selectRows: [
+        [{ id: 'conversation-1' }],
+        [],
+        [{ id: 'plan-1', status: 'awaiting_decision' }],
+        [],
+        [{ id: 'run-1', status: 'running' }],
+      ],
+      stoppedRun: { id: 'run-1' },
+      deletedPlan: null,
+    });
+    const service = new AIRunService(harness.db as never);
+    const executor = { abortRun: vi.fn() };
+    (service as unknown as { executor: typeof executor }).executor = executor;
+
+    await expect(
+      service.abandonPlanning({
+        conversationId: 'conversation-1',
+        userId: 'user-1',
+        clientCommandId: 'command-1',
+      })
+    ).rejects.toMatchObject({ code: 'AI_PLANNING_STATE_CHANGED' });
+
+    expect(harness.transaction).toHaveBeenCalledOnce();
+    expect(harness.insert).not.toHaveBeenCalled();
+    expect(executor.abortRun).not.toHaveBeenCalled();
+  });
+
+  it('discards only the unfinished revision and restores the last published plan', async () => {
+    const harness = createAbandonPlanningDb({
+      selectRows: [
+        [{ id: 'conversation-1' }],
+        [],
+        [{ id: 'plan-1', status: 'validating' }],
+        [{ id: 'revision-1', planId: 'plan-1', revision: 1, status: 'published', publishedAt: new Date() }],
+        [{ id: 'run-2', status: 'running' }],
+        [{ sequence: 12 }],
+      ],
+      stoppedRun: { id: 'run-2' },
+      restoredPlan: { id: 'plan-1' },
+    });
+    const service = new AIRunService(harness.db as never);
+    const executor = { abortRun: vi.fn() };
+    (service as unknown as { executor: typeof executor }).executor = executor;
+
+    await expect(
+      service.abandonPlanning({
+        conversationId: 'conversation-1',
+        userId: 'user-1',
+        clientCommandId: 'command-2',
+      })
+    ).resolves.toEqual({ duplicate: false, stoppedRunId: 'run-2', deletedPlanId: null });
+
+    expect(harness.deleteFn).toHaveBeenCalledOnce();
+    expect(harness.updateValues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: 'published', decision: null }),
+        expect.objectContaining({ status: 'awaiting_decision', activeSince: null }),
+      ])
+    );
+    expect(harness.insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        uiMessage: expect.objectContaining({
+          hiddenSystemEvent: true,
+          lifecycleEvent: { type: 'planning_cancelled', clientCommandId: 'command-2' },
+        }),
+      })
+    );
+    expect(executor.abortRun).toHaveBeenCalledWith('run-2');
+  });
+
+  it('commits run cleanup, plan deletion, and the lifecycle receipt before aborting the executor', async () => {
+    const harness = createAbandonPlanningDb({
+      selectRows: [
+        [{ id: 'conversation-1' }],
+        [],
+        [{ id: 'plan-1', status: 'awaiting_decision' }],
+        [],
+        [{ id: 'run-1', status: 'running' }],
+        [{ sequence: 12 }],
+      ],
+      stoppedRun: { id: 'run-1' },
+      deletedPlan: { id: 'plan-1' },
+    });
+    const service = new AIRunService(harness.db as never);
+    const executor = { abortRun: vi.fn() };
+    (service as unknown as { executor: typeof executor }).executor = executor;
+
+    await expect(
+      service.abandonPlanning({
+        conversationId: 'conversation-1',
+        userId: 'user-1',
+        clientCommandId: 'command-1',
+      })
+    ).resolves.toEqual({ duplicate: false, stoppedRunId: 'run-1', deletedPlanId: 'plan-1' });
+
+    expect(harness.transaction).toHaveBeenCalledOnce();
+    expect(harness.deleteFn).toHaveBeenCalledOnce();
+    expect(harness.insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'conversation-1',
+        sequence: 13,
+        role: 'system',
+        uiMessage: expect.objectContaining({
+          hiddenSystemEvent: true,
+          lifecycleEvent: { type: 'planning_cancelled', clientCommandId: 'command-1' },
+        }),
+      })
+    );
+    expect(executor.abortRun).toHaveBeenCalledWith('run-1');
+    expect(harness.transaction.mock.invocationCallOrder[0]).toBeLessThan(executor.abortRun.mock.invocationCallOrder[0]);
   });
 });
 

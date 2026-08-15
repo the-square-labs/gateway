@@ -7,7 +7,7 @@ import type {
 } from './ai.types.js';
 
 const MAX_REFERENCES_PER_RESULT = 64;
-const RESOURCE_MARKER_RE = /\[\[resource:(gwr_[a-f0-9]{24})\|([^\]\r\n]{1,240})\]\]/g;
+const RESOURCE_MARKER_RE = /\[\[resource:(gwr_[a-f0-9]{24})\|((?:[^[\]\r\n]|\[[^[\]\r\n]*\]){1,240})\]\]/g;
 
 type RecordValue = Record<string, unknown>;
 
@@ -24,7 +24,7 @@ export function mergeAIResourceReference(
 ): AIResourceReference {
   if (!previous) return incoming;
   const label = isFallbackResourceLabel(incoming) ? previous.label : incoming.label;
-  return {
+  const merged = {
     ...previous,
     ...incoming,
     label,
@@ -32,6 +32,13 @@ export function mergeAIResourceReference(
     nodeSlug: incoming.nodeSlug || previous.nodeSlug,
     slug: incoming.slug || previous.slug,
     appearanceColor: incoming.appearanceColor ?? previous.appearanceColor,
+  };
+  return {
+    ...merged,
+    // A later, less detailed tool result may know the resource id but not its
+    // slug. Recompute the route after merging so a previously resolved detail
+    // route never degrades back to the collection page.
+    uiHref: resourceUiHref(merged),
   };
 }
 
@@ -63,7 +70,7 @@ export function appendAIResourceReferencesToModelResult(result: unknown, referen
   const modelReferences = references.map((reference) => ({
     marker: formatAIResourceMarker(reference),
     type: reference.type,
-    label: reference.label,
+    label: sanitizeMarkerLabel(reference.label),
     relation: reference.relation,
   }));
   const instruction =
@@ -106,7 +113,10 @@ function extractFindResourceReferences(result: unknown): AIResourceReference[] {
       item.type === 'docker_container'
         ? firstString(item.name, summary.name, item.id, summary.id)
         : firstString(item.id, summary.id, item.name);
-    const label = firstString(item.name, summary.name, summary.title, summary.hostname, resourceId);
+    const label =
+      item.type === 'proxy_host'
+        ? firstString(firstArrayString(summary.domainNames), firstCommaSeparatedValue(item.name), resourceId)
+        : firstString(item.name, summary.name, summary.title, summary.hostname, resourceId);
     if (!resourceId || !label) continue;
     references.push(
       createReference({
@@ -232,7 +242,7 @@ function resourceUiHref(resource: Omit<AIResourceReference, 'refId' | 'uiHref' |
     case 'node':
       return `/nodes/${segment(resource.slug ?? resource.resourceId)}`;
     case 'proxy_host':
-      return resource.slug ? `/proxy-hosts/${segment(resource.slug)}` : '/proxy-hosts';
+      return `/proxy-hosts/${segment(resource.slug || resource.resourceId)}`;
     case 'proxy_template':
       return `/nginx-templates/${segment(resource.resourceId)}`;
     case 'ca':
@@ -386,7 +396,7 @@ function labelForType(
   }
   if (type === 'proxy_host') {
     const domains = Array.isArray(data.domainNames) ? data.domainNames.filter((item) => typeof item === 'string') : [];
-    return firstString(domains.join(', '), data.name, data.slug, args.domain, resourceId);
+    return firstString(domains[0], data.name, data.slug, args.domain, resourceId);
   }
   if (type === 'domain') return firstString(data.domain, value.domain, args.domain, data.name, resourceId);
   if (type === 'pki_certificate' || type === 'ssl_certificate' || type === 'ca') {
@@ -480,6 +490,14 @@ function firstString(...values: unknown[]): string {
     if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   }
   return '';
+}
+
+function firstArrayString(value: unknown): string {
+  return Array.isArray(value) ? firstString(...value) : '';
+}
+
+function firstCommaSeparatedValue(value: unknown): string {
+  return typeof value === 'string' ? firstString(value.split(',')[0]) : '';
 }
 
 function sanitizeMarkerLabel(value: string): string {

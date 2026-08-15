@@ -1,1 +1,0 @@
-ALTER TABLE "domains" ADD COLUMN "pending_dns_target_ip" varchar(45);

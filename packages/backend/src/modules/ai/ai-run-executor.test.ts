@@ -75,7 +75,20 @@ function createExecutorHarness(
               updatedAt: new Date('2026-06-26T10:00:00.000Z'),
             },
           ]
-        : [{ id: `assistant-message-${++insertId}` }]
+        : values.kind === 'connector_setup' || values.kind === 'node_enrollment'
+          ? [
+              {
+                id: 'setup-1',
+                ...values,
+                status: 'pending',
+                result: null,
+                resolveClientCommandId: null,
+                resolvedAt: null,
+                createdAt: new Date('2026-06-26T10:00:00.000Z'),
+                updatedAt: new Date('2026-06-26T10:00:00.000Z'),
+              },
+            ]
+          : [{ id: `assistant-message-${++insertId}` }]
     );
     return {
       returning,
@@ -462,8 +475,10 @@ describe('AIRunExecutor live assistant draft streaming', () => {
         {
           id: 'marker-1',
           uiMessage: {
-            role: 'assistant',
-            content: 'v2 summary',
+            role: 'system',
+            content: 'Context compaction occurred (auto).\n\nCompacted summary:\nv2 summary',
+            hiddenSystemEvent: true,
+            lifecycleEvent: { type: 'context_compacted', trigger: 'auto' },
             compactMarker: true,
             compactVersion: 2,
             compactEpoch: 1,
@@ -478,7 +493,7 @@ describe('AIRunExecutor live assistant draft streaming', () => {
 
     const messages = harness.streamChat.mock.calls[0]?.[1];
     expect(messages?.map((message) => [message.role, message.content])).toEqual([
-      ['assistant', 'v2 summary'],
+      ['system', 'Context compaction occurred (auto).\n\nCompacted summary:\nv2 summary'],
       ['user', 'recent user'],
       ['assistant', 'recent assistant'],
       ['user', 'new user'],
@@ -847,6 +862,43 @@ describe('AIRunExecutor live assistant draft streaming', () => {
       target: 'dashboard',
       pinned: true,
     });
+  });
+
+  it('persists setup actions and pauses the originating run instead of publishing a transient event', async () => {
+    const harness = createExecutorHarness([
+      {
+        type: 'tool_call_start',
+        requestId: 'request-1',
+        id: 'call-setup',
+        name: 'open_connector_setup',
+        arguments: { connector: 'github' },
+      },
+      {
+        type: 'tool_result',
+        requestId: 'request-1',
+        id: 'call-setup',
+        name: 'open_connector_setup',
+        result: { opened: true },
+        clientAction: { type: 'open_connector_setup', connector: 'github' },
+      },
+      { type: 'done', requestId: 'request-1' },
+    ]);
+
+    await executeRun(harness.executor);
+
+    expect(harness.insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: 'run-1',
+        conversationId: 'conversation-1',
+        toolCallId: 'call-setup',
+        toolName: 'open_connector_setup',
+        kind: 'connector_setup',
+        payload: { type: 'open_connector_setup', connector: 'github' },
+      })
+    );
+    expect(harness.updateSet).toHaveBeenCalledWith(expect.objectContaining({ status: 'waiting_for_setup' }));
+    expect(harness.updateSet).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'completed' }));
+    expect(harness.publishClientAction).not.toHaveBeenCalled();
   });
 
   it('persists a redacted copy of one-time API token tool results', async () => {

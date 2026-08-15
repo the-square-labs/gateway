@@ -27,6 +27,7 @@ const ACTIVE_RUN_STATUSES = [
   'waiting_for_approval',
   'waiting_for_answer',
   'waiting_for_credential',
+  'waiting_for_setup',
 ] as const;
 const DEFAULT_TOOL_HISTORY_RETENTION: AIToolHistoryRetention = { mode: 'recent_full' };
 const TOOL_HISTORY_RETENTION_BY_NAME = new Map(
@@ -171,7 +172,8 @@ export class AIConversationService {
         .orderBy(desc(aiPlans.createdAt))
         .limit(1),
     ]);
-    const messages = messageRows.map((message) => message.uiMessage);
+    const allMessages = messageRows.map((message) => message.uiMessage);
+    const messages = allMessages.filter((message) => !isHiddenSystemMessage(message));
     return {
       id: row.id,
       title: row.title,
@@ -179,8 +181,8 @@ export class AIConversationService {
       updatedAt: row.updatedAt,
       folderId: row.folderId,
       lastUserMessageAt: getLastUserMessageAt(messageRows),
-      messageCount: countVisibleMessages(messages),
-      ...deriveConversationStatus(messages),
+      messageCount: countVisibleMessages(allMessages),
+      ...deriveConversationStatus(allMessages),
       activeRunStatus: activeRuns[0]?.status ?? null,
       planStatus: plans[0]?.status ?? null,
       messages,
@@ -312,7 +314,7 @@ export class AIConversationService {
           lastContext: input.lastContext !== undefined ? lastContext : existing.lastContext,
           discoveredToolsets:
             input.discoveredToolsets !== undefined
-              ? normalizeToolsets(input.discoveredToolsets)
+              ? normalizeToolsets(input.discoveredToolsets).slice(0, 3)
               : existing.discoveredToolsets,
           checkpoint: input.checkpoint !== undefined ? input.checkpoint : existing.checkpoint,
           updatedAt: now,
@@ -352,7 +354,7 @@ export class AIConversationService {
     const discoveredToolsets =
       input.discoveredToolsets === undefined
         ? existing.discoveredToolsets
-        : normalizeToolsets([...existing.discoveredToolsets, ...input.discoveredToolsets]);
+        : normalizeToolsets(input.discoveredToolsets).slice(0, 3);
 
     await this.db
       .update(aiConversations)
@@ -657,8 +659,13 @@ export function deriveConversationStatus(messages: unknown[]): {
 export function countVisibleMessages(messages: unknown[]): number {
   return messages.filter((message) => {
     const record = toRecord(message);
-    return !record?.conversationStatus && !record?.modelChange;
+    return !record?.conversationStatus && !record?.modelChange && !isHiddenSystemMessage(record);
   }).length;
+}
+
+export function isHiddenSystemMessage(message: unknown): boolean {
+  const record = toRecord(message);
+  return record?.role === 'system' && record.hiddenSystemEvent === true;
 }
 
 function collectConversationArtifactIds(messages: unknown[]): string[] {

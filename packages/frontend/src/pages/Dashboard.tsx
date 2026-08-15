@@ -674,9 +674,13 @@ export function Dashboard() {
         <div className="mb-4">
           <div className="flex items-center gap-3">
             <LiteModeBackButton />
-            <h1 className="text-2xl font-bold">Dashboard</h1>
+            <div>
+              <h1 className="text-2xl font-bold">Dashboard</h1>
+              <p className="text-sm text-muted-foreground">
+                Gateway and PKI infrastructure overview
+              </p>
+            </div>
           </div>
-          <p className="text-sm text-muted-foreground">Gateway and PKI infrastructure overview</p>
         </div>
         <div className="space-y-6">
           <RelayHealthNotice

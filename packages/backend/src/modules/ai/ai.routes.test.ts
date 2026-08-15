@@ -8,6 +8,7 @@ import { TokensService } from '@/modules/tokens/tokens.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { AppEnv, SessionData, User } from '@/types.js';
 import { aiRoutes } from './ai.routes.js';
+import { AISandboxArtifactService } from './ai.sandbox-artifact.service.js';
 import { AISettingsService } from './ai.settings.service.js';
 import { AIConversationService } from './ai-conversation.service.js';
 import { AIProviderRuntimeService } from './ai-provider-runtime.service.js';
@@ -21,7 +22,7 @@ const USER: User = {
   avatarUrl: null,
   groupId: 'group-1',
   groupName: 'admin',
-  scopes: ['feat:ai:use', 'feat:ai:configure'],
+  scopes: ['feat:ai:use', 'feat:ai:configure', 'ai:skills:manage'],
   isBlocked: false,
 };
 
@@ -87,6 +88,7 @@ function registerServices(aiSettings?: Partial<AISettingsService>) {
       providerType: 'openai_compatible',
       model: 'test-model',
       supportsImages: false,
+      allowUserReasoningEffortSelection: false,
     }),
     ...aiSettings,
   } as unknown as AISettingsService);
@@ -110,6 +112,9 @@ describe('AI routes session-only authentication', () => {
       providerType: 'openai_compatible',
       defaultModel: 'test-model',
       allowUserModelSelection: false,
+      allowUserReasoningEffortSelection: false,
+      reasoningEfforts: ['default', 'low', 'medium', 'high'],
+      defaultReasoningEffort: 'default',
       supportsImages: false,
       models: [],
     });
@@ -161,6 +166,44 @@ describe('AI routes session-only authentication', () => {
         title: 'debug session',
         messageCount: 1,
       },
+    });
+  });
+
+  it('returns a bounded artifact page with the next-page cursor', async () => {
+    registerServices();
+    const listPageForUser = vi.fn().mockResolvedValue({
+      items: [
+        {
+          id: 'artifact-1',
+          userId: USER.id,
+          conversationId: 'conversation-1',
+          sourceProcessId: 'process-1',
+          sourcePath: 'result.txt',
+          filename: 'result.txt',
+          mediaType: 'text/plain',
+          sizeBytes: 12,
+          createdAt: '2026-08-13T10:00:00.000Z',
+          downloadUrl: '/api/ai/sandbox/artifacts/artifact-1/download',
+        },
+      ],
+      nextPage: 3,
+    });
+    container.registerInstance(AISandboxArtifactService, {
+      listPageForUser,
+    } as unknown as AISandboxArtifactService);
+    container.registerInstance(AIConversationService, {
+      listConversationTitles: vi.fn().mockResolvedValue({ 'conversation-1': 'Deploy app' }),
+    } as unknown as AIConversationService);
+
+    const response = await createApp().request('/api/ai/sandbox/artifacts?page=2&limit=10', {
+      headers: { Cookie: 'session_id=session-1' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(listPageForUser).toHaveBeenCalledWith(USER.id, 2, 10);
+    expect(await response.json()).toMatchObject({
+      data: [{ id: 'artifact-1', conversationTitle: 'Deploy app' }],
+      nextPage: 3,
     });
   });
 
@@ -276,6 +319,61 @@ describe('AI routes session-only authentication', () => {
     });
     expect(await response.json()).toMatchObject({
       data: { id: 'conversation-1', model: 'model-b', reasoningEffort: 'max' },
+    });
+  });
+
+  it('persists an allowed direct-provider reasoning override', async () => {
+    registerServices();
+    const currentConversation = {
+      id: 'conversation-1',
+      title: 'debug session',
+      model: 'test-model',
+      reasoningEffort: null,
+      messages: [],
+    };
+    const updatedConversation = {
+      ...currentConversation,
+      reasoningEffort: 'high',
+    };
+    const getConversation = vi
+      .fn()
+      .mockResolvedValueOnce(currentConversation)
+      .mockResolvedValueOnce(updatedConversation);
+    const updateConversationProvider = vi.fn().mockResolvedValue(undefined);
+    container.registerInstance(AIConversationService, {
+      getConversation,
+    } as unknown as AIConversationService);
+    container.registerInstance(AIProviderRuntimeService, {
+      statusForUser: vi.fn().mockResolvedValue({
+        enabled: true,
+        providerType: 'openai_compatible',
+        defaultModel: 'test-model',
+        allowUserModelSelection: false,
+        allowUserReasoningEffortSelection: true,
+        reasoningEfforts: ['default', 'low', 'medium', 'high'],
+        defaultReasoningEffort: 'default',
+        supportsImages: false,
+        models: [],
+      }),
+    } as unknown as AIProviderRuntimeService);
+    container.registerInstance(AIRunService, {
+      updateConversationProvider,
+    } as unknown as AIRunService);
+
+    const response = await createApp().request('/api/ai/conversations/conversation-1/provider', {
+      method: 'PATCH',
+      headers: { Cookie: 'session_id=session-1', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'test-model', reasoningEffort: 'high' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(updateConversationProvider).toHaveBeenCalledWith({
+      userId: USER.id,
+      conversationId: 'conversation-1',
+      model: 'test-model',
+      reasoningEffort: 'high',
+      modelDisplayName: 'test-model',
+      previousModelDisplayName: 'test-model',
     });
   });
 
@@ -470,5 +568,57 @@ describe('AI routes session-only authentication', () => {
 
     expect(response.status).toBe(200);
     expect(auditLog).not.toHaveBeenCalled();
+  });
+
+  it('lists shared skills and audits user-skill creation without logging instructions', async () => {
+    let storedSkills: unknown[] = [];
+    const auditLog = vi.fn().mockResolvedValue(true);
+    registerServices({
+      getUserSkills: vi.fn(async () => storedSkills) as never,
+      setUserSkills: vi.fn(async (skills) => {
+        storedSkills = skills as unknown[];
+      }) as never,
+    });
+    container.registerInstance(AuditService, { log: auditLog } as unknown as AuditService);
+
+    const listResponse = await createApp().request('/api/ai/skills', {
+      headers: { Cookie: 'session_id=session-1' },
+    });
+    expect(listResponse.status).toBe(200);
+    const listPayload = (await listResponse.json()) as { data: unknown[] };
+    expect(listPayload.data).toEqual(
+      expect.arrayContaining([expect.objectContaining({ source: 'system', enabled: true })])
+    );
+
+    const createResponse = await createApp().request('/api/ai/skills', {
+      method: 'POST',
+      headers: { Cookie: 'session_id=session-1', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Production naming',
+        description: 'Private shared naming policy',
+        instructions: 'Use the private production naming convention.',
+      }),
+    });
+
+    expect(createResponse.status).toBe(201);
+    const createPayload = (await createResponse.json()) as { data: Record<string, unknown> };
+    expect(createPayload.data).toMatchObject({
+      name: 'Production naming',
+      source: 'user',
+      enabled: true,
+    });
+    expect(auditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: USER.id,
+        action: 'ai.skill.create',
+        resourceType: 'ai-skill',
+        details: expect.objectContaining({
+          description: expect.objectContaining({ hash: expect.any(String) }),
+          instructions: expect.objectContaining({ hash: expect.any(String) }),
+        }),
+      })
+    );
+    expect(JSON.stringify(auditLog.mock.calls)).not.toContain('Private shared naming policy');
+    expect(JSON.stringify(auditLog.mock.calls)).not.toContain('private production naming convention');
   });
 });

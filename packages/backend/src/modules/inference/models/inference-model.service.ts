@@ -464,17 +464,11 @@ export class InferenceModelService {
           contextWindow: manual?.contextWindow ?? discovered?.contextWindow ?? model.contextWindow,
           maxInputTokens: manual?.maxInputTokens ?? discovered?.maxInputTokens ?? model.maxInputTokens,
           maxOutputTokens: manual?.maxOutputTokens ?? discovered?.maxOutputTokens ?? model.maxOutputTokens,
+          autoCompactTokenLimit:
+            manual?.autoCompactTokenLimit ?? discovered?.autoCompactTokenLimit ?? model.autoCompactTokenLimit,
         };
       });
-    const outputLimits = [model.maxOutputTokens, ...technical.map((row) => row.maxOutputTokens)].filter(
-      (value): value is number => value !== null
-    );
-    return {
-      contextWindow: Math.min(model.contextWindow, ...technical.map((row) => row.contextWindow)),
-      maxInputTokens: Math.min(model.maxInputTokens, ...technical.map((row) => row.maxInputTokens)),
-      maxOutputTokens: outputLimits.length ? Math.min(...outputLimits) : null,
-      autoCompactTokenLimit: Math.min(model.autoCompactTokenLimit, model.maxInputTokens),
-    };
+    return effectiveTechnicalLimits(technical, model);
   }
 
   private async publicModel(model: typeof inferenceModels.$inferSelect, apiUsageEnabled = true) {
@@ -501,6 +495,7 @@ export class InferenceModelService {
   }
 
   private async serializeModel(model: typeof inferenceModels.$inferSelect) {
+    const limits = await this.safeLimits(model.id, model);
     const sources = await this.db
       .select({
         source: inferenceModelSources,
@@ -531,6 +526,7 @@ export class InferenceModelService {
     const capabilityState = detectedCapabilityState(model.capabilities, sources);
     return {
       ...model,
+      ...limits,
       configuredCapabilities: model.capabilities,
       capabilities: capabilityState.effective,
       capabilityLimitations: capabilityState.limitations,
@@ -756,4 +752,23 @@ export const __testOnly = {
   sourceOriginMetadata,
   filterModelIdsByApiBudget,
   filterSourcesByApiUsage,
+  effectiveTechnicalLimits,
 };
+
+type TechnicalLimits = Pick<
+  InferenceModelInput,
+  'contextWindow' | 'maxInputTokens' | 'maxOutputTokens' | 'autoCompactTokenLimit'
+>;
+
+function effectiveTechnicalLimits(sources: TechnicalLimits[], fallback: TechnicalLimits) {
+  const effective = sources.length ? sources : [fallback];
+  const outputLimits = effective.map((row) => row.maxOutputTokens).filter((value): value is number => value !== null);
+  const contextWindow = Math.min(...effective.map((row) => row.contextWindow));
+  const maxInputTokens = Math.min(...effective.map((row) => row.maxInputTokens));
+  return {
+    contextWindow,
+    maxInputTokens,
+    maxOutputTokens: outputLimits.length ? Math.min(...outputLimits) : null,
+    autoCompactTokenLimit: Math.min(maxInputTokens, ...effective.map((row) => row.autoCompactTokenLimit)),
+  };
+}

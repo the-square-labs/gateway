@@ -4,6 +4,7 @@ import { z } from 'zod';
 // pinned by manifest digest.
 export const DEVELOPMENT_DATABASE_CONNECTOR_IMAGE = 'gateway-database-connector:dev';
 export const DEVELOPMENT_SECURE_LINK_CONNECTOR_IMAGE = 'gateway-secure-link-connector:dev';
+export const BUILT_IN_GITHUB_OAUTH_CLIENT_ID = 'Ov23likbDL1gM8asWzfC';
 const IMMUTABLE_CONNECTOR_IMAGE_PATTERN = /^.+@sha256:[0-9a-f]{64}$/i;
 
 const rateLimitWindowSchema = z.coerce.number().int().positive();
@@ -69,6 +70,10 @@ const envSchema = z.object({
     message: 'OIDC_REDIRECT_URI must be a URL when provided',
   }),
   OIDC_SCOPES: z.string().default('openid email profile'),
+
+  // Optional override for the built-in public OAuth App client used by GitHub Device Flow.
+  // Device Flow does not use a client secret or a per-instance callback URL.
+  GITHUB_OAUTH_CLIENT_ID: nonEmptyStringWithDefault(BUILT_IN_GITHUB_OAUTH_CLIENT_ID),
 
   // Rate limiting
   RATE_LIMIT_WINDOW_MS: rateLimitWindowSchema.default(60000),

@@ -64,15 +64,105 @@ describe('AI tool scope filtering', () => {
     });
   });
 
-  it('exposes only planning-safe tools while keeping read variants of composite tools available', () => {
-    const names = getOpenAITools([], ['feat:ai:use', 'domains:view', 'domains:manage'], true, {
-      discoveredToolsets: ['Domains'],
-      planningMode: true,
-    }).map((tool) => tool.function.name);
+  it('exposes concrete connector and node setup handoffs without the Finalize Setup route', () => {
+    expect(toolNames(['feat:ai:use'])).toEqual(
+      expect.arrayContaining(['open_connector_setup', 'open_node_enrollment'])
+    );
+    expect(
+      parseAndValidateAIToolArguments(
+        'open_connector_setup',
+        JSON.stringify({
+          connector: 'git',
+          baseUrl: 'https://git.example.test',
+          repositoryUrl: 'https://git.example.test/team/api',
+        })
+      )
+    ).toMatchObject({
+      ok: true,
+      arguments: {
+        connector: 'git',
+        repositoryUrl: 'https://git.example.test/team/api',
+      },
+    });
+    expect(
+      parseAndValidateAIToolArguments(
+        'open_connector_setup',
+        JSON.stringify({ connector: 'ssh', host: 'server.example.test' })
+      )
+    ).toMatchObject({
+      ok: true,
+      arguments: { connector: 'ssh', host: 'server.example.test' },
+    });
+    expect(parseAndValidateAIToolArguments('open_connector_setup', JSON.stringify({ connector: 'svn' }))).toEqual({
+      ok: false,
+      error: 'Invalid tool arguments at /connector',
+    });
+  });
 
-    expect(names).toEqual(expect.arrayContaining(['enter_plan_mode', 'submit_plan', 'manage_domain']));
+  it('exposes guarded resource setup tools to the native assistant', () => {
+    const names = toolNames([
+      'databases:view',
+      'databases:create',
+      'docker:containers:migrate',
+      'settings:gateway:view',
+      'settings:gateway:edit',
+    ]);
+    expect(names).toEqual(
+      expect.arrayContaining(['manage_managed_database', 'manage_docker_migration', 'manage_logging_backend'])
+    );
+    expect(
+      parseAndValidateAIToolArguments(
+        'manage_managed_database',
+        JSON.stringify({ operation: 'create', type: 'postgres', name: 'app-db' })
+      )
+    ).toMatchObject({ ok: true });
+    expect(parseAndValidateAIToolArguments('manage_docker_migration', '{"operation":"invent"}')).toEqual({
+      ok: false,
+      error: 'Invalid tool arguments at /operation',
+    });
+  });
+
+  it('exposes only planning-safe tools while keeping read variants of composite tools available', () => {
+    const names = getOpenAITools(
+      [],
+      [
+        'feat:ai:use',
+        'domains:view',
+        'domains:manage',
+        'integrations:github:view',
+        'integrations:github:manage',
+        'integrations:git:view',
+        'integrations:git:manage',
+        'integrations:ssh:view',
+        'integrations:ssh:use',
+      ],
+      true,
+      {
+        discoveredToolsets: ['Domains', 'GitHub', 'Git', 'External SSH', 'Setup'],
+        planningMode: true,
+      }
+    ).map((tool) => tool.function.name);
+
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'enter_plan_mode',
+        'submit_plan',
+        'manage_domain',
+        'open_connector_setup',
+        'github_list_repositories',
+        'github_list_repository_tree',
+        'github_list_workflow_runs',
+        'git_list_repository_tree',
+        'git_read_repository_file',
+        'ssh_list_connectors',
+      ])
+    );
     expect(names).not.toContain('create_domain');
     expect(names).not.toContain('delete_domain');
+    expect(names).not.toContain('github_upsert_repository_file');
+    expect(names).not.toContain('github_upsert_actions_secret');
+    expect(names).not.toContain('git_upsert_repository_file');
+    expect(names).not.toContain('ssh_execute_command');
   });
 
   it('derives active plan lifecycle identifiers on the server instead of asking the model to copy them', () => {
@@ -114,8 +204,10 @@ describe('AI tool scope filtering', () => {
 
   it('keeps core registry ordering, uniqueness, and invalidation contracts stable', () => {
     expect(new Set(AI_TOOLS.map((tool) => tool.name)).size).toBe(AI_TOOLS.length);
-    expect(AI_TOOLS.slice(0, 86).map((tool) => tool.name)).toEqual([
+    expect(AI_TOOLS.slice(0, 90).map((tool) => tool.name)).toEqual([
       'discover_tools',
+      'read_skill',
+      'activate_skill',
       'get_current_context',
       'read_tool_output',
       'search_tool_output',
@@ -124,6 +216,7 @@ describe('AI tool scope filtering', () => {
       'end_conversation',
       'find_resource',
       'search_chats',
+      'search_compacted_history',
       'find_in_chat',
       'read_chat_slice',
       'list_chat_projects',
@@ -180,6 +273,7 @@ describe('AI tool scope filtering', () => {
       'list_users',
       'create_user',
       'update_user_role',
+      'set_user_additional_permissions',
       'set_user_blocked',
       'delete_user',
       'get_ai_settings',
@@ -208,6 +302,7 @@ describe('AI tool scope filtering', () => {
     expect(TOOL_STORE_INVALIDATION_MAP.manage_ssl_certificate).toEqual(['ssl']);
     expect(TOOL_STORE_INVALIDATION_MAP.create_user).toEqual(['users']);
     expect(TOOL_STORE_INVALIDATION_MAP.update_user_role).toEqual(['users']);
+    expect(TOOL_STORE_INVALIDATION_MAP.set_user_additional_permissions).toEqual(['users']);
     expect(TOOL_STORE_INVALIDATION_MAP.set_user_blocked).toEqual(['users']);
     expect(TOOL_STORE_INVALIDATION_MAP.delete_user).toEqual(['users']);
     expect(TOOL_STORE_INVALIDATION_MAP.update_ai_settings).toEqual(['settings']);
@@ -230,6 +325,17 @@ describe('AI tool scope filtering', () => {
     expect(isDestructiveTool('manage_ca')).toBe(true);
     expect(isDestructiveTool('create_proxy_folder')).toBe(true);
     expect(isDestructiveTool('execute_node_console_command')).toBe(true);
+  });
+
+  it('locks progress comments and the final answer to one language per run', () => {
+    const sendComment = AI_TOOLS.find((tool) => tool.name === 'send_comment');
+
+    expect(sendComment?.description).toContain('locks the response language');
+    expect(sendComment?.parameters.properties).toMatchObject({
+      message: expect.objectContaining({
+        description: expect.stringContaining('language already used by this run'),
+      }),
+    });
   });
 
   it('exposes Cloudflare DNS-01 and SSL auto-renew controls to the agent', () => {
@@ -269,7 +375,14 @@ describe('AI tool scope filtering', () => {
       expect.arrayContaining(['list_ssl_certificates', 'manage_ssl_certificate'])
     );
     expect(toolNames(['admin:users'])).toEqual(
-      expect.arrayContaining(['list_users', 'create_user', 'update_user_role', 'set_user_blocked', 'delete_user'])
+      expect.arrayContaining([
+        'list_users',
+        'create_user',
+        'update_user_role',
+        'set_user_additional_permissions',
+        'set_user_blocked',
+        'delete_user',
+      ])
     );
     expect(toolNames(['admin:groups'])).toEqual(
       expect.arrayContaining(['list_groups', 'create_group', 'update_group', 'delete_group'])

@@ -33,6 +33,7 @@ describe("InferenceProviderConnectDialog", () => {
   afterEach(() => useConfirmDialog.getState().close());
 
   it("polls a device flow automatically and completes without a manual check button", async () => {
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
     const onOpenChange = vi.fn<(open: boolean) => void>();
     const onConnected = vi.fn<() => void>();
     vi.mocked(api.startInferenceOAuth).mockResolvedValue({
@@ -66,12 +67,15 @@ describe("InferenceProviderConnectDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Continue to authorization" }));
 
     expect(await screen.findByText("ABCD-EFGH")).toBeInTheDocument();
+    expect(openSpy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
     expect(api.startInferenceOAuth).toHaveBeenCalledWith({
       providerId: "xai",
       connectionName: "Grok team",
       acceptTerms: true,
       termsVersion: "terms-v1",
     });
+    expect(openSpy).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: /complete|check/i })).not.toBeInTheDocument();
     await waitFor(() => expect(api.getInferenceOAuthStatus).toHaveBeenCalledWith("session-1"), {
       timeout: 2_000,

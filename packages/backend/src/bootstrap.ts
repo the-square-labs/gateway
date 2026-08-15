@@ -97,6 +97,7 @@ import { InferenceProviderService } from '@/modules/inference/providers/inferenc
 import { InferenceProviderCredentialService } from '@/modules/inference/providers/inference-provider-credential.service.js';
 import { InferenceProviderHttpConnector } from '@/modules/inference/providers/inference-provider-http.connector.js';
 import { InferenceRoutingService } from '@/modules/inference/providers/inference-routing.service.js';
+import { ExternalSshService } from '@/modules/integrations/external-ssh.service.js';
 import { GitLabProvider } from '@/modules/integrations/gitlab-provider.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { LicenseService } from '@/modules/license/license.service.js';
@@ -441,6 +442,9 @@ export async function initializeContainer(): Promise<void> {
   const integrationsService = new IntegrationsService(db, auditService, cryptoService, [gitLabProvider]);
   integrationsService.setEventBus(eventBus);
   container.registerInstance(IntegrationsService, integrationsService);
+  const externalSshService = new ExternalSshService(db, cryptoService);
+  externalSshService.setEventBus(eventBus);
+  container.registerInstance(ExternalSshService, externalSshService);
 
   const alertService = new AlertService(db);
   container.registerInstance(AlertService, alertService);
@@ -918,19 +922,20 @@ export async function initializeContainer(): Promise<void> {
   });
   generalSettingsService.setInferenceDisabledHandler(() => aiSettingsService.handleInferenceDisabled());
   container.registerInstance(AISettingsService, aiSettingsService);
-  const aiProviderRuntimeService = new AIProviderRuntimeService(
-    aiSettingsService,
-    generalSettingsService,
-    inferenceModelService,
-    inferenceRuntimeService,
-    inferenceBudgetPolicyService
-  );
-  container.registerInstance(AIProviderRuntimeService, aiProviderRuntimeService);
   const aiSandboxArtifactService = new AISandboxArtifactService(env);
   await aiSandboxArtifactService.cleanInterruptedFiles().catch((error) => {
     logger.warn('Failed to clean interrupted AI artifact writes during bootstrap', { error });
   });
   container.registerInstance(AISandboxArtifactService, aiSandboxArtifactService);
+  const aiProviderRuntimeService = new AIProviderRuntimeService(
+    aiSettingsService,
+    generalSettingsService,
+    inferenceModelService,
+    inferenceRuntimeService,
+    inferenceBudgetPolicyService,
+    aiSandboxArtifactService
+  );
+  container.registerInstance(AIProviderRuntimeService, aiProviderRuntimeService);
   const aiSandboxJobsService = new AISandboxJobsService(db);
   container.registerInstance(AISandboxJobsService, aiSandboxJobsService);
   const aiSandboxRunnerService = new AISandboxRunnerService();
@@ -1024,6 +1029,7 @@ export async function initializeContainer(): Promise<void> {
   // Docker service (kept for self-update and image pruning only)
   const dockerService = new DockerService('/var/run/docker.sock', '');
   container.registerInstance(DockerService, dockerService);
+  container.resolve(ExternalSshService).setDockerService(dockerService);
   const relayDockerRecovery = new RelayDockerRecoveryService(dockerService, env);
   container.registerInstance(RelayDockerRecoveryService, relayDockerRecovery);
   const relayStartupFinalizer = new RelayStartupFinalizerService(relayControlClient ?? null, relayDockerRecovery, {
@@ -1362,6 +1368,8 @@ export async function initializeContainer(): Promise<void> {
   const siemDeliveryJob = new SiemDeliveryJob(siemDeliveryService, generalSettingsService);
   scheduler.registerInterval('siem-delivery', 30000, () => siemDeliveryJob.run());
   scheduler.registerInterval('gitlab-integration-sync', 60000, () => integrationsService.runDueGitLabSyncs());
+  scheduler.registerInterval('github-integration-health', 60000, () => integrationsService.runDueGitHubHealthChecks());
+  scheduler.registerInterval('ssh-integration-health', 60000, () => externalSshService.runDueHealthChecks());
   scheduler.registerInterval('cloudflare-integration-sync', 60000, () => integrationsService.runDueCloudflareSyncs());
 
   setTimeout(() => {

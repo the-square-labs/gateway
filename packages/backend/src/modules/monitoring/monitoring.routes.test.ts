@@ -286,9 +286,7 @@ describe('dashboard bootstrap route', () => {
     expect(response.status).toBe(200);
     expect(dashboardReadModels.get).toHaveBeenCalledWith('stats-user');
     expect(snapshots.getList).toHaveBeenCalledWith(nodeId, 'containers');
-    expect(docker.decoratePublicContainerSnapshot).toHaveBeenCalledWith(nodeId, [
-      { id: 'container-1', name: '/api' },
-    ]);
+    expect(docker.decoratePublicContainerSnapshot).toHaveBeenCalledWith(nodeId, [{ id: 'container-1', name: '/api' }]);
     await expect(response.json()).resolves.toMatchObject({
       data: {
         pinned: {

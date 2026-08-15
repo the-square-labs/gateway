@@ -51,6 +51,11 @@ export function toChatMessage(value: unknown): ChatMessage | null {
       typeof message.compactBoundaryMessageId === 'string' ? message.compactBoundaryMessageId : undefined,
     compactTailMessageCount:
       typeof message.compactTailMessageCount === 'number' ? message.compactTailMessageCount : undefined,
+    hiddenSystemEvent: message.hiddenSystemEvent === true,
+    lifecycleEvent:
+      message.lifecycleEvent && typeof message.lifecycleEvent === 'object' && !Array.isArray(message.lifecycleEvent)
+        ? (message.lifecycleEvent as ChatMessage['lifecycleEvent'])
+        : undefined,
     steer: message.steer === true,
   };
 }

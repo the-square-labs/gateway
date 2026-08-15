@@ -59,6 +59,7 @@ import { executeFolderTool, FOLDER_TOOL_NAMES } from './ai.folder-tools.js';
 import { executeGitLabTool, GITLAB_TOOL_NAMES } from './ai.gitlab-tools.js';
 import { executeGroupTool, GROUP_TOOL_NAMES } from './ai.group-tools.js';
 import { executeInferenceTool, INFERENCE_TOOL_NAMES } from './ai.inference-tools.js';
+import { executeIntegrationTool, INTEGRATION_TOOL_NAMES } from './ai.integration-tools.js';
 import { manageLoggingTool } from './ai.logging-tools.js';
 import { executeNodeTool, NODE_TOOL_NAMES } from './ai.node-tools.js';
 import { executeNotificationTool, NOTIFICATION_TOOL_NAMES } from './ai.notification-tools.js';
@@ -68,6 +69,7 @@ import { executePkiTemplateTool, PKI_TEMPLATE_TOOL_NAMES } from './ai.pki-templa
 import { streamModelResponse } from './ai.provider-adapter.js';
 import { executeProxyTool, PROXY_TOOL_NAMES } from './ai.proxy-tools.js';
 import { findResource } from './ai.resource-search.js';
+import { executeResourceSetupTool, RESOURCE_SETUP_TOOL_NAMES } from './ai.resource-setup-tools.js';
 import type { AISandboxService } from './ai.sandbox.service.js';
 import type { AISandboxArtifactService } from './ai.sandbox-artifact.service.js';
 import {
@@ -82,17 +84,21 @@ import {
   redactToolArgs,
 } from './ai.service-helpers.js';
 import type { AISettingsService } from './ai.settings.service.js';
+import { AISkillService } from './ai.skills.js';
+import { executeSshTool, SSH_TOOL_NAMES } from './ai.ssh-tools.js';
 import { manageStatusPageTool } from './ai.status-page-tools.js';
 import { buildAISystemPromptDetailed, type SystemPromptBreakdownItem } from './ai.system-prompt.js';
 import {
   AI_TOOLS,
   getOpenAITools,
   inferDiscoveredToolsetsFromText,
+  isBaseAIToolName,
   parseAndValidateAIToolArguments,
   TOOL_STORE_INVALIDATION_MAP,
   validateAIToolArguments,
 } from './ai.tools.js';
 import type {
+  AIConfig,
   AIContextLimits,
   AIMessageAttachment,
   AIPlanRuntimeSnapshot,
@@ -161,20 +167,60 @@ export interface AIContextCompactionResult {
   sourceTokenEstimate: number;
   resultTokenEstimate: number;
   trigger: AIContextCompactionTrigger;
+  preCompactionTokens?: number;
+  reconstructedTokens?: number;
+  targetTokens?: number;
+  targetAchieved?: boolean;
 }
 
 const SEND_COMMENT_TOOL_NAME = 'send_comment';
 const TOOL_COMMENT_REQUIRED_MESSAGE =
-  'You have reached the maximum number of sequential tool-call rounds without a user-visible progress comment. Call only send_comment now with a concise, useful progress update in the user language, then continue the task after that comment. Do not call any other tool in this response.';
+  'You have reached the maximum number of sequential tool-call rounds without a user-visible progress comment. Call only send_comment now with a concise, useful progress update. If this run already contains user-visible assistant text, use exactly the same language; otherwise use the response language selected for this run. Keep that language for every later comment and the final answer. Do not call any other tool in this response.';
 const SEND_COMMENT_EMPTY_ERROR =
-  'send_comment requires a real, non-empty progress comment for the user. Call send_comment again with a concise update in the user language.';
+  'send_comment requires a real, non-empty progress comment for the user. Call send_comment again in the response language already selected for this run.';
 const SEND_COMMENT_MIXED_ERROR =
   'send_comment must be called by itself. First send the progress comment, then call other tools in the next assistant turn.';
+const RUN_LANGUAGE_LOCK_MESSAGE =
+  'The response language for this run is now locked to the language of the first user-visible assistant text. Use that same language for every later progress update, question, and final answer in this run. Do not switch because tool results, documentation, or the original request use another language. Only a later user message explicitly requesting a language change may override this lock.';
+
+function hasRunLanguageLock(messages: Array<{ role?: unknown; content?: unknown }>): boolean {
+  return messages.some((message) => message.role === 'system' && message.content === RUN_LANGUAGE_LOCK_MESSAGE);
+}
+
+function ensureRuntimeLanguageLock(messages: ChatMessage[]): void {
+  if (hasRunLanguageLock(messages)) return;
+  messages.push({
+    role: 'system',
+    content: RUN_LANGUAGE_LOCK_MESSAGE,
+    hiddenSystemEvent: true,
+  });
+}
+
+function ensureProviderLanguageLock(messages: Record<string, unknown>[]): Record<string, unknown>[] {
+  if (!hasRunLanguageLock(messages)) {
+    messages.push({ role: 'system', content: RUN_LANGUAGE_LOCK_MESSAGE });
+  }
+  return messages;
+}
+
+function latestToolRoundHasUserVisibleAssistantText(messages: Record<string, unknown>[]): boolean {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== 'assistant' || !Array.isArray(message.tool_calls)) continue;
+    if (typeof message.content === 'string' && message.content.trim()) return true;
+    return message.tool_calls.some((call) => {
+      if (!isRecord(call) || !isRecord(call.function)) return false;
+      return call.function.name === 'ask_question' || call.function.name === SEND_COMMENT_TOOL_NAME;
+    });
+  }
+  return false;
+}
 
 const PLAN_LIFECYCLE_TOOL_NAMES = new Set([
   'enter_plan_mode',
   'submit_plan',
   'submit_plan_review',
+  'start_plan_execution',
   'update_plan_step',
   'pause_plan_execution',
   'resume_plan_execution',
@@ -186,7 +232,11 @@ function isToolNameAllowedForPlanState(toolName: string, status: AIPlanRuntimeSn
   if (!status) return !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName) || toolName === 'enter_plan_mode';
   if (status === 'drafting') return !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName) || toolName === 'submit_plan';
   if (status === 'validating') return !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName) || toolName === 'submit_plan_review';
-  if (status === 'awaiting_decision') return false;
+  if (status === 'awaiting_decision') {
+    return (
+      !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName) || toolName === 'submit_plan' || toolName === 'start_plan_execution'
+    );
+  }
   if (status === 'executing') {
     return (
       !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName) ||
@@ -195,6 +245,7 @@ function isToolNameAllowedForPlanState(toolName: string, status: AIPlanRuntimeSn
       toolName === 'finalize_plan_execution'
     );
   }
+  if (status === 'pause_requested') return false;
   if (status === 'paused') return toolName === 'resume_plan_execution';
   if (status === 'verifying')
     return (
@@ -228,6 +279,7 @@ export function shouldEndRunAfterPlanTool(toolName: string, result: unknown, err
   if (
     toolName === 'enter_plan_mode' ||
     toolName === 'submit_plan' ||
+    toolName === 'start_plan_execution' ||
     toolName === 'pause_plan_execution' ||
     toolName === 'resume_plan_execution' ||
     toolName === 'finalize_plan_execution'
@@ -269,8 +321,14 @@ function buildPlanRuntimePrompt(plan: AIPlanRuntimeSnapshot): string {
   if (plan.status === 'validating') {
     return `You are the independent plan validator. Compare the draft with the user's intent and research, independently verify critical facts with planning-safe tools when needed, and call submit_plan_review. If the result says requiresQuestion:true, immediately call ask_question for the missing user decision before ending the run. Do not implement or change infrastructure. Active plan: ${planState}`;
   }
+  if (plan.status === 'awaiting_decision') {
+    return `A validated plan is published and available, but it does not put the conversation into a separate refinement state. Continue as a normal conversation. If and only if the user explicitly asks to execute, implement, proceed with, or resume this published plan, call start_plan_execution. If the user clearly requests changes to the plan, discuss or research them as needed and call submit_plan with the complete revised plan; do not change plan state merely because the user selected Refine in the UI or asked a question about it. For unrelated requests, answer or act normally under the current approval policy. Active plan: ${planState}`;
+  }
   if (plan.status === 'executing') {
     return `Execute the accepted plan. Keep exactly one step in_progress and update every step through update_plan_step with verification evidence. User messages steer the execution. If they materially change scope, call pause_plan_execution with requiresRevision:true; the next planning run must publish a validated revision with changeSummary and wait for acceptance. Call finalize_plan_execution only when the goal is fully implemented and verified. Active plan: ${planState}`;
+  }
+  if (plan.status === 'pause_requested') {
+    return `The user requested a pause. Finish only the already-started tool round and do not begin another model or tool round. Active plan: ${planState}`;
   }
   if (plan.status === 'paused') {
     return `The plan is paused. Use new user context to resolve the blocker, then call resume_plan_execution before continuing. Active plan: ${planState}`;
@@ -470,6 +528,11 @@ function orderLatestToolRoundResults(messages: Record<string, unknown>[]): Recor
 
 function providerMessageToClientMessage(message: Record<string, unknown>): ChatMessage | null {
   const role = message.role;
+  if (role === 'system') {
+    return message.content === RUN_LANGUAGE_LOCK_MESSAGE
+      ? { role: 'system', content: RUN_LANGUAGE_LOCK_MESSAGE, hiddenSystemEvent: true }
+      : null;
+  }
   if (role !== 'user' && role !== 'assistant' && role !== 'tool') return null;
   const content = message.content;
   return {
@@ -578,6 +641,7 @@ const AI_SETTINGS_UPDATE_FIELDS = new Set([
   'model',
   'gatewayInferenceModel',
   'gatewayInferenceAllowUserModelSelection',
+  'allowUserReasoningEffortSelection',
   'customSystemPrompt',
   'rateLimitMax',
   'rateLimitWindowSeconds',
@@ -604,15 +668,68 @@ function aiSettingsUpdatesFromArgs(args: Record<string, unknown>): Record<string
 }
 
 function mergeToolsets(existing: string[], added: string[]): string[] {
-  return [...new Set([...existing, ...added].map((toolset) => toolset.trim()).filter(Boolean))].sort((a, b) =>
-    a.localeCompare(b)
-  );
+  const source = added.length > 0 ? added : existing;
+  return [...new Set(source.map((toolset) => toolset.trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b))
+    .slice(0, 3);
 }
 
-function discoveredToolsetsFromResult(value: unknown): string[] {
+function rankToolCategories(
+  tools: AIToolDefinition[],
+  query = ''
+): Array<{
+  name: string;
+  toolCount: number;
+  matchingTools: string[];
+}> {
+  const tokens = query
+    .toLowerCase()
+    .split(/[^a-z0-9:_-]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2);
+  if (tokens.length === 0) return [];
+  const byCategory = new Map<string, { score: number; tools: Set<string>; total: number }>();
+  for (const tool of tools) {
+    const entry = byCategory.get(tool.category) ?? { score: 0, tools: new Set<string>(), total: 0 };
+    entry.total += 1;
+    const category = tool.category.toLowerCase();
+    const name = tool.name.toLowerCase();
+    const description = tool.description.toLowerCase();
+    const scope = tool.requiredScope.toLowerCase();
+    let score = 0;
+    for (const token of tokens) {
+      if (category.includes(token)) score += 8;
+      if (name.includes(token)) score += 6;
+      if (description.includes(token)) score += 2;
+      if (scope.includes(token)) score += 1;
+    }
+    if (score > 0) {
+      entry.score += score;
+      entry.tools.add(tool.name);
+    }
+    byCategory.set(tool.category, entry);
+  }
+  return [...byCategory.entries()]
+    .filter(([, value]) => value.score > 0)
+    .sort((left, right) => right[1].score - left[1].score || left[0].localeCompare(right[0]))
+    .map(([name, value]) => ({
+      name,
+      toolCount: value.total,
+      matchingTools: [...value.tools].sort().slice(0, 5),
+    }));
+}
+
+function latestCompactEpoch(messages: ChatMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.compactMarker) return messages[index]?.compactEpoch ?? 0;
+  }
+  return 0;
+}
+
+function discoveredToolsetsFromResult(value: unknown): string[] | undefined {
   return isRecord(value) && Array.isArray(value.discoveredToolsets)
     ? value.discoveredToolsets.filter((toolset): toolset is string => typeof toolset === 'string')
-    : [];
+    : undefined;
 }
 
 function inferDiscoveredToolsetsFromMessages(messages: ChatMessage[]): string[] {
@@ -760,17 +877,38 @@ export class AIService {
     const apiKey = await this.settingsService.getDecryptedApiKey();
     if (!apiKey)
       throw new AppError(503, 'AI_NOT_CONFIGURED', 'AI is not configured. An admin must set up the API key.');
+    const requestedReasoningEffort = options.requestedReasoningEffort?.trim();
+    if (requestedReasoningEffort && !config.allowUserReasoningEffortSelection) {
+      throw new AppError(403, 'AI_REASONING_EFFORT_SELECTION_DISABLED', 'Reasoning effort selection is disabled');
+    }
+    if (requestedReasoningEffort && !['default', 'low', 'medium', 'high'].includes(requestedReasoningEffort)) {
+      throw new AppError(
+        400,
+        'AI_REASONING_EFFORT_UNAVAILABLE',
+        'The selected reasoning effort is unavailable for this provider'
+      );
+    }
+    const effectiveReasoningEffort =
+      requestedReasoningEffort && requestedReasoningEffort !== 'default'
+        ? (requestedReasoningEffort as AIConfig['reasoningEffort'])
+        : config.reasoningEffort;
+    const effectiveConfig = options.preferMinimumReasoning
+      ? { ...config, reasoningEffort: 'none' as const }
+      : { ...config, reasoningEffort: effectiveReasoningEffort };
     const client = new OpenAI({ apiKey, baseURL: config.providerUrl || undefined });
     return {
-      config,
-      contextLimits: directProviderContextLimits(config.maxContextTokens, config.maxCompletionTokens),
-      reasoningEffort: config.reasoningEffort === 'none' ? null : config.reasoningEffort,
+      config: effectiveConfig,
+      contextLimits: directProviderContextLimits(effectiveConfig.maxContextTokens, effectiveConfig.maxCompletionTokens),
+      reasoningEffort: effectiveConfig.reasoningEffort === 'none' ? null : effectiveConfig.reasoningEffort,
       stream: (messages, tools, streamOptions) =>
         streamModelResponse({
           client,
           config: streamOptions?.maxOutputTokens
-            ? { ...config, maxCompletionTokens: Math.min(config.maxCompletionTokens, streamOptions.maxOutputTokens) }
-            : config,
+            ? {
+                ...effectiveConfig,
+                maxCompletionTokens: Math.min(effectiveConfig.maxCompletionTokens, streamOptions.maxOutputTokens),
+              }
+            : effectiveConfig,
           messages,
           tools,
           signal: options.signal,
@@ -1082,11 +1220,19 @@ export class AIService {
 
       return { result, invalidateStores };
     } catch (err) {
-      if (source === 'ai' && err instanceof AppError && err.code === 'GITLAB_CREDENTIAL_REQUIRED') {
+      if (
+        source === 'ai' &&
+        err instanceof AppError &&
+        ['GITLAB_CREDENTIAL_REQUIRED', 'GITHUB_CREDENTIAL_REQUIRED', 'GIT_CREDENTIAL_REQUIRED'].includes(err.code)
+      ) {
         const details = isRecord(err.details) ? err.details : {};
-        if (typeof details.connectorId === 'string') {
+        const provider = details.provider ?? (err.code === 'GITLAB_CREDENTIAL_REQUIRED' ? 'gitlab' : null);
+        if (
+          typeof details.connectorId === 'string' &&
+          (provider === 'gitlab' || provider === 'github' || provider === 'git')
+        ) {
           return {
-            credentialChallenge: { provider: 'gitlab', connectorId: details.connectorId },
+            credentialChallenge: { provider, connectorId: details.connectorId },
             invalidateStores: [],
           };
         }
@@ -1242,6 +1388,12 @@ export class AIService {
     if (INFERENCE_TOOL_NAMES.has(toolName)) {
       return executeInferenceTool(user, toolName, args);
     }
+    if (INTEGRATION_TOOL_NAMES.has(toolName)) {
+      return executeIntegrationTool(user, toolName, args);
+    }
+    if (RESOURCE_SETUP_TOOL_NAMES.has(toolName)) {
+      return executeResourceSetupTool(user, toolName, args);
+    }
     if (DOCKER_TOOL_NAMES.has(toolName)) {
       return executeDockerTool(
         {
@@ -1284,6 +1436,9 @@ export class AIService {
         toolName,
         args
       );
+    }
+    if (SSH_TOOL_NAMES.has(toolName)) {
+      return executeSshTool(user, toolName, args);
     }
     if (FOLDER_TOOL_NAMES.has(toolName)) {
       return executeFolderTool(user, toolName, args);
@@ -1367,6 +1522,27 @@ export class AIService {
       case 'discover_tools':
         return this.discoverTools(user, args, runtimeContext.conversationId);
 
+      case 'read_skill': {
+        const skillId = stringArg(a.skillId);
+        if (!skillId) throw new AppError(400, 'AI_SKILL_ID_REQUIRED', 'skillId is required');
+        const skill = await new AISkillService(this.settingsService).getRuntimeSkill(skillId);
+        return { skill, active: false, nextStep: 'Call activate_skill before applying this skill.' };
+      }
+
+      case 'activate_skill': {
+        const skillId = stringArg(a.skillId);
+        if (!skillId) throw new AppError(400, 'AI_SKILL_ID_REQUIRED', 'skillId is required');
+        const skill = await new AISkillService(this.settingsService).getRuntimeSkill(skillId);
+        return {
+          active: true,
+          activationScope: 'current_context',
+          priority: skill.source === 'system' ? 'system_skill' : 'organization_skill',
+          skill,
+          instruction:
+            'Apply the activated instructions while they remain in the current context. Do not activate this skill again until compaction removes this activation. Base security, authorization, permission, and approval rules always take priority.',
+        };
+      }
+
       case 'get_current_context':
         return {
           currentPage: runtimeContext.pageContext ?? null,
@@ -1407,6 +1583,22 @@ export class AIService {
           limit: typeof a.limit === 'number' ? a.limit : undefined,
           currentConversationId: runtimeContext.conversationId,
         });
+      case 'search_compacted_history': {
+        if (!runtimeContext.conversationId) {
+          throw new AppError(
+            409,
+            'AI_CONVERSATION_REQUIRED',
+            'search_compacted_history requires the current saved conversation'
+          );
+        }
+        return (
+          this.conversationSearchService ?? container.resolve(AIConversationSearchService)
+        ).searchCompactedHistory(user.id, {
+          conversationId: runtimeContext.conversationId,
+          query: String(a.query ?? ''),
+          limit: typeof a.limit === 'number' ? a.limit : undefined,
+        });
+      }
       case 'find_in_chat':
         return (this.conversationSearchService ?? container.resolve(AIConversationSearchService)).findInChat(user.id, {
           conversationId: String(a.conversationId ?? ''),
@@ -1564,6 +1756,22 @@ export class AIService {
         }
         await this.authService.assertCanUpdateUserGroup(user.id, user.scopes, a.userId, a.groupId);
         return this.authService.updateUserGroup(a.userId, a.groupId);
+      }
+      case 'set_user_additional_permissions': {
+        if (
+          !Array.isArray(a.additionalScopes) ||
+          a.additionalScopes.some((scope: unknown) => typeof scope !== 'string')
+        ) {
+          throw new Error('additionalScopes must be an array of permission scope strings');
+        }
+        const requestedScopes = a.additionalScopes as string[];
+        const { additionalScopes } = await this.authService.assertCanUpdateUserAdditionalScopes(
+          user.id,
+          user.scopes,
+          a.userId,
+          requestedScopes
+        );
+        return this.authService.updateUserAdditionalScopes(a.userId, additionalScopes);
       }
       case 'set_user_blocked': {
         if (a.userId === user.id) {
@@ -1970,6 +2178,24 @@ export class AIService {
           },
         };
 
+      case 'open_node_enrollment':
+        return {
+          clientAction: {
+            type: 'open_node_enrollment',
+          },
+        };
+
+      case 'open_connector_setup':
+        return {
+          clientAction: {
+            type: 'open_connector_setup',
+            connector: a.connector,
+            baseUrl: a.baseUrl,
+            repositoryUrl: a.repositoryUrl,
+            host: a.host,
+          },
+        };
+
       case 'manage_docker_container_config':
         return manageDockerContainerConfigTool({ dockerService: this.dockerService }, user, args);
 
@@ -2002,6 +2228,10 @@ export class AIService {
           intentReview: a.intentReview,
           securityReview: a.securityReview,
         });
+      }
+      case 'start_plan_execution': {
+        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
+        return this.planService.startExecution(user.id, runtimeContext.conversationId);
       }
       case 'update_plan_step': {
         if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
@@ -2081,11 +2311,22 @@ export class AIService {
         .filter((tool) => isToolNameAllowedForPlanState(tool.function.name, activePlan?.status ?? null))
         .map((tool) => tool.function.name)
     );
-    const categoryFilter = stringArg(args.category)?.toLowerCase();
+    const requestedCategories = [
+      ...(Array.isArray(args.categories)
+        ? args.categories.filter((category): category is string => typeof category === 'string')
+        : []),
+      ...(stringArg(args.category) ? [stringArg(args.category)!] : []),
+    ];
+    const normalizedRequestedCategories = [
+      ...new Set(requestedCategories.map((category) => category.trim()).filter(Boolean)),
+    ];
+    if (normalizedRequestedCategories.length > 3) {
+      throw new AppError(400, 'AI_TOOL_DISCOVERY_TOO_BROAD', 'Activate at most three tool categories at a time');
+    }
     const query = stringArg(args.query)?.toLowerCase();
-    const includeTools = boolArg(args.includeTools) || !!categoryFilter || !!query;
+    const includeTools = boolArg(args.includeTools);
 
-    const callableTools = AI_TOOLS.filter((tool) => callableNames.has(tool.name));
+    const callableTools = AI_TOOLS.filter((tool) => callableNames.has(tool.name) && !isBaseAIToolName(tool.name));
     const categoryMap = new Map<string, { toolCount: number; destructiveCount: number }>();
 
     for (const tool of callableTools) {
@@ -2099,16 +2340,28 @@ export class AIService {
       .map(([name, summary]) => ({ name, ...summary }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
+    const categoryNames = new Map(categories.map((category) => [category.name.toLowerCase(), category.name]));
+    const explicitCategories = normalizedRequestedCategories.map((category) => {
+      const matched = categoryNames.get(category.toLowerCase());
+      if (!matched)
+        throw new AppError(400, 'AI_TOOL_CATEGORY_UNKNOWN', `Unknown or unavailable tool category: ${category}`);
+      return matched;
+    });
+    if (includeTools && explicitCategories.length === 0) {
+      return {
+        categories,
+        recommendedToolsets: rankToolCategories(callableTools, query).slice(0, 3),
+        totalCallableTools: callableTools.length,
+        nextStep:
+          'Choose one to three recommended category names, then call discover_tools with categories and includeTools:true.',
+      };
+    }
+
+    const recommendedToolsets = query ? rankToolCategories(callableTools, query).slice(0, 3) : [];
+
     const tools = includeTools
       ? callableTools
-          .filter((tool) => {
-            if (categoryFilter && tool.category.toLowerCase() !== categoryFilter) return false;
-            if (!query) return true;
-            return [tool.name, tool.category, tool.description, tool.requiredScope]
-              .join(' ')
-              .toLowerCase()
-              .includes(query);
-          })
+          .filter((tool) => explicitCategories.includes(tool.category))
           .map((tool) => ({
             name: tool.name,
             category: tool.category,
@@ -2120,15 +2373,19 @@ export class AIService {
       : undefined;
 
     return {
-      categories,
+      categories:
+        explicitCategories.length > 0
+          ? categories.filter((category) => explicitCategories.includes(category.name))
+          : categories,
       tools,
-      discoveredToolsets: includeTools
-        ? [...new Set((tools ?? []).map((tool) => tool.category))].sort((a, b) => a.localeCompare(b))
-        : [],
+      recommendedToolsets,
+      ...(includeTools ? { discoveredToolsets: explicitCategories } : {}),
       totalCallableTools: callableTools.length,
-      note: includeTools
-        ? 'Call the selected tool with its documented parameters. Use internal_documentation for workflow details when needed.'
-        : 'Pass category, query, or includeTools:true to inspect callable tool details.',
+      nextStep: includeTools
+        ? 'Use a visible tool for the current step. When the task moves to another step, call discover_tools again to replace this working set.'
+        : query
+          ? 'Choose one to three recommended category names, then call discover_tools with categories and includeTools:true.'
+          : 'Use a visible base tool directly. If the category is unclear, call discover_tools with a targeted query.',
     };
   }
 
@@ -2192,6 +2449,8 @@ export class AIService {
 
     if (acceptedComment) {
       input.runtimeMessages.push({ role: 'assistant', content: acceptedComment });
+      input.messages = ensureProviderLanguageLock(input.messages);
+      ensureRuntimeLanguageLock(input.runtimeMessages);
       events.push({ type: 'assistant_comment', requestId: input.requestId, content: acceptedComment });
     }
 
@@ -2207,7 +2466,7 @@ export class AIService {
     if (!options.conversationId) return;
     const discoveredToolsets = toolName === 'discover_tools' ? discoveredToolsetsFromResult(result) : undefined;
 
-    if (!options.pageContext && (!discoveredToolsets || discoveredToolsets.length === 0)) return;
+    if (!options.pageContext && discoveredToolsets === undefined) return;
 
     try {
       await container.resolve(AIConversationService).updateRuntimeState(user.id, options.conversationId, {
@@ -2228,7 +2487,7 @@ export class AIService {
     conversationId: string | undefined,
     discoveredToolsets: string[]
   ): Promise<void> {
-    if (!conversationId || discoveredToolsets.length === 0) return;
+    if (!conversationId) return;
     try {
       await container.resolve(AIConversationService).updateRuntimeState(user.id, conversationId, {
         discoveredToolsets,
@@ -2354,18 +2613,26 @@ export class AIService {
     const providerConversationMessages = await Promise.all(
       clientMessages.map((message) => this.toProviderMessage(user, message, config))
     );
-    const recentBudget = clampIntegerValue(
-      Math.floor(provider.contextLimits.autoCompactTokenLimit * 0.2),
-      8_000,
-      32_000
+    const systemPrompt = await this.buildSystemPrompt(user, pageContext, conversationId);
+    const discoveredToolsets = mergeToolsets(
+      (await this.getConversationDiscoveredToolsets(user, conversationId)) ?? [],
+      inferDiscoveredToolsetsFromMessages(clientMessages)
     );
+    const tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
+    const systemTokens = estimateProviderMessagesTokens([{ role: 'system', content: systemPrompt }]);
+    const toolsTokens = estimateToolSchemaTokens(tools);
+    const fixedOverheadTokens = systemTokens + toolsTokens;
+    const targetTokens = Math.max(1, Math.floor(provider.contextLimits.maxInputTokens * 0.4));
+    const desiredSummaryBudget = clampIntegerValue(Math.floor(targetTokens * 0.05), 512, 12_000);
+    const recentBudget = Math.max(0, targetTokens - fixedOverheadTokens - desiredSummaryBudget);
     const selection = selectCompactionBoundary(clientMessages, providerConversationMessages, recentBudget);
+    const preCompactionTokens = fixedOverheadTokens + estimateProviderMessagesTokens(providerConversationMessages);
     if (selection.source.length === 0) {
-      if (trigger === 'auto') {
+      if (trigger === 'auto' && preCompactionTokens > provider.contextLimits.maxInputTokens) {
         throw new AppError(
           409,
           'AI_CONTEXT_TOO_LARGE',
-          'The active context exceeds the automatic compaction threshold, but its minimal atomic turn cannot be compacted safely'
+          'The active context exceeds the model input limit, but its minimal atomic turn cannot be compacted safely'
         );
       }
       return {
@@ -2378,6 +2645,10 @@ export class AIService {
         sourceTokenEstimate: 0,
         resultTokenEstimate: 0,
         trigger,
+        preCompactionTokens,
+        reconstructedTokens: preCompactionTokens,
+        targetTokens,
+        targetAchieved: preCompactionTokens <= targetTokens,
       };
     }
     const compactBoundaryMessageId = selection.source.at(-1)?.id;
@@ -2401,10 +2672,15 @@ export class AIService {
       },
     ];
     assertProviderInputWithinLimits(messages, [], provider.contextLimits);
-    const summaryOutputBudget = clampIntegerValue(
-      Math.floor(provider.contextLimits.autoCompactTokenLimit * 0.05),
-      2_000,
-      12_000
+    const targetSummaryCapacity = targetTokens - fixedOverheadTokens - selection.recentTokens;
+    const softSummaryCapacity =
+      provider.contextLimits.autoCompactTokenLimit - fixedOverheadTokens - selection.recentTokens;
+    const summaryOutputBudget = Math.max(
+      256,
+      Math.min(
+        desiredSummaryBudget,
+        Math.max(256, targetSummaryCapacity >= 256 ? targetSummaryCapacity : softSummaryCapacity)
+      )
     );
 
     let summary = '';
@@ -2427,12 +2703,6 @@ export class AIService {
       );
     }
 
-    const systemPrompt = await this.buildSystemPrompt(user, pageContext, conversationId);
-    const discoveredToolsets = mergeToolsets(
-      (await this.getConversationDiscoveredToolsets(user, conversationId)) ?? [],
-      inferDiscoveredToolsetsFromMessages(selection.recent)
-    );
-    const tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
     const reconstructedMessages = [
       { role: 'system', content: systemPrompt },
       { role: 'assistant', content: cleanedSummary },
@@ -2458,6 +2728,10 @@ export class AIService {
       sourceTokenEstimate: selection.sourceTokens,
       resultTokenEstimate,
       trigger,
+      preCompactionTokens,
+      reconstructedTokens,
+      targetTokens,
+      targetAchieved: reconstructedTokens <= targetTokens,
     };
   }
 
@@ -2499,16 +2773,13 @@ export class AIService {
 
     const systemPrompt = await this.buildSystemPrompt(user, pageContext, conversationId);
     const inferredToolsets = inferDiscoveredToolsetsFromMessages(clientMessages);
-    let discoveredToolsets = mergeToolsets(
-      (await this.getConversationDiscoveredToolsets(user, conversationId)) ?? [],
-      inferredToolsets
-    );
-    if (inferredToolsets.length > 0) {
-      await this.persistInferredToolsets(user, conversationId, inferredToolsets);
-    }
+    let discoveredToolsets = mergeToolsets([], inferredToolsets);
+    await this.persistInferredToolsets(user, conversationId, discoveredToolsets);
     let tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
 
-    let runtimeMessages = clientMessages.filter((message) => message.role !== 'system');
+    let runtimeMessages = clientMessages.filter(
+      (message) => message.role !== 'system' || message.hiddenSystemEvent === true
+    );
     const buildProviderMessages = async () => [
       { role: 'system', content: systemPrompt },
       ...(await Promise.all(runtimeMessages.map((message) => this.toProviderMessage(user, message, config)))),
@@ -2518,6 +2789,7 @@ export class AIService {
     const maxRounds = config.maxToolRounds;
     let roundsSinceComment = 0;
     let commentRepairAttempts = 0;
+    let runLanguageLocked = hasRunLanguageLock(runtimeMessages);
 
     while (true) {
       if (signal.aborted) return;
@@ -2526,7 +2798,12 @@ export class AIService {
 
       if (autoCompactContext) {
         try {
+          const previousCompactEpoch = latestCompactEpoch(runtimeMessages);
           runtimeMessages = await autoCompactContext(runtimeMessages);
+          if (latestCompactEpoch(runtimeMessages) > previousCompactEpoch) {
+            discoveredToolsets = [];
+            tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
+          }
         } catch (error) {
           if (error instanceof AppError && error.code === 'AI_CONTEXT_TOO_LARGE') {
             yield { type: 'context_blocked', requestId, reason: error.message };
@@ -2536,6 +2813,7 @@ export class AIService {
           throw error;
         }
       }
+      if (runLanguageLocked) ensureRuntimeLanguageLock(runtimeMessages);
       const commentRequired = roundsSinceComment >= maxRounds;
       const activeTools = commentRequired ? commentToolFrom(tools) : tools;
       if (commentRequired && activeTools.length === 0) {
@@ -2592,6 +2870,8 @@ export class AIService {
           const comment = contentBuffer.trim();
           if (comment) {
             runtimeMessages.push({ role: 'assistant', content: comment });
+            ensureRuntimeLanguageLock(runtimeMessages);
+            runLanguageLocked = true;
             yield { type: 'assistant_comment', requestId, content: comment };
             roundsSinceComment = 0;
             commentRepairAttempts = 0;
@@ -2636,6 +2916,7 @@ export class AIService {
         const result = this.processCommentToolCalls({ parsedToolCalls, messages, runtimeMessages, requestId });
         for (const event of result.events) yield event;
         if (result.accepted) {
+          runLanguageLocked = true;
           roundsSinceComment = 0;
           commentRepairAttempts = 0;
         } else {
@@ -2708,8 +2989,11 @@ export class AIService {
           return;
         }
         if (tc.name === 'discover_tools') {
-          discoveredToolsets = mergeToolsets(discoveredToolsets ?? [], discoveredToolsetsFromResult(result.result));
-          tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
+          const activatedToolsets = discoveredToolsetsFromResult(result.result);
+          if (activatedToolsets) {
+            discoveredToolsets = mergeToolsets([], activatedToolsets);
+            tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
+          }
         }
         const resourceReferences = await this.toolResourceReferences(
           tc.name,
@@ -2824,6 +3108,10 @@ export class AIService {
       }
 
       // Continue to next round (LLM will see tool results)
+      if (contentBuffer.trim()) {
+        ensureRuntimeLanguageLock(runtimeMessages);
+        runLanguageLocked = true;
+      }
     }
   }
 
@@ -2849,10 +3137,30 @@ export class AIService {
     selectedModel?: string,
     selectedReasoningEffort?: string,
     approvalDecisions: Record<string, boolean> = {},
-    receivePendingSteers?: ReceivePendingSteersHook
+    receivePendingSteers?: ReceivePendingSteersHook,
+    precomputedResult?: {
+      result: Record<string, unknown>;
+      error?: string;
+      rejected?: boolean;
+    }
   ): AsyncGenerator<WSServerMessage> {
     let continuationProvider: AIProviderSession | undefined;
-    if (toolName === 'ask_question') {
+    if (precomputedResult) {
+      pendingMessages.push({
+        role: 'tool',
+        tool_call_id: toolCallId,
+        content: safeStringify(precomputedResult.result),
+      });
+      yield {
+        type: 'tool_result',
+        requestId,
+        id: toolCallId,
+        name: toolName,
+        result: precomputedResult.result,
+        ...(precomputedResult.error ? { error: precomputedResult.error } : {}),
+        ...(precomputedResult.rejected ? { rejected: true } : {}),
+      };
+    } else if (toolName === 'ask_question') {
       // Batch answers: { toolCallId: answer, ... }
       const allAnswers: Record<string, string> = { ...answers };
       if (answer) allAnswers[toolCallId] = answer;
@@ -3048,6 +3356,9 @@ export class AIService {
     const { config } = provider;
 
     pendingMessages = orderLatestToolRoundResults(pendingMessages);
+    if (latestToolRoundHasUserVisibleAssistantText(pendingMessages)) {
+      ensureProviderLanguageLock(pendingMessages);
+    }
     let discoveredToolsets = await this.getConversationDiscoveredToolsets(user, conversationId);
     let tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
     let runtimeMessages = providerMessagesToClientMessages(pendingMessages);
@@ -3062,6 +3373,7 @@ export class AIService {
     const maxRounds = config.maxToolRounds;
     let roundsSinceComment = 0;
     let commentRepairAttempts = 0;
+    let runLanguageLocked = hasRunLanguageLock(runtimeMessages);
     while (true) {
       if (signal.aborted) return;
 
@@ -3069,7 +3381,12 @@ export class AIService {
 
       if (autoCompactContext) {
         try {
+          const previousCompactEpoch = latestCompactEpoch(runtimeMessages);
           runtimeMessages = await autoCompactContext(runtimeMessages);
+          if (latestCompactEpoch(runtimeMessages) > previousCompactEpoch) {
+            discoveredToolsets = [];
+            tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
+          }
         } catch (error) {
           if (error instanceof AppError && error.code === 'AI_CONTEXT_TOO_LARGE') {
             yield { type: 'context_blocked', requestId, reason: error.message };
@@ -3079,6 +3396,7 @@ export class AIService {
           throw error;
         }
       }
+      if (runLanguageLocked) ensureRuntimeLanguageLock(runtimeMessages);
       const commentRequired = roundsSinceComment >= maxRounds;
       const activeTools = commentRequired ? commentToolFrom(tools) : tools;
       if (commentRequired && activeTools.length === 0) {
@@ -3134,6 +3452,8 @@ export class AIService {
           const comment = contentBuffer.trim();
           if (comment) {
             runtimeMessages.push({ role: 'assistant', content: comment });
+            ensureRuntimeLanguageLock(runtimeMessages);
+            runLanguageLocked = true;
             yield { type: 'assistant_comment', requestId, content: comment };
             roundsSinceComment = 0;
             commentRepairAttempts = 0;
@@ -3168,6 +3488,7 @@ export class AIService {
         const result = this.processCommentToolCalls({ parsedToolCalls, messages, runtimeMessages, requestId });
         for (const event of result.events) yield event;
         if (result.accepted) {
+          runLanguageLocked = true;
           roundsSinceComment = 0;
           commentRepairAttempts = 0;
         } else {
@@ -3238,8 +3559,11 @@ export class AIService {
           return;
         }
         if (tc.name === 'discover_tools') {
-          discoveredToolsets = mergeToolsets(discoveredToolsets ?? [], discoveredToolsetsFromResult(result.result));
-          tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
+          const activatedToolsets = discoveredToolsetsFromResult(result.result);
+          if (activatedToolsets) {
+            discoveredToolsets = mergeToolsets([], activatedToolsets);
+            tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
+          }
         }
         const resourceReferences = await this.toolResourceReferences(
           tc.name,
@@ -3349,6 +3673,11 @@ export class AIService {
         } as any;
         return;
       }
+
+      if (contentBuffer.trim()) {
+        ensureRuntimeLanguageLock(runtimeMessages);
+        runLanguageLocked = true;
+      }
     }
   }
 
@@ -3395,8 +3724,11 @@ export class AIService {
     pageContext?: PageContext,
     conversationId?: string,
     selectedModel?: string,
-    selectedReasoningEffort?: string
+    selectedReasoningEffort?: string,
+    clientMessages: ChatMessage[] = []
   ): Promise<{
+    chatTokens: number;
+    messageCount: number;
     systemTokens: number;
     toolsTokens: number;
     totalOverhead: number;
@@ -3409,6 +3741,7 @@ export class AIService {
     const storedConfig = await this.settingsService.getConfig();
     let config = storedConfig;
     let reasoningEffort: string = storedConfig.reasoningEffort;
+    let contextLimits = directProviderContextLimits(storedConfig.maxContextTokens, storedConfig.maxCompletionTokens);
     if (storedConfig.providerType === 'gateway_inference') {
       const provider = await this.resolveProviderSession(user, {
         requestId: `context-estimate:${conversationId ?? 'new'}`,
@@ -3418,21 +3751,31 @@ export class AIService {
         signal: new AbortController().signal,
       });
       config = provider.config;
+      contextLimits = provider.contextLimits;
       reasoningEffort = provider.reasoningEffort ?? 'none';
     }
     const { prompt, breakdown } = await this.buildSystemPromptDetailed(user, pageContext, conversationId);
-    const discoveredToolsets = await this.getConversationDiscoveredToolsets(user, conversationId);
+    const discoveredToolsets = mergeToolsets(
+      (await this.getConversationDiscoveredToolsets(user, conversationId)) ?? [],
+      inferDiscoveredToolsetsFromMessages(clientMessages)
+    );
     const tools = await this.buildModelTools(config, user, discoveredToolsets, conversationId);
+    const providerMessages = await Promise.all(
+      clientMessages.map((message) => this.toProviderMessage(user, message, config))
+    );
+    const chatTokens = estimateProviderMessagesTokens(providerMessages);
     const systemTokens = estimateTextTokens(prompt);
     const toolsTokens = estimateToolSchemaTokens(tools);
     const totalOverhead = systemTokens + toolsTokens;
     const toolBreakdown = estimateToolBreakdown(tools);
 
     return {
+      chatTokens,
+      messageCount: clientMessages.length,
       systemTokens,
       toolsTokens,
       totalOverhead,
-      limit: config.maxContextTokens,
+      limit: contextLimits.autoCompactTokenLimit,
       reasoningEffort,
       toolCount: tools.length,
       systemBreakdown: breakdown,

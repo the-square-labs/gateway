@@ -225,11 +225,6 @@ export function InferenceSetupWizard({
             reasoningEffortMap: Object.fromEntries(
               source.model.reasoningEfforts.map((effort) => [effort, effort])
             ),
-            manualMetadata: {
-              contextWindow,
-              maxInputTokens,
-              maxOutputTokens,
-            },
             ...(selectedSourceNeedsPricing ? { pricing: source.model.pricing! } : {}),
           },
         ],

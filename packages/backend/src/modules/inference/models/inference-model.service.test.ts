@@ -53,7 +53,12 @@ describe('inference model publication validation', () => {
   });
 
   it('allows manual source IDs only after discovery is unavailable', () => {
-    const metadata = { contextWindow: 100, maxInputTokens: 80, maxOutputTokens: 20 };
+    const metadata = {
+      contextWindow: 100,
+      maxInputTokens: 80,
+      maxOutputTokens: 20,
+      autoCompactTokenLimit: 72,
+    };
     expect(__testOnly.manualSourceAllowed('success', '/models', metadata)).toBe(false);
     expect(__testOnly.manualSourceAllowed('error', '/models', metadata)).toBe(true);
     expect(__testOnly.manualSourceAllowed('success', undefined, metadata)).toBe(true);
@@ -65,6 +70,64 @@ describe('inference model publication validation', () => {
       origin: 'discovery',
       providerFamily: 'openai',
       technical,
+    });
+  });
+
+  it('uses current discovered limits instead of a stale model snapshot', () => {
+    expect(
+      __testOnly.effectiveTechnicalLimits(
+        [
+          {
+            contextWindow: 1_050_000,
+            maxInputTokens: 922_000,
+            maxOutputTokens: 128_000,
+            autoCompactTokenLimit: 829_800,
+          },
+        ],
+        {
+          contextWindow: 384_000,
+          maxInputTokens: 384_000,
+          maxOutputTokens: 128_000,
+          autoCompactTokenLimit: 356_000,
+        }
+      )
+    ).toEqual({
+      contextWindow: 1_050_000,
+      maxInputTokens: 922_000,
+      maxOutputTokens: 128_000,
+      autoCompactTokenLimit: 829_800,
+    });
+  });
+
+  it('keeps explicit source overrides and clamps compaction to the effective input limit', () => {
+    expect(
+      __testOnly.effectiveTechnicalLimits(
+        [
+          {
+            contextWindow: 384_000,
+            maxInputTokens: 320_000,
+            maxOutputTokens: null,
+            autoCompactTokenLimit: 356_000,
+          },
+          {
+            contextWindow: 1_050_000,
+            maxInputTokens: 922_000,
+            maxOutputTokens: 128_000,
+            autoCompactTokenLimit: 829_800,
+          },
+        ],
+        {
+          contextWindow: 1,
+          maxInputTokens: 1,
+          maxOutputTokens: null,
+          autoCompactTokenLimit: 1,
+        }
+      )
+    ).toEqual({
+      contextWindow: 384_000,
+      maxInputTokens: 320_000,
+      maxOutputTokens: 128_000,
+      autoCompactTokenLimit: 320_000,
     });
   });
 
