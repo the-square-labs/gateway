@@ -1233,7 +1233,7 @@ AI Workspace settings control the provider, request limits, tool exposure, web s
 
 ## Tool Access
 - disabledTools: exact tool names hidden from the assistant.
-- webSearchProvider, webSearchBaseUrl, and webSearchApiKey: provider selection, optional provider URL, and secret replacement for web search.
+- webSearchProvider, webSearchBaseUrl, and webSearchApiKey: provider selection, optional provider URL, and secret replacement for web search. Tavily is the default; Brave, Serper, Exa, and SearXNG are also supported. API-backed providers require a stored key, while SearXNG requires its base URL. The web_search tool is exposed only when the effective settings configure the selected provider.
 - sandboxEnabled and sandboxDefaultTier: sandbox runner exposure and default tier.
 
 ## Sandbox Runner

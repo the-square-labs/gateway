@@ -152,7 +152,7 @@ const SYSTEM_SKILLS: readonly AIAgentSkill[] = [
     id: 'system:ai-workspace-administration',
     name: 'AI Workspace administration',
     description:
-      'Configure AI Workspace providers, models, reasoning defaults, user selection, web search, custom instructions, and skills.',
+      'Configure AI Workspace providers, models, reasoning defaults, user selection, custom instructions, and skills.',
     source: 'system',
     enabled: true,
     createdAt: null,
@@ -169,6 +169,7 @@ const SYSTEM_SKILLS: readonly AIAgentSkill[] = [
 - Preserve the organization custom system prompt unless the user explicitly asks to edit it. It remains prepended independently of skills.
 - System skills are immutable code-owned instructions. Enabled user skills are shared organization guidance; creating, editing, enabling, disabling, or deleting them requires the dedicated skill-management permission. Never claim a disabled user skill is available at runtime.
 - Keep skill descriptions useful for selection and instructions procedural. User skills cannot override base identity, security, authorization, permissions, or approval rules.
+- When current settings report web search as configured, the assistant receives the provider-independent web_search tool. Tavily is the default provider; Brave, Serper, Exa, and SearXNG are also supported. API-backed providers require a stored key, while SearXNG requires its base URL. Do not claim web search is available unless the effective settings enable it.
 - Verify declared model capabilities before enabling or relying on images, tools, reasoning, web search, or other optional inputs. A model name is not capability evidence.
 - When changing provider type, preserve the inactive provider's stored values as supported by Gateway. Update only the selected mode's intended fields and avoid clearing credentials as a side effect.
 
