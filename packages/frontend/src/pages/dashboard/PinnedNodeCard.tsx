@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { HealthBars } from "@/components/ui/health-bars";
 import { StatCard as MetricCard } from "@/components/ui/stat-card";
+import { nodeTypeLabel } from "@/lib/node-appearance";
 import { nodeRoute } from "@/lib/resource-routes";
 import { formatBytes } from "@/lib/utils";
 import type { Node, NodeHealthReport } from "@/types";
@@ -73,7 +74,7 @@ export function PinnedNodeCard({ node, liveHealth, healthHistory }: PinnedNodeCa
         className="border-r border-border p-4 space-y-2 overflow-hidden cursor-pointer hover:bg-accent transition-colors"
       >
         <p className="text-xs text-muted-foreground truncate">
-          {node.hostname}, {node.type}
+          {node.hostname}, {nodeTypeLabel(node.type)}
         </p>
         <p className="text-xl font-bold truncate">{node.displayName || node.hostname}</p>
         <div className="flex items-center gap-2">

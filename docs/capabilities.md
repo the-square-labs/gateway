@@ -6,22 +6,23 @@ Gateway is an AI-first but not AI-dependent self-hosted infrastructure control p
 
 Feature availability and plan limits are documented separately in [Plans and licensing](licensing.md). `Coming soon` and `In development` capabilities are not generally available runtime features until released.
 
-## Reverse Proxy
+## Ingress
 
-Gateway manages nginx through the `nginx-daemon` installed on each proxy node.
+Gateway uses managed nginx nodes as public ingress. The Ingress workspace is split into Domains, Routes, and SSL Certificates so placement, traffic forwarding, and TLS remain independently manageable while their relationship stays explicit.
 
-Core proxy workflows:
+Core ingress workflows:
 
-- Create, edit, order, and delete proxy hosts.
-- Manage proxy hosts across multiple nginx nodes.
+- Assign every registered domain to one eligible nginx ingress node with a detected public service address.
+- Create, edit, order, and delete routes. The REST API and persisted model retain the `proxy-host` name for compatibility.
+- Keep each registered domain and every route using it on the same nginx node; Gateway rejects cross-node combinations.
 - Configure SSL termination, manual upstream targets, or managed Docker container/deployment upstreams with published-port validation.
 - Connect managed Docker workloads to nginx through Gateway Secure Links without exposing the workload port as a normal public management endpoint.
-- Put an enabled managed proxy host into maintenance mode to return HTTP 503, pause managed health checks, preserve its TLS paths, and expose maintenance state to alerts and status pages.
+- Put an enabled managed route into maintenance mode to return HTTP 503, pause managed health checks, preserve its TLS paths, and expose maintenance state to alerts and status pages.
 - Configure WebSocket support, custom headers, rewrites, and proxy behavior.
-- Create redirect hosts and 404 hosts.
-- Group proxy hosts into folders and reorder them with drag-and-drop.
+- Create proxy, redirect, and 404 routes.
+- Group routes into folders and reorder them with drag-and-drop.
 - Configure access lists with IP rules and basic authentication.
-- Use nginx config templates with variables for repeatable host configuration.
+- Use nginx config templates with variables for repeatable route configuration.
 - View real-time nginx logs and node stats.
 
 Health checks:
@@ -35,7 +36,7 @@ Nginx integration:
 
 - `managed` mode lets Gateway own a known-good base nginx config.
 - `integrate` mode keeps an existing host nginx config and injects Gateway-managed includes.
-- ACME HTTP-01 challenge paths can be managed for proxy hosts.
+- ACME HTTP-01 challenges are deployed only to the ingress node assigned to the registered domain. That node must be online, publicly reachable on port 80, and have a public service address.
 
 ## Docker
 
@@ -85,13 +86,13 @@ ACME SSL:
 - Issue Let's Encrypt certificates.
 - Use HTTP-01 and DNS-01 challenge flows.
 - Renew certificates on a configurable schedule.
-- Attach certificates to proxy hosts.
+- Attach certificates to routes. Gateway keeps the canonical certificate material and deploys node-local replicas only where enabled TLS routes use it.
 
 Uploaded SSL:
 
 - Upload existing certificates.
 - Track expiration.
-- Use uploaded certificates for proxy hosts.
+- Use uploaded certificates for routes.
 
 Internal PKI:
 
@@ -105,15 +106,18 @@ Private key material is encrypted at rest with the configured `PKI_MASTER_KEY`. 
 
 ## Domains
 
-Gateway keeps a central registry of domains used by the system.
+Gateway keeps a central registry of public hostnames and their ingress placement.
 
 Domain workflows:
 
-- Track domains independently from proxy hosts and certificates.
+- Track domains independently from routes and certificates.
+- Use either external DNS or a Cloudflare connector. External DNS remains operator-managed; Cloudflare-managed domains can have their A/AAAA records created and reconciled automatically.
+- Select an eligible nginx ingress node for every domain. Nodes without a detected public service address are not eligible.
 - Validate DNS records such as A, AAAA, CNAME, CAA, MX, and TXT.
-- Track domain usage across proxy hosts and SSL certificates.
+- Track domain usage across routes and SSL certificates.
 - Surface DNS status in the UI.
 - Use scheduled DNS checks for ongoing validation.
+- Move a domain and its routes between eligible nginx nodes through the explicit ingress migration workflow. Cloudflare-managed DNS is updated during cutover; external DNS requires the operator to update records before completion.
 
 ## Databases
 
@@ -177,7 +181,7 @@ Gateway supports four daemon types:
 
 | Type | Daemon | Purpose |
 |------|--------|---------|
-| nginx | `nginx-daemon` | Reverse proxy management. |
+| nginx | `nginx-daemon` | Public ingress, routes, TLS termination, access lists, nginx configuration, logs, and stats. |
 | docker | `docker-daemon` | Docker container and deployment management. |
 | databases | `docker-daemon` | Restricted profile for Gateway-managed Postgres, Redis, and ClickHouse instances. |
 | monitoring | `monitoring-daemon` | Host metrics without nginx or Docker control. |
@@ -226,7 +230,7 @@ Gateway includes connector and operational communication surfaces:
 - GitLab connectors with project/group allowlists, scheduled synchronization, repository and CI operations, variables, webhooks, registry access, and sandbox clone support.
 - Webhook notification targets with custom headers, templates, HMAC signing, retries, and delivery history.
 - SIEM audit export, when enabled in Gateway settings, to up to five active HTTPS collectors, with encrypted bearer, HMAC-SHA256, or validated custom-header authentication, durable batched delivery, retry history, and least-privilege `audit:siem:*` scopes.
-- Threshold and event alert rules for nodes, containers, proxies, certificates, PostgreSQL, and Redis resources. GPU node rules evaluate only metrics reported by each physical device and can target a selected GPU on one scoped node.
+- Threshold and event alert rules for nodes, containers, routes, certificates, PostgreSQL, and Redis resources. GPU node rules evaluate only metrics reported by each physical device and can target a selected GPU on one scoped node.
 - Public status pages with managed services, incidents, incident updates, proxy templates, and preview.
 
 Connector credentials are encrypted at rest. GitLab access is split between connector administration and per-user credentials unless the caller has the explicit system credential scope.

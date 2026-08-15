@@ -220,7 +220,7 @@ export function ProxyHostDetail({
           usePinnedProxiesStore.getState().removePin(id);
         }
         if (!silent) {
-          toast.error("Failed to load proxy host");
+          toast.error("Failed to load route");
           navigate("/proxy-hosts");
         }
       } finally {
@@ -702,9 +702,8 @@ export function ProxyHostDetail({
     const deletingHostId = host.id;
     const ok = await confirmAction(
       {
-        title: "Delete Proxy Host",
-        description:
-          "Are you sure you want to delete this proxy host? This action cannot be undone.",
+        title: "Delete Route",
+        description: "Are you sure you want to delete this route? This action cannot be undone.",
         confirmLabel: "Delete",
       },
       async () => {
@@ -712,7 +711,7 @@ export function ProxyHostDetail({
           await api.deleteProxyHost(deletingHostId);
           return true;
         } catch (err) {
-          toast.error(err instanceof Error ? err.message : "Failed to delete proxy host");
+          toast.error(err instanceof Error ? err.message : "Failed to delete route");
           return false;
         }
       }
@@ -731,7 +730,7 @@ export function ProxyHostDetail({
       const ok = await confirm({
         title: "Enable Maintenance Mode",
         description:
-          "All requests to this proxy host will receive HTTP 503 and managed health checks will pause until maintenance is disabled.",
+          "All requests to this route will receive HTTP 503 and managed health checks will pause until maintenance is disabled.",
         confirmLabel: "Enable Maintenance",
       });
       if (!ok) return;
@@ -937,7 +936,7 @@ export function ProxyHostDetail({
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="min-w-0 basis-full break-all text-2xl font-bold sm:basis-auto">
-                  {host.domainNames[0] || "Proxy Host"}
+                  {host.domainNames[0] || "Route"}
                 </h1>
                 <Badge
                   className="shrink-0"
@@ -1336,7 +1335,7 @@ export function ProxyHostDetail({
       <Dialog open={pinOpen} onOpenChange={setPinOpen}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Pin Proxy Host</DialogTitle>
+            <DialogTitle>Pin Route</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -1361,5 +1360,5 @@ export function ProxyHostDetail({
 }
 
 function ProxyHostDetailSkeleton() {
-  return <DetailPageSkeleton label="Loading proxy host" />;
+  return <DetailPageSkeleton label="Loading route" />;
 }

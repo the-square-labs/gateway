@@ -24,6 +24,16 @@ export const domainDnsOwnershipEnum = pgEnum('domain_dns_ownership', [
   'matched_existing',
   'overwritten',
 ]);
+export const domainCloudflareMigrationStatusEnum = pgEnum('domain_cloudflare_migration_status', [
+  'pending',
+  'migrated',
+  'zone_unavailable',
+  'zone_ambiguous',
+  'ingress_unavailable',
+  'dns_conflict',
+  'ignored',
+  'error',
+]);
 
 export interface DnsRecords {
   a: string[];
@@ -57,6 +67,16 @@ export const domains = pgTable(
     dnsProxied: boolean('dns_proxied'),
     nginxNodeId: uuid('nginx_node_id').references(() => nodes.id, { onDelete: 'restrict' }),
     pendingDnsTargetIp: varchar('pending_dns_target_ip', { length: 45 }),
+    ingressMigrationId: uuid('ingress_migration_id'),
+    ingressMigrationSourceNodeId: uuid('ingress_migration_source_node_id').references(() => nodes.id, {
+      onDelete: 'set null',
+    }),
+    ingressMigrationStatus: varchar('ingress_migration_status', { length: 32 }),
+    ingressMigrationError: text('ingress_migration_error'),
+    ingressMigrationProxyHostIds: jsonb('ingress_migration_proxy_host_ids').$type<string[]>(),
+    ingressMigrationStartedAt: timestamp('ingress_migration_started_at', { withTimezone: true }),
+    cloudflareMigrationStatus: domainCloudflareMigrationStatusEnum('cloudflare_migration_status'),
+    cloudflareMigrationCheckedAt: timestamp('cloudflare_migration_checked_at', { withTimezone: true }),
     // System flag — locked domains cannot be deleted (e.g. management domain)
     isSystem: boolean('is_system').notNull().default(false),
     folderId: uuid('folder_id').references((): AnyPgColumn => domainFolders.id, { onDelete: 'set null' }),

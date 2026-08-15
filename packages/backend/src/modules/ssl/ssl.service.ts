@@ -114,13 +114,13 @@ export class SSLService {
   // ACME certificate request
   // ---------------------------------------------------------------------------
 
-  async requestACMECert(input: RequestACMECertInput, userId: string) {
+  async requestACMECert(input: RequestACMECertInput, userId: string, contactEmail?: string) {
     const isStaging = input.provider === 'letsencrypt-staging';
     const name = input.domains[0];
 
     if (input.challengeType === 'http-01') {
       // Full automatic flow
-      const result = await this.acmeService.requestCertHTTP01(input.domains, isStaging);
+      const result = await this.acmeService.requestCertHTTP01(input.domains, isStaging, contactEmail);
 
       // Encrypt private key before storing
       const encrypted = this.cryptoService.encryptPrivateKey(result.privateKeyPem);
@@ -131,6 +131,7 @@ export class SSLService {
         encrypted: acmeKeyEncrypted.encryptedPrivateKey,
         encryptedDek: acmeKeyEncrypted.encryptedDek,
         dekIv: acmeKeyEncrypted.dekIv,
+        contactEmail,
       });
 
       const [cert] = await this.db
@@ -193,7 +194,7 @@ export class SSLService {
     }
 
     // DNS-01: start flow, return challenges
-    const result = await this.acmeService.requestCertDNS01Start(input.domains, isStaging);
+    const result = await this.acmeService.requestCertDNS01Start(input.domains, isStaging, contactEmail);
 
     // Encrypt ACME account key before storing
     const dns01AcmeKeyEncrypted = this.cryptoService.encryptPrivateKey(result.accountKey);
@@ -201,6 +202,7 @@ export class SSLService {
       encrypted: dns01AcmeKeyEncrypted.encryptedPrivateKey,
       encryptedDek: dns01AcmeKeyEncrypted.encryptedDek,
       dekIv: dns01AcmeKeyEncrypted.dekIv,
+      contactEmail,
     });
 
     // Save pending cert with ACME state
@@ -368,7 +370,8 @@ export class SSLService {
         decryptedAccountKey,
         cert.acmeOrderUrl,
         cert.domainNames,
-        dns01IsStaging
+        dns01IsStaging,
+        typeof acmeKeyBlob.contactEmail === 'string' ? acmeKeyBlob.contactEmail : undefined
       );
 
       // Encrypt private key
@@ -669,7 +672,11 @@ export class SSLService {
 
       if (cert.acmeChallengeType === 'http-01') {
         const renewIsStaging = cert.acmeProvider === 'letsencrypt-staging';
-        result = await this.acmeService.requestCertHTTP01(cert.domainNames, renewIsStaging);
+        result = await this.acmeService.requestCertHTTP01(
+          cert.domainNames,
+          renewIsStaging,
+          this.getStoredAcmeContactEmail(cert.acmeAccountKey)
+        );
       } else {
         const dnsRenewal = await this.startDNS01Renewal(cert, userId);
         return dnsRenewal;
@@ -702,6 +709,7 @@ export class SSLService {
           encrypted: renewAcmeKeyEncrypted.encryptedPrivateKey,
           encryptedDek: renewAcmeKeyEncrypted.encryptedDek,
           dekIv: renewAcmeKeyEncrypted.dekIv,
+          contactEmail: this.getStoredAcmeContactEmail(cert.acmeAccountKey),
         });
       }
 
@@ -855,13 +863,15 @@ export class SSLService {
           })
         : null;
     const renewIsStaging = cert.acmeProvider === 'letsencrypt-staging';
-    const result = await this.acmeService.requestCertDNS01Start(cert.domainNames, renewIsStaging);
+    const contactEmail = this.getStoredAcmeContactEmail(cert.acmeAccountKey);
+    const result = await this.acmeService.requestCertDNS01Start(cert.domainNames, renewIsStaging, contactEmail);
 
     const acmeKeyEncrypted = this.cryptoService.encryptPrivateKey(result.accountKey);
     const acmeAccountKeyBlob = JSON.stringify({
       encrypted: acmeKeyEncrypted.encryptedPrivateKey,
       encryptedDek: acmeKeyEncrypted.encryptedDek,
       dekIv: acmeKeyEncrypted.dekIv,
+      contactEmail,
     });
 
     const cloudflareChallenges = await this.tryProvisionCloudflareDnsChallenges(
@@ -1112,9 +1122,39 @@ export class SSLService {
     return domain.trim().toLowerCase().replace(/^\*\./, '');
   }
 
+  private getStoredAcmeContactEmail(accountKeyBlob: string | null): string | undefined {
+    if (!accountKeyBlob) return undefined;
+    try {
+      const parsed = JSON.parse(accountKeyBlob) as { contactEmail?: unknown };
+      return typeof parsed.contactEmail === 'string' && parsed.contactEmail.trim()
+        ? parsed.contactEmail.trim()
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Delete certificate
   // ---------------------------------------------------------------------------
+
+  async cancelPendingAcmeIssue(certId: string, userId: string) {
+    const cert = await this.db.query.sslCertificates.findFirst({
+      where: eq(sslCertificates.id, certId),
+      columns: { type: true, status: true, acmePendingOperation: true },
+    });
+
+    if (!cert) throw new AppError(404, 'SSL_CERT_NOT_FOUND', 'SSL certificate not found');
+    if (
+      cert.type !== 'acme' ||
+      cert.acmePendingOperation !== 'issue' ||
+      (cert.status !== 'pending' && cert.status !== 'error')
+    ) {
+      throw new AppError(409, 'ACME_REQUEST_NOT_PENDING', 'Only a pending ACME certificate request can be cancelled');
+    }
+
+    await this.deleteCert(certId, userId);
+  }
 
   async deleteCert(certId: string, userId: string) {
     const cert = await this.db.query.sslCertificates.findFirst({

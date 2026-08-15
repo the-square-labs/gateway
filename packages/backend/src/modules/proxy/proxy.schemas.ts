@@ -162,7 +162,7 @@ export const CreateProxyHostSchema = z
     if (data.type !== 'proxy' && data.upstreamKind !== 'manual') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'Docker upstreams are only available for proxy hosts',
+        message: 'Docker upstreams are only available for proxy routes',
         path: ['upstreamKind'],
       });
     }

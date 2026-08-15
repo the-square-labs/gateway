@@ -241,7 +241,8 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
       properties: {
         category: {
           type: 'string',
-          description: 'One explicit Gateway tool category to activate. Legacy shorthand for categories with one item.',
+          description:
+            'One explicit Gateway tool category to activate, for example Docker, Logging, SSL Certificates, Administration, or Ingress. Legacy shorthand for categories with one item.',
         },
         categories: {
           type: 'array',
@@ -411,7 +412,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: 'find_resource',
     description:
-      'Global resource search and type-scoped listing. Use this FIRST when the user names a resource but you need its ID, nodeId, or exact type. When the user asks to list resources of a type, pass an empty query with that type, for example { query: "", types: ["docker_container"] }. It searches across readable nodes, Docker containers/images/volumes/networks, proxy hosts, certificates, domains, logging resources, databases, notifications, and more. Do not manually list every node and then scan each node when find_resource can search the resource type directly.',
+      'Global resource search and type-scoped listing. Use this FIRST when the user names a resource but you need its ID, nodeId, or exact type. When the user asks to list resources of a type, pass an empty query with that type, for example { query: "", types: ["docker_container"] }. It searches across readable nodes, Docker containers/images/volumes/networks, ingress routes (proxy_host resource type), certificates, domains, logging resources, databases, notifications, and more. Do not manually list every node and then scan each node when find_resource can search the resource type directly.',
     parameters: {
       type: 'object',
       properties: {
@@ -589,10 +590,10 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   // ── Folders ──
   ...FOLDER_AI_TOOLS,
 
-  // ── Reverse Proxy ──
+  // ── Ingress Routes ──
   {
     name: 'list_proxy_hosts',
-    description: 'List all reverse proxy hosts with their status, domains, and SSL configuration.',
+    description: 'List all ingress routes with their status, domains, node placement, and TLS configuration.',
     parameters: {
       type: 'object',
       properties: {
@@ -602,34 +603,38 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
       },
     },
     destructive: false,
-    category: 'Reverse Proxy',
+    category: 'Ingress',
     requiredScope: 'proxy:view',
     invalidateStores: [],
   },
   {
     name: 'get_proxy_host',
-    description: 'Get detailed configuration of a specific proxy host.',
+    description: 'Get detailed configuration of a specific ingress route.',
     parameters: {
       type: 'object',
       properties: {
-        proxyHostId: { type: 'string', description: 'Proxy host UUID' },
+        proxyHostId: { type: 'string', description: 'Route UUID (proxy-host API resource)' },
       },
       required: ['proxyHostId'],
     },
     destructive: false,
-    category: 'Reverse Proxy',
+    category: 'Ingress',
     requiredScope: 'proxy:view',
     invalidateStores: [],
   },
   {
     name: 'create_proxy_host',
-    description: 'Create a new reverse proxy host configuration.',
+    description: 'Create a new ingress route configuration on a selected nginx node.',
     parameters: {
       type: 'object',
       properties: {
         type: { type: 'string', enum: ['proxy', 'redirect', '404'], description: 'Host type (default: proxy)' },
-        nodeId: { type: 'string', description: 'Node UUID to deploy this proxy host on (required)' },
-        domainNames: { type: 'array', items: { type: 'string' }, description: 'Domain names for this host' },
+        nodeId: { type: 'string', description: 'Nginx ingress node UUID to deploy this route on (required)' },
+        domainNames: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Domain names for this route; registered domains must use the same nginx node',
+        },
         forwardHost: { type: 'string', description: 'Backend host to proxy to (for proxy type)' },
         forwardPort: { type: 'number', description: 'Backend port (for proxy type)' },
         forwardScheme: { type: 'string', enum: ['http', 'https'], description: 'Backend scheme (default: http)' },
@@ -686,7 +691,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
           description: 'URL rewrite rules applied before proxying',
         },
         accessListId: { type: 'string', description: 'Access list UUID for IP/auth restrictions' },
-        folderId: { type: 'string', description: 'Folder UUID for organizing this proxy host' },
+        folderId: { type: 'string', description: 'Folder UUID for organizing this route' },
         nginxTemplateId: { type: 'string', description: 'Custom nginx config template UUID' },
         templateVariables: { type: 'object', description: 'Variables for the nginx template (key-value pairs)' },
         healthCheckEnabled: { type: 'boolean', description: 'Enable backend health checks' },
@@ -704,23 +709,23 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
       required: ['nodeId', 'domainNames'],
     },
     destructive: true,
-    category: 'Reverse Proxy',
+    category: 'Ingress',
     requiredScope: 'proxy:create',
     invalidateStores: ['proxy'],
   },
   {
     name: 'update_proxy_host',
-    description: 'Update an existing proxy host configuration.',
+    description: 'Update an existing ingress route configuration.',
     parameters: {
       type: 'object',
       properties: {
-        proxyHostId: { type: 'string', description: 'Proxy host UUID' },
+        proxyHostId: { type: 'string', description: 'Route UUID (proxy-host API resource)' },
         type: {
           type: 'string',
           enum: ['proxy', 'redirect', '404'],
           description: 'Host type; raw is handled by raw tools',
         },
-        nodeId: { type: 'string', description: 'Node UUID to deploy this proxy host on' },
+        nodeId: { type: 'string', description: 'Nginx ingress node UUID to deploy this route on' },
         domainNames: { type: 'array', items: { type: 'string' }, description: 'Domain names' },
         forwardHost: { type: ['string', 'null'], description: 'Backend host; null clears it' },
         forwardPort: { type: ['number', 'null'], description: 'Backend port; null clears it' },
@@ -792,35 +797,35 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
           description: 'How to match the expected response body; null clears it',
         },
         healthCheckSlowThreshold: { type: ['number', 'null'], description: 'Nx average threshold; null clears it' },
-        enabled: { type: 'boolean', description: 'Enable/disable the host' },
+        enabled: { type: 'boolean', description: 'Enable or disable the route' },
       },
       required: ['proxyHostId'],
     },
     destructive: true,
-    category: 'Reverse Proxy',
+    category: 'Ingress',
     requiredScope: 'proxy:edit',
     invalidateStores: ['proxy'],
   },
   {
     name: 'delete_proxy_host',
-    description: 'Permanently delete a proxy host and its nginx configuration.',
+    description: 'Permanently delete an ingress route and its nginx configuration.',
     parameters: {
       type: 'object',
       properties: {
-        proxyHostId: { type: 'string', description: 'Proxy host UUID to delete' },
+        proxyHostId: { type: 'string', description: 'Route UUID to delete (proxy-host API resource)' },
       },
       required: ['proxyHostId'],
     },
     destructive: true,
-    category: 'Reverse Proxy',
+    category: 'Ingress',
     requiredScope: 'proxy:delete',
     invalidateStores: ['proxy'],
   },
 
-  // ── Proxy Host Folders ──
+  // ── Route Folders ──
   {
     name: 'create_proxy_folder',
-    description: 'Create a folder to organize proxy hosts.',
+    description: 'Create a folder to organize ingress routes.',
     parameters: {
       type: 'object',
       properties: {
@@ -830,29 +835,29 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
       required: ['name'],
     },
     destructive: true,
-    category: 'Reverse Proxy',
+    category: 'Ingress',
     requiredScope: 'proxy:folders:manage',
     invalidateStores: ['proxy'],
   },
   {
     name: 'move_hosts_to_folder',
-    description: 'Move one or more proxy hosts into a folder (or to root by passing null as folderId).',
+    description: 'Move one or more ingress routes into a folder (or to root by passing null as folderId).',
     parameters: {
       type: 'object',
       properties: {
-        hostIds: { type: 'array', items: { type: 'string' }, description: 'Proxy host UUIDs to move' },
+        hostIds: { type: 'array', items: { type: 'string' }, description: 'Route UUIDs to move' },
         folderId: { type: ['string', 'null'], description: 'Target folder UUID, or null to move to root (ungrouped)' },
       },
       required: ['hostIds', 'folderId'],
     },
     destructive: true,
-    category: 'Reverse Proxy',
+    category: 'Ingress',
     requiredScope: 'proxy:folders:manage',
     invalidateStores: ['proxy'],
   },
   {
     name: 'delete_proxy_folder',
-    description: 'Delete a proxy host folder. Hosts inside will be moved to root (ungrouped).',
+    description: 'Delete a route folder. Routes inside will be moved to root (ungrouped).',
     parameters: {
       type: 'object',
       properties: {
@@ -861,7 +866,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
       required: ['folderId'],
     },
     destructive: true,
-    category: 'Reverse Proxy',
+    category: 'Ingress',
     requiredScope: 'proxy:folders:manage',
     invalidateStores: ['proxy'],
   },
@@ -883,7 +888,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
       required: ['operation'],
     },
     destructive: true,
-    category: 'Reverse Proxy',
+    category: 'Ingress',
     requiredScope: 'proxy:templates:view',
     invalidateStores: ['proxy'],
   },
@@ -946,7 +951,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: 'link_internal_cert',
     description:
-      'Import a PKI certificate as an SSL certificate so it can be used with proxy hosts. This links an existing PKI certificate (from the Certificates table) into the SSL certificates pool. You MUST use this before assigning a PKI-issued cert to a proxy host.',
+      'Import a PKI certificate as an SSL certificate so it can be used with ingress routes. This links an existing PKI certificate (from the Certificates table) into the SSL certificates pool. You MUST use this before assigning a PKI-issued cert to a route.',
     parameters: {
       type: 'object',
       properties: {
@@ -1120,7 +1125,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   },
   {
     name: 'delete_access_list',
-    description: 'Delete an access list. Proxy hosts using it will no longer have access control.',
+    description: 'Delete an access list. Routes using it will no longer have access control.',
     parameters: {
       type: 'object',
       properties: {
@@ -1255,7 +1260,8 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   },
   {
     name: 'delete_node',
-    description: 'Delete a daemon node. The node must have no assigned proxy hosts. Also revokes its mTLS certificate.',
+    description:
+      'Delete a daemon node. The node must have no assigned ingress routes. Also revokes its mTLS certificate.',
     parameters: {
       type: 'object',
       properties: {
@@ -1296,49 +1302,49 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: 'get_proxy_rendered_config',
     description:
-      'Get the rendered nginx configuration for a proxy host. Shows either the template-generated or raw config.',
+      'Get the rendered nginx configuration for an ingress route. Shows either the template-generated or raw config.',
     parameters: {
       type: 'object',
       properties: {
-        proxyHostId: { type: 'string', description: 'Proxy host UUID' },
+        proxyHostId: { type: 'string', description: 'Route UUID (proxy-host API resource)' },
       },
       required: ['proxyHostId'],
     },
     destructive: false,
-    category: 'Reverse Proxy',
+    category: 'Ingress',
     requiredScope: 'proxy:raw:read',
     invalidateStores: [],
   },
   {
     name: 'update_proxy_raw_config',
-    description: 'Write raw nginx configuration for a proxy host. Raw mode must be enabled first.',
+    description: 'Write raw nginx configuration for an ingress route. Raw mode must be enabled first.',
     parameters: {
       type: 'object',
       properties: {
-        proxyHostId: { type: 'string', description: 'Proxy host UUID' },
+        proxyHostId: { type: 'string', description: 'Route UUID (proxy-host API resource)' },
         rawConfig: { type: 'string', description: 'Raw nginx configuration content' },
       },
       required: ['proxyHostId', 'rawConfig'],
     },
     destructive: true,
-    category: 'Reverse Proxy',
+    category: 'Ingress',
     requiredScope: 'proxy:raw:write',
     invalidateStores: ['proxy'],
   },
   {
     name: 'toggle_proxy_raw_mode',
     description:
-      'Enable or disable raw config mode on a proxy host. When enabled, template rendering is bypassed and the raw config is used directly.',
+      'Enable or disable raw config mode on an ingress route. When enabled, template rendering is bypassed and the raw config is used directly.',
     parameters: {
       type: 'object',
       properties: {
-        proxyHostId: { type: 'string', description: 'Proxy host UUID' },
+        proxyHostId: { type: 'string', description: 'Route UUID (proxy-host API resource)' },
         enabled: { type: 'boolean', description: 'true to enable raw mode, false to disable' },
       },
       required: ['proxyHostId', 'enabled'],
     },
     destructive: true,
-    category: 'Reverse Proxy',
+    category: 'Ingress',
     requiredScope: 'proxy:raw:toggle',
     invalidateStores: ['proxy'],
   },
@@ -1767,7 +1773,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   {
     name: 'get_dashboard_stats',
     description:
-      'Get dashboard statistics: counts of CAs, certificates, proxy hosts, SSL certs, nodes, expiring items.',
+      'Get dashboard statistics: counts of CAs, certificates, ingress routes, SSL certs, nodes, and expiring items.',
     parameters: { type: 'object', properties: {} },
     destructive: false,
     category: 'Administration',

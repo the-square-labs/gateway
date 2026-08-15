@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { isDevForceUpdatesEnabled } from "@/lib/dev-force-updates";
+import { nodeTypeLabel } from "@/lib/node-appearance";
 import { proxyHostRoute } from "@/lib/resource-routes";
 import { formatBytes, formatUptime } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -225,7 +226,7 @@ export function NodeDetailsTab({
             label="Type"
             value={
               <Badge variant="secondary" className="uppercase">
-                {node.type}
+                {nodeTypeLabel(node.type)}
               </Badge>
             }
           />
@@ -368,7 +369,7 @@ export function NodeDetailsTab({
       {/* Assigned Proxy Hosts — nginx nodes only */}
       {node.type === "nginx" && (
         <PanelShell
-          title="Assigned Proxy Hosts"
+          title="Assigned Routes"
           actions={<Badge variant="secondary">{proxyHosts.length}</Badge>}
         >
           {proxyHosts.length > 0 ? (
@@ -405,7 +406,7 @@ export function NodeDetailsTab({
               </table>
             </div>
           ) : (
-            <EmptyState message="No proxy hosts assigned yet" embedded />
+            <EmptyState message="No routes assigned yet" embedded />
           )}
         </PanelShell>
       )}

@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { PanelShell } from "@/components/common/PanelShell";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { nodeTypeLabel } from "@/lib/node-appearance";
 import { nodeRoute } from "@/lib/resource-routes";
 import type { Node } from "@/types";
 import { effectiveNodeStatus } from "@/types";
@@ -44,7 +45,7 @@ export function NodesCard({ nodesList, hasScope, loading = false }: NodesCardPro
                 {node.displayName || node.hostname}
               </span>
               <Badge variant="secondary" size="inline" className="uppercase">
-                {node.type}
+                {nodeTypeLabel(node.type)}
               </Badge>
               {node.daemonVersion && (
                 <Badge variant="outline" size="inline" className="uppercase">

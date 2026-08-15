@@ -10,6 +10,7 @@ import {
 } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import {
+  cancelPendingAcmeCertificateRoute,
   deleteSslCertificateRoute,
   getSslCertificateRoute,
   linkInternalSslCertificateRoute,
@@ -73,7 +74,7 @@ sslRoutes.openapi({ ...requestAcmeCertificateRoute, middleware: requireScope('ss
   const user = c.get('user')!;
   const body = await c.req.json();
   const input = RequestACMECertSchema.parse(body);
-  const result = await sslService.requestACMECert(input, user.id);
+  const result = await sslService.requestACMECert(input, user.id, user.email);
   return c.json({ data: result }, 201);
 });
 
@@ -123,6 +124,13 @@ sslRoutes.openapi({ ...verifyDnsSslCertificateRoute, middleware: requireScope('s
   const id = c.req.param('id')!;
   const cert = await sslService.completeDNS01Verification(id, user.id);
   return c.json({ data: cert });
+});
+
+sslRoutes.openapi({ ...cancelPendingAcmeCertificateRoute, middleware: requireScope('ssl:cert:issue') }, async (c) => {
+  const sslService = container.resolve(SSLService);
+  const user = c.get('user')!;
+  await sslService.cancelPendingAcmeIssue(c.req.param('id')!, user.id);
+  return c.body(null, 204);
 });
 
 // Repair is an operator action and deliberately uses the existing global

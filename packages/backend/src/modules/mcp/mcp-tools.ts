@@ -128,9 +128,10 @@ const MCP_TOOLSET_DEFINITIONS: McpToolsetDefinition[] = [
   },
   {
     id: 'proxy',
-    title: 'Reverse proxy',
-    description: 'Proxy hosts, folders, templates, domains, access lists, and raw proxy operations when delegated.',
-    toolNames: toolNamesForCategories(['Reverse Proxy', 'Domains', 'Access Lists']),
+    title: 'Ingress',
+    description:
+      'Domains, routes, route folders, nginx templates, access lists, and raw route operations when delegated.',
+    toolNames: toolNamesForCategories(['Ingress', 'Domains', 'Access Lists']),
   },
   {
     id: 'certificates',

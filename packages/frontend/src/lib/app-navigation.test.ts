@@ -66,8 +66,8 @@ describe("app navigation registry", () => {
 
     expect(routes).toEqual({
       "1": "/",
-      "2": "/proxy-hosts",
-      "3": "/domains",
+      "2": "/domains",
+      "3": "/proxy-hosts",
       "4": "/ssl-certificates",
       "5": "/cas",
       "6": "/certificates",

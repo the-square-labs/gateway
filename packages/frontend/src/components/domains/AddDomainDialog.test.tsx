@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { vi } from "vitest";
 import { api } from "@/services/api";
@@ -16,7 +16,7 @@ describe("AddDomainDialog", () => {
 
     render(
       <MemoryRouter>
-        <AddDomainDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} />
+        <AddDomainDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} dnsProvider="cloudflare" />
       </MemoryRouter>
     );
 
@@ -50,7 +50,7 @@ describe("AddDomainDialog", () => {
 
     render(
       <MemoryRouter>
-        <AddDomainDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} />
+        <AddDomainDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} dnsProvider="cloudflare" />
       </MemoryRouter>
     );
 
@@ -58,5 +58,41 @@ describe("AddDomainDialog", () => {
     expect(screen.queryByText("No Nginx node has a public address")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /node/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add Domain" })).toBeDisabled();
+  });
+
+  it("renders the node selector when exactly one Nginx node is eligible", async () => {
+    useResourceFolderStore.setState((state) => ({
+      foldersByType: { ...state.foldersByType, domain: [] },
+      loadingByType: { ...state.loadingByType, domain: false },
+    }));
+    vi.spyOn(api, "listDomainFolders").mockResolvedValue([]);
+    vi.spyOn(api, "listDomainNginxNodes").mockResolvedValue({
+      eligibleNodes: [
+        {
+          id: "node-1",
+          slug: "local-nginx",
+          hostname: "local-nginx",
+          displayName: "Local Nginx",
+          appearanceColor: null,
+          effectiveAddress: "217.19.208.197",
+        },
+      ],
+      unconfiguredNodes: [],
+      totalNginxNodes: 1,
+      unconfiguredNginxNodes: 0,
+    });
+
+    render(
+      <MemoryRouter>
+        <AddDomainDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} dnsProvider="cloudflare" />
+      </MemoryRouter>
+    );
+
+    const trigger = await screen.findByRole("combobox", { name: "Ingress node" });
+    expect(trigger).toHaveTextContent("Local Nginx");
+    expect(trigger).not.toHaveTextContent("217.19.208.197");
+
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    expect(await screen.findByText("Local Nginx · 217.19.208.197")).toBeInTheDocument();
   });
 });

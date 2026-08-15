@@ -44,6 +44,7 @@ import { proxyHostRoute } from "@/lib/resource-routes";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useFolderStore } from "@/stores/folders";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { FolderTreeNode, HealthStatus, ProxyHost, ProxyHostType } from "@/types";
 
 const typeOptions: { value: ProxyHostType | "all"; label: string }[] = [
@@ -91,7 +92,6 @@ export function ProxyHosts({
   const {
     folders,
     ungroupedHosts,
-    totalHosts,
     isLoading,
     filters,
     expandedFolderIds,
@@ -124,6 +124,14 @@ export function ProxyHosts({
   const canCreateProxyHost = hasScope("proxy:create");
   const canShowHostActions =
     canManageFolders || hasScopedAccess("proxy:edit") || hasScopedAccess("proxy:delete");
+  const ingressNodes = useUIBootstrapStore((state) => state.snapshot?.navigation.nodes.data);
+  const ingressNodeNames = useMemo(
+    () =>
+      new Map(
+        (ingressNodes ?? []).map((node) => [node.id, node.displayName || node.hostname] as const)
+      ),
+    [ingressNodes]
+  );
 
   const openCreateProxyHost = useCallback(async () => {
     if (checkingCreateNodes) return;
@@ -136,7 +144,7 @@ export function ProxyHosts({
       }
       setCreateDialogOpen(true);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to check Nginx nodes");
+      toast.error(error instanceof Error ? error.message : "Failed to check Ingress nodes");
     } finally {
       setCheckingCreateNodes(false);
     }
@@ -181,7 +189,7 @@ export function ProxyHosts({
       toast.success(currentEnabled ? "Proxy host disabled" : "Proxy host enabled");
       await fetchGroupedHosts();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to toggle proxy host");
+      toast.error(err instanceof Error ? err.message : "Failed to toggle route");
     } finally {
       setTogglingIds((prev) => {
         const next = new Set(prev);
@@ -197,7 +205,7 @@ export function ProxyHosts({
       const ok = await confirm({
         title: "Enable Maintenance Mode",
         description:
-          "All requests to this proxy host will receive HTTP 503 and managed health checks will pause until maintenance ends.",
+          "All requests to this route will receive HTTP 503 and managed health checks will pause until maintenance ends.",
         confirmLabel: "Enable Maintenance",
       });
       if (!ok) return;
@@ -408,8 +416,8 @@ export function ProxyHosts({
   const columns: ResourceListColumn<ProxyHost>[] = [
     {
       id: "domain-names",
-      label: "Domain Names",
-      width: "24%",
+      label: "Domains",
+      width: "20%",
       renderCell: (host) => (
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{host.domainNames[0]}</p>
@@ -423,8 +431,8 @@ export function ProxyHosts({
     },
     {
       id: "upstream",
-      label: "Upstream",
-      width: "22%",
+      label: "Target",
+      width: "18%",
       cellContentClassName: "text-sm text-muted-foreground",
       renderCell: (host) =>
         host.type === "proxy" ? (
@@ -436,6 +444,14 @@ export function ProxyHosts({
         ),
     },
     {
+      id: "ingress-node",
+      label: "Ingress Node",
+      width: "13%",
+      cellContentClassName: "text-sm text-muted-foreground",
+      renderCell: (host) =>
+        host.nodeId ? ingressNodeNames.get(host.nodeId) || "Unknown node" : "Unassigned",
+    },
+    {
       id: "type",
       label: "Type",
       width: "10%",
@@ -443,7 +459,7 @@ export function ProxyHosts({
     },
     {
       id: "ssl",
-      label: "SSL",
+      label: "TLS",
       width: "8%",
       renderCell: (host) =>
         host.sslEnabled ? (
@@ -565,8 +581,10 @@ export function ProxyHosts({
           <div className="flex items-center gap-3">
             <LiteModeBackButton />
             <div>
-              <h1 className="text-2xl font-bold">Proxy Hosts</h1>
-              <p className="text-sm text-muted-foreground">{totalHosts} proxy hosts total</p>
+              <h1 className="text-2xl font-bold">Routes</h1>
+              <p className="text-sm text-muted-foreground">
+                Route incoming domain traffic to services
+              </p>
             </div>
           </div>
           <ResponsiveHeaderActions
@@ -586,7 +604,7 @@ export function ProxyHosts({
               ...(canCreateProxyHost
                 ? [
                     {
-                      label: "Add Proxy Host",
+                      label: "Add Route",
                       icon: <Plus className="h-4 w-4" />,
                       onClick: () => void openCreateProxyHost(),
                     },
@@ -609,7 +627,7 @@ export function ProxyHosts({
             {canCreateProxyHost && (
               <Button onClick={() => void openCreateProxyHost()} disabled={checkingCreateNodes}>
                 <Plus className="h-4 w-4" />
-                Add Proxy Host
+                Add Route
               </Button>
             )}
           </ResponsiveHeaderActions>
@@ -667,11 +685,11 @@ export function ProxyHosts({
             ),
           }}
           loading={isLoading}
-          loadingLabel="Loading proxy hosts..."
+          loadingLabel="Loading routes..."
           hasContent={visibleFolders.length > 0 || ungroupedHosts.length > 0}
           emptyState={
             <EmptyState
-              message="No proxy hosts."
+              message="No routes."
               {...(canCreateProxyHost
                 ? { actionLabel: "Add one", onAction: () => void openCreateProxyHost() }
                 : {})}
@@ -778,11 +796,11 @@ export function ProxyHosts({
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>No Nginx nodes</DialogTitle>
+            <DialogTitle>No Ingress nodes</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            Proxy hosts must be deployed to an Nginx node. Add and connect an Nginx node first, then
-            return here to create the proxy host.
+            Routes must be deployed to an Ingress node. Add and connect an Ingress node first, then
+            return here to create the route.
           </p>
           <DialogFooter>
             <Button

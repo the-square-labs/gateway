@@ -667,6 +667,92 @@ describe('IntegrationsService', () => {
     }
   });
 
+  it('skips visible Cloudflare zones that deny DNS access and probes a manageable zone', async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.endsWith('/user/tokens/verify')) {
+        return Response.json({ success: true, result: { id: 'token-1', status: 'active' } });
+      }
+      if (url.includes('/zones?')) {
+        return Response.json({
+          success: true,
+          result: [
+            { id: 'zone-blocked', name: 'blocked.example', status: 'active' },
+            { id: 'zone-1', name: 'example.com', status: 'active' },
+          ],
+          result_info: { page: 1, total_pages: 1 },
+        });
+      }
+      if (url.includes('/zones/zone-blocked/dns_records') && method === 'GET') {
+        return Response.json(
+          { success: false, result: null, errors: [{ code: 9109, message: 'Unauthorized to access requested resource' }] },
+          { status: 403 }
+        );
+      }
+      if (url.includes('/zones/zone-1/dns_records') && method === 'GET') {
+        return Response.json({ success: true, result: [], result_info: { page: 1, total_pages: 1 } });
+      }
+      if (url.includes('/zones/zone-1/dns_records') && method === 'POST') {
+        return Response.json({
+          success: true,
+          result: { id: 'probe-1', type: 'TXT', name: '_gateway-permission-check.example.com', content: 'ok', ttl: 60 },
+        });
+      }
+      if (url.endsWith('/zones/zone-1/dns_records/probe-1') && method === 'DELETE') {
+        return Response.json({ success: true, result: { id: 'probe-1' } });
+      }
+      throw new Error(`Unexpected Cloudflare mock request: ${method} ${url}`);
+    });
+    globalThis.fetch = fetchMock as never;
+    try {
+      const service = new IntegrationsService({} as never, { log: vi.fn() } as never, {} as never);
+
+      await expect(service.testCloudflareConnectorPreview({ token: 'cf-token' })).resolves.toMatchObject({
+        capabilities: { dnsRead: true, dnsEdit: true },
+        zones: [{ remoteId: 'zone-1', name: 'example.com' }],
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('reports the Cloudflare zone and provider error when no zone allows DNS access', async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/user/tokens/verify')) {
+        return Response.json({ success: true, result: { id: 'token-1', status: 'active' } });
+      }
+      if (url.includes('/zones?')) {
+        return Response.json({
+          success: true,
+          result: [{ id: 'zone-blocked', name: 'blocked.example', status: 'active' }],
+          result_info: { page: 1, total_pages: 1 },
+        });
+      }
+      if (url.includes('/zones/zone-blocked/dns_records')) {
+        return Response.json(
+          { success: false, result: null, errors: [{ code: 9109, message: 'Unauthorized to access requested resource' }] },
+          { status: 403 }
+        );
+      }
+      throw new Error(`Unexpected Cloudflare mock request: ${url}`);
+    });
+    globalThis.fetch = fetchMock as never;
+    try {
+      const service = new IntegrationsService({} as never, { log: vi.fn() } as never, {} as never);
+
+      await expect(service.testCloudflareConnectorPreview({ token: 'cf-token' })).rejects.toMatchObject({
+        code: 'CLOUDFLARE_DNS_READ_REQUIRED',
+        message: 'Cloudflare denied DNS access for blocked.example: Unauthorized to access requested resource',
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('blocks deleting Cloudflare connectors still referenced by domains', async () => {
     const db = createCloudflareDeleteInUseDb(
       connectorRow({

@@ -113,6 +113,7 @@ export function canRenderDatabaseRowsWithNodeAppearance(
   const nodeIds = new Set(nodes.map((node) => node.id));
   return rows.every((row) => !row.managed || nodeIds.has(row.managed.nodeId));
 }
+const DIALOG_PAYLOAD_CLEAR_DELAY_MS = 260;
 
 function delay(ms: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
@@ -747,6 +748,9 @@ export function Databases({
     databaseConnectionId: string;
     error: string;
   } | null>(null);
+  const [managedProvisioningErrorOpen, setManagedProvisioningErrorOpen] = useState(false);
+  const managedProvisioningErrorOpenTimerRef = useRef<number | null>(null);
+  const managedProvisioningErrorClearTimerRef = useRef<number | null>(null);
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
 
   const openManagedCreate = useCallback(() => {
@@ -773,7 +777,41 @@ export function Databases({
       setManagedCreateOpen(false);
       setManagedCreateStep(1);
       setManagedProvisioning(null);
-      window.setTimeout(() => setManagedProvisioningError(failure), 250);
+      if (managedProvisioningErrorOpenTimerRef.current !== null) {
+        window.clearTimeout(managedProvisioningErrorOpenTimerRef.current);
+      }
+      managedProvisioningErrorOpenTimerRef.current = window.setTimeout(() => {
+        if (managedProvisioningErrorClearTimerRef.current !== null) {
+          window.clearTimeout(managedProvisioningErrorClearTimerRef.current);
+          managedProvisioningErrorClearTimerRef.current = null;
+        }
+        setManagedProvisioningError(failure);
+        setManagedProvisioningErrorOpen(true);
+        managedProvisioningErrorOpenTimerRef.current = null;
+      }, 250);
+    },
+    []
+  );
+
+  const closeManagedProvisioningError = useCallback(() => {
+    setManagedProvisioningErrorOpen(false);
+    if (managedProvisioningErrorClearTimerRef.current !== null) {
+      window.clearTimeout(managedProvisioningErrorClearTimerRef.current);
+    }
+    managedProvisioningErrorClearTimerRef.current = window.setTimeout(() => {
+      setManagedProvisioningError(null);
+      managedProvisioningErrorClearTimerRef.current = null;
+    }, DIALOG_PAYLOAD_CLEAR_DELAY_MS);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (managedProvisioningErrorOpenTimerRef.current !== null) {
+        window.clearTimeout(managedProvisioningErrorOpenTimerRef.current);
+      }
+      if (managedProvisioningErrorClearTimerRef.current !== null) {
+        window.clearTimeout(managedProvisioningErrorClearTimerRef.current);
+      }
     },
     []
   );
@@ -1008,7 +1046,7 @@ export function Databases({
   const openFailedManagedDatabase = async (databaseConnectionId: string) => {
     try {
       const database = await api.getDatabase(databaseConnectionId);
-      setManagedProvisioningError(null);
+      closeManagedProvisioningError();
       navigate(databaseRoute(database.slug, "overview"));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to open managed database");
@@ -1354,8 +1392,11 @@ export function Databases({
 
       {!embedded && (
         <Dialog
-          open={managedProvisioningError !== null}
-          onOpenChange={(open) => !open && setManagedProvisioningError(null)}
+          open={managedProvisioningErrorOpen}
+          onOpenChange={(open) => {
+            if (open) setManagedProvisioningErrorOpen(true);
+            else closeManagedProvisioningError();
+          }}
         >
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
@@ -1363,7 +1404,7 @@ export function Databases({
             </DialogHeader>
             <p className="text-sm text-muted-foreground">{managedProvisioningError?.error}</p>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setManagedProvisioningError(null)}>
+              <Button variant="outline" onClick={closeManagedProvisioningError}>
                 Close
               </Button>
               <Button

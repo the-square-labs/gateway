@@ -166,7 +166,7 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'issue_certificate',
     description:
-      'Issue a new PKI certificate from a CA. Returns the certificate. To use it with proxy hosts, you must then import it as SSL certificate using link_internal_cert.',
+      'Issue a new PKI certificate from a CA. Returns the certificate. To use it with ingress routes, you must then import it as an SSL certificate using link_internal_cert.',
     parameters: {
       type: 'object',
       properties: {

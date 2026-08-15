@@ -35,7 +35,7 @@ export const proxyLogStreamRoute = appRoute({
   method: 'get',
   path: '/logs/{hostId}/stream',
   tags: ['Monitoring'],
-  summary: 'Stream proxy host logs',
+  summary: 'Stream ingress route logs',
   request: { params: hostParams },
   responses: { 200: { description: 'Server-sent events stream' } },
 });

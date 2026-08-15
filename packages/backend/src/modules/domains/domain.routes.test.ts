@@ -13,19 +13,24 @@ const mocks = vi.hoisted(() => ({
     createDomain: vi.fn(),
     updateDomain: vi.fn(),
     deleteDomain: vi.fn(),
+    getDomain: vi.fn(),
     getNginxNodeOptions: vi.fn(),
+    resolveCloudflareMigration: vi.fn(),
+  },
+  sslService: {
+    requestACMECert: vi.fn(),
   },
 }));
 
 vi.mock('@/container.js', () => ({
   container: {
-    resolve: vi.fn((token) => (token?.name === 'DomainsService' ? mocks.domainsService : {})),
+    resolve: vi.fn((token) => (token?.name === 'DomainsService' ? mocks.domainsService : mocks.sslService)),
   },
 }));
 
 vi.mock('@/modules/auth/auth.middleware.js', () => ({
   authMiddleware: async (c: any, next: () => Promise<void>) => {
-    c.set('user', { id: 'user-1' });
+    c.set('user', { id: 'user-1', email: 'operator@wlt.sh' });
     c.set('effectiveScopes', mocks.scopes);
     await next();
   },
@@ -68,12 +73,39 @@ describe('domain routes authorization', () => {
     mocks.domainsService.createDomain.mockResolvedValue({ id: DOMAIN_ID, domain: 'example.com' });
     mocks.domainsService.updateDomain.mockResolvedValue({ id: DOMAIN_ID, domain: 'example.com', dnsProxied: true });
     mocks.domainsService.deleteDomain.mockResolvedValue(undefined);
+    mocks.domainsService.getDomain.mockResolvedValue({
+      id: DOMAIN_ID,
+      domain: 'example.com',
+      dnsProvider: 'cloudflare',
+    });
+    mocks.domainsService.resolveCloudflareMigration.mockResolvedValue({
+      id: DOMAIN_ID,
+      domain: 'example.com',
+      dnsProvider: 'legacy',
+      cloudflareMigrationStatus: 'ignored',
+    });
+    mocks.sslService.requestACMECert.mockResolvedValue({ id: 'cert-1' });
     mocks.domainsService.getNginxNodeOptions.mockResolvedValue({
       eligibleNodes: [],
       unconfiguredNodes: [],
       totalNginxNodes: 0,
       unconfiguredNginxNodes: 0,
     });
+  });
+
+  it('uses domains:edit for manual Cloudflare migration resolution', async () => {
+    mocks.scopes = ['domains:edit'];
+
+    const response = await request('POST', `/${DOMAIN_ID}/cloudflare-migration/resolve`, {
+      action: 'keep_external',
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.domainsService.resolveCloudflareMigration).toHaveBeenCalledWith(
+      DOMAIN_ID,
+      { action: 'keep_external' },
+      'user-1'
+    );
   });
 
   it('does not accept a Cloudflare-only scope for domain creation', async () => {
@@ -93,8 +125,14 @@ describe('domain routes authorization', () => {
 
     expect(preview.status).toBe(200);
     expect(created.status).toBe(201);
-    expect(mocks.domainsService.previewDomain).toHaveBeenCalledWith({ domain: 'example.com' });
-    expect(mocks.domainsService.createDomain).toHaveBeenCalledWith({ domain: 'example.com' }, 'user-1');
+    expect(mocks.domainsService.previewDomain).toHaveBeenCalledWith({
+      domain: 'example.com',
+      dnsProvider: 'cloudflare',
+    });
+    expect(mocks.domainsService.createDomain).toHaveBeenCalledWith(
+      { domain: 'example.com', dnsProvider: 'cloudflare' },
+      'user-1'
+    );
   });
 
   it('uses domains:create for the domain Nginx node options', async () => {
@@ -122,5 +160,24 @@ describe('domain routes authorization', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.domainsService.deleteDomain).toHaveBeenCalledWith(DOMAIN_ID, 'user-1', { deleteDns: true });
+  });
+
+  it('uses Cloudflare DNS-01 when issuing a certificate for a managed domain', async () => {
+    mocks.scopes = ['domains:edit', 'ssl:cert:issue'];
+
+    const response = await request('POST', `/${DOMAIN_ID}/issue-cert`);
+
+    expect(response.status).toBe(201);
+    expect(mocks.sslService.requestACMECert).toHaveBeenCalledWith(
+      {
+        domains: ['example.com'],
+        challengeType: 'dns-01',
+        provider: 'letsencrypt',
+        autoRenew: true,
+        dnsProvider: 'cloudflare',
+      },
+      'user-1',
+      'operator@wlt.sh'
+    );
   });
 });

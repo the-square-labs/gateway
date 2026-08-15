@@ -2,7 +2,7 @@
 
 # Gateway
 
-AI-first 但不依赖 AI 的自托管基础设施控制平面，用于反向代理、Docker 工作负载、证书、数据库、日志、监控、状态页和自动化。
+AI-first 但不依赖 AI 的自托管基础设施控制平面，用于 nginx ingress、Docker 工作负载、证书、数据库、日志、监控、状态页和自动化。
 
 > [!NOTE]
 > 主要开发在 [Wiolett Industries GitLab](https://gitlab.wiolett.net/wiolett/gateway) 进行。[GitHub 仓库](https://github.com/wiolett-industries/gateway) 是公开镜像。Issues 和功能请求可以提交到 [GitHub](https://github.com/wiolett-industries/gateway/issues)。
@@ -88,11 +88,11 @@ npx -y @wiolett/gateway-inference@latest setup claude-code
 <td><img src="docs/screenshots/nginx-monitoring.png" width="450" alt="Nginx Monitoring"></td>
 </tr>
 <tr>
-<td align="center"><strong>Proxy Host Config</strong></td>
+<td align="center"><strong>Ingress Route Config</strong></td>
 <td align="center"><strong>Settings</strong></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/proxy-host.png" width="450" alt="Proxy Host Config"></td>
+<td><img src="docs/screenshots/proxy-host.png" width="450" alt="Ingress Route Config"></td>
 <td><img src="docs/screenshots/settings.png" width="450" alt="Settings"></td>
 </tr>
 </table>
@@ -101,10 +101,10 @@ npx -y @wiolett/gateway-inference@latest setup claude-code
 
 | 领域 | 摘要 |
 |------|------|
-| Reverse proxy | Multi-node nginx management, proxy hosts, Docker container/deployment upstreams, maintenance mode, redirects, WebSockets, access lists, health checks, host folders, templates, logs 和 stats。 |
+| Ingress | Domain 选择 public nginx ingress node；route 将流量转发到 address、Docker container 或 deployment；SSL certificate 只部署到实际运行 enabled TLS routes 的 nginx nodes。还包括 maintenance mode、redirects、WebSockets、access lists、health checks、route folders、templates、logs 和 stats。REST API 为兼容性保留 `proxy-host` identifiers。 |
 | Docker | Container lifecycle, deployments, rollout/rollback, shared physical NVIDIA/AMD/Intel GPU attachment, eligible cross-node container 和 volume migrations, offline inventory snapshots, registries, images, networks, volumes, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, mounts 和 cleanup。GPU-attached workloads 在 v1 中不能迁移或导出。 |
-| Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports 和 proxy binding。 |
-| Domains | Central domain registry, DNS checks, record validation 和 usage tracking。 |
+| Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports 和 route binding。 |
+| Domains | Central hostname registry、nginx ingress placement、external 或 Cloudflare-managed DNS、validation、usage tracking 和 explicit ingress migration。 |
 | Databases | Saved PostgreSQL、Redis 和 ClickHouse connections，含 encrypted credentials、health history、browsing、scoped query consoles 和 capability-aware write operations；private-by-default managed Postgres、Redis 和 ClickHouse instances 可安全绑定到 Docker workloads。 |
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware physical GPU telemetry, daemon runtime details, log streaming 和 update checks。 |
 | Logging | 可选的 ClickHouse-backed structured log ingestion，包含 schemas、retention、ingest tokens、rate limits、search、storage caps 和 health safeguards。 |
@@ -131,7 +131,7 @@ Gateway 作为 Docker stack 运行在 control-plane server 上。Managed hosts �
         +-------------+-------------------+
         |             |                   |
  nginx-daemon   docker-daemon     database profile     monitoring-daemon
- proxy host     container host    managed databases    metrics-only host
+ ingress route  container host    managed databases    metrics-only host
 ```
 
 Relay 是一个独立的 long-lived container，也是 `9443/tcp` 唯一的公开监听方。普通 app-only 更新会保留 relay container 和已建立的 managed-database binding streams；更新 relay 仍然是一个单独的 data-plane maintenance event。
@@ -157,7 +157,7 @@ Gateway 已经面向 production operations，而不是狭窄的 MVP。当前方�
 
 已完成的基础：
 
-- [x] Multi-node nginx reverse proxy management over outbound gRPC with mTLS.
+- [x] Multi-node nginx ingress management，包含 domain affinity、routes 和 TLS deployment over outbound gRPC with mTLS。
 - [x] Docker host management with deployments, webhooks, registries, logs, files, consoles, and secrets.
 - [x] Monitoring daemon for host metrics, runtime state, and log streaming.
 - [x] Internal PKI, ACME SSL, certificate templates, domain tracking, and expiry alerts.

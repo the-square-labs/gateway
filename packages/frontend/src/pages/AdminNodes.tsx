@@ -30,7 +30,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
-import { nodeIconClassNames } from "@/lib/node-appearance";
+import { nodeIconClassNames, nodeTypeLabel } from "@/lib/node-appearance";
 import { confirmAndDeleteNode } from "@/lib/remove-node";
 import { nodeRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
@@ -56,8 +56,8 @@ type EnrollmentTargets = {
 const NODE_TYPES = [
   {
     value: "nginx",
-    label: "Nginx",
-    description: "Reverse proxy node running nginx",
+    label: "Ingress",
+    description: "Serve public domains and routes with the Nginx daemon",
     disabled: false,
   },
   {
@@ -320,7 +320,7 @@ export function AdminNodes() {
         label: "Type",
         width: "13%",
         align: "center",
-        renderCell: (node) => <Badge variant="secondary">{node.type}</Badge>,
+        renderCell: (node) => <Badge variant="secondary">{nodeTypeLabel(node.type)}</Badge>,
       },
       {
         id: "lock",
@@ -470,7 +470,7 @@ export function AdminNodes() {
           loadingLabel="Loading nodes..."
           emptyState={
             <EmptyState
-              message="No nodes found. Add a node to start managing nginx instances remotely."
+              message="No nodes found. Add a node to start managing infrastructure remotely."
               actionLabel={hasScope("nodes:create") ? "Add Node" : undefined}
               onAction={hasScope("nodes:create") ? () => setEnrollDialogOpen(true) : undefined}
               hasActiveFilters={hasActiveFilters}
@@ -530,7 +530,7 @@ export function AdminNodes() {
               <Input
                 value={enrollDisplayName}
                 onChange={(e) => setEnrollDisplayName(e.target.value)}
-                placeholder="US-East Proxy"
+                placeholder="US-East Ingress"
               />
             </div>
           </div>

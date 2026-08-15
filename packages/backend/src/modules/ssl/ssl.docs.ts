@@ -79,11 +79,20 @@ export const verifyDnsSslCertificateRoute = appRoute({
   responses: okJson(UnknownDataResponseSchema),
 });
 
+export const cancelPendingAcmeCertificateRoute = appRoute({
+  method: 'post',
+  path: '/{id}/acme-cancel',
+  tags: ['SSL Certificates'],
+  summary: 'Cancel a pending ACME certificate request',
+  request: { params: IdParamSchema },
+  responses: { 204: { description: 'No content' } },
+});
+
 export const resyncSslCertificateDistributionRoute = appRoute({
   method: 'post',
   path: '/{id}/distribution/resync',
   tags: ['SSL Certificates'],
-  summary: 'Resynchronize SSL certificate distribution',
+  summary: 'Retry SSL certificate deployment to ingress nodes used by active TLS routes',
   request: { params: IdParamSchema },
   responses: okJson(UnknownDataResponseSchema),
 });

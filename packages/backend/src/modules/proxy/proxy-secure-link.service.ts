@@ -656,6 +656,10 @@ export class ProxySecureLinkService {
     await this.syncTargetNode(nodeId);
   }
 
+  async reconcileSourceNode(nodeId: string): Promise<void> {
+    await this.syncSourceNode(nodeId);
+  }
+
   private async withLinkOperation<T>(linkId: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.linkOperations.get(linkId) ?? Promise.resolve();
     const current = previous.catch(() => undefined).then(operation);

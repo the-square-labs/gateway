@@ -1,7 +1,8 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, Loader2, Minus, Plus } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { DomainAutocompleteInput } from "@/components/domains/DomainAutocompleteInput";
@@ -32,6 +33,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { nodeTypeLabel } from "@/lib/node-appearance";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import type {
@@ -50,6 +52,9 @@ interface CreateProxyHostDialogProps {
   onOpenChange: (open: boolean) => void;
   /** When editing, pre-fill with existing host data */
   existingHost?: ProxyHost | null;
+  /** Optional entrypoint defaults when creating a route from a registered domain. */
+  initialDomainName?: string;
+  initialNodeId?: string;
   /** Called on successful create/update with the host ID and returned host payload when available. */
   onSuccess?: (hostId: string, host?: ProxyHost) => void;
 }
@@ -82,13 +87,27 @@ function getCachedNodeOptions(): NodeOption[] {
 const STEP_ANIMATION = {
   initial: { opacity: 0, y: 8 },
   animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -8 },
   transition: { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] as const },
 };
+
+export function defaultProxyUpstreamForDockerTargets(
+  targets: DockerContainer[]
+): ProxyUpstreamSelection {
+  const firstTarget = targets[0];
+  if (!firstTarget) return DEFAULT_PROXY_UPSTREAM;
+  return {
+    ...DEFAULT_PROXY_UPSTREAM,
+    kind: firstTarget.kind === "deployment" ? "docker_deployment" : "docker_container",
+  };
+}
 
 export function CreateProxyHostDialog({
   open,
   onOpenChange,
   existingHost,
+  initialDomainName,
+  initialNodeId,
   onSuccess,
 }: CreateProxyHostDialogProps) {
   const isEditing = !!existingHost;
@@ -104,6 +123,7 @@ export function CreateProxyHostDialog({
 
   // Step 2 — Configuration: Proxy
   const [upstream, setUpstream] = useState<ProxyUpstreamSelection>(DEFAULT_PROXY_UPSTREAM);
+  const upstreamTouchedRef = useRef(false);
   const [websocketSupport, setWebsocketSupport] = useState(false);
 
   // Step 2 — Configuration: Redirect
@@ -144,6 +164,7 @@ export function CreateProxyHostDialog({
     setNodeId("");
     setDomainNames([""]);
     setUpstream(DEFAULT_PROXY_UPSTREAM);
+    upstreamTouchedRef.current = false;
     setWebsocketSupport(false);
     setRedirectUrl("");
     setRedirectStatusCode(301);
@@ -156,6 +177,7 @@ export function CreateProxyHostDialog({
     setTemplateVariables({});
     setRawConfigEnabled(false);
     setIsSaving(false);
+    setDockerContainers([]);
   }, []);
 
   // Pre-fill from existingHost when it changes
@@ -165,6 +187,7 @@ export function CreateProxyHostDialog({
     setNodeId((existingHost as any).nodeId || "");
     setDomainNames(existingHost.domainNames.length > 0 ? [...existingHost.domainNames] : [""]);
     setUpstream(proxyUpstreamFromHost(existingHost));
+    upstreamTouchedRef.current = false;
     setWebsocketSupport(existingHost.websocketSupport);
     setRedirectUrl(existingHost.redirectUrl || "");
     setRedirectStatusCode(existingHost.redirectStatusCode || 301);
@@ -178,6 +201,12 @@ export function CreateProxyHostDialog({
     setRawConfigEnabled(existingHost.rawConfigEnabled ?? false);
     setStep(1);
   }, [existingHost]);
+
+  useEffect(() => {
+    if (!open || existingHost) return;
+    setNodeId(initialNodeId ?? "");
+    setDomainNames(initialDomainName ? [initialDomainName] : [""]);
+  }, [existingHost, initialDomainName, initialNodeId, open]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -219,6 +248,11 @@ export function CreateProxyHostDialog({
       .then(setDockerContainers)
       .catch(() => setDockerContainers([]));
   }, [open]);
+
+  useEffect(() => {
+    if (!open || isEditing || type !== "proxy" || upstreamTouchedRef.current) return;
+    setUpstream(defaultProxyUpstreamForDockerTargets(dockerContainers));
+  }, [dockerContainers, isEditing, open, type]);
 
   // Derived: user templates matching current type
   const userTemplates = useMemo(
@@ -316,16 +350,16 @@ export function CreateProxyHostDialog({
 
       if (isEditing && existingHost) {
         const updated = await api.updateProxyHost(existingHost.id, data);
-        toast.success("Proxy host updated");
+        toast.success("Route updated");
         onSuccess?.(existingHost.id, updated);
       } else {
         const created = await api.createProxyHost(data);
-        toast.success("Proxy host created");
+        toast.success("Route created");
         onSuccess?.(created.id, created);
       }
       onOpenChange(false);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save proxy host");
+      toast.error(err instanceof Error ? err.message : "Failed to save route");
     } finally {
       setIsSaving(false);
     }
@@ -352,316 +386,329 @@ export function CreateProxyHostDialog({
         }}
       >
         <DialogHeader>
-          <DialogTitle>{isEditing ? "Edit Proxy Host" : "Create Proxy Host"}</DialogTitle>
+          <DialogTitle>{isEditing ? "Edit Route" : "Create Route"}</DialogTitle>
           <DialogDescription>
             {step === 1
-              ? "Configure the basic settings for your proxy host."
-              : "Set up forwarding, SSL, and advanced options."}
+              ? "Configure the entrypoint for this route."
+              : "Configure the target and TLS for this route."}
           </DialogDescription>
         </DialogHeader>
 
-        <AnimatePresence mode="wait">
-          {step === 1 && (
-            <motion.div
-              key="step-1"
-              initial={STEP_ANIMATION.initial}
-              animate={STEP_ANIMATION.animate}
-              transition={STEP_ANIMATION.transition}
-              className="space-y-6"
-            >
-              {/* Type Selector */}
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Type</label>
-                <Select
-                  value={rawConfigEnabled ? "raw" : type}
-                  onValueChange={(v) => setType(v as ProxyHostType)}
-                  disabled={rawConfigEnabled || maintenanceLocked}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {rawConfigEnabled && <SelectItem value="raw">Raw</SelectItem>}
-                    <SelectItem value="proxy">Proxy</SelectItem>
-                    <SelectItem value="redirect">Redirect</SelectItem>
-                    <SelectItem value="404">404</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+        <AnimatedHeight>
+          <AnimatePresence initial={false} mode="popLayout">
+            {step === 1 && (
+              <motion.div
+                key="step-1"
+                initial={STEP_ANIMATION.initial}
+                animate={STEP_ANIMATION.animate}
+                exit={STEP_ANIMATION.exit}
+                transition={STEP_ANIMATION.transition}
+                className="space-y-6"
+              >
+                {/* Type Selector */}
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Type</label>
+                  <Select
+                    value={rawConfigEnabled ? "raw" : type}
+                    onValueChange={(v) => setType(v as ProxyHostType)}
+                    disabled={rawConfigEnabled || maintenanceLocked}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {rawConfigEnabled && <SelectItem value="raw">Raw</SelectItem>}
+                      <SelectItem value="proxy">Proxy</SelectItem>
+                      <SelectItem value="redirect">Redirect</SelectItem>
+                      <SelectItem value="404">404</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
 
-              {/* Node Selector */}
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Node</label>
-                <Select
-                  value={nodeId || "__none__"}
-                  onValueChange={(v) => setNodeId(v === "__none__" ? "" : v)}
-                  disabled={nodesLoading}
-                >
-                  <SelectTrigger aria-label="Node" aria-busy={nodesLoading}>
-                    {selectedNode ? (
-                      <div className="flex min-w-0 items-center gap-3 pr-2">
-                        <span className="min-w-0 flex-1 truncate">{selectedNode.hostname}</span>
-                        <Badge variant="secondary" size="inline" className="shrink-0">
-                          {selectedNode.type}
-                        </Badge>
-                        <Badge
-                          variant={nodeStatusVariant(selectedNode.status)}
-                          size="inline"
-                          className="shrink-0"
-                        >
-                          {selectedNode.status}
-                        </Badge>
-                      </div>
-                    ) : (
-                      <SelectValue
-                        placeholder={nodesLoading ? "Loading nodes..." : "Select a node..."}
-                      />
-                    )}
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__" disabled>
-                      {nodesLoading ? "Loading nodes..." : "Select a node..."}
-                    </SelectItem>
-                    {nodes.map((node) => {
-                      const lockedForCreation =
-                        node.serviceCreationLocked &&
-                        (!isEditing || node.id !== (existingHost as any)?.nodeId);
-                      return (
-                        <SelectItem key={node.id} value={node.id} disabled={lockedForCreation}>
-                          <div className="flex items-center justify-between w-full gap-3">
-                            <span className="min-w-0 truncate">{node.hostname}</span>
-                            <Badge variant="secondary" size="inline">
-                              {node.type}
-                            </Badge>
-                            <Badge variant={nodeStatusVariant(node.status)} size="inline">
-                              {node.status}
-                            </Badge>
-                          </div>
-                        </SelectItem>
-                      );
-                    })}
-                  </SelectContent>
-                </Select>
-              </div>
+                {/* Node Selector */}
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Ingress node</label>
+                  <Select
+                    value={nodeId || "__none__"}
+                    onValueChange={(v) => setNodeId(v === "__none__" ? "" : v)}
+                    disabled={nodesLoading}
+                  >
+                    <SelectTrigger aria-label="Ingress node" aria-busy={nodesLoading}>
+                      {selectedNode ? (
+                        <div className="flex min-w-0 items-center gap-3 pr-2">
+                          <span className="min-w-0 flex-1 truncate">{selectedNode.hostname}</span>
+                          <Badge variant="secondary" size="inline" className="shrink-0">
+                            {nodeTypeLabel(selectedNode.type)}
+                          </Badge>
+                          <Badge
+                            variant={nodeStatusVariant(selectedNode.status)}
+                            size="inline"
+                            className="shrink-0"
+                          >
+                            {selectedNode.status}
+                          </Badge>
+                        </div>
+                      ) : (
+                        <SelectValue
+                          placeholder={nodesLoading ? "Loading nodes..." : "Select a node..."}
+                        />
+                      )}
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__" disabled>
+                        {nodesLoading ? "Loading nodes..." : "Select a node..."}
+                      </SelectItem>
+                      {nodes.map((node) => {
+                        const lockedForCreation =
+                          node.serviceCreationLocked &&
+                          (!isEditing || node.id !== (existingHost as any)?.nodeId);
+                        return (
+                          <SelectItem key={node.id} value={node.id} disabled={lockedForCreation}>
+                            <div className="flex items-center justify-between w-full gap-3">
+                              <span className="min-w-0 truncate">{node.hostname}</span>
+                              <Badge variant="secondary" size="inline">
+                                {nodeTypeLabel(node.type)}
+                              </Badge>
+                              <Badge variant={nodeStatusVariant(node.status)} size="inline">
+                                {node.status}
+                              </Badge>
+                            </div>
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-              {/* Domain Names */}
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Domain Names</label>
-                <div className="space-y-2">
-                  <AnimatePresence initial={false}>
-                    {domainNames.map((domain, i) => (
-                      <motion.div
-                        key={`domain-${i}`}
-                        initial={{ opacity: 0, y: 4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: 4 }}
-                        transition={{
-                          opacity: { duration: 0.12 },
-                          y: { duration: 0.12, ease: [0.25, 0.1, 0.25, 1] },
-                        }}
-                        className="flex border border-input bg-background"
-                      >
-                        <DomainAutocompleteInput
-                          value={domain}
-                          onChange={(v) => {
-                            const next = [...domainNames];
-                            next[i] = v;
-                            setDomainNames(next);
+                {/* Domain Names */}
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Domain Names</label>
+                  <div className="space-y-2">
+                    <AnimatePresence initial={false}>
+                      {domainNames.map((domain, i) => (
+                        <motion.div
+                          key={`domain-${i}`}
+                          initial={{ opacity: 0, y: 4 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 4 }}
+                          transition={{
+                            opacity: { duration: 0.12 },
+                            y: { duration: 0.12, ease: [0.25, 0.1, 0.25, 1] },
                           }}
-                          placeholder="example.com"
-                          inputClassName="border-0 shadow-none"
-                        />
-                        {domainNames.length > 1 && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
-                            onClick={() => setDomainNames(domainNames.filter((_, j) => j !== i))}
-                          >
-                            <Minus className="h-4 w-4" />
-                          </Button>
-                        )}
-                        {i === domainNames.length - 1 && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
-                            onClick={() => setDomainNames([...domainNames, ""])}
-                          >
-                            <Plus className="h-4 w-4" />
-                          </Button>
-                        )}
-                      </motion.div>
-                    ))}
-                  </AnimatePresence>
-                </div>
-              </div>
-
-              {/* Raw mode toggle — only when editing */}
-              {isEditing && (
-                <div className="border border-border bg-card">
-                  <div className="flex items-center justify-between px-4 py-3">
-                    <div>
-                      <p className="text-sm font-medium">Raw Config Mode</p>
-                      <p className="text-xs text-muted-foreground">
-                        Bypass template rendering and edit nginx config directly
-                      </p>
-                    </div>
-                    <Switch
-                      checked={rawConfigEnabled}
-                      onChange={setRawConfigEnabled}
-                      disabled={maintenanceLocked}
-                    />
-                  </div>
-                </div>
-              )}
-            </motion.div>
-          )}
-
-          {step === 2 && !isEditing && (
-            <motion.div
-              key="step-2"
-              initial={STEP_ANIMATION.initial}
-              animate={STEP_ANIMATION.animate}
-              transition={STEP_ANIMATION.transition}
-              className="space-y-4"
-            >
-              {/* Forwarding / Redirect card */}
-              {type === "proxy" && (
-                <PanelShell title="Forwarding">
-                  <ProxyUpstreamFields
-                    value={upstream}
-                    onChange={setUpstream}
-                    containers={dockerContainers}
-                  />
-                </PanelShell>
-              )}
-
-              {type === "redirect" && (
-                <div className="border border-border bg-card">
-                  <div className="border-b border-border p-4">
-                    <h2 className="font-semibold text-sm">Redirect</h2>
-                  </div>
-                  <div className="p-4">
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <div className="space-y-1.5">
-                        <label className="text-xs text-muted-foreground">Redirect URL</label>
-                        <Input
-                          value={redirectUrl}
-                          onChange={(e) => setRedirectUrl(e.target.value)}
-                          placeholder="https://example.com"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-xs text-muted-foreground">Status Code</label>
-                        <Select
-                          value={String(redirectStatusCode)}
-                          onValueChange={(v) => setRedirectStatusCode(Number(v))}
+                          className="flex border border-input bg-background"
                         >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="301">301 - Permanent</SelectItem>
-                            <SelectItem value="302">302 - Temporary</SelectItem>
-                          </SelectContent>
-                        </Select>
+                          <DomainAutocompleteInput
+                            value={domain}
+                            nginxNodeId={nodeId || undefined}
+                            onChange={(v) => {
+                              const next = [...domainNames];
+                              next[i] = v;
+                              setDomainNames(next);
+                            }}
+                            onDomainSelect={(selectedDomain) => {
+                              if (selectedDomain?.nginxNodeId) {
+                                setNodeId(selectedDomain.nginxNodeId);
+                              }
+                            }}
+                            placeholder="example.com"
+                            inputClassName="border-0 shadow-none"
+                          />
+                          {domainNames.length > 1 && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                              onClick={() => setDomainNames(domainNames.filter((_, j) => j !== i))}
+                            >
+                              <Minus className="h-4 w-4" />
+                            </Button>
+                          )}
+                          {i === domainNames.length - 1 && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                              onClick={() => setDomainNames([...domainNames, ""])}
+                            >
+                              <Plus className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </motion.div>
+                      ))}
+                    </AnimatePresence>
+                  </div>
+                </div>
+
+                {/* Raw mode toggle — only when editing */}
+                {isEditing && (
+                  <div className="border border-border bg-card">
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <div>
+                        <p className="text-sm font-medium">Raw Config Mode</p>
+                        <p className="text-xs text-muted-foreground">
+                          Bypass template rendering and edit nginx config directly
+                        </p>
+                      </div>
+                      <Switch
+                        checked={rawConfigEnabled}
+                        onChange={setRawConfigEnabled}
+                        disabled={maintenanceLocked}
+                      />
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            )}
+
+            {step === 2 && !isEditing && (
+              <motion.div
+                key="step-2"
+                initial={STEP_ANIMATION.initial}
+                animate={STEP_ANIMATION.animate}
+                exit={STEP_ANIMATION.exit}
+                transition={STEP_ANIMATION.transition}
+                className="space-y-4"
+              >
+                {/* Forwarding / Redirect card */}
+                {type === "proxy" && (
+                  <PanelShell title="Forwarding">
+                    <ProxyUpstreamFields
+                      value={upstream}
+                      onChange={(value) => {
+                        upstreamTouchedRef.current = true;
+                        setUpstream(value);
+                      }}
+                      containers={dockerContainers}
+                    />
+                  </PanelShell>
+                )}
+
+                {type === "redirect" && (
+                  <div className="border border-border bg-card">
+                    <div className="border-b border-border p-4">
+                      <h2 className="font-semibold text-sm">Redirect</h2>
+                    </div>
+                    <div className="p-4">
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div className="space-y-1.5">
+                          <label className="text-xs text-muted-foreground">Redirect URL</label>
+                          <Input
+                            value={redirectUrl}
+                            onChange={(e) => setRedirectUrl(e.target.value)}
+                            placeholder="https://example.com"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-xs text-muted-foreground">Status Code</label>
+                          <Select
+                            value={String(redirectStatusCode)}
+                            onValueChange={(v) => setRedirectStatusCode(Number(v))}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="301">301 - Permanent</SelectItem>
+                              <SelectItem value="302">302 - Temporary</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* SSL card — always visible, inner controls disabled when SSL off */}
-              <div className="border border-border bg-card">
-                {type === "proxy" && (
-                  <SettingsControlRow
-                    title="WebSocket Support"
-                    description="Enable WebSocket proxying"
-                  >
-                    <Switch checked={websocketSupport} onChange={setWebsocketSupport} />
-                  </SettingsControlRow>
-                )}
-                {userTemplates.length > 0 && (
-                  <SettingsControlRow
-                    title="Config Template"
-                    description="Nginx configuration template"
-                  >
-                    <Select
-                      value={nginxTemplateId || "__none__"}
-                      onValueChange={(v) => {
-                        const newId = v === "__none__" ? "" : v;
-                        setNginxTemplateId(newId);
-                        if (newId) {
-                          const tmpl = nginxTemplateList.find((t) => t.id === newId);
-                          if (tmpl?.variables?.length) {
-                            const defaults: Record<string, string | number | boolean> = {};
-                            for (const vd of tmpl.variables) {
-                              if (vd.default !== undefined) defaults[vd.name] = vd.default;
+                {/* SSL card — always visible, inner controls disabled when SSL off */}
+                <div className="border border-border bg-card">
+                  {type === "proxy" && (
+                    <SettingsControlRow
+                      title="WebSocket Support"
+                      description="Enable WebSocket proxying"
+                    >
+                      <Switch checked={websocketSupport} onChange={setWebsocketSupport} />
+                    </SettingsControlRow>
+                  )}
+                  {userTemplates.length > 0 && (
+                    <SettingsControlRow
+                      title="Config Template"
+                      description="Nginx configuration template"
+                    >
+                      <Select
+                        value={nginxTemplateId || "__none__"}
+                        onValueChange={(v) => {
+                          const newId = v === "__none__" ? "" : v;
+                          setNginxTemplateId(newId);
+                          if (newId) {
+                            const tmpl = nginxTemplateList.find((t) => t.id === newId);
+                            if (tmpl?.variables?.length) {
+                              const defaults: Record<string, string | number | boolean> = {};
+                              for (const vd of tmpl.variables) {
+                                if (vd.default !== undefined) defaults[vd.name] = vd.default;
+                              }
+                              setTemplateVariables((prev) => ({ ...defaults, ...prev }));
                             }
-                            setTemplateVariables((prev) => ({ ...defaults, ...prev }));
                           }
-                        }
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Default template" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__">Default template</SelectItem>
-                        {userTemplates.map((t) => (
-                          <SelectItem key={t.id} value={t.id}>
-                            {t.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Default template" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">Default template</SelectItem>
+                          {userTemplates.map((t) => (
+                            <SelectItem key={t.id} value={t.id}>
+                              {t.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </SettingsControlRow>
+                  )}
+                  <SettingsControlRow title="SSL Enabled" description="Serve this host over HTTPS">
+                    <Switch checked={sslEnabled} onChange={setSslEnabled} />
                   </SettingsControlRow>
-                )}
-                <SettingsControlRow title="SSL Enabled" description="Serve this host over HTTPS">
-                  <Switch checked={sslEnabled} onChange={setSslEnabled} />
-                </SettingsControlRow>
-                <SettingsControlRow title="Force HTTPS" description="Redirect HTTP to HTTPS">
-                  <div className={cn(!sslEnabled && "opacity-50")}>
-                    <Switch checked={sslForced} onChange={setSslForced} disabled={!sslEnabled} />
-                  </div>
-                </SettingsControlRow>
-                <SettingsControlRow title="HTTP/2" description="Enable HTTP/2 protocol support">
-                  <div className={cn(!sslEnabled && "opacity-50")}>
-                    <Switch
-                      checked={http2Support}
-                      onChange={setHttp2Support}
-                      disabled={!sslEnabled}
-                    />
-                  </div>
-                </SettingsControlRow>
-                <SettingsControlRow title="SSL Certificate">
-                  <div className={cn("w-full", !sslEnabled && "pointer-events-none opacity-50")}>
-                    <Select
-                      value={sslCertificateId || "__none__"}
-                      onValueChange={(v) => setSslCertificateId(v === "__none__" ? "" : v)}
-                      disabled={!sslEnabled}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select certificate..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__">None</SelectItem>
-                        {sslCerts.map((cert) => (
-                          <SelectItem key={cert.id} value={cert.id}>
-                            {cert.name} ({cert.type})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </SettingsControlRow>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+                  <SettingsControlRow title="Force HTTPS" description="Redirect HTTP to HTTPS">
+                    <div className={cn(!sslEnabled && "opacity-50")}>
+                      <Switch checked={sslForced} onChange={setSslForced} disabled={!sslEnabled} />
+                    </div>
+                  </SettingsControlRow>
+                  <SettingsControlRow title="HTTP/2" description="Enable HTTP/2 protocol support">
+                    <div className={cn(!sslEnabled && "opacity-50")}>
+                      <Switch
+                        checked={http2Support}
+                        onChange={setHttp2Support}
+                        disabled={!sslEnabled}
+                      />
+                    </div>
+                  </SettingsControlRow>
+                  <SettingsControlRow title="SSL Certificate">
+                    <div className={cn("w-full", !sslEnabled && "pointer-events-none opacity-50")}>
+                      <Select
+                        value={sslCertificateId || "__none__"}
+                        onValueChange={(v) => setSslCertificateId(v === "__none__" ? "" : v)}
+                        disabled={!sslEnabled}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select certificate..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">None</SelectItem>
+                          {sslCerts.map((cert) => (
+                            <SelectItem key={cert.id} value={cert.id}>
+                              {cert.name} ({cert.type})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </SettingsControlRow>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </AnimatedHeight>
 
         <DialogFooter>
           {isEditing ? (

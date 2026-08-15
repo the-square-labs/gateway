@@ -1,5 +1,17 @@
 import { cn } from "@/lib/utils";
-import type { NodeAppearanceColor } from "@/types";
+import type { NodeAppearanceColor, NodeType } from "@/types";
+
+export const NODE_TYPE_LABELS: Record<NodeType, string> = {
+  nginx: "Ingress",
+  docker: "Docker",
+  databases: "Databases",
+  monitoring: "Monitoring",
+  bastion: "Bastion",
+};
+
+export function nodeTypeLabel(type: NodeType | string): string {
+  return NODE_TYPE_LABELS[type as NodeType] ?? type;
+}
 
 export const NODE_APPEARANCE_COLOR_OPTIONS: Array<{
   value: NodeAppearanceColor;

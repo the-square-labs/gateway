@@ -34,7 +34,11 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import { getForcedDaemonUpdateForNode } from "@/lib/dev-force-updates";
-import { getNodeAppearanceColor, NODE_APPEARANCE_COLOR_OPTIONS } from "@/lib/node-appearance";
+import {
+  getNodeAppearanceColor,
+  NODE_APPEARANCE_COLOR_OPTIONS,
+  nodeTypeLabel,
+} from "@/lib/node-appearance";
 import { confirmAndDeleteNode } from "@/lib/remove-node";
 import { nodeRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
@@ -399,7 +403,7 @@ export function AdminNodeDetail({
           | undefined;
         const approved = await confirm({
           title: "Update domain DNS targets",
-          description: `This Nginx node is used by ${details?.domainCount ?? "one or more"} domain${details?.domainCount === 1 ? "" : "s"}. Their tracked Cloudflare DNS target will change from ${details?.previousAddress || "unavailable"} to ${details?.nextAddress || "unavailable"}.${details?.domains?.length ? ` Affected: ${details.domains.join(", ")}.` : ""}`,
+          description: `This Ingress node is used by ${details?.domainCount ?? "one or more"} domain${details?.domainCount === 1 ? "" : "s"}. Their tracked Cloudflare DNS target will change from ${details?.previousAddress || "unavailable"} to ${details?.nextAddress || "unavailable"}.${details?.domains?.length ? ` Affected: ${details.domains.join(", ")}.` : ""}`,
           confirmLabel: "Update DNS targets",
         });
         if (!approved) return;
@@ -523,7 +527,7 @@ export function AdminNodeDetail({
                   )}
               </div>
               <p className="text-sm text-muted-foreground">
-                {node.hostname} &middot; {node.type} &middot;{" "}
+                {node.hostname} &middot; {nodeTypeLabel(node.type)} &middot;{" "}
                 {node.daemonVersion ?? "unknown version"}
                 {nodeUpdating && updateTargetVersion ? (
                   <> &middot; updating to {updateTargetVersion}</>
@@ -942,7 +946,7 @@ export function AdminNodeDetail({
                     ? "Used as the host shown for published managed database ports."
                     : node.type === "nginx"
                       ? "Used as the public ingress address for domains assigned to this node."
-                      : "Used by proxy hosts to reach published Docker ports."}
+                      : "Used by routes to reach published Docker ports."}
                 </p>
               </div>
             )}

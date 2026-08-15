@@ -1,10 +1,13 @@
-import { Cloud, MoreVertical, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ArrowRight, Cloud, MoreVertical, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { DetailRow } from "@/components/common/DetailRow";
 import { EmptyState } from "@/components/common/EmptyState";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
+import { PanelShell } from "@/components/common/PanelShell";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
 import { DNSChallengeVerification } from "@/components/ssl/DNSChallengeVerification";
@@ -19,6 +22,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -42,7 +46,9 @@ import { cn, daysUntil, formatDate, formatDateTime, hoursUntil } from "@/lib/uti
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useSSLStore } from "@/stores/ssl";
+import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type {
   CertificateDistributionState,
   DNSChallenge,
@@ -94,12 +100,15 @@ function SSLStatusBadge({ status }: { status: SSLCertStatus }) {
   }
 }
 
-function TLSDistributionBadge({ distribution }: { distribution?: CertificateDistributionState }) {
-  if (!distribution || distribution.status === "pending") {
-    return <Badge variant="secondary">TLS pending</Badge>;
+function TLSDeploymentBadge({ distribution }: { distribution?: CertificateDistributionState }) {
+  if (!distribution || distribution.status === "not_deployed") {
+    return <Badge variant="secondary">Not deployed</Badge>;
+  }
+  if (distribution.status === "pending") {
+    return <Badge variant="warning">Deploying</Badge>;
   }
   if (distribution.status === "ready") {
-    return <Badge variant="success">TLS ready ({distribution.readyReplicaCount})</Badge>;
+    return <Badge variant="success">Ready ({distribution.readyReplicaCount})</Badge>;
   }
   if (distribution.status === "daemon_update_required") {
     return <Badge variant="warning">Daemon update needed</Badge>;
@@ -108,29 +117,95 @@ function TLSDistributionBadge({ distribution }: { distribution?: CertificateDist
 }
 
 export function SSLCertificates() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedCertificateId = searchParams.get("certificate");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [domainRequiredOpen, setDomainRequiredOpen] = useState(false);
+  const [cloudflareRequiredOpen, setCloudflareRequiredOpen] = useState(false);
+  const [hasDomains, setHasDomains] = useState(false);
+  const [createInitialTab, setCreateInitialTab] = useState<"acme" | "upload">("acme");
+  const [isCheckingDomains, setIsCheckingDomains] = useState(false);
   const [createDialogDevPreview, setCreateDialogDevPreview] =
     useState<SSLCertificateCreateDialogDevPreview | null>(null);
+  const [cloudflareReady, setCloudflareReady] = useState<boolean | null>(null);
+  const isCheckingDomainsRef = useRef(false);
   const { hasScope } = useAuthStore();
+  const pkiEnabled = useSystemConfigStore((s) => s.config.features.pkiEnabled);
+  const hasCloudflareIntegration = useUIBootstrapStore(
+    (state) => state.snapshot?.navigation.hasCloudflareIntegration ?? false
+  );
+  const canInspectCloudflare =
+    hasScope("integrations:cloudflare:view") ||
+    hasScope("integrations:cloudflare:dns:view") ||
+    hasScope("integrations:cloudflare:dns:edit") ||
+    hasScope("integrations:cloudflare:dns:delete") ||
+    hasScope("integrations:cloudflare:manage");
+  const cloudflareConfigured = cloudflareReady ?? hasCloudflareIntegration;
   const canViewSystemCertificates = useAuthStore((s) => s.hasScope("admin:details:certificates"));
   const showSystemCertificatePreference = useUIStore((s) => s.showSystemCertificates);
   const showSystemCertificates = canViewSystemCertificates && showSystemCertificatePreference;
   const modal = useUIStore((s) => s.modal);
   const closeModal = useUIStore((s) => s.closeModal);
 
+  const openCreateCertificate = useCallback(async () => {
+    if (isCheckingDomainsRef.current) return;
+    isCheckingDomainsRef.current = true;
+    setIsCheckingDomains(true);
+    try {
+      const [result, connectors] = await Promise.all([
+        api.listDomains({ page: 1, limit: 1 }),
+        canInspectCloudflare
+          ? api.listCloudflareConnectors({ enabled: true }).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+      if (connectors !== null) {
+        setCloudflareReady(
+          connectors.some(
+            (connector) =>
+              connector.enabled &&
+              connector.syncStatus !== "error" &&
+              (connector.zones?.length ?? 0) > 0
+          )
+        );
+      }
+      const domainsAvailable = result.pagination.total > 0;
+      setHasDomains(domainsAvailable);
+      if (!domainsAvailable) {
+        setDomainRequiredOpen(true);
+        return;
+      }
+      setCreateInitialTab("acme");
+      setCreateDialogOpen(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to check registered domains");
+    } finally {
+      isCheckingDomainsRef.current = false;
+      setIsCheckingDomains(false);
+    }
+  }, [canInspectCloudflare]);
+
+  const continueWithManualCertificate = () => {
+    setDomainRequiredOpen(false);
+    setHasDomains(false);
+    setCreateInitialTab("upload");
+    setCreateDialogOpen(true);
+  };
+
   // Open dialog from command palette
   useEffect(() => {
     if (modal?.type === "createSSLCert") {
-      setCreateDialogOpen(true);
+      void openCreateCertificate();
       closeModal();
     }
-  }, [modal, closeModal]);
+  }, [modal, closeModal, openCreateCertificate]);
 
   useEffect(() => {
     if (!import.meta.env.DEV || typeof window === "undefined") return;
     const gatewayDev = ((window as Window & { gatewayDev?: Record<string, unknown> }).gatewayDev ??=
       {});
     const openDns01Modal = () => {
+      setHasDomains(true);
+      setCreateInitialTab("acme");
       setCreateDialogDevPreview({
         mode: "dns-01",
         domains: ["example.com", "*.example.com"],
@@ -150,6 +225,8 @@ export function SSLCertificates() {
       setCreateDialogOpen(true);
     };
     const openHttp01Modal = () => {
+      setHasDomains(true);
+      setCreateInitialTab("acme");
       setCreateDialogDevPreview({
         mode: "http-01",
         domains: ["example.com"],
@@ -192,7 +269,6 @@ export function SSLCertificates() {
     isLoadingMore,
     filters,
     hasMore,
-    total,
     fetchCertificates,
     fetchNextPage,
     setFilters,
@@ -298,14 +374,14 @@ export function SSLCertificates() {
     }
   };
 
-  const handleResyncDistribution = async (cert: SSLCertificate) => {
+  const handleRetryDeployments = async (cert: SSLCertificate) => {
     setResyncingCertId(cert.id);
     try {
       await api.resyncSSLCertificateDistribution(cert.id);
-      toast.success(`TLS synchronization requested for ${cert.name}`);
+      toast.success(`TLS deployment retry requested for ${cert.name}`);
       await fetchCertificates();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to synchronize TLS certificate");
+      toast.error(err instanceof Error ? err.message : "Failed to retry TLS deployments");
     } finally {
       setResyncingCertId(null);
     }
@@ -372,9 +448,7 @@ export function SSLCertificates() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to delete certificate";
       if (msg.includes("in use") || msg.includes("CERT_IN_USE")) {
-        toast.error(
-          "Cannot delete: certificate is used by proxy hosts. Remove it from proxy hosts first."
-        );
+        toast.error("Cannot delete: certificate is used by routes. Remove it from routes first.");
       } else if (msg.includes("System") || msg.includes("SYSTEM_CERT")) {
         toast.error("System certificates cannot be deleted.");
       } else {
@@ -383,14 +457,35 @@ export function SSLCertificates() {
     }
   };
 
-  const openCertificatePreview = (cert: SSLCertificate) => {
+  const openCertificatePreview = useCallback((cert: SSLCertificate) => {
     if (previewCleanupTimerRef.current !== null) {
       window.clearTimeout(previewCleanupTimerRef.current);
       previewCleanupTimerRef.current = null;
     }
     setPreviewCert(cert);
     setPreviewOpen(true);
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!requestedCertificateId) return;
+    let cancelled = false;
+    void api
+      .getSSLCertificate(requestedCertificateId)
+      .then((certificate) => {
+        if (!cancelled) openCertificatePreview(certificate);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          toast.error(error instanceof Error ? error.message : "Failed to load certificate");
+        }
+      });
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("certificate");
+    setSearchParams(nextParams, { replace: true });
+    return () => {
+      cancelled = true;
+    };
+  }, [openCertificatePreview, requestedCertificateId, searchParams, setSearchParams]);
 
   const handlePreviewOpenChange = (open: boolean) => {
     setPreviewOpen(open);
@@ -447,9 +542,9 @@ export function SSLCertificates() {
     },
     {
       key: "tls",
-      header: "TLS",
+      header: "Deployments",
       width: "minmax(130px, 0.7fr)",
-      render: (cert) => <TLSDistributionBadge distribution={cert.distribution} />,
+      render: (cert) => <TLSDeploymentBadge distribution={cert.distribution} />,
     },
     {
       key: "expires",
@@ -532,14 +627,17 @@ export function SSLCertificates() {
           cert.autoRenew &&
           cert.autoRenewProvider === "cloudflare";
         const canDeleteCert = !cert.isSystem && hasScope("ssl:cert:delete");
-        const canResyncDistribution =
-          hasScope("admin:update") && cert.distribution?.status !== "ready";
+        const canRetryDeployments =
+          hasScope("admin:update") &&
+          cert.distribution !== undefined &&
+          cert.distribution.status !== "ready" &&
+          cert.distribution.status !== "not_deployed";
         const hasActions =
           canContinueDNSVerification ||
           canRenewCert ||
           canEnableCloudflareAutoRenew ||
           canDisableCloudflareAutoRenew ||
-          canResyncDistribution ||
+          canRetryDeployments ||
           canDeleteCert;
         if (!hasActions) return null;
         return (
@@ -575,16 +673,16 @@ export function SSLCertificates() {
                     Disable Auto-Renew
                   </DropdownMenuItem>
                 )}
-                {canResyncDistribution && (
+                {canRetryDeployments && (
                   <DropdownMenuItem
-                    onClick={() => handleResyncDistribution(cert)}
+                    onClick={() => handleRetryDeployments(cert)}
                     disabled={resyncingCertId === cert.id}
-                    aria-label={`Retry TLS sync for ${cert.name}`}
+                    aria-label={`Retry TLS deployments for ${cert.name}`}
                   >
                     <RefreshCw
                       className={cn("h-4 w-4", resyncingCertId === cert.id && "animate-spin")}
                     />
-                    Retry TLS Sync
+                    Retry Deployments
                   </DropdownMenuItem>
                 )}
                 {canDeleteCert && (
@@ -613,7 +711,9 @@ export function SSLCertificates() {
             <LiteModeBackButton />
             <div>
               <h1 className="text-2xl font-bold">SSL Certificates</h1>
-              <p className="text-sm text-muted-foreground">{total} certificates total</p>
+              <p className="text-sm text-muted-foreground">
+                Manage TLS certificates for ingress domains
+              </p>
             </div>
           </div>
           <ResponsiveHeaderActions
@@ -623,14 +723,15 @@ export function SSLCertificates() {
                     {
                       label: "Add Certificate",
                       icon: <Plus className="h-4 w-4" />,
-                      onClick: () => setCreateDialogOpen(true),
+                      onClick: () => void openCreateCertificate(),
+                      disabled: isCheckingDomains,
                     },
                   ]
                 : []
             }
           >
             {hasScope("ssl:cert:issue") && (
-              <Button onClick={() => setCreateDialogOpen(true)}>
+              <Button onClick={() => void openCreateCertificate()} disabled={isCheckingDomains}>
                 <Plus className="h-4 w-4" />
                 Add Certificate
               </Button>
@@ -718,7 +819,7 @@ export function SSLCertificates() {
           <EmptyState
             message="No SSL certificates."
             {...(hasScope("ssl:cert:issue")
-              ? { actionLabel: "Add one", onAction: () => setCreateDialogOpen(true) }
+              ? { actionLabel: "Add one", onAction: () => void openCreateCertificate() }
               : {})}
             hasActiveFilters={hasActiveFilters}
             onReset={() => {
@@ -736,71 +837,166 @@ export function SSLCertificates() {
           if (!open) setCreateDialogDevPreview(null);
         }}
         onCreated={fetchCertificates}
+        hasDomains={hasDomains}
+        pkiEnabled={pkiEnabled}
+        cloudflareConfigured={cloudflareConfigured}
+        onCloudflareRequired={() => {
+          setCreateDialogOpen(false);
+          setCloudflareRequiredOpen(true);
+        }}
+        initialTab={createInitialTab}
         devPreview={createDialogDevPreview}
       />
+      <Dialog open={cloudflareRequiredOpen} onOpenChange={setCloudflareRequiredOpen}>
+        <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
+          <DialogHeader>
+            <DialogTitle>Configure Cloudflare</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Automatic DNS validation requires a configured Cloudflare integration. Add and enable a
+            Cloudflare connector in Settings, then return here to request the certificate.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCloudflareRequiredOpen(false)}>
+              Close
+            </Button>
+            <Button asChild>
+              <Link to="/settings/integrations" onClick={() => setCloudflareRequiredOpen(false)}>
+                Configure Cloudflare <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={domainRequiredOpen} onOpenChange={setDomainRequiredOpen}>
+        <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
+          <DialogHeader>
+            <DialogTitle>Add a domain first</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Public certificates require a registered domain. Add the domain first, then return here
+            to request its certificate.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={continueWithManualCertificate}>
+              Continue manually
+            </Button>
+            <Button asChild>
+              <Link to="/domains" onClick={() => setDomainRequiredOpen(false)}>
+                Open Domains <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={previewOpen} onOpenChange={handlePreviewOpenChange}>
-        <DialogContent className="max-w-full sm:max-w-xl">
+        <DialogContent className="sm:max-w-2xl" aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle>SSL Certificate Details</DialogTitle>
-            <DialogDescription>
-              <span className="font-mono text-xs break-all">{previewCert?.name ?? ""}</span>
-            </DialogDescription>
           </DialogHeader>
           {previewCert && (
-            <div className="min-w-0 divide-y divide-border overflow-hidden border border-border bg-card">
-              {[
-                ["Name", previewCert.name],
-                ["Domains", previewCert.domainNames.join(", ") || "-"],
-                ["Type", previewCert.type],
-                ["Status", previewCert.status],
-                ["TLS Distribution", previewCert.distribution?.status ?? "pending"],
-                [
-                  "TLS Replicas",
-                  previewCert.distribution
-                    ? `${previewCert.distribution.readyReplicaCount}/${previewCert.distribution.replicaCount} ready`
-                    : "0/0 ready",
-                ],
-                [
-                  "TLS Last Checked",
-                  previewCert.distribution?.lastVerifiedAt
-                    ? formatDateTime(previewCert.distribution.lastVerifiedAt)
-                    : "-",
-                ],
-                ["TLS Issue", previewCert.distribution?.error ?? "-"],
-                ["Provider", previewCert.acmeProvider ?? "-"],
-                ["Challenge", previewCert.acmeChallengeType ?? "-"],
-                ["Valid From", previewCert.notBefore ? formatDate(previewCert.notBefore) : "-"],
-                ["Valid Until", previewCert.notAfter ? formatDate(previewCert.notAfter) : "-"],
-                [
-                  "Auto-Renew",
-                  previewCert.autoRenewProvider === "cloudflare" && previewCert.autoRenew
-                    ? `Cloudflare (${previewCert.autoRenewDnsBindings?.[0]?.connectorName ?? "connector"})`
-                    : previewCert.autoRenew
-                      ? previewCert.acmeChallengeType === "dns-01"
-                        ? "Needs Cloudflare setup"
-                        : "Yes"
-                      : "No",
-                ],
-                ["Auto-Renew Disabled", previewCert.autoRenewDisabledReason ?? "-"],
-                [
-                  "Last Renewed",
-                  previewCert.lastRenewedAt ? formatDate(previewCert.lastRenewedAt) : "-",
-                ],
-                ["System", previewCert.isSystem ? "Yes" : "No"],
-                ["Created", formatDate(previewCert.createdAt)],
-                ["Updated", formatDate(previewCert.updatedAt)],
-                ["Error", previewCert.renewalError ?? "-"],
-              ].map(([label, value]) => (
-                <div
-                  key={label}
-                  className="grid min-w-0 grid-cols-[minmax(96px,max-content)_minmax(0,1fr)] items-center gap-4 px-4 py-3"
-                >
-                  <span className="text-sm text-muted-foreground">{label}</span>
-                  <span className="min-w-0 truncate text-right font-mono text-sm" title={value}>
-                    {value}
-                  </span>
-                </div>
-              ))}
+            <div className="space-y-4">
+              <PanelShell title="Certificate" bodyClassName="divide-y divide-border">
+                <DetailRow
+                  label="Name"
+                  value={<span className="break-all">{previewCert.name}</span>}
+                />
+                <DetailRow
+                  label="Domains"
+                  value={
+                    <span className="break-all">{previewCert.domainNames.join(", ") || "-"}</span>
+                  }
+                />
+                <DetailRow label="Type" value={<SSLTypeBadge type={previewCert.type} />} />
+                <DetailRow label="Status" value={<SSLStatusBadge status={previewCert.status} />} />
+                <DetailRow
+                  label="Valid From"
+                  value={previewCert.notBefore ? formatDate(previewCert.notBefore) : "-"}
+                />
+                <DetailRow
+                  label="Valid Until"
+                  value={previewCert.notAfter ? formatDate(previewCert.notAfter) : "-"}
+                />
+                {previewCert.isSystem && <DetailRow label="System" value="Yes" />}
+                <DetailRow label="Created" value={formatDate(previewCert.createdAt)} />
+                <DetailRow label="Updated" value={formatDate(previewCert.updatedAt)} />
+              </PanelShell>
+
+              <PanelShell title="Deployments" bodyClassName="divide-y divide-border">
+                {(previewCert.distribution?.replicas?.length ?? 0) === 0 ? (
+                  <EmptyState
+                    message="Not deployed. The certificate will be installed when an enabled route uses it."
+                    embedded
+                  />
+                ) : (
+                  previewCert.distribution?.replicas?.map((replica) => (
+                    <DetailRow
+                      key={replica.nodeId}
+                      label={replica.nodeName}
+                      value={
+                        <span className="flex min-w-0 flex-col items-end gap-1">
+                          <Badge
+                            variant={
+                              replica.status === "ready"
+                                ? "success"
+                                : replica.status === "failed"
+                                  ? "destructive"
+                                  : "warning"
+                            }
+                          >
+                            {replica.status.replaceAll("_", " ")}
+                          </Badge>
+                          {replica.error && (
+                            <span className="max-w-full break-words text-xs text-destructive">
+                              {replica.error}
+                            </span>
+                          )}
+                          {replica.lastVerifiedAt && (
+                            <span className="text-xs text-muted-foreground">
+                              Checked {formatDateTime(replica.lastVerifiedAt)}
+                            </span>
+                          )}
+                        </span>
+                      }
+                    />
+                  ))
+                )}
+              </PanelShell>
+
+              <PanelShell title="ACME & Renewal" bodyClassName="divide-y divide-border">
+                <DetailRow label="Provider" value={previewCert.acmeProvider ?? "-"} />
+                <DetailRow label="Challenge" value={previewCert.acmeChallengeType ?? "-"} />
+                <DetailRow
+                  label="Auto-Renew"
+                  value={
+                    previewCert.autoRenewProvider === "cloudflare" && previewCert.autoRenew
+                      ? `Cloudflare (${previewCert.autoRenewDnsBindings?.[0]?.connectorName ?? "connector"})`
+                      : previewCert.autoRenew
+                        ? "Yes"
+                        : "No"
+                  }
+                />
+                <DetailRow
+                  label="Last Renewed"
+                  value={previewCert.lastRenewedAt ? formatDate(previewCert.lastRenewedAt) : "-"}
+                />
+                {previewCert.autoRenewDisabledReason && (
+                  <DetailRow
+                    label="Auto-Renew Disabled"
+                    value={previewCert.autoRenewDisabledReason}
+                  />
+                )}
+                {(previewCert.renewalError || previewCert.distribution?.error) && (
+                  <DetailRow
+                    label="Issue"
+                    value={
+                      <span className="break-words text-destructive">
+                        {previewCert.renewalError ?? previewCert.distribution?.error}
+                      </span>
+                    }
+                  />
+                )}
+              </PanelShell>
             </div>
           )}
         </DialogContent>

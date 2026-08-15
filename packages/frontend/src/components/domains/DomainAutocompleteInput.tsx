@@ -16,6 +16,8 @@ function mapDomains(domains: Domain[]): DomainSearchResult[] {
       id: domain.id,
       domain: domain.domain,
       dnsStatus: domain.dnsStatus,
+      dnsProvider: domain.dnsProvider,
+      nginxNodeId: domain.nginxNodeId,
     }));
 }
 
@@ -50,14 +52,18 @@ function getProxyHostDomainSuggestions() {
       id: domain,
       domain,
       dnsStatus: "unknown" as const,
+      dnsProvider: "legacy" as const,
+      nginxNodeId: null,
     }));
 }
 
-function loadDomainSuggestions() {
+function loadDomainSuggestions(registeredOnly: boolean) {
   return api
     .searchDomains("")
     .catch(() => [])
-    .then((domains) => (domains.length > 0 ? domains : getProxyHostDomainSuggestions()));
+    .then((domains) =>
+      domains.length > 0 || registeredOnly ? domains : getProxyHostDomainSuggestions()
+    );
 }
 
 interface DomainAutocompleteInputProps {
@@ -65,6 +71,9 @@ interface DomainAutocompleteInputProps {
   onChange: (value: string) => void;
   placeholder?: string;
   inputClassName?: string;
+  registeredOnly?: boolean;
+  nginxNodeId?: string;
+  onDomainSelect?: (domain: DomainSearchResult | null) => void;
 }
 
 export function DomainAutocompleteInput({
@@ -72,34 +81,54 @@ export function DomainAutocompleteInput({
   onChange,
   placeholder = "example.com",
   inputClassName,
+  registeredOnly = false,
+  nginxNodeId,
+  onDomainSelect,
 }: DomainAutocompleteInputProps) {
   const [domains, setDomains] = useState<DomainSearchResult[]>(getCachedDomainSuggestions);
 
   useEffect(() => {
     let cancelled = false;
-    void loadDomainSuggestions().then((loadedDomains) => {
+    void loadDomainSuggestions(registeredOnly).then((loadedDomains) => {
       if (!cancelled) setDomains(loadedDomains);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [registeredOnly]);
+
+  useEffect(() => {
+    if (!nginxNodeId || !value.trim()) return;
+    const normalizedValue = value.trim().toLowerCase();
+    const selectedDomain = domains.find(
+      (domain) => domain.domain.trim().toLowerCase() === normalizedValue
+    );
+    if (!selectedDomain || selectedDomain.nginxNodeId === nginxNodeId) return;
+    onChange("");
+    onDomainSelect?.(null);
+  }, [domains, nginxNodeId, onChange, onDomainSelect, value]);
 
   const options = useMemo<ComboboxOption[]>(
     () =>
-      domains.slice(0, 100).map((domain) => ({
-        value: domain.domain,
-        label: domain.domain,
-      })),
-    [domains]
+      domains
+        .filter((domain) => !nginxNodeId || domain.nginxNodeId === nginxNodeId)
+        .slice(0, 100)
+        .map((domain) => ({
+          value: domain.domain,
+          label: domain.domain,
+        })),
+    [domains, nginxNodeId]
   );
 
   return (
     <Combobox
-      freeText
+      freeText={!registeredOnly}
       value={value}
       options={options}
-      onValueChange={onChange}
+      onValueChange={(nextValue) => {
+        onChange(nextValue);
+        onDomainSelect?.(domains.find((candidate) => candidate.domain === nextValue) ?? null);
+      }}
       placeholder={placeholder}
       searchPlaceholder={placeholder}
       emptyMessage="No matching domains."

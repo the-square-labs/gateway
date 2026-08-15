@@ -18,8 +18,10 @@ import {
 import {
   CreateDomainSchema,
   DeleteDomainSchema,
+  DomainIngressMigrationSchema,
   DomainListQuerySchema,
   PreviewDomainSchema,
+  ResolveCloudflareMigrationSchema,
   UpdateDomainSchema,
 } from './domain.schemas.js';
 
@@ -141,7 +143,7 @@ export const previewDomainRoute = appRoute({
   method: 'post',
   path: '/preview',
   tags: ['Domains'],
-  summary: 'Preview Cloudflare DNS records for a domain',
+  summary: 'Preview DNS readiness for a domain',
   request: jsonBody(PreviewDomainSchema),
   responses: okJson(UnknownDataResponseSchema),
 });
@@ -170,6 +172,33 @@ export const checkDomainDnsRoute = appRoute({
   tags: ['Domains'],
   summary: 'Run a DNS check for a domain',
   request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const resolveCloudflareMigrationRoute = appRoute({
+  method: 'post',
+  path: '/{id}/cloudflare-migration/resolve',
+  tags: ['Domains'],
+  summary: 'Resolve a Cloudflare migration conflict',
+  request: { params: IdParamSchema, ...jsonBody(ResolveCloudflareMigrationSchema) },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const previewDomainIngressMigrationRoute = appRoute({
+  method: 'post',
+  path: '/{id}/ingress-migration/preview',
+  tags: ['Domains'],
+  summary: 'Preview a domain ingress migration',
+  request: { params: IdParamSchema, ...jsonBody(DomainIngressMigrationSchema) },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const migrateDomainIngressRoute = appRoute({
+  method: 'post',
+  path: '/{id}/ingress-migration',
+  tags: ['Domains'],
+  summary: 'Move a domain and its routes to another nginx ingress node',
+  request: { params: IdParamSchema, ...jsonBody(DomainIngressMigrationSchema) },
   responses: okJson(UnknownDataResponseSchema),
 });
 

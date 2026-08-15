@@ -30,7 +30,7 @@ export const ALL_SCOPES = [
   'domains:edit',
   'domains:delete',
   'domains:folders:manage',
-  // ── Proxy Hosts ──────────────────────────────────────────────────
+  // ── Ingress Routes (proxy-host API resources) ────────────────────
   'proxy:view',
   'proxy:create',
   'proxy:edit',

@@ -30,9 +30,9 @@ describe("confirmAndDeleteNode", () => {
     expect(confirm).toHaveBeenCalledTimes(2);
     expect(confirm).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        title: "Remove Offline Nginx Node",
-        description: expect.stringContaining("2 assigned proxy hosts"),
-        confirmLabel: "Remove Node and Proxies",
+        title: "Remove Offline Ingress Node",
+        description: expect.stringContaining("2 assigned routes"),
+        confirmLabel: "Remove Node and Routes",
       })
     );
     expect(deleteNode).toHaveBeenNthCalledWith(1, "node-1");

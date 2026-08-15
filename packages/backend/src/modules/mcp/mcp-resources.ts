@@ -136,8 +136,8 @@ const operationalResources: ResourceDefinition[] = [
   {
     name: 'gateway-proxy-hosts',
     uri: 'gateway://proxy/hosts',
-    title: 'Proxy hosts',
-    description: 'Bounded list of reverse proxy hosts and health status.',
+    title: 'Ingress routes',
+    description: 'Bounded list of ingress routes, node placement, targets, TLS, and health status.',
     requiredScopes: ['proxy:view'],
     async read(_uri, scopes) {
       const result = await container

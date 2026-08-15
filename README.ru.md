@@ -2,7 +2,7 @@
 
 # Gateway
 
-AI-first, но не AI-dependent self-hosted платформа управления инфраструктурой для reverse proxy, Docker-нагрузок, сертификатов, баз данных, логов, мониторинга, статус-страниц и автоматизации.
+AI-first, но не AI-dependent self-hosted платформа управления инфраструктурой для nginx ingress, Docker-нагрузок, сертификатов, баз данных, логов, мониторинга, статус-страниц и автоматизации.
 
 > [!NOTE]
 > Основная разработка ведется в [Wiolett Industries GitLab](https://gitlab.wiolett.net/wiolett/gateway). [GitHub-репозиторий](https://github.com/wiolett-industries/gateway) является публичным зеркалом. Issues и запросы функций можно оставлять на [GitHub](https://github.com/wiolett-industries/gateway/issues).
@@ -88,11 +88,11 @@ npx -y @wiolett/gateway-inference@latest setup claude-code
 <td><img src="docs/screenshots/nginx-monitoring.png" width="450" alt="Nginx Monitoring"></td>
 </tr>
 <tr>
-<td align="center"><strong>Proxy Host Config</strong></td>
+<td align="center"><strong>Ingress Route Config</strong></td>
 <td align="center"><strong>Settings</strong></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/proxy-host.png" width="450" alt="Proxy Host Config"></td>
+<td><img src="docs/screenshots/proxy-host.png" width="450" alt="Ingress Route Config"></td>
 <td><img src="docs/screenshots/settings.png" width="450" alt="Settings"></td>
 </tr>
 </table>
@@ -101,10 +101,10 @@ npx -y @wiolett/gateway-inference@latest setup claude-code
 
 | Область | Кратко |
 |---------|--------|
-| Reverse proxy | Multi-node nginx management, proxy hosts, Docker container/deployment upstreams, maintenance mode, redirects, WebSockets, access lists, health checks, host folders, templates, logs и stats. |
+| Ingress | Домен выбирает публичную nginx ingress-ноду; route направляет трафик на адрес, Docker container или deployment; SSL-сертификат раскладывается только на nginx-ноды, где его используют активные TLS routes. Также доступны maintenance mode, redirects, WebSockets, access lists, health checks, folders, templates, logs и stats. REST API сохраняет идентификаторы `proxy-host` для совместимости. |
 | Docker | Container lifecycle, deployments, rollout/rollback, подключение shared физических NVIDIA/AMD/Intel GPU, допустимые cross-node migrations контейнеров и volumes, offline inventory snapshots, registries, images, networks, volumes, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, mounts и cleanup. GPU-attached workloads в v1 нельзя мигрировать или экспортировать. |
-| Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports и proxy binding. |
-| Domains | Central domain registry, DNS checks, record validation и usage tracking. |
+| Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports и привязка к routes. |
+| Domains | Единый реестр hostnames, выбор nginx ingress-ноды, внешний или Cloudflare-managed DNS, validation, usage tracking и явная ingress migration. |
 | Databases | Saved PostgreSQL, Redis и ClickHouse connections с encrypted credentials, health history, browsing, scoped query consoles и capability-aware write operations; private-by-default managed Postgres, Redis и ClickHouse instances могут безопасно подключаться к Docker workloads. |
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware telemetry физических GPU, daemon runtime details, log streaming и update checks. |
 | Logging | Опциональный ClickHouse-backed structured log ingestion со schemas, retention, ingest tokens, rate limits, search, storage caps и health safeguards. |
@@ -131,7 +131,7 @@ Gateway запускается как Docker stack на control-plane серве
         +-------------+-------------------+
         |             |                   |
  nginx-daemon   docker-daemon     database profile     monitoring-daemon
- proxy host     container host    managed databases    metrics-only host
+ ingress route  container host    managed databases    metrics-only host
 ```
 
 Relay — отдельный long-lived container и единственный публичный владелец `9443/tcp`. Обычные app-only обновления сохраняют relay container и установленные managed-database binding streams; обновление relay остается отдельным событием обслуживания data plane.
@@ -157,7 +157,7 @@ Gateway уже ориентирован на production operations, а не на
 
 Готовая основа:
 
-- [x] Multi-node nginx reverse proxy management over outbound gRPC with mTLS.
+- [x] Multi-node nginx ingress management с domain affinity, routes и TLS deployment over outbound gRPC with mTLS.
 - [x] Docker host management with deployments, webhooks, registries, logs, files, consoles, and secrets.
 - [x] Monitoring daemon for host metrics, runtime state, and log streaming.
 - [x] Internal PKI, ACME SSL, certificate templates, domain tracking, and expiry alerts.

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { Resolver } from 'node:dns/promises';
 import type { DnsRecords } from '@/db/schema/domains.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -63,17 +64,36 @@ export function getPublicIPs(): { ipv4: string[]; ipv6: string[] } {
   return { ipv4: cachedPublicIPv4, ipv6: cachedPublicIPv6 };
 }
 
-export async function resolveDnsRecords(domain: string): Promise<DnsRecords> {
+export type DnsAddressResolution = 'resolved' | 'empty' | 'error';
+
+export interface DnsProbeResult {
+  queryName: string;
+  records: DnsRecords;
+  addressResolution: DnsAddressResolution;
+}
+
+export function dnsProbeName(domain: string, token = randomBytes(6).toString('hex')): string {
+  const normalized = domain.trim().toLowerCase();
+  return normalized.startsWith('*.') ? `_gateway-check-${token}.${normalized.slice(2)}` : normalized;
+}
+
+function isMissingAddressError(error: unknown): boolean {
+  const code = (error as { code?: string } | null)?.code;
+  return code === 'ENODATA' || code === 'ENOTFOUND' || code === 'ENONAME' || code === 'NXDOMAIN';
+}
+
+export async function probeDnsRecords(domain: string): Promise<DnsProbeResult> {
+  const queryName = dnsProbeName(domain);
   const [a, aaaa, cname, caa, mx, txt] = await Promise.allSettled([
-    withTimeout(resolver.resolve4(domain)),
-    withTimeout(resolver.resolve6(domain)),
-    withTimeout(resolver.resolveCname(domain)),
-    withTimeout(resolver.resolveCaa(domain)),
-    withTimeout(resolver.resolveMx(domain)),
-    withTimeout(resolver.resolveTxt(domain)),
+    withTimeout(resolver.resolve4(queryName)),
+    withTimeout(resolver.resolve6(queryName)),
+    withTimeout(resolver.resolveCname(queryName)),
+    withTimeout(resolver.resolveCaa(queryName)),
+    withTimeout(resolver.resolveMx(queryName)),
+    withTimeout(resolver.resolveTxt(queryName)),
   ]);
 
-  return {
+  const records = {
     a: a.status === 'fulfilled' ? a.value : [],
     aaaa: aaaa.status === 'fulfilled' ? aaaa.value : [],
     cname: cname.status === 'fulfilled' ? cname.value : [],
@@ -88,6 +108,22 @@ export async function resolveDnsRecords(domain: string): Promise<DnsRecords> {
     mx: mx.status === 'fulfilled' ? mx.value : [],
     txt: txt.status === 'fulfilled' ? txt.value : [],
   };
+
+  const addressResults = [a, aaaa];
+  const addressResolution: DnsAddressResolution =
+    records.a.length > 0 || records.aaaa.length > 0
+      ? 'resolved'
+      : addressResults.every((result) => result.status === 'rejected' && isMissingAddressError(result.reason))
+        ? 'empty'
+        : addressResults.some((result) => result.status === 'fulfilled')
+          ? 'empty'
+          : 'error';
+
+  return { queryName, records, addressResolution };
+}
+
+export async function resolveDnsRecords(domain: string): Promise<DnsRecords> {
+  return (await probeDnsRecords(domain)).records;
 }
 
 export type DnsStatus = 'valid' | 'invalid' | 'pending' | 'unknown';

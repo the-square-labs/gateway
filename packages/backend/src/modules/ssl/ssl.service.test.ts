@@ -446,3 +446,58 @@ describe('SSLService DNS-01 renewal', () => {
     expect(deleteDnsRecord).toHaveBeenCalledWith('zone-1', 'record-1');
   });
 });
+
+describe('SSLService pending ACME cancellation', () => {
+  it('deletes an unfinished initial ACME request', async () => {
+    const db = {
+      query: {
+        sslCertificates: {
+          findFirst: vi.fn().mockResolvedValue({
+            type: 'acme',
+            status: 'pending',
+            acmePendingOperation: 'issue',
+          }),
+        },
+      },
+    } as any;
+    const service = new SSLService(
+      db,
+      {} as any,
+      {} as any,
+      { log: vi.fn() } as any,
+      { upsertGatewayAsset: vi.fn() } as any
+    );
+    const deleteCert = vi.spyOn(service, 'deleteCert').mockResolvedValue(undefined);
+
+    await service.cancelPendingAcmeIssue('cert-1', 'user-1');
+
+    expect(deleteCert).toHaveBeenCalledWith('cert-1', 'user-1');
+  });
+
+  it('does not delete an active certificate or an in-progress renewal', async () => {
+    const db = {
+      query: {
+        sslCertificates: {
+          findFirst: vi.fn().mockResolvedValue({
+            type: 'acme',
+            status: 'pending',
+            acmePendingOperation: 'renewal',
+          }),
+        },
+      },
+    } as any;
+    const service = new SSLService(
+      db,
+      {} as any,
+      {} as any,
+      { log: vi.fn() } as any,
+      { upsertGatewayAsset: vi.fn() } as any
+    );
+    const deleteCert = vi.spyOn(service, 'deleteCert').mockResolvedValue(undefined);
+
+    await expect(service.cancelPendingAcmeIssue('cert-1', 'user-1')).rejects.toMatchObject({
+      code: 'ACME_REQUEST_NOT_PENDING',
+    });
+    expect(deleteCert).not.toHaveBeenCalled();
+  });
+});

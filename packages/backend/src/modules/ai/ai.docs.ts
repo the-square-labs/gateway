@@ -22,6 +22,7 @@ Gateway AI starts conversations with a small base tool surface. Domain-specific 
 - Use internal_documentation before Gateway-specific workflows, tool argument details, permission-sensitive operations, and recently added capabilities. Do not answer those from general intuition.
 - Use discover_tools({ categories: ["Logging"], includeTools: true }) before managing logging environments/schemas/logs.
 - Use discover_tools({ categories: ["Docker"], includeTools: true }) before managing Docker containers/images/volumes/networks.
+- Use discover_tools({ categories: ["Ingress"], includeTools: true }) before managing domains, routes, route folders, nginx templates, or access lists.
 - Use discover_tools({ categories: ["Inference"], includeTools: true }) before configuring inference providers, models, limits, or tokens.
 - Use discover_tools({ query: "certificate" }) when you know the task but not the category.
 - After discovery, use internal_documentation for workflow details and argument shapes.
@@ -43,7 +44,7 @@ Use find_resource with an empty query and a concrete type when the user asks to 
 - Find a container named api: find_resource({ query: "api", types: ["docker_container"] })
 - List Docker containers: find_resource({ query: "", types: ["docker_container"], limit: 50 })
 - List Docker nodes: find_resource({ query: "", types: ["node"], limit: 50 })
-- Find a proxy host by domain: find_resource({ query: "example.com", types: ["proxy_host"] })
+- Find an ingress route by domain: find_resource({ query: "example.com", types: ["proxy_host"] })
 - Find a logging schema: find_resource({ query: "nginx", types: ["logging_schema"] })
 - Search all readable resources: find_resource({ query: "production" })`,
 
@@ -71,15 +72,15 @@ Use find_resource with an empty query and a concrete type when the user asks to 
 - Never use generic revoke/delete operations for system certificates or CAs: server policy rejects them. This tool cannot revoke, delete, issue, export keys, or clean up certificates.
 
 ## PKI → SSL Workflow
-PKI certificates live in a separate store from SSL certificates. To use a PKI cert with a proxy host:
+PKI certificates live in a separate store from SSL certificates. To use a PKI cert with an ingress route:
 1. issue_certificate → returns { certificate, message }
 2. link_internal_cert(internalCertId: certificate.id) → creates an SSL certificate entry
-3. Use the SSL certificate ID (from step 2) when creating/updating proxy hosts.
-NEVER use a PKI certificate ID directly as sslCertificateId on a proxy host.`,
+3. Use the SSL certificate ID (from step 2) when creating/updating routes through the existing proxy-host tools.
+NEVER use a PKI certificate ID directly as sslCertificateId on a route.`,
 
   ssl: `# SSL Certificates
 
-SSL certificates in Gateway are used to enable HTTPS on proxy hosts. Three types exist:
+SSL certificates in Gateway enable HTTPS on ingress routes. Three types exist:
 
 ## Types
 1. **ACME** (Let's Encrypt): Automated free certificates via request_acme_cert. Requires domain verification. Auto-renewable.
@@ -88,7 +89,7 @@ SSL certificates in Gateway are used to enable HTTPS on proxy hosts. Three types
 
 ## ACME Certificates (Let's Encrypt)
 - request_acme_cert({ domains: ["example.com", "www.example.com"], challengeType: "http-01" })
-- **http-01**: Gateway automatically serves the challenge at /.well-known/acme-challenge/ on port 80. The daemon deploys challenge files to nginx. Port 80 must be publicly accessible.
+- **http-01**: Gateway deploys each challenge to the Nginx ingress assigned to that registered domain. The assigned node must be online and publicly reachable on port 80.
 - **dns-01 with Cloudflare**: For wildcard certs or when port 80 is blocked and a matching Cloudflare connector/zone is configured. Use request_acme_cert({ domains, challengeType: "dns-01", dnsProvider: "cloudflare" }). Gateway creates the TXT records, waits for propagation, verifies the ACME order, cleans up created TXT records, and returns the issued certificate.
 - **manual dns-01**: If no Cloudflare connector/zone is available, omit dnsProvider. The tool returns { domain, recordName, recordValue }; user must create a DNS TXT record manually, then confirm with manage_ssl_certificate({ operation: "verify_dns", sslCertificateId }).
 - Auto-renew: checked daily at 3 AM. Renews certificates 30 days before expiry.
@@ -101,26 +102,30 @@ SSL certificates in Gateway are used to enable HTTPS on proxy hosts. Three types
 - Expiry is parsed from the certificate — no auto-renewal.
 
 ## Using PKI Certificates as SSL
-To use a PKI-issued certificate with a proxy host:
+To use a PKI-issued certificate with an ingress route:
 1. Issue a PKI certificate: issue_certificate(...) → returns cert with id
 2. Link it: link_internal_cert(internalCertId: cert.id) → creates an SSL certificate entry with a separate ID
-3. Use the SSL certificate ID (from step 2) as sslCertificateId on the proxy host
+3. Use the SSL certificate ID (from step 2) as sslCertificateId on the route
 IMPORTANT: Never use a PKI certificate ID directly as sslCertificateId — you must link it first.
 
-## Using SSL Certs with Proxy Hosts
-- Set sslCertificateId on the proxy host to the SSL certificate UUID.
+## Using SSL Certs with Routes
+- Set sslCertificateId on the route to the SSL certificate UUID.
 - Set sslEnabled: true to enable HTTPS.
 - sslForced: true redirects all HTTP traffic to HTTPS (301 redirect).
 - http2Support: true enables HTTP/2 (recommended with SSL).
 
 ## Certificate Deployment
-When an SSL cert is assigned to a proxy host, Gateway:
-1. Pushes the cert/key files to the nginx daemon node
-2. Updates the nginx config to reference the cert files
-3. Tests the config (nginx -t)
-4. Reloads nginx to apply`,
+When an enabled TLS route uses an SSL certificate, Gateway:
+1. Keeps the canonical encrypted certificate material in the Gateway control plane
+2. Deploys a node-local replica only to the route's nginx ingress node
+3. Applies the certificate and route config atomically, tests the config (nginx -t), and reloads nginx
+4. Tracks per-node deployment state and removes unused replicas after the cleanup grace period
 
-  proxy: `# Reverse Proxy Hosts
+Certificate issuance itself is not tied to a machine. HTTP-01 validation is served by the registered domain's assigned ingress node; DNS-01 validation does not require HTTP ingress.`,
+
+  proxy: `# Ingress Routes
+
+The UI calls these resources Routes. Existing REST paths, tool names, resource types, and persisted identifiers retain the proxy-host name for compatibility.
 
 ## Types
 - **proxy**: Forward requests to a backend server (forwardHost:forwardPort).
@@ -128,8 +133,8 @@ When an SSL cert is assigned to a proxy host, Gateway:
 - **404**: Return 404 for all requests (used to block domains).
 
 ## Key Fields
-- nodeId: the daemon node this host is deployed on (required when creating).
-- domainNames: array of domains this host serves.
+- nodeId: the nginx ingress node this route is deployed on (required when creating).
+- domainNames: array of domains this route serves. Registered domains must be assigned to the same nginx node.
 - forwardHost/forwardPort/forwardScheme: backend server details (for proxy type).
 - upstreamKind: manual, docker_container, or docker_deployment. Docker upstreams store a stable container name or deployment ID plus a published TCP port and resolve the current node address at apply time.
 - sslEnabled: enable HTTPS. Requires sslCertificateId (SSL cert UUID, NOT PKI cert UUID).
@@ -141,23 +146,23 @@ When an SSL cert is assigned to a proxy host, Gateway:
 - advancedConfig: raw nginx config snippet (advanced users only).
 - rawConfigEnabled: bypass template rendering and use rawConfig directly.
 - rawConfig: custom nginx configuration content (used when rawConfigEnabled is true).
-- enabled: toggle host on/off without deleting.
+- enabled: toggle the route on/off without deleting.
 - folderId: organize into folders.
 - nginxTemplateId: use a custom nginx template.
 
 Ordinary list_proxy_hosts and get_proxy_host responses omit rawConfig and rawConfigEnabled. Raw content is only available through explicit raw config read/render tools with raw-read permission.
 
 ## Maintenance Mode
-- Maintenance mode is available for enabled managed proxy hosts that are not using raw config. It keeps the configured HTTP/HTTPS vhosts but returns HTTP 503 and pauses managed health checks until maintenance ends.
+- Maintenance mode is available for enabled managed routes that are not using raw config. It keeps the configured HTTP/HTTPS vhosts but returns HTTP 503 and pauses managed health checks until maintenance ends.
 - Maintenance state is audited and can feed notification rules and status pages.
-- The current Assistant proxy tools do not expose maintenance toggling or Docker upstream fields. Direct the user to the proxy host UI or documented REST API instead of trying to emulate maintenance by disabling the host or rewriting its config.
+- The current Assistant proxy tools do not expose maintenance toggling or Docker upstream fields. Direct the user to the Routes UI or documented REST API instead of trying to emulate maintenance by disabling the route or rewriting its config.
 
 ## Docker Upstreams
-- The UI and REST API can bind a proxy host to a Docker container by stable name or to a blue/green deployment by deployment ID. Gateway validates a reachable published TCP port and follows deployment slot changes.
+- The UI and REST API can bind a route to a Docker container by stable name or to a blue/green deployment by deployment ID. Gateway validates a reachable published TCP port and follows deployment slot changes.
 - The current Assistant create/update proxy tools support manual upstream fields only. Do not invent Docker-upstream arguments.
 
 ## Nginx Config
-Each proxy host generates an nginx server block. Changes are applied by reloading nginx.
+Each route generates an nginx server block on its selected ingress node. Changes are applied by reloading nginx.
 Config templates can customize the generated config (see templates topic).
 
 ## Raw Config Mode
@@ -165,21 +170,24 @@ When rawConfigEnabled is true, the template rendering is bypassed and rawConfig 
 
   domains: `# Domains
 
-Domains are Cloudflare-backed DNS records used across Gateway.
+Domains are registered public hostnames with an explicit nginx ingress assignment. DNS may be operator-managed externally or managed through a configured Cloudflare connector.
 
 ## Purpose
-- Create and track Cloudflare A/AAAA records that point to an assigned Nginx node public address
+- Track the A/AAAA target expected from the assigned nginx ingress node public service address
+- With external DNS, validate the operator-managed records without mutating the DNS provider
+- With Cloudflare, create and reconcile managed A/AAAA records
 - Adopt existing matching Cloudflare A/AAAA records without changing their target
-- Detect target mismatches before creating proxy hosts
-- Required for ACME HTTP-01 challenges (domain must resolve to Gateway)
+- Detect target mismatches before creating routes
+- Required for ACME HTTP-01 challenges (domain must resolve to its assigned Nginx ingress)
 
 ## Lifecycle
-1. Register a domain: create_domain({ domain: "example.com", nginxNodeId: "..." })
-2. Gateway resolves the selected Nginx node public address and matching Cloudflare zone
-3. If Cloudflare has no conflicting address records, Gateway creates DNS and stores the domain as valid
-4. If Cloudflare already has matching A/AAAA records, Gateway adopts them as matched_existing
-5. If Cloudflare has different A/AAAA records, create_domain returns conflict metadata; retry with overwriteDns only after explicit user approval
+1. Register a domain with an eligible nginx node: create_domain({ domain: "example.com", nginxNodeId: "..." })
+2. Gateway resolves the node's effective public ingress address
+3. Without Cloudflare, the operator points external DNS to that address and Gateway validates the resolved records
+4. With Cloudflare, Gateway resolves the matching zone; it creates missing records or adopts existing matching A/AAAA records as matched_existing
+5. If Cloudflare has different A/AAAA records, create_domain returns conflict metadata; overwrite or adopt only after explicit user approval
 6. Use manage_domain({ operation: "check_dns", domainId }) to manually re-check resolved DNS
+7. Moving ingress is an explicit migration: the domain and its routes move together. Cloudflare-managed DNS is updated during cutover; external DNS must be changed by the operator before completion.
 
 ## DNS Records Tracked
 - **A**: assigned Nginx node public IPv4 address
@@ -187,22 +195,22 @@ Domains are Cloudflare-backed DNS records used across Gateway.
 - Other record types are not created or overwritten by Gateway domain tools in v1
 
 ## Rules
-- Domains used by proxy hosts cannot be deleted (remove from proxy first)
+- Domains used by routes cannot be deleted (remove them from routes first)
 - isSystem domains (management domains) cannot be deleted
 - Wildcard domains (*.example.com) can be registered
 - nginxNodeId is optional only when exactly one Nginx node has a detected public address
-- Registered domains and their proxy hosts must use the same Nginx node
+- Registered domains and their routes must use the same nginx node
 - create_domain requires domains:create, and delete_domain requires domains:delete. Those domain permissions include the managed DNS records for the domain
 - For matched_existing domains, pass deleteDns=false to keep DNS and remove only the Gateway mapping, or deleteDns=true to remove the adopted Cloudflare records`,
 
   'access-lists': `# Access Lists
 
-Access lists provide IP-based access control and HTTP basic authentication for proxy hosts.
+Access lists provide IP-based access control and HTTP basic authentication for ingress routes.
 
 ## How It Works
 1. Create an access list with IP rules and/or basic auth users
-2. Attach it to one or more proxy hosts via accessListId
-3. Nginx enforces the rules on every request to those proxy hosts
+2. Attach it to one or more routes via accessListId
+3. Nginx enforces the rules on every request to those routes
 
 ## IP Rules
 - Array of rules: { type: "allow"|"deny", value: "CIDR or IP" }
@@ -222,8 +230,8 @@ Access lists provide IP-based access control and HTTP basic authentication for p
 - Use basicAuthEnabled to turn HTTP basic auth on or off. If it is enabled, provide at least one basic auth user.
 
 ## Usage
-- One access list can be shared across multiple proxy hosts
-- Changing an access list automatically updates all proxy hosts using it
+- One access list can be shared across multiple routes
+- Changing an access list automatically updates all routes using it
 - Deleting an access list detaches it from all hosts first`,
 
   templates: `# Certificate Templates
@@ -254,11 +262,11 @@ Templates define preset configurations for issuing PKI certificates. They save t
 - Common presets: TLS Server, TLS Client, Code Signing, Email
 
 ## Nginx Config Templates
-Separate from certificate templates — these define nginx server block templates for proxy hosts.
+Separate from certificate templates — these define nginx server block templates for routes.
 - Each template has a type: proxy, redirect, or 404.
 - Templates use variable syntax ({{variableName}}) for dynamic values
 - Can be cloned and customized
-- Assigned to proxy hosts via nginxTemplateId`,
+- Assigned to routes via nginxTemplateId`,
 
   acme: `# ACME (Automated Certificate Management)
 
@@ -267,13 +275,13 @@ Let's Encrypt integration for free, automated SSL certificates.
 ## Issuing an ACME Certificate
 1. request_acme_cert({ domains: ["example.com", "www.example.com"], challengeType: "http-01" })
 2. Gateway contacts Let's Encrypt, receives a challenge
-3. For http-01: Gateway deploys challenge files to nginx nodes automatically, Let's Encrypt verifies
+3. For http-01: Gateway deploys each challenge to the registered domain's assigned Nginx ingress, then Let's Encrypt verifies it
 4. For Cloudflare dns-01: use request_acme_cert({ domains, challengeType: "dns-01", dnsProvider: "cloudflare" }); Gateway creates TXT records, verifies, cleans up, and can enable Cloudflare auto-renew.
 5. For manual dns-01: Gateway returns { domain, recordName, recordValue } — user creates DNS TXT record, then confirms
 6. Certificate is issued and stored as an SSL certificate
 
 ## Challenge Types
-- **http-01** (recommended): Fully automatic. Gateway serves the challenge at \`/.well-known/acme-challenge/\` on port 80. Requires: port 80 publicly accessible, domain resolving to nginx node IP.
+- **http-01**: Automatic for registered domains with an assigned, online Nginx ingress. Gateway deploys the challenge to that node at \`/.well-known/acme-challenge/\`; the domain must resolve to the node and port 80 must be publicly accessible.
 - **dns-01 with Cloudflare**: Automatic when a matching Cloudflare connector/zone is configured. Use dnsProvider: "cloudflare".
 - **manual dns-01**: For wildcard certificates (*.example.com) or when port 80 is blocked. Manual step: add a TXT record at \`_acme-challenge.example.com\`. Supports wildcard issuance.
 
@@ -294,7 +302,7 @@ Let's Encrypt integration for free, automated SSL certificates.
 - **Challenge fails**: Verify domain resolves to your nginx node IP (check Domains page). Ensure port 80 is open and not blocked by firewall.
 - **DNS-01 fails**: Verify TXT record is propagated (use dig or nslookup). TTL must be low enough for timely propagation.
 - **Rate limited**: Switch to staging for testing. Production limit: 5 duplicate certs per week, 50 per domain per week.
-- **Renewal fails**: Check daemon logs on the nginx node. Verify the node is online and connected.`,
+- **Renewal fails**: For HTTP-01, check the assigned ingress node and daemon logs. For Cloudflare DNS-01, check the connector, zone access, and TXT propagation.`,
 
   users: `# User Management
 
@@ -364,48 +372,49 @@ Each event contains an id, a stable Gateway installation source identifier, type
 - Change: \`create_siem_destination\`, \`update_siem_destination\`, \`delete_siem_destination\`, \`test_siem_destination\`, and \`requeue_siem_delivery\` require \`audit:siem:manage\` and go through normal tool approval.
 - Request a secret only when the caller explicitly wants to create or replace a destination. Treat it as one-time input and never echo it.`,
 
-  nginx: `# Nginx Management
+  nginx: `# Nginx Ingress Management
 
-Gateway manages nginx reverse proxies through daemon nodes running on remote servers.
+Gateway manages public ingress through nginx daemon nodes running on remote servers. The Gateway relay on port 9443 is the daemon control-plane transport; it is not an HTTP/TLS ingress for published applications.
 
 ## Architecture
 - Each nginx node runs a Go daemon (\`nginx-daemon\`) alongside the host's native nginx installation
 - A dedicated Gateway relay communicates with daemons over gRPC (port 9443) with mutual TLS; the application uses an internal service-mTLS control-plane hop
-- Proxy hosts are assigned to specific nginx nodes — each host's config is generated by Gateway and pushed to the daemon
+- Domains and routes are assigned to specific nginx nodes. A registered domain and every route using it must share the same node.
+- Each route config is generated by Gateway and pushed to its selected ingress daemon
 - The daemon writes the config files, tests with \`nginx -t\`, and reloads nginx gracefully
 
 ## Config Management
-- Proxy host configs are generated from templates and written to the nginx \`conf.d/sites/\` directory
-- Each proxy host becomes one nginx server block file
+- Route configs are generated from templates and written to the nginx \`conf.d/sites/\` directory
+- Each route becomes one nginx server block file
 - Changes are atomic: write → test → reload (rollback on test failure)
 - Global nginx.conf can be viewed and edited from the node detail page (Configuration tab)
 
 ## Config Templates
-- Nginx templates define the server block structure for proxy hosts
+- Nginx templates define the server block structure for routes
 - Built-in templates for common patterns (reverse proxy, redirect, etc.)
 - Custom templates support variables: \`{{variableName}}\` replaced at render time
-- Assigned to proxy hosts via nginxTemplateId — default template used if none specified
+- Assigned to routes via nginxTemplateId — default template used if none specified
 
 ## Raw Config Mode
-- When rawConfigEnabled is true on a proxy host, the template rendering is bypassed entirely
+- When rawConfigEnabled is true on a route, the template rendering is bypassed entirely
 - The rawConfig field is used directly as the nginx server block content
 - Useful for complex configurations that templates can't express
-- Ordinary proxy host list/detail responses omit rawConfig and rawConfigEnabled
+- Ordinary route list/detail responses omit rawConfig and rawConfigEnabled
 - Raw content can only be read through explicit raw config read/render paths with raw-read permission
 - Requires proxy:raw:toggle and proxy:raw:write scopes
-- proxy:raw:bypass can bypass dangerous raw directive validation for the same proxy host
+- proxy:raw:bypass can bypass dangerous raw directive validation for the same route
 - Use get_proxy_rendered_config to see the current generated config before switching to raw mode
 
 ## Monitoring
 - **Stub status**: nginx stub_status module provides active connections, accepts, handled, requests, reading, writing, waiting
 - **Access log parsing**: traffic stats by status code, response times, bandwidth
-- **Health checks**: per-proxy-host backend health monitoring (configurable URL, interval, expected status)
-- **Nginx logs**: access and error logs streamed via daemon, viewable per proxy host or per node
+- **Health checks**: per-route backend health monitoring (configurable URL, interval, expected status)
+- **Nginx logs**: access and error logs streamed via daemon, viewable per route or per node
 
 ## SSL/TLS
-- SSL certificates are deployed to nginx nodes as PEM files in the certs directory
+- SSL certificates are stored canonically by Gateway and deployed as node-local replicas only to ingress nodes with enabled TLS routes using them
 - Config includes ssl_certificate and ssl_certificate_key directives
-- HTTP/2 support togglable per proxy host
+- HTTP/2 support togglable per route
 - OCSP stapling enabled by default when CA chain is available`,
 
   nodes: `# Nodes (Daemon Management)
@@ -413,7 +422,7 @@ Gateway manages nginx reverse proxies through daemon nodes running on remote ser
 Nodes are remote servers running Gateway daemons. Each daemon type manages different infrastructure.
 
 ## Node Types
-- **nginx**: Reverse proxy node — runs nginx, manages proxy host configs, SSL certs, access lists. Requires nginx installed on the server.
+- **nginx**: Ingress node — runs nginx and manages route configs, TLS replicas, access lists, public traffic, logs, and stats. Requires nginx installed on the server.
 - **monitoring**: Lightweight system monitoring agent — reports CPU, memory, disk, load, network. No nginx required. Useful for any server you want to monitor.
 - **docker**: Container management node — manages Docker containers, images, volumes, networks. Requires Docker installed. Provides container console (exec), file browser, log streaming, environment/secrets management.
 - **databases**: Restricted docker-daemon profile for Gateway-managed Postgres, Redis, and ClickHouse only. It runs as root, validates ext4 image storage before enrollment, and rejects generic Docker workloads.
@@ -982,11 +991,12 @@ All endpoints are under \`/api/\`. Example: \`https://gateway.example.com/api/ca
 - \`POST /api/ssl-certificates/upload\` — upload custom certificate
 - \`POST /api/ssl-certificates/internal\` — link PKI cert as SSL
 
-### Reverse Proxy
-- \`GET /api/proxy-hosts\` — list proxy hosts
-- \`POST /api/proxy-hosts\` — create proxy host
-- \`PATCH /api/proxy-hosts/:id\` — update proxy host
-- \`DELETE /api/proxy-hosts/:id\` — delete proxy host
+### Ingress Routes
+The UI calls these resources Routes; stable API paths keep the \`proxy-hosts\` name.
+- \`GET /api/proxy-hosts\` — list routes
+- \`POST /api/proxy-hosts\` — create route
+- \`PUT /api/proxy-hosts/:id\` — update route
+- \`DELETE /api/proxy-hosts/:id\` — delete route
 - \`GET /api/nginx-templates\` — list nginx config templates
 Programmatic clients can use validated \`advancedConfig\`, but cannot set or read raw nginx config fields.
 
@@ -1054,6 +1064,7 @@ Use \`get_gateway_settings\` before changing control-plane settings and \`update
 ## MCP
 - mcpServerEnabled enables the remote MCP endpoint. MCP still requires an OAuth token issued for the MCP resource and the owning user must have \`mcp:use\`.
 - The default MCP mode starts with a compact core toolset. \`discover_tools\` activates domain toolsets for the current session, Gateway sends \`notifications/tools/list_changed\`, and the client should refresh \`tools/list\`.
+- The \`Ingress\` toolset covers Domains, Routes, route folders, nginx templates, access lists, and raw route configuration. Stable tool names, resource URIs, scopes, and REST paths still use proxy-host identifiers for compatibility.
 - mcpExtendedCompatibility is enabled by default. It returns every OAuth-scoped tool in the initial \`tools/list\` response and omits \`discover_tools\`. Disable it only when a harness loads every tool schema into its context at once and exhausts that context; disabling it can leave that harness unable to use some Gateway tools.
 
 ## General And Network Settings
@@ -1400,7 +1411,7 @@ Gateway is a self-hosted infrastructure control plane. It combines secure access
 
 ## Main Capabilities
 - **Access and administration**: groups, scopes, resource-scoped permissions, audit logs, OIDC/password/email-code sign-in, passkeys, API tokens, OAuth, and MCP.
-- **Traffic and certificates**: nginx daemon nodes, proxy/redirect/404 hosts, access lists, PKI, uploaded/internal/ACME certificates, and Cloudflare-backed domains.
+- **Traffic and certificates**: nginx ingress nodes, proxy/redirect/404 routes, access lists, PKI, uploaded/internal/ACME certificates, and external or Cloudflare-managed domains.
 - **Compute**: Docker nodes, containers, images, volumes, networks, private registries, webhooks, blue/green deployments, exports/imports, and migrations.
 - **Databases and logging**: saved PostgreSQL, Redis, and ClickHouse connections; dedicated nodes for Gateway-managed database instances; optional structured logging in managed or external ClickHouse.
 - **Operations**: daemon health, notifications, housekeeping, status pages, updates, licensing, GitLab and Cloudflare integrations, and a separate Gateway Inference service.
@@ -1411,7 +1422,7 @@ Start with the user goal, then read the focused topic before explaining a workfl
 ## Dashboard Attention And Pins
 - The Dashboard sidebar item can show a **12px square attention badge**. Blue means the Dashboard has only informational cards, such as an unfinished setup checklist. Yellow means at least one warning card is visible; this includes red/unhealthy resource states, certificate expiry, low node capacity, MFA reminders, update/logging/inference warnings, and unhealthy pinned database or Docker resources. No badge means there are no visible information or warning cards for the current user.
 - The Dashboard is one user-scoped bootstrap snapshot. Do not describe the badge as an unread notification count or as a system-wide state: it reflects only cards visible to the signed-in user and their permissions.
-- Nodes, proxy hosts, databases, Docker containers, and Docker deployments can each be pinned independently to the **Dashboard**, the **Sidebar**, or both. A Dashboard pin adds a compact card; a Sidebar pin adds a quick-access link. Removing one placement must not remove the other.
+- Nodes, routes, databases, Docker containers, and Docker deployments can each be pinned independently to the **Dashboard**, the **Sidebar**, or both. A Dashboard pin adds a compact card; a Sidebar pin adds a quick-access link. Removing one placement must not remove the other.
 - When a user asks where to pin something, explain this distinction and recommend Dashboard for operational status and Sidebar for frequent navigation.
 - In the embedded Gateway Assistant, resolve the resource with \`find_resource\` first, then use \`set_resource_pin\` with an explicit \`target\` and \`pinned\` value. Docker pins also need \`nodeId\`, \`nodeSlug\`, and the resource \`name\`. This tool changes only the current browser session's saved layout preference and is intentionally unavailable through MCP.`,
 
@@ -1508,9 +1519,9 @@ Identify the failing surface, read its focused internal topic, and inspect the c
 - Sign-in failure: distinguish OIDC, password, and email-code methods. Check OIDC issuer/client settings and verified-email policy, or verified SMTP for email-based sign-in. Do not claim OIDC is mandatory.
 - Browser URL problem: confirm the explicit canonical URL and whether the browser reaches Gateway directly or through a reverse proxy. Native HTTP/HTTPS use port 3000.
 
-## Nodes, Proxies, And Certificates
+## Nodes, Ingress, And Certificates
 - Offline node: inspect node health and reconnect status before retrying a mutation.
-- Proxy failure: verify its nginx node, upstream reachability, published Docker port where applicable, and rendered configuration. Do not disable a host to imitate maintenance mode.
+- Route failure: verify its nginx ingress node, domain affinity, upstream reachability, published Docker port where applicable, and rendered configuration. Do not disable a route to imitate maintenance mode.
 - ACME failure: for HTTP-01 verify public port 80 and DNS; for DNS-01 verify the matching Cloudflare connector/zone and TXT propagation. Use staging for safe certificate-flow tests.
 
 ## Docker, Databases, And Integrations

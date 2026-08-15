@@ -26,11 +26,14 @@ import {
   listDomainFoldersRoute,
   listDomainNginxNodesRoute,
   listDomainsRoute,
+  migrateDomainIngressRoute,
   moveDomainFolderRoute,
   moveDomainsToFolderRoute,
+  previewDomainIngressMigrationRoute,
   previewDomainRoute,
   reorderDomainFoldersRoute,
   reorderDomainsRoute,
+  resolveCloudflareMigrationRoute,
   searchDomainsRoute,
   updateDomainFolderRoute,
   updateDomainRoute,
@@ -38,8 +41,10 @@ import {
 import {
   CreateDomainSchema,
   DeleteDomainSchema,
+  DomainIngressMigrationSchema,
   DomainListQuerySchema,
   PreviewDomainSchema,
+  ResolveCloudflareMigrationSchema,
   UpdateDomainSchema,
 } from './domain.schemas.js';
 import { DomainsService } from './domain.service.js';
@@ -234,6 +239,53 @@ domainRoutes.openapi({ ...checkDomainDnsRoute, middleware: requireScope('domains
   }
 });
 
+domainRoutes.openapi({ ...resolveCloudflareMigrationRoute, middleware: requireScope('domains:edit') }, async (c) => {
+  const user = c.get('user')!;
+  const input = ResolveCloudflareMigrationSchema.parse(await c.req.json());
+  const domainsService = container.resolve(DomainsService);
+  try {
+    return c.json({ data: await domainsService.resolveCloudflareMigration(c.req.param('id')!, input, user.id) });
+  } catch (err) {
+    if (err instanceof AppError) {
+      return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);
+    }
+    return c.json(
+      { code: 'ERROR', message: err instanceof Error ? err.message : 'Failed to resolve Cloudflare migration' },
+      400
+    );
+  }
+});
+
+domainRoutes.openapi({ ...previewDomainIngressMigrationRoute, middleware: requireScope('domains:edit') }, async (c) => {
+  const input = DomainIngressMigrationSchema.parse(await c.req.json());
+  const domainsService = container.resolve(DomainsService);
+  try {
+    return c.json({ data: await domainsService.previewIngressMigration(c.req.param('id')!, input) });
+  } catch (err) {
+    if (err instanceof AppError) {
+      return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);
+    }
+    return c.json(
+      { code: 'ERROR', message: err instanceof Error ? err.message : 'Failed to preview ingress migration' },
+      400
+    );
+  }
+});
+
+domainRoutes.openapi({ ...migrateDomainIngressRoute, middleware: requireScope('domains:edit') }, async (c) => {
+  const user = c.get('user')!;
+  const input = DomainIngressMigrationSchema.parse(await c.req.json());
+  const domainsService = container.resolve(DomainsService);
+  try {
+    return c.json({ data: await domainsService.migrateIngress(c.req.param('id')!, input, user.id) });
+  } catch (err) {
+    if (err instanceof AppError) {
+      return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);
+    }
+    return c.json({ code: 'ERROR', message: err instanceof Error ? err.message : 'Failed to migrate ingress' }, 400);
+  }
+});
+
 // Issue ACME cert for domain
 domainRoutes.openapi({ ...issueDomainCertificateRoute, middleware: requireScope('domains:edit') }, async (c) => {
   const user = c.get('user')!;
@@ -254,11 +306,13 @@ domainRoutes.openapi({ ...issueDomainCertificateRoute, middleware: requireScope(
     const cert = await sslService.requestACMECert(
       {
         domains: [domainRow.domain],
-        challengeType: 'http-01',
+        challengeType: domainRow.dnsProvider === 'cloudflare' ? 'dns-01' : 'http-01',
         provider: 'letsencrypt',
         autoRenew: true,
+        ...(domainRow.dnsProvider === 'cloudflare' ? { dnsProvider: 'cloudflare' as const } : {}),
       },
-      user.id
+      user.id,
+      user.email
     );
     return c.json({ data: cert }, 201);
   } catch (err) {

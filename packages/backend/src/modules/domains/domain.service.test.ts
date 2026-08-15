@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppError } from '@/middleware/error-handler.js';
-import { resolveDnsRecords } from './dns.utils.js';
+import { probeDnsRecords } from './dns.utils.js';
 import { DomainsService, selectBackfillNginxNode } from './domain.service.js';
 
 vi.mock('@/db/schema/proxy-hosts.js', () => ({
@@ -10,6 +10,7 @@ vi.mock('@/db/schema/proxy-hosts.js', () => ({
     domainNames: 'proxyHosts.domainNames',
     enabled: 'proxyHosts.enabled',
     nodeId: 'proxyHosts.nodeId',
+    upstreamKind: 'proxyHosts.upstreamKind',
   },
 }));
 
@@ -25,6 +26,7 @@ vi.mock('@/db/schema/ssl-certificates.js', () => ({
 vi.mock('./dns.utils.js', () => ({
   computeDnsStatus: vi.fn(() => 'unknown'),
   getPublicIPs: vi.fn(() => ({ ipv4: [], ipv6: [] })),
+  probeDnsRecords: vi.fn(),
   resolveDnsRecords: vi.fn(),
 }));
 
@@ -95,6 +97,13 @@ function createService(db: Record<string, unknown>, records: Array<Record<string
 }
 
 describe('DomainsService Cloudflare lifecycle', () => {
+  beforeEach(() => {
+    vi.mocked(probeDnsRecords).mockResolvedValue({
+      queryName: 'app.example.com',
+      addressResolution: 'resolved',
+      records: { a: ['8.8.8.8'], aaaa: [], cname: [], caa: [], mx: [], txt: [] },
+    });
+  });
   it('chooses a stable backfill node only when proxy-host affinity is unambiguous', () => {
     const eligible = [
       {
@@ -120,6 +129,106 @@ describe('DomainsService Cloudflare lifecycle', () => {
     expect(selectBackfillNginxNode(eligible, ['node-1', 'node-2'])).toBeUndefined();
     expect(selectBackfillNginxNode(eligible, ['node-3'])).toBeUndefined();
     expect(selectBackfillNginxNode(eligible, [null])).toBeUndefined();
+  });
+
+  it('moves linked proxy hosts with the source config preserved until DNS cutover', async () => {
+    const sourceNode = {
+      id: '11111111-1111-4111-8111-111111111111',
+      slug: 'source',
+      hostname: 'source',
+      displayName: null,
+      appearanceColor: null,
+      effectiveAddress: '8.8.8.8',
+    };
+    const targetNode = {
+      id: '22222222-2222-4222-8222-222222222222',
+      slug: 'target',
+      hostname: 'target',
+      displayName: null,
+      appearanceColor: null,
+      effectiveAddress: '1.1.1.1',
+    };
+    const domain = {
+      id: 'domain-1',
+      domain: 'app.example.com',
+      dnsProvider: 'cloudflare',
+      nginxNodeId: sourceNode.id,
+      dnsTargetIps: ['8.8.8.8'],
+      ingressMigrationId: null,
+    };
+    const host = {
+      id: 'host-1',
+      slug: 'app-example-com',
+      domainNames: ['app.example.com'],
+      enabled: true,
+      nodeId: sourceNode.id,
+    };
+    const updateWhere = vi.fn().mockResolvedValue(undefined);
+    const db = {
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where: updateWhere })) })),
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([{ ...domain, nginxNodeId: targetNode.id }]) })),
+      })),
+    };
+    const service = new DomainsService(db as never, { log: vi.fn() } as never);
+    const proxyService = { updateProxyHost: vi.fn() };
+    service.setProxyService(proxyService as never);
+    const impact = {
+      root: domain,
+      sourceNode,
+      targetNode,
+      domains: [domain],
+      proxyHosts: [host],
+      pending: false,
+      migrationId: null,
+    };
+    vi.spyOn(service as any, 'buildIngressMigrationImpact')
+      .mockResolvedValueOnce(impact)
+      .mockResolvedValueOnce({ ...impact, pending: true, migrationId: 'migration-1' });
+    vi.spyOn(service as any, 'reconcileDomainTarget').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'completeIngressMigration').mockResolvedValue({ status: 'completed' });
+
+    await service.migrateIngress(domain.id, { targetNodeId: targetNode.id }, 'user-1');
+
+    expect(proxyService.updateProxyHost).toHaveBeenCalledWith(
+      host.id,
+      { nodeId: targetNode.id },
+      'user-1',
+      expect.objectContaining({
+        skipDomainNodeValidation: true,
+        preserveFormerNodeConfig: true,
+        allowSystemNodeMove: true,
+      })
+    );
+  });
+
+  it('keeps a prepared external-DNS migration pending until DNS reaches the target', async () => {
+    const updateWhere = vi.fn().mockResolvedValue(undefined);
+    const db = {
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where: updateWhere })) })),
+      select: vi.fn(),
+    };
+    const service = new DomainsService(db as never, { log: vi.fn() } as never);
+    const proxyService = { cleanupMigratedHostSource: vi.fn() };
+    service.setProxyService(proxyService as never);
+    const impact = {
+      root: { id: 'domain-1' },
+      sourceNode: { id: 'node-source' },
+      targetNode: { id: 'node-target', effectiveAddress: '1.1.1.1' },
+      domains: [{ id: 'domain-1', domain: 'app.example.com', dnsProvider: 'legacy', dnsStatus: 'pending' }],
+      proxyHosts: [{ id: 'host-1', slug: 'app', domainNames: ['app.example.com'], enabled: true }],
+      pending: true,
+      migrationId: 'migration-1',
+    };
+    vi.spyOn(service as any, 'refreshExternalMigrationDns').mockResolvedValue({
+      ...impact.domains[0],
+      dnsStatus: 'invalid',
+    });
+
+    const result = await (service as any).completeIngressMigration(impact, 'user-1');
+
+    expect(result.status).toBe('waiting_dns');
+    expect(proxyService.cleanupMigratedHostSource).not.toHaveBeenCalled();
   });
 
   it('assigns legacy domains without inventing a managed DNS target', async () => {
@@ -521,16 +630,22 @@ describe('DomainsService Cloudflare lifecycle', () => {
     expect(client.updateDnsRecord).not.toHaveBeenCalled();
   });
 
-  it('does not retarget assigned domains after an unconfirmed reported-address change', async () => {
+  it('automatically reconciles Cloudflare domains after a reported ingress-address change', async () => {
     const domain = {
       id: 'domain-1',
       domain: 'app.example.com',
+      dnsProvider: 'cloudflare',
       nginxNodeId: 'node-1',
       dnsTargetIps: ['8.8.8.8'],
       dnsStatus: 'valid',
+      pendingDnsTargetIp: null,
     };
     let selection = 0;
-    const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) }));
+    const updateSet = vi.fn((values: Record<string, unknown>) => ({
+      where: vi.fn(() => ({
+        returning: vi.fn().mockResolvedValue([{ ...domain, ...values }]),
+      })),
+    }));
     const db = {
       select: vi.fn(() => ({
         from: vi.fn(() => ({
@@ -540,7 +655,7 @@ describe('DomainsService Cloudflare lifecycle', () => {
           }),
         })),
       })),
-      update,
+      update: vi.fn(() => ({ set: updateSet })),
     };
     const service = new DomainsService(db as never, { log: vi.fn() } as never);
     vi.spyOn(service as any, 'getNginxNodeSummary').mockResolvedValue({ id: 'node-1', effectiveAddress: '1.1.1.1' });
@@ -548,8 +663,8 @@ describe('DomainsService Cloudflare lifecycle', () => {
 
     await service.reconcileIngressTargets('node-1');
 
-    expect(reconcile).not.toHaveBeenCalled();
-    expect(update).toHaveBeenCalled();
+    expect(updateSet).toHaveBeenCalledWith(expect.objectContaining({ pendingDnsTargetIp: '1.1.1.1' }));
+    expect(reconcile).toHaveBeenCalledWith(expect.objectContaining({ pendingDnsTargetIp: '1.1.1.1' }), '1.1.1.1');
   });
 
   it('retries a durably approved retarget after a transient provider failure', async () => {
@@ -652,6 +767,150 @@ describe('DomainsService Cloudflare lifecycle', () => {
     );
   });
 
+  it('creates an external domain only after DNS matches the selected Nginx node', async () => {
+    const db = createInsertDb({
+      id: 'domain-1',
+      domain: 'app.example.com',
+      dnsProvider: 'legacy',
+      dnsOwnership: 'legacy',
+      dnsTargetIps: ['8.8.8.8'],
+    });
+    const { service, client } = createService(db, []);
+
+    await expect(
+      service.createDomain({ domain: 'App.Example.com', dnsProvider: 'external' }, 'user-1')
+    ).resolves.toMatchObject({ dnsProvider: 'legacy', dnsTargetIps: ['8.8.8.8'] });
+
+    expect(db.values).toHaveBeenCalledWith(
+      expect.objectContaining({
+        domain: 'app.example.com',
+        dnsProvider: 'legacy',
+        dnsOwnership: 'legacy',
+        nginxNodeId: '11111111-1111-4111-8111-111111111111',
+        dnsTargetIps: ['8.8.8.8'],
+        dnsStatus: 'valid',
+      })
+    );
+    expect(client.createDnsRecord).not.toHaveBeenCalled();
+    expect(client.deleteDnsRecord).not.toHaveBeenCalled();
+  });
+
+  it('keeps a mismatched external domain out of persistence', async () => {
+    vi.mocked(probeDnsRecords).mockResolvedValueOnce({
+      queryName: 'app.example.com',
+      addressResolution: 'resolved',
+      records: { a: ['1.1.1.1'], aaaa: [], cname: [], caa: [], mx: [], txt: [] },
+    });
+    const db = createConflictDb();
+    const { service } = createService(db, []);
+
+    await expect(
+      service.createDomain({ domain: 'app.example.com', dnsProvider: 'external' }, 'user-1')
+    ).rejects.toMatchObject({
+      code: 'DOMAIN_DNS_NOT_READY',
+      details: expect.objectContaining({ status: 'invalid', targetIps: ['8.8.8.8'] }),
+    });
+    expect(db.insert).not.toHaveBeenCalled();
+  });
+
+  it('adopts a matching external domain into Cloudflare without mutating provider DNS', async () => {
+    const writes: Array<Record<string, unknown>> = [];
+    const migratedRow = {
+      id: 'domain-1',
+      domain: 'app.example.com',
+      dnsProvider: 'cloudflare',
+    };
+    const db = {
+      update: vi.fn(() => ({
+        set: vi.fn((values: Record<string, unknown>) => {
+          writes.push(values);
+          return {
+            where: vi.fn(() => ({
+              returning: vi.fn().mockResolvedValue(values.dnsProvider === 'cloudflare' ? [migratedRow] : []),
+            })),
+          };
+        }),
+      })),
+    };
+    const { service, client } = createService(db, [
+      { id: 'record-a', type: 'A', name: 'app.example.com', content: '8.8.8.8', ttl: 120, proxied: true },
+      { id: 'record-txt', type: 'TXT', name: 'app.example.com', content: 'verification=1', ttl: 120 },
+    ]);
+
+    await (service as any).migrateExternalDomainToCloudflare({
+      id: 'domain-1',
+      domain: 'app.example.com',
+      dnsProvider: 'legacy',
+      nginxNodeId: '11111111-1111-4111-8111-111111111111',
+    });
+
+    expect(writes).toContainEqual(
+      expect.objectContaining({
+        dnsProvider: 'cloudflare',
+        dnsOwnership: 'matched_existing',
+        integrationConnectorId: 'connector-1',
+        providerZoneId: 'zone-1',
+        providerRecordIds: ['record-a'],
+        dnsTargetIps: ['8.8.8.8'],
+        cloudflareMigrationStatus: 'migrated',
+      })
+    );
+    expect(client.createDnsRecord).not.toHaveBeenCalled();
+    expect(client.deleteDnsRecord).not.toHaveBeenCalled();
+  });
+
+  it('leaves conflicting external DNS untouched and records a migration status', async () => {
+    const writes: Array<Record<string, unknown>> = [];
+    const db = {
+      update: vi.fn(() => ({
+        set: vi.fn((values: Record<string, unknown>) => {
+          writes.push(values);
+          return { where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([]) })) };
+        }),
+      })),
+    };
+    const { service, client } = createService(db, [
+      { id: 'record-a', type: 'A', name: 'app.example.com', content: '1.1.1.1', ttl: 120, proxied: false },
+    ]);
+
+    await (service as any).migrateExternalDomainToCloudflare({
+      id: 'domain-1',
+      domain: 'app.example.com',
+      dnsProvider: 'legacy',
+      nginxNodeId: '11111111-1111-4111-8111-111111111111',
+    });
+
+    expect(writes).toContainEqual(expect.objectContaining({ cloudflareMigrationStatus: 'dns_conflict' }));
+    expect(writes).not.toContainEqual(expect.objectContaining({ dnsProvider: 'cloudflare' }));
+    expect(client.createDnsRecord).not.toHaveBeenCalled();
+    expect(client.deleteDnsRecord).not.toHaveBeenCalled();
+  });
+
+  it('clears stale migration statuses when no enabled Cloudflare connector remains', async () => {
+    const set = vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) }));
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue([{ id: 'domain-1', domain: 'app.example.com' }]),
+        })),
+      })),
+      update: vi.fn(() => ({ set })),
+    };
+    const service = new DomainsService(db as never, { log: vi.fn() } as never);
+    service.setIntegrationsService({
+      hasEnabledCloudflareConnector: vi.fn().mockResolvedValue(false),
+    } as never);
+
+    await service.migrateExternalDomainsToCloudflare();
+
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cloudflareMigrationStatus: null,
+        cloudflareMigrationCheckedAt: null,
+      })
+    );
+  });
+
   it('returns target mismatch metadata without persisting when existing Cloudflare records differ', async () => {
     const db = createConflictDb();
     const { service, client } = createService(db, [
@@ -696,13 +955,10 @@ describe('DomainsService Cloudflare lifecycle', () => {
   });
 
   it('treats proxied Cloudflare records as valid when provider targets match Gateway IPs', async () => {
-    vi.mocked(resolveDnsRecords).mockResolvedValueOnce({
-      a: ['104.16.1.1'],
-      aaaa: [],
-      cname: [],
-      caa: [],
-      mx: [],
-      txt: [],
+    vi.mocked(probeDnsRecords).mockResolvedValueOnce({
+      queryName: 'app.example.com',
+      addressResolution: 'resolved',
+      records: { a: ['104.16.1.1'], aaaa: [], cname: [], caa: [], mx: [], txt: [] },
     });
     const updateSet = vi.fn((value) => ({
       where: vi.fn(() => ({
@@ -759,9 +1015,11 @@ describe('DomainsService Cloudflare lifecycle', () => {
     expect(updateSet).toHaveBeenCalledWith(expect.objectContaining({ dnsStatus: 'valid' }));
   });
 
-  it('checks legacy domains without requiring a managed Nginx target snapshot', async () => {
+  it('checks external domains against the assigned Nginx node instead of Gateway public IPs', async () => {
     const service = new DomainsService({} as never, { log: vi.fn() } as never);
-    const nodeLookup = vi.spyOn(service as any, 'getNginxNodeSummary');
+    const nodeLookup = vi
+      .spyOn(service as any, 'getNginxNodeSummary')
+      .mockResolvedValue({ id: 'node-1', effectiveAddress: '1.1.1.1' });
 
     await expect(
       (service as any).computeDomainDnsStatus(
@@ -772,7 +1030,7 @@ describe('DomainsService Cloudflare lifecycle', () => {
         },
         { a: ['1.1.1.1'], aaaa: [], cname: [], caa: [], mx: [], txt: [] }
       )
-    ).resolves.toBe('unknown');
-    expect(nodeLookup).not.toHaveBeenCalled();
+    ).resolves.toBe('valid');
+    expect(nodeLookup).toHaveBeenCalledWith('node-1');
   });
 });

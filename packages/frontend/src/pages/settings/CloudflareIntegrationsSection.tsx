@@ -38,6 +38,9 @@ const DEFAULT_SETTINGS: CloudflareConnectorSettings = {
   defaultProxied: true,
 };
 
+const CLOUDFLARE_API_TOKEN_URL =
+  "https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22dns%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22dns%22%2C%22type%22%3A%22edit%22%7D%5D&accountId=%2A&zoneId=all&name=Wiolett%20Gateway";
+
 const CAPABILITY_LABELS: Record<string, string> = {
   apiReachable: "API",
   tokenActive: "Token",
@@ -373,6 +376,14 @@ export function CloudflareIntegrationsSection() {
                     Test Connection
                   </Button>
                 </div>
+                <a
+                  href={CLOUDFLARE_API_TOKEN_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 inline-flex text-sm font-medium text-[color:var(--color-link)] hover:underline focus-visible:outline-none focus-visible:underline"
+                >
+                  Create API token →
+                </a>
               </Field>
 
               <PanelShell

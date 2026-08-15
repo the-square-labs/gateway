@@ -550,7 +550,9 @@ export class ProxyService {
       where: eq(proxyHosts.id, id),
     });
     if (!existing) throw new AppError(404, 'PROXY_HOST_NOT_FOUND', 'Proxy host not found');
-    if (existing.isSystem) throw new AppError(403, 'SYSTEM_HOST', 'System proxy hosts cannot be edited');
+    if (existing.isSystem && !(options.allowSystemNodeMove && Object.keys(input).every((key) => key === 'nodeId'))) {
+      throw new AppError(403, 'SYSTEM_HOST', 'System proxy hosts cannot be edited');
+    }
     if (input.advancedConfig !== undefined) {
       await this.secureLinks?.assertAdditionalReferences(existing.id, input.advancedConfig);
     }
@@ -592,7 +594,7 @@ export class ProxyService {
     const domainAssignmentChanged =
       (input.nodeId !== undefined && input.nodeId !== existing.nodeId) ||
       (input.domainNames !== undefined && !sameDomainNames(input.domainNames, existing.domainNames));
-    if (domainAssignmentChanged) {
+    if (domainAssignmentChanged && !options.skipDomainNodeValidation) {
       await assertRegisteredDomainsUseNode(this.db, input.domainNames ?? existing.domainNames, effectiveNodeId);
     }
 
@@ -671,7 +673,7 @@ export class ProxyService {
           existing.upstreamKind === 'manual' ||
           existingUsesRawMode ||
           (existing.secureLinkGeneration < 1 && Object.keys(upstreamData).length > 0);
-        updated = await this.secureLinks.prepare(updated, requiresSecureLink);
+        updated = await this.secureLinks.prepare(updated, requiresSecureLink, nodeChanged);
         if (updated.secureLinkGeneration > 0 && updated.secureLinkStatus !== 'active') {
           // Existing legacy/manual config must stop serving before the durable
           // no-fallback cutover marker is committed.
@@ -705,7 +707,7 @@ export class ProxyService {
 
         // The new target is now known-good. Only then retire the former
         // node's config and begin its certificate replica grace period.
-        if (nodeChanged && existing.enabled) {
+        if (nodeChanged && existing.enabled && !options.preserveFormerNodeConfig) {
           await this.removeConfigFromNode(id, existing.nodeId);
           await this.certificateDistribution.deactivateHost(id, existing.nodeId);
         }
@@ -2044,6 +2046,22 @@ export class ProxyService {
     });
     this.emitHost(host.id, 'tls_distribution_resynced', host.domainNames?.[0]);
     return { distribution };
+  }
+
+  async cleanupMigratedHostSource(id: string, sourceNodeId: string): Promise<{ orphanedConfigPossible: boolean }> {
+    const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) });
+    if (!host) return { orphanedConfigPossible: false };
+    if (host.nodeId === sourceNodeId) {
+      throw new AppError(409, 'PROXY_HOST_NOT_MIGRATED', 'Proxy host still belongs to the source Nginx node');
+    }
+
+    const connected = this.nodeDispatch.isNodeConnected(sourceNodeId);
+    if (connected) {
+      await this.removeConfigFromNode(id, sourceNodeId);
+    }
+    await this.certificateDistribution.deactivateHost(id, sourceNodeId);
+    await this.secureLinks?.reconcileSourceNode(sourceNodeId);
+    return { orphanedConfigPossible: !connected };
   }
 
   // -----------------------------------------------------------------------

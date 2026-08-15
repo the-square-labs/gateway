@@ -74,7 +74,7 @@ describe("CommandPalette", () => {
       within(quickGroup as HTMLElement)
         .getAllByRole("option")
         .map((item) => item.textContent)
-    ).toEqual([expect.stringContaining("New proxy host")]);
+    ).toEqual([expect.stringContaining("New route")]);
   });
 
   it("promotes resource-specific actions into Quick actions", async () => {
@@ -279,7 +279,7 @@ describe("CommandPalette", () => {
     expect(quickGroup).not.toBeNull();
     expect(within(quickGroup as HTMLElement).getAllByRole("option")).toHaveLength(1);
     expect(screen.getByRole("option", { name: "New logging environment" })).toBeVisible();
-    expect(screen.queryByRole("option", { name: /New proxy host/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /New route/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /Open AI Workspace/ })).not.toBeInTheDocument();
   });
 
@@ -516,9 +516,9 @@ describe("CommandPalette", () => {
     await userEvent.type(input, ">logs api");
 
     expect(await screen.findByRole("option", { name: /Logs api/ })).toBeVisible();
-    expect(screen.queryByRole("option", { name: /New proxy host/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /New route/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /Light theme/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "Proxy Hosts" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Routes" })).not.toBeInTheDocument();
     expect(api.listDockerContainerSnapshots).toHaveBeenCalledWith();
 
     await userEvent.clear(input);

@@ -135,6 +135,12 @@ export class CloudflareClient {
     return this.paginate<CloudflareDnsRecord>(`/zones/${zoneId}/dns_records`, { name });
   }
 
+  async probeDnsRead(zoneId: string): Promise<void> {
+    await this.request<CloudflareDnsRecord[]>(`/zones/${zoneId}/dns_records`, {
+      query: { page: 1, per_page: 1 },
+    });
+  }
+
   async createDnsRecord(zoneId: string, input: CloudflareDnsRecordInput): Promise<CloudflareDnsRecord> {
     return this.request<CloudflareDnsRecord>(`/zones/${zoneId}/dns_records`, { method: 'POST', body: input });
   }

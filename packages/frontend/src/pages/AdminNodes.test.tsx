@@ -54,6 +54,7 @@ describe("AdminNodes", () => {
     renderWithRouter(<AdminNodes />);
 
     expect(await screen.findByText("offline")).toBeInTheDocument();
+    expect(screen.getByText("Ingress")).toBeInTheDocument();
     expect(screen.queryByText("v2.5.0")).not.toBeInTheDocument();
   });
 
@@ -89,7 +90,10 @@ describe("AdminNodes", () => {
     const addNodeButton = screen.getAllByRole("button", { name: /add node/i })[0];
     if (!addNodeButton) throw new Error("Primary Add Node button not found");
     await user.click(addNodeButton);
-    await user.type(screen.getByPlaceholderText("US-East Proxy"), "Branch Edge");
+    expect(
+      screen.getByText("Serve public domains and routes with the Nginx daemon")
+    ).toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText("US-East Ingress"), "Branch Edge");
     await user.click(screen.getByRole("button", { name: /create node/i }));
 
     expect(createNodeSpy).toHaveBeenCalledWith({

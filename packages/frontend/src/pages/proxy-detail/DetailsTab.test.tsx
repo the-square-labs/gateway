@@ -60,4 +60,41 @@ describe("proxy host details tab", () => {
       expect(screen.getByText("http-gateway")).toBeVisible();
     });
   });
+
+  it("links route domains and certificates to their existing resource screens", () => {
+    useUIBootstrapStore.getState().clear();
+    api.setCache("req:/api/nodes/node-1", {
+      data: {
+        id: "node-1",
+        slug: "edge-one",
+        hostname: "edge-one",
+        displayName: "Edge One",
+        type: "nginx",
+        status: "online",
+      },
+    });
+
+    render(
+      <MemoryRouter>
+        <DetailsTab
+          host={
+            {
+              ...HOST,
+              sslEnabled: true,
+              sslCertificate: {
+                id: "cert-1",
+                name: "example.test",
+                type: "acme",
+                status: "active",
+              },
+            } as ProxyHost
+          }
+        />
+      </MemoryRouter>
+    );
+
+    const resourceLinks = screen.getAllByRole("link", { name: "example.test" });
+    expect(resourceLinks[0]).toHaveAttribute("href", "/domains?domain=example.test");
+    expect(resourceLinks[1]).toHaveAttribute("href", "/ssl-certificates?certificate=cert-1");
+  });
 });

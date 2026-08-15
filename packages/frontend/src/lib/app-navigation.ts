@@ -93,23 +93,23 @@ export const APP_NAVIGATION_GROUPS: readonly AppNavigationGroup[] = [
   },
   {
     id: "reverse-proxy",
-    label: "Reverse Proxy",
+    label: "Ingress",
     items: [
-      {
-        id: "proxy-hosts",
-        name: "Proxy Hosts",
-        href: "/proxy-hosts",
-        icon: Globe,
-        shortcutKey: "2",
-        keywords: ["nginx", "upstream", "reverse proxy"],
-      },
       {
         id: "domains",
         name: "Domains",
         href: "/domains",
         icon: Globe2,
-        shortcutKey: "3",
+        shortcutKey: "2",
         keywords: ["dns", "cloudflare"],
+      },
+      {
+        id: "proxy-hosts",
+        name: "Routes",
+        href: "/proxy-hosts",
+        icon: Globe,
+        shortcutKey: "3",
+        keywords: ["nginx", "upstream", "reverse proxy", "route"],
       },
       {
         id: "ssl-certificates",

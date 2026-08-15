@@ -184,6 +184,8 @@ The `mcp:use` scope is a user-account capability gate. The owning user must have
 
 By default, MCP starts with a compact core toolset. Clients call `discover_tools` to activate a domain toolset in the current MCP session. Gateway then sends `notifications/tools/list_changed`, and a compliant client refreshes `tools/list` so the newly activated tools become callable.
 
+The `Ingress` toolset covers Domains, Routes, route folders, nginx templates, access lists, and raw route configuration. For compatibility, callable tool names, resource URIs, OAuth scopes, and REST paths still use `proxy_host`, `proxy`, or `/api/proxy-hosts`; those identifiers refer to the Routes shown in the Operations Console.
+
 Some MCP clients do not refresh their tool list after that notification. Enable **Extended MCP compatibility** in **Settings > Advanced** for those clients. In compatibility mode, the first `tools/list` response contains every tool allowed by the OAuth grant and `discover_tools` is omitted. This can expose hundreds of schemas, so keep the default discovery mode for clients that support list-change notifications.
 
 ### Scope Rules

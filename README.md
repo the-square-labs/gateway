@@ -2,7 +2,7 @@ English | [Русский](README.ru.md) | [中文](README.cn.md)
 
 # Gateway
 
-AI-first but not AI-dependent self-hosted infrastructure control plane for reverse proxies, Docker workloads, certificates, databases, logs, monitoring, status pages, and automation.
+AI-first but not AI-dependent self-hosted infrastructure control plane for nginx ingress, Docker workloads, certificates, databases, logs, monitoring, status pages, and automation.
 
 > [!NOTE]
 > Primary development happens on [Wiolett Industries GitLab](https://gitlab.wiolett.net/wiolett/gateway). The [GitHub repository](https://github.com/wiolett-industries/gateway) is a public mirror. Issues and feature requests are welcome on [GitHub](https://github.com/wiolett-industries/gateway/issues).
@@ -88,11 +88,11 @@ The CLI asks for the Gateway URL and completes OAuth when no active connection e
 <td><img src="docs/screenshots/nginx-monitoring.png" width="450" alt="Nginx Monitoring"></td>
 </tr>
 <tr>
-<td align="center"><strong>Proxy Host Config</strong></td>
+<td align="center"><strong>Ingress Route Config</strong></td>
 <td align="center"><strong>Settings</strong></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/proxy-host.png" width="450" alt="Proxy Host Config"></td>
+<td><img src="docs/screenshots/proxy-host.png" width="450" alt="Ingress Route Config"></td>
 <td><img src="docs/screenshots/settings.png" width="450" alt="Settings"></td>
 </tr>
 </table>
@@ -101,10 +101,10 @@ The CLI asks for the Gateway URL and completes OAuth when no active connection e
 
 | Area | Summary |
 |------|---------|
-| Reverse proxy | Multi-node nginx management, proxy hosts, Docker container/deployment upstreams, maintenance mode, redirects, WebSockets, access lists, health checks, host folders, templates, logs, and stats. |
+| Ingress | Domains select a public nginx ingress node; routes forward traffic to addresses, Docker containers, or deployments; SSL certificates are deployed to the nginx nodes where enabled TLS routes use them. Includes maintenance mode, redirects, WebSockets, access lists, health checks, route folders, templates, logs, and stats. The REST API keeps `proxy-host` identifiers for compatibility. |
 | Docker | Container lifecycle, deployments, rollout/rollback, shared physical NVIDIA/AMD/Intel GPU attachment, eligible cross-node container and volume migrations, offline inventory snapshots, registries, images, networks, volumes, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, mounts, and cleanup. GPU-attached workloads cannot migrate or export in v1. |
-| Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports, and proxy binding. |
-| Domains | Central domain registry, DNS checks, record validation, and usage tracking. |
+| Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports, and route binding. |
+| Domains | Central hostname registry, nginx ingress placement, external or Cloudflare-managed DNS, validation, usage tracking, and explicit ingress migration. |
 | Databases | Saved PostgreSQL, Redis, and ClickHouse connections with encrypted credentials, health history, browsing, scoped query consoles, and capability-aware write operations; private-by-default managed Postgres, Redis, and ClickHouse instances can bind securely to Docker workloads. |
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware physical GPU telemetry, daemon runtime details, log streaming, and update checks. |
 | Logging | Optional ClickHouse-backed structured log ingestion with schemas, retention, ingest tokens, rate limits, search, storage caps, and health safeguards. |
@@ -131,7 +131,7 @@ Gateway runs as a Docker stack on the control-plane server. Managed hosts run sm
         +-------------+-------------------+
         |             |                   |
  nginx-daemon   docker-daemon     database profile     monitoring-daemon
- proxy host     container host    managed databases    metrics-only host
+ ingress route  container host    managed databases    metrics-only host
 ```
 
 The relay is a separate long-lived container and is the only public owner of `9443/tcp`. Ordinary app-only updates keep the relay container and established managed-database binding streams running; a relay update remains an explicit data-plane maintenance event.
@@ -157,7 +157,7 @@ Gateway is already focused on production operations rather than a narrow MVP. Th
 
 Completed foundations:
 
-- [x] Multi-node nginx reverse proxy management over outbound gRPC with mTLS.
+- [x] Multi-node nginx ingress management with domain affinity, routes, and TLS deployment over outbound gRPC with mTLS.
 - [x] Docker host management with deployments, webhooks, registries, logs, files, consoles, and secrets.
 - [x] Monitoring daemon for host metrics, runtime state, and log streaming.
 - [x] Internal PKI, ACME SSL, certificate templates, domain tracking, and expiry alerts.

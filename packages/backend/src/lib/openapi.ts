@@ -315,14 +315,14 @@ const tagExamples: Record<string, unknown> = {
     status: 'online',
     serviceCreationLocked: false,
   },
-  'Proxy Hosts': {
+  Routes: {
     id: '550e8400-e29b-41d4-a716-446655440000',
     domainNames: ['app.example.com'],
     forwardHost: '10.0.0.10',
     forwardPort: 3000,
     enabled: true,
   },
-  'Proxy Folders': {
+  'Route Folders': {
     id: '550e8400-e29b-41d4-a716-446655440000',
     name: 'Production',
     parentId: null,
@@ -562,8 +562,8 @@ export const tags = [
   { name: 'Tokens', description: 'API token management' },
   { name: 'Admin', description: 'User administration' },
   { name: 'Nodes', description: 'Gateway node enrollment, configuration, and monitoring' },
-  { name: 'Proxy Hosts', description: 'Reverse proxy host management' },
-  { name: 'Proxy Folders', description: 'Proxy host folder organization' },
+  { name: 'Routes', description: 'Ingress route management; stable API paths retain the proxy-hosts name' },
+  { name: 'Route Folders', description: 'Ingress route folder organization' },
   { name: 'Nginx Templates', description: 'Reusable nginx config templates' },
   { name: 'Docker Containers', description: 'Docker container lifecycle and inspection' },
   { name: 'Docker Deployments', description: 'Blue/green Docker deployments' },

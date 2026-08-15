@@ -50,4 +50,16 @@ describe('NginxCertificateDistributionService helpers', () => {
     expect(safe).toContain('[redacted PEM]');
     expect(safe).not.toContain('secret');
   });
+
+  it('does not require a synthetic default node when ordering legacy source nodes', () => {
+    expect(__testOnly.stableNodeOrder(['node-b', null, 'node-a'])).toEqual(['node-a', 'node-b']);
+  });
+
+  it('excludes cleanup replicas from the active deployment read model', () => {
+    const active = { nodeId: 'node-active', status: 'ready' as const, cleanupAfter: null };
+    const cleanup = { nodeId: 'node-cleanup', status: 'cleanup_pending' as const, cleanupAfter: new Date() };
+    const failedCleanup = { nodeId: 'node-stale', status: 'failed' as const, cleanupAfter: new Date() };
+
+    expect(__testOnly.deployedReplicasOnly([active, cleanup, failedCleanup])).toEqual([active]);
+  });
 });

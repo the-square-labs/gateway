@@ -3219,19 +3219,35 @@ export class IntegrationsService {
         { cause: error instanceof Error ? error.message : String(error) }
       );
     }
-    const probeZone = zones[0];
-    if (!probeZone) {
+    if (zones.length === 0) {
       throw new AppError(400, 'CLOUDFLARE_ZONE_NOT_FOUND', 'Cloudflare token has no active zones');
     }
-    try {
-      await client.listDnsRecords(probeZone.id);
-    } catch (error) {
-      if (!this.isCloudflarePermissionError(error)) throw error;
+
+    const manageableZones: CloudflareZoneRef[] = [];
+    const dnsReadFailures: Array<{ zone: string; cause: string }> = [];
+    for (const zone of zones) {
+      try {
+        await client.probeDnsRead(zone.id);
+        manageableZones.push(zone);
+      } catch (error) {
+        if (!this.isCloudflarePermissionError(error)) throw error;
+        dnsReadFailures.push({
+          zone: zone.name,
+          cause: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const probeZone = manageableZones[0];
+    if (!probeZone) {
+      const firstFailure = dnsReadFailures[0];
       throw new AppError(
         400,
         'CLOUDFLARE_DNS_READ_REQUIRED',
-        'Cloudflare token must include DNS:Read permission for Gateway-managed zones',
-        { zone: probeZone.name, cause: error instanceof Error ? error.message : String(error) }
+        firstFailure
+          ? `Cloudflare denied DNS access for ${firstFailure.zone}: ${firstFailure.cause}`
+          : 'Cloudflare denied DNS access for every active zone',
+        { failures: dnsReadFailures }
       );
     }
     let probeRecordId: string | null = null;
@@ -3279,7 +3295,7 @@ export class IntegrationsService {
         dnsRead: true,
         dnsEdit: true,
       },
-      zones,
+      zones: manageableZones,
     };
   }
 

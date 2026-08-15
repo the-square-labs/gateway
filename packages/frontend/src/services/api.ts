@@ -1922,6 +1922,10 @@ class ApiClient extends withInferenceApi(
     );
   }
 
+  async cancelPendingACMECert(id: string): Promise<void> {
+    return this.request<void>(`/ssl-certificates/${id}/acme-cancel`, { method: "POST" });
+  }
+
   async resyncSSLCertificateDistribution(id: string): Promise<{ synchronized: number }> {
     return this.unwrapData(
       this.request<{ data: { synchronized: number } }>(
@@ -2051,7 +2055,7 @@ class ApiClient extends withInferenceApi(
   }
 
   async previewDomain(
-    data: Pick<CreateDomainRequest, "domain" | "ttl" | "proxied" | "nginxNodeId">
+    data: Pick<CreateDomainRequest, "domain" | "dnsProvider" | "ttl" | "proxied" | "nginxNodeId">
   ): Promise<import("@/types").DomainPreview> {
     return this.unwrapData(
       this.request<{ data: import("@/types").DomainPreview }>("/domains/preview", {
@@ -2073,6 +2077,42 @@ class ApiClient extends withInferenceApi(
   async listDomainNginxNodes(): Promise<import("@/types").DomainNginxNodeOptions> {
     return this.unwrapData(
       this.request<{ data: import("@/types").DomainNginxNodeOptions }>("/domains/nginx-nodes")
+    );
+  }
+
+  async resolveDomainCloudflareMigration(
+    id: string,
+    data: import("@/types").ResolveCloudflareMigrationRequest
+  ): Promise<DomainWithUsage> {
+    return this.unwrapData(
+      this.request<{ data: DomainWithUsage }>(`/domains/${id}/cloudflare-migration/resolve`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      })
+    );
+  }
+
+  async previewDomainIngressMigration(
+    id: string,
+    targetNodeId: string
+  ): Promise<import("@/types").DomainIngressMigrationImpact> {
+    return this.unwrapData(
+      this.request<{ data: import("@/types").DomainIngressMigrationImpact }>(
+        `/domains/${id}/ingress-migration/preview`,
+        { method: "POST", body: JSON.stringify({ targetNodeId }) }
+      )
+    );
+  }
+
+  async migrateDomainIngress(
+    id: string,
+    targetNodeId: string
+  ): Promise<import("@/types").DomainIngressMigrationImpact> {
+    return this.unwrapData(
+      this.request<{ data: import("@/types").DomainIngressMigrationImpact }>(
+        `/domains/${id}/ingress-migration`,
+        { method: "POST", body: JSON.stringify({ targetNodeId }) }
+      )
     );
   }
 

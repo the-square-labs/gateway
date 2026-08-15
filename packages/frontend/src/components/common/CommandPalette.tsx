@@ -756,7 +756,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     if (hasScope("proxy:create")) {
       actions.push({
         id: "action:new-proxy",
-        label: "New proxy host",
+        label: "New route",
         contexts: ["proxy-hosts", "proxy-host"],
         icon: Plus,
         shortcut: "⌃H",
