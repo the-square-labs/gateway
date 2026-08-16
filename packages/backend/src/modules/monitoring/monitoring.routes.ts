@@ -13,6 +13,7 @@ import { MfaService } from '@/modules/auth/mfa.service.js';
 import { DatabaseConnectionService } from '@/modules/databases/databases.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
+import { DockerHealthCheckService } from '@/modules/docker/docker-health-check.service.js';
 import { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
 import { InferenceUsageService } from '@/modules/inference/accounting/inference-usage.service.js';
 import { LoggingMaintenanceService } from '@/modules/logging/logging-maintenance.service.js';
@@ -22,6 +23,7 @@ import { CAService } from '@/modules/pki/ca.service.js';
 import { CertService } from '@/modules/pki/cert.service.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
+import { DaemonUpdateService } from '@/services/daemon-update.service.js';
 import { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
@@ -39,6 +41,7 @@ import {
   proxyLogStreamRoute,
 } from './monitoring.docs.js';
 import { MonitoringService } from './monitoring.service.js';
+import { healthNavigationAttention, nodeNavigationAttention } from './navigation-attention.js';
 import { subscribeNginxHostLogs } from './nginx-log-subscriptions.js';
 
 export const monitoringRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
@@ -391,6 +394,18 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
           throw error;
         })
     : Promise.resolve(null);
+  const daemonUpdatesPromise =
+    canViewNodes && hasScope(scopes, 'admin:update')
+      ? container.resolve(DaemonUpdateService).getCachedStatus()
+      : Promise.resolve([]);
+  const dockerNavigationHealthPromise = hasScopeBase(scopes, 'docker:containers:view')
+    ? container
+        .resolve(DockerHealthCheckService)
+        .listNavigationHealth()
+        .then((rows) =>
+          rows.filter((row) => hasDockerResourceScope(scopes, 'docker:containers:view', row.nodeId, row.resourceId))
+        )
+    : Promise.resolve([]);
   const authMethodsPromise = container
     .resolve(AuthSettingsService)
     .getConfig()
@@ -524,6 +539,8 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     pinnedDatabaseResponse,
     pinnedDockerResources,
     tlsRepairFailures,
+    daemonUpdates,
+    dockerNavigationHealth,
   ] = await Promise.all([
     statsPromise,
     healthPromise,
@@ -542,6 +559,8 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     pinnedDatabasePromise,
     pinnedDockerPromise,
     tlsRepairFailuresPromise,
+    daemonUpdatesPromise,
+    dockerNavigationHealthPromise,
   ]);
   const now = Date.now();
   const nodeCardIds = nodeResponse.data
@@ -679,6 +698,12 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
       const value = visibleDockerResources.get(`${pin.kind}:${pin.nodeId}:${pin.id}`);
       return value === undefined ? [] : [value];
     });
+  const visibleNodeIds = new Set(dashboardNodes.map((node: any) => node.id));
+  const updateNodeIds = new Set(
+    daemonUpdates.flatMap((status) =>
+      status.nodes.filter((node) => node.updateAvailable && visibleNodeIds.has(node.nodeId)).map((node) => node.nodeId)
+    )
+  );
   return c.json({
     data: {
       fetchedAt: new Date().toISOString(),
@@ -719,6 +744,13 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
       attention: {
         severity: getDashboardAttentionSeverity(notices),
         notices,
+      },
+      navigationAttention: {
+        nodes: nodeNavigationAttention(dashboardNodes, updateNodeIds),
+        'proxy-hosts': healthNavigationAttention(
+          health.map((host) => ({ enabled: host.enabled, healthStatus: host.healthStatus }))
+        ),
+        docker: healthNavigationAttention(dockerNavigationHealth),
       },
     },
   });

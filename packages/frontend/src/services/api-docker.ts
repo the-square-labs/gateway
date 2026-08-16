@@ -9,6 +9,7 @@ import type {
   DockerImage,
   DockerNetwork,
   DockerRegistry,
+  DockerRuntimeStatus,
   DockerSecret,
   DockerTask,
   DockerVolume,
@@ -1152,15 +1153,46 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       return response.blob();
     }
 
-    async createVolume(
-      nodeId: string,
-      config: { name: string; driver?: string; labels?: Record<string, string> }
-    ): Promise<Record<string, unknown>> {
+    async createVolume(nodeId: string, config: { name: string }): Promise<Record<string, unknown>> {
       return this.unwrapData(
         this.request<{ data: Record<string, unknown> }>(`/docker/nodes/${nodeId}/volumes`, {
           method: "POST",
           body: JSON.stringify(config),
         })
+      );
+    }
+
+    async listManagedVolumeOptions(nodeId: string): Promise<Array<{ name: string }>> {
+      return this.unwrapData(
+        this.request<{ data: Array<{ name: string }> }>(`/docker/nodes/${nodeId}/managed-volumes`)
+      );
+    }
+
+    async adoptVolume(nodeId: string, name: string): Promise<void> {
+      await this.request(`/docker/nodes/${nodeId}/volumes/${encodeURIComponent(name)}/adopt`, {
+        method: "POST",
+      });
+    }
+
+    async preflightDockerRuntime(nodeId: string): Promise<DockerRuntimeStatus> {
+      return this.unwrapData(
+        this.request<{ data: DockerRuntimeStatus }>(
+          `/docker/nodes/${nodeId}/runtime/runsc/preflight`,
+          {
+            method: "POST",
+          }
+        )
+      );
+    }
+
+    async installDockerRuntime(nodeId: string): Promise<DockerRuntimeStatus> {
+      return this.unwrapData(
+        this.request<{ data: DockerRuntimeStatus }>(
+          `/docker/nodes/${nodeId}/runtime/runsc/install`,
+          {
+            method: "POST",
+          }
+        )
       );
     }
 

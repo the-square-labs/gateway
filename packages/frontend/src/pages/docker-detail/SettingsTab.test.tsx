@@ -133,6 +133,9 @@ describe("docker detail SettingsTab", () => {
       />
     );
 
+    const executionPanel = screen.getByRole("heading", { name: "Execution" }).closest(".border");
+    expect(executionPanel?.parentElement).toHaveClass("min-[1044px]:grid-cols-2");
+
     await waitFor(() => {
       expect(portMappingsSectionSpy).toHaveBeenLastCalledWith(
         expect.objectContaining({

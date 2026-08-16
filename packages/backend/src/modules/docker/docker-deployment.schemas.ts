@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DockerGpuSelectionSchema } from './docker.schemas.js';
+import { DockerGpuSelectionSchema, DockerRuntimeProfileSchema } from './docker.schemas.js';
 
 export const DOCKER_DEPLOYMENT_ROUTES_MAX = 32;
 
@@ -45,6 +45,7 @@ export const DockerDeploymentDesiredConfigSchema = z.object({
   user: z.string().optional(),
   labels: z.record(z.string()).optional(),
   restartPolicy: z.enum(['no', 'always', 'unless-stopped', 'on-failure']).default('unless-stopped'),
+  runtimeProfile: DockerRuntimeProfileSchema.default('default'),
   runtime: z.record(z.unknown()).optional(),
   gpu: DockerGpuSelectionSchema.optional(),
 });
@@ -65,6 +66,7 @@ export const DockerDeploymentCreateSchema = z.object({
   user: z.string().optional(),
   labels: z.record(z.string()).optional(),
   restartPolicy: DockerDeploymentDesiredConfigSchema.shape.restartPolicy,
+  runtimeProfile: DockerRuntimeProfileSchema.default('default'),
   runtime: z.record(z.unknown()).optional(),
   gpu: DockerDeploymentDesiredConfigSchema.shape.gpu,
 });

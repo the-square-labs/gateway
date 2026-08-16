@@ -46,6 +46,33 @@ export const DockerGpuSelectionSchema = z
   })
   .strict();
 
+export const DockerRuntimeProfileSchema = z.enum(['default', 'secure']);
+
+export const DockerRuntimeInstallStepSchema = z.enum([
+  'preparing',
+  'downloading',
+  'verifying_download',
+  'installing_binaries',
+  'configuring_docker',
+  'restarting_docker',
+  'verifying_runtime',
+]);
+
+export const DockerRuntimeStatusSchema = z
+  .object({
+    state: z.enum(['healthy', 'installable', 'unsupported', 'unknown', 'installing', 'failed']),
+    installedVersion: z.string().trim().min(1).optional(),
+    targetVersion: z.string().trim().min(1).optional(),
+    reasonCode: z.string().trim().min(1).optional(),
+    message: z.string().trim().min(1).optional(),
+    checkedAt: z.string().datetime(),
+    remoteInstallable: z.boolean().default(false),
+    localInstallCommand: z.string().trim().min(1).optional(),
+    step: DockerRuntimeInstallStepSchema.optional(),
+    progressPercent: z.number().int().min(0).max(100).optional(),
+  })
+  .strict();
+
 // Container create
 export const ContainerCreateSchema = z
   .object({
@@ -87,6 +114,7 @@ export const ContainerCreateSchema = z
     env: z.record(z.string()).optional(),
     networks: z.array(z.string().trim().min(1)).max(DOCKER_NETWORKS_MAX).optional(),
     restartPolicy: z.enum(['no', 'always', 'unless-stopped', 'on-failure']).default('no'),
+    runtimeProfile: DockerRuntimeProfileSchema.default('default'),
     stopTimeout: DockerStopTimeoutSchema.optional(),
     gpu: DockerGpuSelectionSchema.optional(),
     labels: z.record(z.string()).optional(),
@@ -162,6 +190,7 @@ export const ContainerRecreateSchema = z.object({
   cpuShares: z.number().int().min(0).optional(),
   pidsLimit: z.number().int().min(0).optional(),
   gpu: DockerGpuSelectionSchema.optional(),
+  runtimeProfile: DockerRuntimeProfileSchema.optional(),
 });
 
 // Container action params
@@ -263,11 +292,7 @@ export const ImagePullSchema = z.object({
 });
 
 // Volume create
-export const VolumeCreateSchema = z.object({
-  name: z.string().min(1),
-  driver: z.string().default('local'),
-  labels: z.record(z.string()).optional(),
-});
+export const VolumeCreateSchema = z.object({ name: z.string().trim().min(1) }).strict();
 
 export const VolumeRenameSchema = z.object({
   name: z.string().min(1),
@@ -402,6 +427,8 @@ export type ContainerCreateInput = z.infer<typeof ContainerCreateSchema>;
 export type ContainerUpdateInput = z.infer<typeof ContainerUpdateSchema>;
 export type ContainerLiveUpdateInput = z.infer<typeof ContainerLiveUpdateSchema>;
 export type ContainerRecreateInput = z.infer<typeof ContainerRecreateSchema>;
+export type DockerRuntimeProfile = z.infer<typeof DockerRuntimeProfileSchema>;
+export type DockerRuntimeStatus = z.infer<typeof DockerRuntimeStatusSchema>;
 export type VolumeCreateInput = z.infer<typeof VolumeCreateSchema>;
 export type NetworkCreateInput = z.infer<typeof NetworkCreateSchema>;
 export type RegistryCreateInput = z.infer<typeof RegistryCreateSchema>;

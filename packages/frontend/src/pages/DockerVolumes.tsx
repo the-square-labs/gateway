@@ -88,7 +88,6 @@ export function DockerVolumes({
     onRefreshRef?.(() => void requestSnapshotRefresh("volumes", visibleNodeId));
   }, [onRefreshRef, requestSnapshotRefresh, visibleNodeId]);
   const [createName, setCreateName] = useState("");
-  const [createDriver, setCreateDriver] = useState("local");
   const [creating, setCreating] = useState(false);
 
   const loadVolumeNodes = useCallback(async () => {
@@ -177,7 +176,6 @@ export function DockerVolumes({
     try {
       await api.createVolume(createNodeId, {
         name: createName.trim(),
-        driver: createDriver,
       });
       toast.success("Volume created");
       closeCreate();
@@ -192,8 +190,20 @@ export function DockerVolumes({
   const closeCreate = () => {
     setCreateOpen(false);
     setCreateName("");
-    setCreateDriver("local");
   };
+
+  const handleAdopt = useCallback(
+    async (name: string, nodeId: string) => {
+      try {
+        await api.adoptVolume(nodeId, name);
+        toast.success("Volume migrated to Gateway management");
+        await fetchVolumes(undefined, search);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to migrate volume");
+      }
+    },
+    [fetchVolumes, search]
+  );
 
   const selectedNode = dockerNodes.find((n) => n.id === selectedNodeId);
 
@@ -209,7 +219,14 @@ export function DockerVolumes({
               <Database className="h-4 w-4 text-muted-foreground" />
             </div>
             <div className="flex-1 min-w-0">
-              <TruncateStart text={v.name} className="text-sm font-medium" />
+              <div className="flex min-w-0 items-center gap-2">
+                <TruncateStart text={v.name} className="text-sm font-medium" />
+                {v.managementState === "legacy" && (
+                  <Badge variant="warning" size="inline">
+                    Legacy
+                  </Badge>
+                )}
+              </div>
             </div>
           </div>
         ),
@@ -272,7 +289,7 @@ export function DockerVolumes({
       {
         id: "actions",
         label: "Actions",
-        width: "5.75rem",
+        width: "9rem",
         align: "right" as const,
         renderCell: (v) => {
           const usedBy: string[] = (v as any).usedBy ?? (v as any).UsedBy ?? [];
@@ -297,16 +314,35 @@ export function DockerVolumes({
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 )}
+              {v.managementState === "legacy" &&
+                v.adoptable &&
+                (hasScope("docker:volumes:create") ||
+                  hasScope(`docker:volumes:create:${(v as any)._nodeId}`)) && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7"
+                    onClick={() => handleAdopt(v.name, (v as any)._nodeId)}
+                    title="Migrate to Gateway management"
+                  >
+                    Migrate
+                  </Button>
+                )}
             </div>
           );
         },
       },
     ],
-    [hasScope, handleRemove]
+    [handleAdopt, hasScope, handleRemove]
   );
   const volumeColumns = allVolumeColumns.filter((c) => {
     if (fixedNodeId && c.id === "node") return false;
-    if (!hasScopedAccess("docker:volumes:delete") && c.id === "actions") return false;
+    if (
+      !hasScopedAccess("docker:volumes:delete") &&
+      !hasScopedAccess("docker:volumes:create") &&
+      c.id === "actions"
+    )
+      return false;
     return true;
   });
 
@@ -500,14 +536,6 @@ export function DockerVolumes({
                 value={createName}
                 onChange={(e) => setCreateName(e.target.value)}
                 placeholder="my-volume"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Driver</label>
-              <Input
-                value={createDriver}
-                onChange={(e) => setCreateDriver(e.target.value)}
-                placeholder="local"
               />
             </div>
           </div>

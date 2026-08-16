@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import {
+  HEADER_ACTION_PRIORITY,
   type ResponsiveHeaderAction,
   ResponsiveHeaderActions,
 } from "@/components/common/ResponsiveHeaderActions";
@@ -148,6 +149,7 @@ export function DatabaseHeader({
             buttonLabel: canPause ? "Pause" : "Unpause",
             icon: canPause ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />,
             onClick: canPause ? onPause : onUnpause,
+            priority: HEADER_ACTION_PRIORITY.primary,
           },
         ]
       : []),
@@ -159,6 +161,7 @@ export function DatabaseHeader({
             buttonLabel: "Restart",
             icon: <RefreshCw className="h-4 w-4" />,
             onClick: onRestart,
+            priority: HEADER_ACTION_PRIORITY.primary,
           },
         ]
       : []),

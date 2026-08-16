@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { useCommandPalettePageActions } from "@/stores/command-palette-page-actions";
 import {
   getHeaderActionOverflowCount,
+  getHeaderActionOverflowIndices,
   HeaderOverflowMenu,
   ResponsiveHeaderActions,
   shouldCollapseHeaderActions,
@@ -145,6 +146,32 @@ describe("ResponsiveHeaderActions command palette registration", () => {
     ).toEqual(["New Folder", "Deploy", "Page actions"]);
     rectSpy.mockRestore();
   });
+
+  it("keeps destructive actions in overflow even when the header is wide", () => {
+    const remove = vi.fn();
+    render(
+      <MemoryRouter initialEntries={["/nodes/test"]}>
+        <div data-testid="header">
+          <div>Node</div>
+          <ResponsiveHeaderActions
+            actions={[
+              { label: "Settings", onClick: vi.fn() },
+              { label: "Remove", onClick: remove, destructive: true },
+            ]}
+          >
+            <button type="button">Settings</button>
+            <button type="button" onClick={remove}>
+              Remove
+            </button>
+          </ResponsiveHeaderActions>
+        </div>
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Page actions" })).toBeInTheDocument();
+  });
 });
 
 describe("HeaderOverflowMenu", () => {
@@ -194,5 +221,19 @@ describe("getHeaderActionOverflowCount", () => {
     expect(getHeaderActionOverflowCount(650, [], 40)).toBe(0);
     expect(getHeaderActionOverflowCount(650, [120], 0)).toBe(0);
     expect(getHeaderActionOverflowCount(650, [0], 40)).toBe(0);
+  });
+});
+
+describe("getHeaderActionOverflowIndices", () => {
+  it("always overflows destructive actions and collapses lower priorities first", () => {
+    const actions = [
+      { width: 120, priority: 100 },
+      { width: 120 },
+      { width: 120, alwaysOverflow: true },
+    ];
+
+    expect(getHeaderActionOverflowIndices(900, actions, 40, 320, 8)).toEqual([2]);
+    expect(getHeaderActionOverflowIndices(580, actions, 40, 320, 8)).toEqual([1, 2]);
+    expect(getHeaderActionOverflowIndices(450, actions, 40, 320, 8)).toEqual([0, 1, 2]);
   });
 });

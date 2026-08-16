@@ -538,7 +538,7 @@ func writeDockerArchiveEntry(writer *tar.Writer, header *tar.Header, content []b
 	return nil
 }
 
-func (p *DockerPlugin) finishArchiveImport(ctx context.Context, archiveID, artifactID, configJSON string) (map[string]string, error) {
+func (p *DockerPlugin) finishArchiveImport(ctx context.Context, archiveID, artifactID, configJSON string) (map[string]any, error) {
 	var req archiveImportFinishRequest
 	if err := json.Unmarshal([]byte(configJSON), &req); err != nil {
 		return nil, fmt.Errorf("parse archive import request: %w", err)
@@ -607,7 +607,12 @@ func (p *DockerPlugin) finishArchiveImport(ctx context.Context, archiveID, artif
 		return nil, err
 	}
 	completed = true
-	return map[string]string{"containerId": containerID, "containerName": name, "imageId": loaded.ID}, nil
+	return map[string]any{
+		"containerId":    containerID,
+		"containerName":  name,
+		"imageId":        loaded.ID,
+		"createdVolumes": createdVolumes,
+	}, nil
 }
 
 // setArchiveImageReferenceLabel adds the update source only after the archive

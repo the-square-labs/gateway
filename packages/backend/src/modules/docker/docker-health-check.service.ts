@@ -3,6 +3,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import {
   type DockerHealthEntry,
   type DockerHealthStatus,
+  dockerAccessResources,
   dockerDeploymentRoutes,
   dockerDeployments,
   dockerHealthChecks,
@@ -297,6 +298,42 @@ export class DockerHealthCheckService {
         )
       );
     return new Map(rows.flatMap((row) => (row.containerName ? [[row.containerName, row] as const] : [])));
+  }
+
+  async listNavigationHealth() {
+    const rows = await this.db
+      .select({
+        target: dockerHealthChecks.target,
+        nodeId: dockerHealthChecks.nodeId,
+        deploymentId: dockerHealthChecks.deploymentId,
+        containerResourceId: dockerAccessResources.id,
+        enabled: dockerHealthChecks.enabled,
+        healthStatus: dockerHealthChecks.healthStatus,
+      })
+      .from(dockerHealthChecks)
+      .leftJoin(
+        dockerAccessResources,
+        and(
+          eq(dockerHealthChecks.target, 'container'),
+          eq(dockerHealthChecks.nodeId, dockerAccessResources.nodeId),
+          eq(dockerHealthChecks.containerName, dockerAccessResources.resourceKey)
+        )
+      )
+      .where(eq(dockerHealthChecks.enabled, true));
+
+    return rows.flatMap((row) => {
+      const resourceId = row.target === 'deployment' ? row.deploymentId : row.containerResourceId;
+      return resourceId
+        ? [
+            {
+              nodeId: row.nodeId,
+              resourceId,
+              enabled: row.enabled,
+              healthStatus: row.healthStatus,
+            },
+          ]
+        : [];
+    });
   }
 
   async getRowsForDeployments(deploymentIds: string[]) {

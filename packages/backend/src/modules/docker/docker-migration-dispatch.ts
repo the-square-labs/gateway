@@ -125,7 +125,7 @@ export class DockerMigrationDispatchAdapter {
     archiveId: string,
     artifactId: string,
     config: Record<string, unknown>
-  ): Promise<{ containerId: string; containerName: string; imageId: string }> {
+  ): Promise<{ containerId: string; containerName: string; imageId: string; createdVolumes?: string[] }> {
     return this.command(nodeId, 'finish_archive_import', {
       migrationId: archiveId,
       artifactId,

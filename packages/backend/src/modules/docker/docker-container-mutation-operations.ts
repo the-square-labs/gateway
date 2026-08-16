@@ -7,6 +7,7 @@ import type { DockerAccessResourceService } from './docker-access-resource.servi
 import { envListToMap, envMapToList, normalizeEnvRecord } from './docker-env-operations.js';
 import { dockerGpuAttachmentFromInspect, hasRequestedGpuChange } from './docker-gpu-attachment.js';
 import type { ContainerAction } from './docker-lifecycle-watch.js';
+import { assertManagedMountMutation } from './docker-managed-mounts.js';
 import { hasRequestedSpecificPortBindIp } from './docker-port-bindings.js';
 import { assertContainerNotUsedByProxy } from './docker-proxy-link.guard.js';
 import type { DockerRegistryAuthCandidate, DockerRegistryService } from './docker-registry.service.js';
@@ -18,7 +19,11 @@ import {
 } from './docker-runtime-operations.js';
 import type { DockerRuntimeSettingsService } from './docker-runtime-settings.service.js';
 import type { DockerSecretService } from './docker-secret.service.js';
-import { assertDockerMountChangeAllowed, normalizeMountDefinitionsFromInspect } from './docker-socket-mount.guard.js';
+import {
+  assertDockerMountChangeAllowed,
+  normalizeMountDefinitionsFromConfig,
+  normalizeMountDefinitionsFromInspect,
+} from './docker-socket-mount.guard.js';
 import type { DockerTaskService } from './docker-task.service.js';
 
 export interface DockerContainerMutationContext {
@@ -48,6 +53,7 @@ export interface DockerContainerMutationContext {
   validateDockerNode(nodeId: string): Promise<unknown>;
   assertDockerGpuCapability(nodeId: string): Promise<void>;
   assertDockerPortBindIpCapability(nodeId: string): Promise<void>;
+  assertDockerRuntimeProfileAvailable(nodeId: string, profile: unknown): Promise<void>;
   assertNameAvailable(nodeId: string, name: string): Promise<void>;
   assertNotManagedDeploymentInternal(nodeId: string, containerId: string): Promise<void>;
   translateNameConflict(err: unknown, name: string): never;
@@ -160,8 +166,18 @@ export async function createContainer(
   await assertNodeAllowsServiceCreation(ctx.db, nodeId, 'docker');
   await ctx.validateDockerNode(nodeId);
   if (hasRequestedGpuChange(config)) await ctx.assertDockerGpuCapability(nodeId);
+  await ctx.assertDockerRuntimeProfileAvailable(nodeId, config.runtimeProfile);
+  assertSecureRuntimeConfiguration(config);
   if (hasRequestedSpecificPortBindIp(config)) await ctx.assertDockerPortBindIpCapability(nodeId);
   assertDockerMountChangeAllowed({ nodeId, actorScopes, nextConfig: config, currentDefinitions: [] });
+  await assertManagedMountMutation({
+    db: ctx.db,
+    dispatch: ctx.nodeDispatch,
+    parseResult: ctx.parseResult,
+    nodeId,
+    current: [],
+    next: normalizeMountDefinitionsFromConfig(config),
+  });
   const registryId = typeof config.registryId === 'string' ? config.registryId : null;
   delete config.registryId;
   const requestedName = (config.name as string | undefined)?.trim();
@@ -615,6 +631,14 @@ export async function duplicateContainer(
     currentDefinitions: [],
     nextDefinitions: normalizeMountDefinitionsFromInspect(inspect),
   });
+  await assertManagedMountMutation({
+    db: ctx.db,
+    dispatch: ctx.nodeDispatch,
+    parseResult: ctx.parseResult,
+    nodeId,
+    current: [],
+    next: normalizeMountDefinitionsFromInspect(inspect),
+  });
   ctx.requireNoTransition(nodeId, sourceName);
   await ctx.assertNameAvailable(nodeId, name);
   ctx.setTransition(nodeId, name, 'creating');
@@ -696,6 +720,19 @@ export async function updateContainer(
     nextConfig: config,
     currentInspect: inspect,
     useCurrentWhenNextMissing: true,
+  });
+  const currentMounts = normalizeMountDefinitionsFromInspect(inspect);
+  const nextMounts =
+    Object.hasOwn(config, 'mounts') || Object.hasOwn(config, 'volumes')
+      ? normalizeMountDefinitionsFromConfig(config)
+      : currentMounts;
+  await assertManagedMountMutation({
+    db: ctx.db,
+    dispatch: ctx.nodeDispatch,
+    parseResult: ctx.parseResult,
+    nodeId,
+    current: currentMounts,
+    next: nextMounts,
   });
   const expectedState = await ctx.resolveExpectedRecreateState(nodeId, containerId);
   if (ctx.environmentService) {
@@ -820,6 +857,8 @@ export async function recreateWithConfig(
     delete config.env;
   }
   const inspect = await ctx.inspectContainer(nodeId, containerId);
+  await ctx.assertDockerRuntimeProfileAvailable(nodeId, config.runtimeProfile);
+  assertSecureRuntimeConfiguration(config, inspect);
   if (hasRequestedGpuChange(config) && dockerGpuAttachmentFromInspect(inspect).mode === 'external') {
     throw new AppError(
       409,
@@ -835,6 +874,19 @@ export async function recreateWithConfig(
     nextConfig: config,
     currentInspect: inspect,
     useCurrentWhenNextMissing: true,
+  });
+  const currentMounts = normalizeMountDefinitionsFromInspect(inspect);
+  const nextMounts =
+    Object.hasOwn(config, 'mounts') || Object.hasOwn(config, 'volumes')
+      ? normalizeMountDefinitionsFromConfig(config)
+      : currentMounts;
+  await assertManagedMountMutation({
+    db: ctx.db,
+    dispatch: ctx.nodeDispatch,
+    parseResult: ctx.parseResult,
+    nodeId,
+    current: currentMounts,
+    next: nextMounts,
   });
   await validateDockerRuntimeResourceConfig(ctx.runtimeOperationContext(), nodeId, containerId, config);
   ctx.setTransition(nodeId, name, 'recreating');
@@ -912,6 +964,39 @@ export async function recreateWithConfig(
         .catch(() => {});
     }
     throw err;
+  }
+}
+
+function assertSecureRuntimeConfiguration(config: Record<string, unknown>, inspect?: Record<string, any>) {
+  if (config.runtimeProfile !== 'secure') return;
+  const gpu = config.gpu as { deviceIds?: unknown[] } | undefined;
+  const hasRequestedGpu = Array.isArray(gpu?.deviceIds) && gpu.deviceIds.length > 0;
+  const preservesGpu = gpu === undefined && inspect ? dockerGpuAttachmentFromInspect(inspect).mode !== 'none' : false;
+  if (hasRequestedGpu || preservesGpu) {
+    throw new AppError(409, 'SECURE_RUNTIME_GPU_UNSUPPORTED', 'Remove GPU attachments before selecting Secure Runtime');
+  }
+  const mounts = Array.isArray(config.mounts)
+    ? config.mounts
+    : Array.isArray(config.volumes)
+      ? config.volumes
+      : undefined;
+  const hasRequestedBind = mounts?.some(
+    (mount) =>
+      !!mount && typeof mount === 'object' && !Array.isArray(mount) && typeof (mount as any).hostPath === 'string'
+  );
+  const preservesBind =
+    mounts === undefined &&
+    !!inspect &&
+    (Array.isArray(inspect?.Mounts)
+      ? inspect.Mounts.some((mount: any) => String(mount?.Type ?? mount?.type).toLowerCase() === 'bind')
+      : Array.isArray(inspect?.HostConfig?.Binds) &&
+        inspect.HostConfig.Binds.some((bind: unknown) => String(bind).split(':', 1)[0]?.startsWith('/')));
+  if (hasRequestedBind || preservesBind) {
+    throw new AppError(
+      409,
+      'SECURE_RUNTIME_BIND_UNSUPPORTED',
+      'Remove host bind mounts before selecting Secure Runtime'
+    );
   }
 }
 

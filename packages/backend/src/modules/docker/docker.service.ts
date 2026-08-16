@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { dockerDeployments, nodes } from '@/db/schema/index.js';
+import { dockerDeployments, dockerManagedVolumes, nodes } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -8,6 +8,7 @@ import type { NotificationEvaluatorService } from '@/modules/notifications/notif
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
+import { type DockerRuntimeStatus, DockerRuntimeStatusSchema } from './docker.schemas.js';
 import { type DockerAccessResourceService, hasDockerResourceScope } from './docker-access-resource.service.js';
 import {
   createContainer as createDockerContainer,
@@ -47,6 +48,7 @@ import {
   watchDockerRecreateByName,
   watchDockerTransition,
 } from './docker-lifecycle-watch.js';
+import { assertManagedMountMutation } from './docker-managed-mounts.js';
 import type { DockerMigrationGuard } from './docker-migration-guard.js';
 import { hasDockerPortBindIpV1Capability } from './docker-port-bindings.js';
 import {
@@ -74,6 +76,7 @@ import type { DockerSecretService } from './docker-secret.service.js';
 import type { DockerTaskService } from './docker-task.service.js';
 import {
   abortVolumeFileUpload as abortDockerVolumeFileUpload,
+  adoptVolume as adoptDockerVolume,
   appendVolumeFileUploadChunk as appendDockerVolumeFileUploadChunk,
   completeVolumeFileUpload as completeDockerVolumeFileUpload,
   connectContainerToNetwork as connectDockerContainerToNetwork,
@@ -299,6 +302,7 @@ export class DockerManagementService {
 
   private volumeNetworkOperationContext() {
     return {
+      db: this.db,
       nodeDispatch: this.nodeDispatch,
       auditService: this.auditService,
       eventBus: this.eventBus,
@@ -600,6 +604,19 @@ export class DockerManagementService {
     }
   }
 
+  private async assertDockerRuntimeProfileAvailable(nodeId: string, profile: unknown): Promise<void> {
+    if (profile !== 'secure') return;
+    const node = await this.validateDockerNode(nodeId);
+    const status = (node.capabilities as Record<string, any> | null)?.dockerRuntimeStatus;
+    if (status?.state !== 'healthy') {
+      throw new AppError(
+        409,
+        'SECURE_RUNTIME_UNAVAILABLE',
+        status?.message || 'Secure Runtime is not healthy on this node. Complete Setup in Node Details first.'
+      );
+    }
+  }
+
   private parseResult(result: { success: boolean; error?: string; detail?: string }) {
     if (!result.success) {
       throw new AppError(502, 'DISPATCH_ERROR', dockerDispatchErrorMessage(result, 'Command failed on daemon'));
@@ -890,6 +907,8 @@ export class DockerManagementService {
       validateDockerNode: (nodeId) => this.validateDockerNode(nodeId),
       assertDockerGpuCapability: (nodeId) => this.assertDockerGpuCapability(nodeId),
       assertDockerPortBindIpCapability: (nodeId) => this.assertDockerPortBindIpCapability(nodeId),
+      assertDockerRuntimeProfileAvailable: (nodeId, profile) =>
+        this.assertDockerRuntimeProfileAvailable(nodeId, profile),
       assertNameAvailable: (nodeId, name) => this.assertNameAvailable(nodeId, name),
       assertNotManagedDeploymentInternal: (nodeId, containerId) =>
         this.assertNotManagedDeploymentInternal(nodeId, containerId),
@@ -1193,19 +1212,167 @@ export class DockerManagementService {
     await updateDockerVolumeLabels(this.volumeNetworkOperationContext(), nodeId, name, labels, userId);
   }
 
-  async createVolume(
-    nodeId: string,
-    config: { name: string; driver: string; labels?: Record<string, string> },
-    userId: string
-  ) {
+  async createVolume(nodeId: string, config: { name: string }, userId: string) {
     await this.validateDockerNode(nodeId);
     return createDockerVolume(this.volumeNetworkOperationContext(), nodeId, config, userId);
+  }
+
+  async listManagedVolumeOptions(nodeId: string) {
+    await this.validateDockerNode(nodeId);
+    const rows = await this.db
+      .select({ name: dockerManagedVolumes.volumeName })
+      .from(dockerManagedVolumes)
+      .where(eq(dockerManagedVolumes.nodeId, nodeId));
+    return rows.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async decoratePublicVolumeSnapshot(
+    nodeId: string,
+    volumes: Array<Record<string, any>>,
+    containers: Array<Record<string, any>>
+  ) {
+    const managedRows = await this.db
+      .select({ volumeName: dockerManagedVolumes.volumeName })
+      .from(dockerManagedVolumes)
+      .where(eq(dockerManagedVolumes.nodeId, nodeId));
+    const managedNames = new Set(managedRows.map((row) => row.volumeName));
+    const publicContainerNames = new Set(
+      containers
+        .filter((entry) => !isGatewayInternalContainer(entry))
+        .flatMap((entry) => {
+          const names = Array.isArray(entry.Names ?? entry.names) ? (entry.Names ?? entry.names) : [];
+          const primary = String(entry.Name ?? entry.name ?? names[0] ?? '').replace(/^\//, '');
+          return primary ? [primary] : [];
+        })
+    );
+    const visible: Array<Record<string, any>> = volumes.flatMap((volume) => {
+      const name = String(volume.Name ?? volume.name ?? '');
+      if (!name) return [];
+      const usedBy = Array.isArray(volume.UsedBy ?? volume.usedBy) ? (volume.UsedBy ?? volume.usedBy) : [];
+      const managed = managedNames.has(name);
+      if (!managed && !usedBy.some((containerName: string) => publicContainerNames.has(containerName))) return [];
+      const driver = String(volume.Driver ?? volume.driver ?? '');
+      const scope = String(volume.Scope ?? volume.scope ?? '');
+      const options = volume.Options ?? volume.options ?? {};
+      const adoptable = !managed && driver === 'local' && scope === 'local' && Object.keys(options ?? {}).length === 0;
+      return [
+        {
+          ...volume,
+          managementState: managed ? 'managed' : 'legacy',
+          adoptable,
+          adoptionReason:
+            !managed && !adoptable ? 'Only local volumes without driver options can be migrated' : undefined,
+        },
+      ];
+    });
+    const returned = new Set(visible.map((volume) => String(volume.Name ?? volume.name ?? '')));
+    for (const { volumeName } of managedRows) {
+      if (!returned.has(volumeName)) {
+        visible.push({
+          Name: volumeName,
+          Driver: 'local',
+          Scope: 'local',
+          UsedBy: [],
+          managementState: 'managed',
+          adoptable: false,
+          availability: 'unavailable',
+        });
+      }
+    }
+    return visible;
+  }
+
+  async registerImportedManagedVolumes(nodeId: string, volumeNames: string[], userId: string) {
+    const names = [...new Set(volumeNames.map((name) => name.trim()).filter(Boolean))];
+    if (names.length === 0) return;
+    await this.db
+      .insert(dockerManagedVolumes)
+      .values(names.map((volumeName) => ({ nodeId, volumeName, origin: 'created' as const, createdById: userId })))
+      .onConflictDoNothing();
+  }
+
+  async assertManagedVolumeSelections(nodeId: string, volumeNames: string[]) {
+    await assertManagedMountMutation({
+      db: this.db,
+      dispatch: this.nodeDispatch,
+      parseResult: (result) => this.parseResult(result),
+      nodeId,
+      current: [],
+      next: [...new Set(volumeNames)].map((source, index) => ({
+        type: 'volume' as const,
+        source,
+        target: `/__gateway_archive_mount_${index}`,
+        readOnly: false,
+      })),
+    });
   }
 
   async removeVolume(nodeId: string, name: string, force: boolean, userId: string | null) {
     await this.migrationGuard?.assertVolumeAllowed(nodeId, name);
     await this.validateDockerNode(nodeId);
     await removeDockerVolume(this.volumeNetworkOperationContext(), nodeId, name, force, userId);
+  }
+
+  async adoptVolume(nodeId: string, name: string, userId: string) {
+    await this.validateDockerNode(nodeId);
+    return adoptDockerVolume(this.volumeNetworkOperationContext(), nodeId, name, userId);
+  }
+
+  async manageRunsc(nodeId: string, action: 'preflight' | 'install') {
+    const node = await this.validateDockerNode(nodeId);
+    const reportedStatus = (node.capabilities as Record<string, any> | null)?.dockerRuntimeStatus as
+      | DockerRuntimeStatus
+      | undefined;
+    if (reportedStatus?.state === 'installing') {
+      throw new AppError(409, 'RUNTIME_INSTALL_IN_PROGRESS', 'Secure Runtime setup is already in progress');
+    }
+
+    if (action === 'install') {
+      await this.persistDockerRuntimeStatus(node, {
+        state: 'installing',
+        targetVersion: reportedStatus?.targetVersion,
+        message: 'Installing and verifying Secure Runtime',
+        checkedAt: new Date().toISOString(),
+        remoteInstallable: reportedStatus?.remoteInstallable ?? true,
+        localInstallCommand: reportedStatus?.localInstallCommand,
+      });
+    }
+
+    let parsed: DockerRuntimeStatus;
+    try {
+      const result = await this.nodeDispatch.sendDockerRuntimeCommand(nodeId, action);
+      parsed = DockerRuntimeStatusSchema.parse(this.parseResult(result));
+    } catch (error) {
+      if (action === 'install') {
+        await this.persistDockerRuntimeStatus(node, {
+          state: 'failed',
+          targetVersion: reportedStatus?.targetVersion,
+          reasonCode: 'INSTALL_FAILED',
+          message: error instanceof Error ? error.message : 'Secure Runtime setup failed',
+          checkedAt: new Date().toISOString(),
+          remoteInstallable: reportedStatus?.remoteInstallable ?? true,
+          localInstallCommand: reportedStatus?.localInstallCommand,
+        });
+      }
+      throw error;
+    }
+
+    await this.persistDockerRuntimeStatus(node, parsed);
+    return parsed;
+  }
+
+  private async persistDockerRuntimeStatus(
+    node: { id: string; hostname: string; capabilities: unknown },
+    status: DockerRuntimeStatus
+  ) {
+    await this.db
+      .update(nodes)
+      .set({
+        capabilities: { ...((node.capabilities as Record<string, unknown> | null) ?? {}), dockerRuntimeStatus: status },
+        updatedAt: new Date(),
+      })
+      .where(eq(nodes.id, node.id));
+    this.nodeRegistry.publishDockerRuntimeChanged(node.id, status);
   }
 
   private async assertContainerMigrationAllowed(nodeId: string, containerId: string): Promise<void> {

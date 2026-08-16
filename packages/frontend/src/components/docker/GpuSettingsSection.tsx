@@ -133,6 +133,15 @@ export function GpuSettingsSection({
     ? "grid-cols-[minmax(0,1fr)_120px_minmax(0,1fr)_minmax(0,1fr)_36px]"
     : "grid-cols-[minmax(0,1fr)_120px_minmax(0,1fr)_minmax(0,1fr)]";
 
+  if (
+    gpuInventoryLoaded &&
+    gpuDevices.length === 0 &&
+    deviceIds.length === 0 &&
+    attachment.mode !== "external"
+  ) {
+    return null;
+  }
+
   return (
     <>
       <PanelShell

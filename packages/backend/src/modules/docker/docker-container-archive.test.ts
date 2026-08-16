@@ -325,7 +325,6 @@ describe('GWCA v1', () => {
           secrets: { DATABASE_PASSWORD: 'secret' },
           networks: [{ name: 'source-app', driver: 'bridge', createable: true }],
           mounts: [
-            { type: 'bind', source: '/source/data', target: '/data', readOnly: false },
             {
               type: 'volume',
               source: 'source-external',
@@ -340,7 +339,6 @@ describe('GWCA v1', () => {
       ),
       resolution: {
         networks: { 'source-app': 'target-app' },
-        bindPaths: { '/source/data': '/target/data' },
         volumes: { 'source-external': 'target-external' },
         ports: { '8080/tcp:8080': 18080 },
       },
@@ -354,10 +352,7 @@ describe('GWCA v1', () => {
         name: 'restored-app',
         manifest: expect.objectContaining({
           networks: [expect.objectContaining({ name: 'target-app' })],
-          mounts: [
-            expect.objectContaining({ source: '/target/data' }),
-            expect.objectContaining({ source: 'target-external', requiresMapping: false }),
-          ],
+          mounts: [expect.objectContaining({ source: 'target-external', requiresMapping: false })],
           ports: [expect.objectContaining({ hostPort: 18080 })],
         }),
         expectedArtifactDigest: createHash('sha256').update(image).digest('hex'),
@@ -370,8 +365,31 @@ describe('GWCA v1', () => {
       imageId,
       environment: { PUBLIC_VALUE: 'visible' },
       secrets: { DATABASE_PASSWORD: 'secret' },
+      createdVolumes: [],
     });
     expect(dispatch.abort).not.toHaveBeenCalled();
+  });
+
+  it('rejects archive imports that contain host bind mounts', async () => {
+    const dispatch = {
+      planArchiveImport: vi.fn(),
+      openArchiveImport: vi.fn(),
+    } as unknown as DockerMigrationDispatchAdapter;
+
+    await expect(
+      importGwca({
+        dispatch,
+        nodeId: 'node-2',
+        name: 'restored-app',
+        body: streamBytes(
+          archiveBytes(Buffer.from('image'), undefined, {
+            mounts: [{ type: 'bind', source: '/source/data', target: '/data', readOnly: false }],
+          })
+        ),
+      })
+    ).rejects.toMatchObject({ statusCode: 409, code: 'HOST_BIND_MOUNTS_DISABLED' });
+    expect(dispatch.planArchiveImport).not.toHaveBeenCalled();
+    expect(dispatch.openArchiveImport).not.toHaveBeenCalled();
   });
 
   it('rejects occupied host ports before opening the archive import stream', async () => {
@@ -510,6 +528,7 @@ describe('GWCA v1', () => {
       imageId,
       environment: { PUBLIC_VALUE: 'visible' },
       secrets: {},
+      createdVolumes: [],
     });
   });
 

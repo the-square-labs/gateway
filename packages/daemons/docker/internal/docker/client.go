@@ -12,9 +12,11 @@ import (
 	"maps"
 	"net/http"
 	"net/netip"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
@@ -45,6 +47,11 @@ type Client struct {
 	cli          *client.Client
 	logger       *slog.Logger
 	gpuInventory gpuInventory
+	runscHealthy atomic.Bool
+}
+
+func (c *Client) SetRunscHealthy(healthy bool) {
+	c.runscHealthy.Store(healthy)
 }
 
 type gpuInventory interface {
@@ -459,6 +466,7 @@ type ContainerCreateConfig struct {
 	CapDrop             []string   `json:"cap_drop,omitempty"`
 	ExtraHosts          []string   `json:"extra_hosts,omitempty"`
 	GPU                 *GPUConfig `json:"gpu,omitempty"`
+	RuntimeProfile      string     `json:"runtimeProfile,omitempty"`
 }
 
 type containerPortMapping struct {
@@ -788,6 +796,12 @@ func (c *Client) CreateContainer(ctx context.Context, configJSON string) (string
 	if cfg.Image == "" {
 		return "", "", fmt.Errorf("image is required")
 	}
+	if cfg.Privileged || len(cfg.CapAdd) > 0 {
+		return "", "", fmt.Errorf("privileged mode and added capabilities are not allowed for user workloads")
+	}
+	if hasHostBind(cfg.Binds) {
+		return "", "", fmt.Errorf("host bind mounts are not allowed for new user workloads")
+	}
 	containerCfg := &container.Config{
 		Image:       cfg.Image,
 		Cmd:         cfg.Cmd,
@@ -809,6 +823,10 @@ func (c *Client) CreateContainer(ctx context.Context, configJSON string) (string
 		CapAdd:      cfg.CapAdd,
 		CapDrop:     cfg.CapDrop,
 		ExtraHosts:  cfg.ExtraHosts,
+	}
+	applyUserWorkloadBaseline(hostCfg)
+	if err := c.applyRuntimeProfile(hostCfg, cfg.RuntimeProfile, cfg.GPU); err != nil {
+		return "", "", err
 	}
 	if cfg.GPU != nil {
 		if err := c.applyGPUConfig(ctx, containerCfg, hostCfg, cfg.GPU); err != nil {
@@ -862,6 +880,48 @@ func (c *Client) CreateContainer(ctx context.Context, configJSON string) (string
 	}
 
 	return result.ID, cfg.Name, nil
+}
+
+func applyUserWorkloadBaseline(hostCfg *container.HostConfig) {
+	hostCfg.Privileged = false
+	hostCfg.CapAdd = nil
+	hostCfg.SecurityOpt = appendUniqueStrings(hostCfg.SecurityOpt, "no-new-privileges:true")
+}
+
+func (c *Client) applyRuntimeProfile(hostCfg *container.HostConfig, profile string, gpuConfig *GPUConfig) error {
+	switch profile {
+	case "", "default":
+		hostCfg.Runtime = ""
+		return nil
+	case "secure":
+		if !c.runscHealthy.Load() {
+			return fmt.Errorf("Secure Runtime is not healthy on this node")
+		}
+		if gpuConfig != nil && len(gpuConfig.DeviceIDs) > 0 {
+			return fmt.Errorf("Secure Runtime does not support GPU attachments")
+		}
+		if len(hostCfg.Devices) > 0 || len(hostCfg.DeviceRequests) > 0 {
+			return fmt.Errorf("Secure Runtime does not support device attachments")
+		}
+		if hasHostBind(hostCfg.Binds) {
+			return fmt.Errorf("Secure Runtime does not support host bind mounts")
+		}
+		hostCfg.Runtime = "runsc"
+		applyUserWorkloadBaseline(hostCfg)
+		return nil
+	default:
+		return fmt.Errorf("unsupported runtime profile %q", profile)
+	}
+}
+
+func hasHostBind(binds []string) bool {
+	for _, bind := range binds {
+		source := strings.SplitN(bind, ":", 2)[0]
+		if filepath.IsAbs(source) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) HTTPProbe(ctx context.Context, configJSON string) (HTTPProbeResult, error) {
@@ -1138,21 +1198,22 @@ func (c *Client) RecreateWithConfig(ctx context.Context, id string, configJSON s
 			Name          string `json:"name"`
 			ReadOnly      bool   `json:"readOnly"`
 		} `json:"mounts"`
-		Entrypoint    []string          `json:"entrypoint"`
-		Command       []string          `json:"command"`
-		WorkingDir    string            `json:"workingDir"`
-		User          string            `json:"user"`
-		Hostname      string            `json:"hostname"`
-		Labels        map[string]string `json:"labels"`
-		StopTimeout   *int              `json:"stopTimeout"`
-		RestartPolicy *string           `json:"restartPolicy"`
-		MaxRetries    *int              `json:"maxRetries"`
-		MemoryLimit   *int64            `json:"memoryLimit"`
-		MemorySwap    *int64            `json:"memorySwap"`
-		NanoCPUs      *int64            `json:"nanoCPUs"`
-		CpuShares     *int64            `json:"cpuShares"`
-		PidsLimit     *int64            `json:"pidsLimit"`
-		GPU           *GPUConfig        `json:"gpu"`
+		Entrypoint     []string          `json:"entrypoint"`
+		Command        []string          `json:"command"`
+		WorkingDir     string            `json:"workingDir"`
+		User           string            `json:"user"`
+		Hostname       string            `json:"hostname"`
+		Labels         map[string]string `json:"labels"`
+		StopTimeout    *int              `json:"stopTimeout"`
+		RestartPolicy  *string           `json:"restartPolicy"`
+		MaxRetries     *int              `json:"maxRetries"`
+		MemoryLimit    *int64            `json:"memoryLimit"`
+		MemorySwap     *int64            `json:"memorySwap"`
+		NanoCPUs       *int64            `json:"nanoCPUs"`
+		CpuShares      *int64            `json:"cpuShares"`
+		PidsLimit      *int64            `json:"pidsLimit"`
+		GPU            *GPUConfig        `json:"gpu"`
+		RuntimeProfile *string           `json:"runtimeProfile"`
 	}
 	if err := json.Unmarshal([]byte(configJSON), &params); err != nil {
 		return fmt.Errorf("parse recreate config: %w", err)
@@ -1262,6 +1323,11 @@ func (c *Client) RecreateWithConfig(ctx context.Context, id string, configJSON s
 	}
 	if params.GPU != nil {
 		if err := c.applyGPUConfig(ctx, insp.Config, insp.HostConfig, params.GPU); err != nil {
+			return err
+		}
+	}
+	if params.RuntimeProfile != nil {
+		if err := c.applyRuntimeProfile(insp.HostConfig, *params.RuntimeProfile, params.GPU); err != nil {
 			return err
 		}
 	}
@@ -1611,6 +1677,9 @@ func (c *Client) PruneImages(ctx context.Context) (int64, error) {
 
 // ── Volume Operations ─────────────────────────────────────────────
 
+const managedVolumeLabel = "com.wiolett.gateway.managed-volume"
+const managedVolumeOriginLabel = "com.wiolett.gateway.managed-volume-origin"
+
 func (c *Client) collectVolumeUsers(ctx context.Context) map[string][]string {
 	volumeUsers := make(map[string][]string)
 	ctrResult, err := c.cli.ContainerList(ctx, client.ContainerListOptions{All: true})
@@ -1751,6 +1820,16 @@ func (c *Client) UpdateVolumeLabels(ctx context.Context, name string, labels map
 	currentLabels := maps.Clone(source.Volume.Labels)
 	if currentLabels == nil {
 		currentLabels = map[string]string{}
+	}
+	for _, key := range []string{managedVolumeLabel, managedVolumeOriginLabel} {
+		if supplied, ok := nextLabels[key]; ok && supplied != currentLabels[key] {
+			return fmt.Errorf("label %q is reserved for Gateway-managed volumes", key)
+		}
+		if current, ok := currentLabels[key]; ok {
+			nextLabels[key] = current
+		} else {
+			delete(nextLabels, key)
+		}
 	}
 	if maps.Equal(currentLabels, nextLabels) {
 		return nil

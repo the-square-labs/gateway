@@ -11,7 +11,14 @@ function dbWithOnlineDockerNode() {
   const where = vi.fn(() => ({ limit }));
   const from = vi.fn(() => ({ where }));
   const select = vi.fn(() => ({ from }));
-  return { select };
+  const values = vi.fn().mockResolvedValue(undefined);
+  const insert = vi.fn(() => ({ values }));
+  const mutationWhere = vi.fn().mockResolvedValue(undefined);
+  const deleteFrom = vi.fn(() => ({ where: mutationWhere }));
+  const updateWhere = vi.fn().mockResolvedValue(undefined);
+  const set = vi.fn(() => ({ where: updateWhere }));
+  const update = vi.fn(() => ({ set }));
+  return { select, insert, delete: deleteFrom, update };
 }
 
 function createService(dispatch: {
@@ -51,13 +58,12 @@ describe('DockerManagementService volume and network operations', () => {
     };
     const { service, audit, eventBus } = createService(dispatch);
 
-    await expect(service.createVolume('node-1', { name: 'data', driver: 'local' }, 'user-1')).resolves.toEqual({
+    await expect(service.createVolume('node-1', { name: 'data' }, 'user-1')).resolves.toEqual({
       Name: 'data',
     });
 
     expect(dispatch.sendDockerVolumeCommand).toHaveBeenCalledWith('node-1', 'create', {
       name: 'data',
-      driver: 'local',
     });
     expect(audit.log).toHaveBeenCalledWith({
       action: 'docker.volume.create',

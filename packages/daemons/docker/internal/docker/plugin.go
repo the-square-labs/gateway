@@ -21,6 +21,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
 	"github.com/wiolett-industries/gateway/daemon-shared/sysmetrics"
 	"github.com/wiolett-industries/gateway/docker-daemon/internal/config"
+	runtimemanager "github.com/wiolett-industries/gateway/docker-daemon/internal/runtime"
 )
 
 // DockerPlugin implements lifecycle.DaemonPlugin for the docker daemon.
@@ -45,6 +46,9 @@ type DockerPlugin struct {
 	relayTunnel     *relayTunnelRouter
 	secureLinks     *dockerSecureLinkManager
 	secureLinkState *securelink.StateStore
+	runtimeManager  *runtimemanager.Manager
+	runtimeStatusMu sync.RWMutex
+	runtimeStatus   runtimemanager.Status
 
 	// Log stream follow support
 	writer          *stream.Writer
@@ -185,8 +189,56 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 
 	// Initialize registry credentials map
 	p.registryCreds = make(map[string]string)
+	p.runtimeManager = runtimemanager.NewManager()
+	p.runtimeManager.DockerHost = p.cfg.Docker.Socket
+	p.runtimeManager.ProgressReporter = p.setRuntimeStatus
+	preflightCtx, cancelPreflight := context.WithTimeout(ctx, 90*time.Second)
+	p.setRuntimeStatus(p.runtimeManager.Preflight(preflightCtx))
+	cancelPreflight()
 
 	return nil
+}
+
+func (p *DockerPlugin) setRuntimeStatus(status runtimemanager.Status) {
+	p.runtimeStatusMu.Lock()
+	p.runtimeStatus = status
+	p.runtimeStatusMu.Unlock()
+	if p.client != nil {
+		p.client.SetRunscHealthy(status.State == runtimemanager.StateHealthy)
+	}
+	if p.writer != nil {
+		if err := p.writer.Send(&pb.DaemonMessage{
+			Payload: &pb.DaemonMessage_DockerRuntimeStatus{
+				DockerRuntimeStatus: protobufRuntimeStatus(status),
+			},
+		}); err != nil && p.logger != nil {
+			p.logger.Warn("failed to report Docker runtime status", "error", err)
+		}
+	}
+}
+
+func (p *DockerPlugin) getRuntimeStatus() runtimemanager.Status {
+	p.runtimeStatusMu.RLock()
+	defer p.runtimeStatusMu.RUnlock()
+	return p.runtimeStatus
+}
+
+func protobufRuntimeStatus(status runtimemanager.Status) *pb.DockerRuntimeStatus {
+	result := &pb.DockerRuntimeStatus{
+		State:               string(status.State),
+		InstalledVersion:    status.InstalledVersion,
+		TargetVersion:       status.TargetVersion,
+		ReasonCode:          status.ReasonCode,
+		Message:             status.Message,
+		CheckedAtUnixMs:     status.CheckedAt.UnixMilli(),
+		RemoteInstallable:   status.RemoteInstallable,
+		LocalInstallCommand: status.LocalInstallCommand,
+		Step:                string(status.Step),
+	}
+	if status.ProgressPercent != nil {
+		result.ProgressPercent = *status.ProgressPercent
+	}
+	return result
 }
 
 // BuildRegisterMessage constructs the registration message for the gateway.
@@ -196,6 +248,21 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 	arch := sysmetrics.GetArchitecture()
 	kernelVer := sysmetrics.GetKernelVersion()
 
+	capabilities := func() []string {
+		if p.cfg.Docker.Mode == "databases" {
+			return []string{
+				"managed_databases_v1",
+				"managed_database_storage_images_v1",
+				"generic_relay_tunnel_v1",
+				"managed_clickhouse_principals_v1",
+			}
+		}
+		values := []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1", "proxy_secure_links_v1", "docker_runtime_management_v1", "docker_managed_volumes_v1"}
+		if p.getRuntimeStatus().State == runtimemanager.StateHealthy {
+			values = append(values, "docker_runsc_healthy_v1")
+		}
+		return values
+	}()
 	return &pb.RegisterMessage{
 		NodeId:        nodeID,
 		Hostname:      hostname,
@@ -207,18 +274,9 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		KernelVersion: kernelVer,
 		// Store docker version in the NginxVersion field as a capability hint.
 		// The gateway uses DaemonType to interpret this field correctly.
-		NginxVersion: p.version,
-		Capabilities: func() []string {
-			if p.cfg.Docker.Mode == "databases" {
-				return []string{
-					"managed_databases_v1",
-					"managed_database_storage_images_v1",
-					"generic_relay_tunnel_v1",
-					"managed_clickhouse_principals_v1",
-				}
-			}
-			return []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1", "proxy_secure_links_v1"}
-		}(),
+		NginxVersion:        p.version,
+		Capabilities:        capabilities,
+		DockerRuntimeStatus: protobufRuntimeStatus(p.getRuntimeStatus()),
 	}
 }
 
@@ -252,6 +310,9 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 	case *pb.GatewayCommand_DockerDeployment:
 		p.handleDeploymentCommand(payload.DockerDeployment, result)
 
+	case *pb.GatewayCommand_DockerRuntime:
+		p.handleRuntimeCommand(payload.DockerRuntime, result)
+
 	case *pb.GatewayCommand_DockerExec:
 		p.handleExecCommand(payload.DockerExec, result)
 
@@ -284,6 +345,45 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 	}
 
 	return result
+}
+
+func (p *DockerPlugin) handleRuntimeCommand(cmd *pb.DockerRuntimeCommand, result *pb.CommandResult) {
+	if p.runtimeManager == nil || cmd.Runtime != "runsc" {
+		result.Success = false
+		result.Error = "unsupported Docker runtime"
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	var status runtimemanager.Status
+	var err error
+	switch cmd.Action {
+	case "preflight":
+		status = p.runtimeManager.Preflight(ctx)
+	case "install":
+		p.setRuntimeStatus(runtimemanager.Status{
+			State:         runtimemanager.StateInstalling,
+			TargetVersion: runtimemanager.RunscVersion,
+			CheckedAt:     time.Now().UTC(),
+		})
+		status, err = p.runtimeManager.Install(ctx)
+	default:
+		result.Success = false
+		result.Error = "unknown runtime action"
+		return
+	}
+	p.setRuntimeStatus(status)
+	data, marshalErr := json.Marshal(status)
+	if marshalErr != nil {
+		result.Success = false
+		result.Error = marshalErr.Error()
+		return
+	}
+	result.Detail = string(data)
+	if err != nil {
+		result.Success = false
+		result.Error = err.Error()
+	}
 }
 
 // handleContainerCommand dispatches container actions.
@@ -883,7 +983,10 @@ func (p *DockerPlugin) handleVolumeCommand(cmd *pb.DockerVolumeCommand, result *
 			result.Error = "name is required for volume create"
 			return
 		}
-		if err := p.client.CreateVolume(ctx, cmd.Name, cmd.Driver, cmd.Labels); err != nil {
+		if err := p.client.CreateVolume(ctx, cmd.Name, "local", map[string]string{
+			managedVolumeLabel:       "true",
+			managedVolumeOriginLabel: "created",
+		}); err != nil {
 			result.Success = false
 			result.Error = err.Error()
 			return

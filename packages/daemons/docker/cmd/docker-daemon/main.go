@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,10 +12,12 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/docker-daemon/internal/config"
 	"github.com/wiolett-industries/gateway/docker-daemon/internal/docker"
+	runtimemanager "github.com/wiolett-industries/gateway/docker-daemon/internal/runtime"
 )
 
 var gatewayCertSHA256Pattern = regexp.MustCompile(`^sha256:[0-9a-fA-F]{64}$`)
@@ -30,10 +34,12 @@ func main() {
 		case "install":
 			runInstall()
 			return
+		case "runtime":
+			os.Exit(runRuntimeCommand(os.Args[2:]))
 		case "run":
 			// explicit run, continue below
 		default:
-			fmt.Fprintf(os.Stderr, "Usage: docker-daemon [run|install|version]\n")
+			fmt.Fprintf(os.Stderr, "Usage: docker-daemon [run|install|runtime|version]\n")
 			os.Exit(1)
 		}
 	}
@@ -81,6 +87,70 @@ func main() {
 	if err := d.Run(ctx); err != nil {
 		logger.Error("daemon exited with error", "error", err)
 		os.Exit(1)
+	}
+}
+
+func runRuntimeCommand(args []string) int {
+	if len(args) < 2 || (args[0] != "preflight" && args[0] != "install") || args[1] != "runsc" {
+		fmt.Fprintln(os.Stderr, "Usage: docker-daemon runtime [preflight|install] runsc [--json|--plain] [--non-interactive] [--silent]")
+		return 2
+	}
+	flags := flag.NewFlagSet("runtime", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	jsonOutput := flags.Bool("json", false, "write structured JSON status")
+	plainOutput := flags.Bool("plain", false, "write a single plain-text status line")
+	_ = flags.Bool("non-interactive", false, "disable interactive prompts")
+	silent := flags.Bool("silent", false, "suppress progress and status output")
+	if err := flags.Parse(args[2:]); err != nil {
+		return 2
+	}
+	if *jsonOutput && *plainOutput {
+		fmt.Fprintln(os.Stderr, "--json and --plain are mutually exclusive")
+		return 2
+	}
+	manager := runtimemanager.NewManager()
+	if !*silent && !*jsonOutput && !*plainOutput {
+		manager.ProgressWriter = os.Stdout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	status := manager.Preflight(ctx)
+	var commandErr error
+	if args[0] == "install" {
+		status, commandErr = manager.Install(ctx)
+	}
+	if !*silent {
+		switch {
+		case *jsonOutput:
+			encoded, _ := json.Marshal(status)
+			fmt.Println(string(encoded))
+		case *plainOutput:
+			fmt.Printf("%s\t%s\t%s\n", status.State, status.ReasonCode, status.Message)
+		default:
+			fmt.Printf("Secure Runtime: %s\n", status.State)
+			if status.InstalledVersion != "" {
+				fmt.Printf("Installed version: %s\n", status.InstalledVersion)
+			}
+			if status.Message != "" {
+				fmt.Println(status.Message)
+			}
+			if !status.RemoteInstallable && status.LocalInstallCommand != "" {
+				fmt.Printf("Local setup: %s\n", status.LocalInstallCommand)
+			}
+		}
+	}
+	if commandErr != nil && !*silent {
+		fmt.Fprintln(os.Stderr, commandErr)
+	}
+	switch status.State {
+	case runtimemanager.StateHealthy:
+		return 0
+	case runtimemanager.StateInstallable:
+		return 10
+	case runtimemanager.StateUnsupported:
+		return 20
+	default:
+		return 30
 	}
 }
 

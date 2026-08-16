@@ -1,4 +1,5 @@
 import { parseShellWords } from "@/lib/shell-words";
+import type { DockerRuntimeProfile } from "@/types";
 import type { PortMapping } from "./PortMappingsSection";
 import type { MountEntry } from "./VolumeMountsSection";
 
@@ -14,6 +15,7 @@ export interface RecreateBaseline {
   hostname: string;
   labels: string;
   gpuDeviceIds: string;
+  runtimeProfile?: "default" | "secure" | "legacy";
 }
 
 export interface RecreatePayloadInputs {
@@ -34,6 +36,8 @@ export interface RecreatePayloadInputs {
   labels: Array<{ key: string; value: string }>;
   gpuChanged: boolean;
   gpuDeviceIds: string[];
+  runtimeProfileChanged?: boolean;
+  runtimeProfile?: DockerRuntimeProfile;
   hasRuntimeChanges: boolean;
   runtimePayload: Record<string, unknown> | null;
   recreateBaseline: RecreateBaseline;
@@ -57,6 +61,8 @@ export function buildRecreatePayloadFromForm({
   labels,
   gpuChanged,
   gpuDeviceIds,
+  runtimeProfileChanged,
+  runtimeProfile,
   hasRuntimeChanges,
   runtimePayload,
   recreateBaseline,
@@ -109,6 +115,9 @@ export function buildRecreatePayloadFromForm({
   }
   if (gpuChanged) {
     payload.gpu = { deviceIds: gpuDeviceIds };
+  }
+  if (runtimeProfileChanged && runtimeProfile) {
+    payload.runtimeProfile = runtimeProfile;
   }
   if (hasRuntimeChanges && runtimePayload) {
     Object.assign(payload, runtimePayload);

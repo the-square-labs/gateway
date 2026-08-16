@@ -29,6 +29,7 @@ export interface DashboardStats {
 }
 
 export type DashboardAttentionSeverity = "info" | "warning" | "critical";
+export type NavigationAttentionSeverity = "warning" | "critical";
 
 export type RelayLifecycleState =
   | "migration_pending"
@@ -146,6 +147,11 @@ export interface DashboardBootstrap {
   attention: {
     severity: DashboardAttentionSeverity | null;
     notices: Array<{ id: string; severity: DashboardAttentionSeverity }>;
+  };
+  navigationAttention: {
+    nodes: NavigationAttentionSeverity | null;
+    "proxy-hosts": NavigationAttentionSeverity | null;
+    docker: NavigationAttentionSeverity | null;
   };
 }
 

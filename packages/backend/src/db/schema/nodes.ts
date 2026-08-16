@@ -9,6 +9,25 @@ export interface NodeCapabilities {
   dockerVersion?: string;
   configDir?: string;
   daemonType?: string;
+  dockerRuntimeStatus?: {
+    state: 'healthy' | 'installable' | 'unsupported' | 'unknown' | 'installing' | 'failed';
+    installedVersion?: string;
+    targetVersion?: string;
+    reasonCode?: string;
+    message?: string;
+    checkedAt: string;
+    remoteInstallable: boolean;
+    localInstallCommand?: string;
+    step?:
+      | 'preparing'
+      | 'downloading'
+      | 'verifying_download'
+      | 'installing_binaries'
+      | 'configuring_docker'
+      | 'restarting_docker'
+      | 'verifying_runtime';
+    progressPercent?: number;
+  };
   [key: string]: unknown;
 }
 

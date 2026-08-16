@@ -1,4 +1,4 @@
-import { ArrowUpCircle } from "lucide-react";
+import { ArrowUpCircle, Loader2, ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -9,6 +9,7 @@ import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ProgressBar } from "@/components/ui/progress-bar";
 import { isDevForceUpdatesEnabled } from "@/lib/dev-force-updates";
 import { nodeTypeLabel } from "@/lib/node-appearance";
 import { proxyHostRoute } from "@/lib/resource-routes";
@@ -16,6 +17,7 @@ import { formatBytes, formatUptime } from "@/lib/utils";
 import { api } from "@/services/api";
 import {
   type DockerContainer,
+  type DockerRuntimeStatus,
   getNodeUpdateTargetVersion,
   isNodeUpdating,
   type NodeDetail,
@@ -68,6 +70,11 @@ export function NodeDetailsTab({
   const [ipAddressesOpen, setIpAddressesOpen] = useState(false);
   const h: NodeHealthReport | null = node.liveHealthReport ?? node.lastHealthReport;
   const caps = (node.capabilities ?? {}) as Record<string, unknown>;
+  const reportedRuntimeStatus = caps.dockerRuntimeStatus as DockerRuntimeStatus | undefined;
+  const [runtimeStatus, setRuntimeStatus] = useState<DockerRuntimeStatus | undefined>(
+    reportedRuntimeStatus
+  );
+  const [runtimeAction, setRuntimeAction] = useState<"preflight" | "install" | null>(null);
   const nodeUpdating = isNodeUpdating(node);
   // A live NodeControl stream is sufficient to deliver the update even when
   // the daemon and the new generic tunnel protocol do not match yet.
@@ -78,6 +85,19 @@ export function NodeDetailsTab({
   const ipAddressCount = new Set([...localIpAddresses, ...publicIpAddresses]).size;
   const resourcesRef = useRef<HTMLDivElement>(null);
   const [resourcesHeight, setResourcesHeight] = useState(0);
+
+  useEffect(() => {
+    setRuntimeStatus(reportedRuntimeStatus);
+  }, [reportedRuntimeStatus]);
+
+  useEffect(() => {
+    if (runtimeAction !== "install" && runtimeStatus?.state !== "installing") return;
+    void refreshNode().catch(() => undefined);
+    const interval = window.setInterval(() => {
+      void refreshNode().catch(() => undefined);
+    }, 5_000);
+    return () => window.clearInterval(interval);
+  }, [refreshNode, runtimeAction, runtimeStatus?.state]);
 
   useEffect(() => {
     if (!resourcesRef.current) return;
@@ -157,6 +177,27 @@ export function NodeDetailsTab({
     }
   };
 
+  const handleRuntimeAction = async (action: "preflight" | "install") => {
+    setRuntimeAction(action);
+    try {
+      const status =
+        action === "install"
+          ? await api.installDockerRuntime(node.id)
+          : await api.preflightDockerRuntime(node.id);
+      setRuntimeStatus(status);
+      toast.success(
+        action === "install" ? "Secure runtime installed" : "Compatibility check completed"
+      );
+      await refreshNode();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Secure runtime setup failed");
+    } finally {
+      setRuntimeAction(null);
+    }
+  };
+
+  const runtimeInstalling = runtimeAction === "install" || runtimeStatus?.state === "installing";
+
   return (
     <div className="space-y-4">
       {/* Docker Container Overview — docker nodes only */}
@@ -216,10 +257,88 @@ export function NodeDetailsTab({
         </PanelShell>
       )}
 
+      {node.type === "docker" && runtimeStatus?.state !== "healthy" && (
+        <PanelShell
+          title="Secure Runtime Setup"
+          description={
+            runtimeInstalling
+              ? "Installing and verifying Secure Runtime"
+              : runtimeStatus?.message || "Check this node for gVisor compatibility"
+          }
+          actions={
+            runtimeInstalling ? (
+              <Button disabled>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Setting up...
+              </Button>
+            ) : (runtimeStatus?.state === "installable" || runtimeStatus?.state === "failed") &&
+              runtimeStatus.remoteInstallable ? (
+              <Button
+                onClick={() => handleRuntimeAction("install")}
+                disabled={runtimeAction !== null || node.status !== "online" || !node.isConnected}
+              >
+                <ShieldCheck className="h-3.5 w-3.5" />
+                {runtimeStatus.state === "failed" ? "Retry setup" : "Setup"}
+              </Button>
+            ) : runtimeStatus?.state !== "unsupported" ? (
+              <Button
+                variant="outline"
+                onClick={() => handleRuntimeAction("preflight")}
+                disabled={runtimeAction !== null || node.status !== "online" || !node.isConnected}
+              >
+                {runtimeAction === "preflight" ? "Checking..." : "Check compatibility"}
+              </Button>
+            ) : null
+          }
+        >
+          <div className="divide-y divide-border">
+            <DetailRow
+              label="Status"
+              value={
+                <Badge variant={runtimeStatus?.state === "unsupported" ? "secondary" : "warning"}>
+                  {runtimeInstalling ? "installing" : (runtimeStatus?.state ?? "unknown")}
+                </Badge>
+              }
+            />
+            {runtimeInstalling && runtimeStatus?.message && (
+              <DetailRow label="Step" value={runtimeStatus.message} />
+            )}
+            {runtimeStatus?.step === "downloading" &&
+              runtimeStatus.progressPercent !== undefined && (
+                <DetailRow
+                  label="Download"
+                  value={
+                    <span className="flex w-full max-w-xs items-center gap-3">
+                      <ProgressBar
+                        value={runtimeStatus.progressPercent}
+                        aria-label="gVisor download progress"
+                      />
+                      <span className="w-10 shrink-0 text-right tabular-nums">
+                        {runtimeStatus.progressPercent}%
+                      </span>
+                    </span>
+                  }
+                />
+              )}
+            {runtimeStatus?.localInstallCommand && !runtimeStatus.remoteInstallable && (
+              <DetailRow
+                label="Local setup"
+                value={
+                  <span className="font-mono text-xs">{runtimeStatus.localInstallCommand}</span>
+                }
+              />
+            )}
+          </div>
+        </PanelShell>
+      )}
+
       {/* Node Details — 2 cards side by side */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 min-[1044px]:grid-cols-2">
         {/* Identity */}
-        <PanelShell title="Identity" bodyClassName="divide-y divide-border">
+        <PanelShell
+          title="Identity"
+          bodyClassName="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border"
+        >
           <DetailRow label="Node ID" value={<span className="break-all">{node.id}</span>} />
           <DetailRow label="Hostname" value={node.hostname} />
           <DetailRow
@@ -231,6 +350,18 @@ export function NodeDetailsTab({
             }
           />
           {node.osInfo && <DetailRow label="OS" value={node.osInfo} />}
+          <DetailRow
+            label="IP Addresses"
+            value={
+              <Button
+                variant="link"
+                className="h-auto p-0"
+                onClick={() => setIpAddressesOpen(true)}
+              >
+                View {ipAddressCount} {ipAddressCount === 1 ? "address" : "addresses"}
+              </Button>
+            }
+          />
         </PanelShell>
 
         {/* Runtime */}
@@ -264,6 +395,32 @@ export function NodeDetailsTab({
           {node.type === "docker" && (
             <DetailRow label="Docker Version" value={String(caps.dockerVersion ?? "Unknown")} />
           )}
+          {node.type === "docker" && runtimeStatus && (
+            <DetailRow
+              label="Secure Runtime"
+              value={
+                <div className="flex items-center gap-2">
+                  <Badge
+                    variant={
+                      runtimeStatus.state === "healthy"
+                        ? "success"
+                        : runtimeStatus.state === "failed"
+                          ? "destructive"
+                          : runtimeStatus.state === "unsupported"
+                            ? "secondary"
+                            : "warning"
+                    }
+                    className="uppercase"
+                  >
+                    {runtimeStatus.state}
+                  </Badge>
+                  {runtimeStatus.installedVersion && (
+                    <Badge variant="secondary">{runtimeStatus.installedVersion}</Badge>
+                  )}
+                </div>
+              }
+            />
+          )}
           <DetailRow label="Created" value={new Date(node.createdAt).toLocaleString()} />
           <DetailRow
             label="Last Seen"
@@ -274,7 +431,7 @@ export function NodeDetailsTab({
 
       {/* System Stats */}
       {h && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:items-start">
+        <div className="grid grid-cols-1 gap-4 min-[1044px]:grid-cols-2 min-[1044px]:items-start">
           {/* Resources */}
           <div
             ref={(el) => {
@@ -294,18 +451,6 @@ export function NodeDetailsTab({
               <DetailRow
                 label="File Descriptors"
                 value={`${h.openFileDescriptors.toLocaleString()} / ${h.maxFileDescriptors.toLocaleString()}`}
-              />
-              <DetailRow
-                label="IP Addresses"
-                value={
-                  <Button
-                    variant="link"
-                    className="h-auto p-0"
-                    onClick={() => setIpAddressesOpen(true)}
-                  >
-                    View {ipAddressCount} {ipAddressCount === 1 ? "address" : "addresses"}
-                  </Button>
-                }
               />
             </PanelShell>
           </div>

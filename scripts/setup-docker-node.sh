@@ -504,6 +504,16 @@ run_privileged_quiet() {
     die "This step requires root privileges. Re-run as root or install sudo."
 }
 
+download_with_progress() {
+    local url="$1"
+    local output="$2"
+    if [[ "$NON_INTERACTIVE" -eq 1 || ! -t 1 ]]; then
+        curl -fL --silent --show-error "$url" -o "$output"
+    else
+        curl -fL --progress-bar "$url" -o "$output"
+    fi
+}
+
 pkg_update_once() {
     if command_exists apt-get; then
         if [[ "$APT_UPDATED" -eq 0 ]]; then
@@ -1154,7 +1164,7 @@ install_daemon() {
         log "Downloading docker-daemon..."
     fi
 
-    if curl -fsSL "$DOWNLOAD_URL" -o "${target}.tmp" >> "$LOG_FILE" 2>&1; then
+    if download_with_progress "$DOWNLOAD_URL" "${target}.tmp"; then
         verify_checksum "${target}.tmp" "$binary_name"
         mv "${target}.tmp" "$target"
         chmod +x "$target"
@@ -1164,6 +1174,44 @@ install_daemon() {
     else
         rm -f "${target}.tmp"
         die "Failed to download docker-daemon ${RESOLVED_DAEMON_VERSION} from releases"
+    fi
+}
+
+setup_secure_runtime() {
+    [[ "$EXISTING_INSTALL" -eq 0 ]] || return 0
+    local target="/usr/local/bin/docker-daemon"
+    local preflight_status=0
+    set +e
+    "$target" runtime preflight runsc --silent
+    preflight_status=$?
+    set -e
+
+    case "$preflight_status" in
+        0)
+            ok "Secure Runtime is ready"
+            return 0
+            ;;
+        10)
+            log "Installing Secure Runtime..."
+            if "$target" runtime install runsc --non-interactive; then
+                ok "Secure Runtime installed and verified"
+                return 0
+            fi
+            warn "Secure Runtime setup failed on this node."
+            ;;
+        20)
+            warn "Current node does not support Secure Runtimes."
+            ;;
+        *)
+            warn "Secure Runtime compatibility could not be verified on this node."
+            ;;
+    esac
+
+    local continue_default="N"
+    [[ "$NON_INTERACTIVE" -eq 1 ]] && continue_default="Y"
+    if ! prompt_yes_no "Continue without Secure Runtimes?" "$continue_default"; then
+        complete_incomplete
+        exit 0
     fi
 }
 
@@ -1316,6 +1364,7 @@ UNIT
 # ── Run ──────────────────────────────────────────────────────────────
 create_directories
 install_daemon
+setup_secure_runtime
 enroll_daemon
 write_database_profile_config
 start_daemon

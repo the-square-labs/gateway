@@ -23,7 +23,10 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
-import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import {
+  HEADER_ACTION_PRIORITY,
+  ResponsiveHeaderActions,
+} from "@/components/common/ResponsiveHeaderActions";
 import { DockerMigrationDialog } from "@/components/docker/DockerMigrationDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -553,6 +556,7 @@ export function DockerDeploymentDetail({
                 toast.success("Deployment started");
               }),
             disabled: actionDisabled,
+            priority: HEADER_ACTION_PRIORITY.primary,
           },
         ]
       : []),
@@ -567,6 +571,7 @@ export function DockerDeploymentDetail({
                 toast.success("Deployment stopped");
               }),
             disabled: actionDisabled,
+            priority: HEADER_ACTION_PRIORITY.primary,
           },
           {
             label: "Restart",
@@ -577,6 +582,7 @@ export function DockerDeploymentDetail({
                 toast.success("Deployment restarted");
               }),
             disabled: actionDisabled,
+            priority: HEADER_ACTION_PRIORITY.primary,
           },
         ]
       : []),

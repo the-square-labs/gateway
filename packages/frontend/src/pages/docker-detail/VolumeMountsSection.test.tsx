@@ -1,6 +1,11 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import { type MountEntry, VolumeMountsSection } from "./VolumeMountsSection";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { api } from "@/services/api";
+import {
+  ensureManagedMountVolumes,
+  type MountEntry,
+  VolumeMountsSection,
+} from "./VolumeMountsSection";
 
 const mounts: MountEntry[] = [
   {
@@ -14,6 +19,7 @@ const mounts: MountEntry[] = [
 function renderSection(canEdit: boolean) {
   return render(
     <VolumeMountsSection
+      nodeId="node-1"
       canEdit={canEdit}
       mounts={mounts}
       setMounts={vi.fn()}
@@ -24,6 +30,8 @@ function renderSection(canEdit: boolean) {
 }
 
 describe("VolumeMountsSection", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
   it("keeps existing mounts visible but readonly without mount permission", () => {
     renderSection(false);
 
@@ -38,5 +46,27 @@ describe("VolumeMountsSection", () => {
     expect(screen.getByDisplayValue("/srv/app/config")).not.toBeDisabled();
     expect(screen.getByDisplayValue("/config")).not.toBeDisabled();
     expect(screen.getByRole("button", { name: /add/i })).toBeInTheDocument();
+  });
+
+  it("creates a free-text managed volume before attaching it", async () => {
+    vi.spyOn(api, "listManagedVolumeOptions").mockResolvedValue([]);
+    const create = vi.spyOn(api, "createVolume").mockResolvedValue({});
+
+    await ensureManagedMountVolumes(
+      "node-1",
+      [{ hostPath: "", containerPath: "/data", name: "app-data", readOnly: false }],
+      []
+    );
+
+    expect(create).toHaveBeenCalledWith("node-1", { name: "app-data" });
+  });
+
+  it("does not recreate an unchanged legacy volume", async () => {
+    const list = vi.spyOn(api, "listManagedVolumeOptions");
+    const legacy = [{ hostPath: "", containerPath: "/data", name: "legacy", readOnly: false }];
+
+    await ensureManagedMountVolumes("node-1", legacy, legacy);
+
+    expect(list).not.toHaveBeenCalled();
   });
 });

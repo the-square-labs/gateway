@@ -1,6 +1,11 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
-import { createControlHandlers, diffDockerContainerStateReports, mapGpuHealthDevices } from './control.js';
+import {
+  createControlHandlers,
+  diffDockerContainerStateReports,
+  mapDockerRuntimeStatus,
+  mapGpuHealthDevices,
+} from './control.js';
 
 vi.mock('@/config/env.js', () => ({
   getEnv: () => ({ APP_VERSION: 'dev' }),
@@ -262,6 +267,50 @@ async function emitRegister(stream: EventEmitter & { end: ReturnType<typeof vi.f
     expect(stream.end.mock.calls.length + stream.write.mock.calls.length).toBeGreaterThan(0);
   });
 }
+
+describe('mapDockerRuntimeStatus', () => {
+  it('keeps the daemon-reported download step and percentage', () => {
+    expect(
+      mapDockerRuntimeStatus({
+        state: 'installing',
+        installedVersion: '',
+        targetVersion: 'release-test',
+        reasonCode: '',
+        message: 'Downloading gVisor',
+        checkedAtUnixMs: '1786838400000',
+        remoteInstallable: true,
+        localInstallCommand: '',
+        step: 'downloading',
+        progressPercent: 45,
+      })
+    ).toEqual({
+      state: 'installing',
+      targetVersion: 'release-test',
+      message: 'Downloading gVisor',
+      checkedAt: '2026-08-16T00:00:00.000Z',
+      remoteInstallable: true,
+      step: 'downloading',
+      progressPercent: 45,
+    });
+  });
+
+  it('drops the proto default percentage outside the download step', () => {
+    expect(
+      mapDockerRuntimeStatus({
+        state: 'installing',
+        installedVersion: '',
+        targetVersion: 'release-test',
+        reasonCode: '',
+        message: 'Restarting Docker',
+        checkedAtUnixMs: '1786838400000',
+        remoteInstallable: true,
+        localInstallCommand: '',
+        step: 'restarting_docker',
+        progressPercent: 0,
+      })?.progressPercent
+    ).toBeUndefined();
+  });
+});
 
 describe('diffDockerContainerStateReports', () => {
   it('does not emit an exited change for an old ID when the same container name was recreated', () => {

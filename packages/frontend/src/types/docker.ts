@@ -34,6 +34,36 @@ export interface DockerMount {
   readOnly: boolean;
 }
 
+export type DockerRuntimeProfile = "default" | "secure";
+export type DockerRuntimeStatusState =
+  | "healthy"
+  | "installable"
+  | "unsupported"
+  | "unknown"
+  | "installing"
+  | "failed";
+export type DockerRuntimeInstallStep =
+  | "preparing"
+  | "downloading"
+  | "verifying_download"
+  | "installing_binaries"
+  | "configuring_docker"
+  | "restarting_docker"
+  | "verifying_runtime";
+
+export interface DockerRuntimeStatus {
+  state: DockerRuntimeStatusState;
+  installedVersion?: string;
+  targetVersion?: string;
+  reasonCode?: string;
+  message?: string;
+  checkedAt: string;
+  remoteInstallable: boolean;
+  localInstallCommand?: string;
+  step?: DockerRuntimeInstallStep;
+  progressPercent?: number;
+}
+
 export interface DockerContainer {
   id: string;
   /** Stable Gateway authorization identity. Unlike the Docker runtime ID, this survives recreate and migration. */
@@ -124,6 +154,7 @@ export interface DockerDeploymentDesiredConfig {
   image: string;
   env?: Record<string, string>;
   restartPolicy?: string;
+  runtimeProfile?: DockerRuntimeProfile;
   gpu?: { deviceIds: string[] };
   [key: string]: unknown;
 }
@@ -232,7 +263,11 @@ export interface DockerVolume {
   driver: string;
   mountpoint: string;
   labels?: Record<string, string>;
+  options?: Record<string, string>;
   scope: string;
+  managementState?: "managed" | "legacy";
+  adoptable?: boolean;
+  adoptionReason?: string;
   createdAt?: string;
   usedBy?: string[];
   usedByCount?: number;
@@ -354,6 +389,7 @@ export interface ContainerCreateConfig {
   env?: Record<string, string>;
   networks?: string[];
   restartPolicy?: string;
+  runtimeProfile?: DockerRuntimeProfile;
   labels?: Record<string, string>;
   command?: string[];
   gpu?: { deviceIds: string[] };

@@ -231,7 +231,14 @@ func validateGwcaExportSupport(config *container.Config, host *container.HostCon
 	if len(host.Devices) > 0 || len(host.DeviceRequests) > 0 {
 		unsupported = append(unsupported, "host devices or GPUs")
 	}
-	if len(host.SecurityOpt) > 0 || len(host.Sysctls) > 0 || host.CgroupParent != "" {
+	unsupportedSecurityOpt := false
+	for _, option := range host.SecurityOpt {
+		if option != "no-new-privileges" && option != "no-new-privileges:true" {
+			unsupportedSecurityOpt = true
+			break
+		}
+	}
+	if unsupportedSecurityOpt || len(host.Sysctls) > 0 || host.CgroupParent != "" {
 		unsupported = append(unsupported, "security, sysctl, or cgroup settings")
 	}
 	if len(host.VolumesFrom) > 0 || len(host.Links) > 0 || host.ContainerIDFile != "" {
@@ -319,6 +326,8 @@ func gwcaManifestToMigration(manifest gwcaContainerManifest, imageID, imageRefer
 	host := &container.HostConfig{
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(manifest.RestartPolicy), MaximumRetryCount: manifest.MaxRetries},
 		PortBindings:  make(network.PortMap),
+		Privileged:    false,
+		SecurityOpt:   []string{"no-new-privileges:true"},
 	}
 	host.Memory = manifest.Resources.MemoryLimit
 	host.MemorySwap = manifest.Resources.MemorySwap

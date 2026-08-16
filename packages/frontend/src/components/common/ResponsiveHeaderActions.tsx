@@ -27,11 +27,71 @@ export interface ResponsiveHeaderAction {
   disabled?: boolean;
   disabledReason?: string;
   destructive?: boolean;
+  priority?: number;
   separatorBefore?: boolean;
 }
 
+export const HEADER_ACTION_PRIORITY = {
+  default: 0,
+  primary: 100,
+} as const;
+
 const MIN_HEADER_CONTENT_WIDTH_PX = 320;
 const HEADER_ACTION_GAP_PX = 8;
+
+interface MeasuredHeaderAction {
+  width: number;
+  priority?: number;
+  alwaysOverflow?: boolean;
+}
+
+export function getHeaderActionOverflowIndices(
+  headerWidth: number,
+  actions: MeasuredHeaderAction[],
+  overflowWidth: number,
+  reservedContentWidth = MIN_HEADER_CONTENT_WIDTH_PX,
+  gapWidth = HEADER_ACTION_GAP_PX
+): number[] {
+  const overflowIndices = new Set(
+    actions.flatMap((action, index) => (action.alwaysOverflow ? [index] : []))
+  );
+
+  if (
+    headerWidth <= 0 ||
+    overflowWidth <= 0 ||
+    actions.length === 0 ||
+    actions.some((action) => action.width <= 0)
+  ) {
+    return [...overflowIndices].sort((a, b) => a - b);
+  }
+
+  const availableWidth = headerWidth - reservedContentWidth;
+  const requiredWidth = () => {
+    const visibleWidth = actions.reduce(
+      (total, action, index) => total + (overflowIndices.has(index) ? 0 : action.width),
+      0
+    );
+    const visibleCount = actions.length - overflowIndices.size;
+    const renderedItemCount = visibleCount + (overflowIndices.size > 0 ? 1 : 0);
+    return (
+      visibleWidth +
+      (overflowIndices.size > 0 ? overflowWidth : 0) +
+      Math.max(0, renderedItemCount - 1) * gapWidth
+    );
+  };
+
+  const collapseOrder = actions
+    .map((action, index) => ({ index, priority: action.priority ?? 0 }))
+    .filter(({ index }) => !overflowIndices.has(index))
+    .sort((a, b) => a.priority - b.priority || a.index - b.index);
+
+  for (const action of collapseOrder) {
+    if (requiredWidth() <= availableWidth) break;
+    overflowIndices.add(action.index);
+  }
+
+  return [...overflowIndices].sort((a, b) => a - b);
+}
 
 export function getHeaderActionOverflowCount(
   headerWidth: number,
@@ -40,33 +100,13 @@ export function getHeaderActionOverflowCount(
   reservedContentWidth = MIN_HEADER_CONTENT_WIDTH_PX,
   gapWidth = HEADER_ACTION_GAP_PX
 ): number {
-  if (
-    headerWidth <= 0 ||
-    overflowWidth <= 0 ||
-    actionWidths.length === 0 ||
-    actionWidths.some((width) => width <= 0)
-  ) {
-    return 0;
-  }
-
-  const availableWidth = headerWidth - reservedContentWidth;
-  const fullWidth =
-    actionWidths.reduce((total, width) => total + width, 0) +
-    Math.max(0, actionWidths.length - 1) * gapWidth;
-
-  if (fullWidth <= availableWidth) return 0;
-
-  for (let overflowCount = 1; overflowCount <= actionWidths.length; overflowCount += 1) {
-    const visibleWidths = actionWidths.slice(overflowCount);
-    const visibleWidth = visibleWidths.reduce((total, width) => total + width, 0);
-    const renderedItemCount = visibleWidths.length + 1;
-    const requiredWidth =
-      overflowWidth + visibleWidth + Math.max(0, renderedItemCount - 1) * gapWidth;
-
-    if (requiredWidth <= availableWidth) return overflowCount;
-  }
-
-  return actionWidths.length;
+  return getHeaderActionOverflowIndices(
+    headerWidth,
+    actionWidths.map((width) => ({ width })),
+    overflowWidth,
+    reservedContentWidth,
+    gapWidth
+  ).length;
 }
 
 export function shouldCollapseHeaderActions(
@@ -121,15 +161,32 @@ export function ResponsiveHeaderActions({
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
+  const actionMetadataRef = useRef<Array<Pick<ResponsiveHeaderAction, "destructive" | "priority">>>(
+    []
+  );
   const overflowMeasureRef = useRef<HTMLDivElement>(null);
-  const [overflowCount, setOverflowCount] = useState(0);
+  const [responsiveOverflowIndices, setResponsiveOverflowIndices] = useState<number[]>([]);
   const actionChildren = useMemo(() => flattenActionChildren(children), [children]);
-  const actionSignature = actions.map((action) => `${action.id ?? ""}:${action.label}`).join("|");
-  const effectiveOverflowCount = Math.min(overflowCount, actionChildren.length);
-  const overflowActions =
-    effectiveOverflowCount === actionChildren.length
-      ? actions
-      : actions.slice(0, effectiveOverflowCount);
+  const actionSignature = actions
+    .map(
+      (action) =>
+        `${action.id ?? ""}:${action.label}:${action.destructive ? 1 : 0}:${action.priority ?? 0}`
+    )
+    .join("|");
+  actionMetadataRef.current = actions.map(({ destructive, priority }) => ({
+    destructive,
+    priority,
+  }));
+  const forcedOverflowIndices = actions.flatMap((action, index) =>
+    action.destructive ? [index] : []
+  );
+  const renderedActionCount = Math.min(actions.length, actionChildren.length);
+  const effectiveOverflowIndices = new Set(
+    [...responsiveOverflowIndices, ...forcedOverflowIndices].filter(
+      (index) => index < renderedActionCount
+    )
+  );
+  const overflowActions = actions.filter((_, index) => effectiveOverflowIndices.has(index));
 
   useRegisterCommandPalettePageActions(
     actions.map((action, index) => ({
@@ -158,14 +215,23 @@ export function ResponsiveHeaderActions({
       const measuredGap = Number.parseFloat(
         actionsRef.current ? window.getComputedStyle(actionsRef.current).columnGap : ""
       );
-      const nextOverflowCount = getHeaderActionOverflowCount(
+      const nextOverflowIndices = getHeaderActionOverflowIndices(
         header.getBoundingClientRect().width,
-        actionWidths,
+        actionWidths.map((width, index) => ({
+          width,
+          priority: actionMetadataRef.current[index]?.priority,
+          alwaysOverflow: actionMetadataRef.current[index]?.destructive,
+        })),
         overflowWidth,
         reservedContentWidth,
         Number.isFinite(measuredGap) ? measuredGap : HEADER_ACTION_GAP_PX
       );
-      setOverflowCount((current) => (current === nextOverflowCount ? current : nextOverflowCount));
+      setResponsiveOverflowIndices((current) =>
+        current.length === nextOverflowIndices.length &&
+        current.every((index, position) => index === nextOverflowIndices[position])
+          ? current
+          : nextOverflowIndices
+      );
     };
 
     updateLayout();
@@ -184,7 +250,7 @@ export function ResponsiveHeaderActions({
     <div ref={rootRef} className="ml-auto flex shrink-0 self-center">
       <div ref={actionsRef} className={`flex items-center gap-2 ${className}`}>
         {actionChildren.map((child, index) => {
-          const isOverflowed = index < effectiveOverflowCount;
+          const isOverflowed = effectiveOverflowIndices.has(index);
           return (
             <div
               key={actions[index]?.id ?? actions[index]?.label ?? index}
@@ -200,7 +266,7 @@ export function ResponsiveHeaderActions({
             </div>
           );
         })}
-        {effectiveOverflowCount > 0 ? (
+        {effectiveOverflowIndices.size > 0 ? (
           <HeaderOverflowMenu actions={overflowActions} ariaLabel="Page actions" />
         ) : null}
       </div>

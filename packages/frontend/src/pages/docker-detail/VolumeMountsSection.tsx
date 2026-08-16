@@ -1,4 +1,6 @@
 import { Minus, Plus } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
 import { Button } from "@/components/ui/button";
@@ -10,12 +12,43 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { api } from "@/services/api";
 
 export interface MountEntry {
   hostPath: string;
   containerPath: string;
   name: string;
   readOnly: boolean;
+  existing?: boolean;
+}
+
+function comparableMount(mount: MountEntry) {
+  return JSON.stringify({
+    hostPath: mount.hostPath,
+    containerPath: mount.containerPath,
+    name: mount.name,
+    readOnly: mount.readOnly,
+  });
+}
+
+export async function ensureManagedMountVolumes(
+  nodeId: string,
+  mounts: MountEntry[],
+  baseline: MountEntry[]
+) {
+  const unchanged = new Set(baseline.map(comparableMount));
+  const requiredNames = new Set(
+    mounts
+      .filter(
+        (mount) => mount.name && mount.containerPath && !unchanged.has(comparableMount(mount))
+      )
+      .map((mount) => mount.name)
+  );
+  if (requiredNames.size === 0) return;
+  const existing = new Set((await api.listManagedVolumeOptions(nodeId)).map((row) => row.name));
+  for (const name of requiredNames) {
+    if (!existing.has(name)) await api.createVolume(nodeId, { name });
+  }
 }
 
 interface VolumeMountsSectionProps {
@@ -24,6 +57,7 @@ interface VolumeMountsSectionProps {
   setMounts: React.Dispatch<React.SetStateAction<MountEntry[]>>;
   mountsChanged: boolean;
   inputCell: string;
+  nodeId: string;
 }
 
 export function VolumeMountsSection({
@@ -32,9 +66,37 @@ export function VolumeMountsSection({
   setMounts,
   mountsChanged,
   inputCell,
+  nodeId,
 }: VolumeMountsSectionProps) {
+  const [managedVolumeNames, setManagedVolumeNames] = useState<string[]>([]);
+  const [volumeOptionsLoaded, setVolumeOptionsLoaded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setVolumeOptionsLoaded(false);
+    void api
+      .listManagedVolumeOptions(nodeId)
+      .then((rows) => {
+        if (!cancelled) setManagedVolumeNames(rows.map((row) => row.name));
+      })
+      .catch(() => {
+        if (!cancelled) setManagedVolumeNames([]);
+      })
+      .finally(() => {
+        if (!cancelled) setVolumeOptionsLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [nodeId]);
+  const volumeOptions = useMemo<ComboboxOption[]>(
+    () => managedVolumeNames.map((name) => ({ value: name, label: name })),
+    [managedVolumeNames]
+  );
   const addMount = () =>
-    setMounts((m) => [...m, { hostPath: "", containerPath: "", name: "", readOnly: false }]);
+    setMounts((m) => [
+      ...m,
+      { hostPath: "", containerPath: "", name: "", readOnly: false, existing: false },
+    ]);
   const removeMount = (i: number) => setMounts((m) => m.filter((_, idx) => idx !== i));
   const updateMount = (i: number, field: keyof MountEntry, val: string | boolean) =>
     setMounts((m) => m.map((entry, idx) => (idx === i ? { ...entry, [field]: val } : entry)));
@@ -64,63 +126,69 @@ export function VolumeMountsSection({
             {canEdit && <div />}
           </div>
           <div>
-            {mounts.map((m, i) => (
-              <div
-                key={i}
-                className={`grid ${canEdit ? "grid-cols-[1fr_1fr_100px_36px]" : "grid-cols-[1fr_1fr_100px]"} border-b border-border last:border-b-0`}
-              >
-                <Input
-                  className={inputCell}
-                  value={m.hostPath || m.name}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (val.startsWith("/")) {
-                      updateMount(i, "hostPath", val);
-                      updateMount(i, "name", "");
-                    } else {
-                      updateMount(i, "name", val);
-                      updateMount(i, "hostPath", "");
-                    }
-                  }}
-                  placeholder="/host/path or volume-name"
-                  disabled={!canEdit}
-                />
-                <div className="border-l border-border">
-                  <Input
-                    className={inputCell}
-                    value={m.containerPath}
-                    onChange={(e) => updateMount(i, "containerPath", e.target.value)}
-                    placeholder="/container/path"
-                    disabled={!canEdit}
-                  />
-                </div>
-                <div className="border-l border-border">
-                  <Select
-                    value={m.readOnly ? "ro" : "rw"}
-                    onValueChange={(v) => updateMount(i, "readOnly", v === "ro")}
-                    disabled={!canEdit}
+            {mounts.map((m, i) =>
+              (() => {
+                const legacy =
+                  m.existing === true &&
+                  (m.hostPath.length > 0 ||
+                    (volumeOptionsLoaded && !managedVolumeNames.includes(m.name)));
+                return (
+                  <div
+                    key={i}
+                    className={`grid ${canEdit ? "grid-cols-[1fr_1fr_100px_36px]" : "grid-cols-[1fr_1fr_100px]"} border-b border-border last:border-b-0`}
                   >
-                    <SelectTrigger className="h-9 border-0 rounded-none shadow-none focus:ring-1 focus:ring-inset focus:ring-ring">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="rw">RW</SelectItem>
-                      <SelectItem value="ro">RO</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                {canEdit && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 shrink-0 rounded-none border-l border-border"
-                    onClick={() => removeMount(i)}
-                  >
-                    <Minus className="h-3.5 w-3.5" />
-                  </Button>
-                )}
-              </div>
-            ))}
+                    <Combobox
+                      freeText
+                      inputClassName={inputCell}
+                      value={m.hostPath || m.name}
+                      options={volumeOptions}
+                      onValueChange={(value) => {
+                        updateMount(i, "name", value);
+                        updateMount(i, "hostPath", "");
+                      }}
+                      placeholder="Select or create a volume"
+                      searchPlaceholder="Search or enter a volume name..."
+                      emptyMessage="Enter a name to create a volume."
+                      disabled={!canEdit || legacy}
+                    />
+                    <div className="border-l border-border">
+                      <Input
+                        className={inputCell}
+                        value={m.containerPath}
+                        onChange={(e) => updateMount(i, "containerPath", e.target.value)}
+                        placeholder="/container/path"
+                        disabled={!canEdit || legacy}
+                      />
+                    </div>
+                    <div className="border-l border-border">
+                      <Select
+                        value={m.readOnly ? "ro" : "rw"}
+                        onValueChange={(v) => updateMount(i, "readOnly", v === "ro")}
+                        disabled={!canEdit || legacy}
+                      >
+                        <SelectTrigger className="h-9 border-0 rounded-none shadow-none focus:ring-1 focus:ring-inset focus:ring-ring">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="rw">RW</SelectItem>
+                          <SelectItem value="ro">RO</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {canEdit && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-9 w-9 shrink-0 rounded-none border-l border-border"
+                        onClick={() => removeMount(i)}
+                      >
+                        <Minus className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </div>
+                );
+              })()
+            )}
           </div>
         </>
       ) : (

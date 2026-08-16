@@ -36,6 +36,7 @@ export interface DockerDeploymentDesiredConfig {
   /** Internal, Gateway-owned private networks (for managed database connectors). */
   networks?: string[];
   restartPolicy?: 'no' | 'always' | 'unless-stopped' | 'on-failure';
+  runtimeProfile?: 'default' | 'secure';
   runtime?: Record<string, unknown>;
   gpu?: { deviceIds: string[] };
 }

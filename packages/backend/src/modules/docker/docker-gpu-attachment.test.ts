@@ -137,6 +137,7 @@ describe('deriveDockerGpuAttachment', () => {
       validateDockerNode: vi.fn().mockResolvedValue(undefined),
       assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
       assertDockerGpuCapability: vi.fn().mockResolvedValue(undefined),
+      assertDockerRuntimeProfileAvailable: vi.fn().mockResolvedValue(undefined),
       resolveContainerName: vi.fn().mockResolvedValue('api'),
       resolveExpectedRecreateState: vi.fn().mockResolvedValue('running'),
       requireNoTransition: vi.fn(),

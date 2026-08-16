@@ -7,6 +7,7 @@ import { TokensService } from '@/modules/tokens/tokens.service.js';
 import type { AppEnv } from '@/types.js';
 import {
   abortVolumeFileUploadRoute,
+  adoptVolumeRoute,
   completeVolumeFileUploadRoute,
   createVolumeDirectoryRoute,
   createVolumeFileRoute,
@@ -15,6 +16,7 @@ import {
   exportVolumeRoute,
   initVolumeFileUploadRoute,
   inspectVolumeRoute,
+  listManagedVolumeOptionsRoute,
   listVolumeFilesRoute,
   listVolumesRoute,
   moveVolumeFileRoute,
@@ -49,6 +51,10 @@ export function compactVolumeListItem(volume: Record<string, any>) {
     driver: volume.driver ?? volume.Driver,
     mountpoint: volume.mountpoint ?? volume.Mountpoint,
     scope: volume.scope ?? volume.Scope,
+    managementState: volume.managementState,
+    adoptable: Boolean(volume.adoptable),
+    adoptionReason: volume.adoptionReason,
+    availability: volume.availability,
     createdAt: volume.createdAt ?? volume.CreatedAt,
     usedBy: Array.isArray(usedBy) ? usedBy.slice(0, DOCKER_VOLUME_USED_BY_PREVIEW_MAX) : usedBy,
     usedByCount: Array.isArray(usedBy) ? usedBy.length : undefined,
@@ -64,7 +70,12 @@ export function normalizeVolumeDetailItem(volume: Record<string, any>) {
     driver: volume.driver ?? volume.Driver,
     mountpoint: volume.mountpoint ?? volume.Mountpoint,
     labels: volume.labels ?? volume.Labels ?? {},
+    options: volume.options ?? volume.Options ?? {},
     scope: volume.scope ?? volume.Scope,
+    managementState: volume.managementState,
+    adoptable: Boolean(volume.adoptable),
+    adoptionReason: volume.adoptionReason,
+    availability: volume.availability,
     createdAt: volume.createdAt ?? volume.CreatedAt,
     usedBy: normalizedUsedBy,
     usedByCount: normalizedUsedBy.length,
@@ -97,6 +108,18 @@ async function parseFileContentRequest(c: Parameters<Parameters<OpenAPIHono<AppE
 export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
   // ─── Volume routes ───────────────────────────────────────────────────
 
+  router.openapi(
+    {
+      ...listManagedVolumeOptionsRoute,
+      middleware: requireScopeForResource('docker:containers:mounts', 'nodeId'),
+    },
+    async (c) => {
+      const service = container.resolve(DockerManagementService);
+      const nodeId = c.req.param('nodeId')!;
+      return c.json({ data: await service.listManagedVolumeOptions(nodeId) });
+    }
+  );
+
   // List volumes
   router.openapi(
     { ...listVolumesRoute, middleware: requireScopeForResource('docker:volumes:view', 'nodeId') },
@@ -105,7 +128,14 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       await snapshots.assertDockerNode(nodeId);
       const snapshot = await snapshots.getList<any[]>(nodeId, 'volumes');
-      const data = snapshot.data;
+      const containerSnapshot = await snapshots.getList<any[]>(nodeId, 'containers');
+      const data = await container
+        .resolve(DockerManagementService)
+        .decoratePublicVolumeSnapshot(
+          nodeId,
+          Array.isArray(snapshot.data) ? snapshot.data : [],
+          Array.isArray(containerSnapshot.data) ? containerSnapshot.data : []
+        );
       if (!Array.isArray(data)) return c.json({ data });
       const search = c.req.query('search')?.trim().toLowerCase();
       const compacted = data
@@ -134,9 +164,18 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const name = c.req.param('name')!;
       const detail = await snapshots.getDetail(nodeId, 'volume-detail', name);
       const data = await resolveDockerVolumeByName({ inspectVolume: async () => detail?.data }, nodeId, name);
+      const containerSnapshot = await snapshots.getList<any[]>(nodeId, 'containers');
+      const [decorated] = await container
+        .resolve(DockerManagementService)
+        .decoratePublicVolumeSnapshot(
+          nodeId,
+          [data],
+          Array.isArray(containerSnapshot.data) ? containerSnapshot.data : []
+        );
+      if (!decorated) throw new HTTPException(404, { message: 'Volume not found' });
       return c.json({
         data: {
-          ...normalizeVolumeDetailItem(data),
+          ...normalizeVolumeDetailItem(decorated),
           nodeId,
           availability: detail ? snapshots.availability(nodeId, detail) : 'unavailable',
         },
@@ -361,6 +400,19 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
       const config = VolumeCreateSchema.parse(body);
       const data = await service.createVolume(nodeId, config, user.id);
       return c.json({ data }, 201);
+    }
+  );
+
+  // Remove volume
+  router.openapi(
+    { ...adoptVolumeRoute, middleware: requireScopeForResource('docker:volumes:create', 'nodeId') },
+    async (c) => {
+      const service = container.resolve(DockerManagementService);
+      const nodeId = c.req.param('nodeId')!;
+      const name = c.req.param('name')!;
+      const user = c.get('user')!;
+      const data = await service.adoptVolume(nodeId, name, user.id);
+      return c.json({ data });
     }
   );
 

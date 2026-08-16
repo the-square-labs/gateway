@@ -389,18 +389,12 @@ describe('AIService Docker tool routing', () => {
         operation: 'create',
         nodeId: 'node-1',
         name: 'cache',
-        driver: 'local',
-        labels: { app: 'api' },
       })
     ).resolves.toMatchObject({
       result: { Name: 'cache' },
       invalidateStores: [],
     });
-    expect(dockerService.createVolume).toHaveBeenCalledWith(
-      'node-1',
-      { name: 'cache', driver: 'local', labels: { app: 'api' } },
-      'user-1'
-    );
+    expect(dockerService.createVolume).toHaveBeenCalledWith('node-1', { name: 'cache' }, 'user-1');
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: ['docker:volumes:delete:node-1'] }, 'manage_docker_volume', {

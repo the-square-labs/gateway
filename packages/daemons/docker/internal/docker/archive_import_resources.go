@@ -369,12 +369,8 @@ func (p *DockerPlugin) prepareGwcaMounts(
 			return '-'
 		}, containerName)
 		name := fmt.Sprintf("%s-gwca-%s-%d", base, shortID, index+1)
-		driver := entry.Driver
-		if driver == "" {
-			driver = "local"
-		}
 		createdVolume, err := p.client.cli.VolumeCreate(ctx, mobyclient.VolumeCreateOptions{
-			Name: name, Driver: driver, Labels: mergeArchiveLabels(entry.Labels, archiveID),
+			Name: name, Driver: "local", Labels: mergeArchiveLabels(entry.Labels, archiveID),
 		})
 		if err != nil {
 			return created, fmt.Errorf("create empty archive volume: %w", err)
@@ -392,6 +388,8 @@ func mergeArchiveLabels(labels map[string]string, archiveID string) map[string]s
 		result = map[string]string{}
 	}
 	result["wiolett.gateway.archive.id"] = archiveID
+	result[managedVolumeLabel] = "true"
+	result[managedVolumeOriginLabel] = "created"
 	return result
 }
 

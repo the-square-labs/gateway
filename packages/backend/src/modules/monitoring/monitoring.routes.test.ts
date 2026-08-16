@@ -7,10 +7,14 @@ import { errorHandler } from '@/middleware/error-handler.js';
 import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import { MfaService } from '@/modules/auth/mfa.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
+import { DockerHealthCheckService } from '@/modules/docker/docker-health-check.service.js';
 import { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
 import { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
+import { DaemonUpdateService } from '@/services/daemon-update.service.js';
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
+import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import { SessionService } from '@/services/session.service.js';
+import { UpdateService } from '@/services/update.service.js';
 import type { AppEnv, SessionData, User } from '@/types.js';
 import { DashboardReadModelService } from './dashboard-read-model.service.js';
 import { monitoringRoutes } from './monitoring.routes.js';
@@ -99,6 +103,15 @@ function registerMinimalDashboardDependencies() {
   container.registerInstance(AuthSettingsService, {
     getConfig: vi.fn(async () => ({ methods: { password: true, emailOtp: false } })),
   } as never);
+  container.registerInstance(DockerHealthCheckService, {
+    listNavigationHealth: vi.fn(async () => []),
+  } as never);
+  container.registerInstance(DaemonUpdateService, {
+    getCachedStatus: vi.fn(async () => []),
+  } as never);
+  container.registerInstance(UpdateService, {
+    getCachedStatus: vi.fn(async () => ({ updateAvailable: false })),
+  } as never);
 }
 
 afterEach(() => {
@@ -106,6 +119,71 @@ afterEach(() => {
 });
 
 describe('dashboard bootstrap route', () => {
+  it('returns scope-aware navigation attention with critical taking priority', async () => {
+    registerSession(['nodes:details', 'admin:update', 'proxy:view', 'docker:containers:view']);
+    registerMinimalDashboardDependencies();
+    container.registerInstance(DashboardReadModelService, {
+      get: vi.fn(async (name: string) => ({
+        data:
+          name === 'stats-user'
+            ? STATS
+            : name === 'health'
+              ? [
+                  { id: 'route-1', enabled: true, healthStatus: 'degraded' },
+                  { id: 'route-2', enabled: true, healthStatus: 'offline' },
+                ]
+              : [],
+        revision: 1,
+      })),
+    } as never);
+    container.registerInstance(ResourceSnapshotStore, {
+      get: vi.fn(async () => ({
+        data: [
+          { id: 'node-1', status: 'online', capabilities: {}, metadata: {} },
+          { id: 'node-2', status: 'offline', capabilities: {}, metadata: {} },
+        ],
+        revision: 1,
+      })),
+    } as never);
+    container.registerInstance(DaemonUpdateService, {
+      getCachedStatus: vi.fn(async () => [
+        {
+          daemonType: 'docker',
+          latestVersion: '2.0.0',
+          lastCheckedAt: null,
+          nodes: [{ nodeId: 'node-1', updateAvailable: true }],
+        },
+      ]),
+    } as never);
+    container.registerInstance(DockerHealthCheckService, {
+      listNavigationHealth: vi.fn(async () => [
+        {
+          nodeId: 'node-1',
+          resourceId: 'resource-1',
+          enabled: true,
+          healthStatus: 'degraded',
+        },
+      ]),
+    } as never);
+
+    const response = await createApp().request('/api/monitoring/dashboard/bootstrap', {
+      method: 'POST',
+      headers: { Cookie: 'session_id=session-1', 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        navigationAttention: {
+          nodes: 'critical',
+          'proxy-hosts': 'critical',
+          docker: 'warning',
+        },
+      },
+    });
+  });
+
   it('reports an active MFA session grace deadline even after the user has configured a factor', async () => {
     const localUser: User = {
       ...USER,
@@ -261,6 +339,9 @@ describe('dashboard bootstrap route', () => {
     } as never);
     container.registerInstance(DockerSnapshotService, snapshots as never);
     container.registerInstance(DockerManagementService, docker as never);
+    container.registerInstance(DockerHealthCheckService, {
+      listNavigationHealth: vi.fn(async () => []),
+    } as never);
     container.registerInstance(FinalizeSetupService, {
       getForUser: vi.fn(async () => null),
       shouldShowMfaReminder: vi.fn(async () => false),

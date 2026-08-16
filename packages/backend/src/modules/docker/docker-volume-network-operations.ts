@@ -1,14 +1,19 @@
 import { randomUUID } from 'node:crypto';
+import { and, eq } from 'drizzle-orm';
+import type { DrizzleClient } from '@/db/client.js';
+import { dockerManagedVolumes } from '@/db/schema/index.js';
 import { commandResultDataToBuffer } from '@/lib/command-result-data.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
+import { isGatewayInternalContainer } from './docker-internal-containers.js';
 import { DOCKER_FILE_READ_MAX_BYTES, DOCKER_FILE_UPLOAD_CHUNK_BYTES } from './docker-read-operations.js';
 
 type DockerDispatchResult = { success: boolean; error?: string; detail?: string; data?: Buffer | Uint8Array | string };
 
 export interface DockerVolumeNetworkOperationContext {
+  db: DrizzleClient;
   nodeDispatch: NodeDispatchService;
   auditService: AuditService;
   eventBus?: EventBusService;
@@ -81,12 +86,84 @@ function publishVolumeFileChanged(
 
 export async function listVolumes(context: DockerVolumeNetworkOperationContext, nodeId: string) {
   const result = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'list');
-  return context.parseResult(result);
+  const volumes = context.parseResult(result);
+  if (!Array.isArray(volumes)) return volumes;
+
+  const [managedRows, containerResult] = await Promise.all([
+    context.db
+      .select({ volumeName: dockerManagedVolumes.volumeName })
+      .from(dockerManagedVolumes)
+      .where(eq(dockerManagedVolumes.nodeId, nodeId)),
+    context.nodeDispatch.sendDockerContainerCommand(nodeId, 'list'),
+  ]);
+  const managedNames = new Set(managedRows.map((row) => row.volumeName));
+  const containers = context.parseResult(containerResult);
+  const userVisibleContainerNames = new Set(
+    (Array.isArray(containers) ? containers : [])
+      .filter((container) => !isGatewayInternalContainer(container))
+      .map((container) => String(container.name ?? container.Name ?? '').replace(/^\/+/, ''))
+      .filter(Boolean)
+  );
+
+  const visible: Record<string, any>[] = volumes.flatMap((volume: Record<string, any>) => {
+    const name = String(volume.Name ?? volume.name ?? '');
+    if (!name) return [];
+    const usedBy = Array.isArray(volume.UsedBy ?? volume.usedBy) ? (volume.UsedBy ?? volume.usedBy) : [];
+    const managed = managedNames.has(name);
+    if (!managed && !usedBy.some((containerName: string) => userVisibleContainerNames.has(containerName))) return [];
+    const eligibility = volumeAdoptionEligibility(volume);
+    return [
+      {
+        ...volume,
+        managementState: managed ? 'managed' : 'legacy',
+        adoptable: !managed && eligibility.adoptable,
+        adoptionReason: managed ? undefined : eligibility.reason,
+      },
+    ];
+  });
+  const returnedNames = new Set(visible.map((volume: Record<string, any>) => String(volume.Name ?? volume.name ?? '')));
+  for (const row of managedRows) {
+    if (returnedNames.has(row.volumeName)) continue;
+    visible.push({
+      Name: row.volumeName,
+      Driver: 'local',
+      Scope: 'local',
+      UsedBy: [],
+      managementState: 'managed',
+      adoptable: false,
+      availability: 'unavailable',
+    });
+  }
+  return visible;
 }
 
 export async function inspectVolume(context: DockerVolumeNetworkOperationContext, nodeId: string, name: string) {
   const result = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'inspect', { name });
-  return context.parseResult(result);
+  const volume = context.parseResult(result);
+  const [managed] = await context.db
+    .select({ volumeName: dockerManagedVolumes.volumeName })
+    .from(dockerManagedVolumes)
+    .where(and(eq(dockerManagedVolumes.nodeId, nodeId), eq(dockerManagedVolumes.volumeName, name)))
+    .limit(1);
+  const eligibility = volumeAdoptionEligibility(volume);
+  return {
+    ...volume,
+    managementState: managed ? 'managed' : 'legacy',
+    adoptable: !managed && eligibility.adoptable,
+    adoptionReason: managed ? undefined : eligibility.reason,
+  };
+}
+
+function volumeAdoptionEligibility(volume: Record<string, any>): { adoptable: boolean; reason?: string } {
+  const driver = String(volume?.Driver ?? volume?.driver ?? '');
+  const scope = String(volume?.Scope ?? volume?.scope ?? '');
+  const options = volume?.Options ?? volume?.options ?? {};
+  if (driver !== 'local') return { adoptable: false, reason: 'Only local Docker volumes can be managed' };
+  if (scope !== 'local') return { adoptable: false, reason: 'Only node-local volumes can be managed' };
+  if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).length > 0) {
+    return { adoptable: false, reason: 'Volumes with driver options cannot be managed' };
+  }
+  return { adoptable: true };
 }
 
 export async function listVolumeFiles(
@@ -377,6 +454,10 @@ export async function renameVolume(
 ) {
   const result = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'rename', { name, newName });
   context.parseResult(result);
+  await context.db
+    .update(dockerManagedVolumes)
+    .set({ volumeName: newName, updatedAt: new Date() })
+    .where(and(eq(dockerManagedVolumes.nodeId, nodeId), eq(dockerManagedVolumes.volumeName, name)));
   await context.auditService.log({
     action: 'docker.volume.rename',
     userId,
@@ -409,11 +490,37 @@ export async function updateVolumeLabels(
 export async function createVolume(
   context: DockerVolumeNetworkOperationContext,
   nodeId: string,
-  config: { name: string; driver: string; labels?: Record<string, string> },
+  config: { name: string },
   userId: string
 ) {
-  const result = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'create', config);
+  const daemonConfig = {
+    name: config.name,
+  };
+  const result = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'create', daemonConfig);
   const data = context.parseResult(result);
+  try {
+    await context.db.insert(dockerManagedVolumes).values({
+      nodeId,
+      volumeName: config.name,
+      origin: 'created',
+      createdById: userId,
+    });
+  } catch (error) {
+    try {
+      const rollback = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'remove', {
+        name: config.name,
+        force: false,
+      });
+      context.parseResult(rollback);
+    } catch {
+      throw new AppError(
+        500,
+        'MANAGED_VOLUME_REGISTRY_FAILED',
+        `Volume "${config.name}" was created but could not be registered or removed; resolve it from the Docker host before retrying`
+      );
+    }
+    throw error;
+  }
   await context.auditService.log({
     action: 'docker.volume.create',
     userId,
@@ -433,6 +540,9 @@ export async function removeVolume(
 ) {
   const result = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'remove', { name, force });
   context.parseResult(result);
+  await context.db
+    .delete(dockerManagedVolumes)
+    .where(and(eq(dockerManagedVolumes.nodeId, nodeId), eq(dockerManagedVolumes.volumeName, name)));
   await context.auditService.log({
     action: 'docker.volume.remove',
     userId,
@@ -441,6 +551,36 @@ export async function removeVolume(
     details: { nodeId },
   });
   context.eventBus?.publish('docker.volume.changed', { nodeId, name, action: 'removed' });
+}
+
+export async function adoptVolume(
+  context: DockerVolumeNetworkOperationContext,
+  nodeId: string,
+  name: string,
+  userId: string
+) {
+  const result = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'inspect', { name });
+  const volume = context.parseResult(result);
+  const eligibility = volumeAdoptionEligibility(volume);
+  if (!eligibility.adoptable) {
+    throw new AppError(409, 'VOLUME_NOT_ADOPTABLE', eligibility.reason ?? 'Volume cannot be managed');
+  }
+  await context.db
+    .insert(dockerManagedVolumes)
+    .values({ nodeId, volumeName: name, origin: 'adopted', createdById: userId })
+    .onConflictDoUpdate({
+      target: [dockerManagedVolumes.nodeId, dockerManagedVolumes.volumeName],
+      set: { origin: 'adopted', updatedAt: new Date() },
+    });
+  await context.auditService.log({
+    action: 'docker.volume.adopt',
+    userId,
+    resourceType: 'docker-volume',
+    resourceId: name,
+    details: { nodeId, name, copiedData: false },
+  });
+  context.eventBus?.publish('docker.volume.changed', { nodeId, name, action: 'adopted' });
+  return { name, managementState: 'managed' as const };
 }
 
 export async function listNetworks(context: DockerVolumeNetworkOperationContext, nodeId: string) {

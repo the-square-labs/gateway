@@ -43,18 +43,19 @@ type deploymentHealthConfig struct {
 }
 
 type deploymentDesiredConfig struct {
-	Image         string            `json:"image"`
-	Env           map[string]string `json:"env"`
-	Mounts        []deploymentMount `json:"mounts"`
-	Command       []string          `json:"command"`
-	Entrypoint    []string          `json:"entrypoint"`
-	WorkingDir    string            `json:"workingDir"`
-	User          string            `json:"user"`
-	Labels        map[string]string `json:"labels"`
-	Networks      []string          `json:"networks"`
-	RestartPolicy string            `json:"restartPolicy"`
-	Runtime       map[string]any    `json:"runtime"`
-	GPU           *GPUConfig        `json:"gpu"`
+	Image          string            `json:"image"`
+	Env            map[string]string `json:"env"`
+	Mounts         []deploymentMount `json:"mounts"`
+	Command        []string          `json:"command"`
+	Entrypoint     []string          `json:"entrypoint"`
+	WorkingDir     string            `json:"workingDir"`
+	User           string            `json:"user"`
+	Labels         map[string]string `json:"labels"`
+	Networks       []string          `json:"networks"`
+	RestartPolicy  string            `json:"restartPolicy"`
+	RuntimeProfile string            `json:"runtimeProfile"`
+	Runtime        map[string]any    `json:"runtime"`
+	GPU            *GPUConfig        `json:"gpu"`
 }
 
 type deploymentMount struct {
@@ -541,6 +542,10 @@ func (c *Client) createDeploymentSlot(ctx context.Context, deploymentID, network
 		Binds:       deploymentBinds(desired.Mounts),
 		NetworkMode: container.NetworkMode(networkName),
 	}
+	applyUserWorkloadBaseline(hostCfg)
+	if err := c.applyRuntimeProfile(hostCfg, desired.RuntimeProfile, desired.GPU); err != nil {
+		return "", err
+	}
 	if desired.RestartPolicy != "" {
 		hostCfg.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyMode(desired.RestartPolicy)}
 	}
@@ -719,6 +724,7 @@ func (c *Client) createDeploymentRouter(ctx context.Context, payload deploymentC
 		HostConfig: &container.HostConfig{
 			NetworkMode:  container.NetworkMode(payload.NetworkName),
 			PortBindings: portBindings,
+			SecurityOpt:  []string{"no-new-privileges:true"},
 		},
 		NetworkingConfig: &network.NetworkingConfig{
 			EndpointsConfig: map[string]*network.EndpointSettings{payload.NetworkName: {}},

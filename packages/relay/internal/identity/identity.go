@@ -257,7 +257,11 @@ func (s *Store) persistRotationState(state rotationState) error {
 }
 
 func (s *Store) ServerTLSConfig() *tls.Config {
-	base := &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.VerifyClientCertIfGiven}
+	base := &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		ClientAuth: tls.VerifyClientCertIfGiven,
+		NextProtos: []string{"h2"},
+	}
 	base.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
 		current := s.Current()
 		clone := base.Clone()

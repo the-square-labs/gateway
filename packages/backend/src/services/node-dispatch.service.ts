@@ -530,7 +530,6 @@ export class NodeDispatchService {
     action: string,
     options: {
       name?: string;
-      driver?: string;
       labels?: Record<string, string>;
       force?: boolean;
       path?: string;
@@ -556,6 +555,16 @@ export class NodeDispatchService {
       },
       timeoutMs
     );
+  }
+
+  async sendDockerRuntimeCommand(
+    nodeId: string,
+    action: 'preflight' | 'install',
+    timeoutMs = action === 'install' ? 30 * 60 * 1000 : 2 * 60 * 1000
+  ): Promise<CommandResult> {
+    await this.assertGenericDockerNode(nodeId);
+    if (action === 'install') await this.assertNodeMutable(nodeId);
+    return this.registry.sendCommand(nodeId, { dockerRuntime: { action, runtime: 'runsc' } as any }, timeoutMs);
   }
 
   async sendDockerNetworkCommand(

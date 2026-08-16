@@ -32,6 +32,7 @@ function withoutCachedAttention(snapshot: DashboardBootstrap): DashboardBootstra
   return {
     ...snapshot,
     attention: { severity: null, notices: [] },
+    navigationAttention: { nodes: null, "proxy-hosts": null, docker: null },
   };
 }
 

@@ -135,38 +135,36 @@ export function RuntimeSection({
         </SettingsInlineControl>
       </SettingsControlRow>
       <SettingsControlRow
-        title="Memory Limit and Swap"
-        description={
-          <>
-            Max: {maxMemoryBytes && maxMemoryBytes > 0 ? formatBytes(maxMemoryBytes) : "detecting"}{" "}
-            · {maxSwapBytes !== null && maxSwapBytes >= 0 ? formatBytes(maxSwapBytes) : "detecting"}
-          </>
-        }
+        title="Memory Limit"
+        description={`Max: ${maxMemoryBytes && maxMemoryBytes > 0 ? formatBytes(maxMemoryBytes) : "detecting"}`}
       >
-        <div className="grid w-full gap-2 sm:grid-cols-2">
-          <SettingsInlineControl label="Memory (MB)">
-            <Input
-              type="text"
-              inputMode="numeric"
-              className={cn(activeFieldErrors.memoryMB && invalidInputClass)}
-              value={memoryMB}
-              onChange={(e) => setMemoryMB(e.target.value)}
-              placeholder="Unlimited"
-              disabled={!canEdit}
-            />
-          </SettingsInlineControl>
-          <SettingsInlineControl label="Swap (MB)">
-            <Input
-              type="text"
-              inputMode="numeric"
-              className={cn(activeFieldErrors.memSwapMB && invalidInputClass)}
-              value={memSwapMB}
-              onChange={(e) => setMemSwapMB(e.target.value)}
-              placeholder="-1 = unlimited, 0 = off"
-              disabled={!canEdit}
-            />
-          </SettingsInlineControl>
-        </div>
+        <SettingsInlineControl label="Memory (MB)">
+          <Input
+            type="text"
+            inputMode="numeric"
+            className={cn(activeFieldErrors.memoryMB && invalidInputClass)}
+            value={memoryMB}
+            onChange={(e) => setMemoryMB(e.target.value)}
+            placeholder="Unlimited"
+            disabled={!canEdit}
+          />
+        </SettingsInlineControl>
+      </SettingsControlRow>
+      <SettingsControlRow
+        title="Swap Limit"
+        description={`Max: ${maxSwapBytes !== null && maxSwapBytes >= 0 ? formatBytes(maxSwapBytes) : "detecting"}`}
+      >
+        <SettingsInlineControl label="Swap (MB)">
+          <Input
+            type="text"
+            inputMode="numeric"
+            className={cn(activeFieldErrors.memSwapMB && invalidInputClass)}
+            value={memSwapMB}
+            onChange={(e) => setMemSwapMB(e.target.value)}
+            placeholder="-1 = unlimited, 0 = off"
+            disabled={!canEdit}
+          />
+        </SettingsInlineControl>
       </SettingsControlRow>
       <SettingsControlRow
         title="CPU Limit and Shares"

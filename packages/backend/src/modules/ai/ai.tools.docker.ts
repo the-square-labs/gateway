@@ -618,8 +618,6 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         operation: { type: 'string', enum: ['create', 'delete'] },
         nodeId: { type: 'string' },
         name: { type: 'string' },
-        driver: { type: 'string' },
-        labels: { type: 'object' },
         force: { type: 'boolean' },
       },
       required: ['operation', 'nodeId', 'name'],

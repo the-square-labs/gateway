@@ -9,6 +9,13 @@ import { GpuSettingsSection, normalizeGpuDeviceIds } from "@/components/docker/G
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   GATEWAY_ARCHIVE_IMAGE_REFERENCE_LABEL,
   resolveContainerImageReference,
 } from "@/lib/docker-image-ref";
@@ -21,11 +28,16 @@ import {
   deriveDockerRuntimeCapacity,
   UNKNOWN_DOCKER_RUNTIME_CAPACITY,
 } from "@/lib/docker-runtime-capacity";
+import {
+  DEFAULT_DOCKER_RUNTIME_DESCRIPTION,
+  getSecureDockerRuntimeDescription,
+  normalizeDockerRuntimeProfile,
+} from "@/lib/docker-runtime-profile";
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
-import type { DockerHealthCheck } from "@/types";
+import type { DockerHealthCheck, DockerRuntimeProfile } from "@/types";
 import type { InspectData } from "./helpers";
 import { LabelsSection } from "./LabelsSection";
 import { type NetworkEntry, NetworksSection, readAttachedNetworks } from "./NetworksSection";
@@ -33,7 +45,11 @@ import { type PortMapping, PortMappingsSection } from "./PortMappingsSection";
 import { type RuntimeFieldErrors, RuntimeSection } from "./RuntimeSection";
 import { buildRuntimePayloadFromForm, type RuntimeFormValues } from "./runtime-payload";
 import { buildRecreatePayloadFromForm, type RecreateBaseline } from "./settings-payload";
-import { type MountEntry, VolumeMountsSection } from "./VolumeMountsSection";
+import {
+  ensureManagedMountVolumes,
+  type MountEntry,
+  VolumeMountsSection,
+} from "./VolumeMountsSection";
 import { WebhookSection } from "./WebhookSection";
 
 export { buildRecreatePayloadFromForm } from "./settings-payload";
@@ -73,7 +89,8 @@ function sameRecreateBaseline(a: RecreateBaseline, b: RecreateBaseline) {
     a.user === b.user &&
     a.hostname === b.hostname &&
     a.labels === b.labels &&
-    a.gpuDeviceIds === b.gpuDeviceIds
+    a.gpuDeviceIds === b.gpuDeviceIds &&
+    a.runtimeProfile === b.runtimeProfile
   );
 }
 
@@ -159,6 +176,8 @@ export function SettingsTab({
 
   // ── Live settings state (no recreation) ──
   const hostConfig = data.HostConfig ?? {};
+  const savedRuntimeName = String(hostConfig.Runtime ?? "");
+  const savedRuntimeProfile = normalizeDockerRuntimeProfile(savedRuntimeName);
   const currentRestartPolicy = hostConfig.RestartPolicy?.Name ?? "no";
   const currentMaxRetries = hostConfig.RestartPolicy?.MaximumRetryCount ?? 0;
   const currentMemory = hostConfig.Memory ?? 0;
@@ -203,6 +222,9 @@ export function SettingsTab({
   const [liveLoading, setLiveLoading] = useState(false);
   const [runtimeCapacity, setRuntimeCapacity] = useState<DockerRuntimeCapacity>(
     UNKNOWN_DOCKER_RUNTIME_CAPACITY
+  );
+  const [secureRuntimeAvailable, setSecureRuntimeAvailable] = useState(
+    savedRuntimeProfile === "secure"
   );
   const [bindAddressOptions, setBindAddressOptions] = useState(
     DEFAULT_DOCKER_PORT_BIND_ADDRESS_OPTIONS
@@ -249,6 +271,7 @@ export function SettingsTab({
         containerPath: mount.Destination,
         name: mount.Type === "volume" ? (mount.Name ?? mount.Source) : "",
         readOnly: !mount.RW,
+        existing: true,
       })),
     [data.Mounts]
   );
@@ -314,6 +337,9 @@ export function SettingsTab({
     Object.entries(initialLabels).map(([key, value]) => ({ key, value }))
   );
   const [gpuDeviceIds, setGpuDeviceIds] = useState(initialGpuDeviceIds);
+  const [runtimeProfile, setRuntimeProfile] = useState<"default" | "secure" | "legacy">(
+    savedRuntimeProfile
+  );
   const gpuDraftTouchedRef = useRef(false);
   const [recreateLoading, setRecreateLoading] = useState(false);
   const networkBaseline = useMemo(() => serializeNetworks(initialNetworks), [initialNetworks]);
@@ -331,6 +357,7 @@ export function SettingsTab({
       hostname: initialHostname,
       labels: JSON.stringify(Object.entries(initialLabels).map(([k, v]) => ({ key: k, value: v }))),
       gpuDeviceIds: JSON.stringify(initialGpuDeviceIds),
+      runtimeProfile: savedRuntimeProfile,
     }),
     [
       initialCmd,
@@ -343,6 +370,7 @@ export function SettingsTab({
       initialUser,
       initialWorkdir,
       initialGpuDeviceIds,
+      savedRuntimeProfile,
       parsedTag,
     ]
   );
@@ -399,6 +427,7 @@ export function SettingsTab({
       user === previous.user &&
       hostname === previous.hostname &&
       JSON.stringify(labels) === previous.labels;
+    const runtimeProfileMatchesPrevious = runtimeProfile === previous.runtimeProfile;
     const gpuDraftMatchesPrevious = JSON.stringify(gpuDeviceIds) === previous.gpuDeviceIds;
 
     previousRecreateBaselineRef.current = recreateBaseline;
@@ -417,6 +446,7 @@ export function SettingsTab({
     if (!gpuDraftTouchedRef.current && gpuDraftMatchesPrevious) {
       setGpuDeviceIds(initialGpuDeviceIds);
     }
+    if (runtimeProfileMatchesPrevious) setRuntimeProfile(savedRuntimeProfile);
   }, [
     command,
     entrypoint,
@@ -441,6 +471,8 @@ export function SettingsTab({
     stopTimeout,
     user,
     workingDir,
+    runtimeProfile,
+    savedRuntimeProfile,
   ]);
 
   useEffect(() => {
@@ -464,6 +496,13 @@ export function SettingsTab({
       .then((node) => {
         if (cancelled) return;
         setRuntimeCapacity(deriveDockerRuntimeCapacity(node));
+        setSecureRuntimeAvailable(
+          (
+            (node.capabilities as Record<string, any>)?.dockerRuntimeStatus as
+              | { state?: string }
+              | undefined
+          )?.state === "healthy" || savedRuntimeProfile === "secure"
+        );
         setBindAddressOptions(deriveDockerPortBindAddressOptions(node));
       })
       .catch(async () => {
@@ -476,13 +515,20 @@ export function SettingsTab({
         }
         if (cancelled) return;
         setRuntimeCapacity(deriveDockerRuntimeCapacity(node));
+        setSecureRuntimeAvailable(
+          (
+            (node?.capabilities as Record<string, any> | undefined)?.dockerRuntimeStatus as
+              | { state?: string }
+              | undefined
+          )?.state === "healthy" || savedRuntimeProfile === "secure"
+        );
         setBindAddressOptions(deriveDockerPortBindAddressOptions(node));
       });
 
     return () => {
       cancelled = true;
     };
-  }, [nodeId]);
+  }, [nodeId, savedRuntimeProfile]);
 
   const runtimeValidation = useMemo(() => {
     const fieldErrors: RuntimeFieldErrors = {};
@@ -669,10 +715,20 @@ export function SettingsTab({
     hostname !== recreateBaseline.hostname;
   const labelsChanged = JSON.stringify(labels) !== recreateBaseline.labels;
   const gpuChanged = JSON.stringify(gpuDeviceIds) !== recreateBaseline.gpuDeviceIds;
+  const runtimeProfileChanged = runtimeProfile !== recreateBaseline.runtimeProfile;
+  const effectiveGpuDeviceIds = runtimeProfile === "secure" ? [] : gpuDeviceIds;
+  const effectiveGpuChanged =
+    JSON.stringify(effectiveGpuDeviceIds) !== recreateBaseline.gpuDeviceIds;
   const networkValidationError = useMemo(() => validateNetworkDraft(networks), [networks]);
   const networksChanged = serializeNetworks(networks) !== networkBaselineRef.current;
   const hasConfigRecreateChanges =
-    portsChanged || mountsChanged || execChanged || labelsChanged || imageTagChanged || gpuChanged;
+    portsChanged ||
+    mountsChanged ||
+    execChanged ||
+    labelsChanged ||
+    imageTagChanged ||
+    effectiveGpuChanged ||
+    runtimeProfileChanged;
   const hasRecreateChanges = hasConfigRecreateChanges || networksChanged;
 
   // ── Track runtime changes against baseline ──
@@ -780,13 +836,16 @@ export function SettingsTab({
         hostname,
         labelsChanged,
         labels,
-        gpuChanged,
-        gpuDeviceIds,
+        gpuChanged: effectiveGpuChanged,
+        gpuDeviceIds: effectiveGpuDeviceIds,
+        runtimeProfileChanged,
+        runtimeProfile: runtimeProfile as DockerRuntimeProfile,
         hasRuntimeChanges,
         runtimePayload: buildRuntimePayload(),
         recreateBaseline,
       });
 
+      if (mountsChanged) await ensureManagedMountVolumes(nodeId, mounts, initialMounts);
       await api.recreateWithConfig(nodeId, containerId, payload);
       gpuDraftTouchedRef.current = false;
       toast.success(
@@ -814,10 +873,13 @@ export function SettingsTab({
     invalidate,
     labels,
     labelsChanged,
-    gpuChanged,
-    gpuDeviceIds,
+    effectiveGpuChanged,
+    effectiveGpuDeviceIds,
+    runtimeProfileChanged,
+    runtimeProfile,
     mounts,
     mountsChanged,
+    initialMounts,
     nodeId,
     networkValidationError,
     networksChanged,
@@ -849,7 +911,7 @@ export function SettingsTab({
       className={`space-y-6 pb-6 ${recreateLoading || !!transition ? "pointer-events-none opacity-60" : ""}`}
     >
       {/* ─── Runtime Settings + Execution (side by side) ────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-6 min-[1044px]:grid-cols-2">
         <RuntimeSection
           canEdit={canEdit}
           appliesLive={recreatesRunningContainer}
@@ -880,7 +942,7 @@ export function SettingsTab({
         <PanelShell
           title="Execution"
           description="Requires container recreation"
-          dirty={execChanged || imageTagChanged || gpuChanged}
+          dirty={execChanged || imageTagChanged || effectiveGpuChanged || runtimeProfileChanged}
           bodyClassName="divide-y divide-border"
           actions={
             canEdit ? (
@@ -916,6 +978,40 @@ export function SettingsTab({
                 />
               </SettingsInlineControl>
             </div>
+          </SettingsControlRow>
+          <SettingsControlRow title="Runtime" description="Container isolation profile">
+            <SettingsInlineControl label="Profile">
+              <Select
+                value={runtimeProfile}
+                onValueChange={(value) => setRuntimeProfile(value as DockerRuntimeProfile)}
+                disabled={!canEdit}
+              >
+                <SelectTrigger aria-label="Runtime">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {runtimeProfile === "legacy" && (
+                    <SelectItem
+                      value="legacy"
+                      disabled
+                      description={`Custom Docker runtime: ${savedRuntimeName}`}
+                    >
+                      Legacy
+                    </SelectItem>
+                  )}
+                  <SelectItem value="default" description={DEFAULT_DOCKER_RUNTIME_DESCRIPTION}>
+                    Default
+                  </SelectItem>
+                  <SelectItem
+                    value="secure"
+                    disabled={!secureRuntimeAvailable}
+                    description={getSecureDockerRuntimeDescription(secureRuntimeAvailable)}
+                  >
+                    Secure
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </SettingsInlineControl>
           </SettingsControlRow>
           <SettingsControlRow
             title="Working Dir and Entrypoint"
@@ -995,17 +1091,19 @@ export function SettingsTab({
         </PanelShell>
       </div>
 
-      <GpuSettingsSection
-        nodeId={nodeId}
-        attachment={gpuAttachment}
-        canEdit={canEdit}
-        deviceIds={gpuDeviceIds}
-        dirty={gpuChanged}
-        onDeviceIdsChange={(nextDeviceIds) => {
-          gpuDraftTouchedRef.current = true;
-          setGpuDeviceIds(nextDeviceIds);
-        }}
-      />
+      {savedRuntimeProfile !== "secure" && (
+        <GpuSettingsSection
+          nodeId={nodeId}
+          attachment={gpuAttachment}
+          canEdit={canEdit}
+          deviceIds={gpuDeviceIds}
+          dirty={gpuChanged}
+          onDeviceIdsChange={(nextDeviceIds) => {
+            gpuDraftTouchedRef.current = true;
+            setGpuDeviceIds(nextDeviceIds);
+          }}
+        />
+      )}
 
       {/* ─── Port Mappings ────────────────────────────────────────── */}
       <PortMappingsSection
@@ -1019,6 +1117,7 @@ export function SettingsTab({
 
       {/* ─── Volume Mounts ────────────────────────────────────────── */}
       <VolumeMountsSection
+        nodeId={nodeId}
         canEdit={canEdit && canEditMounts}
         mounts={mounts}
         setMounts={setMounts}

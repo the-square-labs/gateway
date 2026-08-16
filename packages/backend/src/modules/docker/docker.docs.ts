@@ -77,6 +77,24 @@ const containerSecretParams = pathParamSchema('nodeId', 'containerId', 'secretId
 const deploymentSecretParams = pathParamSchema('nodeId', 'deploymentId', 'secretId');
 const dockerListQuery = z.object({ search: z.string().trim().optional() });
 
+export const preflightDockerRuntimeRoute = appRoute({
+  method: 'post',
+  path: '/nodes/{nodeId}/runtime/runsc/preflight',
+  tags: ['Docker Nodes'],
+  summary: 'Check runsc compatibility and health',
+  request: { params: nodeParams },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const installDockerRuntimeRoute = appRoute({
+  method: 'post',
+  path: '/nodes/{nodeId}/runtime/runsc/install',
+  tags: ['Docker Nodes'],
+  summary: 'Install and verify runsc on a Docker node',
+  request: { params: nodeParams },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const getDockerNodeBySlugRoute = appRoute({
   method: 'get',
   path: '/nodes/by-slug/{nodeSlug}',
@@ -870,6 +888,22 @@ export const createVolumeRoute = appRoute({
   summary: 'Create a volume',
   request: { params: nodeParams, ...jsonBody(VolumeCreateSchema) },
   responses: createdJson(UnknownDataResponseSchema),
+});
+export const listManagedVolumeOptionsRoute = appRoute({
+  method: 'get',
+  path: '/nodes/{nodeId}/managed-volumes',
+  tags: ['Docker Volumes'],
+  summary: 'List managed volume names available for container mounts',
+  request: { params: nodeParams },
+  responses: okJson(UnknownDataResponseSchema),
+});
+export const adoptVolumeRoute = appRoute({
+  method: 'post',
+  path: '/nodes/{nodeId}/volumes/{name}/adopt',
+  tags: ['Docker Volumes'],
+  summary: 'Adopt an eligible legacy local volume without copying data',
+  request: { params: volumeParams },
+  responses: okJson(UnknownDataResponseSchema),
 });
 export const removeVolumeRoute = appRoute({
   method: 'delete',

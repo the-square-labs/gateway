@@ -1,11 +1,12 @@
 import type { ServerDuplexStream } from '@grpc/grpc-js';
-import { eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { container } from '@/container.js';
 import { nodes } from '@/db/schema/index.js';
 import type { NodeGpuDevice } from '@/db/schema/nodes.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { isMinorCompatible } from '@/lib/semver.js';
+import { DockerRuntimeStatusSchema } from '@/modules/docker/docker.schemas.js';
 import { daemonLogRelay } from '@/modules/monitoring/log-relay.service.js';
 import { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
@@ -26,6 +27,24 @@ function clearPendingCommandRegistration(nodeId: string, token: symbol): void {
 // Throttle health history writes — track last recorded timestamp per node
 const lastRecordedTs = new Map<string, number>();
 const HEALTH_HISTORY_MIN_INTERVAL_MS = 30_000; // one entry per 30s
+
+export function mapDockerRuntimeStatus(raw: DaemonMessage['dockerRuntimeStatus']) {
+  if (!raw) return undefined;
+  const checkedAtMs = Number(raw.checkedAtUnixMs);
+  const result = DockerRuntimeStatusSchema.safeParse({
+    state: raw.state,
+    installedVersion: raw.installedVersion || undefined,
+    targetVersion: raw.targetVersion || undefined,
+    reasonCode: raw.reasonCode || undefined,
+    message: raw.message || undefined,
+    checkedAt: Number.isFinite(checkedAtMs) ? new Date(checkedAtMs).toISOString() : undefined,
+    remoteInstallable: Boolean(raw.remoteInstallable),
+    localInstallCommand: raw.localInstallCommand || undefined,
+    step: raw.step || undefined,
+    progressPercent: raw.step === 'downloading' ? Number(raw.progressPercent) : undefined,
+  });
+  return result.success ? result.data : undefined;
+}
 
 interface DockerContainerStateSnapshot {
   containerId: string;
@@ -451,6 +470,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 ? (((msg.register as any).dockerVersion as string | undefined) ?? msg.register.nginxVersion)
                 : ((msg.register as any).dockerVersion as string | undefined);
             const reportedNginxVersion = msg.register.daemonType === 'docker' ? undefined : msg.register.nginxVersion;
+            const reportedRuntimeStatus = mapDockerRuntimeStatus(msg.register.dockerRuntimeStatus);
 
             try {
               await deps.db
@@ -468,6 +488,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                       : {}),
                     ...(msg.register.capabilities?.includes('docker_gpu_v1') ? { dockerGpuV1: true } : {}),
                     ...(msg.register.capabilities?.includes('docker_migration_v1') ? { dockerMigrationV1: true } : {}),
+                    ...(reportedRuntimeStatus ? { dockerRuntimeStatus: reportedRuntimeStatus } : {}),
                     cpuModel: msg.register.cpuModel || undefined,
                     cpuCores: msg.register.cpuCores || undefined,
                     architecture: msg.register.architecture || undefined,
@@ -566,7 +587,35 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               await endStaleStream();
               return;
             }
-            if (msg.commandResult) {
+            if (msg.dockerRuntimeStatus) {
+              const runtimeStatus = mapDockerRuntimeStatus(msg.dockerRuntimeStatus);
+              if (!runtimeStatus) {
+                logger.warn('Ignored invalid Docker runtime status update', { nodeId: activeNodeId });
+                return;
+              }
+              const [updatedNode] = await deps.db
+                .update(nodes)
+                .set({
+                  capabilities: sql`jsonb_set(
+                    coalesce(${nodes.capabilities}, '{}'::jsonb),
+                    '{dockerRuntimeStatus}',
+                    ${JSON.stringify(runtimeStatus)}::jsonb,
+                    true
+                  )`,
+                  updatedAt: new Date(),
+                })
+                .where(
+                  and(
+                    eq(nodes.id, activeNodeId),
+                    sql`coalesce(${nodes.capabilities}->'dockerRuntimeStatus'->>'checkedAt', '') <= ${runtimeStatus.checkedAt}`
+                  )
+                )
+                .returning({ hostname: nodes.hostname, status: nodes.status });
+              if (!isCurrentCommandStream()) return;
+              if (updatedNode) {
+                deps.registry.publishDockerRuntimeChanged(activeNodeId, runtimeStatus);
+              }
+            } else if (msg.commandResult) {
               // Intercept traffic stats results (fire-and-forget, not correlated)
               if (
                 msg.commandResult.commandId?.startsWith('traffic-') &&

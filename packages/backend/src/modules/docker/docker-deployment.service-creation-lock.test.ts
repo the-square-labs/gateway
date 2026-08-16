@@ -77,6 +77,7 @@ describe('DockerDeploymentService service creation lock', () => {
           },
           drainSeconds: 30,
           restartPolicy: 'unless-stopped',
+          runtimeProfile: 'default',
         },
         'user-1'
       )

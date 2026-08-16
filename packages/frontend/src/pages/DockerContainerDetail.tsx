@@ -18,7 +18,10 @@ import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
-import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import {
+  HEADER_ACTION_PRIORITY,
+  ResponsiveHeaderActions,
+} from "@/components/common/ResponsiveHeaderActions";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { DockerMigrationDialog } from "@/components/docker/DockerMigrationDialog";
 import { Badge } from "@/components/ui/badge";
@@ -775,6 +778,7 @@ export function DockerContainerDetail({
             onClick: () =>
               doAction(() => api.startContainer(nodeId!, containerId!), "Container started"),
             disabled: actionDisabled,
+            priority: HEADER_ACTION_PRIORITY.primary,
           },
         ]
       : []),
@@ -786,6 +790,7 @@ export function DockerContainerDetail({
             onClick: () =>
               doAction(() => api.stopContainer(nodeId!, containerId!), "Container stopping"),
             disabled: actionDisabled,
+            priority: HEADER_ACTION_PRIORITY.primary,
           },
           ...(lifecycleActions.canRestart
             ? [
@@ -798,6 +803,7 @@ export function DockerContainerDetail({
                       "Container restarting"
                     ),
                   disabled: actionDisabled,
+                  priority: HEADER_ACTION_PRIORITY.primary,
                 },
               ]
             : []),

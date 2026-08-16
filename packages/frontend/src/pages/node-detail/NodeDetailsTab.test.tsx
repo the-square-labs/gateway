@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { NodeDetail, NodeHealthReport } from "@/types";
@@ -108,10 +108,10 @@ describe("NodeDetailsTab", () => {
       .closest(".border");
     expect(identityPanel).not.toBeNull();
     expect(systemPanel).not.toBeNull();
-    expect(
-      within(identityPanel as HTMLElement).queryByText("IP Addresses")
-    ).not.toBeInTheDocument();
-    expect(within(systemPanel as HTMLElement).getByText("IP Addresses")).toBeInTheDocument();
+    expect(identityPanel?.parentElement).toHaveClass("min-[1044px]:grid-cols-2");
+    expect(systemPanel?.parentElement?.parentElement).toHaveClass("min-[1044px]:grid-cols-2");
+    expect(within(identityPanel as HTMLElement).getByText("IP Addresses")).toBeInTheDocument();
+    expect(within(systemPanel as HTMLElement).queryByText("IP Addresses")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "View 3 addresses" }));
 
@@ -124,5 +124,115 @@ describe("NodeDetailsTab", () => {
     expect(within(dialog).getByRole("heading", { name: "Local IP Addresses" })).toBeInTheDocument();
     expect(within(dialog).getByText("192.168.1.20")).toBeInTheDocument();
     expect(within(dialog).getByText("fd00::10")).toBeInTheDocument();
+  });
+
+  it("shows the existing Setup action when runsc is installable", () => {
+    const node = {
+      ...createNode(),
+      type: "docker" as const,
+      status: "online" as const,
+      isConnected: true,
+      capabilities: {
+        dockerRuntimeStatus: {
+          state: "installable",
+          checkedAt: "2026-08-16T00:00:00.000Z",
+          remoteInstallable: true,
+          message: "Ready to install",
+        },
+      },
+    };
+    render(
+      <MemoryRouter>
+        <NodeDetailsTab
+          node={node}
+          daemonUpdate={{ available: false, latestVersion: null }}
+          refreshNode={vi.fn().mockResolvedValue(undefined)}
+          refreshDaemonUpdateStatus={vi.fn().mockResolvedValue(undefined)}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole("heading", { name: "Secure Runtime Setup" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Setup" })).toBeEnabled();
+  });
+
+  it("restores an in-progress setup from node state and keeps refreshing it", async () => {
+    vi.useFakeTimers();
+    const refreshNode = vi.fn().mockResolvedValue(undefined);
+    const node = {
+      ...createNode(),
+      type: "docker" as const,
+      status: "offline" as const,
+      isConnected: false,
+      capabilities: {
+        dockerRuntimeStatus: {
+          state: "installing",
+          targetVersion: "release-test",
+          checkedAt: "2026-08-16T00:00:00.000Z",
+          remoteInstallable: true,
+          message: "Downloading gVisor",
+          step: "downloading",
+          progressPercent: 45,
+        },
+      },
+    };
+    const view = render(
+      <MemoryRouter>
+        <NodeDetailsTab
+          node={node}
+          daemonUpdate={{ available: false, latestVersion: null }}
+          refreshNode={refreshNode}
+          refreshDaemonUpdateStatus={vi.fn().mockResolvedValue(undefined)}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole("button", { name: "Setting up..." })).toBeDisabled();
+    expect(screen.getAllByText("installing")).not.toHaveLength(0);
+    expect(screen.getByText("Installing and verifying Secure Runtime")).toBeInTheDocument();
+    expect(screen.getByText("Downloading gVisor")).toBeInTheDocument();
+    expect(screen.getByText("45%")).toBeInTheDocument();
+    expect(screen.getByLabelText("gVisor download progress").firstElementChild).toHaveStyle({
+      width: "45%",
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(refreshNode).toHaveBeenCalled();
+
+    view.unmount();
+    vi.useRealTimers();
+  });
+
+  it("keeps the healthy Secure Runtime status visible after setup", () => {
+    const node = {
+      ...createNode(),
+      type: "docker" as const,
+      capabilities: {
+        dockerRuntimeStatus: {
+          state: "healthy",
+          installedVersion: "release-20260810.0",
+          checkedAt: "2026-08-16T00:00:00.000Z",
+          remoteInstallable: true,
+          message: "runsc completed a Docker smoke test",
+        },
+      },
+    };
+    render(
+      <MemoryRouter>
+        <NodeDetailsTab
+          node={node}
+          daemonUpdate={{ available: false, latestVersion: null }}
+          refreshNode={vi.fn().mockResolvedValue(undefined)}
+          refreshDaemonUpdateStatus={vi.fn().mockResolvedValue(undefined)}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByRole("heading", { name: "Secure Runtime Setup" })).not.toBeInTheDocument();
+    expect(screen.getByText("Secure Runtime")).toBeInTheDocument();
+    expect(screen.getByText("healthy")).toBeInTheDocument();
+    expect(screen.getByText("release-20260810.0")).toBeInTheDocument();
   });
 });

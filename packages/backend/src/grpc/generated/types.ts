@@ -55,6 +55,7 @@ export interface DaemonMessage {
   statsReport?: StatsReport;
   daemonLog?: DaemonLogEntry;
   execOutput?: ExecOutput;
+  dockerRuntimeStatus?: DockerRuntimeStatus;
 }
 
 export interface DaemonLogEntry {
@@ -79,6 +80,7 @@ export interface RegisterMessage {
   kernelVersion: string;
   daemonType: string;
   capabilities: string[];
+  dockerRuntimeStatus?: DockerRuntimeStatus;
 }
 
 export interface CommandResult {
@@ -205,6 +207,7 @@ export interface GatewayCommand {
   dockerVolume?: DockerVolumeCommand;
   dockerNetwork?: DockerNetworkCommand;
   dockerDeployment?: DockerDeploymentCommand;
+  dockerRuntime?: DockerRuntimeCommand;
   dockerExec?: DockerExecCommand;
   dockerFile?: DockerFileCommand;
   dockerConfigPush?: DockerConfigPushCommand;
@@ -365,7 +368,6 @@ export interface DockerImageCommand {
 export interface DockerVolumeCommand {
   action: string;
   name: string;
-  driver: string;
   labels: Record<string, string>;
   force: boolean;
   path: string;
@@ -390,6 +392,24 @@ export interface DockerDeploymentCommand {
   slot: string;
   configJson: string;
   force: boolean;
+}
+
+export interface DockerRuntimeCommand {
+  action: string;
+  runtime: string;
+}
+
+export interface DockerRuntimeStatus {
+  state: string;
+  installedVersion: string;
+  targetVersion: string;
+  reasonCode: string;
+  message: string;
+  checkedAtUnixMs: string;
+  remoteInstallable: boolean;
+  localInstallCommand: string;
+  step: string;
+  progressPercent: number;
 }
 
 export interface DockerExecCommand {

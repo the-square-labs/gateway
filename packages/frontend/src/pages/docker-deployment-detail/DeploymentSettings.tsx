@@ -2,19 +2,32 @@ import { RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
+import { SettingsControlRow, SettingsInlineControl } from "@/components/common/SettingsControlRow";
 import { DockerHealthCheckSection } from "@/components/docker/DockerHealthCheckSection";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { stripRegistryHostFromImageName } from "@/lib/docker-image-ref";
 import {
   type DockerRuntimeCapacity,
   loadDockerRuntimeCapacity,
   UNKNOWN_DOCKER_RUNTIME_CAPACITY,
 } from "@/lib/docker-runtime-capacity";
+import {
+  DEFAULT_DOCKER_RUNTIME_DESCRIPTION,
+  getSecureDockerRuntimeDescription,
+} from "@/lib/docker-runtime-profile";
 import { api } from "@/services/api";
 import {
   type DockerDeployment,
   type DockerHealthCheck,
+  type DockerRuntimeProfile,
   type DockerWebhook,
   gpuDeviceLabel,
   type NodeGpuDevice,
@@ -24,7 +37,11 @@ import { LabelsSection } from "../docker-detail/LabelsSection";
 import { type PortMapping, PortMappingsSection } from "../docker-detail/PortMappingsSection";
 import { type RuntimeFieldErrors, RuntimeSection } from "../docker-detail/RuntimeSection";
 import { WebhookSection } from "../docker-detail/SettingsTab";
-import { type MountEntry, VolumeMountsSection } from "../docker-detail/VolumeMountsSection";
+import {
+  ensureManagedMountVolumes,
+  type MountEntry,
+  VolumeMountsSection,
+} from "../docker-detail/VolumeMountsSection";
 
 const EMPTY_GPU_DEVICE_IDS: string[] = [];
 
@@ -62,6 +79,7 @@ function normalizeMounts(mounts: unknown): MountEntry[] {
       containerPath: value.containerPath ?? "",
       name: value.name ?? "",
       readOnly: value.readOnly ?? false,
+      existing: true,
     };
   });
 }
@@ -131,6 +149,7 @@ export function DeploymentSettings({
   );
   const runtime = ((deployment.desiredConfig as any).runtime ?? {}) as Record<string, any>;
   const desiredGpuDeviceIds = deployment.desiredConfig.gpu?.deviceIds ?? EMPTY_GPU_DEVICE_IDS;
+  const savedRuntimeProfile = deployment.desiredConfig.runtimeProfile ?? "default";
   const initialGpuDeviceIds = useMemo(
     () => normalizeGpuDeviceIds(desiredGpuDeviceIds),
     [desiredGpuDeviceIds]
@@ -160,6 +179,7 @@ export function DeploymentSettings({
       pidsLimit: runtime.pidsLimit ? String(runtime.pidsLimit) : "",
       drainSeconds: String(deployment.drainSeconds),
       gpuDeviceIds: JSON.stringify(initialGpuDeviceIds),
+      runtimeProfile: savedRuntimeProfile,
     }),
     [
       deployment.desiredConfig.restartPolicy,
@@ -181,6 +201,7 @@ export function DeploymentSettings({
       runtime.memSwapMB,
       runtime.memoryMB,
       runtime.pidsLimit,
+      savedRuntimeProfile,
     ]
   );
   const [imageTag, setImageTag] = useState(desiredImageParts.tag);
@@ -203,6 +224,10 @@ export function DeploymentSettings({
   const [pidsLimit, setPidsLimit] = useState(runtime.pidsLimit ? String(runtime.pidsLimit) : "");
   const [drainSeconds, setDrainSeconds] = useState(String(deployment.drainSeconds));
   const [gpuDeviceIds, setGpuDeviceIds] = useState(initialGpuDeviceIds);
+  const [runtimeProfile, setRuntimeProfile] = useState<DockerRuntimeProfile>(savedRuntimeProfile);
+  const [secureRuntimeAvailable, setSecureRuntimeAvailable] = useState(
+    savedRuntimeProfile === "secure"
+  );
   const [gpuDevices, setGpuDevices] = useState<NodeGpuDevice[]>([]);
   const [gpuInventoryLoaded, setGpuInventoryLoaded] = useState(false);
   const [runtimeCapacity, setRuntimeCapacity] = useState<DockerRuntimeCapacity>(
@@ -231,6 +256,13 @@ export function DeploymentSettings({
       .then((node) => {
         if (cancelled) return;
         setGpuDevices(node.liveHealthReport?.gpuDevices ?? node.lastHealthReport?.gpuDevices ?? []);
+        setSecureRuntimeAvailable(
+          (
+            (node.capabilities as Record<string, any>)?.dockerRuntimeStatus as
+              | { state?: string }
+              | undefined
+          )?.state === "healthy" || savedRuntimeProfile === "secure"
+        );
       })
       .catch(() => {
         if (!cancelled) setGpuDevices([]);
@@ -241,7 +273,7 @@ export function DeploymentSettings({
     return () => {
       cancelled = true;
     };
-  }, [nodeId]);
+  }, [nodeId, savedRuntimeProfile]);
 
   useEffect(() => {
     const previous = previousDeploymentBaselineRef.current;
@@ -263,7 +295,8 @@ export function DeploymentSettings({
       cpuShares === previous.cpuShares &&
       pidsLimit === previous.pidsLimit &&
       drainSeconds === previous.drainSeconds &&
-      JSON.stringify(gpuDeviceIds) === previous.gpuDeviceIds;
+      JSON.stringify(gpuDeviceIds) === previous.gpuDeviceIds &&
+      runtimeProfile === previous.runtimeProfile;
 
     previousDeploymentBaselineRef.current = deploymentBaseline;
 
@@ -286,6 +319,7 @@ export function DeploymentSettings({
     setPidsLimit(deploymentBaseline.pidsLimit);
     setDrainSeconds(deploymentBaseline.drainSeconds);
     setGpuDeviceIds(initialGpuDeviceIds);
+    setRuntimeProfile(savedRuntimeProfile);
   }, [
     command,
     cpuCount,
@@ -308,6 +342,8 @@ export function DeploymentSettings({
     ports,
     readinessRouteIndex,
     restartPolicy,
+    runtimeProfile,
+    savedRuntimeProfile,
     user,
     workingDir,
   ]);
@@ -327,14 +363,19 @@ export function DeploymentSettings({
   const labelsChanged = JSON.stringify(labels) !== JSON.stringify(initialLabels);
   const drainChanged = drainSeconds !== String(deployment.drainSeconds);
   const gpuChanged = JSON.stringify(gpuDeviceIds) !== deploymentBaseline.gpuDeviceIds;
+  const runtimeProfileChanged = runtimeProfile !== savedRuntimeProfile;
+  const effectiveGpuDeviceIds = runtimeProfile === "secure" ? [] : gpuDeviceIds;
+  const effectiveGpuChanged =
+    JSON.stringify(effectiveGpuDeviceIds) !== deploymentBaseline.gpuDeviceIds;
   const settingsChanged =
     executionChanged ||
     portsChanged ||
     mountsChanged ||
     labelsChanged ||
     drainChanged ||
-    gpuChanged;
-  const executionCardChanged = executionChanged || drainChanged;
+    effectiveGpuChanged ||
+    runtimeProfileChanged;
+  const executionCardChanged = executionChanged || drainChanged || runtimeProfileChanged;
   const runtimeChanged =
     restartPolicy !== (deployment.desiredConfig.restartPolicy ?? "unless-stopped") ||
     maxRetries !== String(runtime.maxRetries ?? 0) ||
@@ -499,7 +540,7 @@ export function DeploymentSettings({
           title="Execution"
           description="Saved to deployment configuration"
           dirty={executionCardChanged}
-          bodyClassName="p-4 space-y-4"
+          bodyClassName="divide-y divide-border"
           actions={
             <Button
               className="bg-warning text-black hover:bg-warning/90 disabled:opacity-50"
@@ -510,6 +551,9 @@ export function DeploymentSettings({
                   for (const label of labels) {
                     if (label.key.trim()) labelMap[label.key.trim()] = label.value;
                   }
+                  if (mountsChanged) {
+                    await ensureManagedMountVolumes(nodeId, mounts, initialMounts);
+                  }
                   await api.updateDockerDeployment(nodeId, deployment.id, {
                     desiredConfig: {
                       image: nextImage,
@@ -517,9 +561,15 @@ export function DeploymentSettings({
                       command: command.trim() ? command.trim().split(/\s+/) : [],
                       workingDir,
                       user,
-                      mounts,
+                      mounts: mounts.map(({ hostPath, containerPath, name, readOnly }) => ({
+                        hostPath,
+                        containerPath,
+                        name,
+                        readOnly,
+                      })),
                       labels: labelMap,
-                      ...(gpuChanged ? { gpu: { deviceIds: gpuDeviceIds } } : {}),
+                      ...(runtimeProfileChanged ? { runtimeProfile } : {}),
+                      ...(effectiveGpuChanged ? { gpu: { deviceIds: effectiveGpuDeviceIds } } : {}),
                     },
                     routes: ports
                       .filter((port) => port.hostPort && port.containerPort)
@@ -539,123 +589,157 @@ export function DeploymentSettings({
             </Button>
           }
         >
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">Image</label>
-              <Input
-                value={stripRegistryHostFromImageName(deploymentBaseline.imageName)}
-                disabled
-              />
+          <SettingsControlRow title="Image and Tag" description="Deployment image reference">
+            <div className="grid w-full gap-2 sm:grid-cols-2">
+              <SettingsInlineControl label="Image">
+                <Input
+                  value={stripRegistryHostFromImageName(deploymentBaseline.imageName)}
+                  disabled
+                />
+              </SettingsInlineControl>
+              <SettingsInlineControl label="Tag">
+                <Input
+                  value={imageTag}
+                  onChange={(e) => setImageTag(e.target.value)}
+                  placeholder={imageTagLocked ? "digest" : "latest"}
+                  disabled={imageTagLocked}
+                  style={
+                    nextImage !== deployment.desiredConfig.image
+                      ? { borderColor: "var(--color-warning)" }
+                      : undefined
+                  }
+                />
+              </SettingsInlineControl>
             </div>
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">Tag</label>
-              <Input
-                value={imageTag}
-                onChange={(e) => setImageTag(e.target.value)}
-                placeholder={imageTagLocked ? "digest" : "latest"}
-                disabled={imageTagLocked}
-                style={
-                  nextImage !== deployment.desiredConfig.image
-                    ? { borderColor: "var(--color-warning)" }
-                    : undefined
-                }
-              />
+          </SettingsControlRow>
+          <SettingsControlRow title="Runtime" description="Container isolation profile">
+            <SettingsInlineControl label="Profile">
+              <Select
+                value={runtimeProfile}
+                onValueChange={(value) => setRuntimeProfile(value as DockerRuntimeProfile)}
+              >
+                <SelectTrigger aria-label="Runtime">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default" description={DEFAULT_DOCKER_RUNTIME_DESCRIPTION}>
+                    Default
+                  </SelectItem>
+                  <SelectItem
+                    value="secure"
+                    disabled={!secureRuntimeAvailable}
+                    description={getSecureDockerRuntimeDescription(secureRuntimeAvailable)}
+                  >
+                    Secure
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </SettingsInlineControl>
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Drain and Entrypoint"
+            description="Rollout and process startup"
+          >
+            <div className="grid w-full gap-2 sm:grid-cols-2">
+              <SettingsInlineControl label="Drain Seconds">
+                <Input
+                  inputMode="numeric"
+                  value={drainSeconds}
+                  onChange={(event) => setDrainSeconds(event.target.value)}
+                />
+              </SettingsInlineControl>
+              <SettingsInlineControl label="Entrypoint">
+                <Input
+                  value={entrypoint}
+                  onChange={(e) => setEntrypoint(e.target.value)}
+                  placeholder="/docker-entrypoint.sh"
+                />
+              </SettingsInlineControl>
             </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">Drain Seconds</label>
-              <Input
-                inputMode="numeric"
-                value={drainSeconds}
-                onChange={(event) => setDrainSeconds(event.target.value)}
-              />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Working Directory and User"
+            description="Application process context"
+          >
+            <div className="grid w-full gap-2 sm:grid-cols-2">
+              <SettingsInlineControl label="Working Directory">
+                <Input
+                  value={workingDir}
+                  onChange={(e) => setWorkingDir(e.target.value)}
+                  placeholder="/app"
+                />
+              </SettingsInlineControl>
+              <SettingsInlineControl label="User">
+                <Input value={user} onChange={(e) => setUser(e.target.value)} placeholder="root" />
+              </SettingsInlineControl>
             </div>
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">Entrypoint</label>
-              <Input
-                value={entrypoint}
-                onChange={(e) => setEntrypoint(e.target.value)}
-                placeholder="/docker-entrypoint.sh"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">Working Directory</label>
-              <Input
-                value={workingDir}
-                onChange={(e) => setWorkingDir(e.target.value)}
-                placeholder="/app"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">User</label>
-              <Input value={user} onChange={(e) => setUser(e.target.value)} placeholder="root" />
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">Command</label>
+          </SettingsControlRow>
+          <SettingsControlRow title="Command" description="Command override">
             <Input
               value={command}
               onChange={(e) => setCommand(e.target.value)}
               placeholder="nginx -g daemon off;"
             />
-          </div>
+          </SettingsControlRow>
         </PanelShell>
       </div>
 
-      <PanelShell title="GPU" description="Applies to both blue/green slots" dirty={gpuChanged}>
-        {!gpuInventoryLoaded ? (
-          <p className="px-4 py-3 text-sm text-muted-foreground">Loading node GPU inventory…</p>
-        ) : gpuDevices.length === 0 ? (
-          <p className="px-4 py-3 text-sm text-muted-foreground">
-            No GPUs are currently reported by this node.
-          </p>
-        ) : (
-          <>
-            <div>
-              {gpuDevices.map((gpu) => {
-                const checked = gpuDeviceIds.includes(gpu.id);
-                const disabled = !!action || (!gpu.attachable && !checked);
-                return (
-                  <label
-                    key={gpu.id}
-                    className={`flex min-w-0 items-center gap-2 border-b border-border px-4 py-3 text-sm last:border-b-0 ${disabled ? "opacity-60" : "cursor-pointer"}`}
-                  >
-                    <input
-                      type="checkbox"
-                      className="form-checkbox shrink-0"
-                      checked={checked}
-                      disabled={disabled}
-                      onChange={() =>
-                        setGpuDeviceIds((current) =>
-                          normalizeGpuDeviceIds(
-                            checked
-                              ? current.filter((deviceId) => deviceId !== gpu.id)
-                              : [...current, gpu.id]
-                          )
-                        )
-                      }
-                    />
-                    <span className="min-w-0">
-                      <span className="block font-medium">{gpuDeviceLabel(gpu)}</span>
-                      <span className="block break-all text-xs text-muted-foreground">
-                        {gpu.attachable
-                          ? `Shared physical device · ${gpu.id}`
-                          : gpu.unavailableReason || "Unavailable for container attachment"}
-                      </span>
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
-            <p className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
-              {gpuDeviceIds.length > 0
-                ? `${gpuDeviceIds.length} physical GPU${gpuDeviceIds.length === 1 ? "" : "s"} selected`
-                : "No GPU selected"}
-            </p>
-          </>
+      {savedRuntimeProfile !== "secure" &&
+        (!gpuInventoryLoaded || gpuDevices.length > 0 || gpuDeviceIds.length > 0) && (
+          <PanelShell title="GPU" description="Applies to both blue/green slots" dirty={gpuChanged}>
+            {!gpuInventoryLoaded ? (
+              <p className="px-4 py-3 text-sm text-muted-foreground">Loading node GPU inventory…</p>
+            ) : gpuDevices.length === 0 ? (
+              <p className="px-4 py-3 text-sm text-muted-foreground">
+                No GPUs are currently reported by this node.
+              </p>
+            ) : (
+              <>
+                <div>
+                  {gpuDevices.map((gpu) => {
+                    const checked = gpuDeviceIds.includes(gpu.id);
+                    const disabled = !!action || (!gpu.attachable && !checked);
+                    return (
+                      <label
+                        key={gpu.id}
+                        className={`flex min-w-0 items-center gap-2 border-b border-border px-4 py-3 text-sm last:border-b-0 ${disabled ? "opacity-60" : "cursor-pointer"}`}
+                      >
+                        <input
+                          type="checkbox"
+                          className="form-checkbox shrink-0"
+                          checked={checked}
+                          disabled={disabled}
+                          onChange={() =>
+                            setGpuDeviceIds((current) =>
+                              normalizeGpuDeviceIds(
+                                checked
+                                  ? current.filter((deviceId) => deviceId !== gpu.id)
+                                  : [...current, gpu.id]
+                              )
+                            )
+                          }
+                        />
+                        <span className="min-w-0">
+                          <span className="block font-medium">{gpuDeviceLabel(gpu)}</span>
+                          <span className="block break-all text-xs text-muted-foreground">
+                            {gpu.attachable
+                              ? `Shared physical device · ${gpu.id}`
+                              : gpu.unavailableReason || "Unavailable for container attachment"}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
+                  {gpuDeviceIds.length > 0
+                    ? `${gpuDeviceIds.length} physical GPU${gpuDeviceIds.length === 1 ? "" : "s"} selected`
+                    : "No GPU selected"}
+                </p>
+              </>
+            )}
+          </PanelShell>
         )}
-      </PanelShell>
 
       <PortMappingsSection
         canEdit
@@ -668,6 +752,7 @@ export function DeploymentSettings({
       />
 
       <VolumeMountsSection
+        nodeId={nodeId}
         canEdit={canEditMounts}
         mounts={mounts}
         setMounts={setMounts}

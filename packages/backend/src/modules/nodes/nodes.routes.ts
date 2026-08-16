@@ -166,6 +166,7 @@ function compactDockerNodeForDockerAccess(node: Record<string, unknown>) {
     capabilities: {
       ...(capabilities?.versionMismatch ? { versionMismatch: true } : {}),
       ...(capabilities?.cpuCores !== undefined ? { cpuCores: capabilities.cpuCores } : {}),
+      ...(capabilities?.dockerRuntimeStatus ? { dockerRuntimeStatus: capabilities.dockerRuntimeStatus } : {}),
       ...(advertisedCapabilities.includes('docker_port_bind_ip_v1') ? { dockerPortBindIpV1: true } : {}),
     },
     lastSeenAt: node.lastSeenAt,

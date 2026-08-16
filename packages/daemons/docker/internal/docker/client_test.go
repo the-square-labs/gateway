@@ -53,6 +53,39 @@ func TestDockerPortMappingsDefaultsToAllInterfaces(t *testing.T) {
 	}
 }
 
+func TestApplyUserWorkloadBaseline(t *testing.T) {
+	host := &container.HostConfig{Privileged: true, CapAdd: []string{"SYS_ADMIN"}}
+	applyUserWorkloadBaseline(host)
+	if host.Privileged || len(host.CapAdd) != 0 {
+		t.Fatalf("unsafe privilege settings survived baseline: privileged=%v capAdd=%v", host.Privileged, host.CapAdd)
+	}
+	if len(host.SecurityOpt) != 1 || host.SecurityOpt[0] != "no-new-privileges:true" {
+		t.Fatalf("security options = %v", host.SecurityOpt)
+	}
+}
+
+func TestSecureRuntimeProfileFailsClosedAndRejectsGPU(t *testing.T) {
+	client := &Client{}
+	if err := client.applyRuntimeProfile(&container.HostConfig{}, "secure", nil); err == nil {
+		t.Fatal("expected Secure Runtime to fail while runsc health is unknown")
+	}
+	client.runscHealthy.Store(true)
+	host := &container.HostConfig{}
+	if err := client.applyRuntimeProfile(host, "secure", nil); err != nil {
+		t.Fatalf("apply healthy Secure Runtime: %v", err)
+	}
+	if host.Runtime != "runsc" {
+		t.Fatalf("runtime = %q", host.Runtime)
+	}
+	if err := client.applyRuntimeProfile(
+		&container.HostConfig{},
+		"secure",
+		&GPUConfig{DeviceIDs: []string{"nvidia:GPU-1"}},
+	); err == nil {
+		t.Fatal("expected Secure Runtime to reject GPU attachment")
+	}
+}
+
 func writeDockerLogFrame(t *testing.T, buf *bytes.Buffer, payload string) {
 	t.Helper()
 	header := make([]byte, 8)

@@ -102,6 +102,9 @@ func (c *Client) CaptureMigrationManifest(ctx context.Context, id string) (docke
 	if hostConfig.ContainerIDFile != "" {
 		manifest.Blockers = append(manifest.Blockers, "container ID files are host-bound")
 	}
+	if hostConfig.Runtime == "runsc" {
+		manifest.Blockers = append(manifest.Blockers, "Secure Runtime containers are not migratable between nodes")
+	}
 	if hostNamespaceMode(string(hostConfig.NetworkMode)) || hostNamespaceMode(string(hostConfig.IpcMode)) ||
 		hostNamespaceMode(string(hostConfig.PidMode)) || hostNamespaceMode(string(hostConfig.UTSMode)) {
 		manifest.Blockers = append(manifest.Blockers, "host or container namespace sharing is not portable")

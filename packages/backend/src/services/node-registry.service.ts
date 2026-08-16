@@ -9,6 +9,7 @@ import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
+import type { DockerRuntimeStatus } from '@/modules/docker/docker.schemas.js';
 
 const logger = createChildLogger('NodeRegistry');
 
@@ -132,6 +133,10 @@ export class NodeRegistryService {
 
   publishNodeChanged(nodeId: string, status: string, hostname?: string) {
     this.eventBus?.publish('node.changed', { id: nodeId, action: 'updated', status, hostname });
+  }
+
+  publishDockerRuntimeChanged(nodeId: string, status: DockerRuntimeStatus) {
+    this.eventBus?.publish('docker.runtime.changed', { nodeId, status });
   }
 
   publishDockerContainerChanged(

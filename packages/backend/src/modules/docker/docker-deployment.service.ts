@@ -53,6 +53,7 @@ import { toSyntheticRow } from './docker-deployment-synthetic.js';
 import { hasDockerGpuV1Capability } from './docker-gpu-attachment.js';
 import type { DockerHealthCheckDto, DockerHealthCheckService } from './docker-health-check.service.js';
 import type { DockerImageCleanupService } from './docker-image-cleanup.service.js';
+import { assertManagedMountMutation } from './docker-managed-mounts.js';
 import type { DockerMigrationGuard } from './docker-migration-guard.js';
 import type { DockerRegistryService } from './docker-registry.service.js';
 import type { DockerSecretService } from './docker-secret.service.js';
@@ -236,6 +237,29 @@ export class DockerDeploymentService {
     }
   }
 
+  private async assertRuntimeProfile(nodeId: string, desiredConfig: DockerDeploymentDesiredConfig): Promise<void> {
+    if (desiredConfig.runtimeProfile !== 'secure') return;
+    const node = await this.validateDockerNode(nodeId);
+    const status = (node.capabilities as Record<string, any> | null)?.dockerRuntimeStatus;
+    if (status?.state !== 'healthy') {
+      throw new AppError(
+        409,
+        'SECURE_RUNTIME_UNAVAILABLE',
+        status?.message || 'Secure Runtime is not healthy on this node. Complete Setup in Node Details first.'
+      );
+    }
+    if ((desiredConfig.gpu?.deviceIds?.length ?? 0) > 0) {
+      throw new AppError(
+        409,
+        'SECURE_RUNTIME_GPU_UNSUPPORTED',
+        'Remove GPU attachments before selecting Secure Runtime'
+      );
+    }
+    if (desiredConfig.mounts?.some((mount) => !!mount.hostPath)) {
+      throw new AppError(409, 'SECURE_RUNTIME_BIND_UNSUPPORTED', 'Secure Runtime does not support host bind mounts');
+    }
+  }
+
   private async assertNameAvailable(nodeId: string, name: string, excludeDeploymentId?: string) {
     const existingDeploymentQuery = this.db
       .select({ id: dockerDeployments.id })
@@ -392,10 +416,20 @@ export class DockerDeploymentService {
       user: input.user,
       labels: input.labels,
       restartPolicy: input.restartPolicy,
+      runtimeProfile: input.runtimeProfile ?? 'default',
       runtime: input.runtime,
       gpu: input.gpu,
     };
+    await this.assertRuntimeProfile(nodeId, desiredConfig);
     assertDockerMountChangeAllowed({ nodeId, actorScopes, nextConfig: desiredConfig, currentDefinitions: [] });
+    await assertManagedMountMutation({
+      db: this.db,
+      dispatch: this.dispatch,
+      parseResult: (result) => this.parseResult(result),
+      nodeId,
+      current: [],
+      next: normalizeMountDefinitionsFromConfig(desiredConfig),
+    });
 
     await this.db.transaction(async (tx) => {
       await tx.insert(dockerDeployments).values({
@@ -566,12 +600,21 @@ export class DockerDeploymentService {
     if (input.desiredConfig && Object.hasOwn(input.desiredConfig, 'gpu')) {
       await this.assertDockerGpuCapability(nodeId);
     }
+    await this.assertRuntimeProfile(nodeId, desiredConfig);
     assertDockerMountChangeAllowed({
       nodeId,
       resourceId: deploymentId,
       actorScopes,
       nextConfig: desiredConfig,
       currentDefinitions: normalizeMountDefinitionsFromConfig(current.desiredConfig),
+    });
+    await assertManagedMountMutation({
+      db: this.db,
+      dispatch: this.dispatch,
+      parseResult: (result) => this.parseResult(result),
+      nodeId,
+      current: normalizeMountDefinitionsFromConfig(current.desiredConfig),
+      next: normalizeMountDefinitionsFromConfig(desiredConfig),
     });
 
     if (routes && !deploymentRoutesEqual(current.routes, routes)) {
@@ -691,6 +734,7 @@ export class DockerDeploymentService {
       env: input.env ?? deployment.desiredConfig.env,
     };
     if (desiredConfig.gpu !== undefined) await this.assertDockerGpuCapability(nodeId);
+    await this.assertRuntimeProfile(nodeId, desiredConfig);
     assertDockerMountChangeAllowed({
       nodeId,
       resourceId: deploymentId,
@@ -799,6 +843,7 @@ export class DockerDeploymentService {
       image: releaseContext?.image ?? deployment.desiredConfig.image,
     };
     if (desiredConfig.gpu !== undefined) await this.assertDockerGpuCapability(nodeId);
+    await this.assertRuntimeProfile(nodeId, desiredConfig);
     assertDockerMountChangeAllowed({
       nodeId,
       resourceId: deploymentId,

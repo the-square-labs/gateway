@@ -79,6 +79,7 @@ message DaemonMessage {
     StatsReport stats_report = 4;
     DaemonLogEntry daemon_log = 5;
     ExecOutput exec_output = 6;
+    DockerRuntimeStatus docker_runtime_status = 7;
   }
 }
 
@@ -106,6 +107,7 @@ message RegisterMessage {
   string kernel_version = 11;
   string daemon_type = 12;       // "nginx", "monitoring", etc.
   repeated string capabilities = 13;
+  DockerRuntimeStatus docker_runtime_status = 14;
 }
 
 message CommandResult {
@@ -245,6 +247,7 @@ message GatewayCommand {
     // Execute the existing proxy health contract from nginx-daemon through
     // the loopback Secure Link listener.
     ProbeProxySecureLinkCommand probe_proxy_secure_link = 40;
+    DockerRuntimeCommand docker_runtime = 41;
   }
 }
 
@@ -485,7 +488,7 @@ message DockerImageCommand {
 message DockerVolumeCommand {
   string action = 1;
   string name = 2;
-  string driver = 3;
+  reserved 3;
   map<string, string> labels = 4;
   bool force = 5;
   string path = 6;
@@ -510,6 +513,24 @@ message DockerDeploymentCommand {
   string slot = 3;
   string config_json = 4;
   bool force = 5;
+}
+
+message DockerRuntimeCommand {
+  string action = 1; // "preflight" or "install"
+  string runtime = 2; // currently "runsc"
+}
+
+message DockerRuntimeStatus {
+  string state = 1; // healthy, installable, unsupported, unknown, installing, failed
+  string installed_version = 2;
+  string target_version = 3;
+  string reason_code = 4;
+  string message = 5;
+  int64 checked_at_unix_ms = 6;
+  bool remote_installable = 7;
+  string local_install_command = 8;
+  string step = 9; // preparing, downloading, verifying_download, installing_binaries, configuring_docker, restarting_docker, verifying_runtime
+  uint32 progress_percent = 10; // meaningful while step is "downloading"
 }
 
 message DockerExecCommand {

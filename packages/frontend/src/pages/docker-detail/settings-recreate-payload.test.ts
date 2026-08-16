@@ -86,6 +86,35 @@ describe("buildRecreatePayloadFromForm", () => {
     ).toEqual({ gpu: { deviceIds: [] } });
   });
 
+  it("sends an explicit Secure Runtime profile during recreation", () => {
+    expect(
+      buildRecreatePayloadFromForm({
+        parsedImageName: "nginx",
+        imageTag: "latest",
+        imageTagChanged: false,
+        portsChanged: false,
+        ports: [],
+        mountsChanged: false,
+        mounts: [],
+        entrypoint: "",
+        command: "",
+        stopTimeout: "10",
+        workingDir: "/app",
+        user: "node",
+        hostname: "gateway",
+        labelsChanged: false,
+        labels: [],
+        gpuChanged: true,
+        gpuDeviceIds: [],
+        runtimeProfileChanged: true,
+        runtimeProfile: "secure",
+        hasRuntimeChanges: false,
+        runtimePayload: null,
+        recreateBaseline,
+      })
+    ).toEqual({ gpu: { deviceIds: [] }, runtimeProfile: "secure" });
+  });
+
   it("preserves the selected publish address in recreated port mappings", () => {
     expect(
       buildRecreatePayloadFromForm({

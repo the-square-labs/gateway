@@ -43,6 +43,7 @@ import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import { useUpdateStore } from "@/stores/update";
 import { AI_SCOPE } from "@/types";
 import { dashboardAttentionDotClass, dashboardAttentionLabel } from "./dashboard-attention";
+import { navigationAttentionForItem, navigationAttentionLabel } from "./navigation-attention";
 import { SidebarPinnedResources } from "./SidebarPinnedResources";
 
 function getInitials(name: string | null): string {
@@ -289,36 +290,48 @@ export function SidebarContent({
                 <TooltipContent side="right">Open sidebar</TooltipContent>
               </Tooltip>
 
-              {allNavItems.map((item) => (
-                <Tooltip key={item.href}>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className={cn(
-                        "h-8 w-8",
-                        isSidebarNavigationActive(location.pathname, item.href) &&
-                          "bg-sidebar-accent"
-                      )}
-                      onClick={() => navigate(item.href)}
-                    >
-                      <span className="relative flex">
-                        <item.icon className="h-4 w-4" />
-                        {item.id === "dashboard" && dashboardAttention && (
-                          <span
-                            aria-label={dashboardAttentionLabel(dashboardAttention)}
-                            className={cn(
-                              "absolute -right-2 -top-2 h-2 w-2",
-                              dashboardAttentionDotClass(dashboardAttention)
-                            )}
-                          />
+              {allNavItems.map((item) => {
+                const navigationAttention = navigationAttentionForItem(dashboardBootstrap, item.id);
+                return (
+                  <Tooltip key={item.href}>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className={cn(
+                          "h-8 w-8",
+                          isSidebarNavigationActive(location.pathname, item.href) &&
+                            "bg-sidebar-accent"
                         )}
-                      </span>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="right">{item.name}</TooltipContent>
-                </Tooltip>
-              ))}
+                        onClick={() => navigate(item.href)}
+                      >
+                        <span className="relative flex">
+                          <item.icon className="h-4 w-4" />
+                          {item.id === "dashboard" && dashboardAttention && (
+                            <span
+                              aria-label={dashboardAttentionLabel(dashboardAttention)}
+                              className={cn(
+                                "absolute -right-2 -top-2 h-2 w-2",
+                                dashboardAttentionDotClass(dashboardAttention)
+                              )}
+                            />
+                          )}
+                          {navigationAttention && (
+                            <span
+                              aria-label={navigationAttentionLabel(item.id, navigationAttention)}
+                              className={cn(
+                                "absolute -right-2 -top-2 h-2 w-2",
+                                dashboardAttentionDotClass(navigationAttention)
+                              )}
+                            />
+                          )}
+                        </span>
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">{item.name}</TooltipContent>
+                  </Tooltip>
+                );
+              })}
 
               <div className="flex-1" />
 
@@ -475,6 +488,10 @@ export function SidebarContent({
                     )}
                     {group.items.map((item) => {
                       const isActive = isSidebarNavigationActive(location.pathname, item.href);
+                      const navigationAttention = navigationAttentionForItem(
+                        dashboardBootstrap,
+                        item.id
+                      );
                       return (
                         <Link
                           key={item.href}
@@ -495,6 +512,15 @@ export function SidebarContent({
                               className={cn(
                                 "ml-auto h-2 w-2 shrink-0",
                                 dashboardAttentionDotClass(dashboardAttention)
+                              )}
+                            />
+                          )}
+                          {navigationAttention && (
+                            <span
+                              aria-label={navigationAttentionLabel(item.id, navigationAttention)}
+                              className={cn(
+                                "ml-auto h-2 w-2 shrink-0",
+                                dashboardAttentionDotClass(navigationAttention)
                               )}
                             />
                           )}

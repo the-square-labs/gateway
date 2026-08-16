@@ -517,7 +517,7 @@ function manageDockerVolume(context: DockerToolContext, user: User, args: Record
   const operation = String(a.operation);
   if (operation === 'create') {
     context.ensureToolScopeForResource(user, 'docker:volumes:create', String(a.nodeId));
-    const input = VolumeCreateSchema.parse(args);
+    const input = VolumeCreateSchema.parse({ name: a.name });
     return context.dockerService.createVolume(String(a.nodeId), input, user.id);
   }
   if (operation === 'delete') {

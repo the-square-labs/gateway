@@ -48,7 +48,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useDaemonUpdatesStore } from "@/stores/daemon-updates";
 import { useDockerStore } from "@/stores/docker";
 import { usePinnedNodesStore } from "@/stores/pinned-nodes";
-import type { Node, NodeAppearanceColor, NodeDetail } from "@/types";
+import type { DockerRuntimeStatus, Node, NodeAppearanceColor, NodeDetail } from "@/types";
 import {
   effectiveNodeStatus,
   getNodeUpdateTargetVersion,
@@ -286,6 +286,11 @@ export function AdminNodeDetail({
     [id, navigate]
   );
 
+  const refreshNodeDetails = useCallback(async () => {
+    if (!id) return;
+    setNode(await api.getNode(id));
+  }, [id]);
+
   const loadDaemonUpdateStatus = useCallback(
     async (options?: { force?: boolean }) => {
       if (!id || !hasScope("admin:update")) return;
@@ -324,6 +329,22 @@ export function AdminNodeDetail({
     }
     loadNode(true);
     void loadDaemonUpdateStatus({ force: true });
+  });
+
+  useRealtime(id ? "docker.runtime.changed" : null, (payload) => {
+    const event = payload as { nodeId?: string; status?: DockerRuntimeStatus };
+    if (!id || event.nodeId !== id || !event.status) return;
+    setNode((current) =>
+      current
+        ? {
+            ...current,
+            capabilities: {
+              ...(current.capabilities ?? {}),
+              dockerRuntimeStatus: event.status,
+            },
+          }
+        : current
+    );
   });
 
   useRealtime(id ? "node.slug.changed" : null, (payload) => {
@@ -720,7 +741,7 @@ export function AdminNodeDetail({
               <NodeDetailsTab
                 node={node}
                 daemonUpdate={daemonUpdate}
-                refreshNode={() => loadNode(true)}
+                refreshNode={refreshNodeDetails}
                 refreshDaemonUpdateStatus={loadDaemonUpdateStatus}
               />
             </TabsContent>

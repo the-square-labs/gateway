@@ -806,6 +806,39 @@ describe('events websocket authentication', () => {
     handlers.onClose(new Event('close'), ws as any);
   });
 
+  it('delivers Docker runtime progress without publishing a global node change', async () => {
+    const eventBus = new EventBusService();
+    container.registerInstance(EventBusService, eventBus);
+    mocks.resolveLiveSessionUser.mockResolvedValue({ user: USER, effectiveScopes: USER.scopes });
+    const ws = createWs();
+    const handlers = createEventsWSHandlers();
+
+    handlers.onOpen(new Event('open'), ws as any);
+    await authenticateEventsConnection(ws as any, 'session-1');
+    handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({ type: 'subscribe', channels: ['docker.runtime.changed'] }),
+      }),
+      ws as any
+    );
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'subscribed', channels: ['docker.runtime.changed'], rejected: [] })
+    );
+
+    const payload = {
+      nodeId: 'node-1',
+      status: { state: 'installing', step: 'downloading', progressPercent: 45 },
+    };
+    eventBus.publish('docker.runtime.changed', payload);
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'event', channel: 'docker.runtime.changed', payload })
+    );
+
+    handlers.onClose(new Event('close'), ws as any);
+  });
+
   it('allows broad Docker viewers to receive node slug changes', async () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);

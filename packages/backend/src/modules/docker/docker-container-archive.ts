@@ -298,11 +298,15 @@ export async function importGwca(args: {
   imageId: string;
   environment: Record<string, string>;
   secrets: Record<string, string>;
+  createdVolumes: string[];
 }> {
   const archiveId = randomUUID();
   const reader = new GwcaImportReader(args.body);
   const manifest = await reader.readManifest();
   applyGwcaImportResolution(manifest, args.resolution ?? {});
+  if ((manifest.container.mounts ?? []).some((mount) => mount.type === 'bind')) {
+    throw new AppError(409, 'HOST_BIND_MOUNTS_DISABLED', 'Container archive import does not allow host bind mounts');
+  }
   await args.authorizeContents?.(manifest.container);
   const plan = await args.dispatch.planArchiveImport(args.nodeId, {
     manifest: manifest.container,
@@ -350,6 +354,7 @@ export async function importGwca(args: {
       containerName: imported.containerName || args.name,
       environment: manifest.container.environment ?? {},
       secrets: manifest.container.secrets ?? {},
+      createdVolumes: imported.createdVolumes ?? [],
     };
   } catch (error) {
     await args.dispatch.abort(args.nodeId, archiveId).catch(() => undefined);

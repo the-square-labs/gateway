@@ -2,8 +2,25 @@ package identity
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 )
+
+func TestServerTLSConfigPreservesGRPCALPNForDynamicCertificates(t *testing.T) {
+	store := &Store{}
+	store.current.Store(&Snapshot{})
+	config := store.ServerTLSConfig()
+	if !slices.Contains(config.NextProtos, "h2") {
+		t.Fatalf("base TLS config does not advertise h2: %v", config.NextProtos)
+	}
+	dynamic, err := config.GetConfigForClient(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(dynamic.NextProtos, "h2") {
+		t.Fatalf("dynamic TLS config lost h2 ALPN: %v", dynamic.NextProtos)
+	}
+}
 
 func TestAppClientTrustSurvivesUncertainReloadAcknowledgement(t *testing.T) {
 	store := &Store{}

@@ -46,6 +46,10 @@ import {
   dashboardAttentionDotClass,
   dashboardAttentionLabel,
 } from "@/components/layout/dashboard-attention";
+import {
+  navigationAttentionForItem,
+  navigationAttentionLabel,
+} from "@/components/layout/navigation-attention";
 import { SidebarPinnedResources } from "@/components/layout/SidebarPinnedResources";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -163,6 +167,13 @@ export function AILiteSidebar({
   } = useUIStore();
   const dashboardBootstrap = useDashboardBootstrapStore((s) => s.snapshot);
   const dashboardAttention = dashboardBootstrap?.attention.severity ?? null;
+  const sectionAttention = Object.values(dashboardBootstrap?.navigationAttention ?? {}).includes(
+    "critical"
+  )
+    ? "critical"
+    : Object.values(dashboardBootstrap?.navigationAttention ?? {}).includes("warning")
+      ? "warning"
+      : null;
   const pkiEnabled = useSystemConfigStore((s) => s.config.features.pkiEnabled);
   const siemEnabled = useSystemConfigStore((s) => s.config.features.siemEnabled);
   const loggingEnabled = useSystemConfigStore((s) => s.config.features.loggingEnabled);
@@ -543,7 +554,22 @@ export function AILiteSidebar({
                           className="h-8 w-8"
                           aria-label="All sections"
                         >
-                          <Compass className="h-4 w-4" />
+                          <span className="relative flex">
+                            <Compass className="h-4 w-4" />
+                            {sectionAttention && (
+                              <span
+                                aria-label={
+                                  sectionAttention === "critical"
+                                    ? "Some sections have critical issues"
+                                    : "Some sections require attention"
+                                }
+                                className={cn(
+                                  "absolute -right-2 -top-2 h-2 w-2",
+                                  dashboardAttentionDotClass(sectionAttention)
+                                )}
+                              />
+                            )}
+                          </span>
                         </Button>
                       </DropdownMenuTrigger>
                     </TooltipTrigger>
@@ -559,12 +585,27 @@ export function AILiteSidebar({
                           <DropdownMenuLabel className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                             {group.label}
                           </DropdownMenuLabel>
-                          {group.items.map((item) => (
-                            <DropdownMenuItem key={item.id} onSelect={() => navigate(item.href)}>
-                              <item.icon className="h-4 w-4" />
-                              <span>{item.name}</span>
-                            </DropdownMenuItem>
-                          ))}
+                          {group.items.map((item) => {
+                            const attention = navigationAttentionForItem(
+                              dashboardBootstrap,
+                              item.id
+                            );
+                            return (
+                              <DropdownMenuItem key={item.id} onSelect={() => navigate(item.href)}>
+                                <item.icon className="h-4 w-4" />
+                                <span>{item.name}</span>
+                                {attention && (
+                                  <span
+                                    aria-label={navigationAttentionLabel(item.id, attention)}
+                                    className={cn(
+                                      "ml-auto h-2 w-2 shrink-0",
+                                      dashboardAttentionDotClass(attention)
+                                    )}
+                                  />
+                                )}
+                              </DropdownMenuItem>
+                            );
+                          })}
                         </div>
                       ))}
                     </DropdownMenuContent>
@@ -918,7 +959,22 @@ export function AILiteSidebar({
                         className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         onClick={() => setSectionsOpen(true)}
                       >
-                        <Compass className="h-4 w-4 shrink-0" />
+                        <span className="relative flex shrink-0">
+                          <Compass className="h-4 w-4" />
+                          {sectionAttention && (
+                            <span
+                              aria-label={
+                                sectionAttention === "critical"
+                                  ? "Some sections have critical issues"
+                                  : "Some sections require attention"
+                              }
+                              className={cn(
+                                "absolute -right-2 -top-2 h-2 w-2",
+                                dashboardAttentionDotClass(sectionAttention)
+                              )}
+                            />
+                          )}
+                        </span>
                         <span className="min-w-0 flex-1 truncate">All sections</span>
                         <ChevronRight className="h-4 w-4 shrink-0" />
                       </button>
@@ -929,7 +985,22 @@ export function AILiteSidebar({
                             type="button"
                             className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                           >
-                            <Compass className="h-4 w-4 shrink-0" />
+                            <span className="relative flex shrink-0">
+                              <Compass className="h-4 w-4" />
+                              {sectionAttention && (
+                                <span
+                                  aria-label={
+                                    sectionAttention === "critical"
+                                      ? "Some sections have critical issues"
+                                      : "Some sections require attention"
+                                  }
+                                  className={cn(
+                                    "absolute -right-2 -top-2 h-2 w-2",
+                                    dashboardAttentionDotClass(sectionAttention)
+                                  )}
+                                />
+                              )}
+                            </span>
                             <span className="min-w-0 flex-1 truncate">All sections</span>
                             <ChevronRight className="h-4 w-4 shrink-0" />
                           </button>
@@ -945,15 +1016,30 @@ export function AILiteSidebar({
                               <DropdownMenuLabel className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                                 {group.label}
                               </DropdownMenuLabel>
-                              {group.items.map((item) => (
-                                <DropdownMenuItem
-                                  key={item.id}
-                                  onSelect={() => navigate(item.href)}
-                                >
-                                  <item.icon className="h-4 w-4" />
-                                  <span>{item.name}</span>
-                                </DropdownMenuItem>
-                              ))}
+                              {group.items.map((item) => {
+                                const attention = navigationAttentionForItem(
+                                  dashboardBootstrap,
+                                  item.id
+                                );
+                                return (
+                                  <DropdownMenuItem
+                                    key={item.id}
+                                    onSelect={() => navigate(item.href)}
+                                  >
+                                    <item.icon className="h-4 w-4" />
+                                    <span>{item.name}</span>
+                                    {attention && (
+                                      <span
+                                        aria-label={navigationAttentionLabel(item.id, attention)}
+                                        className={cn(
+                                          "ml-auto h-2 w-2 shrink-0",
+                                          dashboardAttentionDotClass(attention)
+                                        )}
+                                      />
+                                    )}
+                                  </DropdownMenuItem>
+                                );
+                              })}
                             </div>
                           ))}
                         </DropdownMenuContent>
@@ -1040,6 +1126,7 @@ export function AILiteSidebar({
                     </p>
                     {group.items.map((item) => {
                       const isActive = isSidebarNavigationActive(location.pathname, item.href);
+                      const attention = navigationAttentionForItem(dashboardBootstrap, item.id);
                       return (
                         <button
                           key={item.id}
@@ -1058,6 +1145,15 @@ export function AILiteSidebar({
                         >
                           <item.icon className="h-4 w-4 shrink-0" />
                           <span className="truncate">{item.name}</span>
+                          {attention && (
+                            <span
+                              aria-label={navigationAttentionLabel(item.id, attention)}
+                              className={cn(
+                                "ml-auto h-2 w-2 shrink-0",
+                                dashboardAttentionDotClass(attention)
+                              )}
+                            />
+                          )}
                         </button>
                       );
                     })}

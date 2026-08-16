@@ -1,4 +1,5 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -27,7 +28,7 @@ const baseNode = {
   updatedAt: new Date().toISOString(),
 } satisfies Node;
 
-describe("DockerDeployDialog GPU section", () => {
+describe("DockerDeployDialog runtime section", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(api, "listDockerImages").mockResolvedValue([]);
@@ -63,7 +64,7 @@ describe("DockerDeployDialog GPU section", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("shows the GPU section when the selected node reports GPUs", async () => {
+  it("keeps GPU configuration out of deploy and shows the runtime selector", async () => {
     const gpuNode = {
       ...baseNode,
       lastHealthReport: {
@@ -88,7 +89,47 @@ describe("DockerDeployDialog GPU section", () => {
       <DockerDeployDialog open onOpenChange={vi.fn()} nodeId={gpuNode.id} dockerNodes={[gpuNode]} />
     );
 
-    expect(await screen.findByText("GPU")).toBeInTheDocument();
-    expect(screen.getByText("NVIDIA · RTX 3050")).toBeInTheDocument();
+    expect(await screen.findByText("Runtime")).toBeInTheDocument();
+    expect(screen.queryByText("GPU")).not.toBeInTheDocument();
+    expect(screen.queryByText("NVIDIA · RTX 3050")).not.toBeInTheDocument();
+  });
+
+  it("submits the selected Secure runtime through the real container create path", async () => {
+    const user = userEvent.setup();
+    const secureNode = {
+      ...baseNode,
+      capabilities: { dockerRuntimeStatus: { state: "healthy" } },
+    } satisfies Node;
+    vi.spyOn(api, "pullImageSync").mockResolvedValue({ imageRef: "nginx:alpine" } as never);
+    const createContainer = vi
+      .spyOn(api, "createContainer")
+      .mockResolvedValue({ id: "container-1" } as never);
+    vi.spyOn(api, "inspectContainer").mockResolvedValue({ Name: "/secure-app" } as never);
+
+    renderWithRouter(
+      <DockerDeployDialog
+        open
+        onOpenChange={vi.fn()}
+        nodeId={secureNode.id}
+        dockerNodes={[secureNode]}
+      />
+    );
+
+    const runtimeSelect = screen.getAllByRole("combobox")[1]!;
+    fireEvent.keyDown(runtimeSelect, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: /Secure/ }));
+    const imageInput = screen.getByPlaceholderText("Select or enter an image");
+    await user.click(imageInput);
+    await user.type(imageInput, "nginx:alpine");
+    await user.click(screen.getByRole("button", { name: "Deploy" }));
+
+    await waitFor(() =>
+      expect(createContainer).toHaveBeenCalledWith("node-1", {
+        image: "nginx:alpine",
+        registryId: undefined,
+        restartPolicy: "no",
+        runtimeProfile: "secure",
+      })
+    );
   });
 });

@@ -516,6 +516,10 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
         manifest: { schemaVersion: 1, ...body },
         ...archiveImportPlanAccess(actorScopes, nodeId),
       });
+      const managedNames = new Set(
+        (await container.resolve(DockerManagementService).listManagedVolumeOptions(nodeId)).map((row) => row.name)
+      );
+      data.volumes = data.volumes.filter((volume) => managedNames.has(volume.name));
       return c.json({ data });
     }
   );
@@ -583,6 +587,12 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
           if (!canCreateVolumes && (archiveContainer.mounts ?? []).some((mount) => mount.createNew)) {
             throw new AppError(403, 'FORBIDDEN', 'Creating archive volumes is not permitted on the target node');
           }
+          await container.resolve(DockerManagementService).assertManagedVolumeSelections(
+            nodeId,
+            (archiveContainer.mounts ?? [])
+              .filter((mount) => mount.type === 'volume' && !mount.createNew)
+              .map((mount) => mount.source)
+          );
         },
         resolveRegistryAuthCandidates: async (imageReference) =>
           (
@@ -598,6 +608,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
           .resolve(DockerSecretService)
           .replaceImported(nodeId, data.containerName, data.secrets, c.get('user')!.id);
         await docker.registerImportedContainer(nodeId, data.containerName, data.containerId);
+        await docker.registerImportedManagedVolumes(nodeId, data.createdVolumes, c.get('user')!.id);
       } catch (error) {
         await container
           .resolve(DockerEnvironmentService)
