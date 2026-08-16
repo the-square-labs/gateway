@@ -1,17 +1,18 @@
-import { describe, expect, it, vi } from 'vitest';
-import { LicenseService } from './license.service.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { LicenseServerRequestError, LicenseService } from './license.service.js';
+import type { LicenseServerState } from './license.types.js';
 
 function createDb() {
   const rows = new Map<string, unknown>();
   const keyFromCondition = (condition: unknown): string | undefined => {
     const chunks = (condition as { queryChunks?: Array<{ value?: unknown }> }).queryChunks ?? [];
     for (const chunk of chunks) {
-      const value = (chunk as { value?: unknown }).value;
+      const value = chunk.value;
       if (typeof value === 'string' && value.startsWith('license:')) return value;
     }
     return undefined;
   };
-  const db = {
+  return {
     select: () => ({
       from: () => ({
         where: (condition: unknown) => ({
@@ -39,147 +40,398 @@ function createDb() {
     }),
     rows,
   };
-  return db;
 }
 
 function createCrypto() {
   return {
-    encryptString: (plaintext: string) => ({ encryptedKey: `enc:${plaintext}`, encryptedDek: 'dek' }),
+    encryptString: (plaintext: string) => ({
+      encryptedKey: `enc:${plaintext}`,
+      encryptedDek: 'dek',
+    }),
     decryptString: (encrypted: { encryptedKey: string }) => encrypted.encryptedKey.replace(/^enc:/, ''),
   };
 }
 
 const env = {
   APP_URL: 'https://gateway.example.com',
-  APP_VERSION: 'v2.1.60',
+  APP_VERSION: 'v2.6.12',
 } as never;
 
+const communityState = (): LicenseServerState => ({
+  registrationStatus: 'registered',
+  effectivePlan: 'community',
+  paidLicenseStatus: 'none',
+  entitlementsVersion: 1,
+  entitlements: {
+    managedNodes: 100,
+    users: 10,
+    customPermissionGroups: 5,
+    supportLevel: 'community',
+    features: ['infrastructure'],
+  },
+  serverTime: new Date().toISOString(),
+});
+
+const paidState = (plan: 'personal' | 'business' | 'enterprise' = 'business'): LicenseServerState => ({
+  registrationStatus: 'registered',
+  effectivePlan: plan,
+  paidLicenseStatus: 'valid',
+  paidLicense: {
+    id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    status: 'active',
+    plan,
+    name: `Test ${plan}`,
+    expiresAt: '2030-01-01T00:00:00.000Z',
+    keyLast4: 'DDDD',
+    metadata: { order: 'A-1' },
+  },
+  entitlementsVersion: 1,
+  entitlements: {
+    managedNodes: null,
+    users: null,
+    customPermissionGroups: null,
+    supportLevel: 'priority',
+    features: ['infrastructure', 'structured-logging'],
+  },
+  activation: {
+    installationId: '11111111-1111-4111-8111-111111111111',
+    installationName: 'gateway.example.com',
+    activatedAt: new Date().toISOString(),
+    lastHeartbeatAt: new Date().toISOString(),
+  },
+  serverTime: new Date().toISOString(),
+});
+
+function dataResponse<T>(data: T, status = 200) {
+  return Promise.resolve({
+    ok: status >= 200 && status < 300,
+    status,
+    json: () => Promise.resolve({ data }),
+  });
+}
+
+function errorResponse(code: string, message: string, status = 409) {
+  return Promise.resolve({
+    ok: false,
+    status,
+    json: () => Promise.resolve({ error: { code, message } }),
+  });
+}
+
+function registerResponse(state = communityState()) {
+  return dataResponse(
+    {
+      installationToken: 'WLT-GWI-INSTALLATION-TOKEN',
+      state,
+    },
+    201
+  );
+}
+
 describe('LicenseService', () => {
-  it('returns community without a key and does not call the server', async () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('returns usable Community with pending registration before the first heartbeat', async () => {
     const fetcher = vi.fn();
     const service = new LicenseService(createDb() as never, createCrypto() as never, env, fetcher as never);
 
     const status = await service.getStatus();
 
-    expect(status.status).toBe('community');
-    expect(status.tier).toBe('community');
-    expect(status.licensed).toBe(true);
+    expect(status).toMatchObject({
+      status: 'community',
+      plan: 'community',
+      registrationStatus: 'pending',
+      licensed: true,
+      hasKey: false,
+    });
     expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it('activates and stores a valid homelab key', async () => {
-    const fetcher = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          status: 'valid',
-          tier: 'homelab',
-          licenseName: 'Wiolett Test',
-          expiresAt: null,
-          activeInstallationId: 'install-1',
-          activeInstallationName: 'gateway.example.com',
-        }),
+  it('registers Community with a client-held nonce and stores only encrypted credentials', async () => {
+    const db = createDb();
+    const fetcher = vi.fn().mockImplementation(() => registerResponse());
+    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+
+    await service.heartbeat();
+
+    expect(fetcher).toHaveBeenCalledOnce();
+    const [url, request] = fetcher.mock.calls[0]!;
+    expect(url).toBe('https://license.wiolett.cloud/api/v1/installations/register');
+    const body = JSON.parse(request.body);
+    expect(body).toMatchObject({
+      installationName: 'gateway.example.com',
+      gatewayVersion: 'v2.6.12',
     });
+    expect(body.installationId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(body.registrationNonce.length).toBeGreaterThanOrEqual(32);
+    expect(db.rows.get('license:registration_nonce_encrypted')).toMatchObject({
+      encryptedKey: expect.stringMatching(/^enc:/),
+    });
+    expect(db.rows.get('license:installation_token_encrypted')).toEqual({
+      encryptedKey: 'enc:WLT-GWI-INSTALLATION-TOKEN',
+      encryptedDek: 'dek',
+    });
+    expect(db.rows.has('license:installation_token')).toBe(false);
+    expect(db.rows.has('license:registration_nonce')).toBe(false);
+    expect(await service.getStatus()).toMatchObject({
+      plan: 'community',
+      registrationStatus: 'registered',
+    });
+  });
+
+  it('keeps Community usable and pending when automatic registration is unavailable', async () => {
+    const fetcher = vi.fn().mockRejectedValue(new Error('network down'));
     const service = new LicenseService(createDb() as never, createCrypto() as never, env, fetcher as never);
+
+    await expect(service.heartbeat()).resolves.toBeUndefined();
+
+    expect(await service.getStatus()).toMatchObject({
+      status: 'community',
+      plan: 'community',
+      registrationStatus: 'pending',
+      licensed: true,
+      errorMessage: 'License server is unavailable',
+    });
+  });
+
+  it('serializes concurrent Community registration attempts', async () => {
+    const fetcher = vi.fn().mockImplementation(() => registerResponse());
+    const service = new LicenseService(createDb() as never, createCrypto() as never, env, fetcher as never);
+
+    await Promise.all([service.heartbeat(), service.heartbeat()]);
+
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it('uses one stable installation ID across concurrent status and registration calls', async () => {
+    const db = createDb();
+    const fetcher = vi.fn().mockImplementation(() => registerResponse());
+    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+
+    const [status] = await Promise.all([service.getStatus(), service.heartbeat()]);
+
+    const registrationBody = JSON.parse(fetcher.mock.calls[0]![1].body);
+    expect(status.installationId).toBe(registrationBody.installationId);
+    expect(db.rows.get('license:installation_id')).toBe(status.installationId);
+  });
+
+  it('serializes heartbeat state updates with paid activation', async () => {
+    const db = createDb();
+    type HeartbeatResponse = Awaited<ReturnType<typeof dataResponse<LicenseServerState>>>;
+    let resolveHeartbeat!: (response: HeartbeatResponse) => void;
+    const heartbeatResponse = new Promise<HeartbeatResponse>((resolve) => {
+      resolveHeartbeat = resolve;
+    });
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() => registerResponse())
+      .mockImplementationOnce(() => heartbeatResponse)
+      .mockImplementationOnce(() => dataResponse(paidState('business')));
+    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    await service.heartbeat();
+    db.rows.set('license:cached_state', {
+      ...(db.rows.get('license:cached_state') as Record<string, unknown>),
+      lastCheckedAt: '2020-01-01T00:00:00.000Z',
+    });
+
+    const heartbeat = service.heartbeat();
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    const activation = service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+
+    resolveHeartbeat(await dataResponse(communityState()));
+    await heartbeat;
+    const status = await activation;
+
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(status).toMatchObject({ status: 'valid', plan: 'business', hasKey: true });
+  });
+
+  it('requires online registration and activation before storing a paid key', async () => {
+    const db = createDb();
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() => registerResponse())
+      .mockImplementationOnce(() => dataResponse(paidState('business')));
+    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
 
     const status = await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
 
-    expect(status.status).toBe('valid');
-    expect(status.tier).toBe('homelab');
-    expect(status.licenseName).toBe('Wiolett Test');
-    expect(status.keyLast4).toBe('DDDD');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetcher.mock.calls[1]![1].body)).toEqual({
+      installationToken: 'WLT-GWI-INSTALLATION-TOKEN',
+      licenseKey: 'WLT-GW-AAAA-BBBB-CCCC-DDDD',
+    });
+    expect(status).toMatchObject({
+      status: 'valid',
+      plan: 'business',
+      registrationStatus: 'registered',
+      licenseName: 'Test business',
+      licenseMetadata: { order: 'A-1' },
+      keyLast4: 'DDDD',
+    });
+    expect(db.rows.get('license:key_encrypted')).toEqual({
+      encryptedKey: 'enc:WLT-GW-AAAA-BBBB-CCCC-DDDD',
+      encryptedDek: 'dek',
+    });
   });
 
-  it('keeps last valid status during unreachable grace', async () => {
+  it('does not store a paid key when registration or activation fails', async () => {
     const db = createDb();
-    const firstFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          status: 'valid',
-          tier: 'enterprise',
-          licenseName: 'Enterprise',
-          expiresAt: null,
-          activeInstallationId: 'install-1',
-        }),
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() => registerResponse())
+      .mockImplementationOnce(() => errorResponse('LICENSE_IN_USE', 'License is in use'));
+    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+
+    await expect(service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD')).rejects.toMatchObject({
+      code: 'LICENSE_IN_USE',
     });
-    const service = new LicenseService(db as never, createCrypto() as never, env, firstFetch as never);
+    expect(db.rows.has('license:key_encrypted')).toBe(false);
+  });
+
+  it('keeps a previously valid paid plan only during network grace', async () => {
+    const db = createDb();
+    const activateFetcher = vi
+      .fn()
+      .mockImplementationOnce(() => registerResponse())
+      .mockImplementationOnce(() => dataResponse(paidState('enterprise')));
+    const service = new LicenseService(db as never, createCrypto() as never, env, activateFetcher as never);
     await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
 
-    const failedFetch = vi.fn().mockRejectedValue(new Error('network down'));
-    const serviceAfterFailure = new LicenseService(db as never, createCrypto() as never, env, failedFetch as never);
-    const status = await serviceAfterFailure.checkNow();
+    const failed = new LicenseService(
+      db as never,
+      createCrypto() as never,
+      env,
+      vi.fn().mockRejectedValue(new Error('network down')) as never
+    );
+    const status = await failed.checkNow();
 
-    expect(status.status).toBe('valid_with_warning');
-    expect(status.tier).toBe('enterprise');
-    expect(status.licensed).toBe(true);
+    expect(status).toMatchObject({
+      status: 'valid_with_warning',
+      plan: 'enterprise',
+      licensed: true,
+      errorMessage: 'License server is unavailable',
+    });
     expect(status.graceUntil).toBeTruthy();
   });
 
-  it('surfaces replaced status from heartbeat', async () => {
+  it('downgrades a replaced paid activation to Community authoritatively', async () => {
     const db = createDb();
-    db.rows.set('license:key_encrypted', { encryptedKey: 'enc:WLT-GW-AAAA-BBBB-CCCC-DDDD', encryptedDek: 'dek' });
-    db.rows.set('license:installation_id', 'install-1');
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() => registerResponse())
+      .mockImplementationOnce(() => dataResponse(paidState('personal')))
+      .mockImplementationOnce(() =>
+        dataResponse({
+          ...communityState(),
+          paidLicenseStatus: 'replaced',
+          paidLicense: paidState('personal').paidLicense,
+          activation: paidState('personal').activation,
+        })
+      );
+    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
+
+    const status = await service.checkNow();
+
+    expect(status).toMatchObject({
+      status: 'replaced',
+      plan: 'community',
+      licensed: false,
+      paidLicenseStatus: 'replaced',
+    });
+  });
+
+  it('detaches from the server before deleting the local paid key', async () => {
+    const db = createDb();
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() => registerResponse())
+      .mockImplementationOnce(() => dataResponse(paidState()))
+      .mockImplementationOnce(() => dataResponse(communityState()));
+    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
+
+    const status = await service.clearKey();
+
+    expect(fetcher.mock.calls[2]![0]).toContain('/api/v1/licenses/deactivate');
+    expect(db.rows.has('license:key_encrypted')).toBe(false);
+    expect(status).toMatchObject({ status: 'community', plan: 'community', hasKey: false });
+  });
+
+  it('retains the local key when server detach fails', async () => {
+    const db = createDb();
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() => registerResponse())
+      .mockImplementationOnce(() => dataResponse(paidState()))
+      .mockImplementationOnce(() => errorResponse('LICENSE_SERVER_ERROR', 'Unavailable', 503));
+    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
+
+    await expect(service.clearKey()).rejects.toBeInstanceOf(LicenseServerRequestError);
+    expect(db.rows.has('license:key_encrypted')).toBe(true);
+  });
+
+  it('uses a 30 minute Community cadence while the scheduler ticks every 15 minutes', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-16T12:00:00.000Z'));
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() => registerResponse())
+      .mockImplementation(() => dataResponse(communityState()));
+    const service = new LicenseService(createDb() as never, createCrypto() as never, env, fetcher as never);
+
+    await service.heartbeat();
+    vi.setSystemTime(new Date('2026-08-16T12:15:00.000Z'));
+    await service.heartbeat();
+    expect(fetcher).toHaveBeenCalledOnce();
+
+    vi.setSystemTime(new Date('2026-08-16T12:30:00.001Z'));
+    await service.heartbeat();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries pending Community registration no more than every 30 minutes', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-16T12:00:00.000Z'));
+    const fetcher = vi.fn().mockRejectedValue(new Error('network down'));
+    const service = new LicenseService(createDb() as never, createCrypto() as never, env, fetcher as never);
+
+    await service.heartbeat();
+    vi.setSystemTime(new Date('2026-08-16T12:15:00.000Z'));
+    await service.heartbeat();
+    expect(fetcher).toHaveBeenCalledOnce();
+
+    vi.setSystemTime(new Date('2026-08-16T12:30:00.001Z'));
+    await service.heartbeat();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('attempts one online activation for a legacy encrypted Homelab key after registration', async () => {
+    const db = createDb();
+    db.rows.set('license:key_encrypted', {
+      encryptedKey: 'enc:WLT-GW-LEGACY',
+      encryptedDek: 'dek',
+    });
     db.rows.set('license:cached_state', {
       status: 'valid',
       tier: 'homelab',
-      licenseName: 'Homelab',
-      expiresAt: null,
       lastCheckedAt: new Date().toISOString(),
       lastValidAt: new Date().toISOString(),
-      activeInstallationId: 'install-1',
-      activeInstallationName: 'gateway-1',
-      errorMessage: null,
     });
-    const fetcher = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          status: 'replaced',
-          tier: 'homelab',
-          licenseName: 'Homelab',
-          activeInstallationId: 'install-2',
-        }),
-    });
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() => registerResponse())
+      .mockImplementationOnce(() => dataResponse(paidState('personal')));
     const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
 
     const status = await service.checkNow();
 
-    expect(status.status).toBe('replaced');
-    expect(status.licensed).toBe(false);
-    expect(status.activeInstallationId).toBe('install-2');
-  });
-
-  it('refreshes legacy cached status without a license name', async () => {
-    const db = createDb();
-    db.rows.set('license:key_encrypted', { encryptedKey: 'enc:WLT-GW-AAAA-BBBB-CCCC-DDDD', encryptedDek: 'dek' });
-    db.rows.set('license:installation_id', 'install-1');
-    db.rows.set('license:cached_state', {
-      status: 'valid',
-      tier: 'enterprise',
-      expiresAt: null,
-      lastCheckedAt: new Date().toISOString(),
-      lastValidAt: new Date().toISOString(),
-      activeInstallationId: 'install-1',
-      activeInstallationName: 'localhost',
-      errorMessage: null,
-    });
-    const fetcher = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          status: 'valid',
-          tier: 'enterprise',
-          licenseName: 'Wiolett Test',
-          activeInstallationId: 'install-1',
-          activeInstallationName: 'localhost',
-        }),
-    });
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
-
-    const status = await service.getStatus();
-
-    expect(fetcher).toHaveBeenCalledOnce();
-    expect(status.licenseName).toBe('Wiolett Test');
+    expect(fetcher.mock.calls[1]![0]).toContain('/api/v1/licenses/activate');
+    expect(status).toMatchObject({ status: 'valid', plan: 'personal' });
   });
 });

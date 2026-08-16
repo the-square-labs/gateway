@@ -95,6 +95,7 @@ describe("proxy host details tab", () => {
 
     const resourceLinks = screen.getAllByRole("link", { name: "example.test" });
     expect(resourceLinks[0]).toHaveAttribute("href", "/domains?domain=example.test");
+    expect(resourceLinks[0]?.firstElementChild).toHaveClass("bg-blue-500/15");
     expect(resourceLinks[1]).toHaveAttribute("href", "/ssl-certificates?certificate=cert-1");
   });
 });

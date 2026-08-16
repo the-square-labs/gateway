@@ -110,7 +110,7 @@ describe('NodesService enrollment token creation', () => {
     expect(result.slug).toBe(existing.slug);
   });
 
-  it('rejects custom, private, and unreported Nginx service addresses', async () => {
+  it('rejects hostname and private Nginx service addresses', async () => {
     const existing = {
       id: 'node-1',
       type: 'nginx',
@@ -146,10 +146,47 @@ describe('NodesService enrollment token creation', () => {
     await expect(service.update(existing.id, { serviceAddress: '192.168.1.20' }, 'user-1')).rejects.toMatchObject({
       code: 'INVALID_NGINX_SERVICE_ADDRESS',
     });
-    await expect(service.update(existing.id, { serviceAddress: '9.9.9.9' }, 'user-1')).rejects.toMatchObject({
-      code: 'INVALID_NGINX_SERVICE_ADDRESS',
-    });
     expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it('accepts a custom publicly routable Nginx service address', async () => {
+    const existing = {
+      id: 'node-1',
+      type: 'nginx',
+      hostname: 'edge.local',
+      displayName: null,
+      appearanceColor: null,
+      slug: 'edge-local',
+      serviceAddress: null,
+      lastHealthReport: { localIpAddresses: [], publicIpAddresses: ['8.8.8.8'] },
+    };
+    let selection = 0;
+    const updatedValues = vi.fn((values) => ({
+      where: vi.fn(() => ({ returning: vi.fn(async () => [{ ...existing, ...values }]) })),
+    }));
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => {
+            selection += 1;
+            return selection === 1 ? { limit: vi.fn(async () => [existing]) } : Promise.resolve([]);
+          }),
+        })),
+      })),
+      update: vi.fn(() => ({ set: updatedValues })),
+    } as any;
+    const service = new NodesService(
+      db,
+      { log: vi.fn() } as any,
+      { getNode: vi.fn() } as any,
+      { getGatewayCertSha256: vi.fn() } as any,
+      {} as any
+    );
+
+    await expect(service.update(existing.id, { serviceAddress: '9.9.9.9' }, 'user-1')).resolves.toMatchObject({
+      serviceAddress: '9.9.9.9',
+    });
+    expect(updatedValues).toHaveBeenCalledWith(expect.objectContaining({ serviceAddress: '9.9.9.9' }));
   });
 
   it('requires confirmation before changing DNS targets for domains assigned to an Nginx node', async () => {

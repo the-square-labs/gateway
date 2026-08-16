@@ -89,14 +89,14 @@ describe('node service address', () => {
     ).toEqual(['1.1.1.1', '8.8.8.8', '2606:4700:4700::1111']);
   });
 
-  it('uses only a currently reported public address for Nginx ingress', () => {
+  it('uses a detected or explicitly configured public address for Nginx ingress', () => {
     const report = {
       localIpAddresses: ['192.168.1.20'],
       publicIpAddresses: ['8.8.8.8', '1.1.1.1'],
     } as never;
     expect(getEffectiveNginxIngressAddress({ serviceAddress: null, lastHealthReport: report })).toBe('1.1.1.1');
     expect(getEffectiveNginxIngressAddress({ serviceAddress: '8.8.8.8', lastHealthReport: report })).toBe('8.8.8.8');
-    expect(getEffectiveNginxIngressAddress({ serviceAddress: '9.9.9.9', lastHealthReport: report })).toBeNull();
+    expect(getEffectiveNginxIngressAddress({ serviceAddress: '9.9.9.9', lastHealthReport: report })).toBe('9.9.9.9');
     expect(getEffectiveNginxIngressAddress({ serviceAddress: '192.168.1.20', lastHealthReport: report })).toBeNull();
   });
 });

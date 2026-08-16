@@ -26,6 +26,11 @@ const mocks = vi.hoisted(() => ({
   transport: { getConfig: vi.fn(), updateConfig: vi.fn() },
   restart: { request: vi.fn() },
   wizard: { apply: vi.fn(), completeAIWorkspace: vi.fn(), getPhase: vi.fn() },
+  license: {
+    getOnboardingState: vi.fn(),
+    continueWithCommunity: vi.fn(),
+    activateKey: vi.fn(),
+  },
   logging: {},
 }));
 
@@ -45,6 +50,7 @@ vi.mock('@/container.js', async (importOriginal) => {
         if (name === 'SessionService') return mocks.sessions;
         if (name === 'LoggingRuntimeService') return mocks.logging;
         if (name === 'RuntimeRestartService') return mocks.restart;
+        if (name === 'LicenseService') return mocks.license;
         throw new Error(`Unexpected resolve: ${name}`);
       }),
     },
@@ -97,6 +103,20 @@ describe('setup wizard routes', () => {
     mocks.wizard.getPhase.mockResolvedValue('ai_workspace');
     mocks.wizard.apply.mockResolvedValue({ status: 'ready_for_ai' });
     mocks.wizard.completeAIWorkspace.mockResolvedValue(undefined);
+    mocks.license.getOnboardingState.mockResolvedValue({
+      completed: false,
+      status: { status: 'community', plan: 'community', registrationStatus: 'pending' },
+    });
+    mocks.license.continueWithCommunity.mockResolvedValue({
+      status: 'community',
+      plan: 'community',
+      registrationStatus: 'registered',
+    });
+    mocks.license.activateKey.mockResolvedValue({
+      status: 'valid',
+      plan: 'personal',
+      registrationStatus: 'registered',
+    });
   });
 
   it('exposes setup status without a setup session', async () => {
@@ -281,6 +301,67 @@ describe('setup wizard routes', () => {
       configuredVia: 'gateway_inference',
     });
     expect(mocks.sessions.destroySetupSessions).toHaveBeenCalledWith('00000000-0000-0000-0000-000000000000', 'valid');
+  });
+
+  it('allows an explicit Community choice only after core setup is applied', async () => {
+    mocks.access.validateSession.mockResolvedValue(true);
+    mocks.access.validateCsrfToken.mockResolvedValue(true);
+
+    const response = await createApp().request('/api/setup/wizard/license/community', {
+      method: 'POST',
+      headers: { Cookie: 'setup_session=valid', 'X-CSRF-Token': 'setup-csrf' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.license.continueWithCommunity).toHaveBeenCalledOnce();
+    expect(await response.json()).toMatchObject({
+      data: { plan: 'community', registrationStatus: 'registered' },
+    });
+  });
+
+  it('activates a paid key through the setup session without exposing installation credentials', async () => {
+    mocks.access.validateSession.mockResolvedValue(true);
+    mocks.access.validateCsrfToken.mockResolvedValue(true);
+
+    const response = await createApp().request('/api/setup/wizard/license/activate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: 'setup_session=valid',
+        'X-CSRF-Token': 'setup-csrf',
+      },
+      body: JSON.stringify({ licenseKey: 'WLT-GW-PAID' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.license.activateKey).toHaveBeenCalledWith('WLT-GW-PAID');
+    expect(JSON.stringify(await response.json())).not.toContain('installationToken');
+  });
+
+  it('rejects license choices before core setup is applied', async () => {
+    mocks.access.validateSession.mockResolvedValue(true);
+    mocks.access.validateCsrfToken.mockResolvedValue(true);
+    mocks.wizard.getPhase.mockResolvedValue('configuration');
+
+    const response = await createApp().request('/api/setup/wizard/license/community', {
+      method: 'POST',
+      headers: { Cookie: 'setup_session=valid', 'X-CSRF-Token': 'setup-csrf' },
+    });
+
+    expect(response.status).toBe(409);
+    expect(mocks.license.continueWithCommunity).not.toHaveBeenCalled();
+  });
+
+  it('keeps setup license mutations behind CSRF validation', async () => {
+    mocks.access.validateSession.mockResolvedValue(true);
+
+    const response = await createApp().request('/api/setup/wizard/license/community', {
+      method: 'POST',
+      headers: { Cookie: 'setup_session=valid' },
+    });
+
+    expect(response.status).toBe(403);
+    expect(mocks.license.continueWithCommunity).not.toHaveBeenCalled();
   });
 
   it('rejects invalid network settings before invoking the final apply operation', async () => {

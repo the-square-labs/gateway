@@ -41,7 +41,9 @@ export interface GatewayFeatureConfig {
   inferenceEnabled: boolean;
 }
 
-export type LicenseTier = "community" | "homelab" | "enterprise";
+export type LicensePlan = "community" | "personal" | "business" | "enterprise";
+
+export type LicenseRegistrationStatus = "registered" | "pending";
 
 export type LicenseStatus =
   | "community"
@@ -51,18 +53,32 @@ export type LicenseStatus =
   | "invalid"
   | "expired"
   | "revoked"
-  | "replaced";
+  | "replaced"
+  | "deactivated";
+
+export interface LicenseEntitlements {
+  managedNodes: number | null;
+  users: number | null;
+  customPermissionGroups: number | null;
+  supportLevel: string;
+  features: string[];
+}
 
 export interface LicenseStatusView {
   status: LicenseStatus;
-  tier: LicenseTier;
+  plan: LicensePlan;
+  registrationStatus: LicenseRegistrationStatus;
+  paidLicenseStatus: string;
   licensed: boolean;
   hasKey: boolean;
   keyLast4: string | null;
   licenseName: string | null;
+  licenseMetadata: Record<string, unknown>;
   installationId: string;
   installationName: string;
   expiresAt: string | null;
+  entitlementsVersion: number;
+  entitlements: LicenseEntitlements;
   lastCheckedAt: string | null;
   lastValidAt: string | null;
   graceUntil: string | null;

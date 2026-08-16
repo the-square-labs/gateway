@@ -227,8 +227,8 @@ describe("AdminNodeDetail", () => {
     await user.clear(displayNameInput);
     await user.type(displayNameInput, "Docker Blue");
     await user.click(screen.getByRole("button", { name: "Blue color" }));
-    fireEvent.click(screen.getByRole("combobox"));
-    fireEvent.click(await screen.findByText("8.8.8.8"));
+    await user.click(screen.getByRole("combobox", { name: "Service Address" }));
+    await user.click(await screen.findByText("8.8.8.8"));
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     await waitFor(() =>
@@ -271,10 +271,13 @@ describe("AdminNodeDetail", () => {
     expect(await screen.findByRole("heading", { name: "Edge 1" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /settings/i }));
 
-    expect(screen.getByRole("combobox")).toHaveTextContent("Automatic (8.8.8.8)");
+    expect(screen.getByRole("combobox", { name: "Service Address" })).toHaveAttribute(
+      "placeholder",
+      "Automatic (8.8.8.8)"
+    );
   });
 
-  it("offers only detected public addresses for an Nginx service address", async () => {
+  it("offers detected addresses and accepts a custom public IP for Nginx", async () => {
     useAuthStore.setState({
       user: makeUser({
         scopes: ["nodes:details", "nodes:rename:node-1", "nodes:config:edit:node-1"],
@@ -294,6 +297,14 @@ describe("AdminNodeDetail", () => {
       liveStatsReport: null,
     });
     vi.mocked(api.getNodeHealthHistory).mockResolvedValue([]);
+    vi.mocked(api.updateNode).mockResolvedValue(
+      makeNode({
+        id: "node-1",
+        type: "nginx",
+        hostname: "edge-1",
+        serviceAddress: "9.9.9.9",
+      })
+    );
 
     render(
       <MemoryRouter initialEntries={["/nodes/node-1/details"]}>
@@ -304,12 +315,24 @@ describe("AdminNodeDetail", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "Edge 1" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /settings/i }));
-    fireEvent.click(screen.getByRole("combobox"));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /settings/i }));
+    const addressInput = screen.getByRole("combobox", { name: "Service Address" });
+    await user.click(addressInput);
 
     expect(await screen.findByText("1.1.1.1")).toBeInTheDocument();
     expect(screen.getByText("2606:4700:4700::1111")).toBeInTheDocument();
     expect(screen.queryByText("192.168.1.20")).not.toBeInTheDocument();
-    expect(screen.queryByText("Custom address")).not.toBeInTheDocument();
+    await user.clear(addressInput);
+    await user.type(addressInput, "9.9.9.9");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(api.updateNode).toHaveBeenCalledWith("node-1", {
+        displayName: "Edge 1",
+        appearanceColor: null,
+        serviceAddress: "9.9.9.9",
+      })
+    );
   });
 });

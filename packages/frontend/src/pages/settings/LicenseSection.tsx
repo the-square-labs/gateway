@@ -16,7 +16,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
-import type { LicenseStatus, LicenseStatusView, LicenseTier } from "@/types";
+import type { LicensePlan, LicenseStatus, LicenseStatusView } from "@/types";
 
 interface LicenseSectionProps {
   canManage: boolean;
@@ -27,14 +27,15 @@ function formatDate(value: string | null): string {
   return new Date(value).toLocaleString();
 }
 
-function tierLabel(tier: LicenseTier): string {
-  if (tier === "community") return "Community";
-  if (tier === "homelab") return "Homelab";
+function planLabel(plan: LicensePlan): string {
+  if (plan === "community") return "Community";
+  if (plan === "personal") return "Personal";
+  if (plan === "business") return "Business";
   return "Enterprise";
 }
 
-function tierIconSrc(tier: LicenseTier): string {
-  return `/license/wiolett-gw-${tier}.png`;
+function planIconSrc(plan: LicensePlan): string {
+  return `/license/wiolett-gw-${plan}.png`;
 }
 
 function statusLabel(status: LicenseStatus): string {
@@ -55,6 +56,8 @@ function statusLabel(status: LicenseStatus): string {
       return "Revoked";
     case "replaced":
       return "Replaced";
+    case "deactivated":
+      return "Deactivated";
   }
 }
 
@@ -93,13 +96,15 @@ function LicenseSummary({ status }: { status: LicenseStatusView }) {
   return (
     <div className="flex items-center justify-between gap-4 border-b border-border p-4">
       <div className="flex min-w-0 items-center gap-4">
-        <img src={tierIconSrc(status.tier)} alt={tierLabel(status.tier)} className="h-10 w-10" />
+        <img src={planIconSrc(status.plan)} alt={planLabel(status.plan)} className="h-10 w-10" />
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">{tierLabel(status.tier)}</p>
+          <p className="truncate text-sm font-semibold">{planLabel(status.plan)}</p>
           <p className="truncate text-xs text-muted-foreground mt-0.5">
             {status.hasKey
               ? `Licensed to ${status.licenseName ?? status.installationName}`
-              : "Community license"}
+              : status.registrationStatus === "pending"
+                ? "Community registration pending"
+                : "Community edition"}
           </p>
         </div>
       </div>
@@ -176,7 +181,8 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
   const handleDeactivate = async () => {
     const ok = await confirm({
       title: "Deactivate License",
-      description: "Remove the installed license key from this Gateway?",
+      description:
+        "Deactivate this license and release it from this Gateway installation? The Gateway will return to Community edition.",
       confirmLabel: "Deactivate",
       variant: "destructive",
     });
@@ -294,29 +300,29 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
             </div>
           )}
           {!status.hasKey && (
-            <>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium" htmlFor="license-key">
-                  License key
-                </label>
-                <Input
-                  id="license-key"
-                  value={licenseKey}
-                  onChange={(e) => setLicenseKey(e.target.value)}
-                  placeholder="WLT-GW-XXXX-XXXX-XXXX-XXXX"
-                  autoComplete="off"
-                />
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>
-                  Cancel
-                </Button>
-                <Button onClick={handleActivate} disabled={!licenseKey.trim() || saving}>
-                  {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-                  Activate
-                </Button>
-              </DialogFooter>
-            </>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="license-key">
+                License key
+              </label>
+              <Input
+                id="license-key"
+                value={licenseKey}
+                onChange={(e) => setLicenseKey(e.target.value)}
+                placeholder="WLT-GW-XXXX-XXXX-XXXX-XXXX"
+                autoComplete="off"
+              />
+            </div>
+          )}
+          {!status.hasKey && (
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>
+                Cancel
+              </Button>
+              <Button onClick={handleActivate} disabled={!licenseKey.trim() || saving}>
+                {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+                Activate
+              </Button>
+            </DialogFooter>
           )}
         </DialogContent>
       </Dialog>

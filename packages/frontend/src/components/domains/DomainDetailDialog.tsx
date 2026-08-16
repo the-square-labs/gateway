@@ -385,6 +385,8 @@ export function DomainDetailDialog({
     ? [...(domain.dnsRecords?.a ?? []), ...(domain.dnsRecords?.aaaa ?? [])].join(", ") ||
       "No address record"
     : "";
+  const showInitialLoading = Boolean(open && domainId && loadedDomainIdRef.current !== domainId);
+  const showLoading = isLoading || showInitialLoading;
 
   return (
     <>
@@ -394,15 +396,17 @@ export function DomainDetailDialog({
       >
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>{domain?.domain || "Loading..."}</DialogTitle>
+            <DialogTitle>{showLoading ? "Loading..." : domain?.domain}</DialogTitle>
             <DialogDescription>
-              {domain?.lastDnsCheckAt
-                ? `Last checked ${formatRelativeDate(domain.lastDnsCheckAt)}`
-                : "DNS not checked yet"}
+              {showLoading
+                ? "Loading domain information..."
+                : domain?.lastDnsCheckAt
+                  ? `Last checked ${formatRelativeDate(domain.lastDnsCheckAt)}`
+                  : "DNS not checked yet"}
             </DialogDescription>
           </DialogHeader>
 
-          {isLoading ? (
+          {showLoading ? (
             <div className="space-y-4" aria-busy="true" aria-label="Loading domain details">
               <Skeleton className="h-10 w-full" />
               <div className="border border-border bg-card divide-y divide-border">
@@ -486,7 +490,7 @@ export function DomainDetailDialog({
                 actions={
                   <Button
                     size="sm"
-                    variant="ghost"
+                    variant="secondary"
                     onClick={handleCheckDns}
                     disabled={isCheckingDns}
                   >

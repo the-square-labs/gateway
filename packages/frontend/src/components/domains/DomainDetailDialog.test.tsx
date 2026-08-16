@@ -73,6 +73,26 @@ const domain: DomainWithUsage = {
 };
 
 describe("DomainDetailDialog", () => {
+  it("renders its loading layout on the first open frame", () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["domains:view"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.spyOn(api, "getDomain").mockReturnValue(new Promise(() => {}));
+
+    render(
+      <MemoryRouter>
+        <DomainDetailDialog domainId={domain.id} open onOpenChange={vi.fn()} onUpdated={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole("heading", { name: "Loading..." })).toBeInTheDocument();
+    expect(screen.getByText("Loading domain information...")).toBeInTheDocument();
+    expect(screen.getByLabelText("Loading domain details")).toBeInTheDocument();
+    expect(screen.queryByText("DNS not checked yet")).not.toBeInTheDocument();
+  });
+
   it("uses shared DNS rows, Cloudflare target rows, and Type/Target usage columns", async () => {
     useAuthStore.setState({
       user: makeUser({ scopes: ["domains:view"] }),
@@ -97,6 +117,10 @@ describe("DomainDetailDialog", () => {
     expect(screen.getByRole("columnheader", { name: "Target" })).toBeInTheDocument();
     expect(screen.getByText("Route")).toBeInTheDocument();
     expect(screen.getByText("SSL Certificate")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check" })).toHaveClass(
+      "bg-secondary",
+      "text-secondary-foreground"
+    );
   });
 
   it("omits Cloudflare Target when the domain is not proxied", async () => {

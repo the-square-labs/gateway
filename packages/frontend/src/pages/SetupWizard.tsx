@@ -14,6 +14,7 @@ import {
   AdminDetailsStep,
   AIWorkspaceStep,
   FinishStep,
+  LicenseStep,
   LoggingStep,
 } from "./setup-wizard/SetupFinalSteps";
 import { SetupNetworkStep } from "./setup-wizard/SetupNetworkStep";
@@ -107,7 +108,7 @@ function restoreStepWithRequiredSecrets(
   methods: AuthMethodsDraft,
   availableSteps: SetupStep[]
 ): SetupStep {
-  if (next.phase === "ai_workspace") return "ai-workspace";
+  if (next.phase === "ai_workspace") return next.license.completed ? "ai-workspace" : "license";
   if (next.administratorCreated) return "logging";
 
   const restoredStep =
@@ -654,7 +655,40 @@ export function SetupWizardPage() {
                       },
                       csrfToken
                     );
-                    if (result.status === "ready_for_ai") setStep("ai-workspace");
+                    if (result.status === "ready_for_ai") setStep("license");
+                  })
+                }
+              />
+            )}
+            {unlocked && step === "license" && (
+              <LicenseStep
+                busy={busy || restartPending}
+                onActivate={(licenseKey) =>
+                  void run(async () => {
+                    await setupRequest(
+                      "/wizard/license/activate",
+                      "POST",
+                      { licenseKey },
+                      csrfToken
+                    );
+                    toast.success("License activated");
+                    setStep("ai-workspace");
+                  })
+                }
+                onCommunity={() =>
+                  void run(async () => {
+                    const status = await setupRequest<SetupConfig["license"]["status"]>(
+                      "/wizard/license/community",
+                      "POST",
+                      undefined,
+                      csrfToken
+                    );
+                    if (status.registrationStatus === "pending") {
+                      toast.info(
+                        "Community edition is ready. Registration will retry automatically when the license server is available."
+                      );
+                    }
+                    setStep("ai-workspace");
                   })
                 }
               />

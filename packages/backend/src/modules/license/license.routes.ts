@@ -10,6 +10,7 @@ import {
   clearLicenseRoute,
   licenseStatusRoute,
 } from './license.docs.js';
+import { toLicenseAppError } from './license.errors.js';
 import { LicenseService } from './license.service.js';
 
 export const licenseRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
@@ -24,15 +25,27 @@ licenseRoutes.openapi({ ...licenseStatusRoute, middleware: requireScope('license
 licenseRoutes.openapi({ ...activateLicenseRoute, middleware: requireScope('license:manage') }, async (c) => {
   const body = ActivateLicenseSchema.parse(await c.req.json());
   const service = container.resolve(LicenseService);
-  return c.json({ data: await service.activateKey(body.licenseKey) });
+  try {
+    return c.json({ data: await service.activateKey(body.licenseKey) });
+  } catch (error) {
+    throw toLicenseAppError(error) ?? error;
+  }
 });
 
 licenseRoutes.openapi({ ...checkLicenseRoute, middleware: requireScope('license:manage') }, async (c) => {
   const service = container.resolve(LicenseService);
-  return c.json({ data: await service.checkNow() });
+  try {
+    return c.json({ data: await service.checkNow() });
+  } catch (error) {
+    throw toLicenseAppError(error) ?? error;
+  }
 });
 
 licenseRoutes.openapi({ ...clearLicenseRoute, middleware: requireScope('license:manage') }, async (c) => {
   const service = container.resolve(LicenseService);
-  return c.json({ data: await service.clearKey() });
+  try {
+    return c.json({ data: await service.clearKey() });
+  } catch (error) {
+    throw toLicenseAppError(error) ?? error;
+  }
 });

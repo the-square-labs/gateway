@@ -1,3 +1,4 @@
+import type { LicenseStatusView } from "@/types";
 import type { SmtpDraft, SmtpPresetId } from "../settings/smtp-presets";
 
 export type SetupStep =
@@ -10,6 +11,7 @@ export type SetupStep =
   | "admin-details"
   | "logging"
   | "finish"
+  | "license"
   | "ai-workspace";
 export type PrimaryMethod = "oidc" | "password" | "email_otp";
 export type LoggingMode = "disabled" | "local" | "external";
@@ -55,6 +57,10 @@ export interface NetworkDraft {
 export interface SetupConfig {
   administratorCreated: boolean;
   phase: "configuration" | "ai_workspace";
+  license: {
+    completed: boolean;
+    status: LicenseStatusView;
+  };
   general: {
     publicUrl: string | null;
     gatewayPublicIps: string[];
@@ -108,6 +114,7 @@ export function getSetupSteps(
     ...(!administratorCreated ? (["admin-details"] as const) : []),
     "logging",
     "finish",
+    "license",
     "ai-workspace",
   ];
 }

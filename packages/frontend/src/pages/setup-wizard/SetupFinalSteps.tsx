@@ -11,7 +11,7 @@ import {
   MoreHorizontal,
   ShieldCheck,
 } from "lucide-react";
-import type { Dispatch, SetStateAction } from "react";
+import { type Dispatch, type SetStateAction, useState } from "react";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,61 @@ interface NavigationProps {
   busy: boolean;
   onBack?: () => void;
   onContinue: () => void;
+}
+
+export function LicenseStep({
+  busy,
+  onActivate,
+  onCommunity,
+}: {
+  busy: boolean;
+  onActivate: (licenseKey: string) => void;
+  onCommunity: () => void;
+}) {
+  const [licenseKey, setLicenseKey] = useState("");
+  const trimmedKey = licenseKey.trim();
+
+  return (
+    <section className="mx-auto max-w-md space-y-3 text-center">
+      <div>
+        <h2 className="text-lg font-semibold">Gateway edition</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Enter a Personal, Business, or Enterprise license key. If you don&apos;t have one,
+          continue with Community edition.
+        </p>
+      </div>
+      <form
+        className="space-y-3 text-left"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (trimmedKey) onActivate(trimmedKey);
+        }}
+      >
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium" htmlFor="setup-license-key">
+            License key
+          </label>
+          <Input
+            id="setup-license-key"
+            value={licenseKey}
+            onChange={(event) => setLicenseKey(event.target.value)}
+            placeholder="WLT-GW-..."
+            autoComplete="off"
+            disabled={busy}
+          />
+        </div>
+        <div className="flex flex-wrap justify-center gap-2">
+          <Button type="button" variant="outline" onClick={onCommunity} disabled={busy}>
+            Continue with Community
+          </Button>
+          <Button type="submit" disabled={busy || !trimmedKey}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound />}
+            Activate license
+          </Button>
+        </div>
+      </form>
+    </section>
+  );
 }
 
 export function AIWorkspaceStep({

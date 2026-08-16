@@ -34,6 +34,7 @@ import {
   getEffectiveNginxIngressAddress,
   getEffectiveServiceAddressForNode,
   getReportedPublicNodeAddresses,
+  isPubliclyRoutableIp,
 } from './node-service-address.js';
 import type {
   CreateNodeInput,
@@ -329,13 +330,11 @@ export class NodesService {
     }
 
     if (existing.type === 'nginx' && input.serviceAddress) {
-      const liveHealthReport = this.registry.getNode(id)?.lastHealthReport ?? existing.lastHealthReport;
-      const publicAddresses = getReportedPublicNodeAddresses({ lastHealthReport: liveHealthReport });
-      if (!publicAddresses.includes(input.serviceAddress.trim())) {
+      if (!isPubliclyRoutableIp(input.serviceAddress)) {
         throw new AppError(
           400,
           'INVALID_NGINX_SERVICE_ADDRESS',
-          'Nginx service address must be one of the detected public IP addresses'
+          'Nginx service address must be a publicly routable IP address'
         );
       }
     }

@@ -89,21 +89,31 @@ Gateway verifies paid product license keys against:
 https://license.wiolett.cloud
 ```
 
-Activation flow:
+Registration and activation flow:
 
-1. An administrator enters a license key in **Settings > General > License**.
-2. Gateway sends an activation request to the license server.
-3. The server returns license status, plan, license name, expiration, and active installation details.
-4. Gateway stores the license key encrypted and caches the latest status.
+1. Every installation registers with the license server and receives an installation token. A
+   Community installation remains usable while initial registration is pending.
+2. During browser installation, an administrator can enter a paid key or explicitly continue with
+   Community. The paid-key path requires the license server to be available.
+3. Paid activation binds the key to the registered installation. A key can have only one active
+   installation. It can be moved after explicit deactivation, or after the previous installation has
+   been offline for more than one hour.
+4. The server returns the effective plan, license metadata, expiration, activation details, and
+   versioned entitlements. Gateway stores credentials encrypted and caches the latest state.
 
-Gateway checks an installed key every 12 hours. If the license server is unreachable, Gateway uses the cached status for a 30-day offline grace period.
+Gateway sends paid heartbeats every 15 minutes and Community heartbeats every 30 minutes. If the
+license server is unreachable, a previously valid paid installation uses its cached state for a
+30-day offline grace period. An authoritative `expired`, `revoked`, `replaced`, or `deactivated`
+response immediately returns the installation to Community entitlements.
 
 Data sent to the license server:
 
-- License key.
 - Installation ID.
 - Installation name.
 - Gateway version.
+- A locally generated registration nonce during registration.
+- The installation token during heartbeats and license operations.
+- The paid license key only during activation.
 
 The installation name is derived from Gateway's persisted canonical public URL when possible, otherwise from the host name. Infrastructure configuration, managed-resource contents, logs, prompts, and model responses are not sent to the license server.
 
@@ -118,11 +128,15 @@ The installation name is derived from Gateway's persisted canonical public URL w
 | `invalid` | The license key is not valid. |
 | `expired` | The license key expired. |
 | `revoked` | The license key was revoked. |
-| `replaced` | The license key was replaced by another key or installation. |
+| `replaced` | The license activation moved to another installation. |
+| `deactivated` | The paid license was explicitly detached from this installation. |
 
 ## Storage And Security
 
-Gateway stores a generated installation ID, the encrypted license key when one is installed, and the cached license status returned by the license server. Administrators can remove the active key from **Settings > General > License**.
+Gateway stores a generated installation ID, an encrypted registration nonce, an encrypted
+installation token, the encrypted paid key when one is installed, and the cached state returned by
+the license server. Administrators can deactivate a paid license from **Settings > General >
+License**; the server binding is released before the local key is removed.
 
 ## Source License
 

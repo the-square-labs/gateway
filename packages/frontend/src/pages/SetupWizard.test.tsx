@@ -14,6 +14,39 @@ import {
 
 const CONFIG = {
   administratorCreated: false,
+  phase: "configuration" as const,
+  license: {
+    completed: false,
+    status: {
+      status: "community",
+      plan: "community",
+      registrationStatus: "registered",
+      paidLicenseStatus: "none",
+      licensed: false,
+      hasKey: false,
+      keyLast4: null,
+      licenseName: null,
+      licenseMetadata: {},
+      installationId: "installation-id",
+      installationName: "Gateway",
+      expiresAt: null,
+      entitlementsVersion: 1,
+      entitlements: {
+        managedNodes: 100,
+        users: 10,
+        customPermissionGroups: 5,
+        supportLevel: "community",
+        features: [],
+      },
+      lastCheckedAt: null,
+      lastValidAt: null,
+      graceUntil: null,
+      activeInstallationId: null,
+      activeInstallationName: null,
+      errorMessage: null,
+      serverUrl: "https://license.wiolett.cloud",
+    },
+  },
   general: {
     publicUrl: null,
     gatewayPublicIps: [],
@@ -110,7 +143,15 @@ describe("SetupWizardPage", () => {
           data: { ...PENDING_STATUS, setupInProgress: true, currentSession: true },
         })
       )
-      .mockImplementationOnce(() => response(200, { data: { ...CONFIG, phase: "ai_workspace" } }))
+      .mockImplementationOnce(() =>
+        response(200, {
+          data: {
+            ...CONFIG,
+            phase: "ai_workspace",
+            license: { ...CONFIG.license, completed: true },
+          },
+        })
+      )
       .mockImplementationOnce(() => response(200, { data: { csrfToken: "setup-csrf" } }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -127,6 +168,54 @@ describe("SetupWizardPage", () => {
     });
 
     expect(screen.getByRole("dialog", { name: "Review provider terms" })).toBeInTheDocument();
+  });
+
+  it("restores an incomplete license choice before AI Workspace", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() =>
+        response(200, {
+          data: { ...PENDING_STATUS, setupInProgress: true, currentSession: true },
+        })
+      )
+      .mockImplementationOnce(() => response(200, { data: { ...CONFIG, phase: "ai_workspace" } }))
+      .mockImplementationOnce(() => response(200, { data: { csrfToken: "setup-csrf" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SetupWizardPage />);
+
+    expect(await screen.findByRole("heading", { name: "Gateway edition" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "AI Workspace" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the license step open when paid activation fails", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() =>
+        response(200, {
+          data: { ...PENDING_STATUS, setupInProgress: true, currentSession: true },
+        })
+      )
+      .mockImplementationOnce(() => response(200, { data: { ...CONFIG, phase: "ai_workspace" } }))
+      .mockImplementationOnce(() => response(200, { data: { csrfToken: "setup-csrf" } }))
+      .mockImplementationOnce(() =>
+        response(409, { code: "LICENSE_IN_USE", message: "License is already active" })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<SetupWizardPage />);
+    const keyInput = await screen.findByLabelText("License key");
+    await user.type(keyInput, "WLT-GW-PAID-KEY");
+    await user.click(screen.getByRole("button", { name: "Activate license" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    const [path, init] = fetchMock.mock.calls[3] as [string, RequestInit];
+    expect(path).toBe("/api/setup/wizard/license/activate");
+    expect(new Headers(init.headers).get("X-CSRF-Token")).toBe("setup-csrf");
+    expect(JSON.parse(String(init.body))).toEqual({ licenseKey: "WLT-GW-PAID-KEY" });
+    expect(screen.getByRole("heading", { name: "Gateway edition" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "AI Workspace" })).not.toBeInTheDocument();
   });
 
   it("skips administrator method selection when only one method is enabled", () => {
@@ -493,6 +582,12 @@ describe("SetupWizardPage", () => {
       logging: { mode: "disabled" },
     });
     expect(JSON.parse(String(init.body)).administrator).not.toHaveProperty("password");
+    expect(await screen.findByRole("heading", { name: "Gateway edition" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Continue with Community" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
+    const [licensePath, licenseInit] = fetchMock.mock.calls[4] as [string, RequestInit];
+    expect(licensePath).toBe("/api/setup/wizard/license/community");
+    expect(new Headers(licenseInit.headers).get("X-CSRF-Token")).toBe("setup-csrf");
     expect(await screen.findByRole("heading", { name: "AI Workspace" })).toBeInTheDocument();
   });
 

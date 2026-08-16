@@ -10,6 +10,8 @@ import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
 import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
 import { getAcceptedSessionCookieNames, getSessionCookieName } from '@/modules/auth/session-cookie.js';
+import { toLicenseAppError } from '@/modules/license/license.errors.js';
+import { LicenseService } from '@/modules/license/license.service.js';
 import { LoggingRuntimeService } from '@/modules/logging/logging-runtime.service.js';
 import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
 import {
@@ -232,7 +234,7 @@ setupRoutes.use('/wizard/*', async (c, next) => {
 });
 
 setupRoutes.get('/wizard/config', async (c) => {
-  const [general, auth, smtp, oidc, logging, transport, administratorCreated, phase] = await Promise.all([
+  const [general, auth, smtp, oidc, logging, transport, administratorCreated, phase, license] = await Promise.all([
     container.resolve(GeneralSettingsService).getConfig(),
     container.resolve(AuthSettingsService).getConfig(),
     container.resolve(AuthMailService).getPublicConfig(),
@@ -241,6 +243,7 @@ setupRoutes.get('/wizard/config', async (c) => {
     container.resolve(WebTransportSettingsService).getConfig(),
     container.resolve(SetupTokenPolicyService).isGatewayConfigured(),
     container.resolve(SetupWizardService).getPhase(),
+    container.resolve(LicenseService).getOnboardingState(),
   ]);
   return c.json({
     data: {
@@ -252,6 +255,7 @@ setupRoutes.get('/wizard/config', async (c) => {
       transport,
       administratorCreated,
       phase,
+      license,
       networkSuggestions: getSetupNetworkSuggestions(),
     },
   });
@@ -313,6 +317,31 @@ setupRoutes.post('/wizard/apply', async (c) => {
     throw error;
   }
   return c.json({ data: result });
+});
+
+const SetupLicenseActivationSchema = z.object({
+  licenseKey: z.string().trim().min(1).max(256),
+});
+
+async function requireAppliedSetup(): Promise<void> {
+  if ((await container.resolve(SetupWizardService).getPhase()) !== 'ai_workspace') {
+    throw new AppError(409, 'SETUP_CONFIGURATION_REQUIRED', 'Apply Gateway setup before choosing a license');
+  }
+}
+
+setupRoutes.post('/wizard/license/community', async (c) => {
+  await requireAppliedSetup();
+  return c.json({ data: await container.resolve(LicenseService).continueWithCommunity() });
+});
+
+setupRoutes.post('/wizard/license/activate', async (c) => {
+  await requireAppliedSetup();
+  const input = SetupLicenseActivationSchema.parse(await c.req.json());
+  try {
+    return c.json({ data: await container.resolve(LicenseService).activateKey(input.licenseKey) });
+  } catch (error) {
+    throw toLicenseAppError(error) ?? error;
+  }
 });
 
 const SetupAIWorkspaceOutcomeSchema = z.object({

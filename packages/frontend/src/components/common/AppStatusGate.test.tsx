@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStatusStore } from "@/stores/app-status";
+import { useUpdateStore } from "@/stores/update";
 import {
   AppStatusGate,
   buildGatewayRestartTargetUrl,
@@ -17,6 +18,12 @@ beforeEach(() => {
     gatewayRestartTargetUrl: null,
     gatewayUpdateError: null,
     rateLimitedUntil: null,
+  });
+  useUpdateStore.setState({
+    status: null,
+    isChecking: false,
+    isUpdating: false,
+    updatingComponent: null,
   });
   vi.spyOn(globalThis, "fetch").mockImplementation(
     async () =>
@@ -60,6 +67,38 @@ describe("gateway update version matching", () => {
     expect(
       screen.getByText("Gateway is updating to v2.5.0.", { exact: false })
     ).toBeInTheDocument();
+  });
+
+  it("uses the shared operation screen for a server-restored Relay update", () => {
+    useUpdateStore.setState({
+      status: {
+        currentVersion: "v2.7.0",
+        latestVersion: null,
+        updateAvailable: false,
+        releaseNotes: null,
+        releaseUrl: null,
+        lastCheckedAt: null,
+        relay: {
+          currentVersion: "v2.6.12",
+          latestVersion: "v2.7.0",
+          updateAvailable: true,
+          releaseNotes: null,
+          releaseUrl: null,
+          operation: {
+            status: "updating",
+            targetVersion: "v2.7.0",
+            startedAt: "2026-08-16T18:00:00.000Z",
+            error: null,
+          },
+        },
+      },
+    });
+
+    render(<AppStatusGate />);
+
+    expect(screen.getByRole("heading", { name: "Updating Relay" })).toBeInTheDocument();
+    expect(screen.getByText("Relay is updating to v2.7.0.", { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Wiolett Industries" })).toBeInTheDocument();
   });
 
   it("shows generic restart copy when admission closes", () => {

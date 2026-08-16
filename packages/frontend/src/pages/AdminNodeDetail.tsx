@@ -2,6 +2,7 @@ import { ArrowUpCircle, Pin, Settings, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
+import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { PageBackButton } from "@/components/common/PageBackButton";
@@ -18,16 +19,6 @@ import {
 } from "@/components/ui/dialog";
 import { HealthBars } from "@/components/ui/health-bars";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectSeparator,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -128,8 +119,7 @@ export function AdminNodeDetail({
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [appearanceName, setAppearanceName] = useState("");
   const [appearanceColor, setAppearanceColor] = useState<NodeAppearanceColor | null>(null);
-  const [serviceAddressMode, setServiceAddressMode] = useState("__auto__");
-  const [customServiceAddress, setCustomServiceAddress] = useState("");
+  const [serviceAddress, setServiceAddress] = useState("");
   const [appearanceSaving, setAppearanceSaving] = useState(false);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [lockSaving, setLockSaving] = useState(false);
@@ -164,6 +154,31 @@ export function AdminNodeDetail({
     [node?.lastHealthReport?.publicIpAddresses, node?.liveHealthReport?.publicIpAddresses]
   );
   const nginxPublicAddresses = node?.publicServiceAddresses ?? [];
+  const automaticServiceAddress =
+    node?.type === "nginx" ? nginxPublicAddresses[0] : localIpAddresses[0] || publicIpAddresses[0];
+  const serviceAddressOptions = useMemo<ComboboxOption[]>(() => {
+    const detectedAddresses =
+      node?.type === "nginx" ? nginxPublicAddresses : [...localIpAddresses, ...publicIpAddresses];
+    return [
+      {
+        value: "",
+        label: automaticServiceAddress
+          ? `Automatic (${automaticServiceAddress})`
+          : "Automatic (no IP reported)",
+        keywords: "automatic detected",
+      },
+      ...Array.from(new Set(detectedAddresses)).map((address) => ({
+        value: address,
+        label: address,
+      })),
+    ];
+  }, [
+    automaticServiceAddress,
+    localIpAddresses,
+    nginxPublicAddresses,
+    node?.type,
+    publicIpAddresses,
+  ]);
   const nonInteractiveWhileUpdating =
     nodeUpdating && activeTab !== "details" && activeTab !== "daemon-logs";
   const canUseNodeConsole = !!(id && hasScope(`nodes:console:${id}`)) || hasScope("nodes:console");
@@ -363,24 +378,7 @@ export function AdminNodeDetail({
     if (!node) return;
     setAppearanceName(node.displayName ?? "");
     setAppearanceColor(node.appearanceColor ?? null);
-    if (!node.serviceAddress) {
-      setServiceAddressMode("__auto__");
-      setCustomServiceAddress("");
-    } else if (
-      (node.type === "nginx"
-        ? nginxPublicAddresses
-        : [...localIpAddresses, ...publicIpAddresses]
-      ).includes(node.serviceAddress)
-    ) {
-      setServiceAddressMode(node.serviceAddress);
-      setCustomServiceAddress("");
-    } else if (node.type === "nginx") {
-      setServiceAddressMode("__stale__");
-      setCustomServiceAddress(node.serviceAddress);
-    } else {
-      setServiceAddressMode("__custom__");
-      setCustomServiceAddress(node.serviceAddress);
-    }
+    setServiceAddress(node.serviceAddress ?? "");
     setAppearanceOpen(true);
   };
 
@@ -388,19 +386,13 @@ export function AdminNodeDetail({
     if (!id) return;
     setAppearanceSaving(true);
     try {
-      const serviceAddress =
-        serviceAddressMode === "__auto__"
-          ? null
-          : serviceAddressMode === "__custom__"
-            ? customServiceAddress.trim() || null
-            : serviceAddressMode;
+      const normalizedServiceAddress = serviceAddress.trim() || null;
       const update = {
         displayName: appearanceName.trim() || null,
         appearanceColor,
         ...((node?.type === "docker" || node?.type === "databases" || node?.type === "nginx") &&
-        canEditNodeServiceAddress &&
-        serviceAddressMode !== "__stale__"
-          ? { serviceAddress }
+        canEditNodeServiceAddress
+          ? { serviceAddress: normalizedServiceAddress }
           : {}),
       };
       let updated: Node;
@@ -895,74 +887,31 @@ export function AdminNodeDetail({
             {(node.type === "docker" || node.type === "databases" || node.type === "nginx") && (
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Service Address</label>
-                <Select
-                  value={serviceAddressMode}
-                  onValueChange={setServiceAddressMode}
+                <Combobox
+                  freeText
+                  showAllOptionsOnFocus
+                  ariaLabel="Service Address"
+                  value={serviceAddress}
+                  options={serviceAddressOptions}
+                  placeholder={
+                    automaticServiceAddress
+                      ? `Automatic (${automaticServiceAddress})`
+                      : "Automatic (no IP reported)"
+                  }
+                  searchPlaceholder={
+                    node.type === "nginx"
+                      ? "Enter or select a public IP"
+                      : "Enter or select an address"
+                  }
+                  emptyMessage={
+                    node.type === "nginx"
+                      ? "Enter a public IPv4 or IPv6 address."
+                      : "Enter an IP address or hostname."
+                  }
                   disabled={!canEditNodeServiceAddress}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__auto__">
-                      {(
-                        node.type === "nginx"
-                          ? nginxPublicAddresses[0]
-                          : localIpAddresses[0] || publicIpAddresses[0]
-                      )
-                        ? `Automatic (${node.type === "nginx" ? nginxPublicAddresses[0] : (localIpAddresses[0] ?? publicIpAddresses[0])})`
-                        : "Automatic (no IP reported)"}
-                    </SelectItem>
-                    {node.type !== "nginx" && localIpAddresses.length > 0 && (
-                      <SelectGroup>
-                        <SelectLabel>Local addresses</SelectLabel>
-                        {localIpAddresses.map((address) => (
-                          <SelectItem key={address} value={address}>
-                            {address}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    )}
-                    {(node.type === "nginx" ? nginxPublicAddresses : publicIpAddresses).length >
-                      0 && (
-                      <>
-                        <SelectSeparator />
-                        <SelectGroup>
-                          <SelectLabel>Detected public addresses</SelectLabel>
-                          {(node.type === "nginx" ? nginxPublicAddresses : publicIpAddresses).map(
-                            (address) => (
-                              <SelectItem key={address} value={address}>
-                                {address}
-                              </SelectItem>
-                            )
-                          )}
-                        </SelectGroup>
-                      </>
-                    )}
-                    {node.type === "nginx" && serviceAddressMode === "__stale__" && (
-                      <SelectItem value="__stale__" disabled>
-                        Unavailable ({customServiceAddress})
-                      </SelectItem>
-                    )}
-                    {node.type !== "nginx" && (
-                      <>
-                        <SelectSeparator />
-                        <SelectItem value="__custom__">Custom address</SelectItem>
-                      </>
-                    )}
-                  </SelectContent>
-                </Select>
-                {node.type !== "nginx" && serviceAddressMode === "__custom__" && (
-                  <Input
-                    aria-label="Custom Service Address"
-                    value={customServiceAddress}
-                    onChange={(event) => setCustomServiceAddress(event.target.value)}
-                    placeholder={
-                      node.type === "databases" ? "database-node.internal" : "docker-node.internal"
-                    }
-                    disabled={!canEditNodeServiceAddress}
-                  />
-                )}
+                  inputClassName="font-mono text-xs"
+                  onValueChange={setServiceAddress}
+                />
                 <p className="text-xs text-muted-foreground">
                   {node.type === "databases"
                     ? "Used as the host shown for published managed database ports."
@@ -977,13 +926,7 @@ export function AdminNodeDetail({
             <Button variant="outline" onClick={() => setAppearanceOpen(false)}>
               Cancel
             </Button>
-            <Button
-              onClick={handleAppearanceSave}
-              disabled={
-                appearanceSaving ||
-                (serviceAddressMode === "__custom__" && !customServiceAddress.trim())
-              }
-            >
+            <Button onClick={handleAppearanceSave} disabled={appearanceSaving}>
               {appearanceSaving ? "Saving..." : "Save"}
             </Button>
           </DialogFooter>

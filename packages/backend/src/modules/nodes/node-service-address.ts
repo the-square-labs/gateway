@@ -88,7 +88,7 @@ export function getEffectiveNginxIngressAddress(node: {
 }): string | null {
   const candidates = getReportedPublicNodeAddresses(node);
   const configured = node.serviceAddress?.trim();
-  if (configured) return candidates.includes(configured) ? configured : null;
+  if (configured) return isPubliclyRoutableIp(configured) ? configured : null;
   return candidates[0] ?? null;
 }
 

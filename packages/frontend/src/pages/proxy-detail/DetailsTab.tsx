@@ -137,9 +137,9 @@ export function DetailsTab({ host }: { host: ProxyHost }) {
             value={
               <div className="flex flex-wrap justify-end gap-1">
                 {host.domainNames.map((d) => (
-                  <Button key={d} variant="link" size="sm" asChild>
-                    <Link to={`/domains?domain=${encodeURIComponent(d)}`}>{d}</Link>
-                  </Button>
+                  <Link key={d} to={`/domains?domain=${encodeURIComponent(d)}`} title={d}>
+                    <Badge variant="info">{d}</Badge>
+                  </Link>
                 ))}
               </div>
             }

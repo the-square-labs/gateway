@@ -853,8 +853,8 @@ describe("api client contract", () => {
       .mockResolvedValueOnce(
         jsonResponse({ data: { status: "scheduled", targetVersion: "2.4.1" } })
       )
-      .mockResolvedValueOnce(jsonResponse({ data: { tier: "enterprise", active: true } }))
-      .mockResolvedValueOnce(jsonResponse({ data: { tier: "enterprise", active: true } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { plan: "enterprise", active: true } }))
+      .mockResolvedValueOnce(jsonResponse({ data: { plan: "enterprise", active: true } }))
       .mockResolvedValueOnce(jsonResponse({ data: housekeepingConfig }))
       .mockResolvedValueOnce(jsonResponse({ data: { id: "run-1", status: "completed" } }));
 
@@ -871,7 +871,7 @@ describe("api client contract", () => {
       version: "2.4.1",
     });
 
-    await expect(api.getLicenseStatus()).resolves.toMatchObject({ tier: "enterprise" });
+    await expect(api.getLicenseStatus()).resolves.toMatchObject({ plan: "enterprise" });
     expect(fetchMock.mock.calls[3]?.[0]).toBe("/api/system/license/status");
 
     await expect(api.activateLicense("license-key")).resolves.toMatchObject({ active: true });

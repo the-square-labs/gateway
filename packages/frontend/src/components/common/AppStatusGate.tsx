@@ -9,6 +9,7 @@ import {
   subscribeGatewayReload,
 } from "@/lib/gateway-update-reload";
 import { useAppStatusStore } from "@/stores/app-status";
+import { useUpdateStore } from "@/stores/update";
 
 export { isGatewayUpdateTargetVersion, normalizeGatewayUpdateVersion };
 
@@ -127,6 +128,31 @@ function MaintenanceScreen() {
 interface GatewayHealthSnapshot {
   lifecycleState?: "running" | "draining_user" | "draining_logs" | "terminating";
   version?: string | null;
+}
+
+function UpdateOperationScreen({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="fixed inset-0 z-[205] flex min-h-screen items-center justify-center bg-[#090909] px-6 text-[#f4f4f5]">
+      <div className="w-full max-w-sm text-center">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center border border-[rgba(234,179,8,0.35)] bg-[rgba(234,179,8,0.06)] text-[#facc15]">
+          <RotateCw className="h-6 w-6 animate-spin motion-reduce:[animation-duration:1.8s]" />
+        </div>
+        <h2 className="m-0 text-lg font-semibold leading-[1.4]">{title}</h2>
+        <p className="mt-2 text-sm leading-[1.55] text-[#a1a1aa]">{description}</p>
+        <div className="mt-7 text-xs text-[#71717a]">
+          Powered by{" "}
+          <a
+            href="https://wiolett.net"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[#a1a1aa] hover:underline"
+          >
+            Wiolett Industries
+          </a>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function buildGatewayRestartTargetUrl(targetBase: string, currentHref: string): string {
@@ -266,32 +292,27 @@ function GatewayOperationScreen() {
   ]);
 
   return (
-    <div className="fixed inset-0 z-[205] flex min-h-screen items-center justify-center bg-[#090909] px-6 text-[#f4f4f5]">
-      <div className="w-full max-w-sm text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center border border-[rgba(234,179,8,0.35)] bg-[rgba(234,179,8,0.06)] text-[#facc15]">
-          <RotateCw className="h-6 w-6 animate-spin motion-reduce:[animation-duration:1.8s]" />
-        </div>
-        <h2 className="m-0 text-lg font-semibold leading-[1.4]">
-          {updatingActive ? "Updating Gateway" : "Restarting Gateway"}
-        </h2>
-        <p className="mt-2 text-sm leading-[1.55] text-[#a1a1aa]">
-          {updatingActive && targetVersion
-            ? `Gateway is updating to ${targetVersion}. New actions are temporarily locked.`
-            : "Gateway is finishing active work before restarting. New actions are temporarily locked."}
-        </p>
-        <div className="mt-7 text-xs text-[#71717a]">
-          Powered by{" "}
-          <a
-            href="https://wiolett.net"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[#a1a1aa] hover:underline"
-          >
-            Wiolett Industries
-          </a>
-        </div>
-      </div>
-    </div>
+    <UpdateOperationScreen
+      title={updatingActive ? "Updating Gateway" : "Restarting Gateway"}
+      description={
+        updatingActive && targetVersion
+          ? `Gateway is updating to ${targetVersion}. New actions are temporarily locked.`
+          : "Gateway is finishing active work before restarting. New actions are temporarily locked."
+      }
+    />
+  );
+}
+
+function RelayOperationScreen() {
+  const status = useUpdateStore((state) => state.status);
+  const targetVersion =
+    status?.relay.operation?.targetVersion ?? status?.relay.latestVersion ?? "the latest version";
+
+  return (
+    <UpdateOperationScreen
+      title="Updating Relay"
+      description={`Relay is updating to ${targetVersion}. Active Secure Links may be briefly interrupted.`}
+    />
   );
 }
 
@@ -449,6 +470,11 @@ export function AppStatusGate() {
   const gatewayRestartingActive = useAppStatusStore((s) => s.gatewayRestartingActive);
   const gatewayUpdateError = useAppStatusStore((s) => s.gatewayUpdateError);
   const rateLimitedUntil = useAppStatusStore((s) => s.rateLimitedUntil);
+  const relayUpdatingActive = useUpdateStore(
+    (state) =>
+      (state.isUpdating && state.updatingComponent === "relay") ||
+      state.status?.relay.operation?.status === "updating"
+  );
   const [showMaintenanceScreen, setShowMaintenanceScreen] = useState(false);
 
   useEffect(() => {
@@ -473,6 +499,8 @@ export function AppStatusGate() {
         <GatewayUpdateErrorScreen />
       ) : gatewayUpdatingActive || gatewayRestartingActive ? (
         <GatewayOperationScreen />
+      ) : relayUpdatingActive ? (
+        <RelayOperationScreen />
       ) : showMaintenanceScreen ? (
         <MaintenanceScreen />
       ) : null}

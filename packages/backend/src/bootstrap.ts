@@ -101,7 +101,7 @@ import { ExternalSshService } from '@/modules/integrations/external-ssh.service.
 import { GitLabProvider } from '@/modules/integrations/gitlab-provider.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { LicenseService } from '@/modules/license/license.service.js';
-import { LICENSE_HEARTBEAT_INTERVAL_MS } from '@/modules/license/license.types.js';
+import { LICENSE_SCHEDULER_INTERVAL_MS } from '@/modules/license/license.types.js';
 import { LocalClickHouseService } from '@/modules/logging/local-clickhouse.service.js';
 import { LoggingClickHouseService } from '@/modules/logging/logging-clickhouse.service.js';
 import { LoggingEnvironmentService } from '@/modules/logging/logging-environment.service.js';
@@ -1332,7 +1332,7 @@ export async function initializeContainer(): Promise<void> {
 
   const updateCheckJob = new UpdateCheckJob(updateService, eventBus);
   scheduler.registerInterval('update-check', env.UPDATE_CHECK_INTERVAL_HOURS * 3_600_000, () => updateCheckJob.run());
-  scheduler.registerInterval('license-heartbeat', LICENSE_HEARTBEAT_INTERVAL_MS, () => licenseService.heartbeat());
+  scheduler.registerInterval('license-heartbeat', LICENSE_SCHEDULER_INTERVAL_MS, () => licenseService.heartbeat());
 
   const daemonUpdateCheckJob = new DaemonUpdateCheckJob(daemonUpdateService);
   scheduler.registerInterval('daemon-update-check', env.UPDATE_CHECK_INTERVAL_HOURS * 3_600_000, () =>

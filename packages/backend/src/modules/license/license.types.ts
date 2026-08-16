@@ -1,8 +1,11 @@
-export const LICENSE_SERVER_URL = 'https://gw-license-server.wiolett.net';
+export const LICENSE_SERVER_URL = 'https://license.wiolett.cloud';
 export const LICENSE_OFFLINE_GRACE_DAYS = 30;
-export const LICENSE_HEARTBEAT_INTERVAL_MS = 12 * 60 * 60 * 1000;
+export const LICENSE_PAID_HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000;
+export const LICENSE_COMMUNITY_HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000;
+export const LICENSE_SCHEDULER_INTERVAL_MS = LICENSE_PAID_HEARTBEAT_INTERVAL_MS;
 
-export type LicenseTier = 'community' | 'homelab' | 'enterprise';
+export type LicensePlan = 'community' | 'personal' | 'business' | 'enterprise';
+export type LicenseRegistrationStatus = 'registered' | 'pending';
 
 export type LicenseStatus =
   | 'community'
@@ -12,18 +15,32 @@ export type LicenseStatus =
   | 'invalid'
   | 'expired'
   | 'revoked'
-  | 'replaced';
+  | 'replaced'
+  | 'deactivated';
 
-export interface EncryptedLicenseKey {
+export interface EncryptedLicenseCredential {
   encryptedKey: string;
   encryptedDek: string;
 }
 
+export interface LicenseEntitlements {
+  managedNodes: number | null;
+  users: number | null;
+  customPermissionGroups: number | null;
+  supportLevel: string;
+  features: string[];
+}
+
 export interface CachedLicenseState {
-  status: Exclude<LicenseStatus, 'community'>;
-  tier: Exclude<LicenseTier, 'community'> | null;
+  registrationStatus: LicenseRegistrationStatus;
+  status: LicenseStatus;
+  plan: LicensePlan;
+  paidLicenseStatus: string;
   licenseName: string | null;
+  licenseMetadata: Record<string, unknown>;
   expiresAt: string | null;
+  entitlementsVersion: number;
+  entitlements: LicenseEntitlements;
   lastCheckedAt: string | null;
   lastValidAt: string | null;
   activeInstallationId: string | null;
@@ -33,14 +50,19 @@ export interface CachedLicenseState {
 
 export interface LicenseStatusView {
   status: LicenseStatus;
-  tier: LicenseTier;
+  plan: LicensePlan;
+  registrationStatus: LicenseRegistrationStatus;
+  paidLicenseStatus: string;
   licensed: boolean;
   hasKey: boolean;
   keyLast4: string | null;
   licenseName: string | null;
+  licenseMetadata: Record<string, unknown>;
   installationId: string;
   installationName: string;
   expiresAt: string | null;
+  entitlementsVersion: number;
+  entitlements: LicenseEntitlements;
   lastCheckedAt: string | null;
   lastValidAt: string | null;
   graceUntil: string | null;
@@ -50,15 +72,53 @@ export interface LicenseStatusView {
   serverUrl: string;
 }
 
-export interface LicenseServerResponse {
-  status: 'valid' | 'invalid' | 'expired' | 'revoked' | 'replaced';
-  tier?: 'homelab' | 'enterprise';
-  licenseName?: string;
-  expiresAt?: string | null;
-  activeInstallationId?: string;
-  activeInstallationName?: string;
-  activatedAt?: string | null;
-  lastHeartbeatAt?: string | null;
-  replacedAt?: string | null;
-  message?: string;
+export interface LicenseServerPaidLicense {
+  id: string;
+  status: 'active' | 'expired' | 'revoked';
+  plan: Exclude<LicensePlan, 'community'>;
+  name: string;
+  expiresAt: string | null;
+  keyLast4: string;
+  metadata: Record<string, unknown>;
 }
+
+export interface LicenseServerState {
+  registrationStatus: 'registered';
+  effectivePlan: LicensePlan;
+  paidLicenseStatus: string;
+  paidLicense?: LicenseServerPaidLicense;
+  entitlementsVersion: number;
+  entitlements: LicenseEntitlements;
+  activation?: {
+    installationId: string;
+    installationName: string;
+    activatedAt: string;
+    lastHeartbeatAt: string | null;
+  };
+  serverTime: string;
+}
+
+export interface LicenseServerRegistration {
+  installationToken: string;
+  state: LicenseServerState;
+}
+
+export interface LicenseServerEnvelope<T> {
+  data: T;
+}
+
+export interface LicenseServerErrorEnvelope {
+  error: {
+    code: string;
+    message: string;
+    details?: Record<string, unknown>;
+  };
+}
+
+export const COMMUNITY_ENTITLEMENTS: LicenseEntitlements = {
+  managedNodes: 100,
+  users: 10,
+  customPermissionGroups: 5,
+  supportLevel: 'community',
+  features: [],
+};
