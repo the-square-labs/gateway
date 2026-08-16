@@ -68,25 +68,31 @@ describe("useUpdateStore", () => {
     });
   });
 
-  it("marks a coordinated minor update as Gateway and Relay", async () => {
-    vi.mocked(api.triggerUpdate).mockResolvedValueOnce({
-      status: "started",
-      targetVersion: "v2.4.0",
-    });
-
-    await useUpdateStore.getState().triggerUpdate("v2.4.0", true);
-
-    expect(api.triggerUpdate).toHaveBeenCalledWith("v2.4.0");
-    expect(useUpdateStore.getState()).toMatchObject({
-      isUpdating: true,
-      updatingComponent: "gateway-relay",
-    });
-  });
-
   it("starts a relay-only update without enabling the Gateway restart gate", async () => {
     vi.mocked(api.triggerRelayUpdate).mockResolvedValueOnce({
       status: "started",
       targetVersion: "v2.6.13",
+    });
+    vi.mocked(api.getVersionInfo).mockResolvedValueOnce({
+      currentVersion: "v2.6.12",
+      latestVersion: null,
+      updateAvailable: false,
+      releaseNotes: null,
+      releaseUrl: null,
+      lastCheckedAt: null,
+      relay: {
+        currentVersion: "v2.6.12",
+        latestVersion: "v2.6.13",
+        updateAvailable: true,
+        releaseNotes: null,
+        releaseUrl: null,
+        operation: {
+          status: "updating",
+          targetVersion: "v2.6.13",
+          startedAt: "2026-08-16T18:00:00.000Z",
+          error: null,
+        },
+      },
     });
 
     await useUpdateStore.getState().triggerRelayUpdate("v2.6.13");
@@ -97,5 +103,36 @@ describe("useUpdateStore", () => {
       updatingComponent: "relay",
     });
     expect(useAppStatusStore.getState().gatewayUpdatingActive).toBe(false);
+  });
+
+  it("restores a Relay update operation from server status", async () => {
+    vi.mocked(api.getVersionInfo).mockResolvedValueOnce({
+      currentVersion: "v2.6.12",
+      latestVersion: null,
+      updateAvailable: false,
+      releaseNotes: null,
+      releaseUrl: null,
+      lastCheckedAt: null,
+      relay: {
+        currentVersion: "v2.6.12",
+        latestVersion: "v2.6.13",
+        updateAvailable: true,
+        releaseNotes: null,
+        releaseUrl: null,
+        operation: {
+          status: "updating",
+          targetVersion: "v2.6.13",
+          startedAt: "2026-08-16T18:00:00.000Z",
+          error: null,
+        },
+      },
+    });
+
+    await useUpdateStore.getState().fetchStatus();
+
+    expect(useUpdateStore.getState()).toMatchObject({
+      isUpdating: true,
+      updatingComponent: "relay",
+    });
   });
 });

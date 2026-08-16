@@ -78,7 +78,7 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('gateway-image.update.json');
     expect(source).toContain('verify_signed_relay');
     expect(source).toContain('relay-image.update.json');
-    expect(source).toContain('gateway_update_requires_relay "$current_gateway_version" "$VERSION"');
+    expect(source).not.toContain('gateway_update_requires_relay');
     expect(source).toContain('version_is_newer "$relay_version" "$current_relay_version"');
     expect(source).toContain('IMAGE_REF="$image_ref"');
     expect(source).toContain('databaseConnectorImage');

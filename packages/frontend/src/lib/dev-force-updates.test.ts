@@ -13,13 +13,13 @@ const status: UpdateStatus = {
   releaseNotes: null,
   releaseUrl: null,
   lastCheckedAt: null,
-  relayIncludedInGatewayUpdate: false,
   relay: {
     currentVersion: "v2.6.12",
     latestVersion: null,
     updateAvailable: false,
     releaseNotes: null,
     releaseUrl: null,
+    operation: null,
   },
 };
 
@@ -27,17 +27,16 @@ describe("dev forced update states", () => {
   beforeEach(() => window.localStorage.removeItem(DEV_FORCE_UPDATES_STORAGE_KEY));
 
   it.each([
-    ["gateway", true, false, false],
-    ["relay", false, true, false],
-    ["both", true, true, true],
-  ] as const)("renders the %s update state", (mode, gateway, relay, combined) => {
+    ["gateway", true, false],
+    ["relay", false, true],
+    ["both", true, true],
+  ] as const)("renders the %s update state", (mode, gateway, relay) => {
     setDevForcedUpdateMode(mode);
 
     const forced = applyForcedGatewayUpdateStatus(status);
 
     expect(forced.updateAvailable).toBe(gateway);
     expect(forced.relay.updateAvailable).toBe(relay);
-    expect(forced.relayIncludedInGatewayUpdate).toBe(combined);
     expect(forced.latestVersion).toBe(gateway ? "v9.9.9" : null);
     expect(forced.relay.latestVersion).toBe(relay ? "v9.9.9" : null);
   });
@@ -48,7 +47,6 @@ describe("dev forced update states", () => {
     const forced = applyForcedGatewayUpdateStatus({
       ...status,
       relay: undefined,
-      relayIncludedInGatewayUpdate: undefined,
     } as unknown as UpdateStatus);
 
     expect(forced.updateAvailable).toBe(false);
@@ -57,6 +55,5 @@ describe("dev forced update states", () => {
       latestVersion: "v9.9.9",
       updateAvailable: true,
     });
-    expect(forced.relayIncludedInGatewayUpdate).toBe(false);
   });
 });

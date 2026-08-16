@@ -525,14 +525,6 @@ env_value() {
   sed -n "s/^${key}=//p" .env 2>/dev/null | tail -n1
 }
 
-gateway_update_requires_relay() {
-  local current="${1#v}" target="${2#v}"
-  [[ "$current" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]] || return 1
-  local current_major="${BASH_REMATCH[1]}" current_minor="${BASH_REMATCH[2]}"
-  [[ "$target" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]] || return 1
-  [[ "$current_major" != "${BASH_REMATCH[1]}" || "$current_minor" != "${BASH_REMATCH[2]}" ]]
-}
-
 version_is_newer() {
   local candidate="$1" current="$2"
   [[ "$candidate" != "$current" && "$(printf '%s\n%s\n' "$candidate" "$current" | sort -V | tail -n1)" == "$candidate" ]]
@@ -557,7 +549,7 @@ prepare_install_metadata() {
     return
   fi
 
-  local encoded_project release_json relay_tag relay_version current_relay_version current_gateway_version
+  local encoded_project release_json relay_tag relay_version current_relay_version
   encoded_project="${GITLAB_PROJECT_PATH//\//%2F}"
   info "Resolving the latest Gateway release"
   release_json="$(curl -fsSL "${GITLAB_API_URL}/api/v4/projects/${encoded_project}/releases?per_page=100")" || die "Unable to query releases"
@@ -572,10 +564,8 @@ prepare_install_metadata() {
   [[ -n "$VERSION" ]] || die "The release API did not return an eligible Gateway release"
   info "Version: ${VERSION}"
   verify_signed_release "$VERSION" "$encoded_project"
-  current_gateway_version="$(env_value GATEWAY_VERSION)"
   current_relay_version="$(env_value GATEWAY_RELAY_BUILD_VERSION)"
-  if [[ "$FRESH" == 1 || -z "$(env_value GATEWAY_RELAY_IMAGE_REF)" || -z "$current_relay_version" ]] ||
-    gateway_update_requires_relay "$current_gateway_version" "$VERSION"; then
+  if [[ "$FRESH" == 1 || -z "$(env_value GATEWAY_RELAY_IMAGE_REF)" || -z "$current_relay_version" ]]; then
     relay_tag="$(
       printf '%s' "$release_json" |
         grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' |

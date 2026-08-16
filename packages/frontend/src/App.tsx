@@ -1020,17 +1020,13 @@ function RealtimeBridge() {
             updating?: boolean;
             component?: "gateway" | "relay";
             targetVersion?: string | null;
-            relayIncluded?: boolean;
           }
         | undefined;
       if (typeof ev?.updating === "boolean") {
         if (ev.component === "relay") {
-          useUpdateStore.getState().setUpdating("relay", ev.updating);
-          if (!ev.updating) void useUpdateStore.getState().fetchStatus();
+          void useUpdateStore.getState().fetchStatus();
         } else if (ev.updating) {
-          useUpdateStore
-            .getState()
-            .setUpdating(ev.relayIncluded ? "gateway-relay" : "gateway", true);
+          useUpdateStore.getState().setUpdating("gateway", true);
           setGatewayUpdatingActive(true, ev.targetVersion ?? null);
         } else {
           useUpdateStore.getState().clearUpdating();

@@ -30,13 +30,13 @@ export function isDevForceUpdatesEnabled(): boolean {
 export function applyForcedGatewayUpdateStatus(status: UpdateStatus): UpdateStatus {
   const normalizedStatus: UpdateStatus = {
     ...status,
-    relayIncludedInGatewayUpdate: status.relayIncludedInGatewayUpdate ?? false,
     relay: status.relay ?? {
       currentVersion: status.currentVersion,
       latestVersion: null,
       updateAvailable: false,
       releaseNotes: null,
       releaseUrl: null,
+      operation: null,
     },
   };
   const mode = getDevForcedUpdateMode();
@@ -47,7 +47,6 @@ export function applyForcedGatewayUpdateStatus(status: UpdateStatus): UpdateStat
     ...normalizedStatus,
     latestVersion: gatewayUpdateAvailable ? FORCED_GATEWAY_VERSION : null,
     updateAvailable: gatewayUpdateAvailable,
-    relayIncludedInGatewayUpdate: mode === "both",
     releaseNotes: gatewayUpdateAvailable
       ? (status.releaseNotes ?? "Local Gateway update preview.")
       : null,
@@ -59,6 +58,7 @@ export function applyForcedGatewayUpdateStatus(status: UpdateStatus): UpdateStat
       releaseNotes: relayUpdateAvailable
         ? (normalizedStatus.relay.releaseNotes ?? "Local Relay update preview.")
         : null,
+      operation: null,
     },
   };
 }

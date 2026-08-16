@@ -6,7 +6,6 @@ export interface UpdateStatus {
   releaseNotes: string | null;
   releaseUrl: string | null;
   lastCheckedAt: string | null;
-  relayIncludedInGatewayUpdate: boolean;
   relay: RelayUpdateStatus;
 }
 
@@ -16,6 +15,12 @@ export interface RelayUpdateStatus {
   updateAvailable: boolean;
   releaseNotes: string | null;
   releaseUrl: string | null;
+  operation: {
+    status: "updating" | "failed";
+    targetVersion: string;
+    startedAt: string;
+    error: string | null;
+  } | null;
 }
 
 export interface SystemConfig {

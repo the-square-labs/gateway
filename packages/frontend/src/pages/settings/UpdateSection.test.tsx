@@ -25,24 +25,21 @@ vi.mock("@/services/api", () => ({
   },
 }));
 
-function makeStatus(options: {
-  gatewayVersion: string;
-  relayIncludedInGatewayUpdate: boolean;
-}): UpdateStatus {
+function makeStatus(gatewayVersion: string): UpdateStatus {
   return {
     currentVersion: "v2.6.12",
-    latestVersion: options.gatewayVersion,
+    latestVersion: gatewayVersion,
     updateAvailable: true,
     releaseNotes: null,
     releaseUrl: null,
     lastCheckedAt: null,
-    relayIncludedInGatewayUpdate: options.relayIncludedInGatewayUpdate,
     relay: {
       currentVersion: "v2.6.12",
       latestVersion: "v2.6.13",
       updateAvailable: true,
       releaseNotes: null,
       releaseUrl: null,
+      operation: null,
     },
   };
 }
@@ -67,10 +64,7 @@ describe("UpdateSection", () => {
   });
 
   it("keeps Gateway and Relay actions separate for a patch update", async () => {
-    const status = makeStatus({
-      gatewayVersion: "v2.6.13",
-      relayIncludedInGatewayUpdate: false,
-    });
+    const status = makeStatus("v2.6.13");
     vi.mocked(api.getVersionInfo).mockResolvedValue(status);
     useUpdateStore.setState({ status });
 
@@ -80,6 +74,8 @@ describe("UpdateSection", () => {
       name: "Update Gateway to v2.6.13",
     });
     expect(screen.getByRole("button", { name: "Update Relay to v2.6.13" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Gateway Update Available" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Relay Update Available" })).toBeInTheDocument();
 
     fireEvent.click(gatewayButton);
     await waitFor(() => expect(api.triggerUpdate).toHaveBeenCalledWith("v2.6.13"));
@@ -87,37 +83,29 @@ describe("UpdateSection", () => {
     expect(api.triggerRelayUpdate).not.toHaveBeenCalled();
   });
 
-  it("coordinates Relay with a Gateway minor update after the interruption warning", async () => {
-    const status = makeStatus({
-      gatewayVersion: "v2.7.0",
-      relayIncludedInGatewayUpdate: true,
-    });
+  it("keeps Relay independent from a Gateway minor update", async () => {
+    const status = makeStatus("v2.7.0");
     vi.mocked(api.getVersionInfo).mockResolvedValue(status);
     useUpdateStore.setState({ status });
 
     render(<UpdateSection canUpdate />);
 
-    expect(
-      screen.queryByRole("button", { name: "Update Relay to v2.6.13" })
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update Relay to v2.6.13" })).toBeInTheDocument();
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Update Gateway v2.7.0 and Relay v2.6.13",
+        name: "Update Gateway to v2.7.0",
       })
     );
 
     await waitFor(() => expect(api.triggerUpdate).toHaveBeenCalledWith("v2.7.0"));
-    expect(confirm).toHaveBeenCalledTimes(2);
-    expect(confirm).toHaveBeenLastCalledWith(expect.objectContaining({ title: "Restart Relay?" }));
-    expect(useUpdateStore.getState().updatingComponent).toBe("gateway-relay");
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(api.triggerRelayUpdate).not.toHaveBeenCalled();
+    expect(useUpdateStore.getState().updatingComponent).toBe("gateway");
   });
 
   it("shows one primary action and Relay release notes for a Relay-only update", async () => {
     const status: UpdateStatus = {
-      ...makeStatus({
-        gatewayVersion: "v2.6.12",
-        relayIncludedInGatewayUpdate: false,
-      }),
+      ...makeStatus("v2.6.12"),
       latestVersion: null,
       updateAvailable: false,
       relay: {
@@ -126,6 +114,7 @@ describe("UpdateSection", () => {
         updateAvailable: true,
         releaseNotes: "Relay-only notes",
         releaseUrl: null,
+        operation: null,
       },
     };
     vi.mocked(api.getVersionInfo).mockResolvedValue(status);

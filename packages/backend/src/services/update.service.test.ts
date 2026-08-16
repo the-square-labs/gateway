@@ -6,9 +6,9 @@ import {
   imageRepositoryFromRef,
   isGatewayReleaseTag,
   isRelayReleaseTag,
+  isRelayTooOldForGatewayUpdate,
   selectLatestGatewayRelease,
   selectLatestRelayRelease,
-  shouldIncludeRelayInGatewayUpdate,
   UpdateService,
 } from './update.service.js';
 
@@ -79,18 +79,19 @@ describe('UpdateService release selection', () => {
     });
   });
 
-  describe('shouldIncludeRelayInGatewayUpdate', () => {
-    it('keeps relay separate for patch-only Gateway updates', () => {
-      expect(shouldIncludeRelayInGatewayUpdate('v2.6.12', 'v2.6.13')).toBe(false);
+  describe('isRelayTooOldForGatewayUpdate', () => {
+    it('allows Gateway updates while Relay is less than two minor versions behind', () => {
+      expect(isRelayTooOldForGatewayUpdate('v2.6.12', 'v2.6.13')).toBe(false);
+      expect(isRelayTooOldForGatewayUpdate('v2.5.9', 'v2.6.0')).toBe(false);
     });
 
-    it('includes relay for Gateway minor and major updates', () => {
-      expect(shouldIncludeRelayInGatewayUpdate('v2.6.12', 'v2.7.0')).toBe(true);
-      expect(shouldIncludeRelayInGatewayUpdate('v2.6.12', 'v3.0.0')).toBe(true);
+    it('blocks Gateway updates when Relay is at least two minor versions behind', () => {
+      expect(isRelayTooOldForGatewayUpdate('v2.4.12', 'v2.6.0')).toBe(true);
+      expect(isRelayTooOldForGatewayUpdate('v2.9.0', 'v3.0.0')).toBe(true);
     });
 
-    it('fails closed for unknown versions', () => {
-      expect(shouldIncludeRelayInGatewayUpdate('dev', 'v2.7.0')).toBe(false);
+    it('does not block unverifiable local versions', () => {
+      expect(isRelayTooOldForGatewayUpdate('dev', 'v2.7.0')).toBe(false);
     });
   });
 });
@@ -182,7 +183,7 @@ describe('UpdateService foundation migration', () => {
     expect(dockerService.runDetached).toHaveBeenCalledWith(
       expect.objectContaining({
         Cmd: ['sh', '-c', expect.stringContaining('compose up -d --force-recreate app')],
-        Env: ['FOUNDATION_BACKUP_DIR=/srv/gateway/.gateway-foundation-backups/test', 'UPDATE_RELAY=0'],
+        Env: ['FOUNDATION_BACKUP_DIR=/srv/gateway/.gateway-foundation-backups/test'],
         HostConfig: {
           Binds: ['/srv/gateway:/srv/gateway', '/var/run/docker.sock:/var/run/docker.sock'],
         },
@@ -198,14 +199,13 @@ describe('UpdateService foundation migration', () => {
     );
     expect(sidecarCommand).toContain('cp -p "$FOUNDATION_BACKUP_DIR/.env" /srv/gateway/.env');
     expect(sidecarCommand).toContain('service_exists() { compose config --services | grep -qx "$1"; }');
+    expect(sidecarCommand).toContain('compose stop app');
+    expect(sidecarCommand).not.toContain('compose stop app relay');
     expect(sidecarCommand).toContain(
-      'if [ "$UPDATE_RELAY" -eq 1 ] && [ "$rollback_has_relay" -eq 1 ]; then\n    compose stop app relay\n  else\n    compose stop app\n  fi'
+      'if [ "$rollback_has_relay" -eq 1 ]; then\n    compose up -d --no-deps app\n  else\n    compose up -d app\n  fi'
     );
     expect(sidecarCommand).toContain(
-      'elif [ "$rollback_has_relay" -eq 1 ]; then\n    compose up -d --no-deps app\n  else\n    compose up -d app\n  fi'
-    );
-    expect(sidecarCommand).toContain(
-      'elif service_exists relay; then\n  compose up -d --no-deps --force-recreate app\nelse\n  compose up -d --force-recreate app\nfi'
+      'if service_exists relay; then\n  compose up -d --no-deps --force-recreate app\nelse\n  compose up -d --force-recreate app\nfi'
     );
     expect(sidecarCommand).toContain('relay_reachable()');
     expect(sidecarCommand).toContain('net.connect(9443,"relay"');
@@ -219,28 +219,6 @@ describe('UpdateService foundation migration', () => {
     const syntax = spawnSync('/bin/sh', ['-n'], { input: sidecarCommand, encoding: 'utf8' });
     expect(syntax.stderr).toBe('');
     expect(syntax.status).toBe(0);
-  });
-
-  it('includes an independently verified relay artifact only when both updates are requested', async () => {
-    const dockerService = makeDockerService();
-    const service = makeUpdateService(dockerService);
-    const gateway = makeArtifact('registry.example.com/wiolett/gateway@sha256:new');
-    const relay = makeRelayArtifact();
-
-    await service.performUpdate('v2.4.3', gateway, relay);
-
-    expect(dockerService.pullImageRef).toHaveBeenNthCalledWith(2, relay.imageRef);
-    expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        Cmd: expect.arrayContaining(['--relay-build-version', relay.buildVersion, '--relay-image-ref', relay.imageRef]),
-      })
-    );
-    expect(dockerService.runDetached).toHaveBeenCalledWith(
-      expect.objectContaining({
-        Env: ['FOUNDATION_BACKUP_DIR=/srv/gateway/.gateway-foundation-backups/test', 'UPDATE_RELAY=1'],
-      })
-    );
   });
 
   it('updates relay without recreating the Gateway app', async () => {
@@ -269,6 +247,21 @@ describe('UpdateService foundation migration', () => {
       relay.protocolMajor
     );
     expect(relayRuntime.probeNow).toHaveBeenCalled();
+  });
+
+  it('keeps the Relay update operation on the server', () => {
+    const service = makeUpdateService(makeDockerService());
+
+    service.startRelayUpdate('v2.6.13');
+    expect((service as unknown as { relayUpdateOperation: unknown }).relayUpdateOperation).toMatchObject({
+      status: 'updating',
+      targetVersion: 'v2.6.13',
+      error: null,
+    });
+
+    expect(() => service.startRelayUpdate('v2.6.14')).toThrow('already in progress');
+    service.completeRelayUpdate();
+    expect((service as unknown as { relayUpdateOperation: unknown }).relayUpdateOperation).toBeNull();
   });
 
   it('does not recreate the app when migrated compose validation fails', async () => {

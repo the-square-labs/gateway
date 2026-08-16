@@ -11,7 +11,7 @@ import { GeneralSettingsService } from '@/modules/settings/general-settings.serv
 import { DaemonUpdateService, daemonTypeForNodeType } from '@/services/daemon-update.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
-import { shouldIncludeRelayInGatewayUpdate, UpdateService } from '@/services/update.service.js';
+import { UpdateService } from '@/services/update.service.js';
 import type { AppEnv } from '@/types.js';
 import {
   checkDaemonUpdatesRoute,
@@ -111,12 +111,6 @@ systemRoutes.openapi({ ...performSystemUpdateRoute, middleware: sessionOnly }, a
     return c.json({ code: 'VERSION_MISMATCH', message: 'Requested version does not match available update' }, 400);
   }
   const artifact = await updateService.prepareGatewayUpdate(version);
-  const relayArtifact =
-    status.relay.updateAvailable &&
-    status.relay.latestVersion &&
-    shouldIncludeRelayInGatewayUpdate(status.currentVersion, version)
-      ? await updateService.prepareRelayUpdate(status.relay.latestVersion)
-      : undefined;
 
   // Respond immediately, then trigger the update asynchronously.
   // The container will be replaced — the response must be sent first.
@@ -124,10 +118,9 @@ systemRoutes.openapi({ ...performSystemUpdateRoute, middleware: sessionOnly }, a
     updating: true,
     component: 'gateway',
     targetVersion: version,
-    relayIncluded: Boolean(relayArtifact),
   });
   setTimeout(() => {
-    updateService.performUpdate(version, artifact, relayArtifact).catch((err) => {
+    updateService.performUpdate(version, artifact).catch((err) => {
       eventBus.publish('system.update.changed', { updating: false, component: 'gateway', targetVersion: version });
       logger.error('Update failed', {
         error: err instanceof Error ? err.message : String(err),
@@ -158,15 +151,18 @@ systemRoutes.openapi({ ...performRelayUpdateRoute, middleware: sessionOnly }, as
     );
   }
   const artifact = await updateService.prepareRelayUpdate(version);
+  updateService.startRelayUpdate(version);
   eventBus.publish('system.update.changed', { updating: true, component: 'relay', targetVersion: version });
   setTimeout(() => {
     updateService
       .performRelayUpdate(version, artifact)
+      .then(() => updateService.completeRelayUpdate())
       .then(() => updateService.checkForUpdates())
       .then(() => {
         eventBus.publish('system.update.changed', { updating: false, component: 'relay', targetVersion: version });
       })
       .catch((err) => {
+        updateService.failRelayUpdate(err);
         eventBus.publish('system.update.changed', { updating: false, component: 'relay', targetVersion: version });
         logger.error('Relay update failed', {
           error: err instanceof Error ? err.message : String(err),

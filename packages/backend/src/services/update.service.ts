@@ -26,8 +26,14 @@ export interface UpdateStatus {
   releaseNotes: string | null;
   releaseUrl: string | null;
   lastCheckedAt: string | null;
-  relayIncludedInGatewayUpdate: boolean;
   relay: RelayUpdateStatus;
+}
+
+export interface RelayUpdateOperation {
+  status: 'updating' | 'failed';
+  targetVersion: string;
+  startedAt: string;
+  error: string | null;
 }
 
 export interface RelayUpdateStatus {
@@ -36,6 +42,7 @@ export interface RelayUpdateStatus {
   updateAvailable: boolean;
   releaseNotes: string | null;
   releaseUrl: string | null;
+  operation: RelayUpdateOperation | null;
 }
 
 interface GitLabRelease {
@@ -81,11 +88,13 @@ export function selectLatestRelayRelease(releases: GitLabRelease[]): GitLabRelea
   );
 }
 
-export function shouldIncludeRelayInGatewayUpdate(currentVersion: string, targetVersion: string): boolean {
-  const current = parseSemver(currentVersion);
+export function isRelayTooOldForGatewayUpdate(relayVersion: string, targetVersion: string): boolean {
+  const current = parseSemver(relayVersion);
   const target = parseSemver(targetVersion);
   if (!current || !target) return false;
-  return current[0] !== target[0] || current[1] !== target[1];
+  if (current[0] < target[0]) return true;
+  if (current[0] > target[0]) return false;
+  return target[1] - current[1] >= 2;
 }
 
 const SETTINGS_KEYS = {
@@ -102,6 +111,7 @@ export class UpdateService {
   private readonly gitlabReleasesUrl: string;
   private readonly encodedProjectPath: string;
   private readonly gitlabApiUrl: string;
+  private relayUpdateOperation: RelayUpdateOperation | null = null;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -118,6 +128,32 @@ export class UpdateService {
     return this.env.APP_VERSION;
   }
 
+  startRelayUpdate(targetVersion: string): void {
+    if (this.relayUpdateOperation?.status === 'updating') {
+      throw new AppError(409, 'UPDATE_IN_PROGRESS', 'A relay update is already in progress');
+    }
+    this.relayUpdateOperation = {
+      status: 'updating',
+      targetVersion: normalizeVersionTag(targetVersion),
+      startedAt: new Date().toISOString(),
+      error: null,
+    };
+  }
+
+  completeRelayUpdate(): void {
+    this.relayUpdateOperation = null;
+  }
+
+  failRelayUpdate(error: unknown): void {
+    const operation = this.relayUpdateOperation;
+    if (!operation) return;
+    this.relayUpdateOperation = {
+      ...operation,
+      status: 'failed',
+      error: formatError(error),
+    };
+  }
+
   async getCachedStatus(): Promise<UpdateStatus> {
     const currentVersion = this.getCurrentVersion();
 
@@ -129,7 +165,7 @@ export class UpdateService {
     const map = new Map(allRows.map((r) => [r.key, r.value as string]));
 
     const latestVersion = map.get(SETTINGS_KEYS.latestVersion) ?? null;
-    const updateAvailable =
+    const gatewayUpdateAvailable =
       currentVersion !== 'dev' && latestVersion != null ? isNewerVersion(latestVersion, currentVersion) : false;
     const currentRelayVersion = this.env.GATEWAY_RELAY_BUILD_VERSION ?? 'unknown';
     const latestRelayVersion = map.get(SETTINGS_KEYS.relayLatestVersion) ?? null;
@@ -138,11 +174,10 @@ export class UpdateService {
       currentRelayVersion !== 'unknown' &&
       latestRelayVersion != null &&
       isNewerVersion(latestRelayVersion, currentRelayVersion);
-    const relayIncludedInGatewayUpdate =
-      updateAvailable &&
-      relayUpdateAvailable &&
+    const updateAvailable =
+      gatewayUpdateAvailable &&
       latestVersion != null &&
-      shouldIncludeRelayInGatewayUpdate(currentVersion, latestVersion);
+      !isRelayTooOldForGatewayUpdate(currentRelayVersion, latestVersion);
 
     return {
       currentVersion,
@@ -151,13 +186,13 @@ export class UpdateService {
       releaseNotes: map.get(SETTINGS_KEYS.releaseNotes) ?? null,
       releaseUrl: map.get(SETTINGS_KEYS.releaseUrl) ?? null,
       lastCheckedAt: map.get(SETTINGS_KEYS.lastCheckedAt) ?? null,
-      relayIncludedInGatewayUpdate,
       relay: {
         currentVersion: currentRelayVersion,
         latestVersion: latestRelayVersion,
         updateAvailable: relayUpdateAvailable,
         releaseNotes: map.get(SETTINGS_KEYS.relayReleaseNotes) ?? null,
         releaseUrl: map.get(SETTINGS_KEYS.relayReleaseUrl) ?? null,
+        operation: this.relayUpdateOperation,
       },
     };
   }
@@ -178,13 +213,13 @@ export class UpdateService {
         releaseNotes: null,
         releaseUrl: null,
         lastCheckedAt,
-        relayIncludedInGatewayUpdate: false,
         relay: {
           currentVersion: this.env.GATEWAY_RELAY_BUILD_VERSION ?? 'dev',
           latestVersion: null,
           updateAvailable: false,
           releaseNotes: null,
           releaseUrl: null,
+          operation: this.relayUpdateOperation,
         },
       };
     }
@@ -335,11 +370,7 @@ export class UpdateService {
     }
   }
 
-  async performUpdate(
-    targetVersion: string,
-    artifact: TrustedGatewayUpdateArtifact,
-    relayArtifact?: TrustedRelayUpdateArtifact
-  ): Promise<void> {
+  async performUpdate(targetVersion: string, artifact: TrustedGatewayUpdateArtifact): Promise<void> {
     logger.info('Starting self-update', { targetVersion });
 
     const selfInfo = await this.dockerService.inspectSelf();
@@ -375,7 +406,6 @@ export class UpdateService {
     }
 
     await this.dockerService.pullImageRef(artifact.imageRef);
-    if (relayArtifact) await this.dockerService.pullImageRef(relayArtifact.imageRef);
 
     await this.dockerService.pullImageRef(DOCKER_COMPOSE_CLI_IMAGE_REF);
 
@@ -407,16 +437,6 @@ export class UpdateService {
       tag,
       '--image-ref',
       artifact.imageRef,
-      ...(relayArtifact
-        ? [
-            '--relay-build-version',
-            relayArtifact.buildVersion,
-            '--relay-protocol-major',
-            String(relayArtifact.protocolMajor),
-            '--relay-image-ref',
-            relayArtifact.imageRef,
-          ]
-        : []),
       ...(artifact.databaseConnectorImage ? ['--database-connector-image', artifact.databaseConnectorImage] : []),
       ...(artifact.secureLinkConnectorImage
         ? ['--secure-link-connector-image', artifact.secureLinkConnectorImage]
@@ -507,11 +527,7 @@ rollback() {
   fi
   rollback_has_relay=0
   if service_exists relay; then rollback_has_relay=1; fi
-  if [ "$UPDATE_RELAY" -eq 1 ] && [ "$rollback_has_relay" -eq 1 ]; then
-    compose stop app relay
-  else
-    compose stop app
-  fi
+  compose stop app
   compose up -d postgres
   attempt=0
   until compose exec -T postgres pg_isready -U gateway -d gateway; do
@@ -525,9 +541,7 @@ rollback() {
     [ "$attempt" -lt 10 ]
     sleep 2
   done
-  if [ "$UPDATE_RELAY" -eq 1 ] && [ "$rollback_has_relay" -eq 1 ]; then
-    compose up -d app relay
-  elif [ "$rollback_has_relay" -eq 1 ]; then
+  if [ "$rollback_has_relay" -eq 1 ]; then
     compose up -d --no-deps app
   else
     compose up -d app
@@ -559,9 +573,7 @@ on_exit() {
 }
 trap on_exit EXIT
 sleep 2
-if [ "$UPDATE_RELAY" -eq 1 ] && service_exists relay; then
-  compose up -d --force-recreate app relay
-elif service_exists relay; then
+if service_exists relay; then
   compose up -d --no-deps --force-recreate app
 else
   compose up -d --force-recreate app
@@ -590,7 +602,7 @@ while [ "$attempt" -lt 150 ]; do
 done
 exit 1`,
       ],
-      Env: [`FOUNDATION_BACKUP_DIR=${sidecarBackupDir}`, `UPDATE_RELAY=${relayArtifact ? 1 : 0}`],
+      Env: [`FOUNDATION_BACKUP_DIR=${sidecarBackupDir}`],
       HostConfig: { Binds: [`${composeDir}:${composeDir}`, '/var/run/docker.sock:/var/run/docker.sock'] },
     });
 

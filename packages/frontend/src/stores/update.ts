@@ -8,13 +8,13 @@ interface UpdateState {
   status: UpdateStatus | null;
   isChecking: boolean;
   isUpdating: boolean;
-  updatingComponent: "gateway" | "gateway-relay" | "relay" | null;
+  updatingComponent: "gateway" | "relay" | null;
 
   fetchStatus: () => Promise<void>;
   checkForUpdates: () => Promise<void>;
-  triggerUpdate: (version: string, includeRelay?: boolean) => Promise<void>;
+  triggerUpdate: (version: string) => Promise<void>;
   triggerRelayUpdate: (version: string) => Promise<void>;
-  setUpdating: (component: "gateway" | "gateway-relay" | "relay", active: boolean) => void;
+  setUpdating: (component: "gateway" | "relay", active: boolean) => void;
   clearUpdating: () => void;
 }
 
@@ -28,7 +28,14 @@ export const useUpdateStore = create<UpdateState>()((set) => ({
     try {
       const status = applyForcedGatewayUpdateStatus(await api.getVersionInfo());
       api.setCache("system:version", status);
-      set({ status });
+      set((state) => ({
+        status,
+        ...(status.relay.operation?.status === "updating"
+          ? { isUpdating: true, updatingComponent: "relay" as const }
+          : state.updatingComponent === "relay"
+            ? { isUpdating: false, updatingComponent: null }
+            : {}),
+      }));
     } catch {
       // ignore
     }
@@ -39,7 +46,14 @@ export const useUpdateStore = create<UpdateState>()((set) => ({
     try {
       const status = applyForcedGatewayUpdateStatus(await api.checkForUpdates());
       api.setCache("system:version", status);
-      set({ status });
+      set((state) => ({
+        status,
+        ...(status.relay.operation?.status === "updating"
+          ? { isUpdating: true, updatingComponent: "relay" as const }
+          : state.updatingComponent === "relay"
+            ? { isUpdating: false, updatingComponent: null }
+            : {}),
+      }));
     } catch {
       // ignore
     } finally {
@@ -47,8 +61,8 @@ export const useUpdateStore = create<UpdateState>()((set) => ({
     }
   },
 
-  triggerUpdate: async (version: string, includeRelay = false) => {
-    set({ isUpdating: true, updatingComponent: includeRelay ? "gateway-relay" : "gateway" });
+  triggerUpdate: async (version: string) => {
+    set({ isUpdating: true, updatingComponent: "gateway" });
     try {
       useAppStatusStore.getState().setGatewayUpdatingActive(true, version);
       await api.triggerUpdate(version);
@@ -67,6 +81,7 @@ export const useUpdateStore = create<UpdateState>()((set) => ({
     set({ isUpdating: true, updatingComponent: "relay" });
     try {
       await api.triggerRelayUpdate(version);
+      await useUpdateStore.getState().fetchStatus();
     } catch {
       set({ isUpdating: false, updatingComponent: null });
     }
