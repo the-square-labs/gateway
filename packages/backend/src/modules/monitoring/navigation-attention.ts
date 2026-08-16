@@ -9,11 +9,8 @@ export function healthNavigationAttention(
   return null;
 }
 
-export function nodeNavigationAttention(
-  nodes: Array<{ id: string; status?: unknown }>,
-  updateNodeIds: ReadonlySet<string>
-): NavigationAttentionSeverity {
-  if (nodes.some((node) => node.status === 'offline')) return 'critical';
-  if (nodes.some((node) => updateNodeIds.has(node.id))) return 'warning';
+export function nodeNavigationAttention(offlineCount: number, hasPendingUpdates: boolean): NavigationAttentionSeverity {
+  if (offlineCount > 0) return 'critical';
+  if (hasPendingUpdates) return 'warning';
   return null;
 }

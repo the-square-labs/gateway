@@ -126,7 +126,10 @@ describe('dashboard bootstrap route', () => {
       get: vi.fn(async (name: string) => ({
         data:
           name === 'stats-user'
-            ? STATS
+            ? {
+                ...STATS,
+                nodes: { total: 2, online: 1, offline: 1, pending: 0 },
+              }
             : name === 'health'
               ? [
                   { id: 'route-1', enabled: true, healthStatus: 'degraded' },

@@ -3,16 +3,9 @@ import { healthNavigationAttention, nodeNavigationAttention } from './navigation
 
 describe('navigation attention', () => {
   it('prioritizes offline nodes over pending daemon updates', () => {
-    expect(
-      nodeNavigationAttention(
-        [
-          { id: 'node-1', status: 'online' },
-          { id: 'node-2', status: 'offline' },
-        ],
-        new Set(['node-1'])
-      )
-    ).toBe('critical');
-    expect(nodeNavigationAttention([{ id: 'node-1', status: 'online' }], new Set(['node-1']))).toBe('warning');
+    expect(nodeNavigationAttention(1, true)).toBe('critical');
+    expect(nodeNavigationAttention(0, true)).toBe('warning');
+    expect(nodeNavigationAttention(0, false)).toBeNull();
   });
 
   it('prioritizes offline health over degraded and ignores disabled checks', () => {

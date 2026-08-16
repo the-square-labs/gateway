@@ -27,6 +27,7 @@ import {
 
 interface NodeDetailsTabProps {
   node: NodeDetail;
+  canManageSecureRuntime: boolean;
   daemonUpdate: {
     available: boolean;
     latestVersion: string | null;
@@ -57,6 +58,7 @@ function IPAddressPanel({ title, addresses }: { title: string; addresses: string
 
 export function NodeDetailsTab({
   node,
+  canManageSecureRuntime,
   daemonUpdate,
   refreshNode,
   refreshDaemonUpdateStatus,
@@ -266,7 +268,7 @@ export function NodeDetailsTab({
               : runtimeStatus?.message || "Check this node for gVisor compatibility"
           }
           actions={
-            runtimeInstalling ? (
+            !canManageSecureRuntime ? null : runtimeInstalling ? (
               <Button disabled>
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 Setting up...

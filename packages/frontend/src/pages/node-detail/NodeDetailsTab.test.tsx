@@ -76,6 +76,7 @@ describe("NodeDetailsTab", () => {
       <MemoryRouter>
         <NodeDetailsTab
           node={node}
+          canManageSecureRuntime={false}
           daemonUpdate={{ available: true, latestVersion: "2.0.0" }}
           refreshNode={vi.fn().mockResolvedValue(undefined)}
           refreshDaemonUpdateStatus={vi.fn().mockResolvedValue(undefined)}
@@ -91,6 +92,7 @@ describe("NodeDetailsTab", () => {
       <MemoryRouter>
         <NodeDetailsTab
           node={createNode()}
+          canManageSecureRuntime={false}
           daemonUpdate={{ available: false, latestVersion: null }}
           refreshNode={vi.fn().mockResolvedValue(undefined)}
           refreshDaemonUpdateStatus={vi.fn().mockResolvedValue(undefined)}
@@ -145,6 +147,7 @@ describe("NodeDetailsTab", () => {
       <MemoryRouter>
         <NodeDetailsTab
           node={node}
+          canManageSecureRuntime
           daemonUpdate={{ available: false, latestVersion: null }}
           refreshNode={vi.fn().mockResolvedValue(undefined)}
           refreshDaemonUpdateStatus={vi.fn().mockResolvedValue(undefined)}
@@ -154,6 +157,38 @@ describe("NodeDetailsTab", () => {
 
     expect(screen.getByRole("heading", { name: "Secure Runtime Setup" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Setup" })).toBeEnabled();
+  });
+
+  it("hides Secure Runtime management actions without admin:update", () => {
+    const node = {
+      ...createNode(),
+      type: "docker" as const,
+      status: "online" as const,
+      isConnected: true,
+      capabilities: {
+        dockerRuntimeStatus: {
+          state: "installable",
+          checkedAt: "2026-08-16T00:00:00.000Z",
+          remoteInstallable: true,
+          message: "Ready to install",
+        },
+      },
+    };
+    render(
+      <MemoryRouter>
+        <NodeDetailsTab
+          node={node}
+          canManageSecureRuntime={false}
+          daemonUpdate={{ available: false, latestVersion: null }}
+          refreshNode={vi.fn().mockResolvedValue(undefined)}
+          refreshDaemonUpdateStatus={vi.fn().mockResolvedValue(undefined)}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole("heading", { name: "Secure Runtime Setup" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Setup" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Check compatibility" })).not.toBeInTheDocument();
   });
 
   it("restores an in-progress setup from node state and keeps refreshing it", async () => {
@@ -180,6 +215,7 @@ describe("NodeDetailsTab", () => {
       <MemoryRouter>
         <NodeDetailsTab
           node={node}
+          canManageSecureRuntime
           daemonUpdate={{ available: false, latestVersion: null }}
           refreshNode={refreshNode}
           refreshDaemonUpdateStatus={vi.fn().mockResolvedValue(undefined)}
@@ -223,6 +259,7 @@ describe("NodeDetailsTab", () => {
       <MemoryRouter>
         <NodeDetailsTab
           node={node}
+          canManageSecureRuntime={false}
           daemonUpdate={{ available: false, latestVersion: null }}
           refreshNode={vi.fn().mockResolvedValue(undefined)}
           refreshDaemonUpdateStatus={vi.fn().mockResolvedValue(undefined)}

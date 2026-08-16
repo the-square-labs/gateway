@@ -698,10 +698,10 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
       const value = visibleDockerResources.get(`${pin.kind}:${pin.nodeId}:${pin.id}`);
       return value === undefined ? [] : [value];
     });
-  const visibleNodeIds = new Set(dashboardNodes.map((node: any) => node.id));
-  const updateNodeIds = new Set(
-    daemonUpdates.flatMap((status) =>
-      status.nodes.filter((node) => node.updateAvailable && visibleNodeIds.has(node.nodeId)).map((node) => node.nodeId)
+  const visibleUpdateNodeIds = hasScope(scopes, 'nodes:details') ? null : new Set(scopedNodeIds);
+  const hasPendingNodeUpdate = daemonUpdates.some((status) =>
+    status.nodes.some(
+      (node) => node.updateAvailable && (!visibleUpdateNodeIds || visibleUpdateNodeIds.has(node.nodeId))
     )
   );
   return c.json({
@@ -746,7 +746,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
         notices,
       },
       navigationAttention: {
-        nodes: nodeNavigationAttention(dashboardNodes, updateNodeIds),
+        nodes: nodeNavigationAttention(Number(stats.nodes.offline ?? 0), hasPendingNodeUpdate),
         'proxy-hosts': healthNavigationAttention(
           health.map((host) => ({ enabled: host.enabled, healthStatus: host.healthStatus }))
         ),

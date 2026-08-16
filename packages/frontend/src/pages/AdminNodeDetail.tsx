@@ -740,6 +740,7 @@ export function AdminNodeDetail({
             <TabsContent key={detailsTabRefreshKey} value="details">
               <NodeDetailsTab
                 node={node}
+                canManageSecureRuntime={hasScope("admin:update")}
                 daemonUpdate={daemonUpdate}
                 refreshNode={refreshNodeDetails}
                 refreshDaemonUpdateStatus={loadDaemonUpdateStatus}
