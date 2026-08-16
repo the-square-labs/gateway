@@ -105,7 +105,7 @@ func buildGwcaContainerManifest(
 	if ctr.Config.Labels[deploymentManagedLabel] == "true" {
 		return gwcaContainerManifest{}, fmt.Errorf("blue/green deployment containers must be managed through their deployment")
 	}
-	if err := validateGwcaExportSupport(ctr.Config, ctr.HostConfig); err != nil {
+	if err := validateGwcaExportSupport(ctr.Config, ctr.HostConfig, ctr.Mounts); err != nil {
 		return gwcaContainerManifest{}, err
 	}
 	for key := range secrets {
@@ -171,8 +171,7 @@ func buildGwcaContainerManifest(
 		entry := gwcaMount{Target: mount.Destination, ReadOnly: !mount.RW}
 		switch string(mount.Type) {
 		case "bind":
-			entry.Type = "bind"
-			entry.Source = mount.Source
+			return gwcaContainerManifest{}, fmt.Errorf("archive source contains a host bind mount")
 		case "volume":
 			if mount.Name == "" {
 				return gwcaContainerManifest{}, fmt.Errorf("archive source contains an anonymous volume")
@@ -217,7 +216,7 @@ func buildGwcaContainerManifest(
 	return manifest, nil
 }
 
-func validateGwcaExportSupport(config *container.Config, host *container.HostConfig) error {
+func validateGwcaExportSupport(config *container.Config, host *container.HostConfig, mounts []container.MountPoint) error {
 	var unsupported []string
 	if config.Healthcheck != nil {
 		unsupported = append(unsupported, "healthcheck")
@@ -230,6 +229,12 @@ func validateGwcaExportSupport(config *container.Config, host *container.HostCon
 	}
 	if len(host.Devices) > 0 || len(host.DeviceRequests) > 0 {
 		unsupported = append(unsupported, "host devices or GPUs")
+	}
+	for _, attached := range mounts {
+		if string(attached.Type) == "bind" {
+			unsupported = append(unsupported, "host bind mounts")
+			break
+		}
 	}
 	unsupportedSecurityOpt := false
 	for _, option := range host.SecurityOpt {
@@ -352,7 +357,7 @@ func gwcaManifestToMigration(manifest gwcaContainerManifest, imageID, imageRefer
 		})
 	}
 	for _, mount := range manifest.Mounts {
-		if mount.Source == "" || mount.Target == "" || (mount.Type != "bind" && mount.Type != "volume") {
+		if mount.Source == "" || mount.Target == "" || mount.Type != "volume" {
 			return createStoppedContainerRequest{}, fmt.Errorf("archive contains invalid mount")
 		}
 		bind := mount.Source + ":" + mount.Target

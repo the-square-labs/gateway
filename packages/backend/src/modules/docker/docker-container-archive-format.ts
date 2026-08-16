@@ -125,7 +125,6 @@ export type GwcaManifest = z.infer<typeof GwcaManifestSchema>;
 export interface GwcaImportResolution {
   networks?: Record<string, string>;
   createNetworks?: string[];
-  bindPaths?: Record<string, string>;
   volumes?: Record<string, string>;
   createVolumes?: string[];
   ports?: Record<string, number>;

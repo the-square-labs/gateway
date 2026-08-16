@@ -94,6 +94,7 @@ describe('AIService Docker tool routing', () => {
         env: { APP_ENV: 'stage' },
         volumes: [{ name: 'cache', containerPath: '/cache' }],
         networks: ['frontend', 'metrics'],
+        runtimeProfile: 'secure',
         command: ['nginx', '-g', 'daemon off;'],
       })
     ).resolves.toMatchObject({
@@ -105,6 +106,12 @@ describe('AIService Docker tool routing', () => {
       invalidateStores: ['containers'],
     });
     expect(dockerService.connectContainerToNetwork).toHaveBeenCalledWith('node-1', 'metrics', 'container-1', 'user-1');
+    expect(dockerService.createContainer).toHaveBeenCalledWith(
+      'node-1',
+      expect.objectContaining({ runtimeProfile: 'secure' }),
+      'user-1',
+      user.scopes
+    );
     expect(dockerService.startContainer).toHaveBeenCalledWith('node-1', 'container-1', 'user-1');
     expect(dockerService.rollbackCreatedContainer).not.toHaveBeenCalled();
   });

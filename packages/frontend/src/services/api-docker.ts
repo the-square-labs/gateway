@@ -613,7 +613,6 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       resolution: {
         networks?: Record<string, string>;
         createNetworks?: string[];
-        bindPaths?: Record<string, string>;
         volumes?: Record<string, string>;
         createVolumes?: string[];
         ports?: Record<string, number>;

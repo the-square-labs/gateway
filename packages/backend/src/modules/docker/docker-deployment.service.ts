@@ -851,6 +851,14 @@ export class DockerDeploymentService {
       nextConfig: desiredConfig,
       currentDefinitions: normalizeMountDefinitionsFromConfig(deployment.desiredConfig),
     });
+    await assertManagedMountMutation({
+      db: this.db,
+      dispatch: this.dispatch,
+      parseResult: (result) => this.parseResult(result),
+      nodeId,
+      current: normalizeMountDefinitionsFromConfig(deployment.desiredConfig),
+      next: normalizeMountDefinitionsFromConfig(desiredConfig),
+    });
     const daemonDesiredConfig = await this.desiredConfigWithSecrets(nodeId, deploymentId, desiredConfig);
     const registryAuthCandidates = await this.registry.resolveAuthCandidatesForImagePull(
       nodeId,

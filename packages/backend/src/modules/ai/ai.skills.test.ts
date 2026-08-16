@@ -83,6 +83,8 @@ describe('AISkillService', () => {
     expect(instructions).toContain('Missing prerequisites are setup decisions, not terminal blockers');
     expect(instructions).toContain('Use find_resource first');
     expect(instructions).toContain('Docker container runtime IDs are volatile');
+    expect(instructions).toContain('never propose a host bind path');
+    expect(instructions).toContain('Choose the Secure Docker profile only when the node reports a healthy');
     expect(instructions).toContain('Never route connector setup through Finalize Setup');
     expect(instructions).toContain('External SSH connectors are only for servers outside Gateway management');
     expect(instructions).toContain('Additional permissions are an exact replacement');

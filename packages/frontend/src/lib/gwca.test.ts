@@ -26,7 +26,6 @@ describe("readGwcaImportMetadata", () => {
           { name: "application", driver: "overlay", createable: false, requiresMapping: true },
         ],
         mounts: [
-          { type: "bind", source: "/srv/app", target: "/app", readOnly: false },
           {
             type: "volume",
             source: "shared-data",
@@ -50,7 +49,6 @@ describe("readGwcaImportMetadata", () => {
         { name: "application", driver: "overlay", createable: false, requiresMapping: true },
       ],
       mounts: [
-        { type: "bind", source: "/srv/app", target: "/app", readOnly: false },
         {
           type: "volume",
           source: "shared-data",
@@ -65,6 +63,22 @@ describe("readGwcaImportMetadata", () => {
       secretKeys: ["DATABASE_PASSWORD"],
       warnings: ["Runtime endpoint addresses are reassigned on import."],
     });
+  });
+
+  it("rejects archives containing host bind mounts before planning an import", async () => {
+    const file = archiveFile({
+      format: "gwca",
+      version: 1,
+      container: {
+        schemaVersion: 1,
+        name: "legacy-app",
+        mounts: [{ type: "bind", source: "/srv/app", target: "/app", readOnly: false }],
+      },
+    });
+
+    await expect(readGwcaImportMetadata(file)).rejects.toThrow(
+      "Container archives with host bind mounts cannot be imported"
+    );
   });
 
   it("rejects files without the GWCA header", async () => {

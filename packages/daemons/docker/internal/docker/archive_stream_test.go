@@ -9,12 +9,13 @@ import (
 	"testing"
 
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 )
 
 func TestValidateGwcaExportSupportAllowsDockerDefaults(t *testing.T) {
 	config := &container.Config{}
 	host := &container.HostConfig{Runtime: "runc", ShmSize: 64 * 1024 * 1024}
-	if err := validateGwcaExportSupport(config, host); err != nil {
+	if err := validateGwcaExportSupport(config, host, nil); err != nil {
 		t.Fatalf("ordinary Docker defaults rejected: %v", err)
 	}
 }
@@ -29,9 +30,17 @@ func TestValidateGwcaExportSupportRejectsUnsupportedSettings(t *testing.T) {
 		{ShmSize: 128 * 1024 * 1024},
 	}
 	for index, host := range tests {
-		if err := validateGwcaExportSupport(&container.Config{}, host); err == nil {
+		if err := validateGwcaExportSupport(&container.Config{}, host, nil); err == nil {
 			t.Fatalf("unsupported configuration %d was accepted", index)
 		}
+	}
+}
+
+func TestValidateGwcaExportSupportRejectsHostBindMounts(t *testing.T) {
+	host := &container.HostConfig{Runtime: "runc", ShmSize: 64 * 1024 * 1024}
+	mounts := []container.MountPoint{{Type: mount.TypeBind, Source: "/srv/app", Destination: "/app"}}
+	if err := validateGwcaExportSupport(&container.Config{}, host, mounts); err == nil {
+		t.Fatal("host bind mount was accepted for archive export")
 	}
 }
 
@@ -217,7 +226,7 @@ func TestGwcaManifestToMigrationBuildsSupportedCreateRequest(t *testing.T) {
 		Environment:    map[string]string{"PUBLIC_VALUE": "visible"},
 		Secrets:        map[string]string{"DATABASE_PASSWORD": "secret"},
 		Ports:          []gwcaPortMapping{{ContainerPort: 8080, HostPort: 18080, Protocol: "tcp"}},
-		Mounts:         []gwcaMount{{Type: "bind", Source: "/srv/app", Target: "/app", ReadOnly: true}},
+		Mounts:         []gwcaMount{{Type: "volume", Source: "app-data", Target: "/app", ReadOnly: true}},
 		Networks:       []gwcaNetwork{{Name: "application", Driver: "bridge", Createable: true}},
 		RestartPolicy:  "unless-stopped",
 		Resources:      gwcaResources{MemoryLimit: 256 * 1024 * 1024, NanoCPUs: 500_000_000},
@@ -238,7 +247,7 @@ func TestGwcaManifestToMigrationBuildsSupportedCreateRequest(t *testing.T) {
 	if len(request.Env) != 2 || request.Env[0] != "DATABASE_PASSWORD=secret" || request.Env[1] != "PUBLIC_VALUE=visible" {
 		t.Fatalf("environment = %#v", request.Env)
 	}
-	if got := request.Manifest.HostConfig.Binds; len(got) != 1 || got[0] != "/srv/app:/app:ro" {
+	if got := request.Manifest.HostConfig.Binds; len(got) != 1 || got[0] != "app-data:/app:ro" {
 		t.Fatalf("binds = %#v", got)
 	}
 	if request.Manifest.HostConfig.NetworkMode != "application" {
@@ -246,6 +255,22 @@ func TestGwcaManifestToMigrationBuildsSupportedCreateRequest(t *testing.T) {
 	}
 	if request.Manifest.HostConfig.Memory != 256*1024*1024 || request.Manifest.HostConfig.NanoCPUs != 500_000_000 {
 		t.Fatalf("resources were not preserved: %#v", request.Manifest.HostConfig.Resources)
+	}
+}
+
+func TestGwcaManifestToMigrationRejectsHostBindMounts(t *testing.T) {
+	_, err := gwcaManifestToMigration(
+		gwcaContainerManifest{
+			SchemaVersion: 1,
+			Mounts:        []gwcaMount{{Type: "bind", Source: "/srv/app", Target: "/app"}},
+		},
+		"sha256:"+repeatHex("a"),
+		"sha256:"+repeatHex("a"),
+		"restored-app",
+		"archive-1",
+	)
+	if err == nil {
+		t.Fatal("archive import accepted a host bind mount")
 	}
 }
 

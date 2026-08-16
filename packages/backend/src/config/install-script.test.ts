@@ -154,6 +154,15 @@ describe('database daemon installer prerequisites', () => {
     expect(enrollDaemon).toBeGreaterThan(dockerPreflight);
     expect(source).toContain('Database nodes require a local Docker Engine socket');
   });
+
+  it('does not install the generic-workload Secure Runtime on database nodes', () => {
+    const source = readFileSync(dockerNodeInstaller, 'utf8');
+    const setupStart = source.indexOf('setup_secure_runtime()');
+    const setupEnd = source.indexOf('\n}\n', setupStart);
+    const setup = source.slice(setupStart, setupEnd);
+
+    expect(setup).toContain('[[ "$DOCKER_MODE" == "docker" ]] || return 0');
+  });
 });
 
 describe('node installer private logs', () => {

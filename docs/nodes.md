@@ -61,6 +61,50 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-do
   sudo bash -s -- --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
 ```
 
+## Docker Secure Runtime
+
+Gateway offers two workload isolation profiles:
+
+| Profile | Docker runtime | Intended use |
+|---------|----------------|--------------|
+| **Default** | `runc` | Standard Docker compatibility and GPU/device support. |
+| **Secure** | gVisor `runsc` | A stronger host-isolation boundary for compatible CPU-only workloads. |
+
+Secure Runtime is an additional defense layer, not a virtual machine and not a replacement for permissions, audit logging, network controls, or application security. Because gVisor implements a userspace kernel boundary, applications that depend on uncommon Linux syscalls or direct device access may require the Default profile.
+
+### Setup and compatibility
+
+A fresh generic Docker-node installation runs a Secure Runtime preflight before enrollment and attempts installation when the host is compatible. Existing installations are not modified during upgrade: an administrator with `admin:update` can open **Node Details > Secure Runtime Setup** to run the persisted preflight and installation workflow with step and download progress.
+
+The same operations are available locally:
+
+```bash
+sudo docker-daemon runtime preflight runsc
+sudo docker-daemon runtime install runsc
+```
+
+Both commands accept `--json` or `--plain`, plus `--non-interactive` and `--silent` for installers. Preflight exits with `0` when healthy, `10` when installable, `20` when unsupported, and `30` for other failures.
+
+Secure Runtime requires:
+
+- Linux on `amd64` or `arm64`;
+- a daemon connected to the local Docker Engine rather than a remote Docker host;
+- the Docker CLI and a Docker service that the installer can restart;
+- root privileges for installation.
+
+KVM is not required. A compatible LXC guest can use Secure Runtime when nested Docker, service management, and the required host capabilities are available; LXC compatibility is therefore host-configuration dependent rather than universal.
+
+Gateway advertises Secure as available only after `runsc` is installed, configured in Docker, and passes consecutive Docker smoke tests. Secure workload creation fails closed while that status is unknown, unhealthy, installing, or unsupported.
+
+### Workload boundaries
+
+- Secure workloads cannot attach GPUs or host devices.
+- Secure workloads cannot use host bind mounts. New or changed mounts use Gateway-managed local volumes in both profiles.
+- Secure standalone containers and deployments cannot migrate between nodes in the current version.
+- Secure standalone containers cannot be exported as `.gwca` archives because custom runtimes are outside the portable archive contract.
+- Changing a saved workload between Default and Secure uses the normal recreate flow.
+- All newly created Gateway workloads, including the Default profile, are non-privileged, add no Linux capabilities, and receive `no-new-privileges`.
+
 ## Docker GPU Workloads
 
 Gateway can attach one or more discovered physical GPUs to a standalone Docker container or a blue/green deployment. The selection is node-local and uses stable device IDs; Gateway never accepts a browser-supplied host path or runtime ID.

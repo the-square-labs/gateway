@@ -368,16 +368,12 @@ export function gwcaPortKey(port: { containerPort: number; hostPort: number; pro
 
 export function applyGwcaImportResolution(manifest: GwcaManifest, resolution: GwcaImportResolution): void {
   const networkNames = new Set((manifest.container.networks ?? []).map((entry) => entry.name));
-  const bindSources = new Set(
-    (manifest.container.mounts ?? []).filter((entry) => entry.type === 'bind').map((entry) => entry.source)
-  );
   const volumeSources = new Set(
     (manifest.container.mounts ?? []).filter((entry) => entry.type === 'volume').map((entry) => entry.source)
   );
   const portKeys = new Set((manifest.container.ports ?? []).map(gwcaPortKey));
   assertResolutionKeys(resolution.networks, networkNames, 'network');
   assertResolutionList(resolution.createNetworks, networkNames, 'network');
-  assertResolutionKeys(resolution.bindPaths, bindSources, 'bind path');
   assertResolutionKeys(resolution.volumes, volumeSources, 'volume');
   assertResolutionList(resolution.createVolumes, volumeSources, 'volume');
   assertResolutionKeys(resolution.ports, portKeys, 'port');
@@ -395,9 +391,6 @@ export function applyGwcaImportResolution(manifest: GwcaManifest, resolution: Gw
     gateway: createNetworks.has(entry.name) ? undefined : entry.gateway,
   }));
   manifest.container.mounts = (manifest.container.mounts ?? []).map((entry) => {
-    if (entry.type === 'bind') {
-      return { ...entry, source: resolution.bindPaths?.[entry.source] ?? entry.source };
-    }
     if (createVolumes.has(entry.source)) {
       return { ...entry, createNew: true, requiresMapping: false };
     }

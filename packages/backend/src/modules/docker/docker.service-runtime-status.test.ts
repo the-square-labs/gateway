@@ -18,10 +18,7 @@ const HEALTHY_STATUS = {
   remoteInstallable: true,
 };
 
-function createService(
-  runtimeStatus: Record<string, unknown>,
-  sendDockerRuntimeCommand: ReturnType<typeof vi.fn>
-) {
+function createService(runtimeStatus: Record<string, unknown>, sendDockerRuntimeCommand: ReturnType<typeof vi.fn>) {
   const node = {
     id: '11111111-1111-4111-8111-111111111111',
     type: 'docker',
@@ -62,10 +59,7 @@ describe('DockerManagementService Secure Runtime status', () => {
           resolveCommand = resolve;
         })
     );
-    const { service, updates, registry } = createService(
-      INSTALLABLE_STATUS,
-      sendDockerRuntimeCommand
-    );
+    const { service, updates, registry } = createService(INSTALLABLE_STATUS, sendDockerRuntimeCommand);
 
     const operation = service.manageRunsc('11111111-1111-4111-8111-111111111111', 'install');
 
@@ -92,9 +86,9 @@ describe('DockerManagementService Secure Runtime status', () => {
     const sendDockerRuntimeCommand = vi.fn().mockRejectedValue(new Error('download failed'));
     const { service, updates } = createService(INSTALLABLE_STATUS, sendDockerRuntimeCommand);
 
-    await expect(
-      service.manageRunsc('11111111-1111-4111-8111-111111111111', 'install')
-    ).rejects.toThrow('download failed');
+    await expect(service.manageRunsc('11111111-1111-4111-8111-111111111111', 'install')).rejects.toThrow(
+      'download failed'
+    );
 
     expect(updates).toHaveLength(2);
     expect(updates[1]?.capabilities).toMatchObject({
@@ -113,9 +107,9 @@ describe('DockerManagementService Secure Runtime status', () => {
       sendDockerRuntimeCommand
     );
 
-    await expect(
-      service.manageRunsc('11111111-1111-4111-8111-111111111111', 'install')
-    ).rejects.toThrow('already in progress');
+    await expect(service.manageRunsc('11111111-1111-4111-8111-111111111111', 'install')).rejects.toThrow(
+      'already in progress'
+    );
     expect(sendDockerRuntimeCommand).not.toHaveBeenCalled();
     expect(updates).toHaveLength(0);
   });

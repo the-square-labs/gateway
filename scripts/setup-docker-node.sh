@@ -1178,6 +1178,7 @@ install_daemon() {
 }
 
 setup_secure_runtime() {
+    [[ "$DOCKER_MODE" == "docker" ]] || return 0
     [[ "$EXISTING_INSTALL" -eq 0 ]] || return 0
     local target="/usr/local/bin/docker-daemon"
     local preflight_status=0

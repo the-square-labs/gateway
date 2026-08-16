@@ -326,7 +326,7 @@ OAuth consent leaves high-risk scopes unchecked by default. The user must explic
 | `docker:containers:files` | Can read and write container filesystem contents. |
 | `docker:containers:export` | Can export a container as a portable Gateway archive. |
 | `docker:containers:secrets` | Can reveal and manage encrypted container/deployment secrets. |
-| `docker:containers:mounts` | Can add, remove, or change container/deployment mounts. |
+| `docker:containers:mounts` | Can add, remove, or change container/deployment mounts within the managed-volume policy. New host bind mounts are prohibited. |
 | `docker:containers:migrate` | Can move containers or deployments and their data between Docker nodes. |
 | `docker:volumes:export` | Can export a Docker volume as a portable archive. |
 | `docker:volumes:files:read` | Can read files from Docker volumes. |

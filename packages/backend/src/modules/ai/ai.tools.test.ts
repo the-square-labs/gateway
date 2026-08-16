@@ -551,6 +551,17 @@ describe('AI tool scope filtering', () => {
     expect(manageRegistry?.description).toContain('Do not create a registry for public Docker Hub images');
   });
 
+  it('advertises only managed volume mounts and supported runtime profiles for container creation', () => {
+    const createContainer = AI_TOOLS.find((tool) => tool.name === 'create_docker_container');
+    const properties = createContainer?.parameters.properties as Record<string, any>;
+    const volumeProperties = properties.volumes.items.properties as Record<string, unknown>;
+
+    expect(volumeProperties).not.toHaveProperty('hostPath');
+    expect(properties.volumes.items.required).toEqual(['containerPath', 'name']);
+    expect(properties.runtimeProfile.enum).toEqual(['default', 'secure']);
+    expect(createContainer?.description).toContain('never provide host bind paths');
+  });
+
   it('exposes fetch as a base tool for direct URLs when sandbox access is enabled', () => {
     const baseToolNames = getOpenAITools([], ['feat:ai:use', 'ai:sandbox:use'], false, {
       discoveredToolsets: [],

@@ -7,9 +7,9 @@ import type { NodeHealthReport, NodeStatsReport } from '@/db/schema/nodes.js';
 import type { CommandResult, DaemonMessage, GatewayCommand } from '@/grpc/generated/types.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
+import type { DockerRuntimeStatus } from '@/modules/docker/docker.schemas.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
-import type { DockerRuntimeStatus } from '@/modules/docker/docker.schemas.js';
 
 const logger = createChildLogger('NodeRegistry');
 

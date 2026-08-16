@@ -55,17 +55,11 @@ const DEV_PREVIEW_METADATA: GwcaImportMetadata = {
   ],
   mounts: [
     {
-      type: "bind",
-      source: "/srv/payments/config",
-      target: "/app/config",
-      readOnly: true,
-    },
-    {
       type: "volume",
       source: "payments-database",
       target: "/var/lib/postgresql/data",
       readOnly: false,
-      driver: "rexray/s3fs",
+      driver: "local",
       requiresMapping: true,
     },
     {
@@ -92,9 +86,9 @@ const DEV_PREVIEW_NETWORKS: DockerNetwork[] = [
 const DEV_PREVIEW_VOLUMES: DockerVolume[] = [
   {
     name: "payments-database-target",
-    driver: "rexray/s3fs",
+    driver: "local",
     mountpoint: "/var/lib/docker/volumes/payments-database-target",
-    scope: "global",
+    scope: "local",
   },
 ];
 
@@ -126,7 +120,6 @@ export function GwcaImportDialog({
   const [targetNetworks, setTargetNetworks] = useState<DockerNetwork[]>([]);
   const [targetVolumes, setTargetVolumes] = useState<DockerVolume[]>([]);
   const [networkMappings, setNetworkMappings] = useState<Record<string, string>>({});
-  const [bindPaths, setBindPaths] = useState<Record<string, string>>({});
   const [volumeMappings, setVolumeMappings] = useState<Record<string, string>>({});
   const [portMappings, setPortMappings] = useState<Record<string, GwcaPortMappingInput>>({});
   const [planError, setPlanError] = useState("");
@@ -142,7 +135,6 @@ export function GwcaImportDialog({
     setTargetNetworks([]);
     setTargetVolumes([]);
     setNetworkMappings({});
-    setBindPaths({});
     setVolumeMappings({});
     setPortMappings({});
     setPlanError("");
@@ -176,7 +168,6 @@ export function GwcaImportDialog({
         frontend: "frontend",
         "payments-overlay": "production-overlay",
       });
-      setBindPaths({ "/srv/payments/config": "/srv/imported/payments/config" });
       setVolumeMappings({ "payments-database": "payments-database-target" });
       setPortMappings({
         [gwcaPortKey(DEV_PREVIEW_METADATA.ports[0])]: 9443,
@@ -228,13 +219,6 @@ export function GwcaImportDialog({
         setTargetNetworks(plan.networks);
         setTargetVolumes(plan.volumes);
         setNetworkMappings(networkMap);
-        setBindPaths(
-          Object.fromEntries(
-            archive.mounts
-              .filter((entry) => entry.type === "bind")
-              .map((entry) => [entry.source, entry.source])
-          )
-        );
         setVolumeMappings(volumeMap);
         setPortMappings(plan.resolution.ports);
         if (archive.secretKeys.length > 0 && !canImportSecrets) {
@@ -263,7 +247,6 @@ export function GwcaImportDialog({
     () => normalizeGwcaPortMappings(portMappings),
     [portMappings]
   );
-  const bindMounts = metadata?.mounts.filter((entry) => entry.type === "bind") ?? [];
   const externalVolumes =
     metadata?.mounts.filter((entry) => entry.type === "volume" && entry.requiresMapping) ?? [];
   const conflictingPorts =
@@ -313,7 +296,6 @@ export function GwcaImportDialog({
             ])
           ),
           createNetworks,
-          bindPaths,
           volumes: Object.fromEntries(
             Object.entries(volumeMappings).filter(([, target]) => target !== CREATE_NEW_VALUE)
           ),
@@ -532,45 +514,11 @@ export function GwcaImportDialog({
                   </motion.div>
                 )}
 
-                {bindMounts.length > 0 && (
-                  <motion.div key="bind-remapping" {...REMAP_BLOCK_ANIMATION}>
-                    <PanelShell
-                      title="Bind path remapping"
-                      description="Verify that each host path exists and contains the expected data on the target node."
-                    >
-                      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                        <div className="px-3 py-2">Archive path</div>
-                        <div className="border-l border-border px-3 py-2">Target path</div>
-                      </div>
-                      {bindMounts.map((mount) => (
-                        <div
-                          key={`${mount.source}:${mount.target}`}
-                          className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] border-b border-border last:border-b-0"
-                        >
-                          <div className="flex min-h-9 min-w-0 items-center px-3 py-2 text-sm">
-                            <span className="truncate">{mount.source}</span>
-                          </div>
-                          <Input
-                            value={bindPaths[mount.source] ?? mount.source}
-                            onChange={(event) =>
-                              setBindPaths((current) => ({
-                                ...current,
-                                [mount.source]: event.target.value,
-                              }))
-                            }
-                            className="h-9 rounded-none border-0 border-l border-border shadow-none"
-                          />
-                        </div>
-                      ))}
-                    </PanelShell>
-                  </motion.div>
-                )}
-
                 {externalVolumes.length > 0 && (
                   <motion.div key="volume-remapping" {...REMAP_BLOCK_ANIMATION}>
                     <PanelShell
-                      title="External volume remapping"
-                      description="Non-local volumes must be mapped to a compatible volume already available on the target node."
+                      title="Volume remapping"
+                      description="Volumes that cannot be recreated directly must use a new or existing Gateway-managed local volume."
                     >
                       <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
                         <div className="px-3 py-2">Archive volume</div>

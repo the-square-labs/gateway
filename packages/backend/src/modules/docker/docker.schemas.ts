@@ -229,7 +229,6 @@ const ContainerArchiveStringMappingsSchema = z
 export const ContainerArchiveResolutionSchema = z.object({
   networks: ContainerArchiveStringMappingsSchema.optional(),
   createNetworks: z.array(z.string().min(1).max(512)).max(256).optional(),
-  bindPaths: ContainerArchiveStringMappingsSchema.optional(),
   volumes: ContainerArchiveStringMappingsSchema.optional(),
   createVolumes: z.array(z.string().min(1).max(512)).max(256).optional(),
   ports: z

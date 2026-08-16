@@ -832,9 +832,7 @@ describe('events websocket authentication', () => {
     };
     eventBus.publish('docker.runtime.changed', payload);
 
-    expect(ws.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'event', channel: 'docker.runtime.changed', payload })
-    );
+    expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'event', channel: 'docker.runtime.changed', payload }));
 
     handlers.onClose(new Event('close'), ws as any);
   });

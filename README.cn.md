@@ -102,7 +102,7 @@ npx -y @wiolett/gateway-inference@latest setup claude-code
 | 领域 | 摘要 |
 |------|------|
 | Ingress | Domain 选择 public nginx ingress node；route 将流量转发到 address、Docker container 或 deployment；SSL certificate 只部署到实际运行 enabled TLS routes 的 nginx nodes。还包括 maintenance mode、redirects、WebSockets、access lists、health checks、route folders、templates、logs 和 stats。REST API 为兼容性保留 `proxy-host` identifiers。 |
-| Docker | Container lifecycle, deployments, rollout/rollback, shared physical NVIDIA/AMD/Intel GPU attachment, eligible cross-node container 和 volume migrations, offline inventory snapshots, registries, images, networks, volumes, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, mounts 和 cleanup。GPU-attached workloads 在 v1 中不能迁移或导出。 |
+| Docker | Container lifecycle、Default (`runc`) 与 Secure (`runsc`/gVisor) runtime profiles、Gateway-managed volumes、deployments、rollout/rollback、shared physical NVIDIA/AMD/Intel GPU attachment、eligible cross-node container 和 volume migrations、offline inventory snapshots、registries、images、networks、tasks、webhooks、logs、console、file browser、secrets、env vars、ports 和 cleanup。Secure workloads 不支持 GPU、migration 或 export；GPU-attached workloads 在 v1 中也不能迁移或导出。 |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports 和 route binding。 |
 | Domains | Central hostname registry、nginx ingress placement、external 或 Cloudflare-managed DNS、validation、usage tracking 和 explicit ingress migration。 |
 | Databases | Saved PostgreSQL、Redis 和 ClickHouse connections，含 encrypted credentials、health history、browsing、scoped query consoles 和 capability-aware write operations；private-by-default managed Postgres、Redis 和 ClickHouse instances 可安全绑定到 Docker workloads。 |

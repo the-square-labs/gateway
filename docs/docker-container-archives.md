@@ -13,12 +13,12 @@ GWCA v1 contains a Gateway-owned, versioned manifest with only settings that Gat
 - optional Gateway-managed container environment values;
 - optional secret values;
 - published ports;
-- bind and named-volume declarations;
+- named-volume declarations;
 - attached network metadata;
 - restart policy, stop timeout, and supported CPU, memory, and PID limits;
 - either an embedded Docker image or an immutable registry digest.
 
-The manifest is deliberately not a serialized Docker inspect response. Containers using unsupported or host-sensitive settings, such as privileged mode, devices or GPUs, host namespaces, capabilities, custom runtimes, custom log drivers, health checks, or unsupported resource controls, are rejected during export with an explicit reason instead of producing an incomplete archive.
+The manifest is deliberately not a serialized Docker inspect response. Containers using unsupported or host-sensitive settings, such as privileged mode, devices or GPUs, host bind mounts, host namespaces, capabilities, custom runtimes, custom log drivers, health checks, or unsupported resource controls, are rejected during export with an explicit reason instead of producing an incomplete archive. This includes containers using the Secure (`runsc`) runtime profile.
 
 A Gateway-managed GPU attachment is therefore not portable in GWCA v1: the UI disables export and the API rejects it. GPU-attached standalone containers and blue/green deployments also cannot use cross-node migration in this version. Detach the GPU through the normal recreate flow before using either portability workflow.
 
@@ -44,9 +44,9 @@ Open **Docker > Containers**, choose **Import .gwca**, select the archive and ta
 - portable missing networks are created when the user has network-create access;
 - networks that cannot be reproduced fall back to the target node's default `bridge` network;
 - source IP and MAC addresses are discarded so Docker allocates destination-local endpoint addresses;
-- local named volumes are recreated empty with unique names, so old same-named data is never attached accidentally;
-- non-local or plugin-backed volumes must be mapped to a compatible existing destination volume;
-- bind mounts remain explicit and their destination-node host paths can be changed before import;
+- named volumes are recreated empty as uniquely named Gateway-managed local volumes, so old same-named data is never attached accidentally;
+- a source volume that cannot be recreated directly may be replaced with a new managed local volume; an existing destination can be selected only when it is already Gateway-managed and has the safe local driver, local scope, and no driver options;
+- archives containing host bind mounts are rejected rather than importing destination-node host paths;
 - occupied host ports are shown for remapping; port `0` asks Docker to allocate a free host port.
 
 The imported container remains stopped. Gateway restores ordinary environment values and encrypts imported secrets before publishing the created container to the rest of Gateway. If persistence fails after Docker creation, Gateway removes the partial container and archive-created resources.
@@ -56,15 +56,14 @@ The export/import UI is available only for standalone containers. Gateway deploy
 ## API
 
 - `GET /api/docker/nodes/{nodeId}/containers/{containerId}/archive?imageMode=portable&includeWritableLayer=false&includeEnvironment=false&includeSecrets=false` streams an archive. Export always requires the dedicated `docker:containers:export` scope. Portable mode additionally requires container file access; `includeEnvironment=true` requires environment access; and `includeSecrets=true` additionally requires secret access. `imageMode=registry` does not allow writable-layer capture. The API defaults `includeEnvironment` to `true` for existing clients.
-- `POST /api/docker/nodes/{nodeId}/containers/archive?name={newName}&resolution={json}` accepts an `application/vnd.wiolett.gwca` body and requires container-create on the target node. Importing an archive that contains environment or secret values additionally requires the corresponding environment or secret access. The optional `resolution` object can contain `networks`, `bindPaths`, `volumes`, and `ports` mappings; creating archive-declared local volumes or missing networks requires the corresponding create permissions.
+- `POST /api/docker/nodes/{nodeId}/containers/archive?name={newName}&resolution={json}` accepts an `application/vnd.wiolett.gwca` body and requires container-create on the target node. Importing an archive that contains environment or secret values additionally requires the corresponding environment or secret access. The optional `resolution` object can contain `networks`, `volumes`, and `ports` mappings plus `createNetworks` and `createVolumes` lists; creating archive-declared local volumes or missing networks requires the corresponding create permissions.
 
 Example resolution:
 
 ```json
 {
   "networks": { "source-app": "target-app" },
-  "bindPaths": { "/srv/source": "/srv/target" },
-  "volumes": { "shared-nfs": "target-nfs" },
+  "volumes": { "source-data": "managed-target-data" },
   "ports": { "8080/tcp:8080": 18080 }
 }
 ```

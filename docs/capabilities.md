@@ -47,13 +47,14 @@ Container workflows:
 - List containers across managed Docker nodes.
 - Grant container permissions for an entire Docker node or narrow them to one standalone container or blue/green deployment.
 - Start, stop, restart, recreate, duplicate, rename, and remove containers.
+- Choose the Default (`runc`) or Secure (`runsc` through gVisor) isolation profile when the target node reports a healthy Secure Runtime capability. Secure workloads cannot use GPUs, device attachments, host bind mounts, cross-node migration, or `.gwca` export.
 - Attach one or more node-discovered physical NVIDIA, AMD, or Intel GPUs to standalone containers and blue/green deployments. GPU devices are shared rather than reserved; changing a selection recreates the workload, duplicates preserve it, and both blue/green slots receive the same selection.
-- Stream `.gwca` exports and imports in either self-contained portable mode or smaller registry-backed mode. Export is protected by the dedicated, resource-scopable `docker:containers:export` permission in addition to file and environment access. Archives use a Gateway-supported configuration whitelist, always carry ordinary environment values, can optionally carry secrets, and can optionally capture the writable layer without pausing. Registry-backed archives pull and verify an immutable digest. Volume contents are never included; local volumes are recreated empty, while bind paths, external volumes, networks, and occupied ports can be remapped for the target node.
+- Stream `.gwca` exports and imports in either self-contained portable mode or smaller registry-backed mode. Export is protected by the dedicated, resource-scopable `docker:containers:export` permission in addition to file and environment access. Archives use a Gateway-supported configuration whitelist, always carry ordinary environment values, can optionally carry secrets, and can optionally capture the writable layer without pausing. Registry-backed archives pull and verify an immutable digest. Volume contents are never included; source volumes are restored as empty managed local volumes unless an eligible existing managed local volume is selected. Host bind mounts are not portable. Networks and occupied ports can be remapped for the target node.
 - Create, inspect, and remove images, volumes, and networks across managed nodes.
 - Run durable cross-node migrations for eligible containers and blue/green deployments, including image and volume transfer, capacity preflight, verification, cutover, cancellation, and cleanup recovery. GPU-attached workloads are intentionally not portable in v1.
 - Move resource-scoped grants with a container or deployment during migration. Recreates preserve the stable access identity; explicit deletion removes its grants so a later same-name resource starts without inherited access.
 - Edit image, command, environment variables, secrets, labels, ports, restart policy, and runtime limits.
-- Edit mounts only with the dedicated `docker:containers:mounts` scope. Existing mounts are preserved during normal image, environment, and webhook updates.
+- Edit mounts only with the dedicated `docker:containers:mounts` scope. New and changed mounts accept only Gateway-managed local volumes; new host bind mounts are rejected. Existing legacy mounts are preserved during normal image, environment, and webhook updates.
 - Browse container logs with search and follow mode.
 - Open an interactive container console.
 - Browse and edit container files when permitted.
@@ -73,7 +74,7 @@ Deployment workflows:
 
 Safety controls:
 
-- Mount editing is separated from normal container editing because host bind mounts can expose sensitive host data or control surfaces.
+- Mount editing is separated from normal container editing and constrained to Gateway-managed local volumes. Legacy mounts remain visible only where needed for compatibility and cannot be reintroduced after removal.
 - Secrets are masked by default.
 - Dangerous operations are permission-scoped and audited.
 

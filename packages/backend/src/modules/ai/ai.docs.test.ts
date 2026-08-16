@@ -105,6 +105,14 @@ describe('AI internal docs registry', () => {
     expect(getInternalDocumentation('users', ['admin:users']).content).toContain('additional per-user scopes');
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain('Cross-Node Migrations');
     expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain('last synchronized state');
+    expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain('Isolation Profiles');
+    expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
+      'Secure workloads cannot attach GPUs or devices, use host bind mounts, migrate between nodes, or export'
+    );
+    expect(getInternalDocumentation('docker', ['docker:containers:view']).content).toContain(
+      'New or changed mounts can reference only Gateway-managed local volumes'
+    );
+    expect(getInternalDocumentation('nodes', ['nodes:details']).content).toContain('manual Setup in Node Details');
     expect(getInternalDocumentation('databases', ['databases:view']).content).toContain('Managed Instance Access');
     expect(getInternalDocumentation('databases', ['databases:view']).content).toContain(
       'private connector and authenticated Gateway tunnel'

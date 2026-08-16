@@ -457,9 +457,10 @@ curl -sSL https://gitlab.wiolett.net/wiolett/gateway/-/raw/main/scripts/setup-mo
 
 The setup script:
 1. Downloads the daemon binary to \`/usr/local/bin/<type>-daemon\`
-2. Creates config at \`/etc/<type>-daemon/config.yaml\` with the gateway address, token, and certificate fingerprint
-3. Creates a systemd service and enables it
-4. Starts the daemon — it connects to the gateway and completes mTLS enrollment automatically
+2. On a fresh generic Docker node, preflights and attempts to install the optional Secure Runtime before enrollment. Database-profile nodes skip this generic-workload runtime.
+3. Creates config at \`/etc/<type>-daemon/config.yaml\` with the gateway address, token, and certificate fingerprint
+4. Creates a systemd service and enables it
+5. Starts the daemon — it connects to the gateway and completes mTLS enrollment automatically
 
 ### Step 3: Verify connection
 The node status changes from **pending** to **online** in the Nodes list once the daemon connects. The enrollment token is invalidated after first use.
@@ -510,6 +511,7 @@ Daemons report hardware/OS info on registration:
 - Daemons report localIpAddresses and publicIpAddresses. Docker nodes may set serviceAddress explicitly; otherwise Gateway uses the first reported local address and then a public address for cross-node/proxy-upstream traffic.
 - **Nginx nodes** additionally report: nginx status, uptime, worker count, error rates (4xx/5xx), stub status stats.
 - **Docker nodes** additionally report: container count (running/stopped/total), per-container CPU/memory/network stats, Docker version.
+- Generic Docker nodes report Secure Runtime state, version, setup progress, and compatibility. Existing nodes expose manual Setup in Node Details to administrators with \`admin:update\`; do not attempt remote installation through a console unless the user explicitly asks for host-level repair.
 - **Traffic stats** (nginx only): parsed from access logs — status code distribution, response times.
 - Background polling at 10s intervals; 5s when a user is actively viewing the node detail page.
 
@@ -602,9 +604,18 @@ other stable hint to locate the recreated container and continue with its new ID
 - **Requires recreate**: port mappings, volume mounts, entrypoint, command, stop grace period, working dir, hostname, labels, image tag
 - **Stop grace period**: container-level Docker stop timeout in seconds (0-300). Stop/restart tools use this configured value when no explicit timeout is supplied, falling back to 20 seconds.
 
+## Isolation Profiles
+- **Default** uses Docker \`runc\` for standard compatibility and GPU/device support.
+- **Secure** uses gVisor \`runsc\` for a stronger host-isolation boundary. It is not a virtual machine or a promise of universal Linux syscall compatibility.
+- Secure can be selected only when the target node reports a healthy Secure Runtime state. Creation fails closed while setup is unknown, installing, unhealthy, or unsupported; direct the administrator to **Node Details > Secure Runtime Setup**.
+- Secure Runtime needs no KVM. It supports compatible Linux amd64/arm64 hosts with a local, restartable Docker Engine. Compatible LXC guests can work when nested Docker and the required host capabilities are available; do not claim universal LXC support.
+- Secure workloads cannot attach GPUs or devices, use host bind mounts, migrate between nodes, or export as \`.gwca\` archives. Changing profile recreates the workload.
+- Every newly created Gateway workload in either profile is non-privileged, adds no Linux capabilities, and receives \`no-new-privileges\`.
+
 ## Images, Volumes, Networks
 - Images: list, pull from registries, remove, prune unused
-- Volumes: list, create, remove (shows which containers use each volume)
+- Volumes: create produces a Gateway-managed local volume with no custom driver. New or changed mounts can reference only Gateway-managed local volumes; never propose a host bind path.
+- Existing legacy mounts remain unchanged during ordinary updates. A legacy volume can be adopted in the UI only when it uses the local driver, local scope, and no driver options. Orphaned unmanaged volumes are hidden.
 - Networks: list, create, remove, connect/disconnect containers
 
 ## Inventory Availability
@@ -613,9 +624,10 @@ other stable hint to locate the recreated container and continue with its new ID
 
 ## Cross-Node Migrations
 - Gateway can migrate a standalone container or a blue/green deployment to another Docker node, including referenced images, named-volume data, capacity preflight, verification, proxy cutover, cancellation, and cleanup recovery.
+- Secure Runtime workloads and GPU-attached workloads are not eligible for cross-node migration in the current version.
 - Migration requires \`docker:containers:migrate\` plus the source-resource permissions needed to inspect protected configuration, secrets, and mounts.
 - Use \`manage_docker_migration\` to preflight first, start with the returned fingerprint, inspect progress, cancel before cutover, or retry cleanup. Never start without a blocker-free current preflight.
-- Container archive export requires \`docker:containers:export\` plus file and environment access for the source container. Secret values are included only when the caller also has \`docker:containers:secrets\`.
+- Container archive export requires \`docker:containers:export\` plus file and environment access for the source container. Secret values are included only when the caller also has \`docker:containers:secrets\`. Secure Runtime workloads and containers with host bind mounts cannot be exported. Import rejects host bind mounts and accepts existing volume selections only from safe Gateway-managed local volumes.
 
 ## Registries & Templates
 - Registries: add private Docker registries with encrypted credentials. Global or node-specific scope.

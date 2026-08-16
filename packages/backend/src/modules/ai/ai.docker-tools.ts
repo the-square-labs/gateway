@@ -95,6 +95,7 @@ export async function executeDockerTool(
         env: a.env,
         networks: a.networks,
         restartPolicy: a.restartPolicy ?? 'no',
+        runtimeProfile: a.runtimeProfile,
         stopTimeout: a.stopTimeout,
         labels: a.labels,
         command: a.command,

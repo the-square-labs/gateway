@@ -7,7 +7,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'create_docker_container',
     description:
-      'Create and start a new Docker container on a node from an image already present on that node. Before first creation, use list_docker_images and pull_docker_image when the requested image is absent, then wait for the pull task to complete. Specify image, ports, volumes, env vars, networks, restart policy, and labels. For public Docker Hub images such as nginx:alpine, omit registryId; a saved registry is not required.',
+      'Create and start a new Docker container on a node from an image already present on that node. Before first creation, use list_docker_images and pull_docker_image when the requested image is absent, then wait for the pull task to complete. Volume mounts may reference only existing Gateway-managed volumes; never provide host bind paths. Secure runtime requires a healthy Secure Runtime capability on the node and does not support GPU or device attachments. For public Docker Hub images such as nginx:alpine, omit registryId; a saved registry is not required.',
     parameters: {
       type: 'object',
       properties: {
@@ -34,20 +34,16 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         },
         volumes: {
           type: 'array',
-          description: 'Volume mounts. Supplying mounts also requires docker:containers:mounts for the node.',
+          description:
+            'Existing Gateway-managed named-volume mounts. Supplying mounts also requires docker:containers:mounts for the node.',
           items: {
             type: 'object',
             properties: {
-              hostPath: { type: 'string', description: 'Host path (for bind mounts)' },
               containerPath: { type: 'string' },
-              name: { type: 'string', description: 'Volume name (for named volumes)' },
+              name: { type: 'string', description: 'Existing Gateway-managed volume name' },
               readOnly: { type: 'boolean' },
             },
-            required: ['containerPath'],
-            oneOf: [
-              { properties: { hostPath: {} }, required: ['hostPath'] },
-              { properties: { name: {} }, required: ['name'] },
-            ],
+            required: ['containerPath', 'name'],
           },
         },
         env: { type: 'object', description: 'Environment variables as key-value pairs' },
@@ -56,6 +52,11 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
           type: 'string',
           enum: ['no', 'always', 'unless-stopped', 'on-failure'],
           description: 'Default: no',
+        },
+        runtimeProfile: {
+          type: 'string',
+          enum: ['default', 'secure'],
+          description: 'Container isolation profile. Default: default (runc). Secure uses gVisor runsc.',
         },
         stopTimeout: {
           type: 'integer',
@@ -551,7 +552,8 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   // ── Docker: Volumes & Networks ──
   {
     name: 'list_docker_volumes',
-    description: 'List Docker volumes on a specific node.',
+    description:
+      'List Gateway-managed volumes plus legacy volumes still attached to visible Gateway containers on a specific node. Orphaned unmanaged volumes are hidden.',
     parameters: {
       type: 'object',
       properties: {
@@ -611,7 +613,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_volume',
     description:
-      'Create or delete Docker volumes on a node. Operations: create, delete. Listing is available via list_docker_volumes.',
+      'Create or delete Docker volumes on a node. Create always produces a Gateway-managed local volume and accepts no driver setting. Legacy-volume adoption remains an explicit UI action. Listing is available via list_docker_volumes.',
     parameters: {
       type: 'object',
       properties: {

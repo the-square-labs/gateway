@@ -204,6 +204,9 @@ export async function readGwcaImportMetadata(file: File): Promise<GwcaImportMeta
   ) {
     throw new Error("Container archive manifest is invalid");
   }
+  if (mounts.some((entry) => entry.type === "bind")) {
+    throw new Error("Container archives with host bind mounts cannot be imported");
+  }
   return {
     name: parsed.container.name,
     networks,
