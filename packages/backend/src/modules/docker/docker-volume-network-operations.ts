@@ -505,21 +505,12 @@ export async function createVolume(
       origin: 'created',
       createdById: userId,
     });
-  } catch (error) {
-    try {
-      const rollback = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'remove', {
-        name: config.name,
-        force: false,
-      });
-      context.parseResult(rollback);
-    } catch {
-      throw new AppError(
-        500,
-        'MANAGED_VOLUME_REGISTRY_FAILED',
-        `Volume "${config.name}" was created but could not be registered or removed; resolve it from the Docker host before retrying`
-      );
-    }
-    throw error;
+  } catch {
+    throw new AppError(
+      500,
+      'MANAGED_VOLUME_REGISTRY_FAILED',
+      `Volume "${config.name}" was created but could not be registered; its data was preserved and must be resolved from the Docker host before retrying`
+    );
   }
   await context.auditService.log({
     action: 'docker.volume.create',

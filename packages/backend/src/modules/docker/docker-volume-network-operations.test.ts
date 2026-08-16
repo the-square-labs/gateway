@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { adoptVolume, exportVolume, listVolumes } from './docker-volume-network-operations.js';
+import { adoptVolume, createVolume, exportVolume, listVolumes } from './docker-volume-network-operations.js';
 
 describe('exportVolume', () => {
   it('returns daemon bytes unchanged instead of decoding them as UTF-8 detail text', async () => {
@@ -32,6 +32,23 @@ describe('exportVolume', () => {
 });
 
 describe('managed volume inventory', () => {
+  it('preserves a newly created volume when registry persistence fails', async () => {
+    const values = vi.fn().mockRejectedValue(new Error('database unavailable'));
+    const sendDockerVolumeCommand = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
+    const context = {
+      db: { insert: vi.fn(() => ({ values })) },
+      nodeDispatch: { sendDockerVolumeCommand },
+      auditService: { log: vi.fn() },
+      parseResult: (result: { detail?: string }) => JSON.parse(result.detail ?? 'null'),
+    };
+
+    await expect(createVolume(context as never, 'node-1', { name: 'data' }, 'user-1')).rejects.toMatchObject({
+      code: 'MANAGED_VOLUME_REGISTRY_FAILED',
+    });
+    expect(sendDockerVolumeCommand).toHaveBeenCalledTimes(1);
+    expect(sendDockerVolumeCommand).toHaveBeenCalledWith('node-1', 'create', { name: 'data' });
+  });
+
   it('shows managed and user-attached legacy volumes while hiding orphaned and internal-only legacy volumes', async () => {
     const where = vi.fn().mockResolvedValue([{ volumeName: 'managed' }, { volumeName: 'missing' }]);
     const context = {

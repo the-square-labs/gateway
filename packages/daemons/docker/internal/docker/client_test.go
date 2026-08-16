@@ -86,6 +86,90 @@ func TestSecureRuntimeProfileFailsClosedAndRejectsGPU(t *testing.T) {
 	}
 }
 
+func TestCreateManagedVolumeRejectsExistingVolumeWithoutCreating(t *testing.T) {
+	createCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/volumes/data"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Name":"data","Driver":"local","Labels":{}}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/volumes/create"):
+			createCalls++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Name":"data","Driver":"local","Labels":{}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cli, err := client.NewClientWithOpts(client.WithHost(server.URL), client.WithVersion("1.43"))
+	if err != nil {
+		t.Fatalf("create docker client: %v", err)
+	}
+	defer cli.Close()
+
+	c := &Client{cli: cli, logger: slog.Default()}
+	if err := c.CreateManagedVolume(context.Background(), "data"); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected existing-volume conflict, got %v", err)
+	}
+	if createCalls != 0 {
+		t.Fatalf("volume create calls = %d, want 0", createCalls)
+	}
+}
+
+func TestCreateManagedVolumeRejectsConcurrentUnmanagedResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/volumes/data"):
+			http.NotFound(w, r)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/volumes/create"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Name":"data","Driver":"local","Labels":{}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cli, err := client.NewClientWithOpts(client.WithHost(server.URL), client.WithVersion("1.43"))
+	if err != nil {
+		t.Fatalf("create docker client: %v", err)
+	}
+	defer cli.Close()
+
+	c := &Client{cli: cli, logger: slog.Default()}
+	if err := c.CreateManagedVolume(context.Background(), "data"); err == nil || !strings.Contains(err.Error(), "appeared concurrently") {
+		t.Fatalf("expected concurrent-volume conflict, got %v", err)
+	}
+}
+
+func TestCreateManagedVolumeCreatesLabeledVolume(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/volumes/data"):
+			http.NotFound(w, r)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/volumes/create"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Name":"data","Driver":"local","Labels":{"com.wiolett.gateway.managed-volume":"true","com.wiolett.gateway.managed-volume-origin":"created"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cli, err := client.NewClientWithOpts(client.WithHost(server.URL), client.WithVersion("1.43"))
+	if err != nil {
+		t.Fatalf("create docker client: %v", err)
+	}
+	defer cli.Close()
+
+	c := &Client{cli: cli, logger: slog.Default()}
+	if err := c.CreateManagedVolume(context.Background(), "data"); err != nil {
+		t.Fatalf("create managed volume: %v", err)
+	}
+}
+
 func writeDockerLogFrame(t *testing.T, buf *bytes.Buffer, payload string) {
 	t.Helper()
 	header := make([]byte, 8)

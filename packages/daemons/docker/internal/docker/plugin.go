@@ -983,10 +983,7 @@ func (p *DockerPlugin) handleVolumeCommand(cmd *pb.DockerVolumeCommand, result *
 			result.Error = "name is required for volume create"
 			return
 		}
-		if err := p.client.CreateVolume(ctx, cmd.Name, "local", map[string]string{
-			managedVolumeLabel:       "true",
-			managedVolumeOriginLabel: "created",
-		}); err != nil {
+		if err := p.client.CreateManagedVolume(ctx, cmd.Name); err != nil {
 			result.Success = false
 			result.Error = err.Error()
 			return

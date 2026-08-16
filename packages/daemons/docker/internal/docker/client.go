@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -44,10 +45,11 @@ var detailedContainerTopArgs = []string{"-eo", "pid,user,%cpu,%mem,vsz,rss,tty,s
 
 // Client wraps the Docker SDK client with convenience methods.
 type Client struct {
-	cli          *client.Client
-	logger       *slog.Logger
-	gpuInventory gpuInventory
-	runscHealthy atomic.Bool
+	cli                      *client.Client
+	logger                   *slog.Logger
+	gpuInventory             gpuInventory
+	runscHealthy             atomic.Bool
+	managedVolumeCreateMutex sync.Mutex
 }
 
 func (c *Client) SetRunscHealthy(healthy bool) {
@@ -1908,6 +1910,39 @@ func (c *Client) CreateVolume(ctx context.Context, name string, driver string, l
 	_, err := c.cli.VolumeCreate(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("volume create: %w", err)
+	}
+	return nil
+}
+
+// CreateManagedVolume creates a new Gateway-owned volume without adopting an
+// existing Docker volume with the same name. Docker's volume-create API is
+// idempotent by name, so the explicit inspection and serialized create prevent
+// a create request from silently claiming pre-existing data.
+func (c *Client) CreateManagedVolume(ctx context.Context, name string) error {
+	c.managedVolumeCreateMutex.Lock()
+	defer c.managedVolumeCreateMutex.Unlock()
+
+	if _, err := c.cli.VolumeInspect(ctx, name, client.VolumeInspectOptions{}); err == nil {
+		return fmt.Errorf("volume %q already exists", name)
+	} else if !cerrdefs.IsNotFound(err) {
+		return fmt.Errorf("check existing volume %q: %w", name, err)
+	}
+
+	labels := map[string]string{
+		managedVolumeLabel:       "true",
+		managedVolumeOriginLabel: "created",
+	}
+	result, err := c.cli.VolumeCreate(ctx, client.VolumeCreateOptions{
+		Name:   name,
+		Driver: "local",
+		Labels: labels,
+	})
+	if err != nil {
+		return fmt.Errorf("volume create: %w", err)
+	}
+	if result.Volume.Labels[managedVolumeLabel] != labels[managedVolumeLabel] ||
+		result.Volume.Labels[managedVolumeOriginLabel] != labels[managedVolumeOriginLabel] {
+		return fmt.Errorf("volume %q appeared concurrently and was left unchanged", name)
 	}
 	return nil
 }
