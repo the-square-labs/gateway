@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { dockerManagedVolumes } from '@/db/schema/index.js';
 import { commandResultDataToBuffer } from '@/lib/command-result-data.js';
+import { isMatchingUniqueConstraintViolation } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -505,7 +506,10 @@ export async function createVolume(
       origin: 'created',
       createdById: userId,
     });
-  } catch {
+  } catch (error) {
+    if (isMatchingUniqueConstraintViolation(error, 'docker_managed_volumes_pkey')) {
+      throw new AppError(409, 'NAME_IN_USE', `A managed volume named "${config.name}" already exists on this node`);
+    }
     throw new AppError(
       500,
       'MANAGED_VOLUME_REGISTRY_FAILED',

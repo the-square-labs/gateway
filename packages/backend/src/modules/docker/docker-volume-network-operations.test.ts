@@ -32,6 +32,28 @@ describe('exportVolume', () => {
 });
 
 describe('managed volume inventory', () => {
+  it('reports a managed volume name conflict without claiming registry failure', async () => {
+    const duplicate = Object.assign(new Error('duplicate'), {
+      code: '23505',
+      constraint: 'docker_managed_volumes_pkey',
+    });
+    const values = vi.fn().mockRejectedValue(duplicate);
+    const sendDockerVolumeCommand = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
+    const context = {
+      db: { insert: vi.fn(() => ({ values })) },
+      nodeDispatch: { sendDockerVolumeCommand },
+      auditService: { log: vi.fn() },
+      parseResult: (result: { detail?: string }) => JSON.parse(result.detail ?? 'null'),
+    };
+
+    await expect(createVolume(context as never, 'node-1', { name: 'data' }, 'user-1')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'NAME_IN_USE',
+      message: 'A managed volume named "data" already exists on this node',
+    });
+    expect(sendDockerVolumeCommand).toHaveBeenCalledTimes(1);
+  });
+
   it('preserves a newly created volume when registry persistence fails', async () => {
     const values = vi.fn().mockRejectedValue(new Error('database unavailable'));
     const sendDockerVolumeCommand = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
