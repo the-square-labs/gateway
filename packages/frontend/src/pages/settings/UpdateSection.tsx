@@ -44,11 +44,11 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
   const handleCheckUpdate = async () => {
     await checkForUpdates();
     const s = useUpdateStore.getState().status;
-    if (s?.updateAvailable && s.relay.updateAvailable) {
+    if (s?.updateAvailable && s.relay?.updateAvailable) {
       toast.info(`Gateway ${s.latestVersion} and Relay ${s.relay.latestVersion} are available`);
     } else if (s?.updateAvailable) {
       toast.info(`Gateway update available: ${s.latestVersion}`);
-    } else if (s?.relay.updateAvailable) {
+    } else if (s?.relay?.updateAvailable) {
       toast.info(`Relay update available: ${s.relay.latestVersion}`);
     } else {
       toast.success("Already up to date");
@@ -83,7 +83,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
   };
 
   const handleRelayUpdate = async () => {
-    if (!updateStatus?.relay.updateAvailable || !updateStatus.relay.latestVersion) return;
+    if (!updateStatus?.relay?.updateAvailable || !updateStatus.relay.latestVersion) return;
     const ok = await confirm({
       title: "Update Relay",
       description: `Update Relay from ${updateStatus.relay.currentVersion} to ${updateStatus.relay.latestVersion}?`,
@@ -101,7 +101,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
     updateStatus?.updateAvailable && updateStatus.latestVersion
   );
   const relayUpdateAvailable = Boolean(
-    updateStatus?.relay.updateAvailable && updateStatus.relay.latestVersion
+    updateStatus?.relay?.updateAvailable && updateStatus.relay.latestVersion
   );
   const anyUpdateAvailable = gatewayUpdateAvailable || relayUpdateAvailable;
   const relayIncludedInGatewayUpdate = Boolean(
@@ -109,7 +109,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
   );
   const activeReleaseNotes = gatewayUpdateAvailable
     ? updateStatus?.releaseNotes
-    : updateStatus?.relay.releaseNotes;
+    : updateStatus?.relay?.releaseNotes;
 
   return (
     <>

@@ -87,7 +87,7 @@ export function SidebarContent({
   const updateStatus = useUpdateStore((s) => s.status);
   const gatewayUpdateAvailable = updateStatus?.updateAvailable ?? false;
   const relayOnlyUpdateAvailable =
-    !gatewayUpdateAvailable && (updateStatus?.relay.updateAvailable ?? false);
+    !gatewayUpdateAvailable && (updateStatus?.relay?.updateAvailable ?? false);
   const updateAvailable = gatewayUpdateAvailable || relayOnlyUpdateAvailable;
   const updateLabel = relayOnlyUpdateAvailable
     ? "Relay update available"

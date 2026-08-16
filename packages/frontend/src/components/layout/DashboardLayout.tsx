@@ -20,6 +20,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useRouteScrollRestoration } from "@/hooks/use-route-scroll-restoration";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { keyboardNavigationRoutes } from "@/lib/app-navigation";
+import { applyForcedGatewayUpdateStatus } from "@/lib/dev-force-updates";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
 import { isCompactPanelsViewport } from "@/lib/responsive-panels";
 import { ConfigureAIWorkspaceWizard } from "@/pages/dashboard/finalize-setup/ConfigureAIWorkspaceWizard";
@@ -211,7 +212,9 @@ export function DashboardLayout() {
     if (!uiBootstrap) return;
     setSystemConfig(uiBootstrap.systemConfig);
     useDockerStore.getState().setDockerNodes(uiBootstrap.navigation.dockerNodes);
-    if (uiBootstrap.update) useUpdateStore.setState({ status: uiBootstrap.update });
+    if (uiBootstrap.update) {
+      useUpdateStore.setState({ status: applyForcedGatewayUpdateStatus(uiBootstrap.update) });
+    }
     if (uiBootstrap.aiStatus) useAIStore.getState().setProviderStatus(uiBootstrap.aiStatus);
     setSystemConfigReady(true);
   }, [setSystemConfig, uiBootstrap]);
