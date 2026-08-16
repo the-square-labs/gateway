@@ -389,6 +389,40 @@ describe("CommandPalette", () => {
     window.removeEventListener("gateway:open-ai-workspace", openAIWorkspace);
   });
 
+  it("cancels an in-flight resource search when the query changes", async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.searchResources).mockReturnValue(new Promise(() => {}));
+
+    act(() => {
+      useAuthStore.setState({
+        user: {
+          id: "user-1",
+          email: "user@example.com",
+          name: "User One",
+          groupName: "admin",
+          scopes: ["nodes:details"],
+          isBlocked: false,
+        } as never,
+        isAuthenticated: true,
+        isLoading: false,
+      });
+      useAIStore.setState({ isEnabled: false });
+    });
+
+    renderWithRouter(<CommandPalette open onOpenChange={vi.fn()} />);
+    const input = screen.getByPlaceholderText("Search or type > for commands...");
+    fireEvent.change(input, { target: { value: "first query" } });
+    await act(async () => vi.advanceTimersByTime(200));
+
+    const firstSignal = vi.mocked(api.searchResources).mock.calls[0]?.[1]?.signal;
+    expect(firstSignal).toBeInstanceOf(AbortSignal);
+    expect(firstSignal?.aborted).toBe(false);
+
+    fireEvent.change(input, { target: { value: "second query" } });
+    expect(firstSignal?.aborted).toBe(true);
+    vi.useRealTimers();
+  });
+
   it("keeps the search visible until the close animation finishes", async () => {
     renderWithRouter(<CommandPalette open onOpenChange={vi.fn()} />);
     const input = screen.getByPlaceholderText("Search or type > for commands...");
@@ -474,7 +508,10 @@ describe("CommandPalette", () => {
     );
 
     expect(await screen.findByRole("option", { name: /postgres-primary.*Database/ })).toBeVisible();
-    expect(api.searchResources).toHaveBeenCalledWith("postgres", { limit: 20 });
+    expect(api.searchResources).toHaveBeenCalledWith("postgres", {
+      limit: 20,
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it("finds deep settings and profile destinations without cluttering the default list", async () => {

@@ -399,14 +399,16 @@ class ApiClient extends withInferenceApi(
 
   async searchResources(
     query: string,
-    options?: { types?: string[]; nodeId?: string; limit?: number }
+    options?: { types?: string[]; nodeId?: string; limit?: number; signal?: AbortSignal }
   ): Promise<ResourceSearchResponse> {
     const params = new URLSearchParams({ q: query });
     if (options?.types?.length) params.set("types", options.types.join(","));
     if (options?.nodeId) params.set("nodeId", options.nodeId);
     if (options?.limit) params.set("limit", String(options.limit));
     return this.unwrapData(
-      this.request<{ data: ResourceSearchResponse }>(`/resources/search?${params.toString()}`)
+      this.request<{ data: ResourceSearchResponse }>(`/resources/search?${params.toString()}`, {
+        signal: options?.signal,
+      })
     );
   }
 

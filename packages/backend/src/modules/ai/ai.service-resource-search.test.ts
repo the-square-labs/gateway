@@ -17,11 +17,21 @@ function createService({
   proxyService = {},
   nodesService = {},
   dockerService = {},
+  dockerSnapshotService = {},
 }: {
   proxyService?: Record<string, unknown>;
   nodesService?: Record<string, unknown>;
   dockerService?: Record<string, unknown>;
+  dockerSnapshotService?: Record<string, unknown>;
 }) {
+  const resolvedDockerService = {
+    decoratePublicContainerSnapshot: vi.fn(async (_nodeId: string, containers: unknown) => containers),
+    ...dockerService,
+  };
+  const resolvedDockerSnapshotService = {
+    getList: vi.fn().mockResolvedValue({ data: [] }),
+    ...dockerSnapshotService,
+  };
   return new AIService(
     {} as never,
     {} as never,
@@ -38,7 +48,20 @@ function createService({
     nodesService as never,
     {} as never,
     {} as never,
-    dockerService as never
+    resolvedDockerService as never,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    resolvedDockerSnapshotService as never
   );
 }
 
@@ -104,15 +127,18 @@ describe('AIService resource search tool', () => {
         totalPages: 1,
       }),
     };
-    const dockerService = {
-      listContainers: vi
+    const dockerSnapshotService = {
+      getList: vi
         .fn()
-        .mockResolvedValueOnce([{ Id: 'container-1', Name: '/api', Image: 'gateway/api:latest', State: 'running' }])
-        .mockResolvedValueOnce([
-          { Id: 'container-2', Name: '/worker', Image: 'gateway/worker:latest', State: 'running' },
-        ]),
+        .mockResolvedValueOnce({
+          data: [{ Id: 'container-1', Name: '/api', Image: 'gateway/api:latest', State: 'running' }],
+        })
+        .mockResolvedValueOnce({
+          data: [{ Id: 'container-2', Name: '/worker', Image: 'gateway/worker:latest', State: 'running' }],
+        }),
     };
-    const service = createService({ nodesService, dockerService });
+    const dockerService = { listContainers: vi.fn() };
+    const service = createService({ nodesService, dockerService, dockerSnapshotService });
 
     const result = await service.executeTool(
       { ...BASE_USER, scopes: ['docker:containers:view:node-1', 'docker:containers:view:node-2'] },
@@ -124,9 +150,10 @@ describe('AIService resource search tool', () => {
       { type: 'docker', page: 1, limit: 100 },
       { allowedIds: ['node-1', 'node-2'] }
     );
-    expect(dockerService.listContainers).toHaveBeenCalledTimes(2);
-    expect(dockerService.listContainers).toHaveBeenNthCalledWith(1, 'node-1');
-    expect(dockerService.listContainers).toHaveBeenNthCalledWith(2, 'node-2');
+    expect(dockerSnapshotService.getList).toHaveBeenCalledTimes(2);
+    expect(dockerSnapshotService.getList).toHaveBeenNthCalledWith(1, 'node-1', 'containers');
+    expect(dockerSnapshotService.getList).toHaveBeenNthCalledWith(2, 'node-2', 'containers');
+    expect(dockerService.listContainers).not.toHaveBeenCalled();
     expect((result.result as { results: Array<{ id: string; nodeId: string; nodeSlug: string }> }).results).toEqual([
       expect.objectContaining({
         type: 'docker_container',
@@ -145,6 +172,91 @@ describe('AIService resource search tool', () => {
     ]);
   });
 
+  it('searches independent sources concurrently while preserving source order', async () => {
+    let resolveProxySearch!: (value: { data: Array<Record<string, unknown>>; total: number }) => void;
+    const proxyService = {
+      listProxyHosts: vi.fn().mockReturnValue(
+        new Promise<{ data: Array<Record<string, unknown>>; total: number }>((resolve) => {
+          resolveProxySearch = resolve;
+        })
+      ),
+    };
+    const nodesService = {
+      list: vi.fn().mockResolvedValue({
+        data: [{ id: 'node-1', slug: 'node-one' }],
+        totalPages: 1,
+      }),
+    };
+    const dockerSnapshotService = {
+      getList: vi.fn().mockResolvedValue({
+        data: [{ Id: 'container-1', Name: '/api', Image: 'gateway/api:latest', State: 'running' }],
+      }),
+    };
+    const service = createService({ proxyService, nodesService, dockerSnapshotService });
+
+    const resultPromise = service.executeTool(
+      { ...BASE_USER, scopes: ['proxy:view', 'docker:containers:view:node-1'] },
+      'find_resource',
+      { query: 'api', types: ['proxy_host', 'docker_container'] }
+    );
+
+    await vi.waitFor(() => expect(dockerSnapshotService.getList).toHaveBeenCalledOnce());
+    resolveProxySearch({
+      data: [{ id: 'host-1', domainNames: ['api.example.com'], nodeId: 'node-1', enabled: true }],
+      total: 1,
+    });
+
+    const result = await resultPromise;
+    expect((result.result as { results: Array<{ type: string }> }).results.map((item) => item.type)).toEqual([
+      'proxy_host',
+      'docker_container',
+    ]);
+  });
+
+  it('reads Docker image, volume, and network inventories from snapshots without daemon calls', async () => {
+    const nodesService = {
+      list: vi.fn().mockResolvedValue({
+        data: [{ id: 'node-1', slug: 'node-one' }],
+        totalPages: 1,
+      }),
+    };
+    const dockerSnapshotService = {
+      getList: vi.fn(async (_nodeId: string, kind: string) => ({
+        data:
+          kind === 'images'
+            ? [{ Id: 'image-1', RepoTags: ['example/app:secure'] }]
+            : kind === 'volumes'
+              ? [{ Name: 'secure-data', Driver: 'local' }]
+              : [{ Id: 'network-1', Name: 'secure-network', Driver: 'bridge' }],
+      })),
+    };
+    const dockerService = {
+      listImages: vi.fn(),
+      listVolumes: vi.fn(),
+      listNetworks: vi.fn(),
+    };
+    const service = createService({ nodesService, dockerService, dockerSnapshotService });
+
+    const result = await service.executeTool(
+      {
+        ...BASE_USER,
+        scopes: ['docker:images:view:node-1', 'docker:volumes:view:node-1', 'docker:networks:view:node-1'],
+      },
+      'find_resource',
+      { query: 'secure', types: ['docker_image', 'docker_volume', 'docker_network'] }
+    );
+
+    expect((result.result as { results: Array<{ type: string; name: string }> }).results).toEqual([
+      expect.objectContaining({ type: 'docker_image', name: 'example/app:secure' }),
+      expect.objectContaining({ type: 'docker_volume', name: 'secure-data' }),
+      expect.objectContaining({ type: 'docker_network', name: 'secure-network' }),
+    ]);
+    expect(dockerSnapshotService.getList).toHaveBeenCalledTimes(3);
+    expect(dockerService.listImages).not.toHaveBeenCalled();
+    expect(dockerService.listVolumes).not.toHaveBeenCalled();
+    expect(dockerService.listNetworks).not.toHaveBeenCalled();
+  });
+
   it('lists typed resources when query is empty', async () => {
     const nodesService = {
       list: vi.fn().mockResolvedValue({
@@ -152,13 +264,15 @@ describe('AIService resource search tool', () => {
         totalPages: 1,
       }),
     };
-    const dockerService = {
-      listContainers: vi.fn().mockResolvedValue([
-        { Id: 'container-1', Name: '/api', Image: 'gateway/api:latest', State: 'running' },
-        { Id: 'container-2', Name: '/db', Image: 'postgres:16', State: 'exited' },
-      ]),
+    const dockerSnapshotService = {
+      getList: vi.fn().mockResolvedValue({
+        data: [
+          { Id: 'container-1', Name: '/api', Image: 'gateway/api:latest', State: 'running' },
+          { Id: 'container-2', Name: '/db', Image: 'postgres:16', State: 'exited' },
+        ],
+      }),
     };
-    const service = createService({ nodesService, dockerService });
+    const service = createService({ nodesService, dockerSnapshotService });
 
     const result = await service.executeTool(
       { ...BASE_USER, scopes: ['docker:containers:view:node-1'] },
@@ -168,7 +282,7 @@ describe('AIService resource search tool', () => {
 
     expect(result.error).toBeUndefined();
     expect(nodesService.list).toHaveBeenCalledWith({ type: 'docker', page: 1, limit: 100 }, { allowedIds: ['node-1'] });
-    expect(dockerService.listContainers).toHaveBeenCalledWith('node-1');
+    expect(dockerSnapshotService.getList).toHaveBeenCalledWith('node-1', 'containers');
     expect((result.result as { results: Array<{ id: string; nodeId: string }> }).results).toEqual([
       expect.objectContaining({ type: 'docker_container', id: 'api', name: 'api', nodeId: 'node-1' }),
       expect.objectContaining({ type: 'docker_container', id: 'db', name: 'db', nodeId: 'node-1' }),

@@ -23,6 +23,7 @@ import type { AuthService } from '@/modules/auth/auth.service.js';
 import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import type { DatabaseConnectionService } from '@/modules/databases/databases.service.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
+import type { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
 import type { DomainsService } from '@/modules/domains/domain.service.js';
 import type { GroupService } from '@/modules/groups/group.service.js';
 import { LicenseService } from '@/modules/license/license.service.js';
@@ -844,7 +845,8 @@ export class AIService {
     private readonly siemDestinationService?: import('@/modules/audit/siem-destination.service.js').SiemDestinationService,
     private readonly siemDeliveryService?: import('@/modules/audit/siem-delivery.service.js').SiemDeliveryService,
     private readonly generalSettingsService?: import('@/modules/settings/general-settings.service.js').GeneralSettingsService,
-    private readonly planService?: AIPlanService
+    private readonly planService?: AIPlanService,
+    private readonly dockerSnapshotService?: DockerSnapshotService
   ) {}
 
   private async resolveCurrentApprovalMode(user: User): Promise<AIApprovalMode> {
@@ -2291,6 +2293,8 @@ export class AIService {
         executeToolInternal: (executionUser, delegatedToolName, delegatedArgs) =>
           this.executeToolInternal(executionUser, delegatedToolName, delegatedArgs, runtimeContext),
         nodesService: this.nodesService,
+        dockerService: this.dockerService,
+        dockerSnapshotService: this.dockerSnapshotService,
       },
       user,
       args

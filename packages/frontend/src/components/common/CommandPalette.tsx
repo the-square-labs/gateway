@@ -122,6 +122,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const [resourceResults, setResourceResults] = useState<ResourceSearchResult[]>([]);
   const [resourceSearchPending, setResourceSearchPending] = useState(false);
   const resourceSearchSequence = useRef(0);
+  const resourceSearchAbortController = useRef<AbortController | null>(null);
 
   const { user, hasScope, hasAnyScope, hasScopedAccess, logout } = useAuthStore();
   const { setTheme, theme, toggleSidebar } = useUIStore();
@@ -247,6 +248,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
   useEffect(() => {
     const sequence = ++resourceSearchSequence.current;
+    resourceSearchAbortController.current?.abort();
+    resourceSearchAbortController.current = null;
     if (!open) return;
     if (isCommandMode || searchQuery.length < 2) {
       setResourceResults([]);
@@ -255,9 +258,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     }
 
     setResourceSearchPending(true);
+    const abortController = new AbortController();
+    resourceSearchAbortController.current = abortController;
     const timeout = window.setTimeout(() => {
       void api
-        .searchResources(searchQuery, { limit: 20 })
+        .searchResources(searchQuery, { limit: 20, signal: abortController.signal })
         .then((response) => {
           if (resourceSearchSequence.current === sequence) {
             setResourceResults(response.results);
@@ -271,7 +276,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         });
     }, 200);
 
-    return () => window.clearTimeout(timeout);
+    return () => {
+      window.clearTimeout(timeout);
+      abortController.abort();
+      if (resourceSearchAbortController.current === abortController) {
+        resourceSearchAbortController.current = null;
+      }
+    };
   }, [isCommandMode, open, searchQuery]);
 
   const handleSelect = (callback: () => void) => {

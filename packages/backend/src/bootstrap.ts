@@ -1221,7 +1221,8 @@ export async function initializeContainer(): Promise<void> {
     siemDestinationService,
     siemDeliveryService,
     generalSettingsService,
-    aiPlanService
+    aiPlanService,
+    dockerSnapshotService
   );
   container.registerInstance(AIService, aiService);
   if (!container.isRegistered(AIService)) {
