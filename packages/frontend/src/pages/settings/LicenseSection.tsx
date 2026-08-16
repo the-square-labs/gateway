@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
 import type { LicensePlan, LicenseStatus, LicenseStatusView } from "@/types";
+import { resolveLicensePlan } from "./license-plan";
 
 interface LicenseSectionProps {
   canManage: boolean;
@@ -35,7 +36,7 @@ function planLabel(plan: LicensePlan): string {
 }
 
 function planIconSrc(plan: LicensePlan): string {
-  return `/license/wiolett-gw-${plan}.png`;
+  return `/license/wiolett-gw-${plan}.png?v=2`;
 }
 
 function statusLabel(status: LicenseStatus): string {
@@ -93,24 +94,35 @@ function LicenseKeyValue({ last4 }: { last4: string | null }) {
 }
 
 function LicenseSummary({ status }: { status: LicenseStatusView }) {
+  const plan = resolveLicensePlan(status);
+  const communityRegistrationPending =
+    status.status === "community" && status.registrationStatus !== "registered";
+
   return (
     <div className="flex items-center justify-between gap-4 border-b border-border p-4">
       <div className="flex min-w-0 items-center gap-4">
-        <img src={planIconSrc(status.plan)} alt={planLabel(status.plan)} className="h-10 w-10" />
+        <img src={planIconSrc(plan)} alt={planLabel(plan)} className="h-10 w-10" />
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">{planLabel(status.plan)}</p>
+          <p className="truncate text-sm font-semibold">{planLabel(plan)}</p>
           <p className="truncate text-xs text-muted-foreground mt-0.5">
             {status.hasKey
               ? `Licensed to ${status.licenseName ?? status.installationName}`
-              : status.registrationStatus === "pending"
+              : communityRegistrationPending
                 ? "Community registration pending"
                 : "Community edition"}
           </p>
         </div>
       </div>
-      <Badge className="shrink-0 uppercase" variant={statusVariant(status.status)} size="inline">
-        {statusLabel(status.status)}
-      </Badge>
+      <div className="flex shrink-0 items-center gap-2">
+        <Badge className="uppercase" variant={statusVariant(status.status)}>
+          {statusLabel(status.status)}
+        </Badge>
+        {communityRegistrationPending && (
+          <Badge className="uppercase" variant="warning">
+            Pending registration
+          </Badge>
+        )}
+      </div>
     </div>
   );
 }

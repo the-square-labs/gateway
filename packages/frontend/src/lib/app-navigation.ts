@@ -96,14 +96,6 @@ export const APP_NAVIGATION_GROUPS: readonly AppNavigationGroup[] = [
     label: "Ingress",
     items: [
       {
-        id: "domains",
-        name: "Domains",
-        href: "/domains",
-        icon: Globe2,
-        shortcutKey: "2",
-        keywords: ["dns", "cloudflare"],
-      },
-      {
         id: "proxy-hosts",
         name: "Routes",
         href: "/proxy-hosts",
@@ -118,6 +110,14 @@ export const APP_NAVIGATION_GROUPS: readonly AppNavigationGroup[] = [
         icon: Lock,
         shortcutKey: "4",
         keywords: ["tls", "acme", "letsencrypt"],
+      },
+      {
+        id: "domains",
+        name: "Domains",
+        href: "/domains",
+        icon: Globe2,
+        shortcutKey: "2",
+        keywords: ["dns", "cloudflare"],
       },
     ],
   },

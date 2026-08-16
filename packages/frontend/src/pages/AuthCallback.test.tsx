@@ -1,38 +1,40 @@
 import { screen, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
-import { Route } from "react-router-dom";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import { AuthCallback } from "@/pages/AuthCallback";
-import { api } from "@/services/api";
-import { useAuthStore } from "@/stores/auth";
-import { makeUser } from "@/test/fixtures";
 import { renderWithRouter } from "@/test/render";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("AuthCallback", () => {
   it("loads the current user and redirects after a successful callback", async () => {
-    vi.spyOn(api, "getCurrentUser").mockResolvedValue(makeUser({ scopes: ["nodes:details"] }));
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ id: "user-1" }));
+    const onAuthenticated = vi.fn();
 
     renderWithRouter(
       <StrictMode>
-        <AuthCallback />
+        <AuthCallback onAuthenticated={onAuthenticated} />
       </StrictMode>,
       {
         path: "/callback",
-        route: "/callback",
-        extraRoutes: <Route path="/" element={<div>Dashboard Home</div>} />,
+        route:
+          "/callback?return_to=http%3A%2F%2Flocalhost%3A3000%2Fproxy-hosts%2Froute-1%3Ftab%3Dssl",
       }
     );
 
-    expect(await screen.findByText("Dashboard Home")).toBeInTheDocument();
-
     await waitFor(() => {
-      expect(useAuthStore.getState().isAuthenticated).toBe(true);
+      expect(onAuthenticated).toHaveBeenCalledWith("/proxy-hosts/route-1?tab=ssl");
     });
-    expect(api.getCurrentUser).toHaveBeenCalledOnce();
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(fetchSpy).toHaveBeenCalledWith("/auth/me", { credentials: "include" });
   });
 
   it("shows an error when the current user request fails", async () => {
-    vi.spyOn(api, "getCurrentUser").mockRejectedValue(new Error("Invalid or expired session"));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ message: "Invalid or expired session" }, { status: 401 })
+    );
 
     renderWithRouter(<AuthCallback />, {
       path: "/callback",

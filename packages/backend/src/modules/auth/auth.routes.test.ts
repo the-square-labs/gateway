@@ -215,4 +215,34 @@ describe('OIDC callback route', () => {
     );
     expect(auditLog).toHaveBeenCalledWith(expect.objectContaining({ action: 'auth.login', userId: USER.id }));
   });
+
+  it('preserves a same-origin return path through the frontend callback', async () => {
+    registerDependencies();
+    const returnTo = 'https://gateway.example.com/proxy-hosts/route-1?tab=ssl';
+    const handleCallback = vi.fn().mockResolvedValue({ sessionId: 'new-session-id', user: USER, returnTo });
+    container.registerInstance(AuthService, { handleCallback } as unknown as AuthService);
+    container.registerInstance(OidcSettingsService, {
+      getRuntimeConfig: vi.fn().mockResolvedValue({ redirectUri: 'https://gateway.example.com/auth/callback' }),
+    } as unknown as OidcSettingsService);
+    container.registerInstance(GeneralSettingsService, {
+      requirePublicUrl: vi.fn().mockResolvedValue('https://gateway.example.com'),
+    } as unknown as GeneralSettingsService);
+    container.registerInstance(NetworkSettingsService, {
+      getConfig: vi.fn().mockResolvedValue({
+        clientIpSource: 'direct',
+        trustedProxyCidrs: [],
+        trustCloudflareHeaders: false,
+      }),
+    } as unknown as NetworkSettingsService);
+
+    const app = new Hono<AppEnv>();
+    app.route('/auth', authRoutes);
+
+    const response = await app.request('/auth/callback?code=code&state=state');
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(
+      `https://gateway.example.com/callback?return_to=${encodeURIComponent(returnTo)}`
+    );
+  });
 });

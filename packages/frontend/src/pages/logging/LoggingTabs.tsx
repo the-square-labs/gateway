@@ -198,7 +198,7 @@ function schemaColumns({
           <div className="flex justify-end" onClick={(event) => event.stopPropagation()}>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-7 w-7">
+                <Button variant="ghost" size="icon" className="h-8 w-8">
                   <EllipsisVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>

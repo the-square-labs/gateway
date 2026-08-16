@@ -72,7 +72,7 @@ describe("AuthProvisioningSection inference setting", () => {
     render(
       <PageTransition>
         <AuthProvisioningSection canEdit section="general" />
-        <PoweredByFooter transitionKey="general" />
+        <PoweredByFooter />
       </PageTransition>
     );
 
@@ -97,7 +97,7 @@ describe("AuthProvisioningSection inference setting", () => {
     render(
       <PageTransition>
         <AuthProvisioningSection canEdit section="general" />
-        <PoweredByFooter transitionKey="general" />
+        <PoweredByFooter />
       </PageTransition>
     );
 

@@ -413,7 +413,7 @@ export function AILiteSidebar({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="flex h-full flex-col items-center gap-2 py-3"
+            className="absolute inset-y-0 left-0 flex w-12 flex-col items-center gap-2 py-3"
           >
             <TooltipProvider delayDuration={0} skipDelayDuration={0}>
               <Tooltip>

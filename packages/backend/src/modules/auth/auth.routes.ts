@@ -27,12 +27,12 @@ import {
 } from './auth.docs.js';
 import { authMiddleware, CSRF_HEADER_NAME, sessionOnly } from './auth.middleware.js';
 import { AuthService } from './auth.service.js';
-import { AuthSettingsService } from './auth.settings.service.js';
 import { requiresSessionMfaReauthentication } from './live-session-user.js';
 import { LocalAuthService } from './local-auth.service.js';
 import { MfaService } from './mfa.service.js';
 import { OidcSettingsService } from './oidc-settings.service.js';
 import { PasskeyService } from './passkey.service.js';
+import { getPublicAuthMethods } from './public-auth-methods.js';
 import {
   getAcceptedSessionCookieNames,
   getSessionCookieNameForUrl,
@@ -252,12 +252,12 @@ authRoutes.openapi(callbackRoute, async (c) => {
       path: '/',
     });
 
-    let baseUrl = publicUrl;
+    let safeReturnTo: string | null = null;
     let directReturnTo: string | null = null;
     if (result.returnTo) {
       try {
         if (new URL(result.returnTo).origin === new URL(publicUrl).origin) {
-          baseUrl = result.returnTo;
+          safeReturnTo = result.returnTo;
           const returnPath = new URL(result.returnTo).pathname;
           if (returnPath.startsWith('/api/oauth/authorize') || returnPath === '/oauth/consent') {
             directReturnTo = result.returnTo;
@@ -270,7 +270,8 @@ authRoutes.openapi(callbackRoute, async (c) => {
     if (directReturnTo) {
       return c.redirect(directReturnTo, 302);
     }
-    const redirectUrl = new URL('/callback', baseUrl);
+    const redirectUrl = new URL('/callback', publicUrl);
+    if (safeReturnTo) redirectUrl.searchParams.set('return_to', safeReturnTo);
     return c.redirect(redirectUrl.toString(), 302);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Authentication failed';
@@ -285,12 +286,7 @@ authRoutes.openapi(callbackRoute, async (c) => {
 });
 
 authRoutes.get('/methods', async (c) => {
-  const { methods } = await container.resolve(AuthSettingsService).getConfig();
-  const oidc = await container.resolve(OidcSettingsService).getPublicConfig();
-  return c.json({
-    ...methods,
-    oidc: methods.oidc && oidc.configured,
-  });
+  return c.json(await getPublicAuthMethods());
 });
 
 authRoutes.post('/password/login', async (c) => {

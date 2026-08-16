@@ -155,6 +155,7 @@ function withContainerMirror(
 }
 
 const fetchDockerFoldersRequestIds = resourceMap(() => 0);
+const inFlightFolderRequests = new Map<DockerFolderResourceType, Promise<void>>();
 
 export const useDockerFolderStore = create<DockerFolderState>()((set, get) => {
   const initialExpanded = resourceMap((type) => new Set(loadExpandedFolderIds(type)));
@@ -172,60 +173,73 @@ export const useDockerFolderStore = create<DockerFolderState>()((set, get) => {
     savedExpandedFolderIdsByType: initialExpanded,
 
     fetchFolders: async (resourceType = "container") => {
-      const requestId = ++fetchDockerFoldersRequestIds[resourceType];
-      const cachedEnvelope = api.getCached<{ data: DockerFolderTreeNode[] }>(
-        folderRequestCacheKey(resourceType),
-        Number.POSITIVE_INFINITY
-      );
-      const cached = cachedEnvelope?.data;
-      set((state) =>
-        withContainerMirror(
-          state,
-          {
-            foldersByType:
-              cached === undefined
-                ? state.foldersByType
-                : { ...state.foldersByType, [resourceType]: cached },
-            loadingByType: {
-              ...state.loadingByType,
-              [resourceType]:
-                cached === undefined && state.foldersByType[resourceType].length === 0,
-            },
-            errorByType: { ...state.errorByType, [resourceType]: null },
-          },
-          resourceType
-        )
-      );
-      try {
-        const folders = await api.listDockerFolders(resourceType);
-        if (requestId !== fetchDockerFoldersRequestIds[resourceType]) return;
+      const existingRequest = inFlightFolderRequests.get(resourceType);
+      if (existingRequest) return existingRequest;
+
+      const request = (async () => {
+        const requestId = ++fetchDockerFoldersRequestIds[resourceType];
+        const cachedEnvelope = api.getCached<{ data: DockerFolderTreeNode[] }>(
+          folderRequestCacheKey(resourceType),
+          Number.POSITIVE_INFINITY
+        );
+        const cached = cachedEnvelope?.data;
         set((state) =>
           withContainerMirror(
             state,
             {
-              foldersByType: { ...state.foldersByType, [resourceType]: folders },
-              loadingByType: { ...state.loadingByType, [resourceType]: false },
-              expandedFolderIdsByType: {
-                ...state.expandedFolderIdsByType,
-                [resourceType]: new Set(state.savedExpandedFolderIdsByType[resourceType]),
+              foldersByType:
+                cached === undefined
+                  ? state.foldersByType
+                  : { ...state.foldersByType, [resourceType]: cached },
+              loadingByType: {
+                ...state.loadingByType,
+                [resourceType]:
+                  cached === undefined && state.foldersByType[resourceType].length === 0,
               },
+              errorByType: { ...state.errorByType, [resourceType]: null },
             },
             resourceType
           )
         );
-      } catch (err) {
-        if (requestId !== fetchDockerFoldersRequestIds[resourceType]) return;
-        const message = err instanceof Error ? err.message : "Failed to fetch Docker folders";
-        set((state) =>
-          withContainerMirror(
-            state,
-            {
-              errorByType: { ...state.errorByType, [resourceType]: message },
-              loadingByType: { ...state.loadingByType, [resourceType]: false },
-            },
-            resourceType
-          )
-        );
+        try {
+          const folders = await api.listDockerFolders(resourceType);
+          if (requestId !== fetchDockerFoldersRequestIds[resourceType]) return;
+          set((state) =>
+            withContainerMirror(
+              state,
+              {
+                foldersByType: { ...state.foldersByType, [resourceType]: folders },
+                loadingByType: { ...state.loadingByType, [resourceType]: false },
+                expandedFolderIdsByType: {
+                  ...state.expandedFolderIdsByType,
+                  [resourceType]: new Set(state.savedExpandedFolderIdsByType[resourceType]),
+                },
+              },
+              resourceType
+            )
+          );
+        } catch (err) {
+          if (requestId !== fetchDockerFoldersRequestIds[resourceType]) return;
+          const message = err instanceof Error ? err.message : "Failed to fetch Docker folders";
+          set((state) =>
+            withContainerMirror(
+              state,
+              {
+                errorByType: { ...state.errorByType, [resourceType]: message },
+                loadingByType: { ...state.loadingByType, [resourceType]: false },
+              },
+              resourceType
+            )
+          );
+        }
+      })();
+      inFlightFolderRequests.set(resourceType, request);
+      try {
+        await request;
+      } finally {
+        if (inFlightFolderRequests.get(resourceType) === request) {
+          inFlightFolderRequests.delete(resourceType);
+        }
       }
     },
 

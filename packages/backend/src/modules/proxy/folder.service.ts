@@ -33,6 +33,7 @@ type ProxyHostRow = typeof proxyHosts.$inferSelect;
 function toPlainHost(
   host: ProxyHostRow & {
     dockerDeploymentName?: string | null;
+    dockerNodeSlug?: string | null;
     dockerNodeAppearanceColor?: string | null;
   }
 ): Record<string, unknown> {
@@ -43,6 +44,7 @@ function toPlainHost(
 
   delete plain.healthHistory;
   plain.dockerDeploymentName = host.dockerDeploymentName;
+  plain.dockerNodeSlug = host.dockerNodeSlug;
   plain.dockerNodeAppearanceColor = host.dockerNodeAppearanceColor;
   let effectiveStatus = host.rawConfigEnabled ? 'disabled' : (host.healthStatus as string);
   if (

@@ -15,7 +15,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { AuthShell } from "@/components/auth/AuthShell";
@@ -33,10 +33,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { resolveAuthReturnTo } from "@/lib/auth-return-to";
 import { getInitials } from "@/lib/utils";
-import { useAuthStore } from "@/stores/auth";
 
-type AuthMethods = { oidc: boolean; password: boolean; emailOtp: boolean; passkeyLogin: boolean };
+export type AuthMethods = {
+  oidc: boolean;
+  password: boolean;
+  emailOtp: boolean;
+  passkeyLogin: boolean;
+};
 type PendingMfa = { challengeId: string; passkeyAvailable: boolean };
 type PendingEnrollment = {
   enrollmentToken: string;
@@ -64,6 +69,7 @@ const EMPTY_METHODS: AuthMethods = {
   emailOtp: false,
   passkeyLogin: false,
 };
+const redirectToGateway = (path: string) => window.location.assign(path);
 
 function isPasskeyPromptDismissed(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
@@ -90,12 +96,25 @@ async function authRequest<T>(path: string, body?: unknown): Promise<T> {
   return data;
 }
 
-export function LoginPage() {
+export function loadAuthMethods(): Promise<AuthMethods> {
+  return authRequest<AuthMethods>("/auth/methods");
+}
+
+export function LoginPage({
+  initialMethods,
+  initialMethodsFailed = false,
+  onComplete = redirectToGateway,
+}: {
+  initialMethods?: AuthMethods;
+  initialMethodsFailed?: boolean;
+  onComplete?: (path: string) => void;
+} = {}) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { isAuthenticated } = useAuthStore();
-  const [methods, setMethods] = useState<AuthMethods>(EMPTY_METHODS);
-  const [methodsState, setMethodsState] = useState<MethodsState>("loading");
+  const [methods, setMethods] = useState<AuthMethods>(initialMethods ?? EMPTY_METHODS);
+  const [methodsState, setMethodsState] = useState<MethodsState>(
+    initialMethods ? "ready" : initialMethodsFailed ? "error" : "loading"
+  );
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loginStep, setLoginStep] = useState<LoginStep>("methods");
@@ -109,8 +128,10 @@ export function LoginPage() {
   const [resetProfile, setResetProfile] = useState<PasswordResetProfile | null>(null);
   const [passwordResetConfirmOpen, setPasswordResetConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const gatewayNavigationPending = useRef(false);
   const prefersReducedMotion = useReducedMotion();
   const resetToken = new URLSearchParams(location.search).get("token");
+  const returnTo = resolveAuthReturnTo(location.search);
   const emailEnabled = methods.password || methods.emailOtp;
   const validEmail = /^\S+@\S+\.\S+$/.test(email.trim());
   const activeLoginStep = pendingEnrollment?.recoveryCodes
@@ -126,7 +147,7 @@ export function LoginPage() {
   const loadMethods = useCallback(async () => {
     setMethodsState("loading");
     try {
-      setMethods(await authRequest<AuthMethods>("/auth/methods"));
+      setMethods(await loadAuthMethods());
       setMethodsState("ready");
     } catch {
       setMethodsState("error");
@@ -134,12 +155,9 @@ export function LoginPage() {
   }, []);
 
   useEffect(() => {
+    if (initialMethods || initialMethodsFailed) return;
     void loadMethods();
-  }, [loadMethods]);
-
-  useEffect(() => {
-    if (isAuthenticated) navigate("/");
-  }, [isAuthenticated, navigate]);
+  }, [initialMethods, initialMethodsFailed, loadMethods]);
 
   useEffect(() => {
     if (!resetToken) {
@@ -161,7 +179,10 @@ export function LoginPage() {
     };
   }, [navigate, resetToken]);
 
-  const complete = () => window.location.assign("/");
+  const complete = () => {
+    gatewayNavigationPending.current = true;
+    onComplete(returnTo);
+  };
 
   const handlePrimaryResult = (result: {
     mfaRequired?: boolean;
@@ -195,7 +216,7 @@ export function LoginPage() {
       if (handleError?.(error)) return;
       toast.error(error instanceof Error ? error.message : "Sign-in failed");
     } finally {
-      setBusy(false);
+      if (!gatewayNavigationPending.current) setBusy(false);
     }
   };
 
@@ -680,7 +701,8 @@ export function LoginPage() {
                   <Button
                     className="w-full"
                     onClick={() => {
-                      window.location.href = "/auth/login";
+                      const absoluteReturnTo = new URL(returnTo, window.location.origin).href;
+                      window.location.href = `/auth/login?return_to=${encodeURIComponent(absoluteReturnTo)}`;
                     }}
                     disabled={busy}
                   >
@@ -777,7 +799,7 @@ export function LoginPage() {
                     onChange={(event) => setPassword(event.target.value)}
                   />
                   <Button type="submit" className="shrink-0" disabled={busy || !password}>
-                    <KeyRound className="h-4 w-4" />
+                    {busy ? <Loader2 className="animate-spin" /> : <KeyRound className="h-4 w-4" />}
                     Sign in
                   </Button>
                 </div>

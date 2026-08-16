@@ -59,6 +59,57 @@ describe("LoginPage password reset", () => {
 });
 
 describe("LoginPage email-first sign-in", () => {
+  it("renders injected methods immediately without requesting them again", () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    renderWithRouter(
+      <LoginPage
+        initialMethods={{ oidc: true, password: true, emailOtp: false, passkeyLogin: false }}
+      />,
+      { path: "/login", route: "/login" }
+    );
+
+    expect(screen.getByRole("button", { name: "Sign in with SSO" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign in with Email" })).toBeInTheDocument();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps the sign-in button loading while Gateway navigation starts", async () => {
+    const onComplete = vi.fn();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const path = String(input);
+      if (path === "/auth/email/continue") return Response.json({ method: "password" });
+      if (path === "/auth/password/login") return Response.json({ ok: true });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+
+    renderWithRouter(
+      <LoginPage
+        initialMethods={{ oidc: false, password: true, emailOtp: false, passkeyLogin: false }}
+        onComplete={onComplete}
+      />,
+      {
+        path: "/login",
+        route: "/login?return_to=http%3A%2F%2Flocalhost%3A3000%2Fproxy-hosts%2Froute-1%3Ftab%3Dssl",
+      }
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in with Email" }));
+    fireEvent.change(screen.getByPlaceholderText("Email"), {
+      target: { value: "admin@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.change(await screen.findByPlaceholderText("Password"), {
+      target: { value: "correct horse battery staple" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalledWith("/proxy-hosts/route-1?tab=ssl"));
+    const signInButton = screen.getByRole("button", { name: "Sign in" });
+    expect(signInButton).toBeDisabled();
+    expect(signInButton.querySelector(".animate-spin")).not.toBeNull();
+  });
+
   it("shows enabled method choices with SSO as the primary action", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       Response.json({ oidc: true, password: true, emailOtp: true, passkeyLogin: true })

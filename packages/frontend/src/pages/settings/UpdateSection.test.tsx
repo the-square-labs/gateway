@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { UpdateSection } from "@/pages/settings/UpdateSection";
 import { api } from "@/services/api";
@@ -44,6 +45,14 @@ function makeStatus(gatewayVersion: string): UpdateStatus {
   };
 }
 
+function renderUpdateSection() {
+  return render(
+    <MemoryRouter initialEntries={["/settings/general"]}>
+      <UpdateSection canUpdate />
+    </MemoryRouter>
+  );
+}
+
 describe("UpdateSection", () => {
   beforeEach(() => {
     vi.mocked(confirm).mockReset().mockResolvedValue(true);
@@ -68,7 +77,7 @@ describe("UpdateSection", () => {
     vi.mocked(api.getVersionInfo).mockResolvedValue(status);
     useUpdateStore.setState({ status });
 
-    render(<UpdateSection canUpdate />);
+    renderUpdateSection();
 
     const gatewayButton = await screen.findByRole("button", {
       name: "Update Gateway to v2.6.13",
@@ -88,7 +97,7 @@ describe("UpdateSection", () => {
     vi.mocked(api.getVersionInfo).mockResolvedValue(status);
     useUpdateStore.setState({ status });
 
-    render(<UpdateSection canUpdate />);
+    renderUpdateSection();
 
     expect(screen.getByRole("button", { name: "Update Relay to v2.6.13" })).toBeInTheDocument();
     fireEvent.click(
@@ -120,7 +129,7 @@ describe("UpdateSection", () => {
     vi.mocked(api.getVersionInfo).mockResolvedValue(status);
     useUpdateStore.setState({ status });
 
-    render(<UpdateSection canUpdate />);
+    renderUpdateSection();
 
     expect(await screen.findAllByRole("button", { name: "Update Relay to v2.6.13" })).toHaveLength(
       1
@@ -148,7 +157,7 @@ describe("UpdateSection", () => {
     vi.mocked(api.getVersionInfo).mockResolvedValue(status);
     useUpdateStore.setState({ status });
 
-    render(<UpdateSection canUpdate />);
+    renderUpdateSection();
     fireEvent.click(await screen.findByRole("button", { name: "Update Relay to v2.6.13" }));
 
     await waitFor(() =>

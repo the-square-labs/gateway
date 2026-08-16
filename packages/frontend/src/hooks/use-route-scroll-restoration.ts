@@ -50,9 +50,18 @@ function findRouteScrollContainer(): HTMLElement | null {
 export function useRouteScrollRestoration(userId: string | null | undefined) {
   const location = useLocation();
   const key = routeScrollKey(userId, location.pathname, location.search, location.hash);
+  const hasNavigationScrollTarget = Boolean(
+    (location.state as { scrollTarget?: string } | null)?.scrollTarget
+  );
 
   useLayoutEffect(() => {
-    if (location.pathname === "/" || location.pathname.startsWith("/ai/")) return;
+    if (
+      location.pathname === "/" ||
+      location.pathname.startsWith("/ai/") ||
+      location.hash ||
+      hasNavigationScrollTarget
+    )
+      return;
 
     const savedScrollTop = routeScrollPositions.get(key);
     let scrollContainer: HTMLElement | null = null;
@@ -94,15 +103,22 @@ export function useRouteScrollRestoration(userId: string | null | undefined) {
       discoveryObserver?.disconnect();
       discoveryObserver = null;
 
-      scrollContainer.addEventListener("scroll", trackScroll, { passive: true });
-      scrollContainer.addEventListener("wheel", cancelRestoreForUserInput, { passive: true });
+      scrollContainer.addEventListener("scroll", trackScroll, {
+        passive: true,
+      });
+      scrollContainer.addEventListener("wheel", cancelRestoreForUserInput, {
+        passive: true,
+      });
       scrollContainer.addEventListener("touchstart", cancelRestoreForUserInput, { passive: true });
       scrollContainer.addEventListener("pointerdown", cancelRestoreForUserInput, { passive: true });
       scrollContainer.addEventListener("keydown", cancelRestoreForUserInput);
 
       if (!restorePending) return;
       contentObserver = new MutationObserver(attemptRestore);
-      contentObserver.observe(scrollContainer, { childList: true, subtree: true });
+      contentObserver.observe(scrollContainer, {
+        childList: true,
+        subtree: true,
+      });
       settleTimer = window.setTimeout(() => {
         if (!scrollContainer || savedScrollTop === undefined) return;
         scrollContainer.scrollTop = Math.min(
@@ -118,7 +134,10 @@ export function useRouteScrollRestoration(userId: string | null | undefined) {
     attach();
     if (!scrollContainer) {
       discoveryObserver = new MutationObserver(attach);
-      discoveryObserver.observe(document.body, { childList: true, subtree: true });
+      discoveryObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
       attach();
     }
 
@@ -136,7 +155,7 @@ export function useRouteScrollRestoration(userId: string | null | undefined) {
         rememberScrollPosition(key, scrollContainer.scrollTop);
       }
     };
-  }, [key, location.pathname]);
+  }, [hasNavigationScrollTarget, key, location.hash, location.pathname]);
 }
 
 export const routeScrollRestorationTestApi = {

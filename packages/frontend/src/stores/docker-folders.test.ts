@@ -56,4 +56,18 @@ describe("docker folder store", () => {
 
     expect(useDockerFolderStore.getState().folders).toEqual(fresh);
   });
+
+  it("shares an in-flight folder refresh for the same resource type", async () => {
+    let resolveRefresh!: (folders: DockerFolderTreeNode[]) => void;
+    vi.mocked(api.listDockerFolders).mockImplementation(
+      () => new Promise((resolve) => (resolveRefresh = resolve))
+    );
+
+    const first = useDockerFolderStore.getState().fetchFolders("container");
+    const second = useDockerFolderStore.getState().fetchFolders("container");
+
+    expect(api.listDockerFolders).toHaveBeenCalledTimes(1);
+    resolveRefresh([]);
+    await Promise.all([first, second]);
+  });
 });

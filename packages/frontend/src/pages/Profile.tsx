@@ -303,7 +303,7 @@ export function Profile() {
           </TabsContent>
         </Tabs>
 
-        <PoweredByFooter transitionKey={activeTab} />
+        <PoweredByFooter />
       </div>
     </PageTransition>
   );

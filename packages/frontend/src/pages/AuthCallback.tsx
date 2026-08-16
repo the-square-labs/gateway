@@ -1,25 +1,35 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { LoadingSpinner } from "@/components/common/LoadingSpinner";
-import { api } from "@/services/api";
-import { useAuthStore } from "@/stores/auth";
+import { resolveAuthReturnTo } from "@/lib/auth-return-to";
 
-let currentUserRequest: ReturnType<typeof api.getCurrentUser> | null = null;
+let currentUserRequest: Promise<void> | null = null;
+const redirectToGateway = (path: string) => window.location.replace(path);
 
 function loadCurrentUserOnce() {
   if (!currentUserRequest) {
-    currentUserRequest = api.getCurrentUser().finally(() => {
-      currentUserRequest = null;
-    });
+    currentUserRequest = fetch("/auth/me", { credentials: "include" })
+      .then(async (response) => {
+        if (response.ok) return;
+        const body = (await response.json().catch(() => ({}))) as { message?: string };
+        throw new Error(body.message ?? "Authentication failed");
+      })
+      .finally(() => {
+        currentUserRequest = null;
+      });
   }
   return currentUserRequest;
 }
 
-export function AuthCallback() {
+export function AuthCallback({
+  onAuthenticated = redirectToGateway,
+}: {
+  onAuthenticated?: (path: string) => void;
+} = {}) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [error, setError] = useState<string | null>(null);
-  const { login } = useAuthStore();
+  const returnTo = resolveAuthReturnTo(`?${searchParams.toString()}`);
 
   useEffect(() => {
     let cancelled = false;
@@ -33,10 +43,9 @@ export function AuthCallback() {
       }
 
       try {
-        const user = await loadCurrentUserOnce();
+        await loadCurrentUserOnce();
         if (cancelled) return;
-        login(user);
-        navigate("/", { replace: true });
+        onAuthenticated(returnTo);
       } catch (err) {
         if (cancelled) return;
         const message = err instanceof Error ? err.message : "Authentication failed";
@@ -49,7 +58,7 @@ export function AuthCallback() {
     return () => {
       cancelled = true;
     };
-  }, [searchParams, login, navigate]);
+  }, [searchParams, onAuthenticated, returnTo]);
 
   if (error) {
     return (

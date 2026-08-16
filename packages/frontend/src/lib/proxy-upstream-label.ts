@@ -6,6 +6,8 @@ export interface ProxyUpstreamLabelInput {
   forwardHost: string | null;
   forwardPort: number | null;
   forwardScheme: ForwardScheme;
+  dockerNodeId?: string | null;
+  dockerNodeSlug?: string | null;
   dockerContainerName?: string | null;
   dockerDeploymentId?: string | null;
   dockerDeploymentName?: string | null;

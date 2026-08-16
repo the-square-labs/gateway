@@ -45,6 +45,7 @@ export interface ProxyHost {
   forwardPort: number | null;
   forwardScheme: ForwardScheme;
   dockerNodeId?: string | null;
+  dockerNodeSlug?: string | null;
   dockerContainerName?: string | null;
   dockerDeploymentId?: string | null;
   dockerDeploymentName?: string | null;

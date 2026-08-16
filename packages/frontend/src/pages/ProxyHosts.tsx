@@ -417,7 +417,7 @@ export function ProxyHosts({
     {
       id: "domain-names",
       label: "Domains",
-      width: "20%",
+      width: "25%",
       renderCell: (host) => (
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{host.domainNames[0]}</p>
@@ -471,7 +471,7 @@ export function ProxyHosts({
     {
       id: "health",
       label: "Health",
-      width: "14%",
+      width: "8rem",
       renderCell: (host) => {
         if (host.maintenanceEnabled) return <Badge variant="warning">Maintenance</Badge>;
         const status = host.rawConfigEnabled
@@ -509,7 +509,7 @@ export function ProxyHosts({
     {
       id: "enabled",
       label: "Enabled",
-      width: "10%",
+      width: "5.5rem",
       renderCell: (host) => (
         <div onClick={(e) => e.stopPropagation()}>
           {host.isSystem ? (
@@ -535,7 +535,7 @@ export function ProxyHosts({
           {
             id: "actions",
             label: "Actions",
-            width: "7.5rem",
+            width: "5rem",
             align: "right" as const,
             renderCell: (host: ProxyHost) =>
               canEditHost(host) ? (

@@ -13,6 +13,7 @@ import { ResourceUngroupedSection } from "@/components/common/resource-list/Reso
 import type { ResourceListFormProps } from "@/components/common/resource-list/types";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
 import { Skeleton } from "@/components/ui/skeleton";
+import { pointerFirstCollisionDetection } from "@/lib/dnd-collision";
 
 export function ResourceListForm<TFolder, TItem>({
   columns,
@@ -89,6 +90,7 @@ export function ResourceListForm<TFolder, TItem>({
       ) : hasContent ? (
         <DndContext
           sensors={dnd?.sensors}
+          collisionDetection={dnd?.collisionDetection ?? pointerFirstCollisionDetection}
           onDragStart={dnd?.onDragStart}
           onDragEnd={dnd?.onDragEnd}
           onDragCancel={dnd?.onDragCancel}

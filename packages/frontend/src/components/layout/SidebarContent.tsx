@@ -270,7 +270,9 @@ export function SidebarContent({
 
   return (
     <div
-      style={{ width: alwaysExpanded ? "100%" : isExpanded ? sidebarWidth : 48 }}
+      style={{
+        width: alwaysExpanded ? "100%" : isExpanded ? sidebarWidth : 48,
+      }}
       className={cn(
         "relative flex h-full shrink-0 flex-col bg-sidebar-background overflow-visible",
         !alwaysExpanded && "border-r border-sidebar-border",
@@ -285,7 +287,7 @@ export function SidebarContent({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="flex h-full flex-col items-center py-3 gap-2"
+            className="absolute inset-y-0 left-0 flex w-12 flex-col items-center gap-2 py-3"
           >
             <TooltipProvider delayDuration={0} skipDelayDuration={0}>
               <Tooltip>
@@ -365,8 +367,12 @@ export function SidebarContent({
                   <TooltipTrigger asChild>
                     <Button
                       size="icon"
-                      className="h-8 w-8"
-                      onClick={() => navigate("/settings/general#system-updates")}
+                      className="h-8 w-8 bg-warning text-black hover:bg-warning/90"
+                      onClick={() =>
+                        navigate("/settings/general", {
+                          state: { scrollTarget: "system-updates" },
+                        })
+                      }
                     >
                       <ArrowUpCircle className="h-4 w-4" />
                     </Button>
@@ -562,7 +568,8 @@ export function SidebarContent({
               <>
                 <div className="px-2 py-2">
                   <Link
-                    to="/settings/general#system-updates"
+                    to="/settings/general"
+                    state={{ scrollTarget: "system-updates" }}
                     onClick={onNavigate}
                     className="flex w-full items-center gap-2 bg-warning px-3 py-2 text-left text-sm font-medium text-black transition-colors hover:bg-warning/90"
                   >

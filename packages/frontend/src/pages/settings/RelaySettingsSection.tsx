@@ -11,9 +11,8 @@ import {
   Server,
   Waypoints,
 } from "lucide-react";
-import { useCallback, useContext, useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { InitialPageLoadContext, PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
@@ -60,7 +59,6 @@ function admissionLabel(state: string | undefined) {
 }
 
 export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
-  const registerSettingsInitialLoad = useContext(InitialPageLoadContext);
   const [initialSnapshot] = useState(() => {
     const cachedSettings = api.getCached<AuthProvisioningSettings>(
       RELAY_SETTINGS_CACHE_KEY,
@@ -102,11 +100,6 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     initialRelay?.hardPressurePercent ?? 95
   );
   const [saving, setSaving] = useState(false);
-
-  useLayoutEffect(() => {
-    if (initialLoadComplete || !registerSettingsInitialLoad) return;
-    return registerSettingsInitialLoad();
-  }, [initialLoadComplete, registerSettingsInitialLoad]);
 
   const recordStatus = useCallback((next: DashboardRelaySnapshot | null) => {
     setStatus(next);
@@ -181,13 +174,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     }
   };
 
-  if (!initialLoadComplete) {
-    return (
-      <PageTransition>
-        <Skeleton />
-      </PageTransition>
-    );
-  }
+  if (!initialLoadComplete) return <Skeleton />;
 
   if (!settings) return null;
 
@@ -210,260 +197,254 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     grantTtlHours !== settings.generalSettings.relayGrantTtlHours ||
     autoRecovery !== settings.generalSettings.relayAutoRecovery;
   return (
-    <PageTransition>
-      <div className="space-y-4">
-        <div className="flex flex-wrap items-center gap-3 border border-border bg-card p-3 text-sm">
-          <span className="font-medium">Gateway Relay</span>
-          <Badge
-            variant={
-              healthy
-                ? "success"
-                : status?.state === "recovering" || status?.state === "degraded"
-                  ? "warning"
-                  : "destructive"
-            }
-          >
-            {status?.state ?? "unavailable"}
-          </Badge>
-          <Badge variant="secondary">build {status?.relayBuildVersion ?? "unknown"}</Badge>
-          <Badge variant="secondary">protocol v{status?.protocolMajor ?? "-"}</Badge>
-          <Badge variant={status?.admissionState === "normal" ? "secondary" : "warning"}>
-            {admissionLabel(status?.admissionState)}
-          </Badge>
-        </div>
-
-        <div>
-          <h3 className="mb-2 text-sm font-semibold text-muted-foreground">Tunnel activity</h3>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <StatCard
-              label="Active tunnels"
-              value={metric(status?.activeTunnels).toLocaleString()}
-              icon={Activity}
-              history={history.map((sample) => metric(sample.activeTunnels))}
-              color="#3b82f6"
-              subtitle="Current logical streams"
-            />
-            <StatCard
-              label="Proxy tunnels"
-              value={metric(status?.activeProxyTunnels).toLocaleString()}
-              icon={Network}
-              history={history.map((sample) => metric(sample.activeProxyTunnels))}
-              color="#06b6d4"
-              subtitle="Secure Link traffic"
-            />
-            <StatCard
-              label="Database tunnels"
-              value={metric(status?.activeDatabaseTunnels).toLocaleString()}
-              icon={Database}
-              history={history.map((sample) => metric(sample.activeDatabaseTunnels))}
-              color="#8b5cf6"
-              subtitle="Priority traffic class"
-            />
-            <StatCard
-              label="Registered endpoints"
-              value={metric(status?.registeredEndpoints).toLocaleString()}
-              icon={Waypoints}
-              history={history.map((sample) => metric(sample.registeredEndpoints))}
-              color="#22c55e"
-              subtitle="Available relay targets"
-            />
-          </div>
-        </div>
-
-        <div>
-          <h3 className="mb-2 text-sm font-semibold text-muted-foreground">Relay resources</h3>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <StatCard
-              label="Relay CPU"
-              value={`${metric(status?.cpuPressurePercent)}%`}
-              icon={Cpu}
-              history={history.map((sample) => metric(sample.cpuPressurePercent))}
-              sparklineMax={100}
-              color="#3b82f6"
-              progress={{ percent: metric(status?.cpuPressurePercent) }}
-              subtitle="Relay process across available CPUs"
-            />
-            <StatCard
-              label="Resident memory"
-              value={formatBytes(memoryRss)}
-              icon={MemoryStick}
-              history={history.map((sample) => metric(sample.memoryRssBytes))}
-              sparklineMax={memoryLimit || undefined}
-              color="#8b5cf6"
-              progress={memoryLimit > 0 ? { percent: percent(memoryRss, memoryLimit) } : undefined}
-              subtitle={
-                memoryLimit > 0
-                  ? `${formatBytes(metric(status?.heapInUseBytes))} heap · ${formatBytes(memoryLimit)} limit`
-                  : `${formatBytes(metric(status?.heapInUseBytes))} heap · no cgroup limit`
-              }
-            />
-            <StatCard
-              label="File descriptors"
-              value={openFDs.toLocaleString()}
-              icon={Server}
-              history={history.map((sample) => metric(sample.openFileDescriptors))}
-              sparklineMax={fdLimit || undefined}
-              color="#f97316"
-              progress={fdLimit > 0 ? { percent: percent(openFDs, fdLimit) } : undefined}
-              subtitle={
-                fdLimit > 0 ? `of ${fdLimit.toLocaleString()} process limit` : "Limit unavailable"
-              }
-            />
-            <StatCard
-              label="Admission pressure"
-              value={`${metric(status?.pressurePercent)}%`}
-              icon={Gauge}
-              history={history.map((sample) => metric(sample.pressurePercent))}
-              sparklineMax={100}
-              color={pressureColor}
-              progress={{ percent: metric(status?.pressurePercent), color: pressureColor }}
-              subtitle={admissionLabel(status?.admissionState)}
-            />
-          </div>
-        </div>
-
-        <div>
-          <h3 className="mb-2 text-sm font-semibold text-muted-foreground">Admission & runtime</h3>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <StatCard
-              label="Proxy throttled"
-              value={metric(status?.throttledProxyTotal).toLocaleString()}
-              icon={Ban}
-              history={history.map((sample) => metric(sample.throttledProxyTotal))}
-              color="#f59e0b"
-              subtitle="Cumulative rejected proxy streams"
-            />
-            <StatCard
-              label="Database throttled"
-              value={metric(status?.throttledDatabaseTotal).toLocaleString()}
-              icon={Cable}
-              history={history.map((sample) => metric(sample.throttledDatabaseTotal))}
-              color="#ef4444"
-              subtitle="Only at the hard safety cutoff"
-            />
-            <StatCard
-              label="Data lanes"
-              value={String(persistedDataLanes)}
-              icon={Network}
-              color="#06b6d4"
-              subtitle="Persistent HTTP/2 lanes per daemon"
-            />
-            <StatCard
-              label="Read buffer"
-              value={`${Math.round(persistedReadChunkBytes / 1024)} KiB`}
-              icon={Activity}
-              color="#a855f7"
-              subtitle="Pooled per-stream read chunk"
-            />
-          </div>
-        </div>
-
-        <PanelShell
-          title="Relay runtime"
-          description="Persisted Gateway settings distributed to the relay data plane"
-          actions={
-            <Button onClick={save} disabled={!canEdit || saving || !hasChanges}>
-              <Save className="h-4 w-4" />
-              Save
-            </Button>
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3 border border-border bg-card p-3 text-sm">
+        <span className="font-medium">Gateway Relay</span>
+        <Badge
+          variant={
+            healthy
+              ? "success"
+              : status?.state === "recovering" || status?.state === "degraded"
+                ? "warning"
+                : "destructive"
           }
-          dirty={hasChanges}
         >
-          <SettingsControlRow
-            title="Data lanes"
-            description="Persistent HTTP/2 data-plane connections per daemon (1–16)"
-          >
-            <NumericInput
-              value={dataLanes}
-              onChange={setDataLanes}
-              min={1}
-              max={16}
-              disabled={!canEdit || saving}
-            />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Read chunk"
-            description="Per-tunnel pooled read buffer; protocol frames remain capped at 1 MiB"
-          >
-            <NumericInput
-              value={readChunkBytes}
-              onChange={setReadChunkBytes}
-              min={4096}
-              max={262144}
-              step={4096}
-              disabled={!canEdit || saving}
-            />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Adaptive admission"
-            description="Throttle new proxy streams only when measured relay pressure rises"
-          >
-            <Switch
-              checked={adaptiveAdmissionEnabled}
-              onChange={setAdaptiveAdmissionEnabled}
-              disabled={!canEdit || saving}
-            />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Proxy pressure target"
-            description="Start fair-share admission for dominant proxy routes at this measured pressure"
-          >
-            <NumericInput
-              value={proxyTargetPressurePercent}
-              onChange={setProxyTargetPressurePercent}
-              min={50}
-              max={85}
-              disabled={!canEdit || saving || !adaptiveAdmissionEnabled}
-            />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Database reserve"
-            description="Capacity kept beyond the proxy target for higher-priority database tunnels"
-          >
-            <NumericInput
-              value={databaseReservePercent}
-              onChange={setDatabaseReservePercent}
-              min={5}
-              max={35}
-              disabled={!canEdit || saving || !adaptiveAdmissionEnabled}
-            />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Hard pressure cutoff"
-            description="Last-resort safety threshold; databases remain admissible until this point"
-          >
-            <NumericInput
-              value={hardPressurePercent}
-              onChange={setHardPressurePercent}
-              min={90}
-              max={99}
-              disabled={!canEdit || saving || !adaptiveAdmissionEnabled}
-            />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Grant lifetime"
-            description="Lifetime of newly issued endpoint and connection grants, in hours (1–48)"
-          >
-            <NumericInput
-              value={grantTtlHours}
-              onChange={setGrantTtlHours}
-              min={1}
-              max={48}
-              disabled={!canEdit || saving}
-            />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Automatic recovery"
-            description="Allow up to three bounded managed relay recovery attempts"
-          >
-            <Switch
-              checked={autoRecovery}
-              onChange={setAutoRecovery}
-              disabled={!canEdit || saving}
-            />
-          </SettingsControlRow>
-        </PanelShell>
+          {status?.state ?? "unavailable"}
+        </Badge>
+        <Badge variant="secondary">build {status?.relayBuildVersion ?? "unknown"}</Badge>
+        <Badge variant="secondary">protocol v{status?.protocolMajor ?? "-"}</Badge>
+        <Badge variant={status?.admissionState === "normal" ? "secondary" : "warning"}>
+          {admissionLabel(status?.admissionState)}
+        </Badge>
       </div>
-    </PageTransition>
+
+      <div>
+        <h3 className="mb-2 text-sm font-semibold text-muted-foreground">Tunnel activity</h3>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard
+            label="Active tunnels"
+            value={metric(status?.activeTunnels).toLocaleString()}
+            icon={Activity}
+            history={history.map((sample) => metric(sample.activeTunnels))}
+            color="#3b82f6"
+            subtitle="Current logical streams"
+          />
+          <StatCard
+            label="Proxy tunnels"
+            value={metric(status?.activeProxyTunnels).toLocaleString()}
+            icon={Network}
+            history={history.map((sample) => metric(sample.activeProxyTunnels))}
+            color="#06b6d4"
+            subtitle="Secure Link traffic"
+          />
+          <StatCard
+            label="Database tunnels"
+            value={metric(status?.activeDatabaseTunnels).toLocaleString()}
+            icon={Database}
+            history={history.map((sample) => metric(sample.activeDatabaseTunnels))}
+            color="#8b5cf6"
+            subtitle="Priority traffic class"
+          />
+          <StatCard
+            label="Registered endpoints"
+            value={metric(status?.registeredEndpoints).toLocaleString()}
+            icon={Waypoints}
+            history={history.map((sample) => metric(sample.registeredEndpoints))}
+            color="#22c55e"
+            subtitle="Available relay targets"
+          />
+        </div>
+      </div>
+
+      <div>
+        <h3 className="mb-2 text-sm font-semibold text-muted-foreground">Relay resources</h3>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard
+            label="Relay CPU"
+            value={`${metric(status?.cpuPressurePercent)}%`}
+            icon={Cpu}
+            history={history.map((sample) => metric(sample.cpuPressurePercent))}
+            sparklineMax={100}
+            color="#3b82f6"
+            progress={{ percent: metric(status?.cpuPressurePercent) }}
+            subtitle="Relay process across available CPUs"
+          />
+          <StatCard
+            label="Resident memory"
+            value={formatBytes(memoryRss)}
+            icon={MemoryStick}
+            history={history.map((sample) => metric(sample.memoryRssBytes))}
+            sparklineMax={memoryLimit || undefined}
+            color="#8b5cf6"
+            progress={memoryLimit > 0 ? { percent: percent(memoryRss, memoryLimit) } : undefined}
+            subtitle={
+              memoryLimit > 0
+                ? `${formatBytes(metric(status?.heapInUseBytes))} heap · ${formatBytes(memoryLimit)} limit`
+                : `${formatBytes(metric(status?.heapInUseBytes))} heap · no cgroup limit`
+            }
+          />
+          <StatCard
+            label="File descriptors"
+            value={openFDs.toLocaleString()}
+            icon={Server}
+            history={history.map((sample) => metric(sample.openFileDescriptors))}
+            sparklineMax={fdLimit || undefined}
+            color="#f97316"
+            progress={fdLimit > 0 ? { percent: percent(openFDs, fdLimit) } : undefined}
+            subtitle={
+              fdLimit > 0 ? `of ${fdLimit.toLocaleString()} process limit` : "Limit unavailable"
+            }
+          />
+          <StatCard
+            label="Admission pressure"
+            value={`${metric(status?.pressurePercent)}%`}
+            icon={Gauge}
+            history={history.map((sample) => metric(sample.pressurePercent))}
+            sparklineMax={100}
+            color={pressureColor}
+            progress={{ percent: metric(status?.pressurePercent), color: pressureColor }}
+            subtitle={admissionLabel(status?.admissionState)}
+          />
+        </div>
+      </div>
+
+      <div>
+        <h3 className="mb-2 text-sm font-semibold text-muted-foreground">Admission & runtime</h3>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard
+            label="Proxy throttled"
+            value={metric(status?.throttledProxyTotal).toLocaleString()}
+            icon={Ban}
+            history={history.map((sample) => metric(sample.throttledProxyTotal))}
+            color="#f59e0b"
+            subtitle="Cumulative rejected proxy streams"
+          />
+          <StatCard
+            label="Database throttled"
+            value={metric(status?.throttledDatabaseTotal).toLocaleString()}
+            icon={Cable}
+            history={history.map((sample) => metric(sample.throttledDatabaseTotal))}
+            color="#ef4444"
+            subtitle="Only at the hard safety cutoff"
+          />
+          <StatCard
+            label="Data lanes"
+            value={String(persistedDataLanes)}
+            icon={Network}
+            color="#06b6d4"
+            subtitle="Persistent HTTP/2 lanes per daemon"
+          />
+          <StatCard
+            label="Read buffer"
+            value={`${Math.round(persistedReadChunkBytes / 1024)} KiB`}
+            icon={Activity}
+            color="#a855f7"
+            subtitle="Pooled per-stream read chunk"
+          />
+        </div>
+      </div>
+
+      <PanelShell
+        title="Relay runtime"
+        description="Persisted Gateway settings distributed to the relay data plane"
+        actions={
+          <Button onClick={save} disabled={!canEdit || saving || !hasChanges}>
+            <Save className="h-4 w-4" />
+            Save
+          </Button>
+        }
+        dirty={hasChanges}
+      >
+        <SettingsControlRow
+          title="Data lanes"
+          description="Persistent HTTP/2 data-plane connections per daemon (1–16)"
+        >
+          <NumericInput
+            value={dataLanes}
+            onChange={setDataLanes}
+            min={1}
+            max={16}
+            disabled={!canEdit || saving}
+          />
+        </SettingsControlRow>
+        <SettingsControlRow
+          title="Read chunk"
+          description="Per-tunnel pooled read buffer; protocol frames remain capped at 1 MiB"
+        >
+          <NumericInput
+            value={readChunkBytes}
+            onChange={setReadChunkBytes}
+            min={4096}
+            max={262144}
+            step={4096}
+            disabled={!canEdit || saving}
+          />
+        </SettingsControlRow>
+        <SettingsControlRow
+          title="Adaptive admission"
+          description="Throttle new proxy streams only when measured relay pressure rises"
+        >
+          <Switch
+            checked={adaptiveAdmissionEnabled}
+            onChange={setAdaptiveAdmissionEnabled}
+            disabled={!canEdit || saving}
+          />
+        </SettingsControlRow>
+        <SettingsControlRow
+          title="Proxy pressure target"
+          description="Start fair-share admission for dominant proxy routes at this measured pressure"
+        >
+          <NumericInput
+            value={proxyTargetPressurePercent}
+            onChange={setProxyTargetPressurePercent}
+            min={50}
+            max={85}
+            disabled={!canEdit || saving || !adaptiveAdmissionEnabled}
+          />
+        </SettingsControlRow>
+        <SettingsControlRow
+          title="Database reserve"
+          description="Capacity kept beyond the proxy target for higher-priority database tunnels"
+        >
+          <NumericInput
+            value={databaseReservePercent}
+            onChange={setDatabaseReservePercent}
+            min={5}
+            max={35}
+            disabled={!canEdit || saving || !adaptiveAdmissionEnabled}
+          />
+        </SettingsControlRow>
+        <SettingsControlRow
+          title="Hard pressure cutoff"
+          description="Last-resort safety threshold; databases remain admissible until this point"
+        >
+          <NumericInput
+            value={hardPressurePercent}
+            onChange={setHardPressurePercent}
+            min={90}
+            max={99}
+            disabled={!canEdit || saving || !adaptiveAdmissionEnabled}
+          />
+        </SettingsControlRow>
+        <SettingsControlRow
+          title="Grant lifetime"
+          description="Lifetime of newly issued endpoint and connection grants, in hours (1–48)"
+        >
+          <NumericInput
+            value={grantTtlHours}
+            onChange={setGrantTtlHours}
+            min={1}
+            max={48}
+            disabled={!canEdit || saving}
+          />
+        </SettingsControlRow>
+        <SettingsControlRow
+          title="Automatic recovery"
+          description="Allow up to three bounded managed relay recovery attempts"
+        >
+          <Switch checked={autoRecovery} onChange={setAutoRecovery} disabled={!canEdit || saving} />
+        </SettingsControlRow>
+      </PanelShell>
+    </div>
   );
 }

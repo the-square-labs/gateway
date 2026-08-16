@@ -625,7 +625,12 @@ export function Dashboard() {
   const displayStats: DashboardStats = stats ?? {
     proxyHosts: { total: 0, enabled: 0, online: 0, offline: 0, degraded: 0 },
     sslCertificates: { total: 0, active: 0, expiringSoon: 0, expired: 0 },
-    pkiCertificates: { total: totalCerts, active: totalCerts, revoked: 0, expired: 0 },
+    pkiCertificates: {
+      total: totalCerts,
+      active: totalCerts,
+      revoked: 0,
+      expired: 0,
+    },
     cas: { total: totalCAs, active: activeCAs },
   };
   const expiringItemsForCard = forcedExpiringItems ?? expiringItems;
@@ -731,6 +736,7 @@ export function Dashboard() {
                   </div>
                   <Link
                     to="/settings/general"
+                    state={{ scrollTarget: "system-updates" }}
                     className="flex items-center gap-1 text-sm font-medium text-warning hover:underline"
                   >
                     Go to Settings
@@ -764,7 +770,8 @@ export function Dashboard() {
                   </div>
                 </div>
                 <Link
-                  to="/settings/housekeeping"
+                  to="/settings/features"
+                  state={{ scrollTarget: "housekeeping" }}
                   className="flex shrink-0 items-center gap-1 text-sm font-medium text-warning hover:underline"
                 >
                   Open Housekeeping
@@ -853,7 +860,9 @@ export function Dashboard() {
           {finalizeSetup && !isFinalizeSetupComplete(finalizeSetup) && !mfaOnboardingReminder && (
             <div
               className="border bg-card"
-              style={{ borderColor: "color-mix(in srgb, var(--color-link) 55%, transparent)" }}
+              style={{
+                borderColor: "color-mix(in srgb, var(--color-link) 55%, transparent)",
+              }}
             >
               <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex min-w-0 items-center gap-3">

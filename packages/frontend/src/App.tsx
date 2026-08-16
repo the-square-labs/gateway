@@ -1,5 +1,5 @@
 import { Loader2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   BrowserRouter,
   Navigate,
@@ -16,6 +16,7 @@ import { RequireScope } from "@/components/common/RequireScope";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { ThemeProvider } from "@/components/layout/ThemeProvider";
 import { Button } from "@/components/ui/button";
+import { getLoginRedirectUrl } from "@/lib/auth-return-to";
 import { resolveMigrationTarget } from "@/lib/docker-migration-navigation";
 import {
   INFERENCE_CATALOG_CHANGED_CHANNEL,
@@ -37,7 +38,6 @@ import { Administration } from "@/pages/Administration";
 import { AdminNodeDetail } from "@/pages/AdminNodeDetail";
 import { AdminNodes } from "@/pages/AdminNodes";
 import { AIArtifactPopout } from "@/pages/AIArtifactPopout";
-import { AuthCallback } from "@/pages/AuthCallback";
 import { BlockedPage } from "@/pages/Blocked";
 import { CADetail } from "@/pages/CADetail";
 import { CAs } from "@/pages/CAs";
@@ -56,7 +56,6 @@ import { DockerLogsPopout } from "@/pages/DockerLogsPopout";
 import { DockerVolumeDetail } from "@/pages/DockerVolumeDetail";
 import { Domains } from "@/pages/Domains";
 import { Logging } from "@/pages/Logging";
-import { LoginPage } from "@/pages/Login";
 import { NginxTemplateEdit } from "@/pages/NginxTemplateEdit";
 import { NodeConsolePopout } from "@/pages/NodeConsolePopout";
 import { Notifications } from "@/pages/Notifications";
@@ -155,6 +154,7 @@ function scoped(scope: string, element: React.ReactElement) {
 
 function PopoutAuthGate({ children }: { children: React.ReactElement }) {
   const navigate = useNavigate();
+  const loginRedirectUrl = useRef(getLoginRedirectUrl()).current;
   const { user, isLoading, setUser, setLoading, logout } = useAuthStore();
 
   useEffect(() => {
@@ -184,7 +184,7 @@ function PopoutAuthGate({ children }: { children: React.ReactElement }) {
         if (cancelled) return;
         if (error instanceof ApiRequestError && error.status === 401) {
           logout();
-          navigate("/login", { replace: true });
+          navigate(loginRedirectUrl, { replace: true });
         }
       })
       .finally(() => {
@@ -194,7 +194,7 @@ function PopoutAuthGate({ children }: { children: React.ReactElement }) {
     return () => {
       cancelled = true;
     };
-  }, [isLoading, logout, navigate, setLoading, setUser, user]);
+  }, [isLoading, loginRedirectUrl, logout, navigate, setLoading, setUser, user]);
 
   if (isLoading && !user) {
     return (
@@ -208,7 +208,7 @@ function PopoutAuthGate({ children }: { children: React.ReactElement }) {
   }
 
   if (!user) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to={loginRedirectUrl} replace />;
   }
 
   return children;
@@ -216,6 +216,18 @@ function PopoutAuthGate({ children }: { children: React.ReactElement }) {
 
 function DetailRouteLoading() {
   return <DetailPageSkeleton label="Loading resource" />;
+}
+
+let authDocumentNavigationStarted = false;
+
+function AuthDocumentRoute() {
+  useEffect(() => {
+    if (authDocumentNavigationStarted) return;
+    authDocumentNavigationStarted = true;
+    window.location.replace(window.location.href);
+  }, []);
+
+  return null;
 }
 
 function DetailRouteFailure({
@@ -1209,9 +1221,9 @@ export default function App() {
         <AppStatusGate />
         <BrowserRouter>
           <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/reset-password" element={<LoginPage />} />
-            <Route path="/callback" element={<AuthCallback />} />
+            <Route path="/login" element={<AuthDocumentRoute />} />
+            <Route path="/reset-password" element={<AuthDocumentRoute />} />
+            <Route path="/callback" element={<AuthDocumentRoute />} />
             <Route path="/oauth/consent" element={<OAuthConsent />} />
             <Route path="/oauth/error" element={<OAuthError />} />
             <Route path="/blocked" element={<BlockedPage />} />

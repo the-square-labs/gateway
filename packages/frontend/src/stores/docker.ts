@@ -172,6 +172,7 @@ const dockerRequestIds = {
   tasks: 0,
   registries: 0,
 };
+const inFlightContainerRequests = new Map<string, Promise<void>>();
 
 const initialLoading: Record<DockerResource, boolean> = {
   containers: false,
@@ -282,64 +283,90 @@ export const useDockerStore = create<DockerState>()((set, get) => ({
   },
 
   fetchContainers: async (nodeIdOverride, searchOverride, _nodesOverride) => {
-    const requestId = ++dockerRequestIds.containers;
     const { selectedNodeId, filters } = get();
     const effectiveNodeId = nodeIdOverride ?? selectedNodeId;
     const search = searchOverride ?? filters.search;
     const scope = dockerContainerScope(effectiveNodeId, search);
-    const cacheKey = dockerSnapshotCacheKey("containers", effectiveNodeId, search);
-    const cached =
-      cachedContainersForScope(get(), effectiveNodeId, search) ??
-      api.getCached<DockerContainer[]>(cacheKey, Number.POSITIVE_INFINITY);
-    set((state) => ({
-      containers: cached ?? [],
-      ...loadingState(state.loading, "containers", !cached),
-    }));
-    try {
-      const items = await api.listDockerContainerSnapshots({
-        nodeId: effectiveNodeId ?? undefined,
-        search,
-      });
-      if (requestId !== dockerRequestIds.containers) return;
-      api.setCache(cacheKey, items);
+    const existingRequest = inFlightContainerRequests.get(scope);
+    if (existingRequest) return existingRequest;
+
+    const request = (async () => {
+      const requestId = ++dockerRequestIds.containers;
+      const cacheKey = dockerSnapshotCacheKey("containers", effectiveNodeId, search);
+      const cached =
+        cachedContainersForScope(get(), effectiveNodeId, search) ??
+        api.getCached<DockerContainer[]>(cacheKey, Number.POSITIVE_INFINITY);
       set((state) => ({
-        containers: items,
-        containersByScope: { ...state.containersByScope, [scope]: items },
-        ...loadingState(state.loading, "containers", false),
+        containers: cached ?? [],
+        ...loadingState(state.loading, "containers", !cached),
       }));
-    } catch {
-      if (requestId !== dockerRequestIds.containers) return;
-      set((state) => loadingState(state.loading, "containers", false));
+      try {
+        const items = await api.listDockerContainerSnapshots({
+          nodeId: effectiveNodeId ?? undefined,
+          search,
+        });
+        if (requestId !== dockerRequestIds.containers) return;
+        api.setCache(cacheKey, items);
+        set((state) => ({
+          containers: items,
+          containersByScope: { ...state.containersByScope, [scope]: items },
+          ...loadingState(state.loading, "containers", false),
+        }));
+      } catch {
+        if (requestId !== dockerRequestIds.containers) return;
+        set((state) => loadingState(state.loading, "containers", false));
+      }
+    })();
+    inFlightContainerRequests.set(scope, request);
+    try {
+      await request;
+    } finally {
+      if (inFlightContainerRequests.get(scope) === request) {
+        inFlightContainerRequests.delete(scope);
+      }
     }
   },
 
   forceFetchContainers: async (nodeIdOverride, searchOverride) => {
-    const requestId = ++dockerRequestIds.containers;
     const { selectedNodeId, filters } = get();
     const effectiveNodeId = nodeIdOverride ?? selectedNodeId;
     const search = searchOverride ?? filters.search;
     const scope = dockerContainerScope(effectiveNodeId, search);
-    const cacheKey = dockerSnapshotCacheKey("containers", effectiveNodeId, search);
-    const cached = cachedContainersForScope(get(), effectiveNodeId, search);
-    set((state) => ({
-      containers: cached ?? [],
-      ...loadingState(state.loading, "containers", !cached),
-    }));
-    try {
-      const items = await api.listDockerContainerSnapshots({
-        nodeId: effectiveNodeId ?? undefined,
-        search,
-      });
-      if (requestId !== dockerRequestIds.containers) return;
-      api.setCache(cacheKey, items);
+    const existingRequest = inFlightContainerRequests.get(scope);
+    if (existingRequest) return existingRequest;
+
+    const request = (async () => {
+      const requestId = ++dockerRequestIds.containers;
+      const cacheKey = dockerSnapshotCacheKey("containers", effectiveNodeId, search);
+      const cached = cachedContainersForScope(get(), effectiveNodeId, search);
       set((state) => ({
-        containers: items,
-        containersByScope: { ...state.containersByScope, [scope]: items },
-        ...loadingState(state.loading, "containers", false),
+        containers: cached ?? [],
+        ...loadingState(state.loading, "containers", !cached),
       }));
-    } catch {
-      if (requestId !== dockerRequestIds.containers) return;
-      set((state) => loadingState(state.loading, "containers", false));
+      try {
+        const items = await api.listDockerContainerSnapshots({
+          nodeId: effectiveNodeId ?? undefined,
+          search,
+        });
+        if (requestId !== dockerRequestIds.containers) return;
+        api.setCache(cacheKey, items);
+        set((state) => ({
+          containers: items,
+          containersByScope: { ...state.containersByScope, [scope]: items },
+          ...loadingState(state.loading, "containers", false),
+        }));
+      } catch {
+        if (requestId !== dockerRequestIds.containers) return;
+        set((state) => loadingState(state.loading, "containers", false));
+      }
+    })();
+    inFlightContainerRequests.set(scope, request);
+    try {
+      await request;
+    } finally {
+      if (inFlightContainerRequests.get(scope) === request) {
+        inFlightContainerRequests.delete(scope);
+      }
     }
   },
 

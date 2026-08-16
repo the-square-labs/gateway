@@ -5,6 +5,7 @@ import { nodes } from '@/db/schema/nodes.js';
 
 export type WithDockerUpstreamDisplay<T> = T & {
   dockerDeploymentName: string | null;
+  dockerNodeSlug: string | null;
   dockerNodeAppearanceColor: string | null;
   secureLinkActive: boolean;
 };
@@ -26,12 +27,13 @@ export async function attachDockerUpstreamDisplay<
       : [],
     nodeIds.length > 0
       ? db
-          .select({ id: nodes.id, appearanceColor: nodes.appearanceColor })
+          .select({ id: nodes.id, slug: nodes.slug, appearanceColor: nodes.appearanceColor })
           .from(nodes)
           .where(inArray(nodes.id, nodeIds))
       : [],
   ]);
   const names = new Map(deployments.map((deployment) => [deployment.id, deployment.name]));
+  const slugs = new Map(dockerNodes.map((node) => [node.id, node.slug]));
   const colors = new Map(dockerNodes.map((node) => [node.id, node.appearanceColor]));
   return hosts.map((host) => {
     const visible = { ...host } as Record<string, unknown>;
@@ -58,6 +60,7 @@ export async function attachDockerUpstreamDisplay<
       ...visible,
       secureLinkActive,
       dockerDeploymentName: host.dockerDeploymentId ? (names.get(host.dockerDeploymentId) ?? null) : null,
+      dockerNodeSlug: host.dockerNodeId ? (slugs.get(host.dockerNodeId) ?? null) : null,
       dockerNodeAppearanceColor: host.dockerNodeId ? (colors.get(host.dockerNodeId) ?? null) : null,
     } as WithDockerUpstreamDisplay<T>;
   });

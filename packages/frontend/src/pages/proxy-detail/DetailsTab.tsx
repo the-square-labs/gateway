@@ -5,7 +5,6 @@ import { DetailRow } from "@/components/common/DetailRow";
 import { PanelShell } from "@/components/common/PanelShell";
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { nodeRoute } from "@/lib/resource-routes";
 import { api } from "@/services/api";
@@ -145,7 +144,10 @@ export function DetailsTab({ host }: { host: ProxyHost }) {
             }
           />
           {host.type === "proxy" && (
-            <DetailRow label="Forward Target" value={<ProxyUpstreamTarget host={host} />} />
+            <DetailRow
+              label="Forward Target"
+              value={<ProxyUpstreamTarget host={host} linkToResource />}
+            />
           )}
           {host.type === "redirect" && host.redirectUrl && (
             <DetailRow
@@ -196,11 +198,9 @@ export function DetailsTab({ host }: { host: ProxyHost }) {
           <DetailRow
             label="Name"
             value={
-              <Button variant="link" size="sm" asChild>
-                <Link to={`/ssl-certificates?certificate=${host.sslCertificate.id}`}>
-                  {host.sslCertificate.name}
-                </Link>
-              </Button>
+              <Link to={`/ssl-certificates?certificate=${host.sslCertificate.id}`}>
+                <Badge variant="info">{host.sslCertificate.name}</Badge>
+              </Link>
             }
           />
           <DetailRow

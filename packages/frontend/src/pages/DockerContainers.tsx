@@ -177,6 +177,7 @@ export function DockerContainers({
   const [searchInput, setSearchInput] = useState(filters.search);
   const [dockerNodes, setDockerNodes] = useState<Node[]>([]);
   const [nodesLoading, setNodesLoading] = useState(true);
+  const [initialContentReady, setInitialContentReady] = useState(false);
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [deployOpen, setDeployOpen] = useState(false);
   const [dockerNodeRequiredOpen, setDockerNodeRequiredOpen] = useState(false);
@@ -303,9 +304,15 @@ export function DockerContainers({
       return;
     }
     if (!embedded && !fixedNodeId && nodesLoading) return;
-    void refreshData();
+    let cancelled = false;
+    void refreshData().then(() => {
+      if (!cancelled) setInitialContentReady(true);
+    });
     const interval = setInterval(() => void refreshData(), 30_000);
-    return () => clearInterval(interval);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [dockerNodesLoaded, embedded, fetchFolders, fixedNodeId, nodesLoading, refreshData]);
 
   useRealtime("docker.container.changed", (payload) => {
@@ -686,7 +693,7 @@ export function DockerContainers({
     {
       id: "name",
       label: "Name",
-      width: showNodeColumn ? "24%" : "28%",
+      width: showNodeColumn ? "28%" : "32%",
       cellContentClassName: "gap-3",
       renderCell: (container) => (
         <div className="flex min-w-0 items-center gap-3">
@@ -746,7 +753,7 @@ export function DockerContainers({
     {
       id: "status",
       label: "Status",
-      width: "14%",
+      width: "8.5rem",
       renderCell: (container) => {
         if (container.availability === "unavailable") {
           return <Badge variant="secondary">Unavailable</Badge>;
@@ -758,7 +765,7 @@ export function DockerContainers({
     {
       id: "health",
       label: "Health",
-      width: "10rem",
+      width: "7rem",
       renderCell: (container) => {
         const status = container.healthCheckEnabled
           ? (container.healthStatus ?? "unknown")
@@ -871,7 +878,7 @@ export function DockerContainers({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-bold">Docker Containers</h1>
-              {!isLoading && visibleNodeId && (
+              {initialContentReady && !isLoading && visibleNodeId && (
                 <Badge variant="secondary" size="inline">
                   {containers.length}
                 </Badge>
@@ -1015,10 +1022,12 @@ export function DockerContainers({
               )}
           </>
         }
-        loading={canListDockerResources && (isLoading || foldersLoading)}
+        loading={canListDockerResources && (!initialContentReady || isLoading || foldersLoading)}
         loadingLabel="Loading containers..."
         hasContent={
-          canListDockerResources && (filteredContainers.length > 0 || folderTree.length > 0)
+          initialContentReady &&
+          canListDockerResources &&
+          (filteredContainers.length > 0 || folderTree.length > 0)
         }
         emptyState={
           canListDockerResources ? (

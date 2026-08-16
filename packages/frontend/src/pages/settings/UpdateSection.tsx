@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useScrollToNavigationTarget } from "@/hooks/use-scroll-to-navigation-target";
 import { isDevForceUpdatesEnabled } from "@/lib/dev-force-updates";
 import { api } from "@/services/api";
 import { useUpdateStore } from "@/stores/update";
@@ -37,14 +38,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
     void fetchStatus().finally(() => setInitialLoadComplete(true));
   }, [fetchStatus]);
 
-  useEffect(() => {
-    if (window.location.hash !== "#system-updates" || !updateStatus) return;
-    requestAnimationFrame(() => {
-      document
-        .getElementById("system-updates")
-        ?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  }, [updateStatus]);
+  useScrollToNavigationTarget("system-updates", updateStatus !== null);
 
   if (!initialLoadComplete) return <Skeleton />;
 

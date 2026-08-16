@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { useScrollToNavigationTarget } from "@/hooks/use-scroll-to-navigation-target";
 import { formatBytes, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import type {
@@ -43,7 +44,11 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
           auditLog: { enabled: true, retentionDays: 90 },
           dismissedAlerts: { enabled: true, retentionDays: 30 },
           deliveryLog: { enabled: true, retentionDays: 7 },
-          structuredLogs: { enabled: false, maxRows: 100_000, maxSizeBytes: 10 * 1024 ** 3 },
+          structuredLogs: {
+            enabled: false,
+            maxRows: 100_000,
+            maxSizeBytes: 10 * 1024 ** 3,
+          },
           clickHouseInternals: { enabled: false },
           orphanedAIArtifacts: { enabled: true },
           gatewayLogs: { enabled: false },
@@ -88,6 +93,8 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
   useEffect(() => {
     loadHousekeeping();
   }, [loadHousekeeping]);
+
+  useScrollToNavigationTarget("housekeeping", initialLoadComplete);
 
   const hkHasChanges = hkSavedConfig
     ? JSON.stringify(hkConfig) !== JSON.stringify(hkSavedConfig)
@@ -197,6 +204,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
   return (
     <>
       <PanelShell
+        id="housekeeping"
         title="Housekeeping"
         description="Automated cleanup of logs, old data, and unused resources"
         actions={
@@ -362,7 +370,10 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
               onToggle={(enabled) =>
                 setHkConfig((current) => ({
                   ...current,
-                  clickHouseInternals: { ...current.clickHouseInternals, enabled },
+                  clickHouseInternals: {
+                    ...current.clickHouseInternals,
+                    enabled,
+                  },
                 }))
               }
               disabled={controlsDisabled}
@@ -405,7 +416,10 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
               onRetentionChange={(v) =>
                 setHkConfig((current) => ({
                   ...current,
-                  dismissedAlerts: { ...current.dismissedAlerts, retentionDays: v },
+                  dismissedAlerts: {
+                    ...current.dismissedAlerts,
+                    retentionDays: v,
+                  },
                 }))
               }
               lastResult={hkStats?.lastRun?.categories.find(
@@ -484,7 +498,10 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
               onRetentionChange={(v) =>
                 setHkConfig((current) => ({
                   ...current,
-                  orphanedVolumes: { ...current.orphanedVolumes, retentionDays: v },
+                  orphanedVolumes: {
+                    ...current.orphanedVolumes,
+                    retentionDays: v,
+                  },
                 }))
               }
               lastResult={hkStats?.lastRun?.categories.find(
@@ -503,7 +520,10 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
               }
               enabled={hkConfig.orphanedCerts.enabled}
               onToggle={(v) =>
-                setHkConfig((current) => ({ ...current, orphanedCerts: { enabled: v } }))
+                setHkConfig((current) => ({
+                  ...current,
+                  orphanedCerts: { enabled: v },
+                }))
               }
               lastResult={hkStats?.lastRun?.categories.find((c) => c.category === "Orphaned Certs")}
               disabled={controlsDisabled}
@@ -517,7 +537,10 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
               }
               enabled={hkConfig.acmeCleanup.enabled}
               onToggle={(v) =>
-                setHkConfig((current) => ({ ...current, acmeCleanup: { enabled: v } }))
+                setHkConfig((current) => ({
+                  ...current,
+                  acmeCleanup: { enabled: v },
+                }))
               }
               lastResult={hkStats?.lastRun?.categories.find(
                 (c) => c.category === "ACME Challenges"
@@ -533,7 +556,10 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
               }
               enabled={hkConfig.dockerPrune.enabled}
               onToggle={(v) =>
-                setHkConfig((current) => ({ ...current, dockerPrune: { enabled: v } }))
+                setHkConfig((current) => ({
+                  ...current,
+                  dockerPrune: { enabled: v },
+                }))
               }
               lastResult={hkStats?.lastRun?.categories.find((c) => c.category === "Docker Images")}
               disabled={controlsDisabled}

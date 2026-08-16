@@ -1,3 +1,4 @@
+import { getLoginRedirectUrl } from "@/lib/auth-return-to";
 import { useAppStatusStore } from "@/stores/app-status";
 import { useAuthStore } from "@/stores/auth";
 import type { ApiError } from "@/types";
@@ -123,13 +124,6 @@ function getXhrRetryAfterSeconds(xhr: XMLHttpRequest): number {
   }
 
   return 60;
-}
-
-function getLoginRedirectUrl(): string {
-  if (window.location.pathname.startsWith("/oauth/")) {
-    return `/auth/login?return_to=${encodeURIComponent(window.location.href)}`;
-  }
-  return "/login";
 }
 
 export class ApiClientBase {

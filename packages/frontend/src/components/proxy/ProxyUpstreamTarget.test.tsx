@@ -1,5 +1,8 @@
 import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
+import { useDockerStore } from "@/stores/docker";
+import { makeNode } from "@/test/fixtures";
 import { ProxyUpstreamTarget } from "./ProxyUpstreamTarget";
 
 describe("ProxyUpstreamTarget", () => {
@@ -38,5 +41,32 @@ describe("ProxyUpstreamTarget", () => {
     );
 
     expect(screen.getByText("http://backend.internal:8080").tagName).toBe("SPAN");
+  });
+
+  it("links a Secure Link target badge to the Docker resource when requested", () => {
+    useDockerStore.setState({
+      dockerNodes: [makeNode({ id: "node-1", slug: "docker-one", type: "docker" })],
+    });
+
+    render(
+      <MemoryRouter>
+        <ProxyUpstreamTarget
+          linkToResource
+          host={{
+            type: "proxy",
+            upstreamKind: "docker_container",
+            forwardHost: null,
+            forwardPort: null,
+            forwardScheme: "http",
+            dockerNodeId: "node-1",
+            dockerContainerName: "backend",
+          }}
+        />
+      </MemoryRouter>
+    );
+
+    const link = screen.getByRole("link", { name: "backend" });
+    expect(link).toHaveAttribute("href", "/docker/containers/docker-one/backend");
+    expect(link.firstElementChild).toHaveClass("bg-muted");
   });
 });

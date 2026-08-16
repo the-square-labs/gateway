@@ -189,7 +189,7 @@ export function Settings() {
                 ) : (
                   canUpdate && <UpdateSection canUpdate={canUpdate} />
                 )}
-                <PoweredByFooter transitionKey="general" />
+                <PoweredByFooter />
               </div>
             </TabsContent>
           )}
@@ -201,7 +201,7 @@ export function Settings() {
                   <AuthProvisioningSection canEdit={canEditGatewaySettings} section="advanced" />
                 )}
                 {canManageRegistries && <DockerRegistriesSection nodesList={nodesList} />}
-                <PoweredByFooter transitionKey="advanced" />
+                <PoweredByFooter />
               </div>
             </TabsContent>
           )}
@@ -210,7 +210,7 @@ export function Settings() {
             <TabsContent value="relay" className="pb-0">
               <div className="space-y-4">
                 <RelaySettingsSection canEdit={canEditGatewaySettings} />
-                <PoweredByFooter transitionKey="relay" />
+                <PoweredByFooter />
               </div>
             </TabsContent>
           )}
@@ -229,7 +229,7 @@ export function Settings() {
                     canConfigure={canConfigureHousekeeping}
                   />
                 )}
-                <PoweredByFooter transitionKey="features" />
+                <PoweredByFooter />
               </div>
             </TabsContent>
           )}
@@ -238,7 +238,7 @@ export function Settings() {
             <TabsContent value="integrations" className="pb-0">
               <div className="space-y-4">
                 <IntegrationsSection />
-                <PoweredByFooter transitionKey="integrations" />
+                <PoweredByFooter />
               </div>
             </TabsContent>
           )}
@@ -247,7 +247,7 @@ export function Settings() {
             <TabsContent value="ai" className="pb-0">
               <div className="space-y-4">
                 <AIConfigSection />
-                <PoweredByFooter transitionKey="ai" />
+                <PoweredByFooter />
               </div>
             </TabsContent>
           )}
@@ -255,7 +255,7 @@ export function Settings() {
             <TabsContent value="inference" className="pb-0">
               <div className="space-y-4">
                 <InferenceSettingsSection />
-                <PoweredByFooter transitionKey="inference" />
+                <PoweredByFooter />
               </div>
             </TabsContent>
           )}

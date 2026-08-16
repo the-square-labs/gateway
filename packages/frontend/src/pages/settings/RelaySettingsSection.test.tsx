@@ -1,9 +1,18 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, vi } from "vitest";
+import { PageTransition } from "@/components/common/PageTransition";
 import { api } from "@/services/api";
 import type { AuthProvisioningSettings, DashboardRelaySnapshot } from "@/types";
 import { RelaySettingsSection } from "./RelaySettingsSection";
+
+function renderRelaySettings() {
+  return render(
+    <PageTransition>
+      <RelaySettingsSection canEdit />
+    </PageTransition>
+  );
+}
 
 describe("RelaySettingsSection", () => {
   beforeEach(() => api.invalidateCache());
@@ -50,7 +59,7 @@ describe("RelaySettingsSection", () => {
       throttledDatabaseTotal: 0,
     });
 
-    render(<RelaySettingsSection canEdit />);
+    renderRelaySettings();
 
     expect(await screen.findByText("Resident memory")).toBeInTheDocument();
     expect(screen.getByText("18.0 MB")).toBeInTheDocument();
@@ -80,7 +89,7 @@ describe("RelaySettingsSection", () => {
     } as never);
     vi.spyOn(api, "getRelayStatus").mockResolvedValue(null as never);
 
-    render(<RelaySettingsSection canEdit />);
+    renderRelaySettings();
 
     const saveButton = await screen.findByRole("button", { name: "Save" });
     const panel = screen.getByText("Relay runtime").closest("div.border") as HTMLElement;
@@ -115,7 +124,7 @@ describe("RelaySettingsSection", () => {
     vi.spyOn(api, "getAuthProvisioningSettings").mockImplementation(() => new Promise(() => {}));
     vi.spyOn(api, "getRelayStatus").mockImplementation(() => new Promise(() => {}));
 
-    render(<RelaySettingsSection canEdit />);
+    renderRelaySettings();
 
     expect(screen.getByText("Resident memory")).toBeInTheDocument();
     expect(screen.getByText("18.0 MB")).toBeInTheDocument();
@@ -136,7 +145,7 @@ describe("RelaySettingsSection", () => {
       () => new Promise((resolve) => (resolveStatus = resolve))
     );
 
-    render(<RelaySettingsSection canEdit />);
+    renderRelaySettings();
 
     const transition = document.querySelector("[data-page-transition]");
     expect(transition).toHaveStyle({ visibility: "hidden" });

@@ -3,7 +3,9 @@ import { MemoryRouter } from "react-router-dom";
 import { vi } from "vitest";
 import { PageTransition } from "@/components/common/PageTransition";
 import { api } from "@/services/api";
+import { useDockerStore } from "@/stores/docker";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
+import { makeNode } from "@/test/fixtures";
 import type { NodeDetail, ProxyHost } from "@/types";
 import { DetailsTab } from "./DetailsTab";
 
@@ -73,6 +75,9 @@ describe("proxy host details tab", () => {
         status: "online",
       },
     });
+    useDockerStore.setState({
+      dockerNodes: [makeNode({ id: "docker-node-1", slug: "docker-one", type: "docker" })],
+    });
 
     render(
       <MemoryRouter>
@@ -80,6 +85,10 @@ describe("proxy host details tab", () => {
           host={
             {
               ...HOST,
+              upstreamKind: "docker_container",
+              dockerNodeId: "docker-node-1",
+              dockerContainerName: "backend",
+              secureLinkActive: true,
               sslEnabled: true,
               sslCertificate: {
                 id: "cert-1",
@@ -97,5 +106,8 @@ describe("proxy host details tab", () => {
     expect(resourceLinks[0]).toHaveAttribute("href", "/domains?domain=example.test");
     expect(resourceLinks[0]?.firstElementChild).toHaveClass("bg-blue-500/15");
     expect(resourceLinks[1]).toHaveAttribute("href", "/ssl-certificates?certificate=cert-1");
+    expect(resourceLinks[1]?.firstElementChild).toHaveClass("bg-blue-500/15");
+    const targetLink = screen.getByRole("link", { name: "backend" });
+    expect(targetLink).toHaveAttribute("href", "/docker/containers/docker-one/backend");
   });
 });

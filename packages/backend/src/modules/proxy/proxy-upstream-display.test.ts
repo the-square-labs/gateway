@@ -3,7 +3,7 @@ import { attachDockerUpstreamDisplay } from './proxy-upstream-display.js';
 
 describe('attachDockerUpstreamDisplay', () => {
   it('exposes only the public active flag for an active Secure Link', async () => {
-    const where = vi.fn().mockResolvedValue([]);
+    const where = vi.fn().mockResolvedValueOnce([{ id: 'node-1', slug: 'docker-one', appearanceColor: 'pink' }]);
     const db = {
       select: vi.fn(() => ({ from: vi.fn(() => ({ where })) })),
     } as any;
@@ -30,6 +30,8 @@ describe('attachDockerUpstreamDisplay', () => {
 
     expect(result).toMatchObject({
       secureLinkActive: true,
+      dockerNodeSlug: 'docker-one',
+      dockerNodeAppearanceColor: 'pink',
       forwardHost: null,
       forwardPort: null,
       dockerHostPort: null,

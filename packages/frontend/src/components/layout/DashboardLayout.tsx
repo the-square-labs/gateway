@@ -20,6 +20,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useRouteScrollRestoration } from "@/hooks/use-route-scroll-restoration";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { keyboardNavigationRoutes } from "@/lib/app-navigation";
+import { getLoginRedirectUrl } from "@/lib/auth-return-to";
 import { applyForcedGatewayUpdateStatus } from "@/lib/dev-force-updates";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
 import { isCompactPanelsViewport } from "@/lib/responsive-panels";
@@ -74,6 +75,7 @@ function readSidebarWidth(): number {
 
 export function DashboardLayout() {
   const navigate = useStableNavigate();
+  const loginRedirectUrl = useRef(getLoginRedirectUrl()).current;
   const { isAuthenticated, isLoading, setUser, setLoading, logout } = useAuthStore();
   const currentUser = useAuthStore((state) => state.user);
   const authAccessKey = currentUser
@@ -345,7 +347,7 @@ export function DashboardLayout() {
       } catch (error) {
         if (error instanceof ApiRequestError && error.status === 401) {
           logout();
-          navigate("/login");
+          navigate(loginRedirectUrl);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -357,7 +359,7 @@ export function DashboardLayout() {
       cancelled = true;
       prewarmController.abort();
     };
-  }, [authAccessKey, loadUIBootstrap, logout, navigate, setLoading, setUser]);
+  }, [authAccessKey, loadUIBootstrap, loginRedirectUrl, logout, navigate, setLoading, setUser]);
 
   useEffect(() => {
     const checkMobile = () => {

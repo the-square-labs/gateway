@@ -124,6 +124,20 @@ describe("docker store", () => {
     ]);
   });
 
+  it("shares an in-flight container snapshot refresh for the same scope", async () => {
+    let resolveRequest!: (items: never[]) => void;
+    const snapshotRequest = vi
+      .spyOn(api, "listDockerContainerSnapshots")
+      .mockImplementation(() => new Promise((resolve) => (resolveRequest = resolve)));
+
+    const first = useDockerStore.getState().fetchContainers(null, "");
+    const second = useDockerStore.getState().fetchContainers(null, "");
+
+    expect(snapshotRequest).toHaveBeenCalledTimes(1);
+    resolveRequest([]);
+    await Promise.all([first, second]);
+  });
+
   it("shows a selected node immediately from the aggregate snapshot while refreshing", async () => {
     const aggregate = [
       {

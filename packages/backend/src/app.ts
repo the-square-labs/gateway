@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { resolve } from 'node:path';
@@ -16,6 +16,7 @@ import { requestId } from 'hono/request-id';
 import { getEnv, isDevelopment } from '@/config/env.js';
 import { container, TOKENS } from '@/container.js';
 import { GATEWAY_RESTARTING_HTML, GATEWAY_RESTARTING_SCRIPT, gatewayNotFoundHtml } from '@/lib/gateway-error-pages.js';
+import { injectLoginAuthMethods } from '@/lib/login-page.js';
 import { tags as openApiTags, openApiValidationHook, securitySchemes } from '@/lib/openapi.js';
 import { auditContextMiddleware } from '@/middleware/audit-context.js';
 import { errorHandler } from '@/middleware/error-handler.js';
@@ -41,6 +42,7 @@ import { alertRoutes } from '@/modules/audit/alert.routes.js';
 import { auditRoutes } from '@/modules/audit/audit.routes.js';
 import { authMiddleware, isAdmittedSetupPurposeRequest, requireActiveUser } from '@/modules/auth/auth.middleware.js';
 import { authRoutes } from '@/modules/auth/auth.routes.js';
+import { getPublicAuthMethods } from '@/modules/auth/public-auth-methods.js';
 import { getProgrammaticWebSocketCredential, getSessionWebSocketCredential } from '@/modules/auth/websocket-auth.js';
 import { databaseRoutes } from '@/modules/databases/databases.routes.js';
 import { createManagedDatabaseLogStreamWSHandlers } from '@/modules/databases/managed-database-logs.ws.js';
@@ -987,6 +989,32 @@ export function createApp(): GatewayAppRuntime {
 
   const publicDir = resolve(process.cwd(), 'public');
   if (existsSync(publicDir)) {
+    const loginHtmlPath = resolve(publicDir, 'login.html');
+    if (existsSync(loginHtmlPath)) {
+      const loginHtmlTemplate = readFileSync(loginHtmlPath, 'utf8');
+      const serveLoginPage: MiddlewareHandler<AppEnv> = async (c, next) => {
+        if (!(await isSetupComplete())) {
+          await next();
+          return;
+        }
+
+        let methods = null;
+        try {
+          methods = await getPublicAuthMethods();
+        } catch {
+          // The standalone client retains its existing retry state when auth
+          // configuration is temporarily unavailable.
+        }
+
+        c.header('Cache-Control', 'no-store');
+        return c.html(injectLoginAuthMethods(loginHtmlTemplate, methods));
+      };
+
+      app.get('/login', serveLoginPage);
+      app.get('/reset-password', serveLoginPage);
+      app.get('/callback', serveLoginPage);
+    }
+
     // Serve static assets (JS, CSS, images, etc.)
     app.use(
       '/*',

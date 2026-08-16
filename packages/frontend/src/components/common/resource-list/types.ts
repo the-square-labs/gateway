@@ -4,7 +4,7 @@ import type { ResourceListColumn } from "@/components/common/ResourceListLayout"
 
 export type ResourceListDndHandlers = Pick<
   DndContextProps,
-  "sensors" | "onDragStart" | "onDragEnd" | "onDragCancel"
+  "sensors" | "collisionDetection" | "onDragStart" | "onDragEnd" | "onDragCancel"
 > & {
   active: Active | null;
 };

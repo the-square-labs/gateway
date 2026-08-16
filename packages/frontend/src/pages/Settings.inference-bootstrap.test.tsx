@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router-dom";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -14,6 +14,8 @@ import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import { makeUser } from "@/test/fixtures";
 import type { SystemConfig, UIBootstrapShell } from "@/types";
 import { Settings } from "./Settings";
+
+const settingsSectionMockState = vi.hoisted(() => ({ authReady: true }));
 
 vi.mock("@/components/layout/SidebarContent", () => ({
   SidebarContent: () => <aside>Sidebar</aside>,
@@ -29,11 +31,19 @@ vi.mock("@/pages/settings/DockerRegistriesSection", () => ({
     <div>Registry nodes: {nodesList.length}</div>
   ),
 }));
-vi.mock("@/pages/settings/AuthProvisioningSection", () => ({
-  AuthProvisioningSection: ({ section }: { section: string }) => (
-    <div>Gateway configuration: {section}</div>
-  ),
-}));
+vi.mock("@/pages/settings/AuthProvisioningSection", async () => {
+  const { Skeleton } = await vi.importActual<typeof import("@/components/ui/skeleton")>(
+    "@/components/ui/skeleton"
+  );
+  return {
+    AuthProvisioningSection: ({ section }: { section: string }) =>
+      settingsSectionMockState.authReady ? (
+        <div>Gateway configuration: {section}</div>
+      ) : (
+        <Skeleton />
+      ),
+  };
+});
 vi.mock("@/pages/settings/UpdateSection", () => ({
   UpdateSection: () => <div>About Gateway</div>,
 }));
@@ -42,6 +52,51 @@ vi.mock("@/pages/settings/LicenseSection", () => ({
 }));
 
 describe("Settings inference bootstrap", () => {
+  afterEach(() => {
+    settingsSectionMockState.authReady = true;
+  });
+
+  it("keeps tab content and its footer absent until the active tab is ready", async () => {
+    settingsSectionMockState.authReady = false;
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["settings:gateway:view", "admin:update", "license:view"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    useSystemConfigStore.setState({
+      config: DEFAULT_SYSTEM_CONFIG,
+      loaded: true,
+      isLoading: false,
+    });
+    useUIBootstrapStore.setState({ snapshot: makeShell(false) });
+
+    const view = () => (
+      <MemoryRouter initialEntries={["/settings/general"]}>
+        <Routes>
+          <Route path="/settings/:tab?" element={<Settings />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    const rendered = render(view());
+
+    const tabTransition = [...document.querySelectorAll<HTMLElement>("[data-page-transition]")].at(
+      -1
+    );
+    expect(tabTransition).toHaveStyle({ visibility: "hidden" });
+    expect(screen.getByText("About Gateway")).not.toBeVisible();
+    expect(screen.getByText(/Powered by/)).not.toBeVisible();
+
+    settingsSectionMockState.authReady = true;
+    rendered.rerender(view());
+
+    await waitFor(() => {
+      expect(tabTransition).toHaveStyle({ visibility: "visible" });
+      expect(screen.getByText("Gateway configuration: general")).toBeVisible();
+      expect(screen.getByText("About Gateway")).toBeVisible();
+      expect(screen.getByText(/Powered by/)).toBeVisible();
+    });
+  });
+
   it("keeps a stable application skeleton until feature config is known and preserves the deep link", async () => {
     const user = makeUser({
       scopes: ["feat:ai:use", "inference:providers:view"],
@@ -230,6 +285,10 @@ describe("Settings inference bootstrap", () => {
       "data-state",
       "active"
     );
+    const generalTabTransition = [
+      ...document.querySelectorAll<HTMLElement>("[data-page-transition]"),
+    ].at(-1);
+    expect(generalTabTransition).toContainElement(screen.getByText(/Powered by/));
     expect(screen.queryByText("Gateway configuration: advanced")).not.toBeInTheDocument();
     expect(screen.queryByText(/Registry nodes:/)).not.toBeInTheDocument();
 
@@ -243,6 +302,11 @@ describe("Settings inference bootstrap", () => {
       "data-state",
       "active"
     );
+    const advancedTabTransition = [
+      ...document.querySelectorAll<HTMLElement>("[data-page-transition]"),
+    ].at(-1);
+    expect(advancedTabTransition).not.toBe(generalTabTransition);
+    expect(advancedTabTransition).toContainElement(screen.getByText(/Powered by/));
     expect(screen.getByTestId("location")).toHaveTextContent("/settings/advanced");
 
     await user.click(screen.getByRole("tab", { name: "Features" }));

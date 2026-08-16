@@ -1,14 +1,6 @@
-import { motion } from "framer-motion";
-
-export function PoweredByFooter({ transitionKey }: { transitionKey: string }) {
+export function PoweredByFooter() {
   return (
-    <motion.p
-      key={transitionKey}
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
-      className="text-center text-xs text-muted-foreground"
-    >
+    <p className="text-center text-xs text-muted-foreground">
       Powered by{" "}
       <a
         href="https://wiolett.net"
@@ -18,6 +10,6 @@ export function PoweredByFooter({ transitionKey }: { transitionKey: string }) {
       >
         Wiolett Industries
       </a>
-    </motion.p>
+    </p>
   );
 }
