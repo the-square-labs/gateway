@@ -309,6 +309,14 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     }
   };
 
+  const handleAskAI = (query: string) => {
+    if (aiEnabled === false) {
+      window.dispatchEvent(new CustomEvent("gateway:open-ai-workspace"));
+      return;
+    }
+    askAI(query);
+  };
+
   const navigationGroups = useMemo(
     () =>
       visibleNavigationGroups({
@@ -1046,12 +1054,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
   const hasSearchResults =
     resourceResults.length > 0 || filteredNavigation.length > 0 || filteredActions.length > 0;
-  const askAIFallback =
-    searchQuery.length > 0 &&
-    !resourceSearchPending &&
-    !hasSearchResults &&
-    aiEnabled !== false &&
-    aiScopeOk;
+  const askAIFallback = searchQuery.length > 0 && !hasSearchResults && aiScopeOk;
+  const askAIQuotaExhausted = aiEnabled !== false && inferenceQuota.exhausted;
 
   return (
     <CommandDialog
@@ -1267,12 +1271,12 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               <CommandGroup heading="No results">
                 <CommandItem
                   value="ask-ai"
-                  disabled={inferenceQuota.exhausted}
-                  onSelect={() => handleSelect(() => askAI(searchQuery))}
+                  disabled={askAIQuotaExhausted}
+                  onSelect={() => handleSelect(() => handleAskAI(searchQuery))}
                 >
                   <Sparkles className="mr-2 h-4 w-4" />
                   Ask AI: "{searchQuery}"
-                  {inferenceQuota.exhausted && (
+                  {askAIQuotaExhausted && (
                     <span className="ml-auto text-xs text-muted-foreground">Quota exhausted</span>
                   )}
                 </CommandItem>

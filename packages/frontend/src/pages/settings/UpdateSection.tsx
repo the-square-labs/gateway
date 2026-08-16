@@ -40,6 +40,15 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
     void fetchStatus().finally(() => setInitialLoadComplete(true));
   }, [fetchStatus]);
 
+  useEffect(() => {
+    if (window.location.hash !== "#system-updates" || !updateStatus) return;
+    requestAnimationFrame(() => {
+      document
+        .getElementById("system-updates")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [updateStatus]);
+
   if (!initialLoadComplete) return <Skeleton />;
 
   const handleCheckUpdate = async () => {
@@ -55,14 +64,6 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
       toast.success("Already up to date");
     }
   };
-
-  const confirmRelayRestart = () =>
-    confirm({
-      title: "Restart Relay?",
-      description:
-        "Updating Relay restarts the relay service and briefly interrupts active Secure Link connections.",
-      confirmLabel: "Restart and update",
-    });
 
   const handleGatewayUpdate = async () => {
     if (!updateStatus) return;
@@ -85,10 +86,10 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
     if (!updateStatus?.relay?.updateAvailable || !updateStatus.relay.latestVersion) return;
     const ok = await confirm({
       title: "Update Relay",
-      description: `Update Relay from ${updateStatus.relay.currentVersion} to ${updateStatus.relay.latestVersion}?`,
+      description: `Update Relay from ${updateStatus.relay.currentVersion} to ${updateStatus.relay.latestVersion}? Relay will restart and active Secure Links may be briefly interrupted.`,
       confirmLabel: "Update",
     });
-    if (!ok || !(await confirmRelayRestart())) return;
+    if (!ok) return;
     if (isDevForceUpdatesEnabled()) {
       toast.info("Local update preview only");
       return;
@@ -112,6 +113,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
     <>
       {gatewayUpdateAvailable && (
         <PanelShell
+          id="system-updates"
           title={<span className="text-warning">Gateway Update Available</span>}
           description="A Gateway update is ready to install"
           className="xl:col-span-2"
@@ -162,6 +164,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
 
       {relayUpdateAvailable && (
         <PanelShell
+          id={gatewayUpdateAvailable ? undefined : "system-updates"}
           title={<span className="text-warning">Relay Update Available</span>}
           description="A Relay update is ready to install"
           className="xl:col-span-2"

@@ -130,4 +130,38 @@ describe("UpdateSection", () => {
     expect(await screen.findByText("Relay-only notes")).toBeInTheDocument();
     expect(api.getAllReleaseNotes).not.toHaveBeenCalled();
   });
+
+  it("warns about the Relay restart and Secure Link interruption in one confirmation", async () => {
+    const status: UpdateStatus = {
+      ...makeStatus("v2.6.12"),
+      latestVersion: null,
+      updateAvailable: false,
+      relay: {
+        currentVersion: "v2.6.12",
+        latestVersion: "v2.6.13",
+        updateAvailable: true,
+        releaseNotes: null,
+        releaseUrl: null,
+        operation: null,
+      },
+    };
+    vi.mocked(api.getVersionInfo).mockResolvedValue(status);
+    useUpdateStore.setState({ status });
+
+    render(<UpdateSection canUpdate />);
+    fireEvent.click(await screen.findByRole("button", { name: "Update Relay to v2.6.13" }));
+
+    await waitFor(() =>
+      expect(confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Update Relay",
+          description: expect.stringContaining(
+            "Relay will restart and active Secure Links may be briefly interrupted."
+          ),
+          confirmLabel: "Update",
+        })
+      )
+    );
+    expect(confirm).toHaveBeenCalledTimes(1);
+  });
 });

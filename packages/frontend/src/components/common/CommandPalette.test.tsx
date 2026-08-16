@@ -345,6 +345,50 @@ describe("CommandPalette", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("offers Ask AI while resource search is pending and opens setup when AI is disabled", async () => {
+    vi.mocked(api.searchResources).mockReturnValue(new Promise(() => {}));
+    const openAIWorkspace = vi.fn();
+    window.addEventListener("gateway:open-ai-workspace", openAIWorkspace);
+
+    act(() => {
+      useAuthStore.setState({
+        user: {
+          id: "user-1",
+          email: "user@example.com",
+          name: "User One",
+          groupName: "admin",
+          scopes: ["feat:ai:use", "feat:ai:configure"],
+          isBlocked: false,
+        } as never,
+        isAuthenticated: true,
+        isLoading: false,
+      });
+      useAIStore.setState({
+        isEnabled: false,
+        isConnected: false,
+        sendMessage: vi.fn(),
+      });
+    });
+
+    renderWithRouter(<CommandPalette open onOpenChange={vi.fn()} />);
+    await userEvent.type(
+      screen.getByPlaceholderText("Search or type > for commands..."),
+      "unknown destination"
+    );
+
+    const askAI = screen.getByRole("option", {
+      name: /Ask AI: "unknown destination"/,
+    });
+    expect(askAI).toBeVisible();
+    expect(askAI).not.toHaveAttribute("data-disabled", "true");
+
+    await userEvent.click(askAI);
+    expect(openAIWorkspace).toHaveBeenCalledOnce();
+    expect(useAIStore.getState().sendMessage).not.toHaveBeenCalled();
+
+    window.removeEventListener("gateway:open-ai-workspace", openAIWorkspace);
+  });
+
   it("keeps the search visible until the close animation finishes", async () => {
     renderWithRouter(<CommandPalette open onOpenChange={vi.fn()} />);
     const input = screen.getByPlaceholderText("Search or type > for commands...");

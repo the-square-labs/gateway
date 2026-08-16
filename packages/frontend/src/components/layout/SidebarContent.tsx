@@ -366,7 +366,7 @@ export function SidebarContent({
                     <Button
                       size="icon"
                       className="h-8 w-8"
-                      onClick={() => navigate("/settings/general")}
+                      onClick={() => navigate("/settings/general#system-updates")}
                     >
                       <ArrowUpCircle className="h-4 w-4" />
                     </Button>
@@ -562,7 +562,7 @@ export function SidebarContent({
               <>
                 <div className="px-2 py-2">
                   <Link
-                    to="/settings/general"
+                    to="/settings/general#system-updates"
                     onClick={onNavigate}
                     className="flex w-full items-center gap-2 bg-warning px-3 py-2 text-left text-sm font-medium text-black transition-colors hover:bg-warning/90"
                   >
