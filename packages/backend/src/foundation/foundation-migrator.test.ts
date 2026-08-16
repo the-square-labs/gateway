@@ -302,6 +302,29 @@ describe('runFoundationMigrations', () => {
     expect(env).not.toContain('GATEWAY_RELAY_BUILD_VERSION=v2.4.4-relay');
   });
 
+  it('preserves all Relay metadata when a Gateway-only update omits Relay arguments', async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'gateway-foundation-migrator-test-'));
+    const relayImage = `registry/gateway/relay@sha256:${'a'.repeat(64)}`;
+    await writeFile(
+      path.join(tempDir, '.env'),
+      `GATEWAY_VERSION=v2.4.3\nGATEWAY_IMAGE_REF=registry/gateway@sha256:old\nGATEWAY_RELAY_IMAGE_REF=${relayImage}\nGATEWAY_RELAY_BUILD_VERSION=v2.4.3-relay\nGATEWAY_RELAY_PROTOCOL_MAJOR=1\n`
+    );
+    await writeFile(path.join(tempDir, 'docker-compose.yml'), OLD_COMPOSE);
+
+    await runFoundationMigrations({
+      hostDir: tempDir,
+      targetVersion: 'v2.4.4',
+      imageRef: 'registry/gateway@sha256:new',
+    });
+
+    const env = await readFile(path.join(tempDir, '.env'), 'utf8');
+    expect(env).toContain('GATEWAY_VERSION=v2.4.4');
+    expect(env).toContain('GATEWAY_IMAGE_REF=registry/gateway@sha256:new');
+    expect(env).toContain(`GATEWAY_RELAY_IMAGE_REF=${relayImage}`);
+    expect(env).toContain('GATEWAY_RELAY_BUILD_VERSION=v2.4.3-relay');
+    expect(env).toContain('GATEWAY_RELAY_PROTOCOL_MAJOR=1');
+  });
+
   it('advances the relay image only when the signed relay digest changes', async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), 'gateway-foundation-migrator-test-'));
     await writeFile(

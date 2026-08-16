@@ -8,7 +8,9 @@ import { compareSemver, isNewerVersion, parseSemver } from '@/lib/semver.js';
 import {
   normalizeGitLabApiUrl,
   type TrustedGatewayUpdateArtifact,
+  type TrustedRelayUpdateArtifact,
   verifyGatewayImageManifest,
+  verifyRelayImageManifest,
 } from '@/lib/update-artifact-trust.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { DockerService } from './docker.service.js';
@@ -24,6 +26,16 @@ export interface UpdateStatus {
   releaseNotes: string | null;
   releaseUrl: string | null;
   lastCheckedAt: string | null;
+  relayIncludedInGatewayUpdate: boolean;
+  relay: RelayUpdateStatus;
+}
+
+export interface RelayUpdateStatus {
+  currentVersion: string;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  releaseNotes: string | null;
+  releaseUrl: string | null;
 }
 
 interface GitLabRelease {
@@ -39,6 +51,12 @@ interface FoundationMigrationOutput {
   sandboxWorkspaceDir: string;
 }
 
+export interface RelayUpdateRuntime {
+  setMaintenance(enabled: boolean): Promise<void>;
+  setExpectedArtifact(imageRef: string, buildVersion: string, protocolMajor: number): void;
+  probeNow(): Promise<void>;
+}
+
 export function isGatewayReleaseTag(tag: string): boolean {
   return /^v?\d+\.\d+\.\d+$/.test(tag);
 }
@@ -51,11 +69,33 @@ export function selectLatestGatewayRelease(releases: GitLabRelease[]): GitLabRel
   return matching[0] ?? null;
 }
 
+export function isRelayReleaseTag(tag: string): boolean {
+  return /^v?\d+\.\d+\.\d+-relay$/.test(tag);
+}
+
+export function selectLatestRelayRelease(releases: GitLabRelease[]): GitLabRelease | null {
+  return (
+    releases
+      .filter((release) => isRelayReleaseTag(release.tag_name))
+      .sort((a, b) => compareSemver(b.tag_name.replace(/-relay$/, ''), a.tag_name.replace(/-relay$/, '')))[0] ?? null
+  );
+}
+
+export function shouldIncludeRelayInGatewayUpdate(currentVersion: string, targetVersion: string): boolean {
+  const current = parseSemver(currentVersion);
+  const target = parseSemver(targetVersion);
+  if (!current || !target) return false;
+  return current[0] !== target[0] || current[1] !== target[1];
+}
+
 const SETTINGS_KEYS = {
   latestVersion: 'update:latest_version',
   lastCheckedAt: 'update:last_checked_at',
   releaseNotes: 'update:release_notes',
   releaseUrl: 'update:release_url',
+  relayLatestVersion: 'update:relay:latest_version',
+  relayReleaseNotes: 'update:relay:release_notes',
+  relayReleaseUrl: 'update:relay:release_url',
 } as const;
 
 export class UpdateService {
@@ -66,11 +106,12 @@ export class UpdateService {
   constructor(
     private readonly db: DrizzleClient,
     private readonly dockerService: DockerService,
-    private readonly env: Env
+    private readonly env: Env,
+    private readonly relayRuntime?: RelayUpdateRuntime
   ) {
     this.gitlabApiUrl = normalizeGitLabApiUrl(this.env.GITLAB_API_URL);
     this.encodedProjectPath = encodeURIComponent(this.env.GITLAB_PROJECT_PATH);
-    this.gitlabReleasesUrl = `${this.gitlabApiUrl}/api/v4/projects/${this.encodedProjectPath}/releases`;
+    this.gitlabReleasesUrl = `${this.gitlabApiUrl}/api/v4/projects/${this.encodedProjectPath}/releases?per_page=100`;
   }
 
   getCurrentVersion(): string {
@@ -90,6 +131,18 @@ export class UpdateService {
     const latestVersion = map.get(SETTINGS_KEYS.latestVersion) ?? null;
     const updateAvailable =
       currentVersion !== 'dev' && latestVersion != null ? isNewerVersion(latestVersion, currentVersion) : false;
+    const currentRelayVersion = this.env.GATEWAY_RELAY_BUILD_VERSION ?? 'unknown';
+    const latestRelayVersion = map.get(SETTINGS_KEYS.relayLatestVersion) ?? null;
+    const relayUpdateAvailable =
+      currentRelayVersion !== 'dev' &&
+      currentRelayVersion !== 'unknown' &&
+      latestRelayVersion != null &&
+      isNewerVersion(latestRelayVersion, currentRelayVersion);
+    const relayIncludedInGatewayUpdate =
+      updateAvailable &&
+      relayUpdateAvailable &&
+      latestVersion != null &&
+      shouldIncludeRelayInGatewayUpdate(currentVersion, latestVersion);
 
     return {
       currentVersion,
@@ -98,6 +151,14 @@ export class UpdateService {
       releaseNotes: map.get(SETTINGS_KEYS.releaseNotes) ?? null,
       releaseUrl: map.get(SETTINGS_KEYS.releaseUrl) ?? null,
       lastCheckedAt: map.get(SETTINGS_KEYS.lastCheckedAt) ?? null,
+      relayIncludedInGatewayUpdate,
+      relay: {
+        currentVersion: currentRelayVersion,
+        latestVersion: latestRelayVersion,
+        updateAvailable: relayUpdateAvailable,
+        releaseNotes: map.get(SETTINGS_KEYS.relayReleaseNotes) ?? null,
+        releaseUrl: map.get(SETTINGS_KEYS.relayReleaseUrl) ?? null,
+      },
     };
   }
 
@@ -117,6 +178,14 @@ export class UpdateService {
         releaseNotes: null,
         releaseUrl: null,
         lastCheckedAt,
+        relayIncludedInGatewayUpdate: false,
+        relay: {
+          currentVersion: this.env.GATEWAY_RELAY_BUILD_VERSION ?? 'dev',
+          latestVersion: null,
+          updateAvailable: false,
+          releaseNotes: null,
+          releaseUrl: null,
+        },
       };
     }
 
@@ -140,36 +209,19 @@ export class UpdateService {
       }
 
       const latest = selectLatestGatewayRelease(releases);
-      if (!latest) {
-        logger.debug('No gateway releases found');
-        return this.getCachedStatus();
+      const latestRelay = selectLatestRelayRelease(releases);
+      if (latest) {
+        await this.upsertSetting(SETTINGS_KEYS.latestVersion, latest.tag_name);
+        await this.upsertSetting(SETTINGS_KEYS.releaseNotes, latest.description || '');
+        await this.upsertSetting(SETTINGS_KEYS.releaseUrl, latest._links?.self || '');
       }
-
-      const latestVersion = latest.tag_name;
-      const releaseNotes = latest.description || null;
-      const releaseUrl = latest._links?.self || null;
-
-      // Persist release info to settings (lastCheckedAt already saved above)
-      await this.upsertSetting(SETTINGS_KEYS.latestVersion, latestVersion);
-      await this.upsertSetting(SETTINGS_KEYS.releaseNotes, releaseNotes ?? '');
-      await this.upsertSetting(SETTINGS_KEYS.releaseUrl, releaseUrl ?? '');
-
-      const updateAvailable = isNewerVersion(latestVersion, currentVersion);
-
-      if (updateAvailable) {
-        logger.info('Update available', { current: currentVersion, latest: latestVersion });
-      } else {
-        logger.debug('Already up to date', { current: currentVersion, latest: latestVersion });
+      if (latestRelay) {
+        await this.upsertSetting(SETTINGS_KEYS.relayLatestVersion, latestRelay.tag_name.replace(/-relay$/, ''));
+        await this.upsertSetting(SETTINGS_KEYS.relayReleaseNotes, latestRelay.description || '');
+        await this.upsertSetting(SETTINGS_KEYS.relayReleaseUrl, latestRelay._links?.self || '');
       }
-
-      return {
-        currentVersion,
-        latestVersion,
-        updateAvailable,
-        releaseNotes,
-        releaseUrl,
-        lastCheckedAt,
-      };
+      if (!latest && !latestRelay) logger.debug('No Gateway or relay releases found');
+      return this.getCachedStatus();
     } catch (error) {
       logger.warn('Update check failed', { error });
       // Return cached status on failure
@@ -258,7 +310,36 @@ export class UpdateService {
     return artifact;
   }
 
-  async performUpdate(targetVersion: string, artifact: TrustedGatewayUpdateArtifact): Promise<void> {
+  async prepareRelayUpdate(targetVersion: string): Promise<TrustedRelayUpdateArtifact> {
+    const version = normalizeVersionTag(targetVersion);
+    const tag = `${version}-relay`;
+    const selfInfo = await this.dockerService.inspectSelf();
+    const image = `${imageRepositoryFromRef(selfInfo.Config.Image)}/relay`;
+    const response = await fetch(this.getRelayManifestUrl(version), {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      throw new AppError(502, 'UNTRUSTED_UPDATE_ARTIFACT', `Failed to fetch relay update manifest: ${response.status}`);
+    }
+    const signedManifest = await response.text();
+    try {
+      return verifyRelayImageManifest(signedManifest, { version, tag, image, protocolMajor: 1 });
+    } catch (error) {
+      logger.warn('Relay update manifest verification failed', {
+        targetVersion,
+        image,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new AppError(502, 'UNTRUSTED_UPDATE_ARTIFACT', 'Relay update artifact is not trusted');
+    }
+  }
+
+  async performUpdate(
+    targetVersion: string,
+    artifact: TrustedGatewayUpdateArtifact,
+    relayArtifact?: TrustedRelayUpdateArtifact
+  ): Promise<void> {
     logger.info('Starting self-update', { targetVersion });
 
     const selfInfo = await this.dockerService.inspectSelf();
@@ -294,7 +375,7 @@ export class UpdateService {
     }
 
     await this.dockerService.pullImageRef(artifact.imageRef);
-    await this.dockerService.pullImageRef(artifact.relayImageRef);
+    if (relayArtifact) await this.dockerService.pullImageRef(relayArtifact.imageRef);
 
     await this.dockerService.pullImageRef(DOCKER_COMPOSE_CLI_IMAGE_REF);
 
@@ -316,9 +397,6 @@ export class UpdateService {
       composeDir,
       envTag: tag,
       imageRef: artifact.imageRef,
-      relayBuildVersion: artifact.relayBuildVersion,
-      relayProtocolMajor: artifact.relayProtocolMajor,
-      relayImageRef: artifact.relayImageRef,
     });
     const foundationCommand = [
       'node',
@@ -329,12 +407,16 @@ export class UpdateService {
       tag,
       '--image-ref',
       artifact.imageRef,
-      '--relay-build-version',
-      artifact.relayBuildVersion,
-      '--relay-protocol-major',
-      String(artifact.relayProtocolMajor),
-      '--relay-image-ref',
-      artifact.relayImageRef,
+      ...(relayArtifact
+        ? [
+            '--relay-build-version',
+            relayArtifact.buildVersion,
+            '--relay-protocol-major',
+            String(relayArtifact.protocolMajor),
+            '--relay-image-ref',
+            relayArtifact.imageRef,
+          ]
+        : []),
       ...(artifact.databaseConnectorImage ? ['--database-connector-image', artifact.databaseConnectorImage] : []),
       ...(artifact.secureLinkConnectorImage
         ? ['--secure-link-connector-image', artifact.secureLinkConnectorImage]
@@ -424,8 +506,8 @@ rollback() {
     fi
   fi
   rollback_has_relay=0
-  if service_exists relay; then
-    rollback_has_relay=1
+  if service_exists relay; then rollback_has_relay=1; fi
+  if [ "$UPDATE_RELAY" -eq 1 ] && [ "$rollback_has_relay" -eq 1 ]; then
     compose stop app relay
   else
     compose stop app
@@ -443,8 +525,10 @@ rollback() {
     [ "$attempt" -lt 10 ]
     sleep 2
   done
-  if [ "$rollback_has_relay" -eq 1 ]; then
+  if [ "$UPDATE_RELAY" -eq 1 ] && [ "$rollback_has_relay" -eq 1 ]; then
     compose up -d app relay
+  elif [ "$rollback_has_relay" -eq 1 ]; then
+    compose up -d --no-deps app
   else
     compose up -d app
   fi
@@ -475,8 +559,10 @@ on_exit() {
 }
 trap on_exit EXIT
 sleep 2
-if service_exists relay; then
+if [ "$UPDATE_RELAY" -eq 1 ] && service_exists relay; then
   compose up -d --force-recreate app relay
+elif service_exists relay; then
+  compose up -d --no-deps --force-recreate app
 else
   compose up -d --force-recreate app
 fi
@@ -504,11 +590,119 @@ while [ "$attempt" -lt 150 ]; do
 done
 exit 1`,
       ],
-      Env: [`FOUNDATION_BACKUP_DIR=${sidecarBackupDir}`],
+      Env: [`FOUNDATION_BACKUP_DIR=${sidecarBackupDir}`, `UPDATE_RELAY=${relayArtifact ? 1 : 0}`],
       HostConfig: { Binds: [`${composeDir}:${composeDir}`, '/var/run/docker.sock:/var/run/docker.sock'] },
     });
 
     logger.info('Update sidecar launched — container will be replaced shortly');
+  }
+
+  async performRelayUpdate(targetVersion: string, artifact: TrustedRelayUpdateArtifact): Promise<void> {
+    const version = normalizeVersionTag(targetVersion);
+    const selfInfo = await this.dockerService.inspectSelf();
+    const labels = selfInfo.Config.Labels;
+    const composeDir = this.env.COMPOSE_PROJECT_DIR || labels['com.docker.compose.project.working_dir'];
+    const composeProject = labels['com.docker.compose.project'];
+    if (!composeDir || !/^\/[a-zA-Z0-9/_.-]+$/.test(composeDir)) throw new Error('Invalid Compose directory');
+    if (!composeProject || !/^[a-zA-Z0-9_-]+$/.test(composeProject)) throw new Error('Invalid Compose project');
+    const relayImage = `${imageRepositoryFromRef(selfInfo.Config.Image)}/relay`;
+    if (artifact.payload.version !== version || artifact.payload.image !== relayImage) {
+      throw new Error('Signed relay artifact does not match the requested release');
+    }
+
+    await this.dockerService.pullImageRef(artifact.imageRef);
+    await this.dockerService.pullImageRef(DOCKER_COMPOSE_CLI_IMAGE_REF);
+    const migrationResult = await this.dockerService.runOneShot({
+      Image: selfInfo.Config.Image,
+      Cmd: [
+        'node',
+        'dist/foundation-migrator.js',
+        '--host-dir',
+        '/host',
+        '--relay-build-version',
+        artifact.buildVersion,
+        '--relay-protocol-major',
+        String(artifact.protocolMajor),
+        '--relay-image-ref',
+        artifact.imageRef,
+      ],
+      HostConfig: { Binds: [`${composeDir}:/host`] },
+    });
+    if (migrationResult.exitCode !== 0) throw new Error(`Relay foundation migration failed: ${migrationResult.output}`);
+    const migrationOutput = parseFoundationMigrationOutput(migrationResult.output);
+
+    const configResult = await this.dockerService.runOneShot({
+      Image: DOCKER_COMPOSE_CLI_IMAGE_REF,
+      Cmd: [
+        'docker',
+        'compose',
+        '--project-name',
+        composeProject,
+        '-f',
+        '/project/docker-compose.yml',
+        'config',
+        '--quiet',
+      ],
+      HostConfig: { Binds: [`${composeDir}:/project`, '/var/run/docker.sock:/var/run/docker.sock'] },
+    });
+    if (configResult.exitCode !== 0) {
+      await this.rollbackFoundationMigration(selfInfo.Config.Image, composeDir, migrationOutput.backupDir);
+      throw new Error(`Migrated docker-compose.yml failed validation: ${configResult.output}`);
+    }
+
+    if (migrationOutput.backupDir && !migrationOutput.backupDir.startsWith('/host/.gateway-foundation-backups/')) {
+      throw new Error(`Refusing to use unexpected relay foundation backup path: ${migrationOutput.backupDir}`);
+    }
+    const backupDir = migrationOutput.backupDir?.replace(/^\/host(?=\/)/, composeDir) ?? '';
+    await this.relayRuntime?.setMaintenance(true);
+    try {
+      const result = await this.dockerService.runOneShot({
+        Image: DOCKER_COMPOSE_CLI_IMAGE_REF,
+        Cmd: [
+          'sh',
+          '-c',
+          `set -eu
+compose() { docker compose --project-name ${composeProject} --project-directory ${composeDir} -f ${composeDir}/docker-compose.yml "$@"; }
+relay_reachable() {
+  compose exec -T app node -e 'const net=require("node:net");const socket=net.connect(9443,"relay",()=>{socket.end();process.exit(0)});socket.setTimeout(3000,()=>{socket.destroy();process.exit(1)});socket.on("error",()=>process.exit(1));'
+}
+rollback() {
+  if [ -n "$FOUNDATION_BACKUP_DIR" ]; then
+    [ ! -f "$FOUNDATION_BACKUP_DIR/.env" ] || cp -p "$FOUNDATION_BACKUP_DIR/.env" ${composeDir}/.env
+    [ ! -f "$FOUNDATION_BACKUP_DIR/docker-compose.yml" ] || cp -p "$FOUNDATION_BACKUP_DIR/docker-compose.yml" ${composeDir}/docker-compose.yml
+  fi
+  compose up -d --no-deps --force-recreate relay
+}
+on_exit() { code=$?; trap - EXIT; if [ "$code" -ne 0 ]; then rollback; fi; exit "$code"; }
+trap on_exit EXIT
+compose up -d --no-deps --force-recreate relay
+attempt=0
+while [ "$attempt" -lt 90 ]; do
+  relay_id="$(compose ps -q relay)"
+  if [ -n "$relay_id" ]; then
+    relay_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$relay_id")"
+    if [ "$relay_health" = healthy ] && relay_reachable; then exit 0; fi
+  fi
+  attempt=$((attempt + 1))
+  sleep 2
+done
+exit 1`,
+        ],
+        Env: [`FOUNDATION_BACKUP_DIR=${backupDir}`],
+        HostConfig: { Binds: [`${composeDir}:${composeDir}`, '/var/run/docker.sock:/var/run/docker.sock'] },
+      });
+      if (result.exitCode !== 0) throw new Error(`Relay update failed and was rolled back: ${result.output}`);
+
+      Object.assign(this.env, {
+        GATEWAY_RELAY_IMAGE_REF: artifact.imageRef,
+        GATEWAY_RELAY_BUILD_VERSION: artifact.buildVersion,
+        GATEWAY_RELAY_PROTOCOL_MAJOR: artifact.protocolMajor,
+      });
+      this.relayRuntime?.setExpectedArtifact(artifact.imageRef, artifact.buildVersion, artifact.protocolMajor);
+    } finally {
+      await this.relayRuntime?.setMaintenance(false);
+    }
+    await this.relayRuntime?.probeNow();
   }
 
   private async rollbackFoundationMigration(
@@ -573,6 +767,11 @@ backup="$FOUNDATION_BACKUP_DIR"
   getGatewayManifestUrl(version: string): string {
     const tag = normalizeVersionTag(version);
     return `${this.gitlabApiUrl}/api/v4/projects/${this.encodedProjectPath}/packages/generic/gateway/${tag}/gateway-image.update.json`;
+  }
+
+  getRelayManifestUrl(version: string): string {
+    const tag = `${normalizeVersionTag(version)}-relay`;
+    return `${this.gitlabApiUrl}/api/v4/projects/${this.encodedProjectPath}/packages/generic/relay/${tag}/relay-image.update.json`;
   }
 
   private async upsertSetting(key: string, value: unknown): Promise<void> {

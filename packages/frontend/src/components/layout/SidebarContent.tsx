@@ -84,7 +84,14 @@ export function SidebarContent({
   const [stoppingImpersonation, setStoppingImpersonation] = useState(false);
   const { sidebarOpen, toggleSidebar, setCommandPaletteOpen: openPalette } = useUIStore();
 
-  const updateAvailable = useUpdateStore((s) => s.status?.updateAvailable ?? false);
+  const updateStatus = useUpdateStore((s) => s.status);
+  const gatewayUpdateAvailable = updateStatus?.updateAvailable ?? false;
+  const relayOnlyUpdateAvailable =
+    !gatewayUpdateAvailable && (updateStatus?.relay.updateAvailable ?? false);
+  const updateAvailable = gatewayUpdateAvailable || relayOnlyUpdateAvailable;
+  const updateLabel = relayOnlyUpdateAvailable
+    ? "Relay update available"
+    : "Gateway update available";
   const showUpdateNotifications = useUIStore((s) => s.showUpdateNotifications);
   const showSystemCertificatePreference = useUIStore((s) => s.showSystemCertificates);
   const showSystemCertificates =
@@ -364,7 +371,7 @@ export function SidebarContent({
                       <ArrowUpCircle className="h-4 w-4" />
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent side="right">Update available</TooltipContent>
+                  <TooltipContent side="right">{updateLabel}</TooltipContent>
                 </Tooltip>
               )}
 
@@ -560,7 +567,7 @@ export function SidebarContent({
                     className="flex w-full items-center gap-2 bg-warning px-3 py-2 text-left text-sm font-medium text-black transition-colors hover:bg-warning/90"
                   >
                     <ArrowUpCircle className="h-4 w-4 shrink-0" />
-                    <span className="truncate">Update available</span>
+                    <span className="truncate">{updateLabel}</span>
                   </Link>
                 </div>
                 <Separator />

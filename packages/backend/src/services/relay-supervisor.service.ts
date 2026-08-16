@@ -381,6 +381,12 @@ export class RelaySupervisorService {
     await this.transition({ state: enabled ? 'maintenance' : 'migration_pending', reason: null });
   }
 
+  setExpectedArtifact(imageRef: string, buildVersion: string, protocolMajor: number): void {
+    this.options.expectedImage = imageRef;
+    this.options.expectedVersion = buildVersion;
+    this.options.expectedProtocolMajor = protocolMajor;
+  }
+
   private async runRecoveryCycle(manual: boolean): Promise<void> {
     if (!this.recovery) {
       await this.transition({ state: 'degraded', reason: 'ownership_unverified' });

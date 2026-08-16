@@ -716,15 +716,17 @@ export function Dashboard() {
           )}
 
           {/* Update available */}
-          {dashboardBootstrap?.update?.updateAvailable &&
-            dashboardBootstrap.update.latestVersion &&
+          {(dashboardBootstrap?.update?.updateAvailable ||
+            dashboardBootstrap?.update?.relay.updateAvailable) &&
             showUpdateNotifications && (
               <div className="border border-warning/60 bg-card">
                 <div className="flex items-center justify-between px-4 py-3">
                   <div className="flex items-center gap-3">
                     <span className="text-sm font-semibold text-warning">Update Available</span>
                     <span className="text-sm text-muted-foreground">
-                      {dashboardBootstrap.update.latestVersion} is ready to install
+                      {dashboardBootstrap.update.updateAvailable
+                        ? `Gateway ${dashboardBootstrap.update.latestVersion} is ready to install`
+                        : `Relay ${dashboardBootstrap.update.relay.latestVersion} is ready to install`}
                     </span>
                   </div>
                   <Link

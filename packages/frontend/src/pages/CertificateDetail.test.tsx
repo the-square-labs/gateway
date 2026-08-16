@@ -1,4 +1,5 @@
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Route } from "react-router-dom";
 import { vi } from "vitest";
 import { CertificateDetail } from "@/pages/CertificateDetail";
@@ -38,6 +39,7 @@ describe("CertificateDetail", () => {
   });
 
   it("shows revoke for normal active certificates when the user has scope", async () => {
+    const user = userEvent.setup();
     vi.spyOn(api, "getCertificate").mockResolvedValue(
       makeCertificate({ id: "cert-user", isSystem: false })
     );
@@ -58,6 +60,9 @@ describe("CertificateDetail", () => {
       await screen.findByRole("heading", { level: 1, name: "gateway-grpc" })
     ).toBeInTheDocument();
 
-    expect(await screen.findByRole("button", { name: "Revoke Certificate" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    expect(
+      await screen.findByRole("menuitem", { name: /Revoke certificate/i })
+    ).toBeInTheDocument();
   });
 });

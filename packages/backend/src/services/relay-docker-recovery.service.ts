@@ -45,6 +45,10 @@ export class RelayDockerRecoveryService {
     >
   ) {}
 
+  setExpectedImage(imageRef: string): void {
+    this.env.GATEWAY_RELAY_IMAGE_REF = imageRef;
+  }
+
   async recover(): Promise<RelayRecoveryAction> {
     const expectedImage = this.expectedImage();
     let ownership: RelayOwnership;

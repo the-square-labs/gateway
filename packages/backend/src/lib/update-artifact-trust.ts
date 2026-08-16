@@ -46,11 +46,21 @@ export interface GatewayImageManifestPayload {
   image: string;
   digest: string;
   imageRef: string;
-  relayBuildVersion: string;
-  relayProtocolMajor: number;
-  relayImageRef: string;
   databaseConnectorImage?: string;
   secureLinkConnectorImage?: string;
+  createdAt: string;
+  gitCommitSha?: string;
+  gitPipelineId?: string;
+}
+
+export interface RelayImageManifestPayload {
+  kind: 'relay-image';
+  version: string;
+  tag: string;
+  image: string;
+  digest: string;
+  imageRef: string;
+  protocolMajor: number;
   createdAt: string;
   gitCommitSha?: string;
   gitPipelineId?: string;
@@ -68,11 +78,17 @@ export interface TrustedGatewayUpdateArtifact {
   signedManifest: string;
   imageRef: string;
   digest: string;
-  relayBuildVersion: string;
-  relayProtocolMajor: number;
-  relayImageRef: string;
   databaseConnectorImage?: string;
   secureLinkConnectorImage?: string;
+}
+
+export interface TrustedRelayUpdateArtifact {
+  payload: RelayImageManifestPayload;
+  signedManifest: string;
+  imageRef: string;
+  digest: string;
+  buildVersion: string;
+  protocolMajor: number;
 }
 
 export interface DaemonUpdateManifestExpectation {
@@ -89,6 +105,13 @@ export interface GatewayImageManifestExpectation {
   version: string;
   tag: string;
   image: string;
+}
+
+export interface RelayImageManifestExpectation {
+  version: string;
+  tag: string;
+  image: string;
+  protocolMajor: number;
 }
 
 export function verifyDaemonUpdateManifest(
@@ -131,15 +154,6 @@ export function verifyGatewayImageManifest(
   if (payload.imageRef !== `${payload.image}@${payload.digest}`) {
     throw new UpdateArtifactTrustError('Gateway update image reference is not digest pinned');
   }
-  if (!/^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(payload.relayBuildVersion)) {
-    throw new UpdateArtifactTrustError('Gateway update relay build version is invalid');
-  }
-  if (!Number.isInteger(payload.relayProtocolMajor) || payload.relayProtocolMajor < 1) {
-    throw new UpdateArtifactTrustError('Gateway update relay protocol major is invalid');
-  }
-  if (!isDigestPinnedImageRef(payload.relayImageRef, `${payload.image}/relay`)) {
-    throw new UpdateArtifactTrustError('Gateway update relay image reference is not digest pinned');
-  }
   if (
     payload.databaseConnectorImage !== undefined &&
     (typeof payload.databaseConnectorImage !== 'string' ||
@@ -160,11 +174,39 @@ export function verifyGatewayImageManifest(
     signedManifest,
     imageRef: payload.imageRef,
     digest: payload.digest,
-    relayBuildVersion: payload.relayBuildVersion,
-    relayProtocolMajor: payload.relayProtocolMajor,
-    relayImageRef: payload.relayImageRef,
     ...(payload.databaseConnectorImage ? { databaseConnectorImage: payload.databaseConnectorImage } : {}),
     ...(payload.secureLinkConnectorImage ? { secureLinkConnectorImage: payload.secureLinkConnectorImage } : {}),
+  };
+}
+
+export function verifyRelayImageManifest(
+  signedManifest: string,
+  expected: RelayImageManifestExpectation,
+  publicKey: string | Buffer = UPDATE_SIGNING_PUBLIC_KEY_PEM
+): TrustedRelayUpdateArtifact {
+  const payload = verifySignedPayload<RelayImageManifestPayload>(signedManifest, publicKey);
+  if (payload.kind !== 'relay-image') throw new UpdateArtifactTrustError('Update manifest kind is not relay-image');
+  if (payload.version !== expected.version) throw new UpdateArtifactTrustError('Relay update version mismatch');
+  if (payload.tag !== expected.tag) throw new UpdateArtifactTrustError('Relay update tag mismatch');
+  if (payload.image !== expected.image) throw new UpdateArtifactTrustError('Relay update image mismatch');
+  if (!DIGEST_RE.test(payload.digest)) throw new UpdateArtifactTrustError('Relay update digest is invalid');
+  if (payload.imageRef !== `${payload.image}@${payload.digest}`) {
+    throw new UpdateArtifactTrustError('Relay update image reference is not digest pinned');
+  }
+  if (!/^v?\d+\.\d+\.\d+$/.test(payload.version)) {
+    throw new UpdateArtifactTrustError('Relay update build version is invalid');
+  }
+  if (!Number.isInteger(payload.protocolMajor) || payload.protocolMajor !== expected.protocolMajor) {
+    throw new UpdateArtifactTrustError('Relay update protocol major is incompatible');
+  }
+
+  return {
+    payload,
+    signedManifest,
+    imageRef: payload.imageRef,
+    digest: payload.digest,
+    buildVersion: payload.version,
+    protocolMajor: payload.protocolMajor,
   };
 }
 

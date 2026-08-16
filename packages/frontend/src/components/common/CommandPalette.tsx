@@ -1,5 +1,6 @@
 import {
   Activity,
+  ArrowUpCircle,
   Award,
   Bell,
   Bot,
@@ -41,6 +42,7 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 import { type AppNavigationItemId, visibleNavigationGroups } from "@/lib/app-navigation";
+import { setDevForcedUpdateMode } from "@/lib/dev-force-updates";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
 import { RESOURCE_ICONS, RESOURCE_LABELS, resourceSearchHref } from "@/lib/resource-presentation";
 import { dockerContainerRoute, dockerDeploymentRoute, nodeRoute } from "@/lib/resource-routes";
@@ -53,6 +55,7 @@ import { useResolvedPageContext } from "@/stores/resolved-page-context";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
+import { useUpdateStore } from "@/stores/update";
 import type { DockerContainer, Node, ResourceSearchResult } from "@/types";
 
 interface CommandPaletteProps {
@@ -890,6 +893,25 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
   const entityCommands = useMemo<PaletteEntry[]>(() => {
     const entries: PaletteEntry[] = [];
+    if (import.meta.env.DEV && hasScope("admin:update")) {
+      const addUpdatePreview = (id: string, label: string, mode: "gateway" | "relay" | "both") => {
+        entries.push({
+          id,
+          label,
+          detail: "Development preview",
+          keywords: ["dev update state"],
+          icon: ArrowUpCircle,
+          action: () => {
+            setDevForcedUpdateMode(mode);
+            void useUpdateStore.getState().fetchStatus();
+            navigate("/settings/general");
+          },
+        });
+      };
+      addUpdatePreview("command:dev-update-gateway", "Show Gateway update only", "gateway");
+      addUpdatePreview("command:dev-update-relay", "Show Relay update only", "relay");
+      addUpdatePreview("command:dev-update-both", "Show Gateway and Relay updates", "both");
+    }
     for (const container of commandContainers) {
       const nodeId = container._nodeId;
       if (!nodeId) continue;

@@ -11,12 +11,13 @@ import { GeneralSettingsService } from '@/modules/settings/general-settings.serv
 import { DaemonUpdateService, daemonTypeForNodeType } from '@/services/daemon-update.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
-import { UpdateService } from '@/services/update.service.js';
+import { shouldIncludeRelayInGatewayUpdate, UpdateService } from '@/services/update.service.js';
 import type { AppEnv } from '@/types.js';
 import {
   checkDaemonUpdatesRoute,
   checkSystemUpdateRoute,
   daemonUpdatesRoute,
+  performRelayUpdateRoute,
   performSystemUpdateRoute,
   releaseNotesForVersionRoute,
   releaseNotesRoute,
@@ -110,13 +111,24 @@ systemRoutes.openapi({ ...performSystemUpdateRoute, middleware: sessionOnly }, a
     return c.json({ code: 'VERSION_MISMATCH', message: 'Requested version does not match available update' }, 400);
   }
   const artifact = await updateService.prepareGatewayUpdate(version);
+  const relayArtifact =
+    status.relay.updateAvailable &&
+    status.relay.latestVersion &&
+    shouldIncludeRelayInGatewayUpdate(status.currentVersion, version)
+      ? await updateService.prepareRelayUpdate(status.relay.latestVersion)
+      : undefined;
 
   // Respond immediately, then trigger the update asynchronously.
   // The container will be replaced — the response must be sent first.
-  eventBus.publish('system.update.changed', { updating: true, targetVersion: version });
+  eventBus.publish('system.update.changed', {
+    updating: true,
+    component: 'gateway',
+    targetVersion: version,
+    relayIncluded: Boolean(relayArtifact),
+  });
   setTimeout(() => {
-    updateService.performUpdate(version, artifact).catch((err) => {
-      eventBus.publish('system.update.changed', { updating: false, targetVersion: version });
+    updateService.performUpdate(version, artifact, relayArtifact).catch((err) => {
+      eventBus.publish('system.update.changed', { updating: false, component: 'gateway', targetVersion: version });
       logger.error('Update failed', {
         error: err instanceof Error ? err.message : String(err),
         stack: err instanceof Error ? err.stack : undefined,
@@ -124,6 +136,44 @@ systemRoutes.openapi({ ...performSystemUpdateRoute, middleware: sessionOnly }, a
     });
   }, 500);
 
+  return c.json({ data: { status: 'updating', targetVersion: version } });
+});
+
+systemRoutes.openapi({ ...performRelayUpdateRoute, middleware: sessionOnly }, async (c) => {
+  const forbidden = requireUpdateScope(c);
+  if (forbidden) return forbidden;
+  const { version } = z
+    .object({ version: z.string().regex(/^v?\d+\.\d+\.\d+$/, 'Invalid version format') })
+    .parse(await c.req.json());
+  const updateService = container.resolve(UpdateService);
+  const eventBus = container.resolve(EventBusService);
+  const status = await updateService.getCachedStatus();
+  if (!status.relay.updateAvailable || !status.relay.latestVersion) {
+    return c.json({ code: 'NO_UPDATE', message: 'No relay update available' }, 400);
+  }
+  if (version !== status.relay.latestVersion) {
+    return c.json(
+      { code: 'VERSION_MISMATCH', message: 'Requested version does not match available relay update' },
+      400
+    );
+  }
+  const artifact = await updateService.prepareRelayUpdate(version);
+  eventBus.publish('system.update.changed', { updating: true, component: 'relay', targetVersion: version });
+  setTimeout(() => {
+    updateService
+      .performRelayUpdate(version, artifact)
+      .then(() => updateService.checkForUpdates())
+      .then(() => {
+        eventBus.publish('system.update.changed', { updating: false, component: 'relay', targetVersion: version });
+      })
+      .catch((err) => {
+        eventBus.publish('system.update.changed', { updating: false, component: 'relay', targetVersion: version });
+        logger.error('Relay update failed', {
+          error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        });
+      });
+  }, 500);
   return c.json({ data: { status: 'updating', targetVersion: version } });
 });
 

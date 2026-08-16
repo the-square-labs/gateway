@@ -7,6 +7,7 @@ import {
   UpdateArtifactTrustError,
   verifyDaemonUpdateManifest,
   verifyGatewayImageManifest,
+  verifyRelayImageManifest,
 } from './update-artifact-trust.js';
 
 const checksum = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
@@ -27,9 +28,6 @@ const gatewayPayload = Buffer.from(
     image: 'registry.gitlab.wiolett.net/wiolett/gateway',
     digest: `sha256:${checksum}`,
     imageRef: `registry.gitlab.wiolett.net/wiolett/gateway@sha256:${checksum}`,
-    relayBuildVersion: 'v9.9.9-relay',
-    relayProtocolMajor: 1,
-    relayImageRef: `registry.gitlab.wiolett.net/wiolett/gateway/relay@sha256:${checksum}`,
     databaseConnectorImage: `registry.gitlab.wiolett.net/wiolett/gateway/database-connector@sha256:${checksum}`,
     secureLinkConnectorImage: `registry.gitlab.wiolett.net/wiolett/gateway/secure-link-connector@sha256:${checksum}`,
     createdAt: '2026-05-02T14:39:10Z',
@@ -42,6 +40,24 @@ const gatewayManifest = JSON.stringify({
   signature: sign(null, gatewayPayload, gatewaySigningKey.privateKey).toString('base64url'),
 });
 const gatewayPublicKey = gatewaySigningKey.publicKey.export({ type: 'spki', format: 'pem' });
+const relayPayload = Buffer.from(
+  JSON.stringify({
+    kind: 'relay-image',
+    version: 'v1.2.3',
+    tag: 'v1.2.3-relay',
+    image: 'registry.gitlab.wiolett.net/wiolett/gateway/relay',
+    digest: `sha256:${checksum}`,
+    imageRef: `registry.gitlab.wiolett.net/wiolett/gateway/relay@sha256:${checksum}`,
+    protocolMajor: 1,
+    createdAt: '2026-05-02T14:39:10Z',
+  })
+);
+const relayManifest = JSON.stringify({
+  schemaVersion: 1,
+  keyId: 'wiolett-update-v1',
+  payload: relayPayload.toString('base64url'),
+  signature: sign(null, relayPayload, gatewaySigningKey.privateKey).toString('base64url'),
+});
 
 describe('update artifact trust', () => {
   it('normalizes GitLab API base URLs for exact signed URL comparisons', () => {
@@ -109,10 +125,40 @@ describe('update artifact trust', () => {
     );
 
     expect(artifact.imageRef).toBe(`registry.gitlab.wiolett.net/wiolett/gateway@sha256:${checksum}`);
-    expect(artifact.relayProtocolMajor).toBe(1);
-    expect(artifact.relayImageRef).toContain('/relay@sha256:');
     expect(artifact.databaseConnectorImage).toContain('/database-connector@sha256:');
     expect(artifact.secureLinkConnectorImage).toContain('/secure-link-connector@sha256:');
+  });
+
+  it('verifies an independently signed digest-pinned relay image', () => {
+    const artifact = verifyRelayImageManifest(
+      relayManifest,
+      {
+        version: 'v1.2.3',
+        tag: 'v1.2.3-relay',
+        image: 'registry.gitlab.wiolett.net/wiolett/gateway/relay',
+        protocolMajor: 1,
+      },
+      gatewayPublicKey
+    );
+
+    expect(artifact.buildVersion).toBe('v1.2.3');
+    expect(artifact.protocolMajor).toBe(1);
+    expect(artifact.imageRef).toContain('/relay@sha256:');
+  });
+
+  it('rejects a relay manifest with an incompatible protocol major', () => {
+    expect(() =>
+      verifyRelayImageManifest(
+        relayManifest,
+        {
+          version: 'v1.2.3',
+          tag: 'v1.2.3-relay',
+          image: 'registry.gitlab.wiolett.net/wiolett/gateway/relay',
+          protocolMajor: 2,
+        },
+        gatewayPublicKey
+      )
+    ).toThrow('Relay update protocol major is incompatible');
   });
 
   it('rejects gateway manifests for a different image repository', () => {
@@ -145,9 +191,6 @@ describe('update artifact trust', () => {
         image: 'registry.gitlab.wiolett.net/wiolett/gateway',
         digest: `sha256:${checksum}`,
         imageRef: `registry.gitlab.wiolett.net/wiolett/gateway@sha256:${checksum}`,
-        relayBuildVersion: 'v9.9.9-relay',
-        relayProtocolMajor: 1,
-        relayImageRef: `registry.gitlab.wiolett.net/wiolett/gateway/relay@sha256:${checksum}`,
         secureLinkConnectorImage: 'registry.gitlab.wiolett.net/wiolett/gateway/secure-link-connector:latest',
         createdAt: '2026-08-10T00:00:00.000Z',
       })
@@ -176,15 +219,13 @@ describe('update artifact trust', () => {
     const { publicKey, privateKey } = generateKeyPairSync('ed25519');
     const payload = Buffer.from(
       JSON.stringify({
-        kind: 'gateway-image',
-        version: 'v9.9.9',
-        tag: 'v9.9.9',
-        image: 'registry.example/gateway',
+        kind: 'relay-image',
+        version: '../mutable',
+        tag: '../mutable-relay',
+        image: 'registry.example/gateway/relay',
         digest: `sha256:${checksum}`,
-        imageRef: `registry.example/gateway@sha256:${checksum}`,
-        relayBuildVersion: '../mutable',
-        relayProtocolMajor: 1,
-        relayImageRef: `registry.example/gateway/relay@sha256:${checksum}`,
+        imageRef: `registry.example/gateway/relay@sha256:${checksum}`,
+        protocolMajor: 1,
         createdAt: '2026-08-07T00:00:00.000Z',
       })
     );
@@ -196,11 +237,11 @@ describe('update artifact trust', () => {
     });
 
     expect(() =>
-      verifyGatewayImageManifest(
+      verifyRelayImageManifest(
         envelope,
-        { version: 'v9.9.9', tag: 'v9.9.9', image: 'registry.example/gateway' },
+        { version: '../mutable', tag: '../mutable-relay', image: 'registry.example/gateway/relay', protocolMajor: 1 },
         publicKey.export({ type: 'spki', format: 'pem' })
       )
-    ).toThrow('Gateway update relay build version is invalid');
+    ).toThrow('Relay update build version is invalid');
   });
 });

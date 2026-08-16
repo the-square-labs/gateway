@@ -1,5 +1,6 @@
 import type { CA, Node, ProxyHost } from "@/types";
 import type { InferenceSelfUsage } from "@/types/inference";
+import type { UpdateStatus } from "@/types/system";
 
 // Dashboard Stats
 export interface DashboardStats {
@@ -135,7 +136,7 @@ export interface DashboardBootstrap {
     sessionMfaSatisfied: boolean;
     graceExpiresAt: number | null;
   } | null;
-  update: { updateAvailable?: boolean; latestVersion?: string } | null;
+  update: UpdateStatus | null;
   loggingHealth: unknown | null;
   inferenceUsage: InferenceSelfUsage | null;
   inviteUserMethods: { password: boolean; emailOtp: boolean } | null;

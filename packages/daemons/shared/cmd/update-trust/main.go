@@ -58,7 +58,7 @@ func keygen(args []string) {
 
 func sign(args []string) {
 	fs := flag.NewFlagSet("sign", flag.ExitOnError)
-	kind := fs.String("kind", "", "gateway-image or daemon-binary")
+	kind := fs.String("kind", "", "gateway-image, relay-image, or daemon-binary")
 	out := fs.String("out", "", "output signed manifest path")
 	version := fs.String("version", "", "version")
 	tag := fs.String("tag", "", "release tag")
@@ -71,9 +71,7 @@ func sign(args []string) {
 	digest := fs.String("digest", "", "gateway image digest")
 	databaseConnectorImage := fs.String("database-connector-image", "", "digest-pinned database connector image reference")
 	secureLinkConnectorImage := fs.String("secure-link-connector-image", "", "digest-pinned secure-link connector image reference")
-	relayBuildVersion := fs.String("relay-build-version", "", "standalone relay build version")
 	relayProtocolMajor := fs.Int("relay-protocol-major", 0, "standalone relay protocol major")
-	relayImageRef := fs.String("relay-image-ref", "", "digest-pinned standalone relay image")
 	commitSHA := fs.String("git-commit-sha", "", "Git commit SHA")
 	pipelineID := fs.String("git-pipeline-id", "", "GitLab pipeline ID")
 	must(fs.Parse(args))
@@ -112,29 +110,21 @@ func sign(args []string) {
 		}
 	case "gateway-image":
 		required(map[string]string{
-			"--version":             *version,
-			"--tag":                 *tag,
-			"--image":               *image,
-			"--digest":              *digest,
-			"--relay-build-version": *relayBuildVersion,
-			"--relay-image-ref":     *relayImageRef,
+			"--version": *version,
+			"--tag":     *tag,
+			"--image":   *image,
+			"--digest":  *digest,
 		})
-		if *relayProtocolMajor < 1 {
-			die("--relay-protocol-major must be positive")
-		}
 		payloadMap := map[string]any{
-			"kind":               "gateway-image",
-			"version":            *version,
-			"tag":                *tag,
-			"image":              *image,
-			"digest":             *digest,
-			"imageRef":           fmt.Sprintf("%s@%s", *image, *digest),
-			"relayBuildVersion":  *relayBuildVersion,
-			"relayProtocolMajor": *relayProtocolMajor,
-			"relayImageRef":      *relayImageRef,
-			"createdAt":          createdAt,
-			"gitCommitSha":       *commitSHA,
-			"gitPipelineId":      *pipelineID,
+			"kind":          "gateway-image",
+			"version":       *version,
+			"tag":           *tag,
+			"image":         *image,
+			"digest":        *digest,
+			"imageRef":      fmt.Sprintf("%s@%s", *image, *digest),
+			"createdAt":     createdAt,
+			"gitCommitSha":  *commitSHA,
+			"gitPipelineId": *pipelineID,
 		}
 		if *databaseConnectorImage != "" {
 			payloadMap["databaseConnectorImage"] = *databaseConnectorImage
@@ -143,8 +133,30 @@ func sign(args []string) {
 			payloadMap["secureLinkConnectorImage"] = *secureLinkConnectorImage
 		}
 		payload = payloadMap
+	case "relay-image":
+		required(map[string]string{
+			"--version": *version,
+			"--tag":     *tag,
+			"--image":   *image,
+			"--digest":  *digest,
+		})
+		if *relayProtocolMajor < 1 {
+			die("--relay-protocol-major must be positive")
+		}
+		payload = map[string]any{
+			"kind":          "relay-image",
+			"version":       *version,
+			"tag":           *tag,
+			"image":         *image,
+			"digest":        *digest,
+			"imageRef":      fmt.Sprintf("%s@%s", *image, *digest),
+			"protocolMajor": *relayProtocolMajor,
+			"createdAt":     createdAt,
+			"gitCommitSha":  *commitSHA,
+			"gitPipelineId": *pipelineID,
+		}
 	default:
-		die("--kind must be gateway-image or daemon-binary")
+		die("--kind must be gateway-image, relay-image, or daemon-binary")
 	}
 
 	payloadBytes, err := json.Marshal(payload)

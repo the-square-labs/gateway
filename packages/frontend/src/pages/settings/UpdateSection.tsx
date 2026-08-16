@@ -23,8 +23,10 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
     status: updateStatus,
     isChecking,
     isUpdating,
+    updatingComponent,
     checkForUpdates,
     triggerUpdate,
+    triggerRelayUpdate,
     fetchStatus,
   } = useUpdateStore();
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
@@ -42,44 +44,98 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
   const handleCheckUpdate = async () => {
     await checkForUpdates();
     const s = useUpdateStore.getState().status;
-    if (s?.updateAvailable) {
-      toast.info(`Update available: ${s.latestVersion}`);
+    if (s?.updateAvailable && s.relay.updateAvailable) {
+      toast.info(`Gateway ${s.latestVersion} and Relay ${s.relay.latestVersion} are available`);
+    } else if (s?.updateAvailable) {
+      toast.info(`Gateway update available: ${s.latestVersion}`);
+    } else if (s?.relay.updateAvailable) {
+      toast.info(`Relay update available: ${s.relay.latestVersion}`);
     } else {
       toast.success("Already up to date");
     }
   };
 
-  const handleUpdate = async () => {
-    if (!updateStatus?.latestVersion) return;
+  const confirmRelayRestart = () =>
+    confirm({
+      title: "Restart Relay?",
+      description:
+        "Updating Relay restarts the relay service and briefly interrupts active Secure Link connections.",
+      confirmLabel: "Restart and update",
+    });
+
+  const handleGatewayUpdate = async () => {
+    if (!updateStatus) return;
+    const gatewayUpdate = updateStatus.updateAvailable && Boolean(updateStatus.latestVersion);
+    if (!gatewayUpdate || !updateStatus.latestVersion) return;
+    const includeRelay = updateStatus.relayIncludedInGatewayUpdate;
     const ok = await confirm({
       title: "Update Gateway",
-      description: `Update from ${updateStatus.currentVersion} to ${updateStatus.latestVersion}? The application will restart automatically.`,
+      description: `Update Gateway from ${updateStatus.currentVersion} to ${updateStatus.latestVersion}?${includeRelay ? ` Relay ${updateStatus.relay.latestVersion} will be included.` : ""} The application will restart automatically.`,
       confirmLabel: "Update",
     });
     if (!ok) return;
+    if (includeRelay && !(await confirmRelayRestart())) return;
     if (isDevForceUpdatesEnabled()) {
       toast.info("Local update preview only");
       return;
     }
-    triggerUpdate(updateStatus.latestVersion);
+    triggerUpdate(updateStatus.latestVersion, includeRelay);
   };
+
+  const handleRelayUpdate = async () => {
+    if (!updateStatus?.relay.updateAvailable || !updateStatus.relay.latestVersion) return;
+    const ok = await confirm({
+      title: "Update Relay",
+      description: `Update Relay from ${updateStatus.relay.currentVersion} to ${updateStatus.relay.latestVersion}?`,
+      confirmLabel: "Update",
+    });
+    if (!ok || !(await confirmRelayRestart())) return;
+    if (isDevForceUpdatesEnabled()) {
+      toast.info("Local update preview only");
+      return;
+    }
+    triggerRelayUpdate(updateStatus.relay.latestVersion);
+  };
+
+  const gatewayUpdateAvailable = Boolean(
+    updateStatus?.updateAvailable && updateStatus.latestVersion
+  );
+  const relayUpdateAvailable = Boolean(
+    updateStatus?.relay.updateAvailable && updateStatus.relay.latestVersion
+  );
+  const anyUpdateAvailable = gatewayUpdateAvailable || relayUpdateAvailable;
+  const relayIncludedInGatewayUpdate = Boolean(
+    gatewayUpdateAvailable && relayUpdateAvailable && updateStatus?.relayIncludedInGatewayUpdate
+  );
+  const activeReleaseNotes = gatewayUpdateAvailable
+    ? updateStatus?.releaseNotes
+    : updateStatus?.relay.releaseNotes;
 
   return (
     <>
       {/* Update available */}
-      {updateStatus?.updateAvailable && updateStatus.latestVersion && (
+      {anyUpdateAvailable && (
         <PanelShell
           title={<span className="text-warning">Update Available</span>}
-          description={`${updateStatus.latestVersion} is ready to install`}
+          description={
+            gatewayUpdateAvailable
+              ? relayUpdateAvailable
+                ? "Gateway and Relay updates are ready to install"
+                : "A Gateway update is ready to install"
+              : "A Relay update is ready to install"
+          }
           className="xl:col-span-2"
           dirty
           actions={
             <>
-              {updateStatus.releaseNotes && (
+              {activeReleaseNotes && (
                 <Button
                   variant="outline"
                   onClick={async () => {
                     setReleaseNotesOpen(true);
+                    setReleaseVersions(null);
+                    setReleaseNotesList(null);
+                    if (!gatewayUpdateAvailable) return;
                     try {
                       const all = await api.getAllReleaseNotes();
                       if (all.length > 0) {
@@ -95,19 +151,50 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
                 </Button>
               )}
               {canUpdate && (
-                <Button
-                  onClick={handleUpdate}
-                  className="bg-warning text-black hover:bg-warning/90"
-                >
-                  Update to {updateStatus.latestVersion}
-                </Button>
+                <>
+                  {gatewayUpdateAvailable &&
+                    relayUpdateAvailable &&
+                    !relayIncludedInGatewayUpdate && (
+                      <Button variant="outline" onClick={handleRelayUpdate}>
+                        Update Relay to {updateStatus?.relay.latestVersion}
+                      </Button>
+                    )}
+                  {gatewayUpdateAvailable && (
+                    <Button
+                      onClick={handleGatewayUpdate}
+                      className="bg-warning text-black hover:bg-warning/90"
+                    >
+                      {relayIncludedInGatewayUpdate
+                        ? `Update Gateway ${updateStatus?.latestVersion} and Relay ${updateStatus?.relay.latestVersion}`
+                        : `Update Gateway to ${updateStatus?.latestVersion}`}
+                    </Button>
+                  )}
+                  {!gatewayUpdateAvailable && relayUpdateAvailable && (
+                    <Button
+                      onClick={handleRelayUpdate}
+                      className="bg-warning text-black hover:bg-warning/90"
+                    >
+                      Update Relay to {updateStatus?.relay.latestVersion}
+                    </Button>
+                  )}
+                </>
               )}
             </>
           }
         >
           <div className="divide-y divide-border">
-            <DetailRow label="Current version" value={updateStatus.currentVersion} />
-            <DetailRow label="New version" value={updateStatus.latestVersion} />
+            {gatewayUpdateAvailable && (
+              <DetailRow
+                label="Gateway"
+                value={`${updateStatus?.currentVersion} → ${updateStatus?.latestVersion}`}
+              />
+            )}
+            {relayUpdateAvailable && (
+              <DetailRow
+                label="Relay"
+                value={`${updateStatus?.relay.currentVersion} → ${updateStatus?.relay.latestVersion}`}
+              />
+            )}
           </div>
         </PanelShell>
       )}
@@ -141,23 +228,18 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
           </div>
         </div>
         <div className="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border">
-          <DetailRow label="Version" value={updateStatus?.currentVersion ?? "..."} />
+          <DetailRow label="Gateway version" value={updateStatus?.currentVersion ?? "..."} />
+          <DetailRow label="Relay version" value={updateStatus?.relay.currentVersion ?? "..."} />
           <DetailRow
             label="Status"
             value={
-              updateStatus?.updateAvailable ? (
+              anyUpdateAvailable ? (
                 <Badge variant="warning">Update available</Badge>
               ) : (
                 <Badge variant="success">Up to date</Badge>
               )
             }
           />
-          {updateStatus?.lastCheckedAt && (
-            <DetailRow
-              label="Last checked"
-              value={new Date(updateStatus.lastCheckedAt).toLocaleString()}
-            />
-          )}
         </div>
       </PanelShell>
 
@@ -168,10 +250,15 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
             <div className="flex flex-col items-center gap-4 text-center">
               <Loader2 className="h-10 w-10 animate-spin text-muted-foreground" />
               <div>
-                <h2 className="text-lg font-semibold">Updating Gateway</h2>
+                <h2 className="text-lg font-semibold">
+                  {updatingComponent === "relay" ? "Updating Relay" : "Updating Gateway"}
+                </h2>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Updating to {updateStatus?.latestVersion}. The application will restart
-                  automatically.
+                  {updatingComponent === "relay"
+                    ? `Updating Relay to ${updateStatus?.relay.latestVersion}. Secure Link connections may be interrupted briefly.`
+                    : updatingComponent === "gateway-relay"
+                      ? `Updating Gateway to ${updateStatus?.latestVersion} and Relay to ${updateStatus?.relay.latestVersion}. The application will restart automatically.`
+                      : `Updating to ${updateStatus?.latestVersion}. The application will restart automatically.`}
                 </p>
                 <p className="text-xs text-muted-foreground mt-3">This may take a minute...</p>
               </div>
@@ -187,7 +274,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
             <DialogTitle>Release Notes</DialogTitle>
           </DialogHeader>
           <div className="prose prose-sm dark:prose-invert max-w-none">
-            {(releaseNotesList ?? [updateStatus?.releaseNotes]).filter(Boolean).map((notes, i) => (
+            {(releaseNotesList ?? [activeReleaseNotes]).filter(Boolean).map((notes, i) => (
               <div key={i}>
                 {releaseNotesList && releaseNotesList.length > 1 && (
                   <h3 className="text-base font-semibold mt-0">{releaseVersions?.[i]}</h3>

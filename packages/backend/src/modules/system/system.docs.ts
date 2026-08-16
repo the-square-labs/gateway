@@ -46,6 +46,15 @@ export const performSystemUpdateRoute = appRoute({
   responses: okJson(UnknownDataResponseSchema),
 });
 
+export const performRelayUpdateRoute = appRoute({
+  method: 'post',
+  path: '/relay-update',
+  tags: ['System'],
+  summary: 'Trigger relay self-update',
+  request: jsonBody(UpdateRequestSchema),
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const releaseNotesForVersionRoute = appRoute({
   method: 'get',
   path: '/release-notes/{version}',

@@ -1047,7 +1047,14 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(RelaySupervisorService, relaySupervisor);
 
   // Update service
-  const updateService = new UpdateService(db, dockerService, env);
+  const updateService = new UpdateService(db, dockerService, env, {
+    setMaintenance: (enabled) => relaySupervisor.setMaintenance(enabled),
+    setExpectedArtifact: (imageRef, buildVersion, protocolMajor) => {
+      relayDockerRecovery.setExpectedImage(imageRef);
+      relaySupervisor.setExpectedArtifact(imageRef, buildVersion, protocolMajor);
+    },
+    probeNow: () => relaySupervisor.probeNow(),
+  });
   container.registerInstance(UpdateService, updateService);
 
   const loggingSettingsService = new LoggingSettingsService(db, cryptoService);

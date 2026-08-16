@@ -516,6 +516,7 @@ describe("ProxyHostDetail", () => {
   });
 
   it("exposes maintenance and delete through the responsive header actions", async () => {
+    const user = userEvent.setup();
     useAuthStore.setState({
       user: makeUser({ scopes: ["proxy:edit", "proxy:delete"] }),
       isAuthenticated: true,
@@ -530,7 +531,8 @@ describe("ProxyHostDetail", () => {
     });
 
     expect(await screen.findByRole("button", { name: /Enable Maintenance/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
   });
 
   it("issues a maintenance access code from the responsive header actions", async () => {

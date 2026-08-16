@@ -368,6 +368,30 @@ describe("CommandPalette", () => {
     expect(screen.getByRole("option", { name: "Log out" })).toBeVisible();
   });
 
+  it("offers dev-only Gateway and Relay update-state commands", async () => {
+    act(() => {
+      useAuthStore.setState({
+        user: {
+          id: "user-1",
+          email: "user@example.com",
+          name: "User One",
+          groupName: "admin",
+          scopes: ["admin:update"],
+          isBlocked: false,
+        } as never,
+        isAuthenticated: true,
+        isLoading: false,
+      });
+    });
+
+    renderWithRouter(<CommandPalette open onOpenChange={vi.fn()} />);
+    await userEvent.type(screen.getByPlaceholderText("Search or type > for commands..."), ">");
+
+    expect(screen.getByRole("option", { name: /Show Gateway update only/ })).toBeVisible();
+    expect(screen.getByRole("option", { name: /Show Relay update only/ })).toBeVisible();
+    expect(screen.getByRole("option", { name: /Show Gateway and Relay updates/ })).toBeVisible();
+  });
+
   it("searches all readable resources through the shared backend search", async () => {
     vi.mocked(api.searchResources).mockResolvedValue({
       query: "postgres",

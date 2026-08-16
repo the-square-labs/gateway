@@ -13,6 +13,7 @@ TRANSPORT="${GATEWAY_WEB_TRANSPORT:-}"
 SOURCE_DIR="${GATEWAY_SOURCE_DIR:-}"
 LOG_FILE="${GATEWAY_INSTALL_LOG_FILE:-/tmp/gateway-install.log}"
 DRY_RUN=0
+RELAY_BOOTSTRAP=0
 UPDATE_SIGNING_PUBLIC_KEY='-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAxLXGD8vCYQCYboK301miZXyAaoOLc43zFVnMlH3FeWg=
 -----END PUBLIC KEY-----'
@@ -385,7 +386,7 @@ decode_base64url() {
 verify_signed_release() {
   local version="$1" encoded_project="$2"
   local tmp_dir manifest_file payload_file signature_file key_file
-  local payload signature kind manifest_version tag image digest image_ref relay_build_version relay_protocol_major relay_image_ref relay_digest connector_image_ref connector_image connector_digest secure_connector_image_ref secure_connector_image secure_connector_digest
+  local payload signature kind manifest_version tag image digest image_ref connector_image_ref connector_image connector_digest secure_connector_image_ref secure_connector_image secure_connector_digest
 
   tmp_dir="$(mktemp -d)"
   manifest_file="${tmp_dir}/gateway-image.update.json"
@@ -422,9 +423,6 @@ verify_signed_release() {
   image="$(json_string_field "$payload_file" image)"
   digest="$(json_string_field "$payload_file" digest)"
   image_ref="$(json_string_field "$payload_file" imageRef)"
-  relay_build_version="$(json_string_field "$payload_file" relayBuildVersion)"
-  relay_protocol_major="$(json_number_field "$payload_file" relayProtocolMajor)"
-  relay_image_ref="$(json_string_field "$payload_file" relayImageRef)"
   connector_image_ref="$(json_string_field "$payload_file" databaseConnectorImage)"
   secure_connector_image_ref="$(json_string_field "$payload_file" secureLinkConnectorImage)"
   if [[ "$kind" != "gateway-image" || "$manifest_version" != "$version" || "$tag" != "$version" ||
@@ -448,22 +446,65 @@ verify_signed_release() {
       die "Signed release manifest contains an invalid secure-link connector image."
     fi
   fi
-  relay_digest="${relay_image_ref##*@}"
-  if [[ ! "$relay_build_version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ||
-    ! "$relay_protocol_major" =~ ^[1-9][0-9]*$ || "$relay_image_ref" != "${IMAGE}/relay@${relay_digest}" ||
-    ! "$relay_digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
-    rm -rf "$tmp_dir"
-    die "Signed release manifest contains invalid relay metadata."
-  fi
   rm -rf "$tmp_dir"
 
   IMAGE_REF="$image_ref"
-  RELAY_BUILD_VERSION="$relay_build_version"
-  RELAY_PROTOCOL_MAJOR="$relay_protocol_major"
-  RELAY_IMAGE_REF="$relay_image_ref"
   DATABASE_CONNECTOR_IMAGE_REF="$connector_image_ref"
   SECURE_LINK_CONNECTOR_IMAGE_REF="$secure_connector_image_ref"
   ok "Release ${version} verified (SHA-256: $(short_digest "$digest"))"
+}
+
+verify_signed_relay() {
+  local relay_tag="$1" encoded_project="$2"
+  local tmp_dir manifest_file payload_file signature_file key_file
+  local payload signature kind manifest_version tag image digest image_ref protocol_major
+
+  tmp_dir="$(mktemp -d)"
+  manifest_file="${tmp_dir}/relay-image.update.json"
+  payload_file="${tmp_dir}/payload.json"
+  signature_file="${tmp_dir}/signature.bin"
+  key_file="${tmp_dir}/update-signing-public-key.pem"
+
+  info "Verifying signed relay manifest for ${relay_tag}"
+  if ! curl -fsSL "${GITLAB_API_URL}/api/v4/projects/${encoded_project}/packages/generic/relay/${relay_tag}/relay-image.update.json" -o "$manifest_file" >>"$LOG_FILE" 2>&1; then
+    rm -rf "$tmp_dir"
+    die "Could not download the signed relay manifest. Check ${LOG_FILE} for details."
+  fi
+
+  payload="$(json_string_field "$manifest_file" payload)"
+  signature="$(json_string_field "$manifest_file" signature)"
+  if [[ -z "$payload" || -z "$signature" ]] ||
+    ! decode_base64url "$payload" "$payload_file" 2>>"$LOG_FILE" ||
+    ! decode_base64url "$signature" "$signature_file" 2>>"$LOG_FILE"; then
+    rm -rf "$tmp_dir"
+    die "Signed relay manifest is malformed."
+  fi
+  printf '%s\n' "$UPDATE_SIGNING_PUBLIC_KEY" >"$key_file"
+  if ! openssl pkeyutl -verify -rawin -pubin -inkey "$key_file" -in "$payload_file" -sigfile "$signature_file" >>"$LOG_FILE" 2>&1; then
+    rm -rf "$tmp_dir"
+    die "Signed relay manifest signature verification failed."
+  fi
+
+  kind="$(json_string_field "$payload_file" kind)"
+  manifest_version="$(json_string_field "$payload_file" version)"
+  tag="$(json_string_field "$payload_file" tag)"
+  image="$(json_string_field "$payload_file" image)"
+  digest="$(json_string_field "$payload_file" digest)"
+  image_ref="$(json_string_field "$payload_file" imageRef)"
+  protocol_major="$(json_number_field "$payload_file" protocolMajor)"
+  if [[ "$kind" != "relay-image" || "$tag" != "$relay_tag" || "$relay_tag" != "${manifest_version}-relay" ||
+    ! "$manifest_version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ || "$image" != "${IMAGE}/relay" ||
+    ! "$digest" =~ ^sha256:[a-f0-9]{64}$ || "$image_ref" != "${IMAGE}/relay@${digest}" || "$protocol_major" != "1" ]]; then
+    rm -rf "$tmp_dir"
+    die "Signed relay manifest does not match a compatible Relay image."
+  fi
+  rm -rf "$tmp_dir"
+
+  RELAY_BUILD_VERSION="$manifest_version"
+  RELAY_PROTOCOL_MAJOR="$protocol_major"
+  RELAY_IMAGE_REF="$image_ref"
+  RELAY_BOOTSTRAP=1
+  ok "Relay ${manifest_version} verified (SHA-256: $(short_digest "$digest"))"
 }
 
 local_source_checksum() {
@@ -477,6 +518,24 @@ local_source_checksum() {
       LC_ALL=C sort -z |
       xargs -0 sha256sum
   ) | sha256sum | awk '{print $1}'
+}
+
+env_value() {
+  local key="$1"
+  sed -n "s/^${key}=//p" .env 2>/dev/null | tail -n1
+}
+
+gateway_update_requires_relay() {
+  local current="${1#v}" target="${2#v}"
+  [[ "$current" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]] || return 1
+  local current_major="${BASH_REMATCH[1]}" current_minor="${BASH_REMATCH[2]}"
+  [[ "$target" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]] || return 1
+  [[ "$current_major" != "${BASH_REMATCH[1]}" || "$current_minor" != "${BASH_REMATCH[2]}" ]]
+}
+
+version_is_newer() {
+  local candidate="$1" current="$2"
+  [[ "$candidate" != "$current" && "$(printf '%s\n%s\n' "$candidate" "$current" | sort -V | tail -n1)" == "$candidate" ]]
 }
 
 prepare_install_metadata() {
@@ -498,7 +557,7 @@ prepare_install_metadata() {
     return
   fi
 
-  local encoded_project release_json
+  local encoded_project release_json relay_tag relay_version current_relay_version current_gateway_version
   encoded_project="${GITLAB_PROJECT_PATH//\//%2F}"
   info "Resolving the latest Gateway release"
   release_json="$(curl -fsSL "${GITLAB_API_URL}/api/v4/projects/${encoded_project}/releases?per_page=100")" || die "Unable to query releases"
@@ -513,6 +572,24 @@ prepare_install_metadata() {
   [[ -n "$VERSION" ]] || die "The release API did not return an eligible Gateway release"
   info "Version: ${VERSION}"
   verify_signed_release "$VERSION" "$encoded_project"
+  current_gateway_version="$(env_value GATEWAY_VERSION)"
+  current_relay_version="$(env_value GATEWAY_RELAY_BUILD_VERSION)"
+  if [[ "$FRESH" == 1 || -z "$(env_value GATEWAY_RELAY_IMAGE_REF)" || -z "$current_relay_version" ]] ||
+    gateway_update_requires_relay "$current_gateway_version" "$VERSION"; then
+    relay_tag="$(
+      printf '%s' "$release_json" |
+        grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' |
+        sed -E 's/^.*"([^"]+)"$/\1/' |
+        grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+-relay$' |
+        sort -V |
+        tail -n1 || true
+    )"
+    [[ -n "$relay_tag" ]] || die "The release API did not return an eligible Relay release"
+    relay_version="${relay_tag%-relay}"
+    if [[ "$FRESH" == 1 || -z "$current_relay_version" ]] || version_is_newer "$relay_version" "$current_relay_version"; then
+      verify_signed_relay "$relay_tag" "$encoded_project"
+    fi
+  fi
   ARTIFACT_DIGEST="${IMAGE_REF##*@sha256:}"
   ARTIFACT_KIND="signed image digest"
 }
@@ -635,11 +712,6 @@ if [[ -n "$SOURCE_DIR" ]]; then
   run_quiet "Gateway image build" "${DOCKER[@]}" build --build-arg "APP_VERSION=${VERSION}" --tag "$IMAGE_REF" "$SOURCE_DIR"
   run_quiet "Relay image build" "${DOCKER[@]}" build -f "$SOURCE_DIR/packages/relay/Dockerfile" --build-arg "RELAY_BUILD_VERSION=${VERSION}" --tag "$RELAY_IMAGE_REF" "$SOURCE_DIR"
 fi
-
-env_value() {
-  local key="$1"
-  sed -n "s/^${key}=//p" .env 2>/dev/null | tail -n1
-}
 
 ensure_env() {
   local key="$1" value="$2"
@@ -856,7 +928,10 @@ COMPOSE
 else
   info "Migrating the existing installer-managed Compose foundation"
   run_quiet "Gateway image pull" "${DOCKER[@]}" pull "$IMAGE_REF"
-  foundation_args=(node dist/foundation-migrator.js --host-dir /host --target-version "$VERSION" --image-ref "$IMAGE_REF" --relay-build-version "$RELAY_BUILD_VERSION" --relay-protocol-major "$RELAY_PROTOCOL_MAJOR" --relay-image-ref "$RELAY_IMAGE_REF")
+  foundation_args=(node dist/foundation-migrator.js --host-dir /host --target-version "$VERSION" --image-ref "$IMAGE_REF")
+  if [[ "$RELAY_BOOTSTRAP" == 1 ]]; then
+    foundation_args+=(--relay-build-version "$RELAY_BUILD_VERSION" --relay-protocol-major "$RELAY_PROTOCOL_MAJOR" --relay-image-ref "$RELAY_IMAGE_REF")
+  fi
   if [[ -n "${DATABASE_CONNECTOR_IMAGE_REF:-}" ]]; then
     foundation_args+=(--database-connector-image "$DATABASE_CONNECTOR_IMAGE_REF")
   fi
@@ -868,12 +943,26 @@ fi
 
 if [[ -z "$SOURCE_DIR" ]]; then
   info "Pulling ${IMAGE_REF}"
-  run_quiet "Gateway service image pull" "${DOCKER[@]}" compose pull
+  if [[ "$FRESH" == 1 ]]; then
+    run_quiet "Gateway service image pull" "${DOCKER[@]}" compose pull
+  else
+    run_quiet "Gateway service image pull" "${DOCKER[@]}" compose pull app
+    if [[ "$RELAY_BOOTSTRAP" == 1 ]]; then
+      run_quiet "Relay service image pull" "${DOCKER[@]}" compose pull relay
+    fi
+  fi
 fi
 info "Preparing the pinned recovery helper"
 run_quiet "Gateway recovery helper image pull" "${DOCKER[@]}" pull "$DOCKER_COMPOSE_CLI_IMAGE_REF"
 info "Starting Gateway services"
-run_quiet "Gateway service startup" "${DOCKER[@]}" compose up -d
+if [[ "$FRESH" == 1 ]]; then
+  run_quiet "Gateway service startup" "${DOCKER[@]}" compose up -d
+else
+  if [[ "$RELAY_BOOTSTRAP" == 1 ]]; then
+    run_quiet "Relay service startup" "${DOCKER[@]}" compose up -d --no-deps relay
+  fi
+  run_quiet "Gateway service startup" "${DOCKER[@]}" compose up -d --no-deps app
+fi
 
 info "Waiting for Gateway"
 healthy=0

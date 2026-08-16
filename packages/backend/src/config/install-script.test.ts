@@ -76,13 +76,17 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('decode_base64url');
     expect(source).toContain('openssl pkeyutl -verify -rawin -pubin');
     expect(source).toContain('gateway-image.update.json');
+    expect(source).toContain('verify_signed_relay');
+    expect(source).toContain('relay-image.update.json');
+    expect(source).toContain('gateway_update_requires_relay "$current_gateway_version" "$VERSION"');
+    expect(source).toContain('version_is_newer "$relay_version" "$current_relay_version"');
     expect(source).toContain('IMAGE_REF="$image_ref"');
     expect(source).toContain('databaseConnectorImage');
     expect(source).toContain('DATABASE_CONNECTOR_IMAGE_REF="$connector_image_ref"');
     expect(source).toContain('secureLinkConnectorImage');
     expect(source).toContain('SECURE_LINK_CONNECTOR_IMAGE_REF="$secure_connector_image_ref"');
-    expect(source).toContain('RELAY_BUILD_VERSION="$relay_build_version"');
-    expect(source).toContain('RELAY_PROTOCOL_MAJOR="$relay_protocol_major"');
+    expect(source).toContain('RELAY_BUILD_VERSION="$manifest_version"');
+    expect(source).toContain('RELAY_PROTOCOL_MAJOR="$protocol_major"');
     expect(source).toContain('GATEWAY_RELAY_IMAGE_REF');
     expect(source).toContain('gateway_relay_identity:/var/lib/gateway-relay/identity:ro');
     expect(source).toContain('gateway_relay_state:/var/lib/gateway-relay/state');
@@ -90,6 +94,8 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('Gateway recovery helper image pull');
     expect(source).toContain('--database-connector-image "$DATABASE_CONNECTOR_IMAGE_REF"');
     expect(source).toContain('--secure-link-connector-image "$SECURE_LINK_CONNECTOR_IMAGE_REF"');
+    expect(source).toContain('compose pull app');
+    expect(source).toContain('compose up -d --no-deps app');
     expect(source).toContain('ARTIFACT_KIND="local source checksum"');
     expect(source).toContain('short_digest "$ARTIFACT_DIGEST"');
   });

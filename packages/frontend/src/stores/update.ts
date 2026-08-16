@@ -8,10 +8,13 @@ interface UpdateState {
   status: UpdateStatus | null;
   isChecking: boolean;
   isUpdating: boolean;
+  updatingComponent: "gateway" | "gateway-relay" | "relay" | null;
 
   fetchStatus: () => Promise<void>;
   checkForUpdates: () => Promise<void>;
-  triggerUpdate: (version: string) => Promise<void>;
+  triggerUpdate: (version: string, includeRelay?: boolean) => Promise<void>;
+  triggerRelayUpdate: (version: string) => Promise<void>;
+  setUpdating: (component: "gateway" | "gateway-relay" | "relay", active: boolean) => void;
   clearUpdating: () => void;
 }
 
@@ -19,6 +22,7 @@ export const useUpdateStore = create<UpdateState>()((set) => ({
   status: null,
   isChecking: false,
   isUpdating: false,
+  updatingComponent: null,
 
   fetchStatus: async () => {
     try {
@@ -43,8 +47,8 @@ export const useUpdateStore = create<UpdateState>()((set) => ({
     }
   },
 
-  triggerUpdate: async (version: string) => {
-    set({ isUpdating: true });
+  triggerUpdate: async (version: string, includeRelay = false) => {
+    set({ isUpdating: true, updatingComponent: includeRelay ? "gateway-relay" : "gateway" });
     try {
       useAppStatusStore.getState().setGatewayUpdatingActive(true, version);
       await api.triggerUpdate(version);
@@ -55,9 +59,21 @@ export const useUpdateStore = create<UpdateState>()((set) => ({
           error instanceof Error ? error.message : "Gateway update could not be started",
           version
         );
-      set({ isUpdating: false });
+      set({ isUpdating: false, updatingComponent: null });
     }
   },
 
-  clearUpdating: () => set({ isUpdating: false }),
+  triggerRelayUpdate: async (version: string) => {
+    set({ isUpdating: true, updatingComponent: "relay" });
+    try {
+      await api.triggerRelayUpdate(version);
+    } catch {
+      set({ isUpdating: false, updatingComponent: null });
+    }
+  },
+
+  setUpdating: (component, active) =>
+    set({ isUpdating: active, updatingComponent: active ? component : null }),
+
+  clearUpdating: () => set({ isUpdating: false, updatingComponent: null }),
 }));

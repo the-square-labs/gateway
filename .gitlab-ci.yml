@@ -227,7 +227,7 @@ test-relay:
     - cd ../relay
     - go test ./...
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-relay$/
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
         - proto/relay/**/*
@@ -270,18 +270,81 @@ build-relay:
   <<: *docker-login
   script:
     - |
+      RELAY_VERSION="${CI_COMMIT_TAG%-relay}"
       docker build \
         --file packages/relay/Dockerfile \
-        --build-arg RELAY_BUILD_VERSION="${CI_COMMIT_TAG}-relay" \
-        --tag "${IMAGE}/relay:${CI_COMMIT_TAG}-relay" \
+        --build-arg RELAY_BUILD_VERSION="${RELAY_VERSION}" \
+        --tag "${IMAGE}/relay:${CI_COMMIT_TAG}" \
         .
-    - sh scripts/push-image-with-digest.sh "${IMAGE}/relay:${CI_COMMIT_TAG}-relay" relay-image.digest "relay image"
+    - sh scripts/push-image-with-digest.sh "${IMAGE}/relay:${CI_COMMIT_TAG}" relay-image.digest "relay image"
   artifacts:
     paths:
       - relay-image.digest
     expire_in: 1 hour
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-relay$/
+
+sign-relay-update:
+  stage: sign
+  extends: .go-job
+  needs:
+    - job: build-relay
+      artifacts: true
+  script:
+    - test -n "${UPDATE_SIGNING_PRIVATE_KEY_PEM_B64}" || (echo "UPDATE_SIGNING_PRIVATE_KEY_PEM_B64 CI variable is required to publish signed relay updates" && exit 1)
+    - RELAY_IMAGE_DIGEST=$(cat ../../relay-image.digest)
+    - echo "$RELAY_IMAGE_DIGEST" | grep -Eq '^sha256:[a-f0-9]{64}$' || (echo "RELAY_IMAGE_DIGEST artifact is required to sign relay updates" && exit 1)
+    - RELAY_VERSION="${CI_COMMIT_TAG%-relay}"
+    - |
+      go run ./shared/cmd/update-trust sign \
+        --kind relay-image \
+        --version "$RELAY_VERSION" \
+        --tag "$CI_COMMIT_TAG" \
+        --image "${IMAGE}/relay" \
+        --digest "$RELAY_IMAGE_DIGEST" \
+        --relay-protocol-major 1 \
+        --git-commit-sha "$CI_COMMIT_SHA" \
+        --git-pipeline-id "$CI_PIPELINE_ID" \
+        --out ../../relay-image.update.json
+  artifacts:
+    paths:
+      - relay-image.update.json
+    expire_in: 1 hour
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-relay$/
+
+upload-relay-update:
+  stage: publish
+  image: ${CURL_CI_IMAGE}
+  needs:
+    - job: sign-relay-update
+      artifacts: true
+  script:
+    - |
+      curl \
+        --fail \
+        --show-error \
+        --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+        --upload-file relay-image.update.json \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay/${CI_COMMIT_TAG}/relay-image.update.json"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-relay$/
+
+publish-relay-aliases:
+  stage: publish
+  image: ${DOCKER_CI_IMAGE}
+  needs:
+    - upload-relay-update
+  <<: *docker-login
+  script:
+    - RELAY_VERSION="${CI_COMMIT_TAG%-relay}"
+    - docker pull "${IMAGE}/relay:${CI_COMMIT_TAG}"
+    - docker tag "${IMAGE}/relay:${CI_COMMIT_TAG}" "${IMAGE}/relay:${RELAY_VERSION}"
+    - docker tag "${IMAGE}/relay:${CI_COMMIT_TAG}" "${IMAGE}/relay:latest"
+    - docker push "${IMAGE}/relay:${RELAY_VERSION}"
+    - docker push "${IMAGE}/relay:latest"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-relay$/
 
 sign-gateway-update:
   stage: sign
@@ -293,18 +356,14 @@ sign-gateway-update:
       artifacts: true
     - job: publish-secure-link-connector
       artifacts: true
-    - job: build-relay
-      artifacts: true
   script:
     - test -n "${UPDATE_SIGNING_PRIVATE_KEY_PEM_B64}" || (echo "UPDATE_SIGNING_PRIVATE_KEY_PEM_B64 CI variable is required to publish signed gateway updates" && exit 1)
     - GATEWAY_IMAGE_DIGEST=$(cat ../../gateway-image.digest)
     - DATABASE_CONNECTOR_DIGEST=$(cat ../../database-connector.digest)
     - SECURE_LINK_CONNECTOR_DIGEST=$(cat ../../secure-link-connector.digest)
-    - RELAY_IMAGE_DIGEST=$(cat ../../relay-image.digest)
     - test -n "${GATEWAY_IMAGE_DIGEST}" || (echo "GATEWAY_IMAGE_DIGEST artifact is required to sign gateway updates" && exit 1)
     - echo "$DATABASE_CONNECTOR_DIGEST" | grep -Eq '^sha256:[a-f0-9]{64}$' || (echo "DATABASE_CONNECTOR_DIGEST artifact is required to sign gateway updates" && exit 1)
     - echo "$SECURE_LINK_CONNECTOR_DIGEST" | grep -Eq '^sha256:[a-f0-9]{64}$' || (echo "SECURE_LINK_CONNECTOR_DIGEST artifact is required to sign gateway updates" && exit 1)
-    - echo "$RELAY_IMAGE_DIGEST" | grep -Eq '^sha256:[a-f0-9]{64}$' || (echo "RELAY_IMAGE_DIGEST artifact is required to sign gateway updates" && exit 1)
     - |
       go run ./shared/cmd/update-trust sign \
         --kind gateway-image \
@@ -312,9 +371,6 @@ sign-gateway-update:
         --tag "$CI_COMMIT_TAG" \
         --image "$IMAGE" \
         --digest "$GATEWAY_IMAGE_DIGEST" \
-        --relay-build-version "${CI_COMMIT_TAG}-relay" \
-        --relay-protocol-major 1 \
-        --relay-image-ref "${IMAGE}/relay@${RELAY_IMAGE_DIGEST}" \
         --database-connector-image "${IMAGE}/database-connector@${DATABASE_CONNECTOR_DIGEST}" \
         --secure-link-connector-image "${IMAGE}/secure-link-connector@${SECURE_LINK_CONNECTOR_DIGEST}" \
         --git-commit-sha "$CI_COMMIT_SHA" \
@@ -424,6 +480,32 @@ release:
           link_type: other
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+release-relay:
+  stage: release
+  image: ${RELEASE_CLI_IMAGE}
+  needs:
+    - upload-relay-update
+    - publish-relay-aliases
+  script:
+    - |
+      if [ -n "${CI_COMMIT_TAG_MESSAGE}" ]; then
+        printf '%s\n' "${CI_COMMIT_TAG_MESSAGE}" > release-notes.md
+      else
+        printf 'Relay release %s\n' "${CI_COMMIT_TAG}" > release-notes.md
+      fi
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: "Gateway Relay ${CI_COMMIT_TAG}"
+    description: ./release-notes.md
+    assets:
+      links:
+        - name: relay-image.update.json
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/relay/${CI_COMMIT_TAG}/relay-image.update.json"
+          filepath: /relay-image.update.json
+          link_type: other
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+-relay$/
 
 # ── Logging SDK npm package ───────────────────────────────────────
 

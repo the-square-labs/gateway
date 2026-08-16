@@ -1,10 +1,14 @@
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
-import type { TrustedGatewayUpdateArtifact } from '@/lib/update-artifact-trust.js';
+import type { TrustedGatewayUpdateArtifact, TrustedRelayUpdateArtifact } from '@/lib/update-artifact-trust.js';
 import {
+  DOCKER_COMPOSE_CLI_IMAGE_REF,
   imageRepositoryFromRef,
   isGatewayReleaseTag,
+  isRelayReleaseTag,
   selectLatestGatewayRelease,
+  selectLatestRelayRelease,
+  shouldIncludeRelayInGatewayUpdate,
   UpdateService,
 } from './update.service.js';
 
@@ -19,7 +23,19 @@ describe('UpdateService release selection', () => {
       expect(isGatewayReleaseTag('v2.1.1-docker')).toBe(false);
       expect(isGatewayReleaseTag('v2.1.1-nginx')).toBe(false);
       expect(isGatewayReleaseTag('v2.1.1-monitoring')).toBe(false);
+      expect(isGatewayReleaseTag('v2.1.1-relay')).toBe(false);
     });
+  });
+
+  it('selects relay releases independently from Gateway and daemon tags', () => {
+    expect(isRelayReleaseTag('v2.2.0-relay')).toBe(true);
+    expect(
+      selectLatestRelayRelease([
+        { tag_name: 'v2.2.0', description: '', _links: { self: '' } },
+        { tag_name: 'v2.1.0-relay', description: '', _links: { self: '' } },
+        { tag_name: 'v2.2.0-relay', description: '', _links: { self: '' } },
+      ])?.tag_name
+    ).toBe('v2.2.0-relay');
   });
 
   describe('selectLatestGatewayRelease', () => {
@@ -62,6 +78,21 @@ describe('UpdateService release selection', () => {
       expect(latest).toBeNull();
     });
   });
+
+  describe('shouldIncludeRelayInGatewayUpdate', () => {
+    it('keeps relay separate for patch-only Gateway updates', () => {
+      expect(shouldIncludeRelayInGatewayUpdate('v2.6.12', 'v2.6.13')).toBe(false);
+    });
+
+    it('includes relay for Gateway minor and major updates', () => {
+      expect(shouldIncludeRelayInGatewayUpdate('v2.6.12', 'v2.7.0')).toBe(true);
+      expect(shouldIncludeRelayInGatewayUpdate('v2.6.12', 'v3.0.0')).toBe(true);
+    });
+
+    it('fails closed for unknown versions', () => {
+      expect(shouldIncludeRelayInGatewayUpdate('dev', 'v2.7.0')).toBe(false);
+    });
+  });
 });
 
 describe('imageRepositoryFromRef', () => {
@@ -91,7 +122,7 @@ describe('UpdateService foundation migration', () => {
     await service.performUpdate('v2.4.3', artifact);
 
     expect(dockerService.pullImageRef).toHaveBeenNthCalledWith(1, artifact.imageRef);
-    expect(dockerService.pullImageRef).toHaveBeenNthCalledWith(2, artifact.relayImageRef);
+    expect(dockerService.pullImageRef).toHaveBeenNthCalledWith(2, DOCKER_COMPOSE_CLI_IMAGE_REF);
     expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
@@ -113,12 +144,6 @@ describe('UpdateService foundation migration', () => {
           'v2.4.3',
           '--image-ref',
           artifact.imageRef,
-          '--relay-build-version',
-          artifact.relayBuildVersion,
-          '--relay-protocol-major',
-          '1',
-          '--relay-image-ref',
-          artifact.relayImageRef,
         ],
         HostConfig: expect.objectContaining({
           Binds: expect.arrayContaining([
@@ -157,7 +182,7 @@ describe('UpdateService foundation migration', () => {
     expect(dockerService.runDetached).toHaveBeenCalledWith(
       expect.objectContaining({
         Cmd: ['sh', '-c', expect.stringContaining('compose up -d --force-recreate app')],
-        Env: ['FOUNDATION_BACKUP_DIR=/srv/gateway/.gateway-foundation-backups/test'],
+        Env: ['FOUNDATION_BACKUP_DIR=/srv/gateway/.gateway-foundation-backups/test', 'UPDATE_RELAY=0'],
         HostConfig: {
           Binds: ['/srv/gateway:/srv/gateway', '/var/run/docker.sock:/var/run/docker.sock'],
         },
@@ -174,13 +199,13 @@ describe('UpdateService foundation migration', () => {
     expect(sidecarCommand).toContain('cp -p "$FOUNDATION_BACKUP_DIR/.env" /srv/gateway/.env');
     expect(sidecarCommand).toContain('service_exists() { compose config --services | grep -qx "$1"; }');
     expect(sidecarCommand).toContain(
-      'if service_exists relay; then\n    rollback_has_relay=1\n    compose stop app relay\n  else\n    compose stop app\n  fi'
+      'if [ "$UPDATE_RELAY" -eq 1 ] && [ "$rollback_has_relay" -eq 1 ]; then\n    compose stop app relay\n  else\n    compose stop app\n  fi'
     );
     expect(sidecarCommand).toContain(
-      'if [ "$rollback_has_relay" -eq 1 ]; then\n    compose up -d app relay\n  else\n    compose up -d app\n  fi'
+      'elif [ "$rollback_has_relay" -eq 1 ]; then\n    compose up -d --no-deps app\n  else\n    compose up -d app\n  fi'
     );
     expect(sidecarCommand).toContain(
-      'if service_exists relay; then\n  compose up -d --force-recreate app relay\nelse\n  compose up -d --force-recreate app\nfi'
+      'elif service_exists relay; then\n  compose up -d --no-deps --force-recreate app\nelse\n  compose up -d --force-recreate app\nfi'
     );
     expect(sidecarCommand).toContain('relay_reachable()');
     expect(sidecarCommand).toContain('net.connect(9443,"relay"');
@@ -194,6 +219,56 @@ describe('UpdateService foundation migration', () => {
     const syntax = spawnSync('/bin/sh', ['-n'], { input: sidecarCommand, encoding: 'utf8' });
     expect(syntax.stderr).toBe('');
     expect(syntax.status).toBe(0);
+  });
+
+  it('includes an independently verified relay artifact only when both updates are requested', async () => {
+    const dockerService = makeDockerService();
+    const service = makeUpdateService(dockerService);
+    const gateway = makeArtifact('registry.example.com/wiolett/gateway@sha256:new');
+    const relay = makeRelayArtifact();
+
+    await service.performUpdate('v2.4.3', gateway, relay);
+
+    expect(dockerService.pullImageRef).toHaveBeenNthCalledWith(2, relay.imageRef);
+    expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        Cmd: expect.arrayContaining(['--relay-build-version', relay.buildVersion, '--relay-image-ref', relay.imageRef]),
+      })
+    );
+    expect(dockerService.runDetached).toHaveBeenCalledWith(
+      expect.objectContaining({
+        Env: ['FOUNDATION_BACKUP_DIR=/srv/gateway/.gateway-foundation-backups/test', 'UPDATE_RELAY=1'],
+      })
+    );
+  });
+
+  it('updates relay without recreating the Gateway app', async () => {
+    const dockerService = makeDockerService();
+    const relayRuntime = {
+      setMaintenance: vi.fn().mockResolvedValue(undefined),
+      setExpectedArtifact: vi.fn(),
+      probeNow: vi.fn().mockResolvedValue(undefined),
+    };
+    const service = makeUpdateService(dockerService, relayRuntime);
+    const relay = makeRelayArtifact();
+
+    await service.performRelayUpdate('v2.4.3', relay);
+
+    expect(dockerService.pullImageRef).toHaveBeenNthCalledWith(1, relay.imageRef);
+    expect(dockerService.pullImageRef).toHaveBeenNthCalledWith(2, DOCKER_COMPOSE_CLI_IMAGE_REF);
+    const updateCommand = dockerService.runOneShot.mock.calls[2]?.[0]?.Cmd?.[2];
+    expect(updateCommand).toContain('compose up -d --no-deps --force-recreate relay');
+    expect(updateCommand).not.toContain('force-recreate app');
+    expect(dockerService.runDetached).not.toHaveBeenCalled();
+    expect(relayRuntime.setMaintenance).toHaveBeenNthCalledWith(1, true);
+    expect(relayRuntime.setMaintenance).toHaveBeenLastCalledWith(false);
+    expect(relayRuntime.setExpectedArtifact).toHaveBeenCalledWith(
+      relay.imageRef,
+      relay.buildVersion,
+      relay.protocolMajor
+    );
+    expect(relayRuntime.probeNow).toHaveBeenCalled();
   });
 
   it('does not recreate the app when migrated compose validation fails', async () => {
@@ -279,7 +354,10 @@ describe('UpdateService foundation migration', () => {
   });
 });
 
-function makeUpdateService(dockerService: ReturnType<typeof makeDockerService>): UpdateService {
+function makeUpdateService(
+  dockerService: ReturnType<typeof makeDockerService>,
+  relayRuntime?: ConstructorParameters<typeof UpdateService>[3]
+): UpdateService {
   return new UpdateService(
     {} as never,
     dockerService as never,
@@ -288,7 +366,11 @@ function makeUpdateService(dockerService: ReturnType<typeof makeDockerService>):
       COMPOSE_PROJECT_DIR: '/srv/gateway',
       GITLAB_API_URL: 'https://gitlab.example.com/api/v4',
       GITLAB_PROJECT_PATH: 'wiolett/gateway',
-    } as never
+      GATEWAY_RELAY_IMAGE_REF: `registry.example.com/wiolett/gateway/relay@sha256:${'b'.repeat(64)}`,
+      GATEWAY_RELAY_BUILD_VERSION: 'v2.4.2',
+      GATEWAY_RELAY_PROTOCOL_MAJOR: 1,
+    } as never,
+    relayRuntime
   );
 }
 
@@ -321,9 +403,6 @@ function makeArtifact(
   return {
     imageRef,
     digest: 'sha256:new',
-    relayBuildVersion: 'v2.4.3-relay',
-    relayProtocolMajor: 1,
-    relayImageRef: `registry.example.com/wiolett/gateway/relay@sha256:${'a'.repeat(64)}`,
     signedManifest: 'signed',
     payload: {
       kind: 'gateway-image',
@@ -332,14 +411,32 @@ function makeArtifact(
       image: 'registry.example.com/wiolett/gateway',
       digest: 'sha256:new',
       imageRef,
-      relayBuildVersion: 'v2.4.3-relay',
-      relayProtocolMajor: 1,
-      relayImageRef: `registry.example.com/wiolett/gateway/relay@sha256:${'a'.repeat(64)}`,
       ...(databaseConnectorImage ? { databaseConnectorImage } : {}),
       ...(secureLinkConnectorImage ? { secureLinkConnectorImage } : {}),
       createdAt: '2026-06-30T00:00:00.000Z',
     },
     ...(databaseConnectorImage ? { databaseConnectorImage } : {}),
     ...(secureLinkConnectorImage ? { secureLinkConnectorImage } : {}),
+  };
+}
+
+function makeRelayArtifact(): TrustedRelayUpdateArtifact {
+  const imageRef = `registry.example.com/wiolett/gateway/relay@sha256:${'a'.repeat(64)}`;
+  return {
+    imageRef,
+    digest: `sha256:${'a'.repeat(64)}`,
+    buildVersion: 'v2.4.3',
+    protocolMajor: 1,
+    signedManifest: 'signed-relay',
+    payload: {
+      kind: 'relay-image',
+      version: 'v2.4.3',
+      tag: 'v2.4.3-relay',
+      image: 'registry.example.com/wiolett/gateway/relay',
+      digest: `sha256:${'a'.repeat(64)}`,
+      imageRef,
+      protocolMajor: 1,
+      createdAt: '2026-06-30T00:00:00.000Z',
+    },
   };
 }

@@ -87,6 +87,7 @@ import { useResolvedPageRoute } from "@/stores/resolved-page-context";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { syncAILiteModeFromStorageValue, UI_STORAGE_KEY, useUIStore } from "@/stores/ui";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
+import { useUpdateStore } from "@/stores/update";
 import type { DockerMigration } from "@/types";
 
 const REALTIME_RECONCILIATION_CACHE_PREFIXES = [
@@ -1014,11 +1015,25 @@ function RealtimeBridge() {
   useEffect(() => {
     if (!user) return;
     return eventStream.subscribe("system.update.changed", (payload) => {
-      const ev = payload as { updating?: boolean; targetVersion?: string | null } | undefined;
+      const ev = payload as
+        | {
+            updating?: boolean;
+            component?: "gateway" | "relay";
+            targetVersion?: string | null;
+            relayIncluded?: boolean;
+          }
+        | undefined;
       if (typeof ev?.updating === "boolean") {
-        if (ev.updating) {
+        if (ev.component === "relay") {
+          useUpdateStore.getState().setUpdating("relay", ev.updating);
+          if (!ev.updating) void useUpdateStore.getState().fetchStatus();
+        } else if (ev.updating) {
+          useUpdateStore
+            .getState()
+            .setUpdating(ev.relayIncluded ? "gateway-relay" : "gateway", true);
           setGatewayUpdatingActive(true, ev.targetVersion ?? null);
         } else {
+          useUpdateStore.getState().clearUpdating();
           clearGatewayUpdating();
         }
       }

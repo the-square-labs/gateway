@@ -11,7 +11,6 @@ workload="${project}-workload"
 old_app_image="${GATEWAY_RELEASE_E2E_OLD_APP_IMAGE:-registry.gitlab.wiolett.net/wiolett/gateway:v2.6.12}"
 old_relay_image="${GATEWAY_RELEASE_E2E_OLD_RELAY_IMAGE:-registry.gitlab.wiolett.net/wiolett/gateway/relay:v2.6.12-relay}"
 candidate_app_image="${GATEWAY_RELEASE_E2E_CANDIDATE_APP_IMAGE:-gateway:release-e2e-candidate}"
-candidate_relay_image="${GATEWAY_RELEASE_E2E_CANDIDATE_RELAY_IMAGE:-gateway-relay:release-e2e-candidate}"
 db_password="release-e2e-db"
 pki_key="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 buildx_config="${TMPDIR:-/tmp}/gateway-release-buildx-$run_suffix"
@@ -120,6 +119,17 @@ assert_workload_unchanged() {
   }
 }
 
+assert_relay_unchanged() {
+  local current_id current_restart_count
+  current_id="$(compose ps -q relay)"
+  current_restart_count="$(docker inspect --format '{{.RestartCount}}' "$current_id")"
+  [[ "$current_id" == "$relay_id" ]] || { echo "Relay container was replaced by a Gateway patch upgrade" >&2; return 1; }
+  [[ "$current_restart_count" == "$relay_restart_count" ]] || {
+    echo "Relay restarted during a Gateway patch upgrade" >&2
+    return 1
+  }
+}
+
 cd "$repo_root"
 
 echo "Pulling release baseline images"
@@ -127,9 +137,8 @@ docker pull --platform linux/amd64 "$old_app_image"
 docker pull --platform linux/amd64 "$old_relay_image"
 
 if [[ "${GATEWAY_RELEASE_E2E_SKIP_BUILD:-0}" != "1" ]]; then
-  echo "Building candidate app and relay images"
+  echo "Building candidate Gateway image"
   BUILDX_CONFIG="$buildx_config" docker buildx build --platform linux/amd64 --load -t "$candidate_app_image" -f Dockerfile .
-  BUILDX_CONFIG="$buildx_config" docker buildx build --platform linux/amd64 --load -t "$candidate_relay_image" -f packages/relay/Dockerfile .
 fi
 
 echo "Starting isolated v2.6.12 deployment: $project"
@@ -139,6 +148,8 @@ wait_healthy postgres
 wait_healthy redis
 wait_healthy app
 wait_healthy relay
+relay_id="$(compose ps -q relay)"
+relay_restart_count="$(docker inspect --format '{{.RestartCount}}' "$relay_id")"
 
 compose exec -T postgres psql -v ON_ERROR_STOP=1 -U gateway -d gateway < "$seed_file"
 postgres_id="$(compose ps -q postgres)"
@@ -148,15 +159,16 @@ docker run -d --name "$workload" --label "com.wiolett.gateway.release-e2e=$proje
 workload_id="$(docker inspect --format '{{.Id}}' "$workload")"
 workload_restart_count="$(docker inspect --format '{{.RestartCount}}' "$workload")"
 
-echo "Upgrading only Gateway app and relay"
-set_images "$candidate_app_image" "$candidate_relay_image" "release-e2e-candidate" "release-e2e-candidate"
-compose up -d --no-deps --force-recreate app relay
+echo "Applying a Gateway patch upgrade while preserving Relay"
+set_images "$candidate_app_image" "$old_relay_image" "release-e2e-candidate" "v2.6.12-relay"
+compose up -d --no-deps --force-recreate app
 wait_healthy app
 wait_healthy relay
 
 [[ "$(compose ps -q postgres)" == "$postgres_id" ]] || { echo "PostgreSQL container was replaced" >&2; exit 1; }
 [[ "$(compose ps -q redis)" == "$redis_id" ]] || { echo "Redis container was replaced" >&2; exit 1; }
 assert_workload_unchanged
+assert_relay_unchanged
 verify_database
 
 http_port="$(host_port app 3000)"
@@ -167,12 +179,13 @@ GATEWAY_E2E_API_URL="http://127.0.0.1:$http_port" \
 GATEWAY_E2E_ALLOW_MUTATIONS=1 \
 pnpm --filter backend e2e:api
 
-echo "Restarting candidate services and re-verifying persisted state"
-compose restart app relay
+echo "Restarting the candidate Gateway and re-verifying persisted state"
+compose restart app
 wait_healthy app
 wait_healthy relay
 verify_database
 assert_workload_unchanged
+assert_relay_unchanged
 
 wait_http_version "release-e2e-candidate"
 
