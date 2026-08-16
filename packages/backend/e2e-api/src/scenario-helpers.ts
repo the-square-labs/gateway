@@ -24,7 +24,7 @@ export async function listRows(
 
 export async function findDockerNode(ctx: Parameters<TestCase['run']>[0]) {
   const nodes = await listRows(ctx, '/api/nodes', { type: 'docker', limit: 20 });
-  return nodes.find((row) => row.status === 'online' && row.isConnected !== false) ?? nodes[0] ?? null;
+  return nodes.find((row) => row.status === 'online' && row.isConnected !== false) ?? null;
 }
 
 export async function getSystemConfig(ctx: Parameters<TestCase['run']>[0]) {

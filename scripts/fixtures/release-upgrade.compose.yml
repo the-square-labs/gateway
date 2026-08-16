@@ -1,0 +1,104 @@
+services:
+  app:
+    image: ${GATEWAY_E2E_APP_IMAGE}
+    platform: linux/amd64
+    restart: unless-stopped
+    stop_grace_period: 60s
+    ports:
+      - "127.0.0.1:${GATEWAY_E2E_HTTP_PORT}:3000"
+    expose:
+      - "9443"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgres://gateway:${GATEWAY_E2E_DB_PASSWORD}@postgres:5432/gateway
+      REDIS_URL: redis://redis:6379
+      SESSION_EXPIRY: 2592000
+      SETUP_BOOTSTRAP: "false"
+      WEB_TLS_BOOTSTRAP_MODE: http
+      PKI_MASTER_KEY: ${GATEWAY_E2E_PKI_MASTER_KEY}
+      ACME_EMAIL: release-e2e@example.com
+      ACME_STAGING: "true"
+      GRPC_PORT: 9443
+      GATEWAY_RELAY_REQUIRED: "true"
+      GATEWAY_RELAY_MANAGED: "false"
+      GATEWAY_RELAY_TARGET: relay:9443
+      GATEWAY_RELAY_IDENTITY_DIR: /var/lib/gateway-relay
+      GATEWAY_RELAY_IMAGE_REF: ${GATEWAY_E2E_RELAY_IMAGE}
+      GATEWAY_RELAY_SERVICE_NAME: relay
+      GATEWAY_RELAY_BUILD_VERSION: ${GATEWAY_E2E_RELAY_BUILD_VERSION}
+      GATEWAY_RELAY_PROTOCOL_MAJOR: "1"
+      PUBLIC_IPV4: 203.0.113.10
+      APP_VERSION: ${GATEWAY_E2E_APP_VERSION}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - gateway_data:/var/lib/gateway
+      - relay_identity:/var/lib/gateway-relay
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  relay:
+    image: ${GATEWAY_E2E_RELAY_IMAGE}
+    platform: linux/amd64
+    entrypoint: ["/gateway-relay"]
+    restart: unless-stopped
+    environment:
+      RELAY_IDENTITY_DIR: /var/lib/gateway-relay/identity
+      RELAY_STATE_DIR: /var/lib/gateway-relay/state
+      RELAY_APP_GRPC_TARGET: app:9443
+    ports:
+      - "127.0.0.1:${GATEWAY_E2E_RELAY_PORT}:9443"
+    volumes:
+      - relay_identity:/var/lib/gateway-relay/identity:ro
+      - relay_state:/var/lib/gateway-relay/state
+    healthcheck:
+      test: ["CMD", "/gateway-relay", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${GATEWAY_E2E_POSTGRES_PORT}:5432"
+    environment:
+      POSTGRES_DB: gateway
+      POSTGRES_USER: gateway
+      POSTGRES_PASSWORD: ${GATEWAY_E2E_DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway -d gateway"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  gateway_data:
+  relay_identity:
+  relay_state:
+  postgres_data:
+  redis_data:

@@ -14,6 +14,7 @@ describe('proxy host registered domain node assignment', () => {
     expect(getRegisteredDomainCandidates([' APP.Example.com ', '*.API.Example.com'])).toEqual([
       'app.example.com',
       '*.app.example.com',
+      '*.example.com',
       'api.example.com',
       '*.api.example.com',
     ]);
@@ -55,9 +56,11 @@ describe('proxy host registered domain node assignment', () => {
     ).rejects.toMatchObject({ code: 'DOMAIN_NGINX_NODE_MISMATCH', statusCode: 409 });
   });
 
-  it('applies a registered wildcard assignment to an exact proxy host', async () => {
+  it('applies a registered parent wildcard assignment to an exact subdomain proxy host', async () => {
     const mismatched = databaseWithDomains([{ domain: '*.example.com', nginxNodeId: 'node-2' }]);
-    await expect(assertRegisteredDomainsUseNode(mismatched as never, ['EXAMPLE.COM'], 'node-1')).rejects.toMatchObject({
+    await expect(
+      assertRegisteredDomainsUseNode(mismatched as never, ['API.EXAMPLE.COM'], 'node-1')
+    ).rejects.toMatchObject({
       code: 'DOMAIN_NGINX_NODE_MISMATCH',
       statusCode: 409,
     });

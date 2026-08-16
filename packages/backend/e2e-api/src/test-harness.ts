@@ -40,6 +40,11 @@ export function expectApiAccessible(response: ApiResponse, label: string) {
   }
 }
 
+export function expectApiAccessibleOrFeatureDisabled(response: ApiResponse, label: string, code: string) {
+  if (response.status === 503 && response.text.includes(`"code":"${code}"`)) return;
+  expectApiAccessible(response, label);
+}
+
 export function expectSessionOnly(response: ApiResponse, label: string) {
   expectStatus(response, 403, label);
   if (!response.text.includes('browser session')) {

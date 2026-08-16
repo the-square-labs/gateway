@@ -10,7 +10,8 @@ export function getRegisteredDomainCandidates(domainNames: string[]): string[] {
         const normalized = domain.trim().toLowerCase();
         if (!normalized) return [];
         const base = normalized.startsWith('*.') ? normalized.slice(2) : normalized;
-        return [base, `*.${base}`];
+        const labels = base.split('.');
+        return [base, ...labels.slice(0, -1).map((_, index) => `*.${labels.slice(index).join('.')}`)];
       })
     ),
   ];

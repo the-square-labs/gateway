@@ -687,7 +687,11 @@ describe('IntegrationsService', () => {
       }
       if (url.includes('/zones/zone-blocked/dns_records') && method === 'GET') {
         return Response.json(
-          { success: false, result: null, errors: [{ code: 9109, message: 'Unauthorized to access requested resource' }] },
+          {
+            success: false,
+            result: null,
+            errors: [{ code: 9109, message: 'Unauthorized to access requested resource' }],
+          },
           { status: 403 }
         );
       }
@@ -734,7 +738,11 @@ describe('IntegrationsService', () => {
       }
       if (url.includes('/zones/zone-blocked/dns_records')) {
         return Response.json(
-          { success: false, result: null, errors: [{ code: 9109, message: 'Unauthorized to access requested resource' }] },
+          {
+            success: false,
+            result: null,
+            errors: [{ code: 9109, message: 'Unauthorized to access requested resource' }],
+          },
           { status: 403 }
         );
       }
