@@ -156,7 +156,7 @@ export function CADetail() {
   };
   const childCAs = (cas || []).filter((c) => c.parentId === ca.id);
   const canCreateIntermediate = hasScope(`pki:ca:create:intermediate:${ca.id}`);
-  const canIssueCertificate = hasScope("pki:cert:issue");
+  const canIssueCertificate = hasScope("pki:cert:issue") || hasScope(`pki:cert:issue:${ca.id}`);
   const canRevokeCA = hasScope(
     ca.type === "root" ? "pki:ca:revoke:root" : "pki:ca:revoke:intermediate"
   );

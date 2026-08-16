@@ -1,4 +1,4 @@
-import { AlertTriangle, RotateCw, ServerCrash, XCircle } from "lucide-react";
+import { AlertTriangle, RotateCw, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -39,7 +39,7 @@ async function fetchGatewayCurrentVersion(): Promise<string | null> {
 }
 
 function MaintenanceScreen() {
-  const [backendReady, setBackendReady] = useState(false);
+  const setMaintenanceActive = useAppStatusStore((s) => s.setMaintenanceActive);
 
   useEffect(() => {
     let cancelled = false;
@@ -79,7 +79,7 @@ function MaintenanceScreen() {
             window.sessionStorage.setItem(MAINTENANCE_AUTO_RELOAD_GUARD_KEY, "1");
             window.location.reload();
           } else if (!cancelled) {
-            setBackendReady(true);
+            setMaintenanceActive(false);
           }
           return;
         }
@@ -96,31 +96,28 @@ function MaintenanceScreen() {
       controller.abort();
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, []);
+  }, [setMaintenanceActive]);
 
   return (
-    <div className="fixed inset-0 z-[200] flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-sm space-y-8 text-center">
-        <div className="flex flex-col items-center gap-4">
-          <div className="flex h-12 w-12 items-center justify-center border border-destructive/30 bg-destructive/5">
-            <ServerCrash className="h-6 w-6" />
-          </div>
-          <h2 className="text-lg font-semibold text-foreground">Temporarily Unavailable</h2>
-          <p className="text-sm text-muted-foreground">
-            The backend is not responding right now. Your session is preserved.
-          </p>
+    <div className="fixed inset-0 z-[200] flex min-h-screen items-center justify-center bg-[#090909] px-6 text-[#f4f4f5]">
+      <div className="w-full max-w-sm text-center">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center border border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.06)] text-[#ef4444]">
+          <AlertTriangle className="h-6 w-6" />
         </div>
-
-        <div className="space-y-3">
-          <Button onClick={() => window.location.reload()} className="w-full">
-            <RotateCw className="mr-2 h-4 w-4" />
-            Reload now
-          </Button>
-          <p className="text-xs text-muted-foreground">
-            {backendReady
-              ? "The backend is available. Reload to continue."
-              : "Checking backend availability automatically."}
-          </p>
+        <h2 className="m-0 text-lg font-semibold leading-[1.4]">Temporarily Unavailable</h2>
+        <p className="mt-2 text-sm leading-[1.55] text-[#a1a1aa]">
+          The backend is not responding right now. Your session is preserved.
+        </p>
+        <div className="mt-7 text-xs text-[#71717a]">
+          Powered by{" "}
+          <a
+            href="https://wiolett.net"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[#a1a1aa] hover:underline"
+          >
+            Wiolett Industries
+          </a>
         </div>
       </div>
     </div>

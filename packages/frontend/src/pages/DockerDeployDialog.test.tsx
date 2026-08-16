@@ -32,7 +32,7 @@ describe("DockerDeployDialog GPU section", () => {
     vi.restoreAllMocks();
     vi.spyOn(api, "listDockerImages").mockResolvedValue([]);
     useAuthStore.setState({
-      user: { id: "user-1", scopes: [] } as never,
+      user: { id: "user-1", scopes: ["docker:containers:create"] } as never,
       isAuthenticated: true,
       isLoading: false,
     });

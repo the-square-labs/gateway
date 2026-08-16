@@ -81,7 +81,15 @@ export function DockerDeployDialog({
   const allNodes = useMemo(() => {
     return storeDockerNodes.length > 0 ? storeDockerNodes : dockerNodes;
   }, [dockerNodes, storeDockerNodes]);
-  const availableNodes = useMemo(() => allNodes.filter((n) => !isNodeIncompatible(n)), [allNodes]);
+  const availableNodes = useMemo(
+    () =>
+      allNodes.filter(
+        (node) =>
+          !isNodeIncompatible(node) &&
+          (hasScope("docker:containers:create") || hasScope(`docker:containers:create:${node.id}`))
+      ),
+    [allNodes, hasScope]
+  );
   const selectedDeployNode = useMemo(
     () => allNodes.find((node) => node.id === deployNodeId),
     [allNodes, deployNodeId]
@@ -166,9 +174,9 @@ export function DockerDeployDialog({
 
   useEffect(() => {
     if (!open || !deployNodeId) return;
-    const selectedNode = allNodes.find((n) => n.id === deployNodeId);
-    if (selectedNode?.serviceCreationLocked) setDeployNodeId("");
-  }, [allNodes, deployNodeId, open]);
+    const selectedNode = availableNodes.find((node) => node.id === deployNodeId);
+    if (!selectedNode || selectedNode.serviceCreationLocked) setDeployNodeId("");
+  }, [availableNodes, deployNodeId, open]);
 
   // Fetch local images + pullable images from other nodes when deploy node changes
   useEffect(() => {
@@ -195,7 +203,7 @@ export function DockerDeployDialog({
       .catch(() => setDeployLocalImages([]));
 
     // Fetch images from other nodes (pullable) — only if user can pull
-    if (!hasScope("docker:images:pull")) {
+    if (!hasScope("docker:images:pull") && !hasScope(`docker:images:pull:${deployNodeId}`)) {
       setDeployPullableImages([]);
       return;
     }

@@ -117,13 +117,10 @@ export function Domains() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedDomainName = searchParams.get("domain");
   const { hasScope } = useAuthStore();
-  const { canCreateDomain, canDeleteDomain, canInspectCloudflare } = getDomainPermissions(hasScope);
+  const { canCreateDomain, canInspectCloudflare } = getDomainPermissions(hasScope);
   const hasCloudflareIntegration = useUIBootstrapStore(
     (state) => state.snapshot?.navigation.hasCloudflareIntegration ?? false
   );
-  const canCheckDns = hasScope("domains:edit");
-  const canIssueCert = canCheckDns && hasScope("ssl:cert:issue");
-  const canCreateRoute = hasScope("proxy:create");
 
   const cachedDomains = api.getCached<{ data: Domain[] }>(DOMAIN_FOLDER_LIST_CACHE_KEY);
   const [domains, setDomains] = useState<Domain[]>(cachedDomains?.data ?? []);
@@ -426,7 +423,13 @@ export function Domains() {
       align: "right",
       width: "5rem",
       renderCell: (d) => {
-        const canDeleteRow = !d.isSystem && canDeleteDomain;
+        const permissions = getDomainPermissions(hasScope, d.id);
+        const canCheckDns = permissions.canEditDomain;
+        const canIssueCert = canCheckDns && hasScope("ssl:cert:issue");
+        const canCreateRoute =
+          hasScope("proxy:create") ||
+          (!!d.nginxNodeId && hasScope(`proxy:create:${d.nginxNodeId}`));
+        const canDeleteRow = !d.isSystem && permissions.canDeleteDomain;
         if (!canCheckDns && !canIssueCert && !canCreateRoute && !canDeleteRow) return null;
         return (
           <div

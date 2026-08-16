@@ -328,7 +328,7 @@ export function canAccessNavigationItem(
         hasScopeBase(scopes, "docker:images:view") ||
         hasScopeBase(scopes, "docker:volumes:view") ||
         hasScopeBase(scopes, "docker:networks:view") ||
-        scopeMatches(scopes, "docker:tasks") ||
+        hasScopeBase(scopes, "docker:tasks") ||
         scopeMatches(scopes, "docker:containers:folders:manage");
       return (
         canAccess &&

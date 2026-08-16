@@ -1,9 +1,14 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { hasScope } from '@/lib/permissions.js';
+import { getResourceScopedIds, hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js';
+import {
+  authMiddleware,
+  requireScope,
+  requireScopeBase,
+  requireScopeForResource,
+} from '@/modules/auth/auth.middleware.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import {
   CreateResourceFolderSchema,
@@ -53,11 +58,16 @@ export const domainRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValida
 
 domainRoutes.use('*', authMiddleware);
 
-domainRoutes.openapi({ ...listDomainFoldersRoute, middleware: requireScope('domains:view') }, async (c) => {
+domainRoutes.openapi({ ...listDomainFoldersRoute, middleware: requireScopeBase('domains:view') }, async (c) => {
   const service = container.resolve(DomainFolderService);
-  const data = await service.getFolderTree({
-    includeAllFolders: hasScope(c.get('effectiveScopes') || [], 'domains:folders:manage'),
-  });
+  const scopes = c.get('effectiveScopes') || [];
+  const canManageFolders = hasScope(scopes, 'domains:folders:manage');
+  const hasGlobalView = hasScope(scopes, 'domains:view');
+  const data = await service.getFolderTree(
+    canManageFolders || hasGlobalView
+      ? { includeAllFolders: canManageFolders }
+      : { allowedResourceIds: getResourceScopedIds(scopes, 'domains:view') }
+  );
   return c.json({ data });
 });
 
@@ -118,7 +128,7 @@ domainRoutes.openapi({ ...deleteDomainFolderRoute, middleware: requireScope('dom
 });
 
 // List domains (paginated)
-domainRoutes.openapi({ ...listDomainsRoute, middleware: requireScope('domains:view') }, async (c) => {
+domainRoutes.openapi({ ...listDomainsRoute, middleware: requireScopeBase('domains:view') }, async (c) => {
   const domainsService = container.resolve(DomainsService);
   const query = DomainListQuerySchema.parse({
     page: c.req.query('page'),
@@ -126,15 +136,23 @@ domainRoutes.openapi({ ...listDomainsRoute, middleware: requireScope('domains:vi
     search: c.req.query('search'),
     dnsStatus: c.req.query('dnsStatus'),
   });
-  const result = await domainsService.listDomains(query);
+  const scopes = c.get('effectiveScopes') || [];
+  const result = await domainsService.listDomains(
+    query,
+    hasScope(scopes, 'domains:view') ? undefined : { allowedIds: getResourceScopedIds(scopes, 'domains:view') }
+  );
   return c.json(result);
 });
 
 // Autocomplete search (must be before /:id)
-domainRoutes.openapi({ ...searchDomainsRoute, middleware: requireScope('domains:view') }, async (c) => {
+domainRoutes.openapi({ ...searchDomainsRoute, middleware: requireScopeBase('domains:view') }, async (c) => {
   const domainsService = container.resolve(DomainsService);
   const q = c.req.query('q') || '';
-  const results = await domainsService.searchDomains(q);
+  const scopes = c.get('effectiveScopes') || [];
+  const results = await domainsService.searchDomains(
+    q,
+    hasScope(scopes, 'domains:view') ? undefined : { allowedIds: getResourceScopedIds(scopes, 'domains:view') }
+  );
   return c.json({ data: results });
 });
 
@@ -160,7 +178,7 @@ domainRoutes.openapi({ ...previewDomainRoute, middleware: requireScope('domains:
 });
 
 // Get domain detail with usage
-domainRoutes.openapi({ ...getDomainRoute, middleware: requireScope('domains:view') }, async (c) => {
+domainRoutes.openapi({ ...getDomainRoute, middleware: requireScopeForResource('domains:view', 'id') }, async (c) => {
   const domainsService = container.resolve(DomainsService);
   try {
     const domain = await domainsService.getDomain(c.req.param('id')!);
@@ -192,7 +210,7 @@ domainRoutes.openapi({ ...createDomainRoute, middleware: requireScope('domains:c
 });
 
 // Update domain
-domainRoutes.openapi({ ...updateDomainRoute, middleware: requireScope('domains:edit') }, async (c) => {
+domainRoutes.openapi({ ...updateDomainRoute, middleware: requireScopeForResource('domains:edit', 'id') }, async (c) => {
   const user = c.get('user')!;
   const body = await c.req.json();
   const input = UpdateDomainSchema.parse(body);
@@ -209,113 +227,131 @@ domainRoutes.openapi({ ...updateDomainRoute, middleware: requireScope('domains:e
 });
 
 // Delete domain
-domainRoutes.openapi({ ...deleteDomainRoute, middleware: requireScope('domains:delete') }, async (c) => {
-  const user = c.get('user')!;
-  const domainsService = container.resolve(DomainsService);
-  try {
-    const rawBody = await c.req.text();
-    const input = rawBody ? DeleteDomainSchema.parse(JSON.parse(rawBody)) : {};
-    await domainsService.deleteDomain(c.req.param('id')!, user.id, input);
-    return c.json({ data: { success: true } });
-  } catch (err) {
-    if (err instanceof AppError) {
-      return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);
+domainRoutes.openapi(
+  { ...deleteDomainRoute, middleware: requireScopeForResource('domains:delete', 'id') },
+  async (c) => {
+    const user = c.get('user')!;
+    const domainsService = container.resolve(DomainsService);
+    try {
+      const rawBody = await c.req.text();
+      const input = rawBody ? DeleteDomainSchema.parse(JSON.parse(rawBody)) : {};
+      await domainsService.deleteDomain(c.req.param('id')!, user.id, input);
+      return c.json({ data: { success: true } });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);
+      }
+      if (err instanceof SyntaxError) {
+        return c.json({ code: 'BAD_REQUEST', message: 'Malformed JSON in request body' }, 400);
+      }
+      return c.json({ code: 'ERROR', message: err instanceof Error ? err.message : 'Failed to delete domain' }, 400);
     }
-    if (err instanceof SyntaxError) {
-      return c.json({ code: 'BAD_REQUEST', message: 'Malformed JSON in request body' }, 400);
-    }
-    return c.json({ code: 'ERROR', message: err instanceof Error ? err.message : 'Failed to delete domain' }, 400);
   }
-});
+);
 
 // Manual DNS check
-domainRoutes.openapi({ ...checkDomainDnsRoute, middleware: requireScope('domains:edit') }, async (c) => {
-  const domainsService = container.resolve(DomainsService);
-  try {
-    const domain = await domainsService.checkDns(c.req.param('id')!);
-    return c.json({ data: domain });
-  } catch {
-    return c.json({ code: 'NOT_FOUND', message: 'Domain not found' }, 404);
-  }
-});
-
-domainRoutes.openapi({ ...resolveCloudflareMigrationRoute, middleware: requireScope('domains:edit') }, async (c) => {
-  const user = c.get('user')!;
-  const input = ResolveCloudflareMigrationSchema.parse(await c.req.json());
-  const domainsService = container.resolve(DomainsService);
-  try {
-    return c.json({ data: await domainsService.resolveCloudflareMigration(c.req.param('id')!, input, user.id) });
-  } catch (err) {
-    if (err instanceof AppError) {
-      return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);
+domainRoutes.openapi(
+  { ...checkDomainDnsRoute, middleware: requireScopeForResource('domains:edit', 'id') },
+  async (c) => {
+    const domainsService = container.resolve(DomainsService);
+    try {
+      const domain = await domainsService.checkDns(c.req.param('id')!);
+      return c.json({ data: domain });
+    } catch {
+      return c.json({ code: 'NOT_FOUND', message: 'Domain not found' }, 404);
     }
-    return c.json(
-      { code: 'ERROR', message: err instanceof Error ? err.message : 'Failed to resolve Cloudflare migration' },
-      400
-    );
   }
-});
+);
 
-domainRoutes.openapi({ ...previewDomainIngressMigrationRoute, middleware: requireScope('domains:edit') }, async (c) => {
-  const input = DomainIngressMigrationSchema.parse(await c.req.json());
-  const domainsService = container.resolve(DomainsService);
-  try {
-    return c.json({ data: await domainsService.previewIngressMigration(c.req.param('id')!, input) });
-  } catch (err) {
-    if (err instanceof AppError) {
-      return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);
+domainRoutes.openapi(
+  { ...resolveCloudflareMigrationRoute, middleware: requireScopeForResource('domains:edit', 'id') },
+  async (c) => {
+    const user = c.get('user')!;
+    const input = ResolveCloudflareMigrationSchema.parse(await c.req.json());
+    const domainsService = container.resolve(DomainsService);
+    try {
+      return c.json({ data: await domainsService.resolveCloudflareMigration(c.req.param('id')!, input, user.id) });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);
+      }
+      return c.json(
+        { code: 'ERROR', message: err instanceof Error ? err.message : 'Failed to resolve Cloudflare migration' },
+        400
+      );
     }
-    return c.json(
-      { code: 'ERROR', message: err instanceof Error ? err.message : 'Failed to preview ingress migration' },
-      400
-    );
   }
-});
+);
 
-domainRoutes.openapi({ ...migrateDomainIngressRoute, middleware: requireScope('domains:edit') }, async (c) => {
-  const user = c.get('user')!;
-  const input = DomainIngressMigrationSchema.parse(await c.req.json());
-  const domainsService = container.resolve(DomainsService);
-  try {
-    return c.json({ data: await domainsService.migrateIngress(c.req.param('id')!, input, user.id) });
-  } catch (err) {
-    if (err instanceof AppError) {
-      return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);
+domainRoutes.openapi(
+  { ...previewDomainIngressMigrationRoute, middleware: requireScopeForResource('domains:edit', 'id') },
+  async (c) => {
+    const input = DomainIngressMigrationSchema.parse(await c.req.json());
+    const domainsService = container.resolve(DomainsService);
+    try {
+      return c.json({ data: await domainsService.previewIngressMigration(c.req.param('id')!, input) });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);
+      }
+      return c.json(
+        { code: 'ERROR', message: err instanceof Error ? err.message : 'Failed to preview ingress migration' },
+        400
+      );
     }
-    return c.json({ code: 'ERROR', message: err instanceof Error ? err.message : 'Failed to migrate ingress' }, 400);
   }
-});
+);
+
+domainRoutes.openapi(
+  { ...migrateDomainIngressRoute, middleware: requireScopeForResource('domains:edit', 'id') },
+  async (c) => {
+    const user = c.get('user')!;
+    const input = DomainIngressMigrationSchema.parse(await c.req.json());
+    const domainsService = container.resolve(DomainsService);
+    try {
+      return c.json({ data: await domainsService.migrateIngress(c.req.param('id')!, input, user.id) });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);
+      }
+      return c.json({ code: 'ERROR', message: err instanceof Error ? err.message : 'Failed to migrate ingress' }, 400);
+    }
+  }
+);
 
 // Issue ACME cert for domain
-domainRoutes.openapi({ ...issueDomainCertificateRoute, middleware: requireScope('domains:edit') }, async (c) => {
-  const user = c.get('user')!;
-  const domainsService = container.resolve(DomainsService);
-  const sslService = container.resolve(SSLService);
-  if (!hasScope(c.get('effectiveScopes') || [], 'ssl:cert:issue')) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing required scope: ssl:cert:issue');
-  }
+domainRoutes.openapi(
+  { ...issueDomainCertificateRoute, middleware: requireScopeForResource('domains:edit', 'id') },
+  async (c) => {
+    const user = c.get('user')!;
+    const domainsService = container.resolve(DomainsService);
+    const sslService = container.resolve(SSLService);
+    if (!hasScope(c.get('effectiveScopes') || [], 'ssl:cert:issue')) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing required scope: ssl:cert:issue');
+    }
 
-  let domainRow: Awaited<ReturnType<DomainsService['getDomain']>> | undefined;
-  try {
-    domainRow = await domainsService.getDomain(c.req.param('id')!);
-  } catch {
-    return c.json({ code: 'NOT_FOUND', message: 'Domain not found' }, 404);
-  }
+    let domainRow: Awaited<ReturnType<DomainsService['getDomain']>> | undefined;
+    try {
+      domainRow = await domainsService.getDomain(c.req.param('id')!);
+    } catch {
+      return c.json({ code: 'NOT_FOUND', message: 'Domain not found' }, 404);
+    }
 
-  try {
-    const cert = await sslService.requestACMECert(
-      {
-        domains: [domainRow.domain],
-        challengeType: domainRow.dnsProvider === 'cloudflare' ? 'dns-01' : 'http-01',
-        provider: 'letsencrypt',
-        autoRenew: true,
-        ...(domainRow.dnsProvider === 'cloudflare' ? { dnsProvider: 'cloudflare' as const } : {}),
-      },
-      user.id,
-      user.email
-    );
-    return c.json({ data: cert }, 201);
-  } catch (err) {
-    return c.json({ code: 'CERT_ERROR', message: err instanceof Error ? err.message : 'Failed to issue cert' }, 400);
+    try {
+      const cert = await sslService.requestACMECert(
+        {
+          domains: [domainRow.domain],
+          challengeType: domainRow.dnsProvider === 'cloudflare' ? 'dns-01' : 'http-01',
+          provider: 'letsencrypt',
+          autoRenew: true,
+          ...(domainRow.dnsProvider === 'cloudflare' ? { dnsProvider: 'cloudflare' as const } : {}),
+        },
+        user.id,
+        user.email
+      );
+      return c.json({ data: cert }, 201);
+    } catch (err) {
+      return c.json({ code: 'CERT_ERROR', message: err instanceof Error ? err.message : 'Failed to issue cert' }, 400);
+    }
   }
-});
+);

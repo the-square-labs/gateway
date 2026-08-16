@@ -378,6 +378,9 @@ export function DockerContainers({
   const hasActiveNodeFilter = !fixedNodeId && !!selectedNodeId;
   const isSearchFiltering = filters.search.trim() !== "";
   const canManageFolders = !fixedNodeId && hasScope("docker:containers:folders:manage");
+  const canCreateOnVisibleNode =
+    !!visibleNodeId &&
+    (hasScope("docker:containers:create") || hasScope(`docker:containers:create:${visibleNodeId}`));
   const canDragFolders = canManageFolders && !isMobile && !isSearchFiltering;
   const canManageRuntime = hasScopedAccess("docker:containers:manage");
   const showActionsColumn = canManageFolders || canManageRuntime;
@@ -902,7 +905,7 @@ export function DockerContainers({
                     },
                   ]
                 : []),
-              ...(hasScope("docker:containers:create") && visibleNodeId
+              ...(canCreateOnVisibleNode
                 ? [
                     {
                       label: "Deploy Container",
@@ -932,7 +935,7 @@ export function DockerContainers({
                 New Folder
               </Button>
             )}
-            {hasScope("docker:containers:create") && visibleNodeId && (
+            {canCreateOnVisibleNode && (
               <Button onClick={() => void openDeploy()} disabled={checkingDeployNodes}>
                 <Plus className="h-4 w-4 mr-1" />
                 Deploy Container
@@ -1027,8 +1030,8 @@ export function DockerContainers({
                 resetFilters();
                 if (!fixedNodeId) setSelectedNode(null);
               }}
-              actionLabel={hasScope("docker:containers:create") ? "Deploy a container" : undefined}
-              onAction={hasScope("docker:containers:create") ? () => void openDeploy() : undefined}
+              actionLabel={canCreateOnVisibleNode ? "Deploy a container" : undefined}
+              onAction={canCreateOnVisibleNode ? () => void openDeploy() : undefined}
             />
           ) : null
         }

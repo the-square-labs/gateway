@@ -420,7 +420,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         href: "/docker/tasks",
         icon: ListTodo,
         parentId: "docker",
-        visible: hasScope("docker:tasks"),
+        visible: hasScopedAccess("docker:tasks"),
       },
       {
         id: "logging-environments",
@@ -753,7 +753,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         action: toggleSidebar,
       },
     ];
-    if (hasScope("proxy:create")) {
+    if (hasScopedAccess("proxy:create")) {
       actions.push({
         id: "action:new-proxy",
         label: "New route",
@@ -798,7 +798,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       });
     }
     return actions;
-  }, [aiEnabled, aiScopeOk, hasScope, navigate, pkiEnabled, toggleSidebar]);
+  }, [aiEnabled, aiScopeOk, hasScope, hasScopedAccess, navigate, pkiEnabled, toggleSidebar]);
 
   const adaptiveQuickActions = useMemo(() => {
     const candidates = [...currentPageActions, ...contextActions, ...primaryActions].filter(

@@ -29,6 +29,7 @@ export const UpdateNginxTemplateSchema = z.object({
 export const PreviewNginxTemplateSchema = z.object({
   content: z.string().min(1).max(100000),
   hostId: z.string().uuid().optional(),
+  templateId: z.string().uuid().optional(),
 });
 
 export type CreateNginxTemplateInput = z.infer<typeof CreateNginxTemplateSchema>;

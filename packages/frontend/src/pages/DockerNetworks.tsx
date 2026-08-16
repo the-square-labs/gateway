@@ -381,7 +381,8 @@ export function DockerNetworks({
               className="flex items-center justify-end pr-1"
               onClick={(e) => e.stopPropagation()}
             >
-              {hasScope("docker:networks:delete") &&
+              {(hasScope("docker:networks:delete") ||
+                hasScope(`docker:networks:delete:${net._nodeId}`)) &&
                 count === 0 &&
                 net.availability !== "unavailable" && (
                   <Button
@@ -403,7 +404,7 @@ export function DockerNetworks({
   );
   const networkColumns = allNetworkColumns.filter((c) => {
     if (fixedNodeId && c.id === "node") return false;
-    if (!hasScope("docker:networks:delete") && c.id === "actions") return false;
+    if (!hasScopedAccess("docker:networks:delete") && c.id === "actions") return false;
     return true;
   });
   const detailContainerColumns = useMemo<SimpleTableColumn<NetworkContainerRow>[]>(
@@ -473,7 +474,8 @@ export function DockerNetworks({
                           },
                         ]
                       : []),
-                    ...(hasScope("docker:networks:create")
+                    ...(hasScope("docker:networks:create") ||
+                    hasScope(`docker:networks:create:${selectedNodeId}`)
                       ? [
                           {
                             label: "Create Network",
@@ -497,7 +499,8 @@ export function DockerNetworks({
                     New Folder
                   </Button>
                 )}
-                {hasScope("docker:networks:create") && (
+                {(hasScope("docker:networks:create") ||
+                  hasScope(`docker:networks:create:${selectedNodeId}`)) && (
                   <Button onClick={() => openCreate()}>
                     <Plus className="h-4 w-4 mr-1" />
                     Create Network
@@ -557,8 +560,18 @@ export function DockerNetworks({
             message="No networks found."
             hasActiveFilters={search !== ""}
             onReset={() => setSearch("")}
-            actionLabel={hasScope("docker:networks:create") ? "Create a network" : undefined}
-            onAction={hasScope("docker:networks:create") ? () => openCreate() : undefined}
+            actionLabel={
+              hasScope("docker:networks:create") ||
+              (!!selectedNodeId && hasScope(`docker:networks:create:${selectedNodeId}`))
+                ? "Create a network"
+                : undefined
+            }
+            onAction={
+              hasScope("docker:networks:create") ||
+              (!!selectedNodeId && hasScope(`docker:networks:create:${selectedNodeId}`))
+                ? () => openCreate()
+                : undefined
+            }
           />
         }
         minWidth={fixedNodeId ? "720px" : "860px"}

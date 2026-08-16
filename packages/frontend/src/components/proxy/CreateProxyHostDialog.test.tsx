@@ -1,7 +1,8 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
 import type { DockerContainer } from "@/types";
 import {
   CreateProxyHostDialog,
@@ -38,6 +39,14 @@ describe("proxy upstream defaults", () => {
 });
 
 describe("CreateProxyHostDialog", () => {
+  beforeEach(() => {
+    useAuthStore.setState({
+      user: { id: "user-1", scopes: ["proxy:create"] } as never,
+      isAuthenticated: true,
+      isLoading: false,
+    });
+  });
+
   it("shows a cached nginx node while the refresh is still pending", async () => {
     api.setCache("nodes:list:default", {
       data: [

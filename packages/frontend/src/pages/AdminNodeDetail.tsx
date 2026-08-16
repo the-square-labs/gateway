@@ -577,7 +577,7 @@ export function AdminNodeDetail({
                     },
                   ]
                 : []),
-              ...(hasScope("nodes:delete")
+              ...(hasScope("nodes:delete") || hasScope(`nodes:delete:${node.id}`)
                 ? [
                     {
                       label: "Remove",
@@ -623,7 +623,7 @@ export function AdminNodeDetail({
                 Check for updates
               </Button>
             )}
-            {hasScope("nodes:delete") && (
+            {(hasScope("nodes:delete") || hasScope(`nodes:delete:${node.id}`)) && (
               <Button variant="destructive" onClick={handleDelete} disabled={nodeUpdating}>
                 <Trash2 className="h-4 w-4" />
                 Remove

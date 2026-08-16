@@ -87,6 +87,7 @@ export function ProxyHostDetail({
   const canViewRawConfig = !!id && hasScope(`proxy:raw:read:${id}`);
   const canWriteRawConfig = !!id && hasScope(`proxy:raw:write:${id}`);
   const canEditProxyHost = !!id && (hasScope("proxy:edit") || hasScope(`proxy:edit:${id}`));
+  const canDeleteProxyHost = !!id && (hasScope("proxy:delete") || hasScope(`proxy:delete:${id}`));
   const [host, setHost] = useState<ProxyHost | null>(null);
   const [maintenanceAccessCode, setMaintenanceAccessCode] = useState<string | null>(null);
   const [isCreatingMaintenanceAccessCode, setIsCreatingMaintenanceAccessCode] = useState(false);
@@ -994,7 +995,7 @@ export function ProxyHostDetail({
                 icon: <Pin className="h-4 w-4" />,
                 onClick: () => setPinOpen(true),
               },
-              ...(hasScope("proxy:edit")
+              ...(canEditProxyHost
                 ? [
                     {
                       label: "Edit",
@@ -1035,7 +1036,7 @@ export function ProxyHostDetail({
                     },
                   ]
                 : []),
-              ...(!isSystemHost && hasScope("proxy:delete")
+              ...(!isSystemHost && canDeleteProxyHost
                 ? [
                     {
                       label: "Delete",
@@ -1051,7 +1052,7 @@ export function ProxyHostDetail({
             <Button variant="outline" size="icon" onClick={() => setPinOpen(true)}>
               <Pin className="h-4 w-4" />
             </Button>
-            {hasScope("proxy:edit") && (
+            {canEditProxyHost && (
               <Button variant="outline" onClick={() => setEditOpen(true)}>
                 <Pencil className="h-4 w-4" />
                 Edit
@@ -1083,7 +1084,7 @@ export function ProxyHostDetail({
                 Retry TLS Sync
               </Button>
             )}
-            {!isSystemHost && hasScope("proxy:delete") && (
+            {!isSystemHost && canDeleteProxyHost && (
               <Button variant="destructive" onClick={handleDelete}>
                 <Trash2 className="h-4 w-4" />
                 Delete

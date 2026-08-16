@@ -442,7 +442,8 @@ export function DockerImages({
               className="flex items-center justify-end pr-1"
               onClick={(e) => e.stopPropagation()}
             >
-              {hasScope("docker:images:delete") &&
+              {(hasScope("docker:images:delete") ||
+                hasScope(`docker:images:delete:${img._nodeId}`)) &&
                 canDelete &&
                 img.availability !== "unavailable" && (
                   <Button
@@ -464,7 +465,7 @@ export function DockerImages({
   );
   const imageColumns = allImageColumns.filter((c) => {
     if (fixedNodeId && c.id === "node") return false;
-    if (!hasScope("docker:images:delete") && c.id === "actions") return false;
+    if (!hasScopedAccess("docker:images:delete") && c.id === "actions") return false;
     return true;
   });
 
@@ -502,7 +503,8 @@ export function DockerImages({
                           },
                         ]
                       : []),
-                    ...(hasScope("docker:images:delete")
+                    ...(hasScope("docker:images:delete") ||
+                    hasScope(`docker:images:delete:${selectedNodeId}`)
                       ? [
                           {
                             label: pruning ? "Pruning..." : "Prune Unused",
@@ -512,7 +514,8 @@ export function DockerImages({
                           },
                         ]
                       : []),
-                    ...(hasScope("docker:images:pull")
+                    ...(hasScope("docker:images:pull") ||
+                    hasScope(`docker:images:pull:${selectedNodeId}`)
                       ? [
                           {
                             label: "Pull Image",
@@ -536,13 +539,15 @@ export function DockerImages({
                     New Folder
                   </Button>
                 )}
-                {hasScope("docker:images:delete") && (
+                {(hasScope("docker:images:delete") ||
+                  hasScope(`docker:images:delete:${selectedNodeId}`)) && (
                   <Button variant="outline" onClick={handlePrune} disabled={pruning}>
                     <Trash2 className="h-4 w-4 mr-1" />
                     {pruning ? "Pruning..." : "Prune Unused"}
                   </Button>
                 )}
-                {hasScope("docker:images:pull") && (
+                {(hasScope("docker:images:pull") ||
+                  hasScope(`docker:images:pull:${selectedNodeId}`)) && (
                   <Button onClick={() => openPull()}>
                     <Download className="h-4 w-4 mr-1" />
                     Pull Image

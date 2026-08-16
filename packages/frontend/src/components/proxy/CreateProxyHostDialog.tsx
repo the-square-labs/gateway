@@ -36,6 +36,7 @@ import { Switch } from "@/components/ui/switch";
 import { nodeTypeLabel } from "@/lib/node-appearance";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
 import type {
   CreateProxyHostRequest,
   DockerContainer,
@@ -111,6 +112,7 @@ export function CreateProxyHostDialog({
   onSuccess,
 }: CreateProxyHostDialogProps) {
   const isEditing = !!existingHost;
+  const hasScope = useAuthStore((state) => state.hasScope);
   const maintenanceLocked = !!existingHost?.maintenanceEnabled;
 
   // Step navigation
@@ -260,9 +262,16 @@ export function CreateProxyHostDialog({
     [nginxTemplateList, type]
   );
 
+  const visibleNodes = useMemo(
+    () =>
+      isEditing
+        ? nodes
+        : nodes.filter((node) => hasScope("proxy:create") || hasScope(`proxy:create:${node.id}`)),
+    [hasScope, isEditing, nodes]
+  );
   const selectedNode = useMemo(
-    () => nodes.find((node) => node.id === nodeId) ?? null,
-    [nodeId, nodes]
+    () => visibleNodes.find((node) => node.id === nodeId) ?? null,
+    [nodeId, visibleNodes]
   );
   const selectedLockedForCreation =
     !!selectedNode?.serviceCreationLocked &&
@@ -458,7 +467,7 @@ export function CreateProxyHostDialog({
                       <SelectItem value="__none__" disabled>
                         {nodesLoading ? "Loading nodes..." : "Select a node..."}
                       </SelectItem>
-                      {nodes.map((node) => {
+                      {visibleNodes.map((node) => {
                         const lockedForCreation =
                           node.serviceCreationLocked &&
                           (!isEditing || node.id !== (existingHost as any)?.nodeId);

@@ -390,7 +390,7 @@ export function NginxTemplateEdit() {
   const handleTest = async () => {
     setIsTesting(true);
     try {
-      const result = await api.testNginxTemplate(content);
+      const result = await api.testNginxTemplate(content, id);
       if (result.valid) {
         toast.success("Config test passed");
       } else {

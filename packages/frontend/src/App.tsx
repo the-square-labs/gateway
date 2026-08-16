@@ -467,21 +467,21 @@ function CertificateDetailGuard() {
   return <CertificateDetail />;
 }
 
-function CertificatesPageGuard() {
-  const hasScope = useAuthStore((s) => s.hasScope);
+export function CertificatesPageGuard() {
+  const hasScopedAccess = useAuthStore((s) => s.hasScopedAccess);
   const pkiEnabled = useSystemConfigStore((s) => s.config.features.pkiEnabled);
 
-  if (!pkiEnabled || !hasScope("pki:cert:view")) {
+  if (!pkiEnabled || !hasScopedAccess("pki:cert:view")) {
     return <Navigate to="/" replace />;
   }
 
   return <Certificates />;
 }
 
-function DomainsPageGuard() {
-  const hasScope = useAuthStore((s) => s.hasScope);
+export function DomainsPageGuard() {
+  const hasScopedAccess = useAuthStore((s) => s.hasScopedAccess);
 
-  if (!hasScope("domains:view")) {
+  if (!hasScopedAccess("domains:view")) {
     return <Navigate to="/" replace />;
   }
 
@@ -784,7 +784,7 @@ function RealtimeBridge() {
       "docker:networks:view",
     ].some((scope) => auth.hasScopedAccess(scope));
     const channels: Array<[boolean, string]> = [
-      [auth.hasScope("domains:view"), "domain.changed"],
+      [auth.hasScopedAccess("domains:view"), "domain.changed"],
       [auth.hasScope("pki:templates:view"), "pki.template.changed"],
       [auth.hasScopedAccess("proxy:templates:view"), "nginx.template.changed"],
       [auth.hasScopedAccess("acl:view"), "access-list.changed"],

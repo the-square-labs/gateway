@@ -127,7 +127,12 @@ function formatTime(dateStr: string): string {
 
 export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
   const { tasks, fetchTasks, selectedNodeId } = useDockerStore();
-  const canManageTasks = useAuthStore((s) => s.hasScope("docker:tasks:manage"));
+  const hasScope = useAuthStore((s) => s.hasScope);
+  const canManageTask = (task: DockerTaskRow) =>
+    hasScope("docker:tasks:manage") ||
+    hasScope(`docker:tasks:manage:${task.nodeId}`) ||
+    (!!task.migration?.targetNodeId &&
+      hasScope(`docker:tasks:manage:${task.migration.targetNodeId}`));
 
   const [dockerNodes, setDockerNodes] = useState<Node[]>([]);
   const [migrations, setMigrations] = useState<DockerMigration[]>([]);
@@ -644,6 +649,7 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
             </DialogFooter>
           )}
           {selectedTask?.migration &&
+            canManageTask(selectedTask) &&
             ["pending", "running", "waiting", "cancelling"].includes(
               selectedTask.migration.status
             ) &&
@@ -663,7 +669,7 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
             )}
           {selectedTask &&
             !selectedTask.migration &&
-            canManageTasks &&
+            canManageTask(selectedTask) &&
             ACTIVE_TASK_STATUSES.has(selectedTask.status) && (
               <DialogFooter>
                 <Button

@@ -251,18 +251,34 @@ nodesRoutes.openapi(listNodesRoute, async (c) => {
     query.type === 'docker' ? dockerScopedNodeIds(scopes, RESOURCE_SCOPED_DOCKER_NODE_SCOPES) : [];
   const canListAllDockerNodes = query.type === 'docker' && hasBroadDockerNodeListAccess(scopes);
   const canListDockerNodes = canListAllDockerNodes || allowedDockerNodeIds.length > 0;
-  if (!hasNodeDetails && !canManageFolders && allowedNodeIds.length === 0 && !canListDockerNodes) {
+  const allowedIngressNodeIds = query.type === 'nginx' ? getResourceScopedIds(scopes, 'proxy:create') : [];
+  const canListAllIngressNodes = query.type === 'nginx' && hasScope(scopes, 'proxy:create');
+  const canListIngressNodes = canListAllIngressNodes || allowedIngressNodeIds.length > 0;
+  if (
+    !hasNodeDetails &&
+    !canManageFolders &&
+    allowedNodeIds.length === 0 &&
+    !canListDockerNodes &&
+    !canListIngressNodes
+  ) {
     throw new AppError(403, 'FORBIDDEN', 'Missing required node access scope');
   }
   const scopedNodeIds =
     query.type === 'docker' && !canListAllDockerNodes
       ? [...new Set([...allowedNodeIds, ...allowedDockerNodeIds])]
-      : allowedNodeIds;
+      : query.type === 'nginx' && !canListAllIngressNodes
+        ? [...new Set([...allowedNodeIds, ...allowedIngressNodeIds])]
+        : allowedNodeIds;
   const result = await service.list(
     query,
-    hasNodeDetails || canManageFolders || canListAllDockerNodes ? undefined : { allowedIds: scopedNodeIds }
+    hasNodeDetails || canManageFolders || canListAllDockerNodes || canListAllIngressNodes
+      ? undefined
+      : { allowedIds: scopedNodeIds }
   );
   if (query.type === 'docker' && canListDockerNodes && !hasNodeDetails) {
+    return c.json({ ...result, data: result.data.map((node) => compactDockerNodeForDockerAccess(node as any)) });
+  }
+  if (query.type === 'nginx' && canListIngressNodes && !hasNodeDetails && !canManageFolders) {
     return c.json({ ...result, data: result.data.map((node) => compactDockerNodeForDockerAccess(node as any)) });
   }
   return c.json(result);

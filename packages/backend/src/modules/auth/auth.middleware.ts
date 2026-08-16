@@ -320,6 +320,17 @@ export function requireScopeBase(scopeBase: string): MiddlewareHandler<AppEnv> {
   };
 }
 
+/** Require a broad scope or any resource-scoped variant of at least one base scope. */
+export function requireAnyScopeBase(...scopeBases: string[]): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    const scopes = c.get('effectiveScopes');
+    if (!scopes || !scopeBases.some((scopeBase) => hasScopeBase(scopes, scopeBase))) {
+      throw new HTTPException(403, { message: `Missing required scope: one of ${scopeBases.join(', ')}` });
+    }
+    await next();
+  };
+}
+
 /**
  * Require ANY of the listed scopes (OR logic).
  * Useful when a route should be accessible to users with different scope hierarchies.

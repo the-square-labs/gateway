@@ -626,7 +626,8 @@ export function SSLCertificates() {
           cert.acmeChallengeType === "dns-01" &&
           cert.autoRenew &&
           cert.autoRenewProvider === "cloudflare";
-        const canDeleteCert = !cert.isSystem && hasScope("ssl:cert:delete");
+        const canDeleteCert =
+          !cert.isSystem && (hasScope("ssl:cert:delete") || hasScope(`ssl:cert:delete:${cert.id}`));
         const canRetryDeployments =
           hasScope("admin:update") &&
           cert.distribution !== undefined &&

@@ -152,8 +152,11 @@ export class DomainsService {
     this.eventBus?.publish('domain.changed', { id, action, domain });
   }
 
-  async listDomains(params: DomainListQuery) {
+  async listDomains(params: DomainListQuery, options?: { allowedIds?: string[] }) {
     const conditions = [];
+    if (options?.allowedIds) {
+      conditions.push(inArray(domains.id, options.allowedIds));
+    }
     if (params.search) {
       conditions.push(ilike(domains.domain, `%${params.search}%`));
     }
@@ -1147,7 +1150,9 @@ export class DomainsService {
     }
   }
 
-  async searchDomains(query: string) {
+  async searchDomains(query: string, options?: { allowedIds?: string[] }) {
+    const conditions = [ilike(domains.domain, `%${query}%`)];
+    if (options?.allowedIds) conditions.push(inArray(domains.id, options.allowedIds));
     return this.db
       .select({
         id: domains.id,
@@ -1157,7 +1162,7 @@ export class DomainsService {
         nginxNodeId: domains.nginxNodeId,
       })
       .from(domains)
-      .where(ilike(domains.domain, `%${query}%`))
+      .where(and(...conditions))
       .orderBy(desc(domains.createdAt), asc(domains.domain))
       .limit(100);
   }

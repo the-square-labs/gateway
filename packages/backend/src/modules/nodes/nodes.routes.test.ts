@@ -99,6 +99,17 @@ describe('nodesRoutes list access', () => {
     });
   });
 
+  it('allows a resource-scoped route creator to discover only its Ingress node', async () => {
+    mocks.scopes = ['proxy:create:ingress-1'];
+
+    const response = await createApp().request('/?type=nginx&limit=100');
+
+    expect(response.status).toBe(200);
+    expect(mocks.nodesService.list).toHaveBeenCalledWith(expect.objectContaining({ type: 'nginx', limit: 100 }), {
+      allowedIds: ['ingress-1'],
+    });
+  });
+
   it('keeps safe Docker runtime metadata in compact node discovery rows', async () => {
     mocks.scopes = ['docker:containers:view'];
     mocks.nodesService.list.mockResolvedValue({

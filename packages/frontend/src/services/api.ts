@@ -189,7 +189,7 @@ class ApiClient extends withInferenceApi(
       )
     );
     add(
-      auth.hasScope("domains:view"),
+      auth.hasScopedAccess("domains:view"),
       "domains",
       cache("domains:list:folder-view", () => this.listDomains({ page: 1, limit: 1000 }))
     );
@@ -1821,14 +1821,15 @@ class ApiClient extends withInferenceApi(
   }
 
   async testNginxTemplate(
-    content: string
+    content: string,
+    templateId?: string
   ): Promise<{ rendered: string; valid: boolean; errors: string[] }> {
     return this.unwrapData(
       this.request<{ data: { rendered: string; valid: boolean; errors: string[] } }>(
         "/nginx-templates/test",
         {
           method: "POST",
-          body: JSON.stringify({ content }),
+          body: JSON.stringify({ content, templateId }),
         }
       )
     );

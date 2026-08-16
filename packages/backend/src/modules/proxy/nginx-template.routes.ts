@@ -5,6 +5,7 @@ import { getResourceScopedIds, hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   authMiddleware,
+  requireAnyScopeBase,
   requireScope,
   requireScopeBase,
   requireScopeForResource,
@@ -170,12 +171,28 @@ nginxTemplateRoutes.openapi(
 
 // Test template — render + send to daemon for nginx -t (test_only mode)
 nginxTemplateRoutes.openapi(
-  { ...testNginxTemplateRoute, middleware: requireScope('proxy:templates:edit') },
+  {
+    ...testNginxTemplateRoute,
+    middleware: requireAnyScopeBase('proxy:templates:create', 'proxy:templates:edit'),
+  },
   async (c) => {
     const service = container.resolve(NginxTemplateService);
     const nodeDispatch = container.resolve(NodeDispatchService);
     const body = await c.req.json();
     const input = PreviewNginxTemplateSchema.parse(body);
+    const scopes = c.get('effectiveScopes') || [];
+    const canTest = input.templateId
+      ? hasScope(scopes, `proxy:templates:edit:${input.templateId}`)
+      : hasScope(scopes, 'proxy:templates:create');
+    if (!canTest) {
+      throw new AppError(
+        403,
+        'FORBIDDEN',
+        input.templateId
+          ? `Missing required scope: proxy:templates:edit:${input.templateId}`
+          : 'Missing required scope: proxy:templates:create'
+      );
+    }
 
     const rendered = service.previewWithSampleData(input.content);
 

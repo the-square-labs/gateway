@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, gt, inArray, isNull, or } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { oauthAccessTokens, oauthClients, oauthRefreshTokens } from '@/db/schema/index.js';
+import { expandFolderScopes } from '@/lib/folder-scopes.js';
 import { canonicalizeScopes, isValidBaseScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -230,8 +231,9 @@ export class OAuthTokenLifecycle {
     if (!user || user.isBlocked) return null;
     const resource = token.resource ?? this.deps.getApiResourceUrl();
     this.deps.assertResourceAllowed(user, resource);
-    const scopes = this.deps.grantScopes(user, resource, token.scopes);
-    if (scopes.length === 0) return null;
+    const grantedScopes = this.deps.grantScopes(user, resource, token.scopes);
+    if (grantedScopes.length === 0) return null;
+    const scopes = await expandFolderScopes(this.deps.db, grantedScopes);
 
     this.deps.db
       .update(oauthAccessTokens)

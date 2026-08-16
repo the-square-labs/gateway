@@ -35,6 +35,7 @@ vi.mock('@/modules/auth/auth.middleware.js', () => ({
     await next();
   },
   requireScope: () => async (_c: any, next: () => Promise<void>) => next(),
+  requireAnyScopeBase: () => async (_c: any, next: () => Promise<void>) => next(),
   requireScopeBase: () => async (_c: any, next: () => Promise<void>) => next(),
   requireScopeForResource: () => async (_c: any, next: () => Promise<void>) => next(),
   sessionOnly: async (c: any, next: () => Promise<void>) => {
@@ -159,5 +160,17 @@ describe('nginx template routes', () => {
       '{{{advancedConfig}}}',
       expect.objectContaining({ advancedConfig: 'proxy_set_header X-Secret value;' })
     );
+  });
+
+  it('does not let a resource-scoped edit grant test unrelated new template content', async () => {
+    mocks.scopes = ['proxy:templates:edit:11111111-1111-4111-8111-111111111111'];
+
+    const response = await createApp().request('/test', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer gw_token', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'server {}' }),
+    });
+
+    expect(response.status).toBe(403);
   });
 });

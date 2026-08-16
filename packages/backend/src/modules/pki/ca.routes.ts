@@ -1,7 +1,7 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { hasScope } from '@/lib/permissions.js';
+import { getResourceScopedIds, hasScope } from '@/lib/permissions.js';
 import { sanitizeFilename } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { requireGatewayFeature } from '@/middleware/feature-flags.js';
@@ -9,6 +9,7 @@ import { AuditService } from '@/modules/audit/audit.service.js';
 import {
   authMiddleware,
   requireAnyScope,
+  requireAnyScopeBase,
   requireScope,
   requireScopeForResource,
 } from '@/modules/auth/auth.middleware.js';
@@ -46,7 +47,10 @@ function caTypeScope(prefix: 'pki:ca:view' | 'pki:ca:revoke', type: string) {
 
 // List CAs (tree)
 caRoutes.openapi(
-  { ...listCAsRoute, middleware: requireAnyScope('pki:ca:view:root', 'pki:ca:view:intermediate') },
+  {
+    ...listCAsRoute,
+    middleware: requireAnyScopeBase('pki:ca:view:root', 'pki:ca:view:intermediate', 'pki:cert:issue'),
+  },
   async (c) => {
     const caService = container.resolve(CAService);
     const showSystem = c.req.query('showSystem') === 'true';
@@ -55,11 +59,13 @@ caRoutes.openapi(
       return c.json({ code: 'FORBIDDEN', message: 'Insufficient permissions' }, 403);
     }
     const tree = await caService.getCATree(showSystem);
+    const issuableCAIds = new Set(getResourceScopedIds(scopes, 'pki:cert:issue'));
     return c.json(
       tree.filter(
         (ca) =>
           (ca.type === 'root' && hasScope(scopes, 'pki:ca:view:root')) ||
-          (ca.type === 'intermediate' && hasScope(scopes, 'pki:ca:view:intermediate'))
+          (ca.type === 'intermediate' && hasScope(scopes, 'pki:ca:view:intermediate')) ||
+          issuableCAIds.has(ca.id)
       )
     );
   }

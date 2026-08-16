@@ -365,7 +365,7 @@ export function AdminNodes() {
         width: "10%",
         align: "right",
         renderCell: (node) =>
-          hasScope("nodes:delete") ? (
+          hasScope("nodes:delete") || hasScope(`nodes:delete:${node.id}`) ? (
             <Button
               variant="ghost"
               size="icon"

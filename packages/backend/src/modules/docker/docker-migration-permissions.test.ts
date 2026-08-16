@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   assertDockerMigrationCleanupAccess,
+  assertDockerMigrationReadAccess,
   missingDockerMigrationScopes,
   requiredDockerMigrationScopes,
 } from './docker-migration-permissions.js';
@@ -65,6 +66,17 @@ describe('Docker migration composed permissions', () => {
         'resource',
         true,
         true
+      )
+    ).not.toThrow();
+  });
+
+  it('accepts node-scoped task visibility for a migration on that node', () => {
+    expect(() =>
+      assertDockerMigrationReadAccess(
+        ['docker:tasks:source', 'docker:containers:view:source/resource'],
+        'source',
+        'target',
+        'resource'
       )
     ).not.toThrow();
   });

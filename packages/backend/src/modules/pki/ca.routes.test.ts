@@ -33,6 +33,7 @@ vi.mock('@/modules/auth/auth.middleware.js', () => ({
     await next();
   },
   requireAnyScope: () => async (_c: any, next: () => Promise<void>) => next(),
+  requireAnyScopeBase: () => async (_c: any, next: () => Promise<void>) => next(),
   requireScope: () => async (_c: any, next: () => Promise<void>) => next(),
   requireScopeForResource: (base: string, param: string) => async (c: any, next: () => Promise<void>) => {
     const id = c.req.param(param);
@@ -78,6 +79,15 @@ describe('CA routes scoped visibility', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual([{ id: 'int-1', type: 'intermediate', commonName: 'Intermediate' }]);
+  });
+
+  it('exposes only the CA targeted by a resource-scoped certificate issue grant', async () => {
+    mocks.scopes = ['pki:cert:issue:root-1'];
+
+    const response = await createApp().request('/');
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual([{ id: 'root-1', type: 'root', commonName: 'Root' }]);
   });
 
   it('rejects CA detail when the caller lacks the matching CA type view scope', async () => {

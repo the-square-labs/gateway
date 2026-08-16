@@ -642,6 +642,10 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'proxy:templates:view',
   'proxy:templates:edit',
   'proxy:templates:delete',
+  // Domains
+  'domains:view',
+  'domains:edit',
+  'domains:delete',
   // SSL
   'ssl:cert:view',
   'ssl:cert:delete',
@@ -662,7 +666,6 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'nodes:rename',
   'nodes:delete',
   'nodes:lock',
-  'nodes:folders:manage',
   // Docker containers
   'docker:containers:view',
   'docker:containers:create',
@@ -705,7 +708,6 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'databases:query:write',
   'databases:query:admin',
   'databases:credentials:reveal',
-  'databases:folders:manage',
   // Logging
   'logs:environments:view',
   'logs:environments:edit',
@@ -713,6 +715,70 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'logs:tokens:view',
   'logs:tokens:create',
   'logs:tokens:delete',
+  'logs:schemas:view',
+  'logs:schemas:edit',
+  'logs:schemas:delete',
+  'logs:read',
+];
+
+/**
+ * Resource-scopable permissions that may target a resource folder.
+ * Creation and folder-management permissions intentionally remain broad or
+ * node-scoped because they do not act on an existing resource.
+ */
+export const FOLDER_SCOPABLE: readonly string[] = [
+  // Domains
+  'domains:view',
+  'domains:edit',
+  'domains:delete',
+  // Ingress routes
+  'proxy:view',
+  'proxy:edit',
+  'proxy:delete',
+  'proxy:advanced',
+  'proxy:advanced:bypass',
+  'proxy:maintenance:bypass',
+  'proxy:raw:read',
+  'proxy:raw:write',
+  'proxy:raw:toggle',
+  'proxy:raw:bypass',
+  // Nodes
+  'nodes:details',
+  'nodes:config:view',
+  'nodes:config:edit',
+  'nodes:logs',
+  'nodes:console',
+  'nodes:files:read',
+  'nodes:files:write',
+  'nodes:rename',
+  'nodes:delete',
+  'nodes:lock',
+  // Docker containers and deployments
+  'docker:containers:view',
+  'docker:containers:edit',
+  'docker:containers:config',
+  'docker:containers:manage',
+  'docker:containers:environment',
+  'docker:containers:delete',
+  'docker:containers:console',
+  'docker:containers:files',
+  'docker:containers:export',
+  'docker:containers:secrets',
+  'docker:containers:webhooks',
+  'docker:containers:mounts',
+  'docker:containers:migrate',
+  // Databases
+  'databases:view',
+  'databases:edit',
+  'databases:delete',
+  'databases:query:read',
+  'databases:query:write',
+  'databases:query:admin',
+  'databases:credentials:reveal',
+  // Logging environments and schemas
+  'logs:environments:view',
+  'logs:environments:edit',
+  'logs:environments:delete',
   'logs:schemas:view',
   'logs:schemas:edit',
   'logs:schemas:delete',

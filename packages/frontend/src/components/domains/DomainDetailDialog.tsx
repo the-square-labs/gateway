@@ -111,7 +111,7 @@ export function DomainDetailDialog({
   onUpdated,
 }: DomainDetailDialogProps) {
   const { hasScope } = useAuthStore();
-  const { canEditDomain: canEdit } = getDomainPermissions(hasScope);
+  const { canEditDomain: canEdit } = getDomainPermissions(hasScope, domainId);
   const canEditDns = canEdit;
   const [domain, setDomain] = useState<DomainWithUsage | null>(null);
   const [description, setDescription] = useState("");

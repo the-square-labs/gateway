@@ -33,9 +33,10 @@ describe("scope editor utilities", () => {
     ).toEqual(["proxy:edit:host-2", "proxy:view:host-1"]);
   });
 
-  it("requires resources for scopes that were resource-limited when editing started", () => {
-    expect(requiresResourceSelection("proxy:view", {}, ["proxy:view"])).toBe(true);
+  it("allows a broad actor to remove every resource restriction", () => {
+    expect(requiresResourceSelection("proxy:view", {}, ["proxy:view"])).toBe(false);
     expect(requiresResourceSelection("proxy:view", {}, [])).toBe(false);
+    expect(requiresResourceSelection("proxy:view", { "proxy:view": ["host-1"] }, [])).toBe(true);
   });
 
   it("does not let overlapping exact scopes imply each other", () => {

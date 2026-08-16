@@ -120,24 +120,51 @@ describe("gateway update version matching", () => {
 
     render(<AppStatusGate />);
 
+    const recoveryCheckCount = () =>
+      fetchMock.mock.calls.filter(([input]) => String(input) === "/api/setup/status").length;
+
     await act(async () => {
       await vi.advanceTimersByTimeAsync(800);
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(recoveryCheckCount()).toBe(1);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
     });
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-    expect(screen.getByText("The backend is available. Reload to continue.")).toBeInTheDocument();
+    expect(recoveryCheckCount()).toBe(2);
+    expect(useAppStatusStore.getState().maintenanceActive).toBe(false);
+    expect(
+      screen.queryByRole("heading", { name: "Temporarily Unavailable" })
+    ).not.toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(recoveryCheckCount()).toBe(2);
+  });
+
+  it("uses the restart layout for unavailable state without manual actions", async () => {
+    vi.useFakeTimers();
+    useAppStatusStore.setState({ maintenanceActive: true });
+
+    render(<AppStatusGate />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+
+    expect(screen.getByRole("heading", { name: "Temporarily Unavailable" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reload now" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Checking backend availability automatically.")
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Wiolett Industries" })).toHaveAttribute(
+      "href",
+      "https://wiolett.net"
+    );
   });
 
   it("never overlaps unavailable recovery requests", async () => {

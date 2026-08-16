@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { users } from '@/db/schema/index.js';
+import { expandFolderScopes } from '@/lib/folder-scopes.js';
 import { canManageUser, hasScope } from '@/lib/permissions.js';
 import { canonicalizeScopes } from '@/lib/scopes.js';
 import { SessionService } from '@/services/session.service.js';
@@ -86,6 +87,7 @@ export async function resolveLiveUser(db: DrizzleClient, userId: string): Promis
     groupMap,
     dbUser.additionalScopes
   );
+  const effectiveScopes = dbUser.deletedAt ? [] : await expandFolderScopes(db, scopes);
   return {
     id: dbUser.id,
     oidcSubject: dbUser.oidcSubject,
@@ -98,7 +100,7 @@ export async function resolveLiveUser(db: DrizzleClient, userId: string): Promis
     requireGateway2fa: Boolean(groupMap.get(dbUser.groupId)?.requireGateway2fa),
     groupScopes,
     additionalScopes,
-    scopes: dbUser.deletedAt ? [] : scopes,
+    scopes: effectiveScopes,
     isBlocked: dbUser.isBlocked || Boolean(dbUser.deletedAt),
     isDeleted: Boolean(dbUser.deletedAt),
     aiApprovalMode: dbUser.aiApprovalMode,

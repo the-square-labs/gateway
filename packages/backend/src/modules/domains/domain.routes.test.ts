@@ -40,6 +40,19 @@ vi.mock('@/modules/auth/auth.middleware.js', () => ({
     }
     await next();
   },
+  requireScopeBase: (scope: string) => async (c: any, next: () => Promise<void>) => {
+    if (!mocks.scopes.some((candidate) => candidate === scope || candidate.startsWith(`${scope}:`))) {
+      return c.json({ code: 'FORBIDDEN', message: `Missing required scope: ${scope}` }, 403);
+    }
+    await next();
+  },
+  requireScopeForResource: (scope: string, param: string) => async (c: any, next: () => Promise<void>) => {
+    const resourceScope = `${scope}:${c.req.param(param)}`;
+    if (!mocks.scopes.includes(scope) && !mocks.scopes.includes(resourceScope)) {
+      return c.json({ code: 'FORBIDDEN', message: `Missing required scope: ${resourceScope}` }, 403);
+    }
+    await next();
+  },
 }));
 
 vi.mock('@/modules/domains/domain-folders.service.js', () => ({
@@ -151,6 +164,16 @@ describe('domain routes authorization', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.domainsService.updateDomain).toHaveBeenCalledWith(DOMAIN_ID, { proxied: true }, 'user-1');
+  });
+
+  it('limits domain edits to the selected resource', async () => {
+    mocks.scopes = [`domains:edit:${DOMAIN_ID}`];
+
+    const allowed = await request('PUT', `/${DOMAIN_ID}`, { proxied: true });
+    const denied = await request('PUT', '/22222222-2222-4222-8222-222222222222', { proxied: true });
+
+    expect(allowed.status).toBe(200);
+    expect(denied.status).toBe(403);
   });
 
   it('uses domains:delete for managed DNS deletion without a Cloudflare-specific scope', async () => {

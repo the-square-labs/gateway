@@ -92,6 +92,22 @@ describe("app navigation registry", () => {
     expect(ids).toContain("domains");
   });
 
+  it("shows Domains for an individual domain grant", () => {
+    const ids = visibleNavigationGroups(context({ scopes: ["domains:view:domain-1"] })).flatMap(
+      (group) => group.items.map((item) => item.id)
+    );
+
+    expect(ids).toContain("domains");
+  });
+
+  it("shows Docker for a node-scoped task grant", () => {
+    const ids = visibleNavigationGroups(
+      context({ scopes: ["docker:tasks:docker-node-1"], hasDockerNodes: true })
+    ).flatMap((group) => group.items.map((item) => item.id));
+
+    expect(ids).toContain("docker");
+  });
+
   it("hides feature-backed destinations while their features are disabled", () => {
     const groups = visibleNavigationGroups(
       context({

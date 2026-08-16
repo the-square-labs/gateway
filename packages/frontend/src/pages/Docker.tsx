@@ -240,7 +240,7 @@ export function Docker() {
                 New Folder
               </Button>
             )}
-            {hasScope("docker:images:pull") && (
+            {hasScopedAccess("docker:images:pull") && (
               <Button onClick={() => pullImageRef.current?.()}>
                 <Plus className="h-4 w-4 mr-1" />
                 Pull Image
@@ -257,7 +257,7 @@ export function Docker() {
                 New Folder
               </Button>
             )}
-            {hasScope("docker:volumes:create") && (
+            {hasScopedAccess("docker:volumes:create") && (
               <Button onClick={() => createVolumeRef.current?.()}>
                 <Plus className="h-4 w-4 mr-1" />
                 Create Volume
@@ -274,7 +274,7 @@ export function Docker() {
                 New Folder
               </Button>
             )}
-            {hasScope("docker:networks:create") && (
+            {hasScopedAccess("docker:networks:create") && (
               <Button onClick={() => createNetworkRef.current?.()}>
                 <Plus className="h-4 w-4 mr-1" />
                 Create Network
@@ -320,7 +320,7 @@ export function Docker() {
           },
         ]
       : []),
-    ...(activeTab === "images" && hasScope("docker:images:pull")
+    ...(activeTab === "images" && hasScopedAccess("docker:images:pull")
       ? [
           {
             label: "Pull Image",
@@ -338,7 +338,7 @@ export function Docker() {
           },
         ]
       : []),
-    ...(activeTab === "volumes" && hasScope("docker:volumes:create")
+    ...(activeTab === "volumes" && hasScopedAccess("docker:volumes:create")
       ? [
           {
             label: "Create Volume",
@@ -356,7 +356,7 @@ export function Docker() {
           },
         ]
       : []),
-    ...(activeTab === "networks" && hasScope("docker:networks:create")
+    ...(activeTab === "networks" && hasScopedAccess("docker:networks:create")
       ? [
           {
             label: "Create Network",

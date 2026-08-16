@@ -283,17 +283,20 @@ export function DockerVolumes({
               className="flex items-center justify-end pr-1"
               onClick={(e) => e.stopPropagation()}
             >
-              {hasScope("docker:volumes:delete") && !isUsed && v.availability !== "unavailable" && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  onClick={() => handleRemove(v.name, (v as any)._nodeId)}
-                  title="Remove"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
-              )}
+              {(hasScope("docker:volumes:delete") ||
+                hasScope(`docker:volumes:delete:${(v as any)._nodeId}`)) &&
+                !isUsed &&
+                v.availability !== "unavailable" && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={() => handleRemove(v.name, (v as any)._nodeId)}
+                    title="Remove"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                )}
             </div>
           );
         },
@@ -303,7 +306,7 @@ export function DockerVolumes({
   );
   const volumeColumns = allVolumeColumns.filter((c) => {
     if (fixedNodeId && c.id === "node") return false;
-    if (!hasScope("docker:volumes:delete") && c.id === "actions") return false;
+    if (!hasScopedAccess("docker:volumes:delete") && c.id === "actions") return false;
     return true;
   });
 
@@ -341,7 +344,8 @@ export function DockerVolumes({
                           },
                         ]
                       : []),
-                    ...(hasScope("docker:volumes:create")
+                    ...(hasScope("docker:volumes:create") ||
+                    hasScope(`docker:volumes:create:${selectedNodeId}`)
                       ? [
                           {
                             label: "Create Volume",
@@ -365,7 +369,8 @@ export function DockerVolumes({
                     New Folder
                   </Button>
                 )}
-                {hasScope("docker:volumes:create") && (
+                {(hasScope("docker:volumes:create") ||
+                  hasScope(`docker:volumes:create:${selectedNodeId}`)) && (
                   <Button onClick={() => openCreate()}>
                     <Plus className="h-4 w-4 mr-1" />
                     Create Volume
@@ -425,8 +430,18 @@ export function DockerVolumes({
             message="No volumes found."
             hasActiveFilters={search !== ""}
             onReset={() => setSearch("")}
-            actionLabel={hasScope("docker:volumes:create") ? "Create a volume" : undefined}
-            onAction={hasScope("docker:volumes:create") ? () => openCreate() : undefined}
+            actionLabel={
+              hasScope("docker:volumes:create") ||
+              (!!selectedNodeId && hasScope(`docker:volumes:create:${selectedNodeId}`))
+                ? "Create a volume"
+                : undefined
+            }
+            onAction={
+              hasScope("docker:volumes:create") ||
+              (!!selectedNodeId && hasScope(`docker:volumes:create:${selectedNodeId}`))
+                ? () => openCreate()
+                : undefined
+            }
           />
         }
         minWidth={fixedNodeId ? "720px" : "860px"}

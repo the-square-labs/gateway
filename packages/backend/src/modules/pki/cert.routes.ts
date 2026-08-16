@@ -1,16 +1,12 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { getResourceScopedIds, hasScope } from '@/lib/permissions.js';
+import { getResourceScopedIds, hasScope, hasScopeForResource } from '@/lib/permissions.js';
 import { sanitizeFilename } from '@/lib/utils.js';
+import { AppError } from '@/middleware/error-handler.js';
 import { requireGatewayFeature } from '@/middleware/feature-flags.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
-import {
-  authMiddleware,
-  requireScope,
-  requireScopeBase,
-  requireScopeForResource,
-} from '@/modules/auth/auth.middleware.js';
+import { authMiddleware, requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import { CAService } from './ca.service.js';
 import {
@@ -79,21 +75,29 @@ certRoutes.openapi(
 );
 
 // Issue certificate (server-side key generation)
-certRoutes.openapi({ ...issueCertificateRoute, middleware: requireScope('pki:cert:issue') }, async (c) => {
+certRoutes.openapi({ ...issueCertificateRoute, middleware: requireScopeBase('pki:cert:issue') }, async (c) => {
   const certService = container.resolve(CertService);
   const user = c.get('user')!;
   const body = await c.req.json();
   const input = IssueCertificateSchema.parse(body);
+  const scopes = c.get('effectiveScopes') || [];
+  if (!hasScopeForResource(scopes, 'pki:cert:issue', input.caId)) {
+    throw new AppError(403, 'FORBIDDEN', `Missing required scope: pki:cert:issue:${input.caId}`);
+  }
   const result = await certService.issueCertificate(input, user.id);
   return c.json(result, 201);
 });
 
 // Issue certificate from CSR
-certRoutes.openapi({ ...issueCertificateFromCSRRoute, middleware: requireScope('pki:cert:issue') }, async (c) => {
+certRoutes.openapi({ ...issueCertificateFromCSRRoute, middleware: requireScopeBase('pki:cert:issue') }, async (c) => {
   const certService = container.resolve(CertService);
   const user = c.get('user')!;
   const body = await c.req.json();
   const input = IssueCertFromCSRSchema.parse(body);
+  const scopes = c.get('effectiveScopes') || [];
+  if (!hasScopeForResource(scopes, 'pki:cert:issue', input.caId)) {
+    throw new AppError(403, 'FORBIDDEN', `Missing required scope: pki:cert:issue:${input.caId}`);
+  }
   const cert = await certService.issueCertificateFromCSR(input, user.id);
   return c.json(cert, 201);
 });

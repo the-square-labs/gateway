@@ -3,6 +3,7 @@
  * Replaces the old role-based helpers (hasRole, canManageCAs, etc.)
  */
 
+import { isFolderScopedScope } from './folder-scopes.js';
 import { extractBaseScope, isValidBaseScope } from './scopes.js';
 
 function parentResourceId(baseScope: string, resourceId: string | null): string | null {
@@ -13,6 +14,7 @@ function parentResourceId(baseScope: string, resourceId: string | null): string 
 }
 
 const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Record<string, readonly string[]> = {
+  'domains:view': ['domains:edit'],
   'pki:templates:view': ['pki:templates:edit'],
   'proxy:view': ['proxy:edit'],
   'proxy:templates:view': ['proxy:templates:edit'],
@@ -134,6 +136,7 @@ export function hasScopeForResource(scopes: string[], baseScope: string, resourc
 export function getResourceScopedIds(scopes: readonly string[], baseScope: string): string[] {
   const ids = new Set<string>();
   for (const scope of scopes) {
+    if (isFolderScopedScope(scope)) continue;
     const scopeBase = extractBaseScope(scope);
     if (scope === scopeBase) continue;
     const resourceId = scope.slice(scopeBase.length + 1);

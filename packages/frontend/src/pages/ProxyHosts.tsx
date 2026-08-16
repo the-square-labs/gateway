@@ -121,7 +121,7 @@ export function ProxyHosts({
   const canManageFolders = hasScope("proxy:folders:manage");
   const isSearchFiltering = filters.search.trim() !== "";
   const canReorderFolders = canManageFolders && !isMobile && !isSearchFiltering;
-  const canCreateProxyHost = hasScope("proxy:create");
+  const canCreateProxyHost = hasScopedAccess("proxy:create");
   const canShowHostActions =
     canManageFolders || hasScopedAccess("proxy:edit") || hasScopedAccess("proxy:delete");
   const ingressNodes = useUIBootstrapStore((state) => state.snapshot?.navigation.nodes.data);
