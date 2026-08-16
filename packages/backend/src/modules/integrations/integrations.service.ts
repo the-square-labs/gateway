@@ -3201,7 +3201,15 @@ export class IntegrationsService {
 
   private async testCloudflareToken(token: string) {
     const client = new CloudflareClient(token);
-    const tokenStatus = await client.verifyToken();
+    let tokenStatus: Awaited<ReturnType<CloudflareClient['verifyToken']>>;
+    try {
+      tokenStatus = await client.verifyToken();
+    } catch (error) {
+      if (!this.isCloudflarePermissionError(error)) throw error;
+      throw new AppError(400, 'CLOUDFLARE_TOKEN_INVALID', 'Cloudflare API token is invalid', {
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
     if (tokenStatus.status && tokenStatus.status !== 'active') {
       throw new AppError(400, 'CLOUDFLARE_TOKEN_INACTIVE', 'Cloudflare token is not active', {
         status: tokenStatus.status,

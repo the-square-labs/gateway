@@ -25,7 +25,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { proxyHostRoute } from "@/lib/resource-routes";
@@ -115,7 +114,6 @@ export function DomainDetailDialog({
   const canEditDns = canEdit;
   const [domain, setDomain] = useState<DomainWithUsage | null>(null);
   const [description, setDescription] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
   const [isCheckingDns, setIsCheckingDns] = useState(false);
   const [isUpdatingProxied, setIsUpdatingProxied] = useState(false);
   const [resolutionOpen, setResolutionOpen] = useState(false);
@@ -132,12 +130,13 @@ export function DomainDetailDialog({
   const [isLoadingIngressMigration, setIsLoadingIngressMigration] = useState(false);
   const [isMigratingIngress, setIsMigratingIngress] = useState(false);
   const loadedDomainIdRef = useRef<string | null>(null);
+  const onOpenChangeRef = useRef(onOpenChange);
   const initialIngressMigrationStartedRef = useRef(false);
+  onOpenChangeRef.current = onOpenChange;
 
   const loadDomain = useCallback(async () => {
     if (!domainId || !open) return;
     const initialLoad = loadedDomainIdRef.current !== domainId;
-    if (initialLoad) setIsLoading(true);
     try {
       const d = await api.getDomain(domainId);
       loadedDomainIdRef.current = domainId;
@@ -145,8 +144,7 @@ export function DomainDetailDialog({
       setDescription(d.description || "");
     } catch {
       toast.error("Failed to load domain");
-    } finally {
-      if (initialLoad) setIsLoading(false);
+      if (initialLoad) onOpenChangeRef.current(false);
     }
   }, [domainId, open]);
 
@@ -385,43 +383,31 @@ export function DomainDetailDialog({
     ? [...(domain.dnsRecords?.a ?? []), ...(domain.dnsRecords?.aaaa ?? [])].join(", ") ||
       "No address record"
     : "";
-  const showInitialLoading = Boolean(open && domainId && loadedDomainIdRef.current !== domainId);
-  const showLoading = isLoading || showInitialLoading;
+  const detailsReady = Boolean(domain && domainId && loadedDomainIdRef.current === domainId);
 
   return (
     <>
       <Dialog
-        open={open && initialView === "details" && !resolutionOpen && !ingressMigrationOpen}
+        open={
+          open &&
+          detailsReady &&
+          initialView === "details" &&
+          !resolutionOpen &&
+          !ingressMigrationOpen
+        }
         onOpenChange={handleClose}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>{showLoading ? "Loading..." : domain?.domain}</DialogTitle>
+            <DialogTitle>{domain?.domain}</DialogTitle>
             <DialogDescription>
-              {showLoading
-                ? "Loading domain information..."
-                : domain?.lastDnsCheckAt
-                  ? `Last checked ${formatRelativeDate(domain.lastDnsCheckAt)}`
-                  : "DNS not checked yet"}
+              {domain?.lastDnsCheckAt
+                ? `Last checked ${formatRelativeDate(domain.lastDnsCheckAt)}`
+                : "DNS not checked yet"}
             </DialogDescription>
           </DialogHeader>
 
-          {showLoading ? (
-            <div className="space-y-4" aria-busy="true" aria-label="Loading domain details">
-              <Skeleton className="h-10 w-full" />
-              <div className="border border-border bg-card divide-y divide-border">
-                {Array.from({ length: 3 }, (_, index) => (
-                  <div key={index} className="flex items-center justify-between gap-4 p-4">
-                    <div className="space-y-2">
-                      <Skeleton className="h-4 w-24" />
-                      <Skeleton className="h-3 w-48" />
-                    </div>
-                    <Skeleton className="h-5 w-10" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : domain ? (
+          {domain ? (
             <div className="space-y-4">
               {/* Description */}
               {canEdit && (
@@ -488,12 +474,7 @@ export function DomainDetailDialog({
                   </div>
                 }
                 actions={
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={handleCheckDns}
-                    disabled={isCheckingDns}
-                  >
+                  <Button onClick={handleCheckDns} disabled={isCheckingDns}>
                     <RefreshCw className={`h-3.5 w-3.5 ${isCheckingDns ? "animate-spin" : ""}`} />
                     {isCheckingDns ? "Checking..." : "Check"}
                   </Button>

@@ -211,12 +211,23 @@ export function CloudflareIntegrationsSection() {
         settings: form.settings,
       };
       if (editingConnector) {
-        let updated = await api.updateCloudflareConnector(editingConnector.id, payload);
+        let updated = editingConnector;
+        const settingsChanged = Object.entries(payload.settings).some(
+          ([key, value]) =>
+            editingConnector.settings[key as keyof CloudflareConnectorSettings] !== value
+        );
+        const detailsChanged =
+          payload.name !== editingConnector.name ||
+          payload.enabled !== editingConnector.enabled ||
+          settingsChanged;
         if (form.token.trim()) {
           updated = await api.rotateCloudflareConnectorToken(
             editingConnector.id,
             form.token.trim()
           );
+        }
+        if (detailsChanged) {
+          updated = await api.updateCloudflareConnector(editingConnector.id, payload);
         }
         setEditingConnector(updated);
         toast.success("Cloudflare connector saved");

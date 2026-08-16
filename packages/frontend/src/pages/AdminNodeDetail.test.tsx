@@ -8,6 +8,12 @@ import { makeNode, makeUser } from "@/test/fixtures";
 import type { NodeHealthReport } from "@/types";
 import { AdminNodeDetail } from "./AdminNodeDetail";
 
+Object.defineProperties(window.HTMLElement.prototype, {
+  hasPointerCapture: { configurable: true, value: () => false },
+  setPointerCapture: { configurable: true, value: () => undefined },
+  releasePointerCapture: { configurable: true, value: () => undefined },
+});
+
 vi.mock("sonner", () => ({
   toast: {
     error: vi.fn(),
@@ -228,7 +234,7 @@ describe("AdminNodeDetail", () => {
     await user.type(displayNameInput, "Docker Blue");
     await user.click(screen.getByRole("button", { name: "Blue color" }));
     await user.click(screen.getByRole("combobox", { name: "Service Address" }));
-    await user.click(await screen.findByText("8.8.8.8"));
+    await user.click(await screen.findByRole("option", { name: "8.8.8.8" }));
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     await waitFor(() =>
@@ -271,8 +277,7 @@ describe("AdminNodeDetail", () => {
     expect(await screen.findByRole("heading", { name: "Edge 1" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /settings/i }));
 
-    expect(screen.getByRole("combobox", { name: "Service Address" })).toHaveAttribute(
-      "placeholder",
+    expect(screen.getByRole("combobox", { name: "Service Address" })).toHaveTextContent(
       "Automatic (8.8.8.8)"
     );
   });
@@ -317,14 +322,14 @@ describe("AdminNodeDetail", () => {
     expect(await screen.findByRole("heading", { name: "Edge 1" })).toBeInTheDocument();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /settings/i }));
-    const addressInput = screen.getByRole("combobox", { name: "Service Address" });
-    await user.click(addressInput);
+    await user.click(screen.getByRole("combobox", { name: "Service Address" }));
 
-    expect(await screen.findByText("1.1.1.1")).toBeInTheDocument();
-    expect(screen.getByText("2606:4700:4700::1111")).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "1.1.1.1" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "2606:4700:4700::1111" })).toBeInTheDocument();
     expect(screen.queryByText("192.168.1.20")).not.toBeInTheDocument();
-    await user.clear(addressInput);
-    await user.type(addressInput, "9.9.9.9");
+    await user.click(screen.getByRole("option", { name: "Custom address" }));
+    const customAddressInput = screen.getByRole("textbox", { name: "Custom Service Address" });
+    await user.type(customAddressInput, "9.9.9.9");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     await waitFor(() =>

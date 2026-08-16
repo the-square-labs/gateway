@@ -1618,4 +1618,29 @@ describe('IntegrationsService', () => {
 
     expect(auditService.log).not.toHaveBeenCalled();
   });
+
+  it('reports an invalid Cloudflare token as an integration error instead of a session error', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: false,
+          errors: [{ code: 1000, message: 'Invalid API Token' }],
+          result: null,
+        }),
+        { status: 401, headers: { 'Content-Type': 'application/json' } }
+      )
+    );
+    const service = new IntegrationsService({} as never, { log: vi.fn() } as never, {} as never);
+
+    try {
+      await expect((service as any).testCloudflareToken('invalid-token')).rejects.toMatchObject({
+        statusCode: 400,
+        code: 'CLOUDFLARE_TOKEN_INVALID',
+        message: 'Cloudflare API token is invalid',
+      } satisfies Partial<AppError>);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

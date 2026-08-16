@@ -73,7 +73,7 @@ const domain: DomainWithUsage = {
 };
 
 describe("DomainDetailDialog", () => {
-  it("renders its loading layout on the first open frame", () => {
+  it("waits for domain details before opening to avoid resizing the dialog", () => {
     useAuthStore.setState({
       user: makeUser({ scopes: ["domains:view"] }),
       isAuthenticated: true,
@@ -87,10 +87,7 @@ describe("DomainDetailDialog", () => {
       </MemoryRouter>
     );
 
-    expect(screen.getByRole("heading", { name: "Loading..." })).toBeInTheDocument();
-    expect(screen.getByText("Loading domain information...")).toBeInTheDocument();
-    expect(screen.getByLabelText("Loading domain details")).toBeInTheDocument();
-    expect(screen.queryByText("DNS not checked yet")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("uses shared DNS rows, Cloudflare target rows, and Type/Target usage columns", async () => {
@@ -117,9 +114,11 @@ describe("DomainDetailDialog", () => {
     expect(screen.getByRole("columnheader", { name: "Target" })).toBeInTheDocument();
     expect(screen.getByText("Route")).toBeInTheDocument();
     expect(screen.getByText("SSL Certificate")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toHaveClass("sm:max-w-xl");
     expect(screen.getByRole("button", { name: "Check" })).toHaveClass(
-      "bg-secondary",
-      "text-secondary-foreground"
+      "bg-primary",
+      "text-primary-foreground",
+      "text-sm"
     );
   });
 
