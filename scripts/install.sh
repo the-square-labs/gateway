@@ -521,8 +521,9 @@ local_source_checksum() {
 }
 
 env_value() {
-  local key="$1"
-  sed -n "s/^${key}=//p" .env 2>/dev/null | tail -n1
+  local key="$1" env_file="${INSTALL_DIR}/.env"
+  [[ -f "$env_file" ]] || return 0
+  sed -n "s/^${key}=//p" "$env_file" | tail -n1
 }
 
 version_is_newer() {
